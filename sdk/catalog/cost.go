@@ -7,7 +7,8 @@ import (
 )
 
 // Cost returns total cost in the rate sheet's currency and ok=false when the
-// binding carries no pricing. Tier axis = input tokens (matches app/pricing).
+// binding carries no pricing. Tier axis = prompt length, usage.Tokens.PromptTokens
+// (matches app/pricing).
 // It is the terse form of CostBreakdown, discarding the unpriced-meter list;
 // callers rendering an estimate should prefer CostBreakdown so unpriced meters
 // don't silently deflate the total.
@@ -28,8 +29,8 @@ func (b Binding) CostForServiceTier(tokens usage.Tokens, serviceTier string) (fl
 // in the rate sheet's currency; unpriced lists the usage keys that went
 // unpriced — a meter this binding doesn't price, or a key outside the catalog's
 // meter vocabulary — sorted for stable output; ok is false only when the
-// binding has no pricing at all (cost 0, unpriced nil). Tier axis = input
-// tokens. Surface unpriced rather than presenting cost as complete: an unpriced
+// binding has no pricing at all (cost 0, unpriced nil). Tier axis = prompt
+// length. Surface unpriced rather than presenting cost as complete: an unpriced
 // meter is silently missing money otherwise, and a newly-priced meter type
 // would quietly deflate every estimate that ignored it. Each token is charged
 // once: a part with a rate of its own (see usage.Tokens) is left out of its
@@ -40,13 +41,13 @@ func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []st
 
 // CostBreakdownForServiceTier is CostBreakdown for a response served in
 // serviceTier. For each meter a rate carrying that service tier wins over the
-// base rate whenever one qualifies at the request's input count; a meter the
+// base rate whenever one qualifies at the request's prompt length; a meter the
 // tier does not price bills at the base rate. Matches app/pricing.
 func (b Binding) CostBreakdownForServiceTier(tokens usage.Tokens, serviceTier string) (cost float64, unpriced []string, ok bool) {
 	if len(b.Pricing) == 0 || len(tokens) == 0 {
 		return 0, nil, false
 	}
-	tier := int(tokens["input"])
+	tier := int(tokens.PromptTokens())
 	hasRate := func(key string) bool {
 		_, ok := b.rateForKey(key, tier, serviceTier)
 		return ok

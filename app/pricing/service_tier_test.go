@@ -40,6 +40,7 @@ func TestCostNanosForServiceTier(t *testing.T) {
 		{"base", "", usage.Tokens{"input": 1_000_000, "output": 100_000}, 2_800_000_000},
 		{"priority overrides both meters", "priority", usage.Tokens{"input": 200_000, "output": 100_000}, 2_400_000_000},
 		{"priority ladder above threshold", "priority", usage.Tokens{"input": 300_000}, 2_400_000_000},
+		{"priority ladder reached by cached prompt", "priority", usage.Tokens{"input": 100_000, "cache_read": 200_000}, 900_000_000},
 		{"flex falls back per meter", "flex", usage.Tokens{"input": 1_000_000, "output": 100_000}, 1_800_000_000},
 		{"flex cache_read bills at base", "flex", usage.Tokens{"input": 1_000_000, "cache_read": 200_000}, 1_100_000_000},
 		{"unknown tier bills at base", "scale", usage.Tokens{"input": 1_000_000, "output": 100_000}, 2_800_000_000},

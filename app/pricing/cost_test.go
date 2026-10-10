@@ -23,7 +23,7 @@ func TestCost_SimpleInputOutput(t *testing.T) {
 	}
 }
 
-func TestCost_TierByInput(t *testing.T) {
+func TestCost_TierByPromptLength(t *testing.T) {
 	p := &Pricing{
 		Spec: Spec{
 			Currency: "USD",
@@ -47,6 +47,13 @@ func TestCost_TierByInput(t *testing.T) {
 	want = 3.0*0.1 + 15.0*0.05
 	if got != want {
 		t.Fatalf("base tier: got %v want %v", got, want)
+	}
+
+	// Cached prompt tokens count toward the tier: 1k input + 249k cache_read is a 250k prompt.
+	got = p.Cost(usage.Tokens{"input": 1_000, "cache_read": 249_000, "output": 50_000})
+	want = 6.0*0.001 + 22.5*0.05
+	if got != want {
+		t.Fatalf("cached upper tier: got %v want %v", got, want)
 	}
 }
 
@@ -121,6 +128,22 @@ func TestCostNanos_RateTable(t *testing.T) {
 			Rates:    []Rate{{Meter: MeterTokensInput, Unit: UnitPerUnit, Amount: 0.001}},
 		},
 	}
+	// Every meter doubles at a 100k prompt; nanos per token: input 1000→2000, output 5000→10000, cache_read 100→200, cache_creation 1250→2500.
+	cachedTier := &Pricing{
+		Spec: Spec{
+			Currency: "USD",
+			Rates: []Rate{
+				{Meter: MeterTokensInput, Unit: UnitPerMillion, Amount: 1},
+				{Meter: MeterTokensInput, Unit: UnitPerMillion, Amount: 2, AboveTokens: 100_000},
+				{Meter: MeterTokensOutput, Unit: UnitPerMillion, Amount: 5},
+				{Meter: MeterTokensOutput, Unit: UnitPerMillion, Amount: 10, AboveTokens: 100_000},
+				{Meter: MeterTokensCacheRead, Unit: UnitPerMillion, Amount: 0.1},
+				{Meter: MeterTokensCacheRead, Unit: UnitPerMillion, Amount: 0.2, AboveTokens: 100_000},
+				{Meter: MeterTokensCacheCreation, Unit: UnitPerMillion, Amount: 1.25},
+				{Meter: MeterTokensCacheCreation, Unit: UnitPerMillion, Amount: 2.5, AboveTokens: 100_000},
+			},
+		},
+	}
 
 	tests := []struct {
 		name     string
@@ -165,11 +188,53 @@ func TestCostNanos_RateTable(t *testing.T) {
 			name:   "tier boundary is inclusive — input == AboveTokens picks upper",
 			p:      tiered,
 			tokens: usage.Tokens{"input": 200_000, "output": 100},
-			// upper tier applies to BOTH meters (tier axis = input).
+			// upper tier applies to BOTH meters (tier axis = prompt length).
 			want: 200_000*6_000 + 100*22_500,
 			wantBkdn: map[string]int64{
 				"tokens.input":  200_000 * 6_000,
 				"tokens.output": 100 * 22_500,
+			},
+		},
+		{
+			name:   "cache_read pushes the prompt over the threshold — upper tier on every meter",
+			p:      cachedTier,
+			tokens: usage.Tokens{"input": 1_000, "cache_read": 299_000, "output": 500},
+			want:   1_000*2_000 + 299_000*200 + 500*10_000,
+			wantBkdn: map[string]int64{
+				"tokens.input":      1_000 * 2_000,
+				"tokens.cache_read": 299_000 * 200,
+				"tokens.output":     500 * 10_000,
+			},
+		},
+		{
+			name:   "cache_creation counts too — prompt == AboveTokens picks upper",
+			p:      cachedTier,
+			tokens: usage.Tokens{"input": 1_000, "cache_creation": 99_000, "output": 100},
+			want:   1_000*2_000 + 99_000*2_500 + 100*10_000,
+			wantBkdn: map[string]int64{
+				"tokens.input":          1_000 * 2_000,
+				"tokens.cache_creation": 99_000 * 2_500,
+				"tokens.output":         100 * 10_000,
+			},
+		},
+		{
+			name:   "cached prompt one below the threshold stays base",
+			p:      cachedTier,
+			tokens: usage.Tokens{"input": 1_000, "cache_read": 98_999},
+			want:   1_000*1_000 + 98_999*100,
+			wantBkdn: map[string]int64{
+				"tokens.input":      1_000 * 1_000,
+				"tokens.cache_read": 98_999 * 100,
+			},
+		},
+		{
+			name:   "uncached prompt under the threshold stays base",
+			p:      cachedTier,
+			tokens: usage.Tokens{"input": 99_999, "output": 100},
+			want:   99_999*1_000 + 100*5_000,
+			wantBkdn: map[string]int64{
+				"tokens.input":  99_999 * 1_000,
+				"tokens.output": 100 * 5_000,
 			},
 		},
 		{

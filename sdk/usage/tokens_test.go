@@ -41,6 +41,17 @@ func TestTokensBillable(t *testing.T) {
 	}
 }
 
+// audio_input is already inside input, so it adds nothing to the prompt length.
+func TestTokensPromptTokens(t *testing.T) {
+	tokens := Tokens{"input": 1000, "audio_input": 200, "cache_read": 300, "cache_creation": 50, "output": 500, "reasoning": 100}
+	if got := tokens.PromptTokens(); got != 1350 {
+		t.Errorf("PromptTokens() = %d, want 1350", got)
+	}
+	if got := (Tokens{"output": 10}).PromptTokens(); got != 0 {
+		t.Errorf("PromptTokens() without prompt keys = %d, want 0", got)
+	}
+}
+
 // A provider that reports a part outside its whole shows it by a part larger than the whole; deducting would erase the charge for the whole's own tokens.
 func TestTokensBillable_PartsLargerThanWhole(t *testing.T) {
 	tokens := Tokens{"output": 498, "reasoning": 95_305}

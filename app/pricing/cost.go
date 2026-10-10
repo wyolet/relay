@@ -13,16 +13,17 @@ import (
 // per-request magnitudes fit int64 with room to spare (~9.2e9 USD).
 //
 // Tier semantics match Cost (and sdk/catalog.Binding.Cost): the tier axis
-// is the input token count; the rate with the largest AboveTokens ≤ input
-// applies, and the WHOLE meter count bills at that tier (no marginal
-// splitting) — the conventional context-length-tier model across providers.
+// is the prompt length (usage.Tokens.PromptTokens, cached tokens included);
+// the rate with the largest AboveTokens ≤ prompt length applies, and the
+// WHOLE meter count bills at that tier (no marginal splitting) — the
+// conventional context-length-tier model across providers.
 //
 // ok is false when nothing was priced: nil/disabled pricing, no tokens, or
 // no token key matched a rate. Callers must treat !ok as "unpriced", never
 // as a zero cost — a fabricated $0 is the silent-drop bug class. A genuine
 // zero (priced meters with zero counts) returns ok=true with total 0.
 //
-// Each token is charged once. Some keys count tokens that are also inside input or output (usage.Tokens lists them); when the sheet has a rate for such a part, the part is charged there and left out of the whole's charge. So a breakdown entry is rate × usage.Tokens.Billable for its key, which for input and output can be less than rate × the stored count. The tier still comes from the stored input count.
+// Each token is charged once. Some keys count tokens that are also inside input or output (usage.Tokens lists them); when the sheet has a rate for such a part, the part is charged there and left out of the whole's charge. So a breakdown entry is rate × usage.Tokens.Billable for its key, which for input and output can be less than rate × the stored count. The tier still comes from the stored counts.
 //
 // CostNanos prices at the base rates; CostNanosForServiceTier prices a response the upstream reports as served in a service tier.
 func (p *Pricing) CostNanos(tokens usage.Tokens) (total int64, breakdown map[string]int64, ok bool) {
@@ -34,7 +35,7 @@ func (p *Pricing) CostNanosForServiceTier(tokens usage.Tokens, serviceTier strin
 	if p == nil || !p.IsEnabled() || len(tokens) == 0 {
 		return 0, nil, false
 	}
-	tier := int(tokens["input"])
+	tier := int(tokens.PromptTokens())
 	for key := range tokens {
 		rate, found := p.rateForKey(key, tier, serviceTier)
 		if !found {

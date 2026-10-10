@@ -77,7 +77,7 @@ func TestCostBreakdown_TieredPricing(t *testing.T) {
 			{Meter: "tokens.input", Unit: "per_million", Amount: 6.0, AboveTokens: 200_000},
 		},
 	}
-	// tier axis = input count; above the 200k bracket the whole input is
+	// tier axis = prompt length; above the 200k bracket the whole input is
 	// priced at the higher rate.
 	cost, _, ok := b.CostBreakdown(usage.Tokens{"input": 1_000_000})
 	if !ok {
@@ -85,6 +85,38 @@ func TestCostBreakdown_TieredPricing(t *testing.T) {
 	}
 	if want := 6.0; cost != want {
 		t.Fatalf("tiered cost = %v, want %v", cost, want)
+	}
+}
+
+// Cache reads and writes count toward the prompt length that picks the tier, and the tier applies to every meter.
+func TestCostBreakdown_TierByPromptLength(t *testing.T) {
+	b := Binding{Pricing: []Rate{
+		{Meter: "tokens.input", Unit: "per_million", Amount: 1},
+		{Meter: "tokens.input", Unit: "per_million", Amount: 2, AboveTokens: 100_000},
+		{Meter: "tokens.output", Unit: "per_million", Amount: 5},
+		{Meter: "tokens.output", Unit: "per_million", Amount: 10, AboveTokens: 100_000},
+		{Meter: "tokens.cache_read", Unit: "per_million", Amount: 0.1},
+		{Meter: "tokens.cache_read", Unit: "per_million", Amount: 0.2, AboveTokens: 100_000},
+		{Meter: "tokens.cache_creation", Unit: "per_million", Amount: 1.25},
+		{Meter: "tokens.cache_creation", Unit: "per_million", Amount: 2.5, AboveTokens: 100_000},
+	}}
+	cases := []struct {
+		name   string
+		tokens usage.Tokens
+		want   float64
+	}{
+		{"cache_read pushes the prompt over", usage.Tokens{"input": 1_000, "cache_read": 299_000, "output": 500}, 0.001*2 + 0.299*0.2 + 0.0005*10},
+		{"prompt at the threshold picks upper", usage.Tokens{"input": 1_000, "cache_creation": 99_000, "output": 100}, 0.001*2 + 0.099*2.5 + 0.0001*10},
+		{"cached prompt one below stays base", usage.Tokens{"input": 1_000, "cache_read": 98_999}, 0.001*1 + 0.098999*0.1},
+		{"uncached prompt under stays base", usage.Tokens{"input": 99_999, "output": 100}, 0.099999*1 + 0.0001*5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cost, unpriced, ok := b.CostBreakdown(tc.tokens)
+			if !ok || len(unpriced) != 0 || math.Abs(cost-tc.want) > 1e-12 {
+				t.Fatalf("cost=%v unpriced=%v ok=%v, want %v", cost, unpriced, ok, tc.want)
+			}
+		})
 	}
 }
 
