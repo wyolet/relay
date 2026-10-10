@@ -1,14 +1,5 @@
 //go:build integration
 
-// Package kvtest gives every integration test a Redis/Valkey keyspace of its
-// own on the server named by RELAY_TEST_REDIS_ADDR, so test packages run in
-// parallel against one server despite fixed key names and prefix scans.
-//
-// Isolation is by logical database: a test leases one of the indexes 1..15
-// through a key on database 0, and the database is flushed and the lease
-// released on cleanup. A killed run's leases expire on their own. Cluster
-// and Sentinel topologies are out of scope. Tests skip when
-// RELAY_TEST_REDIS_ADDR is unset.
 package kvtest
 
 import (
@@ -76,6 +67,25 @@ func Config(t testing.TB) kv.RedisConfig {
 		}
 	})
 	return kv.RedisConfig{Addr: addr, DB: db}
+}
+
+// NewRedis returns a kv.Redis on a database of the test's own, closed on
+// cleanup. Skips when RELAY_TEST_REDIS_ADDR is unset.
+func NewRedis(t testing.TB) *kv.Redis {
+	t.Helper()
+	return Connect(t, Config(t))
+}
+
+// Connect opens a kv.Redis on cfg, closed on cleanup, for a test that needs
+// several clients on one keyspace.
+func Connect(t testing.TB, cfg kv.RedisConfig) *kv.Redis {
+	t.Helper()
+	s, err := kv.NewRedis(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewRedis: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
 
 // acquire polls the indexes until one lease is free, then flushes the
