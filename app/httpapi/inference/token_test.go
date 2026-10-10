@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,10 +53,11 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 		token      func() string
 		wantStatus int
 		wantMsg    string
+		wantCode   string // checked when set
 	}{
 		{
 			name:       "another key's signature",
-			token:      func() string { return signWith(t, otherPriv, f) },
+			token:      func() string { return signedWith(t, f, otherPriv, "") },
 			wantStatus: http.StatusUnauthorized, wantMsg: "invalid token",
 		},
 		{
@@ -71,9 +73,11 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 			wantStatus: http.StatusUnauthorized, wantMsg: "token expired",
 		},
 		{
+			// Signing out everywhere (a token-version bump) answers the same
+			// code as a per-jti revocation, so a client has one thing to key on.
 			name:       "token version behind the user's",
 			token:      func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Ver = 0 }) },
-			wantStatus: http.StatusUnauthorized, wantMsg: "token revoked",
+			wantStatus: http.StatusUnauthorized, wantMsg: "token revoked", wantCode: "token_revoked",
 		},
 		{
 			name:       "unknown user",
@@ -98,6 +102,19 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 			}
 			if got := authCode(t, w.Body.Bytes()); got != tc.wantMsg {
 				t.Errorf("message = %q, want %q", got, tc.wantMsg)
+			}
+			if tc.wantCode != "" {
+				var body struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if body.Error.Code != tc.wantCode {
+					t.Errorf("code = %q, want %q", body.Error.Code, tc.wantCode)
+				}
 			}
 		})
 	}
@@ -371,14 +388,74 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
-func signWith(t *testing.T, priv ed25519.PrivateKey, f principalFixture) string {
+// signedWith mints a token for the fixture's user under priv, naming kid.
+func signedWith(t *testing.T, f principalFixture, priv ed25519.PrivateKey, kid string) string {
 	t.Helper()
-	token, err := crypto.SignToken(priv, "", crypto.TokenClaims{
+	tok, err := crypto.SignToken(priv, kid, crypto.TokenClaims{
 		Iss: crypto.TokenIssuer, Sub: "user:" + f.user, Prj: f.project.Meta.ID,
-		Ver: 1, Jti: meta.NewID(), Iat: time.Now().Unix(), Exp: time.Now().Add(time.Hour).Unix(),
+		Ver: 1, Jti: meta.NewID(), Iat: time.Now().Unix(),
+		Exp: time.Now().Add(time.Hour).Unix(),
 	})
 	if err != nil {
-		t.Fatalf("sign token: %v", err)
+		t.Fatalf("sign: %v", err)
 	}
-	return token
+	return tok
+}
+
+func TestSigningKeyRotationKeepsThePreviousKeyLive(t *testing.T) {
+	f := newPrincipalFixture()
+	f.bindings = []*policybinding.PolicyBinding{
+		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
+	}
+	oldPub := f.signer.Public().(ed25519.PublicKey)
+	old := signedWith(t, f, f.signer, crypto.KeyID(oldPub))
+
+	newPub, newPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.tokens.SetKey(newPub)
+	fresh := signedWith(t, f, newPriv, crypto.KeyID(newPub))
+
+	st := f.stack(t)
+	if w := st.do(fresh); w.Code != http.StatusOK {
+		t.Fatalf("token under the new key: status %d: %s", w.Code, w.Body)
+	}
+	if w := st.do(old); w.Code != http.StatusOK {
+		t.Fatalf("token under the previous key: status %d: %s — rotation must not be a global logout", w.Code, w.Body)
+	}
+
+	// A second rotation retires the original key.
+	thirdPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.tokens.SetKey(thirdPub)
+	if w := st.do(old); w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 once the key is two rotations old", w.Code)
+	}
+}
+
+// Tokens minted before the kid header existed carry none and must keep
+// verifying against the current key through the transition.
+func TestTokenWithoutKidVerifiesAgainstTheCurrentKey(t *testing.T) {
+	f := newPrincipalFixture()
+	f.bindings = []*policybinding.PolicyBinding{
+		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
+	}
+	bare := signedWith(t, f, f.signer, "")
+	if crypto.TokenKeyID(bare) != "" {
+		t.Fatal("expected a token with no kid")
+	}
+	if w := f.stack(t).do(bare); w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestUnknownKidIsRefused(t *testing.T) {
+	f := newPrincipalFixture()
+	tok := signedWith(t, f, f.signer, "deadbeefdeadbeef")
+	if w := f.stack(t).do(tok); w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 for a kid naming no held key", w.Code)
+	}
 }
