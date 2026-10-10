@@ -1,0 +1,22 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "hi"
+        }
+      ]
+    }
+  ],
+  "output_mode": "sync",
+  "extensions": {
+    "openai.logprobs": true,
+    "openai.service_tier": "priority",
+    "openai.store": false,
+    "openai.top_logprobs": 2
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "id": "resp_tool1",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "completed",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_lima",
+      "call_id": "call_lima",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Lima\"}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 90,
+    "output_tokens": 18,
+    "total_tokens": 108,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "temperature": null,
+  "top_p": null,
+  "parallel_tool_calls": false,
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_weather",
+      "description": "Current weather for a city.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "additionalProperties": false
+      },
+      "strict": true
+    }
+  ],
+  "metadata": {},
+  "tool_choice": "required"
+}

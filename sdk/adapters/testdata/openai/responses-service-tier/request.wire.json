@@ -1,0 +1,19 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "hi"
+        }
+      ]
+    }
+  ],
+  "store": false,
+  "include": [
+    "reasoning.encrypted_content"
+  ]
+}

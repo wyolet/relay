@@ -1,0 +1,57 @@
+[
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Hel"
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "lo."
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [],
+            "role": "model"
+          },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash",
+      "usageMetadata": {
+        "candidatesTokenCount": 2,
+        "promptTokenCount": 8
+      }
+    }
+  }
+]

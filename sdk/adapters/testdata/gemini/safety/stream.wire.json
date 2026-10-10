@@ -1,0 +1,39 @@
+[
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Here is"
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [],
+            "role": "model"
+          },
+          "finishReason": "SAFETY",
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash",
+      "usageMetadata": {
+        "candidatesTokenCount": 5,
+        "promptTokenCount": 10
+      }
+    }
+  }
+]

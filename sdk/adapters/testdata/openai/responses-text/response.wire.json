@@ -1,0 +1,44 @@
+{
+  "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Hello.",
+          "annotations": [],
+          "logprobs": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 36,
+    "output_tokens": 3,
+    "total_tokens": 39,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "error": null,
+  "incomplete_details": null,
+  "instructions": "You are terse.",
+  "temperature": 0.2,
+  "top_p": null,
+  "parallel_tool_calls": true,
+  "tools": [],
+  "metadata": {
+    "team": "core"
+  },
+  "tool_choice": "auto"
+}

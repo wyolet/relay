@@ -1,0 +1,63 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Weather in Paris?"
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_paris",
+      "call_id": "call_paris",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\"}",
+      "status": "completed"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_paris",
+      "output": "{\"temp_c\":18}"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "And in Lima?"
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "choice": "required",
+    "parallel": false
+  },
+  "output_mode": "sync"
+}

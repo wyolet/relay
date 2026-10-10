@@ -93,6 +93,7 @@ func responsesPartFromCanonical(p v1.Part, asOutput bool) ResponsesPart {
 	case *v1.ImagePart:
 		return &ResponsesImagePart{ImageURL: v.ImageURL, Detail: v.Detail}
 	case *v1.FilePart:
+		// canonical: FilePart.MediaType dropped — a Responses input_file has no media type field.
 		return &ResponsesFilePart{
 			FileURL:  v.FileURL,
 			FileID:   v.FileID,
@@ -125,6 +126,7 @@ func responsesAnnotationFromCanonical(a v1.Annotation) ResponsesAnnotation {
 		}
 		return &ResponsesRawAnnotation{Type: v.Type, JSON: v.JSON}
 	default:
+		// canonical: text_citation annotations dropped — Responses has no offset-only citation type.
 		return nil
 	}
 }

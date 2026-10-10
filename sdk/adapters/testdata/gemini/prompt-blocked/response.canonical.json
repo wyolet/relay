@@ -1,0 +1,26 @@
+{
+  "id": "gemini-<now>",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "gemini-2.5-flash",
+  "status": "incomplete",
+  "finish_reason": "content_filter",
+  "usage": {
+    "input": 8
+  },
+  "incomplete_details": {
+    "reason": "content_filter"
+  },
+  "extensions": {
+    "gemini.prompt_feedback": {
+      "blockReason": "SAFETY",
+      "safetyRatings": [
+        {
+          "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+          "probability": "HIGH",
+          "blocked": true
+        }
+      ]
+    }
+  }
+}

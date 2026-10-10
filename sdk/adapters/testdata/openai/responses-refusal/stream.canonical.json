@@ -1,0 +1,57 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "resp_refuse",
+      "model": "gpt-5-2025-08-07"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_refuse",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_refuse",
+      "index": 0,
+      "kind": "text",
+      "delta": "I can't help with that."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_refuse",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_refuse",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I can't help with that."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "resp_refuse",
+      "status": "completed",
+      "finish_reason": "refusal",
+      "usage": {
+        "input": 30,
+        "output": 7
+      }
+    }
+  }
+]

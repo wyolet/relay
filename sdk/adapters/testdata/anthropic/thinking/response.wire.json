@@ -1,0 +1,22 @@
+{
+  "content": [
+    {
+      "signature": "EqQBCgIYAhIMSecondSignatureBlob",
+      "thinking": "The tool says 13 × 17, so 221 is composite.",
+      "type": "thinking"
+    },
+    {
+      "text": "No. 221 = 13 × 17.",
+      "type": "text"
+    }
+  ],
+  "id": "msg_think1",
+  "model": "claude-sonnet-4-5-20250929",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "type": "message",
+  "usage": {
+    "input_tokens": 512,
+    "output_tokens": 96
+  }
+}

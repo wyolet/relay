@@ -68,6 +68,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 			}
 		}
 		for _, fc := range runToolUses {
+			// canonical: FunctionCall.ID/Status/ProviderData dropped — a tool_use block carries only its call id, which ParseRequest reuses as the item id.
 			var inputObj any
 			if fc.Arguments != "" {
 				if err := json.Unmarshal([]byte(fc.Arguments), &inputObj); err != nil {
@@ -153,6 +154,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	for _, item := range items {
 		switch v := item.(type) {
 		case *v1.Message:
+			// canonical: Message.ID/Status/ProviderData dropped — Anthropic messages carry no item id, status, or opaque payload.
 			if v.Role == v1.RoleDeveloper || v.Role == v1.RoleSystem {
 				var sb strings.Builder
 				for _, p := range v.Content {
@@ -234,6 +236,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 			// rejects modified or unsigned blocks. Only ProviderData payloads
 			// qualify — they hold the exact block (text may legitimately be
 			// empty under display "omitted").
+			// canonical: Reasoning.ID/Status/Summary dropped — a thinking block carries only its signed thinking text.
 			if len(v.ProviderData) > 0 {
 				var pd struct {
 					Type      string `json:"type"`

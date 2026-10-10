@@ -1,0 +1,62 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "chatcmpl-refuse",
+      "model": "gpt-4o-2024-08-06"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_0",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "I can't help"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "kind": "text",
+      "delta": " with that."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_0",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "I can't help with that."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "chatcmpl-refuse",
+      "status": "completed",
+      "finish_reason": "refusal"
+    }
+  }
+]

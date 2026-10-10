@@ -1,0 +1,262 @@
+[
+  {
+    "event": "response.created",
+    "data": {
+      "type": "response.created",
+      "sequence_number": 0,
+      "response": {
+        "id": "resp_reason1",
+        "object": "response",
+        "created_at": "<now>",
+        "model": "gpt-5-2025-08-07",
+        "status": "in_progress",
+        "output": [],
+        "error": null,
+        "incomplete_details": null,
+        "instructions": null,
+        "temperature": null,
+        "top_p": null,
+        "parallel_tool_calls": false,
+        "tools": [],
+        "metadata": {},
+        "tool_choice": "auto"
+      }
+    }
+  },
+  {
+    "event": "response.in_progress",
+    "data": {
+      "type": "response.in_progress",
+      "sequence_number": 1,
+      "response": {
+        "id": "resp_reason1",
+        "object": "response",
+        "created_at": "<now>",
+        "model": "gpt-5-2025-08-07",
+        "status": "in_progress",
+        "output": [],
+        "error": null,
+        "incomplete_details": null,
+        "instructions": null,
+        "temperature": null,
+        "top_p": null,
+        "parallel_tool_calls": false,
+        "tools": [],
+        "metadata": {},
+        "tool_choice": "auto"
+      }
+    }
+  },
+  {
+    "event": "response.output_item.added",
+    "data": {
+      "type": "response.output_item.added",
+      "sequence_number": 2,
+      "output_index": 0,
+      "item": {
+        "type": "reasoning",
+        "id": "rs_reason1",
+        "summary": []
+      }
+    }
+  },
+  {
+    "event": "response.reasoning_text.delta",
+    "data": {
+      "type": "response.reasoning_text.delta",
+      "sequence_number": 3,
+      "item_id": "rs_reason1",
+      "output_index": 0,
+      "content_index": 0,
+      "delta": "**Checking divisors**"
+    }
+  },
+  {
+    "event": "response.reasoning_text.delta",
+    "data": {
+      "type": "response.reasoning_text.delta",
+      "sequence_number": 4,
+      "item_id": "rs_reason1",
+      "output_index": 0,
+      "content_index": 0,
+      "delta": "\n\n221 = 13 × 17."
+    }
+  },
+  {
+    "event": "response.reasoning_text.done",
+    "data": {
+      "type": "response.reasoning_text.done",
+      "sequence_number": 5,
+      "item_id": "rs_reason1",
+      "output_index": 0,
+      "content_index": 0,
+      "text": "**Checking divisors**\n\n221 = 13 × 17."
+    }
+  },
+  {
+    "event": "response.output_item.done",
+    "data": {
+      "type": "response.output_item.done",
+      "sequence_number": 6,
+      "output_index": 0,
+      "item": {
+        "type": "reasoning",
+        "id": "rs_reason1",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "**Checking divisors**\n\n221 = 13 × 17."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "response.output_item.added",
+    "data": {
+      "type": "response.output_item.added",
+      "sequence_number": 7,
+      "output_index": 1,
+      "item": {
+        "type": "message",
+        "id": "msg_reason1",
+        "role": "assistant",
+        "content": null
+      }
+    }
+  },
+  {
+    "event": "response.content_part.added",
+    "data": {
+      "type": "response.content_part.added",
+      "sequence_number": 8,
+      "item_id": "msg_reason1",
+      "output_index": 1,
+      "content_index": 0,
+      "part": {
+        "type": "output_text",
+        "text": "",
+        "annotations": [],
+        "logprobs": []
+      }
+    }
+  },
+  {
+    "event": "response.output_text.delta",
+    "data": {
+      "type": "response.output_text.delta",
+      "sequence_number": 9,
+      "item_id": "msg_reason1",
+      "output_index": 1,
+      "content_index": 0,
+      "delta": "No. 221 = 13 × 17."
+    }
+  },
+  {
+    "event": "response.output_text.done",
+    "data": {
+      "type": "response.output_text.done",
+      "sequence_number": 10,
+      "item_id": "msg_reason1",
+      "output_index": 1,
+      "content_index": 0,
+      "text": "No. 221 = 13 × 17."
+    }
+  },
+  {
+    "event": "response.content_part.done",
+    "data": {
+      "type": "response.content_part.done",
+      "sequence_number": 11,
+      "item_id": "msg_reason1",
+      "output_index": 1,
+      "content_index": 0,
+      "part": {
+        "type": "output_text",
+        "text": "No. 221 = 13 × 17.",
+        "annotations": [],
+        "logprobs": []
+      }
+    }
+  },
+  {
+    "event": "response.output_item.done",
+    "data": {
+      "type": "response.output_item.done",
+      "sequence_number": 12,
+      "output_index": 1,
+      "item": {
+        "type": "message",
+        "id": "msg_reason1",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "No. 221 = 13 × 17.",
+            "annotations": [],
+            "logprobs": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "response.completed",
+    "data": {
+      "type": "response.completed",
+      "sequence_number": 13,
+      "response": {
+        "id": "resp_reason1",
+        "object": "response",
+        "created_at": "<now>",
+        "model": "gpt-5-2025-08-07",
+        "status": "completed",
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "rs_reason1",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "**Checking divisors**\n\n221 = 13 × 17."
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "msg_reason1",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "No. 221 = 13 × 17.",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 160,
+          "total_tokens": 172,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 128
+          }
+        },
+        "error": null,
+        "incomplete_details": null,
+        "instructions": null,
+        "temperature": null,
+        "top_p": null,
+        "parallel_tool_calls": false,
+        "tools": [],
+        "metadata": {},
+        "tool_choice": "auto"
+      }
+    }
+  }
+]

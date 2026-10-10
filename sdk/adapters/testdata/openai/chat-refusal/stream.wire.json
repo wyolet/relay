@@ -1,0 +1,71 @@
+[
+  {
+    "data": {
+      "id": "chatcmpl-refuse",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-4o-2024-08-06",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "chatcmpl-refuse",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-4o-2024-08-06",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "I can't help"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "chatcmpl-refuse",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-4o-2024-08-06",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": " with that."
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "chatcmpl-refuse",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-4o-2024-08-06",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "content_filter"
+        }
+      ]
+    }
+  },
+  {
+    "data": "[DONE]"
+  }
+]

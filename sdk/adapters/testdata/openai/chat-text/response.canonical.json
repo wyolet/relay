@@ -1,0 +1,27 @@
+{
+  "id": "chatcmpl-B9MBs8CjcvOU2jLn4n570S5qMJKcT",
+  "object": "response",
+  "created_at": 1741569952,
+  "model": "gpt-4o-2024-08-06",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_chatcmpl-B9MBs8CjcvOU2jLn4n570S5qMJKcT",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Hello."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 19,
+    "output": 2
+  },
+  "service_tier": "default"
+}

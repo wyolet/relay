@@ -1,0 +1,27 @@
+{
+  "id": "gemini-<now>",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "gemini-2.5-flash",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_0",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Twenty days a year."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "cache_read": 1920,
+    "input": 128,
+    "output": 6
+  }
+}

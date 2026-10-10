@@ -1,0 +1,26 @@
+{
+  "id": "msg_refuse",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "claude-sonnet-4-5-20250929",
+  "status": "completed",
+  "finish_reason": "refusal",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_0",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "I can't help with that."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 30,
+    "output": 7
+  }
+}

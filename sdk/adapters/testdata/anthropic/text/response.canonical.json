@@ -1,0 +1,26 @@
+{
+  "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "claude-sonnet-4-5-20250929",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_0",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Hello."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 12,
+    "output": 4
+  }
+}

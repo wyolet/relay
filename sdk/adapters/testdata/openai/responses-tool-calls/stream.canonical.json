@@ -1,0 +1,63 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "resp_tool1",
+      "model": "gpt-5-2025-08-07"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "fc_lima",
+      "item_type": "function_call",
+      "index": 0,
+      "name": "get_weather"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "fc_lima",
+      "index": 0,
+      "kind": "arguments",
+      "delta": "{\"city\":"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "fc_lima",
+      "index": 0,
+      "kind": "arguments",
+      "delta": "\"Lima\"}"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "fc_lima",
+      "index": 0,
+      "item": {
+        "type": "function_call",
+        "id": "fc_lima",
+        "call_id": "call_lima",
+        "name": "get_weather",
+        "arguments": "{\"city\":\"Lima\"}",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "resp_tool1",
+      "status": "completed",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "input": 90,
+        "output": 18
+      }
+    }
+  }
+]

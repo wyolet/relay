@@ -1,0 +1,60 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "gemini-<now>",
+      "model": "gemini-2.5-flash"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_0",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "Partial"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_0",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Partial"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "gemini-<now>",
+      "status": "incomplete",
+      "finish_reason": "other",
+      "usage": {
+        "input": 9,
+        "output": 1
+      },
+      "incomplete_details": {
+        "reason": "gemini:NEW_REASON"
+      }
+    }
+  }
+]

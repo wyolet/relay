@@ -1,0 +1,41 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "gemini-<now>",
+      "model": "gemini-2.5-flash"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_0",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "Here is"
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "gemini-<now>",
+      "status": "incomplete",
+      "finish_reason": "content_filter",
+      "usage": {
+        "input": 10,
+        "output": 5
+      },
+      "incomplete_details": {
+        "reason": "content_filter"
+      }
+    }
+  }
+]

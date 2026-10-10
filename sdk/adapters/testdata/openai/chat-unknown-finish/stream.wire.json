@@ -1,0 +1,59 @@
+[
+  {
+    "data": {
+      "id": "chatcmpl-new",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-5",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "chatcmpl-new",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-5",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "Partial"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "chatcmpl-new",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "gpt-5",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "new_reason"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 1,
+        "total_tokens": 10
+      }
+    }
+  },
+  {
+    "data": "[DONE]"
+  }
+]

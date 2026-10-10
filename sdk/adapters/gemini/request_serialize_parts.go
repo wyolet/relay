@@ -14,14 +14,17 @@ func canonicalPartsToGemini(parts []v1.Part) ([]geminiPart, error) {
 		case *v1.TextPart:
 			out = append(out, geminiPart{Text: v.Text})
 		case *v1.OutputTextPart:
+			// canonical: OutputTextPart.Annotations dropped — a Gemini text part takes no citations on input.
 			out = append(out, geminiPart{Text: v.Text})
 		case *v1.ImagePart:
+			// canonical: ImagePart.Detail dropped — per-part mediaResolution exists on Gemini 3+ only, and canonical carries no model generation to gate it.
 			gp, err := canonicalImageToGemini(v.ImageURL)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, gp)
 		case *v1.FilePart:
+			// canonical: FilePart.Filename dropped — Gemini API parts carry no file name (displayName on inlineData/fileData is Vertex-only).
 			if v.FileData != "" {
 				mt := v.MediaType
 				if mt == "" {

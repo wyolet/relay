@@ -1,0 +1,59 @@
+[
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "**Reading the factors**\n\n13 × 17 = 221.",
+                "thought": true
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-pro"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "No. 221 = 13 × 17."
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-pro"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [],
+            "role": "model"
+          },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-pro",
+      "usageMetadata": {
+        "candidatesTokenCount": 12,
+        "promptTokenCount": 60,
+        "thoughtsTokenCount": 140
+      }
+    }
+  }
+]

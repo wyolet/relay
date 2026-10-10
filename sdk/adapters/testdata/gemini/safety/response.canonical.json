@@ -1,0 +1,27 @@
+{
+  "id": "gemini-<now>",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "gemini-2.5-flash",
+  "status": "incomplete",
+  "finish_reason": "content_filter",
+  "usage": {
+    "input": 10
+  },
+  "incomplete_details": {
+    "reason": "content_filter"
+  },
+  "extensions": {
+    "gemini.safety_ratings": [
+      {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "probability": "HIGH",
+        "blocked": true
+      },
+      {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "probability": "NEGLIGIBLE"
+      }
+    ]
+  }
+}

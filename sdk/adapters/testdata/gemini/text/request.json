@@ -1,0 +1,5 @@
+{
+  "systemInstruction": {"parts": [{"text": "You are terse."}]},
+  "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+  "generationConfig": {"temperature": 0.2, "topK": 40, "maxOutputTokens": 64, "stopSequences": ["END"], "seed": 7}
+}

@@ -1,0 +1,22 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "What is the leave policy?"
+        }
+      ]
+    }
+  ],
+  "instructions": "You answer questions about the attached handbook.",
+  "store": false,
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "prompt_cache_key": "conv-7f3a",
+  "prompt_cache_retention": "in_memory"
+}

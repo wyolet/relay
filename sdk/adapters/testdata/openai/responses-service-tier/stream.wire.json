@@ -1,0 +1,86 @@
+[
+  {
+    "event": "response.created",
+    "data": {
+      "type": "response.created",
+      "sequence_number": 0,
+      "response": {
+        "id": "resp_tier",
+        "object": "response",
+        "created_at": "<now>",
+        "model": "gpt-5",
+        "status": "in_progress",
+        "output": [],
+        "error": null,
+        "incomplete_details": null,
+        "instructions": null,
+        "temperature": null,
+        "top_p": null,
+        "parallel_tool_calls": false,
+        "tools": [],
+        "metadata": {},
+        "tool_choice": "auto"
+      }
+    }
+  },
+  {
+    "event": "response.in_progress",
+    "data": {
+      "type": "response.in_progress",
+      "sequence_number": 1,
+      "response": {
+        "id": "resp_tier",
+        "object": "response",
+        "created_at": "<now>",
+        "model": "gpt-5",
+        "status": "in_progress",
+        "output": [],
+        "error": null,
+        "incomplete_details": null,
+        "instructions": null,
+        "temperature": null,
+        "top_p": null,
+        "parallel_tool_calls": false,
+        "tools": [],
+        "metadata": {},
+        "tool_choice": "auto"
+      }
+    }
+  },
+  {
+    "event": "response.completed",
+    "data": {
+      "type": "response.completed",
+      "sequence_number": 2,
+      "response": {
+        "id": "resp_tier",
+        "object": "response",
+        "created_at": "<now>",
+        "model": "gpt-5",
+        "status": "completed",
+        "output": [],
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "total_tokens": 12,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "service_tier": "flex",
+        "error": null,
+        "incomplete_details": null,
+        "instructions": null,
+        "temperature": null,
+        "top_p": null,
+        "parallel_tool_calls": false,
+        "tools": [],
+        "metadata": {},
+        "tool_choice": "auto"
+      }
+    }
+  }
+]

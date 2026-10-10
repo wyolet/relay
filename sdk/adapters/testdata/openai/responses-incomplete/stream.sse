@@ -1,0 +1,15 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_cut","object":"response","created_at":1741476542,"status":"in_progress","model":"gpt-5-2025-08-07","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"type":"message","id":"msg_cut","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_cut","output_index":0,"content_index":0,"delta":"The first three reasons are"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_cut","status":"incomplete","role":"assistant","content":[{"type":"output_text","text":"The first three reasons are","annotations":[]}]}}
+
+event: response.incomplete
+data: {"type":"response.incomplete","sequence_number":4,"response":{"id":"resp_cut","object":"response","created_at":1741476542,"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"model":"gpt-5-2025-08-07","output":[],"usage":{"input_tokens":20,"output_tokens":16,"total_tokens":36}}}
+

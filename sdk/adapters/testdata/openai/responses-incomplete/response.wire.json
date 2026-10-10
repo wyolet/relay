@@ -1,0 +1,44 @@
+{
+  "id": "resp_cut",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "incomplete",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_cut",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "The first three reasons are",
+          "annotations": [],
+          "logprobs": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 20,
+    "output_tokens": 16,
+    "total_tokens": 36,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "error": null,
+  "incomplete_details": {
+    "reason": "max_output_tokens"
+  },
+  "instructions": null,
+  "temperature": null,
+  "top_p": null,
+  "parallel_tool_calls": false,
+  "tools": [],
+  "metadata": {},
+  "tool_choice": "auto"
+}

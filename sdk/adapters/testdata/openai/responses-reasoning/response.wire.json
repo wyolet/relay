@@ -1,0 +1,53 @@
+{
+  "id": "resp_reason1",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "completed",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "rs_reason1",
+      "summary": [
+        {
+          "type": "summary_text",
+          "text": "**Checking divisors**\n\n221 = 13 × 17."
+        }
+      ],
+      "encrypted_content": "gAAAAABoX1ExampleEncryptedBlob=="
+    },
+    {
+      "type": "message",
+      "id": "msg_reason1",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "No. 221 = 13 × 17.",
+          "annotations": [],
+          "logprobs": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 160,
+    "total_tokens": 172,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 128
+    }
+  },
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "temperature": null,
+  "top_p": null,
+  "parallel_tool_calls": true,
+  "tools": [],
+  "metadata": {},
+  "tool_choice": "auto"
+}

@@ -1,0 +1,29 @@
+{
+  "id": "resp_tier",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5",
+  "status": "completed",
+  "output": null,
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 2,
+    "total_tokens": 12,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "service_tier": "priority",
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "temperature": null,
+  "top_p": null,
+  "parallel_tool_calls": true,
+  "tools": [],
+  "metadata": {},
+  "tool_choice": "auto"
+}

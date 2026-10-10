@@ -1,0 +1,21 @@
+{
+  "model": "gpt-5",
+  "instructions": "You answer questions about the attached handbook.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "What is the leave policy?"
+        }
+      ]
+    }
+  ],
+  "cache_config": {
+    "key": "conv-7f3a",
+    "ttl": "5m"
+  },
+  "output_mode": "sync"
+}

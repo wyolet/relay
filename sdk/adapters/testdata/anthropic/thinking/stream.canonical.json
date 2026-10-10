@@ -1,0 +1,106 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "msg_think1",
+      "model": "claude-sonnet-4-5-20250929"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "t_0",
+      "item_type": "reasoning",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "t_0",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": "The tool says 13 × 17, "
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "t_0",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": "so 221 is composite."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "t_0",
+      "index": 0,
+      "item": {
+        "type": "reasoning",
+        "id": "t_0",
+        "summary": [
+          {
+            "text": "The tool says 13 × 17, so 221 is composite."
+          }
+        ],
+        "content": "The tool says 13 × 17, so 221 is composite.",
+        "status": "completed",
+        "provider_data": {
+          "signature": "EqQBCgIYAhIMSecondSignatureBlob",
+          "thinking": "The tool says 13 × 17, so 221 is composite.",
+          "type": "thinking"
+        }
+      }
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "t_1",
+      "item_type": "message",
+      "index": 1
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "t_1",
+      "index": 1,
+      "kind": "text",
+      "delta": "No. 221 = 13 × 17."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "t_1",
+      "index": 1,
+      "item": {
+        "type": "message",
+        "id": "t_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "No. 221 = 13 × 17."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "msg_think1",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 512,
+        "output": 96
+      }
+    }
+  }
+]

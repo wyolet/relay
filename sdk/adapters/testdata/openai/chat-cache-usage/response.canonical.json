@@ -1,0 +1,27 @@
+{
+  "id": "chatcmpl-cache",
+  "object": "response",
+  "created_at": 1741569952,
+  "model": "gpt-4.1-2025-04-14",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_chatcmpl-cache",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Twenty days a year."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "cache_read": 1920,
+    "input": 128,
+    "output": 6
+  }
+}

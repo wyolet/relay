@@ -1,0 +1,60 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "resp_cut",
+      "model": "gpt-5-2025-08-07"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_cut",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_cut",
+      "index": 0,
+      "kind": "text",
+      "delta": "The first three reasons are"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_cut",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_cut",
+        "status": "incomplete",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "The first three reasons are"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "resp_cut",
+      "status": "incomplete",
+      "finish_reason": "length",
+      "usage": {
+        "input": 20,
+        "output": 16
+      },
+      "incomplete_details": {
+        "reason": "max_output_tokens"
+      }
+    }
+  }
+]

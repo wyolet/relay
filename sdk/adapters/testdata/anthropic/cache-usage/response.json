@@ -1,0 +1,16 @@
+{
+  "id": "msg_cache",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-5-20250929",
+  "content": [{"type": "text", "text": "Twenty days a year."}],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 24,
+    "cache_creation_input_tokens": 1024,
+    "cache_read_input_tokens": 2048,
+    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1024},
+    "output_tokens": 6
+  }
+}

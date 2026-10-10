@@ -1,0 +1,16 @@
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_lima","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Lima\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_quito","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"city\":\"Quito\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4o-2024-08-06","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160}}
+
+data: [DONE]
+

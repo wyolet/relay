@@ -1,0 +1,7 @@
+{
+  "model": "gpt-5",
+  "instructions": "You answer questions about the attached handbook.",
+  "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What is the leave policy?"}]}],
+  "prompt_cache_key": "conv-7f3a",
+  "prompt_cache_retention": "in_memory"
+}

@@ -1,0 +1,10 @@
+{
+  "model": "gpt-5",
+  "instructions": "You are terse.",
+  "input": "Say hello.",
+  "temperature": 0.2,
+  "max_output_tokens": 64,
+  "metadata": {"team": "core"},
+  "store": false,
+  "stream": true
+}

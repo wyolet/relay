@@ -1,0 +1,61 @@
+{
+  "model": "claude-sonnet-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Weather in Paris?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "Let me check.",
+          "type": "text"
+        },
+        {
+          "id": "toolu_paris",
+          "input": {
+            "city": "Paris"
+          },
+          "name": "get_weather",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "content": "18C and clear",
+          "tool_use_id": "toolu_paris",
+          "type": "tool_result"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "And in Lima?"
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Current weather for a city.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "auto"
+  },
+  "max_tokens": 1024
+}

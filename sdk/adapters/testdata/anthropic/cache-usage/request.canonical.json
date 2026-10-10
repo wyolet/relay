@@ -1,0 +1,41 @@
+{
+  "model": "claude-sonnet-4-5",
+  "instructions": "You answer questions about the attached handbook.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "What is the leave policy?"
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "claude-sonnet-4-5": {
+      "sampling": {
+        "max_tokens": 1024
+      }
+    }
+  },
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "lookup",
+        "description": "Look a section up.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "output_mode": "sync"
+}

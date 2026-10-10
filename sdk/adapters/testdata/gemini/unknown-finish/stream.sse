@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"text":"Partial"}],"role":"model"},"index":0}],"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"NEW_REASON","index":0}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":1,"totalTokenCount":10},"modelVersion":"gemini-2.5-flash"}
+

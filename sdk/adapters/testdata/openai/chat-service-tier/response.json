@@ -1,0 +1,8 @@
+{
+  "id": "c1",
+  "object": "chat.completion",
+  "model": "gpt-5",
+  "service_tier": "priority",
+  "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+  "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+}

@@ -1,0 +1,66 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+      "model": "claude-sonnet-4-5-20250929"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "t_0",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "t_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "Hel"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "t_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "lo."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "t_0",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "t_0",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Hello."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 12,
+        "output": 4
+      }
+    }
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Partial"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "NEW_REASON",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-2.5-flash",
+  "usageMetadata": {
+    "candidatesTokenCount": 1,
+    "promptTokenCount": 9
+  }
+}

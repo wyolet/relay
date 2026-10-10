@@ -1,0 +1,32 @@
+{
+  "id": "chatcmpl-new",
+  "object": "response",
+  "created_at": 1741569952,
+  "model": "gpt-5",
+  "status": "incomplete",
+  "finish_reason": "other",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_chatcmpl-new",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Partial"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 9,
+    "output": 1
+  },
+  "incomplete_details": {
+    "reason": "openai:new_reason"
+  },
+  "extensions": {
+    "openai.finish_reason": "new_reason"
+  }
+}

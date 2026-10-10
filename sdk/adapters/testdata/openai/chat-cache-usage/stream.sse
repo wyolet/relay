@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4.1-2025-04-14","choices":[{"index":0,"delta":{"role":"assistant","content":"Twenty days a year."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4.1-2025-04-14","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1741569952,"model":"gpt-4.1-2025-04-14","choices":[],"usage":{"prompt_tokens":2048,"completion_tokens":6,"total_tokens":2054,"prompt_tokens_details":{"cached_tokens":1920}}}
+
+data: [DONE]
+

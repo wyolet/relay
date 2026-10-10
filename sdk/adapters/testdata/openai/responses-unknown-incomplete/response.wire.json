@@ -1,0 +1,44 @@
+{
+  "id": "resp_new",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "incomplete",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_new",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Partial",
+          "annotations": [],
+          "logprobs": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 9,
+    "output_tokens": 1,
+    "total_tokens": 10,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "error": null,
+  "incomplete_details": {
+    "reason": "new_reason"
+  },
+  "instructions": null,
+  "temperature": null,
+  "top_p": null,
+  "parallel_tool_calls": false,
+  "tools": [],
+  "metadata": {},
+  "tool_choice": "auto"
+}

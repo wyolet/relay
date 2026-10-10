@@ -1,0 +1,105 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "reason-1",
+      "model": "deepseek-reasoner"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "rs_0",
+      "item_type": "reasoning",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "rs_0",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": "221 = 13 * 17"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "rs_0",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": ", so not prime."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "rs_0",
+      "index": 0,
+      "item": {
+        "type": "reasoning",
+        "id": "rs_0",
+        "summary": [
+          {
+            "text": "221 = 13 * 17, so not prime."
+          }
+        ],
+        "content": "221 = 13 * 17, so not prime.",
+        "status": "completed",
+        "provider_data": {
+          "cc_reasoning_field": "reasoning_content"
+        }
+      }
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_1",
+      "item_type": "message",
+      "index": 1
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_1",
+      "index": 1,
+      "kind": "text",
+      "delta": "No. 221 = 13 × 17."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_1",
+      "index": 1,
+      "item": {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "No. 221 = 13 × 17."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "reason-1",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 12,
+        "output": 48,
+        "reasoning": 36
+      }
+    }
+  }
+]

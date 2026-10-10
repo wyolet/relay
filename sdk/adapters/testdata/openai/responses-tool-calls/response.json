@@ -1,0 +1,26 @@
+{
+  "id": "resp_tool1",
+  "object": "response",
+  "created_at": 1741476542,
+  "status": "completed",
+  "model": "gpt-5-2025-08-07",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_lima",
+      "call_id": "call_lima",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Lima\"}",
+      "status": "completed"
+    }
+  ],
+  "parallel_tool_calls": false,
+  "tool_choice": "required",
+  "usage": {
+    "input_tokens": 90,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens": 18,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 108
+  }
+}

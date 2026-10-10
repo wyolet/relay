@@ -1,0 +1,8 @@
+{
+  "promptFeedback": {
+    "blockReason": "SAFETY",
+    "safetyRatings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "HIGH", "blocked": true}]
+  },
+  "usageMetadata": {"promptTokenCount": 8, "totalTokenCount": 8},
+  "modelVersion": "gemini-2.5-flash"
+}

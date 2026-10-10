@@ -1,0 +1,38 @@
+{
+  "id": "gemini-<now>",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "gemini-2.5-pro",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "rs_0",
+      "summary": [
+        {
+          "text": "**Reading the factors**\n\n13 × 17 = 221."
+        }
+      ],
+      "content": "**Reading the factors**\n\n13 × 17 = 221.",
+      "status": "completed"
+    },
+    {
+      "type": "message",
+      "id": "msg_1",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "No. 221 = 13 × 17."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 60,
+    "output": 152,
+    "reasoning": 140
+  }
+}

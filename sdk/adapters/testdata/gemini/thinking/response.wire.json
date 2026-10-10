@@ -1,0 +1,26 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "**Reading the factors**\n\n13 × 17 = 221.",
+            "thought": true
+          },
+          {
+            "text": "No. 221 = 13 × 17."
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-2.5-pro",
+  "usageMetadata": {
+    "candidatesTokenCount": 12,
+    "promptTokenCount": 60,
+    "thoughtsTokenCount": 140
+  }
+}

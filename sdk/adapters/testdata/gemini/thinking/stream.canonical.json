@@ -1,0 +1,93 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "gemini-<now>",
+      "model": "gemini-2.5-pro"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "rs_0",
+      "item_type": "reasoning",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "rs_0",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": "**Reading the factors**\n\n13 × 17 = 221."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "rs_0",
+      "index": 0,
+      "item": {
+        "type": "reasoning",
+        "id": "rs_0",
+        "summary": [
+          {
+            "text": "**Reading the factors**\n\n13 × 17 = 221."
+          }
+        ],
+        "content": "**Reading the factors**\n\n13 × 17 = 221.",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_1",
+      "item_type": "message",
+      "index": 1
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_1",
+      "index": 1,
+      "kind": "text",
+      "delta": "No. 221 = 13 × 17."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_1",
+      "index": 1,
+      "item": {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "No. 221 = 13 × 17."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "gemini-<now>",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 60,
+        "output": 152,
+        "reasoning": 140
+      }
+    }
+  }
+]

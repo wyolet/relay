@@ -1,0 +1,23 @@
+{
+  "id": "resp_cache",
+  "object": "response",
+  "created_at": 1741476542,
+  "status": "completed",
+  "model": "gpt-5-2025-08-07",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_cache",
+      "status": "completed",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "Twenty days a year.", "annotations": []}]
+    }
+  ],
+  "usage": {
+    "input_tokens": 2048,
+    "input_tokens_details": {"cached_tokens": 1920},
+    "output_tokens": 6,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 2054
+  }
+}

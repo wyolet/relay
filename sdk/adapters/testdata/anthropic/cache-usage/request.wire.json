@@ -1,0 +1,25 @@
+{
+  "model": "claude-sonnet-4-5",
+  "system": "You answer questions about the attached handbook.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the leave policy?"
+    }
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "Look a section up.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ],
+  "max_tokens": 1024
+}

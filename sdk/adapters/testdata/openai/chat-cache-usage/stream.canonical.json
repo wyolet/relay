@@ -1,0 +1,58 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "chatcmpl-cache",
+      "model": "gpt-4.1-2025-04-14"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_0",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "Twenty days a year."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_0",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Twenty days a year."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "chatcmpl-cache",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "cache_read": 1920,
+        "input": 128,
+        "output": 6
+      }
+    }
+  }
+]

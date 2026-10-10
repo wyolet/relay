@@ -1,0 +1,40 @@
+[
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Twenty days a year."
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [],
+            "role": "model"
+          },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash",
+      "usageMetadata": {
+        "cachedContentTokenCount": 1920,
+        "candidatesTokenCount": 6,
+        "promptTokenCount": 128
+      }
+    }
+  }
+]

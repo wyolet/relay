@@ -236,6 +236,7 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 				continue
 			}
 			// A tool lowered from `custom` goes back out verbatim: only the original definition carries the freeform format the upstream needs.
+			// canonical: FunctionTool.ProviderData dropped unless it holds a Responses custom tool — another vendor's definition has no Responses form.
 			if ct := responsesCustomToolFromCanonical(ft); ct != nil {
 				rreq.Tools = append(rreq.Tools, ct)
 				continue

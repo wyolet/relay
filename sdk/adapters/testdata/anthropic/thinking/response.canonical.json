@@ -1,0 +1,42 @@
+{
+  "id": "msg_think1",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "claude-sonnet-4-5-20250929",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "rs_0",
+      "summary": [
+        {
+          "text": "The tool says 13 × 17, so 221 is composite."
+        }
+      ],
+      "content": "The tool says 13 × 17, so 221 is composite.",
+      "status": "completed",
+      "provider_data": {
+        "signature": "EqQBCgIYAhIMSecondSignatureBlob",
+        "thinking": "The tool says 13 × 17, so 221 is composite.",
+        "type": "thinking"
+      }
+    },
+    {
+      "type": "message",
+      "id": "msg_1",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "No. 221 = 13 × 17."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 512,
+    "output": 96
+  }
+}

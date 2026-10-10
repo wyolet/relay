@@ -1,0 +1,29 @@
+{
+  "model": "gpt-4o",
+  "instructions": "You are terse.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Say hello."
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "gpt-4o": {
+      "sampling": {
+        "temperature": 0.2,
+        "max_tokens": 64
+      }
+    }
+  },
+  "output_mode": "stream",
+  "user": "user-42",
+  "metadata": {
+    "team": "core"
+  }
+}
