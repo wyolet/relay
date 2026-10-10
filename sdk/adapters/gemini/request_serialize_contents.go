@@ -33,6 +33,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 		}
 		var parts []geminiPart
 		for _, fc := range pendingFCs {
+			// canonical: FunctionCall.ID/Status dropped — a Gemini functionCall part carries no item id or status.
 			var argsObj json.RawMessage
 			if fc.Arguments != "" {
 				argsObj = json.RawMessage(fc.Arguments)
@@ -55,6 +56,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 		}
 		var parts []geminiPart
 		for _, fco := range pendingFCOs {
+			// canonical: non-text tool-result parts dropped — functionResponse.parts exists on Gemini 3+ only, and canonical carries no model generation to gate it.
 			resp := fco.Output
 			if resp == "" && len(fco.Content) > 0 {
 				var sb strings.Builder
@@ -94,6 +96,8 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 	for _, item := range items {
 		switch v := item.(type) {
 		case *v1.Message:
+			// canonical: Message.ID/Status/ProviderData dropped — Gemini contents carry no item id, status, or opaque payload.
+			// canonical: ItemCacheConfig.Anchor dropped — Gemini caches implicitly; it has no breakpoint.
 			if v.Role == v1.RoleSystem || v.Role == v1.RoleDeveloper {
 				var sb strings.Builder
 				for _, p := range v.Content {
@@ -163,6 +167,8 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			// If there's no ProviderData (no signature), Gemini ignores unknown
 			// thought parts in history, so this is safe to always emit.
 			flushFCOs()
+			// canonical: Reasoning.ID/Status dropped — a thought part carries no id or status.
+			// canonical: Reasoning.Summary dropped when Content is set — a thought part carries one text.
 			text := v.Content
 			if text == "" && len(v.Summary) > 0 {
 				text = v.Summary[0].Text

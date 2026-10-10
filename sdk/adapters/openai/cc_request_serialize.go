@@ -156,6 +156,7 @@ func canonicalItemsToCC(instructions string, items []v1.Item) ([]ChatMessage, er
 			msgs = append(msgs, msg)
 
 		case *v1.FunctionCall:
+			// canonical: FunctionCall.ID/Status/ProviderData dropped — a CC tool call carries only its call id, which ParseRequest reuses as the item id.
 			// Attach to the last assistant message if possible; otherwise synthesize.
 			tc := ToolCall{
 				ID:   v.CallID,

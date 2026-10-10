@@ -135,6 +135,8 @@ func ccAssistantMessageToItem(msg *ChatMessage) ([]v1.Item, error) {
 
 // canonicalMessageToCC converts a canonical *v1.Message to a CC ChatMessage.
 func canonicalMessageToCC(m *v1.Message) (ChatMessage, error) {
+	// canonical: Message.ID/Status/ProviderData dropped — CC messages carry no item id, status, or opaque payload.
+	// canonical: ItemCacheConfig.Anchor dropped — OpenAI caches prefixes automatically; a per-item breakpoint has no wire form.
 	msg := ChatMessage{Role: string(m.Role)}
 	if m.Role == v1.RoleDeveloper {
 		msg.Role = "system"
@@ -157,6 +159,7 @@ func canonicalMessageToCC(m *v1.Message) (ChatMessage, error) {
 // canonicalPartsToCC serializes canonical []v1.Part into a CC content field.
 // All-text → compact string. Mixed → array of ContentParts.
 func canonicalPartsToCC(parts []v1.Part) (json.RawMessage, error) {
+	// canonical: OutputTextPart.Annotations dropped — CC message content is plain text; citations exist only on responses.
 	allText := true
 	for _, p := range parts {
 		switch p.PartType() {
@@ -208,6 +211,8 @@ func canonicalPartToCC(p v1.Part) (ContentPart, error) {
 			ImageURL: &ImageURL{URL: v.ImageURL, Detail: v.Detail},
 		}, nil
 	case *v1.FilePart:
+		// canonical: FilePart.FileURL dropped — a CC file part takes inline data or an uploaded file id, not a URL.
+		// canonical: FilePart.MediaType dropped — a CC file part has no media type field.
 		fileObj := map[string]string{}
 		if v.FileID != "" {
 			fileObj["file_id"] = v.FileID

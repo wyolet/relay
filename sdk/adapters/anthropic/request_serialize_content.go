@@ -10,6 +10,7 @@ import (
 // canonicalPartsToAnthropicContent converts canonical []v1.Part to Anthropic content.
 // All-text → plain string. Mixed → array of blocks.
 func canonicalPartsToAnthropicContent(parts []v1.Part) (any, error) {
+	// canonical: OutputTextPart.Annotations dropped — Anthropic text-block citations point at its own document and search-result locations, not URL offsets.
 	if len(parts) == 0 {
 		return "", nil
 	}
@@ -55,6 +56,7 @@ func canonicalPartToAnthropicBlock(p v1.Part) (map[string]any, error) {
 	case *v1.OutputTextPart:
 		return map[string]any{"type": "text", "text": v.Text}, nil
 	case *v1.ImagePart:
+		// canonical: ImagePart.Detail dropped — Anthropic image blocks take no detail level.
 		return canonicalImageURLToAnthropicBlock(v.ImageURL), nil
 	case *v1.FilePart:
 		if v.FileData != "" {

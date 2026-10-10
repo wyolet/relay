@@ -156,6 +156,8 @@ func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) R
 		// as an OutputTextPart, and emitting input_text on an assistant message
 		// is a hard 400 ("Invalid value: 'input_text'").
 		asOutput := v.Role == v1.RoleAssistant
+		// canonical: Message.ProviderData dropped — Responses messages carry no opaque payload.
+		// canonical: ItemCacheConfig.Anchor dropped — OpenAI caches prefixes automatically; a per-item breakpoint has no wire form.
 		parts := make([]ResponsesPart, 0, len(v.Content))
 		for _, p := range v.Content {
 			rp := responsesPartFromCanonical(p, asOutput)
@@ -171,6 +173,7 @@ func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) R
 		}
 
 	case *v1.FunctionCall:
+		// canonical: FunctionCall.ProviderData dropped unless it is the custom-call marker — a Responses function_call has no field for another vendor's blob.
 		if custom.noteCall(v) {
 			return &ResponsesCustomToolCall{
 				ID:     v.ID,

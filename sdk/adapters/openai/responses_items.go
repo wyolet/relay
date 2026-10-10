@@ -22,6 +22,8 @@ func (*ResponsesMessage) ResponsesItemType() ResponsesItemType { return Response
 // rejects it as an unknown parameter when the item is sent back as input
 // ("Unknown parameter: 'input[N].status'"). Items round-trip from a prior
 // response into the next request's input, so never emit status on marshal.
+//
+// canonical: item Status dropped on Responses input — the API sets it on output items only and rejects it on input items.
 func (m *ResponsesMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Type    ResponsesItemType `json:"type"`
