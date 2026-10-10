@@ -516,8 +516,8 @@ seeded from YAML, mutable via control API, watched live by
 `app/settingswatch`). Resource edit/delete governance lives in
 `governance:*` sections holding `Governance{allowEdit, allowDelete}`
 (default edit:true / delete:false — a speed-bump, not a wall). Owner-tier
-invariants are hardcoded in `app/settings.Check(op, kind, ownerKind)`
-(system rows never delete/edit-via-CRUD; user rows allowed;
+invariants are hardcoded in `app/settings.Governs(r, op, kind, ownerKind, admin)`
+(system rows: edit/delete by an admin only; user/team/project rows allowed;
 catalog-managed rows consult the section). See `.tmp/design/settings.md`.
 
 ### Hot-path rules (non-negotiable)
