@@ -11,31 +11,19 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
-
-type rescopeList[T any] []*T
-
-func (l rescopeList[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 // rescopeFixture is team T with projects P1 and P2. The caller is
 // project-admin at P1 and holds secondRole at P2; P1 also holds one role
@@ -106,14 +94,10 @@ func newRescopeFixture(t *testing.T, secondRole string) *rescopeFixture {
 	sameta := func(s *serviceaccount.ServiceAccount) *meta.Metadata { return &s.Meta }
 	accounts := &memStore[serviceaccount.ServiceAccount]{metaOf: sameta, items: map[string]*serviceaccount.ServiceAccount{sa.Meta.ID: sa}}
 
-	cat := appcatalog.New(
-		rescopeList[provider.Provider](nil), rescopeList[host.Host](nil), rescopeList[policy.Policy](nil),
-		rescopeList[model.Model](nil), rescopeList[hostkey.HostKey](nil), rescopeList[ratelimit.RateLimit](nil),
-		rescopeList[key.Key](nil), rescopeList[pricing.Pricing](nil), rescopeList[binding.Binding](nil),
-	)
-	cat.UseTenancy(rescopeList[team.Team]{tm}, rescopeList[project.Project]{projects[p1ID], projects[p2ID]},
-		accounts, rescopeList[group.Group](nil),
-		rescopeList[role.Role](builtins), roleBindings, rescopeList[policybinding.PolicyBinding](nil))
+	cat := catalogtest.Catalog{}.New()
+	cat.UseTenancy(catalogtest.Rows[team.Team]{tm}, catalogtest.Rows[project.Project]{projects[p1ID], projects[p2ID]},
+		accounts, catalogtest.Rows[group.Group](nil),
+		catalogtest.Rows[role.Role](builtins), roleBindings, catalogtest.Rows[policybinding.PolicyBinding](nil))
 	if err := cat.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -131,14 +115,7 @@ func newRescopeFixture(t *testing.T, secondRole string) *rescopeFixture {
 
 	caller := &actor.Actor{UserID: callerID, Username: "caller", Subjects: appcatalog.UserSubjects(callerID, nil, nil)}
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if req.Header.Get("X-Test-Actor") == "caller" {
-				req = req.WithContext(actor.WithActor(req.Context(), caller))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", map[string]*actor.Actor{"caller": caller}))
 	cfg := huma.DefaultConfig("rescope-test", "0")
 	cfg.Components.Schemas = httpapi.NewRegistry()
 	api := humachi.New(r, cfg)

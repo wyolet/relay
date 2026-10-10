@@ -13,23 +13,13 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/ids"
@@ -144,14 +134,7 @@ func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQue
 func newUsageHarness(t *testing.T, authzr authz.Authorizer, reader *fakeUsageReader) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("usage-scope-test", "0"))
 	d := Deps{Authz: authzr, UsageReader: reader}
 	registerUsage(api, d, nil)
@@ -289,20 +272,12 @@ func viewerFixture(t *testing.T) (cat *appcatalog.Catalog, viewer *actor.Actor, 
 	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: viewerUserID}}
 	rb.Spec.Enabled = &yes
 
-	cat = appcatalog.New(
-		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
-		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
-		tokenList[key.Key]{}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
-	)
-	cat.UseTenancy(
-		tokenList[team.Team]{tm}, tokenList[project.Project]{proj1, proj2},
-		tokenList[serviceaccount.ServiceAccount]{}, tokenList[group.Group]{},
-		tokenList[role.Role](builtins), tokenList[rolebinding.RoleBinding]{rb},
-		tokenList[policybinding.PolicyBinding]{},
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	cat = catalogtest.Catalog{
+		Teams:        []*team.Team{tm},
+		Projects:     []*project.Project{proj1, proj2},
+		Roles:        builtins,
+		RoleBindings: []*rolebinding.RoleBinding{rb},
+	}.Load(t)
 	viewer = &actor.Actor{UserID: viewerUserID, Subjects: appcatalog.UserSubjects(viewerUserID, nil, nil)}
 	return cat, viewer, p1
 }
@@ -360,14 +335,7 @@ func TestScopeOfCoversHashOnlyEventsByOwnKeyHash(t *testing.T) {
 	k.Spec.PreviousKeyHash = "hash-alice-old"
 	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: "u-alice"}
 
-	cat := appcatalog.New(
-		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
-		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
-		tokenList[key.Key]{k}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	cat := catalogtest.Catalog{Keys: []*key.Key{k}}.Load(t)
 
 	ctx := actor.WithActor(context.Background(), scopeActors["alice"])
 	sc, err := scopeOf(ctx, testRBAC(), cat, "usage")

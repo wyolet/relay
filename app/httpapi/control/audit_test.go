@@ -66,14 +66,7 @@ func newAuditHarness(t *testing.T, inner authz.Authorizer, seed ...*scopedThing)
 	}
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	r.Use(audit.Middleware(em, nil))
 	api := humachi.New(r, huma.DefaultConfig("audit-test", "0"))
 	registerKind[scopedThing](

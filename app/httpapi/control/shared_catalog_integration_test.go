@@ -82,14 +82,7 @@ func TestHostWritesNeedACatalogRole(t *testing.T) {
 		"editor": {UserID: editorID, Username: "editor", SessionID: "s-editor", Subjects: appcatalog.UserSubjects(editorID, nil, nil)},
 	}
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := actors[req.Header.Get("X-Test-User")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-User", actors))
 	Mount(r, deps)
 
 	send := func(who, method, path, body string) *httptest.ResponseRecorder {

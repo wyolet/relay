@@ -14,7 +14,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/payload"
 	payloadfile "github.com/wyolet/relay/pkg/payload/file"
@@ -41,14 +40,7 @@ type logGetBody struct {
 func newLogsHarness(t *testing.T, ur usagelog.Reader, pr payload.Reader) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("logs-owner-test", "0"))
 	registerLogs(api, Deps{Authz: testRBAC(), UsageReader: ur, PayloadReader: pr}, nil)
 	return r

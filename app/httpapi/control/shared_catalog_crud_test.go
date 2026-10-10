@@ -1,7 +1,6 @@
 package control
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,23 +15,15 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
-	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
@@ -61,20 +52,7 @@ func catalogEditorRBAC(t *testing.T, editorID string) authz.RBAC {
 	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: editorID}}
 	rb.Spec.Enabled = &yes
 
-	cat := appcatalog.New(
-		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
-		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
-		tokenList[key.Key]{}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
-	)
-	cat.UseTenancy(
-		tokenList[team.Team]{}, tokenList[project.Project]{},
-		tokenList[serviceaccount.ServiceAccount]{}, tokenList[group.Group]{},
-		tokenList[role.Role](builtins), tokenList[rolebinding.RoleBinding]{rb},
-		tokenList[policybinding.PolicyBinding]{},
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	cat := catalogtest.Catalog{Roles: builtins, RoleBindings: []*rolebinding.RoleBinding{rb}}.Load(t)
 	return authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
 }
 
@@ -93,14 +71,7 @@ func newSharedCatalogHarness(t *testing.T) http.Handler {
 	d := Deps{Authz: rbac}
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := actors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", actors))
 	cfg := huma.DefaultConfig("shared-catalog-test", "0")
 	cfg.OpenAPI.Components.Schemas = httpapi.NewRegistry()
 	api := humachi.New(r, cfg)

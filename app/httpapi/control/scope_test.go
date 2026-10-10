@@ -16,7 +16,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 )
@@ -70,7 +70,7 @@ func (noSettings) Setting(string) (any, bool) { return nil, false }
 // projects, no bindings. Every allow it grants comes from the two rules that
 // need no binding — personal rows and catalog reads.
 func testRBAC() authz.RBAC {
-	snap := appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	snap := catalogtest.Catalog{}.Snapshot()
 	return authz.RBAC{Snap: func() authz.Snapshot { return snap }}
 }
 
@@ -92,14 +92,7 @@ func newScopeHarness(t *testing.T, authzr authz.Authorizer, seed ...*scopedThing
 	}
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("scope-test", "0"))
 	registerKind[scopedThing](
 		api, "rate-limits", "rate-limit", store, authzr, tmeta,

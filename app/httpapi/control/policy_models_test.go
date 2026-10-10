@@ -5,7 +5,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -61,14 +61,12 @@ func testIndex() *resolveIndex {
 
 	// Build snapshot with all hosts (including disabled h2) but only enabled models/providers.
 	// Note: m3 is disabled so it won't enter the snapshot — hostsByID still has H1.
-	snap := catalog.Build(
-		[]*provider.Provider{p1, p2},
-		[]*host.Host{h1, h2},
-		nil, nil,
-		[]*model.Model{m1, m2},
-		nil, nil, nil,
-		[]*binding.Binding{b1, b2, b3},
-	)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{p1, p2},
+		Hosts:     []*host.Host{h1, h2},
+		Models:    []*model.Model{m1, m2},
+		Bindings:  []*binding.Binding{b1, b2, b3},
+	}.Snapshot()
 
 	return &resolveIndex{
 		snap:             snap,

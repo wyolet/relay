@@ -101,14 +101,7 @@ func TestUsersListAuthorizesAtTheGlobalScope(t *testing.T) {
 func usersHandlerWith(t *testing.T, d Deps) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("users-test", "0"))
 	registerUsers(api, d, nil)
 	return r

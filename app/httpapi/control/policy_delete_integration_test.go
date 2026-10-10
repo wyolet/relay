@@ -120,14 +120,7 @@ func newPolicyDeleteFixture(t *testing.T) (policyDeleteFixture, context.Context)
 	r := chi.NewRouter()
 	// X-Test-User signs the request in as alice, a user with no binding in
 	// the project.
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if req.Header.Get("X-Test-User") == "alice" {
-				req = req.WithContext(actor.WithActor(req.Context(), &actor.Actor{UserID: f.alice.ID, Username: f.alice.Username}))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-User", map[string]*actor.Actor{"alice": {UserID: f.alice.ID, Username: f.alice.Username}}))
 	Mount(r, deps)
 	f.handler = r
 	return f, ctx

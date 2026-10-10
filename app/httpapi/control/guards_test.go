@@ -20,7 +20,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -223,14 +223,7 @@ func newTenancyHarness[T any](t *testing.T, plural, singular string,
 	t.Helper()
 	store := &memStore[T]{metaOf: metaOf, items: map[string]*T{}}
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig(plural+"-guards-test", "0"))
 	registerKind[T](
 		api, plural, singular, store, testRBAC(), metaOf, validate,
@@ -245,7 +238,7 @@ func newTenancyHarness[T any](t *testing.T, plural, singular string,
 // a built-in Role lives in and could otherwise never name one in a binding.
 func TestSystemOwnedRolesAreVisibleToAScopedCaller(t *testing.T) {
 	rbac := authz.RBAC{Snap: func() authz.Snapshot {
-		return appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		return catalogtest.Catalog{}.Snapshot()
 	}}
 	ctx := actor.WithActor(context.Background(),
 		&actor.Actor{UserID: "u-alice", Subjects: []string{"user:u-alice"}})
@@ -333,14 +326,7 @@ func newScopedListHarness(t *testing.T, plural, singular string, seed ...*scoped
 		store.items[it.Meta.ID] = it
 	}
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig(plural+"-list-test", "0"))
 	registerKind[scopedThing](
 		api, plural, singular, store, testRBAC(), tmeta, nil,
