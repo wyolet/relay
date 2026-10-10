@@ -8,36 +8,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 )
 
-// fakeSource is a SettingsSource backed by a swappable UsageLogging value.
-type fakeSource struct {
-	mu  sync.Mutex
-	cfg settings.UsageLogging
-	cb  func()
-}
-
-func (f *fakeSource) set(cfg settings.UsageLogging) {
-	f.mu.Lock()
-	f.cfg = cfg
-	cb := f.cb
-	f.mu.Unlock()
-	if cb != nil {
-		cb()
-	}
-}
-
-func (f *fakeSource) Setting(string) (any, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	c := f.cfg
-	return &c, true
-}
-
-func (f *fakeSource) OnSettingsChange(_ string, fn func()) {
-	f.mu.Lock()
-	f.cb = fn
-	f.mu.Unlock()
+func usageSettings(cfg settings.UsageLogging) *settingstest.Source {
+	return settingstest.Sections(map[string]any{settings.SectionUsageLogging: &cfg})
 }
 
 // fakeBackend is a Sink+Reader+Closer that records closure.
@@ -59,7 +34,7 @@ func (f *fakeBackend) TimeSeries(context.Context, TimeSeriesQuery) (TimeSeriesRe
 }
 
 func TestController_ReconcileSwapsBackendAndClosesOld(t *testing.T) {
-	src := &fakeSource{cfg: settings.UsageLogging{Backend: "file"}}
+	src := usageSettings(settings.UsageLogging{Backend: "file"})
 
 	var built []*fakeBackend
 	var bmu sync.Mutex
@@ -92,7 +67,7 @@ func TestController_ReconcileSwapsBackendAndClosesOld(t *testing.T) {
 	}
 
 	// Change backend → rebuild + old closed.
-	src.set(settings.UsageLogging{Backend: "clickhouse"})
+	src.Change(settings.SectionUsageLogging, &settings.UsageLogging{Backend: "clickhouse"})
 	c.reconcile(context.Background())
 	bmu.Lock()
 	n = len(built)
@@ -109,7 +84,7 @@ func TestController_ReconcileSwapsBackendAndClosesOld(t *testing.T) {
 }
 
 func TestController_KeepsPreviousOnBuildError(t *testing.T) {
-	src := &fakeSource{cfg: settings.UsageLogging{Backend: "file"}}
+	src := usageSettings(settings.UsageLogging{Backend: "file"})
 	good := &fakeBackend{name: "file"}
 	build := func(_ context.Context, cfg settings.UsageLogging) (Backend, error) {
 		if cfg.Backend == "bad" {
@@ -120,7 +95,7 @@ func TestController_KeepsPreviousOnBuildError(t *testing.T) {
 	c := NewController(src, build, testLogger())
 	c.reconcile(context.Background())
 
-	src.set(settings.UsageLogging{Backend: "bad"})
+	src.Change(settings.SectionUsageLogging, &settings.UsageLogging{Backend: "bad"})
 	c.reconcile(context.Background())
 	if good.closed.Load() {
 		t.Fatal("a failed rebuild must not tear down the working sink")

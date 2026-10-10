@@ -1,6 +1,10 @@
 package settings
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wyolet/relay/app/settings/settingstest"
+)
 
 // A Team, Group or Role is system-owned because nobody owns it personally,
 // not because the relay ships it: those follow the tenant tier and stay
@@ -8,7 +12,7 @@ import "testing"
 // deleted only by an admin. A project-owned row is the tenant's whatever its
 // governance section says.
 func TestGovernsOwnerTiers(t *testing.T) {
-	locked := fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}}
+	locked := map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}}
 
 	for _, tc := range []struct {
 		name      string
@@ -16,7 +20,7 @@ func TestGovernsOwnerTiers(t *testing.T) {
 		kind      string
 		ownerKind string
 		admin     bool
-		reader    fakeReader
+		reader    map[string]any
 		wantErr   bool
 	}{
 		// An admin may edit or delete a system row through CRUD; nobody else may.
@@ -50,11 +54,7 @@ func TestGovernsOwnerTiers(t *testing.T) {
 		{name: "unknown owner deletes", op: OpDelete, kind: "policy", ownerKind: "provider", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := tc.reader
-			if r == nil {
-				r = fakeReader{}
-			}
-			err := Governs(r, tc.op, tc.kind, tc.ownerKind, tc.admin)
+			err := Governs(settingstest.Sections(tc.reader), tc.op, tc.kind, tc.ownerKind, tc.admin)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Governs(%s, %s, %s, admin=%v) = %v, wantErr %v", tc.op, tc.kind, tc.ownerKind, tc.admin, err, tc.wantErr)
 			}

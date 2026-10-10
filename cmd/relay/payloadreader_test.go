@@ -9,17 +9,14 @@ import (
 
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 )
-
-type payloadSettings struct{ cfg settings.PayloadLogging }
-
-func (p payloadSettings) Setting(string) (any, bool)    { return &p.cfg, true }
-func (payloadSettings) OnSettingsChange(string, func()) {}
 
 func TestPayloadReaderResolverEraseUnsupportedBackend(t *testing.T) {
 	cfg := settings.PayloadLogging{Backend: "file"}
 	cfg.File.Path = filepath.Join(t.TempDir(), "payloads.jsonl")
-	r := newPayloadReaderResolver(payloadSettings{cfg}, nil, payloadCHBoot{}, nil)
+	src := settingstest.Sections(map[string]any{settings.SectionPayloadLogging: &cfg})
+	r := newPayloadReaderResolver(src, nil, payloadCHBoot{}, nil)
 
 	_, err := r.Erase(context.Background(), payloadlog.EraseFilter{ProjectID: "p-1"})
 	if !errors.Is(err, payloadlog.ErrEraseUnsupported) || !strings.Contains(err.Error(), `"file"`) {

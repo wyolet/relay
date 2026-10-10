@@ -17,18 +17,14 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
 // openPolicyless answers the inference section with policy-less traffic
 // switched on, which is the only setting the gate reads.
-type openPolicyless struct{}
-
-func (openPolicyless) Setting(section string) (any, bool) {
-	if section != settings.SectionInference {
-		return nil, false
-	}
-	return &settings.Inference{AllowMissingPolicy: true}, true
+func openPolicyless() *settingstest.Source {
+	return settingstest.Sections(map[string]any{settings.SectionInference: &settings.Inference{AllowMissingPolicy: true}})
 }
 
 // Policy-less traffic is off unless the operator switched it on, so a caller
@@ -50,7 +46,7 @@ func TestResolve_PolicylessHonouredOnlyUnderSingleAuthorization(t *testing.T) {
 	f := newTwoHostParts()
 	snap := f.hostARows().Snapshot()
 
-	single := &Resolver{cfg: openPolicyless{}}
+	single := &Resolver{cfg: openPolicyless()}
 	if !single.PolicylessTrafficAllowed() {
 		t.Fatal("the setting is on and authorization is single, but the gate is closed")
 	}
@@ -58,7 +54,7 @@ func TestResolve_PolicylessHonouredOnlyUnderSingleAuthorization(t *testing.T) {
 		t.Fatalf("Resolve under single authorization: %v", err)
 	}
 
-	rbac := &Resolver{cfg: openPolicyless{}, requirePolicy: true}
+	rbac := &Resolver{cfg: openPolicyless(), requirePolicy: true}
 	if rbac.PolicylessTrafficAllowed() {
 		t.Error("the listing would advertise models to a caller the flow refuses")
 	}

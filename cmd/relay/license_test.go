@@ -5,40 +5,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/app/settingswatch"
 	"github.com/wyolet/relay/internal/license"
 )
-
-// fakeLicenseSource is the app/settingswatch.Source shape, reimplemented
-// here (rather than imported from its test file) since that file lives in
-// another package and is not exported.
-type fakeLicenseSource struct {
-	mu   sync.Mutex
-	val  *settings.License
-	subs []func()
-}
-
-func (f *fakeLicenseSource) Setting(string) (any, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.val, f.val != nil
-}
-
-func (f *fakeLicenseSource) OnSettingsChange(_ string, fn func()) {
-	f.mu.Lock()
-	f.subs = append(f.subs, fn)
-	f.mu.Unlock()
-}
-
-func (f *fakeLicenseSource) change(v settings.License) {
-	f.mu.Lock()
-	f.val = &v
-	subs := append([]func(){}, f.subs...)
-	f.mu.Unlock()
-	for _, fn := range subs {
-		fn()
-	}
-}
 
 // TestApplyLicenseSection_ReachesServiceThroughTheWatcher proves the data
 // path a stored license takes to become live: PUT /license only writes the
@@ -58,7 +28,7 @@ func (f *fakeLicenseSource) change(v settings.License) {
 // contract in question.
 func TestApplyLicenseSection_ReachesServiceThroughTheWatcher(t *testing.T) {
 	svc := license.New(nil)
-	src := &fakeLicenseSource{}
+	src := &settingstest.Source{}
 
 	var mu sync.Mutex
 	var calls []settings.License
@@ -71,7 +41,7 @@ func TestApplyLicenseSection_ReachesServiceThroughTheWatcher(t *testing.T) {
 	}
 
 	w := settingswatch.New[settings.License](src, settings.SectionLicense, spy, nil)
-	src.change(settings.License{}) // seed a value so Start's initial reconcile applies
+	src.Change(settings.SectionLicense, &settings.License{}) // seed a value so Start's initial reconcile applies
 	w.Start()
 
 	mu.Lock()
@@ -85,7 +55,7 @@ func TestApplyLicenseSection_ReachesServiceThroughTheWatcher(t *testing.T) {
 
 	// A later settings change — e.g. an admin pasting a license through the
 	// API — must reach the same Service without any other wiring.
-	src.change(settings.License{Value: "not-a-real-license"})
+	src.Change(settings.SectionLicense, &settings.License{Value: "not-a-real-license"})
 
 	mu.Lock()
 	if len(calls) != 2 || calls[1].Value != "not-a-real-license" {

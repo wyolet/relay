@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -148,19 +149,6 @@ func TestApplyValidatesEveryPlannedRow(t *testing.T) {
 	}
 }
 
-// govReader answers one governance section.
-type govReader struct {
-	section string
-	value   *settings.Governance
-}
-
-func (g govReader) Setting(name string) (any, bool) {
-	if name != g.section {
-		return nil, false
-	}
-	return g.value, true
-}
-
 // A catalog-managed row is only editable while its governance section says
 // so; apply is a mutation like any other.
 func TestApplyHonoursGovernance(t *testing.T) {
@@ -172,10 +160,9 @@ func TestApplyHonoursGovernance(t *testing.T) {
 		},
 		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "gpt-4o"}}, Pointer: "gpt-4o"},
 	}
-	locked := Options{Gov: govReader{
-		section: settings.SectionGovernanceModel,
-		value:   &settings.Governance{AllowEdit: false},
-	}}
+	locked := Options{Gov: settingstest.Sections(map[string]any{
+		settings.SectionGovernanceModel: &settings.Governance{AllowEdit: false},
+	})}
 
 	plan := func(opts Options) error {
 		b := &builder{opts: opts, rows: &Rows{Models: []*model.Model{stored}}}
