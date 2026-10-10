@@ -14,20 +14,12 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -175,16 +167,12 @@ func newCatalog(t *testing.T, teams []*team.Team, projects catalog.ProjectLister
 	roles []*role.Role, bindings []*rolebinding.RoleBinding,
 ) *catalog.Catalog {
 	t.Helper()
-	cat := catalog.New(
-		lister[provider.Provider](nil), lister[host.Host](nil), lister[policy.Policy](nil),
-		lister[model.Model](nil), lister[hostkey.HostKey](nil), lister[ratelimit.RateLimit](nil),
-		lister[key.Key](nil), lister[pricing.Pricing](nil), lister[binding.Binding](nil),
-	)
+	cat := catalogtest.Catalog{}.New()
 	cat.UseTenancy(
-		lister[team.Team](teams), projects,
-		lister[serviceaccount.ServiceAccount](sas), lister[group.Group](groups),
-		lister[role.Role](roles), lister[rolebinding.RoleBinding](bindings),
-		lister[policybinding.PolicyBinding](nil),
+		catalogtest.Rows[team.Team](teams), projects,
+		catalogtest.Rows[serviceaccount.ServiceAccount](sas), catalogtest.Rows[group.Group](groups),
+		catalogtest.Rows[role.Role](roles), catalogtest.Rows[rolebinding.RoleBinding](bindings),
+		catalogtest.Rows[policybinding.PolicyBinding](nil),
 	)
 	if err := cat.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)

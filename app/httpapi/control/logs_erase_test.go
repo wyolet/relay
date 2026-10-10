@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
@@ -40,16 +38,9 @@ func (f *fakeEraser) Erase(_ context.Context, ef payloadlog.EraseFilter) (payloa
 func newEraseHarness(t *testing.T, inner authz.Authorizer, pr payloadlog.Reader) (http.Handler, *auditSink, *audit.Emitter) {
 	t.Helper()
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	r.Use(audit.Middleware(em, nil))
 	api := humachi.New(r, huma.DefaultConfig("logs-erase-test", "0"))
 	registerLogsErase(api, Deps{Authz: audit.Authorizer{Inner: inner}, PayloadReader: pr}, nil)

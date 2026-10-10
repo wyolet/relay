@@ -6,7 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -76,20 +76,15 @@ func TestResolve_WildcardPolicyDoesNotReachUngrantedNoAuthHost(t *testing.T) {
 		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
-	c := catalog.New(
-		provListR{prov},
-		hostListR{keyedHost, openHost},
-		polListR{pol},
-		modListR{openModel},
-		keyListR{hk},
-		rlListR{},
-		rkListR{rk},
-		rcListR{},
-		bndListR{openBnd},
-	)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{keyedHost, openHost},
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{openModel},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{openBnd},
+	}.Load(t)
 	r := routing.New(c)
 
 	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Policy: pol})
@@ -140,20 +135,14 @@ func TestResolve_ExplicitModelGrantReachesNoAuthHost(t *testing.T) {
 		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
-	c := catalog.New(
-		provListR{prov},
-		hostListR{openHost},
-		polListR{pol},
-		modListR{openModel},
-		keyListR{},
-		rlListR{},
-		rkListR{rk},
-		rcListR{},
-		bndListR{openBnd},
-	)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{openHost},
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{openModel},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{openBnd},
+	}.Load(t)
 	r := routing.New(c)
 
 	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Policy: pol})

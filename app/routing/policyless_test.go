@@ -10,29 +10,21 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
 // openPolicyless answers the inference section with policy-less traffic
 // switched on, which is the only setting the gate reads.
-type openPolicyless struct{}
-
-func (openPolicyless) Setting(section string) (any, bool) {
-	if section != settings.SectionInference {
-		return nil, false
-	}
-	return &settings.Inference{AllowMissingPolicy: true}, true
+func openPolicyless() *settingstest.Source {
+	return settingstest.Sections(map[string]any{settings.SectionInference: &settings.Inference{AllowMissingPolicy: true}})
 }
 
 // Policy-less traffic is off unless the operator switched it on, so a caller
@@ -40,15 +32,7 @@ func (openPolicyless) Setting(section string) (any, bool) {
 // by default.
 func TestResolve_PolicylessIsClosedByDefault(t *testing.T) {
 	f := newTwoHostParts()
-	c := catalog.New(
-		lister[provider.Provider]{f.provider}, lister[host.Host]{f.hostRowA},
-		lister[policy.Policy]{f.tierA}, lister[model.Model]{f.model},
-		lister[hostkey.HostKey]{f.keyA}, lister[ratelimit.RateLimit]{},
-		lister[key.Key]{}, lister[pricing.Pricing]{}, lister[binding.Binding]{f.bindingA},
-	)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := f.hostARows().Load(t)
 	if _, err := New(c).Resolve(Request{ModelName: "m1"}); !errors.Is(err, ErrPolicyless) {
 		t.Fatalf("err = %v, want ErrPolicyless", err)
 	}
@@ -60,16 +44,9 @@ func TestResolve_PolicylessIsClosedByDefault(t *testing.T) {
 // with the same missing-policy error the setting-off path answers.
 func TestResolve_PolicylessHonouredOnlyUnderSingleAuthorization(t *testing.T) {
 	f := newTwoHostParts()
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows().Snapshot()
 
-	single := &Resolver{cfg: openPolicyless{}}
+	single := &Resolver{cfg: openPolicyless()}
 	if !single.PolicylessTrafficAllowed() {
 		t.Fatal("the setting is on and authorization is single, but the gate is closed")
 	}
@@ -77,7 +54,7 @@ func TestResolve_PolicylessHonouredOnlyUnderSingleAuthorization(t *testing.T) {
 		t.Fatalf("Resolve under single authorization: %v", err)
 	}
 
-	rbac := &Resolver{cfg: openPolicyless{}, requirePolicy: true}
+	rbac := &Resolver{cfg: openPolicyless(), requirePolicy: true}
 	if rbac.PolicylessTrafficAllowed() {
 		t.Error("the listing would advertise models to a caller the flow refuses")
 	}
@@ -102,7 +79,12 @@ func TestResolvePolicyless_NoAuthHostInjectsAnonKey(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "qwen3-on-ollama", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
 	}
-	snap := catalog.Build([]*provider.Provider{prov}, []*host.Host{h}, nil, nil, []*model.Model{m}, nil, nil, nil, []*binding.Binding{b})
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h},
+		Models:    []*model.Model{m},
+		Bindings:  []*binding.Binding{b},
+	}.Snapshot()
 
 	plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{m}, &m.Spec.Snapshots[0], "", "")
 	if err != nil {

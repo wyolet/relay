@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
-	apphost "github.com/wyolet/relay/app/host"
 )
 
 // A host that refuses connections is reported to the caller by slug; its base URL and dial target stay in the logs.
@@ -20,11 +19,7 @@ func TestDispatch_UnreachableHostKeepsItsAddressOutOfTheResponse(t *testing.T) {
 	addr := strings.TrimPrefix(closed, "http://")
 
 	cat, pr := buildDispatchCatalog(t, "internal-host", adapters.OpenAI)
-	h := *cat.Current().Hosts()[0]
-	h.Spec = apphost.Spec{BaseURL: closed, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatal(err)
-	}
+	pointHostAt(t, cat, closed)
 	d := buildRunnableDeps(t, cat)
 
 	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil), pr)

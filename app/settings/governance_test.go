@@ -1,13 +1,10 @@
 package settings
 
-import "testing"
+import (
+	"testing"
 
-type fakeReader map[string]any
-
-func (f fakeReader) Setting(section string) (any, bool) {
-	v, ok := f[section]
-	return v, ok
-}
+	"github.com/wyolet/relay/app/settings/settingstest"
+)
 
 func TestGoverns(t *testing.T) {
 	tests := []struct {
@@ -15,7 +12,7 @@ func TestGoverns(t *testing.T) {
 		op        Op
 		kind      string
 		ownerKind string
-		reader    fakeReader
+		reader    map[string]any
 		wantErr   bool
 	}{
 		{name: "system delete always denied", op: OpDelete, kind: "rate-limit", ownerKind: "system", wantErr: true},
@@ -30,12 +27,12 @@ func TestGoverns(t *testing.T) {
 		// Section override.
 		{
 			name: "catalog delete enabled via section", op: OpDelete, kind: "policy", ownerKind: "host",
-			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: true, AllowDelete: true}},
+			reader:  map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: true, AllowDelete: true}},
 			wantErr: false,
 		},
 		{
 			name: "catalog edit disabled via section", op: OpEdit, kind: "policy", ownerKind: "host",
-			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
+			reader:  map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
 			wantErr: true,
 		},
 
@@ -44,18 +41,14 @@ func TestGoverns(t *testing.T) {
 		{name: "team delete allowed", op: OpDelete, kind: "team", ownerKind: "team", wantErr: false},
 		{
 			name: "project-owned policy delete allowed", op: OpDelete, kind: "policy", ownerKind: "project",
-			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
+			reader:  map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
 			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := tt.reader
-			if r == nil {
-				r = fakeReader{}
-			}
-			err := Governs(r, tt.op, tt.kind, tt.ownerKind, false)
+			err := Governs(settingstest.Sections(tt.reader), tt.op, tt.kind, tt.ownerKind, false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Governs(%s,%s,%s) err=%v, wantErr=%v", tt.op, tt.kind, tt.ownerKind, err, tt.wantErr)
 			}

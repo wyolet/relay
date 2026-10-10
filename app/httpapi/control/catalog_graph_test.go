@@ -5,7 +5,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -13,10 +13,9 @@ import (
 )
 
 func TestGraphModels_DeprecationFilter(t *testing.T) {
-	snap := catalog.Build(
-		[]*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
-		nil, nil, nil, nil, nil, nil, nil, nil,
-	)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
+	}.Snapshot()
 	live := &model.Model{Meta: meta.Metadata{ID: "M1", Name: "live", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
 	dep := &model.Model{Meta: meta.Metadata{ID: "M2", Name: "old", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
 	dep.Spec.DeprecationDate = "2025-01-01"
@@ -43,10 +42,9 @@ func TestGraphModels_DeprecationFilter(t *testing.T) {
 }
 
 func TestGraphModels_LabelSelector(t *testing.T) {
-	snap := catalog.Build(
-		[]*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
-		nil, nil, nil, nil, nil, nil, nil, nil,
-	)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
+	}.Snapshot()
 	feat := &model.Model{Meta: meta.Metadata{ID: "M1", Name: "feat", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}, Labels: map[string]string{"featured": "true"}}}
 	plain := &model.Model{Meta: meta.Metadata{ID: "M2", Name: "plain", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
 	idx := &resolveIndex{snap: snap, allModels: []*model.Model{feat, plain}}
@@ -95,7 +93,12 @@ func TestGraphModels_PrunesDisabledBindings(t *testing.T) {
 		Spec: binding.Spec{ModelID: modID, HostID: hostID2, Adapter: adapters.OpenAI, Enabled: &disabled},
 	}
 
-	snap := catalog.Build([]*provider.Provider{prov}, []*host.Host{h1, h2}, nil, nil, []*model.Model{m}, nil, nil, nil, []*binding.Binding{b1, b2})
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h1, h2},
+		Models:    []*model.Model{m},
+		Bindings:  []*binding.Binding{b1, b2},
+	}.Snapshot()
 	idx := &resolveIndex{snap: snap, allModels: []*model.Model{m}}
 
 	got := graphModels(idx, false, nil)

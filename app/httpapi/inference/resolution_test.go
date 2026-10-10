@@ -16,6 +16,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -79,20 +80,17 @@ func twoHostDispatch(t *testing.T) (*catalog.Catalog, *Principal) {
 			PolicyID:  polID, KeyHash: sha("sk-models"),
 		},
 	}
-	cat := catalog.New(
-		provListD{prov},
-		hostListD{mkHost(hostA, "host-a"), mkHost(hostB, "host-b"), mkHost(idleHost, "host-idle")},
+	cat := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{mkHost(hostA, "host-a"), mkHost(hostB, "host-b"), mkHost(idleHost, "host-idle")},
 		// host-b's tier grants a different model, so a request pinned there
 		// resolves the binding and then finds no key it may spend.
-		polListD{pol, mkTier(tierA, "tier-a", hostA), mkTier(tierB, "tier-b", hostB, "acme/something-else")},
-		modListD{m},
-		keyListD{mkKey(hkA, "key-a", hostA, tierA), mkKey(hkB, "key-b", hostB, tierB)},
-		rlListD{}, rkListD{k}, rcListD{},
-		bndListD{mkBinding("m-on-a", hostA), mkBinding("m-on-b", hostB)},
-	)
-	if err := cat.Reload(t.Context()); err != nil {
-		t.Fatalf("catalog reload: %v", err)
-	}
+		Policies: []*policy.Policy{pol, mkTier(tierA, "tier-a", hostA), mkTier(tierB, "tier-b", hostB, "acme/something-else")},
+		Models:   []*model.Model{m},
+		HostKeys: []*hostkey.HostKey{mkKey(hkA, "key-a", hostA, tierA), mkKey(hkB, "key-b", hostB, tierB)},
+		Keys:     []*key.Key{k},
+		Bindings: []*binding.Binding{mkBinding("m-on-a", hostA), mkBinding("m-on-b", hostB)},
+	}.Load(t)
 	return cat, &Principal{
 		CredentialKind: CredentialKey, CredentialID: k.Meta.ID,
 		KeyHash: k.Spec.KeyHash, Key: k, Policy: pol,

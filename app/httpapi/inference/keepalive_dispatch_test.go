@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -44,20 +43,14 @@ func keepAliveRegistry() *adapter.Registry {
 func keepAliveCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *Principal) {
 	t.Helper()
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
-	h := *cat.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: upstreamURL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, upstreamURL)
 	return cat, rk
 }
 
 func keepAliveDeps(t *testing.T, cat *catalog.Catalog, every time.Duration) Deps {
 	t.Helper()
 	d := buildRunnableDeps(t, cat)
-	reg := keepAliveRegistry()
-	d.Specs = reg
-	d.Adapters = reg.AdapterMap()
+	useSpecs(&d, keepAliveRegistry())
 	d.StreamKeepAlive = every
 	return d
 }

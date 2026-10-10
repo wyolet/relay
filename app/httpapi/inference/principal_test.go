@@ -11,30 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/role"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/crypto"
 )
-
-type stubList[T any] []*T
-
-func (l stubList[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 // principalStack wires a catalog holding one team → project → service
 // account plus the supplied keys and groups, and returns a handler that
@@ -113,38 +101,20 @@ func newPrincipalFixture() principalFixture {
 // mint would produce, letting a test mutate them first.
 func (f principalFixture) mint(t testing.TB, mutate func(*crypto.TokenClaims)) string {
 	t.Helper()
-	claims := crypto.TokenClaims{
-		Iss: crypto.TokenIssuer,
-		Sub: "user:" + f.user,
-		Prj: f.project.Meta.ID,
-		Ver: 1,
-		Jti: meta.NewID(),
-		Iat: time.Now().Unix(),
-		Exp: time.Now().Add(time.Hour).Unix(),
-	}
-	if mutate != nil {
-		mutate(&claims)
-	}
-	token, err := crypto.SignToken(f.signer, "", claims)
-	if err != nil {
-		t.Fatalf("sign token: %v", err)
-	}
-	return token
+	return mintToken(t, f.signer, "", f.user, f.project.Meta.ID, mutate)
 }
 
 func (f principalFixture) stack(t testing.TB, keys ...*key.Key) *principalStack {
 	t.Helper()
-	c := catalog.New(
-		stubList[provider.Provider]{}, stubList[host.Host]{},
-		stubList[policy.Policy]{f.saPol, f.keyPol, f.boundPol},
-		stubList[model.Model]{}, stubList[hostkey.HostKey]{}, stubList[ratelimit.RateLimit]{},
-		stubList[key.Key](keys), stubList[pricing.Pricing]{}, stubList[binding.Binding]{},
-	)
-	c.UseTenancy(
-		stubList[team.Team]{f.team}, stubList[project.Project]{f.project},
-		stubList[serviceaccount.ServiceAccount]{f.sa}, stubList[group.Group]{f.group},
-		stubList[role.Role]{}, stubList[rolebinding.RoleBinding]{}, stubList[policybinding.PolicyBinding](f.bindings),
-	)
+	c := catalogtest.Catalog{
+		Policies:        []*policy.Policy{f.saPol, f.keyPol, f.boundPol},
+		Keys:            keys,
+		Teams:           []*team.Team{f.team},
+		Projects:        []*project.Project{f.project},
+		ServiceAccounts: []*serviceaccount.ServiceAccount{f.sa},
+		Groups:          []*group.Group{f.group},
+		PolicyBindings:  f.bindings,
+	}.New()
 	c.UseTokenVersions(f.versions)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)

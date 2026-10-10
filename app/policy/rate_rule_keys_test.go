@@ -2,7 +2,6 @@ package policy
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -53,11 +52,10 @@ func TestReserveInbound_PerModelBindingsGetDistinctBuckets(t *testing.T) {
 		{Models: []string{"prov/fast"}, RateLimitID: "rl-a"},
 		{Models: []string{"prov/slow"}, RateLimitID: "rl-b"},
 	}
-	store := newCountingKV()
-	t.Cleanup(func() { _ = store.Close() })
+	store := recordingMem(t)
 	svc := NewService(
 		multiRLSnap{pol: pol, rls: map[string]*appratelimit.RateLimit{"rl-a": rlA, "rl-b": rlB}},
-		nil, pkgratelimit.New(store, slog.New(slog.NewTextHandler(io.Discard, nil)), nil))
+		nil, pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil))
 
 	ctx := context.Background()
 	if _, err := svc.ReserveInbound(ctx, InboundInput{
@@ -65,13 +63,13 @@ func TestReserveInbound_PerModelBindingsGetDistinctBuckets(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reserve fast: %v", err)
 	}
-	fast := store.lastKeys()
+	fast := lastKeys(store)
 	if _, err := svc.ReserveInbound(ctx, InboundInput{
 		Policy: pol, ProviderSlug: "prov", ModelSlug: "slow", ModelID: "model-slow",
 	}); err != nil {
 		t.Fatalf("reserve slow: %v", err)
 	}
-	slow := store.lastKeys()
+	slow := lastKeys(store)
 
 	if len(fast) == 0 || len(slow) == 0 {
 		t.Fatalf("no keys recorded: fast=%v slow=%v", fast, slow)

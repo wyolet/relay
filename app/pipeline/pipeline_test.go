@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -27,116 +26,6 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
-
-// fakeSnap is a minimal policy.SnapshotReader for tests.
-type fakeSnap struct {
-	pols map[string]*policy.Policy
-	rls  map[string]*ratelimit.RateLimit
-}
-
-func (f *fakeSnap) Policy(_ context.Context, id string) (*policy.Policy, bool) {
-	p, ok := f.pols[id]
-	return p, ok
-}
-func (f *fakeSnap) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
-	r, ok := f.rls[id]
-	return r, ok
-}
-
-// ---------------------------------------------------------------------------
-// fakeAdapter
-// ---------------------------------------------------------------------------
-
-type fakeAdapter struct {
-	callFn    func(ctx context.Context, baseURL, key string, body []byte, hdr http.Header) (*http.Response, error)
-	tokens    pkgusage.Tokens
-	retryFn   func(*http.Response) (bool, keypool.FailureKind, time.Duration)
-	callCount atomic.Int32
-	lastOAuth atomic.Bool
-}
-
-func (f *fakeAdapter) Call(ctx context.Context, baseURL string, _ *string, key string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
-	f.callCount.Add(1)
-	f.lastOAuth.Store(oauth)
-	if f.callFn != nil {
-		return f.callFn(ctx, baseURL, key, body, hdr)
-	}
-	return okResp("ok"), nil
-}
-
-func (f *fakeAdapter) ExtractTokens(_ []byte) pkgusage.Tokens {
-	if f.tokens != nil {
-		return f.tokens
-	}
-	return pkgusage.Tokens{"input": 10, "output": 20}
-}
-
-func (f *fakeAdapter) Retryable(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
-	if f.retryFn != nil {
-		return f.retryFn(resp)
-	}
-	return false, 0, 0
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-func okResp(body string) *http.Response {
-	return &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     http.Header{},
-	}
-}
-
-func errResp(status int) *http.Response {
-	return &http.Response{
-		StatusCode: status,
-		Body:       io.NopCloser(strings.NewReader("error")),
-		Header:     http.Header{},
-	}
-}
-
-func makeKey(hash, resolved string) *hostkey.HostKey {
-	return &hostkey.HostKey{
-		Resolved: resolved,
-		KeyHash:  hash,
-	}
-}
-
-func makePolicy() *policy.Policy {
-	return &policy.Policy{
-		Meta: meta.Metadata{Name: "test-policy"},
-		Spec: policy.Spec{KeySelection: policy.KeySelectionPrioritized},
-	}
-}
-
-func newService(snap policy.SnapshotReader) *policy.Service {
-	mem := kv.NewMem()
-	sel := keypool.New(mem, slog.Default(), nil, nil)
-	lim := pkgratelimit.New(mem, slog.Default(), nil)
-	if snap == nil {
-		snap = &fakeSnap{}
-	}
-	return policy.NewService(snap, sel, lim)
-}
-
-func newPipeline() *pipeline.Pipeline {
-	return &pipeline.Pipeline{Policy: newService(nil), Logger: slog.Default()}
-}
-
-func drainResult(t *testing.T, res *pipeline.Result) {
-	t.Helper()
-	_, _ = io.Copy(io.Discard, res.Body)
-	if err := res.Body.Close(); err != nil {
-		t.Errorf("result Body.Close: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 func TestHappyPath_SinglePass(t *testing.T) {
 	t.Parallel()

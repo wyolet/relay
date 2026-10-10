@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -51,11 +50,7 @@ func countingRegistry() *adapter.Registry {
 func countCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *Principal) {
 	t.Helper()
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
-	h := *cat.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: upstreamURL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, upstreamURL)
 	return cat, rk
 }
 
@@ -104,8 +99,7 @@ func TestCountTokens_ExactTier(t *testing.T) {
 
 	cat, rk := countCatalog(t, up.URL)
 	d := buildRunnableDeps(t, cat)
-	d.Specs = countingRegistry()
-	d.Adapters = d.Specs.AdapterMap()
+	useSpecs(&d, countingRegistry())
 	d.Profiles = profileRegistry(newCountProfile())
 
 	count, tier := countAnswer(t, countRequest(d, rk, `{"model":"test-model","messages":[]}`, nil))

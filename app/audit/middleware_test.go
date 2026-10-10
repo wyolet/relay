@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -44,7 +43,7 @@ func (m *memSink) all() []Event {
 	return append([]Event(nil), m.events...)
 }
 
-func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func quietLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // serve runs one request through the audit middleware with a handler that
 // authorizes once and writes code, and returns the events that reached the

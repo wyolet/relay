@@ -18,23 +18,13 @@ import (
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-func newRedisStore(t *testing.T, cfg kv.RedisConfig) *kv.Redis {
-	t.Helper()
-	s, err := kv.NewRedis(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewRedis: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
-}
-
 // TestDistributed_Reserve_TwoLimiters: correctness gate.
 // 1000 concurrent goroutines split across 2 Limiter instances sharing one Redis.
 // Budget = 200 RPM. Asserts admitted ∈ [195,200].
 func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 	cfg := kvtest.Config(t)
-	s1 := newRedisStore(t, cfg)
-	s2 := newRedisStore(t, cfg)
+	s1 := kvtest.Connect(t, cfg)
+	s2 := kvtest.Connect(t, cfg)
 
 	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -91,13 +81,8 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 
 func redisLimiterFactory(cfg kv.RedisConfig) func(t *testing.T, now *time.Time) *Limiter {
 	return func(t *testing.T, now *time.Time) *Limiter {
-		s, err := kv.NewRedis(context.Background(), cfg)
-		if err != nil {
-			t.Fatalf("NewRedis: %v", err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
 		clock := func() time.Time { return *now }
-		return New(s, discardLog(), clock)
+		return New(kvtest.Connect(t, cfg), discardLog(), clock)
 	}
 }
 
@@ -160,7 +145,7 @@ func TestDistributed_CommitBoth_Parity(t *testing.T) {
 		return out
 	}
 
-	s1 := newRedisStore(t, cfg)
+	s1 := kvtest.Connect(t, cfg)
 	l1 := New(s1, discardLog(), func() time.Time { return now })
 	seq := dump(t, l1, s1, "seq-policy", "hostkey:seq-key", func(l *Limiter, in, up *Reservation) {
 		if err := l.Commit(context.Background(), in, obs); err != nil {
@@ -171,7 +156,7 @@ func TestDistributed_CommitBoth_Parity(t *testing.T) {
 		}
 	})
 
-	s2 := newRedisStore(t, cfg)
+	s2 := kvtest.Connect(t, cfg)
 	l2 := New(s2, discardLog(), func() time.Time { return now })
 	batch := dump(t, l2, s2, "batch-policy", "hostkey:batch-key", func(l *Limiter, in, up *Reservation) {
 		if err := l.CommitBoth(context.Background(), in, up, obs); err != nil {

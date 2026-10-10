@@ -9,7 +9,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/meta"
@@ -26,14 +25,7 @@ func newGroupsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 	store := &memStore[group.Group]{metaOf: gmeta, items: map[string]*group.Group{}}
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("groups-scope-test", "0"))
 	registerKind[group.Group](
 		api, "groups", "group", store, authzr, gmeta,
@@ -54,14 +46,7 @@ func newTeamsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 	tmeta := func(x *team.Team) *meta.Metadata { return &x.Meta }
 	store := &memStore[team.Team]{metaOf: tmeta, items: map[string]*team.Team{}}
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("teams-scope-test", "0"))
 	registerKind[team.Team](
 		api, "teams", "team", store, authzr, tmeta,

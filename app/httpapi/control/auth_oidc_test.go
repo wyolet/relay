@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -358,7 +357,7 @@ func TestOIDCFlow_AuditsLogin(t *testing.T) {
 		od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "open")
 
 		sink := &auditSink{}
-		em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 		h := audit.Middleware(em, nil)(http.HandlerFunc(od.callback))
 
 		loc, flow := driveStart(t, od)
@@ -390,7 +389,7 @@ func TestOIDCFlow_AuditsLogin(t *testing.T) {
 		od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "closed")
 
 		sink := &auditSink{}
-		em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 		h := audit.Middleware(em, nil)(http.HandlerFunc(od.callback))
 
 		loc, flow := driveStart(t, od)
@@ -420,7 +419,7 @@ func TestOIDCRootCallbackAuditsLogin(t *testing.T) {
 	idp := newFakeIdP(t)
 	od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "open")
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	r := chi.NewRouter()
 	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false, "sess:"), Audit: em}, od)
 

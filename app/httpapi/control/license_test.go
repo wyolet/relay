@@ -15,18 +15,9 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
-	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/license"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 )
 
 // fakeLicense accepts exactly one value and, like the real service, leaves
@@ -56,19 +47,12 @@ func (f *fakeLicense) Set(value string) (license.Info, error) {
 }
 
 // newLicenseHarness mounts /version + /license with lic wired in. Requests
-// carrying X-Test-Admin arrive authenticated.
+// carrying X-Test-Admin: 1 arrive authenticated.
 func newLicenseHarness(t *testing.T, lic license.Service) http.Handler {
 	t.Helper()
 	d := Deps{Authz: authz.AlwaysAllowAuthenticated{}, License: lic}
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if req.Header.Get("X-Test-Admin") != "" {
-				req = req.WithContext(actor.WithActor(req.Context(), &actor.Actor{AdminToken: true}))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Admin", map[string]*actor.Actor{"1": {AdminToken: true}}))
 	api := humachi.New(r, huma.DefaultConfig("license-test", "0"))
 	protect := huma.Middlewares{httpapi.HumaAuth(RequireActor)}
 	registerVersion(api, d)
@@ -200,21 +184,10 @@ func (badLicense) Set(string) (license.Info, error) {
 // A reload rebuilds the snapshot; a stored licence that stopped verifying is
 // a separate fact and must not turn the operator's rebuild into a 500.
 func TestReloadReportsABadLicenseWithout500(t *testing.T) {
-	cat := appcatalog.New(
-		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
-		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
-		tokenList[key.Key]{}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
-	)
+	cat := catalogtest.Catalog{}.New()
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("reload-test", "0"))
 	registerMisc(api, Deps{
 		Authz:   authz.AlwaysAllowAuthenticated{},

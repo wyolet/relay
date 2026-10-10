@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -21,34 +20,16 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
-	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/model"
-
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/role"
-	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
-
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/crypto"
 )
-
-type tokenList[T any] []*T
-
-func (l tokenList[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 // tokenUsers is the in-memory user store the token handlers read versions
 // from and bump.
@@ -119,17 +100,12 @@ func newTokenFixture(t *testing.T, audits ...audit.Event) tokenFixture {
 		Spec: group.Spec{MemberIDs: []string{userID}},
 	}
 
-	cat := appcatalog.New(
-		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{pol},
-		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
-		tokenList[key.Key]{}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
-	)
-	cat.UseTenancy(tokenList[team.Team]{tm}, tokenList[project.Project]{proj},
-		tokenList[serviceaccount.ServiceAccount]{}, tokenList[group.Group]{g},
-		tokenList[role.Role]{}, tokenList[rolebinding.RoleBinding]{}, tokenList[policybinding.PolicyBinding]{})
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("catalog reload: %v", err)
-	}
+	cat := catalogtest.Catalog{
+		Policies: []*policy.Policy{pol},
+		Teams:    []*team.Team{tm},
+		Projects: []*project.Project{proj},
+		Groups:   []*group.Group{g},
+	}.Load(t)
 
 	seed := make([]byte, ed25519.SeedSize)
 	for i := range seed {
@@ -162,7 +138,7 @@ func newTokenFixture(t *testing.T, audits ...audit.Event) tokenFixture {
 func audited(t *testing.T, a *actor.Actor, fn func(ctx context.Context)) []audit.Event {
 	t.Helper()
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	h := audit.Middleware(em, nil)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		fn(actor.WithActor(r.Context(), a))
 	}))

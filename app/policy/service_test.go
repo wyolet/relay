@@ -3,11 +3,9 @@ package policy
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,88 +16,17 @@ import (
 	"github.com/wyolet/relay/app/model"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/kv/kvtest"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// scriptRecorder captures each script invocation whole — name, keys and args —
-// so a test can pin what a commit sent as well as how many calls it cost.
-type scriptRecorder struct {
-	*kv.Mem
-	mu sync.Mutex
-	// calls is every script the limiter ran, batched or not; batches counts
-	// only the round trips, which is what collapsing two commits saves.
-	calls      []scriptCall
-	batches    int
-	batchSizes []int
-}
-
-type scriptCall struct {
-	name string
-	keys []string
-	args []any
-}
-
-func newScriptRecorder() *scriptRecorder {
-	mem := kv.NewMem()
-	pkgratelimit.RegisterScripts(mem)
-	keypool.RegisterScripts(mem)
-	return &scriptRecorder{Mem: mem}
-}
-
-func (r *scriptRecorder) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
-	r.mu.Lock()
-	r.calls = append(r.calls, scriptCall{name: name, keys: append([]string(nil), keys...), args: args})
-	r.mu.Unlock()
-	return r.Mem.RunScript(ctx, name, script, keys, args...)
-}
-
-// RunScriptBatch routes through this recorder's own RunScript; Mem's calls its
-// unwrapped method, which would hide every batched commit from the count. The
-// batch itself is recorded separately: the scripts still run one by one, so
-// counting them alone cannot tell a batch from two sequential commits.
-func (r *scriptRecorder) RunScriptBatch(ctx context.Context, calls []kv.ScriptCall) []kv.ScriptResult {
-	r.mu.Lock()
-	r.batches++
-	r.batchSizes = append(r.batchSizes, len(calls))
-	r.mu.Unlock()
-	results := make([]kv.ScriptResult, len(calls))
-	for i, c := range calls {
-		v, err := r.RunScript(ctx, c.Name, c.Script, c.Keys, c.Args...)
-		results[i] = kv.ScriptResult{Value: v, Err: err}
-	}
-	return results
-}
-
-// batchStats reports how many batched round trips ran and how many scripts
-// the last one carried.
-func (r *scriptRecorder) batchStats() (count, lastSize int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.batchSizes) == 0 {
-		return r.batches, 0
-	}
-	return r.batches, r.batchSizes[len(r.batchSizes)-1]
-}
-
-func (r *scriptRecorder) named(name string) []scriptCall {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []scriptCall
-	for _, c := range r.calls {
-		if c.name == name {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // acquireFixture wires a Service over a real in-memory limiter and selector
 // with one host key whose tier policy carries rules.
 type acquireFixture struct {
 	svc   *Service
-	store *scriptRecorder
+	store *kvtest.Recording
 	key   *hostkey.HostKey
 	tier  *Policy
 	in    AcquireInput
@@ -123,8 +50,7 @@ func newAcquireFixture(t *testing.T, tierRules ...appratelimit.Rule) acquireFixt
 	}
 	k.KeyHash = "hash-" + k.Meta.ID
 
-	store := newScriptRecorder()
-	t.Cleanup(func() { _ = store.Close() })
+	store := recordingMem(t)
 	caller := fix("caller")
 	caller.Meta.ID = meta.NewID()
 	svc := NewService(
@@ -157,12 +83,12 @@ func TestAcquire_TierRateLimit(t *testing.T) {
 	if got := acq.KeyHash(); got != f.key.KeyHash {
 		t.Errorf("KeyHash = %q, want %q", got, f.key.KeyHash)
 	}
-	reserves := f.store.named("limit.reserve")
+	reserves := f.store.Named("limit.reserve")
 	if len(reserves) != 1 {
 		t.Fatalf("reserve scripts = %d, want exactly 1", len(reserves))
 	}
 	wantScope := "limit:{hostkey:" + f.key.Meta.ID + "}:"
-	for _, key := range reserves[0].keys {
+	for _, key := range reserves[0].Keys {
 		if !strings.HasPrefix(key, wantScope) {
 			t.Errorf("key %q is not under the key's own hash tag %q", key, wantScope)
 		}
@@ -242,7 +168,7 @@ func TestAcquire_NoTierRulesMakesNoReservation(t *testing.T) {
 			if acq.Reservation != nil {
 				t.Error("a reservation was made with no rules to meter by")
 			}
-			if got := len(f.store.named("limit.reserve")); got != 0 {
+			if got := len(f.store.Named("limit.reserve")); got != 0 {
 				t.Errorf("reserve scripts = %d, want 0", got)
 			}
 		})
@@ -269,7 +195,7 @@ func TestRelease_RefundsAndRecordsTheFailure(t *testing.T) {
 		t.Fatalf("Acquire: %v", err)
 	}
 	f.svc.Release(ctx, acq, keypool.FailureAuth, 0)
-	if got := len(f.store.named("limit.commit")); got != 1 {
+	if got := len(f.store.Named("limit.commit")); got != 1 {
 		t.Fatalf("commit scripts = %d, want the refund", got)
 	}
 	// The breaker for this key is now open, so it is no longer selectable.
@@ -368,12 +294,12 @@ func TestCommitInbound_TokenMeterMapping(t *testing.T) {
 // assertTokenCounters reads the token buckets the last commit touched. The
 // commit script's KEYS are [guard, token buckets...] when no rule meters
 // concurrency, so the bucket order matches the rule order.
-func assertTokenCounters(t *testing.T, store *countingKV, want []int64) {
+func assertTokenCounters(t *testing.T, store *kvtest.Recording, want []int64) {
 	t.Helper()
 	var keys []string
-	for i, name := range store.names {
-		if name == "limit.commit" {
-			keys = store.keys[i]
+	for _, c := range store.Scripts() {
+		if c.Name == "limit.commit" {
+			keys = c.Keys
 		}
 	}
 	if keys == nil {
@@ -383,13 +309,13 @@ func assertTokenCounters(t *testing.T, store *countingKV, want []int64) {
 		t.Fatalf("commit keys = %v, want the guard plus %d token buckets", keys, len(want))
 	}
 	for i, w := range want {
-		if got := memCounter(t, store.Mem, keys[i+1]); got != w {
+		if got := memCounter(t, store, keys[i+1]); got != w {
 			t.Errorf("bucket %q = %d, want %d", keys[i+1], got, w)
 		}
 	}
 }
 
-func memCounter(t *testing.T, m *kv.Mem, key string) int64 {
+func memCounter(t *testing.T, m kv.Store, key string) int64 {
 	t.Helper()
 	b, err := m.Get(context.Background(), key)
 	if err != nil || len(b) == 0 {
@@ -437,12 +363,12 @@ func TestReserveInbound_NilLimiterAndCommitPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live ReserveInbound: %v", err)
 	}
-	before := len(store.names)
+	before := len(store.Scripts())
 	if err := svc.CommitInbound(ctx, got, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitInbound without a limiter: %v", err)
 	}
-	if len(store.names) != before {
-		t.Fatalf("script calls %d → %d, want none from a limiterless commit", before, len(store.names))
+	if after := len(store.Scripts()); after != before {
+		t.Fatalf("script calls %d → %d, want none from a limiterless commit", before, after)
 	}
 }
 
@@ -474,14 +400,14 @@ func TestCommitBoth_ReturnsBothReservationsInOneCall(t *testing.T) {
 	// scripts alone cannot tell that apart from two sequential commits, which
 	// is the round trip this method exists to save, so the batch is what the
 	// assertion is on.
-	batches, size := f.store.batchStats()
+	batches, size := batchStats(f.store)
 	if batches != 1 {
 		t.Fatalf("batched round trips = %d, want exactly 1", batches)
 	}
 	if size != 2 {
 		t.Fatalf("the batch carried %d scripts, want one per reservation", size)
 	}
-	if got := len(f.store.named("limit.commit")); got != 2 {
+	if got := len(f.store.Named("limit.commit")); got != 2 {
 		t.Fatalf("commit scripts = %d, want one per reservation", got)
 	}
 
@@ -490,21 +416,21 @@ func TestCommitBoth_ReturnsBothReservationsInOneCall(t *testing.T) {
 	if err := f.svc.CommitBoth(ctx, nil, nil, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitBoth(nil, nil): %v", err)
 	}
-	if got, _ := f.store.batchStats(); got != batches {
+	if got, _ := batchStats(f.store); got != batches {
 		t.Fatalf("batched round trips = %d after a no-op CommitBoth, want %d", got, batches)
 	}
 	single, err := f.svc.ReserveInbound(ctx, InboundInput{Policy: caller, TeamID: "team-2"})
 	if err != nil {
 		t.Fatalf("second ReserveInbound: %v", err)
 	}
-	before := len(f.store.named("limit.commit"))
+	before := len(f.store.Named("limit.commit"))
 	if err := f.svc.CommitBoth(ctx, single, nil, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitBoth with only an inbound reservation: %v", err)
 	}
-	if got := len(f.store.named("limit.commit")) - before; got != 1 {
+	if got := len(f.store.Named("limit.commit")) - before; got != 1 {
 		t.Fatalf("commit scripts = %d, want exactly 1", got)
 	}
-	if got, _ := f.store.batchStats(); got != batches {
+	if got, _ := batchStats(f.store); got != batches {
 		t.Fatalf("batched round trips = %d for a single reservation, want %d", got, batches)
 	}
 }

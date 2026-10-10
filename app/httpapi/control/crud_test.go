@@ -122,14 +122,7 @@ func newRoleBindingsHarness(t *testing.T) http.Handler {
 	store := &memStore[rolebinding.RoleBinding]{metaOf: rbmeta, items: map[string]*rolebinding.RoleBinding{}}
 
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
-				req = req.WithContext(actor.WithActor(req.Context(), a))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	api := humachi.New(r, huma.DefaultConfig("rolebindings-test", "0"))
 	registerKind[rolebinding.RoleBinding](
 		api, "role-bindings", "role-binding", store, authz.AlwaysAllowAuthenticated{}, rbmeta,

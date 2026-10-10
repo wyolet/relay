@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/pkg/secret"
 )
 
@@ -59,7 +60,7 @@ func TestAuthTokens_Validate(t *testing.T) {
 func TestAuthTokensFrom_MissingSection(t *testing.T) {
 	// A reader that knows nothing must still answer with the defaults —
 	// callers gate on Enabled, never on a nil.
-	cfg := AuthTokensFrom(fakeReader{})
+	cfg := AuthTokensFrom(&settingstest.Source{})
 	if cfg == nil || !cfg.Enabled || cfg.MaxTTL != 24*time.Hour {
 		t.Errorf("AuthTokensFrom(empty) = %+v, want the defaults", cfg)
 	}

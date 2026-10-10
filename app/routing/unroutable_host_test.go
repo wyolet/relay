@@ -6,7 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -50,25 +50,18 @@ func TestResolve_SkipsHostWithoutBaseURL(t *testing.T) {
 		Spec: policy.Spec{Models: []string{"acme/shared", "acme/only-unset"}},
 	}
 
-	c := catalog.New(
-		provListR{&provider.Provider{Meta: meta.Metadata{ID: provID, Name: "acme", Owner: sys}}},
-		hostListR{unset, live},
-		polListR{pol},
-		modListR{shared, onlyUnset},
-		keyListR{},
-		rlListR{},
-		rkListR{},
-		rcListR{},
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: provID, Name: "acme", Owner: sys}}},
+		Hosts:     []*host.Host{unset, live},
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{shared, onlyUnset},
 		// "a-" sorts first, so the unroutable binding is tried before the live one.
-		bndListR{
+		Bindings: []*binding.Binding{
 			newBinding("a-shared-on-self-hosted", sharedID, unsetID),
 			newBinding("b-shared-on-live", sharedID, liveID),
 			newBinding("only-unset-on-self-hosted", onlyUnsetID, unsetID),
 		},
-	)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	}.Load(t)
 	r := routing.New(c)
 	snap := c.Current()
 

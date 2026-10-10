@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/inference"
@@ -20,7 +21,6 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
@@ -29,11 +29,6 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 	pkgrelay "github.com/wyolet/relay/sdk/v1"
 )
-
-// lister satisfies every catalog.*Lister — each is List(ctx) ([]*T, error).
-type lister[T any] []*T
-
-func (l lister[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 type catSnapReader struct{ cat *appcatalog.Catalog }
 
@@ -98,17 +93,15 @@ func runnerFixture(t *testing.T) (*Runner, kv.Store, string) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerUser, ID: fixtureUser}},
 		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: fixtureUser}, KeyHash: fixtureKeyHash},
 	}
-	cat := appcatalog.New(
-		lister[provider.Provider]{prov},
-		lister[host.Host]{h},
-		lister[policy.Policy]{pol},
-		lister[model.Model]{m},
-		lister[hostkey.HostKey]{hk},
-		lister[ratelimit.RateLimit]{},
-		lister[key.Key]{rk},
-		lister[pricing.Pricing]{},
-		lister[binding.Binding]{b},
-	)
+	cat := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h},
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{m},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{b},
+	}.New()
 	cat.UseTokenVersions(fixtureVersions{fixtureUser: 0})
 	if err := cat.Reload(t.Context()); err != nil {
 		t.Fatalf("catalog reload: %v", err)

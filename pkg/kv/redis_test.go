@@ -14,29 +14,18 @@ import (
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-func newRedisStore(t *testing.T, cfg kv.RedisConfig) *kv.Redis {
-	t.Helper()
-	ctx := context.Background()
-	s, err := kv.NewRedis(ctx, cfg)
-	if err != nil {
-		t.Fatalf("NewRedis: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
-}
-
 func TestContractRedis(t *testing.T) {
 	cfg := kvtest.Config(t)
 	// Each sub-test needs its own store to avoid key collisions.
 	runContractSuite(t, "RedisStore", func(t *testing.T) kv.Store {
-		return newRedisStore(t, cfg)
+		return kvtest.Connect(t, cfg)
 	})
 }
 
 // ---- RunScript tests ----
 
 func TestRunScriptCacheHit(t *testing.T) {
-	s := newRedisStore(t, kvtest.Config(t))
+	s := kvtest.NewRedis(t)
 	ctx := context.Background()
 
 	// simple script: returns "ok"
@@ -60,7 +49,7 @@ func TestRunScriptCacheHit(t *testing.T) {
 
 func TestRunScriptNOSCRIPTFallback(t *testing.T) {
 	cfg := kvtest.Config(t)
-	s := newRedisStore(t, cfg)
+	s := kvtest.Connect(t, cfg)
 	ctx := context.Background()
 
 	const script = `return "hello"`
@@ -108,7 +97,7 @@ func TestWithLockContention(t *testing.T) {
 			if i%2 == 0 {
 				keys = []string{"lockB", "lockA"}
 			}
-			s := newRedisStore(t, cfg)
+			s := kvtest.Connect(t, cfg)
 			_ = s.WithLock(ctx, keys, func(ctx context.Context) error {
 				mu.Lock()
 				if held {

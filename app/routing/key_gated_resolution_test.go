@@ -1,74 +1,17 @@
 package routing
 
 import (
-	"context"
 	"errors"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/pkg/slug"
 )
-
-// twoHostFixture builds one model served by two hosts, both keyed by their
-// own tier policy, and returns the ids the tests pin behaviour on.
-type twoHostFixture struct {
-	model            *model.Model
-	hostA, hostB     string
-	keyA, keyB       *hostkey.HostKey
-	tierA, tierB     *policy.Policy
-	provider         *provider.Provider
-	bindingA, bindB  *binding.Binding
-	hostRowA, hostRB *host.Host
-}
-
-func newTwoHostParts() twoHostFixture {
-	provID, hostA, hostB, modID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
-	tierAID, tierBID := meta.NewID(), meta.NewID()
-	f := twoHostFixture{hostA: hostA, hostB: hostB}
-	f.provider = &provider.Provider{Meta: meta.Metadata{ID: provID, Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	f.hostRowA = &host.Host{
-		Meta: meta.Metadata{ID: hostA, Name: "host-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: host.Spec{BaseURL: "http://a.example"},
-	}
-	f.hostRB = &host.Host{
-		Meta: meta.Metadata{ID: hostB, Name: "host-b", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: host.Spec{BaseURL: "http://b.example"},
-	}
-	f.model = &model.Model{
-		Meta: meta.Metadata{ID: modID, Name: "m1", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "m1"}}, Pointer: slug.From("m1")},
-	}
-	f.bindingA = &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "m1-on-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI},
-	}
-	f.bindB = &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "m1-on-b", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: modID, HostID: hostB, Adapter: adapters.OpenAI},
-	}
-	f.tierA = &policy.Policy{Meta: meta.Metadata{ID: tierAID, Name: "tier-a", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}}
-	f.tierB = &policy.Policy{Meta: meta.Metadata{ID: tierBID, Name: "tier-b", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}}
-	f.keyA = &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "key-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: hostA, PolicyID: tierAID, Value: "sk-a", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
-	}
-	f.keyB = &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "key-b", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: hostB, PolicyID: tierBID, Value: "sk-b", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
-	}
-	return f
-}
 
 // The first binding the policy allows has no key the policy may spend;
 // resolution must keep walking to the binding it does hold a key for instead
@@ -79,14 +22,7 @@ func TestResolve_WalksPastKeylessBinding(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyB.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA, f.hostRB},
-		[]*policy.Policy{f.tierA, f.tierB, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA, f.keyB}, nil, nil,
-		[]*binding.Binding{f.bindingA, f.bindB},
-	)
+	snap := f.twoHostRows(caller).Snapshot()
 	plan, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -107,25 +43,12 @@ func TestResolve_NoKeysAnywhereStillAnswersNoKeys(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{Models: []string{"acme/m1"}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA, f.hostRB},
-		[]*policy.Policy{f.tierA, f.tierB, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA, f.keyB}, nil, nil,
-		[]*binding.Binding{f.bindingA, f.bindB},
-	)
+	snap := f.twoHostRows(caller).Snapshot()
 	_, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap})
 	if !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys", err)
 	}
 }
-
-// lister serves a fixed slice to catalog.New / UseTenancy, so a test can
-// build a snapshot that actually holds tenancy rows.
-type lister[T any] []*T
-
-func (l lister[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 // The tier gate applies to the policy-less pool too: a key whose
 // host tier does not grant the model is not a usable candidate.
@@ -133,23 +56,11 @@ func TestResolvePolicyless_AppliesTierGate(t *testing.T) {
 	f := newTwoHostParts()
 	// A tier that grants a different model only.
 	f.tierA.Spec.Models = []string{"acme/other"}
-	other := &model.Model{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other", Owner: f.model.Meta.Owner},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "other"}}, Pointer: slug.From("other")},
-	}
-	otherBnd := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other-on-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: other.Meta.ID, HostID: f.hostA, Adapter: adapters.OpenAI},
-	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA}, nil,
-		[]*model.Model{f.model, other},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA, otherBnd},
-	)
-	_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
+	other, otherBnd := f.otherModelOnA()
+	rows := f.hostARows()
+	rows.Models = append(rows.Models, other)
+	rows.Bindings = append(rows.Bindings, otherBnd)
+	_, err := (&Resolver{}).resolvePolicyless(rows.Snapshot(), []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
 	if !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys — the tier does not grant this model", err)
 	}
@@ -163,26 +74,12 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{Models: []string{"acme/m1"}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows(caller).Snapshot()
 	if anyMode.PolicyAllows(snap, caller, f.model) {
 		t.Fatal("PolicyAllows = true, but the policy holds no host key for the model's host")
 	}
 	caller.Spec.HostKeyIDs = []string{f.keyA.Meta.ID}
-	snap = catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap = f.hostARows(caller).Snapshot()
 	if !anyMode.PolicyAllows(snap, caller, f.model) {
 		t.Fatal("PolicyAllows = false with a granted, keyed model")
 	}
@@ -191,22 +88,11 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 	// tier has to grant this model too, or the listing advertises a model
 	// every request for it would answer ErrNoKeys.
 	f.tierA.Spec.Models = []string{"acme/other"}
-	other := &model.Model{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other", Owner: f.model.Meta.Owner},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "other"}}, Pointer: slug.From("other")},
-	}
-	otherBnd := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other-on-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: other.Meta.ID, HostID: f.hostA, Adapter: adapters.OpenAI},
-	}
-	snap = catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model, other},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA, otherBnd},
-	)
+	other, otherBnd := f.otherModelOnA()
+	rows := f.hostARows(caller)
+	rows.Models = append(rows.Models, other)
+	rows.Bindings = append(rows.Bindings, otherBnd)
+	snap = rows.Snapshot()
 	if anyMode.PolicyAllows(snap, caller, f.model) {
 		t.Fatal("PolicyAllows = true, but the key's tier policy does not grant this model")
 	}
@@ -224,14 +110,13 @@ func TestPolicyAllows_ListsNoAuthHost(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{Models: []string{"acme/m1"}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{caller}, nil,
-		[]*model.Model{f.model},
-		nil, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{f.provider},
+		Hosts:     []*host.Host{f.hostRowA},
+		Policies:  []*policy.Policy{caller},
+		Models:    []*model.Model{f.model},
+		Bindings:  []*binding.Binding{f.bindingA},
+	}.Snapshot()
 	if !anyMode.PolicyAllows(snap, caller, f.model) {
 		t.Fatal("PolicyAllows = false for an explicitly granted model on a NoAuth host")
 	}
@@ -245,15 +130,7 @@ func TestPolicyAllows_DisabledPolicyGrantsNothing(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}, Enabled: &off},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
-	if anyMode.PolicyAllows(snap, caller, f.model) {
+	if anyMode.PolicyAllows(f.hostARows(caller).Snapshot(), caller, f.model) {
 		t.Fatal("PolicyAllows = true for a disabled policy")
 	}
 }
@@ -270,14 +147,7 @@ func TestResolve_DisabledTierPolicyDeniesTheKey(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows(caller).Snapshot()
 	if _, ok := snap.HostKey(f.keyA.Meta.ID); !ok {
 		t.Fatal("the key was evicted; the tier gate should be what denies it")
 	}
@@ -297,15 +167,7 @@ func TestResolve_ReEnabledTierServesAgain(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}},
 	}
-	c := catalog.New(
-		lister[provider.Provider]{f.provider}, lister[host.Host]{f.hostRowA},
-		lister[policy.Policy]{f.tierA, caller}, lister[model.Model]{f.model},
-		lister[hostkey.HostKey]{f.keyA}, lister[ratelimit.RateLimit]{},
-		lister[key.Key]{}, lister[pricing.Pricing]{}, lister[binding.Binding]{f.bindingA},
-	)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := f.hostARows(caller).Load(t)
 	r := New(c)
 	if _, err := r.Resolve(Request{ModelName: "m1", Policy: caller}); !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys while the tier is off", err)
@@ -334,15 +196,7 @@ func TestResolve_DisabledPolicyIsReachable(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}, Enabled: &off},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
-	_, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap})
+	_, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: f.hostARows(caller).Snapshot()})
 	if !errors.Is(err, ErrPolicyDisabled) {
 		t.Fatalf("err = %v, want ErrPolicyDisabled", err)
 	}
@@ -353,14 +207,7 @@ func TestResolve_DisabledPolicyIsReachable(t *testing.T) {
 // advertised; a NoAuth host is served by the anonymous key, so its model is.
 func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 	f := newTwoHostParts()
-	shared := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	shared := f.hostARows().Snapshot()
 	if !anyMode.PolicylessAllows(shared, f.model, "", "") {
 		t.Fatal("a system-owned key's model is not listed")
 	}
@@ -368,14 +215,12 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 	// A NoAuth host has no host key at all and is still reachable.
 	noAuth := newTwoHostParts()
 	noAuth.hostRowA.Spec.NoAuth = true
-	open := catalog.Build(
-		[]*provider.Provider{noAuth.provider},
-		[]*host.Host{noAuth.hostRowA},
-		nil, nil,
-		[]*model.Model{noAuth.model},
-		nil, nil, nil,
-		[]*binding.Binding{noAuth.bindingA},
-	)
+	open := catalogtest.Catalog{
+		Providers: []*provider.Provider{noAuth.provider},
+		Hosts:     []*host.Host{noAuth.hostRowA},
+		Models:    []*model.Model{noAuth.model},
+		Bindings:  []*binding.Binding{noAuth.bindingA},
+	}.Snapshot()
 	if !anyMode.PolicylessAllows(open, noAuth.model, "", "") {
 		t.Error("a NoAuth host's model is not listed, but the flow serves it with the anonymous key")
 	}
@@ -387,23 +232,11 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 	// the model stops being listed too.
 	gated := newTwoHostParts()
 	gated.tierA.Spec.Models = []string{"acme/other"}
-	other := &model.Model{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other", Owner: gated.model.Meta.Owner},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "other"}}, Pointer: slug.From("other")},
-	}
-	otherBnd := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other-on-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: other.Meta.ID, HostID: gated.hostA, Adapter: adapters.OpenAI},
-	}
-	tiered := catalog.Build(
-		[]*provider.Provider{gated.provider},
-		[]*host.Host{gated.hostRowA},
-		[]*policy.Policy{gated.tierA}, nil,
-		[]*model.Model{gated.model, other},
-		[]*hostkey.HostKey{gated.keyA}, nil, nil,
-		[]*binding.Binding{gated.bindingA, otherBnd},
-	)
-	if anyMode.PolicylessAllows(tiered, gated.model, "", "") {
+	other, otherBnd := gated.otherModelOnA()
+	rows := gated.hostARows()
+	rows.Models = append(rows.Models, other)
+	rows.Bindings = append(rows.Bindings, otherBnd)
+	if anyMode.PolicylessAllows(rows.Snapshot(), gated.model, "", "") {
 		t.Error("a model the key's tier does not grant is listed anyway")
 	}
 
@@ -425,14 +258,7 @@ func BenchmarkResolveTwoBindings(b *testing.B) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID, f.keyB.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA, f.hostRB},
-		[]*policy.Policy{f.tierA, f.tierB, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA, f.keyB}, nil, nil,
-		[]*binding.Binding{f.bindingA, f.bindB},
-	)
+	snap := f.twoHostRows(caller).Snapshot()
 	r := &Resolver{}
 	req := Request{ModelName: "m1", Policy: caller, Snapshot: snap}
 	b.ReportAllocs()
@@ -447,14 +273,7 @@ func BenchmarkResolveTwoBindings(b *testing.B) {
 // BenchmarkResolvePolicyless covers the policy-less pool filter + tier gate.
 func BenchmarkResolvePolicyless(b *testing.B) {
 	f := newTwoHostParts()
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows().Snapshot()
 	r := &Resolver{}
 	models := []*model.Model{f.model}
 	b.ReportAllocs()

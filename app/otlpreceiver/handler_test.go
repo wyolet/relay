@@ -23,23 +23,18 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wyolet/relay/app/binding"
-	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/otlpreceiver"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/role"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
@@ -62,10 +57,6 @@ func keyHash(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
 }
-
-type rows[T any] []*T
-
-func (r rows[T]) List(context.Context) ([]*T, error) { return r, nil }
 
 // fixture is a receiver in front of a catalog holding one model served by two hosts: the provider's own (priced) and a reseller (priced higher), plus one model name that two providers both have. The fixture is the receiver's usage queue: events holds what was queued, and emptying it stands in for the queue draining.
 type fixture struct {
@@ -175,7 +166,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: fx.sa.Meta.ID}, KeyHash: keyHash(relayKey)},
 	}
 	fx.keyRow.Spec.PayloadLoggingEnabled = o.keyCaptures
-	var policies rows[policy.Policy]
+	var policies []*policy.Policy
 	if o.policyCaptures != nil {
 		enabled := !o.policyDisabled
 		governing := &policy.Policy{
@@ -226,7 +217,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 			perMillion(pricing.MeterTokensOutput, 150),
 		}},
 	}
-	bindings := rows[binding.Binding]{
+	bindings := []*binding.Binding{
 		// Sorted first by name, so only the provider-host preference keeps it from winning.
 		{Meta: meta.Metadata{ID: meta.NewID(), Name: "a-reseller-acme-large", Owner: system()}, Spec: binding.Spec{ModelID: fx.model.Meta.ID, HostID: reseller.Meta.ID, Adapter: "openai", PricingID: resellerPrice.Meta.ID}},
 		{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-acme-large", Owner: system()}, Spec: binding.Spec{ModelID: fx.model.Meta.ID, HostID: ownHost.Meta.ID, Adapter: "openai", PricingID: fx.ownPrice.Meta.ID}},
@@ -242,7 +233,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "shared"}}, Pointer: "shared"},
 	}
 
-	var limits rows[ratelimit.RateLimit]
+	var limits []*ratelimit.RateLimit
 	if o.exportsPerMinute > 0 {
 		enabled := !o.rateLimitDisabled
 		limits = append(limits, &ratelimit.RateLimit{
@@ -255,29 +246,19 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		})
 	}
 
-	cat := appcatalog.New(
-		rows[provider.Provider]{prov, zeta},
-		rows[host.Host]{ownHost, reseller},
-		policies,
-		rows[model.Model]{fx.model, fx.sharedAcme, fx.sharedZeta},
-		rows[hostkey.HostKey]{},
-		limits,
-		rows[key.Key]{fx.keyRow, siblingRow, outsiderRow},
-		rows[pricing.Pricing]{fx.ownPrice, resellerPrice},
-		bindings,
-	)
-	cat.UseTenancy(
-		rows[team.Team]{fx.team},
-		rows[project.Project]{fx.project, fx.otherProject},
-		rows[serviceaccount.ServiceAccount]{fx.sa, sibling, outsider},
-		rows[group.Group]{},
-		rows[role.Role]{},
-		rows[rolebinding.RoleBinding]{},
-		rows[policybinding.PolicyBinding]{},
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("catalog reload: %v", err)
-	}
+	cat := catalogtest.Catalog{
+		Providers:       []*provider.Provider{prov, zeta},
+		Hosts:           []*host.Host{ownHost, reseller},
+		Policies:        policies,
+		Models:          []*model.Model{fx.model, fx.sharedAcme, fx.sharedZeta},
+		RateLimits:      limits,
+		Keys:            []*key.Key{fx.keyRow, siblingRow, outsiderRow},
+		Pricings:        []*pricing.Pricing{fx.ownPrice, resellerPrice},
+		Bindings:        bindings,
+		Teams:           []*team.Team{fx.team},
+		Projects:        []*project.Project{fx.project, fx.otherProject},
+		ServiceAccounts: []*serviceaccount.ServiceAccount{fx.sa, sibling, outsider},
+	}.Load(t)
 
 	state := kv.NewMem()
 	t.Cleanup(func() { _ = state.Close() })

@@ -2,6 +2,8 @@ package settings
 
 import (
 	"testing"
+
+	"github.com/wyolet/relay/app/settings/settingstest"
 )
 
 // fakeChecker unlocks exactly the features it lists.
@@ -79,16 +81,7 @@ func TestLicenseSectionRoundTrip(t *testing.T) {
 	if got := LicenseFrom(nil).Value; got != "" {
 		t.Errorf("nil reader = %q, want the community zero value", got)
 	}
-	if got := LicenseFrom(licenseReader{v: &License{Value: "x.y.z"}}).Value; got != "x.y.z" {
+	if got := LicenseFrom(settingstest.Sections(map[string]any{SectionLicense: &License{Value: "x.y.z"}})).Value; got != "x.y.z" {
 		t.Errorf("LicenseFrom = %q", got)
 	}
-}
-
-type licenseReader struct{ v *License }
-
-func (r licenseReader) Setting(section string) (any, bool) {
-	if section == SectionLicense {
-		return r.v, true
-	}
-	return nil, false
 }

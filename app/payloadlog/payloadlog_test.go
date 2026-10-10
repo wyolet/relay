@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
-func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // memSink is an in-memory Sink for observer tests.
 type memSink struct {
@@ -33,60 +34,24 @@ func (m *memSink) count() int {
 	return len(m.recs)
 }
 
-// fakeReader is a settable SettingsSource. The tests drive reconcile
-// directly, so OnSettingsChange just records the callback.
-type fakeReader struct {
-	mu      sync.Mutex
-	cfg     settings.PayloadLogging
-	present bool
-	subs    []func()
-}
-
-func (f *fakeReader) OnSettingsChange(_ string, fn func()) {
-	f.mu.Lock()
-	f.subs = append(f.subs, fn)
-	f.mu.Unlock()
-}
-
-// fire invokes the registered callbacks the way the catalog NOTIFY
-// listener would after a settings change.
-func (f *fakeReader) fire() {
-	f.mu.Lock()
-	subs := append([]func(){}, f.subs...)
-	f.mu.Unlock()
-	for _, fn := range subs {
-		fn()
-	}
-}
-
-func (f *fakeReader) set(c settings.PayloadLogging) {
-	f.mu.Lock()
-	f.cfg, f.present = c, true
-	f.mu.Unlock()
-}
-
-func (f *fakeReader) Setting(string) (any, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.present {
-		return nil, false
-	}
-	c := f.cfg
-	return &c, true
+// setPayload stores cfg as the payload-logging section without running the
+// change callbacks; the tests drive reconcile directly.
+func setPayload(src *settingstest.Source, cfg settings.PayloadLogging) {
+	src.Set(settings.SectionPayloadLogging, &cfg)
 }
 
 // enabledCtrl returns a Controller in the enabled state with maxBytes and a
 // memSink installed — no reconcile loop running.
 func enabledCtrl(maxBytes int) (*Controller, *memSink) {
 	sink := &memSink{}
-	c := NewController(&fakeReader{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return sink, nil }, testLogger())
+	c := NewController(&settingstest.Source{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return sink, nil }, testLogger())
 	c.set(true, maxBytes, settings.PayloadLogging{Enabled: true})
 	c.rsink.swap(sink, c.log)
 	return c, sink
 }
 
 func disabledCtrl() *Controller {
-	return NewController(&fakeReader{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return &memSink{}, nil }, testLogger())
+	return NewController(&settingstest.Source{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return &memSink{}, nil }, testLogger())
 }
 
 func mustResult(t *testing.T, obs lifecycle.StreamObserver) *Record {
@@ -199,7 +164,7 @@ func TestRegistryChain(t *testing.T) {
 }
 
 func TestController_Reconcile(t *testing.T) {
-	reader := &fakeReader{}
+	reader := &settingstest.Source{}
 	var built int
 	sinks := map[string]*memSink{}
 	build := func(_ context.Context, cfg settings.PayloadLogging) (Sink, error) {
@@ -217,7 +182,7 @@ func TestController_Reconcile(t *testing.T) {
 	}
 
 	// Enable with bucket A → builds + enabled, maxBytes applied.
-	reader.set(settings.PayloadLogging{Enabled: true, Backend: "s3", MaxBytes: 7, S3: settings.PayloadS3{Bucket: "A"}})
+	setPayload(reader, settings.PayloadLogging{Enabled: true, Backend: "s3", MaxBytes: 7, S3: settings.PayloadS3{Bucket: "A"}})
 	c.reconcile(context.Background())
 	if !c.Enabled() || c.MaxBytes() != 7 || built != 1 {
 		t.Fatalf("enable A: enabled=%v max=%d built=%d", c.Enabled(), c.MaxBytes(), built)
@@ -230,14 +195,14 @@ func TestController_Reconcile(t *testing.T) {
 	}
 
 	// Change bucket → hot-swap (rebuild).
-	reader.set(settings.PayloadLogging{Enabled: true, Backend: "s3", MaxBytes: 7, S3: settings.PayloadS3{Bucket: "B"}})
+	setPayload(reader, settings.PayloadLogging{Enabled: true, Backend: "s3", MaxBytes: 7, S3: settings.PayloadS3{Bucket: "B"}})
 	c.reconcile(context.Background())
 	if built != 2 {
 		t.Fatalf("swap: built=%d", built)
 	}
 
 	// Disable → teardown, no further build, gate off.
-	reader.set(settings.PayloadLogging{Enabled: false})
+	setPayload(reader, settings.PayloadLogging{Enabled: false})
 	c.reconcile(context.Background())
 	if c.Enabled() || built != 2 {
 		t.Fatalf("disable: enabled=%v built=%d", c.Enabled(), built)
@@ -245,7 +210,7 @@ func TestController_Reconcile(t *testing.T) {
 }
 
 func TestController_BuildErrorKeepsPrevious(t *testing.T) {
-	reader := &fakeReader{}
+	reader := &settingstest.Source{}
 	fail := false
 	c := NewController(reader, func(context.Context, settings.PayloadLogging) (Sink, error) {
 		if fail {
@@ -254,7 +219,7 @@ func TestController_BuildErrorKeepsPrevious(t *testing.T) {
 		return &memSink{}, nil
 	}, testLogger())
 
-	reader.set(settings.PayloadLogging{Enabled: true, Backend: "file"})
+	setPayload(reader, settings.PayloadLogging{Enabled: true, Backend: "file"})
 	c.reconcile(context.Background())
 	if !c.Enabled() {
 		t.Fatal("initial enable failed")
@@ -262,7 +227,7 @@ func TestController_BuildErrorKeepsPrevious(t *testing.T) {
 	// New config that fails to build → stays enabled on the previous sink,
 	// applied unchanged so it retries.
 	fail = true
-	reader.set(settings.PayloadLogging{Enabled: true, Backend: "file", MaxBytes: 99})
+	setPayload(reader, settings.PayloadLogging{Enabled: true, Backend: "file", MaxBytes: 99})
 	c.reconcile(context.Background())
 	if !c.Enabled() || c.MaxBytes() == 99 {
 		t.Fatalf("build error should keep previous: enabled=%v max=%d", c.Enabled(), c.MaxBytes())
@@ -270,16 +235,13 @@ func TestController_BuildErrorKeepsPrevious(t *testing.T) {
 }
 
 func TestController_SignalDrivenRun(t *testing.T) {
-	reader := &fakeReader{}
+	reader := &settingstest.Source{}
 	c := NewController(reader, func(context.Context, settings.PayloadLogging) (Sink, error) {
 		return &memSink{}, nil
 	}, testLogger())
 
 	c.Subscribe()
-	reader.mu.Lock()
-	nSubs := len(reader.subs)
-	reader.mu.Unlock()
-	if nSubs != 1 {
+	if nSubs := reader.Callbacks(settings.SectionPayloadLogging); nSubs != 1 {
 		t.Fatalf("Subscribe registered %d callbacks, want 1", nSubs)
 	}
 
@@ -289,8 +251,7 @@ func TestController_SignalDrivenRun(t *testing.T) {
 
 	// Enable via settings, then fire the change callback as the catalog
 	// would. Run must pick it up off the signal and reconcile to enabled.
-	reader.set(settings.PayloadLogging{Enabled: true, Backend: "file"})
-	reader.fire()
+	reader.Change(settings.SectionPayloadLogging, &settings.PayloadLogging{Enabled: true, Backend: "file"})
 
 	deadline := time.After(2 * time.Second)
 	for !c.Enabled() {

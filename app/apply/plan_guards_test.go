@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -21,33 +22,19 @@ import (
 // and the row each write would persist.
 func teamPlan(t *testing.T, b *builder, docs ...*manifest.TeamDTO) ([]Entry, []*team.Team, error) {
 	t.Helper()
-	var written []*team.Team
 	names := map[string]string{}
 	for _, row := range b.rows.Teams {
 		names[row.Meta.Name] = row.Meta.ID
 	}
-	b.idx = newIndex(b.rows)
-	err := planKind(context.Background(), b, kindWiring[manifest.TeamDTO, team.Team]{
+	written, err := planOne(context.Background(), b, kindWiring[manifest.TeamDTO, team.Team]{
 		Kind: "Team", Docs: docs, Names: names, Rows: b.rows.Teams,
 		To:   manifest.ToTeam,
 		Meta: func(x *team.Team) *meta.Metadata { return &x.Meta },
-		Upsert: func(_ context.Context, x *team.Team) error {
-			written = append(written, x)
-			return nil
-		},
-		Delete: func(context.Context, string) error { return nil },
 	})
-	if err != nil {
-		return b.entries, written, err
+	if err == nil {
+		runWrites(t, b)
 	}
-	for _, e := range b.entries {
-		if e.write != nil {
-			if werr := e.write(context.Background()); werr != nil {
-				t.Fatalf("write: %v", werr)
-			}
-		}
-	}
-	return b.entries, written, err
+	return b.entries, *written, err
 }
 
 // rateLimitPlan is teamPlan for a kind whose owner the document authors —
@@ -55,33 +42,19 @@ func teamPlan(t *testing.T, b *builder, docs ...*manifest.TeamDTO) ([]Entry, []*
 // owner guards.
 func rateLimitPlan(t *testing.T, b *builder, docs ...*manifest.RateLimitDTO) ([]Entry, []*ratelimit.RateLimit, error) {
 	t.Helper()
-	var written []*ratelimit.RateLimit
 	names := map[string]string{}
 	for _, row := range b.rows.RateLimits {
 		names[row.Meta.Name] = row.Meta.ID
 	}
-	b.idx = newIndex(b.rows)
-	err := planKind(context.Background(), b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
+	written, err := planOne(context.Background(), b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
 		Kind: "RateLimit", Docs: docs, Names: names, Rows: b.rows.RateLimits,
 		To:   manifest.ToRateLimit,
 		Meta: func(x *ratelimit.RateLimit) *meta.Metadata { return &x.Meta },
-		Upsert: func(_ context.Context, x *ratelimit.RateLimit) error {
-			written = append(written, x)
-			return nil
-		},
-		Delete: func(context.Context, string) error { return nil },
 	})
-	if err != nil {
-		return b.entries, written, err
+	if err == nil {
+		runWrites(t, b)
 	}
-	for _, e := range b.entries {
-		if e.write != nil {
-			if werr := e.write(context.Background()); werr != nil {
-				t.Fatalf("write: %v", werr)
-			}
-		}
-	}
-	return b.entries, written, err
+	return b.entries, *written, err
 }
 
 func rateLimitDoc(name string) *manifest.RateLimitDTO {
@@ -176,19 +149,6 @@ func TestApplyValidatesEveryPlannedRow(t *testing.T) {
 	}
 }
 
-// govReader answers one governance section.
-type govReader struct {
-	section string
-	value   *settings.Governance
-}
-
-func (g govReader) Setting(name string) (any, bool) {
-	if name != g.section {
-		return nil, false
-	}
-	return g.value, true
-}
-
 // A catalog-managed row is only editable while its governance section says
 // so; apply is a mutation like any other.
 func TestApplyHonoursGovernance(t *testing.T) {
@@ -200,14 +160,12 @@ func TestApplyHonoursGovernance(t *testing.T) {
 		},
 		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "gpt-4o"}}, Pointer: "gpt-4o"},
 	}
-	locked := Options{Gov: govReader{
-		section: settings.SectionGovernanceModel,
-		value:   &settings.Governance{AllowEdit: false},
-	}}
+	locked := Options{Gov: settingstest.Sections(map[string]any{
+		settings.SectionGovernanceModel: &settings.Governance{AllowEdit: false},
+	})}
 
 	plan := func(opts Options) error {
 		b := &builder{opts: opts, rows: &Rows{Models: []*model.Model{stored}}}
-		b.idx = newIndex(b.rows)
 		d := &manifest.ModelDTO{APIVersion: manifest.APIVersion, Kind: "Model"}
 		d.Metadata.Name = "gpt-4o"
 		d.Metadata.DisplayName = "GPT-4o mini"
@@ -215,14 +173,13 @@ func TestApplyHonoursGovernance(t *testing.T) {
 		d.Metadata.Owner.ID = providerID
 		d.Spec.Snapshots = []model.Snapshot{{Name: "gpt-4o"}}
 		d.Spec.Pointer = "gpt-4o"
-		return planKind(context.Background(), b, kindWiring[manifest.ModelDTO, model.Model]{
+		_, err := planOne(context.Background(), b, kindWiring[manifest.ModelDTO, model.Model]{
 			Kind: "Model", Docs: []*manifest.ModelDTO{d},
 			Names: map[string]string{"gpt-4o": stored.Meta.ID}, Rows: b.rows.Models,
-			To:     manifest.ToModel,
-			Meta:   func(x *model.Model) *meta.Metadata { return &x.Meta },
-			Upsert: func(context.Context, *model.Model) error { return nil },
-			Delete: func(context.Context, string) error { return nil },
+			To:   manifest.ToModel,
+			Meta: func(x *model.Model) *meta.Metadata { return &x.Meta },
 		})
+		return err
 	}
 
 	var gov *GovernanceError

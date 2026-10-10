@@ -31,14 +31,7 @@ func TestSecretSettingsNeedAnAdmin(t *testing.T) {
 	deps := mountDeps(t)
 	deps.Stores = stores
 	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if req.Header.Get("X-Test-User") == "bob" {
-				req = req.WithContext(actor.WithActor(req.Context(), &actor.Actor{UserID: "u-bob", Username: "bob", SessionID: "s"}))
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
+	r.Use(withTestActor("X-Test-User", map[string]*actor.Actor{"bob": {UserID: "u-bob", Username: "bob", SessionID: "s"}}))
 	Mount(r, deps)
 
 	put := func(section, body string, admin bool) int {

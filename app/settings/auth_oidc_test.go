@@ -3,16 +3,13 @@ package settings
 import (
 	"strings"
 	"testing"
+
+	"github.com/wyolet/relay/app/settings/settingstest"
 )
 
-// oidcReader serves a canned auth:oidc section value.
-type oidcReader struct{ v *AuthOIDC }
-
-func (f oidcReader) Setting(section string) (any, bool) {
-	if section == AuthOIDCSection && f.v != nil {
-		return f.v, true
-	}
-	return nil, false
+// oidcSection serves v as the stored auth:oidc section.
+func oidcSection(v *AuthOIDC) *settingstest.Source {
+	return settingstest.Sections(map[string]any{AuthOIDCSection: v})
 }
 
 func setOIDCEnv(t *testing.T) {
@@ -94,7 +91,7 @@ func TestAuthOIDCEnv_IncompleteFails(t *testing.T) {
 
 func TestEffectiveAuthOIDC_EnvWinsOverDB(t *testing.T) {
 	setOIDCEnv(t)
-	db := oidcReader{v: &AuthOIDC{Enabled: true, Issuer: "https://db.example.com"}}
+	db := oidcSection(&AuthOIDC{Enabled: true, Issuer: "https://db.example.com"})
 	if got := EffectiveAuthOIDC(db); got.Issuer != "https://idp.example.com" {
 		t.Errorf("env overlay should win, got issuer %q", got.Issuer)
 	}
@@ -102,7 +99,7 @@ func TestEffectiveAuthOIDC_EnvWinsOverDB(t *testing.T) {
 
 func TestEffectiveAuthOIDC_FallsBackToDB(t *testing.T) {
 	t.Setenv("WYOLET_AUTH_MODE", "")
-	db := oidcReader{v: &AuthOIDC{Enabled: true, Issuer: "https://db.example.com"}}
+	db := oidcSection(&AuthOIDC{Enabled: true, Issuer: "https://db.example.com"})
 	if got := EffectiveAuthOIDC(db); got.Issuer != "https://db.example.com" {
 		t.Errorf("want DB section, got %+v", got)
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -70,17 +71,15 @@ func entriesFixture(t *testing.T, grants ...string) (*catalog.Snapshot, *policy.
 			Spec: binding.Spec{ModelID: modID, HostID: freeHostID, Adapter: adapters.OpenAI},
 		},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{{Meta: meta.Metadata{ID: provID, Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
-		hosts,
-		[]*policy.Policy{pol},
-		nil,
-		[]*model.Model{m},
-		[]*hostkey.HostKey{hk},
-		nil,
-		[]*pricing.Pricing{price},
-		bindings,
-	)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: provID, Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
+		Hosts:     hosts,
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{m},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Pricings:  []*pricing.Pricing{price},
+		Bindings:  bindings,
+	}.Snapshot()
 	pol, ok := snap.Policy(polID)
 	if !ok {
 		t.Fatal("policy missing from snapshot")

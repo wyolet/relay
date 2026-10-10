@@ -12,50 +12,15 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// countingRedis wraps a real kv.Redis so a test can count the round trips one
-// reservation costs without changing what the server executes.
-type countingRedis struct {
-	*kv.Redis
-	mu    sync.Mutex
-	names []string
-	keys  [][]string
-}
-
-func newCountingRedis(t *testing.T) *countingRedis {
-	t.Helper()
-	s, err := kv.NewRedis(context.Background(), kvtest.Config(t))
-	if err != nil {
-		t.Fatalf("NewRedis: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return &countingRedis{Redis: s}
-}
-
-func (c *countingRedis) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
-	c.mu.Lock()
-	c.names = append(c.names, name)
-	c.keys = append(c.keys, append([]string(nil), keys...))
-	c.mu.Unlock()
-	return c.Redis.RunScript(ctx, name, script, keys, args...)
-}
-
-func (c *countingRedis) calls() ([]string, [][]string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.names...), append([][]string(nil), c.keys...)
-}
-
-func redisFixture(t *testing.T, rules ...appratelimit.Rule) (*Service, *countingRedis, *Policy) {
+func redisFixture(t *testing.T, rules ...appratelimit.Rule) (*Service, *kvtest.Recording, *Policy) {
 	t.Helper()
 	pol := fix("prod-policy")
 	pol.Meta.ID = "pol-1"
@@ -64,7 +29,7 @@ func redisFixture(t *testing.T, rules ...appratelimit.Rule) (*Service, *counting
 		rl = testRateLimit("rl-1", rules...)
 		pol.Spec.RateLimitID = rl.Meta.ID
 	}
-	store := newCountingRedis(t)
+	store := kvtest.NewRecording(kvtest.NewRedis(t))
 	return NewService(reserveSnap{pol: pol, rl: rl}, nil,
 		pkgratelimit.New(store, discardLogger(), nil)), store, pol
 }
@@ -94,11 +59,11 @@ func TestReserve_IsOneScriptOnRedis(t *testing.T) {
 	if res == nil {
 		t.Fatal("no reservation for a metered token request")
 	}
-	names, keys := store.calls()
-	if len(names) != 1 || names[0] != "limit.reserve" {
-		t.Fatalf("script calls = %v, want exactly one limit.reserve", names)
+	scripts := store.Scripts()
+	if len(scripts) != 1 || scripts[0].Name != "limit.reserve" {
+		t.Fatalf("script calls = %v, want exactly one limit.reserve", scriptNames(store))
 	}
-	touched := keys[0]
+	touched := scripts[0].Keys
 	if want := RevokedKey("team-1", "jti-1"); len(touched) == 0 || touched[0] != want {
 		t.Fatalf("first key = %v, want the revocation key %q first", touched, want)
 	}
@@ -120,13 +85,12 @@ func TestReserve_RevokedJTIOnRedis(t *testing.T) {
 	if err := store.Set(ctx, RevokedKey("team-1", "jti-1"), []byte("1"), time.Hour); err != nil {
 		t.Fatalf("write denylist entry: %v", err)
 	}
-	before, _ := store.calls()
+	before := len(store.Scripts())
 	_, err := svc.ReserveInbound(ctx, InboundInput{Policy: pol, TeamID: "team-1", TokenJTI: "jti-1"})
 	if !errors.Is(err, pkgratelimit.ErrRevoked) {
 		t.Fatalf("err = %v, want ErrRevoked", err)
 	}
-	after, _ := store.calls()
-	if got := len(after) - len(before); got != 1 {
+	if got := len(store.Scripts()) - before; got != 1 {
 		t.Fatalf("script calls = %d, want the revocation to ride the single reservation", got)
 	}
 	// A different token in the same team is unaffected.
@@ -148,8 +112,7 @@ func TestReserveThenCommit_IsOneScriptOnRedis(t *testing.T) {
 	if err := svc.CommitInbound(ctx, res, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitInbound: %v", err)
 	}
-	names, _ := store.calls()
-	if len(names) != 1 {
+	if names := scriptNames(store); len(names) != 1 {
 		t.Fatalf("script calls = %v, want exactly 1 (Reserve only, Commit skipped)", names)
 	}
 }

@@ -14,7 +14,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/usage"
@@ -53,11 +52,7 @@ func upstreamErrorDeps(t *testing.T, status int) (Deps, *Principal, usageCapture
 	t.Cleanup(up.Close)
 
 	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	h := *cat.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: up.URL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, up.URL)
 
 	d := buildRunnableDeps(t, cat)
 	specs := adapter.NewRegistry(
@@ -70,8 +65,7 @@ func upstreamErrorDeps(t *testing.T, status int) (Deps, *Principal, usageCapture
 		}).Build(),
 		(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 	)
-	d.Specs = specs
-	d.Adapters = specs.AdapterMap()
+	useSpecs(&d, specs)
 
 	events := make(usageCapture, 4)
 	reg := lifecycle.New()

@@ -5,7 +5,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -52,14 +52,12 @@ func enabledIndex() *resolveIndex {
 		Spec: binding.Spec{ModelID: "M3", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &enabled},
 	}
 
-	snap := catalog.Build(
-		[]*provider.Provider{p1},
-		[]*host.Host{h1},
-		nil, nil,
-		[]*model.Model{m1, m2, m3},
-		nil, nil, nil,
-		[]*binding.Binding{b1, b2, b3},
-	)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{p1},
+		Hosts:     []*host.Host{h1},
+		Models:    []*model.Model{m1, m2, m3},
+		Bindings:  []*binding.Binding{b1, b2, b3},
+	}.Snapshot()
 
 	return &resolveIndex{
 		snap:             snap,

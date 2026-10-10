@@ -9,21 +9,15 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/role"
-	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -36,27 +30,15 @@ var anyMode *Resolver
 // row being dropped for a missing parent first.
 func tenantedSnapshot(t *testing.T, f twoHostFixture, keys []*hostkey.HostKey, proj *project.Project, tm *team.Team) *catalog.Snapshot {
 	t.Helper()
-	c := catalog.New(
-		lister[provider.Provider]{f.provider}, lister[host.Host]{f.hostRowA},
-		lister[policy.Policy]{f.tierA}, lister[model.Model]{f.model},
-		lister[hostkey.HostKey](keys), lister[ratelimit.RateLimit]{},
-		lister[key.Key]{}, lister[pricing.Pricing]{}, lister[binding.Binding]{f.bindingA},
-	)
-	teams := lister[team.Team]{}
-	projects := lister[project.Project]{}
+	rows := f.hostARows()
+	rows.HostKeys = keys
 	if tm != nil {
-		teams = lister[team.Team]{tm}
+		rows.Teams = []*team.Team{tm}
 	}
 	if proj != nil {
-		projects = lister[project.Project]{proj}
+		rows.Projects = []*project.Project{proj}
 	}
-	c.UseTenancy(teams, projects,
-		lister[serviceaccount.ServiceAccount]{}, lister[group.Group]{},
-		lister[role.Role]{}, lister[rolebinding.RoleBinding]{}, lister[policybinding.PolicyBinding]{})
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	return c.Current()
+	return rows.Load(t).Current()
 }
 
 func newTenancy() (*team.Team, *project.Project) {
@@ -133,14 +115,7 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 // downstream should meter it against a policy it does not have.
 func TestResolvePolicyless_PlanCarriesNoPolicy(t *testing.T) {
 	f := newTwoHostParts()
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows().Snapshot()
 	plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
 	if err != nil {
 		t.Fatalf("resolvePolicyless: %v", err)
@@ -192,14 +167,7 @@ func TestResolvePolicyless_Diagnoses(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&f)
 			}
-			snap := catalog.Build(
-				[]*provider.Provider{f.provider},
-				[]*host.Host{f.hostRowA},
-				[]*policy.Policy{f.tierA}, nil,
-				[]*model.Model{f.model},
-				[]*hostkey.HostKey{f.keyA}, nil, nil,
-				[]*binding.Binding{f.bindingA},
-			)
+			snap := f.hostARows().Snapshot()
 			pin := ""
 			if tc.mutate == nil {
 				pin = f.hostB // a host the model has no binding on
@@ -232,15 +200,9 @@ func TestResolve_SecondBindingHasKeys(t *testing.T) {
 			Rates:          []pricing.Rate{{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 3}},
 		},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA, f.hostRB},
-		[]*policy.Policy{f.tierA, f.tierB, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA, f.keyB}, nil,
-		[]*pricing.Pricing{priceB},
-		[]*binding.Binding{f.bindingA, f.bindB},
-	)
+	rows := f.twoHostRows(caller)
+	rows.Pricings = []*pricing.Pricing{priceB}
+	snap := rows.Snapshot()
 	plan, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -407,8 +369,10 @@ func randomGrantCatalog(r *rand.Rand) (*catalog.Snapshot, *policy.Policy, []*mod
 	}
 	policies = append(policies, caller)
 
-	snap := catalog.Build(
-		[]*provider.Provider{prov}, hosts, policies, nil, models, keys, nil, nil, bindings)
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov}, Hosts: hosts, Policies: policies,
+		Models: models, HostKeys: keys, Bindings: bindings,
+	}.Snapshot()
 	return snap, caller, models
 }
 
@@ -459,14 +423,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 					caller.Spec.ModelIDs = []string{f.model.Meta.ID}
 				}
 				caller.Spec.HostKeyIDs = []string{f.keyA.Meta.ID}
-				snap := catalog.Build(
-					[]*provider.Provider{f.provider},
-					[]*host.Host{f.hostRowA},
-					[]*policy.Policy{f.tierA, caller}, nil,
-					[]*model.Model{f.model},
-					[]*hostkey.HostKey{f.keyA}, nil, nil,
-					[]*binding.Binding{f.bindingA},
-				)
+				snap := f.hostARows(caller).Snapshot()
 				_, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap})
 				if tc.wantErr != nil {
 					if !errors.Is(err, tc.wantErr) {
@@ -494,14 +451,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 			Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}},
 		}
-		snap := catalog.Build(
-			[]*provider.Provider{f.provider},
-			[]*host.Host{f.hostRowA},
-			[]*policy.Policy{f.tierA, caller}, nil,
-			[]*model.Model{f.model},
-			[]*hostkey.HostKey{f.keyA}, nil, nil,
-			[]*binding.Binding{f.bindingA},
-		)
+		snap := f.hostARows(caller).Snapshot()
 		if _, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap}); err != nil {
 			t.Errorf("deprecation status %q: Resolve: %v", status, err)
 		}
@@ -532,30 +482,18 @@ func TestTierGate_MatrixAcrossResolutionAndListing(t *testing.T) {
 			f := newTwoHostParts()
 			f.tierA.Spec = tc.tier
 			// A second model exists so a tier can name something else.
-			other := &model.Model{
-				Meta: meta.Metadata{ID: meta.NewID(), Name: "other", Owner: f.model.Meta.Owner},
-				Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "other"}}, Pointer: slug.From("other")},
-			}
-			otherBnd := &binding.Binding{
-				Meta: meta.Metadata{ID: meta.NewID(), Name: "other-on-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-				Spec: binding.Spec{ModelID: other.Meta.ID, HostID: f.hostA, Adapter: adapters.OpenAI},
-			}
+			other, otherBnd := f.otherModelOnA()
 			caller := &policy.Policy{
 				Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 				Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}},
 			}
-			policies := []*policy.Policy{f.tierA, caller}
+			rows := f.hostARows(caller)
 			if tc.absentTier {
-				policies = []*policy.Policy{caller}
+				rows.Policies = []*policy.Policy{caller}
 			}
-			snap := catalog.Build(
-				[]*provider.Provider{f.provider},
-				[]*host.Host{f.hostRowA},
-				policies, nil,
-				[]*model.Model{f.model, other},
-				[]*hostkey.HostKey{f.keyA}, nil, nil,
-				[]*binding.Binding{f.bindingA, otherBnd},
-			)
+			rows.Models = append(rows.Models, other)
+			rows.Bindings = append(rows.Bindings, otherBnd)
+			snap := rows.Snapshot()
 			// A key whose tier is merely switched off survives — evicting it
 			// would strand it until a reload, and the gate is what denies it.
 			// A key whose tier is absent has lost a required ref and is
@@ -593,27 +531,16 @@ func TestTierGate_MatrixAcrossResolutionAndListing(t *testing.T) {
 // gate narrows what a key may spend on, it does not switch the key off.
 func TestTierGate_KeyStillServesTheModelItsTierGrants(t *testing.T) {
 	f := newTwoHostParts()
-	other := &model.Model{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other", Owner: f.model.Meta.Owner},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "other"}}, Pointer: slug.From("other")},
-	}
-	otherBnd := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "other-on-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: other.Meta.ID, HostID: f.hostA, Adapter: adapters.OpenAI},
-	}
+	other, otherBnd := f.otherModelOnA()
 	f.tierA.Spec.Models = []string{"acme/other"}
 	caller := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model, other},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA, otherBnd},
-	)
+	rows := f.hostARows(caller)
+	rows.Models = append(rows.Models, other)
+	rows.Bindings = append(rows.Bindings, otherBnd)
+	snap := rows.Snapshot()
 	if _, err := (&Resolver{}).Resolve(Request{ModelName: "other", Policy: caller, Snapshot: snap}); err != nil {
 		t.Fatalf("the model the tier does grant is unreachable: %v", err)
 	}
@@ -633,14 +560,7 @@ func TestResolve_KeyListIsFilteredToTheChosenHost(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{meta.NewID(), f.keyB.Meta.ID, f.keyA.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA, f.hostRB},
-		[]*policy.Policy{f.tierA, f.tierB, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA, f.keyB}, nil, nil,
-		[]*binding.Binding{f.bindingA, f.bindB},
-	)
+	snap := f.twoHostRows(caller).Snapshot()
 	plan, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -657,14 +577,7 @@ func TestResolve_UnknownAndEmptyModelNames(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows(caller).Snapshot()
 	for _, name := range []string{"", "   ", "no-such-model", "acme/no-such-model@host-a"} {
 		if _, err := (&Resolver{}).Resolve(Request{ModelName: name, Policy: caller, Snapshot: snap}); !errors.Is(err, ErrModelNotFound) {
 			t.Errorf("Resolve(%q) err = %v, want ErrModelNotFound", name, err)
@@ -683,14 +596,7 @@ func TestResolve_BindingServesOnlyItsListedSnapshots(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{HostKeyIDs: []string{f.keyA.Meta.ID, f.keyB.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA, f.hostRB},
-		[]*policy.Policy{f.tierA, f.tierB, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA, f.keyB}, nil, nil,
-		[]*binding.Binding{f.bindingA, f.bindB},
-	)
+	snap := f.twoHostRows(caller).Snapshot()
 	for name, wantHost := range map[string]string{"m1": f.hostA, "m1-preview": f.hostB} {
 		plan, err := (&Resolver{}).Resolve(Request{ModelName: name, Policy: caller, Snapshot: snap})
 		if err != nil {
@@ -716,14 +622,7 @@ func TestResolve_DisabledModelIsDiagnosedAsDisabled(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{ModelIDs: []string{f.model.Meta.ID}, HostKeyIDs: []string{f.keyA.Meta.ID}},
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider},
-		[]*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA, caller}, nil,
-		[]*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil,
-		[]*binding.Binding{f.bindingA},
-	)
+	snap := f.hostARows(caller).Snapshot()
 	// The alias index still answers the name; the walk is what refuses it.
 	if _, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap}); err != nil &&
 		!errors.Is(err, ErrModelDisabled) && !errors.Is(err, ErrModelNotFound) {
@@ -735,10 +634,7 @@ func TestResolve_DisabledModelIsDiagnosedAsDisabled(t *testing.T) {
 // model in a snapshot that never heard of it.
 func TestPolicyAllows_NilInputs(t *testing.T) {
 	f := newTwoHostParts()
-	snap := catalog.Build(
-		[]*provider.Provider{f.provider}, []*host.Host{f.hostRowA},
-		[]*policy.Policy{f.tierA}, nil, []*model.Model{f.model},
-		[]*hostkey.HostKey{f.keyA}, nil, nil, []*binding.Binding{f.bindingA})
+	snap := f.hostARows().Snapshot()
 
 	if anyMode.PolicyAllows(snap, nil, f.model) {
 		t.Error("a nil policy grants something")

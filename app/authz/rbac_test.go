@@ -10,20 +10,11 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -31,11 +22,6 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/ids"
 )
-
-// lister serves a fixed slice to catalog.New / UseTenancy.
-type lister[T any] []*T
-
-func (l lister[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 // Fixture ids: teams T1 (projects P1, P2) and T2 (P3, disabled P4).
 var (
@@ -124,29 +110,18 @@ func newFixture(t *testing.T) *catalog.Catalog {
 	sa1.Spec.ProjectID = p1ID
 	sa1.Spec.Enabled = &yes
 
-	cat := catalog.New(
-		lister[provider.Provider](nil),
-		lister[host.Host](nil),
-		lister[policy.Policy](nil),
-		lister[model.Model](nil),
-		lister[hostkey.HostKey](nil),
-		lister[ratelimit.RateLimit](nil),
-		lister[key.Key](nil),
-		lister[pricing.Pricing](nil),
-		lister[binding.Binding](nil),
-	)
-	cat.UseTenancy(
-		lister[team.Team]{mkTeam(t1ID, "t1"), mkTeam(t2ID, "t2")},
-		lister[project.Project]{
+	return catalogtest.Catalog{
+		Teams: []*team.Team{mkTeam(t1ID, "t1"), mkTeam(t2ID, "t2")},
+		Projects: []*project.Project{
 			mkProject(p1ID, "p1", t1ID, true),
 			mkProject(p2ID, "p2", t1ID, true),
 			mkProject(p3ID, "p3", t2ID, true),
 			mkProject(p4ID, "p4", t2ID, false),
 		},
-		lister[serviceaccount.ServiceAccount]{sa1},
-		lister[group.Group]{ml},
-		lister[role.Role](builtins),
-		lister[rolebinding.RoleBinding]{
+		ServiceAccounts: []*serviceaccount.ServiceAccount{sa1},
+		Groups:          []*group.Group{ml},
+		Roles:           builtins,
+		RoleBindings: []*rolebinding.RoleBinding{
 			mkBinding("alice-team-admin", roleID["team-admin"], teamScope(t1ID), userSubject(aliceID)),
 			mkBinding("bob-developer", roleID["developer"], projectScope(p1ID), userSubject(bobID)),
 			mkBinding("carol-viewer", roleID["viewer"], teamScope(t1ID), userSubject(carolID)),
@@ -156,12 +131,7 @@ func newFixture(t *testing.T) *catalog.Catalog {
 			mkBinding("sa1-developer", roleID["developer"], projectScope(p1ID), saSubject(sa1ID)),
 			mkBinding("gina-project-admin", roleID["project-admin"], projectScope(p4ID), userSubject(ginaID)),
 		},
-		lister[policybinding.PolicyBinding](nil),
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	return cat
+	}.Load(t)
 }
 
 // Actors. Subjects are what the session middleware builds; a service
@@ -439,24 +409,13 @@ func TestRBACRotateIsNotUpdate(t *testing.T) {
 	updateRole.Spec.Enabled = &yes
 
 	rotatorID, updaterID := ids.New(), ids.New()
-	cat := catalog.New(
-		lister[provider.Provider](nil), lister[host.Host](nil), lister[policy.Policy](nil),
-		lister[model.Model](nil), lister[hostkey.HostKey](nil), lister[ratelimit.RateLimit](nil),
-		lister[key.Key](nil), lister[pricing.Pricing](nil), lister[binding.Binding](nil),
-	)
-	cat.UseTenancy(
-		lister[team.Team](nil), lister[project.Project](nil), lister[serviceaccount.ServiceAccount](nil),
-		lister[group.Group](nil),
-		lister[role.Role]{rotateRole, updateRole},
-		lister[rolebinding.RoleBinding]{
+	cat := catalogtest.Catalog{
+		Roles: []*role.Role{rotateRole, updateRole},
+		RoleBindings: []*rolebinding.RoleBinding{
 			mkBinding("rotator", rotateRole.Meta.ID, globalScope, userSubject(rotatorID)),
 			mkBinding("updater", updateRole.Meta.ID, globalScope, userSubject(updaterID)),
 		},
-		lister[policybinding.PolicyBinding](nil),
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	}.Load(t)
 	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
 
 	rotator := actorOf(rotatorID, subjectsOf(rotatorID))

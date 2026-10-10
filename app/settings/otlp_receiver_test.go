@@ -1,19 +1,16 @@
 package settings
 
-import "testing"
+import (
+	"testing"
 
-type oneSection map[string]any
-
-func (s oneSection) Setting(section string) (any, bool) {
-	v, ok := s[section]
-	return v, ok
-}
+	"github.com/wyolet/relay/app/settings/settingstest"
+)
 
 func TestOTLPReceiverDefaultsToOff(t *testing.T) {
 	for name, r := range map[string]Reader{
 		"no reader":        nil,
-		"section absent":   oneSection{},
-		"section mistyped": oneSection{SectionOTLPReceiver: "enabled"},
+		"section absent":   &settingstest.Source{},
+		"section mistyped": settingstest.Sections(map[string]any{SectionOTLPReceiver: "enabled"}),
 	} {
 		if got := OTLPReceiverFrom(r); got.Enabled || got.CaptureContent {
 			t.Errorf("%s: %+v, want the receiver and content capture off", name, got)
@@ -34,7 +31,7 @@ func TestOTLPReceiverDecodesContentCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	got := OTLPReceiverFrom(oneSection{SectionOTLPReceiver: v})
+	got := OTLPReceiverFrom(settingstest.Sections(map[string]any{SectionOTLPReceiver: v}))
 	if !got.Enabled || !got.CaptureContent {
 		t.Errorf("decoded = %+v, want both switches on", got)
 	}
@@ -44,7 +41,7 @@ func TestOTLPReceiverDecodesContentCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode without captureContent: %v", err)
 	}
-	if got := OTLPReceiverFrom(oneSection{SectionOTLPReceiver: v}); !got.Enabled || got.CaptureContent {
+	if got := OTLPReceiverFrom(settingstest.Sections(map[string]any{SectionOTLPReceiver: v})); !got.Enabled || got.CaptureContent {
 		t.Errorf("decoded = %+v, want the receiver on and content capture off", got)
 	}
 }

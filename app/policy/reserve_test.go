@@ -3,58 +3,15 @@ package policy
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/kv/kvtest"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
-
-// countingKV records every script call so a test can pin how many kv round
-// trips one request costs.
-type countingKV struct {
-	*kv.Mem
-	mu    sync.Mutex
-	names []string
-	keys  [][]string
-}
-
-func newCountingKV() *countingKV {
-	mem := kv.NewMem()
-	pkgratelimit.RegisterScripts(mem)
-	return &countingKV{Mem: mem}
-}
-
-func (c *countingKV) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
-	c.mu.Lock()
-	c.names = append(c.names, name)
-	c.keys = append(c.keys, append([]string(nil), keys...))
-	c.mu.Unlock()
-	return c.Mem.RunScript(ctx, name, script, keys, args...)
-}
-
-func (c *countingKV) reserveCalls() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	n := 0
-	for _, name := range c.names {
-		if name == "limit.reserve" {
-			n++
-		}
-	}
-	return n
-}
-
-func (c *countingKV) lastKeys() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.keys[len(c.keys)-1]
-}
 
 // reserveSnap answers the two lookups rulesFor makes.
 type reserveSnap struct {
@@ -70,7 +27,7 @@ func (s reserveSnap) RateLimit(_ context.Context, id string) (*appratelimit.Rate
 	return s.rl, true
 }
 
-func reserveFixture(t testing.TB, rules ...appratelimit.Rule) (*Service, *countingKV, *Policy) {
+func reserveFixture(t testing.TB, rules ...appratelimit.Rule) (*Service, *kvtest.Recording, *Policy) {
 	t.Helper()
 	pol := fix("prod-policy")
 	pol.Meta.ID = "pol-1"
@@ -90,9 +47,8 @@ func reserveFixture(t testing.TB, rules ...appratelimit.Rule) (*Service, *counti
 		rl.Spec.Rules = rules
 		pol.Spec.RateLimitID = rl.Meta.ID
 	}
-	store := newCountingKV()
-	t.Cleanup(func() { _ = store.Close() })
-	return NewService(reserveSnap{pol: pol, rl: rl}, nil, pkgratelimit.New(store, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)), store, pol
+	store := recordingMem(t)
+	return NewService(reserveSnap{pol: pol, rl: rl}, nil, pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)), store, pol
 }
 
 // TestReserveInbound_TokenWithNoRules pins the hot-path invariant: a token
@@ -110,11 +66,11 @@ func TestReserveInbound_TokenWithNoRules(t *testing.T) {
 	if res == nil {
 		t.Fatal("reservation is nil, want one covering the revocation check")
 	}
-	if got := store.reserveCalls(); got != 1 {
+	if got := reserveCalls(store); got != 1 {
 		t.Fatalf("reserve scripts = %d, want exactly 1", got)
 	}
 	want := "limit:{team:team-1}:jti:jti-1"
-	if keys := store.lastKeys(); len(keys) != 1 || keys[0] != want {
+	if keys := lastKeys(store); len(keys) != 1 || keys[0] != want {
 		t.Fatalf("script keys = %v, want [%s]", keys, want)
 	}
 }
@@ -131,7 +87,7 @@ func TestReserveInbound_KeyWithNoRules(t *testing.T) {
 	if res != nil {
 		t.Fatalf("reservation = %+v, want nil (nothing to reserve)", res)
 	}
-	if got := store.reserveCalls(); got != 0 {
+	if got := reserveCalls(store); got != 0 {
 		t.Fatalf("reserve scripts = %d, want 0", got)
 	}
 }
@@ -149,10 +105,10 @@ func TestReserveInbound_OneScriptWithRules(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReserveInbound: %v", err)
 	}
-	if got := store.reserveCalls(); got != 1 {
+	if got := reserveCalls(store); got != 1 {
 		t.Fatalf("reserve scripts = %d, want exactly 1", got)
 	}
-	keys := store.lastKeys()
+	keys := lastKeys(store)
 	if len(keys) != 2 {
 		t.Fatalf("script keys = %v, want the rule key plus the denylist key", keys)
 	}
@@ -203,7 +159,7 @@ func TestReserveInbound_ScopeTag(t *testing.T) {
 			if _, err := svc.ReserveInbound(context.Background(), InboundInput{Policy: pol, TeamID: tc.teamID}); err != nil {
 				t.Fatalf("ReserveInbound: %v", err)
 			}
-			for _, k := range store.lastKeys() {
+			for _, k := range lastKeys(store) {
 				if !strings.HasPrefix(k, tc.want) {
 					t.Errorf("key %q, want prefix %q", k, tc.want)
 				}
@@ -227,7 +183,7 @@ func TestReserveInbound_RevocationRuleIsFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReserveInbound: %v", err)
 	}
-	keys := store.lastKeys()
+	keys := lastKeys(store)
 	if len(keys) != 2 {
 		t.Fatalf("script keys = %v, want the denylist key plus the rate-limit rule key", keys)
 	}
@@ -253,8 +209,8 @@ func TestReserveInbound_ThenCommit_IsOneScriptTotal(t *testing.T) {
 	if err := svc.CommitInbound(context.Background(), res, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitInbound: %v", err)
 	}
-	if got := len(store.names); got != 1 {
-		t.Fatalf("total script calls = %d (%v), want exactly 1 (Reserve only, Commit skipped)", got, store.names)
+	if names := scriptNames(store); len(names) != 1 {
+		t.Fatalf("total script calls = %d (%v), want exactly 1 (Reserve only, Commit skipped)", len(names), names)
 	}
 }
 
