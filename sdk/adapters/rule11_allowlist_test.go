@@ -141,9 +141,4 @@ var allowedDrops = map[string][]allowedDrop{
 
 // silentFeatureDrops are rejectedFeatures a shape serializes without an
 // error while losing them; each is a skipped subtest until fixed.
-var silentFeatureDrops = map[string]map[string]string{
-	"openai-responses": {
-		"server tool": "canonicalToResponsesRequest skips non-function tools where every other shape refuses them",
-		"mcp tool":    "canonicalToResponsesRequest skips MCPTool although Responses has an mcp tool type (server_url, headers)",
-	},
-}
+var silentFeatureDrops = map[string]map[string]string{}

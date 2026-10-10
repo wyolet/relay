@@ -48,6 +48,7 @@ const (
 	ResponsesToolTypeFunction  ResponsesToolType = "function"
 	ResponsesToolTypeCustom    ResponsesToolType = "custom"
 	ResponsesToolTypeNamespace ResponsesToolType = "namespace"
+	ResponsesToolTypeMCP       ResponsesToolType = "mcp"
 )
 
 // ResponsesRole enumerates valid message roles in the Responses API.

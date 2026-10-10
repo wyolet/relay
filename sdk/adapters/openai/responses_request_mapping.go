@@ -68,6 +68,10 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 				}
 				continue
 			}
+			if mt := responsesMCPToolToCanonical(t); mt != nil {
+				tc.Definitions = append(tc.Definitions, mt)
+				continue
+			}
 			if ct := responsesToolToCanonical(t); ct != nil {
 				tc.Definitions = append(tc.Definitions, ct)
 			}
@@ -136,9 +140,53 @@ func responsesToolToCanonical(t ResponsesTool) *v1.FunctionTool {
 	case *ResponsesCustomTool:
 		return responsesCustomToolToCanonical(v)
 	default:
-		// canonical: hosted-tool definition (web_search, mcp, …) and nested namespaces dropped — not expressible to a non-OpenAI upstream. Skip rather than 400 the whole request (rule 11: annotated, not silent).
+		// canonical: hosted-tool definition (web_search, an mcp tool MCPTool can't hold, …) and nested namespaces dropped — not expressible to a non-OpenAI upstream. Skip rather than 400 the whole request (rule 11: annotated, not silent).
 		return nil
 	}
+}
+
+// responsesMCPWire is the part of a Responses mcp tool that canonical MCPTool carries.
+type responsesMCPWire struct {
+	Type        ResponsesToolType `json:"type"`
+	ServerLabel string            `json:"server_label"`
+	ServerURL   string            `json:"server_url"`
+	Headers     map[string]string `json:"headers,omitempty"`
+}
+
+// responsesMCPToolToCanonical maps a wire mcp tool to MCPTool, or nil when it is not an mcp tool or uses a field MCPTool has no room for. Dropping require_approval or allowed_tools would loosen what the model may call, so such a tool takes the hosted-tool drop instead.
+func responsesMCPToolToCanonical(t ResponsesTool) *v1.MCPTool {
+	raw, ok := t.(*ResponsesRawTool)
+	if !ok || raw.Type != ResponsesToolTypeMCP {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw.Raw, &fields) != nil {
+		return nil
+	}
+	for k := range fields {
+		switch k {
+		case "type", "server_label", "server_url", "headers":
+		default:
+			return nil
+		}
+	}
+	var w responsesMCPWire
+	if json.Unmarshal(raw.Raw, &w) != nil || w.ServerLabel == "" || w.ServerURL == "" {
+		return nil
+	}
+	return &v1.MCPTool{Name: w.ServerLabel, ServerURL: w.ServerURL, Headers: w.Headers}
+}
+
+// responsesMCPToolFromCanonical renders MCPTool as a Responses mcp tool. The upstream needs a label and a URL; a Name-only MCPTool names a server only relay knows, so it is refused.
+func responsesMCPToolFromCanonical(m *v1.MCPTool) (ResponsesTool, error) {
+	if m.Name == "" || m.ServerURL == "" {
+		return nil, fmt.Errorf("responses serialize_request: mcp tool needs both name and server_url")
+	}
+	raw, err := json.Marshal(responsesMCPWire{Type: ResponsesToolTypeMCP, ServerLabel: m.Name, ServerURL: m.ServerURL, Headers: m.Headers})
+	if err != nil {
+		return nil, err
+	}
+	return &ResponsesRawTool{Type: ResponsesToolTypeMCP, Raw: raw}, nil
 }
 
 // canonicalToResponsesRequest maps a canonical *v1.Request back to a *ResponsesRequest.
@@ -231,9 +279,20 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	// Tools are task-level (req.Tools), shared across models — not per-model.
 	if tc := req.Tools; tc != nil {
 		for _, tool := range tc.Definitions {
-			ft, ok := tool.(*v1.FunctionTool)
-			if !ok {
+			var ft *v1.FunctionTool
+			switch t := tool.(type) {
+			case *v1.FunctionTool:
+				ft = t
+			case *v1.MCPTool:
+				mt, err := responsesMCPToolFromCanonical(t)
+				if err != nil {
+					return nil, err
+				}
+				rreq.Tools = append(rreq.Tools, mt)
 				continue
+			default:
+				// ServerTool is relay-executed; a Responses hosted tool of the same name runs upstream, so it is not an equivalent.
+				return nil, fmt.Errorf("responses serialize_request: unsupported tool type %T", tool)
 			}
 			// A tool lowered from `custom` goes back out verbatim: only the original definition carries the freeform format the upstream needs.
 			// canonical: FunctionTool.ProviderData dropped unless it holds a Responses custom tool — another vendor's definition has no Responses form.

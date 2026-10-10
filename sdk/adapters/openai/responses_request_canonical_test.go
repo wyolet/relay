@@ -277,6 +277,48 @@ func TestResponsesParseRequest_Tools(t *testing.T) {
 	}
 }
 
+func TestResponsesMCPTool(t *testing.T) {
+	tr := ResponsesTranslator{}
+	base := func(tool v1.Tool) *v1.Request {
+		return &v1.Request{
+			Model: v1.ModelRefs{"gpt-5"},
+			Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+			Tools: &v1.ToolsConfig{Definitions: v1.Tools{tool}},
+		}
+	}
+
+	wire, err := tr.SerializeRequest(base(&v1.MCPTool{Name: "docs", ServerURL: "https://mcp.example.com", Headers: map[string]string{"X-Key": "k"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}`) {
+		t.Errorf("wire tool: %s", wire)
+	}
+	back, err := tr.ParseRequest(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mt, ok := back.Tools.Definitions[0].(*v1.MCPTool); !ok || mt.Name != "docs" || mt.ServerURL != "https://mcp.example.com" || mt.Headers["X-Key"] != "k" {
+		t.Errorf("parsed tool: %#v", back.Tools.Definitions[0])
+	}
+
+	if _, err := tr.SerializeRequest(base(&v1.MCPTool{Name: "docs"})); err == nil {
+		t.Error("name-only MCPTool serialized")
+	}
+	if _, err := tr.SerializeRequest(base(&v1.ServerTool{Name: "web_search"})); err == nil {
+		t.Error("ServerTool serialized")
+	}
+
+	// require_approval has no MCPTool field, so the tool must not reach canonical without it.
+	req, err := tr.ParseRequest([]byte(`{"model":"gpt-5","input":"hi","tools":[{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","require_approval":"never"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(req.Tools.Definitions); n != 0 {
+		t.Errorf("tools with require_approval: got %d definitions, want 0", n)
+	}
+}
+
 func TestResponsesParseRequest_ToolChoice(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object"}`)
 	// ResponsesToolChoice wire format: a string shorthand ("auto", "required", "none")
