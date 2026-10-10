@@ -10,6 +10,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,21 +38,21 @@ func WithMigrateOnBoot(on bool) PoolOption {
 	return func(s *poolSettings) { s.migrate = on }
 }
 
-// WithMaxConns overrides the pool's maximum connections (ignored if n <= 0).
+// WithMaxConns overrides the pool's maximum connections (ignored if n is not in 1..MaxInt32).
 func WithMaxConns(n int) PoolOption {
 	return func(s *poolSettings) {
-		if n > 0 {
+		if n > 0 && n <= math.MaxInt32 {
 			s.maxConns = int32(n)
 		}
 	}
 }
 
-// WithMinConns overrides the pool's warm-floor connections (ignored if n <= 0).
+// WithMinConns overrides the pool's warm-floor connections (ignored if n is not in 1..MaxInt32).
 // A higher floor keeps connections pre-established, so bursty load never pays
 // cold-connection (dial + DNS) latency on the request path.
 func WithMinConns(n int) PoolOption {
 	return func(s *poolSettings) {
-		if n > 0 {
+		if n > 0 && n <= math.MaxInt32 {
 			s.minConns = int32(n)
 		}
 	}

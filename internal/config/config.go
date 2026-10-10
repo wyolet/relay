@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -198,13 +199,14 @@ func Load() (*Config, error) {
 	// Pool sizing (0 = storage default). A higher MinConns keeps connections
 	// pre-warmed so bursty control-plane load never pays cold-connection dial +
 	// DNS latency on the request path.
-	if v, err := envPositiveInt("RELAY_PG_MAX_CONNS", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_PG_MAX_CONNS must be >= 1")
+	// pgxpool sizes the pool in int32.
+	if v, err := envPositiveInt("RELAY_PG_MAX_CONNS", 0); err != nil || v > math.MaxInt32 {
+		return nil, fmt.Errorf("RELAY_PG_MAX_CONNS must be between 1 and %d", math.MaxInt32)
 	} else {
 		cfg.PGMaxConns = v
 	}
-	if v, err := envPositiveInt("RELAY_PG_MIN_CONNS", 0); err != nil {
-		return nil, fmt.Errorf("RELAY_PG_MIN_CONNS must be >= 1")
+	if v, err := envPositiveInt("RELAY_PG_MIN_CONNS", 0); err != nil || v > math.MaxInt32 {
+		return nil, fmt.Errorf("RELAY_PG_MIN_CONNS must be between 1 and %d", math.MaxInt32)
 	} else {
 		cfg.PGMinConns = v
 	}

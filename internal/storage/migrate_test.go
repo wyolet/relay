@@ -1,6 +1,16 @@
 package storage
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
+
+// The bound is checked before any database or migration source is touched.
+func TestForceVersionRejectsAVersionAboveInt32(t *testing.T) {
+	if err := ForceVersion("", math.MaxInt32+1); err == nil {
+		t.Fatal("a version above MaxInt32 was accepted")
+	}
+}
 
 // `migrate down <n>` above the current version must be refused, not run as
 // the up-migrations the operator is trying to undo.

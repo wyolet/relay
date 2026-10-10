@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -58,6 +59,10 @@ func runMigrations(dsn string) error {
 // the schema dirty and every later migrate refuses it; the operator repairs
 // the schema by hand, then records where it now stands.
 func ForceVersion(dsn string, version uint) error {
+	// golang-migrate's Force takes an int; a larger version would wrap negative.
+	if version > math.MaxInt32 {
+		return fmt.Errorf("storage: force %d: version exceeds %d", version, math.MaxInt32)
+	}
 	src, err := iofs.New(pgmigrations.FS, ".")
 	if err != nil {
 		return fmt.Errorf("storage: open migration source: %w", err)

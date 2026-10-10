@@ -1,6 +1,12 @@
 package storage
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
+
+// A variable, not a constant: int(MaxInt32+1) must still compile on 32-bit targets.
+var aboveInt32 int64 = math.MaxInt32 + 1
 
 func TestResolvePoolSettings(t *testing.T) {
 	tests := []struct {
@@ -13,6 +19,7 @@ func TestResolvePoolSettings(t *testing.T) {
 		{"overrides applied", []PoolOption{WithMaxConns(20), WithMinConns(10)}, 20, 10},
 		{"min clamps to max", []PoolOption{WithMaxConns(5), WithMinConns(50)}, 5, 5},
 		{"only max set, min stays default", []PoolOption{WithMaxConns(30)}, 30, 2},
+		{"above int32 ignored", []PoolOption{WithMaxConns(int(aboveInt32)), WithMinConns(int(aboveInt32))}, 10, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
