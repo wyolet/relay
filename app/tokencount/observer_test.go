@@ -46,6 +46,22 @@ func TestObserver_RecordsTheRatio(t *testing.T) {
 	}
 }
 
+// On a cache hit "input" is only the uncached remainder; the body still carries the cached prefix, so the ratio must count cache reads and writes too.
+func TestObserver_CountsCachedPromptTokens(t *testing.T) {
+	s := kv.NewMem()
+	t.Cleanup(func() { _ = s.Close() })
+	cal := NewCalibrator(s)
+
+	body := make([]byte, 4000)
+	finalized(t, NewObserver(cal), newLC(body, "model-x", "sess-x"),
+		&usagelog.Event{Tokens: sdkusage.Tokens{"input": 100, "cache_read": 600, "cache_creation": 300, "output": 20}})
+
+	got, ok := cal.Ratio(t.Context(), "sess-x", "model-x")
+	if !ok || got != 0.25 {
+		t.Fatalf("ratio = %v (ok=%v), want 0.25 from 1000 prompt tokens", got, ok)
+	}
+}
+
 // A request whose body was only partly captured, or which never resolved to a model, or which reported no input tokens, measures nothing.
 func TestObserver_SkipsUnmeasurableRequests(t *testing.T) {
 	body := make([]byte, 4000)
