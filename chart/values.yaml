@@ -100,8 +100,19 @@ relay:
   # -- Override the catalog archive URL template ("{version}" substituted).
   # For airgapped mirrors; empty uses the wyolet/relay-catalog GitHub archive.
   catalogUrl: ""
-  # -- Extra raw env vars (name/value) appended to the relay container.
+  # -- Extra raw env vars (name/value) appended to the relay container and the migration Job.
   extraEnv: []
+
+# ----------------------------------------------------------------------------
+# Postgres migrations. On upgrade a pre-upgrade hook Job runs `relay migrate up` before any pod rolls, and the pods start with RELAY_MIGRATE_ON_BOOT=off. A fresh install migrates on boot (the Job has nothing to reach yet).
+# ----------------------------------------------------------------------------
+migrations:
+  job:
+    enabled: true
+    # -- Retries after a failed run (a dirty schema fails every retry alike).
+    backoffLimit: 1
+    # -- Hard cap on the Job, including the wait for Postgres.
+    activeDeadlineSeconds: 900
 
 # ----------------------------------------------------------------------------
 # Secrets. master key + admin token are REQUIRED (no silent auto-generation of

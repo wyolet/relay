@@ -1,0 +1,67 @@
+{{- if .Values.migrations.job.enabled }}
+# Not pre-install: on a fresh install neither the chart Secret nor the bundled Postgres exists yet, so the pods migrate on boot instead.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "relay.fullname" . }}-migrate
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    # Keep a failed Job for its logs; the next upgrade replaces it.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.job.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      # The relay pod labels let the bundled stores' NetworkPolicy admit it; it exposes no named ports, so the relay Services never route to it.
+      labels:
+        {{- include "relay.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "relay.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.postgresql.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.38
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              until nc -z {{ include "relay.postgresql.fullname" . }} 5432; do echo "waiting for postgres"; sleep 2; done
+      {{- end }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate", "up"]
+          envFrom:
+            {{- include "relay.envFrom" . | nindent 12 }}
+          env:
+            {{- include "relay.env" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

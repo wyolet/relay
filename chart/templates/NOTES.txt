@@ -5,8 +5,12 @@ Data stores (relay owns these — NOT the shared platform Postgres):
   ClickHouse: {{ if .Values.clickhouse.enabled }}bundled ({{ include "relay.clickhouse.fullname" . }}:9000){{ else }}{{ .Values.external.chDsn | default "disabled" }}{{ end }}
   Valkey:     {{ if .Values.valkey.enabled }}bundled ({{ include "relay.valkey.fullname" . }}:6379){{ else }}{{ .Values.external.redisAddr | default "disabled (state=memory)" }}{{ end }}
 
-Relay self-migrates Postgres on boot (advisory-locked, multi-pod safe) and
-self-seeds the catalog into an empty DB from the image's baked /catalog.
+{{ if and .Values.migrations.job.enabled .Release.IsUpgrade -}}
+Postgres was migrated by the {{ include "relay.fullname" . }}-migrate Job before the pods rolled; they start with RELAY_MIGRATE_ON_BOOT=off.
+{{- else -}}
+Relay migrates Postgres on boot (advisory-locked, multi-pod safe).
+{{- end }}
+Relay self-seeds the catalog into an empty DB from the image's baked /catalog.
 
 Endpoints (ClusterIP):
   inference (data plane): {{ include "relay.fullname" . }}:{{ .Values.service.inferencePort }}   -> /openai/v1/*, /anthropic/v1/*, /v1/*, /healthz

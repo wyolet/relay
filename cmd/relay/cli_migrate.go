@@ -9,19 +9,33 @@ import (
 	storagemod "github.com/wyolet/relay/internal/storage"
 )
 
-// runMigrate implements `relay migrate [down <version> | force <version>]`.
-// Up-migrations run implicitly on boot; only the rollback direction needs a
-// command, because an operator downgrading the image must first put the
-// schema back where the old binary can read it. `force` is the recovery
-// path after a migration failed half-way and left the schema dirty.
+// runMigrate implements `relay migrate [up | down <version> | force <version>]`.
+// Up-migrations also run on boot; `up` applies them as a step of its own, so a rollout can migrate once before any pod starts. `down` is the rollback direction: an operator downgrading the image must first put the schema back where the old binary can read it. `force` is the recovery path after a migration failed half-way and left the schema dirty.
 func runMigrate(args []string) error {
 	if len(args) == 0 {
-		slog.Info("migrate: up-migrations run on boot; use 'relay migrate down <version>' to roll back")
+		slog.Info("migrate: up-migrations run on boot; use 'relay migrate up' to run them now or 'relay migrate down <version>' to roll back")
 		return nil
 	}
 	cmd := args[0]
+	if cmd == "up" {
+		if len(args) != 1 {
+			return fmt.Errorf("migrate up: takes no arguments")
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if cfg.PGDSN == "" {
+			return fmt.Errorf("RELAY_PG_DSN required for migrate up")
+		}
+		if err := storagemod.MigrateUp(cfg.PGDSN); err != nil {
+			return err
+		}
+		slog.Info("migrate: schema is up to date")
+		return nil
+	}
 	if cmd != "down" && cmd != "force" {
-		return fmt.Errorf("migrate: unknown argument %q (want 'down <version>' or 'force <version>')", cmd)
+		return fmt.Errorf("migrate: unknown argument %q (want 'up', 'down <version>' or 'force <version>')", cmd)
 	}
 	if len(args) != 2 {
 		if cmd == "down" {

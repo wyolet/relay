@@ -96,6 +96,60 @@ app.kubernetes.io/component: relay
 {{- end -}}
 {{- end -}}
 
+{{/* Relay container envFrom + env, shared by the Deployment and the migration Job */}}
+{{- define "relay.envFrom" -}}
+- configMapRef:
+    name: {{ include "relay.fullname" . }}
+{{- end -}}
+
+{{- define "relay.env" -}}
+- name: RELAY_INSTANCE_ID
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+- name: RELAY_MASTER_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "relay.secretName" . }}
+      key: RELAY_MASTER_KEY
+- name: RELAY_ADMIN_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "relay.secretName" . }}
+      key: RELAY_ADMIN_TOKEN
+- name: RELAY_PG_DSN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "relay.secretName" . }}
+      key: RELAY_PG_DSN
+# Optional: an existingSecret without the key keeps Valkey passwordless.
+- name: RELAY_REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "relay.secretName" . }}
+      key: RELAY_REDIS_PASSWORD
+      optional: true
+{{- if or .Values.clickhouse.enabled .Values.external.chDsn }}
+- name: RELAY_CH_DSN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "relay.secretName" . }}
+      key: RELAY_CH_DSN
+{{- end }}
+{{- if .Values.auth.adminUser.enabled }}
+- name: RELAY_CONFIG_DIR
+  value: {{ .Values.auth.adminUser.configDir | quote }}
+- name: RELAY_ADMIN_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "relay.secretName" . }}
+      key: RELAY_ADMIN_PASSWORD
+{{- end }}
+{{- with .Values.relay.extraEnv }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
 {{/* RELAY_REDIS_ADDR (bundled Valkey or external) */}}
 {{- define "relay.redisAddr" -}}
 {{- if .Values.valkey.enabled -}}

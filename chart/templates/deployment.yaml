@@ -65,54 +65,14 @@ spec:
             - name: control
               containerPort: {{ .Values.relay.controlPort }}
           envFrom:
-            - configMapRef:
-                name: {{ include "relay.fullname" . }}
+            {{- include "relay.envFrom" . | nindent 12 }}
           env:
-            - name: RELAY_INSTANCE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: RELAY_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "relay.secretName" . }}
-                  key: RELAY_MASTER_KEY
-            - name: RELAY_ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "relay.secretName" . }}
-                  key: RELAY_ADMIN_TOKEN
-            - name: RELAY_PG_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "relay.secretName" . }}
-                  key: RELAY_PG_DSN
-            # Optional: an existingSecret without the key keeps Valkey passwordless.
-            - name: RELAY_REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "relay.secretName" . }}
-                  key: RELAY_REDIS_PASSWORD
-                  optional: true
-            {{- if or .Values.clickhouse.enabled .Values.external.chDsn }}
-            - name: RELAY_CH_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "relay.secretName" . }}
-                  key: RELAY_CH_DSN
+            {{- if and .Values.migrations.job.enabled .Release.IsUpgrade }}
+            # The pre-upgrade Job has migrated; a pod stopped mid-migration would leave the schema dirty. Installs migrate on boot (no Job runs then).
+            - name: RELAY_MIGRATE_ON_BOOT
+              value: "off"
             {{- end }}
-            {{- if .Values.auth.adminUser.enabled }}
-            - name: RELAY_CONFIG_DIR
-              value: {{ .Values.auth.adminUser.configDir | quote }}
-            - name: RELAY_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "relay.secretName" . }}
-                  key: RELAY_ADMIN_PASSWORD
-            {{- end }}
-            {{- with .Values.relay.extraEnv }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+            {{- include "relay.env" . | nindent 12 }}
           startupProbe:
             httpGet:
               path: /healthz

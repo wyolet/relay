@@ -42,9 +42,11 @@ func TestMigrateDownArguments(t *testing.T) {
 		want string
 	}{
 		{"no target", []string{"down"}, "exactly one target version"},
-		{"unknown direction", []string{"up"}, "unknown argument"},
+		{"unknown direction", []string{"sideways"}, "unknown argument"},
 		{"target is not a number", []string{"down", "v24"}, "not a schema version"},
 		{"no dsn", []string{"down", "24"}, "RELAY_PG_DSN required"},
+		{"up with a version", []string{"up", "24"}, "takes no arguments"},
+		{"up without a dsn", []string{"up"}, "RELAY_PG_DSN required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := runMigrate(tc.args)
