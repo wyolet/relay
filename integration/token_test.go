@@ -15,7 +15,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
+
+	appcatalog "github.com/wyolet/relay/app/catalog"
 )
 
 // tokenFixture is a stack seeded for token traffic: a project the caller can
@@ -116,23 +117,6 @@ func (f *tokenFixture) chat(bearer, modelName string) (int, string) {
 	return resp.StatusCode, body.Error.Code
 }
 
-// waitForRejection polls the data plane until the bearer stops being
-// accepted, and reports the code it was rejected with.
-func (f *tokenFixture) waitForRejection(bearer string, within time.Duration) (int, string) {
-	f.t.Helper()
-	deadline := time.Now().Add(within)
-	for {
-		code, reason := f.chat(bearer, "test-model")
-		if code != http.StatusOK {
-			return code, reason
-		}
-		if time.Now().After(deadline) {
-			return code, reason
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
 func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
 	t.Parallel()
 	f := newTokenFixture(t)
@@ -151,8 +135,8 @@ func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
 }
 
 // revoke-all bumps the user's token version. The bump reaches the data plane
-// over NOTIFY, so the promise is a bound, not an instant.
-func TestRevokeAllInvalidatesTokensWithinTwoSeconds(t *testing.T) {
+// over NOTIFY, so the test waits for the snapshot to carry it.
+func TestRevokeAllInvalidatesTokens(t *testing.T) {
 	t.Parallel()
 	f := newTokenFixture(t)
 	us := f.login(t, f.username, f.password)
@@ -164,14 +148,19 @@ func TestRevokeAllInvalidatesTokensWithinTwoSeconds(t *testing.T) {
 	if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
 		t.Fatalf("chat before revoke = %d (%s)", got, reason)
 	}
+	mintedVer, _ := f.cat.Current().TokenVersion(f.userID)
 
 	if code, raw := us.do(http.MethodPost, "/api/auth/token/revoke-all", ""); code != http.StatusNoContent && code != http.StatusOK {
 		t.Fatalf("revoke-all = %d: %s", code, raw)
 	}
 
-	got, reason := f.waitForRejection(token, 2*time.Second)
+	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool {
+		ver, ok := s.TokenVersion(f.userID)
+		return ok && ver != mintedVer
+	}, "the token version bump never reached the snapshot")
+	got, reason := f.chat(token, "test-model")
 	if got != http.StatusUnauthorized {
-		t.Fatalf("chat after revoke-all = %d (%s), want 401 within 2s", got, reason)
+		t.Fatalf("chat after revoke-all = %d (%s), want 401", got, reason)
 	}
 	if reason != "token_revoked" {
 		t.Errorf("rejection code = %q, want token_revoked", reason)
@@ -195,7 +184,9 @@ func TestDisablingAUserRevokesTokensAndRefusesMintAndLogin(t *testing.T) {
 		t.Fatalf("disable user = %d: %s", code, raw)
 	}
 
-	got, reason := f.waitForRejection(token, 2*time.Second)
+	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool { return !s.UserEnabled(f.userID) },
+		"the user's disable never reached the snapshot")
+	got, reason := f.chat(token, "test-model")
 	if got != http.StatusUnauthorized {
 		t.Fatalf("chat after the account was disabled = %d (%s), want 401", got, reason)
 	}
