@@ -137,10 +137,8 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 		}
 	}
 
-	// Usage: orthogonal-meter map. Each dimension Anthropic prices
-	// distinctly (input vs cache_read vs cache_creation) gets its own
-	// key. Tokens.Sum() over the map gives the honest "all tokens
-	// processed" count without double-counting.
+	// Usage: each dimension Anthropic prices distinctly gets its own key;
+	// cache_creation_1h is a part of cache_creation (see usage.Tokens).
 	resp.Usage = anthropicUsageToCanonical(&ar.Usage)
 
 	return resp, nil

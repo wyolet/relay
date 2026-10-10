@@ -15,12 +15,13 @@ func anthropicUsageToCanonical(u *anthropicFullUsage) usage.Tokens {
 	if u == nil {
 		return nil
 	}
-	return anthropicTokens(u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
+	return anthropicTokens(u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens, u.CacheCreationByTTL.Ephemeral1hInputTokens)
 }
 
-// anthropicTokens builds the canonical Tokens map from the four counters
+// anthropicTokens builds the canonical Tokens map from the counters
 // Anthropic reports, skipping zero meters and returning nil when none are set.
-func anthropicTokens(input, output, cacheRead, cacheCreation int) usage.Tokens {
+// cacheCreation1h is the 1-hour share of cacheCreation, billed at its own rate.
+func anthropicTokens(input, output, cacheRead, cacheCreation, cacheCreation1h int) usage.Tokens {
 	t := usage.Tokens{}
 	if input > 0 {
 		t["input"] = int64(input)
@@ -33,6 +34,9 @@ func anthropicTokens(input, output, cacheRead, cacheCreation int) usage.Tokens {
 	}
 	if cacheCreation > 0 {
 		t["cache_creation"] = int64(cacheCreation)
+	}
+	if cacheCreation1h > 0 {
+		t["cache_creation_1h"] = int64(cacheCreation1h)
 	}
 	if len(t) == 0 {
 		return nil

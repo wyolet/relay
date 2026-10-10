@@ -11,7 +11,7 @@ func fp(v float64) *float64 { return &v }
 // outside this set computes to $0 silently — the closure test guards it.
 var knownMeters = map[string]bool{
 	"tokens.input": true, "tokens.output": true,
-	"tokens.cache_read": true, "tokens.cache_creation": true,
+	"tokens.cache_read": true, "tokens.cache_creation": true, "tokens.cache_creation_1h": true,
 	"tokens.reasoning": true, "tokens.audio_input": true, "tokens.audio_output": true,
 	"tokens.accepted_prediction": true, "tokens.rejected_prediction": true,
 	"tokens.server_tool_use_input": true, "tokens.server_tool_use_output": true,

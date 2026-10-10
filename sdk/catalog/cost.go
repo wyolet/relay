@@ -113,6 +113,8 @@ func meterForUsageKey(k string) (string, bool) {
 		return "tokens.cache_read", true
 	case "cache_creation":
 		return "tokens.cache_creation", true
+	case "cache_creation_1h":
+		return "tokens.cache_creation_1h", true
 	case "reasoning":
 		return "tokens.reasoning", true
 	case "audio_input":

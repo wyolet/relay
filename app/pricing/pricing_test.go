@@ -41,6 +41,14 @@ func TestValidate_ZeroAmountOK(t *testing.T) {
 	}
 }
 
+func TestValidate_CacheCreation1hMeter(t *testing.T) {
+	p := valid()
+	p.Spec.Rates = append(p.Spec.Rates, Rate{Meter: MeterTokensCacheCreation1h, Unit: UnitPerMillion, Amount: 2})
+	if err := p.Validate(); err != nil {
+		t.Fatalf("cache_creation_1h meter: %v", err)
+	}
+}
+
 func TestValidate_NegativeAmount(t *testing.T) {
 	p := valid()
 	p.Spec.Rates[0].Amount = -1
@@ -106,6 +114,7 @@ func TestMeterForUsageKey(t *testing.T) {
 		"output":                 MeterTokensOutput,
 		"cache_read":             MeterTokensCacheRead,
 		"cache_creation":         MeterTokensCacheCreation,
+		"cache_creation_1h":      MeterTokensCacheCreation1h,
 		"reasoning":              MeterTokensReasoning,
 		"audio_input":            MeterTokensAudioInput,
 		"audio_output":           MeterTokensAudioOutput,
