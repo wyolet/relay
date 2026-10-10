@@ -38,6 +38,31 @@ func TestServiceTier_ReachesSummary(t *testing.T) {
 	}
 }
 
+func TestServiceTier_RequestRoundTrip(t *testing.T) {
+	for name, tr := range map[string]v1.Translator{"cc": CCTranslator{}, "responses": ResponsesTranslator{}} {
+		var body string
+		if name == "cc" {
+			body = `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}],"service_tier":"flex"}`
+		} else {
+			body = `{"model":"gpt-5","input":"hi","service_tier":"flex"}`
+		}
+		req, err := tr.ParseRequest([]byte(body))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := string(req.Extensions[extServiceTier]); got != `"flex"` {
+			t.Errorf("%s: extensions[%q] = %s, want \"flex\"", name, extServiceTier, got)
+		}
+		wire, err := tr.SerializeRequest(req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(string(wire), `"service_tier":"flex"`) {
+			t.Errorf("%s: service_tier missing from %s", name, wire)
+		}
+	}
+}
+
 func TestServiceTier_SerializedBack(t *testing.T) {
 	resp := &v1.Response{ID: "r1", Model: "gpt-5", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop, ServiceTier: "priority"}
 	for name, tr := range map[string]v1.Translator{"cc": CCTranslator{}, "responses": ResponsesTranslator{}} {

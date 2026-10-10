@@ -64,7 +64,6 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: CacheConfig.Instructions/Tools dropped", "cache_config.instructions", "cache_config.tools"),
 		annotated("canonical: ItemCacheConfig.Anchor dropped — OpenAI", userMsg+".cache_config.anchor"),
 		annotated("canonical: Extensions keys other than openai.service_tier dropped", "extensions.acme.trace", "extensions.openai.logit_bias", "extensions.openai.logprobs", "extensions.openai.store", "extensions.openai.top_logprobs"),
-		annotated("canonical: service_tier dropped — it asks the upstream account", "extensions.openai.service_tier"),
 		annotated("canonical: item Status dropped on Responses input", "input[*].status"),
 		annotated("canonical: FunctionCall.ProviderData dropped unless it is the custom-call marker", call1+".provider_data"),
 		annotated("canonical: Message.ProviderData dropped — Responses", userMsg+".provider_data"),

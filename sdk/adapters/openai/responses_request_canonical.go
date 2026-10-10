@@ -131,7 +131,6 @@ func responsesRejectStatefulFields(req *ResponsesRequest) error {
 	if req.Truncation != "" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "truncation")
 	}
-	// canonical: service_tier dropped — it asks the upstream account for a latency/price lane, not for different output, and no other vendor has the concept. Codex sends it on every request when the user configures one, so rejecting it would refuse the whole turn over a hint.
 	if req.SafetyIdentifier != "" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "safety_identifier")
 	}

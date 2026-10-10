@@ -175,6 +175,7 @@ type anthropicFullUsage struct {
 	CacheCreationByTTL       struct {
 		Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
 	} `json:"cache_creation"`
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 type anthropicCitation struct {

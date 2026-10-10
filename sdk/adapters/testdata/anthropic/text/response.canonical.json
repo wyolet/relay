@@ -22,5 +22,6 @@
   "usage": {
     "input": 12,
     "output": 4
-  }
+  },
+  "service_tier": "standard"
 }

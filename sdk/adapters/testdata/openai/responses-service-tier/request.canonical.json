@@ -12,5 +12,8 @@
       ]
     }
   ],
-  "output_mode": "sync"
+  "output_mode": "sync",
+  "extensions": {
+    "openai.service_tier": "flex"
+  }
 }

@@ -22,5 +22,6 @@
   "usage": {
     "input": 10,
     "output": 2
-  }
+  },
+  "service_tier": "priority"
 }

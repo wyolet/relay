@@ -103,6 +103,7 @@ func ParseResponse(body []byte) (*Response, error) {
 		FinishReason      FinishReason               `json:"finish_reason"`
 		Output            json.RawMessage            `json:"output"`
 		Usage             usage.Tokens               `json:"usage"`
+		ServiceTier       string                     `json:"service_tier"`
 		Error             *Error                     `json:"error"`
 		IncompleteDetails *IncompleteDetails         `json:"incomplete_details"`
 		RelayUsage        *RelayUsage                `json:"relay_usage"`
@@ -119,6 +120,7 @@ func ParseResponse(body []byte) (*Response, error) {
 		Status:            raw.Status,
 		FinishReason:      raw.FinishReason,
 		Usage:             raw.Usage,
+		ServiceTier:       raw.ServiceTier,
 		Error:             raw.Error,
 		IncompleteDetails: raw.IncompleteDetails,
 		RelayUsage:        raw.RelayUsage,

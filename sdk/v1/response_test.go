@@ -165,6 +165,20 @@ func TestResponseWithExtensions(t *testing.T) {
 	}
 }
 
+func TestParseResponseServiceTier(t *testing.T) {
+	b, err := Marshal(&Response{ID: "resp_tier", Object: "response", Model: "gpt-5", Status: StatusCompleted, ServiceTier: "priority"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := ParseResponse(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ServiceTier != "priority" {
+		t.Errorf("service_tier: got %q, want %q", resp.ServiceTier, "priority")
+	}
+}
+
 func TestResponseRefusalIsFinishReason(t *testing.T) {
 	resp := &Response{
 		ID:           "resp_ref",

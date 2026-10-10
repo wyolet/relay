@@ -15,5 +15,6 @@
   "store": false,
   "include": [
     "reasoning.encrypted_content"
-  ]
+  ],
+  "service_tier": "flex"
 }

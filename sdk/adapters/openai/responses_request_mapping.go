@@ -18,6 +18,11 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 
 	cr.CacheConfig = openaiCacheConfigFromWire(req.PromptCacheKey, req.PromptCacheRetention)
 
+	if req.ServiceTier != "" {
+		raw, _ := json.Marshal(req.ServiceTier)
+		cr.Extensions = map[string]json.RawMessage{extServiceTier: raw}
+	}
+
 	if req.Stream != nil && *req.Stream {
 		cr.OutputMode = v1.OutputModeStream
 	} else {

@@ -140,6 +140,7 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 	// Usage: each dimension Anthropic prices distinctly gets its own key;
 	// cache_creation_1h is a part of cache_creation (see usage.Tokens).
 	resp.Usage = anthropicUsageToCanonical(&ar.Usage)
+	resp.ServiceTier = ar.Usage.ServiceTier
 
 	return resp, nil
 }
