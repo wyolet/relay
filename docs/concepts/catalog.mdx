@@ -30,8 +30,10 @@ container boots with a populated catalog and **no external fetch required**.
 
 <Info>
 Pin a specific catalog release with `RELAY_CATALOG_VERSION`. Unset, the image
-seeds from its bundled `/catalog`. A bare binary needs `RELAY_CATALOG_DIR` or
-`RELAY_CATALOG_VERSION` to seed a catalog.
+seeds from its bundled `/catalog`. A binary built with `make build` fetches
+the catalog release it was built against when neither `RELAY_CATALOG_DIR` nor
+`RELAY_CATALOG_VERSION` is set (`RELAY_CATALOG_VERSION=off` disables this). A
+plain `go build` binary needs one of them to seed a catalog.
 </Info>
 
 Keeping the catalog in its own repo means provider, model, and pricing

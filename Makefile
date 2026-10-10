@@ -339,7 +339,7 @@ ui-fetch: ## fetch + verify relay-ui release tarball (private repo → gh auth)
 	@echo "UI fetched into $(UI_DIST_DIR)"
 
 build: ui-fetch ## ui-fetch + go build → ./relay
-	CGO_ENABLED=0 go build -trimpath -o relay ./cmd/relay
+	CGO_ENABLED=0 go build -trimpath -ldflags "-X github.com/wyolet/relay/internal/config.DefaultCatalogVersion=$(CATALOG_VERSION)" -o relay ./cmd/relay
 
 clean: ## drop UI dist + binary
 	rm -rf $(UI_DIST_DIR)

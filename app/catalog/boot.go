@@ -357,11 +357,14 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 		if opts.AutoSeedDir != "" {
 			return seedLocalFallback(ctx, stores, opts, fetchErr)
 		}
-		return fmt.Errorf("fetch catalog %s: %w", version, fetchErr)
+		return fmt.Errorf("fetch catalog %s: %w; %s", version, fetchErr, seedHint)
 	}
 	return keepServingOnSeedError(empty, version,
 		seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched"))
 }
+
+// seedHint tells the operator how to seed an empty catalog that has nothing to fetch from.
+const seedHint = "to seed, set RELAY_CATALOG_DIR to a local catalog tree (with RELAY_AUTO_SEED_IF_EMPTY=1) or RELAY_CATALOG_VERSION to a release reachable at RELAY_CATALOG_URL; RELAY_CATALOG_VERSION=off boots with an empty catalog"
 
 // keepServingOnSeedError applies the fetch-failure policy to a release that
 // fails to seed: a non-empty catalog keeps its rows and its marker, so the
@@ -381,7 +384,7 @@ func keepServingOnSeedError(empty bool, version string, err error) error {
 // until it succeeds.
 func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOptions, cause error) error {
 	if opts.AutoSeedDir == "" {
-		return fmt.Errorf("resolve catalog %s: %w", opts.CatalogVersion, cause)
+		return fmt.Errorf("resolve catalog %s: %w; %s", opts.CatalogVersion, cause, seedHint)
 	}
 	slog.Error("catalog: versioned fetch failed on empty catalog; seeding local dir instead",
 		"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", cause)
