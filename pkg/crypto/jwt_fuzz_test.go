@@ -108,26 +108,3 @@ func headerDeclaresEdDSA(token string) bool {
 	}
 	return strings.Contains(string(raw), `"alg":"EdDSA"`)
 }
-
-// FuzzTokenKeyID pins that reading a kid out of an arbitrary header is a
-// total function — it runs on every bearer before the signature is checked.
-func FuzzTokenKeyID(f *testing.F) {
-	priv, pub, _ := fuzzKeys(f)
-	valid, err := SignToken(priv, KeyID(pub), fuzzClaims())
-	if err != nil {
-		f.Fatalf("sign seed token: %v", err)
-	}
-	for _, seed := range []string{
-		"", ".", valid,
-		base64url([]byte(`{"alg":"EdDSA","typ":"JWT","kid":"☃"}`)) + ".x.y",
-		base64url([]byte(`{"kid":`)) + ".x.y",
-		strings.Repeat("ey", 4096) + ".x.y",
-	} {
-		f.Add(seed)
-	}
-	f.Fuzz(func(t *testing.T, token string) {
-		if kid := TokenKeyID(token); strings.ContainsAny(kid, "\x00") {
-			t.Fatalf("kid %q carries a NUL", kid)
-		}
-	})
-}

@@ -301,9 +301,3 @@ func TestWithLockContention(t *testing.T) {
 		t.Fatal("lock exclusion violated: two goroutines held lock simultaneously")
 	}
 }
-
-// Sentinel topology is not covered here: standalone Redis is the tested
-// integration topology.
-func TestSentinelSkipped(t *testing.T) {
-	t.Skip("Sentinel is not covered by the integration suite; standalone is the tested topology")
-}

@@ -299,14 +299,6 @@ func TestCCNewToCanonicalStream_ReasoningContent(t *testing.T) {
 	}
 }
 
-// CC-1: NewFromCanonicalStream must return a non-nil function (was nil → panic).
-func TestCCNewFromCanonicalStream_NotNil(t *testing.T) {
-	fn := (CCTranslator{}).NewFromCanonicalStream()
-	if fn == nil {
-		t.Fatal("NewFromCanonicalStream returned nil")
-	}
-}
-
 // CC-1: canonical event sequence → valid chat.completion.chunk frames + [DONE].
 func TestCCNewFromCanonicalStream_TextSequence(t *testing.T) {
 	fn := (CCTranslator{}).NewFromCanonicalStream()
