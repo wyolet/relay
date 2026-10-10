@@ -1,0 +1,27 @@
+{
+  "contents": [
+    {"role": "user", "parts": [
+      {"text": "Compare these and call the tool."},
+      {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}},
+      {"inlineData": {"mimeType": "application/pdf", "data": "JVBERi0xLjQ="}},
+      {"inlineData": {"mimeType": "audio/wav", "data": "UklGRiQAAABXQVZF"}},
+      {"fileData": {"mimeType": "video/mp4", "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc123"}}
+    ]},
+    {"role": "model", "parts": [
+      {"text": "The user wants a forecast.", "thought": true, "thoughtSignature": "CtwBThoughtPartSignature"},
+      {"functionCall": {"name": "get_forecast", "args": {"city":"Oslo"}}, "thoughtSignature": "CtwBCallPartSignature"}
+    ]},
+    {"role": "user", "parts": [{"functionResponse": {"name": "get_forecast", "response": {"output": "sunny, 12C"}}}]}
+  ],
+  "tools": [
+    {
+      "functionDeclarations": [
+        {"name": "get_forecast", "description": "Forecast for a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+      ]
+    }
+  ],
+  "generationConfig": {
+    "responseMimeType": "application/json",
+    "responseSchema": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}
+  }
+}

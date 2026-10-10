@@ -12,11 +12,7 @@ import (
 // wire shape. Stateless value type; per-stream state lives in closures.
 type GeminiTranslator struct{}
 
-// Gemini has no per-call IDs — it matches tool results to calls by function
-// name. Canonical (and OpenAI/Anthropic clients downstream) require a unique
-// CallID per call, so we synthesize CallID = name + callIDSep + index and
-// strip it back to the bare name when emitting a functionResponse upstream.
-// callIDSep is chosen to never collide with a real function name.
+// Gemini's functionCall.id is optional — without it tool results match calls by function name. Canonical (and OpenAI/Anthropic clients downstream) require a unique CallID per call, so when the id is absent we synthesize CallID = name + callIDSep + index and strip it back to the bare name when emitting a functionResponse upstream. callIDSep is chosen to never collide with a real function name.
 const callIDSep = "__relay_call_"
 
 func geminiCallID(name string, idx int) string {
@@ -29,6 +25,14 @@ func geminiCallID(name string, idx int) string {
 func geminiFuncNameFromCallID(callID string) string {
 	if i := strings.LastIndex(callID, callIDSep); i >= 0 {
 		return callID[:i]
+	}
+	return callID
+}
+
+// geminiWireCallID is the functionCall/functionResponse id to send: empty for a CallID relay derived from the function name, since Gemini never sent one.
+func geminiWireCallID(callID, name string) string {
+	if callID == name || strings.Contains(callID, callIDSep) {
+		return ""
 	}
 	return callID
 }

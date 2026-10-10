@@ -15,7 +15,10 @@
       "type": "function_call",
       "call_id": "factor",
       "name": "factor",
-      "arguments": "{\"n\":221}"
+      "arguments": "{\"n\":221}",
+      "provider_data": {
+        "thoughtSignature": "CtwBAdHtim9FactorCallSignature"
+      }
     },
     {
       "type": "function_call_output",

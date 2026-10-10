@@ -88,6 +88,10 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			opts.Reasoning = rc
 			hasOpts = true
 		}
+		if f := geminiResponseFormat(gc.ResponseMIMEType, gc.ResponseSchema); f != nil {
+			opts.Output = &v1.OutputConfig{Format: f}
+			hasOpts = true
+		}
 	}
 
 	if len(wire.Tools) > 0 {
@@ -134,6 +138,46 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	return req, nil
 }
 
+// geminiResponseFormat inverts the serializer's json_object / json_schema mapping.
+func geminiResponseFormat(mimeType string, schema json.RawMessage) *v1.Format {
+	if mimeType != "application/json" {
+		// canonical: responseMimeType other than application/json dropped — text/plain is the default and canonical Format has no enum (text/x.enum) type.
+		return nil
+	}
+	if len(schema) > 0 && string(schema) != "null" {
+		return &v1.Format{Type: "json_schema", Schema: schema}
+	}
+	return &v1.Format{Type: "json_object"}
+}
+
+// geminiFunctionOutput inverts the serializer's {"output": …} wrap of a non-object result. A wrap the serializer would not reproduce (an object value, or text that parses as JSON) stays whole so the round trip is stable.
+func geminiFunctionOutput(resp json.RawMessage) string {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(resp, &obj) != nil || len(obj) != 1 {
+		return string(resp)
+	}
+	inner, ok := obj["output"]
+	if !ok || len(inner) == 0 || inner[0] == '{' {
+		return string(resp)
+	}
+	if inner[0] != '"' {
+		return string(inner)
+	}
+	var s string
+	if json.Unmarshal(inner, &s) != nil || json.Valid([]byte(strings.TrimSpace(s))) {
+		return string(resp)
+	}
+	return s
+}
+
+// geminiInlineDataPart picks the canonical part from the mime type: an image rides an ImagePart data URL, anything else a FilePart.
+func geminiInlineDataPart(d *inlineData) v1.Part {
+	if strings.HasPrefix(d.MIMEType, "image/") {
+		return &v1.ImagePart{ImageURL: "data:" + d.MIMEType + ";base64," + d.Data}
+	}
+	return &v1.FilePart{FileData: d.Data, MediaType: d.MIMEType}
+}
+
 // geminiExtractSystemText reads systemInstruction content parts as plain text.
 func geminiExtractSystemText(raw json.RawMessage) string {
 	var c geminiContent
@@ -170,18 +214,22 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 					hasFunctionResponse = true
 					output := ""
 					if len(p.FunctionResponse.Response) > 0 {
-						output = string(p.FunctionResponse.Response)
+						output = geminiFunctionOutput(p.FunctionResponse.Response)
+					}
+					callID := p.FunctionResponse.ID
+					if callID == "" {
+						callID = p.FunctionResponse.Name
 					}
 					items = append(items, &v1.FunctionCallOutput{
-						CallID: p.FunctionResponse.Name,
+						CallID: callID,
 						Output: output,
 					})
 				} else if p.Text != "" {
 					textParts = append(textParts, &v1.TextPart{Text: p.Text})
 				} else if p.InlineData != nil {
-					url := "data:" + p.InlineData.MIMEType + ";base64," + p.InlineData.Data
-					textParts = append(textParts, &v1.ImagePart{ImageURL: url})
+					textParts = append(textParts, geminiInlineDataPart(p.InlineData))
 				} else if p.FileData != nil {
+					// Stays a FilePart even for an image: ImagePart has no media type for a URL, so the mimeType would be lost.
 					textParts = append(textParts, &v1.FilePart{
 						FileURL:   p.FileData.FileURI,
 						MediaType: p.FileData.MIMEType,
@@ -211,13 +259,25 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 					if len(p.FunctionCall.Args) > 0 {
 						args = string(p.FunctionCall.Args)
 					}
-					items = append(items, &v1.FunctionCall{
-						CallID:    p.FunctionCall.Name,
+					callID := p.FunctionCall.ID
+					if callID == "" {
+						callID = p.FunctionCall.Name
+					}
+					fc := &v1.FunctionCall{
+						CallID:    callID,
 						Name:      p.FunctionCall.Name,
 						Arguments: args,
-					})
+					}
+					if p.ThoughtSignature != "" {
+						fc.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
+					}
+					items = append(items, fc)
 				} else if p.Text != "" && p.Thought {
-					items = append(items, &v1.Reasoning{Content: p.Text, Summary: []v1.SummaryText{{Text: p.Text}}})
+					r := &v1.Reasoning{Content: p.Text, Summary: []v1.SummaryText{{Text: p.Text}}}
+					if p.ThoughtSignature != "" {
+						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
+					}
+					items = append(items, r)
 				} else if p.Text != "" {
 					textParts = append(textParts, &v1.OutputTextPart{Text: p.Text})
 				}

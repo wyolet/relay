@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"fc-lima-7q2","name":"get_weather","args":{"city":"Lima"}}},{"functionCall":{"id":"fc-quito-3x9","name":"get_weather","args":{"city":"Quito"}}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":90,"totalTokenCount":90},"modelVersion":"gemini-2.5-flash"}
+
+data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":90,"candidatesTokenCount":20,"totalTokenCount":110},"modelVersion":"gemini-2.5-flash"}
+

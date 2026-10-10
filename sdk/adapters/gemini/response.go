@@ -53,9 +53,13 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 					if len(p.FunctionCall.Args) > 0 {
 						args = string(p.FunctionCall.Args)
 					}
+					callID := p.FunctionCall.ID
+					if callID == "" {
+						callID = geminiCallID(p.FunctionCall.Name, outputIndex)
+					}
 					fc := &v1.FunctionCall{
 						ID:        fmt.Sprintf("fc_%d", outputIndex),
-						CallID:    geminiCallID(p.FunctionCall.Name, outputIndex), // Gemini has no call ID; synthesize a unique one
+						CallID:    callID,
 						Name:      p.FunctionCall.Name,
 						Arguments: args,
 						Status:    v1.StatusCompleted,
@@ -126,7 +130,7 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 				argsObj = json.RawMessage(`{}`)
 			}
 			parts = append(parts, geminiPart{
-				FunctionCall: &geminiFC{Name: v.Name, Args: argsObj},
+				FunctionCall: &geminiFC{ID: geminiWireCallID(v.CallID, v.Name), Name: v.Name, Args: argsObj},
 			})
 		case *v1.Reasoning:
 			text := v.Content

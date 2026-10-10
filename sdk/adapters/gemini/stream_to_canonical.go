@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -35,6 +36,7 @@ type geminiToCanonicalStream struct {
 	argsBuf           strings.Builder
 	thinkBuf          strings.Builder
 	currentFCName     string
+	currentFCID       string // functionCall.id when Gemini sent one
 	currentThoughtSig string // thoughtSignature for the current item, if any
 	// sawFunctionCall records whether any function_call part appeared across
 	// the whole stream, so the terminal completion reports finish_reason
@@ -134,6 +136,7 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 			s.currentItemType = v1.ItemTypeFunctionCall
 			s.currentIndex = idx
 			s.currentFCName = p.FunctionCall.Name
+			s.currentFCID = p.FunctionCall.ID
 			s.currentThoughtSig = p.ThoughtSignature
 			s.sawFunctionCall = true
 			s.argsBuf.Reset()
@@ -149,7 +152,7 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 				ItemType: v1.ItemTypeFunctionCall,
 				Index:    idx,
 				Name:     p.FunctionCall.Name,
-				CallID:   geminiCallID(p.FunctionCall.Name, idx),
+				CallID:   cmp.Or(p.FunctionCall.ID, geminiCallID(p.FunctionCall.Name, idx)),
 			})
 			out = append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}})...)
 
@@ -249,9 +252,13 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 			Content: []v1.Part{&v1.OutputTextPart{Text: s.textBuf.String()}},
 		}
 	case v1.ItemTypeFunctionCall:
+		callID := s.currentFCID
+		if callID == "" {
+			callID = geminiCallID(s.currentFCName, s.currentIndex)
+		}
 		fc := &v1.FunctionCall{
 			ID:        s.currentItemID,
-			CallID:    geminiCallID(s.currentFCName, s.currentIndex),
+			CallID:    callID,
 			Name:      s.currentFCName,
 			Arguments: s.argsBuf.String(),
 			Status:    v1.StatusCompleted,

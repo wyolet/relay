@@ -1,0 +1,100 @@
+{
+  "model": null,
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Compare these and call the tool."
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,iVBORw0KGgo="
+        },
+        {
+          "type": "input_file",
+          "file_data": "JVBERi0xLjQ=",
+          "media_type": "application/pdf"
+        },
+        {
+          "type": "input_file",
+          "file_data": "UklGRiQAAABXQVZF",
+          "media_type": "audio/wav"
+        },
+        {
+          "type": "input_file",
+          "file_url": "https://generativelanguage.googleapis.com/v1beta/files/abc123",
+          "media_type": "video/mp4"
+        }
+      ]
+    },
+    {
+      "type": "reasoning",
+      "summary": [
+        {
+          "text": "The user wants a forecast."
+        }
+      ],
+      "content": "The user wants a forecast.",
+      "provider_data": {
+        "thoughtSignature": "CtwBThoughtPartSignature"
+      }
+    },
+    {
+      "type": "function_call",
+      "call_id": "get_forecast",
+      "name": "get_forecast",
+      "arguments": "{\"city\":\"Oslo\"}",
+      "provider_data": {
+        "thoughtSignature": "CtwBCallPartSignature"
+      }
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "get_forecast",
+      "output": "sunny, 12C"
+    }
+  ],
+  "model_config": {
+    "*": {
+      "output": {
+        "format": {
+          "type": "json_schema",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "summary"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "get_forecast",
+        "description": "Forecast for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    ]
+  }
+}

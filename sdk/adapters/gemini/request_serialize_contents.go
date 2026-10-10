@@ -48,7 +48,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			} else {
 				argsObj = json.RawMessage(`{}`)
 			}
-			p := geminiPart{FunctionCall: &geminiFC{Name: fc.Name, Args: argsObj}}
+			p := geminiPart{FunctionCall: &geminiFC{ID: geminiWireCallID(fc.CallID, fc.Name), Name: fc.Name, Args: argsObj}}
 			if sig := thoughtSignatureFrom(fc.ProviderData); sig != "" {
 				p.ThoughtSignature = sig
 			}
@@ -95,6 +95,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 				name = geminiFuncNameFromCallID(fco.CallID)
 			}
 			parts = append(parts, geminiPart{FunctionResponse: &geminiFR{
+				ID:       geminiWireCallID(fco.CallID, name),
 				Name:     name,
 				Response: respRaw,
 			}})
