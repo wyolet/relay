@@ -66,6 +66,23 @@ func TestUserOwnerNameResolvesToID(t *testing.T) {
 	}
 }
 
+// Export names a host owner by slug, so a host-owned HostKey has to resolve
+// it back to the id the way a host-owned Policy does.
+func TestHostOwnerNameResolvesToID(t *testing.T) {
+	idx := MapResolver{Hosts: map[string]string{"acme-api": "h-acme"}}
+	d := HostKeyDTO{Metadata: WireMeta{Name: "acme-key"}}
+	d.Metadata.Owner = WireOwner{Kind: meta.OwnerHost, Name: "acme-api"}
+	d.Spec.HostID = "acme-api"
+
+	k, err := ToHostKey(d, idx)
+	if err != nil {
+		t.Fatalf("ToHostKey: %v", err)
+	}
+	if k.Meta.Owner.ID != "h-acme" {
+		t.Errorf("owner id = %q, want the resolved host id", k.Meta.Owner.ID)
+	}
+}
+
 // A Key resolves its policy through its principal when it declares none, so
 // omitting spec.policy is legal on the wire.
 func TestKeyPolicyIsOptional(t *testing.T) {

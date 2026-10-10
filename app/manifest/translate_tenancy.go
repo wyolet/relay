@@ -12,8 +12,8 @@ import (
 // Team / Project
 // ---------------------------------------------------------------------------
 
-// resolveScopeOwner rewrites a team-, project-, or user-kind owner from the
-// wire name to its id. Rows in other scopes are untouched.
+// resolveScopeOwner rewrites a team-, project-, user-, or host-kind owner
+// from the wire name to its id. Rows in other scopes are untouched.
 func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 	if o.ID == "" {
 		return
@@ -29,6 +29,10 @@ func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 		}
 	case meta.OwnerUser:
 		if id, ok := idx.UserID(o.ID); ok {
+			o.ID = id
+		}
+	case meta.OwnerHost:
+		if id, ok := idx.HostID(o.ID); ok {
 			o.ID = id
 		}
 	}
