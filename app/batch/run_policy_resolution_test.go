@@ -7,17 +7,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/binding"
-	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 )
 
@@ -39,14 +30,7 @@ func TestRun_MissingPolicyFailsTheItem(t *testing.T) {
 func TestRun_PinsItsSnapshot(t *testing.T) {
 	// A resolver over an empty catalog: without pinning, resolution reads it
 	// and cannot find the model.
-	empty := appcatalog.New(
-		lister[provider.Provider]{}, lister[host.Host]{}, lister[policy.Policy]{},
-		lister[model.Model]{}, lister[hostkey.HostKey]{}, lister[ratelimit.RateLimit]{},
-		lister[key.Key]{}, lister[pricing.Pricing]{}, lister[binding.Binding]{},
-	)
-	if err := empty.Reload(t.Context()); err != nil {
-		t.Fatalf("reload empty catalog: %v", err)
-	}
+	empty := catalogtest.Catalog{}.Load(t)
 	rn, _, policyID := runnerFixture(t)
 	rn.Resolver = routing.New(empty)
 

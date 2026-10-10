@@ -4,37 +4,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wyolet/relay/app/binding"
-	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/httpapi/inference"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 )
-
-type snapList[T any] []*T
-
-func (l snapList[T]) List(context.Context) ([]*T, error) { return l, nil }
 
 // The rate-limit rules a request is metered by must come from the snapshot
 // the request was authenticated against, not from whatever reload landed
 // while it was in flight.
 func TestSnapReaderServesTheRequestSnapshot(t *testing.T) {
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	cat := appcatalog.New(
-		snapList[provider.Provider]{}, snapList[host.Host]{}, snapList[policy.Policy]{pol},
-		snapList[model.Model]{}, snapList[hostkey.HostKey]{}, snapList[ratelimit.RateLimit]{},
-		snapList[key.Key]{}, snapList[pricing.Pricing]{}, snapList[binding.Binding]{},
-	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	cat := catalogtest.Catalog{Policies: []*policy.Policy{pol}}.Load(t)
 	pinned := cat.Current()
 	r := catalogSnapReader{cat: cat}
 
