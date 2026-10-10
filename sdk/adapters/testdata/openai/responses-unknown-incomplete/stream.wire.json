@@ -56,6 +56,7 @@
       "item": {
         "type": "message",
         "id": "msg_new",
+        "status": "in_progress",
         "role": "assistant",
         "content": null
       }
@@ -124,6 +125,7 @@
       "item": {
         "type": "message",
         "id": "msg_new",
+        "status": "incomplete",
         "role": "assistant",
         "content": [
           {
@@ -151,6 +153,7 @@
           {
             "type": "message",
             "id": "msg_new",
+            "status": "incomplete",
             "role": "assistant",
             "content": [
               {

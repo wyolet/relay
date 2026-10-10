@@ -121,22 +121,28 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 //     canonical: foreign reasoning items dropped on Responses input — they
 //     are provider-signed (e.g. Anthropic thinking signatures) and cannot
 //     round-trip cross-vendor (rule 8); their relay-minted id would 400.
+//
+// canonical: item Status dropped on Responses input — the API sets it on output items only and rejects it on input items ("Unknown parameter: 'input[N].status'").
 func responsesInputItemFromCanonical(item v1.Item, custom *responsesCustomLowering) ResponsesItem {
 	ritem := responsesItemFromCanonical(item, custom)
 	switch v := ritem.(type) {
 	case *ResponsesMessage:
+		v.Status = ""
 		if !strings.HasPrefix(v.ID, "msg_") {
 			v.ID = ""
 		}
 	case *ResponsesFunctionCall:
+		v.Status = ""
 		if !strings.HasPrefix(v.ID, "fc_") {
 			v.ID = ""
 		}
 	case *ResponsesCustomToolCall:
+		v.Status = ""
 		if !strings.HasPrefix(v.ID, "ctc_") {
 			v.ID = ""
 		}
 	case *ResponsesReasoning:
+		v.Status = ""
 		if v.EncryptedContent == "" {
 			return nil
 		}

@@ -58,7 +58,8 @@
         "id": "fc_lima",
         "call_id": "",
         "name": "get_weather",
-        "arguments": ""
+        "arguments": "",
+        "status": "in_progress"
       }
     }
   },
@@ -106,7 +107,8 @@
         "id": "fc_lima",
         "call_id": "call_lima",
         "name": "get_weather",
-        "arguments": "{\"city\":\"Lima\"}"
+        "arguments": "{\"city\":\"Lima\"}",
+        "status": "completed"
       }
     }
   },
@@ -127,7 +129,8 @@
             "id": "fc_lima",
             "call_id": "call_lima",
             "name": "get_weather",
-            "arguments": "{\"city\":\"Lima\"}"
+            "arguments": "{\"city\":\"Lima\"}",
+            "status": "completed"
           }
         ],
         "usage": {

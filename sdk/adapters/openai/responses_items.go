@@ -18,22 +18,19 @@ func (*ResponsesMessage) ResponsesItemType() ResponsesItemType { return Response
 
 // MarshalJSON emits the wire shape with content as a typed array.
 //
-// status is OUTPUT-ONLY: the Responses API stamps it on items it returns but
-// rejects it as an unknown parameter when the item is sent back as input
-// ("Unknown parameter: 'input[N].status'"). Items round-trip from a prior
-// response into the next request's input, so never emit status on marshal.
-//
-// canonical: item Status dropped on Responses input — the API sets it on output items only and rejects it on input items.
+// status is output-only: the Responses API rejects it on input items ("Unknown parameter: 'input[N].status'"), so responsesInputItemFromCanonical clears it before an item is marshaled as input.
 func (m *ResponsesMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Type    ResponsesItemType `json:"type"`
 		ID      string            `json:"id,omitempty"`
+		Status  ResponsesStatus   `json:"status,omitempty"`
 		Role    ResponsesRole     `json:"role"`
 		Content []ResponsesPart   `json:"content"`
 	}
 	return json.Marshal(wire{
 		Type:    ResponsesItemTypeMessage,
 		ID:      m.ID,
+		Status:  m.Status,
 		Role:    m.Role,
 		Content: m.Content,
 	})
@@ -75,7 +72,7 @@ func (*ResponsesFunctionCall) ResponsesItemType() ResponsesItemType {
 	return ResponsesItemTypeFunctionCall
 }
 
-// status is output-only — see ResponsesMessage.MarshalJSON. Never emit it.
+// status is output-only — see ResponsesMessage.MarshalJSON.
 func (f *ResponsesFunctionCall) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Type      ResponsesItemType `json:"type"`
@@ -83,6 +80,7 @@ func (f *ResponsesFunctionCall) MarshalJSON() ([]byte, error) {
 		CallID    string            `json:"call_id"`
 		Name      string            `json:"name"`
 		Arguments string            `json:"arguments"`
+		Status    ResponsesStatus   `json:"status,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:      ResponsesItemTypeFunctionCall,
@@ -90,6 +88,7 @@ func (f *ResponsesFunctionCall) MarshalJSON() ([]byte, error) {
 		CallID:    f.CallID,
 		Name:      f.Name,
 		Arguments: f.Arguments,
+		Status:    f.Status,
 	})
 }
 
@@ -189,13 +188,14 @@ func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 		ID               string                 `json:"id,omitempty"`
 		Summary          []ResponsesSummaryText `json:"summary"`
 		EncryptedContent string                 `json:"encrypted_content,omitempty"`
+		Status           ResponsesStatus        `json:"status,omitempty"`
 	}
 	// summary is REQUIRED on a reasoning item (the Responses API rejects one
 	// without it: "Missing required parameter input[N].summary"). A reasoning
 	// item commonly has no summary (low effort, or summary not requested), so
 	// emit at least [] — never null, never omitted.
 	//
-	// status is output-only — see ResponsesMessage.MarshalJSON. Never emit it.
+	// status is output-only — see ResponsesMessage.MarshalJSON.
 	summary := r.Summary
 	if summary == nil {
 		summary = []ResponsesSummaryText{}
@@ -205,6 +205,7 @@ func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 		ID:               r.ID,
 		Summary:          summary,
 		EncryptedContent: r.EncryptedContent,
+		Status:           r.Status,
 	})
 }
 

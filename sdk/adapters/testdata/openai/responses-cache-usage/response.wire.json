@@ -8,6 +8,7 @@
     {
       "type": "message",
       "id": "msg_cache",
+      "status": "completed",
       "role": "assistant",
       "content": [
         {

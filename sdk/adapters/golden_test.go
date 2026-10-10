@@ -37,21 +37,11 @@ type lossyRoundTrip struct {
 	bug bool
 }
 
-const responsesOutputStatus = "Responses output items lose status: the item marshalers omit it because input rejects it, and the response and stream serializers reuse them"
-
 // lossyRoundTrips is keyed by "<case dir> <input file>".
 var lossyRoundTrips = func() map[string]lossyRoundTrip {
 	m := map[string]lossyRoundTrip{
-		"testdata/openai/chat-refusal stream.sse":             {why: "a CC stream writes a refusal as text deltas plus finish_reason content_filter — message.refusal would need the finish reason before the first delta"},
-		"testdata/openai/responses-tool-calls request.json":   {why: "input items carry no status on Responses (annotated drop)"},
-		"testdata/openai/responses-reasoning stream.sse":      {bug: true, why: responsesOutputStatus + "; the from-canonical stream also never writes the reasoning item's encrypted_content"},
-		"testdata/openai/responses-cache-usage response.json": {bug: true, why: responsesOutputStatus},
-		"testdata/openai/responses-reasoning response.json":   {bug: true, why: responsesOutputStatus},
-	}
-	for _, c := range []string{"responses-incomplete", "responses-refusal", "responses-text", "responses-tool-calls", "responses-unknown-incomplete"} {
-		for _, input := range []string{responseInput, streamInput} {
-			m["testdata/openai/"+c+" "+input] = lossyRoundTrip{bug: true, why: responsesOutputStatus}
-		}
+		"testdata/openai/chat-refusal stream.sse":           {why: "a CC stream writes a refusal as text deltas plus finish_reason content_filter — message.refusal would need the finish reason before the first delta"},
+		"testdata/openai/responses-tool-calls request.json": {why: "input items carry no status on Responses (annotated drop)"},
 	}
 	for _, c := range []string{"cache-usage", "refusal", "text", "unknown-stop"} {
 		m["testdata/anthropic/"+c+" "+streamInput] = lossyRoundTrip{bug: true, why: anthropicStreamUsage}
