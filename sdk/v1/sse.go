@@ -109,16 +109,48 @@ func NormalizeSSELineEnds(frame []byte) []byte {
 	return out
 }
 
-// ParseSSEChunk extracts event and data from a raw SSE chunk (one frame,
-// the bytes between two blank-line separators).
+// ParseSSEChunk extracts event and data from a raw SSE chunk (one frame, the bytes between two blank-line separators) per the WHATWG event-stream rules: data lines join with "\n", one space after the colon is stripped, comment lines and unknown fields are ignored, lines end in LF, CRLF or CR, and the last event line wins. When the chunk holds several frames the first one with data is parsed. data aliases chunk unless the frame has several data lines or chunk holds a CR; ok is false when the frame has no data.
 func ParseSSEChunk(chunk []byte) (event string, data []byte, ok bool) {
-	lines := bytes.Split(bytes.TrimRight(chunk, "\n"), []byte("\n"))
-	for _, line := range lines {
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event = string(bytes.TrimSpace(line[6:]))
-		} else if bytes.HasPrefix(line, []byte("data:")) {
-			data = bytes.TrimSpace(line[5:])
+	rest := bytes.TrimRight(NormalizeSSELineEnds(chunk), "\n")
+	var name []byte
+	dataLines := 0
+	for len(rest) > 0 {
+		line := rest
+		rest = nil
+		if i := bytes.IndexByte(line, '\n'); i >= 0 {
+			line, rest = line[:i], line[i+1:]
+		}
+		if len(line) == 0 {
+			if len(data) > 0 {
+				break
+			}
+			name, data, dataLines = nil, nil, 0
+			continue
+		}
+		field, value := line, []byte(nil)
+		if i := bytes.IndexByte(line, ':'); i >= 0 {
+			field, value = line[:i], line[i+1:]
+			if len(value) > 0 && value[0] == ' ' {
+				value = value[1:]
+			}
+		}
+		switch string(field) {
+		case "event":
+			name = value
+		case "data":
+			switch dataLines {
+			case 0:
+				data = value
+			case 1:
+				// Copy before joining: appending to the alias would write into chunk.
+				joined := make([]byte, 0, len(data)+1+len(value))
+				joined = append(append(joined, data...), '\n')
+				data = append(joined, value...)
+			default:
+				data = append(append(data, '\n'), value...)
+			}
+			dataLines++
 		}
 	}
-	return event, data, len(data) > 0
+	return string(name), data, len(data) > 0
 }
