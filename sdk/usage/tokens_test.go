@@ -29,6 +29,23 @@ func TestTokensBillable(t *testing.T) {
 		{"a part is billed whole", "reasoning", rated("reasoning"), 100},
 		{"absent key", "cache_creation", rated(), 0},
 	}
+	cacheWrite := Tokens{"input": 10, "cache_creation": 900, "cache_creation_1h": 600}
+	for _, tc := range []struct {
+		name  string
+		key   string
+		rated func(string) bool
+		want  int64
+	}{
+		{"1h writes unrated stay in cache_creation", "cache_creation", rated(), 900},
+		{"1h writes rated leave the 5m writes", "cache_creation", rated("cache_creation_1h"), 300},
+		{"1h writes do not reduce input", "input", rated("cache_creation_1h"), 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cacheWrite.Billable(tc.key, tc.rated); got != tc.want {
+				t.Errorf("Billable(%q) = %d, want %d", tc.key, got, tc.want)
+			}
+		})
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tokens.Billable(tc.key, tc.rated); got != tc.want {
@@ -46,6 +63,9 @@ func TestTokensPromptTokens(t *testing.T) {
 	tokens := Tokens{"input": 1000, "audio_input": 200, "cache_read": 300, "cache_creation": 50, "output": 500, "reasoning": 100}
 	if got := tokens.PromptTokens(); got != 1350 {
 		t.Errorf("PromptTokens() = %d, want 1350", got)
+	}
+	if got := (Tokens{"input": 10, "cache_creation": 900, "cache_creation_1h": 600}).PromptTokens(); got != 910 {
+		t.Errorf("PromptTokens() counted cache_creation_1h outside cache_creation: got %d, want 910", got)
 	}
 	if got := (Tokens{"output": 10}).PromptTokens(); got != 0 {
 		t.Errorf("PromptTokens() without prompt keys = %d, want 0", got)

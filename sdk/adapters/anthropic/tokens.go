@@ -13,6 +13,7 @@ import (
 //	input_tokens                  -> input
 //	output_tokens                 -> output
 //	cache_creation_input_tokens   -> cache_creation
+//	cache_creation.ephemeral_1h_input_tokens -> cache_creation_1h (part of cache_creation)
 //	cache_read_input_tokens       -> cache_read
 //	server_tool_use.input_tokens  -> server_tool_use_input
 //	server_tool_use.output_tokens -> server_tool_use_output
@@ -68,12 +69,16 @@ func ExtractTokens(body []byte) usage.Tokens {
 // non-streaming response / message_delta (top-level "usage") or a
 // message_start SSE event (usage nested under "message").
 func extractFromObject(body []byte) usage.Tokens {
+	type cacheCreationByTTL struct {
+		Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
+	}
 	var obj struct {
 		Usage *struct {
-			InputTokens              int64 `json:"input_tokens"`
-			OutputTokens             int64 `json:"output_tokens"`
-			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+			InputTokens              int64              `json:"input_tokens"`
+			OutputTokens             int64              `json:"output_tokens"`
+			CacheCreationInputTokens int64              `json:"cache_creation_input_tokens"`
+			CacheCreationByTTL       cacheCreationByTTL `json:"cache_creation"`
+			CacheReadInputTokens     int64              `json:"cache_read_input_tokens"`
 			ServerToolUse            *struct {
 				InputTokens  int64 `json:"input_tokens"`
 				OutputTokens int64 `json:"output_tokens"`
@@ -82,10 +87,11 @@ func extractFromObject(body []byte) usage.Tokens {
 		// message_start wraps usage in message.usage
 		Message *struct {
 			Usage *struct {
-				InputTokens              int64 `json:"input_tokens"`
-				OutputTokens             int64 `json:"output_tokens"`
-				CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-				CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+				InputTokens              int64              `json:"input_tokens"`
+				OutputTokens             int64              `json:"output_tokens"`
+				CacheCreationInputTokens int64              `json:"cache_creation_input_tokens"`
+				CacheCreationByTTL       cacheCreationByTTL `json:"cache_creation"`
+				CacheReadInputTokens     int64              `json:"cache_read_input_tokens"`
 			} `json:"usage,omitempty"`
 		} `json:"message,omitempty"`
 	}
@@ -109,6 +115,9 @@ func extractFromObject(body []byte) usage.Tokens {
 		}
 		if mu.CacheCreationInputTokens > 0 {
 			t["cache_creation"] = mu.CacheCreationInputTokens
+		}
+		if n := mu.CacheCreationByTTL.Ephemeral1hInputTokens; n > 0 {
+			t["cache_creation_1h"] = n
 		}
 		if mu.CacheReadInputTokens > 0 {
 			t["cache_read"] = mu.CacheReadInputTokens
@@ -135,6 +144,9 @@ func extractFromObject(body []byte) usage.Tokens {
 	}
 	if u.CacheCreationInputTokens > 0 {
 		t["cache_creation"] = u.CacheCreationInputTokens
+	}
+	if n := u.CacheCreationByTTL.Ephemeral1hInputTokens; n > 0 {
+		t["cache_creation_1h"] = n
 	}
 	if u.CacheReadInputTokens > 0 {
 		t["cache_read"] = u.CacheReadInputTokens

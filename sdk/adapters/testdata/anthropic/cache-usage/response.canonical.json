@@ -21,6 +21,7 @@
   ],
   "usage": {
     "cache_creation": 1024,
+    "cache_creation_1h": 1024,
     "cache_read": 2048,
     "input": 24,
     "output": 6

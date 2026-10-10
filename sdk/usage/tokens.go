@@ -6,6 +6,7 @@ package usage
 //	input                   prompt tokens neither read from nor written to a prompt cache
 //	cache_read              prompt tokens read from a cache (not in input)
 //	cache_creation          prompt tokens written to a cache (not in input)
+//	cache_creation_1h       part of cache_creation: prompt tokens written to a 1-hour cache
 //	output                  every generated token, reasoning included
 //	reasoning               part of output: reasoning tokens, when the provider reports them apart
 //	audio_output            part of output: audio tokens
@@ -25,6 +26,7 @@ var parts = [...]struct{ part, whole string }{
 	{"accepted_prediction", "output"},
 	{"rejected_prediction", "output"},
 	{"audio_input", "input"},
+	{"cache_creation_1h", "cache_creation"},
 }
 
 // Billable returns the count of key to charge at key's own rate: the stored count less its parts that rated reports as charged at a rate of their own, so no token is charged twice. A part without a rate stays in its whole. The stored counts are not changed.

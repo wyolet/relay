@@ -31,6 +31,7 @@ type anthropicToCanonicalStream struct {
 	outputTokens        int
 	cachedTokens        int
 	cacheCreationTokens int
+	cacheCreation1h     int
 	stopReason          string
 	// structuredOutputSeen is set when a __relay_structured_output tool block
 	// is completed. It prevents handleMessageDelta from overwriting the
@@ -75,9 +76,12 @@ func (s *anthropicToCanonicalStream) handleMessageStart(data []byte) ([]byte, er
 			ID    string `json:"id"`
 			Model string `json:"model"`
 			Usage struct {
-				InputTokens   int `json:"input_tokens"`
-				CacheRead     int `json:"cache_read_input_tokens"`
-				CacheCreation int `json:"cache_creation_input_tokens"`
+				InputTokens        int `json:"input_tokens"`
+				CacheRead          int `json:"cache_read_input_tokens"`
+				CacheCreation      int `json:"cache_creation_input_tokens"`
+				CacheCreationByTTL struct {
+					Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+				} `json:"cache_creation"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -90,6 +94,7 @@ func (s *anthropicToCanonicalStream) handleMessageStart(data []byte) ([]byte, er
 	s.inputTokens = ms.Message.Usage.InputTokens
 	s.cachedTokens = ms.Message.Usage.CacheRead
 	s.cacheCreationTokens = ms.Message.Usage.CacheCreation
+	s.cacheCreation1h = ms.Message.Usage.CacheCreationByTTL.Ephemeral1h
 
 	if s.responseID == "" {
 		s.responseID = fmt.Sprintf("resp_%d", s.created)
@@ -131,7 +136,7 @@ func (s *anthropicToCanonicalStream) handleMessageStop() ([]byte, error) {
 		ID:                s.responseID,
 		Status:            status,
 		FinishReason:      finish,
-		Usage:             anthropicTokens(s.inputTokens, s.outputTokens, s.cachedTokens, s.cacheCreationTokens),
+		Usage:             anthropicTokens(s.inputTokens, s.outputTokens, s.cachedTokens, s.cacheCreationTokens, s.cacheCreation1h),
 		IncompleteDetails: incomplete,
 	}
 

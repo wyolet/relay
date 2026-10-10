@@ -73,7 +73,7 @@ func callAttributes(c *Call) []keyValue {
 
 // appendUsage maps canonical token counts to the conventions' usage attributes. Canonical input excludes cached tokens while the conventions' input_tokens includes them, so it is the sum of the three; output already includes reasoning and audio in both.
 //
-// canonical: accepted_prediction, rejected_prediction, server_tool_use_input, server_tool_use_output dropped — the conventions have no attribute for them; the first two stay counted inside output.
+// canonical: accepted_prediction, rejected_prediction, cache_creation_1h, server_tool_use_input, server_tool_use_output dropped — the conventions have no attribute for them; the first two stay counted inside output, cache_creation_1h inside cache_creation.
 func appendUsage(attrs []keyValue, t usage.Tokens) []keyValue {
 	input, hasInput := int64(0), false
 	for _, k := range [...]string{"input", "cache_read", "cache_creation"} {

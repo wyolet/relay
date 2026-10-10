@@ -111,7 +111,7 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 
 	// Usage: canonical orthogonal-meter map → Anthropic's named fields.
 	if len(resp.Usage) > 0 {
-		u := map[string]int64{
+		u := map[string]any{
 			"input_tokens":  resp.Usage["input"],
 			"output_tokens": resp.Usage["output"],
 		}
@@ -120,6 +120,14 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 		}
 		if v := resp.Usage["cache_creation"]; v > 0 {
 			u["cache_creation_input_tokens"] = v
+		}
+		// The TTL split goes out only when it was reported: without it the
+		// share of 5-minute vs 1-hour writes is unknown.
+		if h := resp.Usage["cache_creation_1h"]; h > 0 {
+			u["cache_creation"] = map[string]int64{
+				"ephemeral_5m_input_tokens": max(resp.Usage["cache_creation"]-h, 0),
+				"ephemeral_1h_input_tokens": h,
+			}
 		}
 		out["usage"] = u
 	}

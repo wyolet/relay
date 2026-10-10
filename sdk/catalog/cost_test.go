@@ -120,6 +120,23 @@ func TestCostBreakdown_TierByPromptLength(t *testing.T) {
 	}
 }
 
+// 1-hour cache writes are counted inside cache_creation; with their own rate they are charged there and the rest of cache_creation at the 5-minute rate.
+func TestBindingCost_CacheCreation1h(t *testing.T) {
+	b := Binding{Pricing: []Rate{
+		{Meter: "tokens.cache_creation", Unit: "per_million", Amount: 1.25},
+		{Meter: "tokens.cache_creation_1h", Unit: "per_million", Amount: 2},
+	}}
+	tokens := usage.Tokens{"cache_creation": 4_000_000, "cache_creation_1h": 1_000_000}
+	cost, unpriced, _ := b.CostBreakdown(tokens)
+	if want := 3*1.25 + 1*2.0; math.Abs(cost-want) > 1e-9 || len(unpriced) != 0 {
+		t.Fatalf("with a 1h rate: cost = %v unpriced = %v, want %v", cost, unpriced, want)
+	}
+	cost, _, _ = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(tokens)
+	if want := 4 * 1.25; math.Abs(cost-want) > 1e-9 {
+		t.Fatalf("without a 1h rate: cost = %v, want %v", cost, want)
+	}
+}
+
 // Reasoning is counted inside output; with a reasoning rate it is charged there and not again at the output rate.
 func TestCostBreakdown_PartChargedOnce(t *testing.T) {
 	b := Binding{Pricing: []Rate{

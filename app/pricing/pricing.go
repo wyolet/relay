@@ -41,7 +41,7 @@ type Spec struct {
 // to responses the upstream reports as served in that tier, under the
 // upstream's own tier name.
 type Rate struct {
-	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.reasoning tokens.audio_input tokens.audio_output tokens.accepted_prediction tokens.rejected_prediction tokens.server_tool_use_input tokens.server_tool_use_output"`
+	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.cache_creation_1h tokens.reasoning tokens.audio_input tokens.audio_output tokens.accepted_prediction tokens.rejected_prediction tokens.server_tool_use_input tokens.server_tool_use_output"`
 	Unit        Unit    `json:"unit"                  yaml:"unit"                  validate:"required,oneof=per_million per_unit"`
 	Amount      float64 `json:"amount"                yaml:"amount"                validate:"gte=0"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty" validate:"gte=0"`
@@ -57,6 +57,7 @@ const (
 	MeterTokensOutput              Meter = "tokens.output"
 	MeterTokensCacheRead           Meter = "tokens.cache_read"
 	MeterTokensCacheCreation       Meter = "tokens.cache_creation"
+	MeterTokensCacheCreation1h     Meter = "tokens.cache_creation_1h"
 	MeterTokensReasoning           Meter = "tokens.reasoning"
 	MeterTokensAudioInput          Meter = "tokens.audio_input"
 	MeterTokensAudioOutput         Meter = "tokens.audio_output"
@@ -79,6 +80,8 @@ func MeterForUsageKey(k string) (Meter, bool) {
 		return MeterTokensCacheRead, true
 	case "cache_creation":
 		return MeterTokensCacheCreation, true
+	case "cache_creation_1h":
+		return MeterTokensCacheCreation1h, true
 	case "reasoning":
 		return MeterTokensReasoning, true
 	case "audio_input":
