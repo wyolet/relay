@@ -1,10 +1,28 @@
 {
   "model": "claude-sonnet-4-5",
-  "system": "You answer questions about the attached handbook.",
+  "system": [
+    {
+      "cache_control": {
+        "ttl": "1h",
+        "type": "ephemeral"
+      },
+      "text": "You answer questions about the attached handbook.",
+      "type": "text"
+    }
+  ],
   "messages": [
     {
       "role": "user",
-      "content": "What is the leave policy?"
+      "content": [
+        {
+          "cache_control": {
+            "ttl": "1h",
+            "type": "ephemeral"
+          },
+          "text": "What is the leave policy?",
+          "type": "text"
+        }
+      ]
     }
   ],
   "tools": [
@@ -18,6 +36,10 @@
             "type": "string"
           }
         }
+      },
+      "cache_control": {
+        "ttl": "1h",
+        "type": "ephemeral"
       }
     }
   ],

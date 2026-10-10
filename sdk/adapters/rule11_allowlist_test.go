@@ -80,8 +80,7 @@ var allowedDrops = map[string][]allowedDrop{
 	"anthropic": {
 		hoistedSystem,
 		developerAsSystem,
-		carriable("SerializeRequest emits cache_control breakpoints (system, last tool, anchored message, ttl) but ParseRequest never reads them back",
-			"cache_config.instructions", "cache_config.tools", "cache_config.ttl", userMsg+".cache_config.anchor"),
+		{paths: []string{"cache_config.ttl"}, folded: "a TTL over 5m rounds to Anthropic's 1h tier"},
 		annotated("canonical: CacheConfig.Key dropped — Anthropic", "cache_config.key"),
 		annotated("canonical: Extensions dropped — no Anthropic-owned", "extensions.*"),
 		annotated("canonical: Metadata dropped — Anthropic metadata", "metadata.*"),
@@ -89,7 +88,8 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: OutputTextPart.Annotations dropped — Anthropic", assistMsg+".content[output_text].annotations*"),
 		annotated("canonical: Message.ID/Status/ProviderData dropped — Anthropic", "input[message:*].id", "input[message:*].status", "input[message:*].provider_data"),
 		annotated("canonical: ImagePart.Detail dropped — Anthropic", userMsg+".content[input_image].detail"),
-		carriable("SerializeRequest emits document blocks but ParseRequest skips them (anthropicBlockToPart), and Filename could ride the document title", userMsg+".content[input_file*"),
+		annotated("canonical: FilePart.MediaType dropped for URL documents", userMsg+".content[input_file].media_type"),
+		carriable("SerializeRequest writes no document title, the wire home for FilePart.Filename", userMsg+".content[input_file*].filename"),
 		annotated("canonical: Reasoning.ID/Status/Summary dropped — a thinking block", reasoning+".id", reasoning+".status", reasoning+".summary*"),
 		annotated("canonical: Format.Name/Description/Strict dropped — the", opts+".output.format.name", opts+".output.format.description", opts+".output.format.strict"),
 		annotated("canonical: Output.Format ignored when caller forces their own", opts+".output.format.*"),
@@ -101,7 +101,6 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: Temperature/TopP/TopK dropped when reasoning is set", opts+".sampling.temperature", opts+".sampling.top_p", opts+".sampling.top_k"),
 		annotated("canonical: FunctionTool.Strict dropped — Anthropic", tool+".strict"),
 		annotated("canonical: FunctionTool.ProviderData dropped — it holds another", tool+".provider_data"),
-		carriable("SerializeRequest writes disable_parallel_tool_use on tool_choice; anthropicParseToolChoice never maps it back to Tools.Parallel", "tools.parallel"),
 	},
 	"gemini": {
 		hoistedSystem,

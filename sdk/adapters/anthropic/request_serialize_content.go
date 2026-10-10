@@ -74,6 +74,7 @@ func canonicalPartToAnthropicBlock(p v1.Part) (map[string]any, error) {
 			}, nil
 		}
 		if v.FileURL != "" {
+			// canonical: FilePart.MediaType dropped for URL documents — an Anthropic url source carries no media type.
 			return map[string]any{
 				"type": "document",
 				"source": map[string]any{

@@ -3,11 +3,7 @@
 // bodies and the canonical v1.Request/v1.Response types.
 //
 // Design decisions and known lossy mappings:
-//   - cache_control: outbound (SerializeRequest) emits breakpoints from the
-//     neutral v1.Request.CacheConfig (instructions/tools) and per-message
-//     ItemCacheConfig anchors. Inbound (ParseRequest) still drops any wire
-//     cache_control — we don't reverse-map vendor cache markers into canonical;
-//     callers express cache intent via cache_config, not vendor fields.
+//   - cache_control: outbound (SerializeRequest) emits breakpoints from the neutral v1.Request.CacheConfig (instructions/tools/ttl) and per-message ItemCacheConfig anchors; inbound (ParseRequest) reads them back into the same fields (request_parse_cache.go).
 //   - server_tool_use blocks (web_search, code_execution): dropped. Not
 //     modeled in canonical v1 output; per spec comment server tools land in v2.
 //   - thinking signature: carried in Reasoning.ProviderData for same-vendor

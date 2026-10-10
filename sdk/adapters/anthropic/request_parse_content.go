@@ -8,7 +8,7 @@ import (
 
 // anthropicMessagesToCanonical converts Anthropic messages to canonical []v1.Item.
 // Each message role maps directly. Content blocks within each message are parsed.
-func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
+func anthropicMessagesToCanonical(raws []json.RawMessage, breakpoints *cacheBreakpoints) ([]v1.Item, error) {
 	var items []v1.Item
 	for _, raw := range raws {
 		var msg struct {
@@ -30,10 +30,12 @@ func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 			for _, tr := range toolResults {
 				items = append(items, tr)
 			}
+			anchor := breakpoints.contentAnchor(msg.Content)
 			if sysItem := unwrapSystemUserTurn(toolResults, textParts); sysItem != nil {
+				sysItem.CacheConfig = anchor
 				items = append(items, sysItem)
 			} else if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleUser, Content: textParts})
+				items = append(items, &v1.Message{Role: v1.RoleUser, Content: textParts, CacheConfig: anchor})
 			}
 
 		case "system":
@@ -46,7 +48,7 @@ func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 				return nil, err
 			}
 			if len(parts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleSystem, Content: parts})
+				items = append(items, &v1.Message{Role: v1.RoleSystem, Content: parts, CacheConfig: breakpoints.contentAnchor(msg.Content)})
 			}
 
 		case "assistant":
@@ -55,6 +57,7 @@ func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 				return nil, err
 			}
 			if msgItem != nil {
+				msgItem.CacheConfig = breakpoints.contentAnchor(msg.Content)
 				items = append(items, msgItem)
 			}
 			items = append(items, toolCalls...)
@@ -63,7 +66,7 @@ func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 			// Unknown roles become user messages.
 			parts, _ := anthropicContentToCanonicalParts(msg.Content)
 			if len(parts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleUser, Content: parts})
+				items = append(items, &v1.Message{Role: v1.RoleUser, Content: parts, CacheConfig: breakpoints.contentAnchor(msg.Content)})
 			}
 		}
 	}
@@ -104,8 +107,8 @@ func anthropicContentToCanonicalParts(raw json.RawMessage) ([]v1.Part, error) {
 	return parts, nil
 }
 
-// anthropicBlockToPart maps a text or image content block to a canonical part.
-// Any other block type (or an image with no usable source) yields nil.
+// anthropicBlockToPart maps a text, image or document content block to a canonical part.
+// Any other block type (or an image or document with no usable source) yields nil.
 func anthropicBlockToPart(raw json.RawMessage, blockType string) v1.Part {
 	switch blockType {
 	case "text":
@@ -118,7 +121,38 @@ func anthropicBlockToPart(raw json.RawMessage, blockType string) v1.Part {
 		if url := anthropicImageBlockToURL(raw); url != "" {
 			return &v1.ImagePart{ImageURL: url}
 		}
+	case "document":
+		if p := anthropicDocumentBlockToPart(raw); p != nil {
+			return p
+		}
 	}
+	return nil
+}
+
+// anthropicDocumentBlockToPart inverts the FilePart → document mapping of canonicalPartToAnthropicBlock.
+func anthropicDocumentBlockToPart(raw json.RawMessage) *v1.FilePart {
+	// canonical: document title/context/citations dropped — FilePart has no slot for them.
+	var block struct {
+		Source struct {
+			Type      string `json:"type"`
+			URL       string `json:"url"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+			FileID    string `json:"file_id"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(raw, &block); err != nil {
+		return nil
+	}
+	switch block.Source.Type {
+	case "base64":
+		return &v1.FilePart{FileData: block.Source.Data, MediaType: block.Source.MediaType}
+	case "url":
+		return &v1.FilePart{FileURL: block.Source.URL}
+	case "file":
+		return &v1.FilePart{FileID: block.Source.FileID}
+	}
+	// canonical: document text and content sources dropped — FilePart.FileData is base64 file bytes, and Anthropic accepts base64 documents only as PDF.
 	return nil
 }
 

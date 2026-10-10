@@ -37,25 +37,31 @@ func anthropicParseTool(raw json.RawMessage) (v1.Tool, error) {
 	}, nil
 }
 
-// anthropicParseToolChoice decodes Anthropic tool_choice JSON into canonical *v1.ToolChoice.
-func anthropicParseToolChoice(raw json.RawMessage) *v1.ToolChoice {
+// anthropicParseToolChoice decodes Anthropic tool_choice JSON into canonical *v1.ToolChoice and the parallel-calls setting, which Anthropic carries on tool_choice as disable_parallel_tool_use.
+func anthropicParseToolChoice(raw json.RawMessage) (*v1.ToolChoice, *bool) {
 	var tc struct {
-		Type string `json:"type"`
-		Name string `json:"name,omitempty"`
+		Type                   string `json:"type"`
+		Name                   string `json:"name,omitempty"`
+		DisableParallelToolUse *bool  `json:"disable_parallel_tool_use"`
 	}
 	if err := json.Unmarshal(raw, &tc); err != nil {
-		return nil
+		return nil, nil
+	}
+	var parallel *bool
+	if tc.DisableParallelToolUse != nil {
+		p := !*tc.DisableParallelToolUse
+		parallel = &p
 	}
 	switch tc.Type {
 	case "auto":
-		return &v1.ToolChoice{Mode: "auto"}
+		return &v1.ToolChoice{Mode: "auto"}, parallel
 	case "any":
-		return &v1.ToolChoice{Mode: "required"}
+		return &v1.ToolChoice{Mode: "required"}, parallel
 	case "none":
-		return &v1.ToolChoice{Mode: "none"}
+		return &v1.ToolChoice{Mode: "none"}, parallel
 	case "tool":
-		return &v1.ToolChoice{Mode: "function", FunctionName: tc.Name}
+		return &v1.ToolChoice{Mode: "function", FunctionName: tc.Name}, parallel
 	default:
-		return &v1.ToolChoice{Mode: tc.Type}
+		return &v1.ToolChoice{Mode: tc.Type}, parallel
 	}
 }

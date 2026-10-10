@@ -1,6 +1,5 @@
 {
   "model": "claude-sonnet-4-5",
-  "instructions": "You answer questions about the attached handbook.",
   "input": [
     {
       "type": "message",
@@ -8,12 +7,9 @@
       "content": [
         {
           "type": "input_text",
-          "text": "What is the leave policy?"
+          "text": "Weather in Paris and Lima?"
         }
-      ],
-      "cache_config": {
-        "anchor": true
-      }
+      ]
     }
   ],
   "model_config": {
@@ -27,23 +23,23 @@
     "definitions": [
       {
         "type": "function",
-        "name": "lookup",
-        "description": "Look a section up.",
+        "name": "get_weather",
+        "description": "Current weather for a city.",
         "parameters": {
           "type": "object",
           "properties": {
-            "q": {
+            "city": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "city"
+          ]
         }
       }
-    ]
-  },
-  "cache_config": {
-    "instructions": true,
-    "tools": true,
-    "ttl": "1h"
+    ],
+    "choice": "required",
+    "parallel": false
   },
   "output_mode": "sync"
 }
