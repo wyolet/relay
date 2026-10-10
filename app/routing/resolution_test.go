@@ -1,45 +1,22 @@
 package routing_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/slug"
 )
-
-// Minimal in-process list adapters mirroring app/catalog tests.
-type provListR []*provider.Provider
-type hostListR []*host.Host
-type polListR []*policy.Policy
-type modListR []*model.Model
-type keyListR []*hostkey.HostKey
-type rlListR []*ratelimit.RateLimit
-type rkListR []*key.Key
-type rcListR []*pricing.Pricing
-type bndListR []*binding.Binding
-
-func (l bndListR) List(context.Context) ([]*binding.Binding, error)    { return l, nil }
-func (l provListR) List(context.Context) ([]*provider.Provider, error) { return l, nil }
-func (l hostListR) List(context.Context) ([]*host.Host, error)         { return l, nil }
-func (l polListR) List(context.Context) ([]*policy.Policy, error)      { return l, nil }
-func (l modListR) List(context.Context) ([]*model.Model, error)        { return l, nil }
-func (l keyListR) List(context.Context) ([]*hostkey.HostKey, error)    { return l, nil }
-func (l rlListR) List(context.Context) ([]*ratelimit.RateLimit, error) { return l, nil }
-func (l rkListR) List(context.Context) ([]*key.Key, error)             { return l, nil }
-func (l rcListR) List(context.Context) ([]*pricing.Pricing, error)     { return l, nil }
 
 func mkSnap(real string) model.Snapshot {
 	s := slug.From(real)
@@ -102,20 +79,15 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *policy.Policy) {
 		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
-	c := catalog.New(
-		provListR{prov},
-		hostListR{h},
-		polListR{tier, pol},
-		modListR{m},
-		keyListR{hk},
-		rlListR{},
-		rkListR{rk},
-		rcListR{},
-		bndListR{b},
-	)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h},
+		Policies:  []*policy.Policy{tier, pol},
+		Models:    []*model.Model{m},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{b},
+	}.Load(t)
 	return c, pol
 }
 
@@ -209,11 +181,12 @@ func TestResolve_HostPinIndex(t *testing.T) {
 		Spec: binding.Spec{ModelID: modID, HostID: hostB, Adapter: adapters.OpenAI},
 	}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{}, bndListR{bA, bB})
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	snap := c.Current()
+	snap := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{hA, hB},
+		Models:    []*model.Model{m},
+		Bindings:  []*binding.Binding{bA, bB},
+	}.Load(t).Current()
 
 	for _, tc := range []struct{ send, wantHostID string }{
 		{"gpt-5-5@openai", hostA},
@@ -283,11 +256,15 @@ func TestResolve_ViaStandaloneBinding(t *testing.T) {
 		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
-	c := catalog.New(provListR{prov}, hostListR{h}, polListR{tier, pol}, modListR{m},
-		keyListR{hk}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b})
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h},
+		Policies:  []*policy.Policy{tier, pol},
+		Models:    []*model.Model{m},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{b},
+	}.Load(t)
 	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5", Policy: pol})
 	if err != nil {
 		t.Fatalf("Resolve via standalone binding: %v", err)
@@ -339,10 +316,15 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	keyB := &hostkey.HostKey{Meta: meta.Metadata{ID: hkB, Name: "kb", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: hostkey.Spec{HostID: hostB, PolicyID: tierBID, Value: "sk-b", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
 	rk := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: key.Spec{PolicyID: custPolID, KeyHash: "h"}}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierA, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{bA, bB})
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{hA, hB},
+		Policies:  []*policy.Policy{custPol, tierA, tierB},
+		Models:    []*model.Model{m},
+		HostKeys:  []*hostkey.HostKey{keyA, keyB},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{bA, bB},
+	}.Load(t)
 	r := routing.New(c)
 
 	// @openai: keyA's tier grants everything the host serves → succeeds.
@@ -384,10 +366,14 @@ func TestResolve_NoAuthHostInjectsAnonKey(t *testing.T) {
 	pol := &policy.Policy{Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{ModelIDs: []string{modID}}}
 	rk := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: key.Spec{PolicyID: polID, KeyHash: "h"}}
 
-	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m}, keyListR{}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b})
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h},
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{m},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{b},
+	}.Load(t)
 	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "qwen3", Policy: pol})
 	if err != nil {
 		t.Fatalf("no-auth host should resolve without a real key, got %v", err)

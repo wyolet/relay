@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -66,11 +67,15 @@ func aliasCatalog(t *testing.T) (*catalog.Catalog, *policy.Policy) {
 		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
-	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m1, m2},
-		keyListR{hk}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b1, b2})
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*host.Host{h},
+		Policies:  []*policy.Policy{pol},
+		Models:    []*model.Model{m1, m2},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Keys:      []*key.Key{rk},
+		Bindings:  []*binding.Binding{b1, b2},
+	}.Load(t)
 	return c, pol
 }
 
