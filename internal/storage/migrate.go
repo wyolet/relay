@@ -14,6 +14,9 @@ import (
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
 
+// MigrateUp runs the pending up-migrations, as boot does, for a deployment that applies them in a step of its own before the pods roll.
+func MigrateUp(dsn string) error { return runMigrations(dsn) }
+
 // runMigrations runs all pending up-migrations against dsn.
 // It is a no-op when no new migrations exist.
 func runMigrations(dsn string) error {

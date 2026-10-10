@@ -13,7 +13,8 @@ single self-migrating binary serving the **inference (data) plane** and the
 | Component | Kind | Purpose | Toggle |
 |---|---|---|---|
 | relay | Deployment + 2 Services | data plane `:8080` + control plane `:8081` (one binary) | always |
-| PostgreSQL | StatefulSet + PVC | config truth; relay self-migrates on boot | `postgresql.enabled` |
+| Migrations | Job (pre-upgrade hook) | `relay migrate up` before the pods roll | `migrations.job.enabled` |
+| PostgreSQL | StatefulSet + PVC | config truth | `postgresql.enabled` |
 | ClickHouse | StatefulSet + PVC | usage + payload events | `clickhouse.enabled` |
 | Valkey | StatefulSet + PVC | hot state + rate-limit counters | `valkey.enabled` |
 | HPA / PDB | — | scaling + disruption budget | `autoscaling`, `podDisruptionBudget` |
@@ -26,8 +27,7 @@ single self-migrating binary serving the **inference (data) plane** and the
 - **One binary, two planes.** `RELAY_MODE` is `oss`/`cloud`, not a plane split.
   Data plane on `RELAY_PORT` (8080, `/openai/v1/*`, `/anthropic/v1/*`, canonical `/v1/*`, `/healthz`); control plane on
   `RELAY_CONTROL_PORT` (8081, UI/CRUD/`/metrics`/`/version`).
-- **Self-migrating.** Relay runs PG migrations on boot under a golang-migrate
-  advisory lock, so concurrent replicas are safe — no separate migration Job.
+- **Migrations run once per upgrade.** See [Migrations](#migrations).
 - **Self-seeding.** The lean image bakes the catalog at `/catalog` with
   `RELAY_AUTO_SEED_IF_EMPTY=1`; an empty PG is seeded on first boot.
 - **Cluster mode on.** `RELAY_CLUSTER_MODE=on` keeps every pod's in-memory
@@ -60,6 +60,33 @@ Required values (template fails fast otherwise): `secrets.masterKey`,
 holding `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN`, `RELAY_CH_DSN`
 (+ `postgres-password` / `clickhouse-password` if bundling those stores, and
 `RELAY_REDIS_PASSWORD` to give the bundled Valkey a password).
+
+## Migrations
+
+On `helm upgrade`, a pre-upgrade hook Job (`<fullname>-migrate`) runs `relay migrate up` with the relay pods' image, env, Secret and ServiceAccount, after waiting for the bundled Postgres. The pods roll only once it succeeds, and they start with `RELAY_MIGRATE_ON_BOOT=off`, so no pod applies a migration and a pod stopped mid-rollout cannot leave the schema half-recorded. If the Job fails, the upgrade fails and the old pods keep serving; a failed Job is kept for `kubectl logs job/<fullname>-migrate` and replaced by the next upgrade. The Job reads the Secret and ConfigMap as they stand before the upgrade, so change the Postgres DSN or password in an upgrade of its own.
+
+A fresh `helm install` runs no Job — there is no Secret or Postgres yet when pre-install hooks run — and the pods migrate on boot under a golang-migrate advisory lock. `helm upgrade --no-hooks` skips the Job while the pods still start with migrations off; don't combine it with a release that adds migrations.
+
+Argo CD renders the chart with `helm template` and runs the Job as a PreSync hook on every sync, the first one included. Its pods keep migrating on boot (a no-op once the Job has run). With the bundled Postgres, sync the first time with `migrations.job.enabled: false`, since Postgres does not exist yet when PreSync runs, then turn it back on.
+
+Set `migrations.job.enabled: false` to drop the Job and migrate on boot on every install and upgrade.
+
+### Recovering from a dirty schema version
+
+If a migration is interrupted, the schema is recorded as dirty at that version and every later migrate (the Job, or a pod migrating on boot) fails with `Dirty database version N`. To recover:
+
+1. Read the state: `kubectl -n relay exec -it sts/relay-postgresql -- psql -U relay relay -c 'SELECT version, dirty FROM schema_migrations'` (with an external Postgres, run the query there).
+2. Open `migrations/postgres/<N>_*.up.sql` at the tag of the relay release you are upgrading to and check that every object it creates or alters (tables, columns, indexes, constraints, functions, triggers) is present in the database. Each file runs in a single transaction, so it is normally all there or none of it.
+3. All present: record N as applied with `relay migrate force N`. None present: record the previous version with `relay migrate force <N-1>`. Partly present: repair by hand or restore the backup before forcing anything.
+4. Run the upgrade again; the Job applies whatever is still pending.
+
+`relay migrate force` needs only `RELAY_PG_DSN`. With the bundled Postgres, forward it and run the release image locally:
+
+```sh
+kubectl -n relay port-forward svc/relay-postgresql 5432:5432 &
+docker run --rm --network host -e RELAY_PG_DSN='postgres://relay:<password>@127.0.0.1:5432/relay?sslmode=disable' \
+  ghcr.io/wyolet/relay:<version> migrate force <N>
+```
 
 ## Data store access
 
