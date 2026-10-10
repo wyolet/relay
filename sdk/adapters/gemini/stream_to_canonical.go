@@ -85,7 +85,10 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 	// Emit generation.created on first frame.
 	if !s.lifecycleEmitted {
 		s.created = time.Now().Unix()
-		s.responseID = fmt.Sprintf("gemini-%d", s.created)
+		s.responseID = gr.ResponseID
+		if s.responseID == "" {
+			s.responseID = fmt.Sprintf("gemini-%d", s.created)
+		}
 		s.model = gr.ModelVersion
 		s.lifecycleEmitted = true
 
@@ -113,6 +116,7 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 	if cand.Content == nil {
 		// Terminal frame with no content but finishReason/usage.
 		if cand.FinishReason != "" || gr.UsageMetadata != nil {
+			out = append(out, s.closeCurrentItem()...)
 			out = append(out, s.emitCompletion(cand.FinishReason, gr.UsageMetadata)...)
 		}
 		return out, nil

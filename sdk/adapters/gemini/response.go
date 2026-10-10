@@ -19,10 +19,13 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 	}
 
 	resp := &v1.Response{
-		ID:        fmt.Sprintf("gemini-%d", time.Now().UnixNano()),
+		ID:        gr.ResponseID,
 		Object:    "response",
 		CreatedAt: time.Now().Unix(),
 		Model:     gr.ModelVersion,
+	}
+	if resp.ID == "" {
+		resp.ID = fmt.Sprintf("gemini-%d", time.Now().UnixNano())
 	}
 
 	if len(gr.Candidates) > 0 {
@@ -166,6 +169,9 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 
 	if resp.Model != "" {
 		out["modelVersion"] = resp.Model
+	}
+	if resp.ID != "" {
+		out["responseId"] = resp.ID
 	}
 
 	return json.Marshal(out)

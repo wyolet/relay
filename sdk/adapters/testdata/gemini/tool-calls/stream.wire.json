@@ -19,7 +19,8 @@
           "index": 0
         }
       ],
-      "modelVersion": "gemini-2.5-flash"
+      "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>"
     }
   },
   {
@@ -42,7 +43,8 @@
           "index": 0
         }
       ],
-      "modelVersion": "gemini-2.5-flash"
+      "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>"
     }
   },
   {
@@ -58,6 +60,7 @@
         }
       ],
       "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>",
       "usageMetadata": {
         "candidatesTokenCount": 20,
         "promptTokenCount": 90

@@ -86,6 +86,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 				Index:   0,
 			}},
 			ModelVersion: s.model,
+			ResponseID:   s.responseID,
 		}
 		return geminiSSEBytes(frame)
 
@@ -110,6 +111,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 				Index: 0,
 			}},
 			ModelVersion: s.model,
+			ResponseID:   s.responseID,
 		}
 		return geminiSSEBytes(frame)
 
@@ -129,6 +131,9 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		}
 		if len(e.Usage) > 0 {
 			frame["usageMetadata"] = canonicalUsageToGemini(e.Usage)
+		}
+		if s.responseID != "" {
+			frame["responseId"] = s.responseID
 		}
 		// canonical: service_tier dropped — same reason as SerializeResponse.
 		b, err := json.Marshal(frame)

@@ -46,10 +46,6 @@ var lossyRoundTrips = func() map[string]lossyRoundTrip {
 	for _, c := range []string{"service-tier", "text"} {
 		m["testdata/anthropic/"+c+" "+responseInput] = lossyRoundTrip{why: "SerializeResponse drops service_tier (annotated): the canonical tier is the serving upstream's lane name, which usage.service_tier would mislabel when another vendor served it"}
 	}
-	for _, input := range []string{responseInput, streamInput} {
-		m["testdata/gemini/cache-usage "+input] = lossyRoundTrip{bug: true, why: "canonicalUsageToGemini writes promptTokenCount without the cached tokens Gemini counts inside it, so input is lost on re-parse and a Gemini client reads a prompt smaller than its cached part"}
-	}
-	m["testdata/gemini/safety "+streamInput] = lossyRoundTrip{bug: true, why: "the to-canonical stream never closes the open message item when the terminal frame has no content (finishReason SAFETY, no parts): no item.completed, unlike the prompt-blocked path"}
 	return m
 }()
 

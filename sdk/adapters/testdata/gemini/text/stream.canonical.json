@@ -2,7 +2,7 @@
   {
     "event": "generation.created",
     "data": {
-      "id": "gemini-<now>",
+      "id": "mT7GaKvJGc6Rz7IPu5qG8Ac",
       "model": "gemini-2.5-flash"
     }
   },
@@ -54,7 +54,7 @@
   {
     "event": "generation.completed",
     "data": {
-      "id": "gemini-<now>",
+      "id": "mT7GaKvJGc6Rz7IPu5qG8Ac",
       "status": "completed",
       "finish_reason": "stop",
       "usage": {

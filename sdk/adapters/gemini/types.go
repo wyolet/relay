@@ -116,6 +116,7 @@ type geminiResponse struct {
 	Candidates    []candidate    `json:"candidates"`
 	UsageMetadata *usageMetadata `json:"usageMetadata,omitempty"`
 	ModelVersion  string         `json:"modelVersion,omitempty"`
+	ResponseID    string         `json:"responseId,omitempty"`
 	// PromptFeedback is set when the prompt itself was blocked (blockReason),
 	// in which case there are no candidates. Kept raw for Extensions.
 	PromptFeedback json.RawMessage `json:"promptFeedback,omitempty"`
