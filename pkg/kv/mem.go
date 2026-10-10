@@ -129,7 +129,7 @@ func (m *Mem) Incr(_ context.Context, key string, delta int64) (int64, error) {
 		if !e.expired() {
 			n, err := strconv.ParseInt(string(e.value), 10, 64)
 			if err != nil {
-				return 0, fmt.Errorf("state: Incr on non-integer key %q: %w", key, err)
+				return 0, fmt.Errorf("state: Incr on non-integer key %s: %w", redactKey(key), err)
 			}
 			cur = n
 			deadline = e.deadline
