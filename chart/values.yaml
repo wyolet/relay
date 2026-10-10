@@ -234,6 +234,10 @@ external:
 resources:
   requests: { cpu: 250m, memory: 256Mi }
   limits:   { cpu: "1",  memory: 1Gi }
+# -- The busybox wait-for-stores init containers (relay pods + migration Job).
+initResources:
+  requests: { cpu: 10m, memory: 16Mi }
+  limits:   { cpu: 100m, memory: 32Mi }
 # -- GOMEMLIMIT/GOGC are part of relay's deployment story (allocation-conscious
 # hot path). Defaults track the memory limit; tune for your traffic.
 goMemLimit: "900MiB"
@@ -335,6 +339,7 @@ podLabels: {}
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
+  runAsGroup: 65532
   fsGroup: 65532
   seccompProfile:
     type: RuntimeDefault

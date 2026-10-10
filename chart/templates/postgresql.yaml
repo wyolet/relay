@@ -77,13 +77,23 @@ spec:
             {{- toYaml .Values.postgresql.primary.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
-  {{- if .Values.postgresql.primary.persistence.existingClaim }}
+            # Unix socket + lock file.
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  {{- if .Values.postgresql.primary.persistence.existingClaim }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ .Values.postgresql.primary.persistence.existingClaim }}
@@ -100,7 +110,6 @@ spec:
           requests:
             storage: {{ .Values.postgresql.primary.persistence.size | quote }}
   {{- else }}
-      volumes:
         - name: data
           emptyDir: {}
   {{- end }}
