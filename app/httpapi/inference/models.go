@@ -286,7 +286,7 @@ func tierThresholds(p *pricing.Pricing) []int {
 	var out []int
 	seen := map[int]struct{}{}
 	for _, r := range p.Spec.Rates {
-		if r.AboveTokens <= 0 {
+		if r.AboveTokens <= 0 || r.ServiceTier != "" {
 			continue
 		}
 		if _, dup := seen[r.AboveTokens]; dup {

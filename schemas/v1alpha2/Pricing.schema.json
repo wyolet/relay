@@ -14,6 +14,9 @@
         "meter": {
           "type": "string"
         },
+        "serviceTier": {
+          "type": "string"
+        },
         "unit": {
           "type": "string"
         }

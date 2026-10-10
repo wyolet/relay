@@ -36,6 +36,7 @@ func ToPricing(d PricingDTO, idx Resolver) (*pricing.Pricing, error) {
 			Unit:        pricing.Unit(r.Unit),
 			Amount:      r.Amount,
 			AboveTokens: r.AboveTokens,
+			ServiceTier: r.ServiceTier,
 		})
 	}
 
@@ -74,6 +75,7 @@ func FromPricing(p *pricing.Pricing, rev ReverseResolver) PricingDTO {
 			Unit:        string(r.Unit),
 			Amount:      r.Amount,
 			AboveTokens: r.AboveTokens,
+			ServiceTier: r.ServiceTier,
 		})
 	}
 

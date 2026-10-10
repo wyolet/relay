@@ -13,12 +13,15 @@ import (
 
 // stubTranslator hands buildEvent fixed canonical usage without pulling a
 // real vendor adapter into the test binary.
-type stubTranslator struct{ tokens sdkusage.Tokens }
+type stubTranslator struct {
+	tokens      sdkusage.Tokens
+	serviceTier string
+}
 
 func (stubTranslator) ParseRequest([]byte) (*v1.Request, error)     { return nil, nil }
 func (stubTranslator) SerializeRequest(*v1.Request) ([]byte, error) { return nil, nil }
 func (s stubTranslator) ParseResponse([]byte) (*v1.Response, error) {
-	return &v1.Response{Usage: s.tokens}, nil
+	return &v1.Response{Usage: s.tokens, ServiceTier: s.serviceTier}, nil
 }
 func (stubTranslator) SerializeResponse(*v1.Response, *v1.Request) ([]byte, error) {
 	return nil, nil
@@ -107,6 +110,28 @@ func TestBuildEvent_CostStamping(t *testing.T) {
 	ev5 := buildEvent(lc, 200, "", "", body, nil)
 	if ev5.CostNanos != nil {
 		t.Fatal("nil pricer: want unpriced")
+	}
+}
+
+// The served service tier picks the sheet's tier rates and is recorded on the
+// event; a tier the sheet does not price falls back to the base rates.
+func TestBuildEvent_ServiceTierPricing(t *testing.T) {
+	sheet := testSheet()
+	sheet.Spec.Rates = append(sheet.Spec.Rates, pricing.Rate{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 10, ServiceTier: "priority"})
+	pricer := testPricer(map[string]*pricing.Pricing{"pr-1": sheet})
+	tokens := sdkusage.Tokens{"input": 1000, "output": 200}
+
+	for serviceTier, want := range map[string]int64{"": 10_000_000, "priority": 15_000_000, "flex": 10_000_000} {
+		lc := lifecycle.NewContext("req-t", "pipeline", time.Now())
+		lc.PricingID = "pr-1"
+		lc.Translator = stubTranslator{tokens: tokens, serviceTier: serviceTier}
+		ev := buildEvent(lc, 200, "", "", []byte(`{}`), pricer)
+		if ev.CostNanos == nil || *ev.CostNanos != want {
+			t.Fatalf("service tier %q: cost %v, want %d", serviceTier, ev.CostNanos, want)
+		}
+		if got := ev.Extras[ExtrasKeyServiceTier]; got != serviceTier {
+			t.Fatalf("service tier %q: extras %q", serviceTier, got)
+		}
 	}
 }
 

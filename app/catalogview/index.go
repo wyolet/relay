@@ -175,7 +175,7 @@ func (idx *index) pricingFor(b *binding.Binding) *PricingView {
 	}
 	out := &PricingView{ID: p.Meta.ID, Name: p.Meta.Name, Currency: p.Spec.Currency, Rates: make([]Rate, 0, len(p.Spec.Rates))}
 	for _, r := range p.Spec.Rates {
-		out.Rates = append(out.Rates, Rate{Meter: string(r.Meter), Unit: string(r.Unit), Amount: r.Amount, AboveTokens: r.AboveTokens})
+		out.Rates = append(out.Rates, Rate{Meter: string(r.Meter), Unit: string(r.Unit), Amount: r.Amount, AboveTokens: r.AboveTokens, ServiceTier: r.ServiceTier})
 	}
 	return out
 }

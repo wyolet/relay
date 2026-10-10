@@ -24,10 +24,11 @@ type Pricer struct {
 func NewPricer(lookup PricingLookup) *Pricer { return &Pricer{lookup: lookup} }
 
 // Price returns the total nano-USD cost + per-meter breakdown for the
-// tokens under pricingID. ok=false means unpriced — no pricing id stamped,
-// the rate sheet is gone from the snapshot, or no token key matched a rate.
-// Unpriced is never reported as a zero cost.
-func (p *Pricer) Price(pricingID string, tokens sdkusage.Tokens) (nanos int64, breakdown map[string]int64, ok bool) {
+// tokens under pricingID, at the rates of the service tier the upstream
+// reported serving (empty = base rates). ok=false means unpriced — no pricing
+// id stamped, the rate sheet is gone from the snapshot, or no token key
+// matched a rate. Unpriced is never reported as a zero cost.
+func (p *Pricer) Price(pricingID string, tokens sdkusage.Tokens, serviceTier string) (nanos int64, breakdown map[string]int64, ok bool) {
 	if p == nil || p.lookup == nil || pricingID == "" || len(tokens) == 0 {
 		return 0, nil, false
 	}
@@ -35,5 +36,5 @@ func (p *Pricer) Price(pricingID string, tokens sdkusage.Tokens) (nanos int64, b
 	if !found {
 		return 0, nil, false
 	}
-	return pr.CostNanos(tokens)
+	return pr.CostNanosForServiceTier(tokens, serviceTier)
 }

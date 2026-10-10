@@ -57,7 +57,7 @@ func (o *streamUsageObserver) Result() (any, error) {
 	if status == 0 {
 		status = http.StatusOK
 	}
-	out := buildEventWithSummary(o.lc, status, "", "", s.Tokens, string(s.FinishReason), o.pricer)
+	out := buildEventWithSummary(o.lc, status, "", "", s, o.pricer)
 	stampInstance(out, o.instance)
 	return out, nil
 }
