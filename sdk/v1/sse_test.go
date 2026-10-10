@@ -57,6 +57,69 @@ func TestParseSSEChunk(t *testing.T) {
 			wantData:  "",
 			wantOK:    false,
 		},
+		{
+			name:      "empty data line",
+			chunk:     []byte("event: ping\ndata:\n\n"),
+			wantEvent: "ping",
+			wantData:  "",
+			wantOK:    false,
+		},
+		{
+			name:      "multi-line data joins with LF",
+			chunk:     []byte("event: e\ndata: {\"a\":\ndata: 1}\ndata: x\n\n"),
+			wantEvent: "e",
+			wantData:  "{\"a\":\n1}\nx",
+			wantOK:    true,
+		},
+		{
+			name:      "CRLF line endings",
+			chunk:     []byte("event: e\r\ndata: a\r\ndata: b\r\n\r\n"),
+			wantEvent: "e",
+			wantData:  "a\nb",
+			wantOK:    true,
+		},
+		{
+			name:      "CR line endings",
+			chunk:     []byte("event: e\rdata: a\rdata: b\r\r"),
+			wantEvent: "e",
+			wantData:  "a\nb",
+			wantOK:    true,
+		},
+		{
+			name:      "comment lines ignored",
+			chunk:     []byte(": keepalive\nevent: e\n:data: no\ndata: x\n\n"),
+			wantEvent: "e",
+			wantData:  "x",
+			wantOK:    true,
+		},
+		{
+			name:      "strips exactly one leading space",
+			chunk:     []byte("event:  e\ndata:  x \n\n"),
+			wantEvent: " e",
+			wantData:  " x ",
+			wantOK:    true,
+		},
+		{
+			name:      "no space after colon",
+			chunk:     []byte("event:e\ndata:x\n\n"),
+			wantEvent: "e",
+			wantData:  "x",
+			wantOK:    true,
+		},
+		{
+			name:      "last event line wins",
+			chunk:     []byte("event: a\ndata: x\nevent: b\n\n"),
+			wantEvent: "b",
+			wantData:  "x",
+			wantOK:    true,
+		},
+		{
+			name:      "first frame with data is parsed",
+			chunk:     []byte("event: a\n\nevent: b\ndata: x\n\nevent: c\ndata: y\n\n"),
+			wantEvent: "b",
+			wantData:  "x",
+			wantOK:    true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -72,6 +135,29 @@ func TestParseSSEChunk(t *testing.T) {
 				t.Errorf("ok: got %v, want %v", ok, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestParseSSEChunkMultiLineLeavesChunkIntact(t *testing.T) {
+	chunk := []byte("data: a\ndata: b\ndata: c\n\n")
+	want := string(chunk)
+	if _, data, _ := ParseSSEChunk(chunk); string(data) != "a\nb\nc" {
+		t.Fatalf("data: got %q", data)
+	}
+	if string(chunk) != want {
+		t.Errorf("chunk modified: got %q, want %q", chunk, want)
+	}
+}
+
+func TestParseSSEChunkAllocs(t *testing.T) {
+	dataOnly := []byte("data: {\"x\":1}\n\n")
+	if n := testing.AllocsPerRun(100, func() { ParseSSEChunk(dataOnly) }); n != 0 {
+		t.Errorf("data-only frame: %v allocs, want 0", n)
+	}
+	// The one allocation is the event name's string conversion.
+	withEvent := []byte("event: item.delta\ndata: {\"x\":1}\n\n")
+	if n := testing.AllocsPerRun(100, func() { ParseSSEChunk(withEvent) }); n != 1 {
+		t.Errorf("event+data frame: %v allocs, want 1", n)
 	}
 }
 
