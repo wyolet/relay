@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/wyolet/relay/sdk/internal/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -28,14 +29,26 @@ type responsesToCanonicalStream struct {
 }
 
 func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
-	event, data, ok := ParseResponsesSSEChunk(chunk)
-	if !ok {
-		return nil, nil
+	var out []byte
+	sc := sse.NewScanner(chunk)
+	for sc.Next() {
+		b, err := s.translateEvent(sc.Event(), sc.Data())
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = b
+		} else {
+			out = append(out, b...)
+		}
 	}
+	return out, nil
+}
 
+func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte, error) {
 	var frames []v1.SSEFrame
 
-	switch event {
+	switch string(event) {
 	case ResponsesEventCreated:
 		var ev ResponsesCreatedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {

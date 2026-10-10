@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/wyolet/relay/sdk/internal/sse"
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -103,16 +104,28 @@ func ccStreamErrorFrame(data []byte) (v1.SSEFrame, bool) {
 }
 
 func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
-	// Parse the CC SSE chunk.
-	_, data, ok := v1.ParseSSEChunk(chunk)
-	if !ok {
-		return nil, nil
+	var out []byte
+	sc := sse.NewScanner(chunk)
+	for sc.Next() {
+		b, err := s.translateEvent(sc.Data())
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = b
+		} else {
+			out = append(out, b...)
+		}
 	}
+	return out, nil
+}
+
+func (s *ccToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 	if s.errorEmitted {
 		return nil, nil
 	}
 
-	if bytes.Equal(data, []byte("[DONE]")) {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return s.handleDone()
 	}
 

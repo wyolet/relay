@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/sdk/internal/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -42,11 +43,23 @@ type geminiToCanonicalStream struct {
 }
 
 func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
-	_, data, ok := v1.ParseSSEChunk(chunk)
-	if !ok {
-		return nil, nil
+	var out []byte
+	sc := sse.NewScanner(chunk)
+	for sc.Next() {
+		b, err := s.translateEvent(sc.Data())
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = b
+		} else {
+			out = append(out, b...)
+		}
 	}
+	return out, nil
+}
 
+func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 	var gr geminiResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
 		// Try error shape.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wyolet/relay/sdk/internal/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -40,12 +41,24 @@ type anthropicToCanonicalStream struct {
 }
 
 func (s *anthropicToCanonicalStream) translate(chunk []byte) ([]byte, error) {
-	event, data, ok := v1.ParseSSEChunk(chunk)
-	if !ok {
-		return nil, nil
+	var out []byte
+	sc := sse.NewScanner(chunk)
+	for sc.Next() {
+		b, err := s.translateEvent(sc.Event(), sc.Data())
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = b
+		} else {
+			out = append(out, b...)
+		}
 	}
+	return out, nil
+}
 
-	switch event {
+func (s *anthropicToCanonicalStream) translateEvent(event, data []byte) ([]byte, error) {
+	switch string(event) {
 	case "message_start":
 		return s.handleMessageStart(data)
 	case "content_block_start":
