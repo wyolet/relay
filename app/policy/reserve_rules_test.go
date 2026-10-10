@@ -21,11 +21,11 @@ func TestReserveInbound_RevokedRuleStaysFirst(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReserveInbound: %v", err)
 	}
-	keys := store.lastKeys()
+	keys := lastKeys(store)
 	if len(keys) == 0 || keys[0] != "limit:{team:team-1}:jti:jti-1" {
 		t.Fatalf("first key = %v, want the revocation key first", keys)
 	}
-	if got := store.reserveCalls(); got != 1 {
+	if got := reserveCalls(store); got != 1 {
 		t.Fatalf("reserve scripts = %d, want exactly 1", got)
 	}
 }
@@ -46,7 +46,7 @@ func TestReserveInbound_OneScriptRegardlessOfRuleCount(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReserveInbound: %v", err)
 	}
-	if got := store.reserveCalls(); got != 1 {
+	if got := reserveCalls(store); got != 1 {
 		t.Fatalf("reserve scripts = %d, want exactly 1", got)
 	}
 }
