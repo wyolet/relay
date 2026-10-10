@@ -48,7 +48,8 @@
       "item_id": "t_1",
       "item_type": "function_call",
       "index": 1,
-      "name": "get_weather"
+      "name": "get_weather",
+      "call_id": "toolu_lima"
     }
   },
   {

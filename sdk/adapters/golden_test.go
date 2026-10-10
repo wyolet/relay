@@ -43,11 +43,6 @@ var lossyRoundTrips = func() map[string]lossyRoundTrip {
 		"testdata/openai/chat-refusal stream.sse":           {why: "a CC stream writes a refusal as text deltas plus finish_reason content_filter — message.refusal would need the finish reason before the first delta"},
 		"testdata/openai/responses-tool-calls request.json": {why: "input items carry no status on Responses (annotated drop)"},
 	}
-	for _, c := range []string{"cache-usage", "refusal", "text", "unknown-stop"} {
-		m["testdata/anthropic/"+c+" "+streamInput] = lossyRoundTrip{bug: true, why: anthropicStreamUsage}
-	}
-	m["testdata/anthropic/thinking "+streamInput] = lossyRoundTrip{bug: true, why: anthropicStreamUsage + "; the thinking signature in the completed item's provider_data is never emitted as a signature_delta"}
-	m["testdata/anthropic/tool-calls "+streamInput] = lossyRoundTrip{bug: true, why: anthropicStreamUsage + "; tool_use.id is the canonical item id, not the call id (item.started carries no call id)"}
 	for _, c := range []string{"service-tier", "text"} {
 		m["testdata/anthropic/"+c+" "+responseInput] = lossyRoundTrip{why: "SerializeResponse drops service_tier (annotated): the canonical tier is the serving upstream's lane name, which usage.service_tier would mislabel when another vendor served it"}
 	}
@@ -57,8 +52,6 @@ var lossyRoundTrips = func() map[string]lossyRoundTrip {
 	m["testdata/gemini/safety "+streamInput] = lossyRoundTrip{bug: true, why: "the to-canonical stream never closes the open message item when the terminal frame has no content (finishReason SAFETY, no parts): no item.completed, unlike the prompt-blocked path"}
 	return m
 }()
-
-const anthropicStreamUsage = "the canonical → Anthropic stream writes input_tokens 0 on message_start and only output_tokens on message_delta, so input and cache counts are lost"
 
 // checkRoundTrip compares the canonical golden with the canonical re-parsed
 // from the serialized wire.

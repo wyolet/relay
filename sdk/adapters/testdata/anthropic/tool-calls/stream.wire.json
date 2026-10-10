@@ -57,7 +57,7 @@
     "event": "content_block_start",
     "data": {
       "content_block": {
-        "id": "t_1",
+        "id": "toolu_lima",
         "input": {},
         "name": "get_weather",
         "type": "tool_use"
@@ -115,6 +115,7 @@
       },
       "type": "message_delta",
       "usage": {
+        "input_tokens": 420,
         "output_tokens": 60
       }
     }

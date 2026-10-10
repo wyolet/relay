@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -89,14 +90,13 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return nil, fmt.Errorf("responses from_canonical stream: item.started: %w", err)
 		}
-		// R-3: capture name from item.started so function call events carry it.
-		// Use itemID as provisional callID — the real callID arrives on item.completed.
+		// R-3: capture name and call id from item.started so function call events carry them; the item id stands in only for a producer that sends no call id.
 		// Custom-ness is decided here, from the name alone, and kept for the item's whole lifecycle: added and done must describe the same item type, and an upstream that omits the name at item.started leaves nothing else to match on.
 		s.outputItems[ev.ItemID] = responsesStreamItem{
 			itemType:    ev.ItemType,
 			outputIndex: ev.Index,
 			name:        ev.Name,
-			callID:      ev.ItemID, // provisional; overwritten from item.completed payload
+			callID:      cmp.Or(ev.CallID, ev.ItemID),
 			custom:      ev.ItemType == v1.ItemTypeFunctionCall && s.custom.isCustomName(ev.Name),
 		}
 		s.outputIndex[ev.ItemID] = ev.Index
@@ -120,12 +120,14 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		case v1.ItemTypeFunctionCall:
 			var callItem ResponsesItem = &ResponsesFunctionCall{
 				ID:     ev.ItemID,
+				CallID: ev.CallID,
 				Name:   ev.Name,
 				Status: ResponsesStatusInProgress,
 			}
 			if s.outputItems[ev.ItemID].custom {
 				callItem = &ResponsesCustomToolCall{
 					ID:     ev.ItemID,
+					CallID: ev.CallID,
 					Name:   ev.Name,
 					Status: ResponsesStatusInProgress,
 				}

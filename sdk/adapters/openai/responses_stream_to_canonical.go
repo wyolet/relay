@@ -88,9 +88,10 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 			return nil, nil
 		}
 		var itemProbe struct {
-			Type ResponsesItemType `json:"type"`
-			ID   string            `json:"id"`
-			Name string            `json:"name"`
+			Type   ResponsesItemType `json:"type"`
+			ID     string            `json:"id"`
+			Name   string            `json:"name"`
+			CallID string            `json:"call_id"`
 		}
 		if err := json.Unmarshal(evHeader.Item, &itemProbe); err != nil {
 			return nil, fmt.Errorf("responses stream: output_item.added item: %w", err)
@@ -110,8 +111,9 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 			ItemType: canonType,
 			// Name rides item.started for function_call items so downstream
 			// serializers that emit the tool name at item-start (Anthropic) have it.
-			Name:  itemProbe.Name,
-			Index: evHeader.OutputIndex,
+			Name:   itemProbe.Name,
+			CallID: itemProbe.CallID,
+			Index:  evHeader.OutputIndex,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemStarted, Data: startData})
 

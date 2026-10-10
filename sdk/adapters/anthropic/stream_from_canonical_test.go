@@ -142,6 +142,44 @@ func TestCanonicalToAnthropic_IndexGapKeepsDeltasOnOpenedBlock(t *testing.T) {
 	}
 }
 
+func TestCanonicalToAnthropic_UsageRoundTripsThroughMessageDelta(t *testing.T) {
+	want := usage.Tokens{"input": 40, "output": 9, "cache_read": 300, "cache_creation": 200, "cache_creation_1h": 150}
+	chunks := [][]byte{
+		canonSSEFrame(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "msg_u", Model: "m"}),
+		canonSSEFrame(v1.EventGenerationCompleted, v1.GenerationCompletedEvent{ID: "msg_u", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop, Usage: want}),
+	}
+	from := (AnthropicTranslator{}).NewFromCanonicalStream()
+	to := (AnthropicTranslator{}).NewToCanonicalStream()
+	var got usage.Tokens
+	for _, c := range chunks {
+		wire, err := from(c)
+		if err != nil {
+			t.Fatalf("from canonical: %v", err)
+		}
+		canon, err := to(wire)
+		if err != nil {
+			t.Fatalf("to canonical: %v", err)
+		}
+		for _, f := range splitFrames(canon) {
+			if ev, data, ok := v1.ParseSSEChunk(f); ok && ev == v1.EventGenerationCompleted {
+				var e v1.GenerationCompletedEvent
+				if err := json.Unmarshal(data, &e); err != nil {
+					t.Fatal(err)
+				}
+				got = e.Usage
+			}
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("usage: got %v want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("usage[%q]: got %d want %d", k, got[k], v)
+		}
+	}
+}
+
 func intSlicesEqual(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

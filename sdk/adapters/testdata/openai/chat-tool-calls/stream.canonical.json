@@ -12,7 +12,8 @@
       "item_id": "call_lima",
       "item_type": "function_call",
       "index": 0,
-      "name": "get_weather"
+      "name": "get_weather",
+      "call_id": "call_lima"
     }
   },
   {
@@ -39,7 +40,8 @@
       "item_id": "call_quito",
       "item_type": "function_call",
       "index": 1,
-      "name": "get_weather"
+      "name": "get_weather",
+      "call_id": "call_quito"
     }
   },
   {

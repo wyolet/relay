@@ -145,6 +145,7 @@ func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 				ItemType: v1.ItemTypeFunctionCall,
 				Index:    idx,
 				Name:     p.FunctionCall.Name,
+				CallID:   geminiCallID(p.FunctionCall.Name, idx),
 			})
 			out = append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}})...)
 

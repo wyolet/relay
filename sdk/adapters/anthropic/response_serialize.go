@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 
+	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -109,30 +110,34 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 	}
 	out["content"] = content
 
-	// Usage: canonical orthogonal-meter map → Anthropic's named fields.
 	if len(resp.Usage) > 0 {
-		u := map[string]any{
-			"input_tokens":  resp.Usage["input"],
-			"output_tokens": resp.Usage["output"],
-		}
-		if v := resp.Usage["cache_read"]; v > 0 {
-			u["cache_read_input_tokens"] = v
-		}
-		if v := resp.Usage["cache_creation"]; v > 0 {
-			u["cache_creation_input_tokens"] = v
-		}
-		// The TTL split goes out only when it was reported: without it the
-		// share of 5-minute vs 1-hour writes is unknown.
-		if h := resp.Usage["cache_creation_1h"]; h > 0 {
-			u["cache_creation"] = map[string]int64{
-				"ephemeral_5m_input_tokens": max(resp.Usage["cache_creation"]-h, 0),
-				"ephemeral_1h_input_tokens": h,
-			}
-		}
-		out["usage"] = u
+		out["usage"] = canonicalUsageToAnthropic(resp.Usage)
 	}
 	// canonical: service_tier dropped — it is the serving upstream's own lane
 	// name; writing it into usage.service_tier would mislabel Anthropic's lanes.
 
 	return json.Marshal(out)
+}
+
+// canonicalUsageToAnthropic maps the canonical orthogonal-meter map to Anthropic's named usage fields.
+func canonicalUsageToAnthropic(t usage.Tokens) map[string]any {
+	u := map[string]any{
+		"input_tokens":  t["input"],
+		"output_tokens": t["output"],
+	}
+	if v := t["cache_read"]; v > 0 {
+		u["cache_read_input_tokens"] = v
+	}
+	if v := t["cache_creation"]; v > 0 {
+		u["cache_creation_input_tokens"] = v
+	}
+	// The TTL split goes out only when it was reported: without it the
+	// share of 5-minute vs 1-hour writes is unknown.
+	if h := t["cache_creation_1h"]; h > 0 {
+		u["cache_creation"] = map[string]int64{
+			"ephemeral_5m_input_tokens": max(t["cache_creation"]-h, 0),
+			"ephemeral_1h_input_tokens": h,
+		}
+	}
+	return u
 }
