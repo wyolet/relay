@@ -1,0 +1,23 @@
+{
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are terse."
+    },
+    {
+      "role": "user",
+      "content": "Say hello."
+    }
+  ],
+  "metadata": {
+    "team": "core"
+  },
+  "temperature": 0.2,
+  "user": "user-42",
+  "max_tokens": 64,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}

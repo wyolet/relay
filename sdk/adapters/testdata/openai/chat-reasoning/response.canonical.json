@@ -1,0 +1,41 @@
+{
+  "id": "reason-1",
+  "object": "response",
+  "created_at": 1741569952,
+  "model": "deepseek-reasoner",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "rs_reason-1",
+      "summary": [
+        {
+          "text": "221 = 13 * 17, so it has divisors besides 1 and itself."
+        }
+      ],
+      "content": "221 = 13 * 17, so it has divisors besides 1 and itself.",
+      "status": "completed",
+      "provider_data": {
+        "cc_reasoning_field": "reasoning_content"
+      }
+    },
+    {
+      "type": "message",
+      "id": "msg_reason-1",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "No. 221 = 13 × 17."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 12,
+    "output": 48,
+    "reasoning": 36
+  }
+}

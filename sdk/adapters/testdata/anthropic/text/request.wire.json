@@ -1,0 +1,19 @@
+{
+  "model": "claude-sonnet-4-5",
+  "system": "You are terse.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say hello."
+    }
+  ],
+  "max_tokens": 1024,
+  "temperature": 0.2,
+  "stop_sequences": [
+    "END"
+  ],
+  "stream": true,
+  "metadata": {
+    "user_id": "user-42"
+  }
+}

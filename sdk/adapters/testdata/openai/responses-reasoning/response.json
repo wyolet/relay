@@ -1,0 +1,30 @@
+{
+  "id": "resp_reason1",
+  "object": "response",
+  "created_at": 1741476542,
+  "status": "completed",
+  "model": "gpt-5-2025-08-07",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "rs_reason1",
+      "summary": [{"type": "summary_text", "text": "**Checking divisors**\n\n221 = 13 × 17."}],
+      "encrypted_content": "gAAAAABoX1ExampleEncryptedBlob=="
+    },
+    {
+      "type": "message",
+      "id": "msg_reason1",
+      "status": "completed",
+      "role": "assistant",
+      "content": [{"type": "output_text", "text": "No. 221 = 13 × 17.", "annotations": []}]
+    }
+  ],
+  "reasoning": {"effort": "high", "summary": "auto"},
+  "usage": {
+    "input_tokens": 12,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens": 160,
+    "output_tokens_details": {"reasoning_tokens": 128},
+    "total_tokens": 172
+  }
+}

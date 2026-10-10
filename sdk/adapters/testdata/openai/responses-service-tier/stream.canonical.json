@@ -1,0 +1,22 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "resp_tier",
+      "model": "gpt-5"
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "resp_tier",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 10,
+        "output": 2
+      },
+      "service_tier": "flex"
+    }
+  }
+]

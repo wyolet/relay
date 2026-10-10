@@ -1,0 +1,28 @@
+{
+  "model": "gpt-5",
+  "instructions": "You are terse.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Say hello."
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "gpt-5": {
+      "sampling": {
+        "temperature": 0.2,
+        "max_tokens": 64
+      }
+    }
+  },
+  "output_mode": "stream",
+  "metadata": {
+    "team": "core"
+  }
+}

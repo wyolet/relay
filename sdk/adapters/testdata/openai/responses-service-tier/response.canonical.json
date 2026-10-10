@@ -1,0 +1,13 @@
+{
+  "id": "resp_tier",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5",
+  "status": "completed",
+  "finish_reason": "stop",
+  "usage": {
+    "input": 10,
+    "output": 2
+  },
+  "service_tier": "priority"
+}

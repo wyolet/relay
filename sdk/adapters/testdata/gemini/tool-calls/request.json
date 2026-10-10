@@ -1,0 +1,20 @@
+{
+  "contents": [
+    {"role": "user", "parts": [{"text": "Weather in Paris?"}]},
+    {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city":"Paris"}}}]},
+    {"role": "user", "parts": [{"functionResponse": {"name": "get_weather", "response": {"temp_c":18}}}]},
+    {"role": "user", "parts": [{"text": "And in Lima and Quito?"}]}
+  ],
+  "tools": [
+    {
+      "functionDeclarations": [
+        {
+          "name": "get_weather",
+          "description": "Current weather for a city.",
+          "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+        }
+      ]
+    }
+  ],
+  "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}
+}

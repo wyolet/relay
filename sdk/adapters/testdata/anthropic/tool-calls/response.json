@@ -1,0 +1,13 @@
+{
+  "id": "msg_tool1",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-5-20250929",
+  "content": [
+    {"type": "text", "text": "Checking Lima."},
+    {"type": "tool_use", "id": "toolu_lima", "name": "get_weather", "input": {"city":"Lima"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 420, "output_tokens": 60}
+}

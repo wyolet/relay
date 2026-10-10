@@ -1,0 +1,24 @@
+{
+  "id": "chatcmpl-cache",
+  "object": "chat.completion",
+  "created": 1741569952,
+  "model": "gpt-4.1-2025-04-14",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Twenty days a year."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 2048,
+    "completion_tokens": 6,
+    "total_tokens": 2054,
+    "prompt_tokens_details": {
+      "cached_tokens": 1920
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "msg_cache",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "claude-sonnet-4-5-20250929",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_0",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Twenty days a year."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "cache_creation": 1024,
+    "cache_read": 2048,
+    "input": 24,
+    "output": 6
+  }
+}

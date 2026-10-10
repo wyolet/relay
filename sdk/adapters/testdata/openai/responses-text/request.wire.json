@@ -1,0 +1,26 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Say hello."
+        }
+      ]
+    }
+  ],
+  "instructions": "You are terse.",
+  "temperature": 0.2,
+  "max_output_tokens": 64,
+  "metadata": {
+    "team": "core"
+  },
+  "stream": true,
+  "store": false,
+  "include": [
+    "reasoning.encrypted_content"
+  ]
+}

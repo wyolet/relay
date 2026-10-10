@@ -1,0 +1,22 @@
+{
+  "id": "resp_tool1",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "completed",
+  "finish_reason": "tool_calls",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_lima",
+      "call_id": "call_lima",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Lima\"}",
+      "status": "completed"
+    }
+  ],
+  "usage": {
+    "input": 90,
+    "output": 18
+  }
+}

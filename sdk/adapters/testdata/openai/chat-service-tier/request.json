@@ -1,0 +1,8 @@
+{
+  "model": "gpt-5",
+  "messages": [{"role": "user", "content": "hi"}],
+  "service_tier": "priority",
+  "logprobs": true,
+  "top_logprobs": 2,
+  "store": false
+}

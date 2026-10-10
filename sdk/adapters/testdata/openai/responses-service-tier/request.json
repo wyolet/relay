@@ -1,0 +1,5 @@
+{
+  "model": "gpt-5",
+  "input": "hi",
+  "service_tier": "flex"
+}

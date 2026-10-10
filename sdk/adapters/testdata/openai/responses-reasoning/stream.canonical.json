@@ -1,0 +1,104 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "resp_reason1",
+      "model": "gpt-5-2025-08-07"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "rs_reason1",
+      "item_type": "reasoning",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "rs_reason1",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": "**Checking divisors**"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "rs_reason1",
+      "index": 0,
+      "kind": "reasoning",
+      "delta": "\n\n221 = 13 × 17."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "rs_reason1",
+      "index": 0,
+      "item": {
+        "type": "reasoning",
+        "id": "rs_reason1",
+        "summary": [
+          {
+            "text": "**Checking divisors**\n\n221 = 13 × 17."
+          }
+        ],
+        "provider_data": {
+          "encrypted_content": "gAAAAABoX1ExampleEncryptedBlob==",
+          "id": "rs_reason1"
+        }
+      }
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_reason1",
+      "item_type": "message",
+      "index": 1
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_reason1",
+      "index": 1,
+      "kind": "text",
+      "delta": "No. 221 = 13 × 17."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_reason1",
+      "index": 1,
+      "item": {
+        "type": "message",
+        "id": "msg_reason1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "No. 221 = 13 × 17."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "resp_reason1",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 12,
+        "output": 160,
+        "reasoning": 128
+      }
+    }
+  }
+]

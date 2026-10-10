@@ -1,0 +1,13 @@
+{
+  "id": "msg_think1",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-5-20250929",
+  "content": [
+    {"type": "thinking", "thinking": "The tool says 13 × 17, so 221 is composite.", "signature": "EqQBCgIYAhIMSecondSignatureBlob"},
+    {"type": "text", "text": "No. 221 = 13 × 17."}
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 512, "output_tokens": 96}
+}

@@ -1,0 +1,76 @@
+{
+  "model": "claude-sonnet-4-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Weather in Paris?"
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Let me check."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "toolu_paris",
+      "call_id": "toolu_paris",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "toolu_paris",
+      "output": "18C and clear"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "And in Lima?"
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "claude-sonnet-4-5": {
+      "sampling": {
+        "max_tokens": 1024
+      }
+    }
+  },
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    ],
+    "choice": "auto"
+  },
+  "output_mode": "sync"
+}

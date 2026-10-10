@@ -1,0 +1,6 @@
+data: {"candidates":[{"content":{"parts":[{"text":"**Reading the factors**\n\n13 × 17 = 221.","thought":true}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":60,"totalTokenCount":200,"thoughtsTokenCount":140},"modelVersion":"gemini-2.5-pro"}
+
+data: {"candidates":[{"content":{"parts":[{"text":"No. 221 = 13 × 17.","thoughtSignature":"CtwBAdHtim9AnswerSignature"}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":60,"totalTokenCount":200,"thoughtsTokenCount":140},"modelVersion":"gemini-2.5-pro"}
+
+data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":60,"candidatesTokenCount":12,"thoughtsTokenCount":140,"totalTokenCount":212},"modelVersion":"gemini-2.5-pro"}
+

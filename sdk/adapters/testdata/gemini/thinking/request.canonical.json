@@ -1,0 +1,53 @@
+{
+  "model": null,
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Is 221 prime?"
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "factor",
+      "name": "factor",
+      "arguments": "{\"n\":221}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "factor",
+      "output": "{\"factors\":[13,17]}"
+    }
+  ],
+  "model_config": {
+    "*": {
+      "reasoning": {
+        "budget_tokens": 1024
+      }
+    }
+  },
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "factor",
+        "description": "Factor an integer.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "n"
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "candidates": [
+    {"content": {"parts": [{"text": "Twenty days a year."}], "role": "model"}, "finishReason": "STOP", "index": 0}
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 2048,
+    "candidatesTokenCount": 6,
+    "totalTokenCount": 2054,
+    "cachedContentTokenCount": 1920
+  },
+  "modelVersion": "gemini-2.5-flash"
+}

@@ -1,0 +1,17 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {"functionCall": {"name": "get_weather", "args": {"city":"Lima"}}},
+          {"functionCall": {"name": "get_weather", "args": {"city":"Quito"}}}
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {"promptTokenCount": 90, "candidatesTokenCount": 20, "totalTokenCount": 110},
+  "modelVersion": "gemini-2.5-flash"
+}

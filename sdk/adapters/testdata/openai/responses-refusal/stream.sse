@@ -1,0 +1,21 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_refuse","object":"response","created_at":1741476542,"status":"in_progress","model":"gpt-5-2025-08-07","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"type":"message","id":"msg_refuse","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":2,"item_id":"msg_refuse","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""}}
+
+event: response.refusal.delta
+data: {"type":"response.refusal.delta","sequence_number":3,"item_id":"msg_refuse","output_index":0,"content_index":0,"delta":"I can't help with that."}
+
+event: response.refusal.done
+data: {"type":"response.refusal.done","sequence_number":4,"item_id":"msg_refuse","output_index":0,"content_index":0,"refusal":"I can't help with that."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"type":"message","id":"msg_refuse","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"I can't help with that."}]}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":6,"response":{"id":"resp_refuse","object":"response","created_at":1741476542,"status":"completed","model":"gpt-5-2025-08-07","output":[{"type":"message","id":"msg_refuse","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"I can't help with that."}]}],"usage":{"input_tokens":30,"output_tokens":7,"total_tokens":37}}}
+

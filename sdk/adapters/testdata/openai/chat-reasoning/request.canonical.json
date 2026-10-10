@@ -1,0 +1,26 @@
+{
+  "model": "deepseek-reasoner",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Is 221 prime?"
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "deepseek-reasoner": {
+      "sampling": {
+        "max_tokens": 4096
+      },
+      "reasoning": {
+        "effort": "high"
+      }
+    }
+  },
+  "output_mode": "sync"
+}

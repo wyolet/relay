@@ -1,0 +1,23 @@
+{
+  "model": "claude-sonnet-4-5",
+  "max_tokens": 8192,
+  "thinking": {"type": "enabled", "budget_tokens": 2048},
+  "tools": [
+    {
+      "name": "factor",
+      "description": "Factor an integer.",
+      "input_schema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}
+    }
+  ],
+  "messages": [
+    {"role": "user", "content": "Is 221 prime?"},
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "thinking", "thinking": "I should factor 221.", "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds"},
+        {"type": "tool_use", "id": "toolu_factor", "name": "factor", "input": {"n":221}}
+      ]
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_factor", "content": "[13, 17]"}]}
+  ]
+}

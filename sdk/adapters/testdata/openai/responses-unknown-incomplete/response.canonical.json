@@ -1,0 +1,29 @@
+{
+  "id": "resp_new",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "incomplete",
+  "finish_reason": "other",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_new",
+      "status": "incomplete",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Partial"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 9,
+    "output": 1
+  },
+  "incomplete_details": {
+    "reason": "new_reason"
+  }
+}

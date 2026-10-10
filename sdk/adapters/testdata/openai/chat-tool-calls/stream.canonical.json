@@ -1,0 +1,96 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "chatcmpl-tool1",
+      "model": "gpt-4o-2024-08-06"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "call_lima",
+      "item_type": "function_call",
+      "index": 0,
+      "name": "get_weather"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "call_lima",
+      "index": 0,
+      "kind": "arguments",
+      "delta": "{\"city\":"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "call_lima",
+      "index": 0,
+      "kind": "arguments",
+      "delta": "\"Lima\"}"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "call_quito",
+      "item_type": "function_call",
+      "index": 1,
+      "name": "get_weather"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "call_quito",
+      "index": 1,
+      "kind": "arguments",
+      "delta": "{\"city\":\"Quito\"}"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "call_lima",
+      "index": 0,
+      "item": {
+        "type": "function_call",
+        "id": "call_lima",
+        "call_id": "call_lima",
+        "name": "get_weather",
+        "arguments": "{\"city\":\"Lima\"}",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "call_quito",
+      "index": 1,
+      "item": {
+        "type": "function_call",
+        "id": "call_quito",
+        "call_id": "call_quito",
+        "name": "get_weather",
+        "arguments": "{\"city\":\"Quito\"}",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "chatcmpl-tool1",
+      "status": "completed",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "input": 120,
+        "output": 40
+      }
+    }
+  }
+]

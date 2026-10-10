@@ -1,0 +1,17 @@
+{
+  "content": [
+    {
+      "text": "Partial",
+      "type": "text"
+    }
+  ],
+  "id": "msg_new",
+  "model": "claude-sonnet-4-5-20250929",
+  "role": "assistant",
+  "stop_reason": "new_reason",
+  "type": "message",
+  "usage": {
+    "input_tokens": 9,
+    "output_tokens": 1
+  }
+}

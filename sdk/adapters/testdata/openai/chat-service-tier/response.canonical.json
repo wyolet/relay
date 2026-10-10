@@ -1,0 +1,27 @@
+{
+  "id": "c1",
+  "object": "response",
+  "created_at": "<now>",
+  "model": "gpt-5",
+  "status": "completed",
+  "finish_reason": "stop",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_c1",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "hi"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 10,
+    "output": 2
+  },
+  "service_tier": "priority"
+}

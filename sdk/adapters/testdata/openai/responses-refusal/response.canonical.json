@@ -1,0 +1,26 @@
+{
+  "id": "resp_refuse",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "completed",
+  "finish_reason": "refusal",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_refuse",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "I can't help with that."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input": 30,
+    "output": 7
+  }
+}

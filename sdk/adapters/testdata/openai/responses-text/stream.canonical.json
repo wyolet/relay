@@ -1,0 +1,66 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "resp_1",
+      "model": "gpt-5-2025-08-07"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_1",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_1",
+      "index": 0,
+      "kind": "text",
+      "delta": "Hel"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_1",
+      "index": 0,
+      "kind": "text",
+      "delta": "lo."
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_1",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Hello."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "resp_1",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 36,
+        "output": 3
+      }
+    }
+  }
+]

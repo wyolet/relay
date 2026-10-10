@@ -1,0 +1,96 @@
+[
+  {
+    "data": {
+      "id": "reason-1",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "deepseek-reasoner",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "reason-1",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "deepseek-reasoner",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "reasoning_content": "221 = 13 * 17"
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "reason-1",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "deepseek-reasoner",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "reasoning_content": ", so not prime."
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "reason-1",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "deepseek-reasoner",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "No. 221 = 13 × 17."
+          },
+          "finish_reason": null
+        }
+      ]
+    }
+  },
+  {
+    "data": {
+      "id": "reason-1",
+      "object": "chat.completion.chunk",
+      "created": "<now>",
+      "model": "deepseek-reasoner",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 12,
+        "completion_tokens": 48,
+        "total_tokens": 60,
+        "completion_tokens_details": {
+          "reasoning_tokens": 36
+        }
+      }
+    }
+  },
+  {
+    "data": "[DONE]"
+  }
+]

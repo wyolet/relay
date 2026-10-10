@@ -1,0 +1,26 @@
+{
+  "model": "gpt-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Is 221 prime?"
+        }
+      ]
+    }
+  ],
+  "text": {
+    "verbosity": "low"
+  },
+  "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+  },
+  "store": false,
+  "include": [
+    "reasoning.encrypted_content"
+  ]
+}

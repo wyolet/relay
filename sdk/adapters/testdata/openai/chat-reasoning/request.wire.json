@@ -1,0 +1,11 @@
+{
+  "model": "deepseek-reasoner",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Is 221 prime?"
+    }
+  ],
+  "max_tokens": 4096,
+  "reasoning_effort": "high"
+}

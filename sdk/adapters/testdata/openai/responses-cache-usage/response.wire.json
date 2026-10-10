@@ -1,0 +1,42 @@
+{
+  "id": "resp_cache",
+  "object": "response",
+  "created_at": 1741476542,
+  "model": "gpt-5-2025-08-07",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_cache",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Twenty days a year.",
+          "annotations": [],
+          "logprobs": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 2048,
+    "output_tokens": 6,
+    "total_tokens": 2054,
+    "input_tokens_details": {
+      "cached_tokens": 1920
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "error": null,
+  "incomplete_details": null,
+  "instructions": "You answer questions about the attached handbook.",
+  "temperature": null,
+  "top_p": null,
+  "parallel_tool_calls": true,
+  "tools": [],
+  "metadata": {},
+  "tool_choice": "auto"
+}

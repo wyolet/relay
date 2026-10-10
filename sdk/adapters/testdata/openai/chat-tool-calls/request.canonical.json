@@ -1,0 +1,74 @@
+{
+  "model": "gpt-4o",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Weather in Paris and Tokyo?"
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "call_paris",
+      "call_id": "call_paris",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\"}"
+    },
+    {
+      "type": "function_call",
+      "id": "call_tokyo",
+      "call_id": "call_tokyo",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Tokyo\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_paris",
+      "output": "{\"temp_c\":18}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_tokyo",
+      "output": "{\"temp_c\":24}"
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "And in Lima?"
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "choice": "auto",
+    "parallel": true
+  },
+  "output_mode": "sync"
+}

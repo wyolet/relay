@@ -1,0 +1,58 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "c1",
+      "model": "gpt-5"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "msg_0",
+      "item_type": "message",
+      "index": 0
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "kind": "text",
+      "delta": "hi"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "msg_0",
+      "index": 0,
+      "item": {
+        "type": "message",
+        "id": "msg_0",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "hi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "c1",
+      "status": "completed",
+      "finish_reason": "stop",
+      "usage": {
+        "input": 10,
+        "output": 2
+      },
+      "service_tier": "flex"
+    }
+  }
+]
