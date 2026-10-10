@@ -23,6 +23,9 @@ const (
 	AuthzRBAC   = "rbac"
 )
 
+// DefaultCatalogVersion is the catalog release `make build` stamps from versions.env (-X ...config.DefaultCatalogVersion=<tag>); it stands in for RELAY_CATALOG_VERSION when neither that nor RELAY_CATALOG_DIR is set, so a binary without a bundled tree still seeds.
+var DefaultCatalogVersion = ""
+
 // Config holds every RELAY_* setting parsed and validated at startup.
 type Config struct {
 	// Cluster
@@ -287,8 +290,15 @@ func Load() (*Config, error) {
 	// CatalogURL (default the wyolet/relay-catalog GitHub archive) — no
 	// image rebuild to move catalog versions. Re-seeds skip
 	// operator-edited (dirty) rows and overlays re-merge at snapshot load,
-	// so user changes survive. Unset = seed-if-empty from CatalogDir only.
+	// so user changes survive. Unset = DefaultCatalogVersion when CatalogDir
+	// is also unset, else seed-if-empty from CatalogDir only; "off" = no pin.
 	cfg.CatalogVersion = os.Getenv("RELAY_CATALOG_VERSION")
+	switch {
+	case cfg.CatalogVersion == "off":
+		cfg.CatalogVersion = ""
+	case cfg.CatalogVersion == "" && cfg.CatalogDir == "":
+		cfg.CatalogVersion = DefaultCatalogVersion
+	}
 	cfg.CatalogURL = os.Getenv("RELAY_CATALOG_URL")
 	cfg.CatalogIndexURL = os.Getenv("RELAY_CATALOG_INDEX_URL")
 
