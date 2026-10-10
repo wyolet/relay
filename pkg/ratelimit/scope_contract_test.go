@@ -156,5 +156,5 @@ func newSince(before, after map[string]bool) []string {
 }
 
 func TestContractScope_MemStore(t *testing.T) {
-	runScopeContractSuite(t, "MemStore", memLimiterFactory)
+	runScopeContractSuite(t, "MemStore", newTestLimiter)
 }

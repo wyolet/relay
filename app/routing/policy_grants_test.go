@@ -70,11 +70,13 @@ func newTenancy() (*team.Team, *project.Project) {
 }
 
 // The pool a policy-less request draws on is the host's system-owned
-// credentials plus the caller's own. A project's credential is reachable
-// only through that project's policy, which is what holds the spend inside
-// its limits and attribution — TestResolvePolicyless_SkipsProjectOwnedKeys
-// pins that half. What is left is which of the remaining owner kinds count as
-// shared, and that a disabled key is out for the usual reason.
+// credentials plus the caller's own. A user's own host key is their
+// credential, not a shared pool, so nobody else spends it — and a caller with
+// no id (batch, proxy, any path that never resolved a user) gets system keys
+// only. A project's credential is reachable only through that project's
+// policy, which is what holds the spend inside its limits and attribution, so
+// it is out even with its project present. A disabled key is out for the
+// usual reason.
 func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 	tm, proj := newTenancy()
 	off := false
@@ -84,11 +86,15 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 		name    string
 		owner   meta.Owner
 		enabled *bool
+		noID    bool // the caller presents no user id
 		want    bool // the key serves policy-less traffic
 	}{
 		{name: "system-owned is shared", owner: meta.Owner{Kind: meta.OwnerSystem}, want: true},
+		{name: "system-owned is shared with a caller that has no id", owner: meta.Owner{Kind: meta.OwnerSystem}, noID: true, want: true},
 		{name: "the caller's own is spendable", owner: meta.Owner{Kind: meta.OwnerUser, ID: callerID}, want: true},
 		{name: "another user's is not", owner: meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}},
+		{name: "a user's is not spendable by a caller with no id", owner: meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}, noID: true},
+		{name: "project-owned is not", owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}},
 		{name: "disabled is not", owner: meta.Owner{Kind: meta.OwnerSystem}, enabled: &off},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,8 +102,15 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 			f.keyA.Meta.Owner = tc.owner
 			f.keyA.Spec.Enabled = tc.enabled
 			snap := tenantedSnapshot(t, f, []*hostkey.HostKey{f.keyA}, proj, tm)
+			if _, ok := snap.HostKey(f.keyA.Meta.ID); !ok && tc.enabled == nil {
+				t.Fatal("the key was dropped before the pool filter could be tested")
+			}
+			caller := callerID
+			if tc.noID {
+				caller = ""
+			}
 
-			plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", callerID)
+			plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", caller)
 			if !tc.want {
 				if !errors.Is(err, ErrNoKeys) {
 					t.Fatalf("err = %v, want ErrNoKeys — this key must not serve policy-less traffic", err)
@@ -109,7 +122,7 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 			}
 			// The listing answers the same question, or it advertises models
 			// the flow would refuse.
-			if got := anyMode.PolicylessAllows(snap, f.model, "", callerID); got != tc.want {
+			if got := anyMode.PolicylessAllows(snap, f.model, "", caller); got != tc.want {
 				t.Errorf("PolicylessAllows = %v, want %v — the listing and the flow disagree", got, tc.want)
 			}
 		})
@@ -196,25 +209,6 @@ func TestResolvePolicyless_Diagnoses(t *testing.T) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
 		})
-	}
-}
-
-// Policy-less traffic is off unless the operator switched it on, so a caller
-// that resolved no policy is refused rather than served from the shared pool
-// by default.
-func TestResolve_PolicylessIsClosedByDefault(t *testing.T) {
-	f := newTwoHostParts()
-	c := catalog.New(
-		lister[provider.Provider]{f.provider}, lister[host.Host]{f.hostRowA},
-		lister[policy.Policy]{f.tierA}, lister[model.Model]{f.model},
-		lister[hostkey.HostKey]{f.keyA}, lister[ratelimit.RateLimit]{},
-		lister[key.Key]{}, lister[pricing.Pricing]{}, lister[binding.Binding]{f.bindingA},
-	)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if _, err := New(c).Resolve(Request{ModelName: "m1"}); !errors.Is(err, ErrPolicyless) {
-		t.Fatalf("err = %v, want ErrPolicyless", err)
 	}
 }
 

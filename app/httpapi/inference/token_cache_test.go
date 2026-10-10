@@ -3,9 +3,11 @@ package inference
 import (
 	"crypto/ed25519"
 	"net/http"
+	"runtime"
 	"testing"
 	"time"
 
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/crypto"
@@ -132,4 +134,35 @@ func TestCacheDisabledStillVerifies(t *testing.T) {
 	if ent := f.tokens.cache.get(hashToken(token), time.Now()); ent != nil {
 		t.Fatal("an entry was stored with the cache off")
 	}
+}
+
+// A cache entry lives until its token expires, so remembering the snapshot
+// it resolved against by pointer keeps that whole catalog reachable — one
+// retained copy per generation a token outlives. Only the generation number
+// may be kept.
+func TestCacheDoesNotPinTheSnapshotItResolvedAgainst(t *testing.T) {
+	ent := &cacheEntry{}
+	collected := make(chan struct{})
+
+	func() {
+		snap := appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		runtime.SetFinalizer(snap, func(*appcatalog.Snapshot) { close(collected) })
+		ent.setSubjects(snap, []string{"user:u-1"})
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		select {
+		case <-collected:
+			// The entry still knows which view it was built from.
+			next := appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			if _, ok := ent.subjectsFor(next); ok {
+				t.Fatal("subjects survived into a different snapshot generation")
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	t.Fatal("the snapshot was never collected — a cache entry still references it")
 }

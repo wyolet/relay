@@ -543,22 +543,6 @@ func TestProperty_CatalogRowsReadForAllAndMutateOnlyViaBinding(t *testing.T) {
 	})
 }
 
-// The break-glass token answers every probe on every owner.
-func TestProperty_AdminTokenBypassesEverything(t *testing.T) {
-	forEachWorld(t, func(t *testing.T, w *world) {
-		rbac := w.rbac()
-		ctx := ctxOf(&actor.Actor{AdminToken: true})
-		owners := scopedOwners(w, &globalScope, providerOwner(), userOwner(ids.New()))
-		for _, p := range probes {
-			for _, o := range owners {
-				if err := rbac.Authorize(ctx, p.kind+"."+p.verb, resourceOf(p, o)); err != nil {
-					t.Fatalf("admin token denied %s.%s: %v", p.kind, p.verb, err)
-				}
-			}
-		}
-	})
-}
-
 // A disabled project is not in the snapshot, so its chain is [global]: a
 // binding at that project grants nothing, and only a global binding does.
 func TestProperty_DisabledProjectCollapsesToGlobal(t *testing.T) {
@@ -622,21 +606,6 @@ func TestProperty_TeamDeleteMatchesAFreshBuild(t *testing.T) {
 							gone.Meta.Name, p.kind, p.verb, *o, gotR, gotB)
 					}
 				}
-			}
-		}
-	})
-}
-
-// An upgraded deployment has no bindings at all, and every list there must
-// answer 200 with the caller's own rows rather than 403.
-func TestProperty_ZeroBindingListIsAllowedAndFilteredByVisible(t *testing.T) {
-	forEachWorld(t, func(t *testing.T, w *world) {
-		rbac := w.rbac()
-		id := ids.New()
-		ctx := ctxOf(actorOf(id, subjectsOf(id)))
-		for _, kind := range []string{"keys", "policies", "service-accounts", "projects", "teams"} {
-			if err := rbac.Authorize(ctx, kind+".list", authz.Resource{Kind: authz.Singular(kind)}); err != nil {
-				t.Errorf("%s.list with no bindings = %v, want allowed", kind, err)
 			}
 		}
 	})

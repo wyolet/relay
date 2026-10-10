@@ -3,8 +3,8 @@ package inference
 // Cross-shape smoke: a real CC-inbound request routed to an openai_responses
 // upstream, driven end-to-end through Dispatch against an httptest upstream with
 // the REAL CC + Responses translators (the other dispatch tests use stub
-// translators, which is exactly why they never caught the #321→#329 cross-shape
-// serialization cluster). These assert BOTH directions of the chain:
+// translators, which cannot catch cross-shape serialization faults). These
+// assert BOTH directions of the chain:
 //   - the Responses request body relay produced for the upstream
 //   - the CC response body relay returned to the caller
 // covering tools, reasoning round-trip injection, usage totals, and streaming.
@@ -139,23 +139,23 @@ func TestCrossShape_CCtoResponses_Buffered(t *testing.T) {
 	mu.Unlock()
 
 	// --- the Responses request relay produced for the upstream ---
-	// #321: content part type is role-driven — assistant→output_text, user→input_text.
+	// Content part type is role-driven — assistant→output_text, user→input_text.
 	mustContain(t, "upstream req", upReq, `"type":"output_text","text":"let me check"`)
 	mustContain(t, "upstream req", upReq, `"type":"input_text","text":"weather in SF?"`)
 	mustContain(t, "upstream req", upReq, "72F and sunny")               // tool result carried
 	mustContain(t, "upstream req", upReq, `"call_id":"call_0"`)          // function_call_output paired
 	mustContain(t, "upstream req", upReq, `"name":"get_weather"`)        // tool definition forwarded
-	mustContain(t, "upstream req", upReq, `"store":false`)               // #324 stateless reasoning
-	mustContain(t, "upstream req", upReq, "reasoning.encrypted_content") // #324 include
-	mustNotContain(t, "upstream req", upReq, "stop_sequences")           // #329 nonexistent param
-	mustNotContain(t, "upstream req", upReq, "top_k")                    // #329 nonexistent param
-	mustNotContain(t, "upstream req", upReq, `"status"`)                 // #327 output-only field stripped
+	mustContain(t, "upstream req", upReq, `"store":false`)               // stateless reasoning
+	mustContain(t, "upstream req", upReq, "reasoning.encrypted_content") // include
+	mustNotContain(t, "upstream req", upReq, "stop_sequences")           // nonexistent param
+	mustNotContain(t, "upstream req", upReq, "top_k")                    // nonexistent param
+	mustNotContain(t, "upstream req", upReq, `"status"`)                 // output-only field stripped
 
 	// --- the CC response relay returned to the caller ---
 	ccResp := w.Body.String()
 	mustContain(t, "cc resp", ccResp, `"chat.completion"`)   // CC shape, not Responses
 	mustContain(t, "cc resp", ccResp, "get_weather")         // tool call surfaced
-	mustContain(t, "cc resp", ccResp, `"total_tokens":5608`) // #328 no reasoning double-count
+	mustContain(t, "cc resp", ccResp, `"total_tokens":5608`) // no reasoning double-count
 }
 
 // A realistic streaming Responses upstream reply (text deltas + terminal usage).
@@ -184,7 +184,7 @@ data: {"type":"response.completed","response":{"id":"resp_1","object":"response"
 
 // TestCrossShape_CCtoResponses_Streaming drives a streaming CC request through
 // the cross-shape chain: upstream Responses SSE → canonical → CC SSE. Guards
-// #322 (terminal event/usage) and #323 (the stream flag reaching the upstream).
+// the terminal event/usage and the stream flag reaching the upstream.
 func TestCrossShape_CCtoResponses_Streaming(t *testing.T) {
 	var mu sync.Mutex
 	var upstreamBody string
@@ -220,11 +220,11 @@ func TestCrossShape_CCtoResponses_Streaming(t *testing.T) {
 	mu.Lock()
 	upReq := upstreamBody
 	mu.Unlock()
-	mustContain(t, "upstream req", upReq, `"stream":true`) // #323 stream flag propagates
+	mustContain(t, "upstream req", upReq, `"stream":true`) // stream flag propagates
 
 	ccOut := w.Body.String()
 	mustContain(t, "cc stream", ccOut, "chat.completion.chunk") // CC streaming shape
 	mustContain(t, "cc stream", ccOut, "Hello")                 // text deltas translated
 	mustContain(t, "cc stream", ccOut, "world")
-	mustContain(t, "cc stream", ccOut, "[DONE]") // #322 terminal frame emitted
+	mustContain(t, "cc stream", ccOut, "[DONE]") // terminal frame emitted
 }

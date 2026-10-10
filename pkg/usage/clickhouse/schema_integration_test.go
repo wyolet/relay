@@ -38,15 +38,19 @@ func TestIntegration_EnsureSchemaAddsAttributionColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer admin.Close()
+	// Registered before CREATE, and owning admin's Close: a deferred Close
+	// would run before any Cleanup and leave the DROP a closed connection.
+	t.Cleanup(func() {
+		defer admin.Close()
+		dropCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := admin.Exec(dropCtx, "DROP DATABASE IF EXISTS "+db); err != nil {
+			t.Errorf("cleanup: drop database %s: %v", db, err)
+		}
+	})
 	if err := admin.Exec(ctx, "CREATE DATABASE "+db); err != nil {
 		t.Fatalf("create database: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db); err != nil {
-			t.Logf("cleanup: drop database %s: %v", db, err)
-		}
-	})
 
 	scoped := *opts
 	scoped.Auth.Database = db

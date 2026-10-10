@@ -288,7 +288,7 @@ func TestCCSerializeRequest_FunctionCallOutputInInput(t *testing.T) {
 	}
 }
 
-// CC-4: SerializeRequest sets stream_options.include_usage=true for stream mode.
+// SerializeRequest sets stream_options.include_usage=true for stream mode.
 func TestCCSerializeRequest_StreamIncludesUsage(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{"gpt-4o"},
@@ -309,7 +309,7 @@ func TestCCSerializeRequest_StreamIncludesUsage(t *testing.T) {
 	}
 }
 
-// CC-4: non-streaming requests must NOT carry stream_options.
+// Non-streaming requests must NOT carry stream_options.
 func TestCCSerializeRequest_NoStreamOptions_Sync(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{"gpt-4o"},

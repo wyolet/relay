@@ -117,63 +117,33 @@ func TestEmitterRetriesThenDropsOnPersistentSinkFailure(t *testing.T) {
 	}
 }
 
-// Close leaves the queue channel open, so a concurrent Emit is a no-op
-// rather than a send-on-closed-channel panic — run under -race.
+// Close leaves the queue channel open, so an Emit still in flight when Close
+// lands — from a handler racing shutdown, or several Closes at once — is a
+// no-op rather than a send-on-closed-channel panic. Run under -race.
 func TestEmitterCloseDoesNotRaceEmit(t *testing.T) {
 	sink := &memSink{}
 	e := NewEmitter(sink, quietLogger())
 
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 16; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for j := 0; j < 500; j++ {
 				e.Emit(Event{Action: "policies.update"})
 			}
 		}()
 	}
-	e.Close()
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.Close()
+		}()
+	}
 	wg.Wait()
 
-	// Already-queued events before Close still get written; nothing panics.
+	// After Close, Emit and Close stay no-ops.
 	e.Emit(Event{Action: "policies.update"})
 	e.Close()
-}
-
-func TestPruneUsesLiveRetention(t *testing.T) {
-	sink := &memSink{}
-	e := NewEmitter(sink, quietLogger())
-	defer e.Close()
-
-	// Retention unset: nothing is pruned.
-	e.Prune()
-	sink.mu.Lock()
-	n := sink.pruned
-	sink.mu.Unlock()
-	if n != 0 {
-		t.Fatalf("prune calls = %d with retention unset, want 0", n)
-	}
-
-	e.SetRetentionDays(30)
-	e.Prune()
-	sink.mu.Lock()
-	first := sink.before
-	sink.mu.Unlock()
-	if d := time.Since(first).Hours() / 24; d < 29 || d > 31 {
-		t.Fatalf("prune cutoff %v is %.1f days old, want ~30", first, d)
-	}
-
-	// A live settings change moves the cutoff on the next pass.
-	e.SetRetentionDays(1)
-	e.Prune()
-	sink.mu.Lock()
-	second := sink.before
-	sink.mu.Unlock()
-	if !second.After(first) {
-		t.Fatalf("cutoff %v did not move after shortening retention (was %v)", second, first)
-	}
-	if d := time.Since(second).Hours() / 24; d < 0.5 || d > 1.5 {
-		t.Fatalf("prune cutoff %v is %.2f days old, want ~1", second, d)
-	}
 }

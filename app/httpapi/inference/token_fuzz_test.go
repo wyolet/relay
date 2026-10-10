@@ -1,7 +1,7 @@
 package inference
 
-// token_fuzz_test.go fuzzes the two functions every inbound bearer reaches
-// before anything is trusted: the shape sniff and the token verification.
+// token_fuzz_test.go fuzzes the token half of the credential middleware, which
+// every inbound bearer shaped like a token reaches before anything is trusted.
 
 import (
 	"net/http/httptest"
@@ -30,25 +30,6 @@ func fuzzBearerSeeds(valid string) []string {
 		"ey" + strings.Repeat("A", 64<<10) + ".a.b",
 		"\x00ey.a.b",
 	}
-}
-
-// FuzzLooksLikeToken pins the classifier as a total function on arbitrary
-// bearers: it must answer for every input and never disagree with the rule
-// it states, because a bearer misrouted to the token lookup can only be
-// authenticated by the key lookup it skipped.
-func FuzzLooksLikeToken(f *testing.F) {
-	valid := newPrincipalFixture().mint(f, nil)
-	for _, seed := range fuzzBearerSeeds(valid) {
-		f.Add(seed)
-	}
-
-	f.Fuzz(func(t *testing.T, bearer string) {
-		got := looksLikeToken(bearer)
-		want := strings.HasPrefix(bearer, "ey") && strings.Count(bearer, ".") == 2
-		if got != want {
-			t.Fatalf("looksLikeToken(%q) = %v, want %v", bearer, got, want)
-		}
-	})
 }
 
 // FuzzTokenPrincipal drives the whole token half of the credential

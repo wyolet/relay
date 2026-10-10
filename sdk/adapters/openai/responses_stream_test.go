@@ -396,7 +396,7 @@ func extractResponsesEvents(b []byte) []string {
 
 // --- E2E: Responses → canonical → CC wire → canonical → Responses ---
 
-// R-2: response.refusal.delta events map to text item.delta in canonical stream.
+// response.refusal.delta events map to text item.delta in canonical stream.
 func TestResponsesNewToCanonicalStream_RefusalDelta(t *testing.T) {
 	fn := (ResponsesTranslator{}).NewToCanonicalStream()
 
@@ -441,7 +441,7 @@ func TestResponsesNewToCanonicalStream_RefusalDelta(t *testing.T) {
 	}
 }
 
-// R-2: response.failed must emit generation.completed so the consumer isn't hung.
+// response.failed must emit generation.completed so the consumer isn't hung.
 func TestResponsesNewToCanonicalStream_ResponseFailed(t *testing.T) {
 	fn := (ResponsesTranslator{}).NewToCanonicalStream()
 
@@ -473,7 +473,7 @@ func TestResponsesNewToCanonicalStream_ResponseFailed(t *testing.T) {
 	}
 }
 
-// R-3: canonical→Responses streaming emits non-empty call_id and name on function call events.
+// Canonical→Responses streaming emits non-empty call_id and name on function call events.
 func TestResponsesNewFromCanonicalStream_FunctionCallHasNameAndCallID(t *testing.T) {
 	fn := (ResponsesTranslator{}).NewFromCanonicalStream()
 
@@ -551,7 +551,7 @@ func TestResponsesStream_HostedToolNoOrphanStarted(t *testing.T) {
 	}
 }
 
-// --- tool_choice object modes (PR3) ---
+// --- tool_choice object modes ---
 
 // TestResponsesStream_FunctionCallItemStartedCarriesName: item.started for a
 // function_call must carry the tool name (for downstream Anthropic-style emit).

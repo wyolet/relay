@@ -335,15 +335,32 @@ func TestVisibleMatchesAuthorizeGet(t *testing.T) {
 	}
 }
 
-// The bootstrap admin from config/users carries no bindings at all.
-func TestBootstrapAdminNeedsNoBindings(t *testing.T) {
+// The break-glass token and the bootstrap admin from config/users carry no
+// bindings at all, and answer every verb on every owner.
+func TestAdminActorsNeedNoBindings(t *testing.T) {
 	cat := newFixture(t)
 	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
-	root := actorOf(ids.New(), nil, user.RoleAdmin)
+	owners := []*meta.Owner{
+		projectOwner(p1ID), projectOwner(p3ID), projectOwner(p4ID),
+		{Kind: meta.OwnerTeam, ID: t2ID}, &globalScope, providerOwner(), userOwner(ids.New()),
+	}
 
-	for _, action := range []string{"settings.update", "teams.create", "keys.delete", "system.apply", "audit.read"} {
-		if err := rbac.Authorize(ctxOf(root), action, authz.Resource{Kind: "any", Owner: projectOwner(p3ID)}); err != nil {
-			t.Fatalf("bootstrap admin denied %q: %v", action, err)
+	for name, a := range map[string]*actor.Actor{
+		"admin token":     {AdminToken: true},
+		"bootstrap admin": actorOf(ids.New(), nil, user.RoleAdmin),
+	} {
+		ctx := ctxOf(a)
+		for _, action := range []string{"settings.update", "teams.create", "keys.delete", "system.apply", "audit.read"} {
+			if err := rbac.Authorize(ctx, action, authz.Resource{Kind: "any", Owner: projectOwner(p3ID)}); err != nil {
+				t.Fatalf("%s denied %q: %v", name, action, err)
+			}
+		}
+		for _, p := range probes {
+			for _, o := range owners {
+				if err := rbac.Authorize(ctx, p.kind+"."+p.verb, resourceOf(p, o)); err != nil {
+					t.Fatalf("%s denied %s.%s on %+v: %v", name, p.kind, p.verb, *o, err)
+				}
+			}
 		}
 	}
 }

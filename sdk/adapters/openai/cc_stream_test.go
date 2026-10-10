@@ -299,15 +299,7 @@ func TestCCNewToCanonicalStream_ReasoningContent(t *testing.T) {
 	}
 }
 
-// CC-1: NewFromCanonicalStream must return a non-nil function (was nil → panic).
-func TestCCNewFromCanonicalStream_NotNil(t *testing.T) {
-	fn := (CCTranslator{}).NewFromCanonicalStream()
-	if fn == nil {
-		t.Fatal("NewFromCanonicalStream returned nil")
-	}
-}
-
-// CC-1: canonical event sequence → valid chat.completion.chunk frames + [DONE].
+// A canonical event sequence → valid chat.completion.chunk frames + [DONE].
 func TestCCNewFromCanonicalStream_TextSequence(t *testing.T) {
 	fn := (CCTranslator{}).NewFromCanonicalStream()
 
@@ -341,7 +333,7 @@ func TestCCNewFromCanonicalStream_TextSequence(t *testing.T) {
 	}
 }
 
-// CC-1: tool call streaming emits id+name on first chunk, arguments on delta chunks.
+// Tool call streaming emits id+name on first chunk, arguments on delta chunks.
 func TestCCNewFromCanonicalStream_ToolCallSequence(t *testing.T) {
 	fn := (CCTranslator{}).NewFromCanonicalStream()
 
@@ -373,7 +365,7 @@ func TestCCNewFromCanonicalStream_ToolCallSequence(t *testing.T) {
 	}
 }
 
-// CC-1: error event produces an error body + [DONE].
+// An error event produces an error body + [DONE].
 func TestCCNewFromCanonicalStream_ErrorEvent(t *testing.T) {
 	fn := (CCTranslator{}).NewFromCanonicalStream()
 
