@@ -5,7 +5,8 @@ package integration_test
 import (
 	"net/http"
 	"testing"
-	"time"
+
+	appcatalog "github.com/wyolet/relay/app/catalog"
 )
 
 // A personal key acts as its user: disabling the user stops the key, and
@@ -24,21 +25,17 @@ func TestIntegration_DisabledUsersPersonalKeysStopWorking(t *testing.T) {
 	if code, raw := f.adminDo(http.MethodPut, "/api/users/by-id/"+owner.ID, `{"disabled":true}`); code != http.StatusOK {
 		t.Fatalf("disable = %d: %s", code, raw)
 	}
-	if got, reason := f.waitForRejection(keyPlain, 2*time.Second); got != http.StatusUnauthorized {
+	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool { return !s.UserEnabled(owner.ID) },
+		"the user's disable never reached the snapshot")
+	if got, reason := f.chat(keyPlain, "test-model"); got != http.StatusUnauthorized {
 		t.Fatalf("chat with a disabled user's key = %d (%s), want 401", got, reason)
 	}
 	if code, raw := f.adminDo(http.MethodPut, "/api/users/by-id/"+owner.ID, `{"disabled":false}`); code != http.StatusOK {
 		t.Fatalf("re-enable = %d: %s", code, raw)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		got, reason := f.chat(keyPlain, "test-model")
-		if got == http.StatusOK {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("chat after re-enable = %d (%s), want 200", got, reason)
-		}
-		time.Sleep(50 * time.Millisecond)
+	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool { return s.UserEnabled(owner.ID) },
+		"the user's re-enable never reached the snapshot")
+	if got, reason := f.chat(keyPlain, "test-model"); got != http.StatusOK {
+		t.Fatalf("chat after re-enable = %d (%s), want 200", got, reason)
 	}
 }
