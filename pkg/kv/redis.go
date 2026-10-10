@@ -98,7 +98,7 @@ func (r *Redis) trackSlow(op, key string, start time.Time, err error) {
 	}
 	st := r.client.PoolStats()
 	slog.Warn("kv: slow redis op",
-		"op", op, "key", key, "dur_ms", d.Milliseconds(), "err", err,
+		"op", op, "key", redactKey(key), "dur_ms", d.Milliseconds(), "err", err,
 		"pool_hits", st.Hits, "pool_misses", st.Misses, "pool_timeouts", st.Timeouts,
 		"pool_total", st.TotalConns, "pool_idle", st.IdleConns)
 }
