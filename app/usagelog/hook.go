@@ -6,7 +6,6 @@ import (
 
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/usage"
-	sdkusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -54,6 +53,10 @@ const ExtrasKeyInstance = "instance"
 // correlation only; RequestID is always relay-minted.
 const ExtrasKeyClientRequestID = "client_request_id"
 
+// ExtrasKeyServiceTier carries the service tier the upstream reported
+// serving, the one the cost was priced at. Absent when the upstream names none.
+const ExtrasKeyServiceTier = "service_tier"
+
 // stampInstance records which relay instance emitted the event. Stamped
 // here rather than per runner so every source (pipeline/proxy/ws/batch)
 // carries it without each runner knowing the config.
@@ -74,22 +77,20 @@ func stampInstance(ev *Event, instance string) {
 // incrementally and calls buildEventWithSummary — same Event, same
 // Namespace, no retained body.
 func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body []byte, pricer *Pricer) *Event {
-	var tokens sdkusage.Tokens
-	var finish string
+	var sum v1.Summary
 	if lc.Translator != nil && len(body) > 0 {
 		if s, err := v1.ExtractSummary(lc.Translator, body); err == nil {
-			tokens = s.Tokens
-			finish = string(s.FinishReason)
+			sum = s
 		}
 	}
-	return buildEventWithSummary(lc, status, errKind, errMsg, tokens, finish, pricer)
+	return buildEventWithSummary(lc, status, errKind, errMsg, sum, pricer)
 }
 
-// buildEventWithSummary assembles the Event from an already-extracted token
-// map + finish reason. Shared by buildEvent (buffered) and the streaming
-// observer (which harvests the Summary frame-by-frame) so both land the
-// identical Event regardless of stream vs buffered.
-func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg string, tokens sdkusage.Tokens, finishReason string, pricer *Pricer) *Event {
+// buildEventWithSummary assembles the Event from an already-extracted
+// Summary. Shared by buildEvent (buffered) and the streaming observer (which
+// harvests the Summary frame-by-frame) so both land the identical Event
+// regardless of stream vs buffered.
+func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg string, sum v1.Summary, pricer *Pricer) *Event {
 	// A runner that passes a provider's error response through to the caller reports only the status. The body is not summarized into the message: a validation error can quote the request, and the usage log is not gated by the payload-logging opt-in.
 	if errKind == "" && status >= 400 {
 		errKind = usage.ErrorKindUpstream
@@ -154,14 +155,14 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		}
 	}
 
-	out.Tokens = tokens
-	out.FinishReason = finishReason
+	out.Tokens = sum.Tokens
+	out.FinishReason = string(sum.FinishReason)
 
 	// Emit-time cost: priced only when a rate sheet was stamped AND tokens
 	// matched its meters — anything else stays unpriced (CostNanos nil),
 	// never a fabricated $0. The Pricing slug above is stamped regardless,
 	// recording which sheet covered the route.
-	if nanos, breakdown, ok := pricer.Price(lc.PricingID, out.Tokens); ok {
+	if nanos, breakdown, ok := pricer.Price(lc.PricingID, out.Tokens, sum.ServiceTier); ok {
 		out.CostNanos = &nanos
 		out.CostBreakdown = breakdown
 	}
@@ -179,6 +180,12 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		if len(extras) > 0 {
 			out.Extras = extras
 		}
+	}
+	if sum.ServiceTier != "" {
+		if out.Extras == nil {
+			out.Extras = map[string]string{}
+		}
+		out.Extras[ExtrasKeyServiceTier] = sum.ServiceTier
 	}
 
 	if raw, ok := lc.Metadata[MetadataKeyRequestTags].(string); ok {

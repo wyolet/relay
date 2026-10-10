@@ -74,7 +74,7 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c report
 	m := resolveModel(snap, inf, hint)
 	ev.ModelID, ev.Model, ev.Provider, ev.Pricing = m.id, m.name, m.provider, m.pricingName
 	ev.Tokens = tokens(inf.Tokens)
-	if nanos, breakdown, ok := pricer.Price(m.pricingID, ev.Tokens); ok {
+	if nanos, breakdown, ok := pricer.Price(m.pricingID, ev.Tokens, ""); ok {
 		ev.CostNanos = &nanos
 		ev.CostBreakdown = breakdown
 	}

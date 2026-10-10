@@ -123,6 +123,8 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 		}
 		out["usage"] = u
 	}
+	// canonical: service_tier dropped — it is the serving upstream's own lane
+	// name; writing it into usage.service_tier would mislabel Anthropic's lanes.
 
 	return json.Marshal(out)
 }

@@ -130,6 +130,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		if len(e.Usage) > 0 {
 			frame["usageMetadata"] = canonicalUsageToGemini(e.Usage)
 		}
+		// canonical: service_tier dropped — same reason as SerializeResponse.
 		b, err := json.Marshal(frame)
 		if err != nil {
 			return nil, err

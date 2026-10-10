@@ -204,6 +204,9 @@ func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
 		p.Spec.Rates = append(p.Spec.Rates,
 			pricing.Rate{Meter: pricing.MeterTokensCacheRead, Unit: pricing.UnitPerMillion, Amount: 0.3},
 			pricing.Rate{Meter: pricing.MeterTokensCacheCreation, Unit: pricing.UnitPerMillion, Amount: 3.75},
+			// Service-tier rates must neither displace base rates nor add a tier.
+			pricing.Rate{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 5, ServiceTier: "priority"},
+			pricing.Rate{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 12, AboveTokens: 400000, ServiceTier: "priority"},
 		)
 	}
 
@@ -213,6 +216,9 @@ func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
 		if h.Name == "priced-host" {
 			priced = h
 		}
+	}
+	if priced.InputUSDPerMtok != 3 {
+		t.Errorf("base input = %v", priced.InputUSDPerMtok)
 	}
 	if priced.CacheReadUSDPerMtok == nil || *priced.CacheReadUSDPerMtok != 0.3 {
 		t.Errorf("cache read = %v", priced.CacheReadUSDPerMtok)

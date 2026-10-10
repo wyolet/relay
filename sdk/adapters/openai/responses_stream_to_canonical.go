@@ -204,6 +204,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			FinishReason:      cr.FinishReason,
 			Usage:             cr.Usage,
 			IncompleteDetails: cr.IncompleteDetails,
+			ServiceTier:       cr.ServiceTier,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
 
@@ -224,6 +225,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			FinishReason:      cr.FinishReason,
 			Usage:             cr.Usage,
 			IncompleteDetails: cr.IncompleteDetails,
+			ServiceTier:       cr.ServiceTier,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
 

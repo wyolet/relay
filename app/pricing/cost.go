@@ -23,17 +23,24 @@ import (
 // zero (priced meters with zero counts) returns ok=true with total 0.
 //
 // Each token is charged once. Some keys count tokens that are also inside input or output (usage.Tokens lists them); when the sheet has a rate for such a part, the part is charged there and left out of the whole's charge. So a breakdown entry is rate × usage.Tokens.Billable for its key, which for input and output can be less than rate × the stored count. The tier still comes from the stored input count.
+//
+// CostNanos prices at the base rates; CostNanosForServiceTier prices a response the upstream reports as served in a service tier.
 func (p *Pricing) CostNanos(tokens usage.Tokens) (total int64, breakdown map[string]int64, ok bool) {
+	return p.CostNanosForServiceTier(tokens, "")
+}
+
+// CostNanosForServiceTier is CostNanos with rates picked as in RateForServiceTier.
+func (p *Pricing) CostNanosForServiceTier(tokens usage.Tokens, serviceTier string) (total int64, breakdown map[string]int64, ok bool) {
 	if p == nil || !p.IsEnabled() || len(tokens) == 0 {
 		return 0, nil, false
 	}
 	tier := int(tokens["input"])
 	for key := range tokens {
-		rate, found := p.rateForKey(key, tier)
+		rate, found := p.rateForKey(key, tier, serviceTier)
 		if !found {
 			continue
 		}
-		count := p.billable(tokens, key, tier)
+		count := p.billable(tokens, key, tier, serviceTier)
 		var n int64
 		switch rate.Unit {
 		case UnitPerMillion:
@@ -52,12 +59,12 @@ func (p *Pricing) CostNanos(tokens usage.Tokens) (total int64, breakdown map[str
 }
 
 // rateForKey returns the rate that charges a usage key at the given tier, or false when the sheet does not charge that key.
-func (p *Pricing) rateForKey(key string, tier int) (*Rate, bool) {
+func (p *Pricing) rateForKey(key string, tier int, serviceTier string) (*Rate, bool) {
 	meter, known := MeterForUsageKey(key)
 	if !known {
 		return nil, false
 	}
-	rate, found := p.RateFor(meter, tier)
+	rate, found := p.RateForServiceTier(meter, tier, serviceTier)
 	if !found || (rate.Unit != UnitPerMillion && rate.Unit != UnitPerUnit) {
 		return nil, false
 	}
@@ -65,9 +72,9 @@ func (p *Pricing) rateForKey(key string, tier int) (*Rate, bool) {
 }
 
 // billable is the count of a usage key this sheet charges at the key's own rate.
-func (p *Pricing) billable(tokens usage.Tokens, key string, tier int) int64 {
+func (p *Pricing) billable(tokens usage.Tokens, key string, tier int, serviceTier string) int64 {
 	return tokens.Billable(key, func(part string) bool {
-		_, rated := p.rateForKey(part, tier)
+		_, rated := p.rateForKey(part, tier, serviceTier)
 		return rated
 	})
 }

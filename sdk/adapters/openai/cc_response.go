@@ -17,10 +17,11 @@ func (CCTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 	}
 
 	resp := &v1.Response{
-		ID:        cc.ID,
-		Object:    "response",
-		CreatedAt: cc.Created,
-		Model:     cc.Model,
+		ID:          cc.ID,
+		Object:      "response",
+		CreatedAt:   cc.Created,
+		Model:       cc.Model,
+		ServiceTier: cc.ServiceTier,
 	}
 	if resp.CreatedAt == 0 {
 		resp.CreatedAt = time.Now().Unix()
@@ -85,10 +86,11 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 	}
 
 	cc := ChatResponse{
-		ID:      resp.ID,
-		Object:  "chat.completion",
-		Created: resp.CreatedAt,
-		Model:   resp.Model,
+		ID:          resp.ID,
+		Object:      "chat.completion",
+		Created:     resp.CreatedAt,
+		Model:       resp.Model,
+		ServiceTier: resp.ServiceTier,
 	}
 	if len(resp.Usage) > 0 {
 		cc.Usage = canonicalUsageToCC(resp.Usage)

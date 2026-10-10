@@ -104,6 +104,24 @@ func TestCostBreakdown_PartChargedOnce(t *testing.T) {
 	}
 }
 
+func TestCostBreakdownForServiceTier(t *testing.T) {
+	b := Binding{Pricing: []Rate{
+		{Meter: "tokens.input", Unit: "per_million", Amount: 4, ServiceTier: "priority"},
+		{Meter: "tokens.input", Unit: "per_million", Amount: 2},
+		{Meter: "tokens.output", Unit: "per_million", Amount: 8},
+	}}
+	tokens := usage.Tokens{"input": 1_000_000, "output": 100_000, "audio_input": 0}
+	for serviceTier, want := range map[string]float64{"": 2.8, "priority": 4.8, "flex": 2.8} {
+		cost, unpriced, ok := b.CostBreakdownForServiceTier(tokens, serviceTier)
+		if !ok || len(unpriced) != 0 || math.Abs(cost-want) > 1e-9 {
+			t.Fatalf("service tier %q: cost=%v unpriced=%v ok=%v, want %v", serviceTier, cost, unpriced, ok, want)
+		}
+	}
+	if cost, _ := b.Cost(tokens); math.Abs(cost-2.8) > 1e-9 {
+		t.Fatalf("Cost must price at base rates, got %v", cost)
+	}
+}
+
 func TestIndexedCatalog_Cost(t *testing.T) {
 	ic, err := Load()
 	if err != nil {

@@ -92,6 +92,27 @@ func TestExtractUsage_CanonicalSSE(t *testing.T) {
 	}
 }
 
+func TestExtractSummary_ServiceTier(t *testing.T) {
+	completed, _ := json.Marshal(GenerationCompletedEvent{
+		ID:          "resp_1",
+		Status:      "completed",
+		Usage:       usage.Tokens{"input": 10},
+		ServiceTier: "priority",
+	})
+	body := append(SSEFrame{Event: EventGenerationCreated, Data: []byte(`{}`)}.Bytes(),
+		SSEFrame{Event: EventGenerationCompleted, Data: completed}.Bytes()...)
+
+	s, err := ExtractSummary(fakeTranslator{}, body)
+	if err != nil || s.ServiceTier != "priority" {
+		t.Fatalf("stream: service tier %q, err %v", s.ServiceTier, err)
+	}
+	summ := NewStreamSummarizer(fakeTranslator{})
+	summ.Observe(bytes.TrimSuffix(SSEFrame{Event: EventGenerationCompleted, Data: completed}.Bytes(), []byte("\n\n")))
+	if got := summ.Summary().ServiceTier; got != "priority" {
+		t.Fatalf("summarizer: service tier %q", got)
+	}
+}
+
 func TestExtractUsage_EmptyBody(t *testing.T) {
 	u, err := ExtractUsage(fakeTranslator{}, nil)
 	if err != nil {

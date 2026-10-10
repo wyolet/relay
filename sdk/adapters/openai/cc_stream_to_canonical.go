@@ -49,6 +49,7 @@ type ccToCanonicalStream struct {
 	reasoningItem    *ccStreamItem
 	toolItems        map[int]*ccStreamItem
 	lastUsage        *Usage
+	serviceTier      string
 	lifecycleEmitted bool
 	status           v1.Status
 	finishReason     v1.FinishReason
@@ -127,6 +128,9 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 
 	if ccChunk.Usage != nil {
 		s.lastUsage = ccChunk.Usage
+	}
+	if ccChunk.ServiceTier != "" {
+		s.serviceTier = ccChunk.ServiceTier
 	}
 
 	var frames []v1.SSEFrame
@@ -269,6 +273,7 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 		FinishReason:      finish,
 		Usage:             u,
 		IncompleteDetails: incomplete,
+		ServiceTier:       s.serviceTier,
 	})
 	frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
 

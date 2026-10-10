@@ -285,6 +285,10 @@ spec:
     - meter: tokens.output
       unit: per_million
       amount: 15.00
+    - meter: tokens.input
+      unit: per_million
+      amount: 6.00
+      serviceTier: priority
 `
 
 func TestToPricing_HappyPath(t *testing.T) {
@@ -313,6 +317,12 @@ func TestToPricing_HappyPath(t *testing.T) {
 	}
 	if p.Spec.Rates[0].Amount != 3.00 {
 		t.Errorf("rates[0].amount: want 3.00, got %f", p.Spec.Rates[0].Amount)
+	}
+	if p.Spec.Rates[2].ServiceTier != "priority" {
+		t.Errorf("rates[2].serviceTier: want priority, got %q", p.Spec.Rates[2].ServiceTier)
+	}
+	if back := manifest.FromPricing(p, testRev); back.Spec.Rates[2].ServiceTier != "priority" {
+		t.Errorf("FromPricing dropped serviceTier: %+v", back.Spec.Rates[2])
 	}
 }
 

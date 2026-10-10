@@ -188,6 +188,7 @@ func ratesFrom(p *pricing.Pricing) []sdkcatalog.Rate {
 			Unit:        string(r.Unit),
 			Amount:      r.Amount,
 			AboveTokens: r.AboveTokens,
+			ServiceTier: r.ServiceTier,
 		}
 	}
 	return rates

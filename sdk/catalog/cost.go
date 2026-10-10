@@ -12,7 +12,14 @@ import (
 // callers rendering an estimate should prefer CostBreakdown so unpriced meters
 // don't silently deflate the total.
 func (b Binding) Cost(tokens usage.Tokens) (float64, bool) {
-	cost, _, ok := b.CostBreakdown(tokens)
+	return b.CostForServiceTier(tokens, "")
+}
+
+// CostForServiceTier is Cost for a response the upstream reports as served in
+// serviceTier (the canonical Response.ServiceTier); see
+// CostBreakdownForServiceTier.
+func (b Binding) CostForServiceTier(tokens usage.Tokens, serviceTier string) (float64, bool) {
+	cost, _, ok := b.CostBreakdownForServiceTier(tokens, serviceTier)
 	return cost, ok
 }
 
@@ -26,14 +33,22 @@ func (b Binding) Cost(tokens usage.Tokens) (float64, bool) {
 // meter is silently missing money otherwise, and a newly-priced meter type
 // would quietly deflate every estimate that ignored it. Each token is charged
 // once: a part with a rate of its own (see usage.Tokens) is left out of its
-// whole's charge.
+// whole's charge. Prices at the base rates; see CostBreakdownForServiceTier.
 func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []string, ok bool) {
+	return b.CostBreakdownForServiceTier(tokens, "")
+}
+
+// CostBreakdownForServiceTier is CostBreakdown for a response served in
+// serviceTier. For each meter a rate carrying that service tier wins over the
+// base rate whenever one qualifies at the request's input count; a meter the
+// tier does not price bills at the base rate. Matches app/pricing.
+func (b Binding) CostBreakdownForServiceTier(tokens usage.Tokens, serviceTier string) (cost float64, unpriced []string, ok bool) {
 	if len(b.Pricing) == 0 || len(tokens) == 0 {
 		return 0, nil, false
 	}
 	tier := int(tokens["input"])
 	hasRate := func(key string) bool {
-		_, ok := b.rateForKey(key, tier)
+		_, ok := b.rateForKey(key, tier, serviceTier)
 		return ok
 	}
 	for key, count := range tokens {
@@ -41,7 +56,7 @@ func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []st
 			continue
 		}
 		if meter, known := meterForUsageKey(key); known {
-			if rate, rated := rateFor(b.Pricing, meter, tier); rated {
+			if rate, rated := rateFor(b.Pricing, meter, tier, serviceTier); rated {
 				count := tokens.Billable(key, hasRate)
 				switch rate.Unit {
 				case "per_million":
@@ -75,12 +90,12 @@ func (ic *IndexedCatalog) Cost(ref string, tokens usage.Tokens) (cost float64, u
 }
 
 // rateForKey returns the rate that charges a usage key at the given tier, or false when the binding does not charge that key.
-func (b Binding) rateForKey(key string, tier int) (*Rate, bool) {
+func (b Binding) rateForKey(key string, tier int, serviceTier string) (*Rate, bool) {
 	meter, known := meterForUsageKey(key)
 	if !known {
 		return nil, false
 	}
-	rate, found := rateFor(b.Pricing, meter, tier)
+	rate, found := rateFor(b.Pricing, meter, tier, serviceTier)
 	if !found || (rate.Unit != "per_million" && rate.Unit != "per_unit") {
 		return nil, false
 	}
@@ -115,11 +130,20 @@ func meterForUsageKey(k string) (string, bool) {
 	return "", false
 }
 
-func rateFor(rates []Rate, meter string, tokens int) (*Rate, bool) {
+func rateFor(rates []Rate, meter string, tokens int, serviceTier string) (*Rate, bool) {
+	if serviceTier != "" {
+		if r, ok := rateInServiceTier(rates, meter, tokens, serviceTier); ok {
+			return r, true
+		}
+	}
+	return rateInServiceTier(rates, meter, tokens, "")
+}
+
+func rateInServiceTier(rates []Rate, meter string, tokens int, serviceTier string) (*Rate, bool) {
 	var best *Rate
 	for i := range rates {
 		r := &rates[i]
-		if r.Meter != meter {
+		if r.Meter != meter || r.ServiceTier != serviceTier {
 			continue
 		}
 		if tokens < r.AboveTokens {

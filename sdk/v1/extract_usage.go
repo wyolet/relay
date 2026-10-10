@@ -37,11 +37,17 @@ func ExtractUsage(tr Translator, body []byte) (usage.Tokens, error) {
 }
 
 // Summary is the canonical post-flight view of a response body: token
-// counts plus the finish reason. Both are harvested in a single decode
-// (one ParseResponse / one SSE walk) so observers don't double-parse.
+// counts, the finish reason, and the served service tier. All are harvested
+// in a single decode (one ParseResponse / one SSE walk) so observers don't
+// double-parse.
 type Summary struct {
 	Tokens       usage.Tokens
 	FinishReason FinishReason
+	ServiceTier  string
+}
+
+func (s Summary) isEmpty() bool {
+	return len(s.Tokens) == 0 && s.FinishReason == "" && s.ServiceTier == ""
 }
 
 // ExtractSummary decodes a vendor wire response body — sync JSON or SSE
@@ -63,7 +69,7 @@ func ExtractSummary(tr Translator, body []byte) (Summary, error) {
 		if err != nil || resp == nil {
 			return Summary{}, nil
 		}
-		return Summary{Tokens: resp.Usage, FinishReason: resp.FinishReason}, nil
+		return Summary{Tokens: resp.Usage, FinishReason: resp.FinishReason, ServiceTier: resp.ServiceTier}, nil
 	}
 
 	return extractSummaryFromSSE(tr, body), nil
@@ -105,7 +111,7 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 		if err != nil || len(canonChunk) == 0 {
 			continue
 		}
-		if s := harvestSummaryFromCanonicalSSE(canonChunk); len(s.Tokens) > 0 || s.FinishReason != "" {
+		if s := harvestSummaryFromCanonicalSSE(canonChunk); !s.isEmpty() {
 			found = s
 		}
 	}
@@ -140,6 +146,9 @@ func harvestSummaryFromCanonicalSSE(canon []byte) Summary {
 		}
 		if ev.FinishReason != "" {
 			found.FinishReason = ev.FinishReason
+		}
+		if ev.ServiceTier != "" {
+			found.ServiceTier = ev.ServiceTier
 		}
 	}
 	return found

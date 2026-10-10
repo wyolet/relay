@@ -21,6 +21,7 @@ func UnmarshalResponsesResponse(data []byte) (*ResponsesResponse, error) {
 		Status            ResponsesStatus             `json:"status"`
 		Output            []json.RawMessage           `json:"output"`
 		Usage             *ResponsesUsage             `json:"usage"`
+		ServiceTier       string                      `json:"service_tier"`
 		Error             *ResponsesError             `json:"error"`
 		IncompleteDetails *ResponsesIncompleteDetails `json:"incomplete_details"`
 	}
@@ -45,6 +46,7 @@ func UnmarshalResponsesResponse(data []byte) (*ResponsesResponse, error) {
 		Status:            wire.Status,
 		Output:            output,
 		Usage:             wire.Usage,
+		ServiceTier:       wire.ServiceTier,
 		Error:             wire.Error,
 		IncompleteDetails: wire.IncompleteDetails,
 	}, nil

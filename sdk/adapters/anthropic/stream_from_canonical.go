@@ -205,6 +205,7 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 	if len(e.Usage) > 0 {
 		outTokens = e.Usage["output"]
 	}
+	// canonical: service_tier dropped — same reason as SerializeResponse.
 
 	md, _ := json.Marshal(map[string]any{
 		"type": "message_delta",

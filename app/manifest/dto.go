@@ -314,6 +314,7 @@ type PricingRateDTO struct {
 	Unit        string  `json:"unit"                  yaml:"unit"`
 	Amount      float64 `json:"amount"                yaml:"amount"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty"`
+	ServiceTier string  `json:"serviceTier,omitempty" yaml:"serviceTier,omitempty"`
 }
 
 // BudgetDTO is the wire form of a spend cap, shared by Team and Project.
