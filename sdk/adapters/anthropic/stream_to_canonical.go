@@ -125,24 +125,14 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 }
 
 func (s *anthropicToCanonicalStream) handleMessageStop() ([]byte, error) {
-	// canonical: raw unknown stop_reason dropped on the stream — the completed
-	// event has no extensions slot; the incomplete status still keeps it from
-	// reading as success, and the buffered path carries it.
 	status, finish, incomplete := anthropicStopReasonToCanonical(s.stopReason)
 
 	gen := v1.GenerationCompletedEvent{
-		ID:           s.responseID,
-		Status:       status,
-		FinishReason: finish,
-		Usage:        anthropicTokens(s.inputTokens, s.outputTokens, s.cachedTokens, s.cacheCreationTokens),
-	}
-	if incomplete != nil {
-		// encode incomplete_details as extension — GenerationCompletedEvent
-		// doesn't carry it directly, but we still want it signaled.
-		// Map: if status=incomplete+pause_turn, use finish_reason placeholder.
-		// For max_tokens: finish_reason=length is already set.
-		// For pause_turn: no finish_reason; status alone signals it.
-		_ = incomplete // status=incomplete already conveys this
+		ID:                s.responseID,
+		Status:            status,
+		FinishReason:      finish,
+		Usage:             anthropicTokens(s.inputTokens, s.outputTokens, s.cachedTokens, s.cacheCreationTokens),
+		IncompleteDetails: incomplete,
 	}
 
 	completedData, _ := json.Marshal(gen)

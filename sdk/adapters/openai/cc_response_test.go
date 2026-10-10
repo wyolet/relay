@@ -150,7 +150,7 @@ func TestCCParseResponse_FinishReasonMappings(t *testing.T) {
 		{"tool_calls", v1.StatusCompleted, v1.FinishReasonToolCalls, false},
 		{"content_filter", v1.StatusCompleted, v1.FinishReasonContentFilter, false},
 		{"function_call", v1.StatusCompleted, v1.FinishReasonToolCalls, false},
-		{"unknown_future", v1.StatusIncomplete, "", true},
+		{"unknown_future", v1.StatusIncomplete, v1.FinishReasonOther, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.reason, func(t *testing.T) {

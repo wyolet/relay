@@ -3,6 +3,7 @@ package gemini
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -180,7 +181,7 @@ func geminiFinishReasonToCanonical(reason string, hasFunctionCall bool) (v1.Stat
 	case "STOP", "":
 		return v1.StatusCompleted, v1.FinishReasonStop, nil
 	case "MAX_TOKENS":
-		return v1.StatusIncomplete, v1.FinishReasonLength, &v1.IncompleteDetails{Reason: "max_tokens"}
+		return v1.StatusIncomplete, v1.FinishReasonLength, &v1.IncompleteDetails{Reason: "max_output_tokens"}
 	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
 		// Content blocked by Gemini's safety/policy filters. Must NOT look like
 		// a normal STOP — safety auditing, retry, and billing classification
@@ -194,11 +195,13 @@ func geminiFinishReasonToCanonical(reason string, hasFunctionCall bool) (v1.Stat
 		// Unsupported language — treated as a content filter (output withheld).
 		return v1.StatusIncomplete, v1.FinishReasonContentFilter, &v1.IncompleteDetails{Reason: "unsupported_language"}
 	default:
-		// Unknown/future reason: surface as incomplete with the raw reason
-		// rather than silently masquerading as a successful stop.
-		return v1.StatusIncomplete, v1.FinishReasonStop, &v1.IncompleteDetails{Reason: "gemini:" + reason}
+		return v1.StatusIncomplete, v1.FinishReasonOther, &v1.IncompleteDetails{Reason: unknownFinishReasonPrefix + reason}
 	}
 }
+
+// unknownFinishReasonPrefix marks incomplete_details.reason for a finishReason
+// this adapter does not recognise.
+const unknownFinishReasonPrefix = "gemini:"
 
 // canonicalFinishReasonToGemini maps canonical status + finish_reason + incomplete_details
 // back to a Gemini finishReason string.
@@ -209,8 +212,16 @@ func canonicalFinishReasonToGemini(status v1.Status, reason v1.FinishReason, inc
 		// canonical: status=failed/incomplete empty finish_reason → OTHER, not STOP
 		return "OTHER"
 	}
-	if incomplete != nil && incomplete.Reason == "max_tokens" {
+	if incomplete != nil && incomplete.Reason == "max_output_tokens" {
 		return "MAX_TOKENS"
+	}
+	if reason == v1.FinishReasonOther {
+		if incomplete != nil {
+			if raw, ok := strings.CutPrefix(incomplete.Reason, unknownFinishReasonPrefix); ok && raw != "" {
+				return raw
+			}
+		}
+		return "OTHER"
 	}
 	switch reason {
 	case v1.FinishReasonStop:

@@ -98,6 +98,9 @@ type GenerationCompletedEvent struct {
 	Status       Status       `json:"status"`
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 	Usage        usage.Tokens `json:"usage,omitempty"`
+	// IncompleteDetails mirrors Response.IncompleteDetails so a raw upstream
+	// reason behind FinishReasonOther survives the stream path too.
+	IncompleteDetails *IncompleteDetails `json:"incomplete_details,omitempty"`
 
 	// RelayUsage rides the terminal event when the caller opted into echo
 	// (X-WR-Usage: full) on a canonical stream. Relay-produced, nil

@@ -199,10 +199,11 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		}
 		cr := responsesResponseToCanonical(resp)
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
-			ID:           cr.ID,
-			Status:       cr.Status,
-			FinishReason: cr.FinishReason,
-			Usage:        cr.Usage,
+			ID:                cr.ID,
+			Status:            cr.Status,
+			FinishReason:      cr.FinishReason,
+			Usage:             cr.Usage,
+			IncompleteDetails: cr.IncompleteDetails,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
 
@@ -218,10 +219,11 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		}
 		cr := responsesResponseToCanonical(resp)
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
-			ID:           cr.ID,
-			Status:       v1.StatusFailed,
-			FinishReason: cr.FinishReason,
-			Usage:        cr.Usage,
+			ID:                cr.ID,
+			Status:            v1.StatusFailed,
+			FinishReason:      cr.FinishReason,
+			Usage:             cr.Usage,
+			IncompleteDetails: cr.IncompleteDetails,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
 

@@ -191,7 +191,7 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 		return nil, fmt.Errorf("canonical→anthropic: generation.completed: %w", err)
 	}
 
-	stopReason := canonicalFinishReasonToAnthropicStr(e.FinishReason)
+	stopReason := canonicalFinishReasonToAnthropic(e.FinishReason, e.IncompleteDetails)
 	if e.Status == v1.StatusIncomplete && e.FinishReason == "" {
 		stopReason = "pause_turn"
 	}

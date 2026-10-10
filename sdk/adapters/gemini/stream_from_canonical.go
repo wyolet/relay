@@ -118,7 +118,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		if err := json.Unmarshal(data, &e); err != nil {
 			return nil, fmt.Errorf("canonical→gemini: generation.completed: %w", err)
 		}
-		finReason := canonicalFinishReasonToGemini(e.Status, e.FinishReason, nil)
+		finReason := canonicalFinishReasonToGemini(e.Status, e.FinishReason, e.IncompleteDetails)
 		frame := map[string]any{
 			"candidates": []any{map[string]any{
 				"content":      map[string]any{"role": "model", "parts": []any{}},
