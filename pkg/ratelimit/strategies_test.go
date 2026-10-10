@@ -369,38 +369,6 @@ func TestSlidingWindow_ExceededRetryAfter(t *testing.T) {
 	}
 }
 
-// TestSlidingWindow_BoundaryAccuracy2: new bucket → fresh start.
-// (Covered in limiter_test.go as TestSlidingWindow_BoundaryAccuracy; this verifies
-// at exact +1ms boundary for the sliding-window strategy explicitly.)
-func TestSlidingWindow_BoundaryAccuracy2(t *testing.T) {
-	base := time.Date(2024, 1, 1, 0, 2, 0, 0, time.UTC) // clean minute boundary
-	l1, now1 := newScopedLimiter(t, base.Add(time.Millisecond))
-	rule := Rule{
-		Key:      "Route:sw-bound2:rl-sw",
-		Name:     "requests",
-		Meter:    "requests",
-		Strategy: StrategySlidingWindow,
-		Amount:   5,
-		Window:   time.Minute,
-	}
-	rules := []Rule{rule}
-
-	// Fill 5 in bucket at base+1ms.
-	for i := 0; i < 5; i++ {
-		res := mustReserve(t, l1, "sw-bound2", rules)
-		mustCommit(t, l1, res, Observations{})
-	}
-	_ = mustExceed(t, l1, "sw-bound2", rules)
-
-	// In a fresh limiter at base+60s+1ms: completely new bucket, no prev data.
-	l2, now2 := newScopedLimiter(t, base.Add(60*time.Second+time.Millisecond))
-	_ = now2
-	*now1 = base.Add(60*time.Second + time.Millisecond) // not used further
-
-	res := mustReserve(t, l2, "sw-bound2", rules)
-	mustCommit(t, l2, res, Observations{})
-}
-
 // ── FIXED WINDOW ──────────────────────────────────────────────────────────────
 
 // TestFixedWindow_HardResetAtBoundary: 5 at t=0..59s → all pass. 6th fails.
@@ -830,30 +798,6 @@ func TestConcurrency_IgnoresStrategy(t *testing.T) {
 }
 
 // ── MULTI-RULE INTERACTIONS ───────────────────────────────────────────────────
-
-// TestMultiRule_FirstViolationShortCircuits: already in limiter_test.go; redone
-// here with different strategy mix for additional coverage.
-func TestMultiRule_FirstViolationShortCircuits2(t *testing.T) {
-	start := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l, _ := newScopedLimiter(t, start)
-
-	ruleA := Rule{Key: "Route:multi-sc:rl-a", Name: "requests a", Meter: "requests", Strategy: StrategyTokenBucket, Amount: 100, Window: time.Minute}
-	ruleB := Rule{Key: "Route:multi-sc:rl-b", Name: "concurrency b", Meter: "concurrency", Strategy: StrategyTokenBucket, Amount: 0, Window: time.Minute} // always fails
-	ruleC := Rule{Key: "Route:multi-sc:rl-c", Name: "requests c", Meter: "requests", Strategy: StrategySlidingWindow, Amount: 100, Window: time.Minute}
-
-	rules := []Rule{ruleA, ruleB, ruleC}
-
-	ee := mustExceed(t, l, "multi-sc", rules)
-	if ee.Rule.Key != ruleB.Key {
-		t.Errorf("expected ruleB to be violated, got key=%s", ee.Rule.Key)
-	}
-
-	// ruleA increments should have been rolled back — all 100 reserves succeed.
-	for i := 0; i < 100; i++ {
-		res := mustReserve(t, l, "multi-sc", []Rule{ruleA})
-		mustCommit(t, l, res, Observations{})
-	}
-}
 
 // requests/token-bucket/100 + requests/fixed-window/50: the fixed-window cap
 // rejects the 51st request. The token-bucket rollback is pinned by

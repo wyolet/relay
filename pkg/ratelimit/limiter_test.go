@@ -67,38 +67,9 @@ func tokRule(key, name string, amount int64, window time.Duration) Rule {
 
 const testScope = "test-policy"
 
-// ── migrated tests ────────────────────────────────────────────────────────────
-
-// TestRequests_RPMWindow_HappyPath: amount=10, 10 requests succeed, 11th fails.
-func TestRequests_RPMWindow_HappyPath(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{reqRule("Route:test-route:rl-requests", "requests on rl-requests", 10, time.Minute)}
-
-	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d: unexpected error: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-
-	_, err := l.Reserve(ctx, testScope, rules)
-	if err == nil {
-		t.Fatal("expected ExceededError on 11th reserve")
-	}
-	var ee *ExceededError
-	if !errors.As(err, &ee) {
-		t.Fatalf("expected *ExceededError, got %T", err)
-	}
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatal("expected errors.Is(err, ErrExceeded)")
-	}
-	if ee.Rule.Meter != "requests" {
-		t.Fatalf("expected requests meter, got %s", ee.Rule.Meter)
-	}
-}
+// The behaviour Mem and Redis must share (request/concurrency/token caps,
+// idempotent commit, rollback on a later violation) is the contract suite in
+// store_contract_test.go; the tests here pin strategy and edge behaviour.
 
 // TestRequests_SlidingInterpolation: at half-window, old bucket weight = 0.5.
 func TestRequests_SlidingInterpolation(t *testing.T) {
@@ -151,51 +122,6 @@ func TestRequests_SlidingInterpolation(t *testing.T) {
 	}
 }
 
-// TestTokens_PostHocOnly: tokens peeked at Reserve, incremented at Commit.
-func TestTokens_PostHocOnly(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{tokRule("Route:test-route:rl-tokens", "tokens", 100, time.Minute)}
-
-	// 5 reserves succeed (tokens not yet consumed at Reserve time).
-	var reservations [5]*Reservation
-	for i := 0; i < 5; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i+1, err)
-		}
-		reservations[i] = res
-	}
-
-	// Commit each with 20 tokens → total 100 (equal to amount; still allowed with > comparator).
-	for i, res := range reservations {
-		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"input": 12, "output": 8}}); err != nil {
-			t.Fatalf("commit %d: %v", i+1, err)
-		}
-	}
-
-	// 6th reserve succeeds (rate==amount is still allowed with strict > comparator).
-	res6, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("6th reserve (rate==amount should pass): %v", err)
-	}
-	// Commit 1 more token → total 101 > 100.
-	if err := l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"input": 1}}); err != nil {
-		t.Fatalf("commit 6: %v", err)
-	}
-
-	// 7th Reserve should fail: tokens=101 > 100.
-	_, err = l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded after 101 tokens consumed, got %v", err)
-	}
-	var ee *ExceededError
-	if !errors.As(err, &ee) || ee.Rule.Meter != "tokens" {
-		t.Fatalf("expected tokens meter exceeded, got %v", err)
-	}
-}
-
 // Bare "tokens" counts input + output. The other keys break those two
 // down (reasoning ⊂ output, cache reads ⊂ input), so summing the whole map
 // charged one request several times over.
@@ -221,38 +147,6 @@ func TestBareTokensMeterCountsInputPlusOutputOnly(t *testing.T) {
 	if _, err := l.Reserve(ctx, testScope, rules); err != nil {
 		t.Fatalf("reserve after 60 counted tokens: %v — sub-meters were double-counted", err)
 	}
-}
-
-// TestConcurrency_BudgetCap: amount=3, 3 succeed, 4th fails, after commit 5th succeeds.
-func TestConcurrency_BudgetCap(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{conRule("Route:test-route:rl-concurrency", "concurrency", 3, time.Minute)}
-
-	var r [3]*Reservation
-	for i := 0; i < 3; i++ {
-		res, err := l.Reserve(ctx, testScope, rules)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i+1, err)
-		}
-		r[i] = res
-	}
-
-	_, err := l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded on 4th, got %v", err)
-	}
-
-	if err := l.Commit(ctx, r[0], Observations{}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve after commit: %v", err)
-	}
-	_ = l.Commit(ctx, res, Observations{})
 }
 
 // TestConcurrency_CommitOnCancel_DecreasesCounter
@@ -332,67 +226,6 @@ func TestConcurrencyCommitDoesNotCreateNegativeCounterAfterTTLReclaim(t *testing
 			}
 		})
 	}
-}
-
-// TestComposition_FirstViolationShortCircuits
-func TestComposition_FirstViolationShortCircuits(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-
-	rule0 := reqRule("Route:test-route:rl-rule0", "requests on rl-rule0", 100, time.Minute)
-	rule1 := conRule("Route:test-route:rl-rule1", "concurrency on rl-rule1", 0, time.Minute) // cap=0, always fails
-	rule2 := reqRule("Route:test-route:rl-rule2", "requests on rl-rule2", 100, time.Minute)
-
-	rules := []Rule{rule0, rule1, rule2}
-
-	_, err := l.Reserve(ctx, testScope, rules)
-	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected exceeded, got %v", err)
-	}
-
-	var ee *ExceededError
-	errors.As(err, &ee)
-	if ee.Rule.Key != rule1.Key {
-		t.Fatalf("expected rule1 to be violated (key=%s), got key=%s", rule1.Key, ee.Rule.Key)
-	}
-
-	// rule0's requests counter should be rolled back → 100 consecutive reserves succeed.
-	for i := 0; i < 100; i++ {
-		res, err2 := l.Reserve(ctx, testScope, []Rule{rule0})
-		if err2 != nil {
-			t.Fatalf("rule0 reserve %d after rollback: %v", i+1, err2)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-}
-
-// TestIdempotentCommit: double Commit is a no-op.
-func TestIdempotentCommit(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	l := newTestLimiter(t, &now)
-	ctx := context.Background()
-	rules := []Rule{conRule("Route:test-route:rl-concurrency", "concurrency", 1, time.Minute)}
-
-	res, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-
-	obs := Observations{Tokens: map[string]int64{"tokens": 50}}
-	if err := l.Commit(ctx, res, obs); err != nil {
-		t.Fatalf("commit 1: %v", err)
-	}
-	if err := l.Commit(ctx, res, obs); err != nil {
-		t.Fatalf("commit 2: %v", err)
-	}
-
-	// Concurrency counter should be 0 (decremented once, not twice → a third reserve succeeds).
-	res3, err := l.Reserve(ctx, testScope, rules)
-	if err != nil {
-		t.Fatalf("expected third reserve to succeed after idempotent commit, got %v", err)
-	}
-	_ = l.Commit(ctx, res3, Observations{})
 }
 
 // TestSlidingWindow_BoundaryAccuracy

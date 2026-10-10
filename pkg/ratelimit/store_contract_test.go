@@ -2,23 +2,15 @@ package ratelimit
 
 // store_contract_test.go — parameterised contract suite that runs against
 // kv.Mem unconditionally. The Redis variant lives in distributed_test.go
-// and is gated on the "integration" build tag.
+// and is gated on the "integration" build tag. A behaviour both backends
+// must share belongs here, not in a Mem-only test.
 
 import (
 	"context"
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/wyolet/relay/pkg/kv"
 )
-
-func memLimiterFactory(t *testing.T, now *time.Time) *Limiter {
-	s := kv.NewMem()
-	t.Cleanup(func() { _ = s.Close() })
-	clock := func() time.Time { return *now }
-	return New(s, discardLog(), clock)
-}
 
 func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.T, now *time.Time) *Limiter) {
 	t.Run(name+"/Requests_HappyPath", func(t *testing.T) {
@@ -44,6 +36,10 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		_, err := l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
 			t.Fatalf("expected ErrExceeded on 11th reserve, got %v", err)
+		}
+		var ee *ExceededError
+		if !errors.As(err, &ee) || ee.Rule.Meter != "requests" {
+			t.Fatalf("expected *ExceededError naming the requests meter, got %T %v", err, err)
 		}
 	})
 
@@ -114,10 +110,16 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if err != nil {
 			t.Fatalf("6th reserve (rate==amount should pass): %v", err)
 		}
-		_ = l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"input": 1}})
+		if err := l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"input": 1}}); err != nil {
+			t.Fatalf("commit 6: %v", err)
+		}
 		_, err = l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
 			t.Fatalf("expected ErrExceeded after 101 tokens, got %v", err)
+		}
+		var ee *ExceededError
+		if !errors.As(err, &ee) || ee.Rule.Meter != "tokens" {
+			t.Fatalf("expected the tokens meter exceeded, got %v", err)
 		}
 	})
 
@@ -172,7 +174,15 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			Amount:   0, // cap=0, always fails
 			Window:   time.Minute,
 		}
-		rules := []Rule{rule0, rule1}
+		rule2 := Rule{
+			Key:      "Route:contract-route:rl-rule2",
+			Name:     "requests on rl-rule2",
+			Meter:    "requests",
+			Strategy: StrategySlidingWindow,
+			Amount:   100,
+			Window:   time.Minute,
+		}
+		rules := []Rule{rule0, rule1, rule2}
 
 		_, err := l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
@@ -244,5 +254,5 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 }
 
 func TestContractLimit_MemStore(t *testing.T) {
-	runLimiterContractSuite(t, "MemStore", memLimiterFactory)
+	runLimiterContractSuite(t, "MemStore", newTestLimiter)
 }
