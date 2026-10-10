@@ -11,8 +11,18 @@ import (
 	"time"
 )
 
-// frameTerminator ends every SSE frame; a keepalive is only safe to splice in after one.
-var frameTerminator = []byte("\n\n")
+// endsFrame reports whether b ends on the blank line that ends an SSE frame, under any of the CRLF, LF and CR line endings; a keepalive is only safe to splice in after one.
+func endsFrame(b []byte) bool {
+	switch {
+	case bytes.HasSuffix(b, []byte("\r\n")):
+		b = b[:len(b)-2]
+	case bytes.HasSuffix(b, []byte("\n")), bytes.HasSuffix(b, []byte("\r")):
+		b = b[:len(b)-1]
+	default:
+		return false
+	}
+	return bytes.HasSuffix(b, []byte("\n")) || bytes.HasSuffix(b, []byte("\r"))
+}
 
 // KeepAlive wraps a streaming ResponseWriter and writes frame whenever nothing else has been written for the configured interval. It is an io.Writer + http.Flusher, so the copy loops can write through it unchanged.
 //
@@ -55,7 +65,7 @@ func (k *KeepAlive) Write(p []byte) (int, error) {
 	defer k.mu.Unlock()
 	n, err := k.w.Write(p)
 	k.last = time.Now()
-	k.atBoundary = bytes.HasSuffix(p[:n], frameTerminator)
+	k.atBoundary = endsFrame(p[:n])
 	k.flush()
 	return n, err
 }

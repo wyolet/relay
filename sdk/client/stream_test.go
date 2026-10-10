@@ -21,7 +21,7 @@ func TestStreamRecv_MalformedFrameReturnsErrorAndStreamContinues(t *testing.T) {
 		"event: response.output_text.delta\ndata: {\"item_id\":\"msg_1\",\"delta\":\"hi\"}\n\n" +
 		"event: response.completed\ndata: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[]}}\n\n"
 	sc := bufio.NewScanner(strings.NewReader(body))
-	sc.Split(splitSSEFrames)
+	sc.Split(v1.SplitSSEFrames)
 	s := &Stream{
 		body:    io.NopCloser(strings.NewReader("")),
 		sc:      sc,

@@ -57,11 +57,11 @@ type StreamSession struct {
 const maxPartialFrameBytes = 1 << 20
 
 // Write is the io.Writer the runner tees the raw upstream body into. It
-// reframes the byte stream on the SSE blank-line separator — "\n\n" as sent
-// by every major vendor, or the spec-legal CRLF form "\r\n\r\n" — and feeds
-// each complete frame to the observers + summarizer, retaining only the
-// trailing partial frame (bounded by maxPartialFrameBytes). CRLF frames are
-// normalized to LF before feeding so downstream parsing sees one dialect.
+// reframes the byte stream on the SSE blank-line separator (any of the
+// spec-legal CRLF, LF and CR line endings) and feeds each complete frame to
+// the observers + summarizer, retaining only the trailing partial frame
+// (bounded by maxPartialFrameBytes). Frames are normalized to LF before
+// feeding so downstream parsing sees one dialect.
 // Never errors (always reports len(p) consumed).
 func (s *StreamSession) Write(p []byte) (int, error) {
 	if s == nil {
@@ -69,24 +69,17 @@ func (s *StreamSession) Write(p []byte) (int, error) {
 	}
 	s.buf = append(s.buf, p...)
 	for {
-		i, sep := bytes.Index(s.buf, []byte("\n\n")), 2
-		if j := bytes.Index(s.buf, []byte("\r\n\r\n")); j >= 0 && (i < 0 || j < i) {
-			i, sep = j, 4
-		}
-		if i < 0 {
+		n, frame, _ := v1.SplitSSEFrames(s.buf, false)
+		if n == 0 {
 			break
 		}
-		frame := s.buf[:i]
-		if sep == 4 {
-			frame = bytes.ReplaceAll(frame, []byte("\r\n"), []byte("\n"))
-		}
 		if len(bytes.TrimSpace(frame)) > 0 {
-			s.feed(frame)
+			s.feed(v1.NormalizeSSELineEnds(frame))
 		}
-		s.buf = s.buf[i+sep:]
+		s.buf = s.buf[n:]
 	}
 	if len(s.buf) > maxPartialFrameBytes {
-		s.feed(s.buf)
+		s.feed(v1.NormalizeSSELineEnds(s.buf))
 		s.buf = nil
 	}
 	return len(p), nil
@@ -142,7 +135,7 @@ func (s *StreamSession) Finish() {
 	}
 	s.finished = true
 	if len(bytes.TrimSpace(s.buf)) > 0 {
-		s.feed(s.buf)
+		s.feed(v1.NormalizeSSELineEnds(s.buf))
 	}
 	s.buf = nil
 	for _, no := range s.obs {

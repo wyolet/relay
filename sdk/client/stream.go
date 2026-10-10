@@ -89,7 +89,8 @@ func (s *Stream) Recv() (*Event, error) {
 			s.report.streamEnded(s, nil, false)
 			return nil, io.EOF
 		}
-		raw := append(append([]byte(nil), s.sc.Bytes()...), '\n', '\n')
+		frame := v1.NormalizeSSELineEnds(s.sc.Bytes())
+		raw := append(append(make([]byte, 0, len(frame)+2), frame...), '\n', '\n')
 		if s.toCanon == nil {
 			s.pending = [][]byte{raw}
 			continue
@@ -148,25 +149,6 @@ func (s *Stream) Timing() StreamTiming {
 		}
 	}
 	return t
-}
-
-// splitSSEFrames is a bufio.SplitFunc yielding one SSE frame per token.
-func splitSSEFrames(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	lf := bytes.Index(data, []byte("\n\n"))
-	crlf := bytes.Index(data, []byte("\r\n\r\n"))
-	switch {
-	case lf >= 0 && (crlf < 0 || lf <= crlf):
-		return lf + 2, data[:lf], nil
-	case crlf >= 0:
-		return crlf + 4, data[:crlf], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }
 
 // splitFrames splits concatenated SSE bytes into individual frames.

@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/httpheader"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // WriteAPIError emits relay's error envelope. Exported so
@@ -293,5 +294,5 @@ func MapPipelineErr(w http.ResponseWriter, err error) { mapPipelineErr(w, err) }
 // SplitSSEChunks is exported so adapter packages can use the same SSE
 // chunking logic in their cross-shape stream handlers.
 func SplitSSEChunks(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	return splitSSEChunks(data, atEOF)
+	return v1.SplitSSEFrames(data, atEOF)
 }
