@@ -36,6 +36,8 @@ type exportInput struct {
 	Kinds  string `query:"kinds"  doc:"Comma-separated API plurals to include. Default: every exportable kind."`
 	Scope  string `query:"scope"  doc:"Restrict to a subtree: team:<id> or project:<id>."`
 	Format string `query:"format" doc:"yaml (default) or json."`
+
+	IncludeSystem bool `query:"includeSystem" doc:"Also include system-owned rows, and catalog rows an operator has edited (dirty)."`
 }
 
 type exportOutput struct {
@@ -110,6 +112,8 @@ type exporter struct {
 	rev   manifest.MapReverseResolver
 	kinds map[string]bool
 
+	includeSystem bool
+
 	// scoped narrows the export to one subtree; the id sets are the teams
 	// and projects that subtree covers.
 	scoped   bool
@@ -125,7 +129,7 @@ func newExporter(ctx context.Context, d Deps, in *exportInput) (*exporter, error
 	if err != nil {
 		return nil, err
 	}
-	e := &exporter{d: d, rows: rows, rev: reverseResolver(rows)}
+	e := &exporter{d: d, rows: rows, rev: reverseResolver(rows), includeSystem: in.IncludeSystem}
 
 	if in.Kinds != "" {
 		e.kinds = map[string]bool{}
@@ -187,8 +191,17 @@ func (e *exporter) wanted(ctx context.Context, plural, singular string, m *meta.
 	default:
 		switch m.Owner.Kind {
 		case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject:
+		case meta.OwnerSystem:
+			// The catalog's rows are host- or provider-owned, so a system-owned
+			// one was written on this deployment and only it can back it up.
+			if !e.includeSystem {
+				return false
+			}
 		default:
-			return false
+			// A catalog row is backed up only once an operator has edited it.
+			if !e.includeSystem || !m.Dirty {
+				return false
+			}
 		}
 	}
 	if e.scoped {
@@ -358,6 +371,8 @@ func (e *exporter) nameOwner(m *manifest.WireMeta) {
 		name, ok = e.rev.ProjectName(m.Owner.Name)
 	case meta.OwnerUser:
 		name, ok = e.rev.Username(m.Owner.Name)
+	case meta.OwnerHost:
+		name, ok = e.rev.HostName(m.Owner.Name)
 	}
 	if ok {
 		m.Owner.Name = name

@@ -15,6 +15,7 @@ func runExport(args []string) error {
 	scope := fs.String("scope", "", "Restrict to a subtree: team:<id> or project:<id>.")
 	kinds := fs.String("kinds", "", "Comma-separated API plurals to include. Default: every exportable kind.")
 	format := fs.String("format", "", "yaml (default) or json.")
+	includeSystem := fs.Bool("include-system", false, "Also include system-owned rows, and catalog rows an operator has edited.")
 	out := fs.String("o", "", "Write to this file instead of stdout.")
 	serverURL := fs.String("url", "", "Control API base URL. Default $RELAY_URL, else "+DefaultControlURL+".")
 	token := fs.String("token", "", "Admin bearer token. Default $RELAY_ADMIN_TOKEN.")
@@ -27,6 +28,9 @@ func runExport(args []string) error {
 		if v != "" {
 			q.Set(k, v)
 		}
+	}
+	if *includeSystem {
+		q.Set("includeSystem", "true")
 	}
 	body, err := newControlClient(*serverURL, *token).do("GET", "/api/export?"+q.Encode(), "", nil)
 	if err != nil {

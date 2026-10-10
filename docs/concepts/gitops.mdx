@@ -105,6 +105,7 @@ landed diff as `unchanged`, and the run picks up from where it stopped.
 ```bash
 relay export -o manifests/relay.yaml
 relay export --scope project:<id> --kinds policies,keys
+relay export --include-system -o backup/relay.yaml
 ```
 
 `GET /api/export` renders the tenant-owned rows as a manifest bundle in
@@ -127,6 +128,17 @@ only rows owned by a user, a team, or a project. Catalog template rows
 are never exported; they come from the catalog, not from a git repo.
 Overlays layered on top of those catalog rows *are* exported, since the
 overlay itself is user-owned.
+
+`--include-system` (`?includeSystem=true`) widens the owner rule for a
+backup: it adds every system-owned row of the exported kinds (what the admin
+token creates through the API or `apply`, and the relay's own system rate
+limits), and every host- or provider-owned catalog row an operator has edited
+through the API (a dirty row). Catalog rows nobody edited stay out, and so
+does every added row in a scoped export, since none of them has a team or
+project. Applied back to the deployment it came from, the bundle reports its
+dirty rows as `skip-dirty` unless `--force` is given; on a freshly seeded
+deployment they apply as updates. An edit made through `apply` does not mark a
+row dirty, so a catalog row changed that way is not included.
 
 A role-binding at global scope (`{kind: system}`) has no team or project
 to scope it into, so it only survives an **unscoped** export — `--scope
