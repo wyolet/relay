@@ -394,6 +394,33 @@ func extractResponsesEvents(b []byte) []string {
 	return names
 }
 
+func TestParseResponsesSSEChunk(t *testing.T) {
+	cases := []struct {
+		name      string
+		chunk     string
+		wantEvent string
+		wantData  string
+		wantOK    bool
+	}{
+		{name: "single line", chunk: "event: response.created\ndata: {\"a\":1}\n\n", wantEvent: "response.created", wantData: `{"a":1}`, wantOK: true},
+		{name: "multi-line data", chunk: "event: response.created\ndata: {\"a\":\ndata: 1}\n\n", wantEvent: "response.created", wantData: "{\"a\":\n1}", wantOK: true},
+		{name: "CRLF", chunk: "event: response.created\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n", wantEvent: "response.created", wantData: "{\"a\":\n1}", wantOK: true},
+		{name: "CR", chunk: "event: response.created\rdata: {\"a\":1}\r\r", wantEvent: "response.created", wantData: `{"a":1}`, wantOK: true},
+		{name: "comment lines", chunk: ": ping\nevent: response.created\n: data: {\"b\":2}\ndata: {\"a\":1}\n\n", wantEvent: "response.created", wantData: `{"a":1}`, wantOK: true},
+		{name: "several events yield the first", chunk: "event: response.created\ndata: {\"a\":1}\n\nevent: response.completed\ndata: {\"a\":2}\n\n", wantEvent: "response.created", wantData: `{"a":1}`, wantOK: true},
+		{name: "comment only", chunk: ": ping\n\n"},
+		{name: "event without data", chunk: "event: response.created\n\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event, data, ok := ParseResponsesSSEChunk([]byte(tc.chunk))
+			if event != tc.wantEvent || string(data) != tc.wantData || ok != tc.wantOK {
+				t.Errorf("got (%q, %q, %v), want (%q, %q, %v)", event, data, ok, tc.wantEvent, tc.wantData, tc.wantOK)
+			}
+		})
+	}
+}
+
 // --- E2E: Responses → canonical → CC wire → canonical → Responses ---
 
 // response.refusal.delta events map to text item.delta in canonical stream.

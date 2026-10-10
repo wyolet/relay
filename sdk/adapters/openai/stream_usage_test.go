@@ -64,6 +64,14 @@ func TestIsUsageOnlyChunk(t *testing.T) {
 		{`data: {"id":"c","choices":[]}`, false},
 		{`data: [DONE]`, false},
 		{`data: {"choices":[{"delta":{"content":"\"choices\":[]"}}],"usage":null}`, false},
+		{"data: {\"id\":\"c\",\"choices\":\ndata: [],\"usage\":{\"prompt_tokens\":4}}", true},
+		{"data: {\"id\":\"c\",\"choices\":[],\r\ndata: \"usage\":{\"prompt_tokens\":4}}", true},
+		{"data: {\"id\":\"c\",\"choices\":[],\rdata: \"usage\":{\"prompt_tokens\":4}}", true},
+		{": keepalive\ndata: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":4}}", true},
+		{": {\"choices\":[],\"usage\":{\"prompt_tokens\":4}}", false},
+		{"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4}}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":5}}", true},
+		{"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}", false},
+		{"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":4}}", false},
 	}
 	for _, tc := range cases {
 		if got := IsUsageOnlyChunk([]byte(tc.frame)); got != tc.want {

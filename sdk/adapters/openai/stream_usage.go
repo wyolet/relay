@@ -3,6 +3,8 @@ package openai
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/wyolet/relay/sdk/internal/sse"
 )
 
 // RequestStreamUsage sets stream_options.include_usage on a streamed Chat
@@ -38,40 +40,47 @@ func RequestStreamUsage(fields map[string]json.RawMessage) bool {
 // IsUsageOnlyChunk reports whether one SSE frame (separator stripped) is the
 // extra chunk stream_options.include_usage adds before [DONE]: an empty
 // choices array and a usage object. Frames with content are rejected by a
-// byte scan before any JSON is parsed.
+// byte scan before any JSON is parsed. A frame holding several events counts
+// only when every event is one, since the caller drops the whole frame.
 func IsUsageOnlyChunk(frame []byte) bool {
-	if !hasEmptyChoices(frame) {
-		return false
+	events := 0
+	for sc := sse.NewScanner(frame); sc.Next(); events++ {
+		if !isUsageOnlyData(sc.Data()) {
+			return false
+		}
 	}
-	payload := frame
-	if i := bytes.Index(payload, []byte("data:")); i >= 0 {
-		payload = payload[i+len("data:"):]
+	return events > 0
+}
+
+func isUsageOnlyData(data []byte) bool {
+	if !hasEmptyChoices(data) {
+		return false
 	}
 	var chunk struct {
 		Choices []json.RawMessage `json:"choices"`
 		Usage   json.RawMessage   `json:"usage"`
 	}
-	if json.Unmarshal(bytes.TrimSpace(payload), &chunk) != nil {
+	if json.Unmarshal(data, &chunk) != nil {
 		return false
 	}
 	return len(chunk.Choices) == 0 && len(chunk.Usage) > 0 && !bytes.Equal(chunk.Usage, []byte("null"))
 }
 
-// hasEmptyChoices reports whether frame holds `"choices"` followed by an
-// empty array, allowing whitespace around the colon and inside the brackets.
-func hasEmptyChoices(frame []byte) bool {
+// hasEmptyChoices reports whether data holds `"choices"` followed by an
+// empty array, allowing JSON whitespace around the colon and inside the brackets.
+func hasEmptyChoices(data []byte) bool {
 	const key = `"choices"`
-	for rest := frame; ; {
+	for rest := data; ; {
 		i := bytes.Index(rest, []byte(key))
 		if i < 0 {
 			return false
 		}
 		rest = rest[i+len(key):]
-		v := bytes.TrimLeft(rest, " \t")
+		v := bytes.TrimLeft(rest, " \t\r\n")
 		if len(v) == 0 || v[0] != ':' {
 			continue
 		}
-		v = bytes.TrimLeft(v[1:], " \t")
+		v = bytes.TrimLeft(v[1:], " \t\r\n")
 		if len(v) == 0 || v[0] != '[' {
 			continue
 		}
