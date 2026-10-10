@@ -61,8 +61,7 @@ func budgetPolicy(meter ratelimit.Meter, strategy ratelimit.Strategy, amount int
 func budgetPipeline(t *testing.T, snap policy.SnapshotReader) (*pipeline.Pipeline, *kv.Mem) {
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
-	svc := policy.NewService(snap, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), nil))
-	return &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}, mem
+	return &pipeline.Pipeline{Policy: serviceOver(snap, mem), Logger: slog.Default()}, mem
 }
 
 func waitBudgetCommit(t *testing.T, mem *kv.Mem) {
