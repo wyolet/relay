@@ -33,16 +33,7 @@ func newBearerSpec(t *testing.T, path string, opts ...func(*adapter.Spec)) *adap
 }
 
 func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
-	var gotPath, gotAuth, gotCT string
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		gotCT = r.Header.Get("Content-Type")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
@@ -53,6 +44,7 @@ func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	gotPath, gotAuth, gotCT := got.Path(), got.Header("Authorization"), got.Header("Content-Type")
 	if gotPath != "/v1/chat/completions" {
 		t.Errorf("path: want /v1/chat/completions, got %s", gotPath)
 	}
@@ -65,12 +57,7 @@ func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
 }
 
 func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
-	var gotCustom string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotCustom = r.Header.Get("X-Relay-Test")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
@@ -82,18 +69,13 @@ func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if gotCustom != "hello" {
+	if gotCustom := got.Header("X-Relay-Test"); gotCustom != "hello" {
 		t.Errorf("X-Relay-Test: want hello, got %s", gotCustom)
 	}
 }
 
 func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
-	var gotVer string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotVer = r.Header.Get("Anthropic-Version")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 
 	s := &adapter.Spec{
 		Name:        adapters.Anthropic,
@@ -114,19 +96,14 @@ func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if gotVer != "2023-06-01" {
+	if gotVer := got.Header("Anthropic-Version"); gotVer != "2023-06-01" {
 		t.Errorf("Anthropic-Version: want 2023-06-01, got %s", gotVer)
 	}
 }
 
 func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 	// Forwarded header takes priority over ExtraHeaders default.
-	var gotVer string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotVer = r.Header.Get("Anthropic-Version")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 
 	s := &adapter.Spec{
 		Name:        adapters.Anthropic,
@@ -149,18 +126,13 @@ func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 	resp.Body.Close()
 
 	// Forwarded header wins over ExtraHeaders default.
-	if gotVer != "2024-12-01" {
+	if gotVer := got.Header("Anthropic-Version"); gotVer != "2024-12-01" {
 		t.Errorf("Anthropic-Version: want forwarded 2024-12-01, got %s", gotVer)
 	}
 }
 
 func TestSpecAdapter_Call_EmptyAPIKey(t *testing.T) {
-	var gotAuth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
@@ -171,7 +143,7 @@ func TestSpecAdapter_Call_EmptyAPIKey(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if gotAuth != "" {
+	if gotAuth := got.Header("Authorization"); gotAuth != "" {
 		t.Errorf("expected no auth header for empty key, got %q", gotAuth)
 	}
 }
@@ -318,22 +290,18 @@ type capturedHeaders struct{ auth, apiKey, beta, version string }
 
 func callCapture(t *testing.T, s *adapter.Spec, key string, hdr http.Header, oauth bool) capturedHeaders {
 	t.Helper()
-	var got capturedHeaders
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got.auth = r.Header.Get("Authorization")
-		got.apiKey = r.Header.Get("x-api-key")
-		got.beta = r.Header.Get("x-oauth-beta")
-		got.version = r.Header.Get("x-api-version")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 	resp, err := s.PipelineAdapter().Call(context.Background(), srv.URL, nil, key, []byte(`{}`), hdr, "", false, oauth)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	resp.Body.Close()
-	return got
+	return capturedHeaders{
+		auth:    got.Header("Authorization"),
+		apiKey:  got.Header("x-api-key"),
+		beta:    got.Header("x-oauth-beta"),
+		version: got.Header("x-api-version"),
+	}
 }
 
 func TestSpecAdapter_OAuth_SelectsBearerAndBeta(t *testing.T) {
@@ -390,13 +358,7 @@ func TestSpecAdapter_OAuth_OverridesForwardedAuthHeader(t *testing.T) {
 }
 
 func TestSpecAdapter_Call_HostPathOverride(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer srv.Close()
+	srv, got := captureServer(t)
 
 	a := newBearerSpec(t, "/v1/responses").PipelineAdapter()
 
@@ -407,7 +369,7 @@ func TestSpecAdapter_Call_HostPathOverride(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 	resp.Body.Close()
-	if gotPath != p {
+	if gotPath := got.Path(); gotPath != p {
 		t.Fatalf("path: got %q, want %q", gotPath, p)
 	}
 
@@ -418,7 +380,7 @@ func TestSpecAdapter_Call_HostPathOverride(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 	resp.Body.Close()
-	if gotPath != "/" {
+	if gotPath := got.Path(); gotPath != "/" {
 		t.Fatalf("path: got %q, want / (nothing appended)", gotPath)
 	}
 
@@ -428,7 +390,7 @@ func TestSpecAdapter_Call_HostPathOverride(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 	resp.Body.Close()
-	if gotPath != "/v1/responses" {
+	if gotPath := got.Path(); gotPath != "/v1/responses" {
 		t.Fatalf("path: got %q, want /v1/responses", gotPath)
 	}
 }
