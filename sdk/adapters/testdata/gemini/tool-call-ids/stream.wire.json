@@ -1,0 +1,72 @@
+[
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "fc-lima-7q2",
+                  "name": "get_weather",
+                  "args": {
+                    "city": "Lima"
+                  }
+                }
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "id": "fc-quito-3x9",
+                  "name": "get_weather",
+                  "args": {
+                    "city": "Quito"
+                  }
+                }
+              }
+            ]
+          },
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>"
+    }
+  },
+  {
+    "data": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [],
+            "role": "model"
+          },
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>",
+      "usageMetadata": {
+        "candidatesTokenCount": 20,
+        "promptTokenCount": 90
+      }
+    }
+  }
+]

@@ -1,0 +1,89 @@
+[
+  {
+    "event": "generation.created",
+    "data": {
+      "id": "gemini-<now>",
+      "model": "gemini-2.5-flash"
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "fc_0",
+      "item_type": "function_call",
+      "index": 0,
+      "name": "get_weather",
+      "call_id": "fc-lima-7q2"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "fc_0",
+      "index": 0,
+      "kind": "arguments",
+      "delta": "{\"city\":\"Lima\"}"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "fc_0",
+      "index": 0,
+      "item": {
+        "type": "function_call",
+        "id": "fc_0",
+        "call_id": "fc-lima-7q2",
+        "name": "get_weather",
+        "arguments": "{\"city\":\"Lima\"}",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "event": "item.started",
+    "data": {
+      "item_id": "fc_1",
+      "item_type": "function_call",
+      "index": 1,
+      "name": "get_weather",
+      "call_id": "fc-quito-3x9"
+    }
+  },
+  {
+    "event": "item.delta",
+    "data": {
+      "item_id": "fc_1",
+      "index": 1,
+      "kind": "arguments",
+      "delta": "{\"city\":\"Quito\"}"
+    }
+  },
+  {
+    "event": "item.completed",
+    "data": {
+      "item_id": "fc_1",
+      "index": 1,
+      "item": {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "fc-quito-3x9",
+        "name": "get_weather",
+        "arguments": "{\"city\":\"Quito\"}",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "event": "generation.completed",
+    "data": {
+      "id": "gemini-<now>",
+      "status": "completed",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "input": 90,
+        "output": 20
+      }
+    }
+  }
+]

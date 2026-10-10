@@ -27,6 +27,7 @@ type canonicalToGeminiStream struct {
 	// buffer them and emit one complete functionCall frame on item.completed.
 	inFunctionCall bool
 	fcName         string
+	fcCallID       string
 	fcArgs         strings.Builder
 }
 
@@ -56,6 +57,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 			// complete functionCall is emitted on item.completed.
 			s.inFunctionCall = true
 			s.fcName = e.Name
+			s.fcCallID = e.CallID
 			s.fcArgs.Reset()
 		}
 		return nil, nil
@@ -86,6 +88,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 				Index:   0,
 			}},
 			ModelVersion: s.model,
+			ResponseID:   s.responseID,
 		}
 		return geminiSSEBytes(frame)
 
@@ -105,11 +108,12 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		frame := geminiResponse{
 			Candidates: []candidate{{
 				Content: &geminiContent{Role: "model", Parts: []geminiPart{{
-					FunctionCall: &geminiFC{Name: s.fcName, Args: args},
+					FunctionCall: &geminiFC{ID: geminiWireCallID(s.fcCallID, s.fcName), Name: s.fcName, Args: args},
 				}}},
 				Index: 0,
 			}},
 			ModelVersion: s.model,
+			ResponseID:   s.responseID,
 		}
 		return geminiSSEBytes(frame)
 
@@ -129,6 +133,9 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		}
 		if len(e.Usage) > 0 {
 			frame["usageMetadata"] = canonicalUsageToGemini(e.Usage)
+		}
+		if s.responseID != "" {
+			frame["responseId"] = s.responseID
 		}
 		// canonical: service_tier dropped — same reason as SerializeResponse.
 		b, err := json.Marshal(frame)

@@ -10,7 +10,10 @@
           "type": "input_text",
           "text": "What is the leave policy?"
         }
-      ]
+      ],
+      "cache_config": {
+        "anchor": true
+      }
     }
   ],
   "model_config": {
@@ -36,6 +39,11 @@
         }
       }
     ]
+  },
+  "cache_config": {
+    "instructions": true,
+    "tools": true,
+    "ttl": "1h"
   },
   "output_mode": "sync"
 }

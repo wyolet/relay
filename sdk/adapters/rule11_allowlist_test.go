@@ -64,13 +64,11 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: CacheConfig.Instructions/Tools dropped", "cache_config.instructions", "cache_config.tools"),
 		annotated("canonical: ItemCacheConfig.Anchor dropped — OpenAI", userMsg+".cache_config.anchor"),
 		annotated("canonical: Extensions keys other than openai.service_tier dropped", "extensions.acme.trace", "extensions.openai.logit_bias", "extensions.openai.logprobs", "extensions.openai.store", "extensions.openai.top_logprobs"),
-		annotated("canonical: service_tier dropped — it asks the upstream account", "extensions.openai.service_tier"),
 		annotated("canonical: item Status dropped on Responses input", "input[*].status"),
 		annotated("canonical: FunctionCall.ProviderData dropped unless it is the custom-call marker", call1+".provider_data"),
 		annotated("canonical: Message.ProviderData dropped — Responses", userMsg+".provider_data"),
 		annotated("canonical: text_citation annotations dropped", assistMsg+".content[output_text].annotations[text_citation].*"),
 		annotated("canonical: FilePart.MediaType dropped — a Responses", userMsg+".content[input_file*].media_type"),
-		carriable("a Responses reasoning item carries raw reasoning as content[].reasoning_text; responsesItemFromCanonical never writes Reasoning.Content", reasoning+".content"),
 		annotated("canonical: BudgetTokens has no Responses wire equivalent", opts+".reasoning.budget_tokens"),
 		annotated("canonical: Seed has no Responses wire equivalent", opts+".sampling.seed"),
 		annotated("canonical: FrequencyPenalty has no Responses wire equivalent", opts+".sampling.frequency_penalty"),
@@ -82,8 +80,7 @@ var allowedDrops = map[string][]allowedDrop{
 	"anthropic": {
 		hoistedSystem,
 		developerAsSystem,
-		carriable("SerializeRequest emits cache_control breakpoints (system, last tool, anchored message, ttl) but ParseRequest never reads them back",
-			"cache_config.instructions", "cache_config.tools", "cache_config.ttl", userMsg+".cache_config.anchor"),
+		{paths: []string{"cache_config.ttl"}, folded: "a TTL over 5m rounds to Anthropic's 1h tier"},
 		annotated("canonical: CacheConfig.Key dropped — Anthropic", "cache_config.key"),
 		annotated("canonical: Extensions dropped — no Anthropic-owned", "extensions.*"),
 		annotated("canonical: Metadata dropped — Anthropic metadata", "metadata.*"),
@@ -91,7 +88,8 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: OutputTextPart.Annotations dropped — Anthropic", assistMsg+".content[output_text].annotations*"),
 		annotated("canonical: Message.ID/Status/ProviderData dropped — Anthropic", "input[message:*].id", "input[message:*].status", "input[message:*].provider_data"),
 		annotated("canonical: ImagePart.Detail dropped — Anthropic", userMsg+".content[input_image].detail"),
-		carriable("SerializeRequest emits document blocks but ParseRequest skips them (anthropicBlockToPart), and Filename could ride the document title", userMsg+".content[input_file*"),
+		annotated("canonical: FilePart.MediaType dropped for URL documents", userMsg+".content[input_file].media_type"),
+		carriable("SerializeRequest writes no document title, the wire home for FilePart.Filename", userMsg+".content[input_file*].filename"),
 		annotated("canonical: Reasoning.ID/Status/Summary dropped — a thinking block", reasoning+".id", reasoning+".status", reasoning+".summary*"),
 		annotated("canonical: Format.Name/Description/Strict dropped — the", opts+".output.format.name", opts+".output.format.description", opts+".output.format.strict"),
 		annotated("canonical: Output.Format ignored when caller forces their own", opts+".output.format.*"),
@@ -103,7 +101,6 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: Temperature/TopP/TopK dropped when reasoning is set", opts+".sampling.temperature", opts+".sampling.top_p", opts+".sampling.top_k"),
 		annotated("canonical: FunctionTool.Strict dropped — Anthropic", tool+".strict"),
 		annotated("canonical: FunctionTool.ProviderData dropped — it holds another", tool+".provider_data"),
-		carriable("SerializeRequest writes disable_parallel_tool_use on tool_choice; anthropicParseToolChoice never maps it back to Tools.Parallel", "tools.parallel"),
 	},
 	"gemini": {
 		hoistedSystem,
@@ -115,22 +112,17 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: Extensions dropped — no Gemini-owned", "extensions.*"),
 		annotated("canonical: User dropped — generateContent", "user"),
 		annotated("canonical: Metadata dropped — generateContent", "metadata.*"),
-		carriable("Gemini functionCall/functionResponse carry an id, but the adapter pairs by name: ParseRequest sets CallID to the function name, and SerializeRequest writes a foreign CallID into functionResponse.name",
-			call1+".call_id", call2+".call_id"),
 		annotated("canonical: FunctionCall.ID/Status dropped — a Gemini functionCall", call1+".id", call1+".status"),
-		carriable("SerializeRequest writes thoughtSignature on functionCall and thought parts; ParseRequest never reads it back", call1+".provider_data", reasoning+".provider_data"),
-		carriable(`SerializeRequest wraps a non-object tool result as {"output": …}; ParseRequest keeps the wrapper`, result1+".output"),
 		annotated("canonical: non-text tool-result parts dropped — functionResponse.parts", result2+".content[input_image].*"),
 		annotated("canonical: OutputTextPart.Annotations dropped — a Gemini", assistMsg+".content[output_text].annotations*"),
 		annotated("canonical: Message.ID/Status/ProviderData dropped — Gemini", "input[message:*].id", "input[message:*].status", "input[message:*].provider_data"),
 		annotated("canonical: ImagePart.Detail dropped — per-part mediaResolution", userMsg+".content[input_image].detail"),
 		annotated("canonical: FilePart.Filename dropped — Gemini API", userMsg+".content[input_file*].filename"),
-		carriable("ParseRequest types a part by wire field, not mime type (every inlineData becomes an image, every fileData a file), and SerializeRequest sends an image URL as fileData with no mimeType",
+		carriable("SerializeRequest sends an image URL as fileData with no mimeType, so ParseRequest reads it back as a file",
 			userMsg+".content[*"),
 		annotated("canonical: Reasoning.ID/Status dropped — a thought part", reasoning+".id", reasoning+".status"),
 		annotated("canonical: Reasoning.Summary dropped when Content is set", reasoning+".summary*"),
 		annotated("canonical: Format.Name/Description/Strict dropped — responseSchema", opts+".output.format.name", opts+".output.format.description", opts+".output.format.strict"),
-		carriable("SerializeRequest writes responseMimeType/responseSchema; ParseRequest never maps them back to Output.Format", opts+".output.format.*"),
 		annotated("canonical: Output.Verbosity dropped — generateContent", opts+".output.verbosity"),
 		annotated("canonical: Reasoning.Effort dropped — thinkingLevel", opts+".reasoning.effort"),
 		annotated("canonical: Reasoning.Summary dropped — Gemini only toggles", opts+".reasoning.summary"),
@@ -142,9 +134,4 @@ var allowedDrops = map[string][]allowedDrop{
 
 // silentFeatureDrops are rejectedFeatures a shape serializes without an
 // error while losing them; each is a skipped subtest until fixed.
-var silentFeatureDrops = map[string]map[string]string{
-	"openai-responses": {
-		"server tool": "canonicalToResponsesRequest skips non-function tools where every other shape refuses them",
-		"mcp tool":    "canonicalToResponsesRequest skips MCPTool although Responses has an mcp tool type (server_url, headers)",
-	},
-}
+var silentFeatureDrops = map[string]map[string]string{}

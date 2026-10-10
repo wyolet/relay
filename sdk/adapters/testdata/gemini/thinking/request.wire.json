@@ -12,6 +12,7 @@
       "role": "model",
       "parts": [
         {
+          "thoughtSignature": "CtwBAdHtim9FactorCallSignature",
           "functionCall": {
             "name": "factor",
             "args": {

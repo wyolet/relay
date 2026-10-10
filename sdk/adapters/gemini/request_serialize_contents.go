@@ -20,6 +20,14 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 	var pendingFCs []v1.FunctionCall
 	var pendingFCOs []v1.FunctionCallOutput
 
+	// Gemini matches a functionResponse to its call by name; a call id minted by another vendor carries no name, so it comes from the call itself.
+	callNames := map[string]string{}
+	for _, item := range items {
+		if fc, ok := item.(*v1.FunctionCall); ok && fc.CallID != "" {
+			callNames[fc.CallID] = fc.Name
+		}
+	}
+
 	// Positional system turns deferred past an open tool round; drained
 	// right after the functionResponse user turn.
 	var pendingSystem []geminiContent
@@ -40,7 +48,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			} else {
 				argsObj = json.RawMessage(`{}`)
 			}
-			p := geminiPart{FunctionCall: &geminiFC{Name: fc.Name, Args: argsObj}}
+			p := geminiPart{FunctionCall: &geminiFC{ID: geminiWireCallID(fc.CallID, fc.Name), Name: fc.Name, Args: argsObj}}
 			if sig := thoughtSignatureFrom(fc.ProviderData); sig != "" {
 				p.ThoughtSignature = sig
 			}
@@ -82,8 +90,13 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 					respRaw = b
 				}
 			}
+			name, ok := callNames[fco.CallID]
+			if !ok {
+				name = geminiFuncNameFromCallID(fco.CallID)
+			}
 			parts = append(parts, geminiPart{FunctionResponse: &geminiFR{
-				Name:     geminiFuncNameFromCallID(fco.CallID),
+				ID:       geminiWireCallID(fco.CallID, name),
+				Name:     name,
 				Response: respRaw,
 			}})
 		}

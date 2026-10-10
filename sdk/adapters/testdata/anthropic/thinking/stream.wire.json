@@ -59,6 +59,17 @@
     }
   },
   {
+    "event": "content_block_delta",
+    "data": {
+      "delta": {
+        "signature": "EqQBCgIYAhIMSecondSignatureBlob",
+        "type": "signature_delta"
+      },
+      "index": 0,
+      "type": "content_block_delta"
+    }
+  },
+  {
     "event": "content_block_stop",
     "data": {
       "index": 0,
@@ -103,6 +114,7 @@
       },
       "type": "message_delta",
       "usage": {
+        "input_tokens": 512,
         "output_tokens": 96
       }
     }

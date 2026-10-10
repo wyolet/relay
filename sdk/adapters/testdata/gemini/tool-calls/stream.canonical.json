@@ -12,7 +12,8 @@
       "item_id": "fc_0",
       "item_type": "function_call",
       "index": 0,
-      "name": "get_weather"
+      "name": "get_weather",
+      "call_id": "get_weather__relay_call_0"
     }
   },
   {
@@ -45,7 +46,8 @@
       "item_id": "fc_1",
       "item_type": "function_call",
       "index": 1,
-      "name": "get_weather"
+      "name": "get_weather",
+      "call_id": "get_weather__relay_call_1"
     }
   },
   {

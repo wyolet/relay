@@ -44,9 +44,13 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		req.OutputMode = v1.OutputModeSync
 	}
 
+	var breakpoints cacheBreakpoints
+	var instructionsCached, toolsCached bool
+
 	// system → Instructions
 	if len(wire.System) > 0 && string(wire.System) != "null" {
 		req.Instructions = anthropicExtractSystemText(wire.System)
+		instructionsCached = breakpoints.systemMarked(wire.System)
 	}
 
 	// metadata.user_id → User
@@ -102,9 +106,12 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			if tool != nil {
 				tc.Definitions = append(tc.Definitions, tool)
 			}
+			if breakpoints.blockMarked(raw) {
+				toolsCached = true
+			}
 		}
 		if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
-			tc.Choice = anthropicParseToolChoice(wire.ToolChoice)
+			tc.Choice, tc.Parallel = anthropicParseToolChoice(wire.ToolChoice)
 		}
 		req.Tools = tc
 	}
@@ -156,11 +163,12 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	}
 
 	// Build Input from messages.
-	input, err := anthropicMessagesToCanonical(wire.Messages)
+	input, err := anthropicMessagesToCanonical(wire.Messages, &breakpoints)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic parse_request: messages: %w", err)
 	}
 	req.Input = input
+	req.CacheConfig = breakpoints.config(instructionsCached, toolsCached)
 
 	return req, nil
 }

@@ -127,7 +127,13 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 			StopReason string `json:"stop_reason"`
 		} `json:"delta"`
 		Usage struct {
-			OutputTokens int `json:"output_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			InputTokens        int `json:"input_tokens"`
+			CacheRead          int `json:"cache_read_input_tokens"`
+			CacheCreation      int `json:"cache_creation_input_tokens"`
+			CacheCreationByTTL struct {
+				Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+			} `json:"cache_creation"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &md); err != nil {
@@ -139,6 +145,11 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 		s.stopReason = md.Delta.StopReason
 	}
 	s.outputTokens = md.Usage.OutputTokens
+	// message_delta usage is cumulative and its input-side counts are optional; max keeps message_start's when they are absent or zero.
+	s.inputTokens = max(s.inputTokens, md.Usage.InputTokens)
+	s.cachedTokens = max(s.cachedTokens, md.Usage.CacheRead)
+	s.cacheCreationTokens = max(s.cacheCreationTokens, md.Usage.CacheCreation)
+	s.cacheCreation1h = max(s.cacheCreation1h, md.Usage.CacheCreationByTTL.Ephemeral1h)
 	return nil, nil
 }
 

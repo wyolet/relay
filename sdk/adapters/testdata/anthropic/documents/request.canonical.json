@@ -1,0 +1,32 @@
+{
+  "model": "claude-sonnet-4-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Compare the two quarterly reports."
+        },
+        {
+          "type": "input_file",
+          "file_data": "JVBERi0xLjQK",
+          "media_type": "application/pdf"
+        },
+        {
+          "type": "input_file",
+          "file_url": "https://example.com/q3.pdf"
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "claude-sonnet-4-5": {
+      "sampling": {
+        "max_tokens": 1024
+      }
+    }
+  },
+  "output_mode": "sync"
+}

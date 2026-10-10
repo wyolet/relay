@@ -63,7 +63,7 @@ func (s *canonicalToAnthropicStream) handleGenerationCreated(data []byte) ([]byt
 	s.responseID = e.ID
 	s.model = e.Model
 
-	// Emit message_start + ping
+	// Canonical usage arrives only on generation.completed, so the zeros here are placeholders; message_delta carries the real counts, and Anthropic defines its usage as cumulative.
 	ms, _ := json.Marshal(map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
@@ -104,9 +104,14 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 	case v1.ItemTypeMessage:
 		cb = map[string]any{"type": "text", "text": ""}
 	case v1.ItemTypeFunctionCall:
+		// The item id is a fallback only: tool_result.tool_use_id must echo the call id.
+		callID := e.CallID
+		if callID == "" {
+			callID = e.ItemID
+		}
 		cb = map[string]any{
 			"type":  "tool_use",
-			"id":    e.ItemID,
+			"id":    callID,
 			"name":  e.Name,
 			"input": map[string]any{},
 		}
@@ -166,9 +171,13 @@ func (s *canonicalToAnthropicStream) handleItemDelta(data []byte) ([]byte, error
 }
 
 func (s *canonicalToAnthropicStream) handleItemCompleted(data []byte) ([]byte, error) {
-	// Only need the index field; Item is polymorphic and not needed here.
+	// Only the fields the closing frames need; decoding the polymorphic Item would reject types this shape skips.
 	var e struct {
 		Index int `json:"index"`
+		Item  struct {
+			Type         v1.ItemType     `json:"type"`
+			ProviderData json.RawMessage `json:"provider_data"`
+		} `json:"item"`
 	}
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil, fmt.Errorf("canonical→anthropic: item.completed: %w", err)
@@ -178,11 +187,37 @@ func (s *canonicalToAnthropicStream) handleItemCompleted(data []byte) ([]byte, e
 		return nil, nil
 	}
 
+	var out []byte
+	if e.Item.Type == v1.ItemTypeReasoning {
+		if sig := thinkingSignature(e.Item.ProviderData); sig != "" {
+			sd, _ := json.Marshal(map[string]any{
+				"type":  "content_block_delta",
+				"index": idx,
+				"delta": map[string]string{"type": "signature_delta", "signature": sig},
+			})
+			out = append(out, anthropicSSEBytes("content_block_delta", string(sd))...)
+		}
+	}
 	cbe, _ := json.Marshal(map[string]any{
 		"type":  "content_block_stop",
 		"index": idx,
 	})
-	return anthropicSSEBytes("content_block_stop", string(cbe)), nil
+	return append(out, anthropicSSEBytes("content_block_stop", string(cbe))...), nil
+}
+
+// thinkingSignature returns the signature an Anthropic thinking block left in provider_data; other vendors' blobs yield "".
+func thinkingSignature(providerData json.RawMessage) string {
+	if len(providerData) == 0 {
+		return ""
+	}
+	var pd struct {
+		Type      string `json:"type"`
+		Signature string `json:"signature"`
+	}
+	if err := json.Unmarshal(providerData, &pd); err != nil || pd.Type != "thinking" {
+		return ""
+	}
+	return pd.Signature
 }
 
 func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]byte, error) {
@@ -201,9 +236,9 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 		stopReason = "refusal"
 	}
 
-	outTokens := int64(0)
+	deltaUsage := map[string]any{"output_tokens": 0}
 	if len(e.Usage) > 0 {
-		outTokens = e.Usage["output"]
+		deltaUsage = canonicalUsageToAnthropic(e.Usage)
 	}
 	// canonical: service_tier dropped — same reason as SerializeResponse.
 
@@ -213,7 +248,7 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 			"stop_reason":   stopReason,
 			"stop_sequence": "",
 		},
-		"usage": map[string]int64{"output_tokens": outTokens},
+		"usage": deltaUsage,
 	})
 	ms, _ := json.Marshal(map[string]string{"type": "message_stop"})
 

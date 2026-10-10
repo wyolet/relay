@@ -14,7 +14,8 @@
           "index": 0
         }
       ],
-      "modelVersion": "gemini-2.5-flash"
+      "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>"
     }
   },
   {
@@ -30,10 +31,11 @@
         }
       ],
       "modelVersion": "gemini-2.5-flash",
+      "responseId": "gemini-<now>",
       "usageMetadata": {
         "cachedContentTokenCount": 1920,
         "candidatesTokenCount": 6,
-        "promptTokenCount": 128
+        "promptTokenCount": 2048
       }
     }
   }

@@ -1,0 +1,20 @@
+{
+  "contents": [
+    {"role": "user", "parts": [{"text": "Weather in Lima and Quito?"}]},
+    {"role": "model", "parts": [
+      {"functionCall": {"id": "fc-lima-7q2", "name": "get_weather", "args": {"city":"Lima"}}},
+      {"functionCall": {"id": "fc-quito-3x9", "name": "get_weather", "args": {"city":"Quito"}}}
+    ]},
+    {"role": "user", "parts": [
+      {"functionResponse": {"id": "fc-lima-7q2", "name": "get_weather", "response": {"temp_c":19}}},
+      {"functionResponse": {"id": "fc-quito-3x9", "name": "get_weather", "response": {"temp_c":14}}}
+    ]}
+  ],
+  "tools": [
+    {
+      "functionDeclarations": [
+        {"name": "get_weather", "description": "Current weather for a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+      ]
+    }
+  ]
+}

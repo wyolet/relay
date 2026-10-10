@@ -63,11 +63,13 @@ type fileData struct {
 }
 
 type geminiFC struct {
+	ID   string          `json:"id,omitempty"`
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args,omitempty"` // JSON object on the wire
 }
 
 type geminiFR struct {
+	ID       string          `json:"id,omitempty"`
 	Name     string          `json:"name"`
 	Response json.RawMessage `json:"response"` // JSON object on the wire
 }
@@ -83,7 +85,7 @@ type generationConfig struct {
 	PresencePenalty  *float64        `json:"presencePenalty,omitempty"`
 	CandidateCount   *int            `json:"candidateCount,omitempty"`
 	ResponseMIMEType string          `json:"responseMimeType,omitempty"`
-	ResponseSchema   interface{}     `json:"responseSchema,omitempty"`
+	ResponseSchema   json.RawMessage `json:"responseSchema,omitempty"`
 	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
@@ -116,6 +118,7 @@ type geminiResponse struct {
 	Candidates    []candidate    `json:"candidates"`
 	UsageMetadata *usageMetadata `json:"usageMetadata,omitempty"`
 	ModelVersion  string         `json:"modelVersion,omitempty"`
+	ResponseID    string         `json:"responseId,omitempty"`
 	// PromptFeedback is set when the prompt itself was blocked (blockReason),
 	// in which case there are no candidates. Kept raw for Extensions.
 	PromptFeedback json.RawMessage `json:"promptFeedback,omitempty"`

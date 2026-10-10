@@ -18,6 +18,7 @@
     }
   ],
   "modelVersion": "gemini-2.5-pro",
+  "responseId": "gemini-<now>",
   "usageMetadata": {
     "candidatesTokenCount": 12,
     "promptTokenCount": 60,

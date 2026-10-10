@@ -12,7 +12,8 @@
       "item_id": "fc_lima",
       "item_type": "function_call",
       "index": 0,
-      "name": "get_weather"
+      "name": "get_weather",
+      "call_id": "call_lima"
     }
   },
   {

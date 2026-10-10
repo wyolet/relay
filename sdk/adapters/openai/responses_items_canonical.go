@@ -60,6 +60,10 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 		for _, s := range v.Summary {
 			r.Summary = append(r.Summary, v1.SummaryText{Text: s.Text})
 		}
+		// Canonical content is one string, so parts concatenate the same way the stream's reasoning_text deltas do across content_index.
+		for _, c := range v.Content {
+			r.Content += c.Text
+		}
 		// R-1: store encrypted_content + item id in ProviderData for same-vendor round-trip.
 		if v.EncryptedContent != "" {
 			type reasoningProviderData struct {
@@ -121,22 +125,28 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 //     canonical: foreign reasoning items dropped on Responses input — they
 //     are provider-signed (e.g. Anthropic thinking signatures) and cannot
 //     round-trip cross-vendor (rule 8); their relay-minted id would 400.
+//
+// canonical: item Status dropped on Responses input — the API sets it on output items only and rejects it on input items ("Unknown parameter: 'input[N].status'").
 func responsesInputItemFromCanonical(item v1.Item, custom *responsesCustomLowering) ResponsesItem {
 	ritem := responsesItemFromCanonical(item, custom)
 	switch v := ritem.(type) {
 	case *ResponsesMessage:
+		v.Status = ""
 		if !strings.HasPrefix(v.ID, "msg_") {
 			v.ID = ""
 		}
 	case *ResponsesFunctionCall:
+		v.Status = ""
 		if !strings.HasPrefix(v.ID, "fc_") {
 			v.ID = ""
 		}
 	case *ResponsesCustomToolCall:
+		v.Status = ""
 		if !strings.HasPrefix(v.ID, "ctc_") {
 			v.ID = ""
 		}
 	case *ResponsesReasoning:
+		v.Status = ""
 		if v.EncryptedContent == "" {
 			return nil
 		}
@@ -216,6 +226,9 @@ func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) R
 		}
 		for _, s := range v.Summary {
 			r.Summary = append(r.Summary, ResponsesSummaryText{Text: s.Text})
+		}
+		if v.Content != "" {
+			r.Content = []ResponsesReasoningText{{Text: v.Content}}
 		}
 		// R-1: restore encrypted_content from ProviderData for same-vendor round-trip.
 		if len(v.ProviderData) > 0 {

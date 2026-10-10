@@ -8,6 +8,7 @@
     {
       "type": "message",
       "id": "msg_new",
+      "status": "incomplete",
       "role": "assistant",
       "content": [
         {

@@ -86,7 +86,10 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 			// Emit the id+name header chunk for this tool call immediately:
 			// CC streaming convention is id+type+name on the first chunk, then
 			// arguments-only deltas follow.
-			callID := ev.ItemID
+			callID := ev.CallID
+			if callID == "" {
+				callID = ev.ItemID
+			}
 			s.toolItems[ev.ItemID] = ccFromCanonicalToolItem{index: idx, callID: callID, name: ev.Name}
 			b, _ := json.Marshal(ChatStreamChunk{
 				ID:      s.responseID,

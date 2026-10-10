@@ -1,0 +1,30 @@
+{
+  "model": "claude-sonnet-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "text": "Compare the two quarterly reports.",
+          "type": "text"
+        },
+        {
+          "source": {
+            "data": "JVBERi0xLjQK",
+            "media_type": "application/pdf",
+            "type": "base64"
+          },
+          "type": "document"
+        },
+        {
+          "source": {
+            "type": "url",
+            "url": "https://example.com/q3.pdf"
+          },
+          "type": "document"
+        }
+      ]
+    }
+  ],
+  "max_tokens": 1024
+}

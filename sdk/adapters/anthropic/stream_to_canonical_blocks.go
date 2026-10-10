@@ -96,6 +96,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 		ItemID:   b.itemID,
 		ItemType: itemType,
 		Name:     b.toolName,
+		CallID:   b.callID,
 		Index:    outputIndex,
 	})
 	return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}}), nil

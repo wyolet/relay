@@ -62,6 +62,7 @@
       },
       "type": "message_delta",
       "usage": {
+        "input_tokens": 30,
         "output_tokens": 7
       }
     }

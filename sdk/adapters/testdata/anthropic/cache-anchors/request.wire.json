@@ -1,0 +1,59 @@
+{
+  "model": "claude-sonnet-4-5",
+  "system": [
+    {
+      "cache_control": {
+        "ttl": "1h",
+        "type": "ephemeral"
+      },
+      "text": "You review pull requests.",
+      "type": "text"
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "cache_control": {
+            "ttl": "1h",
+            "type": "ephemeral"
+          },
+          "text": "Review the first diff.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "cache_control": {
+            "ttl": "1h",
+            "type": "ephemeral"
+          },
+          "text": "The first diff looks fine.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "cache_control": {
+            "ttl": "1h",
+            "type": "ephemeral"
+          },
+          "text": "<system>\nKeep reviews under five lines.\n</system>",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Now the second diff."
+    }
+  ],
+  "max_tokens": 1024
+}

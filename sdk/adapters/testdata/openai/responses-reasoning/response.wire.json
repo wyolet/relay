@@ -19,6 +19,7 @@
     {
       "type": "message",
       "id": "msg_reason1",
+      "status": "completed",
       "role": "assistant",
       "content": [
         {

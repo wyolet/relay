@@ -1,0 +1,37 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "id": "fc-lima-7q2",
+              "name": "get_weather",
+              "args": {
+                "city": "Lima"
+              }
+            }
+          },
+          {
+            "functionCall": {
+              "id": "fc-quito-3x9",
+              "name": "get_weather",
+              "args": {
+                "city": "Quito"
+              }
+            }
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-2.5-flash",
+  "responseId": "gemini-<now>",
+  "usageMetadata": {
+    "candidatesTokenCount": 20,
+    "promptTokenCount": 90
+  }
+}

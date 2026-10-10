@@ -21,6 +21,7 @@
     }
   ],
   "modelVersion": "gemini-2.5-flash",
+  "responseId": "gemini-<now>",
   "usageMetadata": {
     "promptTokenCount": 10
   }

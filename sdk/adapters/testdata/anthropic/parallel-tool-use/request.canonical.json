@@ -1,0 +1,45 @@
+{
+  "model": "claude-sonnet-4-5",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Weather in Paris and Lima?"
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "claude-sonnet-4-5": {
+      "sampling": {
+        "max_tokens": 1024
+      }
+    }
+  },
+  "tools": {
+    "definitions": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    ],
+    "choice": "required",
+    "parallel": false
+  },
+  "output_mode": "sync"
+}

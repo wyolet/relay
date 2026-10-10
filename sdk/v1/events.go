@@ -45,6 +45,8 @@ type ItemStartedEvent struct {
 	Index int `json:"index"`
 	// Name is the function name for FunctionCall items. Empty for other kinds.
 	Name string `json:"name,omitempty"`
+	// CallID is the call id for FunctionCall items. Empty for other kinds.
+	CallID string `json:"call_id,omitempty"`
 }
 
 // ItemDeltaEvent carries an incremental chunk into the current item.

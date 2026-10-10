@@ -85,7 +85,7 @@ func (*ResponsesCustomToolCall) ResponsesItemType() ResponsesItemType {
 	return ResponsesItemTypeCustomToolCall
 }
 
-// status is output-only — see ResponsesMessage.MarshalJSON. Never emit it.
+// status is output-only — see ResponsesMessage.MarshalJSON.
 func (c *ResponsesCustomToolCall) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Type   ResponsesItemType `json:"type"`
@@ -93,6 +93,7 @@ func (c *ResponsesCustomToolCall) MarshalJSON() ([]byte, error) {
 		CallID string            `json:"call_id"`
 		Name   string            `json:"name"`
 		Input  string            `json:"input"`
+		Status ResponsesStatus   `json:"status,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:   ResponsesItemTypeCustomToolCall,
@@ -100,6 +101,7 @@ func (c *ResponsesCustomToolCall) MarshalJSON() ([]byte, error) {
 		CallID: c.CallID,
 		Name:   c.Name,
 		Input:  c.Input,
+		Status: c.Status,
 	})
 }
 

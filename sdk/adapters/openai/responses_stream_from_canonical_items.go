@@ -17,8 +17,9 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 	// populate without a custom dispatcher — the full item is not needed
 	// because per-stream state in s.outputItems already holds type + buffers).
 	var evHeader struct {
-		ItemID string `json:"item_id"`
-		Index  int    `json:"index"`
+		ItemID string          `json:"item_id"`
+		Index  int             `json:"index"`
+		Item   json.RawMessage `json:"item"`
 	}
 	if err := json.Unmarshal(data, &evHeader); err != nil {
 		return nil, fmt.Errorf("responses from_canonical stream: item.completed: %w", err)
@@ -28,6 +29,15 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		return nil, nil
 	}
 	itemID := evHeader.ItemID
+	// The completed item's status is passed through as is: an item cut short stays incomplete, and one the source sent without a status gets none.
+	var done struct {
+		Status       ResponsesStatus `json:"status"`
+		Content      string          `json:"content"`
+		ProviderData json.RawMessage `json:"provider_data"`
+	}
+	if len(evHeader.Item) > 0 {
+		_ = json.Unmarshal(evHeader.Item, &done)
+	}
 
 	var frames []ResponsesSSEFrame
 
@@ -51,7 +61,7 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		finalMsg := &ResponsesMessage{
 			ID:      itemID,
 			Role:    ResponsesRoleAssistant,
-			Status:  ResponsesStatusCompleted,
+			Status:  done.Status,
 			Content: []ResponsesPart{finalPart},
 		}
 		itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
@@ -71,11 +81,8 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 		}
-		var evItemRaw struct {
-			Item json.RawMessage `json:"item"`
-		}
-		if json.Unmarshal(data, &evItemRaw) == nil && len(evItemRaw.Item) > 0 {
-			if json.Unmarshal(evItemRaw.Item, &fcProbe) == nil {
+		if len(evHeader.Item) > 0 {
+			if json.Unmarshal(evHeader.Item, &fcProbe) == nil {
 				if fcProbe.CallID != "" {
 					callID = fcProbe.CallID
 				}
@@ -106,7 +113,7 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 				CallID: callID,
 				Name:   name,
 				Input:  input,
-				Status: ResponsesStatusCompleted,
+				Status: done.Status,
 			}
 			itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
 				OutputIndex: st.outputIndex,
@@ -128,7 +135,7 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 			CallID:    callID,
 			Name:      name,
 			Arguments: st.argsBuf,
-			Status:    ResponsesStatusCompleted,
+			Status:    done.Status,
 		}
 		itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
 			OutputIndex: st.outputIndex,
@@ -147,8 +154,18 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventReasoningTextDone, Data: textDoneData})
 		finalR := &ResponsesReasoning{
 			ID:      itemID,
-			Status:  ResponsesStatusCompleted,
+			Status:  done.Status,
 			Summary: []ResponsesSummaryText{{Text: st.textBuf}},
+		}
+		if done.Content != "" {
+			finalR.Content = []ResponsesReasoningText{{Text: done.Content}}
+		}
+		// Same-vendor round trip: encrypted_content rides provider_data, as in responsesItemFromCanonical.
+		var pd struct {
+			EncryptedContent string `json:"encrypted_content"`
+		}
+		if json.Unmarshal(done.ProviderData, &pd) == nil {
+			finalR.EncryptedContent = pd.EncryptedContent
 		}
 		itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
 			OutputIndex: st.outputIndex,

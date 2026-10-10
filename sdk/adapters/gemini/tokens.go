@@ -76,11 +76,11 @@ func geminiUsageToTokens(u *usageMetadata) usage.Tokens {
 	return t
 }
 
-// canonicalUsageToGemini is the inverse of geminiUsageToTokens: candidates are the output tokens that are not thoughts.
+// canonicalUsageToGemini is the inverse of geminiUsageToTokens: the prompt count includes the cached tokens, and candidates are the output tokens that are not thoughts.
 func canonicalUsageToGemini(t usage.Tokens) map[string]int64 {
 	um := map[string]int64{}
 	reasoning := t["reasoning"]
-	if v := t["input"]; v > 0 {
+	if v := t["input"] + t["cache_read"]; v > 0 {
 		um["promptTokenCount"] = v
 	}
 	if v := t["output"] - reasoning; v > 0 {

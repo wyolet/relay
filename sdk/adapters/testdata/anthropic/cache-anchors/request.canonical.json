@@ -1,0 +1,67 @@
+{
+  "model": "claude-sonnet-4-5",
+  "instructions": "You review pull requests.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Review the first diff."
+        }
+      ],
+      "cache_config": {
+        "anchor": true
+      }
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "The first diff looks fine."
+        }
+      ],
+      "cache_config": {
+        "anchor": true
+      }
+    },
+    {
+      "type": "message",
+      "role": "system",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Keep reviews under five lines."
+        }
+      ],
+      "cache_config": {
+        "anchor": true
+      }
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Now the second diff."
+        }
+      ]
+    }
+  ],
+  "model_config": {
+    "claude-sonnet-4-5": {
+      "sampling": {
+        "max_tokens": 1024
+      }
+    }
+  },
+  "cache_config": {
+    "instructions": true,
+    "ttl": "1h"
+  },
+  "output_mode": "sync"
+}
