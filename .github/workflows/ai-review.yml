@@ -1,0 +1,47 @@
+name: AI review
+
+# An AI review runs only when someone adds the `ai-review` label. Adding a label
+# needs triage access, so outside contributors cannot start one. The label is
+# removed after each run: a review is a deliberate request, and later pushes to
+# a fork PR never reach the secrets without a member looking first.
+#
+# pull_request_target gives fork PRs the secrets. The action checks out the base
+# branch and reads the PR head only as git objects, so no PR code is executed and
+# the review rules (.opencodereview/rule.json) always come from the base branch.
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.label.name == 'ai-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Pin both the action and the CLI it installs; the action alone installs
+      # whatever npm calls latest.
+      - uses: alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4 # v1.12.13
+        with:
+          ocr_version: '1.12.13'
+          llm_url: ${{ secrets.AI_REVIEW_LLM_URL }}
+          llm_auth_token: ${{ secrets.AI_REVIEW_LLM_TOKEN }}
+          llm_model: ${{ vars.AI_REVIEW_MODEL || 'claude-haiku-5-5' }}
+          llm_use_anthropic: 'true'
+          max_tokens_budget: ${{ vars.AI_REVIEW_MAX_TOKENS || '3000000' }}
+          sticky_summary: 'true'
+          route_categories: 'style,documentation'
+
+      - name: Remove the label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label ai-review
