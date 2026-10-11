@@ -71,6 +71,20 @@ func (q *Queries) DeleteProject(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteProjectRoleBindings = `-- name: DeleteProjectRoleBindings :exec
+DELETE FROM role_bindings WHERE scope_kind = $1::text AND scope_id = $2::text
+`
+
+type DeleteProjectRoleBindingsParams struct {
+	ProjectKind string
+	ProjectID   string
+}
+
+func (q *Queries) DeleteProjectRoleBindings(ctx context.Context, arg DeleteProjectRoleBindingsParams) error {
+	_, err := q.db.Exec(ctx, deleteProjectRoleBindings, arg.ProjectKind, arg.ProjectID)
+	return err
+}
+
 const deleteRole = `-- name: DeleteRole :exec
 DELETE FROM roles WHERE id = $1
 `
@@ -113,6 +127,23 @@ DELETE FROM teams WHERE id = $1
 
 func (q *Queries) DeleteTeam(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deleteTeam, id)
+	return err
+}
+
+const deleteTeamRoleBindings = `-- name: DeleteTeamRoleBindings :exec
+DELETE FROM role_bindings
+WHERE (scope_kind = $1::text AND scope_id = $2::text)
+   OR (scope_kind = $3::text AND scope_id IN (SELECT id FROM projects WHERE team_id = $2::text))
+`
+
+type DeleteTeamRoleBindingsParams struct {
+	TeamKind    string
+	TeamID      string
+	ProjectKind string
+}
+
+func (q *Queries) DeleteTeamRoleBindings(ctx context.Context, arg DeleteTeamRoleBindingsParams) error {
+	_, err := q.db.Exec(ctx, deleteTeamRoleBindings, arg.TeamKind, arg.TeamID, arg.ProjectKind)
 	return err
 }
 

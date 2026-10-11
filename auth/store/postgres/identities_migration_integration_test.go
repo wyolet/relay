@@ -230,7 +230,7 @@ func TestIdentitiesDownMigration(t *testing.T) {
 			ada := &directory.User{Username: "ada", Identity: directory.Identity{Issuer: "https://idp.example.com", Subject: "a"},
 				External: directory.External{Source: "scim-1", ID: "e-1"}}
 			must(t, d.CreateUser(ctx, nil, ada))
-			must(t, d.CreateGroup(ctx, &directory.Group{Meta: directory.Metadata{Name: "ops"}, Spec: directory.GroupSpec{External: ada.External}}))
+			must(t, d.CreateGroup(ctx, nil, &directory.Group{Meta: directory.Metadata{Name: "ops"}, Spec: directory.GroupSpec{External: ada.External}}))
 
 			migrateModule(t, dsn, 1)
 			if got := allTables(t, dsn); !slices.Equal(got, tables) {

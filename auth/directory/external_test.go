@@ -14,25 +14,25 @@ func TestManagedGroup(t *testing.T) {
 	ext := directory.External{Source: "scim-1", ID: "g-1"}
 	scim := h.d.WithWriter(directory.Writer{Source: "scim-1"})
 	g := &directory.Group{Meta: directory.Metadata{Name: "ops"}, Spec: directory.GroupSpec{External: ext}}
-	must(t, scim.CreateGroup(ctx, g))
+	must(t, scim.CreateGroup(ctx, caller, g))
 
 	edit := func() *directory.Group {
 		return &directory.Group{Meta: directory.Metadata{ID: g.Meta.ID, Name: "ops", DisplayName: "Ops"}}
 	}
-	err := h.d.UpdateGroup(ctx, edit())
+	err := h.d.UpdateGroup(ctx, caller, edit())
 	wantErr(t, "update by another writer", err, directory.ErrManaged)
 	if me, ok := errors.AsType[*directory.ManagedError](err); !ok || me.Source != "scim-1" || me.Name != "ops" || me.Kind != "group" {
 		t.Fatalf("managed error = %#v", err)
 	}
-	wantErr(t, "update by another source", h.d.WithWriter(directory.Writer{Source: "scim-2"}).UpdateGroup(ctx, edit()), directory.ErrManaged)
-	wantErr(t, "add member", h.d.AddGroupMember(ctx, g.Meta.ID, u.ID), directory.ErrManaged)
+	wantErr(t, "update by another source", h.d.WithWriter(directory.Writer{Source: "scim-2"}).UpdateGroup(ctx, caller, edit()), directory.ErrManaged)
+	wantErr(t, "add member", h.d.AddGroupMember(ctx, caller, g.Meta.ID, u.ID), directory.ErrManaged)
 	wantErr(t, "remove member", h.d.RemoveGroupMember(ctx, g.Meta.ID, u.ID), directory.ErrManaged)
 	wantErr(t, "delete", h.d.DeleteGroup(ctx, g.Meta.ID), directory.ErrManaged)
 
-	must(t, scim.AddGroupMember(ctx, g.Meta.ID, u.ID))
-	must(t, scim.UpdateGroup(ctx, &directory.Group{Meta: directory.Metadata{ID: g.Meta.ID, Name: "ops"}, Spec: directory.GroupSpec{MemberIDs: []string{u.ID}}}))
+	must(t, scim.AddGroupMember(ctx, caller, g.Meta.ID, u.ID))
+	must(t, scim.UpdateGroup(ctx, caller, &directory.Group{Meta: directory.Metadata{ID: g.Meta.ID, Name: "ops"}, Spec: directory.GroupSpec{MemberIDs: []string{u.ID}}}))
 	forced := h.d.WithWriter(directory.Writer{Force: true})
-	must(t, forced.UpdateGroup(ctx, edit()))
+	must(t, forced.UpdateGroup(ctx, caller, edit()))
 	got, _ := h.s.Groups.Get(ctx, g.Meta.ID)
 	if got.Spec.External != ext || got.Meta.DisplayName != "Ops" {
 		t.Fatalf("a write that left external out changed it: %+v", got)
@@ -40,8 +40,8 @@ func TestManagedGroup(t *testing.T) {
 	must(t, forced.DeleteGroup(ctx, g.Meta.ID))
 
 	plain := &directory.Group{Meta: directory.Metadata{Name: "eng"}}
-	must(t, h.d.CreateGroup(ctx, plain))
-	must(t, h.d.AddGroupMember(ctx, plain.Meta.ID, u.ID))
-	wantErr(t, "external id without a source", h.d.CreateGroup(ctx,
+	must(t, h.d.CreateGroup(ctx, caller, plain))
+	must(t, h.d.AddGroupMember(ctx, caller, plain.Meta.ID, u.ID))
+	wantErr(t, "external id without a source", h.d.CreateGroup(ctx, caller,
 		&directory.Group{Meta: directory.Metadata{Name: "qa"}, Spec: directory.GroupSpec{External: directory.External{ID: "x"}}}), directory.ErrInvalid)
 }

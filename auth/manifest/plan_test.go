@@ -76,7 +76,7 @@ func TestPruneLeavesRowsCreatedOutsideManifestsAlone(t *testing.T) {
 	if err := e.dir.CreateProject(ctx, &directory.Project{Meta: directory.Metadata{Name: "ui-project"}, Spec: directory.ProjectSpec{TeamID: handTeam.Meta.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.dir.CreateGroup(ctx, &directory.Group{Meta: directory.Metadata{Name: "ui-group", Labels: map[string]string{"managed-by": "someone-else"}}}); err != nil {
+	if err := e.dir.CreateGroup(ctx, admin, &directory.Group{Meta: directory.Metadata{Name: "ui-group", Labels: map[string]string{"managed-by": "someone-else"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.dir.CreateUser(ctx, nil, &directory.User{Username: "carol"}); err != nil {
@@ -134,5 +134,26 @@ func TestApplyRunsTheDirectoryGrantCheck(t *testing.T) {
 	var ae *manifest.ApplyError
 	if !errors.As(err, &ae) || ae.Entry.Kind != manifest.KindRoleBinding || len(applied) != 7 || !denying.called {
 		t.Fatalf("apply = %v (%d applied), want the binding refused by the grant check", err, len(applied))
+	}
+}
+
+// A member of a bound group acts under its bindings, so a document adding one runs the grant check; one removing a member does not.
+func TestApplyChecksGroupMembersAsGrants(t *testing.T) {
+	e := newEnv(t)
+	e.apply(t, bundle, manifest.Options{})
+	cfg := testConfig()
+	denying := &denyBindings{}
+	dir, err := directory.New(directory.Config{Stores: e.store.Stores(), Grants: denying, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fewer := strings.Replace(bundle, "members: [alice, bob]", "members: [alice]", 1)
+	if _, err := e.plan(t, e.parse(t, fewer), manifest.Options{}).Apply(context.Background(), dir, admin); err != nil || denying.called {
+		t.Fatalf("removing a member = %v (checked %v), want no grant check", err, denying.called)
+	}
+	_, err = e.plan(t, e.parse(t, bundle), manifest.Options{}).Apply(context.Background(), dir, admin)
+	var ae *manifest.ApplyError
+	if !errors.As(err, &ae) || ae.Entry.Kind != manifest.KindGroup || !denying.called {
+		t.Fatalf("adding a member = %v, want the group refused by the grant check", err)
 	}
 }

@@ -81,7 +81,7 @@ func (s *UserSpec) check() (field string, err error) {
 // UsesEnv reports whether the document reads its password from the environment, for a product that allows that only on some paths.
 func (s *UserSpec) UsesEnv() bool { return s.Password != nil && s.Password.ValueFrom != nil }
 
-// ToUser translates a User document. current is the stored account with that username, or nil. An omitted password or identity keeps current's, and a password read from the environment that current's hash already verifies keeps that hash, so re-applying the same document changes nothing.
+// ToUser translates a User document. current is the stored account with that username, or nil. An omitted password or identity keeps current's, and a password read from the environment that current's hash already verifies keeps that hash, so re-applying the same document changes nothing. A document clearing the identities of an account it leaves without a password is ErrNoSignIn, so a plan refuses it before anything is written.
 func (r *Registry) ToUser(d *Document, current *directory.User) (*directory.User, error) {
 	s := d.User
 	if s == nil {
@@ -94,19 +94,23 @@ func (r *Registry) ToUser(d *Document, current *directory.User) (*directory.User
 	if s.Identity != nil {
 		u.Identity = directory.Identity{Issuer: s.Identity.Issuer, Subject: s.Identity.Subject}
 	}
-	if s.Password == nil {
-		return u, nil
-	}
-	if s.Password.clears() {
+	if s.Password != nil && s.Password.clears() {
 		u.PasswordHash = ""
-		return u, nil
+	} else if s.Password != nil {
+		hash, err := r.passwordHash(s.Password, current)
+		if err != nil {
+			return nil, docError(d, "spec.password", err)
+		}
+		u.PasswordHash = hash
 	}
-	hash, err := r.passwordHash(s.Password, current)
-	if err != nil {
-		return nil, docError(d, "spec.password", err)
+	if u.PasswordHash == "" && u.Identity.IsZero() && holdsIdentity(current) {
+		return nil, docError(d, "spec.identity", ErrNoSignIn)
 	}
-	u.PasswordHash = hash
 	return u, nil
+}
+
+func holdsIdentity(u *directory.User) bool {
+	return u != nil && (!u.Identity.IsZero() || len(u.Identities) > 0)
 }
 
 func (r *Registry) passwordHash(p *Password, current *directory.User) (string, error) {

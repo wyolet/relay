@@ -49,8 +49,16 @@ func (s teams) Upsert(ctx context.Context, t *directory.Team) error {
 	})))
 }
 
+// Delete takes the bindings scoped to the team and to its projects in the same transaction; scope_id carries no foreign key, so they would outlive the rows.
 func (s teams) Delete(ctx context.Context, id string) error {
-	return mapErr("delete team", gen.New(s.db).DeleteTeam(ctx, id))
+	return inTx(ctx, s.db, func(q *gen.Queries) error {
+		if err := q.DeleteTeamRoleBindings(ctx, gen.DeleteTeamRoleBindingsParams{
+			TeamKind: directory.OwnerTeam, TeamID: id, ProjectKind: directory.OwnerProject,
+		}); err != nil {
+			return mapErr("delete team role bindings", err)
+		}
+		return mapErr("delete team", q.DeleteTeam(ctx, id))
+	})
 }
 
 func teamFromRow(r gen.Team) (*directory.Team, error) {
@@ -107,8 +115,14 @@ func (s projects) Upsert(ctx context.Context, p *directory.Project) error {
 	})))
 }
 
+// Delete takes the bindings scoped to the project in the same transaction.
 func (s projects) Delete(ctx context.Context, id string) error {
-	return mapErr("delete project", gen.New(s.db).DeleteProject(ctx, id))
+	return inTx(ctx, s.db, func(q *gen.Queries) error {
+		if err := q.DeleteProjectRoleBindings(ctx, gen.DeleteProjectRoleBindingsParams{ProjectKind: directory.OwnerProject, ProjectID: id}); err != nil {
+			return mapErr("delete project role bindings", err)
+		}
+		return mapErr("delete project", q.DeleteProject(ctx, id))
+	})
 }
 
 func projectFromRow(r gen.Project) (*directory.Project, error) {

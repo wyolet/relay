@@ -99,7 +99,7 @@ func newDirectoryKinds(d Deps, ops directoryOps) directoryKinds {
 		},
 		groups: directoryKind[group.Group, directory.Group]{
 			entityStore: s.Group, ops: ops, toRow: infallible((*group.Group).ToDirectory),
-			create: ungranted((*dir).CreateGroup), update: ungranted((*dir).UpdateGroup), remove: (*dir).DeleteGroup,
+			create: (*dir).CreateGroup, update: (*dir).UpdateGroup, remove: (*dir).DeleteGroup,
 		},
 		roles: directoryKind[role.Role, directory.Role]{
 			entityStore: s.Role, ops: ops, toRow: infallible((*role.Role).ToDirectory),

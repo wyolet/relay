@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/user"
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 func userDocs(t *testing.T, src string) []manifest.Document {
@@ -80,6 +81,20 @@ func TestPlanUsersReadsEnvPasswordsOnlyWhenAllowed(t *testing.T) {
 	b = usersBuilder(nil, &builder{admin: true, opts: Options{EnvPasswords: true}})
 	if err := b.run(context.Background(), userDocs(t, src)); err != nil || len(b.entries) != 1 || b.entries[0].Action != ActionCreate {
 		t.Fatalf("with EnvPasswords: err = %v, entries = %+v", err, b.entries)
+	}
+}
+
+// Clearing the sign-in identity of an account the document leaves without a password is refused while planning, so the bundle writes nothing.
+func TestPlanUsersRefusesAnIdentityClearWithoutAPassword(t *testing.T) {
+	stored := []*user.User{{ID: "u-1", Username: "carol", OIDCSubject: "https://idp|c"}}
+	b := usersBuilder(stored, &builder{admin: true})
+	err := b.run(context.Background(), userDocs(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: carol}\nspec: {identity: null}\n"))
+	var invalid *InvalidError
+	if !errors.As(err, &invalid) || invalid.Name != "carol" || !errors.Is(err, authmanifest.ErrNoSignIn) {
+		t.Fatalf("err = %v, want the identity clear refused on carol", err)
+	}
+	if len(b.entries) != 0 {
+		t.Fatalf("a refused plan kept entries: %+v", b.entries)
 	}
 }
 

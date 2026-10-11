@@ -16,19 +16,19 @@ func TestGroups(t *testing.T) {
 	must(t, h.d.CreateUser(ctx, nil, bob))
 
 	g := &directory.Group{Meta: directory.Metadata{DisplayName: "Platform Ops"}}
-	must(t, h.d.CreateGroup(ctx, g))
+	must(t, h.d.CreateGroup(ctx, caller, g))
 	if g.Meta.Name != "platform-ops" || g.Meta.Owner.Kind != directory.OwnerSystem || !g.IsEnabled() {
 		t.Fatalf("created %+v", g.Meta)
 	}
 	dup := &directory.Group{Meta: directory.Metadata{DisplayName: "Platform Ops"}}
-	must(t, h.d.CreateGroup(ctx, dup))
+	must(t, h.d.CreateGroup(ctx, caller, dup))
 	if dup.Meta.Name != "platform-ops-2" {
 		t.Fatalf("second group named %q", dup.Meta.Name)
 	}
 
-	must(t, h.d.AddGroupMember(ctx, g.Meta.ID, ada.ID))
-	must(t, h.d.AddGroupMember(ctx, g.Meta.ID, bob.ID))
-	must(t, h.d.AddGroupMember(ctx, g.Meta.ID, ada.ID))
+	must(t, h.d.AddGroupMember(ctx, caller, g.Meta.ID, ada.ID))
+	must(t, h.d.AddGroupMember(ctx, caller, g.Meta.ID, bob.ID))
+	must(t, h.d.AddGroupMember(ctx, caller, g.Meta.ID, ada.ID))
 	got, _ := h.s.Groups.Get(ctx, g.Meta.ID)
 	if !slices.Equal(got.Spec.MemberIDs, []string{ada.ID, bob.ID}) {
 		t.Fatalf("members = %v", got.Spec.MemberIDs)
@@ -42,17 +42,17 @@ func TestGroups(t *testing.T) {
 	if !slices.Equal(got.Spec.MemberIDs, []string{bob.ID}) {
 		t.Fatalf("members = %v", got.Spec.MemberIDs)
 	}
-	wantErr(t, "add a missing user", h.d.AddGroupMember(ctx, g.Meta.ID, "nope"), directory.ErrInvalid)
-	wantErr(t, "add to a missing group", h.d.AddGroupMember(ctx, "nope", ada.ID), directory.ErrNotFound)
+	wantErr(t, "add a missing user", h.d.AddGroupMember(ctx, caller, g.Meta.ID, "nope"), directory.ErrInvalid)
+	wantErr(t, "add to a missing group", h.d.AddGroupMember(ctx, caller, "nope", ada.ID), directory.ErrNotFound)
 
 	got.Spec.MemberIDs = []string{ada.ID, bob.ID}
 	got.Meta.Name = ""
-	must(t, h.d.UpdateGroup(ctx, got))
+	must(t, h.d.UpdateGroup(ctx, caller, got))
 	if got.Meta.Name != "platform-ops" {
 		t.Fatalf("update without a name renamed the group to %q", got.Meta.Name)
 	}
 	got.Meta.ResourceVersion = "1"
-	wantErr(t, "stale update", h.d.UpdateGroup(ctx, got), directory.ErrStaleResourceVersion)
+	wantErr(t, "stale update", h.d.UpdateGroup(ctx, caller, got), directory.ErrStaleResourceVersion)
 
 	for name, bad := range map[string]*directory.Group{
 		"reserved name":   {Meta: directory.Metadata{Name: "system:everyone"}},
@@ -63,10 +63,10 @@ func TestGroups(t *testing.T) {
 		"empty member":    {Meta: directory.Metadata{Name: "z"}, Spec: directory.GroupSpec{MemberIDs: []string{""}}},
 		"missing members": {Meta: directory.Metadata{Name: "w"}, Spec: directory.GroupSpec{MemberIDs: []string{"nope"}}},
 	} {
-		wantErr(t, name, h.d.CreateGroup(ctx, bad), directory.ErrInvalid)
+		wantErr(t, name, h.d.CreateGroup(ctx, caller, bad), directory.ErrInvalid)
 	}
-	wantErr(t, "update without id", h.d.UpdateGroup(ctx, &directory.Group{}), directory.ErrInvalid)
-	wantErr(t, "update a missing group", h.d.UpdateGroup(ctx, &directory.Group{Meta: directory.Metadata{ID: "nope"}}), directory.ErrNotFound)
+	wantErr(t, "update without id", h.d.UpdateGroup(ctx, caller, &directory.Group{}), directory.ErrInvalid)
+	wantErr(t, "update a missing group", h.d.UpdateGroup(ctx, caller, &directory.Group{Meta: directory.Metadata{ID: "nope"}}), directory.ErrNotFound)
 
 	must(t, h.d.DeleteGroup(ctx, dup.Meta.ID))
 	if c := h.notes.last(t); c.Op != directory.OpDelete || c.ID != dup.Meta.ID {

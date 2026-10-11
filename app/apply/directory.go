@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/auth/directory"
@@ -55,6 +56,24 @@ func throughDirectory[T any](b *builder, toRow func(*T) (any, error)) func(conte
 			return err
 		}
 		return authmanifest.Write(ctx, b.dir, refcheck.Principal(ctx, b.opts.Authz), r)
+	}
+}
+
+// groupChecks is the Group kind's Check: relay's reference rules, then the directory's membership grant check, so a refused group fails the plan before anything is written. The check probes through the directory's own grant checker, which the handlers build over the unaudited authorizer; the write runs it again.
+func groupChecks(b *builder) func(context.Context, *group.Group) error {
+	refs := refsFor(b, refcheck.Checker.Group)
+	if refs == nil {
+		return nil
+	}
+	return func(ctx context.Context, g *group.Group) error {
+		if err := refs(ctx, g); err != nil {
+			return err
+		}
+		// Without a directory the write itself fails; there is nothing to probe through.
+		if b.dir == nil {
+			return nil
+		}
+		return b.dir.CheckMembershipGrants(ctx, refcheck.Principal(ctx, b.opts.Authz), g.ToDirectory())
 	}
 }
 

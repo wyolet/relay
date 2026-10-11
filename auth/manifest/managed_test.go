@@ -16,7 +16,7 @@ func TestPlanSkipsManagedGroupsUnlessForced(t *testing.T) {
 	ctx := context.Background()
 	ext := directory.External{Source: "scim-1", ID: "g-1"}
 	g := &directory.Group{Meta: directory.Metadata{Name: "ops", Labels: map[string]string{"owner": "gitops"}}, Spec: directory.GroupSpec{External: ext}}
-	if err := e.dir.WithWriter(directory.Writer{Source: "scim-1"}).CreateGroup(ctx, g); err != nil {
+	if err := e.dir.WithWriter(directory.Writer{Source: "scim-1"}).CreateGroup(ctx, admin, g); err != nil {
 		t.Fatal(err)
 	}
 

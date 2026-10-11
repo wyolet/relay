@@ -89,6 +89,11 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR teams.resource_version = 
 -- name: DeleteTeam :exec
 DELETE FROM teams WHERE id = $1;
 
+-- name: DeleteTeamRoleBindings :exec
+DELETE FROM role_bindings
+WHERE (scope_kind = sqlc.arg('team_kind')::text AND scope_id = sqlc.arg('team_id')::text)
+   OR (scope_kind = sqlc.arg('project_kind')::text AND scope_id IN (SELECT id FROM projects WHERE team_id = sqlc.arg('team_id')::text));
+
 -- name: ListProjects :many
 SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects ORDER BY name;
 
@@ -109,6 +114,9 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR projects.resource_version
 
 -- name: DeleteProject :exec
 DELETE FROM projects WHERE id = $1;
+
+-- name: DeleteProjectRoleBindings :exec
+DELETE FROM role_bindings WHERE scope_kind = sqlc.arg('project_kind')::text AND scope_id = sqlc.arg('project_id')::text;
 
 -- name: ListServiceAccounts :many
 SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name;

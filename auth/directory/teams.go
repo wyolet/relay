@@ -26,7 +26,7 @@ func (d *Directory) UpdateTeam(ctx context.Context, t *Team) error {
 	return d.writeTeam(ctx, t)
 }
 
-// DeleteTeam removes the team; its store takes the team's projects and their service accounts with it.
+// DeleteTeam removes the team; its store takes the team's projects, their service accounts, and every binding scoped to the team or one of its projects with it, so no binding outlives its scope.
 func (d *Directory) DeleteTeam(ctx context.Context, id string) error {
 	return deleteRow(ctx, d, d.cfg.Stores.Teams, KindTeam, id)
 }
@@ -58,7 +58,7 @@ func (d *Directory) UpdateProject(ctx context.Context, p *Project) error {
 	return d.writeProject(ctx, p)
 }
 
-// DeleteProject removes the project; its store takes the project's service accounts with it.
+// DeleteProject removes the project; its store takes the project's service accounts and the bindings scoped to it with it.
 func (d *Directory) DeleteProject(ctx context.Context, id string) error {
 	return deleteRow(ctx, d, d.cfg.Stores.Projects, KindProject, id)
 }
