@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -442,6 +443,40 @@ func TestTokenWithoutKidVerifiesAgainstTheCurrentKey(t *testing.T) {
 	}
 	if w := f.stack(t).do(bare); w.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+}
+
+// An at+jwt is an OAuth access token issued for some other resource. Signed
+// with relay's own key and carrying valid claims it is still refused, while
+// the same claims under a JWT header pass.
+func TestAccessTokenTypIsRefused(t *testing.T) {
+	f := newPrincipalFixture()
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated")}
+	pub := f.signer.Public().(ed25519.PublicKey)
+	payload, err := json.Marshal(crypto.TokenClaims{
+		Iss: crypto.TokenIssuer, Sub: "user:" + f.user, Prj: f.project.Meta.ID, Ver: 1,
+		Jti: meta.NewID(), Iat: time.Now().Unix(), Exp: time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := func(typ string) string {
+		header := `{"alg":"EdDSA","typ":"` + typ + `","kid":"` + authtoken.KeyID(pub) + `"}`
+		enc := base64.RawURLEncoding
+		signing := enc.EncodeToString([]byte(header)) + "." + enc.EncodeToString(payload)
+		return signing + "." + enc.EncodeToString(ed25519.Sign(f.signer, []byte(signing)))
+	}
+
+	st := f.stack(t)
+	if w := st.do(signed(authtoken.TypeJWT)); w.Code != http.StatusOK {
+		t.Fatalf("JWT header: status %d, want 200: %s", w.Code, w.Body)
+	}
+	w := st.do(signed(authtoken.TypeAccessToken))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("at+jwt header: status %d, want 401: %s", w.Code, w.Body)
+	}
+	if got := authCode(t, w.Body.Bytes()); got != "invalid token" {
+		t.Errorf("message = %q, want invalid token", got)
 	}
 }
 

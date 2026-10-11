@@ -64,6 +64,8 @@ type Principal struct {
 	// Admin passes every product rule and binding; the credential scope still applies. It is meant for break-glass callers: roles such as owner or admin are better ordinary roles, so a grant check can tell their holders apart. Mapping a role to Admin is the product's choice.
 	Admin      bool
 	Credential Credential
+	// Audience is the `aud` the presented token was issued for, as the token carried it. Empty for any other credential and for a token without one. It lives here rather than on Credential so Credential stays comparable.
+	Audience []string
 	// SessionID correlates the session the caller came from. It is derived from the session token, never equal to it, because audit readers see it.
 	SessionID string
 	Status    Status
