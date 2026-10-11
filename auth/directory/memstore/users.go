@@ -156,6 +156,15 @@ func (u userStore) RemoveIdentity(_ context.Context, userID string, id directory
 	return nil
 }
 
+func (u userStore) RemoveIdentities(_ context.Context, userID string) error {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	if x, ok := u.s.users[userID]; ok {
+		x.Identities, x.Identity = nil, directory.Identity{}
+	}
+	return nil
+}
+
 func withoutIdentity(ids []directory.UserIdentity, id directory.Identity) []directory.UserIdentity {
 	out := slices.DeleteFunc(slices.Clone(ids), func(o directory.UserIdentity) bool { return o.Identity == id })
 	if len(out) == 0 {

@@ -120,6 +120,15 @@ func (s users) RemoveIdentity(ctx context.Context, userID string, id directory.I
 	})
 }
 
+func (s users) RemoveIdentities(ctx context.Context, userID string) error {
+	return inTx(ctx, s.db, func(q *gen.Queries) error {
+		if err := q.ClearPrimaryIdentity(ctx, userID); err != nil {
+			return mapErr("clear primary identity", err)
+		}
+		return mapErr("remove identities", q.DeleteUserIdentities(ctx, userID))
+	})
+}
+
 // withIdentities turns a lookup's row into the user with its identities; no row is (nil, nil).
 func withIdentities(ctx context.Context, q *gen.Queries, r gen.User, err error) (*directory.User, error) {
 	if notFound(err) {

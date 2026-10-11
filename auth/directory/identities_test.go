@@ -69,6 +69,29 @@ func TestRemoveIdentity(t *testing.T) {
 	}
 }
 
+func TestRemoveIdentities(t *testing.T) {
+	h := newHarness(t)
+	u := &directory.User{Username: "ada", Identity: directory.Identity{Issuer: "https://idp.example.com", Subject: "s-1"}}
+	must(t, h.d.CreateUser(ctx, nil, u))
+	must(t, h.d.AddIdentity(ctx, u.ID, directory.UserIdentity{Identity: directory.Identity{Issuer: "https://idp.example.com", Subject: "s-2"}}))
+	wantErr(t, "every identity of an account without a password", h.d.RemoveIdentities(ctx, u.ID), directory.ErrInvalid)
+	wantErr(t, "missing user", h.d.RemoveIdentities(ctx, directory.NewID()), directory.ErrNotFound)
+
+	hash, err := password.Hash("s3cret")
+	must(t, err)
+	got, _ := h.s.Users.Get(ctx, u.ID)
+	got.PasswordHash = hash
+	must(t, h.d.UpdateUser(ctx, nil, got))
+	must(t, h.d.RemoveIdentities(ctx, u.ID))
+	if !slices.Equal(h.rev.ended, []string{u.ID}) {
+		t.Fatalf("sessions ended for %v, want the user's", h.rev.ended)
+	}
+	if got, _ := h.s.Users.Get(ctx, u.ID); !got.Identity.IsZero() || got.Identities != nil {
+		t.Fatalf("after removing every identity: %+v", got)
+	}
+	must(t, h.d.RemoveIdentities(ctx, u.ID))
+}
+
 func TestUpdateUserKeepsExternal(t *testing.T) {
 	h := newHarness(t)
 	ext := directory.External{Source: "scim-1", ID: "e-1"}

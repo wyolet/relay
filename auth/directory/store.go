@@ -28,6 +28,8 @@ type UserStore interface {
 	AddIdentity(ctx context.Context, userID string, id UserIdentity) error
 	// RemoveIdentity unlinks id from the user; one the user does not hold is not an error. Removing the primary makes the oldest remaining identity primary.
 	RemoveIdentity(ctx context.Context, userID string, id Identity) error
+	// RemoveIdentities unlinks every identity of the user at once, the primary included.
+	RemoveIdentities(ctx context.Context, userID string) error
 }
 
 // Stores is every store the directory reads and writes. A delete cascades in the store: a team takes its projects, a project its service accounts, a role its bindings, and a user or service account leaves every group and binding it was in.

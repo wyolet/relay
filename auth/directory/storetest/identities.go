@@ -77,6 +77,14 @@ func testIdentities(t *testing.T, s directory.Stores) {
 	must(t, u.Upsert(ctx, got))
 	wantIdentities(t, "last identity cleared", user(f.user.ID), directory.Identity{})
 
+	must(t, u.AddIdentity(ctx, f.user.ID, second))
+	must(t, u.AddIdentity(ctx, f.user.ID, fourth))
+	must(t, u.RemoveIdentities(ctx, f.user.ID))
+	wantIdentities(t, "every identity removed", user(f.user.ID), directory.Identity{})
+	if got, err := u.ByIdentity(ctx, fourth.Identity); err != nil || got != nil {
+		t.Fatalf("by an identity removed with the rest = %v, %v", got, err)
+	}
+
 	must(t, u.Delete(ctx, f.user.ID))
 	if got, err := u.ByIdentity(ctx, second.Identity); err != nil || got != nil {
 		t.Fatalf("identity of a deleted user = %v, %v", got, err)

@@ -35,6 +35,32 @@ func (d *Directory) AddIdentity(ctx context.Context, userID string, id UserIdent
 	return nil
 }
 
+// RemoveIdentities unlinks every identity of the account in one write and ends its sessions; an account with none is left alone. An account without a password keeps them, so it keeps a way to sign in.
+func (d *Directory) RemoveIdentities(ctx context.Context, userID string) error {
+	users := d.cfg.Stores.Users
+	u, err := users.Get(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return fmt.Errorf("%w: user %s", ErrNotFound, userID)
+	}
+	if len(u.Identities) == 0 {
+		return nil
+	}
+	if u.PasswordHash == "" {
+		return fmt.Errorf("%w: user %q: an account without a password cannot have every identity removed", ErrInvalid, u.Username)
+	}
+	if err := users.RemoveIdentities(ctx, userID); err != nil {
+		return err
+	}
+	if err := d.revoke(ctx, userID); err != nil {
+		return err
+	}
+	d.notify(ctx, KindUser, OpUpsert, userID)
+	return nil
+}
+
 // RemoveIdentity unlinks an identity from the account and ends its sessions, any of which may have signed in with it. The last identity of an account without a password stays, so the account keeps a way to sign in. Removing the primary makes the oldest remaining identity primary.
 func (d *Directory) RemoveIdentity(ctx context.Context, userID string, id Identity) error {
 	users := d.cfg.Stores.Users

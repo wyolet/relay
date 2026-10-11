@@ -32,9 +32,22 @@ func Write(ctx context.Context, dir *directory.Directory, caller *principal.Prin
 		if current == nil {
 			return dir.CreateUser(ctx, caller, x)
 		}
-		return dir.UpdateUser(ctx, caller, x)
+		return updateUser(ctx, dir, caller, current, x)
 	}
 	return fmt.Errorf("manifest: cannot write a %T", row)
+}
+
+// updateUser writes a translated account over current. A translation with no identity means the document cleared it, since an omitted one keeps current's: every stored identity goes in one directory call, which refuses it for an account without a password. Clearing only the primary would promote the next one, and a re-apply would change the account again.
+func updateUser(ctx context.Context, dir *directory.Directory, caller *principal.Principal, current, u *directory.User) error {
+	if !u.Identity.IsZero() || len(current.Identities) == 0 {
+		return dir.UpdateUser(ctx, caller, u)
+	}
+	keep := *u
+	keep.Identity = current.Identity
+	if err := dir.UpdateUser(ctx, caller, &keep); err != nil {
+		return err
+	}
+	return dir.RemoveIdentities(ctx, u.ID)
 }
 
 func upsert[T any](ctx context.Context, s directory.Store[T], id string, create, update func() error) error {

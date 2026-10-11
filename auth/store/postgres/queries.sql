@@ -56,6 +56,12 @@ UPDATE users SET oidc_subject = $2 WHERE id = $1 AND oidc_subject IS NULL;
 -- name: DeleteIdentity :exec
 DELETE FROM identities WHERE user_id = $1 AND issuer = $2 AND subject = $3;
 
+-- name: DeleteUserIdentities :exec
+DELETE FROM identities WHERE user_id = $1;
+
+-- name: ClearPrimaryIdentity :exec
+UPDATE users SET oidc_subject = NULL WHERE id = $1;
+
 -- Promotes only while the primary is still the one named, NULL for none; with no identity left the primary stays NULL.
 -- name: PromoteOldestIdentity :exec
 UPDATE users SET oidc_subject = (

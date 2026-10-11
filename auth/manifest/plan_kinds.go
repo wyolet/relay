@@ -223,7 +223,7 @@ func (p *planner) planUsers() error {
 			}
 			e.Action = ActionUpdate
 			e.write = func(ctx context.Context, dir *directory.Directory, c *principal.Principal) error {
-				return dir.UpdateUser(ctx, c, u)
+				return updateUser(ctx, dir, c, prev, u)
 			}
 		}
 		p.entries = append(p.entries, e)

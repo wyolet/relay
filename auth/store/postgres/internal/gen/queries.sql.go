@@ -20,6 +20,15 @@ func (q *Queries) BumpUserTokenVersion(ctx context.Context, id string) error {
 	return err
 }
 
+const clearPrimaryIdentity = `-- name: ClearPrimaryIdentity :exec
+UPDATE users SET oidc_subject = NULL WHERE id = $1
+`
+
+func (q *Queries) ClearPrimaryIdentity(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, clearPrimaryIdentity, id)
+	return err
+}
+
 const deleteGroup = `-- name: DeleteGroup :exec
 DELETE FROM groups WHERE id = $1
 `
@@ -113,6 +122,15 @@ DELETE FROM users WHERE id = $1
 
 func (q *Queries) DeleteUser(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deleteUser, id)
+	return err
+}
+
+const deleteUserIdentities = `-- name: DeleteUserIdentities :exec
+DELETE FROM identities WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserIdentities(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, deleteUserIdentities, userID)
 	return err
 }
 
