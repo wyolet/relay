@@ -37,7 +37,7 @@ func Write(ctx context.Context, dir *directory.Directory, caller *principal.Prin
 	return fmt.Errorf("manifest: cannot write a %T", row)
 }
 
-// updateUser writes a translated account over current. A translation with no identity means the document cleared it, since an omitted one keeps current's: every stored identity goes in one directory call. Clearing only the primary would promote the next one, and a re-apply would change the account again. An account left without a password is refused before either write, as ToUser refuses it.
+// updateUser writes a translated account over current. A translation with no identity means the document cleared it, since an omitted one keeps current's: every stored identity goes, in the same store write as the rest of the edit, so a failure leaves the account as it was. Clearing only the primary would promote the next one, and a re-apply would change the account again. An account left without a password is refused before the write, as ToUser refuses it.
 func updateUser(ctx context.Context, dir *directory.Directory, caller *principal.Principal, current, u *directory.User) error {
 	if !u.Identity.IsZero() || len(current.Identities) == 0 {
 		return dir.UpdateUser(ctx, caller, u)
@@ -45,12 +45,7 @@ func updateUser(ctx context.Context, dir *directory.Directory, caller *principal
 	if u.PasswordHash == "" {
 		return fmt.Errorf("%w: user %q: %w", directory.ErrInvalid, u.Username, ErrNoSignIn)
 	}
-	keep := *u
-	keep.Identity = current.Identity
-	if err := dir.UpdateUser(ctx, caller, &keep); err != nil {
-		return err
-	}
-	return dir.RemoveIdentities(ctx, u.ID)
+	return dir.UpdateUserRemovingIdentities(ctx, caller, u)
 }
 
 func upsert[T any](ctx context.Context, s directory.Store[T], id string, create, update func() error) error {

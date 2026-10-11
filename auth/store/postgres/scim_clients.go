@@ -77,6 +77,24 @@ func (s *SCIMTokens) RevokeClient(ctx context.Context, name string) error {
 	return nil
 }
 
+func (s *SCIMTokens) RotateClient(ctx context.Context, c *scim.Client) error {
+	q := gen.New(s.db)
+	n, err := q.RotateSCIMClient(ctx, gen.RotateSCIMClientParams{Name: c.Name, TokenHash: c.TokenHash, TokenPrefix: c.TokenPrefix})
+	if err != nil {
+		return mapErr("rotate scim client", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	// No live row changed: the client is revoked, or there is none.
+	if _, err := q.GetSCIMClient(ctx, c.Name); notFound(err) {
+		return fmt.Errorf("%w: %q", scim.ErrNoClient, c.Name)
+	} else if err != nil {
+		return mapErr("get scim client", err)
+	}
+	return fmt.Errorf("%w: %q", scim.ErrClientRevoked, c.Name)
+}
+
 func scimClientFromRow(r gen.ScimClient) *scim.Client {
 	return &scim.Client{
 		Name: r.Name, TokenHash: r.TokenHash, TokenPrefix: r.TokenPrefix,

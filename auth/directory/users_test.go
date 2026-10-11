@@ -1,12 +1,14 @@
 package directory_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/directory/memstore"
 	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/auth/rbac"
@@ -53,6 +55,41 @@ func TestCreateUser(t *testing.T) {
 	wantErr(t, "roles without a principal", h.d.CreateUser(ctx, nil, &directory.User{Username: "erin", Roles: []string{"viewer"}}),
 		authz.ErrUnauthenticated)
 	must(t, h.d.CreateUser(ctx, caller, &directory.User{Username: "erin", Roles: []string{"viewer"}}))
+}
+
+// A password or identity the caller chose lets it sign in as the account: only an admin sets, changes or clears one, and only the product itself (a nil principal) registers an account with one.
+func TestUserCredentialsNeedAnAdmin(t *testing.T) {
+	h := newHarness(t)
+	hash, err := password.Hash("s3cret")
+	must(t, err)
+	idp := directory.Identity{Issuer: "https://idp.example.com", Subject: "root"}
+	root := &directory.User{Username: "root", PasswordHash: hash, Identity: idp}
+	must(t, h.d.CreateUser(ctx, admin, root))
+	other, err := password.Hash("mallory")
+	must(t, err)
+
+	wantErr(t, "a new account with a password", h.d.CreateUser(ctx, caller, &directory.User{Username: "m1", PasswordHash: hash}), authz.ErrForbidden)
+	wantErr(t, "a new account with an identity", h.d.CreateUser(ctx, caller,
+		&directory.User{Username: "m2", Identity: directory.Identity{Issuer: idp.Issuer, Subject: "m2"}}), authz.ErrForbidden)
+	for name, edit := range map[string]func(u *directory.User){
+		"password changed": func(u *directory.User) { u.PasswordHash = other },
+		"password cleared": func(u *directory.User) { u.PasswordHash = "" },
+		"identity changed": func(u *directory.User) { u.Identity.Subject = "mallory" },
+		"identity cleared": func(u *directory.User) { u.Identity = directory.Identity{} },
+	} {
+		for _, p := range []*principal.Principal{caller, nil} {
+			u, _ := h.s.Users.Get(ctx, root.ID)
+			edit(u)
+			wantErr(t, name, h.d.UpdateUser(ctx, p, u), authz.ErrForbidden)
+		}
+		if got, _ := h.s.Users.Get(ctx, root.ID); got.PasswordHash != hash || got.Identity != idp {
+			t.Fatalf("%s: the refused change was written: %+v", name, got)
+		}
+	}
+	u, _ := h.s.Users.Get(ctx, root.ID)
+	u.PasswordHash = other
+	must(t, h.d.UpdateUser(ctx, admin, u))
+	must(t, h.d.CreateUser(ctx, nil, &directory.User{Username: "self", Identity: directory.Identity{Issuer: idp.Issuer, Subject: "self"}}))
 }
 
 func TestUpdateUserRoles(t *testing.T) {
@@ -136,6 +173,29 @@ func TestDisableEnableUser(t *testing.T) {
 	h.rev.err = errors.New("kv down")
 	if err := h.d.EnableUser(ctx, u.ID); err == nil {
 		t.Fatal("a failed session revoke was not reported")
+	}
+}
+
+// failingBump is a store whose separate token-version bump fails.
+type failingBump struct{ directory.UserStore }
+
+func (failingBump) BumpTokenVersion(context.Context, string) error { return errors.New("bump failed") }
+
+// Disabling and re-enabling move the flag and the token version in one write: a failure can never leave the account enabled at the version its pre-disable tokens carry.
+func TestDisableEnableBumpTheTokenVersionAtomically(t *testing.T) {
+	s := memstore.New().Stores()
+	s.Users = failingBump{s.Users}
+	d, err := directory.New(directory.Config{Stores: s, Grants: &grants{deny: map[string]bool{}}})
+	must(t, err)
+	u := &directory.User{Username: "ada"}
+	must(t, d.CreateUser(ctx, nil, u))
+	minted, _ := s.Users.Get(ctx, u.ID)
+
+	_ = d.DisableUser(ctx, u.ID)
+	_ = d.EnableUser(ctx, u.ID)
+	got, _ := s.Users.Get(ctx, u.ID)
+	if !got.Disabled && got.TokenVersion == minted.TokenVersion {
+		t.Fatalf("enabled at token version %d, which tokens minted before the disable carry", got.TokenVersion)
 	}
 }
 

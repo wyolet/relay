@@ -22,6 +22,14 @@ const SystemPrefix = "system:"
 type Group struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
+	// External is set on a group a provisioning source manages. The server owns it: a write that carries it is ignored, so no caller can hand a group to a source.
+	External *External `json:"external,omitempty" yaml:"-" readOnly:"true" doc:"The provisioning source (a SCIM client) that manages the group, and its id there. Only that source, or an apply with force, changes the group."`
+}
+
+// External names the provisioning source that manages a group and the source's own id for it.
+type External struct {
+	Source string `json:"source"`
+	ID     string `json:"id,omitempty"`
 }
 
 // Spec carries the member list and the enabled flag.

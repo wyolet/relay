@@ -5,8 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/manifest"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 const aliceHash = "$2a$10$CwTycUXWue0Thq9StjUM0uJ8.6Y3bOS2jvUJFXJ3m/BS/YwgMm9aW"
@@ -110,6 +112,112 @@ func TestUserIdentityClearRemovesEveryIdentityOnce(t *testing.T) {
 		t.Fatalf("after the first apply: %+v", u)
 	}
 	wantLines(t, actions(e.apply(t, cleared, manifest.Options{})), []string{"unchanged User/alice"})
+}
+
+// A password or identity the caller chose would let it sign in as the account, so a plan that sets, changes or clears one applies only for an admin, and a refused one writes nothing.
+func TestApplyRefusesCredentialsFromANonAdmin(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	s := e.store.Stores()
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: root}\nspec: {password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: root}}\n", manifest.Options{})
+	before, _ := s.Users.ByUsername(ctx, "root")
+	team := "apiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: core}\nspec: {}\n---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: User\n"
+	nonAdmin := &principal.Principal{ID: "lead", Kind: principal.KindUser}
+	for name, user := range map[string]string{
+		"password changed":          "metadata: {name: root}\nspec: {password: {hash: \"$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy\"}}\n",
+		"identity changed":          "metadata: {name: root}\nspec: {identity: {issuer: i, subject: mallory}}\n",
+		"identity cleared":          "metadata: {name: root}\nspec: {identity: null}\n",
+		"new account with password": "metadata: {name: mallory}\nspec: {password: {hash: \"" + aliceHash + "\"}}\n",
+		"new account with identity": "metadata: {name: mallory}\nspec: {identity: {issuer: i, subject: m}}\n",
+	} {
+		p := e.plan(t, e.parse(t, team+user), manifest.Options{})
+		for _, caller := range []*principal.Principal{nonAdmin, nil} {
+			applied, err := p.Apply(ctx, e.dir, caller)
+			if !errors.Is(err, authz.ErrForbidden) || len(applied) != 0 {
+				t.Fatalf("%s as %v: applied %v, err = %v; want nothing and forbidden", name, caller, applied, err)
+			}
+		}
+		if teams, _ := s.Teams.List(ctx); len(teams) != 0 {
+			t.Fatalf("%s: a refused apply wrote %d teams", name, len(teams))
+		}
+		if after, _ := s.Users.ByUsername(ctx, "root"); after.PasswordHash != before.PasswordHash || after.Identity != before.Identity {
+			t.Fatalf("%s: a refused apply changed the account: %+v", name, after)
+		}
+		if got, _ := s.Users.ByUsername(ctx, "mallory"); got != nil {
+			t.Fatalf("%s: a refused apply created %+v", name, got)
+		}
+	}
+	// Leaving the credentials out needs no admin.
+	p := e.plan(t, e.parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: root}\nspec: {email: root@example.com}\n"), manifest.Options{})
+	if _, err := p.Apply(ctx, e.dir, nonAdmin); err != nil {
+		t.Fatalf("an edit that keeps the credentials: %v", err)
+	}
+}
+
+type endedSessions struct{ ids []string }
+
+func (e *endedSessions) DestroyUser(_ context.Context, id string) error {
+	e.ids = append(e.ids, id)
+	return nil
+}
+
+// A password or identity a manifest changes or clears ends the account's sessions and kills its tokens, as any other credential change does.
+func TestApplyCredentialChangeEndsSessionsAndTokens(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	ended := &endedSessions{}
+	cfg := testConfig()
+	dir, err := directory.New(directory.Config{Stores: e.store.Stores(), Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs, Revoker: ended})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.dir = dir
+	users := e.store.Stores().Users
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: a}}\n", manifest.Options{})
+	for _, spec := range []string{
+		"{password: {hash: \"$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy\"}}",
+		"{identity: {issuer: i, subject: a2}}",
+		"{identity: null}",
+	} {
+		before, _ := users.ByUsername(ctx, "alice")
+		ended.ids = nil
+		e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: "+spec+"\n", manifest.Options{})
+		after, _ := users.ByUsername(ctx, "alice")
+		if len(ended.ids) == 0 || ended.ids[0] != after.ID {
+			t.Fatalf("%s: sessions ended for %v, want alice's", spec, ended.ids)
+		}
+		if after.TokenVersion <= before.TokenVersion {
+			t.Fatalf("%s: token version %d -> %d, want a bump", spec, before.TokenVersion, after.TokenVersion)
+		}
+	}
+}
+
+// failingIdentityRemoval is a store whose separate removal of every identity fails.
+type failingIdentityRemoval struct{ directory.UserStore }
+
+func (failingIdentityRemoval) RemoveIdentities(context.Context, string) error {
+	return errors.New("remove identities failed")
+}
+
+// A document that edits an account and clears its identities writes both or neither: a failure part-way must not leave the edit without the removal.
+func TestUserIdentityClearIsOneWrite(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {email: a@example.com, password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: a}}\n", manifest.Options{})
+	s := e.store.Stores()
+	s.Users = failingIdentityRemoval{s.Users}
+	cfg := testConfig()
+	dir, err := directory.New(directory.Config{Stores: s, Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := e.plan(t, e.parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {email: b@example.com, identity: null}\n"), manifest.Options{})
+	_, applyErr := p.Apply(ctx, dir, admin)
+	got, _ := s.Users.ByUsername(ctx, "alice")
+	edited, cleared := got.Email == "b@example.com", len(got.Identities) == 0
+	if edited != cleared {
+		t.Fatalf("apply (err %v) wrote half the document: email %q, identities %+v", applyErr, got.Email, got.Identities)
+	}
 }
 
 func TestUserSpecReportsAnEnvPassword(t *testing.T) {

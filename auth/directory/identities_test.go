@@ -38,7 +38,7 @@ func TestAddIdentity(t *testing.T) {
 	wantErr(t, "half an identity", h.d.AddIdentity(ctx, u.ID, directory.UserIdentity{Identity: directory.Identity{Subject: "s"}}), directory.ErrInvalid)
 	wantErr(t, "separator in issuer", h.d.AddIdentity(ctx, u.ID,
 		directory.UserIdentity{Identity: directory.Identity{Issuer: "a|b", Subject: "s"}}), directory.ErrInvalid)
-	wantErr(t, "primary of another user", h.d.UpdateUser(ctx, nil, &directory.User{ID: other.ID, Username: "bob", Identity: idp.Identity}), directory.ErrConflict)
+	wantErr(t, "primary of another user", h.d.UpdateUser(ctx, admin, &directory.User{ID: other.ID, Username: "bob", Identity: idp.Identity}), directory.ErrConflict)
 }
 
 // Only accounts a source created and no identity reached yet are link candidates, matched on the source's id alone.
@@ -139,6 +139,7 @@ func TestRemoveIdentity(t *testing.T) {
 	must(t, h.d.CreateUser(ctx, nil, u))
 	must(t, h.d.AddIdentity(ctx, u.ID, second))
 
+	h.rev.ended = nil
 	must(t, h.d.RemoveIdentity(ctx, u.ID, first))
 	if !slices.Equal(h.rev.ended, []string{u.ID}) {
 		t.Fatalf("sessions ended for %v, want the user's", h.rev.ended)
@@ -154,7 +155,7 @@ func TestRemoveIdentity(t *testing.T) {
 	hash, err := password.Hash("s3cret")
 	must(t, err)
 	got.PasswordHash = hash
-	must(t, h.d.UpdateUser(ctx, nil, got))
+	must(t, h.d.UpdateUser(ctx, admin, got))
 	must(t, h.d.RemoveIdentity(ctx, u.ID, second.Identity))
 	got, _ = h.s.Users.Get(ctx, u.ID)
 	if !got.Identity.IsZero() || got.Identities != nil {
@@ -174,7 +175,8 @@ func TestRemoveIdentities(t *testing.T) {
 	must(t, err)
 	got, _ := h.s.Users.Get(ctx, u.ID)
 	got.PasswordHash = hash
-	must(t, h.d.UpdateUser(ctx, nil, got))
+	must(t, h.d.UpdateUser(ctx, admin, got))
+	h.rev.ended = nil
 	must(t, h.d.RemoveIdentities(ctx, u.ID))
 	if !slices.Equal(h.rev.ended, []string{u.ID}) {
 		t.Fatalf("sessions ended for %v, want the user's", h.rev.ended)

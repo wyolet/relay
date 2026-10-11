@@ -58,6 +58,9 @@ type oidcDeps struct {
 
 func newOIDCDeps(d Deps) *oidcDeps {
 	users := directoryUsers{Store: d.Users, ops: newDirectoryOps(d)}
+	if d.Stores != nil {
+		users.clients = d.Stores.SCIMClients
+	}
 	return newOIDC(func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) },
 		func() *settings.AuthSCIM { return settings.AuthSCIMFrom(d.Catalog) }, users, d.Sessions, d.CookieSecure)
 }

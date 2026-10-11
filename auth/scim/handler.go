@@ -24,6 +24,8 @@ type Config struct {
 	BaseURL string
 	// OnWrite hears every write a client attempted, after it ran, with its error; nil drops them.
 	OnWrite func(ctx context.Context, w Write)
+	// CheckDeactivate runs before a client disables or deletes an enabled account, so a product can keep a rule such as one enabled admin. An error wrapping ErrRefused refuses the write with 409; any other error is a 500. Nil allows every one.
+	CheckDeactivate func(ctx context.Context, u *directory.User) error
 	// Logger receives internal errors; nil is slog.Default().
 	Logger *slog.Logger
 }
@@ -39,8 +41,23 @@ type Write struct {
 	Name string
 	// Fields are the SCIM attributes an update changed.
 	Fields []string
-	// Err is why the write failed; a refused reach for a row the client did not provision matches directory.ErrForeign.
+	// Err is why the write failed; a refused reach for a row the client did not provision matches directory.ErrForeign, and a write Config.CheckDeactivate refused matches ErrRefused.
 	Err error
+}
+
+// ErrRefused is wrapped by a Config.CheckDeactivate error that refuses the write. Its message is the client's to read, so it names no other account.
+var ErrRefused = errors.New("scim: refused")
+
+// checkDeactivate runs Config.CheckDeactivate on an enabled account and reports a refusal as a failed op.
+func (h *Handler) checkDeactivate(rq *request, u *directory.User, op string) error {
+	if h.cfg.CheckDeactivate == nil || u.Disabled {
+		return nil
+	}
+	err := h.cfg.CheckDeactivate(rq.ctx(), u)
+	if errors.Is(err, ErrRefused) {
+		return h.report(rq, Write{Kind: "user", Op: op, ID: u.ID, Name: u.Username, Err: err})
+	}
+	return err
 }
 
 // Handler is the SCIM service provider. It serves paths relative to its mount point, so mount it under a prefix with http.StripPrefix.

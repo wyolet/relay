@@ -46,12 +46,15 @@ func TestRollbackBelowSharedTablesRestoresAuthSchema(t *testing.T) {
 		if _, err := authpg.New(pool).Groups.List(context.Background()); err != nil {
 			t.Errorf("groups after a round trip through %d: %v", target, err)
 		}
+		if _, err := authpg.New(pool).Users.List(context.Background()); err != nil {
+			t.Errorf("users after a round trip through %d: %v", target, err)
+		}
 		pool.Close()
 	}
 }
 
 // authHead is the auth module's newest migration.
-const authHead = 3
+const authHead = 4
 
 func authVersion(t *testing.T, dsn string) int64 {
 	t.Helper()

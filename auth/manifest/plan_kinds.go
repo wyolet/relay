@@ -209,7 +209,11 @@ func (p *planner) planUsers() error {
 			return err
 		}
 		u.ID = p.idx.ids[KindUser][d.Metadata.Name]
-		e := Entry{Kind: KindUser, Name: d.Metadata.Name, ID: u.ID}
+		if prev != nil {
+			// The update applies only while the account is as this plan read it.
+			u.ResourceVersion = prev.ResourceVersion
+		}
+		e := Entry{Kind: KindUser, Name: d.Metadata.Name, ID: u.ID, credentials: directory.ChangesCredentials(prev, u)}
 		if d.Metadata.ID != "" && d.Metadata.ID != u.ID {
 			e.IDMismatch = d.Metadata.ID
 		}

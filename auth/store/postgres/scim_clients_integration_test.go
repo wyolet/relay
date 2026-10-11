@@ -44,8 +44,27 @@ func TestSCIMTokens(t *testing.T) {
 		t.Fatalf("list: %+v, %v", list, err)
 	}
 
+	// Rotation swaps the token in place: the old one finds nothing, the new one finds the same live client, unused so far.
+	rotated, _, err := scim.RotateClient(ctx, s, "entra")
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if old, _ := s.ClientByTokenHash(ctx, apikey.Hash(token)); old != nil {
+		t.Fatalf("the old token still finds %+v", old)
+	}
+	if got, _ := s.ClientByTokenHash(ctx, apikey.Hash(rotated)); got == nil || got.Name != "entra" || got.Revoked || !got.LastUsedAt.IsZero() {
+		t.Fatalf("rotated client reads as %+v", got)
+	}
+	if _, _, err := scim.RotateClient(ctx, s, "nobody"); !errors.Is(err, scim.ErrNoClient) {
+		t.Fatalf("rotating a missing client: %v", err)
+	}
+	token = rotated
+
 	if err := s.RevokeClient(ctx, "entra"); err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err := scim.RotateClient(ctx, s, "entra"); !errors.Is(err, scim.ErrClientRevoked) {
+		t.Fatalf("rotating a revoked client: %v", err)
 	}
 	if err := s.RevokeClient(ctx, "entra"); err != nil {
 		t.Fatalf("revoking twice: %v", err)
@@ -57,15 +76,11 @@ func TestSCIMTokens(t *testing.T) {
 		t.Fatalf("revoked client reads as %+v", got)
 	}
 
-	// A revoked name is issued again with a fresh token; the old token stays dead.
-	fresh, _, err := scim.CreateClient(ctx, s, "entra")
-	if err != nil {
-		t.Fatalf("reissue: %v", err)
+	// A revoked name is not issued again, so no new token inherits what the old one provisioned; the old token stays dead.
+	if _, _, err := scim.CreateClient(ctx, s, "entra"); !errors.Is(err, scim.ErrClientExists) {
+		t.Fatalf("reissuing a revoked name: %v, want ErrClientExists", err)
 	}
-	if got, _ := s.ClientByTokenHash(ctx, apikey.Hash(fresh)); got == nil || got.Revoked || !got.LastUsedAt.IsZero() {
-		t.Fatalf("reissued client %+v", got)
-	}
-	if old, _ := s.ClientByTokenHash(ctx, apikey.Hash(token)); old != nil {
-		t.Fatalf("the old token still finds %+v", old)
+	if old, _ := s.ClientByTokenHash(ctx, apikey.Hash(token)); old == nil || !old.Revoked {
+		t.Fatalf("the old token reads as %+v, want revoked", old)
 	}
 }

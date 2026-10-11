@@ -60,47 +60,6 @@ func (u userStore) List(_ context.Context) ([]*directory.User, error) {
 	return out, nil
 }
 
-func (u userStore) Upsert(_ context.Context, in *directory.User) error {
-	u.s.mu.Lock()
-	defer u.s.mu.Unlock()
-	for id, x := range u.s.users {
-		if id == in.ID {
-			continue
-		}
-		switch {
-		case x.Username == in.Username:
-			return fmt.Errorf("%w: username %q is taken", directory.ErrConflict, in.Username)
-		case in.Email != "" && x.Email == in.Email:
-			return fmt.Errorf("%w: %q", directory.ErrEmailTaken, in.Email)
-		case !in.Identity.IsZero() && x.HasIdentity(in.Identity):
-			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
-		case in.External.ID != "" && x.External == in.External:
-			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
-		}
-	}
-	c := cloneUser(in)
-	stored := u.s.users[in.ID]
-	c.TokenVersion, c.CreatedAt, c.Identities = 1, now(), nil
-	if stored != nil {
-		c.TokenVersion, c.CreatedAt = stored.TokenVersion, stored.CreatedAt
-		c.Identities = stored.Identities
-		if stored.Identity != in.Identity {
-			c.Identities = withoutIdentity(c.Identities, stored.Identity)
-		}
-	} else {
-		u.s.userOrder = append(u.s.userOrder, in.ID)
-	}
-	if !in.Identity.IsZero() && !c.HasIdentity(in.Identity) {
-		c.Identities = append(c.Identities, directory.UserIdentity{Identity: in.Identity, CreatedAt: now()})
-	}
-	if in.Identity.IsZero() && len(c.Identities) > 0 {
-		c.Identity = c.Identities[0].Identity
-	}
-	c.UpdatedAt = now()
-	u.s.users[in.ID] = c
-	return nil
-}
-
 func (u userStore) Delete(_ context.Context, id string) error {
 	u.s.mu.Lock()
 	defer u.s.mu.Unlock()
@@ -118,7 +77,7 @@ func (u userStore) BumpTokenVersion(_ context.Context, id string) error {
 	defer u.s.mu.Unlock()
 	if x, ok := u.s.users[id]; ok {
 		x.TokenVersion++
-		x.UpdatedAt = now()
+		touch(x)
 	}
 	return nil
 }
@@ -140,6 +99,8 @@ func (u userStore) AddIdentity(_ context.Context, userID string, id directory.Us
 			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
 		}
 	}
+	x.TokenVersion++
+	touch(x)
 	if i := slices.IndexFunc(x.Identities, func(o directory.UserIdentity) bool { return o.Identity == id.Identity }); i >= 0 {
 		x.Identities[i].ExternalID = id.ExternalID
 		return nil
@@ -168,7 +129,8 @@ func (u userStore) AddFirstIdentity(_ context.Context, userID string, id directo
 	}
 	x.Identities = []directory.UserIdentity{{Identity: id, CreatedAt: now()}}
 	x.Identity = id
-	x.UpdatedAt = now()
+	x.TokenVersion++
+	touch(x)
 	return nil
 }
 
@@ -186,6 +148,8 @@ func (u userStore) RemoveIdentity(_ context.Context, userID string, id directory
 			x.Identity = x.Identities[0].Identity
 		}
 	}
+	x.TokenVersion++
+	touch(x)
 	return nil
 }
 
@@ -194,6 +158,8 @@ func (u userStore) RemoveIdentities(_ context.Context, userID string) error {
 	defer u.s.mu.Unlock()
 	if x, ok := u.s.users[userID]; ok {
 		x.Identities, x.Identity = nil, directory.Identity{}
+		x.TokenVersion++
+		touch(x)
 	}
 	return nil
 }

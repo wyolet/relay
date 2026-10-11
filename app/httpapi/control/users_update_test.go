@@ -17,21 +17,30 @@ import (
 	"github.com/wyolet/relay/auth/principal"
 )
 
-// updateUsers is an in-memory userWriter: a directory over the auth module's memstore, read back as relay users.
+// updateUsers is an in-memory userWriter: a directory over the auth module's memstore, read back as relay users. ended records the users whose sessions the directory ended.
 type updateUsers struct {
-	t   *testing.T
-	ms  *memstore.Store
-	dir *directory.Directory
+	t     *testing.T
+	ms    *memstore.Store
+	dir   *directory.Directory
+	ended *endedUsers
+}
+
+type endedUsers struct{ ids []string }
+
+func (e *endedUsers) DestroyUser(_ context.Context, id string) error {
+	e.ids = append(e.ids, id)
+	return nil
 }
 
 func newUpdateUsers(t *testing.T, rows ...*user.User) *updateUsers {
 	t.Helper()
 	ms := memstore.New()
-	dir, err := directory.New(directory.Config{Stores: ms.Stores(), Grants: grantChecker{authz: allowAuthz{}}})
+	ended := &endedUsers{}
+	dir, err := directory.New(directory.Config{Stores: ms.Stores(), Grants: grantChecker{authz: allowAuthz{}}, Revoker: ended})
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := &updateUsers{t: t, ms: ms, dir: dir}
+	u := &updateUsers{t: t, ms: ms, dir: dir, ended: ended}
 	for _, r := range rows {
 		u.put(r)
 	}

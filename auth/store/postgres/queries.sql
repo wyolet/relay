@@ -1,29 +1,34 @@
 -- Columns are listed, never *, so a column a product adds to a shared table does not break these reads.
 
 -- name: GetUser :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = $1;
 
 -- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE username = $1;
 
 -- name: GetUserByIdentity :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2);
 
 -- name: ListUsersByExternalID :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE external_source IS NOT NULL AND external_id = $1 ORDER BY created_at ASC, id ASC;
 
 -- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users ORDER BY created_at ASC, id ASC;
 
--- name: UpsertUser :exec
+-- A new password, primary identity or disabled flag bumps the token version in the same statement, so no token outlives the change.
+-- name: UpsertUser :execrows
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
+    token_version   = CASE WHEN users.password_hash IS DISTINCT FROM EXCLUDED.password_hash
+                             OR users.oidc_subject IS DISTINCT FROM EXCLUDED.oidc_subject
+                             OR users.disabled <> EXCLUDED.disabled
+                           THEN users.token_version + 1 ELSE users.token_version END,
     username        = EXCLUDED.username,
     email           = EXCLUDED.email,
     password_hash   = EXCLUDED.password_hash,
@@ -32,7 +37,16 @@ ON CONFLICT (id) DO UPDATE SET
     disabled        = EXCLUDED.disabled,
     external_source = EXCLUDED.external_source,
     external_id     = EXCLUDED.external_id,
-    updated_at      = now();
+    updated_at      = now()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR users.resource_version = sqlc.narg('expected_version')::bigint;
+
+-- The same statement bumps the token version, so a re-enabled account never revives a token minted before.
+-- name: SetUserDisabled :execrows
+UPDATE users SET disabled = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1 AND disabled <> $2;
+
+-- Touches only the columns a provisioning source owns, and only on its own rows.
+-- name: UpdateProvisionedUser :execrows
+UPDATE users SET username = $3, email = $4, external_id = $5, updated_at = now() WHERE id = $1 AND external_source = $2;
 
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;
@@ -59,7 +73,7 @@ UPDATE users SET oidc_subject = $2 WHERE id = $1 AND oidc_subject IS NULL;
 
 -- The trigger writes the identity row. A concurrent first link waits on the row lock, then finds oidc_subject set and matches nothing.
 -- name: SetFirstPrimaryIdentity :execrows
-UPDATE users SET oidc_subject = $2, updated_at = now()
+UPDATE users SET oidc_subject = $2, token_version = token_version + 1, updated_at = now()
 WHERE id = $1 AND oidc_subject IS NULL AND NOT EXISTS (SELECT 1 FROM identities WHERE identities.user_id = $1);
 
 -- name: DeleteIdentity :exec
@@ -253,22 +267,19 @@ SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM
 -- name: ListSCIMClients :many
 SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients ORDER BY name;
 
--- A revoked client's name is issued again with a fresh token; a live one is left alone and the insert touches no row.
+-- A name is never issued twice, revoked or not, so a new token never inherits the rows an old one provisioned; the insert touches no row.
 -- name: CreateSCIMClient :execrows
 INSERT INTO scim_clients (name, token_hash, token_prefix)
 VALUES ($1, $2, $3)
-ON CONFLICT (name) DO UPDATE SET
-    token_hash   = EXCLUDED.token_hash,
-    token_prefix = EXCLUDED.token_prefix,
-    created_at   = now(),
-    last_used_at = NULL,
-    revoked_at   = NULL
-WHERE scim_clients.revoked_at IS NOT NULL;
+ON CONFLICT (name) DO NOTHING;
 
 -- Writes at most once a minute per client, so a burst of provisioning calls is not a burst of updates.
 -- name: MarkSCIMClientUsed :exec
 UPDATE scim_clients SET last_used_at = sqlc.arg(used_at)::timestamptz
 WHERE name = sqlc.arg(name) AND (last_used_at IS NULL OR last_used_at < sqlc.arg(used_at)::timestamptz - interval '1 minute');
+
+-- name: RotateSCIMClient :execrows
+UPDATE scim_clients SET token_hash = $2, token_prefix = $3, last_used_at = NULL WHERE name = $1 AND revoked_at IS NULL;
 
 -- name: RevokeSCIMClient :execrows
 UPDATE scim_clients SET revoked_at = now() WHERE name = $1 AND revoked_at IS NULL;

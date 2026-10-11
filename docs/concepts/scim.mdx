@@ -61,6 +61,8 @@ A SCIM client acts only on the users and groups it created, which carry its name
 
 - It cannot read, change or delete an account or group an operator created, or one another client created. Such a request answers `404`, and a write is recorded in the audit log as denied.
 - It cannot set roles, passwords or sign-in identities, and cannot reach roles, role bindings, teams, projects or service accounts.
+- It changes only the attributes it maps (`userName`, `emails`, `externalId`, `active`), so an operator's change to an account, such as disabling it or removing a role, is never written back over.
+- It cannot disable or delete the last enabled admin. Such a request answers `409` and is recorded in the audit log as denied.
 - Membership of its own groups is the identity provider's call and is not checked against your own grants. What membership grants is decided by the role bindings you make on those groups.
 - A new group never takes a name that an existing group holds or a role binding names, so it inherits no grant made for something else.
 
@@ -72,13 +74,13 @@ SCIM creates the account without a password or sign-in identity. Relay expects t
 
 When no account holds the sign-in's identity (issuer and subject), relay looks for an account to link before it provisions a new one. It links the account when all of these hold:
 
-- a SCIM client created it;
+- a SCIM client created it, and that client is not revoked;
 - it has no sign-in identity yet;
 - its `externalId` equals the value of the `linkClaim` claim in the verified ID token.
 
 The identity is then added to that account, the user is signed in as it, and the link is recorded in the [audit log](/concepts/audit) as a `users.update` of `identities`. This works whether OIDC registration is open or closed. Later sign-ins find the account by its identity.
 
-Set `linkClaim` in `auth:scim` to the claim that carries the id the identity provider sends as `externalId`:
+Set `linkClaim` in `auth:scim` to the claim that carries the id the identity provider sends as `externalId`. Only `sub` and `oid` are accepted: a claim the user can edit, such as an email, could link them to someone else's account.
 
 | Identity provider | `linkClaim` |
 | --- | --- |
@@ -102,6 +104,15 @@ curl -X PUT https://relay.example.com/api/settings/auth:scim \
 
 ## Rotating and revoking
 
-`GET /api/scim-clients` lists the clients with the start of each token and when it was last used. `POST /api/scim-clients/<name>/revoke` stops the token at once; the users and groups it provisioned stay. Creating a client again under a revoked name issues a new token that takes over those users and groups, which is how you rotate a token.
+`GET /api/scim-clients` lists the clients with the start of each token and when it was last used.
 
-Under `RELAY_AUTHZ=rbac`, managing SCIM clients takes the `scim-clients` kind (`list`, `create`, `revoke`), which of the built-in roles only `admin` holds. Changing the `auth:scim` section takes an admin in either mode.
+To rotate a token, call `POST /api/scim-clients/<name>/rotate`. It returns a new token once, and the old one stops working at once. The client keeps its name, so the users and groups it provisioned stay its own; put the new token in the identity provider:
+
+```bash
+curl -X POST https://relay.example.com/api/scim-clients/entra/rotate \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN"
+```
+
+`POST /api/scim-clients/<name>/revoke` stops the token for good; the users and groups it provisioned stay, still stamped with its name, and no client can change them. A revoked client is not rotated (`409`) and its name is not issued again (creating it answers `409`), so no new token takes over what it provisioned.
+
+Under `RELAY_AUTHZ=rbac`, managing SCIM clients (`list`, `create`, `rotate`, `revoke`) takes an admin: a custom role holding the `scim-clients` verbs is not enough. Changing the `auth:scim` section takes an admin in either mode.

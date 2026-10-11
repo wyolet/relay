@@ -59,13 +59,16 @@ func throughDirectory[T any](b *builder, toRow func(*T) (any, error)) func(conte
 	}
 }
 
-// groupChecks is the Group kind's Check: relay's reference rules, then the directory's membership grant check, so a refused group fails the plan before anything is written. The check probes through the directory's own grant checker, which the handlers build over the unaudited authorizer; the write runs it again.
+// groupChecks is the Group kind's Check: the managed-group rule, relay's reference rules, then the directory's membership grant check, so a refused group fails the plan before anything is written. The check probes through the directory's own grant checker, which the handlers build over the unaudited authorizer; the write runs it again.
 func groupChecks(b *builder) func(context.Context, *group.Group) error {
 	refs := refsFor(b, refcheck.Checker.Group)
-	if refs == nil {
-		return nil
-	}
 	return func(ctx context.Context, g *group.Group) error {
+		if err := b.refuseManagedGroup(g.Meta.ID); err != nil {
+			return err
+		}
+		if refs == nil {
+			return nil
+		}
 		if err := refs(ctx, g); err != nil {
 			return err
 		}
@@ -75,6 +78,19 @@ func groupChecks(b *builder) func(context.Context, *group.Group) error {
 		}
 		return b.dir.CheckMembershipGrants(ctx, refcheck.Principal(ctx, b.opts.Authz), g.ToDirectory())
 	}
+}
+
+// refuseManagedGroup is the directory's managed-group rule run while planning: a stored group a provisioning source manages is written only by a forced apply, and refusing it here keeps the rest of the bundle from being written first.
+func (b *builder) refuseManagedGroup(id string) error {
+	if b.opts.Force {
+		return nil
+	}
+	for _, g := range b.rows.Groups {
+		if g.Meta.ID == id && g.External != nil && g.External.Source != "" {
+			return &directory.ManagedError{Kind: "group", Name: g.Meta.Name, Source: g.External.Source}
+		}
+	}
+	return nil
 }
 
 // deleteThroughDirectory is a kind's Delete.

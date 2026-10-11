@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/directory/memstore"
 	"github.com/wyolet/relay/auth/scim"
 )
 
@@ -41,6 +43,7 @@ func TestSCIMWritesAreAuditedAsTheClient(t *testing.T) {
 		{Client: "entra", Kind: "group", Op: "update", ID: "g-1", Fields: []string{"members"}},
 		{Client: "entra", Kind: "user", Op: "update", ID: "local", Err: fmt.Errorf("%w: %w", directory.ErrNotFound, directory.ErrForeign)},
 		{Client: "entra", Kind: "user", Op: "create", Err: directory.ErrConflict},
+		{Client: "entra", Kind: "user", Op: "delete", ID: "u-2", Err: fmt.Errorf("%w: last admin", scim.ErrRefused)},
 	}
 	h := audit.Middleware(em, nil)(auditSCIM(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, wr := range writes {
@@ -68,9 +71,37 @@ func TestSCIMWritesAreAuditedAsTheClient(t *testing.T) {
 		{"users.update", audit.StatusAllowed, "disabled"},
 		{"groups.update", audit.StatusAllowed, "members"},
 		{"users.update", audit.StatusDenied, ""},
+		{"users.delete", audit.StatusDenied, audit.AnyField},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("rows %+v, want %+v", got, want)
+	}
+}
+
+// A SCIM client may not disable or delete the last enabled admin; with another one enabled, or for any other account, it may.
+func TestSCIMKeepsOneEnabledAdmin(t *testing.T) {
+	ctx := context.Background()
+	users := memstore.New().Stores().Users
+	ada := &directory.User{ID: "u-ada", Username: "ada", Roles: []string{user.RoleAdmin}}
+	bob := &directory.User{ID: "u-bob", Username: "bob"}
+	for _, u := range []*directory.User{ada, bob} {
+		if err := users.Upsert(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := keepOneAdminAgainstSCIM(users)
+	if err := check(ctx, ada); !errors.Is(err, scim.ErrRefused) {
+		t.Fatalf("the last enabled admin: %v, want a refusal", err)
+	}
+	if err := check(ctx, bob); err != nil {
+		t.Fatalf("a member: %v", err)
+	}
+	bob.Roles = []string{user.RoleAdmin}
+	if err := users.Upsert(ctx, bob); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(ctx, ada); err != nil {
+		t.Fatalf("with another enabled admin: %v", err)
 	}
 }
 

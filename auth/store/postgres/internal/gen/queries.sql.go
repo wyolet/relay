@@ -32,13 +32,7 @@ func (q *Queries) ClearPrimaryIdentity(ctx context.Context, id string) error {
 const createSCIMClient = `-- name: CreateSCIMClient :execrows
 INSERT INTO scim_clients (name, token_hash, token_prefix)
 VALUES ($1, $2, $3)
-ON CONFLICT (name) DO UPDATE SET
-    token_hash   = EXCLUDED.token_hash,
-    token_prefix = EXCLUDED.token_prefix,
-    created_at   = now(),
-    last_used_at = NULL,
-    revoked_at   = NULL
-WHERE scim_clients.revoked_at IS NOT NULL
+ON CONFLICT (name) DO NOTHING
 `
 
 type CreateSCIMClientParams struct {
@@ -47,7 +41,7 @@ type CreateSCIMClientParams struct {
 	TokenPrefix string
 }
 
-// A revoked client's name is issued again with a fresh token; a live one is left alone and the insert touches no row.
+// A name is never issued twice, revoked or not, so a new token never inherits the rows an old one provisioned; the insert touches no row.
 func (q *Queries) CreateSCIMClient(ctx context.Context, arg CreateSCIMClientParams) (int64, error) {
 	result, err := q.db.Exec(ctx, createSCIMClient, arg.Name, arg.TokenHash, arg.TokenPrefix)
 	if err != nil {
@@ -421,7 +415,7 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = $1
 `
 
@@ -442,12 +436,13 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.TokenVersion,
 		&i.ExternalSource,
 		&i.ExternalID,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2)
 `
 
@@ -472,12 +467,13 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.TokenVersion,
 		&i.ExternalSource,
 		&i.ExternalID,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE username = $1
 `
 
@@ -497,6 +493,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.TokenVersion,
 		&i.ExternalSource,
 		&i.ExternalID,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -909,7 +906,7 @@ func (q *Queries) ListUserIdentities(ctx context.Context, userID string) ([]Iden
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users ORDER BY created_at ASC, id ASC
 `
 
@@ -935,6 +932,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.TokenVersion,
 			&i.ExternalSource,
 			&i.ExternalID,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -947,7 +945,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 const listUsersByExternalID = `-- name: ListUsersByExternalID :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE external_source IS NOT NULL AND external_id = $1 ORDER BY created_at ASC, id ASC
 `
 
@@ -973,6 +971,7 @@ func (q *Queries) ListUsersByExternalID(ctx context.Context, externalID pgtype.T
 			&i.TokenVersion,
 			&i.ExternalSource,
 			&i.ExternalID,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1030,8 +1029,26 @@ func (q *Queries) RevokeSCIMClient(ctx context.Context, name string) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const rotateSCIMClient = `-- name: RotateSCIMClient :execrows
+UPDATE scim_clients SET token_hash = $2, token_prefix = $3, last_used_at = NULL WHERE name = $1 AND revoked_at IS NULL
+`
+
+type RotateSCIMClientParams struct {
+	Name        string
+	TokenHash   string
+	TokenPrefix string
+}
+
+func (q *Queries) RotateSCIMClient(ctx context.Context, arg RotateSCIMClientParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateSCIMClient, arg.Name, arg.TokenHash, arg.TokenPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setFirstPrimaryIdentity = `-- name: SetFirstPrimaryIdentity :execrows
-UPDATE users SET oidc_subject = $2, updated_at = now()
+UPDATE users SET oidc_subject = $2, token_version = token_version + 1, updated_at = now()
 WHERE id = $1 AND oidc_subject IS NULL AND NOT EXISTS (SELECT 1 FROM identities WHERE identities.user_id = $1)
 `
 
@@ -1061,6 +1078,51 @@ type SetPrimaryIdentityIfNoneParams struct {
 func (q *Queries) SetPrimaryIdentityIfNone(ctx context.Context, arg SetPrimaryIdentityIfNoneParams) error {
 	_, err := q.db.Exec(ctx, setPrimaryIdentityIfNone, arg.ID, arg.OidcSubject)
 	return err
+}
+
+const setUserDisabled = `-- name: SetUserDisabled :execrows
+UPDATE users SET disabled = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1 AND disabled <> $2
+`
+
+type SetUserDisabledParams struct {
+	ID       string
+	Disabled bool
+}
+
+// The same statement bumps the token version, so a re-enabled account never revives a token minted before.
+func (q *Queries) SetUserDisabled(ctx context.Context, arg SetUserDisabledParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserDisabled, arg.ID, arg.Disabled)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateProvisionedUser = `-- name: UpdateProvisionedUser :execrows
+UPDATE users SET username = $3, email = $4, external_id = $5, updated_at = now() WHERE id = $1 AND external_source = $2
+`
+
+type UpdateProvisionedUserParams struct {
+	ID             string
+	ExternalSource pgtype.Text
+	Username       string
+	Email          pgtype.Text
+	ExternalID     pgtype.Text
+}
+
+// Touches only the columns a provisioning source owns, and only on its own rows.
+func (q *Queries) UpdateProvisionedUser(ctx context.Context, arg UpdateProvisionedUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateProvisionedUser,
+		arg.ID,
+		arg.ExternalSource,
+		arg.Username,
+		arg.Email,
+		arg.ExternalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertGroup = `-- name: UpsertGroup :execrows
@@ -1327,10 +1389,14 @@ func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
-const upsertUser = `-- name: UpsertUser :exec
+const upsertUser = `-- name: UpsertUser :execrows
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
+    token_version   = CASE WHEN users.password_hash IS DISTINCT FROM EXCLUDED.password_hash
+                             OR users.oidc_subject IS DISTINCT FROM EXCLUDED.oidc_subject
+                             OR users.disabled <> EXCLUDED.disabled
+                           THEN users.token_version + 1 ELSE users.token_version END,
     username        = EXCLUDED.username,
     email           = EXCLUDED.email,
     password_hash   = EXCLUDED.password_hash,
@@ -1340,22 +1406,25 @@ ON CONFLICT (id) DO UPDATE SET
     external_source = EXCLUDED.external_source,
     external_id     = EXCLUDED.external_id,
     updated_at      = now()
+WHERE $10::bigint IS NULL OR users.resource_version = $10::bigint
 `
 
 type UpsertUserParams struct {
-	ID             string
-	Username       string
-	Email          pgtype.Text
-	PasswordHash   pgtype.Text
-	OidcSubject    pgtype.Text
-	Roles          []string
-	Disabled       bool
-	ExternalSource pgtype.Text
-	ExternalID     pgtype.Text
+	ID              string
+	Username        string
+	Email           pgtype.Text
+	PasswordHash    pgtype.Text
+	OidcSubject     pgtype.Text
+	Roles           []string
+	Disabled        bool
+	ExternalSource  pgtype.Text
+	ExternalID      pgtype.Text
+	ExpectedVersion pgtype.Int8
 }
 
-func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
-	_, err := q.db.Exec(ctx, upsertUser,
+// A new password, primary identity or disabled flag bumps the token version in the same statement, so no token outlives the change.
+func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertUser,
 		arg.ID,
 		arg.Username,
 		arg.Email,
@@ -1365,6 +1434,10 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
 		arg.Disabled,
 		arg.ExternalSource,
 		arg.ExternalID,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

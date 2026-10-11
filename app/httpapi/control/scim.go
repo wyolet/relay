@@ -5,6 +5,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -36,7 +37,8 @@ func MountSCIM(r chi.Router, d Deps) {
 	if d.PublicURL != "" {
 		base = strings.TrimRight(d.PublicURL, "/") + SCIMPrefix
 	}
-	cfg := scim.Config{Directory: dir, Tokens: d.Stores.SCIMClients, BaseURL: base, OnWrite: collectSCIMWrite}
+	cfg := scim.Config{Directory: dir, Tokens: d.Stores.SCIMClients, BaseURL: base, OnWrite: collectSCIMWrite,
+		CheckDeactivate: keepOneAdminAgainstSCIM(dir.Stores().Users)}
 	deleting, err := scim.New(cfg)
 	if err != nil {
 		slog.Error("relay control: SCIM not mounted", "err", err)
@@ -98,7 +100,26 @@ func auditSCIM(next http.Handler) http.Handler {
 	})
 }
 
-// collectSCIMWrite turns a SCIM write into an audit row: allowed when it ran, denied when the client reached for a row it did not provision. A write that failed validation changed nothing and records nothing.
+// keepOneAdminAgainstSCIM is the users endpoint's keep-one-admin rule for a SCIM client: it may not disable or delete the last enabled admin, as nobody could grant the role back short of editing the database.
+func keepOneAdminAgainstSCIM(users directory.UserStore) func(context.Context, *directory.User) error {
+	return func(ctx context.Context, u *directory.User) error {
+		if !isActiveAdmin(u.Disabled, u.Roles) {
+			return nil
+		}
+		all, err := users.List(ctx)
+		if err != nil {
+			return err
+		}
+		for _, other := range all {
+			if other.ID != u.ID && isActiveAdmin(other.Disabled, other.Roles) {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: this is the last enabled admin; grant the role to another account first", scim.ErrRefused)
+	}
+}
+
+// collectSCIMWrite turns a SCIM write into an audit row: allowed when it ran, denied when the client reached for a row it did not provision or relay's rules refused it. A write that failed validation changed nothing and records nothing.
 func collectSCIMWrite(ctx context.Context, w scim.Write) {
 	c, ok := ctx.Value(scimWritesKey{}).(*scimWrites)
 	if !ok {
@@ -107,7 +128,7 @@ func collectSCIMWrite(ctx context.Context, w scim.Write) {
 	status := audit.StatusAllowed
 	switch {
 	case w.Err == nil:
-	case errors.Is(w.Err, directory.ErrForeign):
+	case errors.Is(w.Err, directory.ErrForeign), errors.Is(w.Err, scim.ErrRefused):
 		status = audit.StatusDenied
 	default:
 		return

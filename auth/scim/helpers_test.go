@@ -50,7 +50,7 @@ func (m *memTokens) MarkUsed(_ context.Context, name string, t time.Time) error 
 func (m *memTokens) CreateClient(_ context.Context, c *Client) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if old, ok := m.byName[c.Name]; ok && !old.Revoked {
+	if _, ok := m.byName[c.Name]; ok {
 		return ErrClientExists
 	}
 	cp := *c
@@ -77,6 +77,21 @@ func (m *memTokens) RevokeClient(_ context.Context, name string) error {
 		return ErrNoClient
 	}
 	c.Revoked = true
+	return nil
+}
+
+func (m *memTokens) RotateClient(_ context.Context, c *Client) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, ok := m.byName[c.Name]
+	switch {
+	case !ok:
+		return ErrNoClient
+	case old.Revoked:
+		return ErrClientRevoked
+	}
+	old.TokenHash, old.TokenPrefix = c.TokenHash, c.TokenPrefix
+	delete(m.used, c.Name)
 	return nil
 }
 

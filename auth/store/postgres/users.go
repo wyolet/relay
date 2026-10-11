@@ -76,34 +76,6 @@ func (s users) List(ctx context.Context) ([]*directory.User, error) {
 	return out, nil
 }
 
-func (s users) Upsert(ctx context.Context, u *directory.User) error {
-	roles := u.Roles
-	if roles == nil {
-		roles = []string{}
-	}
-	row := gen.UpsertUserParams{
-		ID:             u.ID,
-		Username:       u.Username,
-		Email:          text(u.Email),
-		PasswordHash:   text(u.PasswordHash),
-		OidcSubject:    text(encodeIdentity(u.Identity)),
-		Roles:          roles,
-		Disabled:       u.Disabled,
-		ExternalSource: text(u.External.Source),
-		ExternalID:     text(u.External.ID),
-	}
-	if !u.Identity.IsZero() {
-		return mapErr("upsert user", gen.New(s.db).UpsertUser(ctx, row))
-	}
-	// Clearing the primary of an account that holds other identities promotes the oldest of them.
-	return inTx(ctx, s.db, func(q *gen.Queries) error {
-		if err := q.UpsertUser(ctx, row); err != nil {
-			return mapErr("upsert user", err)
-		}
-		return mapErr("promote identity", q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{ID: u.ID}))
-	})
-}
-
 func (s users) Delete(ctx context.Context, id string) error {
 	return mapErr("delete user", gen.New(s.db).DeleteUser(ctx, id))
 }
@@ -123,9 +95,12 @@ func (s users) AddIdentity(ctx context.Context, userID string, id directory.User
 		if n == 0 {
 			return fmt.Errorf("add identity: %w: identity belongs to another user", directory.ErrConflict)
 		}
-		return mapErr("set primary identity", q.SetPrimaryIdentityIfNone(ctx, gen.SetPrimaryIdentityIfNoneParams{
+		if err := q.SetPrimaryIdentityIfNone(ctx, gen.SetPrimaryIdentityIfNoneParams{
 			ID: userID, OidcSubject: text(encodeIdentity(id.Identity)),
-		}))
+		}); err != nil {
+			return mapErr("set primary identity", err)
+		}
+		return mapErr("bump token version", q.BumpUserTokenVersion(ctx, userID))
 	})
 }
 
@@ -145,9 +120,12 @@ func (s users) RemoveIdentity(ctx context.Context, userID string, id directory.I
 		if err := q.DeleteIdentity(ctx, gen.DeleteIdentityParams{UserID: userID, Issuer: id.Issuer, Subject: id.Subject}); err != nil {
 			return mapErr("remove identity", err)
 		}
-		return mapErr("promote identity", q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{
+		if err := q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{
 			ID: userID, OidcSubject: text(encodeIdentity(id)),
-		}))
+		}); err != nil {
+			return mapErr("promote identity", err)
+		}
+		return mapErr("bump token version", q.BumpUserTokenVersion(ctx, userID))
 	})
 }
 
@@ -156,7 +134,10 @@ func (s users) RemoveIdentities(ctx context.Context, userID string) error {
 		if err := q.ClearPrimaryIdentity(ctx, userID); err != nil {
 			return mapErr("clear primary identity", err)
 		}
-		return mapErr("remove identities", q.DeleteUserIdentities(ctx, userID))
+		if err := q.DeleteUserIdentities(ctx, userID); err != nil {
+			return mapErr("remove identities", err)
+		}
+		return mapErr("bump token version", q.BumpUserTokenVersion(ctx, userID))
 	})
 }
 
@@ -181,17 +162,18 @@ func withIdentities(ctx context.Context, q *gen.Queries, r gen.User, err error) 
 
 func userFromRow(r gen.User) *directory.User {
 	return &directory.User{
-		ID:           r.ID,
-		Username:     r.Username,
-		Email:        r.Email.String,
-		PasswordHash: r.PasswordHash.String,
-		Identity:     decodeIdentity(r.OidcSubject.String),
-		External:     directory.External{Source: r.ExternalSource.String, ID: r.ExternalID.String},
-		Roles:        r.Roles,
-		Disabled:     r.Disabled,
-		TokenVersion: int(r.TokenVersion),
-		CreatedAt:    r.CreatedAt.Time,
-		UpdatedAt:    r.UpdatedAt.Time,
+		ID:              r.ID,
+		Username:        r.Username,
+		Email:           r.Email.String,
+		PasswordHash:    r.PasswordHash.String,
+		Identity:        decodeIdentity(r.OidcSubject.String),
+		External:        directory.External{Source: r.ExternalSource.String, ID: r.ExternalID.String},
+		Roles:           r.Roles,
+		Disabled:        r.Disabled,
+		TokenVersion:    int(r.TokenVersion),
+		ResourceVersion: directory.FormatResourceVersion(r.ResourceVersion),
+		CreatedAt:       r.CreatedAt.Time,
+		UpdatedAt:       r.UpdatedAt.Time,
 	}
 }
 

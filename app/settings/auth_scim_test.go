@@ -31,3 +31,18 @@ func TestAuthSCIMIsOffByDefaultAndAdminOnly(t *testing.T) {
 		t.Fatal("auth:scim is writable by a non-admin")
 	}
 }
+
+// Only the provider's stable user ids link a sign-in; a claim the user controls, such as an email, would let them claim another account.
+func TestAuthSCIMLinkClaimIsSubOrOid(t *testing.T) {
+	sec, _ := Lookup(AuthSCIMSection)
+	for _, claim := range []string{"email", "preferred_username", "name", "SUB", "oid "} {
+		if _, err := sec.Decode([]byte(`{"enabled":true,"linkClaim":"` + claim + `"}`)); err == nil {
+			t.Errorf("linkClaim %q was accepted", claim)
+		}
+	}
+	for _, claim := range []string{"", "sub", "oid"} {
+		if _, err := sec.Decode([]byte(`{"enabled":true,"linkClaim":"` + claim + `"}`)); err != nil {
+			t.Errorf("linkClaim %q: %v", claim, err)
+		}
+	}
+}

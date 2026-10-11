@@ -17,10 +17,12 @@ import (
 const TokenPrefix = "scim_"
 
 var (
-	// ErrClientExists reports a create for a name a live client holds.
+	// ErrClientExists reports a create for a name a client holds or held: a revoked client's name is not issued again.
 	ErrClientExists = errors.New("scim: client exists")
 	// ErrNoClient reports an operation on a client that does not exist.
 	ErrNoClient = errors.New("scim: no such client")
+	// ErrClientRevoked reports a rotation of a revoked client, whose name is never issued a token again.
+	ErrClientRevoked = errors.New("scim: client is revoked")
 )
 
 // Client is one provisioning source with its bearer token. Its name is the source stamped on every row it creates.
@@ -42,12 +44,14 @@ type TokenStore interface {
 	ClientByTokenHash(ctx context.Context, hash string) (*Client, error)
 	// MarkUsed records that the client authenticated at t. A store may skip writes closer together than it cares to keep.
 	MarkUsed(ctx context.Context, name string, t time.Time) error
-	// CreateClient stores c. A name a live client holds is ErrClientExists; a revoked client's name is issued again, so the new token takes over the rows the old one provisioned.
+	// CreateClient stores c. A name any client holds, revoked or not, is ErrClientExists: the name is the source stamped on the rows a client provisions, so issuing it again would hand those rows to the new token.
 	CreateClient(ctx context.Context, c *Client) error
 	// ListClients returns every client ordered by name.
 	ListClients(ctx context.Context) ([]*Client, error)
 	// RevokeClient revokes the client's token for good; a missing name is ErrNoClient, and revoking twice is not an error.
 	RevokeClient(ctx context.Context, name string) error
+	// RotateClient replaces the token of the live client c.Name with c.TokenHash and c.TokenPrefix in one write, so the old token stops working at once; the name, and so every row it provisioned, stays. A missing name is ErrNoClient and a revoked one ErrClientRevoked.
+	RotateClient(ctx context.Context, c *Client) error
 }
 
 // CreateClient mints a token for a new client named name and stores the client. The token is returned once and kept nowhere. The name must be a DNS-1123 label, as it is stamped on every row the client writes.
@@ -61,6 +65,19 @@ func CreateClient(ctx context.Context, store TokenStore, name string) (token str
 	}
 	c = &Client{Name: name, TokenHash: g.Hash, TokenPrefix: g.Prefix}
 	if err := store.CreateClient(ctx, c); err != nil {
+		return "", nil, err
+	}
+	return g.Plaintext, c, nil
+}
+
+// RotateClient mints a new token for the live client named name and stores it in place of the old one, which stops working at once. The token is returned once and kept nowhere.
+func RotateClient(ctx context.Context, store TokenStore, name string) (token string, c *Client, err error) {
+	g, err := apikey.Generate(TokenPrefix)
+	if err != nil {
+		return "", nil, err
+	}
+	c = &Client{Name: name, TokenHash: g.Hash, TokenPrefix: g.Prefix}
+	if err := store.RotateClient(ctx, c); err != nil {
 		return "", nil, err
 	}
 	return g.Plaintext, c, nil
