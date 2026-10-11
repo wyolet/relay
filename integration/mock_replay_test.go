@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // TestMockReplay_OpenAIChatCompletions verifies the relay's byte-pass path
@@ -236,6 +237,11 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	s.t.Helper()
 	ctx := context.Background()
 
+	// modelSlug is the DNS-1123 form used as the catalog key; modelName (which
+	// may contain dots, e.g. "gpt-5.4-mini") is preserved as OriginalName so
+	// the adapter sends it verbatim to the upstream.
+	modelSlug := slug.From(modelName)
+
 	prov := &provider.Provider{
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-provider", DisplayName: "Mock", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 	}
@@ -268,15 +274,15 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	mustUpsert(s.t, s.stores.HostKey.Upsert(ctx, hk), "hostkey")
 
 	mdl := &model.Model{
-		Meta: meta.Metadata{ID: ids.New(), Name: modelName, Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
+		Meta: meta.Metadata{ID: ids.New(), Name: modelSlug, Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{
-			Snapshots: []model.Snapshot{{Name: modelName}},
-			Pointer:   modelName,
+			Snapshots: []model.Snapshot{{Name: modelSlug, OriginalName: modelName}},
+			Pointer:   modelSlug,
 		},
 	}
 	mustUpsert(s.t, s.stores.Model.Upsert(ctx, mdl), "model")
 	bnd := &binding.Binding{
-		Meta: meta.Metadata{ID: ids.New(), Name: modelName + "-on-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Meta: meta.Metadata{ID: ids.New(), Name: modelSlug + "-on-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: binding.Spec{ModelID: mdl.Meta.ID, HostID: hst.Meta.ID, Adapter: adapters.OpenAI},
 	}
 	mustUpsert(s.t, s.stores.Binding.Upsert(ctx, bnd), "binding")
@@ -292,9 +298,15 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 
 	const keyPlain = "rk_mock_smoke"
+	userID := s.seedUser("mock-replay-owner")
 	rk := &key.Key{
-		Meta: meta.Metadata{ID: ids.New(), Name: "rk-mock", Owner: meta.Owner{Kind: meta.OwnerUser, ID: ids.New()}},
-		Spec: key.Spec{PolicyID: pol.Meta.ID, KeyHash: sha256Hex(keyPlain), Prefix: "rk_mock"},
+		Meta: meta.Metadata{ID: ids.New(), Name: "rk-mock", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
+		Spec: key.Spec{
+			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
+			PolicyID:  pol.Meta.ID,
+			KeyHash:   sha256Hex(keyPlain),
+			Prefix:    "rk_mock",
+		},
 	}
 	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
 	if err := s.cat.Reload(ctx); err != nil {
