@@ -80,7 +80,7 @@ When no account holds the sign-in's identity (issuer and subject), relay looks f
 
 The identity is then added to that account, the user is signed in as it, and the link is recorded in the [audit log](/concepts/audit) as a `users.update` of `identities`. This works whether OIDC registration is open or closed. Later sign-ins find the account by its identity.
 
-Set `linkClaim` in `auth:scim` to the claim that carries the id the identity provider sends as `externalId`:
+Set `linkClaim` in `auth:scim` to the claim that carries the id the identity provider sends as `externalId`. Only `sub` and `oid` are accepted: a claim the user can edit, such as an email, could link them to someone else's account.
 
 | Identity provider | `linkClaim` |
 | --- | --- |

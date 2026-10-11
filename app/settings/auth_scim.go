@@ -1,16 +1,24 @@
 package settings
 
+import "fmt"
+
 // AuthSCIM is the auth:scim settings section: inbound SCIM 2.0 provisioning at /scim/v2 on the control listener. Off by default; while it is off the endpoint answers 404 and SCIM client tokens do nothing.
 type AuthSCIM struct {
 	Enabled bool `json:"enabled"`
 	// DeleteDisables makes a SCIM DELETE of a user disable the account instead of deleting it, keeping its audit trail and bindings.
 	DeleteDisables bool `json:"deleteDisables,omitempty"`
-	// LinkClaim names the verified id_token claim whose value a first OIDC sign-in matches against a SCIM-provisioned account's externalId; empty means "sub".
+	// LinkClaim names the verified id_token claim whose value a first OIDC sign-in matches against a SCIM-provisioned account's externalId: "sub" (the default when empty) or "oid".
 	LinkClaim string `json:"linkClaim,omitempty"`
 }
 
-// Validate has nothing to refuse: the switches are plain and any claim name may be configured.
-func (a *AuthSCIM) Validate() error { return nil }
+// Validate refuses a link claim other than sub or oid: those are the provider's stable ids for the user, and a claim the user can edit, such as an email or a name, would let them link to someone else's account.
+func (a *AuthSCIM) Validate() error {
+	switch a.LinkClaim {
+	case "", "sub", "oid":
+		return nil
+	}
+	return fmt.Errorf("auth:scim: linkClaim %q: must be sub or oid", a.LinkClaim)
+}
 
 // EffectiveLinkClaim returns the claim a first sign-in is linked on.
 func (a *AuthSCIM) EffectiveLinkClaim() string {
@@ -29,7 +37,7 @@ func init() {
 		Description: "SCIM 2.0 provisioning from an identity provider (Microsoft Entra ID, Okta) at /scim/v2 on the control listener; disabled by default. " +
 			"Each identity provider authenticates with a SCIM client token created under /api/scim-clients. " +
 			"deleteDisables makes a SCIM DELETE of a user disable the account instead of deleting it. " +
-			"linkClaim names the id_token claim a first OIDC sign-in is linked on: a provisioned account with no sign-in identity whose externalId equals it is signed in (default sub; oid for Entra).",
+			"linkClaim names the id_token claim a first OIDC sign-in is linked on: a provisioned account with no sign-in identity whose externalId equals it is signed in (sub, the default, or oid for Entra; nothing else is accepted).",
 		Defaults: func() any { return &AuthSCIM{} },
 		Decode:   decodeAndValidate[AuthSCIM, *AuthSCIM],
 	})
