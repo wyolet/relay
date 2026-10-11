@@ -2,9 +2,8 @@
 // the verification key by `kid`. The claim set is the caller's: any value that
 // encodes to a JSON object.
 //
-// Only the format lives here. Claim policy (issuer, expiry, versioning),
-// signing-key rotation and verification caching are the caller's; other JOSE
-// algorithms and JWK sets are out of scope.
+// Claim policy (issuer, audience, expiry, versioning) and verification
+// caching are the caller's. Other JOSE algorithms are out of scope.
 package token
 
 import (
