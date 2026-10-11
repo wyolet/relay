@@ -14,6 +14,7 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -43,7 +44,7 @@ func (v *TokenVerifier) SetKey(pub ed25519.PublicKey) {
 		v.keys.Store(nil)
 		return
 	}
-	next := &verifyKeys{current: pub, currentKID: crypto.KeyID(pub)}
+	next := &verifyKeys{current: pub, currentKID: authtoken.KeyID(pub)}
 	if old := v.keys.Load(); old != nil && !old.current.Equal(pub) {
 		next.previous, next.previousKID = old.current, old.currentKID
 	}
@@ -64,8 +65,8 @@ func (v *TokenVerifier) SetKeys(current, previous ed25519.PublicKey) {
 		return
 	}
 	v.keys.Store(&verifyKeys{
-		current: current, currentKID: crypto.KeyID(current),
-		previous: previous, previousKID: crypto.KeyID(previous),
+		current: current, currentKID: authtoken.KeyID(current),
+		previous: previous, previousKID: authtoken.KeyID(previous),
 	})
 }
 
@@ -115,11 +116,11 @@ func (v *TokenVerifier) Verify(token string) (crypto.TokenClaims, error) {
 	if k == nil || len(k.current) == 0 {
 		return crypto.TokenClaims{}, ErrTokensDisabled
 	}
-	pub, ok := k.pick(crypto.TokenKeyID(token))
+	pub, ok := k.pick(authtoken.HeaderKeyID(token))
 	if !ok {
-		return crypto.TokenClaims{}, crypto.ErrTokenSignature
+		return crypto.TokenClaims{}, authtoken.ErrSignature
 	}
-	return crypto.ParseToken(pub, token)
+	return authtoken.Parse[crypto.TokenClaims](pub, token)
 }
 
 // pick resolves the key a token's kid names. A token with no kid predates

@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/apikey"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/slug"
@@ -70,15 +71,15 @@ func policylessCaptureCatalog(t *testing.T, upstreamURL string) (*appcatalog.Cat
 	}
 	plaintexts := map[bool]string{}
 	for _, captures := range []bool{true, false} {
-		g, err := key.Generate()
+		g, err := apikey.Generate(key.TokenPrefix)
 		if err != nil {
-			t.Fatalf("key.Generate: %v", err)
+			t.Fatalf("apikey.Generate: %v", err)
 		}
 		k := &key.Key{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "capture-" + strconv.FormatBool(captures) + "-" + sfx, Owner: meta.Owner{Kind: meta.OwnerUser, ID: u.ID}},
 			Spec: key.Spec{
 				Principal:             key.Principal{Kind: key.PrincipalUser, ID: u.ID},
-				KeyHash:               g.KeyHash,
+				KeyHash:               g.Hash,
 				Prefix:                g.Prefix,
 				PayloadLoggingEnabled: captures,
 			},

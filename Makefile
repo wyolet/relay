@@ -349,18 +349,20 @@ test: ## go test ./... (all modules)
 	$(GO_TEST) ./...
 	cd sdk && $(GO_TEST) ./...
 	cd jobq && $(GO_TEST) ./...
+	cd auth && $(GO_TEST) ./...
 
 test-race: ## unit tests under -race (all modules)
 	$(GO_TEST) -race ./...
 	cd sdk && $(GO_TEST) -race ./...
 	cd jobq && $(GO_TEST) -race ./...
+	cd auth && $(GO_TEST) -race ./...
 
 # One target at a time: `go test -fuzz` fuzzes a single function per run. Only
 # the two parsers of untrusted bearers are fuzzed; every fuzz target's seeds and
 # testdata/fuzz corpus also run as ordinary tests.
 FUZZ_TIME ?= 10s
 test-fuzz: ## fuzz the token parser and the bearer-to-principal resolver ($(FUZZ_TIME) each)
-	$(GO_TEST) -run '^$$' -fuzz '^FuzzParseToken$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
+	cd auth && $(GO_TEST) -run '^$$' -fuzz '^FuzzParse$$' -fuzztime $(FUZZ_TIME) ./token
 	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 
 # Coverage. COVER_PKGS is shared by the unit and integration profiles so the
@@ -376,6 +378,7 @@ test-cover: ## unit tests of every module with coverprofiles in $(COVER_DIR)
 	$(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/unit.out ./...
 	cd sdk && $(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/sdk.out ./...
 	cd jobq && $(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq.out ./...
+	cd auth && $(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/auth.out ./...
 
 test-race-cover: ## test-cover under -race (CI runs the unit tests once for both)
 	@$(MAKE) --no-print-directory test-cover COVER_TEST_FLAGS=-race
@@ -388,7 +391,7 @@ cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 		COVER_ENFORCE=$(COVER_ENFORCE) ./scripts/covcheck.sh $$profiles
 
 # Allocation gate. ns/op is not gated — too noisy on shared runners.
-BENCH_PKGS            := ./app/httpapi/inference ./pkg/crypto ./app/policy ./app/catalog ./app/routing
+BENCH_PKGS            := ./app/httpapi/inference ./auth/token ./app/policy ./app/catalog ./app/routing
 BENCH_BASELINE        := scripts/bench-baseline.txt
 BENCH_ALLOC_TOLERANCE ?= 0
 BENCH_COUNT           ?= 1
@@ -418,12 +421,13 @@ lint: ## golangci-lint every module (config: .golangci.yml)
 	$(GOLANGCI_LINT) run ./...
 	cd sdk && $(GOLANGCI_LINT) run ./...
 	cd jobq && $(GOLANGCI_LINT) run ./...
+	cd auth && $(GOLANGCI_LINT) run ./...
 
 GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 # Scans every module before failing, so one report lists them all.
 vulncheck: ## govulncheck every module; fails on vulnerabilities the code calls
-	@status=0; for m in . sdk jobq; do \
+	@status=0; for m in . sdk jobq auth; do \
 		echo "== $$m"; (cd $$m && $(GOVULNCHECK) ./...) || status=1; \
 	done; exit $$status
 

@@ -1,6 +1,6 @@
 # Per-package statement-coverage floors, checked by scripts/covcheck.sh over
-# the profiles in $(COVER_DIR). Paths are repo-relative (sdk/ and jobq/ are
-# their own modules); `*` matches any characters. The first matching line
+# the profiles in $(COVER_DIR). Paths are repo-relative (sdk/, jobq/ and auth/
+# are their own modules); `*` matches any characters. The first matching line
 # wins, so list narrower paths first. Floors only move up.
 #
 # Each floor is the merged unit + integration coverage measured when it was
@@ -31,6 +31,10 @@ pkg/ratelimit			81
 
 jobq				69
 jobq/payload			66
+
+auth/apikey			85
+auth/password			95
+auth/token			85
 
 sdk/adapters/anthropic		75
 sdk/adapters/gemini		71
