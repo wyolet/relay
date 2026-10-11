@@ -1,6 +1,6 @@
 // Package oidc is an OpenID Connect relying party for browser login: Start redirects to the provider's hosted login, Callback exchanges the authorization code and hands the caller's claims to the product.
 //
-// Any provider publishing an OpenID discovery document whose issuer equals the configured issuer works. The product owns accounts and sessions through the Provision and Login hooks; this package stores nothing. State, the PKCE verifier and the nonce travel in a short-lived SameSite=Lax cookie rather than a session, because the callback arrives as a cross-site top-level navigation that a SameSite=Strict session cookie does not accompany.
+// Any provider publishing an OpenID discovery document whose issuer equals the configured issuer, give or take a trailing slash, works. The product owns accounts and sessions through the Provision and Login hooks; this package stores nothing. State, the PKCE verifier and the nonce travel in a short-lived SameSite=Lax cookie rather than a session, because the callback arrives as a cross-site top-level navigation that a SameSite=Strict session cookie does not accompany.
 package oidc
 
 import (
@@ -19,7 +19,7 @@ import (
 
 // Config is one provider registration. A RelyingParty reads it on every request, so a changed setting applies to the next login.
 type Config struct {
-	// Issuer is the provider's issuer URL; endpoints and signing keys are discovered from its metadata. It must equal the metadata's issuer exactly, trailing slash included.
+	// Issuer is the provider's issuer URL; endpoints and signing keys are discovered from its metadata. It must equal the metadata's issuer or differ from it only by one trailing slash; id_tokens must carry the metadata's issuer exactly.
 	Issuer   string
 	ClientID string
 	// ClientSecret is sent in the token request's form parameters; empty for a public client, which relies on PKCE alone.

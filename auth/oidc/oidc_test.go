@@ -643,11 +643,6 @@ func TestDiscovery(t *testing.T) {
 		w := httptest.NewRecorder()
 		f.rp.Start(w, httptest.NewRequest("GET", "/start", nil))
 		wantStatus(t, w, http.StatusBadGateway, "identity provider unavailable")
-		// The configured issuer with a trailing slash the provider does not publish is a mismatch too.
-		f.p.metadata = nil
-		if _, err := discover(context.Background(), f.p.srv.URL+"/"); err == nil {
-			t.Fatal("trailing-slash issuer accepted")
-		}
 	})
 	t.Run("errors", func(t *testing.T) {
 		f := newFixture(t)
@@ -670,6 +665,65 @@ func TestDiscovery(t *testing.T) {
 			t.Errorf("non-JSON metadata: %v", err)
 		}
 	})
+}
+
+// A configured issuer may differ from the published one by a trailing slash, either way round; the id_token's iss must still equal the published one.
+func TestIssuerTrailingSlash(t *testing.T) {
+	const (
+		signsIn      = ""
+		undiscovered = "identity provider unavailable"
+		badToken     = "identity provider returned an invalid id_token"
+	)
+	cases := []struct {
+		name                       string
+		published, configured, iss string
+		refusal                    string
+	}{
+		{"configured with a slash", "", "/", "", signsIn},
+		{"published with a slash", "/", "", "/", signsIn},
+		{"iss as configured, not as published", "", "/", "/", badToken},
+		{"another host", "https://evil.example", "", "https://evil.example", undiscovered},
+		{"another path", "/tenant", "", "/tenant", undiscovered},
+		{"two slashes", "//", "", "//", undiscovered},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			base := f.p.srv.URL
+			at := func(s string) string {
+				if strings.HasPrefix(s, "https://") {
+					return s
+				}
+				return base + s
+			}
+			f.p.metadata = map[string]any{
+				"issuer": at(tc.published), "authorization_endpoint": base + "/authorize", "token_endpoint": base + "/token", "jwks_uri": base + "/jwks",
+			}
+			f.p.claims = map[string]any{"iss": at(tc.iss)}
+			f.rp.Config().Issuer = at(tc.configured)
+			switch tc.refusal {
+			case undiscovered:
+				w := httptest.NewRecorder()
+				f.rp.Start(w, httptest.NewRequest("GET", "/start", nil))
+				wantStatus(t, w, http.StatusBadGateway, undiscovered)
+			case badToken:
+				wantStatus(t, f.login("good"), http.StatusBadGateway, badToken)
+				if err := f.rec.denied[0].Err; !strings.Contains(err.Error(), "issued by a different provider") {
+					t.Fatalf("error = %v", err)
+				}
+			default:
+				if w := f.login("good"); w.Code != http.StatusFound {
+					t.Fatalf("login: %d %s", w.Code, w.Body.String())
+				}
+				if got := f.rec.provisioned[0].Issuer; got != at(tc.configured) {
+					t.Fatalf("claims issuer = %q, want the configured %q", got, at(tc.configured))
+				}
+			}
+			if tc.refusal != signsIn && len(f.rec.provisioned) != 0 {
+				t.Fatalf("provisioned %+v", f.rec.provisioned)
+			}
+		})
+	}
 }
 
 func TestGroupsClaim(t *testing.T) {
