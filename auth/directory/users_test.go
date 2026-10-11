@@ -1,12 +1,14 @@
 package directory_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/directory/memstore"
 	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/auth/rbac"
@@ -171,6 +173,29 @@ func TestDisableEnableUser(t *testing.T) {
 	h.rev.err = errors.New("kv down")
 	if err := h.d.EnableUser(ctx, u.ID); err == nil {
 		t.Fatal("a failed session revoke was not reported")
+	}
+}
+
+// failingBump is a store whose separate token-version bump fails.
+type failingBump struct{ directory.UserStore }
+
+func (failingBump) BumpTokenVersion(context.Context, string) error { return errors.New("bump failed") }
+
+// Disabling and re-enabling move the flag and the token version in one write: a failure can never leave the account enabled at the version its pre-disable tokens carry.
+func TestDisableEnableBumpTheTokenVersionAtomically(t *testing.T) {
+	s := memstore.New().Stores()
+	s.Users = failingBump{s.Users}
+	d, err := directory.New(directory.Config{Stores: s, Grants: &grants{deny: map[string]bool{}}})
+	must(t, err)
+	u := &directory.User{Username: "ada"}
+	must(t, d.CreateUser(ctx, nil, u))
+	minted, _ := s.Users.Get(ctx, u.ID)
+
+	_ = d.DisableUser(ctx, u.ID)
+	_ = d.EnableUser(ctx, u.ID)
+	got, _ := s.Users.Get(ctx, u.ID)
+	if !got.Disabled && got.TokenVersion == minted.TokenVersion {
+		t.Fatalf("enabled at token version %d, which tokens minted before the disable carry", got.TokenVersion)
 	}
 }
 
