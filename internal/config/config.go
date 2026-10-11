@@ -115,9 +115,18 @@ type Config struct {
 	// Dev/replay tooling only — never enable in production.
 	DevTrustEventTime bool
 
+	// Port is the inference listener's port (RELAY_PORT, default 8080).
+	Port string
+
 	// ControlPort is the listener port for the control-plane HTTP server.
 	// Empty disables the control listener entirely (data plane only).
 	ControlPort string
+
+	// ListenHost is the address the inference listener binds (RELAY_LISTEN_HOST) and the control listener's default. Empty binds every interface.
+	ListenHost string
+
+	// ControlListenHost is the address the control listener binds (RELAY_CONTROL_LISTEN_HOST, default ListenHost), so the admin plane can stay private while inference is reachable.
+	ControlListenHost string
 
 	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
 	// separated list of exact origin strings (no wildcards — credentialed
@@ -379,9 +388,16 @@ func Load() (*Config, error) {
 		cfg.Runtime.Mode = "oss"
 	}
 
+	cfg.Port = os.Getenv("RELAY_PORT")
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+	}
 	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
 	if cfg.ControlPort == "" {
 		cfg.ControlPort = "8081"
+	}
+	if err := loadListenHosts(cfg); err != nil {
+		return nil, err
 	}
 
 	if raw := os.Getenv("RELAY_CONTROL_ALLOW_ORIGINS"); raw != "" {
