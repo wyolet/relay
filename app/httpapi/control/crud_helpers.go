@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/auth/directory"
 )
 
 func stampOwnerID(ctx context.Context, o *meta.Owner) error { return refcheck.StampOwnerID(ctx, o) }
@@ -74,13 +75,37 @@ func staleVersionError(kind, id string) error {
 	}
 }
 
-// mapWriteErr maps a store write error: a stale resourceVersion is the
-// caller's 409, anything else is a 500.
+// mapWriteErr maps a store write error: a stale resourceVersion or a row a
+// provisioning source manages is the caller's 409, anything else is a 500.
 func mapWriteErr(kind, id string, err error) error {
 	if errors.Is(err, meta.ErrStaleResourceVersion) {
 		return staleVersionError(kind, id)
 	}
+	if managed := managedError(err); managed != nil {
+		return managed
+	}
 	return huma.Error500InternalServerError(err.Error())
+}
+
+// managedError is the 409 for a write to a row a provisioning source
+// manages, or nil when err is not one.
+func managedError(err error) error {
+	me, ok := errors.AsType[*directory.ManagedError](err)
+	if !ok {
+		return nil
+	}
+	return &httpapi.APIError{
+		Err: httpapi.APIErrorBody{
+			Type:    "invalid_request_error",
+			Code:    "managed_by_source",
+			Message: managedMessage(me),
+		},
+		HTTPStatus: http.StatusConflict,
+	}
+}
+
+func managedMessage(me *directory.ManagedError) string {
+	return fmt.Sprintf("%s is managed by %s; apply with force to override", me.Kind, me.Source)
 }
 
 // listScanResolver is the slug→id resolver fallback for kinds whose

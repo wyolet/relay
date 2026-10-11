@@ -111,7 +111,7 @@ func TestIntegration_UsersNotifyOnlyOnTokenVersion(t *testing.T) {
 
 	var triggers []string
 	rows, err := p.Query(ctx,
-		`SELECT tgname FROM pg_trigger WHERE tgrelid = 'users'::regclass AND NOT tgisinternal ORDER BY tgname`)
+		`SELECT tgname FROM pg_trigger WHERE tgrelid = 'users'::regclass AND NOT tgisinternal AND tgfoid = 'catalog_notify'::regproc ORDER BY tgname`)
 	if err != nil {
 		t.Fatalf("read triggers: %v", err)
 	}

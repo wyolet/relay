@@ -20,6 +20,15 @@ func (q *Queries) BumpUserTokenVersion(ctx context.Context, id string) error {
 	return err
 }
 
+const clearPrimaryIdentity = `-- name: ClearPrimaryIdentity :exec
+UPDATE users SET oidc_subject = NULL WHERE id = $1
+`
+
+func (q *Queries) ClearPrimaryIdentity(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, clearPrimaryIdentity, id)
+	return err
+}
+
 const deleteGroup = `-- name: DeleteGroup :exec
 DELETE FROM groups WHERE id = $1
 `
@@ -35,6 +44,21 @@ DELETE FROM group_members WHERE group_id = $1
 
 func (q *Queries) DeleteGroupMembers(ctx context.Context, groupID string) error {
 	_, err := q.db.Exec(ctx, deleteGroupMembers, groupID)
+	return err
+}
+
+const deleteIdentity = `-- name: DeleteIdentity :exec
+DELETE FROM identities WHERE user_id = $1 AND issuer = $2 AND subject = $3
+`
+
+type DeleteIdentityParams struct {
+	UserID  string
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) error {
+	_, err := q.db.Exec(ctx, deleteIdentity, arg.UserID, arg.Issuer, arg.Subject)
 	return err
 }
 
@@ -101,8 +125,17 @@ func (q *Queries) DeleteUser(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteUserIdentities = `-- name: DeleteUserIdentities :exec
+DELETE FROM identities WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserIdentities(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, deleteUserIdentities, userID)
+	return err
+}
+
 const getGroup = `-- name: GetGroup :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version, external_source, external_id FROM groups WHERE id = $1
 `
 
 func (q *Queries) GetGroup(ctx context.Context, id string) (Group, error) {
@@ -117,6 +150,8 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (Group, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
+		&i.ExternalSource,
+		&i.ExternalID,
 	)
 	return i, err
 }
@@ -292,7 +327,7 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users WHERE id = $1
 `
 
@@ -311,17 +346,24 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TokenVersion,
+		&i.ExternalSource,
+		&i.ExternalID,
 	)
 	return i, err
 }
 
-const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
-FROM users WHERE oidc_subject = $1
+const getUserByIdentity = `-- name: GetUserByIdentity :one
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2)
 `
 
-func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.Text) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByOIDCSubject, oidcSubject)
+type GetUserByIdentityParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityParams) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByIdentity, arg.Issuer, arg.Subject)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -334,12 +376,14 @@ func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.T
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TokenVersion,
+		&i.ExternalSource,
+		&i.ExternalID,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users WHERE username = $1
 `
 
@@ -357,6 +401,8 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TokenVersion,
+		&i.ExternalSource,
+		&i.ExternalID,
 	)
 	return i, err
 }
@@ -431,7 +477,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context) ([]GroupMember, error) {
 }
 
 const listGroups = `-- name: ListGroups :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version, external_source, external_id FROM groups ORDER BY name
 `
 
 func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
@@ -452,6 +498,38 @@ func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
+			&i.ExternalSource,
+			&i.ExternalID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIdentities = `-- name: ListIdentities :many
+SELECT user_id, issuer, subject, external_id, created_at FROM identities ORDER BY user_id, created_at, issuer, subject
+`
+
+func (q *Queries) ListIdentities(ctx context.Context) ([]Identity, error) {
+	rows, err := q.db.Query(ctx, listIdentities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Identity
+	for rows.Next() {
+		var i Identity
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Issuer,
+			&i.Subject,
+			&i.ExternalID,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -673,8 +751,40 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 	return items, nil
 }
 
+const listUserIdentities = `-- name: ListUserIdentities :many
+
+SELECT user_id, issuer, subject, external_id, created_at FROM identities WHERE user_id = $1 ORDER BY created_at, issuer, subject
+`
+
+// Identities read oldest first; that order also picks the next primary when the primary is removed.
+func (q *Queries) ListUserIdentities(ctx context.Context, userID string) ([]Identity, error) {
+	rows, err := q.db.Query(ctx, listUserIdentities, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Identity
+	for rows.Next() {
+		var i Identity
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Issuer,
+			&i.Subject,
+			&i.ExternalID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users ORDER BY created_at ASC, id ASC
 `
 
@@ -698,6 +808,8 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.TokenVersion,
+			&i.ExternalSource,
+			&i.ExternalID,
 		); err != nil {
 			return nil, err
 		}
@@ -709,16 +821,50 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const promoteOldestIdentity = `-- name: PromoteOldestIdentity :exec
+UPDATE users SET oidc_subject = (
+    SELECT i.issuer || '|' || i.subject FROM identities i WHERE i.user_id = users.id
+     ORDER BY i.created_at, i.issuer, i.subject LIMIT 1)
+WHERE id = $1 AND oidc_subject IS NOT DISTINCT FROM $2
+`
+
+type PromoteOldestIdentityParams struct {
+	ID          string
+	OidcSubject pgtype.Text
+}
+
+// Promotes only while the primary is still the one named, NULL for none; with no identity left the primary stays NULL.
+func (q *Queries) PromoteOldestIdentity(ctx context.Context, arg PromoteOldestIdentityParams) error {
+	_, err := q.db.Exec(ctx, promoteOldestIdentity, arg.ID, arg.OidcSubject)
+	return err
+}
+
+const setPrimaryIdentityIfNone = `-- name: SetPrimaryIdentityIfNone :exec
+UPDATE users SET oidc_subject = $2 WHERE id = $1 AND oidc_subject IS NULL
+`
+
+type SetPrimaryIdentityIfNoneParams struct {
+	ID          string
+	OidcSubject pgtype.Text
+}
+
+func (q *Queries) SetPrimaryIdentityIfNone(ctx context.Context, arg SetPrimaryIdentityIfNoneParams) error {
+	_, err := q.db.Exec(ctx, setPrimaryIdentityIfNone, arg.ID, arg.OidcSubject)
+	return err
+}
+
 const upsertGroup = `-- name: UpsertGroup :execrows
-INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
+INSERT INTO groups (id, name, display_name, metadata, spec, external_source, external_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $6::bigint IS NULL OR groups.resource_version = $6::bigint
+    name            = EXCLUDED.name,
+    display_name    = EXCLUDED.display_name,
+    metadata        = EXCLUDED.metadata,
+    spec            = EXCLUDED.spec,
+    external_source = EXCLUDED.external_source,
+    external_id     = EXCLUDED.external_id,
+    updated_at      = NOW()
+WHERE $8::bigint IS NULL OR groups.resource_version = $8::bigint
 `
 
 type UpsertGroupParams struct {
@@ -727,6 +873,8 @@ type UpsertGroupParams struct {
 	DisplayName     string
 	Metadata        []byte
 	Spec            []byte
+	ExternalSource  pgtype.Text
+	ExternalID      pgtype.Text
 	ExpectedVersion pgtype.Int8
 }
 
@@ -737,7 +885,36 @@ func (q *Queries) UpsertGroup(ctx context.Context, arg UpsertGroupParams) (int64
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExternalSource,
+		arg.ExternalID,
 		arg.ExpectedVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertIdentity = `-- name: UpsertIdentity :execrows
+INSERT INTO identities (user_id, issuer, subject, external_id) VALUES ($1, $2, $3, $4)
+ON CONFLICT (issuer, subject) DO UPDATE SET external_id = EXCLUDED.external_id
+WHERE identities.user_id = EXCLUDED.user_id
+`
+
+type UpsertIdentityParams struct {
+	UserID     string
+	Issuer     string
+	Subject    string
+	ExternalID pgtype.Text
+}
+
+// An identity another account holds matches no row, which the store reads as a conflict.
+func (q *Queries) UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertIdentity,
+		arg.UserID,
+		arg.Issuer,
+		arg.Subject,
+		arg.ExternalID,
 	)
 	if err != nil {
 		return 0, err
@@ -941,26 +1118,30 @@ func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) (int64, 
 }
 
 const upsertUser = `-- name: UpsertUser :exec
-INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
-    username      = EXCLUDED.username,
-    email         = EXCLUDED.email,
-    password_hash = EXCLUDED.password_hash,
-    oidc_subject  = EXCLUDED.oidc_subject,
-    roles         = EXCLUDED.roles,
-    disabled      = EXCLUDED.disabled,
-    updated_at    = now()
+    username        = EXCLUDED.username,
+    email           = EXCLUDED.email,
+    password_hash   = EXCLUDED.password_hash,
+    oidc_subject    = EXCLUDED.oidc_subject,
+    roles           = EXCLUDED.roles,
+    disabled        = EXCLUDED.disabled,
+    external_source = EXCLUDED.external_source,
+    external_id     = EXCLUDED.external_id,
+    updated_at      = now()
 `
 
 type UpsertUserParams struct {
-	ID           string
-	Username     string
-	Email        pgtype.Text
-	PasswordHash pgtype.Text
-	OidcSubject  pgtype.Text
-	Roles        []string
-	Disabled     bool
+	ID             string
+	Username       string
+	Email          pgtype.Text
+	PasswordHash   pgtype.Text
+	OidcSubject    pgtype.Text
+	Roles          []string
+	Disabled       bool
+	ExternalSource pgtype.Text
+	ExternalID     pgtype.Text
 }
 
 func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
@@ -972,6 +1153,8 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
 		arg.OidcSubject,
 		arg.Roles,
 		arg.Disabled,
+		arg.ExternalSource,
+		arg.ExternalID,
 	)
 	return err
 }

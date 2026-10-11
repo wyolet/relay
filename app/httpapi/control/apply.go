@@ -21,12 +21,13 @@ import (
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/auth/directory"
 )
 
 type applyInput struct {
 	ContentType string `header:"Content-Type" doc:"application/yaml (multi-document) or application/json ({\"documents\": [...]})."`
 	DryRun      bool   `query:"dryRun"        doc:"Plan only; write nothing."`
-	Force       bool   `query:"force"         doc:"Write over operator-edited (dirty) rows."`
+	Force       bool   `query:"force"         doc:"Write over operator-edited (dirty) rows and groups a provisioning source manages."`
 	Prune       bool   `query:"prune"         doc:"Delete selected rows the bundle omits. Requires selector."`
 	Selector    string `query:"selector"      doc:"Label selector naming the managed set, e.g. env=prod,team=platform."`
 	RawBody     []byte
@@ -125,8 +126,12 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			var se *apply.StoreError
 			if errors.As(err, &se) {
 				recordApplied(ctx, d, se.Applied, &se.Entry)
+				status, msg := http.StatusInternalServerError, se.Error()
+				if me, ok := errors.AsType[*directory.ManagedError](err); ok {
+					status, msg = http.StatusConflict, managedMessage(me)
+				}
 				return nil, &applyFailure{
-					status: http.StatusInternalServerError, Message: se.Error(),
+					status: status, Message: msg,
 					Plan: plan.Entries, Applied: se.Applied,
 				}
 			}

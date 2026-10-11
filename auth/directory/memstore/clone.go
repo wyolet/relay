@@ -17,6 +17,7 @@ func cloneUser(u *directory.User) *directory.User {
 	}
 	c := *u
 	c.Roles = append([]string{}, u.Roles...)
+	c.Identities = nilIfEmpty(u.Identities)
 	return &c
 }
 

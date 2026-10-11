@@ -20,6 +20,15 @@ const MigrationsTable = "auth_schema_migrations"
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
+// MigrationFiles returns the embedded migration files, for a product that fingerprints its schema, such as to key a cached test database.
+func MigrationFiles() fs.FS {
+	sub, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		panic(err) // the directory is embedded, so Sub cannot fail
+	}
+	return sub
+}
+
 // Migrate runs the module's pending up-migrations against dsn, a postgres:// or postgresql:// URL. Running it when nothing is pending does nothing. A clean schema at a version newer than this binary embeds is left alone, so an older binary still boots during a rolling upgrade or a rollback; that relies on the module's migrations staying backward-compatible.
 func Migrate(dsn string) error {
 	src, err := iofs.New(migrationFiles, "migrations")
@@ -49,6 +58,37 @@ func Migrate(dsn string) error {
 	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("auth migrations: up: %w", err)
+	}
+	return nil
+}
+
+// MigrateDown runs the module's down-migrations until the schema is at version; a schema at or below it, or never migrated, is left alone. A product whose own down-migrations drop tables that the module's later migrations change calls it first, so the next Migrate applies them again.
+func MigrateDown(dsn string, version uint) error {
+	src, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("auth migrations: open source: %w", err)
+	}
+	target, err := migrateURL(dsn)
+	if err != nil {
+		return err
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, target)
+	if err != nil {
+		return fmt.Errorf("auth migrations: init: %w", err)
+	}
+	defer m.Close()
+	current, _, err := m.Version()
+	if errors.Is(err, migrate.ErrNilVersion) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("auth migrations: read schema version: %w", err)
+	}
+	if current <= version {
+		return nil
+	}
+	if err := m.Migrate(version); err != nil {
+		return fmt.Errorf("auth migrations: down to %d: %w", version, err)
 	}
 	return nil
 }

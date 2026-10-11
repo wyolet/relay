@@ -14,8 +14,16 @@ import (
 
 var errNoDirectory = errors.New("apply: the account, tenancy and RBAC stores are not all wired")
 
-// directoryFor is opts.Directory, or a directory over opts.Stores whose grant check probes opts.Authz.
+// directoryFor is opts.Directory, or a directory over opts.Stores whose grant check probes opts.Authz. A forced apply also writes over groups a provisioning source manages.
 func directoryFor(opts Options) (*directory.Directory, error) {
+	dir, err := newDirectory(opts)
+	if err != nil || !opts.Force {
+		return dir, err
+	}
+	return dir.WithWriter(directory.Writer{Force: true}), nil
+}
+
+func newDirectory(opts Options) (*directory.Directory, error) {
 	if opts.Directory != nil {
 		return opts.Directory, nil
 	}

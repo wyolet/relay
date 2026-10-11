@@ -41,7 +41,7 @@ func runApply(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	from := fs.String("f", "", "Manifest file or directory to apply.")
 	dryRun := fs.Bool("dry-run", false, "Print the plan; write nothing.")
-	force := fs.Bool("force", false, "Write over operator-edited (dirty) rows.")
+	force := fs.Bool("force", false, "Write over operator-edited (dirty) rows and groups a provisioning source manages.")
 	prune := fs.Bool("prune", false, "Delete selected rows the bundle omits. Requires --selector.")
 	selector := fs.String("selector", "", "Label selector naming the managed set, e.g. env=prod,team=platform.")
 	serverURL := fs.String("url", "", "Control API base URL. Default $RELAY_URL, else "+DefaultControlURL+".")

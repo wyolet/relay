@@ -1,4 +1,4 @@
-// Package directory is the identity and tenancy data an auth deployment keeps: users and the external identity they sign in with, groups and their members, teams, projects (each in one team), service accounts (each in one project), roles, and the role bindings that grant them to users, groups, service accounts or every authenticated principal. It validates rows, runs the grant check on every write that hands out a permission, invalidates a user's tokens and sessions when the account changes, and reports each committed write to a Notifier.
+// Package directory is the identity and tenancy data an auth deployment keeps: users and the external identities they sign in with, groups and their members, teams, projects (each in one team), service accounts (each in one project), roles, and the role bindings that grant them to users, groups, service accounts or every authenticated principal. It validates rows, runs the grant check on every write that hands out a permission, invalidates a user's tokens and sessions when the account changes, and reports each committed write to a Notifier.
 //
 // Every read and write goes through the Stores interfaces: auth/store/postgres is the ready-made implementation, directory/memstore an in-memory one, and directory/storetest the behaviour any other implementation must share. The package also provides the default rbac.ScopeResolver over the team and project hierarchy.
 //
@@ -32,9 +32,10 @@ type Config struct {
 	Revoker Revoker
 }
 
-// Directory runs the operations. It holds no state beyond its Config and is safe for concurrent use when the stores are.
+// Directory runs the operations. It holds no state beyond its Config and the writer WithWriter set, and is safe for concurrent use when the stores are.
 type Directory struct {
-	cfg Config
+	cfg    Config
+	writer Writer
 }
 
 // New returns a Directory over cfg. Every store and the grant checker are required, so no grant is ever made unchecked.

@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/adapters"
@@ -51,7 +50,6 @@ const preTenancyVersion = 24
 type upgradeDB struct {
 	dsn    string
 	pool   *pgxpool.Pool
-	m      *migrate.Migrate
 	cat    *appcatalog.Catalog
 	stores *appcatalog.Stores
 }
@@ -80,12 +78,12 @@ func newUpgradeDB(t *testing.T) *upgradeDB {
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
-	return &upgradeDB{dsn: dsn, pool: pool, m: m, cat: cat, stores: stores}
+	return &upgradeDB{dsn: dsn, pool: pool, cat: cat, stores: stores}
 }
 
 func (u *upgradeDB) upgrade(t *testing.T) {
 	t.Helper()
-	if err := u.m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+	if err := storagemod.MigrateUp(u.dsn); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
 }

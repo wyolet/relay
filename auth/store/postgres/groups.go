@@ -75,6 +75,7 @@ func (s groups) Upsert(ctx context.Context, g *directory.Group) error {
 		if err := mapErr("upsert group", staleIfNoRows(q.UpsertGroup(ctx, gen.UpsertGroupParams{
 			ID: g.Meta.ID, Name: g.Meta.Name, DisplayName: g.Meta.DisplayName,
 			Metadata: md, Spec: spec, ExpectedVersion: ver,
+			ExternalSource: text(g.Spec.External.Source), ExternalID: text(g.Spec.External.ID),
 		}))); err != nil {
 			return err
 		}
@@ -106,5 +107,9 @@ func groupFromRow(r gen.Group) (*directory.Group, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &directory.Group{Meta: m, Spec: directory.GroupSpec{Enabled: doc.Enabled, Attributes: attrs}}, nil
+	return &directory.Group{Meta: m, Spec: directory.GroupSpec{
+		Enabled:    doc.Enabled,
+		External:   directory.External{Source: r.ExternalSource.String, ID: r.ExternalID.String},
+		Attributes: attrs,
+	}}, nil
 }
