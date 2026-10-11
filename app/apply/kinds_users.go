@@ -19,7 +19,7 @@ var errEnvPassword = errors.New("password.valueFrom.env reads the server's envir
 // errLastAdmin is the users endpoint's keep-one-admin rule: with no enabled admin, nobody could grant the role back short of editing the database.
 var errLastAdmin = errors.New("this is the last enabled admin; grant the role to another account first")
 
-// planUsers plans User documents. An account has no metadata envelope, so it bypasses planKind: no dirty flag (never skipped), no labels (never pruned), and no owner (authorized at the global scope, as the users endpoints are). Relay's rules for accounts run here: only an admin changes roles, and the last enabled admin stays.
+// planUsers plans User documents. An account has no metadata envelope, so it bypasses planKind: no dirty flag (never skipped), no labels (never pruned), and no owner (authorized at the global scope, as the users endpoints are). Relay's rules for accounts run here: only an admin changes roles or sets a password or identity, and the last enabled admin stays.
 func (b *builder) planUsers(ctx context.Context, docs []*authmanifest.Document) error {
 	stored := make(map[string]*user.User, len(b.rows.Users))
 	admins := map[string]bool{}
@@ -66,6 +66,12 @@ func (b *builder) planUsers(ctx context.Context, docs []*authmanifest.Document) 
 		}
 		if rolesChanged {
 			if err := refcheck.RequireAdmin(ctx, b.opts.Authz, "changing roles"); err != nil {
+				return &AuthzError{Entry: Entry{Kind: e.Kind, Name: name, plural: e.plural}, Err: err}
+			}
+		}
+		// users.update is not a grant to sign in as the account: a password or identity the caller chose would let it.
+		if directory.ChangesCredentials(current, u) {
+			if err := refcheck.RequireAdmin(ctx, b.opts.Authz, "setting a password or sign-in identity"); err != nil {
 				return &AuthzError{Entry: Entry{Kind: e.Kind, Name: name, plural: e.plural}, Err: err}
 			}
 		}

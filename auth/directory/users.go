@@ -9,12 +9,15 @@ import (
 	"github.com/wyolet/relay/auth/principal"
 )
 
-// CreateUser adds an account, minting its id when it has none. Roles on a new account go through the grant check like any role change; an account with no roles needs no principal, so p may be nil for self-registration.
+// CreateUser adds an account, minting its id when it has none. Roles on a new account go through the grant check like any role change; an account with no roles needs no principal, so p may be nil for self-registration. A non-nil p must be an admin to create an account carrying a password or identity.
 func (d *Directory) CreateUser(ctx context.Context, p *principal.Principal, u *User) error {
 	if err := u.validate(); err != nil {
 		return err
 	}
 	if err := validatePasswordHash(u); err != nil {
+		return err
+	}
+	if err := checkCredentials(p, nil, u); err != nil {
 		return err
 	}
 	users := d.cfg.Stores.Users
@@ -38,7 +41,7 @@ func (d *Directory) CreateUser(ctx context.Context, p *principal.Principal, u *U
 	return nil
 }
 
-// UpdateUser replaces the account with id u.ID; a zero u.External keeps the stored one. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Disabling or re-enabling bumps the token version, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed; read the user back for it.
+// UpdateUser replaces the account with id u.ID; a zero u.External keeps the stored one. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Changing the password or primary identity needs an admin p. Disabling or re-enabling bumps the token version, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed; read the user back for it.
 func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *User) error {
 	users := d.cfg.Stores.Users
 	stored, err := users.Get(ctx, u.ID)
@@ -55,6 +58,9 @@ func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *U
 		if err := validatePasswordHash(u); err != nil {
 			return err
 		}
+	}
+	if err := checkCredentials(p, stored, u); err != nil {
+		return err
 	}
 	if err := d.checkUserUnique(ctx, u); err != nil {
 		return err

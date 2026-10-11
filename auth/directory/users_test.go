@@ -55,6 +55,41 @@ func TestCreateUser(t *testing.T) {
 	must(t, h.d.CreateUser(ctx, caller, &directory.User{Username: "erin", Roles: []string{"viewer"}}))
 }
 
+// A password or identity the caller chose lets it sign in as the account: only an admin sets, changes or clears one, and only the product itself (a nil principal) registers an account with one.
+func TestUserCredentialsNeedAnAdmin(t *testing.T) {
+	h := newHarness(t)
+	hash, err := password.Hash("s3cret")
+	must(t, err)
+	idp := directory.Identity{Issuer: "https://idp.example.com", Subject: "root"}
+	root := &directory.User{Username: "root", PasswordHash: hash, Identity: idp}
+	must(t, h.d.CreateUser(ctx, admin, root))
+	other, err := password.Hash("mallory")
+	must(t, err)
+
+	wantErr(t, "a new account with a password", h.d.CreateUser(ctx, caller, &directory.User{Username: "m1", PasswordHash: hash}), authz.ErrForbidden)
+	wantErr(t, "a new account with an identity", h.d.CreateUser(ctx, caller,
+		&directory.User{Username: "m2", Identity: directory.Identity{Issuer: idp.Issuer, Subject: "m2"}}), authz.ErrForbidden)
+	for name, edit := range map[string]func(u *directory.User){
+		"password changed": func(u *directory.User) { u.PasswordHash = other },
+		"password cleared": func(u *directory.User) { u.PasswordHash = "" },
+		"identity changed": func(u *directory.User) { u.Identity.Subject = "mallory" },
+		"identity cleared": func(u *directory.User) { u.Identity = directory.Identity{} },
+	} {
+		for _, p := range []*principal.Principal{caller, nil} {
+			u, _ := h.s.Users.Get(ctx, root.ID)
+			edit(u)
+			wantErr(t, name, h.d.UpdateUser(ctx, p, u), authz.ErrForbidden)
+		}
+		if got, _ := h.s.Users.Get(ctx, root.ID); got.PasswordHash != hash || got.Identity != idp {
+			t.Fatalf("%s: the refused change was written: %+v", name, got)
+		}
+	}
+	u, _ := h.s.Users.Get(ctx, root.ID)
+	u.PasswordHash = other
+	must(t, h.d.UpdateUser(ctx, admin, u))
+	must(t, h.d.CreateUser(ctx, nil, &directory.User{Username: "self", Identity: directory.Identity{Issuer: idp.Issuer, Subject: "self"}}))
+}
+
 func TestUpdateUserRoles(t *testing.T) {
 	h := newHarness(t)
 	viewer := addRole(t, h, "viewer")

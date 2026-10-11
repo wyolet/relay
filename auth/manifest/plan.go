@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/principal"
 )
@@ -35,7 +36,12 @@ type Entry struct {
 	IDMismatch string
 
 	write func(ctx context.Context, dir *directory.Directory, caller *principal.Principal) error
+	// credentials marks a User entry that sets, changes or clears a password or sign-in identity.
+	credentials bool
 }
+
+// errCredentialsNeedAdmin refuses a credential change from a caller that is not an admin: it would let the caller sign in as the account.
+var errCredentialsNeedAdmin = fmt.Errorf("%w: setting a password or sign-in identity requires an admin", authz.ErrForbidden)
 
 // Plan is the ordered set of entries one Apply runs: creates and updates in dependency order, then deletes in reverse.
 type Plan struct {
@@ -91,8 +97,13 @@ func (r *Registry) Plan(ctx context.Context, stores directory.Stores, docs []Doc
 	return &Plan{Entries: p.entries}, nil
 }
 
-// Apply runs every write in order, as caller, through dir. A failed write stops the run with an *ApplyError; re-planning picks up from what landed.
+// Apply runs every write in order, as caller, through dir. A failed write stops the run with an *ApplyError; re-planning picks up from what landed. A plan that sets, changes or clears an account's password or sign-in identity needs an admin caller; without one nothing is written.
 func (p *Plan) Apply(ctx context.Context, dir *directory.Directory, caller *principal.Principal) ([]Entry, error) {
+	for _, e := range p.Entries {
+		if e.credentials && e.write != nil && (caller == nil || !caller.Admin) {
+			return nil, &ApplyError{Entry: e, Err: errCredentialsNeedAdmin}
+		}
+	}
 	applied := make([]Entry, 0, len(p.Entries))
 	for _, e := range p.Entries {
 		if e.write == nil {

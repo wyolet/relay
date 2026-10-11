@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/user"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
@@ -67,6 +68,47 @@ func TestPlanUsersRefusesARoleChangeFromANonAdmin(t *testing.T) {
 	b = usersBuilder(stored, &builder{opts: Options{Authz: seesOnly{}}})
 	if err := b.run(context.Background(), userDocs(t, userYAML("bob", "", "true"))); err != nil {
 		t.Fatalf("a non-admin edit without a role change: %v", err)
+	}
+}
+
+// A password or identity the caller chose lets it sign in as the account, so only an admin sets one, on another account or on a new one; the plan refuses before anything is written.
+func TestPlanUsersRefusesCredentialsFromANonAdmin(t *testing.T) {
+	const (
+		hash  = "$2a$10$CwTycUXWue0Thq9StjUM0uJ8.6Y3bOS2jvUJFXJ3m/BS/YwgMm9aW"
+		other = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+	)
+	doc := func(name, spec string) string {
+		return "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: " + name + "}\nspec: {" + spec + "}\n"
+	}
+	stored := func() []*user.User {
+		return []*user.User{{ID: "u-1", Username: "alice", Roles: []string{"admin"}, PasswordHash: hash, OIDCSubject: "https://idp|alice"}}
+	}
+	for name, src := range map[string]string{
+		"password changed":          doc("alice", "roles: [admin], password: {hash: '"+other+"'}"),
+		"password cleared":          doc("alice", "roles: [admin], password: null"),
+		"identity changed":          doc("alice", "roles: [admin], identity: {issuer: 'https://idp', subject: mallory}"),
+		"identity cleared":          doc("alice", "roles: [admin], identity: null"),
+		"new account with password": doc("mallory", "password: {hash: '"+hash+"'}"),
+		"new account with identity": doc("mallory", "identity: {issuer: 'https://idp', subject: alice-2}"),
+	} {
+		b := usersBuilder(stored(), &builder{opts: Options{Authz: seesOnly{}}})
+		err := b.run(context.Background(), userDocs(t, src))
+		var ae *AuthzError
+		if !errors.As(err, &ae) || ae.Entry.Kind != "User" || !errors.Is(err, authz.ErrForbidden) {
+			t.Fatalf("%s: err = %v, want a forbidden AuthzError on the user", name, err)
+		}
+		if len(b.entries) != 0 {
+			t.Fatalf("%s: a refused plan kept entries: %+v", name, b.entries)
+		}
+		b = usersBuilder(stored(), &builder{admin: true})
+		if err := b.run(context.Background(), userDocs(t, src)); err != nil || len(b.entries) != 1 || b.entries[0].write == nil {
+			t.Fatalf("%s as an admin: err = %v, entries = %+v", name, err, b.entries)
+		}
+	}
+	// Leaving the credentials out keeps them, which needs no admin.
+	b := usersBuilder(stored(), &builder{opts: Options{Authz: seesOnly{}}})
+	if err := b.run(context.Background(), userDocs(t, doc("alice", "roles: [admin], email: alice@example.com"))); err != nil {
+		t.Fatalf("an edit that keeps the credentials: %v", err)
 	}
 }
 
