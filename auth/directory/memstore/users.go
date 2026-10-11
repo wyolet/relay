@@ -59,7 +59,7 @@ func (u userStore) Upsert(_ context.Context, in *directory.User) error {
 		case x.Username == in.Username:
 			return fmt.Errorf("%w: username %q is taken", directory.ErrConflict, in.Username)
 		case in.Email != "" && x.Email == in.Email:
-			return fmt.Errorf("%w: email %q is taken", directory.ErrConflict, in.Email)
+			return fmt.Errorf("%w: %q", directory.ErrEmailTaken, in.Email)
 		case !in.Identity.IsZero() && x.HasIdentity(in.Identity):
 			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
 		case in.External.ID != "" && x.External == in.External:

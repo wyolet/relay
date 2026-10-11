@@ -12,6 +12,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/oidc"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
@@ -152,6 +154,10 @@ func (od *oidcDeps) resolveUser(ctx context.Context, c oidc.Claims) (*user.User,
 			return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "no account for this identity (registration is closed)", Name: subject}
 		}
 		u, err = od.provision(ctx, subject, c)
+		// Linking a sign-in to an existing account is an administrator's decision, never an email match.
+		if errors.Is(err, directory.ErrEmailTaken) {
+			return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "an account with this email already exists; an administrator must link it to this sign-in", Name: subject, Err: err}
+		}
 		if err != nil {
 			slog.Error("oidc callback: provision failed", "err", err)
 			return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "account provisioning failed", Name: subject, Err: err}

@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -156,7 +157,14 @@ func (f *fakeUsers) ByOIDCSubject(_ context.Context, s string) (*user.User, erro
 	return f.bySubject[s], nil
 }
 
-func (f *fakeUsers) Create(ctx context.Context, u *user.User) error { return f.Upsert(ctx, u) }
+func (f *fakeUsers) Create(ctx context.Context, u *user.User) error {
+	for _, other := range f.byName {
+		if u.Email != "" && other.Email == u.Email {
+			return directory.ErrEmailTaken
+		}
+	}
+	return f.Upsert(ctx, u)
+}
 
 func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
 	f.bySubject[u.OIDCSubject] = u
@@ -582,6 +590,19 @@ func TestOIDCFlow_ClosedRegistrationRejectsUnknown(t *testing.T) {
 	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "no account for this identity (registration is closed)")
 	if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
 		t.Error("session minted or user created despite closed registration")
+	}
+	wantDenied(t, h.events(), h.subject())
+}
+
+// A first sign-in whose email belongs to an account with no identity linked, as SCIM or YAML creates, is refused like closed registration rather than linked or answered with a 500.
+func TestOIDCFlow_EmailTakenRejected(t *testing.T) {
+	idp := newFakeIdP(t)
+	h := newTestOIDC(t, idp, "open")
+	_ = h.users.Upsert(context.Background(), &user.User{ID: "u1", Username: "alice-scim", Email: idp.email})
+
+	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
+	if h.sess.calls != 0 || h.users.bySubject[h.subject()] != nil || h.users.byName["alice-scim"].OIDCSubject != "" {
+		t.Error("session minted, account created or identity linked despite the taken email")
 	}
 	wantDenied(t, h.events(), h.subject())
 }

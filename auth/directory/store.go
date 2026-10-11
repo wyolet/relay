@@ -11,7 +11,7 @@ type Store[T any] interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// UserStore is the storage of accounts. Lookups return (nil, nil) when no account matches; a duplicate username, email, identity or external id is ErrConflict.
+// UserStore is the storage of accounts. Lookups return (nil, nil) when no account matches; a duplicate username, email, identity or external id is ErrConflict, and a duplicate email is the ErrEmailTaken form of it.
 type UserStore interface {
 	Get(ctx context.Context, id string) (*User, error)
 	ByUsername(ctx context.Context, username string) (*User, error)

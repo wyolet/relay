@@ -14,7 +14,7 @@ import (
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-// Sign-in resolves accounts through the auth module's identities table: an account a binary from before that table wrote is found, a first sign-in provisions an account that the next sign-in finds again, and the refusals are unchanged.
+// Sign-in resolves accounts through the auth module's identities table: an account a binary from before that table wrote is found, a first sign-in provisions an account that the next sign-in finds again, a first sign-in with a taken email is refused, and the other refusals are unchanged.
 func TestOIDCSignInOverIdentities(t *testing.T) {
 	ctx := t.Context()
 	pool := storagetest.Pool(t)
@@ -58,6 +58,13 @@ func TestOIDCSignInOverIdentities(t *testing.T) {
 	if u, err := od.resolveUser(ctx, claims("sub-ada-2", "")); err != nil || u.ID != "u-old" || u.OIDCSubject != "https://idp.example.com|sub-ada" {
 		t.Fatalf("sign-in by a second identity = %+v, %v", u, err)
 	}
+
+	if err := dir.CreateUser(ctx, nil, &directory.User{Username: "grace", Email: "grace@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	taken := claims("sub-grace", "grace")
+	taken.Email = "grace@example.com"
+	wantFailure(t, "email of an account with no identity", od, taken, http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
 
 	cfg.Registration = "closed"
 	wantFailure(t, "closed registration", od, claims("sub-unknown", "x"), http.StatusForbidden, "no account for this identity (registration is closed)")
