@@ -34,7 +34,7 @@ dirty flag — apply owns the row again from that point on.
 
 ## Account, tenancy and RBAC documents
 
-`Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha2`. Both write the same rows, and one file may mix them with the other kinds. Under either apiVersion these kinds are parsed strictly: an unknown field, a rule kind or verb that is not in the [role vocabulary](/concepts/auth), or a plain-text password fails the apply with the document's index and the field's path.
+`Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha2`. Both write the same rows, and one file may mix them with the other kinds. Under `auth.wyolet.dev/v1alpha1` they are parsed strictly: an unknown field, a rule kind or verb that is not in the [role vocabulary](/concepts/auth), `metadata.owner` (every owner of these kinds is derived), or a plain-text password fails the apply with the document's index and the field's path. Under `relay.wyolet.dev/v1alpha2` unknown fields and `metadata.owner` are ignored.
 
 `User` documents are accepted under `auth.wyolet.dev/v1alpha1` only; `metadata.name` is the username:
 
@@ -46,11 +46,11 @@ metadata:
 spec:
   email: alice@example.com
   password:
-    valueFrom: {env: ALICE_PASSWORD}   # or: hash: "$2a$10$..."
+    hash: "$2a$10$..."
   roles: [viewer]
 ```
 
-A password is a bcrypt hash (`password.hash`) or the name of an environment variable on the server (`password.valueFrom.env`), whose value is hashed on apply; plain text is refused. Every field is declarative, so one left out is cleared. Changing an account's roles requires an admin, and a bundle that would leave no enabled admin is refused.
+A password is a bcrypt hash (`password.hash`); plain text is refused. `relay seed --apply` also accepts `password.valueFrom.env`, the name of an environment variable of the seeding process whose value is hashed; `POST /api/apply` refuses it, so the API never reads the server's environment. `email`, `roles` and `disabled` are declarative: one left out is cleared. `password` and `identity` (the identity provider's `issuer` and `subject`) left out keep the stored value; `null`, `""` or `{}` clears it. Changing an account's roles requires an admin, and a bundle that would leave no enabled admin is refused. `relay seed --apply` writes accounts without ending their sessions; the boot seed takes no `User` documents.
 
 ## Running it from CI
 
