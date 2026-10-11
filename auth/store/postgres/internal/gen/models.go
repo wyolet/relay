@@ -82,6 +82,15 @@ type RoleBindingSubject struct {
 	Position      int32
 }
 
+type ScimClient struct {
+	Name        string
+	TokenHash   string
+	TokenPrefix string
+	CreatedAt   pgtype.Timestamptz
+	LastUsedAt  pgtype.Timestamptz
+	RevokedAt   pgtype.Timestamptz
+}
+
 type ServiceAccount struct {
 	ID              string
 	Name            string

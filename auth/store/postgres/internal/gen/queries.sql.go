@@ -29,6 +29,33 @@ func (q *Queries) ClearPrimaryIdentity(ctx context.Context, id string) error {
 	return err
 }
 
+const createSCIMClient = `-- name: CreateSCIMClient :execrows
+INSERT INTO scim_clients (name, token_hash, token_prefix)
+VALUES ($1, $2, $3)
+ON CONFLICT (name) DO UPDATE SET
+    token_hash   = EXCLUDED.token_hash,
+    token_prefix = EXCLUDED.token_prefix,
+    created_at   = now(),
+    last_used_at = NULL,
+    revoked_at   = NULL
+WHERE scim_clients.revoked_at IS NOT NULL
+`
+
+type CreateSCIMClientParams struct {
+	Name        string
+	TokenHash   string
+	TokenPrefix string
+}
+
+// A revoked client's name is issued again with a fresh token; a live one is left alone and the insert touches no row.
+func (q *Queries) CreateSCIMClient(ctx context.Context, arg CreateSCIMClientParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createSCIMClient, arg.Name, arg.TokenHash, arg.TokenPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteGroup = `-- name: DeleteGroup :exec
 DELETE FROM groups WHERE id = $1
 `
@@ -313,6 +340,42 @@ func (q *Queries) GetRoleBindingSubjects(ctx context.Context, bindingID string) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const getSCIMClient = `-- name: GetSCIMClient :one
+SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients WHERE name = $1
+`
+
+func (q *Queries) GetSCIMClient(ctx context.Context, name string) (ScimClient, error) {
+	row := q.db.QueryRow(ctx, getSCIMClient, name)
+	var i ScimClient
+	err := row.Scan(
+		&i.Name,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
+const getSCIMClientByTokenHash = `-- name: GetSCIMClientByTokenHash :one
+SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients WHERE token_hash = $1
+`
+
+func (q *Queries) GetSCIMClientByTokenHash(ctx context.Context, tokenHash string) (ScimClient, error) {
+	row := q.db.QueryRow(ctx, getSCIMClientByTokenHash, tokenHash)
+	var i ScimClient
+	err := row.Scan(
+		&i.Name,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.RevokedAt,
+	)
+	return i, err
 }
 
 const getServiceAccount = `-- name: GetServiceAccount :one
@@ -715,6 +778,37 @@ func (q *Queries) ListRoles(ctx context.Context) ([]Role, error) {
 	return items, nil
 }
 
+const listSCIMClients = `-- name: ListSCIMClients :many
+SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients ORDER BY name
+`
+
+func (q *Queries) ListSCIMClients(ctx context.Context) ([]ScimClient, error) {
+	rows, err := q.db.Query(ctx, listSCIMClients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ScimClient
+	for rows.Next() {
+		var i ScimClient
+		if err := rows.Scan(
+			&i.Name,
+			&i.TokenHash,
+			&i.TokenPrefix,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServiceAccounts = `-- name: ListServiceAccounts :many
 SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name
 `
@@ -852,6 +946,22 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const markSCIMClientUsed = `-- name: MarkSCIMClientUsed :exec
+UPDATE scim_clients SET last_used_at = $1::timestamptz
+WHERE name = $2 AND (last_used_at IS NULL OR last_used_at < $1::timestamptz - interval '1 minute')
+`
+
+type MarkSCIMClientUsedParams struct {
+	UsedAt pgtype.Timestamptz
+	Name   string
+}
+
+// Writes at most once a minute per client, so a burst of provisioning calls is not a burst of updates.
+func (q *Queries) MarkSCIMClientUsed(ctx context.Context, arg MarkSCIMClientUsedParams) error {
+	_, err := q.db.Exec(ctx, markSCIMClientUsed, arg.UsedAt, arg.Name)
+	return err
+}
+
 const promoteOldestIdentity = `-- name: PromoteOldestIdentity :exec
 UPDATE users SET oidc_subject = (
     SELECT i.issuer || '|' || i.subject FROM identities i WHERE i.user_id = users.id
@@ -868,6 +978,18 @@ type PromoteOldestIdentityParams struct {
 func (q *Queries) PromoteOldestIdentity(ctx context.Context, arg PromoteOldestIdentityParams) error {
 	_, err := q.db.Exec(ctx, promoteOldestIdentity, arg.ID, arg.OidcSubject)
 	return err
+}
+
+const revokeSCIMClient = `-- name: RevokeSCIMClient :execrows
+UPDATE scim_clients SET revoked_at = now() WHERE name = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeSCIMClient(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeSCIMClient, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setPrimaryIdentityIfNone = `-- name: SetPrimaryIdentityIfNone :exec
