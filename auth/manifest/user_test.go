@@ -154,6 +154,44 @@ func TestApplyRefusesCredentialsFromANonAdmin(t *testing.T) {
 	}
 }
 
+type endedSessions struct{ ids []string }
+
+func (e *endedSessions) DestroyUser(_ context.Context, id string) error {
+	e.ids = append(e.ids, id)
+	return nil
+}
+
+// A password or identity a manifest changes or clears ends the account's sessions and kills its tokens, as any other credential change does.
+func TestApplyCredentialChangeEndsSessionsAndTokens(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	ended := &endedSessions{}
+	cfg := testConfig()
+	dir, err := directory.New(directory.Config{Stores: e.store.Stores(), Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs, Revoker: ended})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.dir = dir
+	users := e.store.Stores().Users
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: a}}\n", manifest.Options{})
+	for _, spec := range []string{
+		"{password: {hash: \"$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy\"}}",
+		"{identity: {issuer: i, subject: a2}}",
+		"{identity: null}",
+	} {
+		before, _ := users.ByUsername(ctx, "alice")
+		ended.ids = nil
+		e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: "+spec+"\n", manifest.Options{})
+		after, _ := users.ByUsername(ctx, "alice")
+		if len(ended.ids) == 0 || ended.ids[0] != after.ID {
+			t.Fatalf("%s: sessions ended for %v, want alice's", spec, ended.ids)
+		}
+		if after.TokenVersion <= before.TokenVersion {
+			t.Fatalf("%s: token version %d -> %d, want a bump", spec, before.TokenVersion, after.TokenVersion)
+		}
+	}
+}
+
 func TestUserSpecReportsAnEnvPassword(t *testing.T) {
 	docs := newEnv(t).parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: a}\nspec: {password: {valueFrom: {env: P}}}\n"+
 		"---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: b}\nspec: {password: {hash: \""+aliceHash+"\"}}\n")

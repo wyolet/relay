@@ -139,6 +139,18 @@ func TestSCIMEntraProvisioningSequence(t *testing.T) {
 	if err := f.stores.Directory.Users.Upsert(ctx, u); err != nil {
 		t.Fatal(err)
 	}
+	// Setting a password bumps the token version; mint only once the data plane knows the new one.
+	withPassword, err := f.stores.Directory.Users.Get(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.cat.ReloadTokenVersions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool {
+		v, ok := s.TokenVersion(userID)
+		return ok && v == withPassword.TokenVersion
+	}, "the password's token version never reached the snapshot")
 	us := f.login(t, userName, "pw-ada")
 	code, token, raw := f.mint(us)
 	if code != http.StatusOK {

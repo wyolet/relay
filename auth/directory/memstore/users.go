@@ -84,6 +84,9 @@ func (u userStore) Upsert(_ context.Context, in *directory.User) error {
 	c.TokenVersion, c.CreatedAt, c.Identities, c.ResourceVersion = 1, now(), nil, "0"
 	if stored != nil {
 		c.TokenVersion, c.CreatedAt, c.ResourceVersion = stored.TokenVersion, stored.CreatedAt, stored.ResourceVersion
+		if in.PasswordHash != stored.PasswordHash || in.Identity != stored.Identity || in.Disabled != stored.Disabled {
+			c.TokenVersion++
+		}
 		c.Identities = stored.Identities
 		if stored.Identity != in.Identity {
 			c.Identities = withoutIdentity(c.Identities, stored.Identity)
@@ -192,6 +195,8 @@ func (u userStore) AddIdentity(_ context.Context, userID string, id directory.Us
 			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
 		}
 	}
+	x.TokenVersion++
+	touch(x)
 	if i := slices.IndexFunc(x.Identities, func(o directory.UserIdentity) bool { return o.Identity == id.Identity }); i >= 0 {
 		x.Identities[i].ExternalID = id.ExternalID
 		return nil
@@ -199,7 +204,6 @@ func (u userStore) AddIdentity(_ context.Context, userID string, id directory.Us
 	x.Identities = append(x.Identities, directory.UserIdentity{Identity: id.Identity, ExternalID: id.ExternalID, CreatedAt: now()})
 	if x.Identity.IsZero() {
 		x.Identity = id.Identity
-		touch(x)
 	}
 	return nil
 }
@@ -221,6 +225,7 @@ func (u userStore) AddFirstIdentity(_ context.Context, userID string, id directo
 	}
 	x.Identities = []directory.UserIdentity{{Identity: id, CreatedAt: now()}}
 	x.Identity = id
+	x.TokenVersion++
 	touch(x)
 	return nil
 }
@@ -238,8 +243,9 @@ func (u userStore) RemoveIdentity(_ context.Context, userID string, id directory
 		if len(x.Identities) > 0 {
 			x.Identity = x.Identities[0].Identity
 		}
-		touch(x)
 	}
+	x.TokenVersion++
+	touch(x)
 	return nil
 }
 
@@ -248,6 +254,7 @@ func (u userStore) RemoveIdentities(_ context.Context, userID string) error {
 	defer u.s.mu.Unlock()
 	if x, ok := u.s.users[userID]; ok {
 		x.Identities, x.Identity = nil, directory.Identity{}
+		x.TokenVersion++
 		touch(x)
 	}
 	return nil

@@ -151,9 +151,12 @@ func (s users) AddIdentity(ctx context.Context, userID string, id directory.User
 		if n == 0 {
 			return fmt.Errorf("add identity: %w: identity belongs to another user", directory.ErrConflict)
 		}
-		return mapErr("set primary identity", q.SetPrimaryIdentityIfNone(ctx, gen.SetPrimaryIdentityIfNoneParams{
+		if err := q.SetPrimaryIdentityIfNone(ctx, gen.SetPrimaryIdentityIfNoneParams{
 			ID: userID, OidcSubject: text(encodeIdentity(id.Identity)),
-		}))
+		}); err != nil {
+			return mapErr("set primary identity", err)
+		}
+		return mapErr("bump token version", q.BumpUserTokenVersion(ctx, userID))
 	})
 }
 
@@ -173,9 +176,12 @@ func (s users) RemoveIdentity(ctx context.Context, userID string, id directory.I
 		if err := q.DeleteIdentity(ctx, gen.DeleteIdentityParams{UserID: userID, Issuer: id.Issuer, Subject: id.Subject}); err != nil {
 			return mapErr("remove identity", err)
 		}
-		return mapErr("promote identity", q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{
+		if err := q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{
 			ID: userID, OidcSubject: text(encodeIdentity(id)),
-		}))
+		}); err != nil {
+			return mapErr("promote identity", err)
+		}
+		return mapErr("bump token version", q.BumpUserTokenVersion(ctx, userID))
 	})
 }
 
@@ -184,7 +190,10 @@ func (s users) RemoveIdentities(ctx context.Context, userID string) error {
 		if err := q.ClearPrimaryIdentity(ctx, userID); err != nil {
 			return mapErr("clear primary identity", err)
 		}
-		return mapErr("remove identities", q.DeleteUserIdentities(ctx, userID))
+		if err := q.DeleteUserIdentities(ctx, userID); err != nil {
+			return mapErr("remove identities", err)
+		}
+		return mapErr("bump token version", q.BumpUserTokenVersion(ctx, userID))
 	})
 }
 

@@ -11,7 +11,7 @@ type Store[T any] interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// UserStore is the storage of accounts. Lookups return (nil, nil) when no account matches; a duplicate username, email, identity or external id is ErrConflict, and a duplicate email is the ErrEmailTaken form of it.
+// UserStore is the storage of accounts. Lookups return (nil, nil) when no account matches; a duplicate username, email, identity or external id is ErrConflict, and a duplicate email is the ErrEmailTaken form of it. Every write that changes how the account signs in or whether it may (its password hash, identities or disabled flag) advances TokenVersion in that same write, so no token outlives the change even when a later step fails.
 type UserStore interface {
 	Get(ctx context.Context, id string) (*User, error)
 	ByUsername(ctx context.Context, username string) (*User, error)
@@ -21,7 +21,7 @@ type UserStore interface {
 	ByExternalID(ctx context.Context, externalID string) ([]*User, error)
 	// List returns every account, oldest first.
 	List(ctx context.Context) ([]*User, error)
-	// Upsert inserts or replaces by ID and leaves TokenVersion as stored; a new account starts at version 1. With ResourceVersion set it replaces only while the stored account still carries that version and returns ErrStaleResourceVersion otherwise. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities; a zero Identity on an account that holds other identities makes the oldest of them primary, so such an account always has one.
+	// Upsert inserts or replaces by ID; a new account starts at TokenVersion 1, and a replace advances it only when the password hash, primary identity or disabled flag changes. With ResourceVersion set it replaces only while the stored account still carries that version and returns ErrStaleResourceVersion otherwise. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities; a zero Identity on an account that holds other identities makes the oldest of them primary, so such an account always has one.
 	Upsert(ctx context.Context, u *User) error
 	// SetDisabled sets the disabled flag alone and, in the same write, advances TokenVersion. It reports false, writing nothing, when the account is missing or already in that state.
 	SetDisabled(ctx context.Context, id string, disabled bool) (bool, error)
@@ -30,13 +30,13 @@ type UserStore interface {
 	Delete(ctx context.Context, id string) error
 	// BumpTokenVersion invalidates every token the user holds.
 	BumpTokenVersion(ctx context.Context, id string) error
-	// AddIdentity links id to the user, or updates its external id when the user already holds it. The first identity of an account with no primary becomes its primary.
+	// AddIdentity links id to the user, or updates its external id when the user already holds it, and advances TokenVersion. The first identity of an account with no primary becomes its primary.
 	AddIdentity(ctx context.Context, userID string, id UserIdentity) error
-	// AddFirstIdentity links id as the primary of a user that holds no identity, checking and writing in one atomic step: a user that holds one, or an identity another user holds, is ErrConflict.
+	// AddFirstIdentity links id as the primary of a user that holds no identity, checking, writing and advancing TokenVersion in one atomic step: a user that holds one, or an identity another user holds, is ErrConflict.
 	AddFirstIdentity(ctx context.Context, userID string, id Identity) error
-	// RemoveIdentity unlinks id from the user; one the user does not hold is not an error. Removing the primary makes the oldest remaining identity primary.
+	// RemoveIdentity unlinks id from the user and advances TokenVersion; one the user does not hold is not an error. Removing the primary makes the oldest remaining identity primary.
 	RemoveIdentity(ctx context.Context, userID string, id Identity) error
-	// RemoveIdentities unlinks every identity of the user at once, the primary included.
+	// RemoveIdentities unlinks every identity of the user at once, the primary included, and advances TokenVersion.
 	RemoveIdentities(ctx context.Context, userID string) error
 }
 

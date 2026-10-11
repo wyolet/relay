@@ -41,7 +41,7 @@ func (d *Directory) CreateUser(ctx context.Context, p *principal.Principal, u *U
 	return nil
 }
 
-// UpdateUser replaces the account with id u.ID; a zero u.External keeps the stored one. The write is conditional on u.ResourceVersion, or on the version read here when it is empty, so a concurrent change fails with ErrStaleResourceVersion instead of being lost. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Changing the password or primary identity needs an admin p. Disabling or re-enabling bumps the token version, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed and u.ResourceVersion is cleared; read the user back for them.
+// UpdateUser replaces the account with id u.ID; a zero u.External keeps the stored one. The write is conditional on u.ResourceVersion, or on the version read here when it is empty, so a concurrent change fails with ErrStaleResourceVersion instead of being lost. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Changing the password or primary identity needs an admin p. Disabling, re-enabling or changing the password or primary identity bumps the token version in the same write, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed and u.ResourceVersion is cleared; read the user back for them.
 func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *User) error {
 	users := d.cfg.Stores.Users
 	stored, err := users.Get(ctx, u.ID)
@@ -78,6 +78,7 @@ func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *U
 	if u.External.IsZero() {
 		u.External = stored.External
 	}
+	credentialsChanged := ChangesCredentials(stored, u)
 	// The write applies only while the account is as read here, so a concurrent change is a conflict, not overwritten.
 	u.ResourceVersion = stored.ResourceVersion
 	err = users.Upsert(ctx, u)
@@ -85,7 +86,7 @@ func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *U
 	if err != nil {
 		return err
 	}
-	return d.afterUserWrite(ctx, u, stored.Disabled, rolesChanged)
+	return d.afterUserWrite(ctx, u, stored.Disabled, rolesChanged || credentialsChanged)
 }
 
 // DisableUser disables the account: its token version is bumped and its sessions end. Disabling a disabled account does nothing.
@@ -127,15 +128,9 @@ func (d *Directory) setDisabled(ctx context.Context, id string, disabled bool) e
 	return nil
 }
 
-// afterUserWrite bumps the token version on a disabled change, ends sessions when the account's state or roles moved, and reports the write.
-func (d *Directory) afterUserWrite(ctx context.Context, u *User, wasDisabled, rolesChanged bool) error {
-	toggled := u.Disabled != wasDisabled
-	if toggled {
-		if err := d.cfg.Stores.Users.BumpTokenVersion(ctx, u.ID); err != nil {
-			return err
-		}
-	}
-	if toggled || rolesChanged {
+// afterUserWrite ends sessions when the account's state, roles or credentials moved, and reports the write. The store's write already bumped the token version.
+func (d *Directory) afterUserWrite(ctx context.Context, u *User, wasDisabled, endSessions bool) error {
+	if u.Disabled != wasDisabled || endSessions {
 		if err := d.revoke(ctx, u.ID); err != nil {
 			return err
 		}

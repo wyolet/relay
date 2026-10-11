@@ -34,6 +34,7 @@ func testIdentities(t *testing.T, s directory.Stores) {
 	must(t, u.AddIdentity(ctx, f.user.ID, second))
 	wantIdentities(t, "re-add", user(f.user.ID), primary, directory.UserIdentity{Identity: primary}, second)
 
+	got = user(f.user.ID)
 	got.Identities = nil
 	must(t, u.Upsert(ctx, got))
 	wantIdentities(t, "upsert ignores identities", user(f.user.ID), primary, directory.UserIdentity{Identity: primary}, second)

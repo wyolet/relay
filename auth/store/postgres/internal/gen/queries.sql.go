@@ -1036,7 +1036,7 @@ func (q *Queries) RevokeSCIMClient(ctx context.Context, name string) (int64, err
 }
 
 const setFirstPrimaryIdentity = `-- name: SetFirstPrimaryIdentity :execrows
-UPDATE users SET oidc_subject = $2, updated_at = now()
+UPDATE users SET oidc_subject = $2, token_version = token_version + 1, updated_at = now()
 WHERE id = $1 AND oidc_subject IS NULL AND NOT EXISTS (SELECT 1 FROM identities WHERE identities.user_id = $1)
 `
 
@@ -1381,6 +1381,10 @@ const upsertUser = `-- name: UpsertUser :execrows
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
+    token_version   = CASE WHEN users.password_hash IS DISTINCT FROM EXCLUDED.password_hash
+                             OR users.oidc_subject IS DISTINCT FROM EXCLUDED.oidc_subject
+                             OR users.disabled <> EXCLUDED.disabled
+                           THEN users.token_version + 1 ELSE users.token_version END,
     username        = EXCLUDED.username,
     email           = EXCLUDED.email,
     password_hash   = EXCLUDED.password_hash,
@@ -1406,6 +1410,7 @@ type UpsertUserParams struct {
 	ExpectedVersion pgtype.Int8
 }
 
+// A new password, primary identity or disabled flag bumps the token version in the same statement, so no token outlives the change.
 func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (int64, error) {
 	result, err := q.db.Exec(ctx, upsertUser,
 		arg.ID,

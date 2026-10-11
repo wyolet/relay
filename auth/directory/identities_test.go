@@ -139,6 +139,7 @@ func TestRemoveIdentity(t *testing.T) {
 	must(t, h.d.CreateUser(ctx, nil, u))
 	must(t, h.d.AddIdentity(ctx, u.ID, second))
 
+	h.rev.ended = nil
 	must(t, h.d.RemoveIdentity(ctx, u.ID, first))
 	if !slices.Equal(h.rev.ended, []string{u.ID}) {
 		t.Fatalf("sessions ended for %v, want the user's", h.rev.ended)
@@ -175,6 +176,7 @@ func TestRemoveIdentities(t *testing.T) {
 	got, _ := h.s.Users.Get(ctx, u.ID)
 	got.PasswordHash = hash
 	must(t, h.d.UpdateUser(ctx, admin, got))
+	h.rev.ended = nil
 	must(t, h.d.RemoveIdentities(ctx, u.ID))
 	if !slices.Equal(h.rev.ended, []string{u.ID}) {
 		t.Fatalf("sessions ended for %v, want the user's", h.rev.ended)

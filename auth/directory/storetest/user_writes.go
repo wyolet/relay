@@ -63,4 +63,25 @@ func testUserWrites(t *testing.T, s directory.Stores) {
 	wantErr(t, "a missing account", u.UpdateProvisioned(ctx, "scim-1", directory.NewID(), in), directory.ErrNotFound)
 	in.Username = "ada"
 	wantErr(t, "a taken username", u.UpdateProvisioned(ctx, "scim-1", prov.ID, in), directory.ErrConflict)
+
+	extra := directory.Identity{Issuer: "https://other.example.com", Subject: "o-9"}
+	for _, step := range []struct {
+		name  string
+		write func() error
+	}{
+		{"add first identity", func() error {
+			return u.AddFirstIdentity(ctx, prov.ID, directory.Identity{Issuer: "https://idp.example.com", Subject: "bob"})
+		}},
+		{"add identity", func() error { return u.AddIdentity(ctx, prov.ID, directory.UserIdentity{Identity: extra}) }},
+		{"remove identity", func() error { return u.RemoveIdentity(ctx, prov.ID, extra) }},
+		{"remove identities", func() error { return u.RemoveIdentities(ctx, prov.ID) }},
+	} {
+		before, _ := u.Get(ctx, prov.ID)
+		if err := step.write(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if after, _ := u.Get(ctx, prov.ID); after.TokenVersion != before.TokenVersion+1 {
+			t.Fatalf("%s left the token version at %d, want %d", step.name, after.TokenVersion, before.TokenVersion+1)
+		}
+	}
 }
