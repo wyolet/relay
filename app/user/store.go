@@ -1,74 +1,65 @@
-// store.go is the data-access layer for User. Same conventions as the
-// entity stores: sqlc-generated typed methods, no sqlc types in exported
-// signatures, (nil, nil) on not-found.
+// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the two reads it has no equivalent for (a batched existence check and the snapshot's token versions) stay on relay's sqlc queries. (nil, nil) on not-found.
 
 package user
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-
+	"github.com/wyolet/relay/auth/directory"
+	authpg "github.com/wyolet/relay/auth/store/postgres"
+	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // Store is the User data-access type.
 type Store struct {
-	q *gen.Queries
+	rows directory.UserStore
+	q    *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
-func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+// NewStore constructs a Store over db: the pool, or a transaction.
+func NewStore(db storage.DB) *Store {
+	return &Store{rows: authpg.New(db).Users, q: gen.New(db)}
+}
 
 // Get returns the user with the given id, or (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*User, error) {
-	r, err := s.q.GetUser(ctx, id)
+	u, err := s.rows.Get(ctx, id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("user.Get: %w", err)
 	}
-	return fromRow(r), nil
+	return FromDirectory(u), nil
 }
 
 // ByUsername returns the user with the given username, or (nil, nil).
 func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) {
-	r, err := s.q.GetUserByUsername(ctx, username)
+	u, err := s.rows.ByUsername(ctx, username)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("user.ByUsername: %w", err)
 	}
-	return fromRow(r), nil
+	return FromDirectory(u), nil
 }
 
 // ByOIDCSubject returns the user bound to the external identity subject
 // ("issuer|sub"), or (nil, nil).
 func (s *Store) ByOIDCSubject(ctx context.Context, subject string) (*User, error) {
-	r, err := s.q.GetUserByOIDCSubject(ctx, text(subject))
+	u, err := s.rows.ByIdentity(ctx, oidcIdentity(subject))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("user.ByOIDCSubject: %w", err)
 	}
-	return fromRow(r), nil
+	return FromDirectory(u), nil
 }
 
 // List returns every user, oldest first.
 func (s *Store) List(ctx context.Context) ([]*User, error) {
-	rows, err := s.q.ListUsers(ctx)
+	rows, err := s.rows.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("user.List: %w", err)
 	}
 	out := make([]*User, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, fromRow(r))
+	for _, u := range rows {
+		out = append(out, FromDirectory(u))
 	}
 	return out, nil
 }
@@ -99,20 +90,7 @@ func (s *Store) MissingIDs(ctx context.Context, ids []string) ([]string, error) 
 
 // Upsert writes u. Caller is responsible for stamping ID.
 func (s *Store) Upsert(ctx context.Context, u *User) error {
-	roles := u.Roles
-	if roles == nil {
-		roles = []string{}
-	}
-	err := s.q.UpsertUser(ctx, gen.UpsertUserParams{
-		ID:           u.ID,
-		Username:     u.Username,
-		Email:        text(u.Email),
-		PasswordHash: text(u.PasswordHash),
-		OidcSubject:  text(u.OIDCSubject),
-		Roles:        roles,
-		Disabled:     u.Disabled,
-	})
-	if err != nil {
+	if err := s.rows.Upsert(ctx, u.ToDirectory()); err != nil {
 		return fmt.Errorf("user.Upsert: %w", err)
 	}
 	return nil
@@ -120,7 +98,7 @@ func (s *Store) Upsert(ctx context.Context, u *User) error {
 
 // Delete removes a user by id.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return s.q.DeleteUser(ctx, id)
+	return s.rows.Delete(ctx, id)
 }
 
 // TokenVersions returns every enabled user's current token version, keyed
@@ -141,29 +119,8 @@ func (s *Store) TokenVersions(ctx context.Context) (map[string]int, error) {
 
 // BumpTokenVersion invalidates every token the user holds.
 func (s *Store) BumpTokenVersion(ctx context.Context, id string) error {
-	if err := s.q.BumpUserTokenVersion(ctx, id); err != nil {
+	if err := s.rows.BumpTokenVersion(ctx, id); err != nil {
 		return fmt.Errorf("user.BumpTokenVersion: %w", err)
 	}
 	return nil
-}
-
-func fromRow(r gen.User) *User {
-	return &User{
-		ID:           r.ID,
-		Username:     r.Username,
-		Email:        r.Email.String,
-		PasswordHash: r.PasswordHash.String,
-		OIDCSubject:  r.OidcSubject.String,
-		Roles:        r.Roles,
-		Disabled:     r.Disabled,
-		TokenVersion: int(r.TokenVersion),
-		CreatedAt:    r.CreatedAt.Time,
-		UpdatedAt:    r.UpdatedAt.Time,
-	}
-}
-
-// text maps "" ↔ SQL NULL so the partial unique indexes (email,
-// oidc_subject) never collide on empty strings.
-func text(s string) pgtype.Text {
-	return pgtype.Text{String: s, Valid: s != ""}
 }

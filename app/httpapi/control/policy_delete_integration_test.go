@@ -33,7 +33,6 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // policyDeleteFixture is a project with a service account, a host, and a
@@ -78,7 +77,7 @@ func newPolicyDeleteFixture(t *testing.T) (policyDeleteFixture, context.Context)
 	if err != nil {
 		t.Fatalf("BootstrapStores: %v", err)
 	}
-	f := policyDeleteFixture{pool: pool, cat: cat, stores: stores, users: user.NewStore(gen.New(pool)), sink: &auditSink{}}
+	f := policyDeleteFixture{pool: pool, cat: cat, stores: stores, users: user.NewStore(pool), sink: &auditSink{}}
 
 	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "del-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	if err := stores.Team.Upsert(ctx, tm); err != nil {

@@ -22,7 +22,6 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -35,7 +34,7 @@ func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
 	p := testPool(t, dsn)
 	ctx := context.Background()
 	u := &user.User{ID: ids.New(), Username: "alice"}
-	if err := user.NewStore(gen.New(p)).Upsert(ctx, u); err != nil {
+	if err := user.NewStore(p).Upsert(ctx, u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 

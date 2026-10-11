@@ -41,15 +41,15 @@ func rowStores(db storage.DB) *Stores {
 		Key:       key.NewStore(q),
 		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),
-		Team:      team.NewStore(q),
-		Project:   project.NewStore(q),
+		Team:      team.NewStore(db),
+		Project:   project.NewStore(db),
 
-		ServiceAccount: serviceaccount.NewStore(q),
+		ServiceAccount: serviceaccount.NewStore(db),
 		Group:          group.NewStore(db),
-		Role:           role.NewStore(q),
+		Role:           role.NewStore(db),
 		RoleBinding:    rolebinding.NewStore(db),
 		PolicyBinding:  policybinding.NewStore(db),
-		Users:          user.NewStore(q),
+		Users:          user.NewStore(db),
 	}
 }
 

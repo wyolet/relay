@@ -26,7 +26,6 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/apikey"
-	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // N clients rotate the same key at once, with a plain PUT racing them. A rotation
@@ -43,7 +42,7 @@ func TestIntegration_ConcurrentRotatesLeaveOneLiveHash(t *testing.T) {
 	}
 
 	u := &user.User{ID: meta.NewID(), Username: "rotate-race-" + meta.NewID()[:8]}
-	users := user.NewStore(gen.New(pool))
+	users := user.NewStore(pool)
 	if err := users.Upsert(ctx, u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

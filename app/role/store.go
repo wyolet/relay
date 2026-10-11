@@ -1,101 +1,53 @@
-// Rules live in the spec JSONB; a Role has no relational columns of its own.
+// Roles are stored by the auth module's directory store; the rules live in the spec JSONB and a Role has no relational columns of its own.
 
 package role
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/auth/directory"
+	authpg "github.com/wyolet/relay/auth/store/postgres"
+	"github.com/wyolet/relay/internal/storage"
 )
 
 type Store struct {
-	q *gen.Queries
+	rows directory.Store[directory.Role]
 }
 
-func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+func NewStore(db storage.DB) *Store { return &Store{rows: authpg.New(db).Roles} }
 
 func (s *Store) List(ctx context.Context) ([]*Role, error) {
-	rows, err := s.q.ListRoles(ctx)
+	rows, err := s.rows.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("role.List: %w", err)
 	}
 	out := make([]*Role, 0, len(rows))
 	for _, r := range rows {
-		role, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
-		if err != nil {
-			return nil, fmt.Errorf("role %s: %w", r.Name, err)
-		}
-		out = append(out, role)
+		out = append(out, FromDirectory(r))
 	}
 	return out, nil
 }
 
 // Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*Role, error) {
-	r, err := s.q.GetRole(ctx, id)
+	r, err := s.rows.Get(ctx, id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("role.Get: %w", err)
 	}
-	return fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
+	if r == nil {
+		return nil, nil
+	}
+	return FromDirectory(r), nil
 }
 
 // Upsert expects Meta.ID set by the caller.
 func (s *Store) Upsert(ctx context.Context, r *Role) error {
-	params, err := toUpsertParams(r)
-	if err != nil {
-		return fmt.Errorf("role.Upsert: %w", err)
-	}
-	return meta.StaleIfNoRows(s.q.UpsertRole(ctx, params))
+	return meta.FromDirectoryError(s.rows.Upsert(ctx, r.ToDirectory()))
 }
 
 // Delete relies on the FK to cascade the role's bindings.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return s.q.DeleteRole(ctx, id)
-}
-
-func fromRow(id, name, displayName string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz, version int64) (*Role, error) {
-	md, err := meta.UnmarshalJSONB(id, name, displayName, metadata)
-	if err != nil {
-		return nil, err
-	}
-	md.CreatedAt = createdAt.Time
-	md.UpdatedAt = updatedAt.Time
-	md.ResourceVersion = meta.FormatResourceVersion(version)
-	var sp Spec
-	if err := json.Unmarshal(spec, &sp); err != nil {
-		return nil, fmt.Errorf("spec: %w", err)
-	}
-	return &Role{Meta: md, Spec: sp}, nil
-}
-
-func toUpsertParams(r *Role) (gen.UpsertRoleParams, error) {
-	metaJSON, err := meta.MarshalJSONB(r.Meta)
-	if err != nil {
-		return gen.UpsertRoleParams{}, fmt.Errorf("metadata: %w", err)
-	}
-	specJSON, err := json.Marshal(r.Spec)
-	if err != nil {
-		return gen.UpsertRoleParams{}, fmt.Errorf("spec: %w", err)
-	}
-	ver, ok, err := r.Meta.ExpectedVersion()
-	if err != nil {
-		return gen.UpsertRoleParams{}, err
-	}
-	return gen.UpsertRoleParams{
-		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
-		ID:              r.Meta.ID,
-		Name:            r.Meta.Name,
-		DisplayName:     r.Meta.DisplayName,
-		Metadata:        metaJSON,
-		Spec:            specJSON,
-	}, nil
+	return s.rows.Delete(ctx, id)
 }

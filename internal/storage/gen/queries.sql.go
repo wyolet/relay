@@ -11,15 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const bumpUserTokenVersion = `-- name: BumpUserTokenVersion :exec
-UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1
-`
-
-func (q *Queries) BumpUserTokenVersion(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, bumpUserTokenVersion, id)
-	return err
-}
-
 const createBatch = `-- name: CreateBatch :exec
 
 INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items,
@@ -73,24 +64,6 @@ type CreateBatchItemParams struct {
 
 func (q *Queries) CreateBatchItem(ctx context.Context, arg CreateBatchItemParams) error {
 	_, err := q.db.Exec(ctx, createBatchItem, arg.BatchID, arg.Idx, arg.JobID)
-	return err
-}
-
-const deleteGroup = `-- name: DeleteGroup :exec
-DELETE FROM groups WHERE id = $1
-`
-
-func (q *Queries) DeleteGroup(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteGroup, id)
-	return err
-}
-
-const deleteGroupMembers = `-- name: DeleteGroupMembers :exec
-DELETE FROM group_members WHERE group_id = $1
-`
-
-func (q *Queries) DeleteGroupMembers(ctx context.Context, groupID string) error {
-	_, err := q.db.Exec(ctx, deleteGroupMembers, groupID)
 	return err
 }
 
@@ -198,15 +171,6 @@ func (q *Queries) DeletePricingModels(ctx context.Context, pricingID string) err
 	return err
 }
 
-const deleteProject = `-- name: DeleteProject :exec
-DELETE FROM projects WHERE id = $1
-`
-
-func (q *Queries) DeleteProject(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteProject, id)
-	return err
-}
-
 const deleteProvider = `-- name: DeleteProvider :exec
 DELETE FROM providers WHERE id = $1
 `
@@ -234,33 +198,6 @@ func (q *Queries) DeleteRelayKey(ctx context.Context, id string) error {
 	return err
 }
 
-const deleteRole = `-- name: DeleteRole :exec
-DELETE FROM roles WHERE id = $1
-`
-
-func (q *Queries) DeleteRole(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteRole, id)
-	return err
-}
-
-const deleteRoleBinding = `-- name: DeleteRoleBinding :exec
-DELETE FROM role_bindings WHERE id = $1
-`
-
-func (q *Queries) DeleteRoleBinding(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteRoleBinding, id)
-	return err
-}
-
-const deleteRoleBindingSubjects = `-- name: DeleteRoleBindingSubjects :exec
-DELETE FROM role_binding_subjects WHERE binding_id = $1
-`
-
-func (q *Queries) DeleteRoleBindingSubjects(ctx context.Context, bindingID string) error {
-	_, err := q.db.Exec(ctx, deleteRoleBindingSubjects, bindingID)
-	return err
-}
-
 const deleteSecret = `-- name: DeleteSecret :exec
 DELETE FROM secrets WHERE id = $1
 `
@@ -279,39 +216,12 @@ func (q *Queries) DeleteSecretValue(ctx context.Context, id string) error {
 	return err
 }
 
-const deleteServiceAccount = `-- name: DeleteServiceAccount :exec
-DELETE FROM service_accounts WHERE id = $1
-`
-
-func (q *Queries) DeleteServiceAccount(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteServiceAccount, id)
-	return err
-}
-
 const deleteSetting = `-- name: DeleteSetting :exec
 DELETE FROM settings WHERE section = $1
 `
 
 func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 	_, err := q.db.Exec(ctx, deleteSetting, section)
-	return err
-}
-
-const deleteTeam = `-- name: DeleteTeam :exec
-DELETE FROM teams WHERE id = $1
-`
-
-func (q *Queries) DeleteTeam(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteTeam, id)
-	return err
-}
-
-const deleteUser = `-- name: DeleteUser :exec
-DELETE FROM users WHERE id = $1
-`
-
-func (q *Queries) DeleteUser(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteUser, id)
 	return err
 }
 
@@ -341,50 +251,6 @@ func (q *Queries) GetBatch(ctx context.Context, id string) (Batch, error) {
 		&i.CredentialID,
 	)
 	return i, err
-}
-
-const getGroup = `-- name: GetGroup :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups WHERE id = $1
-`
-
-func (q *Queries) GetGroup(ctx context.Context, id string) (Group, error) {
-	row := q.db.QueryRow(ctx, getGroup, id)
-	var i Group
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.DisplayName,
-		&i.Metadata,
-		&i.Spec,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ResourceVersion,
-	)
-	return i, err
-}
-
-const getGroupMembers = `-- name: GetGroupMembers :many
-SELECT group_id, user_id, position FROM group_members WHERE group_id = $1 ORDER BY position
-`
-
-func (q *Queries) GetGroupMembers(ctx context.Context, groupID string) ([]GroupMember, error) {
-	rows, err := q.db.Query(ctx, getGroupMembers, groupID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GroupMember
-	for rows.Next() {
-		var i GroupMember
-		if err := rows.Scan(&i.GroupID, &i.UserID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const getHost = `-- name: GetHost :one
@@ -673,27 +539,6 @@ func (q *Queries) GetPricingModels(ctx context.Context, pricingID string) ([]Pri
 	return items, nil
 }
 
-const getProject = `-- name: GetProject :one
-SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects WHERE id = $1
-`
-
-func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
-	row := q.db.QueryRow(ctx, getProject, id)
-	var i Project
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.DisplayName,
-		&i.TeamID,
-		&i.Metadata,
-		&i.Spec,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ResourceVersion,
-	)
-	return i, err
-}
-
 const getProvider = `-- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1
 `
@@ -795,89 +640,6 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 	return i, err
 }
 
-const getRole = `-- name: GetRole :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM roles WHERE id = $1
-`
-
-func (q *Queries) GetRole(ctx context.Context, id string) (Role, error) {
-	row := q.db.QueryRow(ctx, getRole, id)
-	var i Role
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.DisplayName,
-		&i.Metadata,
-		&i.Spec,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ResourceVersion,
-	)
-	return i, err
-}
-
-const getRoleBinding = `-- name: GetRoleBinding :one
-SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at, resource_version
-FROM role_bindings WHERE id = $1
-`
-
-func (q *Queries) GetRoleBinding(ctx context.Context, id string) (RoleBinding, error) {
-	row := q.db.QueryRow(ctx, getRoleBinding, id)
-	var i RoleBinding
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.DisplayName,
-		&i.RoleID,
-		&i.ScopeKind,
-		&i.ScopeID,
-		&i.Metadata,
-		&i.Spec,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ResourceVersion,
-	)
-	return i, err
-}
-
-const getRoleBindingSubjects = `-- name: GetRoleBindingSubjects :many
-SELECT binding_id, kind, subject_id, subject_name, position
-FROM role_binding_subjects WHERE binding_id = $1 ORDER BY position
-`
-
-type GetRoleBindingSubjectsRow struct {
-	BindingID   string      `db:"binding_id" json:"binding_id"`
-	Kind        string      `db:"kind" json:"kind"`
-	SubjectID   pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName pgtype.Text `db:"subject_name" json:"subject_name"`
-	Position    int32       `db:"position" json:"position"`
-}
-
-func (q *Queries) GetRoleBindingSubjects(ctx context.Context, bindingID string) ([]GetRoleBindingSubjectsRow, error) {
-	rows, err := q.db.Query(ctx, getRoleBindingSubjects, bindingID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetRoleBindingSubjectsRow
-	for rows.Next() {
-		var i GetRoleBindingSubjectsRow
-		if err := rows.Scan(
-			&i.BindingID,
-			&i.Kind,
-			&i.SubjectID,
-			&i.SubjectName,
-			&i.Position,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getSecret = `-- name: GetSecret :one
 SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets WHERE id = $1
 `
@@ -940,27 +702,6 @@ func (q *Queries) GetSecretValue(ctx context.Context, id string) (GetSecretValue
 	return i, err
 }
 
-const getServiceAccount = `-- name: GetServiceAccount :one
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts WHERE id = $1
-`
-
-func (q *Queries) GetServiceAccount(ctx context.Context, id string) (ServiceAccount, error) {
-	row := q.db.QueryRow(ctx, getServiceAccount, id)
-	var i ServiceAccount
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.DisplayName,
-		&i.ProjectID,
-		&i.Metadata,
-		&i.Spec,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ResourceVersion,
-	)
-	return i, err
-}
-
 const getSetting = `-- name: GetSetting :one
 SELECT section, value, updated_at FROM settings WHERE section = $1
 `
@@ -969,92 +710,6 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 	row := q.db.QueryRow(ctx, getSetting, section)
 	var i Setting
 	err := row.Scan(&i.Section, &i.Value, &i.UpdatedAt)
-	return i, err
-}
-
-const getTeam = `-- name: GetTeam :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams WHERE id = $1
-`
-
-func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
-	row := q.db.QueryRow(ctx, getTeam, id)
-	var i Team
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.DisplayName,
-		&i.Metadata,
-		&i.Spec,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ResourceVersion,
-	)
-	return i, err
-}
-
-const getUser = `-- name: GetUser :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users WHERE id = $1
-`
-
-func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
-	row := q.db.QueryRow(ctx, getUser, id)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Username,
-		&i.Email,
-		&i.PasswordHash,
-		&i.OidcSubject,
-		&i.Roles,
-		&i.Disabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.TokenVersion,
-	)
-	return i, err
-}
-
-const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users WHERE oidc_subject = $1
-`
-
-func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.Text) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByOIDCSubject, oidcSubject)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Username,
-		&i.Email,
-		&i.PasswordHash,
-		&i.OidcSubject,
-		&i.Roles,
-		&i.Disabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.TokenVersion,
-	)
-	return i, err
-}
-
-const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users WHERE username = $1
-`
-
-func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByUsername, username)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Username,
-		&i.Email,
-		&i.PasswordHash,
-		&i.OidcSubject,
-		&i.Roles,
-		&i.Disabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.TokenVersion,
-	)
 	return i, err
 }
 
@@ -1079,22 +734,6 @@ type InsertAuditEventParams struct {
 	Method        pgtype.Text        `db:"method" json:"method"`
 	Path          pgtype.Text        `db:"path" json:"path"`
 	ChangedFields []string           `db:"changed_fields" json:"changed_fields"`
-}
-
-const insertGroupMember = `-- name: InsertGroupMember :exec
-INSERT INTO group_members (group_id, user_id, position) VALUES ($1, $2, $3)
-ON CONFLICT (group_id, user_id) DO UPDATE SET position = EXCLUDED.position
-`
-
-type InsertGroupMemberParams struct {
-	GroupID  string `db:"group_id" json:"group_id"`
-	UserID   string `db:"user_id" json:"user_id"`
-	Position int32  `db:"position" json:"position"`
-}
-
-func (q *Queries) InsertGroupMember(ctx context.Context, arg InsertGroupMemberParams) error {
-	_, err := q.db.Exec(ctx, insertGroupMember, arg.GroupID, arg.UserID, arg.Position)
-	return err
 }
 
 const insertPolicyBindingSubject = `-- name: InsertPolicyBindingSubject :exec
@@ -1168,35 +807,6 @@ type InsertPricingModelParams struct {
 
 func (q *Queries) InsertPricingModel(ctx context.Context, arg InsertPricingModelParams) error {
 	_, err := q.db.Exec(ctx, insertPricingModel, arg.PricingID, arg.ModelID, arg.Position)
-	return err
-}
-
-const insertRoleBindingSubject = `-- name: InsertRoleBindingSubject :exec
-INSERT INTO role_binding_subjects
-    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-`
-
-type InsertRoleBindingSubjectParams struct {
-	BindingID     string      `db:"binding_id" json:"binding_id"`
-	Kind          string      `db:"kind" json:"kind"`
-	SubjectID     pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName   pgtype.Text `db:"subject_name" json:"subject_name"`
-	SubjectUserID pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
-	SubjectSaID   pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
-	Position      int32       `db:"position" json:"position"`
-}
-
-func (q *Queries) InsertRoleBindingSubject(ctx context.Context, arg InsertRoleBindingSubjectParams) error {
-	_, err := q.db.Exec(ctx, insertRoleBindingSubject,
-		arg.BindingID,
-		arg.Kind,
-		arg.SubjectID,
-		arg.SubjectName,
-		arg.SubjectUserID,
-		arg.SubjectSaID,
-		arg.Position,
-	)
 	return err
 }
 
@@ -1557,63 +1167,6 @@ func (q *Queries) ListBatchesByRelayKey(ctx context.Context, relayKeyHash string
 	return items, nil
 }
 
-const listGroupMembers = `-- name: ListGroupMembers :many
-SELECT group_id, user_id, position FROM group_members ORDER BY group_id, position
-`
-
-func (q *Queries) ListGroupMembers(ctx context.Context) ([]GroupMember, error) {
-	rows, err := q.db.Query(ctx, listGroupMembers)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GroupMember
-	for rows.Next() {
-		var i GroupMember
-		if err := rows.Scan(&i.GroupID, &i.UserID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listGroups = `-- name: ListGroups :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups ORDER BY name
-`
-
-func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
-	rows, err := q.db.Query(ctx, listGroups)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Group
-	for rows.Next() {
-		var i Group
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.Metadata,
-			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listHostBindings = `-- name: ListHostBindings :many
 
 SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at, resource_version FROM host_bindings ORDER BY name
@@ -1892,10 +1445,12 @@ func (q *Queries) ListPolicyBindingSubjects(ctx context.Context) ([]ListPolicyBi
 }
 
 const listPolicyBindings = `-- name: ListPolicyBindings :many
+
 SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
 FROM policy_bindings ORDER BY name
 `
 
+// ── policy bindings (migration 0027) ─────────────────────────────────────────
 func (q *Queries) ListPolicyBindings(ctx context.Context) ([]PolicyBinding, error) {
 	rows, err := q.db.Query(ctx, listPolicyBindings)
 	if err != nil {
@@ -2020,40 +1575,6 @@ func (q *Queries) ListPricings(ctx context.Context) ([]Pricing, error) {
 			&i.Name,
 			&i.DisplayName,
 			&i.HostID,
-			&i.Metadata,
-			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listProjects = `-- name: ListProjects :many
-SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects ORDER BY name
-`
-
-func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjects)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Project
-	for rows.Next() {
-		var i Project
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.TeamID,
 			&i.Metadata,
 			&i.Spec,
 			&i.CreatedAt,
@@ -2210,117 +1731,6 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 	return items, nil
 }
 
-const listRoleBindingSubjects = `-- name: ListRoleBindingSubjects :many
-SELECT binding_id, kind, subject_id, subject_name, position
-FROM role_binding_subjects ORDER BY binding_id, position
-`
-
-type ListRoleBindingSubjectsRow struct {
-	BindingID   string      `db:"binding_id" json:"binding_id"`
-	Kind        string      `db:"kind" json:"kind"`
-	SubjectID   pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName pgtype.Text `db:"subject_name" json:"subject_name"`
-	Position    int32       `db:"position" json:"position"`
-}
-
-func (q *Queries) ListRoleBindingSubjects(ctx context.Context) ([]ListRoleBindingSubjectsRow, error) {
-	rows, err := q.db.Query(ctx, listRoleBindingSubjects)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListRoleBindingSubjectsRow
-	for rows.Next() {
-		var i ListRoleBindingSubjectsRow
-		if err := rows.Scan(
-			&i.BindingID,
-			&i.Kind,
-			&i.SubjectID,
-			&i.SubjectName,
-			&i.Position,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listRoleBindings = `-- name: ListRoleBindings :many
-SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at, resource_version
-FROM role_bindings ORDER BY name
-`
-
-func (q *Queries) ListRoleBindings(ctx context.Context) ([]RoleBinding, error) {
-	rows, err := q.db.Query(ctx, listRoleBindings)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []RoleBinding
-	for rows.Next() {
-		var i RoleBinding
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.RoleID,
-			&i.ScopeKind,
-			&i.ScopeID,
-			&i.Metadata,
-			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listRoles = `-- name: ListRoles :many
-
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM roles ORDER BY name
-`
-
-// ── roles + bindings (migration 0027) ────────────────────────────────────────
-func (q *Queries) ListRoles(ctx context.Context) ([]Role, error) {
-	rows, err := q.db.Query(ctx, listRoles)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Role
-	for rows.Next() {
-		var i Role
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.Metadata,
-			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listSecretValuesForRotation = `-- name: ListSecretValuesForRotation :many
 SELECT id, ciphertext, nonce, key_version FROM secret_values ORDER BY id
 `
@@ -2413,42 +1823,6 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 	return items, nil
 }
 
-const listServiceAccounts = `-- name: ListServiceAccounts :many
-
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name
-`
-
-// ── service accounts + groups (migration 0026) ───────────────────────────────
-func (q *Queries) ListServiceAccounts(ctx context.Context) ([]ServiceAccount, error) {
-	rows, err := q.db.Query(ctx, listServiceAccounts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ServiceAccount
-	for rows.Next() {
-		var i ServiceAccount
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.ProjectID,
-			&i.Metadata,
-			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listSettings = `-- name: ListSettings :many
 SELECT section, value, updated_at FROM settings ORDER BY section
 `
@@ -2509,41 +1883,6 @@ func (q *Queries) ListStoredSecretsForRotation(ctx context.Context) ([]ListStore
 	return items, nil
 }
 
-const listTeams = `-- name: ListTeams :many
-
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams ORDER BY name
-`
-
-// ── teams + projects (migration 0025) ────────────────────────────────────────
-func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
-	rows, err := q.db.Query(ctx, listTeams)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Team
-	for rows.Next() {
-		var i Team
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.Metadata,
-			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUserIDsIn = `-- name: ListUserIDsIn :many
 SELECT id FROM users WHERE id = ANY($1::text[])
 `
@@ -2590,41 +1929,6 @@ func (q *Queries) ListUserTokenVersions(ctx context.Context) ([]ListUserTokenVer
 	for rows.Next() {
 		var i ListUserTokenVersionsRow
 		if err := rows.Scan(&i.ID, &i.TokenVersion); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUsers = `-- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users ORDER BY created_at ASC
-`
-
-func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := q.db.Query(ctx, listUsers)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []User
-	for rows.Next() {
-		var i User
-		if err := rows.Scan(
-			&i.ID,
-			&i.Username,
-			&i.Email,
-			&i.PasswordHash,
-			&i.OidcSubject,
-			&i.Roles,
-			&i.Disabled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.TokenVersion,
-		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2921,42 +2225,6 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 	return i, err
 }
 
-const upsertGroup = `-- name: UpsertGroup :execrows
-INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $6::bigint IS NULL OR groups.resource_version = $6::bigint
-`
-
-type UpsertGroupParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
-}
-
-func (q *Queries) UpsertGroup(ctx context.Context, arg UpsertGroupParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertGroup,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.Metadata,
-		arg.Spec,
-		arg.ExpectedVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const upsertHost = `-- name: UpsertHost :execrows
 INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -3216,45 +2484,6 @@ func (q *Queries) UpsertPricing(ctx context.Context, arg UpsertPricingParams) (i
 	return result.RowsAffected(), nil
 }
 
-const upsertProject = `-- name: UpsertProject :execrows
-INSERT INTO projects (id, name, display_name, team_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    team_id      = EXCLUDED.team_id,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $7::bigint IS NULL OR projects.resource_version = $7::bigint
-`
-
-type UpsertProjectParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	TeamID          string      `db:"team_id" json:"team_id"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
-}
-
-func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertProject,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.TeamID,
-		arg.Metadata,
-		arg.Spec,
-		arg.ExpectedVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const upsertProvider = `-- name: UpsertProvider :execrows
 INSERT INTO providers (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -3378,87 +2607,6 @@ func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) 
 	return result.RowsAffected(), nil
 }
 
-const upsertRole = `-- name: UpsertRole :execrows
-INSERT INTO roles (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $6::bigint IS NULL OR roles.resource_version = $6::bigint
-`
-
-type UpsertRoleParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
-}
-
-func (q *Queries) UpsertRole(ctx context.Context, arg UpsertRoleParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertRole,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.Metadata,
-		arg.Spec,
-		arg.ExpectedVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const upsertRoleBinding = `-- name: UpsertRoleBinding :execrows
-INSERT INTO role_bindings (id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    role_id      = EXCLUDED.role_id,
-    scope_kind   = EXCLUDED.scope_kind,
-    scope_id     = EXCLUDED.scope_id,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $9::bigint IS NULL OR role_bindings.resource_version = $9::bigint
-`
-
-type UpsertRoleBindingParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	RoleID          string      `db:"role_id" json:"role_id"`
-	ScopeKind       string      `db:"scope_kind" json:"scope_kind"`
-	ScopeID         pgtype.Text `db:"scope_id" json:"scope_id"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
-}
-
-func (q *Queries) UpsertRoleBinding(ctx context.Context, arg UpsertRoleBindingParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertRoleBinding,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.RoleID,
-		arg.ScopeKind,
-		arg.ScopeID,
-		arg.Metadata,
-		arg.Spec,
-		arg.ExpectedVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const upsertSecret = `-- name: UpsertSecret :exec
 INSERT INTO secrets (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -3517,45 +2665,6 @@ func (q *Queries) UpsertSecretValue(ctx context.Context, arg UpsertSecretValuePa
 	return err
 }
 
-const upsertServiceAccount = `-- name: UpsertServiceAccount :execrows
-INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    project_id   = EXCLUDED.project_id,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $7::bigint IS NULL OR service_accounts.resource_version = $7::bigint
-`
-
-type UpsertServiceAccountParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	ProjectID       string      `db:"project_id" json:"project_id"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
-}
-
-func (q *Queries) UpsertServiceAccount(ctx context.Context, arg UpsertServiceAccountParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertServiceAccount,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.ProjectID,
-		arg.Metadata,
-		arg.Spec,
-		arg.ExpectedVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const upsertSetting = `-- name: UpsertSetting :exec
 INSERT INTO settings (section, value, updated_at)
 VALUES ($1, $2, NOW())
@@ -3571,77 +2680,5 @@ type UpsertSettingParams struct {
 
 func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
 	_, err := q.db.Exec(ctx, upsertSetting, arg.Section, arg.Value)
-	return err
-}
-
-const upsertTeam = `-- name: UpsertTeam :execrows
-INSERT INTO teams (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $6::bigint IS NULL OR teams.resource_version = $6::bigint
-`
-
-type UpsertTeamParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
-}
-
-func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertTeam,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.Metadata,
-		arg.Spec,
-		arg.ExpectedVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const upsertUser = `-- name: UpsertUser :exec
-INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (id) DO UPDATE SET
-    username      = EXCLUDED.username,
-    email         = EXCLUDED.email,
-    password_hash = EXCLUDED.password_hash,
-    oidc_subject  = EXCLUDED.oidc_subject,
-    roles         = EXCLUDED.roles,
-    disabled      = EXCLUDED.disabled,
-    updated_at    = now()
-`
-
-type UpsertUserParams struct {
-	ID           string      `db:"id" json:"id"`
-	Username     string      `db:"username" json:"username"`
-	Email        pgtype.Text `db:"email" json:"email"`
-	PasswordHash pgtype.Text `db:"password_hash" json:"password_hash"`
-	OidcSubject  pgtype.Text `db:"oidc_subject" json:"oidc_subject"`
-	Roles        []string    `db:"roles" json:"roles"`
-	Disabled     bool        `db:"disabled" json:"disabled"`
-}
-
-func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
-	_, err := q.db.Exec(ctx, upsertUser,
-		arg.ID,
-		arg.Username,
-		arg.Email,
-		arg.PasswordHash,
-		arg.OidcSubject,
-		arg.Roles,
-		arg.Disabled,
-	)
 	return err
 }

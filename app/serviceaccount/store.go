@@ -1,36 +1,33 @@
-// project_id is a real column (FK cascade) so deleting a Project drops its
-// accounts without parsing JSONB.
+// Service accounts are stored by the auth module's directory store; project_id is a real column there (FK cascade), so deleting a Project drops its accounts without parsing JSONB.
 
 package serviceaccount
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/auth/directory"
+	authpg "github.com/wyolet/relay/auth/store/postgres"
+	"github.com/wyolet/relay/internal/storage"
 )
 
 type Store struct {
-	q *gen.Queries
+	rows directory.Store[directory.ServiceAccount]
 }
 
-func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+func NewStore(db storage.DB) *Store { return &Store{rows: authpg.New(db).ServiceAccounts} }
 
 func (s *Store) List(ctx context.Context) ([]*ServiceAccount, error) {
-	rows, err := s.q.ListServiceAccounts(ctx)
+	rows, err := s.rows.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("serviceaccount.List: %w", err)
 	}
 	out := make([]*ServiceAccount, 0, len(rows))
 	for _, r := range rows {
-		sa, err := fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
+		sa, err := FromDirectory(r)
 		if err != nil {
-			return nil, fmt.Errorf("serviceaccount %s: %w", r.Name, err)
+			return nil, fmt.Errorf("serviceaccount %s: %w", r.Meta.Name, err)
 		}
 		out = append(out, sa)
 	}
@@ -39,69 +36,27 @@ func (s *Store) List(ctx context.Context) ([]*ServiceAccount, error) {
 
 // Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*ServiceAccount, error) {
-	r, err := s.q.GetServiceAccount(ctx, id)
+	r, err := s.rows.Get(ctx, id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("serviceaccount.Get: %w", err)
 	}
-	return fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
+	if r == nil {
+		return nil, nil
+	}
+	return FromDirectory(r)
 }
 
 // Upsert expects Meta.ID set by the caller and re-derives Owner from ProjectID.
 func (s *Store) Upsert(ctx context.Context, sa *ServiceAccount) error {
 	sa.StampOwner()
-	params, err := toUpsertParams(sa)
+	r, err := sa.ToDirectory()
 	if err != nil {
 		return fmt.Errorf("serviceaccount.Upsert: %w", err)
 	}
-	return meta.StaleIfNoRows(s.q.UpsertServiceAccount(ctx, params))
+	return meta.FromDirectoryError(s.rows.Upsert(ctx, r))
 }
 
 // Delete relies on the FK to cascade the account's keys.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return s.q.DeleteServiceAccount(ctx, id)
-}
-
-func fromRow(id, name, displayName, projectID string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz, version int64) (*ServiceAccount, error) {
-	md, err := meta.UnmarshalJSONB(id, name, displayName, metadata)
-	if err != nil {
-		return nil, err
-	}
-	md.CreatedAt = createdAt.Time
-	md.UpdatedAt = updatedAt.Time
-	md.ResourceVersion = meta.FormatResourceVersion(version)
-	var sp Spec
-	if err := json.Unmarshal(spec, &sp); err != nil {
-		return nil, fmt.Errorf("spec: %w", err)
-	}
-	sp.ProjectID = projectID
-	sa := &ServiceAccount{Meta: md, Spec: sp}
-	sa.StampOwner()
-	return sa, nil
-}
-
-func toUpsertParams(sa *ServiceAccount) (gen.UpsertServiceAccountParams, error) {
-	metaJSON, err := meta.MarshalJSONB(sa.Meta)
-	if err != nil {
-		return gen.UpsertServiceAccountParams{}, fmt.Errorf("metadata: %w", err)
-	}
-	specJSON, err := json.Marshal(sa.Spec)
-	if err != nil {
-		return gen.UpsertServiceAccountParams{}, fmt.Errorf("spec: %w", err)
-	}
-	ver, ok, err := sa.Meta.ExpectedVersion()
-	if err != nil {
-		return gen.UpsertServiceAccountParams{}, err
-	}
-	return gen.UpsertServiceAccountParams{
-		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
-		ID:              sa.Meta.ID,
-		Name:            sa.Meta.Name,
-		DisplayName:     sa.Meta.DisplayName,
-		ProjectID:       sa.Spec.ProjectID,
-		Metadata:        metaJSON,
-		Spec:            specJSON,
-	}, nil
+	return s.rows.Delete(ctx, id)
 }
