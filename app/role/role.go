@@ -24,7 +24,7 @@ var Kinds = []string{
 	"*", "audit", "debug", "groups", "host-bindings", "host-keys", "hosts",
 	"keys", "license", "logs", "master-key", "models", "policies",
 	"policy-bindings", "pricings", "projects", "providers", "rate-limits",
-	"role-bindings", "roles", "service-accounts", "settings", "system",
+	"role-bindings", "roles", "scim-clients", "service-accounts", "settings", "system",
 	"teams", "tokens", "usage", "users",
 }
 

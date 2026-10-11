@@ -33,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/scim"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
@@ -119,6 +120,9 @@ type Stores struct {
 
 	// Directory is the auth module's view of the account, tenancy and RBAC tables, the stores its operations write through.
 	Directory directory.Stores
+
+	// SCIMClients holds the identity providers allowed to provision through /scim/v2, by token hash.
+	SCIMClients scim.TokenStore
 
 	// pool is what InTx opens its transaction on.
 	pool *pgxpool.Pool
