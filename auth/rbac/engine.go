@@ -18,7 +18,7 @@ type Source interface {
 
 // ScopeResolver places a resource in its scopes.
 type ScopeResolver interface {
-	// ChainFor returns the scopes res lives in, most specific first, ending in the engine's global scope. A resource may be its own innermost scope, so a binding can attach to one resource.
+	// ChainFor returns the scopes res lives in, most specific first, ending in the engine's global scope. A resource may be its own innermost scope, so a binding can attach to one resource. CheckGrant asks with Resource{Owner: &scope} and no ID, so a resolver must read an owner equal to a scope as living in that scope.
 	ChainFor(ctx context.Context, res authz.Resource) ([]Scope, error)
 }
 
@@ -84,43 +84,96 @@ func (e *Engine) decide(ctx context.Context, p *Principal, kind, verb string, re
 	if !p.Authenticated() {
 		return authz.ErrUnauthenticated
 	}
-	ok, err := e.allows(ctx, p, kind, verb, res)
+	ok, chain, err := e.allows(ctx, p, kind, verb, res)
 	if err != nil {
 		return err
 	}
-	if !ok || !p.Credential.permits(kind, verb, res.ID) {
+	if ok && p.Credential != nil {
+		ok, err = e.credentialPermits(ctx, p.Credential, kind, verb, res, chain)
+		if err != nil {
+			return err
+		}
+	}
+	if !ok {
 		return authz.ErrForbidden
 	}
 	return nil
 }
 
-func (e *Engine) allows(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (bool, error) {
+// allows also returns res's scope chain when the bindings had to resolve it, so the credential check can reuse it.
+func (e *Engine) allows(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
 	if p.Admin {
-		return true, nil
+		return true, nil, nil
 	}
 	for _, r := range e.Rules {
 		d, err := r.Decide(ctx, p, kind, verb, res)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		switch d {
 		case Allow:
-			return true, nil
+			return true, nil, nil
 		case Deny:
-			return false, nil
+			return false, nil, nil
 		}
 	}
 	return e.bound(ctx, p, kind, verb, res)
 }
 
 // bound scans the bindings of p's subjects for one at a scope in res's chain whose role covers (kind, verb).
-func (e *Engine) bound(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (bool, error) {
+func (e *Engine) bound(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
 	if e.Source == nil {
-		return false, nil
+		return false, nil, nil
 	}
+	// The any-scope path: see VerbList for why an unowned list needs no chain.
 	anyScope := verb == VerbList && res.Owner == nil
 	var chain []Scope
 	if !anyScope {
+		if e.Scopes == nil {
+			return false, nil, nil
+		}
+		var err error
+		if chain, err = e.Scopes.ChainFor(ctx, res); err != nil {
+			return false, nil, err
+		}
+	}
+	for i := range subjectCount(p) {
+		bindings, err := e.Source.BindingsForSubject(ctx, subjectAt(p, i))
+		if err != nil {
+			return false, nil, err
+		}
+		for _, b := range bindings {
+			if !anyScope && !slices.Contains(chain, b.Scope) {
+				continue
+			}
+			role, found, err := e.Source.Role(ctx, b.RoleID)
+			if err != nil {
+				return false, nil, err
+			}
+			if found && role.Allows(kind, verb) {
+				return true, chain, nil
+			}
+		}
+	}
+	return false, chain, nil
+}
+
+// credentialPermits applies c to an allowed request. chain is res's scope chain when already resolved, else nil.
+func (e *Engine) credentialPermits(ctx context.Context, c *CredentialScope, kind, verb string, res authz.Resource, chain []Scope) (bool, error) {
+	if !rulesAllow(c.Rules, kind, verb) {
+		return false, nil
+	}
+	within, limited := c.Within[kind]
+	if !limited {
+		return true, nil
+	}
+	if len(within) == 0 {
+		return false, nil
+	}
+	if res.ID == "" && res.Owner == nil {
+		return verb == VerbList, nil
+	}
+	if chain == nil {
 		if e.Scopes == nil {
 			return false, nil
 		}
@@ -129,22 +182,9 @@ func (e *Engine) bound(ctx context.Context, p *Principal, kind, verb string, res
 			return false, err
 		}
 	}
-	for i := range subjectCount(p) {
-		bindings, err := e.Source.BindingsForSubject(ctx, subjectAt(p, i))
-		if err != nil {
-			return false, err
-		}
-		for _, b := range bindings {
-			if !anyScope && !slices.Contains(chain, b.Scope) {
-				continue
-			}
-			role, found, err := e.Source.Role(ctx, b.RoleID)
-			if err != nil {
-				return false, err
-			}
-			if found && role.Allows(kind, verb) {
-				return true, nil
-			}
+	for _, s := range within {
+		if slices.Contains(chain, s) {
+			return true, nil
 		}
 	}
 	return false, nil

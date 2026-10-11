@@ -276,8 +276,15 @@ func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 		return Continue, nil
 	})
 	e, _ := newEngine(map[string][]Binding{"user:o": {{RoleID: "owner", Scope: global}}}, allowAll)
-	readDocs := []Rule{{Kinds: []string{"documents", "notes"}, Verbs: []string{"get"}}}
+	readDocs := []Rule{{Kinds: []string{"documents", "notes"}, Verbs: []string{"get", "list", "create"}}}
 	note := authz.Resource{Kind: "note", ID: "n1"}
+	within := func(kind string, scopes ...Scope) *CredentialScope {
+		return &CredentialScope{Rules: readDocs, Within: map[string][]Scope{kind: scopes}}
+	}
+	noteIn := func(folder string) authz.Resource {
+		return authz.Resource{Kind: "note", ID: "n-" + folder, Owner: &authz.Owner{Kind: "folder", ID: folder}}
+	}
+	unowned := authz.Resource{Kind: "document"}
 
 	tests := []struct {
 		name   string
@@ -293,13 +300,23 @@ func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 		{"capability refuses a product rule", &CredentialScope{Rules: readDocs}, false, "notes.delete", note, authz.ErrForbidden},
 		{"capability refuses an admin", &CredentialScope{Rules: readDocs}, true, "documents.delete", doc("f1"), authz.ErrForbidden},
 		{"no rules permit nothing", &CredentialScope{}, false, "documents.get", doc("f1"), authz.ErrForbidden},
-		{"listed id", &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {"d-f1"}}}, false, "documents.get", doc("f1"), nil},
-		{"unlisted id", &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {"d-f1"}}}, false, "documents.get", doc("f2"), authz.ErrForbidden},
-		{"empty id list", &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {}}}, false, "documents.get", doc("f1"), authz.ErrForbidden},
-		{"no id on the resource", &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {"d-f1"}}}, false, "documents.get",
-			authz.Resource{Kind: "document", Owner: &authz.Owner{Kind: "folder", ID: "f1"}}, authz.ErrForbidden},
-		{"other kind not limited by id", &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {}}}, false, "notes.get", note, nil},
-		{"product rule inside the id list", &CredentialScope{Rules: readDocs, IDs: map[string][]string{"notes": {"n1"}}}, false, "notes.get", note, nil},
+		{"a parent-scope limit reaches a child", within("documents", org1), false, "documents.get", doc("f2"), nil},
+		{"a scope limit reaches its own resource", within("documents", folder1), false, "documents.get", doc("f1"), nil},
+		{"a sibling scope is refused", within("documents", folder1), false, "documents.get", doc("f2"), authz.ErrForbidden},
+		{"listed scopes of mixed kinds", within("documents", Scope{Kind: "org", ID: "o9"}, folder2), false, "documents.get", doc("f2"), nil},
+		{"an empty list reaches nothing", within("documents"), false, "documents.get", doc("f1"), authz.ErrForbidden},
+		{"an empty list admits no list", within("documents"), false, "documents.list", unowned, authz.ErrForbidden},
+		{"an unowned list is admitted", within("documents", folder1), false, "documents.list", unowned, nil},
+		{"an owned list is limited", within("documents", folder1), false, "documents.list", doc("f2"), authz.ErrForbidden},
+		{"create with no id and no owner is refused", within("documents", folder1), false, "documents.create", unowned, authz.ErrForbidden},
+		{"get with no id and no owner is refused", within("documents", folder1), false, "documents.get", unowned, authz.ErrForbidden},
+		{"create inside the limit", within("documents", folder1), false, "documents.create",
+			authz.Resource{Kind: "document", Owner: &authz.Owner{Kind: "folder", ID: "f1"}}, nil},
+		{"admin inside the limit", within("documents", folder1), true, "documents.get", doc("f1"), nil},
+		{"admin outside the limit", within("documents", folder1), true, "documents.get", doc("f2"), authz.ErrForbidden},
+		{"product rule inside the limit", within("notes", folder1), false, "notes.get", noteIn("f1"), nil},
+		{"product rule outside the limit", within("notes", folder1), false, "notes.get", noteIn("f2"), authz.ErrForbidden},
+		{"other kind not limited", within("documents"), false, "notes.get", note, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -308,6 +325,65 @@ func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 				t.Fatalf("Authorize(%s) = %v, want %v", tt.action, err, tt.want)
 			}
 		})
+	}
+}
+
+// countingChains counts ChainFor calls, so a test can see the chain resolved once per decision.
+type countingChains struct {
+	folderChains
+	calls *int
+}
+
+func (c countingChains) ChainFor(ctx context.Context, res authz.Resource) ([]Scope, error) {
+	*c.calls++
+	return c.folderChains.ChainFor(ctx, res)
+}
+
+func TestCredentialScopeResolvesTheChainOnce(t *testing.T) {
+	ctx := context.Background()
+	cred := &CredentialScope{Rules: []Rule{{Kinds: []string{Wildcard}, Verbs: []string{Wildcard}}}, Within: map[string][]Scope{"documents": {folder1}}}
+	e, _ := newEngine(map[string][]Binding{"user:o": {{RoleID: "owner", Scope: global}}})
+	calls := 0
+	e.Scopes = countingChains{calls: &calls}
+
+	if err := e.Authorize(ctx, &Principal{ID: "u", Subjects: []string{"user:o"}, Credential: cred}, "documents.get", doc("f1")); err != nil || calls != 1 {
+		t.Fatalf("binding path: %v after %d chain lookups, want allowed after 1", err, calls)
+	}
+	calls = 0
+	if err := e.Authorize(ctx, &Principal{Admin: true, Credential: cred}, "documents.get", doc("f1")); err != nil || calls != 1 {
+		t.Fatalf("admin path: %v after %d chain lookups, want allowed after 1", err, calls)
+	}
+
+	e.Scopes = folderChains{err: errDown}
+	if err := e.Authorize(ctx, &Principal{Admin: true, Credential: cred}, "documents.get", doc("f1")); err != errDown {
+		t.Fatalf("chain failure in the credential check = %v, want it returned", err)
+	}
+	e.Scopes = nil
+	if err := e.Authorize(ctx, &Principal{Admin: true, Credential: cred}, "documents.get", doc("f1")); !errors.Is(err, authz.ErrForbidden) {
+		t.Fatalf("no resolver = %v, want forbidden", err)
+	}
+}
+
+// A limited credential may call the list; the rows it gets back are the ones inside the limit.
+func TestLimitedListIsAdmittedThenFiltered(t *testing.T) {
+	ctx := context.Background()
+	e, _ := newEngine(map[string][]Binding{"user:o": {{RoleID: "owner", Scope: global}}})
+	p := &Principal{ID: "u", Subjects: []string{"user:o"}, Credential: &CredentialScope{
+		Rules:  []Rule{{Kinds: []string{"documents"}, Verbs: []string{"get", "list", "create"}}},
+		Within: map[string][]Scope{"documents": {folder1}},
+	}}
+	if err := e.Authorize(ctx, p, "documents.list", authz.Resource{Kind: "document"}); err != nil {
+		t.Fatalf("list = %v, want admitted", err)
+	}
+	if !e.Visible(ctx, p, "documents", doc("f1")) || e.Visible(ctx, p, "documents", doc("f2")) {
+		t.Fatal("rows outside the limit survive the filter, or rows inside it do not")
+	}
+	f, err := e.ScopeOf(ctx, p, "get", "documents")
+	if err != nil || !f.All || len(f.Within) != 1 || f.Within[0] != folder1 {
+		t.Fatalf("ScopeOf = %+v, %v; want everything within folder1", f, err)
+	}
+	if err := e.Authorize(ctx, p, "documents.create", authz.Resource{Kind: "document"}); !errors.Is(err, authz.ErrForbidden) {
+		t.Fatalf("create without an owner = %v, want forbidden", err)
 	}
 }
 

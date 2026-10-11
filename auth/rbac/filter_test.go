@@ -65,10 +65,14 @@ func TestScopeOf(t *testing.T) {
 		{"capability narrows to nothing", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs}}, nil, "list", Filter{}},
 		{"capability keeps", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs}}, nil, "get",
 			Filter{Scopes: []Scope{folder1}}},
-		{"id list", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {"d1"}}}}, nil, "get",
-			Filter{Scopes: []Scope{folder1}, IDs: []string{"d1"}}},
-		{"empty id list", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, IDs: map[string][]string{"documents": {}}}}, nil, "get",
+		{"narrowed by Within", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {org1, {Kind: "document", ID: "d1"}}}}}, nil, "get",
+			Filter{Scopes: []Scope{folder1}, Within: []Scope{org1, {Kind: "document", ID: "d1"}}}},
+		{"an admin narrowed by Within", &Principal{Admin: true, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {folder2}}}}, nil, "get",
+			Filter{All: true, Within: []Scope{folder2}}},
+		{"an empty Within", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {}}}}, nil, "get",
 			Filter{}},
+		{"Within on another kind", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"notes": {}}}}, nil, "get",
+			Filter{Scopes: []Scope{folder1}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,7 +108,7 @@ func TestScopeOfFailsClosed(t *testing.T) {
 	}{
 		{"unauthenticated", nil, nil, nil, authz.ErrUnauthenticated},
 		{"a rule without a filter", p, []ProductRule{plain}, nil, ErrUnfilterable},
-		{"a rule filter with its own id limit", p, []ProductRule{fixedFilter{f: Filter{IDs: []string{"x"}}}}, nil, ErrUnfilterable},
+		{"a rule filter with its own limit", p, []ProductRule{fixedFilter{f: Filter{Within: []Scope{folder1}}}}, nil, ErrUnfilterable},
 		{"a rule filter error", p, []ProductRule{fixedFilter{err: errDown}}, nil, errDown},
 		{"binding lookup", p, nil, func(_ *Engine, s *memSource) { s.bindingErr = errDown }, errDown},
 		{"role lookup", p, nil, func(_ *Engine, s *memSource) { s.roleErr = errDown }, errDown},

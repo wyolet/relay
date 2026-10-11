@@ -11,13 +11,13 @@ import (
 // ErrUnfilterable is returned by ScopeOf when a product rule cannot describe what it allows as a Filter; the caller filters row by row with Visible.
 var ErrUnfilterable = errors.New("rbac: rule cannot be expressed as a filter")
 
-// Filter is ScopeOf's answer: which owned resources of a kind the caller may act on, in a form a store can turn into a query. A resource passes when All is set, its scope chain holds one of Scopes, its owner is one of Owners, or its owner's kind is one of OwnerKinds; and, when IDs is not empty, its id is one of IDs as well.
+// Filter is ScopeOf's answer: which owned resources of a kind the caller may act on, in a form a store can turn into a query. A resource passes when All is set, its scope chain holds one of Scopes, its owner is one of Owners, or its owner's kind is one of OwnerKinds; and, when Within is not empty, its scope chain also holds one of Within. A scope in Scopes or Within whose kind is the queried kind means "this id": the resource is its own innermost scope.
 type Filter struct {
 	All        bool
 	Scopes     []Scope
 	Owners     []authz.Owner
 	OwnerKinds []string
-	IDs        []string
+	Within     []Scope
 }
 
 // None reports whether no resource passes.
@@ -43,11 +43,11 @@ func (e *Engine) ScopeOf(ctx context.Context, p *Principal, verb, kind string) (
 	if !rulesAllow(p.Credential.Rules, kind, verb) {
 		return Filter{}, nil
 	}
-	if ids, limited := p.Credential.IDs[kind]; limited {
-		if len(ids) == 0 {
+	if within, limited := p.Credential.Within[kind]; limited {
+		if len(within) == 0 {
 			return Filter{}, nil
 		}
-		f.IDs = slices.Clone(ids)
+		f.Within = slices.Clone(within)
 	}
 	return f, nil
 }
@@ -66,8 +66,8 @@ func (e *Engine) grantedFilter(ctx context.Context, p *Principal, kind, verb str
 		if err != nil {
 			return Filter{}, err
 		}
-		// A union of filters cannot carry one rule's id limit.
-		if len(rf.IDs) > 0 {
+		// A union of filters cannot carry one rule's own limit.
+		if len(rf.Within) > 0 {
 			return Filter{}, ErrUnfilterable
 		}
 		if rf.All {

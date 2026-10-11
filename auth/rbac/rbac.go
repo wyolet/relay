@@ -17,7 +17,7 @@ const SubjectAuthenticated = "system:authenticated"
 const (
 	// VerbGet is the verb Visible checks: seeing a resource is reading it.
 	VerbGet = "get"
-	// VerbList on a resource with no owner is admitted by a binding at any scope; the caller filters the rows it returns through Visible.
+	// VerbList on a resource with no owner is admitted by a binding at any scope; the caller filters the rows it returns through Visible or ScopeOf. Callers that cannot filter rows (e.g. a Kubernetes-style authorizer) must set Owner, or one scoped binding admits the whole collection.
 	VerbList = "list"
 )
 
@@ -61,7 +61,7 @@ type Principal struct {
 	ID string
 	// Subjects are the binding subjects the caller acts under.
 	Subjects []string
-	// Admin passes every product rule and binding; Credential still applies.
+	// Admin passes every product rule and binding; Credential still applies. It is meant for break-glass callers: roles such as owner or admin are better ordinary roles, so CheckGrant can tell their holders apart. Mapping a role to Admin is the product's choice.
 	Admin bool
 	// Credential narrows what this credential may do; nil leaves it unrestricted.
 	Credential *CredentialScope
@@ -70,22 +70,11 @@ type Principal struct {
 // Authenticated reports whether p is a caller the engine may evaluate.
 func (p *Principal) Authenticated() bool { return p != nil && (p.ID != "" || p.Admin) }
 
-// CredentialScope narrows a credential below what its principal holds. It fails closed: no rules permit nothing, and a kind present in IDs reaches only the listed ids, none when the list is empty, and never a resource that names no id.
+// CredentialScope narrows a credential below what its principal holds. It fails closed: no rules permit nothing, and a kind present in Within with an empty list reaches nothing.
 type CredentialScope struct {
 	Rules []Rule
-	// IDs maps an action kind to the only resource ids the credential reaches. A kind absent from the map is not limited by id.
-	IDs map[string][]string
-}
-
-func (c *CredentialScope) permits(kind, verb, id string) bool {
-	if c == nil {
-		return true
-	}
-	if !rulesAllow(c.Rules, kind, verb) {
-		return false
-	}
-	ids, limited := c.IDs[kind]
-	return !limited || (id != "" && slices.Contains(ids, id))
+	// Within maps an action kind to the scopes the credential is limited to there: a resource of that kind is reached only when one of the listed scopes, of any kind, is in its scope chain. A list on a resource with no id and no owner is admitted, its rows then filtered through Visible or ScopeOf; any other verb on such a resource is refused. A kind absent from the map is not limited by scope.
+	Within map[string][]Scope
 }
 
 // MatchesSubject reports whether p acts under subject.
@@ -96,7 +85,7 @@ func MatchesSubject(p *Principal, subject string) bool {
 	return subject == SubjectAuthenticated || slices.Contains(p.Subjects, subject)
 }
 
-// SplitAction cuts "<kind>[.<sub>].<verb>" into kind (everything before the first dot) and verb (everything after the last). An action without a dot is both.
+// SplitAction cuts "<kind>[.<sub>].<verb>" into kind (everything before the first dot) and verb (everything after the last). An action without a dot is both. The middle segment shares its parent kind's permission; a sub-resource that needs a permission of its own makes it part of the kind ("servers/status.update" → kind "servers/status").
 func SplitAction(action string) (kind, verb string) {
 	kind, verb = action, action
 	if i := strings.IndexByte(action, '.'); i >= 0 {

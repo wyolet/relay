@@ -397,17 +397,22 @@ func TestScopeOfMatchesAuthorize(t *testing.T) {
 
 // filterMatches is the query a store would run for f, against one row.
 func filterMatches(snap authz.Snapshot, f rbac.Filter, res authz.Resource) bool {
-	if len(f.IDs) > 0 && !slices.Contains(f.IDs, res.ID) {
+	var chain []rbac.Scope
+	for _, o := range snap.ScopeChainFor(res.Kind, res.ID, res.Owner) {
+		chain = append(chain, rbac.Scope{Kind: string(o.Kind), ID: o.ID})
+	}
+	inAny := func(scopes []rbac.Scope) bool {
+		for _, s := range scopes {
+			if slices.Contains(chain, s) {
+				return true
+			}
+		}
 		return false
 	}
-	if f.All {
-		return true
+	if len(f.Within) > 0 && !inAny(f.Within) {
+		return false
 	}
-	for _, o := range snap.ScopeChainFor(res.Kind, res.ID, res.Owner) {
-		if slices.Contains(f.Scopes, rbac.Scope{Kind: string(o.Kind), ID: o.ID}) {
-			return true
-		}
-	}
-	return slices.Contains(f.Owners, coreauthz.Owner{Kind: string(res.Owner.Kind), ID: res.Owner.ID}) ||
+	return f.All || inAny(f.Scopes) ||
+		slices.Contains(f.Owners, coreauthz.Owner{Kind: string(res.Owner.Kind), ID: res.Owner.ID}) ||
 		slices.Contains(f.OwnerKinds, string(res.Owner.Kind))
 }
