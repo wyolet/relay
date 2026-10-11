@@ -167,27 +167,69 @@ func TestLoginRoundTripsAndRotatesToken(t *testing.T) {
 	}
 }
 
+type ctxMarker struct{}
+
 func TestLoginOIDCAndSubjects(t *testing.T) {
-	m := New(newMemStore(), Options{Subjects: func(uid string, local, idp []string) []string {
-		return append(append([]string{"user:" + uid}, local...), idp...)
+	m := New(newMemStore(), Options{Subjects: func(ctx context.Context, p *principal.Principal) ([]string, error) {
+		if ctx.Value(ctxMarker{}) != "request" {
+			t.Error("Subjects did not get the request context")
+		}
+		subs := []string{p.Issuer + "|" + p.Subject, "user:" + p.ID}
+		subs = append(subs, p.Roles...)
+		return append(subs, p.Groups...), nil
 	}})
-	m.UseGroups(func(uid string) []string { return []string{"local-of-" + uid} })
 	c := login(t, m, func(ctx context.Context) error {
 		return m.LoginOIDC(ctx, "u-1", "alice", "https://idp|sub-1", "sid-1", []string{"eng"}, "viewer")
 	})
-	p := whoami(t, m, c)
+	var p *principal.Principal
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(c)
+	m.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var err error
+		p, _, err = m.Authenticate(r.WithContext(context.WithValue(r.Context(), ctxMarker{}, "request")))
+		if err != nil {
+			t.Errorf("Authenticate: %v", err)
+		}
+	})).ServeHTTP(httptest.NewRecorder(), req)
 	if p == nil || p.Issuer != "https://idp" || p.Subject != "sub-1" || !slices.Equal(p.Groups, []string{"eng"}) || !slices.Equal(p.Roles, []string{"viewer"}) {
 		t.Fatalf("principal = %+v", p)
 	}
-	if !slices.Equal(p.Subjects, []string{"user:u-1", "local-of-u-1", "eng"}) {
+	if !slices.Equal(p.Subjects, []string{"https://idp|sub-1", "user:u-1", "viewer", "eng"}) {
 		t.Errorf("subjects = %v", p.Subjects)
 	}
 
-	// Without UseGroups the hook still runs, with no local groups.
-	m = New(newMemStore(), Options{Subjects: func(uid string, local, _ []string) []string { return append([]string{uid}, local...) }})
+	m = New(newMemStore(), Options{Subjects: func(_ context.Context, p *principal.Principal) ([]string, error) { return []string{p.ID}, nil }})
 	c = login(t, m, func(ctx context.Context) error { return m.LoginOIDC(ctx, "u-2", "bob", "", "", nil) })
 	if p := whoami(t, m, c); p == nil || !slices.Equal(p.Subjects, []string{"u-2"}) || p.Issuer != "" || p.Groups != nil {
 		t.Errorf("principal = %+v", p)
+	}
+}
+
+// A failed subjects lookup is a server failure, as a failed store read is, and never an anonymous request.
+func TestSubjectsErrorIsServerFailure(t *testing.T) {
+	logged := captureLog(t)
+	errLookup := errors.New("lookup down")
+	m := New(newMemStore(), Options{Subjects: func(context.Context, *principal.Principal) ([]string, error) { return nil, errLookup }})
+	c := login(t, m, func(ctx context.Context) error { return m.Login(ctx, "u-1", "alice") })
+	serve(m, c, func(_ http.ResponseWriter, r *http.Request) {
+		p, claimed, err := m.Authenticate(r)
+		if p != nil || claimed || !errors.Is(err, errLookup) {
+			t.Errorf("Authenticate = %+v, %v, %v; want the lookup error", p, claimed, err)
+		}
+		if got := authn.Status(err); got != http.StatusInternalServerError {
+			t.Errorf("status = %d, want 500", got)
+		}
+	})
+	if s := logged.String(); !strings.Contains(s, "session subjects failure") || !strings.Contains(s, "lookup down") {
+		t.Errorf("log = %q", s)
+	}
+}
+
+func TestSameSiteOption(t *testing.T) {
+	m := New(newMemStore(), Options{SameSite: http.SameSiteLaxMode})
+	c := login(t, m, func(ctx context.Context) error { return m.Login(ctx, "u", "u") })
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax", c.SameSite)
 	}
 }
 

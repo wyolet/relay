@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -44,24 +45,25 @@ type Store interface {
 	DeleteUserToken(ctx context.Context, userID, token string) error
 }
 
-// Options configure a Manager. The cookie is always HttpOnly, SameSite=Strict and scoped to Path=/.
+// Options configure a Manager. The cookie is always HttpOnly and scoped to Path=/.
 type Options struct {
 	// CookieName defaults to "session".
 	CookieName string
 	// Secure marks the cookie HTTPS-only; set it everywhere but local development.
 	Secure bool
+	// SameSite defaults to Strict. A login or consent flow that returns through the identity provider needs Lax, or the browser withholds the cookie on the final redirect.
+	SameSite http.SameSite
 	// Lifetime is the absolute session lifetime; there is no idle timeout. Defaults to 24h.
 	Lifetime time.Duration
-	// Subjects renders the binding subjects of a user from its local groups (see UseGroups) and the groups its identity provider asserted. Nil leaves Principal.Subjects empty.
-	Subjects func(userID string, localGroups, idpGroups []string) []string
+	// Subjects renders the binding subjects of the session's principal, which carries its ID, Issuer, Subject, Groups (as the identity provider asserted them) and Roles. It runs on every Authenticate; an error fails the request as a server failure. Nil leaves Principal.Subjects empty.
+	Subjects func(ctx context.Context, p *principal.Principal) ([]string, error)
 }
 
 // Manager is the session layer. Wrap the routes that use sessions with Middleware; Login, Logout and Authenticate act on the session it loaded.
 type Manager struct {
 	sm       *scs.SessionManager
 	store    Store
-	subjects func(userID string, localGroups, idpGroups []string) []string
-	groupsOf func(userID string) []string
+	subjects func(ctx context.Context, p *principal.Principal) ([]string, error)
 }
 
 // New returns a Manager that keeps sessions in store.
@@ -78,7 +80,10 @@ func New(store Store, opts Options) *Manager {
 	}
 	sm.Cookie.HttpOnly = true
 	sm.Cookie.Secure = opts.Secure
-	sm.Cookie.SameSite = http.SameSiteStrictMode
+	sm.Cookie.SameSite = opts.SameSite
+	if sm.Cookie.SameSite == 0 {
+		sm.Cookie.SameSite = http.SameSiteStrictMode
+	}
 	sm.Cookie.Path = "/"
 	sm.Store = store
 	// scs's default ErrorFunc logs the bare error through the stdlib logger and writes a text/plain 500. On the commit path scs calls this mid-response and then still writes the handler's own status; onceWriter absorbs that duplicate and any later body.
@@ -95,9 +100,6 @@ func New(store Store, opts Options) *Manager {
 	}
 	return &Manager{sm: sm, store: store, subjects: opts.Subjects}
 }
-
-// UseGroups attaches the source of a user's local group names, passed to Options.Subjects. Call it once, before serving.
-func (m *Manager) UseGroups(fn func(userID string) []string) { m.groupsOf = fn }
 
 // Middleware wraps h with scs's LoadAndSave: it loads the session named by the cookie and persists changes with the response.
 func (m *Manager) Middleware(h http.Handler) http.Handler {
@@ -131,11 +133,12 @@ func (m *Manager) Authenticate(r *http.Request) (*principal.Principal, bool, err
 		_ = json.Unmarshal([]byte(raw), &p.Groups)
 	}
 	if m.subjects != nil {
-		var local []string
-		if m.groupsOf != nil {
-			local = m.groupsOf(uid)
+		subjects, err := m.subjects(ctx, p)
+		if err != nil {
+			slog.Error("session subjects failure", "err", err, "method", r.Method, "path", r.URL.Path)
+			return nil, false, fmt.Errorf("session subjects: %w", err)
 		}
-		p.Subjects = m.subjects(uid, local, p.Groups)
+		p.Subjects = subjects
 	}
 	return p, true, nil
 }

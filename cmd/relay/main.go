@@ -85,8 +85,7 @@ func main() {
 	startOAuthRefresher(listenerCtx, st, stores, kvStore)
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
-	sessMgr := session.New(kvStore, cookieSecure, "sess:")
-	sessMgr.UseGroups(func(userID string) []string { return cat.Current().GroupsForUser(userID) })
+	sessMgr := session.NewWithGroups(kvStore, cookieSecure, "sess:", func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 
 	validateOIDCEnv()
 

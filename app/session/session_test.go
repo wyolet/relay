@@ -148,6 +148,14 @@ func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 	}
 }
 
+func TestNewWithGroupsAddsLocalGroups(t *testing.T) {
+	m := NewWithGroups(kv.NewMem(), false, "sess:", func(userID string) []string { return []string{"local-of-" + userID} })
+	p := principalFor(t, m, loginCookie(t, m, "u-1"))
+	if p == nil || !slices.Equal(p.Subjects, []string{"user:u-1", "group:local-of-u-1", "group:system:authenticated"}) {
+		t.Errorf("principal = %+v", p)
+	}
+}
+
 // A request with no session, or a session that names no user, is not the session's to claim.
 func TestAuthenticateLeavesAnonymousRequests(t *testing.T) {
 	m := New(kv.NewMem(), false, "sess:")
