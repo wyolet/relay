@@ -43,6 +43,9 @@ func (e *RefError) Error() string { return fmt.Sprintf("%s %q not found", e.Kind
 // ErrPlainPassword reports a password written in clear text.
 var ErrPlainPassword = errors.New("plain-text passwords are refused; set password.hash to a bcrypt hash or password.valueFrom.env to an environment variable")
 
+// ErrOwnerDerived reports a metadata.owner, which these kinds derive rather than take.
+var ErrOwnerDerived = errors.New("metadata.owner is not accepted: the owner is derived from the kind and its spec (the system for Team, Role and Group, the parent for Project and ServiceAccount, the scope for RoleBinding)")
+
 // docError wraps err for doc d at field, keeping an *Error err already is.
 func docError(d *Document, field string, err error) error {
 	var e *Error

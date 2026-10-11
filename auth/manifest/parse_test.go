@@ -93,6 +93,14 @@ func TestParseRefusesDocumentsOutsideThePackage(t *testing.T) {
 	}
 }
 
+// Every kind derives its owner, so a document naming one is refused rather than silently overridden.
+func TestParseRefusesMetadataOwner(t *testing.T) {
+	e := parseErr(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: t, owner: {kind: user}}\n")
+	if e.Field != "metadata.owner" || !errors.Is(e, manifest.ErrOwnerDerived) {
+		t.Errorf("error = %v at %q, want ErrOwnerDerived at metadata.owner", e, e.Field)
+	}
+}
+
 // Document indexes count empty documents, so an error points at the right place in the file.
 func TestParseCountsEmptyDocuments(t *testing.T) {
 	docs, err := testRegistry(t).Parse(strings.NewReader("---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: a}\n---\n---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: b}\n"))

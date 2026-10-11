@@ -13,6 +13,9 @@ import (
 	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
+// errEnvPassword refuses an environment-sourced password where the environment is the server's and the caller is not its operator.
+var errEnvPassword = errors.New("password.valueFrom.env reads the server's environment and is accepted only by `relay seed`; set password.hash instead")
+
 // errLastAdmin is the users endpoint's keep-one-admin rule: with no enabled admin, nobody could grant the role back short of editing the database.
 var errLastAdmin = errors.New("this is the last enabled admin; grant the role to another account first")
 
@@ -32,6 +35,9 @@ func (b *builder) planUsers(ctx context.Context, docs []*authmanifest.Document) 
 			return &DuplicateError{Kind: authmanifest.KindUser, Name: name}
 		}
 		declared[name] = true
+		if d.User.UsesEnv() && !b.opts.EnvPasswords {
+			return &InvalidError{Kind: authmanifest.KindUser, Name: name, Err: errEnvPassword}
+		}
 		prev := stored[name]
 		var current *directory.User
 		if prev != nil {

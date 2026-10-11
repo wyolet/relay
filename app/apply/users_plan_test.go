@@ -69,6 +69,20 @@ func TestPlanUsersRefusesARoleChangeFromANonAdmin(t *testing.T) {
 	}
 }
 
+// Only a loader running as the operator reads a password from its environment; the API refuses one.
+func TestPlanUsersReadsEnvPasswordsOnlyWhenAllowed(t *testing.T) {
+	t.Setenv("RELAY_TEST_APPLY_PASSWORD", "a long test password")
+	src := "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: erin}\nspec: {password: {valueFrom: {env: RELAY_TEST_APPLY_PASSWORD}}}\n"
+	b := usersBuilder(nil, &builder{admin: true})
+	if err := b.run(context.Background(), userDocs(t, src)); !errors.Is(err, errEnvPassword) {
+		t.Fatalf("err = %v, want the env-password refusal", err)
+	}
+	b = usersBuilder(nil, &builder{admin: true, opts: Options{EnvPasswords: true}})
+	if err := b.run(context.Background(), userDocs(t, src)); err != nil || len(b.entries) != 1 || b.entries[0].Action != ActionCreate {
+		t.Fatalf("with EnvPasswords: err = %v, entries = %+v", err, b.entries)
+	}
+}
+
 func TestPlanUsersKeepsOneEnabledAdmin(t *testing.T) {
 	stored := []*user.User{{ID: "u-1", Username: "alice", Roles: []string{"admin"}}, {ID: "u-2", Username: "bob"}}
 	b := usersBuilder(stored, &builder{admin: true})

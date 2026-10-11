@@ -5,8 +5,7 @@
   "properties": {
     "apiVersion": {
       "enum": [
-        "auth.wyolet.dev/v1alpha1",
-        "relay.wyolet.dev/v1alpha2"
+        "auth.wyolet.dev/v1alpha1"
       ],
       "type": "string"
     },
@@ -39,57 +38,71 @@
           "type": "string"
         },
         "identity": {
-          "additionalProperties": false,
-          "properties": {
-            "issuer": {
-              "type": "string"
-            },
-            "subject": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "issuer",
-            "subject"
-          ],
-          "type": "object"
-        },
-        "password": {
-          "additionalProperties": false,
-          "description": "A hash or an environment variable; plain text is refused.",
-          "oneOf": [
+          "anyOf": [
             {
-              "required": [
-                "hash"
-              ]
-            },
-            {
-              "required": [
-                "valueFrom"
-              ]
-            }
-          ],
-          "properties": {
-            "hash": {
-              "description": "A bcrypt hash.",
-              "pattern": "^\\$2[aby]\\$",
-              "type": "string"
-            },
-            "valueFrom": {
               "additionalProperties": false,
-              "description": "An environment variable holding a password or a bcrypt hash.",
               "properties": {
-                "env": {
+                "issuer": {
+                  "type": "string"
+                },
+                "subject": {
                   "type": "string"
                 }
               },
               "required": [
-                "env"
+                "issuer",
+                "subject"
               ],
               "type": "object"
+            },
+            {
+              "maxProperties": 0,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "const": ""
             }
-          },
-          "type": "object"
+          ],
+          "description": "The identity provider's issuer and subject. Omit to keep the stored identity; null, \"\" or {} clears it."
+        },
+        "password": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "maxProperties": 1,
+              "properties": {
+                "hash": {
+                  "description": "A bcrypt hash.",
+                  "pattern": "^\\$2[aby]\\$",
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "additionalProperties": false,
+                  "description": "An environment variable holding a password or a bcrypt hash.",
+                  "properties": {
+                    "env": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "env"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "A bcrypt hash or an environment variable; plain text is refused. Omit to keep the stored password; null, \"\" or {} clears it."
         },
         "roles": {
           "items": {

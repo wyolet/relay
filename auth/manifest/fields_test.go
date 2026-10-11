@@ -109,8 +109,11 @@ func TestJSONSchemaCarriesTheVocabularyAndTheFields(t *testing.T) {
 	if !strings.Contains(string(all[manifest.KindTeam]), `"costCenter"`) || strings.Contains(string(all[manifest.KindProject]), `"costCenter"`) {
 		t.Errorf("product field placed wrong:\n%s", all[manifest.KindTeam])
 	}
-	if !strings.Contains(string(all[manifest.KindUser]), `"oneOf"`) {
-		t.Errorf("user schema lacks the password rule:\n%s", all[manifest.KindUser])
+	if !strings.Contains(string(all[manifest.KindUser]), `Omit to keep the stored password`) {
+		t.Errorf("user schema does not describe keeping an omitted password:\n%s", all[manifest.KindUser])
+	}
+	if strings.Contains(string(all[manifest.KindTeam]), `"owner"`) {
+		t.Errorf("team schema offers metadata.owner:\n%s", all[manifest.KindTeam])
 	}
 	if _, err := r.JSONSchema("Policy"); err == nil {
 		t.Error("schema for an unknown kind")

@@ -11,19 +11,12 @@ import (
 // These convert between relay's wire DTOs for the module's kinds and the module's documents. They carry every field across; the module owns what the fields mean.
 
 func wireMetaOf(m authmanifest.Metadata) WireMeta {
-	w := WireMeta{ID: m.ID, Name: m.Name, DisplayName: m.DisplayName, Description: m.Description, Labels: m.Labels, Annotations: m.Annotations}
-	if m.Owner != nil {
-		w.Owner = WireOwner{Kind: meta.OwnerKind(m.Owner.Kind), Name: m.Owner.Name, ID: m.Owner.ID}
-	}
-	return w
+	return WireMeta{ID: m.ID, Name: m.Name, DisplayName: m.DisplayName, Description: m.Description, Labels: m.Labels, Annotations: m.Annotations}
 }
 
+// docMetaOf leaves the wire owner behind: the module derives every owner of these kinds, as relay's translate always did.
 func docMetaOf(w WireMeta) authmanifest.Metadata {
-	m := authmanifest.Metadata{ID: w.ID, Name: w.Name, DisplayName: w.DisplayName, Description: w.Description, Labels: w.Labels, Annotations: w.Annotations}
-	if w.Owner != (WireOwner{}) {
-		m.Owner = &authmanifest.Owner{Kind: string(w.Owner.Kind), Name: w.Owner.Name, ID: w.Owner.ID}
-	}
-	return m
+	return authmanifest.Metadata{ID: w.ID, Name: w.Name, DisplayName: w.DisplayName, Description: w.Description, Labels: w.Labels, Annotations: w.Annotations}
 }
 
 func authDoc(apiVersion, kind string, w WireMeta) *authmanifest.Document {

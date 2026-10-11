@@ -82,6 +82,9 @@ type userMetadata struct {
 }
 
 func (r *Registry) decodeMetadata(d *Document, n *yaml.Node) error {
+	if mappingValue(n, "owner") != nil {
+		return &Error{Doc: d.Index, Kind: d.Kind, Field: "metadata.owner", Err: ErrOwnerDerived}
+	}
 	t := reflect.TypeFor[Metadata]()
 	if d.Kind == KindUser {
 		t = reflect.TypeFor[userMetadata]()
@@ -102,7 +105,9 @@ func (r *Registry) decodeMetadata(d *Document, n *yaml.Node) error {
 
 func (r *Registry) decodeSpec(d *Document, n *yaml.Node) error {
 	t := specTypes[d.Kind]
+	var cleared []string
 	if d.Kind == KindUser {
+		cleared = takeEmpty(n, "password", "identity")
 		if err := refusePlainPassword(d, n); err != nil {
 			return err
 		}
@@ -138,7 +143,31 @@ func (r *Registry) decodeSpec(d *Document, n *yaml.Node) error {
 		}
 	}
 	setSpec(d, spec.Interface())
+	for _, key := range cleared {
+		d.User.clear(key)
+	}
 	return nil
+}
+
+// takeEmpty removes the keys of mapping n whose value is null, "" or {}, and returns them: on a User those clear the stored value, which an omitted key keeps.
+func takeEmpty(n *yaml.Node, keys ...string) []string {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	var taken []string
+	content := n.Content[:0]
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		empty := v.Tag == "!!null" || (v.Kind == yaml.ScalarNode && v.Tag == "!!str" && v.Value == "") ||
+			(v.Kind == yaml.MappingNode && len(v.Content) == 0)
+		if empty && slices.Contains(keys, k.Value) {
+			taken = append(taken, k.Value)
+			continue
+		}
+		content = append(content, k, v)
+	}
+	n.Content = content
+	return taken
 }
 
 func (r *Registry) hasField(kind, name string) bool {

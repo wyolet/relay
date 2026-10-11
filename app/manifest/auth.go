@@ -1,4 +1,4 @@
-// The tenancy, RBAC and account kinds are the auth module's manifests. Relay registers its rule vocabulary and its own spec fields with the module, accepts its relay.wyolet.dev apiVersion for them, and keeps its wire DTOs and translate functions as thin adapters over the module's.
+// The tenancy, RBAC and account kinds are the auth module's manifests. Relay registers its rule vocabulary and its own spec fields with the module, and keeps its wire DTOs and translate functions as thin adapters over the module's.
 
 package manifest
 
@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/team"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
@@ -18,9 +16,8 @@ import (
 
 // AuthManifests is relay's registration with the auth module's manifests.
 var AuthManifests = authmanifest.MustRegistry(authmanifest.Config{
-	RuleKinds:   role.Kinds,
-	RuleVerbs:   role.Verbs,
-	APIVersions: []string{APIVersion},
+	RuleKinds: role.Kinds,
+	RuleVerbs: role.Verbs,
 	Fields: map[string][]authmanifest.Field{
 		authmanifest.KindTeam:           {budgetField},
 		authmanifest.KindProject:        {budgetField},
@@ -93,29 +90,6 @@ var policyField = authmanifest.Field{
 		}
 		return json.Marshal(id)
 	},
-}
-
-// authKind reports a document the auth module decodes: one of its kinds under its apiVersion or relay's. A User under any other apiVersion stays the identity loader's (see isForeignKind).
-func authKind(apiVersion, kind string) bool {
-	if !authmanifest.IsKind(kind) {
-		return false
-	}
-	if kind == authmanifest.KindUser {
-		return apiVersion == authmanifest.APIVersion
-	}
-	return AuthManifests.AcceptsAPIVersion(apiVersion)
-}
-
-func parseAuthDoc(index int, node *yaml.Node) (Document, error) {
-	d, err := AuthManifests.Decode(index, node)
-	if err != nil {
-		return Document{}, err
-	}
-	doc, err := fromAuthDoc(&d)
-	if err != nil {
-		return Document{}, &authmanifest.Error{Doc: index, Kind: d.Kind, Name: d.Metadata.Name, Err: err}
-	}
-	return doc, nil
 }
 
 func strictJSON(raw json.RawMessage, dst any) error {

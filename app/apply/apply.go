@@ -128,6 +128,12 @@ type Options struct {
 	// whose grant check probes Authz; the control plane passes its own, which
 	// also ends an account's sessions when apply changes it.
 	Directory *directory.Directory
+
+	// EnvPasswords lets a User document read its password from this
+	// process's environment (password.valueFrom.env). Only `relay seed`
+	// sets it: over the API it would let a caller read the server's
+	// variables into an account's password.
+	EnvPasswords bool
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —

@@ -99,6 +99,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	plan, err := apply.Plan(ctx, docs, apply.Options{
 		Stores: apply.NewStores(opts.Pool, opts.MasterKey),
 		Force:  opts.ClearDirty,
+		// The seed runs as the deployment's operator, whose environment it is.
+		EnvPasswords: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("seed: %w", err)

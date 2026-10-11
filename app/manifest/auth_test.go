@@ -47,7 +47,9 @@ func TestAuthKindsParseTheSameUnderEitherAPIVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relay apiVersion: %v", err)
 	}
+	// The auth apiVersion refuses metadata.owner; relay's ignores it, so dropping it changes no row.
 	moved := strings.ReplaceAll(authKindsYAML, manifest.APIVersion, authmanifest.APIVersion)
+	moved = strings.Replace(moved, " owner: {kind: user},", "", 1)
 	auth, err := manifest.Parse(strings.NewReader(moved))
 	if err != nil {
 		t.Fatalf("auth apiVersion: %v", err)
@@ -99,17 +101,33 @@ func translate(t *testing.T, d manifest.Document, idx manifest.Resolver) any {
 	return row
 }
 
-// The auth module decodes these kinds strictly under relay's apiVersion as well: an unknown field, a rule typo and a typo inside a relay field all fail at parse.
-func TestAuthKindsParseStrictly(t *testing.T) {
-	for _, tc := range []struct{ name, doc, want string }{
-		{"unknown field", "kind: Group\nmetadata: {name: g}\nspec: {membrs: [a]}", `spec.membrs: unknown field "membrs"`},
-		{"rule typo", "kind: Role\nmetadata: {name: r}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}", `spec.rules[0].verbs[0]: "updat" is not a registered verb`},
-		{"budget typo", "kind: Team\nmetadata: {name: t}\nspec: {budget: {amout: \"1\"}}", `spec.budget: json: unknown field "amout"`},
-	} {
+// strictCases fail under the auth apiVersion and parse under relay's, which keeps its leniency.
+var strictCases = []struct{ name, doc, want string }{
+	{"unknown field", "kind: Group\nmetadata: {name: g}\nspec: {membrs: [a]}", `spec.membrs: unknown field "membrs"`},
+	{"rule typo", "kind: Role\nmetadata: {name: r}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}", `spec.rules[0].verbs[0]: "updat" is not a registered verb`},
+	{"budget typo", "kind: Team\nmetadata: {name: t}\nspec: {budget: {amount: \"1\", amout: \"1\"}}", `spec.budget: json: unknown field "amout"`},
+	{"owner", "kind: Team\nmetadata: {name: t, owner: {kind: user}}", `metadata.owner is not accepted`},
+}
+
+// Under the auth apiVersion the module decodes these kinds strictly: each problem fails at parse, naming the document and the field.
+func TestAuthKindsParseStrictlyUnderTheAuthAPIVersion(t *testing.T) {
+	for _, tc := range strictCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := manifest.Parse(strings.NewReader("---\napiVersion: relay.wyolet.dev/v1alpha2\n" + tc.doc + "\n"))
-			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "doc 0") {
-				t.Fatalf("err = %v, want %q at doc 0", err, tc.want)
+			_, err := manifest.Parse(strings.NewReader("apiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: first}\n---\napiVersion: auth.wyolet.dev/v1alpha1\n" + tc.doc + "\n"))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "doc 1") {
+				t.Fatalf("err = %v, want %q at doc 1", err, tc.want)
+			}
+		})
+	}
+}
+
+// Under relay's apiVersion the same documents parse as they always have: stray fields and metadata.owner are ignored, and a rule typo is left to the row's Validate at plan time.
+func TestAuthKindsStayLenientUnderRelayAPIVersion(t *testing.T) {
+	for _, tc := range strictCases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha2\n" + tc.doc + "\n"))
+			if err != nil || len(docs) != 1 {
+				t.Fatalf("docs = %v, err = %v", docs, err)
 			}
 		})
 	}

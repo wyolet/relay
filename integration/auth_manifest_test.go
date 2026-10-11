@@ -5,6 +5,8 @@ package integration_test
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,17 +14,19 @@ import (
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
-// underAuthAPIVersion moves every document of the auth module's kinds to its apiVersion, leaving relay's own kinds (the Policy) where they are: a mixed file.
+// underAuthAPIVersion moves every document of the auth module's kinds to its apiVersion, leaving relay's own kinds (the Policy) where they are: a mixed file. The auth apiVersion refuses metadata.owner, which relay's ignores for these kinds, so it is dropped.
 func underAuthAPIVersion(bundle string) string {
 	docs := strings.Split(bundle, "---\n")
 	for i, d := range docs {
 		if !strings.Contains(d, "kind: Policy\n") {
-			docs[i] = strings.Replace(d, "apiVersion: relay.wyolet.dev/v1alpha2", "apiVersion: auth.wyolet.dev/v1alpha1", 1)
+			d = strings.Replace(d, "apiVersion: relay.wyolet.dev/v1alpha2", "apiVersion: auth.wyolet.dev/v1alpha1", 1)
+			docs[i] = strings.ReplaceAll(d, ", owner: {kind: user}", "")
 		}
 	}
 	return strings.Join(docs, "---\n")
@@ -69,7 +73,7 @@ func TestIntegration_AuthKindsWriteTheSameRowsUnderEitherAPIVersion(t *testing.T
 	diff(t, authRows, relayRows)
 }
 
-// mixedBundle has relay kinds naming auth kinds (a policy owned by a project, keys for a service account and a user, a policy binding) and auth kinds naming relay kinds (a service account's policy), plus an account with its password from the environment.
+// mixedBundle has relay kinds naming auth kinds (a policy owned by a project, keys for a service account and a user, a policy binding) and auth kinds naming relay kinds (a service account's policy), plus an account; DANA_HASH stands for its password hash.
 const mixedBundle = `apiVersion: auth.wyolet.dev/v1alpha1
 kind: Team
 metadata: {name: data}
@@ -95,7 +99,7 @@ kind: User
 metadata: {name: dana}
 spec:
   email: dana@example.com
-  password: {valueFrom: {env: RELAY_TEST_DANA_PASSWORD}}
+  password: {hash: "DANA_HASH"}
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Key
@@ -122,13 +126,18 @@ spec:
 `
 
 func TestIntegration_ApplyMixesRelayAndAuthKinds(t *testing.T) {
-	t.Setenv("RELAY_TEST_DANA_PASSWORD", "a long test password")
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	if err := role.SeedBuiltins(ctx, st.stores.Role, nil, nil); err != nil {
 		t.Fatalf("seed built-in roles: %v", err)
 	}
-	code, plan, raw := st.applyBundle(mixedBundle, "")
+	hash, err := password.Hash("a long test password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := strings.Replace(mixedBundle, "DANA_HASH", hash, 1)
+	code, plan, raw := st.applyBundle(mixed, "")
 	if code != http.StatusOK {
 		t.Fatalf("apply = %d: %s", code, raw)
 	}
@@ -139,8 +148,8 @@ func TestIntegration_ApplyMixesRelayAndAuthKinds(t *testing.T) {
 	if err != nil || dana == nil {
 		t.Fatalf("dana = %v, %v", dana, err)
 	}
-	if ok, plain := password.Verify(dana.PasswordHash, "a long test password"); !ok || plain {
-		t.Errorf("dana's password was not stored as a bcrypt hash of the env value")
+	if dana.PasswordHash != hash {
+		t.Errorf("dana's password hash was not stored as given")
 	}
 	keys, err := st.stores.Key.List(ctx)
 	if err != nil {
@@ -156,8 +165,8 @@ func TestIntegration_ApplyMixesRelayAndAuthKinds(t *testing.T) {
 		t.Fatalf("service accounts = %+v, %v", sas, err)
 	}
 
-	// Re-applying the same file, the env password included, changes nothing.
-	_, again, raw := st.applyBundle(mixedBundle, "dryRun=true")
+	// Re-applying the same file changes nothing.
+	_, again, raw := st.applyBundle(mixed, "dryRun=true")
 	if again.Counts.Unchanged != 9 {
 		t.Fatalf("re-apply: %s", raw)
 	}
@@ -176,12 +185,12 @@ func TestIntegration_ApplyMixesRelayAndAuthKinds(t *testing.T) {
 	}
 }
 
-// A typo in a rule fails the apply naming the document and the field, under relay's apiVersion too.
+// Under the auth apiVersion a typo in a rule fails the apply naming the document and the field, and so does a plain-text password.
 func TestIntegration_ApplyRefusesATypoInARule(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
-	bundle := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Team\nmetadata: {name: t}\n---\n" +
-		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Role\nmetadata: {name: model-editor}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}\n"
+	bundle := "apiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: t}\n---\n" +
+		"apiVersion: auth.wyolet.dev/v1alpha1\nkind: Role\nmetadata: {name: model-editor}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}\n"
 	code, _, raw := st.applyBundle(bundle, "dryRun=true")
 	if code != http.StatusBadRequest || !strings.Contains(string(raw), `doc 1 Role \"model-editor\": spec.rules[0].verbs[0]: \"updat\" is not a registered verb`) {
 		t.Fatalf("apply = %d %s", code, raw)
@@ -189,5 +198,42 @@ func TestIntegration_ApplyRefusesATypoInARule(t *testing.T) {
 	code, _, raw = st.applyBundle("apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: eve}\nspec: {password: hunter22}\n", "dryRun=true")
 	if code != http.StatusBadRequest || !strings.Contains(string(raw), "plain-text passwords are refused") {
 		t.Fatalf("plain password apply = %d %s", code, raw)
+	}
+}
+
+// envUser reads its password from the environment, which only `relay seed` may do.
+const envUser = "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: erin}\nspec: {password: {valueFrom: {env: RELAY_TEST_ERIN_PASSWORD}}}\n"
+
+// The API refuses an environment-sourced password, so a caller cannot read the server's variables into an account.
+func TestIntegration_ApplyRefusesAnEnvPassword(t *testing.T) {
+	t.Setenv("RELAY_TEST_ERIN_PASSWORD", "a long test password")
+	st := newStack(t)
+	code, _, raw := st.applyBundle(envUser, "dryRun=true")
+	if code != http.StatusBadRequest || !strings.Contains(string(raw), "password.valueFrom.env reads the server's environment") {
+		t.Fatalf("apply = %d %s", code, raw)
+	}
+	if u, err := st.users.ByUsername(context.Background(), "erin"); err != nil || u != nil {
+		t.Fatalf("erin = %+v, %v; want no account", u, err)
+	}
+}
+
+// `relay seed` runs as the operator, so it reads the password from its own environment and hashes it.
+func TestIntegration_SeedReadsAnEnvPassword(t *testing.T) {
+	t.Setenv("RELAY_TEST_ERIN_PASSWORD", "a long test password")
+	st := newStack(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "erin.yaml"), []byte(envUser), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := seed.Run(context.Background(), seed.Options{Pool: testPool(t, st.dsn), YAMLDir: dir})
+	if err != nil || res.Users != 1 {
+		t.Fatalf("seed = %+v, %v", res, err)
+	}
+	u, err := st.users.ByUsername(context.Background(), "erin")
+	if err != nil || u == nil {
+		t.Fatalf("erin = %v, %v", u, err)
+	}
+	if ok, plain := password.Verify(u.PasswordHash, "a long test password"); !ok || plain {
+		t.Errorf("erin's password is not a bcrypt hash of the env value")
 	}
 }

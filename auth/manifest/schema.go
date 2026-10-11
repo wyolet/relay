@@ -74,10 +74,8 @@ func metadataSchema(kind string) map[string]any {
 	}
 	name := str()
 	name["pattern"] = `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
-	owner := objectSchema(map[string]any{"kind": str(), "name": str(), "id": str()})
 	return objectSchema(map[string]any{
 		"id": str(), "name": name, "displayName": str(), "description": str(),
-		"owner":  described(owner, "Ignored: the owner is derived from the kind and its spec."),
 		"labels": stringMap(), "annotations": stringMap(),
 	}, "name")
 }
@@ -145,16 +143,28 @@ func (r *Registry) specSchema(kind string) (map[string]any, bool) {
 	return objectSchema(props, required...), true
 }
 
+// clearing is the null and "" a User field takes to clear the stored value.
+func clearing() []any {
+	return []any{map[string]any{"type": "null"}, map[string]any{"const": ""}}
+}
+
 func userSchema() map[string]any {
 	hash := described(str(), "A bcrypt hash.")
 	hash["pattern"] = `^\$2[aby]\$`
 	env := objectSchema(map[string]any{"env": str()}, "env")
 	password := objectSchema(map[string]any{"hash": hash, "valueFrom": described(env, "An environment variable holding a password or a bcrypt hash.")})
-	password["oneOf"] = []any{map[string]any{"required": []string{"hash"}}, map[string]any{"required": []string{"valueFrom"}}}
+	password["maxProperties"] = 1
+	identity := objectSchema(map[string]any{"issuer": str(), "subject": str()}, "issuer", "subject")
 	return map[string]any{
-		"email":    str(),
-		"password": described(password, "A hash or an environment variable; plain text is refused."),
-		"identity": objectSchema(map[string]any{"issuer": str(), "subject": str()}, "issuer", "subject"),
+		"email": str(),
+		"password": map[string]any{
+			"description": "A bcrypt hash or an environment variable; plain text is refused. Omit to keep the stored password; null, \"\" or {} clears it.",
+			"anyOf":       append([]any{password}, clearing()...),
+		},
+		"identity": map[string]any{
+			"description": "The identity provider's issuer and subject. Omit to keep the stored identity; null, \"\" or {} clears it.",
+			"anyOf":       append([]any{identity, map[string]any{"type": "object", "maxProperties": 0}}, clearing()...),
+		},
 		"roles":    array(str()),
 		"disabled": boolean(),
 	}

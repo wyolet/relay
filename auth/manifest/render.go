@@ -157,9 +157,7 @@ func Render(docs []*Document) ([]byte, error) {
 
 func documentNode(d *Document) (*yaml.Node, error) {
 	var meta, spec yaml.Node
-	m := d.Metadata
-	m.Owner = nil
-	if err := meta.Encode(m); err != nil {
+	if err := meta.Encode(d.Metadata); err != nil {
 		return nil, err
 	}
 	if err := spec.Encode(d.spec()); err != nil {

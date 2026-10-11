@@ -214,6 +214,9 @@ func LoadDir(dir string) ([]Document, error) {
 }
 
 func dispatchKind(env *rawEnvelope) (Document, error) {
+	if doc, ok, err := decodeRelayAuthKind(env); ok {
+		return doc, err
+	}
 	switch env.Kind {
 	case "Provider":
 		var spec ProviderSpec

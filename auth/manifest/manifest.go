@@ -59,24 +59,15 @@ type Document struct {
 // Name is the document's metadata.name.
 func (d *Document) Name() string { return d.Metadata.Name }
 
-// Metadata is the identity block every document carries. A User document takes only name.
+// Metadata is the identity block every document carries. A User document takes only name. There is no owner: every kind's owner is derived (the system for Team, Role and Group, the parent for Project and ServiceAccount, the scope for RoleBinding), so Parse refuses metadata.owner.
 type Metadata struct {
 	// ID is informational: ids are minted by the store, and a document whose id differs from the row its name resolves to is reported, not obeyed.
-	ID          string `yaml:"id,omitempty"          json:"id,omitempty"`
-	Name        string `yaml:"name"                  json:"name"`
-	DisplayName string `yaml:"displayName,omitempty" json:"displayName,omitempty"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	// Owner is accepted so documents written for older loaders still parse, and ignored: every kind's owner is derived (the system for Team, Role and Group, the parent for Project and ServiceAccount, the scope for RoleBinding).
-	Owner       *Owner            `yaml:"owner,omitempty"       json:"owner,omitempty"`
+	ID          string            `yaml:"id,omitempty"          json:"id,omitempty"`
+	Name        string            `yaml:"name"                  json:"name"`
+	DisplayName string            `yaml:"displayName,omitempty" json:"displayName,omitempty"`
+	Description string            `yaml:"description,omitempty" json:"description,omitempty"`
 	Labels      map[string]string `yaml:"labels,omitempty"      json:"labels,omitempty"`
 	Annotations map[string]string `yaml:"annotations,omitempty" json:"annotations,omitempty"`
-}
-
-// Owner is the shape metadata.owner takes.
-type Owner struct {
-	Kind string `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Name string `yaml:"name,omitempty" json:"name,omitempty"`
-	ID   string `yaml:"id,omitempty"   json:"id,omitempty"`
 }
 
 // TeamSpec is a team. Enabled nil means enabled, here and in every spec below.
