@@ -17,21 +17,30 @@ import (
 	"github.com/wyolet/relay/auth/principal"
 )
 
-// updateUsers is an in-memory userWriter: a directory over the auth module's memstore, read back as relay users.
+// updateUsers is an in-memory userWriter: a directory over the auth module's memstore, read back as relay users. ended records the users whose sessions the directory ended.
 type updateUsers struct {
-	t   *testing.T
-	ms  *memstore.Store
-	dir *directory.Directory
+	t     *testing.T
+	ms    *memstore.Store
+	dir   *directory.Directory
+	ended *endedUsers
+}
+
+type endedUsers struct{ ids []string }
+
+func (e *endedUsers) DestroyUser(_ context.Context, id string) error {
+	e.ids = append(e.ids, id)
+	return nil
 }
 
 func newUpdateUsers(t *testing.T, rows ...*user.User) *updateUsers {
 	t.Helper()
 	ms := memstore.New()
-	dir, err := directory.New(directory.Config{Stores: ms.Stores(), Grants: grantChecker{authz: allowAuthz{}}})
+	ended := &endedUsers{}
+	dir, err := directory.New(directory.Config{Stores: ms.Stores(), Grants: grantChecker{authz: allowAuthz{}}, Revoker: ended})
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := &updateUsers{t: t, ms: ms, dir: dir}
+	u := &updateUsers{t: t, ms: ms, dir: dir, ended: ended}
 	for _, r := range rows {
 		u.put(r)
 	}
@@ -215,6 +224,35 @@ func TestLastEnabledAdminCannotBeRemoved(t *testing.T) {
 		users.put(old)
 		if _, err := updateUser(admin, users, scopedAllow{}, in); err != nil {
 			t.Fatalf("%s with another enabled admin: %v", name, err)
+		}
+	}
+}
+
+// A live session carries the roles and state it logged in with, so a role change, a disable and a re-enable through the users endpoint each end the account's sessions; an edit that changes nothing ends none.
+func TestUserUpdateEndsSessions(t *testing.T) {
+	admin := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true})
+	users := newUpdateUsers(t, &user.User{ID: "u-1", Username: "alice"})
+	for _, step := range []struct {
+		name string
+		in   *userUpdateInput
+		ends bool
+	}{
+		{"role change", rolesInput("u-1", "viewer"), true},
+		{"same roles", rolesInput("u-1", "viewer"), false},
+		{"disable", disableUserInput("u-1", true), true},
+		{"enable", disableUserInput("u-1", false), true},
+		{"role change and disable", func() *userUpdateInput {
+			in := rolesInput("u-1")
+			in.Body.Disabled = disableUserInput("u-1", true).Body.Disabled
+			return in
+		}(), true},
+	} {
+		users.ended.ids = nil
+		if _, err := updateUser(admin, users, scopedAllow{}, step.in); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if got := len(users.ended.ids) == 1 && users.ended.ids[0] == "u-1"; got != step.ends {
+			t.Fatalf("%s: sessions ended for %v, want ended = %v", step.name, users.ended.ids, step.ends)
 		}
 	}
 }
