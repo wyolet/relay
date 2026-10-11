@@ -25,6 +25,7 @@ func Run(t *testing.T, open func(t *testing.T) directory.Stores) {
 	t.Run("versions", func(t *testing.T) { testVersions(t, open(t)) })
 	t.Run("references", func(t *testing.T) { testReferences(t, open(t)) })
 	t.Run("cascades", func(t *testing.T) { testCascades(t, open(t)) })
+	t.Run("scope cascades", func(t *testing.T) { testScopeCascades(t, open(t)) })
 }
 
 // fixture is one row of every kind, linked to each other.

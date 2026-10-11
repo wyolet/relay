@@ -122,6 +122,7 @@ func (s *Store) cascadeTeam(id string) {
 			s.cascadeProject(pid)
 		}
 	}
+	s.dropBindingsAt(directory.OwnerTeam, id)
 }
 
 func (s *Store) cascadeProject(id string) {
@@ -129,6 +130,16 @@ func (s *Store) cascadeProject(id string) {
 		if sa.Spec.ProjectID == id {
 			delete(s.serviceAccounts.rows, said)
 			s.dropServiceAccount(said)
+		}
+	}
+	s.dropBindingsAt(directory.OwnerProject, id)
+}
+
+// dropBindingsAt deletes the bindings scoped to a deleted team or project, as the Postgres store does in the delete's transaction.
+func (s *Store) dropBindingsAt(kind, id string) {
+	for bid, b := range s.bindings.rows {
+		if b.Spec.Scope.Kind == kind && b.Spec.Scope.ID == id {
+			delete(s.bindings.rows, bid)
 		}
 	}
 }

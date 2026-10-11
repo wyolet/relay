@@ -83,3 +83,48 @@ func testCascades(t *testing.T, s directory.Stores) {
 	}
 	must(t, s.Roles.Delete(ctx, f.role.Meta.ID))
 }
+
+// testScopeCascades: deleting a team or project deletes the bindings scoped to it, and a team's delete those of its projects; bindings at any other scope stay.
+func testScopeCascades(t *testing.T, s directory.Stores) {
+	ctx := context.Background()
+	f := seed(t, s)
+	other := &directory.Team{Meta: meta("other", directory.OwnerSystem, "")}
+	must(t, s.Teams.Upsert(ctx, other))
+	web := &directory.Project{Meta: meta("web", "", ""), Spec: directory.ProjectSpec{TeamID: f.team.Meta.ID}}
+	must(t, s.Projects.Upsert(ctx, web))
+	bind := func(name string, scope rbac.Scope) *directory.RoleBinding {
+		b := &directory.RoleBinding{Meta: meta(name, "", ""), Spec: directory.RoleBindingSpec{
+			RoleID: f.role.Meta.ID, Scope: scope, Subjects: []directory.Subject{directory.AllAuthenticated}}}
+		must(t, s.RoleBindings.Upsert(ctx, b))
+		return b
+	}
+	atWeb := bind("at-web", rbac.Scope{Kind: directory.OwnerProject, ID: web.Meta.ID})
+	atTeam := bind("at-team", rbac.Scope{Kind: directory.OwnerTeam, ID: f.team.Meta.ID})
+	kept := []*directory.RoleBinding{
+		bind("at-other", rbac.Scope{Kind: directory.OwnerTeam, ID: other.Meta.ID}),
+		bind("global", directory.Global),
+		// A product's own scope kind sharing the team's id is not the team.
+		bind("folder", rbac.Scope{Kind: "folder", ID: f.team.Meta.ID}),
+	}
+	gone := func(what string, bs ...*directory.RoleBinding) {
+		t.Helper()
+		for _, b := range bs {
+			if got := fetch(t, get(s.RoleBindings, b.Meta.ID)); got != nil {
+				t.Fatalf("%s left binding %s", what, b.Meta.Name)
+			}
+		}
+	}
+
+	must(t, s.Projects.Delete(ctx, web.Meta.ID))
+	gone("project delete", atWeb)
+	if got := fetch(t, get(s.RoleBindings, atTeam.Meta.ID)); got == nil {
+		t.Fatal("project delete took its team's binding")
+	}
+	must(t, s.Teams.Delete(ctx, f.team.Meta.ID))
+	gone("team delete", atTeam, f.binding)
+	for _, b := range kept {
+		if got := fetch(t, get(s.RoleBindings, b.Meta.ID)); got == nil {
+			t.Fatalf("team delete took binding %s at another scope", b.Meta.Name)
+		}
+	}
+}
