@@ -2,8 +2,6 @@ package control
 
 import (
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/wyolet/relay/app/settings"
@@ -20,18 +18,8 @@ func oidcFlowSecret(t *testing.T, idp *fakeIdP, secretEnv string) (string, error
 	if err != nil {
 		return "", err
 	}
-	cfg := v.(*settings.AuthOIDC)
-	od := &oidcDeps{
-		cfg:      func() *settings.AuthOIDC { return cfg },
-		users:    newFakeUsers(),
-		sessions: &fakeSessions{},
-		discover: cachedDiscover(),
-	}
-	loc, flow := driveStart(t, od)
-	cb := httptest.NewRequest("GET", "/api/auth/oidc/callback?code="+idp.issuedCode+"&state="+url.QueryEscape(loc.Query().Get("state")), nil)
-	cb.AddCookie(flow)
-	w := httptest.NewRecorder()
-	od.callback(w, cb)
+	h := newOIDCHarness(t, idp, v.(*settings.AuthOIDC))
+	w := h.login("/api/auth/oidc/callback")
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback: status %d body %s", w.Code, w.Body.String())
 	}

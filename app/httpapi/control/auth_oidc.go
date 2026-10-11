@@ -85,7 +85,10 @@ func registerAuthOIDC(r chi.Router, d Deps) {
 	if d.Users == nil || d.Sessions == nil || d.Catalog == nil {
 		return
 	}
-	od := newOIDCDeps(d)
+	mountOIDCRoutes(r, newOIDCDeps(d))
+}
+
+func mountOIDCRoutes(r chi.Router, od *oidcDeps) {
 	r.Get("/auth/oidc/start", od.start)
 	r.Get("/auth/oidc/callback", od.callback)
 }
