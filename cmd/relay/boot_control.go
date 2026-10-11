@@ -91,6 +91,8 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	// byte-exactly — it can't carry the /api prefix the rest of the
 	// control API mounts under.
 	control.MountOIDCCallbackRoot(ctrlRouter, ctrlDeps)
+	// SCIM at the root too: identity providers are configured with one fixed base URL, and it needs no session.
+	control.MountSCIM(ctrlRouter, ctrlDeps)
 	ctrlRouter.Handle("/metrics", metrics.Handler())
 	// The embedded SPA is the fallback for unclaimed paths, but never
 	// under /api: a UI calling a renamed endpoint must get a JSON 404 it

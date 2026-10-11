@@ -202,6 +202,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSchemas(r) // public: the JSON Schemas the manifests reference
 	registerTokens(api, d, protect)
 	registerUsers(api, d, protect)
+	registerSCIMClients(api, d, protect) // the /scim/v2 endpoint itself is MountSCIM, outside /api
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in app/ratelimit). The spec is

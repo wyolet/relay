@@ -37,6 +37,7 @@
               "concepts/proxy-mode",
               "concepts/observability",
               "concepts/auth",
+              "concepts/scim",
               "concepts/audit",
               "concepts/license",
               "concepts/upgrade"

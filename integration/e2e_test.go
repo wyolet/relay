@@ -241,22 +241,22 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	verifier.SetKey(signer.PublicKey())
 
 	ctrlRouter := chi.NewRouter()
-	// Mirror prod: control API under /api so SPA routes aren't shadowed.
-	ctrlRouter.Route("/api", func(r chi.Router) {
-		control.Mount(r, control.Deps{
-			Identity:      idStore,
-			Users:         usersStore,
-			Sessions:      sessMgr,
-			AdminToken:    adminToken,
-			Authz:         audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
-			Catalog:       cat,
-			Stores:        stores,
-			Audit:         auditEmitter,
-			AuditReader:   auditStore,
-			TokenSigner:   signer,
-			TokenDenylist: kvStore,
-		})
-	})
+	ctrlDeps := control.Deps{
+		Identity:      idStore,
+		Users:         usersStore,
+		Sessions:      sessMgr,
+		AdminToken:    adminToken,
+		Authz:         audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
+		Catalog:       cat,
+		Stores:        stores,
+		Audit:         auditEmitter,
+		AuditReader:   auditStore,
+		TokenSigner:   signer,
+		TokenDenylist: kvStore,
+	}
+	// Mirror prod: control API under /api so SPA routes aren't shadowed, SCIM at the root.
+	ctrlRouter.Route("/api", func(r chi.Router) { control.Mount(r, ctrlDeps) })
+	control.MountSCIM(ctrlRouter, ctrlDeps)
 
 	inferRouter := chi.NewRouter()
 	inference.Mount(inferRouter, inference.Deps{

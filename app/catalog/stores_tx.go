@@ -52,6 +52,7 @@ func rowStores(db storage.DB) *Stores {
 		PolicyBinding:  policybinding.NewStore(db),
 		Users:          user.NewStore(db),
 		Directory:      authpg.New(db),
+		SCIMClients:    authpg.NewSCIMTokens(db),
 	}
 }
 

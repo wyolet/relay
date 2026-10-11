@@ -234,3 +234,32 @@ DELETE FROM role_binding_subjects WHERE binding_id = $1;
 INSERT INTO role_binding_subjects
     (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: GetSCIMClientByTokenHash :one
+SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients WHERE token_hash = $1;
+
+-- name: GetSCIMClient :one
+SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients WHERE name = $1;
+
+-- name: ListSCIMClients :many
+SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients ORDER BY name;
+
+-- A revoked client's name is issued again with a fresh token; a live one is left alone and the insert touches no row.
+-- name: CreateSCIMClient :execrows
+INSERT INTO scim_clients (name, token_hash, token_prefix)
+VALUES ($1, $2, $3)
+ON CONFLICT (name) DO UPDATE SET
+    token_hash   = EXCLUDED.token_hash,
+    token_prefix = EXCLUDED.token_prefix,
+    created_at   = now(),
+    last_used_at = NULL,
+    revoked_at   = NULL
+WHERE scim_clients.revoked_at IS NOT NULL;
+
+-- Writes at most once a minute per client, so a burst of provisioning calls is not a burst of updates.
+-- name: MarkSCIMClientUsed :exec
+UPDATE scim_clients SET last_used_at = sqlc.arg(used_at)::timestamptz
+WHERE name = sqlc.arg(name) AND (last_used_at IS NULL OR last_used_at < sqlc.arg(used_at)::timestamptz - interval '1 minute');
+
+-- name: RevokeSCIMClient :execrows
+UPDATE scim_clients SET revoked_at = now() WHERE name = $1 AND revoked_at IS NULL;

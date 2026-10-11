@@ -419,7 +419,7 @@ type RoleSpec struct {
 
 // RoleRuleDTO mirrors role.Rule using plain types.
 type RoleRuleDTO struct {
-	Kinds []string `json:"kinds" yaml:"kinds" minItems:"1" enum:"*,audit,debug,groups,host-bindings,host-keys,hosts,keys,license,logs,master-key,models,policies,policy-bindings,pricings,projects,providers,rate-limits,role-bindings,roles,service-accounts,settings,system,teams,tokens,usage,users"`
+	Kinds []string `json:"kinds" yaml:"kinds" minItems:"1" enum:"*,audit,debug,groups,host-bindings,host-keys,hosts,keys,license,logs,master-key,models,policies,policy-bindings,pricings,projects,providers,rate-limits,role-bindings,roles,scim-clients,service-accounts,settings,system,teams,tokens,usage,users"`
 	Verbs []string `json:"verbs" yaml:"verbs" minItems:"1" enum:"*,apply,attach,create,delete,detach,generate,get,health,list,mint,read,reload,revoke,rotate,snapshot,update"`
 }
 

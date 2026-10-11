@@ -7,11 +7,13 @@ import (
 )
 
 // Actor kinds. Anonymous covers unauthenticated callers — notably a failed
-// login, where the attempted username is all that is known.
+// login, where the attempted username is all that is known. A SCIM client is
+// an identity provider provisioning through /scim/v2, named by its client name.
 const (
 	ActorUser       = "user"
 	ActorAdminToken = "admin-token"
 	ActorAnonymous  = "anonymous"
+	ActorSCIMClient = "scim-client"
 )
 
 // Outcome statuses. Error is an authorizer backend failure, which is not

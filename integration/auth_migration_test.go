@@ -26,8 +26,8 @@ func TestRollbackBelowSharedTablesRestoresAuthSchema(t *testing.T) {
 			st.Close()
 		}
 		boot()
-		if v := authVersion(t, dsn); v != 2 {
-			t.Fatalf("auth schema at %d after boot, want 2", v)
+		if v := authVersion(t, dsn); v != authHead {
+			t.Fatalf("auth schema at %d after boot, want %d", v, authHead)
 		}
 		if err := storagemod.MigrateTo(dsn, target); err != nil {
 			t.Fatalf("migrate down to %d: %v", target, err)
@@ -36,8 +36,8 @@ func TestRollbackBelowSharedTablesRestoresAuthSchema(t *testing.T) {
 			t.Fatalf("auth schema at %d after relay went down to %d, want 1", v, target)
 		}
 		boot()
-		if v := authVersion(t, dsn); v != 2 {
-			t.Fatalf("auth schema at %d after coming back up from %d, want 2", v, target)
+		if v := authVersion(t, dsn); v != authHead {
+			t.Fatalf("auth schema at %d after coming back up from %d, want %d", v, target, authHead)
 		}
 		pool, err := pgxpool.New(context.Background(), dsn)
 		if err != nil {
@@ -49,6 +49,9 @@ func TestRollbackBelowSharedTablesRestoresAuthSchema(t *testing.T) {
 		pool.Close()
 	}
 }
+
+// authHead is the auth module's newest migration.
+const authHead = 3
 
 func authVersion(t *testing.T, dsn string) int64 {
 	t.Helper()
