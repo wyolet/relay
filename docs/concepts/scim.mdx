@@ -61,6 +61,8 @@ A SCIM client acts only on the users and groups it created, which carry its name
 
 - It cannot read, change or delete an account or group an operator created, or one another client created. Such a request answers `404`, and a write is recorded in the audit log as denied.
 - It cannot set roles, passwords or sign-in identities, and cannot reach roles, role bindings, teams, projects or service accounts.
+- It changes only the attributes it maps (`userName`, `emails`, `externalId`, `active`), so an operator's change to an account, such as disabling it or removing a role, is never written back over.
+- It cannot disable or delete the last enabled admin. Such a request answers `409` and is recorded in the audit log as denied.
 - Membership of its own groups is the identity provider's call and is not checked against your own grants. What membership grants is decided by the role bindings you make on those groups.
 - A new group never takes a name that an existing group holds or a role binding names, so it inherits no grant made for something else.
 
