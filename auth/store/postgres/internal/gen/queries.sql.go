@@ -946,6 +946,44 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const listUsersByExternalID = `-- name: ListUsersByExternalID :many
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+FROM users WHERE external_source IS NOT NULL AND external_id = $1 ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListUsersByExternalID(ctx context.Context, externalID pgtype.Text) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsersByExternalID, externalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Email,
+			&i.PasswordHash,
+			&i.OidcSubject,
+			&i.Roles,
+			&i.Disabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TokenVersion,
+			&i.ExternalSource,
+			&i.ExternalID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markSCIMClientUsed = `-- name: MarkSCIMClientUsed :exec
 UPDATE scim_clients SET last_used_at = $1::timestamptz
 WHERE name = $2 AND (last_used_at IS NULL OR last_used_at < $1::timestamptz - interval '1 minute')
@@ -986,6 +1024,25 @@ UPDATE scim_clients SET revoked_at = now() WHERE name = $1 AND revoked_at IS NUL
 
 func (q *Queries) RevokeSCIMClient(ctx context.Context, name string) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeSCIMClient, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setFirstPrimaryIdentity = `-- name: SetFirstPrimaryIdentity :execrows
+UPDATE users SET oidc_subject = $2, updated_at = now()
+WHERE id = $1 AND oidc_subject IS NULL AND NOT EXISTS (SELECT 1 FROM identities WHERE identities.user_id = $1)
+`
+
+type SetFirstPrimaryIdentityParams struct {
+	ID          string
+	OidcSubject pgtype.Text
+}
+
+// The trigger writes the identity row. A concurrent first link waits on the row lock, then finds oidc_subject set and matches nothing.
+func (q *Queries) SetFirstPrimaryIdentity(ctx context.Context, arg SetFirstPrimaryIdentityParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setFirstPrimaryIdentity, arg.ID, arg.OidcSubject)
 	if err != nil {
 		return 0, err
 	}

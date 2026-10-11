@@ -35,6 +35,47 @@ func (d *Directory) AddIdentity(ctx context.Context, userID string, id UserIdent
 	return nil
 }
 
+// UnlinkedUsersByExternalID returns the accounts a provisioning source created with externalID that hold no identity yet, oldest first: the accounts a product may link a first sign-in to. Two sources may hold the same id, so more than one may come back.
+func (d *Directory) UnlinkedUsersByExternalID(ctx context.Context, externalID string) ([]*User, error) {
+	if externalID == "" {
+		return nil, nil
+	}
+	all, err := d.cfg.Stores.Users.ByExternalID(ctx, externalID)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, u := range all {
+		if u.External.Source != "" && u.Identity.IsZero() && len(u.Identities) == 0 {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+// AddFirstIdentity links id to an account that holds no identity, as its primary. The store checks and writes in one step, so of two concurrent first links to one account only one succeeds; the other, like a link to an account that already has an identity, is ErrConflict.
+func (d *Directory) AddFirstIdentity(ctx context.Context, userID string, id Identity) error {
+	users := d.cfg.Stores.Users
+	u, err := users.Get(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return fmt.Errorf("%w: user %s", ErrNotFound, userID)
+	}
+	if id.Issuer == "" || id.Subject == "" {
+		return fmt.Errorf("%w: user %q: identity needs both issuer and subject", ErrInvalid, u.Username)
+	}
+	if err := id.validate(u.Username); err != nil {
+		return err
+	}
+	if err := users.AddFirstIdentity(ctx, userID, id); err != nil {
+		return err
+	}
+	d.notify(ctx, KindUser, OpUpsert, userID)
+	return nil
+}
+
 // RemoveIdentities unlinks every identity of the account in one write and ends its sessions; an account with none is left alone. An account without a password keeps them, so it keeps a way to sign in.
 func (d *Directory) RemoveIdentities(ctx context.Context, userID string) error {
 	users := d.cfg.Stores.Users

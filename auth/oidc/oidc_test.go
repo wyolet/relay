@@ -688,6 +688,29 @@ func TestGroupsClaim(t *testing.T) {
 	}
 }
 
+// StringClaim reads any string claim of the verified id_token and nothing from an inline profile.
+func TestStringClaim(t *testing.T) {
+	f := newFixture(t)
+	f.p.claims = map[string]any{"oid": "obj-1", "n": 7}
+	if w := f.login("good"); w.Code != http.StatusFound {
+		t.Fatalf("status %d", w.Code)
+	}
+	c := f.rec.provisioned[0]
+	for name, want := range map[string]string{"oid": "obj-1", "sub": "s1", "n": "", "groups": "", "missing": ""} {
+		if got := c.StringClaim(name); got != want {
+			t.Errorf("StringClaim(%q) = %q, want %q", name, got, want)
+		}
+	}
+
+	f.p.tokenBody = map[string]any{"access_token": "at", "token_type": "bearer", "user": map[string]any{"id": "u9", "oid": "obj-1"}}
+	if w := f.login("good"); w.Code != http.StatusFound {
+		t.Fatalf("status %d", w.Code)
+	}
+	if c := f.rec.provisioned[1]; c.StringClaim("oid") != "" || c.StringClaim("id") != "" || c.StringClaim("sub") != "" {
+		t.Fatalf("inline profile claims were read: oid %q id %q sub %q", c.StringClaim("oid"), c.StringClaim("id"), c.StringClaim("sub"))
+	}
+}
+
 func TestFailureError(t *testing.T) {
 	cause := errors.New("cause")
 	f := &Failure{Message: "m", Err: cause}

@@ -92,6 +92,49 @@ func testIdentities(t *testing.T, s directory.Stores) {
 	must(t, u.AddIdentity(ctx, bob.ID, second))
 }
 
+func testFirstIdentity(t *testing.T, s directory.Stores) {
+	ctx := context.Background()
+	f := seed(t, s)
+	u := s.Users
+	scim1 := &directory.User{ID: directory.NewID(), Username: "eve", External: directory.External{Source: "scim-1", ID: "obj-1"}}
+	scim2 := &directory.User{ID: directory.NewID(), Username: "eve-2", External: directory.External{Source: "scim-2", ID: "obj-1"}}
+	other := &directory.User{ID: directory.NewID(), Username: "mal", External: directory.External{Source: "scim-1", ID: "obj-2"}}
+	for _, x := range []*directory.User{scim1, scim2, other} {
+		must(t, u.Upsert(ctx, x))
+	}
+
+	got, err := u.ByExternalID(ctx, "obj-1")
+	must(t, err)
+	if len(got) != 2 || got[0].ID != scim1.ID || got[1].ID != scim2.ID {
+		t.Fatalf("by external id = %+v, want eve and eve-2", got)
+	}
+	for _, id := range []string{"obj-3", ""} {
+		if got, err := u.ByExternalID(ctx, id); err != nil || len(got) != 0 {
+			t.Fatalf("by external id %q = %+v, %v", id, got, err)
+		}
+	}
+
+	first := directory.Identity{Issuer: "https://idp.example.com", Subject: "eve"}
+	must(t, u.AddFirstIdentity(ctx, scim1.ID, first))
+	wantIdentities(t, "first identity", fetch(t, func() (*directory.User, error) { return u.Get(ctx, scim1.ID) }), first, directory.UserIdentity{Identity: first})
+	if byID, err := u.ByIdentity(ctx, first); err != nil || byID == nil || byID.ID != scim1.ID {
+		t.Fatalf("by the linked identity = %+v, %v", byID, err)
+	}
+	got, err = u.ByExternalID(ctx, "obj-1")
+	must(t, err)
+	if len(got) != 2 || len(got[0].Identities) != 1 {
+		t.Fatalf("by external id after the link = %+v", got)
+	}
+
+	second := directory.Identity{Issuer: "https://idp.example.com", Subject: "eve-again"}
+	wantErr(t, "a second first identity", u.AddFirstIdentity(ctx, scim1.ID, second), directory.ErrConflict)
+	wantErr(t, "an account with a primary", u.AddFirstIdentity(ctx, f.user.ID, second), directory.ErrConflict)
+	wantErr(t, "an identity another account holds", u.AddFirstIdentity(ctx, scim2.ID, first), directory.ErrConflict)
+	if got := fetch(t, func() (*directory.User, error) { return u.Get(ctx, scim2.ID) }); !got.Identity.IsZero() || len(got.Identities) != 0 {
+		t.Fatalf("refused link wrote an identity: %+v", got)
+	}
+}
+
 func wantIdentities(t *testing.T, what string, u *directory.User, primary directory.Identity, all ...directory.UserIdentity) {
 	t.Helper()
 	if u.Identity != primary {

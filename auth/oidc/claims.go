@@ -30,6 +30,15 @@ type Claims struct {
 	SessionID string
 	// Groups holds the string values of Config.GroupsClaim.
 	Groups []string
+
+	// verified is every claim of the verified id_token; nil for an inline profile, which nothing signed.
+	verified map[string]any
+}
+
+// StringClaim returns the named claim of the verified id_token when its value is a string, else "". A login with no id_token has no verified claims, so it reads "" for every name.
+func (c Claims) StringClaim(name string) string {
+	s, _ := c.verified[name].(string)
+	return s
 }
 
 type idTokenPayload struct {
@@ -49,7 +58,7 @@ func claimsFromToken(ctx context.Context, tok *oauth2.Token, p *gooidc.Provider,
 		if idt.Subject == "" {
 			return Claims{}, errors.New("id_token has no sub")
 		}
-		// The groups claim's name is configuration, so it is read from the generic decode.
+		// Claim names a product configures (groups, StringClaim) are read from the generic decode.
 		var all map[string]any
 		_ = idt.Claims(&all)
 		return Claims{
@@ -59,6 +68,7 @@ func claimsFromToken(ctx context.Context, tok *oauth2.Token, p *gooidc.Provider,
 			PreferredUsername: payload.PreferredUsername,
 			SessionID:         payload.Sid,
 			Groups:            stringsClaim(all, cfg.GroupsClaim),
+			verified:          all,
 		}, nil
 	}
 	if m, ok := tok.Extra("user").(map[string]any); ok {

@@ -17,6 +17,8 @@ type UserStore interface {
 	ByUsername(ctx context.Context, username string) (*User, error)
 	// ByIdentity finds the account holding id among its identities, primary or not.
 	ByIdentity(ctx context.Context, id Identity) (*User, error)
+	// ByExternalID returns every account a provisioning source created with externalID as that source's id for it, oldest first; two sources may hold the same id.
+	ByExternalID(ctx context.Context, externalID string) ([]*User, error)
 	// List returns every account, oldest first.
 	List(ctx context.Context) ([]*User, error)
 	// Upsert inserts or replaces by ID and leaves TokenVersion as stored; a new account starts at version 1. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities; a zero Identity on an account that holds other identities makes the oldest of them primary, so such an account always has one.
@@ -26,6 +28,8 @@ type UserStore interface {
 	BumpTokenVersion(ctx context.Context, id string) error
 	// AddIdentity links id to the user, or updates its external id when the user already holds it. The first identity of an account with no primary becomes its primary.
 	AddIdentity(ctx context.Context, userID string, id UserIdentity) error
+	// AddFirstIdentity links id as the primary of a user that holds no identity, checking and writing in one atomic step: a user that holds one, or an identity another user holds, is ErrConflict.
+	AddFirstIdentity(ctx context.Context, userID string, id Identity) error
 	// RemoveIdentity unlinks id from the user; one the user does not hold is not an error. Removing the primary makes the oldest remaining identity primary.
 	RemoveIdentity(ctx context.Context, userID string, id Identity) error
 	// RemoveIdentities unlinks every identity of the user at once, the primary included.
