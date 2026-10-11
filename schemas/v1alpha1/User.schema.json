@@ -1,0 +1,111 @@
+{
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha1/User.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "enum": [
+        "auth.wyolet.dev/v1alpha1",
+        "relay.wyolet.dev/v1alpha2"
+      ],
+      "type": "string"
+    },
+    "kind": {
+      "const": "User"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The username.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {
+          "type": "boolean"
+        },
+        "email": {
+          "type": "string"
+        },
+        "identity": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "issuer",
+            "subject"
+          ],
+          "type": "object"
+        },
+        "password": {
+          "additionalProperties": false,
+          "description": "A hash or an environment variable; plain text is refused.",
+          "oneOf": [
+            {
+              "required": [
+                "hash"
+              ]
+            },
+            {
+              "required": [
+                "valueFrom"
+              ]
+            }
+          ],
+          "properties": {
+            "hash": {
+              "description": "A bcrypt hash.",
+              "pattern": "^\\$2[aby]\\$",
+              "type": "string"
+            },
+            "valueFrom": {
+              "additionalProperties": false,
+              "description": "An environment variable holding a password or a bcrypt hash.",
+              "properties": {
+                "env": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "env"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "roles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata"
+  ],
+  "title": "User",
+  "type": "object"
+}

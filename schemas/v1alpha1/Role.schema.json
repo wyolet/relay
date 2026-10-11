@@ -1,0 +1,162 @@
+{
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha1/Role.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "enum": [
+        "auth.wyolet.dev/v1alpha1",
+        "relay.wyolet.dev/v1alpha2"
+      ],
+      "type": "string"
+    },
+    "kind": {
+      "const": "Role"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "type": "string"
+        },
+        "owner": {
+          "additionalProperties": false,
+          "description": "Ignored: the owner is derived from the kind and its spec.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "rules": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kinds": {
+                "items": {
+                  "enum": [
+                    "*",
+                    "audit",
+                    "debug",
+                    "groups",
+                    "host-bindings",
+                    "host-keys",
+                    "hosts",
+                    "keys",
+                    "license",
+                    "logs",
+                    "master-key",
+                    "models",
+                    "policies",
+                    "policy-bindings",
+                    "pricings",
+                    "projects",
+                    "providers",
+                    "rate-limits",
+                    "role-bindings",
+                    "roles",
+                    "service-accounts",
+                    "settings",
+                    "system",
+                    "teams",
+                    "tokens",
+                    "usage",
+                    "users"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "verbs": {
+                "items": {
+                  "enum": [
+                    "*",
+                    "apply",
+                    "attach",
+                    "create",
+                    "delete",
+                    "detach",
+                    "generate",
+                    "get",
+                    "health",
+                    "list",
+                    "mint",
+                    "read",
+                    "reload",
+                    "revoke",
+                    "rotate",
+                    "snapshot",
+                    "update"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "kinds",
+              "verbs"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata"
+  ],
+  "title": "Role",
+  "type": "object"
+}
