@@ -174,10 +174,9 @@ jobq/                      — SEPARATE Go module: self-contained, durable
                              "PG never holds bytes"). River-style claim model.
                              app/batch is its consumer.
 
-auth/                      — SEPARATE Go module: general-purpose auth
-                             primitives (signed tokens, API keys, passwords;
-                             RBAC/sessions/OIDC follow). No product vocabulary;
-                             imports nothing from relay.
+auth/                      — SEPARATE Go module: general-purpose
+                             authentication + authorization primitives. No
+                             product vocabulary; imports nothing from relay.
 
 internal/                  — composition root / boundary
   config/                  — RELAY_* env parsing
