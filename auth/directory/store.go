@@ -23,6 +23,8 @@ type UserStore interface {
 	List(ctx context.Context) ([]*User, error)
 	// Upsert inserts or replaces by ID; a new account starts at TokenVersion 1, and a replace advances it only when the password hash, primary identity or disabled flag changes. With ResourceVersion set it replaces only while the stored account still carries that version and returns ErrStaleResourceVersion otherwise. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities; a zero Identity on an account that holds other identities makes the oldest of them primary, so such an account always has one.
 	Upsert(ctx context.Context, u *User) error
+	// UpsertRemovingIdentities is Upsert of an account with a zero Identity that also unlinks every identity it holds, all in one atomic write.
+	UpsertRemovingIdentities(ctx context.Context, u *User) error
 	// SetDisabled sets the disabled flag alone and, in the same write, advances TokenVersion. It reports false, writing nothing, when the account is missing or already in that state.
 	SetDisabled(ctx context.Context, id string, disabled bool) (bool, error)
 	// UpdateProvisioned sets the username, email and external id alone, on an account whose External.Source is source; any other account, or none, is ErrNotFound.

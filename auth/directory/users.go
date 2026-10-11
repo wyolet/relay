@@ -43,6 +43,15 @@ func (d *Directory) CreateUser(ctx context.Context, p *principal.Principal, u *U
 
 // UpdateUser replaces the account with id u.ID; a zero u.External keeps the stored one. The write is conditional on u.ResourceVersion, or on the version read here when it is empty, so a concurrent change fails with ErrStaleResourceVersion instead of being lost. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Changing the password or primary identity needs an admin p. Disabling, re-enabling or changing the password or primary identity bumps the token version in the same write, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed and u.ResourceVersion is cleared; read the user back for them.
 func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *User) error {
+	return d.updateUser(ctx, p, u, false)
+}
+
+// UpdateUserRemovingIdentities is UpdateUser for an account left with no identity: u.Identity must be zero, and every identity the account holds is unlinked in the same store write, so the edit and the removal land together or not at all. One it would leave without a password is ErrInvalid, so the account keeps a way to sign in.
+func (d *Directory) UpdateUserRemovingIdentities(ctx context.Context, p *principal.Principal, u *User) error {
+	return d.updateUser(ctx, p, u, true)
+}
+
+func (d *Directory) updateUser(ctx context.Context, p *principal.Principal, u *User, removeIdentities bool) error {
 	users := d.cfg.Stores.Users
 	stored, err := users.Get(ctx, u.ID)
 	if err != nil {
@@ -56,6 +65,13 @@ func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *U
 	}
 	if err := u.validate(); err != nil {
 		return err
+	}
+	removing := removeIdentities && len(stored.Identities) > 0
+	switch {
+	case removeIdentities && !u.Identity.IsZero():
+		return fmt.Errorf("%w: user %q: removing every identity leaves no primary", ErrInvalid, u.Username)
+	case removing && u.PasswordHash == "":
+		return fmt.Errorf("%w: user %q: an account without a password cannot have every identity removed", ErrInvalid, u.Username)
 	}
 	if u.PasswordHash != stored.PasswordHash {
 		if err := validatePasswordHash(u); err != nil {
@@ -78,10 +94,14 @@ func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *U
 	if u.External.IsZero() {
 		u.External = stored.External
 	}
-	credentialsChanged := ChangesCredentials(stored, u)
+	credentialsChanged := ChangesCredentials(stored, u) || removing
+	write := users.Upsert
+	if removeIdentities {
+		write = users.UpsertRemovingIdentities
+	}
 	// The write applies only while the account is as read here, so a concurrent change is a conflict, not overwritten.
 	u.ResourceVersion = stored.ResourceVersion
-	err = users.Upsert(ctx, u)
+	err = write(ctx, u)
 	u.ResourceVersion = ""
 	if err != nil {
 		return err

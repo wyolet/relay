@@ -64,6 +64,23 @@ func testUserWrites(t *testing.T, s directory.Stores) {
 	in.Username = "ada"
 	wantErr(t, "a taken username", u.UpdateProvisioned(ctx, "scim-1", prov.ID, in), directory.ErrConflict)
 
+	// The edit and the removal land in one write: a stale version leaves both undone.
+	with, _ := u.Get(ctx, f.user.ID)
+	must(t, u.AddIdentity(ctx, f.user.ID, directory.UserIdentity{Identity: directory.Identity{Issuer: "https://other.example.com", Subject: "o-8"}}))
+	staleWith := *with
+	staleWith.Email, staleWith.Identity, staleWith.PasswordHash = "gone@example.com", directory.Identity{}, "$2a$10$x"
+	wantErr(t, "a stale upsert removing identities", u.UpsertRemovingIdentities(ctx, &staleWith), directory.ErrStaleResourceVersion)
+	if got, _ := u.Get(ctx, f.user.ID); got.Email == "gone@example.com" || len(got.Identities) != 2 {
+		t.Fatalf("a refused upsert removing identities wrote part of itself: %+v", got)
+	}
+	fresh, _ := u.Get(ctx, f.user.ID)
+	fresh.Email, fresh.Identity, fresh.PasswordHash = "gone@example.com", directory.Identity{}, "$2a$10$x"
+	must(t, u.UpsertRemovingIdentities(ctx, fresh))
+	if got, _ := u.Get(ctx, f.user.ID); got.Email != "gone@example.com" || !got.Identity.IsZero() || got.Identities != nil || got.TokenVersion <= fresh.TokenVersion {
+		t.Fatalf("after an upsert removing identities: %+v", got)
+	}
+	wantErr(t, "a primary kept while removing identities", u.UpsertRemovingIdentities(ctx, f.user), directory.ErrInvalid)
+
 	extra := directory.Identity{Issuer: "https://other.example.com", Subject: "o-9"}
 	for _, step := range []struct {
 		name  string

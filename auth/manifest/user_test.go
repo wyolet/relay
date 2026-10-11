@@ -192,6 +192,34 @@ func TestApplyCredentialChangeEndsSessionsAndTokens(t *testing.T) {
 	}
 }
 
+// failingIdentityRemoval is a store whose separate removal of every identity fails.
+type failingIdentityRemoval struct{ directory.UserStore }
+
+func (failingIdentityRemoval) RemoveIdentities(context.Context, string) error {
+	return errors.New("remove identities failed")
+}
+
+// A document that edits an account and clears its identities writes both or neither: a failure part-way must not leave the edit without the removal.
+func TestUserIdentityClearIsOneWrite(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {email: a@example.com, password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: a}}\n", manifest.Options{})
+	s := e.store.Stores()
+	s.Users = failingIdentityRemoval{s.Users}
+	cfg := testConfig()
+	dir, err := directory.New(directory.Config{Stores: s, Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := e.plan(t, e.parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {email: b@example.com, identity: null}\n"), manifest.Options{})
+	_, applyErr := p.Apply(ctx, dir, admin)
+	got, _ := s.Users.ByUsername(ctx, "alice")
+	edited, cleared := got.Email == "b@example.com", len(got.Identities) == 0
+	if edited != cleared {
+		t.Fatalf("apply (err %v) wrote half the document: email %q, identities %+v", applyErr, got.Email, got.Identities)
+	}
+}
+
 func TestUserSpecReportsAnEnvPassword(t *testing.T) {
 	docs := newEnv(t).parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: a}\nspec: {password: {valueFrom: {env: P}}}\n"+
 		"---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: b}\nspec: {password: {hash: \""+aliceHash+"\"}}\n")
