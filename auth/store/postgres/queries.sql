@@ -278,5 +278,8 @@ ON CONFLICT (name) DO NOTHING;
 UPDATE scim_clients SET last_used_at = sqlc.arg(used_at)::timestamptz
 WHERE name = sqlc.arg(name) AND (last_used_at IS NULL OR last_used_at < sqlc.arg(used_at)::timestamptz - interval '1 minute');
 
+-- name: RotateSCIMClient :execrows
+UPDATE scim_clients SET token_hash = $2, token_prefix = $3, last_used_at = NULL WHERE name = $1 AND revoked_at IS NULL;
+
 -- name: RevokeSCIMClient :execrows
 UPDATE scim_clients SET revoked_at = now() WHERE name = $1 AND revoked_at IS NULL;

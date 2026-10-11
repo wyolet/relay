@@ -80,6 +80,21 @@ func (m *memTokens) RevokeClient(_ context.Context, name string) error {
 	return nil
 }
 
+func (m *memTokens) RotateClient(_ context.Context, c *Client) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, ok := m.byName[c.Name]
+	switch {
+	case !ok:
+		return ErrNoClient
+	case old.Revoked:
+		return ErrClientRevoked
+	}
+	old.TokenHash, old.TokenPrefix = c.TokenHash, c.TokenPrefix
+	delete(m.used, c.Name)
+	return nil
+}
+
 // denyGrants refuses every grant to a caller that is not an admin, so a test sees whether a write ran the check.
 type denyGrants struct{ calls int }
 

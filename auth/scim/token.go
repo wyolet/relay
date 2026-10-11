@@ -21,6 +21,8 @@ var (
 	ErrClientExists = errors.New("scim: client exists")
 	// ErrNoClient reports an operation on a client that does not exist.
 	ErrNoClient = errors.New("scim: no such client")
+	// ErrClientRevoked reports a rotation of a revoked client, whose name is never issued a token again.
+	ErrClientRevoked = errors.New("scim: client is revoked")
 )
 
 // Client is one provisioning source with its bearer token. Its name is the source stamped on every row it creates.
@@ -48,6 +50,8 @@ type TokenStore interface {
 	ListClients(ctx context.Context) ([]*Client, error)
 	// RevokeClient revokes the client's token for good; a missing name is ErrNoClient, and revoking twice is not an error.
 	RevokeClient(ctx context.Context, name string) error
+	// RotateClient replaces the token of the live client c.Name with c.TokenHash and c.TokenPrefix in one write, so the old token stops working at once; the name, and so every row it provisioned, stays. A missing name is ErrNoClient and a revoked one ErrClientRevoked.
+	RotateClient(ctx context.Context, c *Client) error
 }
 
 // CreateClient mints a token for a new client named name and stores the client. The token is returned once and kept nowhere. The name must be a DNS-1123 label, as it is stamped on every row the client writes.
@@ -61,6 +65,19 @@ func CreateClient(ctx context.Context, store TokenStore, name string) (token str
 	}
 	c = &Client{Name: name, TokenHash: g.Hash, TokenPrefix: g.Prefix}
 	if err := store.CreateClient(ctx, c); err != nil {
+		return "", nil, err
+	}
+	return g.Plaintext, c, nil
+}
+
+// RotateClient mints a new token for the live client named name and stores it in place of the old one, which stops working at once. The token is returned once and kept nowhere.
+func RotateClient(ctx context.Context, store TokenStore, name string) (token string, c *Client, err error) {
+	g, err := apikey.Generate(TokenPrefix)
+	if err != nil {
+		return "", nil, err
+	}
+	c = &Client{Name: name, TokenHash: g.Hash, TokenPrefix: g.Prefix}
+	if err := store.RotateClient(ctx, c); err != nil {
 		return "", nil, err
 	}
 	return g.Plaintext, c, nil

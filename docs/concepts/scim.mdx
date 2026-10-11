@@ -102,8 +102,17 @@ curl -X PUT https://relay.example.com/api/settings/auth:scim \
 - An identity provider that returns no ID token links nothing, because the claim is read only from the verified token.
 - While `auth:scim` is disabled, nothing is linked.
 
-## Revoking
+## Rotating and revoking
 
-`GET /api/scim-clients` lists the clients with the start of each token and when it was last used. `POST /api/scim-clients/<name>/revoke` stops the token at once; the users and groups it provisioned stay, still stamped with its name. A revoked name is not issued again (creating it answers `409`), so a new token never takes over what an old one provisioned; a replacement client needs a new name.
+`GET /api/scim-clients` lists the clients with the start of each token and when it was last used.
 
-Under `RELAY_AUTHZ=rbac`, managing SCIM clients (`list`, `create`, `revoke`) takes an admin: a custom role holding the `scim-clients` verbs is not enough. Changing the `auth:scim` section takes an admin in either mode.
+To rotate a token, call `POST /api/scim-clients/<name>/rotate`. It returns a new token once, and the old one stops working at once. The client keeps its name, so the users and groups it provisioned stay its own; put the new token in the identity provider:
+
+```bash
+curl -X POST https://relay.example.com/api/scim-clients/entra/rotate \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN"
+```
+
+`POST /api/scim-clients/<name>/revoke` stops the token for good; the users and groups it provisioned stay, still stamped with its name, and no client can change them. A revoked client is not rotated (`409`) and its name is not issued again (creating it answers `409`), so no new token takes over what it provisioned.
+
+Under `RELAY_AUTHZ=rbac`, managing SCIM clients (`list`, `create`, `rotate`, `revoke`) takes an admin: a custom role holding the `scim-clients` verbs is not enough. Changing the `auth:scim` section takes an admin in either mode.

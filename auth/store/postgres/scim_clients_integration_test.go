@@ -44,8 +44,27 @@ func TestSCIMTokens(t *testing.T) {
 		t.Fatalf("list: %+v, %v", list, err)
 	}
 
+	// Rotation swaps the token in place: the old one finds nothing, the new one finds the same live client, unused so far.
+	rotated, _, err := scim.RotateClient(ctx, s, "entra")
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if old, _ := s.ClientByTokenHash(ctx, apikey.Hash(token)); old != nil {
+		t.Fatalf("the old token still finds %+v", old)
+	}
+	if got, _ := s.ClientByTokenHash(ctx, apikey.Hash(rotated)); got == nil || got.Name != "entra" || got.Revoked || !got.LastUsedAt.IsZero() {
+		t.Fatalf("rotated client reads as %+v", got)
+	}
+	if _, _, err := scim.RotateClient(ctx, s, "nobody"); !errors.Is(err, scim.ErrNoClient) {
+		t.Fatalf("rotating a missing client: %v", err)
+	}
+	token = rotated
+
 	if err := s.RevokeClient(ctx, "entra"); err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err := scim.RotateClient(ctx, s, "entra"); !errors.Is(err, scim.ErrClientRevoked) {
+		t.Fatalf("rotating a revoked client: %v", err)
 	}
 	if err := s.RevokeClient(ctx, "entra"); err != nil {
 		t.Fatalf("revoking twice: %v", err)

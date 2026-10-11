@@ -16,7 +16,8 @@ import (
 	"github.com/wyolet/relay/auth/scim"
 )
 
-type scimClientRow struct {
+// SCIMClientRow is a SCIM client as the API shows it. It is exported because huma skips the fields of an unexported embedded struct, and the create and rotate bodies embed it.
+type SCIMClientRow struct {
 	Name        string     `json:"name"                 doc:"The client's name, stamped as the source of every user and group it provisions."`
 	TokenPrefix string     `json:"tokenPrefix"          doc:"The start of the token, for telling tokens apart."`
 	CreatedAt   time.Time  `json:"createdAt"`
@@ -24,8 +25,8 @@ type scimClientRow struct {
 	Revoked     bool       `json:"revoked"`
 }
 
-func scimClientRowOf(c *scim.Client) scimClientRow {
-	row := scimClientRow{Name: c.Name, TokenPrefix: c.TokenPrefix, CreatedAt: c.CreatedAt, Revoked: c.Revoked}
+func scimClientRowOf(c *scim.Client) SCIMClientRow {
+	row := SCIMClientRow{Name: c.Name, TokenPrefix: c.TokenPrefix, CreatedAt: c.CreatedAt, Revoked: c.Revoked}
 	if !c.LastUsedAt.IsZero() {
 		t := c.LastUsedAt
 		row.LastUsedAt = &t
@@ -35,7 +36,7 @@ func scimClientRowOf(c *scim.Client) scimClientRow {
 
 type scimClientListOutput struct {
 	Body struct {
-		Clients []scimClientRow `json:"clients"`
+		Clients []SCIMClientRow `json:"clients"`
 	}
 }
 
@@ -47,7 +48,7 @@ type scimClientCreateInput struct {
 
 type scimClientCreateOutput struct {
 	Body struct {
-		scimClientRow
+		SCIMClientRow
 		Token string `json:"token" doc:"The bearer token the identity provider sends. Returned once; only its hash is kept."`
 	}
 }
@@ -95,7 +96,7 @@ func registerSCIMClients(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		out := &scimClientListOutput{}
-		out.Body.Clients = make([]scimClientRow, len(clients))
+		out.Body.Clients = make([]SCIMClientRow, len(clients))
 		for i, c := range clients {
 			out.Body.Clients[i] = scimClientRowOf(c)
 		}
@@ -131,7 +132,7 @@ func registerSCIMClients(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		out := &scimClientCreateOutput{}
-		out.Body.scimClientRow, out.Body.Token = scimClientRowOf(created), token
+		out.Body.SCIMClientRow, out.Body.Token = scimClientRowOf(created), token
 		return out, nil
 	})
 
@@ -159,9 +160,42 @@ func registerSCIMClients(api huma.API, d Deps, protect huma.Middlewares) {
 		audit.Record(ctx, "scim-clients.revoke", audit.Resource{Kind: res.Kind, Name: in.Name, Owner: res.Owner}, audit.StatusAllowed)
 		return &emptyOutput{}, nil
 	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "scim_clients_rotate",
+		Method:      http.MethodPost,
+		Path:        "/scim-clients/{name}/rotate",
+		Summary:     "Rotate a SCIM client's token and return the new one once",
+		Description: "The old token stops authenticating at once. The client keeps its name, so the users and groups it provisioned stay its own.",
+		Tags:        []string{"scim"},
+		Middlewares: protect,
+		Errors:      []int{401, 403, 404, 409, 500},
+	}, func(ctx context.Context, in *scimClientRevokeInput) (*scimClientCreateOutput, error) {
+		res := scimClientResource(in.Name)
+		if err := authorizeSCIMClients(ctx, d.Authz, "scim-clients.rotate", res); err != nil {
+			return nil, err
+		}
+		token, _, err := scim.RotateClient(ctx, store, in.Name)
+		switch {
+		case errors.Is(err, scim.ErrNoClient):
+			return nil, huma.Error404NotFound("no SCIM client " + in.Name)
+		case errors.Is(err, scim.ErrClientRevoked):
+			return nil, huma.Error409Conflict("the SCIM client is revoked; a revoked client is never issued a token again")
+		case err != nil:
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		audit.Record(ctx, "scim-clients.rotate", audit.Resource{Kind: res.Kind, Name: in.Name, Owner: res.Owner}, audit.StatusAllowed)
+		rotated, err := clientNamed(ctx, store, in.Name)
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		out := &scimClientCreateOutput{}
+		out.Body.SCIMClientRow, out.Body.Token = scimClientRowOf(rotated), token
+		return out, nil
+	})
 }
 
-// clientNamed reads a client back so a create answers with the stored timestamps.
+// clientNamed reads a client back so a create or rotate answers with the stored timestamps.
 func clientNamed(ctx context.Context, store scim.TokenStore, name string) (*scim.Client, error) {
 	clients, err := store.ListClients(ctx)
 	if err != nil {
@@ -172,5 +206,5 @@ func clientNamed(ctx context.Context, store scim.TokenStore, name string) (*scim
 			return c, nil
 		}
 	}
-	return nil, errors.New("scim client " + name + " vanished after create")
+	return nil, errors.New("scim client " + name + " vanished after the write")
 }

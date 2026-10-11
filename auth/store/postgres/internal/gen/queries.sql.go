@@ -1029,6 +1029,24 @@ func (q *Queries) RevokeSCIMClient(ctx context.Context, name string) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const rotateSCIMClient = `-- name: RotateSCIMClient :execrows
+UPDATE scim_clients SET token_hash = $2, token_prefix = $3, last_used_at = NULL WHERE name = $1 AND revoked_at IS NULL
+`
+
+type RotateSCIMClientParams struct {
+	Name        string
+	TokenHash   string
+	TokenPrefix string
+}
+
+func (q *Queries) RotateSCIMClient(ctx context.Context, arg RotateSCIMClientParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateSCIMClient, arg.Name, arg.TokenHash, arg.TokenPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setFirstPrimaryIdentity = `-- name: SetFirstPrimaryIdentity :execrows
 UPDATE users SET oidc_subject = $2, token_version = token_version + 1, updated_at = now()
 WHERE id = $1 AND oidc_subject IS NULL AND NOT EXISTS (SELECT 1 FROM identities WHERE identities.user_id = $1)
