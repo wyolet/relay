@@ -1,4 +1,4 @@
-package crypto
+package token
 
 import (
 	"crypto/ed25519"
@@ -41,9 +41,9 @@ func nonCanonicalTwin(t *testing.T, seg string) string {
 	return twin
 }
 
-func canonicalTestClaims() TokenClaims {
-	return TokenClaims{
-		Iss: TokenIssuer,
+func canonicalTestClaims() testClaims {
+	return testClaims{
+		Iss: "issuer",
 		Sub: "user:019200aa",
 		Prj: "019200bb",
 		Ver: 1,
@@ -53,42 +53,42 @@ func canonicalTestClaims() TokenClaims {
 	}
 }
 
-func TestParseToken_AcceptsCanonicalEncoding(t *testing.T) {
+func TestParse_AcceptsCanonicalEncoding(t *testing.T) {
 	pub, priv := testKey(t)
-	token, err := SignToken(priv, "", canonicalTestClaims())
+	token, err := Sign(priv, "", canonicalTestClaims())
 	if err != nil {
-		t.Fatalf("SignToken: %v", err)
+		t.Fatalf("Sign: %v", err)
 	}
-	if _, err := ParseToken(pub, token); err != nil {
-		t.Fatalf("ParseToken: %v", err)
+	if _, err := Parse[testClaims](pub, token); err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
 }
 
-func TestParseToken_RejectsNonCanonicalSignature(t *testing.T) {
+func TestParse_RejectsNonCanonicalSignature(t *testing.T) {
 	pub, priv := testKey(t)
-	token, err := SignToken(priv, "", canonicalTestClaims())
+	token, err := Sign(priv, "", canonicalTestClaims())
 	if err != nil {
-		t.Fatalf("SignToken: %v", err)
+		t.Fatalf("Sign: %v", err)
 	}
 	header, rest, _ := strings.Cut(token, ".")
 	payload, sig, _ := strings.Cut(rest, ".")
 
 	twin := header + "." + payload + "." + nonCanonicalTwin(t, sig)
-	if _, err := ParseToken(pub, twin); !errors.Is(err, ErrTokenMalformed) {
-		t.Fatalf("ParseToken on a non-canonically encoded signature: %v, want ErrTokenMalformed", err)
+	if _, err := Parse[testClaims](pub, twin); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("Parse on a non-canonically encoded signature: %v, want ErrMalformed", err)
 	}
 }
 
-func TestParseToken_RejectsNonCanonicalPayload(t *testing.T) {
+func TestParse_RejectsNonCanonicalPayload(t *testing.T) {
 	pub, priv := testKey(t)
 	claims := canonicalTestClaims()
 	// Grow the subject until the encoded payload's length leaves unused bits
 	// to flip; the claim's content is irrelevant to the property.
 	var payload string
 	for range 4 {
-		token, err := SignToken(priv, "", claims)
+		token, err := Sign(priv, "", claims)
 		if err != nil {
-			t.Fatalf("SignToken: %v", err)
+			t.Fatalf("Sign: %v", err)
 		}
 		_, rest, _ := strings.Cut(token, ".")
 		payload, _, _ = strings.Cut(rest, ".")
@@ -105,7 +105,7 @@ func TestParseToken_RejectsNonCanonicalPayload(t *testing.T) {
 	// verifies and yields the same claims as the canonical one.
 	signing := jwtHeader + "." + nonCanonicalTwin(t, payload)
 	token := signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, []byte(signing)))
-	if _, err := ParseToken(pub, token); !errors.Is(err, ErrTokenMalformed) {
-		t.Fatalf("ParseToken on a non-canonically encoded payload: %v, want ErrTokenMalformed", err)
+	if _, err := Parse[testClaims](pub, token); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("Parse on a non-canonically encoded payload: %v, want ErrMalformed", err)
 	}
 }

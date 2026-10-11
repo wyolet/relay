@@ -12,6 +12,8 @@ import (
 	"sort"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/wyolet/relay/auth/password"
 )
 
 // Store holds the loaded User set. It is intentionally small — the catalog
@@ -187,7 +189,7 @@ func validate(store *Store) error {
 		if len(u.Spec.Password.Get()) < 8 {
 			return fmt.Errorf("User %q: password must be at least 8 characters", name)
 		}
-		if IsPlaceholderPassword(u.Spec.Password.Get()) {
+		if password.IsPlaceholder(u.Spec.Password.Get()) {
 			return fmt.Errorf("User %q: password is a published placeholder (%s); set a real one", name, u.Spec.Password.Source())
 		}
 	}

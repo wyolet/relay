@@ -14,6 +14,11 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
+// TokenPrefix is the literal prefix every relay-issued bearer token
+// starts with. The leading "sk-" matches the LLM-API convention so the
+// token visually scans as a secret credential in logs.
+const TokenPrefix = "sk-wr-"
+
 // PrincipalKind names the sort of subject a Key authenticates as.
 type PrincipalKind string
 

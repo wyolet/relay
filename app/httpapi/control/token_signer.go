@@ -10,6 +10,7 @@ import (
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -39,7 +40,7 @@ func (s *TokenSigner) SetSeed(seed []byte) {
 		return
 	}
 	priv := ed25519.NewKeyFromSeed(seed)
-	s.key.Store(&signingKey{priv: priv, kid: crypto.KeyID(priv.Public().(ed25519.PublicKey))})
+	s.key.Store(&signingKey{priv: priv, kid: authtoken.KeyID(priv.Public().(ed25519.PublicKey))})
 }
 
 // PublicKey returns the verification half, or nil when no key is installed.
@@ -82,7 +83,7 @@ func (s *TokenSigner) sign(claims crypto.TokenClaims) (string, error) {
 	if k == nil {
 		return "", ErrNoSigningKey
 	}
-	return crypto.SignToken(k.priv, k.kid, claims)
+	return authtoken.Sign(k.priv, k.kid, claims)
 }
 
 // rotateTokenKey re-keys the signer. Deployment-wide and unscoped, so it is

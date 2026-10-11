@@ -7,3 +7,5 @@ use .
 use ./sdk
 
 use ./jobq
+
+use ./auth

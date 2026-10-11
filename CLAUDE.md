@@ -41,8 +41,8 @@ suggestions.
 
 ## Repository layout
 
-Three Go modules wired by a root `go.work` (`use .`, `use ./sdk`,
-`use ./jobq`). The codebase is organised by responsibility.
+Four Go modules wired by a root `go.work` (`use .`, `use ./sdk`,
+`use ./jobq`, `use ./auth`). The codebase is organised by responsibility.
 
 ```
 app/                       — the application: domain + composition + handlers
@@ -173,6 +173,10 @@ jobq/                      — SEPARATE Go module: self-contained, durable
                              background-job engine (PG store + PayloadStore;
                              "PG never holds bytes"). River-style claim model.
                              app/batch is its consumer.
+
+auth/                      — SEPARATE Go module: general-purpose
+                             authentication + authorization primitives. No
+                             product vocabulary; imports nothing from relay.
 
 internal/                  — composition root / boundary
   config/                  — RELAY_* env parsing

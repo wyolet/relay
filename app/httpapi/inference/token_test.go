@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/httpheader"
 )
@@ -400,14 +401,14 @@ func TestSigningKeyRotationKeepsThePreviousKeyLive(t *testing.T) {
 		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
 	}
 	oldPub := f.signer.Public().(ed25519.PublicKey)
-	old := signedWith(t, f, f.signer, crypto.KeyID(oldPub))
+	old := signedWith(t, f, f.signer, authtoken.KeyID(oldPub))
 
 	newPub, newPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.tokens.SetKey(newPub)
-	fresh := signedWith(t, f, newPriv, crypto.KeyID(newPub))
+	fresh := signedWith(t, f, newPriv, authtoken.KeyID(newPub))
 
 	st := f.stack(t)
 	if w := st.do(fresh); w.Code != http.StatusOK {
@@ -436,7 +437,7 @@ func TestTokenWithoutKidVerifiesAgainstTheCurrentKey(t *testing.T) {
 		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
 	}
 	bare := signedWith(t, f, f.signer, "")
-	if crypto.TokenKeyID(bare) != "" {
+	if authtoken.HeaderKeyID(bare) != "" {
 		t.Fatal("expected a token with no kid")
 	}
 	if w := f.stack(t).do(bare); w.Code != http.StatusOK {

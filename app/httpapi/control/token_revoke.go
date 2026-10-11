@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -82,7 +83,7 @@ func revokeTokenByValue(ctx context.Context, d tokenDeps, raw string) (*emptyOut
 	var claims crypto.TokenClaims
 	var err error
 	for _, pub := range keys {
-		if claims, err = crypto.ParseToken(pub, raw); err == nil {
+		if claims, err = authtoken.Parse[crypto.TokenClaims](pub, raw); err == nil {
 			break
 		}
 	}

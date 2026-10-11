@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/internal/identity"
 )
 
@@ -76,7 +77,7 @@ func registerAuth(api huma.API, d Deps) {
 	}, func(ctx context.Context, in *loginInput) (*authResponse, error) {
 		// A row seeded before the loader refused placeholders still holds
 		// their hash, so the submitted value is checked too.
-		if identity.IsPlaceholderPassword(in.Body.Password) {
+		if password.IsPlaceholder(in.Body.Password) {
 			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
