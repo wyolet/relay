@@ -503,7 +503,7 @@ smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-moc
 		obj=json.loads(open(sorted(glob.glob('$(MOCK_FIXTURES)/session-*.jsonl'))[0]).readline()); \
 		open('/tmp/fixbody.json','w').write(json.dumps(obj['match']['body_json_equals']))"
 	@test -f /tmp/fixbody-parallel.json || python3 -c "import json; \
-		obj=json.loads(open('$(MOCK_FIXTURES)/session-1779156057-87325-4.jsonl').readlines()[9]); \
+		obj=json.loads(open('$(MOCK_FIXTURES)/session-1779163989-65437-1.jsonl').readlines()[8]); \
 		open('/tmp/fixbody-parallel.json','w').write(json.dumps(obj['match']['body_json_equals']))"
 	@pgrep -f 'spec-mock-openai.*-addr.*5180' >/dev/null || \
 		( $(MOCK_BIN) -addr ":5180" \
