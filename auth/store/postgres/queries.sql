@@ -1,26 +1,26 @@
 -- Columns are listed, never *, so a column a product adds to a shared table does not break these reads.
 
 -- name: GetUser :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = $1;
 
 -- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE username = $1;
 
 -- name: GetUserByIdentity :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2);
 
 -- name: ListUsersByExternalID :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE external_source IS NOT NULL AND external_id = $1 ORDER BY created_at ASC, id ASC;
 
 -- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users ORDER BY created_at ASC, id ASC;
 
--- name: UpsertUser :exec
+-- name: UpsertUser :execrows
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
@@ -32,7 +32,16 @@ ON CONFLICT (id) DO UPDATE SET
     disabled        = EXCLUDED.disabled,
     external_source = EXCLUDED.external_source,
     external_id     = EXCLUDED.external_id,
-    updated_at      = now();
+    updated_at      = now()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR users.resource_version = sqlc.narg('expected_version')::bigint;
+
+-- The same statement bumps the token version, so a re-enabled account never revives a token minted before.
+-- name: SetUserDisabled :execrows
+UPDATE users SET disabled = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1 AND disabled <> $2;
+
+-- Touches only the columns a provisioning source owns, and only on its own rows.
+-- name: UpdateProvisionedUser :execrows
+UPDATE users SET username = $3, email = $4, external_id = $5, updated_at = now() WHERE id = $1 AND external_source = $2;
 
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;

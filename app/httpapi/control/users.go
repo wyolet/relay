@@ -185,6 +185,9 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *
 		if errors.Is(err, authz.ErrForbidden) || errors.Is(err, authz.ErrUnauthenticated) {
 			return nil, mapAuthzErr(err)
 		}
+		if errors.Is(err, directory.ErrStaleResourceVersion) {
+			return nil, staleVersionError("user", u.ID)
+		}
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
 	u.Disabled, u.Roles = disabled, roles

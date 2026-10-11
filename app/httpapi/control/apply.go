@@ -129,6 +129,8 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 				status, msg := http.StatusInternalServerError, se.Error()
 				if me, ok := errors.AsType[*directory.ManagedError](err); ok {
 					status, msg = http.StatusConflict, managedMessage(me)
+				} else if errors.Is(err, directory.ErrStaleResourceVersion) {
+					status = http.StatusConflict
 				} else if errors.Is(err, authz.ErrForbidden) {
 					status = http.StatusForbidden
 				}

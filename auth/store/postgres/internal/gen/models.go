@@ -115,16 +115,17 @@ type Team struct {
 }
 
 type User struct {
-	ID             string
-	Username       string
-	Email          pgtype.Text
-	PasswordHash   pgtype.Text
-	OidcSubject    pgtype.Text
-	Roles          []string
-	Disabled       bool
-	CreatedAt      pgtype.Timestamptz
-	UpdatedAt      pgtype.Timestamptz
-	TokenVersion   int32
-	ExternalSource pgtype.Text
-	ExternalID     pgtype.Text
+	ID              string
+	Username        string
+	Email           pgtype.Text
+	PasswordHash    pgtype.Text
+	OidcSubject     pgtype.Text
+	Roles           []string
+	Disabled        bool
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	TokenVersion    int32
+	ExternalSource  pgtype.Text
+	ExternalID      pgtype.Text
+	ResourceVersion int64
 }

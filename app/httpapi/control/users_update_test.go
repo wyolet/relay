@@ -219,6 +219,41 @@ func TestLastEnabledAdminCannotBeRemoved(t *testing.T) {
 	}
 }
 
+// racingUsers runs between once, right after the handler reads the account, as a concurrent writer would.
+type racingUsers struct {
+	*updateUsers
+	between func()
+}
+
+func (r *racingUsers) Get(ctx context.Context, id string) (*user.User, error) {
+	u, err := r.updateUsers.Get(ctx, id)
+	if r.between != nil {
+		run := r.between
+		r.between = nil
+		run()
+	}
+	return u, err
+}
+
+// A change another writer makes between the handler's read and its write is a conflict for the caller to retry, not overwritten: a role edit must not re-enable an account disabled meanwhile.
+func TestUserUpdateRefusesAConcurrentChange(t *testing.T) {
+	base := newUpdateUsers(t, &user.User{ID: "u-1", Username: "alice"})
+	users := &racingUsers{updateUsers: base, between: func() {
+		if err := base.DisableUser(context.Background(), "u-1"); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	admin := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true})
+	_, err := updateUser(admin, users, scopedAllow{}, rolesInput("u-1", "viewer"))
+	var se huma.StatusError
+	if !errors.As(err, &se) || se.GetStatus() != http.StatusConflict {
+		t.Fatalf("an update over a concurrent change = %v, want 409", err)
+	}
+	if got := base.row("u-1"); !got.Disabled || len(got.Roles) != 0 {
+		t.Fatalf("the refused update was written: %+v", got)
+	}
+}
+
 func TestUserUpdateIsMountedOnTheUsersRoutes(t *testing.T) {
 	c := &captureAuthz{}
 	d := Deps{Authz: c, Users: &user.Store{}}

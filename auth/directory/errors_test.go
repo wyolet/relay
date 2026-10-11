@@ -79,6 +79,20 @@ func (f flakyUsers) Upsert(ctx context.Context, u *directory.User) error {
 	return f.UserStore.Upsert(ctx, u)
 }
 
+func (f flakyUsers) SetDisabled(ctx context.Context, id string, disabled bool) (bool, error) {
+	if *f.writes {
+		return false, errStore
+	}
+	return f.UserStore.SetDisabled(ctx, id, disabled)
+}
+
+func (f flakyUsers) UpdateProvisioned(ctx context.Context, source, id string, in directory.ProvisionedUser) error {
+	if *f.writes {
+		return errStore
+	}
+	return f.UserStore.UpdateProvisioned(ctx, source, id, in)
+}
+
 func (f flakyUsers) Delete(ctx context.Context, id string) error {
 	if *f.writes {
 		return errStore

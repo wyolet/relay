@@ -90,8 +90,8 @@ func sameUser(t *testing.T, what string, got, want *directory.User) {
 		t.Fatalf("%s: not found", what)
 	}
 	g, w := *got, *want
-	g.TokenVersion, g.CreatedAt, g.UpdatedAt = 0, time.Time{}, time.Time{}
-	w.TokenVersion, w.CreatedAt, w.UpdatedAt = 0, time.Time{}, time.Time{}
+	g.TokenVersion, g.ResourceVersion, g.CreatedAt, g.UpdatedAt = 0, "", time.Time{}, time.Time{}
+	w.TokenVersion, w.ResourceVersion, w.CreatedAt, w.UpdatedAt = 0, "", time.Time{}, time.Time{}
 	if w.Roles == nil {
 		w.Roles = []string{}
 	}
@@ -103,8 +103,8 @@ func sameUser(t *testing.T, what string, got, want *directory.User) {
 	if !reflect.DeepEqual(g, w) {
 		t.Fatalf("%s:\n got  %+v\n want %+v", what, g, w)
 	}
-	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
-		t.Fatalf("%s: store did not set timestamps", what)
+	if got.ResourceVersion == "" || got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatalf("%s: store did not set the version and timestamps", what)
 	}
 	for _, x := range got.Identities {
 		if x.CreatedAt.IsZero() {

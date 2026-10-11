@@ -421,7 +421,7 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = $1
 `
 
@@ -442,12 +442,13 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.TokenVersion,
 		&i.ExternalSource,
 		&i.ExternalID,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2)
 `
 
@@ -472,12 +473,13 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.TokenVersion,
 		&i.ExternalSource,
 		&i.ExternalID,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE username = $1
 `
 
@@ -497,6 +499,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.TokenVersion,
 		&i.ExternalSource,
 		&i.ExternalID,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -909,7 +912,7 @@ func (q *Queries) ListUserIdentities(ctx context.Context, userID string) ([]Iden
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users ORDER BY created_at ASC, id ASC
 `
 
@@ -935,6 +938,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.TokenVersion,
 			&i.ExternalSource,
 			&i.ExternalID,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -947,7 +951,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 const listUsersByExternalID = `-- name: ListUsersByExternalID :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id, resource_version
 FROM users WHERE external_source IS NOT NULL AND external_id = $1 ORDER BY created_at ASC, id ASC
 `
 
@@ -973,6 +977,7 @@ func (q *Queries) ListUsersByExternalID(ctx context.Context, externalID pgtype.T
 			&i.TokenVersion,
 			&i.ExternalSource,
 			&i.ExternalID,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1061,6 +1066,51 @@ type SetPrimaryIdentityIfNoneParams struct {
 func (q *Queries) SetPrimaryIdentityIfNone(ctx context.Context, arg SetPrimaryIdentityIfNoneParams) error {
 	_, err := q.db.Exec(ctx, setPrimaryIdentityIfNone, arg.ID, arg.OidcSubject)
 	return err
+}
+
+const setUserDisabled = `-- name: SetUserDisabled :execrows
+UPDATE users SET disabled = $2, token_version = token_version + 1, updated_at = now() WHERE id = $1 AND disabled <> $2
+`
+
+type SetUserDisabledParams struct {
+	ID       string
+	Disabled bool
+}
+
+// The same statement bumps the token version, so a re-enabled account never revives a token minted before.
+func (q *Queries) SetUserDisabled(ctx context.Context, arg SetUserDisabledParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserDisabled, arg.ID, arg.Disabled)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateProvisionedUser = `-- name: UpdateProvisionedUser :execrows
+UPDATE users SET username = $3, email = $4, external_id = $5, updated_at = now() WHERE id = $1 AND external_source = $2
+`
+
+type UpdateProvisionedUserParams struct {
+	ID             string
+	ExternalSource pgtype.Text
+	Username       string
+	Email          pgtype.Text
+	ExternalID     pgtype.Text
+}
+
+// Touches only the columns a provisioning source owns, and only on its own rows.
+func (q *Queries) UpdateProvisionedUser(ctx context.Context, arg UpdateProvisionedUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateProvisionedUser,
+		arg.ID,
+		arg.ExternalSource,
+		arg.Username,
+		arg.Email,
+		arg.ExternalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertGroup = `-- name: UpsertGroup :execrows
@@ -1327,7 +1377,7 @@ func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
-const upsertUser = `-- name: UpsertUser :exec
+const upsertUser = `-- name: UpsertUser :execrows
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
@@ -1340,22 +1390,24 @@ ON CONFLICT (id) DO UPDATE SET
     external_source = EXCLUDED.external_source,
     external_id     = EXCLUDED.external_id,
     updated_at      = now()
+WHERE $10::bigint IS NULL OR users.resource_version = $10::bigint
 `
 
 type UpsertUserParams struct {
-	ID             string
-	Username       string
-	Email          pgtype.Text
-	PasswordHash   pgtype.Text
-	OidcSubject    pgtype.Text
-	Roles          []string
-	Disabled       bool
-	ExternalSource pgtype.Text
-	ExternalID     pgtype.Text
+	ID              string
+	Username        string
+	Email           pgtype.Text
+	PasswordHash    pgtype.Text
+	OidcSubject     pgtype.Text
+	Roles           []string
+	Disabled        bool
+	ExternalSource  pgtype.Text
+	ExternalID      pgtype.Text
+	ExpectedVersion pgtype.Int8
 }
 
-func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
-	_, err := q.db.Exec(ctx, upsertUser,
+func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertUser,
 		arg.ID,
 		arg.Username,
 		arg.Email,
@@ -1365,6 +1417,10 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
 		arg.Disabled,
 		arg.ExternalSource,
 		arg.ExternalID,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

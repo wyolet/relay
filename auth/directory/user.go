@@ -59,8 +59,15 @@ type User struct {
 	Disabled bool
 	// TokenVersion is the generation every token the user holds must carry. The store owns it: an upsert leaves it alone and BumpTokenVersion advances it.
 	TokenVersion int
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// ResourceVersion changes on every write to the account. An update carrying it applies only while the stored account still has it; empty updates unconditionally.
+	ResourceVersion string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// ExpectedVersion is Metadata.ExpectedVersion for an account.
+func (u *User) ExpectedVersion() (v int64, ok bool, err error) {
+	return Metadata{ResourceVersion: u.ResourceVersion}.ExpectedVersion()
 }
 
 // Status is the account state a principal for this user carries.

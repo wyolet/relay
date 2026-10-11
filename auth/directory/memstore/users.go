@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/wyolet/relay/auth/directory"
 )
@@ -61,28 +62,28 @@ func (u userStore) List(_ context.Context) ([]*directory.User, error) {
 }
 
 func (u userStore) Upsert(_ context.Context, in *directory.User) error {
+	want, conditional, err := in.ExpectedVersion()
+	if err != nil {
+		return err
+	}
 	u.s.mu.Lock()
 	defer u.s.mu.Unlock()
+	stored := u.s.users[in.ID]
+	if conditional && stored != nil && stored.ResourceVersion != directory.FormatResourceVersion(want) {
+		return directory.ErrStaleResourceVersion
+	}
+	if err := u.checkUnique(in.ID, in.Username, in.Email, in.External); err != nil {
+		return err
+	}
 	for id, x := range u.s.users {
-		if id == in.ID {
-			continue
-		}
-		switch {
-		case x.Username == in.Username:
-			return fmt.Errorf("%w: username %q is taken", directory.ErrConflict, in.Username)
-		case in.Email != "" && x.Email == in.Email:
-			return fmt.Errorf("%w: %q", directory.ErrEmailTaken, in.Email)
-		case !in.Identity.IsZero() && x.HasIdentity(in.Identity):
+		if id != in.ID && !in.Identity.IsZero() && x.HasIdentity(in.Identity) {
 			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
-		case in.External.ID != "" && x.External == in.External:
-			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
 		}
 	}
 	c := cloneUser(in)
-	stored := u.s.users[in.ID]
-	c.TokenVersion, c.CreatedAt, c.Identities = 1, now(), nil
+	c.TokenVersion, c.CreatedAt, c.Identities, c.ResourceVersion = 1, now(), nil, "0"
 	if stored != nil {
-		c.TokenVersion, c.CreatedAt = stored.TokenVersion, stored.CreatedAt
+		c.TokenVersion, c.CreatedAt, c.ResourceVersion = stored.TokenVersion, stored.CreatedAt, stored.ResourceVersion
 		c.Identities = stored.Identities
 		if stored.Identity != in.Identity {
 			c.Identities = withoutIdentity(c.Identities, stored.Identity)
@@ -96,8 +97,59 @@ func (u userStore) Upsert(_ context.Context, in *directory.User) error {
 	if in.Identity.IsZero() && len(c.Identities) > 0 {
 		c.Identity = c.Identities[0].Identity
 	}
-	c.UpdatedAt = now()
+	touch(c)
 	u.s.users[in.ID] = c
+	return nil
+}
+
+// checkUnique refuses a username, email or external id another account than id holds.
+func (u userStore) checkUnique(id, username, email string, ext directory.External) error {
+	for otherID, x := range u.s.users {
+		switch {
+		case otherID == id:
+		case x.Username == username:
+			return fmt.Errorf("%w: username %q is taken", directory.ErrConflict, username)
+		case email != "" && x.Email == email:
+			return fmt.Errorf("%w: %q", directory.ErrEmailTaken, email)
+		case ext.ID != "" && x.External == ext:
+			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
+		}
+	}
+	return nil
+}
+
+// touch records a write to the stored account, as the Postgres trigger does.
+func touch(x *directory.User) {
+	v, _ := strconv.ParseInt(x.ResourceVersion, 10, 64)
+	x.ResourceVersion = directory.FormatResourceVersion(v + 1)
+	x.UpdatedAt = now()
+}
+
+func (u userStore) SetDisabled(_ context.Context, id string, disabled bool) (bool, error) {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	x, ok := u.s.users[id]
+	if !ok || x.Disabled == disabled {
+		return false, nil
+	}
+	x.Disabled = disabled
+	x.TokenVersion++
+	touch(x)
+	return true, nil
+}
+
+func (u userStore) UpdateProvisioned(_ context.Context, source, id string, in directory.ProvisionedUser) error {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	x, ok := u.s.users[id]
+	if !ok || x.External.Source == "" || x.External.Source != source {
+		return fmt.Errorf("%w: user %s of source %q", directory.ErrNotFound, id, source)
+	}
+	if err := u.checkUnique(id, in.Username, in.Email, directory.External{Source: source, ID: in.ExternalID}); err != nil {
+		return err
+	}
+	x.Username, x.Email, x.External.ID = in.Username, in.Email, in.ExternalID
+	touch(x)
 	return nil
 }
 
@@ -118,7 +170,7 @@ func (u userStore) BumpTokenVersion(_ context.Context, id string) error {
 	defer u.s.mu.Unlock()
 	if x, ok := u.s.users[id]; ok {
 		x.TokenVersion++
-		x.UpdatedAt = now()
+		touch(x)
 	}
 	return nil
 }
@@ -147,6 +199,7 @@ func (u userStore) AddIdentity(_ context.Context, userID string, id directory.Us
 	x.Identities = append(x.Identities, directory.UserIdentity{Identity: id.Identity, ExternalID: id.ExternalID, CreatedAt: now()})
 	if x.Identity.IsZero() {
 		x.Identity = id.Identity
+		touch(x)
 	}
 	return nil
 }
@@ -168,7 +221,7 @@ func (u userStore) AddFirstIdentity(_ context.Context, userID string, id directo
 	}
 	x.Identities = []directory.UserIdentity{{Identity: id, CreatedAt: now()}}
 	x.Identity = id
-	x.UpdatedAt = now()
+	touch(x)
 	return nil
 }
 
@@ -185,6 +238,7 @@ func (u userStore) RemoveIdentity(_ context.Context, userID string, id directory
 		if len(x.Identities) > 0 {
 			x.Identity = x.Identities[0].Identity
 		}
+		touch(x)
 	}
 	return nil
 }
@@ -194,6 +248,7 @@ func (u userStore) RemoveIdentities(_ context.Context, userID string) error {
 	defer u.s.mu.Unlock()
 	if x, ok := u.s.users[userID]; ok {
 		x.Identities, x.Identity = nil, directory.Identity{}
+		touch(x)
 	}
 	return nil
 }

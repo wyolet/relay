@@ -13,6 +13,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 // The identities migration expands the schema without contracting it: users.oidc_subject keeps the primary identity, so a binary from before it reads and writes accounts as it did. These tests run it on the product's schema and on the module's own.
@@ -115,6 +116,8 @@ INSERT INTO users (id, username, oidc_subject) VALUES
 			if got := identityRows(t, dsn); !slices.Equal(got, want) {
 				t.Fatalf("identities = %q, want %q", got, want)
 			}
+			// The store reads the columns later migrations add.
+			migrateModule(t, dsn, embeddedVersion(t))
 			users := New(pool).Users
 			for id, idp := range map[string]directory.Identity{
 				"u-1": {Issuer: "https://idp.example.com", Subject: "sub-1"},
@@ -139,7 +142,7 @@ func TestIdentitiesSurviveRollback(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			dsn := atFirstMigration(t, withProduct)
-			migrateModule(t, dsn, 2)
+			migrateModule(t, dsn, embeddedVersion(t))
 			pool := openPool(t, dsn)
 			d, err := directory.New(directory.Config{Stores: New(pool), Grants: allowAll{}})
 			if err != nil {
@@ -173,7 +176,7 @@ func TestIdentitiesSurviveRollback(t *testing.T) {
 			cleared, err := users.Get(ctx, bob.ID)
 			must(t, err)
 			cleared.Identity = directory.Identity{}
-			must(t, d.UpdateUser(ctx, nil, cleared))
+			must(t, d.UpdateUser(ctx, &principal.Principal{Admin: true}, cleared))
 			if got := oldRead(t, dsn, "https://other.example.com|c"); got != bob.ID {
 				t.Fatalf("old read after a cleared primary was promoted = %q, want %q", got, bob.ID)
 			}
@@ -223,6 +226,8 @@ func TestIdentitiesDownMigration(t *testing.T) {
 			if got := allTables(t, dsn); !slices.Contains(got, "identities") {
 				t.Fatalf("tables after the up migration: %v", got)
 			}
+			// The store writes the columns later migrations add; going down to 1 removes them too.
+			migrateModule(t, dsn, embeddedVersion(t))
 			d, err := directory.New(directory.Config{Stores: New(openPool(t, dsn)), Grants: allowAll{}})
 			if err != nil {
 				t.Fatal(err)

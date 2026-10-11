@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/store/postgres/internal/gen"
 )
@@ -81,27 +83,53 @@ func (s users) Upsert(ctx context.Context, u *directory.User) error {
 	if roles == nil {
 		roles = []string{}
 	}
+	v, conditional, err := u.ExpectedVersion()
+	if err != nil {
+		return err
+	}
 	row := gen.UpsertUserParams{
-		ID:             u.ID,
-		Username:       u.Username,
-		Email:          text(u.Email),
-		PasswordHash:   text(u.PasswordHash),
-		OidcSubject:    text(encodeIdentity(u.Identity)),
-		Roles:          roles,
-		Disabled:       u.Disabled,
-		ExternalSource: text(u.External.Source),
-		ExternalID:     text(u.External.ID),
+		ID:              u.ID,
+		Username:        u.Username,
+		Email:           text(u.Email),
+		PasswordHash:    text(u.PasswordHash),
+		OidcSubject:     text(encodeIdentity(u.Identity)),
+		Roles:           roles,
+		Disabled:        u.Disabled,
+		ExternalSource:  text(u.External.Source),
+		ExternalID:      text(u.External.ID),
+		ExpectedVersion: pgtype.Int8{Int64: v, Valid: conditional},
 	}
 	if !u.Identity.IsZero() {
-		return mapErr("upsert user", gen.New(s.db).UpsertUser(ctx, row))
+		return mapErr("upsert user", staleIfNoRows(gen.New(s.db).UpsertUser(ctx, row)))
 	}
 	// Clearing the primary of an account that holds other identities promotes the oldest of them.
 	return inTx(ctx, s.db, func(q *gen.Queries) error {
-		if err := q.UpsertUser(ctx, row); err != nil {
-			return mapErr("upsert user", err)
+		if err := mapErr("upsert user", staleIfNoRows(q.UpsertUser(ctx, row))); err != nil {
+			return err
 		}
 		return mapErr("promote identity", q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{ID: u.ID}))
 	})
+}
+
+func (s users) SetDisabled(ctx context.Context, id string, disabled bool) (bool, error) {
+	n, err := gen.New(s.db).SetUserDisabled(ctx, gen.SetUserDisabledParams{ID: id, Disabled: disabled})
+	if err != nil {
+		return false, mapErr("set disabled", err)
+	}
+	return n > 0, nil
+}
+
+func (s users) UpdateProvisioned(ctx context.Context, source, id string, in directory.ProvisionedUser) error {
+	n, err := gen.New(s.db).UpdateProvisionedUser(ctx, gen.UpdateProvisionedUserParams{
+		ID: id, ExternalSource: text(source), Username: in.Username, Email: text(in.Email), ExternalID: text(in.ExternalID),
+	})
+	if err != nil {
+		return mapErr("update provisioned user", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("update provisioned user: %w: user %s of source %q", directory.ErrNotFound, id, source)
+	}
+	return nil
 }
 
 func (s users) Delete(ctx context.Context, id string) error {
@@ -181,17 +209,18 @@ func withIdentities(ctx context.Context, q *gen.Queries, r gen.User, err error) 
 
 func userFromRow(r gen.User) *directory.User {
 	return &directory.User{
-		ID:           r.ID,
-		Username:     r.Username,
-		Email:        r.Email.String,
-		PasswordHash: r.PasswordHash.String,
-		Identity:     decodeIdentity(r.OidcSubject.String),
-		External:     directory.External{Source: r.ExternalSource.String, ID: r.ExternalID.String},
-		Roles:        r.Roles,
-		Disabled:     r.Disabled,
-		TokenVersion: int(r.TokenVersion),
-		CreatedAt:    r.CreatedAt.Time,
-		UpdatedAt:    r.UpdatedAt.Time,
+		ID:              r.ID,
+		Username:        r.Username,
+		Email:           r.Email.String,
+		PasswordHash:    r.PasswordHash.String,
+		Identity:        decodeIdentity(r.OidcSubject.String),
+		External:        directory.External{Source: r.ExternalSource.String, ID: r.ExternalID.String},
+		Roles:           r.Roles,
+		Disabled:        r.Disabled,
+		TokenVersion:    int(r.TokenVersion),
+		ResourceVersion: directory.FormatResourceVersion(r.ResourceVersion),
+		CreatedAt:       r.CreatedAt.Time,
+		UpdatedAt:       r.UpdatedAt.Time,
 	}
 }
 

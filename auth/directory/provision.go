@@ -86,16 +86,27 @@ func (p *Provisioner) CreateUser(ctx context.Context, in ProvisionedUser, disabl
 	return p.ownUser(ctx, u.ID)
 }
 
-// UpdateUser replaces the fields a source owns on one of its accounts; roles, password, identities and the disabled flag stay as stored.
+// UpdateUser sets the fields a source owns on one of its accounts and writes nothing else, so roles, password, identities and the disabled flag stay as stored even when an operator changes them while the source's request runs.
 func (p *Provisioner) UpdateUser(ctx context.Context, id string, in ProvisionedUser) (*User, error) {
 	u, err := p.ownUser(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	u.Username, u.Email, u.External.ID = in.Username, in.Email, in.ExternalID
-	if err := p.d.UpdateUser(ctx, nil, u); err != nil {
+	next := *u
+	next.Username, next.Email, next.External.ID = in.Username, in.Email, in.ExternalID
+	if err := next.validate(); err != nil {
 		return nil, err
 	}
+	if err := p.d.checkUserUnique(ctx, &next); err != nil {
+		return nil, err
+	}
+	if err := p.d.cfg.Stores.Users.UpdateProvisioned(ctx, p.source, id, in); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, foreign("user", id)
+		}
+		return nil, err
+	}
+	p.d.notify(ctx, KindUser, OpUpsert, id)
 	return p.ownUser(ctx, id)
 }
 

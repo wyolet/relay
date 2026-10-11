@@ -48,6 +48,10 @@ func (b *builder) planUsers(ctx context.Context, docs []*authmanifest.Document) 
 			return &InvalidError{Kind: authmanifest.KindUser, Name: name, Err: err}
 		}
 		u.ID = b.idx.Users[name]
+		if current != nil {
+			// The write applies only while the account is as this plan read it.
+			u.ResourceVersion = current.ResourceVersion
+		}
 		e := Entry{Kind: authmanifest.KindUser, Name: name, ID: u.ID, plural: "users", owner: meta.Owner{Kind: meta.OwnerSystem}}
 		if d.Metadata.ID != "" && d.Metadata.ID != u.ID {
 			e.IDMismatch = d.Metadata.ID
