@@ -22,7 +22,7 @@ import (
 // envDSN names the server the test databases are created on; each test gets a database of its own, dropped on cleanup.
 const envDSN = "RELAY_TEST_PG_DSN"
 
-// productMigrations is the migration tree of the product that shares these tables in this repository; tests that need it skip when it is absent.
+// productMigrations is the migration tree of the product that shares these tables in this repository; tests that need it fail when it is absent, so a moved tree cannot turn them into passes that tested nothing.
 var productMigrations = filepath.Join("..", "..", "..", "migrations", "postgres")
 
 func emptyDB(t *testing.T) string {
@@ -86,7 +86,7 @@ func openPool(t *testing.T, dsn string) *pgxpool.Pool {
 func migrateProduct(t *testing.T, dsn string) {
 	t.Helper()
 	if _, err := os.Stat(productMigrations); err != nil {
-		t.Skipf("product migrations not found at %s", productMigrations)
+		t.Fatalf("product migrations not found at %s: %v", productMigrations, err)
 	}
 	src, err := iofs.New(os.DirFS(productMigrations), ".")
 	if err != nil {
