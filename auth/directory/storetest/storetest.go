@@ -22,6 +22,7 @@ func Run(t *testing.T, open func(t *testing.T) directory.Stores) {
 	t.Run("user writes", func(t *testing.T) { testUserWrites(t, open(t)) })
 	t.Run("identities", func(t *testing.T) { testIdentities(t, open(t)) })
 	t.Run("first identity", func(t *testing.T) { testFirstIdentity(t, open(t)) })
+	t.Run("issuer slash", func(t *testing.T) { testIssuerSlash(t, open(t)) })
 	t.Run("external", func(t *testing.T) { testExternal(t, open(t)) })
 	t.Run("rows", func(t *testing.T) { testRows(t, open(t)) })
 	t.Run("versions", func(t *testing.T) { testVersions(t, open(t)) })

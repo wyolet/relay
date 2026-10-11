@@ -146,7 +146,7 @@ func auditLoginDenied(ctx context.Context, name string) {
 		audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: name})
 }
 
-// oidcSubject is the user row's key for an IdP identity: the configured issuer and the token's sub.
+// oidcSubject is the user row's key for an IdP identity: the configured issuer and the token's sub. It is stored as written, because an older binary matches it exactly on a rollback; lookups ignore trailing slashes on the issuer.
 func oidcSubject(c oidc.Claims) string { return c.Issuer + "|" + c.Subject }
 
 // resolveUser finds the user for an OIDC identity, linking it to a SCIM-provisioned account or provisioning one when registration is open, and refuses disabled accounts.

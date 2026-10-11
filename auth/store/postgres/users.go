@@ -1,4 +1,4 @@
-// The primary identity is written to users.oidc_subject, and a trigger mirrors that column into identities (see the 000002 migration), so Upsert writes no identity row itself and a binary that only knows the column stays in step.
+// The primary identity is written to users.oidc_subject as given, and a trigger mirrors that column into identities in canonical form (see the 000002 and 000005 migrations), so Upsert writes no identity row itself and a binary that only knows the column, matching it exactly, stays in step.
 
 package postgres
 
@@ -28,6 +28,7 @@ func (s users) ByIdentity(ctx context.Context, id directory.Identity) (*director
 	if id.IsZero() {
 		return nil, nil
 	}
+	id = id.Canonical()
 	q := gen.New(s.db)
 	r, err := q.GetUserByIdentity(ctx, gen.GetUserByIdentityParams{Issuer: id.Issuer, Subject: id.Subject})
 	return withIdentities(ctx, q, r, err)
@@ -85,9 +86,10 @@ func (s users) BumpTokenVersion(ctx context.Context, id string) error {
 }
 
 func (s users) AddIdentity(ctx context.Context, userID string, id directory.UserIdentity) error {
+	key := id.Canonical()
 	return inTx(ctx, s.db, func(q *gen.Queries) error {
 		n, err := q.UpsertIdentity(ctx, gen.UpsertIdentityParams{
-			UserID: userID, Issuer: id.Issuer, Subject: id.Subject, ExternalID: text(id.ExternalID),
+			UserID: userID, Issuer: key.Issuer, Subject: key.Subject, ExternalID: text(id.ExternalID),
 		})
 		if err != nil {
 			return mapErr("add identity", err)
@@ -116,12 +118,22 @@ func (s users) AddFirstIdentity(ctx context.Context, userID string, id directory
 }
 
 func (s users) RemoveIdentity(ctx context.Context, userID string, id directory.Identity) error {
+	key := id.Canonical()
 	return inTx(ctx, s.db, func(q *gen.Queries) error {
-		if err := q.DeleteIdentity(ctx, gen.DeleteIdentityParams{UserID: userID, Issuer: id.Issuer, Subject: id.Subject}); err != nil {
+		if err := q.DeleteIdentity(ctx, gen.DeleteIdentityParams{UserID: userID, Issuer: key.Issuer, Subject: key.Subject}); err != nil {
 			return mapErr("remove identity", err)
 		}
+		// The promotion compares the primary as stored, which may spell the issuer with a trailing slash where id does not, or the reverse.
+		named := text(encodeIdentity(id))
+		r, err := q.GetUser(ctx, userID)
+		if err != nil && !notFound(err) {
+			return mapErr("get user", err)
+		}
+		if err == nil && decodeIdentity(r.OidcSubject.String).Canonical() == key {
+			named = r.OidcSubject
+		}
 		if err := q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{
-			ID: userID, OidcSubject: text(encodeIdentity(id)),
+			ID: userID, OidcSubject: named,
 		}); err != nil {
 			return mapErr("promote identity", err)
 		}

@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/oidc"
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
@@ -72,6 +75,53 @@ func TestOIDCSignInOverIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantFailure(t, "disabled account", od, claims("sub-new", ""), http.StatusForbidden, "account disabled")
+}
+
+// An account a binary from before the identities table wrote under a configured issuer with a trailing slash signs in after the upgrade whichever form is configured, and that binary's exact oidc_subject lookup still finds it and the accounts provisioned since.
+func TestOIDCSignInAfterIssuerSlashUpgrade(t *testing.T) {
+	ctx := t.Context()
+	dsn := storagetest.DB(t)
+	if err := authpg.MigrateDown(dsn, 1); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	const slashed = "https://idp.example.com/"
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, oidc_subject) VALUES ('u-old', 'ada', $1)`, slashed+"|sub-ada"); err != nil {
+		t.Fatal(err)
+	}
+	if err := authpg.Migrate(dsn); err != nil {
+		t.Fatal(err)
+	}
+	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("BootstrapStores: %v", err)
+	}
+	cfg := &settings.AuthOIDC{Enabled: true, ClientID: "c", Registration: "closed"}
+	od := newOIDC(func() *settings.AuthOIDC { return cfg }, func() *settings.AuthSCIM { return &settings.AuthSCIM{} },
+		directoryUsers{Store: stores.Users, ops: newDirectoryOps(Deps{Stores: stores})}, &fakeSessions{}, false)
+
+	for _, issuer := range []string{slashed, "https://idp.example.com"} {
+		cfg.Issuer = issuer
+		if u, err := od.resolveUser(ctx, oidc.Claims{Issuer: issuer, Subject: "sub-ada"}); err != nil || u.ID != "u-old" {
+			t.Fatalf("sign-in through %s = %+v, %v; want u-old", issuer, u, err)
+		}
+	}
+
+	cfg.Issuer, cfg.Registration = slashed, "open"
+	grace, err := od.resolveUser(ctx, oidc.Claims{Issuer: slashed, Subject: "sub-grace", PreferredUsername: "grace"})
+	if err != nil || grace.OIDCSubject != slashed+"|sub-grace" {
+		t.Fatalf("first sign-in = %+v, %v; want the configured issuer kept", grace, err)
+	}
+	for subject, want := range map[string]string{slashed + "|sub-ada": "u-old", slashed + "|sub-grace": grace.ID} {
+		var got string
+		if err := pool.QueryRow(ctx, `SELECT id FROM users WHERE oidc_subject = $1`, subject).Scan(&got); err != nil || got != want {
+			t.Fatalf("rollback lookup of %s = %q, %v; want %q", subject, got, err, want)
+		}
+	}
 }
 
 func wantFailure(t *testing.T, what string, od *oidcDeps, c oidc.Claims, status int, message string) {

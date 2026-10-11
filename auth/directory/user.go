@@ -21,6 +21,15 @@ type Identity struct {
 // IsZero reports whether the identity is unset, as for a local-only account.
 func (i Identity) IsZero() bool { return i.Issuer == "" && i.Subject == "" }
 
+// CanonicalIssuer is issuer without trailing slashes, the form identities are stored and looked up in: a provider and a configuration that disagree only on the slash name one issuer.
+func CanonicalIssuer(issuer string) string { return strings.TrimRight(issuer, "/") }
+
+// Canonical is i with its issuer in canonical form; two identities with the same canonical form are one identity.
+func (i Identity) Canonical() Identity {
+	i.Issuer = CanonicalIssuer(i.Issuer)
+	return i
+}
+
 func (i Identity) validate(username string) error {
 	if (i.Issuer == "") != (i.Subject == "") {
 		return fmt.Errorf("%w: user %q: identity needs both issuer and subject", ErrInvalid, username)
@@ -48,9 +57,9 @@ type User struct {
 	Email    string
 	// PasswordHash is a password hash, never a password; empty means no password login.
 	PasswordHash string
-	// Identity is the account's primary identity; zero only for an account with no identities. Writing a different one replaces the primary in Identities; writing a zero one removes it and makes the oldest remaining identity primary.
+	// Identity is the account's primary identity; zero only for an account with no identities. Writing a different one replaces the primary in Identities; writing a zero one removes it and makes the oldest remaining identity primary. Its issuer is kept as written, which a reader matching it exactly still finds.
 	Identity Identity
-	// Identities are every identity the account signs in with, oldest first, the primary among them. The store fills them on read and an upsert leaves them alone apart from the primary; Directory.AddIdentity and RemoveIdentity change them.
+	// Identities are every identity the account signs in with, oldest first, the primary among them, each in canonical form. The store fills them on read and an upsert leaves them alone apart from the primary; Directory.AddIdentity and RemoveIdentity change them.
 	Identities []UserIdentity
 	// External is the provisioning source that created the account and its id there. An update that leaves it zero keeps the stored one.
 	External External
@@ -88,10 +97,11 @@ func (u *User) validate() error {
 	return u.External.validate("user", u.Username)
 }
 
-// HasIdentity reports whether id is one of the account's identities.
+// HasIdentity reports whether id, with or without trailing slashes on its issuer, is one of the account's identities.
 func (u *User) HasIdentity(id Identity) bool {
+	id = id.Canonical()
 	for _, x := range u.Identities {
-		if x.Identity == id {
+		if x.Canonical() == id {
 			return true
 		}
 	}

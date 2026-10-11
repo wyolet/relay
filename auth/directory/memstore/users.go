@@ -89,23 +89,24 @@ func (u userStore) AddIdentity(_ context.Context, userID string, id directory.Us
 	if !ok {
 		return invalid("identity: user %q does not exist", userID)
 	}
+	key := id.Canonical()
 	for otherID, other := range u.s.users {
-		if otherID != userID && other.HasIdentity(id.Identity) {
+		if otherID != userID && other.HasIdentity(key) {
 			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
 		}
 		if id.ExternalID != "" && slices.ContainsFunc(other.Identities, func(o directory.UserIdentity) bool {
-			return o.Issuer == id.Issuer && o.ExternalID == id.ExternalID && (otherID != userID || o.Identity != id.Identity)
+			return o.Issuer == key.Issuer && o.ExternalID == id.ExternalID && (otherID != userID || o.Identity != key)
 		}) {
 			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
 		}
 	}
 	x.TokenVersion++
 	touch(x)
-	if i := slices.IndexFunc(x.Identities, func(o directory.UserIdentity) bool { return o.Identity == id.Identity }); i >= 0 {
+	if i := slices.IndexFunc(x.Identities, func(o directory.UserIdentity) bool { return o.Identity == key }); i >= 0 {
 		x.Identities[i].ExternalID = id.ExternalID
 		return nil
 	}
-	x.Identities = append(x.Identities, directory.UserIdentity{Identity: id.Identity, ExternalID: id.ExternalID, CreatedAt: now()})
+	x.Identities = append(x.Identities, directory.UserIdentity{Identity: key, ExternalID: id.ExternalID, CreatedAt: now()})
 	if x.Identity.IsZero() {
 		x.Identity = id.Identity
 	}
@@ -127,7 +128,7 @@ func (u userStore) AddFirstIdentity(_ context.Context, userID string, id directo
 			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
 		}
 	}
-	x.Identities = []directory.UserIdentity{{Identity: id, CreatedAt: now()}}
+	x.Identities = []directory.UserIdentity{{Identity: id.Canonical(), CreatedAt: now()}}
 	x.Identity = id
 	x.TokenVersion++
 	touch(x)
@@ -142,7 +143,7 @@ func (u userStore) RemoveIdentity(_ context.Context, userID string, id directory
 		return nil
 	}
 	x.Identities = withoutIdentity(x.Identities, id)
-	if x.Identity == id {
+	if x.Identity.Canonical() == id.Canonical() {
 		x.Identity = directory.Identity{}
 		if len(x.Identities) > 0 {
 			x.Identity = x.Identities[0].Identity
@@ -165,6 +166,7 @@ func (u userStore) RemoveIdentities(_ context.Context, userID string) error {
 }
 
 func withoutIdentity(ids []directory.UserIdentity, id directory.Identity) []directory.UserIdentity {
+	id = id.Canonical()
 	out := slices.DeleteFunc(slices.Clone(ids), func(o directory.UserIdentity) bool { return o.Identity == id })
 	if len(out) == 0 {
 		return nil

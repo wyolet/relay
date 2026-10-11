@@ -50,7 +50,7 @@ func (u userStore) upsert(in *directory.User, removeIdentities bool) error {
 			c.TokenVersion++
 		}
 		c.Identities = stored.Identities
-		if stored.Identity != in.Identity {
+		if stored.Identity.Canonical() != in.Identity.Canonical() {
 			c.Identities = withoutIdentity(c.Identities, stored.Identity)
 		}
 	} else {
@@ -60,7 +60,7 @@ func (u userStore) upsert(in *directory.User, removeIdentities bool) error {
 		c.Identities = nil
 	}
 	if !in.Identity.IsZero() && !c.HasIdentity(in.Identity) {
-		c.Identities = append(c.Identities, directory.UserIdentity{Identity: in.Identity, CreatedAt: now()})
+		c.Identities = append(c.Identities, directory.UserIdentity{Identity: in.Identity.Canonical(), CreatedAt: now()})
 	}
 	if in.Identity.IsZero() && len(c.Identities) > 0 {
 		c.Identity = c.Identities[0].Identity
