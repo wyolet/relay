@@ -93,11 +93,11 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 			}
 		}
 	}
-	return b.checkBindingsAtPrunedScopes()
+	return b.checkDocsAtPrunedScopes()
 }
 
-// checkBindingsAtPrunedScopes refuses a RoleBinding document scoped to a team or project this run prunes, or to a project of a pruned team: the delete takes the scope's bindings with it, so the binding would be written and then lost.
-func (b *builder) checkBindingsAtPrunedScopes() error {
+// checkDocsAtPrunedScopes refuses a RoleBinding scoped to, or a ServiceAccount in, a team or project this run prunes, or a project of a pruned team: the delete cascades to them, so they would be written and then lost.
+func (b *builder) checkDocsAtPrunedScopes() error {
 	gone := map[meta.Owner]bool{}
 	for _, kind := range b.deletes {
 		for _, e := range kind {
@@ -114,9 +114,9 @@ func (b *builder) checkBindingsAtPrunedScopes() error {
 			}
 		}
 	}
-	// A binding's owner mirrors its scope.
+	// A binding's owner mirrors its scope and an account's its project.
 	for _, e := range b.entries {
-		if e.Kind == "RoleBinding" && gone[e.owner] {
+		if (e.Kind == "RoleBinding" || e.Kind == "ServiceAccount") && gone[e.owner] {
 			return &InvalidError{Kind: e.Kind, Name: e.Name, Err: authmanifest.ErrScopePruned}
 		}
 	}

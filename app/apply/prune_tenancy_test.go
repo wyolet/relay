@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 var pruneLabels = map[string]string{"bundle": "ml"}
@@ -47,6 +48,24 @@ func TestPruneRefusesAProjectThatStillHasRows(t *testing.T) {
 	}
 	if invalid.Kind != "Project" || !strings.Contains(err.Error(), "ServiceAccount/indexer") {
 		t.Fatalf("err = %v, want the project refused naming its service account", err)
+	}
+}
+
+// A new service account in a project the same run prunes, alone or with its team, is refused while planning: the cascade would delete it right after the write.
+func TestPruneRefusesAServiceAccountInAPrunedProject(t *testing.T) {
+	doc := userDocs(t, "apiVersion: relay.wyolet.dev/v1alpha2\nkind: ServiceAccount\nmetadata: {name: crawler}\nspec: {project: ml-search}\n")
+	for name, teamPruned := range map[string]bool{"project pruned": false, "team and project pruned": true} {
+		rows := tenancyRows(true)
+		rows.ServiceAccounts = nil
+		if !teamPruned {
+			rows.Teams[0].Meta.Labels = nil
+		}
+		b := pruneAll(rows)
+		err := b.run(context.Background(), doc)
+		var invalid *InvalidError
+		if !errors.As(err, &invalid) || invalid.Kind != "ServiceAccount" || invalid.Name != "crawler" || !errors.Is(err, authmanifest.ErrScopePruned) {
+			t.Fatalf("%s: err = %v, want ServiceAccount/crawler refused with ErrScopePruned", name, err)
+		}
 	}
 }
 
