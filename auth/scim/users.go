@@ -191,8 +191,13 @@ func (h *Handler) patchUser(rq *request, id string) error {
 	return h.replyUser(rq, http.StatusOK, id)
 }
 
-// writeUser writes the changed attributes, then the active flag through DisableUser or EnableUser, so a deactivation ends the user's sessions and tokens.
+// writeUser writes the changed attributes, then the active flag through DisableUser or EnableUser, so a deactivation ends the user's sessions and tokens. A refused deactivation writes nothing.
 func (h *Handler) writeUser(rq *request, stored *directory.User, next *userPatch) error {
+	if !next.active {
+		if err := h.checkDeactivate(rq, stored, "disable"); err != nil {
+			return err
+		}
+	}
 	if fields := next.changedFields(stored); len(fields) > 0 {
 		_, err := rq.p.UpdateUser(rq.ctx(), stored.ID, next.provisioned())
 		if err := h.report(rq, Write{Kind: "user", Op: "update", ID: stored.ID, Name: next.userName, Fields: fields, Err: err}); err != nil {
@@ -227,6 +232,9 @@ func (h *Handler) deleteUser(rq *request, id string) error {
 	}
 	u, err := h.storedUser(rq, id, op)
 	if err != nil {
+		return err
+	}
+	if err := h.checkDeactivate(rq, u, op); err != nil {
 		return err
 	}
 	w := Write{Kind: "user", ID: id, Name: u.Username}

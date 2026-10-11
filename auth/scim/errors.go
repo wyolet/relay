@@ -70,6 +70,8 @@ func toError(err error) *Error {
 		return errorf(http.StatusConflict, typeUniqueness, "%s", err.Error())
 	case errors.Is(err, directory.ErrInvalid):
 		return badRequest(typeInvalidValue, "%s", err.Error())
+	case errors.Is(err, ErrRefused):
+		return errorf(http.StatusConflict, "", "%s", err.Error())
 	case errors.Is(err, directory.ErrStaleResourceVersion):
 		return errorf(http.StatusConflict, "", "the resource changed while the request ran; retry it")
 	case errors.Is(err, directory.ErrManaged), errors.Is(err, authz.ErrForbidden):
