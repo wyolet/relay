@@ -464,6 +464,9 @@ func registerKind[T any](
 		}
 		audit.Changed(ctx, []string{audit.AnyField})
 		if err := store.Delete(ctx, in.ID); err != nil {
+			if managed := managedError(err); managed != nil {
+				return nil, managed
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
 		return &emptyResponse{}, nil

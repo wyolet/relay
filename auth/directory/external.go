@@ -5,8 +5,22 @@ import (
 	"fmt"
 )
 
-// ErrManaged reports a write to a group that a provisioning source manages, made by someone else without Writer.Force.
+// ErrManaged reports a write to a group that a provisioning source manages, made by someone else without Writer.Force. The error returned is a *ManagedError.
 var ErrManaged = errors.New("directory: managed by a provisioning source")
+
+// ManagedError is ErrManaged for one row: its kind and name, and the source that manages it.
+type ManagedError struct {
+	Kind   string
+	Name   string
+	Source string
+}
+
+func (e *ManagedError) Error() string {
+	return fmt.Sprintf("%v: %s %q is managed by %q", ErrManaged, e.Kind, e.Name, e.Source)
+}
+
+// Is matches ErrManaged.
+func (e *ManagedError) Is(target error) bool { return target == ErrManaged }
 
 // External is the provisioning source, such as a SCIM client, a row came from and that source's id for it. Source scopes ID, so two sources may use the same id; a source may hold a row it sent no id for.
 type External struct {
@@ -45,5 +59,5 @@ func (d *Directory) checkManaged(g *Group) error {
 	if src == "" || d.writer.Force || d.writer.Source == src {
 		return nil
 	}
-	return fmt.Errorf("%w: group %q is managed by %q", ErrManaged, g.Meta.Name, src)
+	return &ManagedError{Kind: "group", Name: g.Meta.Name, Source: src}
 }

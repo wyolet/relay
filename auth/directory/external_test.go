@@ -1,6 +1,7 @@
 package directory_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/wyolet/relay/auth/directory"
@@ -18,7 +19,11 @@ func TestManagedGroup(t *testing.T) {
 	edit := func() *directory.Group {
 		return &directory.Group{Meta: directory.Metadata{ID: g.Meta.ID, Name: "ops", DisplayName: "Ops"}}
 	}
-	wantErr(t, "update by another writer", h.d.UpdateGroup(ctx, edit()), directory.ErrManaged)
+	err := h.d.UpdateGroup(ctx, edit())
+	wantErr(t, "update by another writer", err, directory.ErrManaged)
+	if me, ok := errors.AsType[*directory.ManagedError](err); !ok || me.Source != "scim-1" || me.Name != "ops" || me.Kind != "group" {
+		t.Fatalf("managed error = %#v", err)
+	}
 	wantErr(t, "update by another source", h.d.WithWriter(directory.Writer{Source: "scim-2"}).UpdateGroup(ctx, edit()), directory.ErrManaged)
 	wantErr(t, "add member", h.d.AddGroupMember(ctx, g.Meta.ID, u.ID), directory.ErrManaged)
 	wantErr(t, "remove member", h.d.RemoveGroupMember(ctx, g.Meta.ID, u.ID), directory.ErrManaged)
