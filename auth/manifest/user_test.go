@@ -38,14 +38,49 @@ func TestUserPasswordAndIdentityAreKeptUnlessCleared(t *testing.T) {
 			t.Errorf("%s did not clear: %+v", empty, u)
 		}
 	}
+}
 
-	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: s}}\n", manifest.Options{})
-	p = e.plan(t, e.parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {password: null, identity: null}\n"), manifest.Options{})
-	if _, err := p.Apply(ctx, e.dir, admin); !errors.Is(err, directory.ErrInvalid) {
-		t.Fatalf("clearing the password and the last identity at once: err = %v, want ErrInvalid", err)
+// A document that clears the identities of an account it leaves without a password is refused at plan time, the password change in the same document counted, so nothing in the bundle is written.
+func TestUserIdentityClearWithoutAPasswordWritesNothing(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	s := e.store.Stores()
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\n"+
+		"spec: {email: a@example.com, password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: s}}\n"+
+		"---\napiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: carol}\nspec: {identity: {issuer: i, subject: c}}\n", manifest.Options{})
+	before, _ := s.Users.ByUsername(ctx, "alice")
+	team := "apiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: core}\nspec: {}\n---\n"
+
+	for name, user := range map[string]string{
+		"password and identity cleared together": "metadata: {name: alice}\nspec: {email: b@example.com, password: null, identity: null}\n",
+		"identity cleared, no password stored":   "metadata: {name: carol}\nspec: {identity: {}}\n",
+	} {
+		_, err := e.reg.Plan(ctx, s, e.parse(t, team+"apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\n"+user), manifest.Options{})
+		if !errors.Is(err, manifest.ErrNoSignIn) || asError(t, err).Field != "spec.identity" {
+			t.Fatalf("%s: plan err = %v, want ErrNoSignIn on spec.identity", name, err)
+		}
 	}
-	if u, _ := users.ByUsername(ctx, "alice"); len(u.Identities) != 1 {
-		t.Fatalf("a refused clear removed identities: %+v", u)
+	if teams, _ := s.Teams.List(ctx); len(teams) != 0 {
+		t.Fatalf("a refused plan wrote %d teams", len(teams))
+	}
+	if after, _ := s.Users.ByUsername(ctx, "alice"); after.Email != before.Email || after.PasswordHash != before.PasswordHash || len(after.Identities) != 1 {
+		t.Fatalf("a refused plan changed the account: %+v", after)
+	}
+
+	// Write, for a product that plans itself, refuses before either of its two writes.
+	cleared := *before
+	cleared.Email, cleared.PasswordHash, cleared.Identity = "b@example.com", "", directory.Identity{}
+	if err := manifest.Write(ctx, e.dir, admin, &cleared); !errors.Is(err, manifest.ErrNoSignIn) || !errors.Is(err, directory.ErrInvalid) {
+		t.Fatalf("Write = %v, want ErrNoSignIn", err)
+	}
+	if after, _ := s.Users.ByUsername(ctx, "alice"); after.Email != before.Email || after.PasswordHash != before.PasswordHash || len(after.Identities) != 1 {
+		t.Fatalf("a refused Write changed the account: %+v", after)
+	}
+
+	// With a password set in the same document the identities may go.
+	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: carol}\nspec: {password: {hash: \""+aliceHash+"\"}, identity: null}\n", manifest.Options{})
+	if u, _ := s.Users.ByUsername(ctx, "carol"); u.PasswordHash != aliceHash || u.Identities != nil {
+		t.Fatalf("carol = %+v", u)
 	}
 }
 

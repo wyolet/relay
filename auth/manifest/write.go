@@ -37,10 +37,13 @@ func Write(ctx context.Context, dir *directory.Directory, caller *principal.Prin
 	return fmt.Errorf("manifest: cannot write a %T", row)
 }
 
-// updateUser writes a translated account over current. A translation with no identity means the document cleared it, since an omitted one keeps current's: every stored identity goes in one directory call, which refuses it for an account without a password. Clearing only the primary would promote the next one, and a re-apply would change the account again.
+// updateUser writes a translated account over current. A translation with no identity means the document cleared it, since an omitted one keeps current's: every stored identity goes in one directory call. Clearing only the primary would promote the next one, and a re-apply would change the account again. An account left without a password is refused before either write, as ToUser refuses it.
 func updateUser(ctx context.Context, dir *directory.Directory, caller *principal.Principal, current, u *directory.User) error {
 	if !u.Identity.IsZero() || len(current.Identities) == 0 {
 		return dir.UpdateUser(ctx, caller, u)
+	}
+	if u.PasswordHash == "" {
+		return fmt.Errorf("%w: user %q: %w", directory.ErrInvalid, u.Username, ErrNoSignIn)
 	}
 	keep := *u
 	keep.Identity = current.Identity
