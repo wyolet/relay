@@ -23,14 +23,16 @@ gets one of seven actions:
 | --- | --- |
 | `create` | No row with this name exists yet. |
 | `update` | The row exists and at least one field differs. `changedFields` lists the JSON paths. |
-| `unchanged` | The row matches the manifest exactly. Nothing is written. |
-| `skip-dirty` | The row was hand-edited through the control API (`meta.Dirty`) and the run is not forcing. Reported as drift; left alone. |
+| `unchanged` | The row matches the manifest exactly, whether or not it was hand-edited. Nothing is written. |
+| `skip-dirty` | The row was hand-edited through the control API (`meta.Dirty`), differs from the manifest, and the run is not forcing. `changedFields` lists the paths that differ. Reported as drift; left alone. |
 | `delete` | Pruning removed a row absent from the bundle. Only appears with `--prune`. |
 | `conflict` | Another writer changed the row between the plan and the write. Nothing is written for it; re-running picks up the change. |
 | `forbidden` | The caller may not see the row the document names. Nothing is written for it, and the run reports it by the name the bundle used. |
 
 `--force` overwrites a dirty row with the manifest's version and clears the
 dirty flag — apply owns the row again from that point on.
+
+A dirty row the manifest matches is `unchanged` and nothing is written, so it stays dirty: exporting a hand-edited row and applying the export back reports no drift, and a later change to that document reports `skip-dirty` until `--force` is given.
 
 ## Account, tenancy and RBAC documents
 
@@ -155,9 +157,9 @@ token creates through the API or `apply`, and the relay's own system rate
 limits), and every host- or provider-owned catalog row an operator has edited
 through the API (a dirty row). Catalog rows nobody edited stay out, and so
 does every added row in a scoped export, since none of them has a team or
-project. Applied back to the deployment it came from, the bundle reports its
-dirty rows as `skip-dirty` unless `--force` is given; on a freshly seeded
-deployment they apply as updates. An edit made through `apply` does not mark a
+project. Applied back to the deployment it came from, the bundle's dirty rows
+match what is stored and plan as `unchanged`; on a freshly seeded deployment
+they apply as updates. An edit made through `apply` does not mark a
 row dirty, so a catalog row changed that way is not included.
 
 A role-binding at global scope (`{kind: system}`) has no team or project

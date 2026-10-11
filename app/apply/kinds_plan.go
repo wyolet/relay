@@ -83,12 +83,9 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 			pm := k.Meta(prev)
 			e.prev = rowState{present: true, dirty: pm.Dirty, updatedAt: pm.UpdatedAt}
 		}
-		switch {
-		case !found:
+		if !found {
 			e.Action = ActionCreate
-		case k.Meta(prev).Dirty && !b.opts.Force:
-			e.Action = ActionSkipDirty
-		default:
+		} else {
 			// The stored owner wins: a document must not move a row into
 			// another tenant's scope. An operator may still re-parent.
 			if !b.admin {
@@ -99,9 +96,14 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				k.Keep(prev, obj)
 			}
 			fields := changedFields(viewOf(k.Kind, prev, k.Meta(prev)), viewOf(k.Kind, obj, m))
-			if len(fields) == 0 {
+			switch {
+			case len(fields) == 0:
+				// A dirty row the document already matches is not drift: an exported operator edit applies back as a no-op.
 				e.Action = ActionUnchanged
-			} else {
+			case k.Meta(prev).Dirty && !b.opts.Force:
+				e.Action = ActionSkipDirty
+				e.ChangedFields = fields
+			default:
 				e.Action = ActionUpdate
 				e.ChangedFields = fields
 			}

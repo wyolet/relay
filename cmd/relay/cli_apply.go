@@ -110,14 +110,17 @@ func runApply(args []string) error {
 			"apply: %d row(s) changed between plan and write and were skipped; re-run to converge",
 			conflicts)}
 	}
-	if !*force {
-		for _, e := range resp.Plan {
-			if e.Action == apply.ActionSkipDirty {
-				return &exitError{code: exitDrift, err: fmt.Errorf(
-					"apply: %d row(s) differ from the manifest and were left alone; re-run with --force to overwrite",
-					resp.Counts.SkipDirty)}
-			}
+	// The server plans a dirty row the manifest matches as unchanged, so every skip-dirty entry is one that differs.
+	differing := 0
+	for _, e := range resp.Plan {
+		if e.Action == apply.ActionSkipDirty {
+			differing++
 		}
+	}
+	if differing > 0 && !*force {
+		return &exitError{code: exitDrift, err: fmt.Errorf(
+			"apply: %d row(s) differ from the manifest and were left alone; re-run with --force to overwrite",
+			differing)}
 	}
 	return nil
 }
