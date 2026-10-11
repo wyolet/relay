@@ -41,9 +41,10 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	rolemeta := func(r *role.Role) *meta.Metadata { return &r.Meta }
 	rbmeta := func(b *rolebinding.RoleBinding) *meta.Metadata { return &b.Meta }
 	pbmeta := func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta }
+	dk := newDirectoryKinds(d, newDirectoryOps(d))
 
 	registerKind[team.Team](
-		api, "teams", "team", d.Stores.Team, d.Authz, tmeta,
+		api, "teams", "team", dk.teams, d.Authz, tmeta,
 		func(t *team.Team) error { return t.Validate() },
 		meta.OwnerSystem,
 		listScanResolver(d.Stores.Team, tmeta),
@@ -59,7 +60,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	)
 
 	registerKind[project.Project](
-		api, "projects", "project", d.Stores.Project, d.Authz, projmeta,
+		api, "projects", "project", dk.projects, d.Authz, projmeta,
 		func(p *project.Project) error { return p.Validate() },
 		meta.OwnerTeam,
 		listScanResolver(d.Stores.Project, projmeta),
@@ -75,7 +76,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	)
 
 	registerKind[serviceaccount.ServiceAccount](
-		api, "service-accounts", "service-account", d.Stores.ServiceAccount, d.Authz, sameta,
+		api, "service-accounts", "service-account", dk.serviceAccounts, d.Authz, sameta,
 		func(sa *serviceaccount.ServiceAccount) error { return sa.Validate() },
 		meta.OwnerProject,
 		listScanResolver(d.Stores.ServiceAccount, sameta),
@@ -91,7 +92,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	)
 
 	registerKind[group.Group](
-		api, "groups", "group", d.Stores.Group, d.Authz, gmeta,
+		api, "groups", "group", dk.groups, d.Authz, gmeta,
 		func(g *group.Group) error { return g.Validate() },
 		meta.OwnerSystem,
 		listScanResolver(d.Stores.Group, gmeta),
@@ -107,7 +108,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	)
 
 	registerKind[role.Role](
-		api, "roles", "role", d.Stores.Role, d.Authz, rolemeta,
+		api, "roles", "role", dk.roles, d.Authz, rolemeta,
 		func(r *role.Role) error { return r.Validate() },
 		meta.OwnerSystem,
 		listScanResolver(d.Stores.Role, rolemeta),
@@ -123,7 +124,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	)
 
 	registerKind[rolebinding.RoleBinding](
-		api, "role-bindings", "role-binding", d.Stores.RoleBinding, d.Authz, rbmeta,
+		api, "role-bindings", "role-binding", dk.roleBindings, d.Authz, rbmeta,
 		// Owner mirrors the scope exactly, so it is re-derived before the
 		// row is checked rather than in the guard that runs after.
 		func(b *rolebinding.RoleBinding) error { b.StampOwner(); return b.Validate() },

@@ -7,6 +7,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 // userRow is the projection returned by GET /users.
@@ -75,13 +78,13 @@ func registerUsers(api huma.API, d Deps, protect huma.Middlewares) {
 	registerUserUpdate(api, d, protect)
 }
 
-// userWriter is the narrow store surface the update handler needs.
-// *user.Store satisfies it; tests supply a fake.
+// userWriter is what the update handler needs: the reads relay's own rules and the response take, and the directory's operations for the write, which bump the token version and end the sessions.
 type userWriter interface {
 	Get(ctx context.Context, id string) (*user.User, error)
 	List(ctx context.Context) ([]*user.User, error)
-	Upsert(ctx context.Context, u *user.User) error
-	BumpTokenVersion(ctx context.Context, id string) error
+	UpdateUser(ctx context.Context, p *principal.Principal, u *directory.User) error
+	DisableUser(ctx context.Context, id string) error
+	EnableUser(ctx context.Context, id string) error
 }
 
 type userUpdateInput struct {
@@ -97,6 +100,7 @@ type userUpdateOutput struct {
 }
 
 func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
+	users := directoryUsers{Store: d.Users, ops: newDirectoryOps(d)}
 	huma.Register(api, huma.Operation{
 		OperationID: "update_user",
 		Method:      http.MethodPut,
@@ -108,11 +112,7 @@ func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *userUpdateInput) (*userUpdateOutput, error) {
-		var sessions sessionEnder
-		if d.Sessions != nil {
-			sessions = d.Sessions
-		}
-		return updateUser(ctx, d.Users, d.Authz, sessions, in)
+		return updateUser(ctx, users, d.Authz, in)
 	})
 }
 
@@ -135,15 +135,10 @@ func keepOneAdmin(ctx context.Context, users userWriter, changing string) error 
 	return huma.Error409Conflict("this is the last enabled admin; grant the role to another account first")
 }
 
-// sessionEnder ends every session a user holds. *session.Manager satisfies it.
-type sessionEnder interface {
-	DestroyUser(ctx context.Context, userID string) error
-}
-
 // updateUser applies the two editable fields. Authorization is at the global
 // scope, like the list: an account belongs to the deployment, not to a team,
 // so a binding inside one project is not a grant to edit anyone.
-func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, sessions sessionEnder, in *userUpdateInput) (*userUpdateOutput, error) {
+func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *userUpdateInput) (*userUpdateOutput, error) {
 	owner := meta.Owner{Kind: meta.OwnerSystem}
 	if err := az.Authorize(ctx, "users.update", authz.Resource{Kind: "user", ID: in.ID, Owner: &owner}); err != nil {
 		return nil, mapAuthzErr(err)
@@ -163,9 +158,10 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, sess
 	if in.Body.Roles != nil {
 		roles = *in.Body.Roles
 	}
+	rolesChanged := !slices.Equal(roles, oldRoles)
 	// users.update is not a grant to hand out roles, or its holder could
 	// make themselves an admin.
-	if !slices.Equal(roles, oldRoles) {
+	if rolesChanged {
 		if err := refcheck.RequireAdmin(ctx, az, "changing roles"); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
@@ -175,25 +171,23 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, sess
 			return nil, err
 		}
 	}
-	u.Disabled, u.Roles = disabled, roles
-	if err := users.Upsert(ctx, u); err != nil {
+	// The directory ends the sessions on either change, since a live session keeps the roles it logged in with, and bumps the token version on a toggle in both directions: the snapshot drops a disabled account's version, and re-enabling must revive no pre-disable token.
+	switch {
+	case disabled != wasDisabled && !rolesChanged && disabled:
+		err = users.DisableUser(ctx, u.ID)
+	case disabled != wasDisabled && !rolesChanged:
+		err = users.EnableUser(ctx, u.ID)
+	default:
+		u.Disabled, u.Roles = disabled, roles
+		err = users.UpdateUser(ctx, principalOf(ctx, az), u.ToDirectory())
+	}
+	if err != nil {
+		if errors.Is(err, authz.ErrForbidden) || errors.Is(err, authz.ErrUnauthenticated) {
+			return nil, mapAuthzErr(err)
+		}
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
-	// A live session keeps the roles it logged in with; end it so the next
-	// login reads the row as it is now.
-	if sessions != nil && (u.Disabled != wasDisabled || !slices.Equal(u.Roles, oldRoles)) {
-		if err := sessions.DestroyUser(ctx, u.ID); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
-		}
-	}
-	// The snapshot drops a disabled account's token version, which stops its
-	// tokens and personal keys; only a version change reaches the snapshot,
-	// so both directions bump (re-enabling revives no pre-disable token).
-	if u.Disabled != wasDisabled {
-		if err := users.BumpTokenVersion(ctx, in.ID); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
-		}
-	}
+	u.Disabled, u.Roles = disabled, roles
 	audit.Record(ctx, "users.update", audit.Resource{
 		Kind: "user", ID: u.ID, Name: u.Username, Owner: &owner,
 	}, audit.StatusAllowed)

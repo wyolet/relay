@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -50,6 +51,7 @@ func rowStores(db storage.DB) *Stores {
 		RoleBinding:    rolebinding.NewStore(db),
 		PolicyBinding:  policybinding.NewStore(db),
 		Users:          user.NewStore(db),
+		Directory:      authpg.New(db),
 	}
 }
 
