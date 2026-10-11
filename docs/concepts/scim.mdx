@@ -1,0 +1,77 @@
+---
+title: "SCIM Provisioning"
+description: "Connect Microsoft Entra ID or Okta so users and groups are created, updated and deactivated from your identity provider"
+---
+
+Relay is a SCIM 2.0 service provider. An identity provider pushes users and groups to it, keeps their attributes and memberships in step, and deactivates or deletes accounts when people leave. You decide what a provisioned group may do by binding roles to it, as with any other group.
+
+## Set it up
+
+1. Turn the endpoint on. It is off by default and answers `404` until the `auth:scim` section is enabled:
+
+   ```bash
+   curl -X PUT https://relay.example.com/api/settings/auth:scim \
+     -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"enabled": true}'
+   ```
+
+2. Create a SCIM client for the identity provider. The name is a lowercase label (`entra`, `okta`, …); the token is returned once and only its hash is kept:
+
+   ```bash
+   curl -X POST https://relay.example.com/api/scim-clients \
+     -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"name": "entra"}'
+   ```
+
+3. Configure the identity provider with the base URL `https://<control host>/scim/v2` and the token as a bearer token.
+
+| | Microsoft Entra ID | Okta |
+| --- | --- | --- |
+| Where | Enterprise application → Provisioning → Admin credentials | App integration → Provisioning → Integration |
+| Base URL | **Tenant URL** | **SCIM connector base URL** |
+| Token | **Secret Token** | Authentication mode **HTTP Header**, the token as the Bearer value |
+| Users are matched on | `userName` | **Unique identifier field for users**: `userName` |
+| Actions | Provision users and groups | Push New Users, Push Profile Updates, Push Groups |
+
+`/scim/v2` lives at the root of the control listener, not under `/api`, and needs no session.
+
+## What maps where
+
+| SCIM attribute | Relay |
+| --- | --- |
+| `userName` | The account's username; unique. |
+| `emails` | The account's email: the primary address, else the first. One address is kept. |
+| `externalId` | Kept per client, so the identity provider can find the account by its own id. |
+| `active` | `false` disables the account: its sessions end at once, its inference tokens stop working, and so do its personal keys. `true` enables it again and its keys with it; tokens minted before the deactivation stay dead. |
+| `groups` (user) | Read-only: the client's groups the account is in. |
+| `displayName` (group) | The group's display name. The group's name, which role bindings refer to, is derived from the first display name and does not follow renames. |
+| `members` (group) | The group's members; each must be an account the same client provisioned. |
+
+Other core attributes (`name`, a user's `displayName`, `phoneNumbers`, `addresses`, `roles`, `password`, …) and extension attributes are accepted and not stored, so a default attribute mapping works unchanged.
+
+A `DELETE` of a user deletes the account. Set `"deleteDisables": true` in `auth:scim` to disable it instead and keep its bindings and history.
+
+Filters (`eq`, `ne`, `co`, `sw`, `ew`, `gt`, `ge`, `lt`, `le`, `pr`, `and`, `or`, `not`) work on `id`, `userName`, `externalId` and `emails` for users and on `id`, `displayName`, `externalId` and `members.value` for groups. Bulk operations, sorting and ETags are not supported.
+
+## What a SCIM client may do
+
+A SCIM client acts only on the users and groups it created, which carry its name as their source:
+
+- It cannot read, change or delete an account or group an operator created, or one another client created. Such a request answers `404`, and a write is recorded in the audit log as denied.
+- It cannot set roles, passwords or sign-in identities, and cannot reach roles, role bindings, teams, projects or service accounts.
+- Membership of its own groups is the identity provider's call and is not checked against your own grants. What membership grants is decided by the role bindings you make on those groups.
+- A new group never takes a name that an existing group holds or a role binding names, so it inherits no grant made for something else.
+
+Every write a client makes is in the [audit log](/concepts/audit) with the actor kind `scim-client` and the client's name.
+
+## Signing in
+
+SCIM creates the account; it does not give it a way to sign in. A provisioned account has no password and no linked OIDC identity, so [OIDC](/concepts/auth) sign-in does not match it to an existing account.
+
+## Rotating and revoking
+
+`GET /api/scim-clients` lists the clients with the start of each token and when it was last used. `POST /api/scim-clients/<name>/revoke` stops the token at once; the users and groups it provisioned stay. Creating a client again under a revoked name issues a new token that takes over those users and groups, which is how you rotate a token.
+
+Under `RELAY_AUTHZ=rbac`, managing SCIM clients takes the `scim-clients` kind (`list`, `create`, `revoke`), which of the built-in roles only `admin` holds. Changing the `auth:scim` section takes an admin in either mode.

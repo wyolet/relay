@@ -214,6 +214,16 @@ out, or wait for the session to expire.
 
 See [Audit Log](/concepts/audit) for the audit event shape and retention.
 
+## SCIM clients
+
+```
+GET  /api/scim-clients               list clients (name, token prefix, created, last used, revoked)
+POST /api/scim-clients               {"name": "entra"} → the client and its token, returned once
+POST /api/scim-clients/{name}/revoke stop the token; the users and groups it provisioned stay
+```
+
+The SCIM endpoint itself is `/scim/v2` at the root of the control listener, enabled by the `auth:scim` settings section. See [SCIM Provisioning](/concepts/scim).
+
 ## GitOps
 
 ```
