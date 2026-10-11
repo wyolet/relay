@@ -61,7 +61,7 @@ func (s users) Upsert(ctx context.Context, u *directory.User) error {
 	if roles == nil {
 		roles = []string{}
 	}
-	return mapErr("upsert user", gen.New(s.db).UpsertUser(ctx, gen.UpsertUserParams{
+	row := gen.UpsertUserParams{
 		ID:             u.ID,
 		Username:       u.Username,
 		Email:          text(u.Email),
@@ -71,7 +71,17 @@ func (s users) Upsert(ctx context.Context, u *directory.User) error {
 		Disabled:       u.Disabled,
 		ExternalSource: text(u.External.Source),
 		ExternalID:     text(u.External.ID),
-	}))
+	}
+	if !u.Identity.IsZero() {
+		return mapErr("upsert user", gen.New(s.db).UpsertUser(ctx, row))
+	}
+	// Clearing the primary of an account that holds other identities promotes the oldest of them.
+	return inTx(ctx, s.db, func(q *gen.Queries) error {
+		if err := q.UpsertUser(ctx, row); err != nil {
+			return mapErr("upsert user", err)
+		}
+		return mapErr("promote identity", q.PromoteOldestIdentity(ctx, gen.PromoteOldestIdentityParams{ID: u.ID}))
+	})
 }
 
 func (s users) Delete(ctx context.Context, id string) error {

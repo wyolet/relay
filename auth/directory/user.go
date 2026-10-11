@@ -48,7 +48,7 @@ type User struct {
 	Email    string
 	// PasswordHash is a password hash, never a password; empty means no password login.
 	PasswordHash string
-	// Identity is the account's primary identity; zero for none. Writing a different one replaces the primary in Identities.
+	// Identity is the account's primary identity; zero only for an account with no identities. Writing a different one replaces the primary in Identities; writing a zero one removes it and makes the oldest remaining identity primary.
 	Identity Identity
 	// Identities are every identity the account signs in with, oldest first, the primary among them. The store fills them on read and an upsert leaves them alone apart from the primary; Directory.AddIdentity and RemoveIdentity change them.
 	Identities []UserIdentity

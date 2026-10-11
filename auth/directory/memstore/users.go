@@ -81,6 +81,9 @@ func (u userStore) Upsert(_ context.Context, in *directory.User) error {
 	if !in.Identity.IsZero() && !c.HasIdentity(in.Identity) {
 		c.Identities = append(c.Identities, directory.UserIdentity{Identity: in.Identity, CreatedAt: now()})
 	}
+	if in.Identity.IsZero() && len(c.Identities) > 0 {
+		c.Identity = c.Identities[0].Identity
+	}
 	c.UpdatedAt = now()
 	u.s.users[in.ID] = c
 	return nil

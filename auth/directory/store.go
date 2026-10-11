@@ -19,7 +19,7 @@ type UserStore interface {
 	ByIdentity(ctx context.Context, id Identity) (*User, error)
 	// List returns every account, oldest first.
 	List(ctx context.Context) ([]*User, error)
-	// Upsert inserts or replaces by ID and leaves TokenVersion as stored; a new account starts at version 1. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities.
+	// Upsert inserts or replaces by ID and leaves TokenVersion as stored; a new account starts at version 1. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities; a zero Identity on an account that holds other identities makes the oldest of them primary, so such an account always has one.
 	Upsert(ctx context.Context, u *User) error
 	Delete(ctx context.Context, id string) error
 	// BumpTokenVersion invalidates every token the user holds.

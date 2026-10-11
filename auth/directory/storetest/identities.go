@@ -64,11 +64,18 @@ func testIdentities(t *testing.T, s directory.Stores) {
 	must(t, u.Upsert(ctx, got))
 	wantIdentities(t, "primary replaced", user(f.user.ID), third, directory.UserIdentity{Identity: third})
 
+	fourth := directory.UserIdentity{Identity: directory.Identity{Issuer: "https://other.example.com", Subject: "o-4"}}
 	must(t, u.AddIdentity(ctx, f.user.ID, second))
+	must(t, u.AddIdentity(ctx, f.user.ID, fourth))
 	got = user(f.user.ID)
 	got.Identity = directory.Identity{}
 	must(t, u.Upsert(ctx, got))
-	wantIdentities(t, "primary cleared", user(f.user.ID), directory.Identity{}, second)
+	wantIdentities(t, "cleared primary promotes the oldest remaining", user(f.user.ID), second.Identity, second, fourth)
+	must(t, u.RemoveIdentity(ctx, f.user.ID, fourth.Identity))
+	got = user(f.user.ID)
+	got.Identity = directory.Identity{}
+	must(t, u.Upsert(ctx, got))
+	wantIdentities(t, "last identity cleared", user(f.user.ID), directory.Identity{})
 
 	must(t, u.Delete(ctx, f.user.ID))
 	if got, err := u.ByIdentity(ctx, second.Identity); err != nil || got != nil {

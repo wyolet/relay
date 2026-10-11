@@ -56,11 +56,12 @@ UPDATE users SET oidc_subject = $2 WHERE id = $1 AND oidc_subject IS NULL;
 -- name: DeleteIdentity :exec
 DELETE FROM identities WHERE user_id = $1 AND issuer = $2 AND subject = $3;
 
+-- Promotes only while the primary is still the one named, NULL for none; with no identity left the primary stays NULL.
 -- name: PromoteOldestIdentity :exec
 UPDATE users SET oidc_subject = (
     SELECT i.issuer || '|' || i.subject FROM identities i WHERE i.user_id = users.id
      ORDER BY i.created_at, i.issuer, i.subject LIMIT 1)
-WHERE id = $1 AND oidc_subject = $2;
+WHERE id = $1 AND oidc_subject IS NOT DISTINCT FROM $2;
 
 -- name: ListTeams :many
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams ORDER BY name;

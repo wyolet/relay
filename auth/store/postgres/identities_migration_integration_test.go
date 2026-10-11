@@ -170,6 +170,13 @@ func TestIdentitiesSurviveRollback(t *testing.T) {
 				t.Fatalf("old read of a first added identity = %q, want %q", got, bob.ID)
 			}
 			must(t, d.AddIdentity(ctx, bob.ID, directory.UserIdentity{Identity: directory.Identity{Issuer: "https://other.example.com", Subject: "c"}}))
+			cleared, err := users.Get(ctx, bob.ID)
+			must(t, err)
+			cleared.Identity = directory.Identity{}
+			must(t, d.UpdateUser(ctx, nil, cleared))
+			if got := oldRead(t, dsn, "https://other.example.com|c"); got != bob.ID {
+				t.Fatalf("old read after a cleared primary was promoted = %q, want %q", got, bob.ID)
+			}
 
 			// The older binary's own writes: a sign-up, a changed identity, a delete.
 			if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, oidc_subject) VALUES ('old-1', 'eve', 'https://idp.example.com|eve')`); err != nil {
