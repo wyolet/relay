@@ -72,6 +72,9 @@ type Config struct {
 	// schema back, so a restarting pod doesn't re-apply what was just undone.
 	MigrateOnBoot bool
 
+	// MigrateLockTimeout bounds how long a migration statement waits for a table lock (RELAY_MIGRATE_LOCK_TIMEOUT_S, default 10s; 0 waits indefinitely). A migration queued behind a long transaction holds every later query on that table behind it, logins included.
+	MigrateLockTimeout time.Duration
+
 	// Behavior knobs
 	AutoSeedIfEmpty bool
 	ConfigDir       string
@@ -262,6 +265,11 @@ func Load() (*Config, error) {
 		cfg.MigrateOnBoot = false
 	default:
 		return nil, fmt.Errorf(`RELAY_MIGRATE_ON_BOOT must be "on" or "off", got %q`, v)
+	}
+	if v := envInt("RELAY_MIGRATE_LOCK_TIMEOUT_S", 10); v < 0 {
+		return nil, fmt.Errorf("RELAY_MIGRATE_LOCK_TIMEOUT_S must be >= 0")
+	} else {
+		cfg.MigrateLockTimeout = time.Duration(v) * time.Second
 	}
 
 	// --- Behavior knobs ---

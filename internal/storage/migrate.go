@@ -67,7 +67,7 @@ func runRelayMigrations(dsn string) error {
 	}
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("storage: migrate up: %w", err)
+		return fmt.Errorf("storage: migrate up: %w", retryable(m, src, true, err))
 	}
 	return nil
 }
@@ -150,12 +150,12 @@ func MigrateTo(dsn string, version uint) error {
 	// everything is its own call.
 	if downAllRun {
 		if err := m.Down(); err != nil && err != migrate.ErrNoChange {
-			return fmt.Errorf("storage: migrate down to 0: %w", err)
+			return fmt.Errorf("storage: migrate down to 0: %w", retryable(m, src, false, err))
 		}
 		return nil
 	}
 	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("storage: migrate to %d: %w", version, err)
+		return fmt.Errorf("storage: migrate to %d: %w", version, retryable(m, src, false, err))
 	}
 	return nil
 }

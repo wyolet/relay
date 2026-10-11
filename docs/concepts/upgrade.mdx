@@ -54,6 +54,20 @@ If a migration fails part-way, the schema is left marked dirty and every later m
 
 `relay migrate down` and `relay migrate force` read and write relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`. `relay migrate force` never changes it; `relay migrate down` to a version below 26 first steps the auth module back to its version 1, because relay's down-migrations below 26 drop tables the module's later migrations extend. The next upgrade reapplies them: accounts keep their primary sign-in identity, and further identities and external ids are gone.
 
+### Rolling back the auth module
+
+The auth module's migrations only add: the `identities` table, `external_source` / `external_id` on users and groups, `scim_clients`, and `users.resource_version`. A binary from before them ignores all of it, and a trigger copies the sign-in identity such a binary writes into `identities`, so the safe default is to roll back the image and leave the schema where it is. Run the module's down-migrations only when you need the schema itself back:
+
+```bash
+relay migrate auth down <version>
+```
+
+It runs the module's down-migrations to (not including) `<version>`, with `RELAY_PG_DSN` set, and leaves relay's own version alone; a target at or above the module's current version does nothing. The lowest target is `1`, the module's first migration, whose tables are relay's own; `relay migrate down` removes those. Stop the pods or set `RELAY_MIGRATE_ON_BOOT=off` first, as above, since boot reapplies the module's migrations.
+
+## Lock timeout
+
+Each migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` seconds (default `10`) for a table lock. An `ALTER TABLE` queued behind a long transaction would otherwise hold every later query on that table behind it, sign-ins on `users` included, for as long as the transaction runs. A migration that gives up fails with `canceling statement due to lock timeout`, applies nothing, and leaves the schema version clean, so boot, `relay migrate up`, or the chart's migration Job can simply be run again once the blocking transaction has ended. The timeout applies to the migration connections only, not to the pool that serves requests; `0` waits indefinitely, and a `lock_timeout` set in `RELAY_PG_DSN` takes precedence.
+
 <Warning>
 `relay migrate down` is destructive — it drops the tables and columns its down-migrations remove, including any teams, projects, roles, bindings, and service accounts created since the upgrade. Take the backup in step 1 before you need this, not after.
 </Warning>

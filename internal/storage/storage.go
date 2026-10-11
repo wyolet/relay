@@ -26,9 +26,15 @@ type Storage struct {
 type PoolOption func(*poolSettings)
 
 type poolSettings struct {
-	maxConns int32
-	minConns int32
-	migrate  bool
+	maxConns    int32
+	minConns    int32
+	migrate     bool
+	lockTimeout time.Duration
+}
+
+// WithMigrateLockTimeout bounds how long Open's migrations wait for a table lock; see MigrationDSN. The pool itself is not affected.
+func WithMigrateLockTimeout(d time.Duration) PoolOption {
+	return func(s *poolSettings) { s.lockTimeout = d }
 }
 
 // WithMigrateOnBoot(false) stops Open from running the up-migrations. An
@@ -80,7 +86,11 @@ func resolvePoolSettings(opts ...PoolOption) poolSettings {
 func Open(ctx context.Context, dsn string, opts ...PoolOption) (*Storage, error) {
 	s := resolvePoolSettings(opts...)
 	if s.migrate {
-		if err := runMigrations(dsn); err != nil {
+		migrationDSN, err := MigrationDSN(dsn, s.lockTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("storage.Open: %w", err)
+		}
+		if err := runMigrations(migrationDSN); err != nil {
 			return nil, fmt.Errorf("storage.Open: %w", err)
 		}
 	}
