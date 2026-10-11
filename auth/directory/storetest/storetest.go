@@ -20,6 +20,7 @@ import (
 func Run(t *testing.T, open func(t *testing.T) directory.Stores) {
 	t.Run("users", func(t *testing.T) { testUsers(t, open(t)) })
 	t.Run("identities", func(t *testing.T) { testIdentities(t, open(t)) })
+	t.Run("first identity", func(t *testing.T) { testFirstIdentity(t, open(t)) })
 	t.Run("external", func(t *testing.T) { testExternal(t, open(t)) })
 	t.Run("rows", func(t *testing.T) { testRows(t, open(t)) })
 	t.Run("versions", func(t *testing.T) { testVersions(t, open(t)) })

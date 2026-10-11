@@ -27,6 +27,18 @@ func (u userStore) ByIdentity(_ context.Context, id directory.Identity) (*direct
 	return u.find(func(x *directory.User) bool { return x.HasIdentity(id) }), nil
 }
 
+func (u userStore) ByExternalID(_ context.Context, externalID string) ([]*directory.User, error) {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	var out []*directory.User
+	for _, id := range u.s.userOrder {
+		if x := u.s.users[id]; x.External.Source != "" && x.External.ID == externalID {
+			out = append(out, cloneUser(x))
+		}
+	}
+	return out, nil
+}
+
 func (u userStore) find(match func(*directory.User) bool) *directory.User {
 	u.s.mu.Lock()
 	defer u.s.mu.Unlock()
@@ -136,6 +148,27 @@ func (u userStore) AddIdentity(_ context.Context, userID string, id directory.Us
 	if x.Identity.IsZero() {
 		x.Identity = id.Identity
 	}
+	return nil
+}
+
+func (u userStore) AddFirstIdentity(_ context.Context, userID string, id directory.Identity) error {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	x, ok := u.s.users[userID]
+	if !ok {
+		return invalid("identity: user %q does not exist", userID)
+	}
+	if !x.Identity.IsZero() || len(x.Identities) > 0 {
+		return fmt.Errorf("%w: user already holds an identity", directory.ErrConflict)
+	}
+	for _, other := range u.s.users {
+		if other.HasIdentity(id) {
+			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
+		}
+	}
+	x.Identities = []directory.UserIdentity{{Identity: id, CreatedAt: now()}}
+	x.Identity = id
+	x.UpdatedAt = now()
 	return nil
 }
 

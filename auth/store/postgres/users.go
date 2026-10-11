@@ -33,6 +33,26 @@ func (s users) ByIdentity(ctx context.Context, id directory.Identity) (*director
 	return withIdentities(ctx, q, r, err)
 }
 
+func (s users) ByExternalID(ctx context.Context, externalID string) ([]*directory.User, error) {
+	if externalID == "" {
+		return nil, nil
+	}
+	q := gen.New(s.db)
+	rows, err := q.ListUsersByExternalID(ctx, text(externalID))
+	if err != nil {
+		return nil, mapErr("users by external id", err)
+	}
+	out := make([]*directory.User, 0, len(rows))
+	for _, r := range rows {
+		u, err := withIdentities(ctx, q, r, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
 func (s users) List(ctx context.Context) ([]*directory.User, error) {
 	q := gen.New(s.db)
 	rows, err := q.ListUsers(ctx)
@@ -107,6 +127,17 @@ func (s users) AddIdentity(ctx context.Context, userID string, id directory.User
 			ID: userID, OidcSubject: text(encodeIdentity(id.Identity)),
 		}))
 	})
+}
+
+func (s users) AddFirstIdentity(ctx context.Context, userID string, id directory.Identity) error {
+	n, err := gen.New(s.db).SetFirstPrimaryIdentity(ctx, gen.SetFirstPrimaryIdentityParams{ID: userID, OidcSubject: text(encodeIdentity(id))})
+	if err != nil {
+		return mapErr("add first identity", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("add first identity: %w: user is missing or already holds an identity", directory.ErrConflict)
+	}
+	return nil
 }
 
 func (s users) RemoveIdentity(ctx context.Context, userID string, id directory.Identity) error {

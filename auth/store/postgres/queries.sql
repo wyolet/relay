@@ -12,6 +12,10 @@ FROM users WHERE username = $1;
 SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2);
 
+-- name: ListUsersByExternalID :many
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+FROM users WHERE external_source IS NOT NULL AND external_id = $1 ORDER BY created_at ASC, id ASC;
+
 -- name: ListUsers :many
 SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users ORDER BY created_at ASC, id ASC;
@@ -52,6 +56,11 @@ WHERE identities.user_id = EXCLUDED.user_id;
 
 -- name: SetPrimaryIdentityIfNone :exec
 UPDATE users SET oidc_subject = $2 WHERE id = $1 AND oidc_subject IS NULL;
+
+-- The trigger writes the identity row. A concurrent first link waits on the row lock, then finds oidc_subject set and matches nothing.
+-- name: SetFirstPrimaryIdentity :execrows
+UPDATE users SET oidc_subject = $2, updated_at = now()
+WHERE id = $1 AND oidc_subject IS NULL AND NOT EXISTS (SELECT 1 FROM identities WHERE identities.user_id = $1);
 
 -- name: DeleteIdentity :exec
 DELETE FROM identities WHERE user_id = $1 AND issuer = $2 AND subject = $3;

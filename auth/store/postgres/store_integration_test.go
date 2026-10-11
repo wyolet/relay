@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/wyolet/relay/auth/authz"
@@ -103,5 +105,38 @@ func TestDirectoryOverPostgres(t *testing.T) {
 	clash := &directory.Team{Meta: directory.Metadata{ID: directory.NewID(), Name: "core-team", Owner: authz.Owner{Kind: "system"}}}
 	if err := stores.Teams.Upsert(ctx, clash); !errors.Is(err, directory.ErrConflict) {
 		t.Fatalf("duplicate name: %v", err)
+	}
+}
+
+// TestAddFirstIdentityConcurrent races first links to one account on separate connections: the row lock lets exactly one write.
+func TestAddFirstIdentityConcurrent(t *testing.T) {
+	ctx := context.Background()
+	stores := New(openPool(t, migratedDB(t)))
+	u := &directory.User{ID: directory.NewID(), Username: "ada", External: directory.External{Source: "entra", ID: "obj-1"}}
+	if err := stores.Users.Upsert(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	const n = 8
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			errs <- stores.Users.AddFirstIdentity(ctx, u.ID, directory.Identity{Issuer: "https://idp.example.com", Subject: fmt.Sprintf("s-%d", i)})
+		})
+	}
+	wg.Wait()
+	close(errs)
+	ok := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case !errors.Is(err, directory.ErrConflict):
+			t.Fatalf("err = %v", err)
+		}
+	}
+	got, err := stores.Users.Get(ctx, u.ID)
+	if err != nil || ok != 1 || len(got.Identities) != 1 || got.Identity != got.Identities[0].Identity {
+		t.Fatalf("%d links succeeded; user %+v, %v", ok, got, err)
 	}
 }

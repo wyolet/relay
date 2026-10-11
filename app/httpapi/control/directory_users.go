@@ -23,6 +23,31 @@ func (u directoryUsers) Create(ctx context.Context, row *user.User) error {
 	return dir.CreateUser(ctx, nil, row.ToDirectory())
 }
 
+// UnlinkedByExternalID returns the SCIM-provisioned accounts with externalID that no sign-in identity reached yet.
+func (u directoryUsers) UnlinkedByExternalID(ctx context.Context, externalID string) ([]*user.User, error) {
+	dir, err := u.ops.directory()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := dir.UnlinkedUsersByExternalID(ctx, externalID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*user.User, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, user.FromDirectory(r))
+	}
+	return out, nil
+}
+
+func (u directoryUsers) AddFirstIdentity(ctx context.Context, userID string, id directory.Identity) error {
+	dir, err := u.ops.directory()
+	if err != nil {
+		return err
+	}
+	return dir.AddFirstIdentity(ctx, userID, id)
+}
+
 func (u directoryUsers) UpdateUser(ctx context.Context, p *principal.Principal, row *directory.User) error {
 	dir, err := u.ops.directory()
 	if err != nil {

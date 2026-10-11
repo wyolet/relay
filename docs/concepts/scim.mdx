@@ -68,7 +68,37 @@ Every write a client makes is in the [audit log](/concepts/audit) with the actor
 
 ## Signing in
 
-SCIM creates the account; it does not give it a way to sign in. A provisioned account has no password and no linked OIDC identity, so [OIDC](/concepts/auth) sign-in does not match it to an existing account.
+SCIM creates the account without a password or sign-in identity. Relay expects the SCIM client and the configured [OIDC](/concepts/auth) provider to be the same identity provider, and links the account at its user's first OIDC sign-in.
+
+When no account holds the sign-in's identity (issuer and subject), relay looks for an account to link before it provisions a new one. It links the account when all of these hold:
+
+- a SCIM client created it;
+- it has no sign-in identity yet;
+- its `externalId` equals the value of the `linkClaim` claim in the verified ID token.
+
+The identity is then added to that account, the user is signed in as it, and the link is recorded in the [audit log](/concepts/audit) as a `users.update` of `identities`. This works whether OIDC registration is open or closed. Later sign-ins find the account by its identity.
+
+Set `linkClaim` in `auth:scim` to the claim that carries the id the identity provider sends as `externalId`:
+
+| Identity provider | `linkClaim` |
+| --- | --- |
+| Microsoft Entra ID | `oid` (the object id; Entra's `sub` is different for every application) |
+| Okta | `sub` (the default; the Okta user id) |
+
+Entra's default user mapping sends `mailNickname` as `externalId`. Replace it with a direct mapping from `objectId` to `externalId` before the first user is provisioned, so `externalId` carries the value of `oid`.
+
+```bash
+curl -X PUT https://relay.example.com/api/settings/auth:scim \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "linkClaim": "oid"}'
+```
+
+- An email never links an account. A first sign-in whose email belongs to an account it does not link to is refused with `403`.
+- A disabled account that matches is refused like any disabled account, and nothing is linked.
+- If more than one account matches (two SCIM clients sent the same `externalId`), the sign-in is refused with `409` and nothing is linked.
+- An identity provider that returns no ID token links nothing, because the claim is read only from the verified token.
+- While `auth:scim` is disabled, nothing is linked.
 
 ## Rotating and revoking
 
