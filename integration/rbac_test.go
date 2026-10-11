@@ -480,15 +480,19 @@ func TestIntegration_SeedRBAC(t *testing.T) {
 	if again.Skipped == 0 {
 		t.Error("second seed skipped nothing; the dirty row should have been preserved")
 	}
+	if kept, err := st.stores.RoleBinding.Get(ctx, b.Meta.ID); err != nil || kept == nil || kept.Meta.DisplayName != "Operator Edited" {
+		t.Errorf("second seed overwrote the operator's edit: %v %+v", err, kept)
+	}
 }
 
-// adminUpdateDirty marks a role binding operator-edited by writing it
-// through the control API, which is what sets the dirty flag.
+// adminUpdateDirty renames a role binding through the control API, which is
+// what sets the dirty flag; the rename makes it differ from the manifest.
 func (s *stack) adminUpdateDirty(id string) (int, error) {
 	b, err := s.stores.RoleBinding.Get(context.Background(), id)
 	if err != nil || b == nil {
 		return 0, err
 	}
+	b.Meta.DisplayName = "Operator Edited"
 	body, err := json.Marshal(b)
 	if err != nil {
 		return 0, err

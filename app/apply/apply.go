@@ -33,8 +33,9 @@ const (
 	ActionCreate    Action = "create"
 	ActionUpdate    Action = "update"
 	ActionUnchanged Action = "unchanged"
-	// ActionSkipDirty is an operator-edited row the run refused to
-	// overwrite. Reported as drift; nothing is written.
+	// ActionSkipDirty is an operator-edited row that differs from the
+	// document and the run refused to overwrite. Reported as drift; nothing
+	// is written.
 	ActionSkipDirty Action = "skip-dirty"
 	ActionDelete    Action = "delete"
 	// ActionConflict is a row another writer changed between Plan and
@@ -97,7 +98,7 @@ type Options struct {
 
 	// Force writes over rows an operator edited via the control API
 	// (meta.Dirty), resetting them to the manifest. Default false: dirty
-	// rows are reported as skip-dirty and left alone.
+	// rows that differ are reported as skip-dirty and left alone.
 	Force bool
 
 	// Prune deletes rows that match Selector and are absent from the

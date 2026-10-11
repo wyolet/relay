@@ -104,6 +104,7 @@ func TestApplyDryRunExitsClean(t *testing.T) {
 func TestApplyDriftExitsOne(t *testing.T) {
 	srv := planServer(t, http.StatusOK, []apply.Entry{
 		{Kind: "Team", Name: "platform", Action: apply.ActionSkipDirty},
+		{Kind: "Team", Name: "research", Action: apply.ActionUnchanged},
 	})
 	var err error
 	captureStdout(t, func() {
@@ -111,6 +112,10 @@ func TestApplyDriftExitsOne(t *testing.T) {
 	})
 	if got := exitCode(t, err); got != exitDrift {
 		t.Fatalf("exit %d, want %d", got, exitDrift)
+	}
+	// Only the skip-dirty row differs; an unchanged one is not drift.
+	if !strings.Contains(err.Error(), "1 row(s) differ") {
+		t.Fatalf("drift message = %q, want it to count the one differing row", err)
 	}
 
 	// --force is the operator saying "overwrite it"; drift stops being an error.
