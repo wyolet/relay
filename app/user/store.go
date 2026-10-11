@@ -44,8 +44,8 @@ func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) 
 	return FromDirectory(u), nil
 }
 
-// ByOIDCSubject returns the user bound to the external identity subject
-// ("issuer|sub"), or (nil, nil).
+// ByOIDCSubject returns the user holding the external identity subject
+// ("issuer|sub") among its sign-in identities, or (nil, nil).
 func (s *Store) ByOIDCSubject(ctx context.Context, subject string) (*User, error) {
 	u, err := s.rows.ByIdentity(ctx, oidcIdentity(subject))
 	if err != nil {
