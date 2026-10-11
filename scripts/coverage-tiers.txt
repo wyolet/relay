@@ -33,7 +33,9 @@ jobq				69
 jobq/payload			66
 
 auth/apikey			85
+auth/authn			95
 auth/password			95
+auth/principal			95
 auth/rbac			95
 auth/token			85
 

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -22,11 +22,21 @@ func loginCookie(t *testing.T, m *Manager, userID string) *http.Cookie {
 	return rec.Result().Cookies()[0]
 }
 
-func actorFor(m *Manager, c *http.Cookie) *actor.Actor {
-	var got *actor.Actor
-	h := m.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = actor.From(r.Context()) }))
+// principalFor is who a request carrying c authenticates as; nil when the session does not claim it.
+func principalFor(t *testing.T, m *Manager, c *http.Cookie) *principal.Principal {
+	t.Helper()
+	var got *principal.Principal
+	h := m.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		p, claimed, err := m.Authenticate(r)
+		if err != nil || claimed != (p != nil) {
+			t.Errorf("Authenticate = %+v, %v, %v", p, claimed, err)
+		}
+		got = p
+	}))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(c)
+	if c != nil {
+		req.AddCookie(c)
+	}
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	return got
 }
@@ -39,11 +49,11 @@ func TestDestroyUserEndsOnlyThatUsersSessions(t *testing.T) {
 		t.Fatalf("DestroyUser: %v", err)
 	}
 	for i, c := range []*http.Cookie{a1, a2} {
-		if a := actorFor(m, c); a != nil {
+		if a := principalFor(t, m, c); a != nil {
 			t.Fatalf("session %d of u-a still authenticates as %+v", i, a)
 		}
 	}
-	if a := actorFor(m, b); a == nil || a.UserID != "u-b" {
+	if a := principalFor(t, m, b); a == nil || a.ID != "u-b" {
 		t.Fatalf("u-b's session = %+v, want it intact", a)
 	}
 }

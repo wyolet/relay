@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 // Source is where the engine reads bindings and roles. A lookup error fails the decision with that error; it is never read as a denial. The engine is done with what a method returns before calling that method again, so a Source may reuse its buffers.
@@ -36,14 +37,14 @@ const (
 
 // ProductRule is an ownership-style shortcut a product consults ahead of the bindings. Grants that a role could express belong in a Source instead, so they go through Visible, ScopeOf and the grant check like any binding.
 type ProductRule interface {
-	Decide(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (Decision, error)
+	Decide(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (Decision, error)
 }
 
 // RuleFunc adapts a function to ProductRule. It has no Filter, so an engine holding one cannot answer ScopeOf.
-type RuleFunc func(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (Decision, error)
+type RuleFunc func(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (Decision, error)
 
 // Decide calls f.
-func (f RuleFunc) Decide(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (Decision, error) {
+func (f RuleFunc) Decide(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (Decision, error) {
 	return f(ctx, p, kind, verb, res)
 }
 
@@ -58,13 +59,13 @@ type Engine struct {
 }
 
 // Authorize returns nil when p may perform action on res, authz.ErrUnauthenticated or authz.ErrForbidden when not, and any other error when a lookup failed.
-func (e *Engine) Authorize(ctx context.Context, p *Principal, action string, res authz.Resource) error {
+func (e *Engine) Authorize(ctx context.Context, p *principal.Principal, action string, res authz.Resource) error {
 	kind, verb := SplitAction(action)
 	return e.decide(ctx, p, kind, verb, res)
 }
 
 // Allowed is Authorize as a boolean; the error is only a failed lookup.
-func (e *Engine) Allowed(ctx context.Context, p *Principal, action string, res authz.Resource) (bool, error) {
+func (e *Engine) Allowed(ctx context.Context, p *principal.Principal, action string, res authz.Resource) (bool, error) {
 	err := e.Authorize(ctx, p, action, res)
 	if err == nil {
 		return true, nil
@@ -76,11 +77,11 @@ func (e *Engine) Allowed(ctx context.Context, p *Principal, action string, res a
 }
 
 // Visible reports whether p may get res, an action of kind. A failed lookup hides the resource.
-func (e *Engine) Visible(ctx context.Context, p *Principal, kind string, res authz.Resource) bool {
+func (e *Engine) Visible(ctx context.Context, p *principal.Principal, kind string, res authz.Resource) bool {
 	return e.decide(ctx, p, kind, VerbGet, res) == nil
 }
 
-func (e *Engine) decide(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) error {
+func (e *Engine) decide(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) error {
 	if !p.Authenticated() {
 		return authz.ErrUnauthenticated
 	}
@@ -88,8 +89,8 @@ func (e *Engine) decide(ctx context.Context, p *Principal, kind, verb string, re
 	if err != nil {
 		return err
 	}
-	if ok && p.Credential != nil {
-		ok, err = e.credentialPermits(ctx, p.Credential, kind, verb, res, chain)
+	if ok && p.Credential.Scope != nil {
+		ok, err = e.credentialPermits(ctx, p.Credential.Scope, kind, verb, res, chain)
 		if err != nil {
 			return err
 		}
@@ -101,7 +102,7 @@ func (e *Engine) decide(ctx context.Context, p *Principal, kind, verb string, re
 }
 
 // allows also returns res's scope chain when the bindings had to resolve it, so the credential check can reuse it.
-func (e *Engine) allows(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
+func (e *Engine) allows(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
 	if p.Admin {
 		return true, nil, nil
 	}
@@ -121,7 +122,7 @@ func (e *Engine) allows(ctx context.Context, p *Principal, kind, verb string, re
 }
 
 // bound scans the bindings of p's subjects for one at a scope in res's chain whose role covers (kind, verb).
-func (e *Engine) bound(ctx context.Context, p *Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
+func (e *Engine) bound(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
 	if e.Source == nil {
 		return false, nil, nil
 	}
@@ -159,7 +160,7 @@ func (e *Engine) bound(ctx context.Context, p *Principal, kind, verb string, res
 }
 
 // credentialPermits applies c to an allowed request. chain is res's scope chain when already resolved, else nil.
-func (e *Engine) credentialPermits(ctx context.Context, c *CredentialScope, kind, verb string, res authz.Resource, chain []Scope) (bool, error) {
+func (e *Engine) credentialPermits(ctx context.Context, c *principal.CredentialScope, kind, verb string, res authz.Resource, chain []Scope) (bool, error) {
 	if !rulesAllow(c.Rules, kind, verb) {
 		return false, nil
 	}
@@ -191,14 +192,14 @@ func (e *Engine) credentialPermits(ctx context.Context, c *CredentialScope, kind
 }
 
 // subjectCount and subjectAt walk p's subjects followed by SubjectAuthenticated, unless p already lists it.
-func subjectCount(p *Principal) int {
+func subjectCount(p *principal.Principal) int {
 	if slices.Contains(p.Subjects, SubjectAuthenticated) {
 		return len(p.Subjects)
 	}
 	return len(p.Subjects) + 1
 }
 
-func subjectAt(p *Principal, i int) string {
+func subjectAt(p *principal.Principal, i int) string {
 	if i < len(p.Subjects) {
 		return p.Subjects[i]
 	}

@@ -6,10 +6,12 @@ package rbac
 import (
 	"slices"
 	"strings"
+
+	"github.com/wyolet/relay/auth/principal"
 )
 
 // Wildcard in a rule's kinds or verbs matches any kind or verb.
-const Wildcard = "*"
+const Wildcard = principal.Wildcard
 
 // SubjectAuthenticated is the reserved subject every authenticated principal matches, whether or not its Subjects list it.
 const SubjectAuthenticated = "system:authenticated"
@@ -21,22 +23,11 @@ const (
 	VerbList = "list"
 )
 
-// Scope is a place a binding attaches: the global scope, any resource that groups others, or a single resource.
-type Scope struct {
-	Kind string
-	ID   string
-}
+// Scope is a place a binding attaches: the global scope, any resource that groups others, or a single resource. It and Rule are declared with the principal because a credential scope is made of both.
+type Scope = principal.Scope
 
 // Rule grants every verb in Verbs on every kind in Kinds.
-type Rule struct {
-	Kinds []string
-	Verbs []string
-}
-
-// Allows reports whether the rule covers (kind, verb).
-func (r Rule) Allows(kind, verb string) bool {
-	return covers(r.Kinds, kind) && covers(r.Verbs, verb)
-}
+type Rule = principal.Rule
 
 // Role is a named rule set. It carries no scope; the binding supplies one.
 type Role struct {
@@ -55,30 +46,8 @@ type Binding struct {
 	Origin string
 }
 
-// Principal is what the engine reads about a caller.
-type Principal struct {
-	// ID is the caller's durable id. Empty, with Admin unset, means unauthenticated.
-	ID string
-	// Subjects are the binding subjects the caller acts under.
-	Subjects []string
-	// Admin passes every product rule and binding; Credential still applies. It is meant for break-glass callers: roles such as owner or admin are better ordinary roles, so CheckGrant can tell their holders apart. Mapping a role to Admin is the product's choice.
-	Admin bool
-	// Credential narrows what this credential may do; nil leaves it unrestricted.
-	Credential *CredentialScope
-}
-
-// Authenticated reports whether p is a caller the engine may evaluate.
-func (p *Principal) Authenticated() bool { return p != nil && (p.ID != "" || p.Admin) }
-
-// CredentialScope narrows a credential below what its principal holds. It fails closed: no rules permit nothing, and a kind present in Within with an empty list reaches nothing.
-type CredentialScope struct {
-	Rules []Rule
-	// Within maps an action kind to the scopes the credential is limited to there: a resource of that kind is reached only when one of the listed scopes, of any kind, is in its scope chain. A list on a resource with no id and no owner is admitted, its rows then filtered through Visible or ScopeOf; any other verb on such a resource is refused. A kind absent from the map is not limited by scope.
-	Within map[string][]Scope
-}
-
 // MatchesSubject reports whether p acts under subject.
-func MatchesSubject(p *Principal, subject string) bool {
+func MatchesSubject(p *principal.Principal, subject string) bool {
 	if !p.Authenticated() {
 		return false
 	}
@@ -100,15 +69,6 @@ func SplitAction(action string) (kind, verb string) {
 func rulesAllow(rules []Rule, kind, verb string) bool {
 	for _, r := range rules {
 		if r.Allows(kind, verb) {
-			return true
-		}
-	}
-	return false
-}
-
-func covers(set []string, want string) bool {
-	for _, v := range set {
-		if v == Wildcard || v == want {
 			return true
 		}
 	}

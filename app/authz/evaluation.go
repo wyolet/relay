@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/meta"
 	coreauthz "github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/auth/rbac"
 )
 
@@ -17,7 +18,7 @@ type evaluation struct {
 	snapFn    func() Snapshot
 	snap      Snapshot
 	loaded    bool
-	principal rbac.Principal
+	principal principal.Principal
 	owner     coreauthz.Owner
 	metaOwner meta.Owner
 	rules     [6]rbac.ProductRule
@@ -43,14 +44,15 @@ var evaluations = sync.Pool{New: func() any {
 func acquireEvaluation(snap func() Snapshot, a *actor.Actor) *evaluation {
 	ev := evaluations.Get().(*evaluation)
 	ev.snapFn = snap
-	ev.principal = rbac.Principal{ID: a.UserID, Subjects: a.Subjects, Admin: adminActor(a)}
+	// Only what the engine reads: copying the whole principal (a.Principal) costs a decision about 8%.
+	ev.principal = principal.Principal{ID: a.UserID, Subjects: a.Subjects, Admin: adminActor(a)}
 	return ev
 }
 
 // release drops what pins the caller and the snapshot, keeping the buffers.
 func (ev *evaluation) release() {
 	ev.snapFn, ev.snap, ev.loaded = nil, nil, false
-	ev.principal, ev.owner, ev.metaOwner = rbac.Principal{}, coreauthz.Owner{}, meta.Owner{}
+	ev.principal, ev.owner, ev.metaOwner = principal.Principal{}, coreauthz.Owner{}, meta.Owner{}
 	evaluations.Put(ev)
 }
 

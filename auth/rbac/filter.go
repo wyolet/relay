@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 // ErrUnfilterable is returned by ScopeOf when a product rule cannot describe what it allows as a Filter; the caller filters row by row with Visible.
@@ -28,22 +29,23 @@ func (f Filter) None() bool {
 // FilterRule is a ProductRule that can also describe, for ScopeOf, every resource of a kind it allows verb on. A rule that may Deny such a resource returns ErrUnfilterable: a Filter only adds.
 type FilterRule interface {
 	ProductRule
-	Filter(ctx context.Context, p *Principal, kind, verb string) (Filter, error)
+	Filter(ctx context.Context, p *principal.Principal, kind, verb string) (Filter, error)
 }
 
 // ScopeOf returns the owned resources of kind that p may perform verb on, as a Filter for a store-side query; Visible stays the per-row check, and the two agree on every owned resource as long as each rule's Filter describes its Decide. A resource with no owner (a list call) is outside what ScopeOf describes. Every product rule must be a FilterRule, or ScopeOf returns ErrUnfilterable.
-func (e *Engine) ScopeOf(ctx context.Context, p *Principal, verb, kind string) (Filter, error) {
+func (e *Engine) ScopeOf(ctx context.Context, p *principal.Principal, verb, kind string) (Filter, error) {
 	if !p.Authenticated() {
 		return Filter{}, authz.ErrUnauthenticated
 	}
 	f, err := e.grantedFilter(ctx, p, kind, verb)
-	if err != nil || f.None() || p.Credential == nil {
+	cred := p.Credential.Scope
+	if err != nil || f.None() || cred == nil {
 		return f, err
 	}
-	if !rulesAllow(p.Credential.Rules, kind, verb) {
+	if !rulesAllow(cred.Rules, kind, verb) {
 		return Filter{}, nil
 	}
-	if within, limited := p.Credential.Within[kind]; limited {
+	if within, limited := cred.Within[kind]; limited {
 		if len(within) == 0 {
 			return Filter{}, nil
 		}
@@ -52,7 +54,7 @@ func (e *Engine) ScopeOf(ctx context.Context, p *Principal, verb, kind string) (
 	return f, nil
 }
 
-func (e *Engine) grantedFilter(ctx context.Context, p *Principal, kind, verb string) (Filter, error) {
+func (e *Engine) grantedFilter(ctx context.Context, p *principal.Principal, kind, verb string) (Filter, error) {
 	if p.Admin {
 		return Filter{All: true}, nil
 	}

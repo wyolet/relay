@@ -7,19 +7,24 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 )
+
+func scopedUser(scope *principal.CredentialScope) *principal.Principal {
+	return &principal.Principal{ID: "u", Subjects: []string{"user:r"}, Credential: principal.Credential{Scope: scope}}
+}
 
 // ownRows is an owner shortcut that also answers ScopeOf.
 type ownRows struct{}
 
-func (ownRows) Decide(_ context.Context, p *Principal, _, _ string, res authz.Resource) (Decision, error) {
+func (ownRows) Decide(_ context.Context, p *principal.Principal, _, _ string, res authz.Resource) (Decision, error) {
 	if res.Owner != nil && res.Owner.Kind == "person" && res.Owner.ID == p.ID {
 		return Allow, nil
 	}
 	return Continue, nil
 }
 
-func (ownRows) Filter(_ context.Context, p *Principal, _, _ string) (Filter, error) {
+func (ownRows) Filter(_ context.Context, p *principal.Principal, _, _ string) (Filter, error) {
 	return Filter{Owners: []authz.Owner{{Kind: "person", ID: p.ID}}}, nil
 }
 
@@ -29,11 +34,11 @@ type fixedFilter struct {
 	err error
 }
 
-func (fixedFilter) Decide(context.Context, *Principal, string, string, authz.Resource) (Decision, error) {
+func (fixedFilter) Decide(context.Context, *principal.Principal, string, string, authz.Resource) (Decision, error) {
 	return Continue, nil
 }
 
-func (r fixedFilter) Filter(context.Context, *Principal, string, string) (Filter, error) {
+func (r fixedFilter) Filter(context.Context, *principal.Principal, string, string) (Filter, error) {
 	return r.f, r.err
 }
 
@@ -48,12 +53,12 @@ func TestScopeOf(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		p     *Principal
+		p     *principal.Principal
 		rules []ProductRule
 		verb  string
 		want  Filter
 	}{
-		{"admin", &Principal{Admin: true}, nil, "get", Filter{All: true}},
+		{"admin", &principal.Principal{Admin: true}, nil, "get", Filter{All: true}},
 		{"global binding", user("u", "user:a"), []ProductRule{ownRows{}}, "get", Filter{All: true}},
 		{"scoped bindings, deduplicated", user("u", "user:r", "group:g"), nil, "get",
 			Filter{Scopes: []Scope{folder1, folder2, org1}}},
@@ -62,16 +67,16 @@ func TestScopeOf(t *testing.T) {
 			Filter{Scopes: []Scope{folder1}, Owners: []authz.Owner{{Kind: "person", ID: "u"}}, OwnerKinds: []string{"shared"}}},
 		{"a rule admitting everything", user("u"), []ProductRule{fixedFilter{f: Filter{All: true, Scopes: []Scope{folder1}}}}, "get", Filter{All: true}},
 		{"nothing", user("u"), nil, "get", Filter{}},
-		{"capability narrows to nothing", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs}}, nil, "list", Filter{}},
-		{"capability keeps", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs}}, nil, "get",
+		{"capability narrows to nothing", scopedUser(&principal.CredentialScope{Rules: readDocs}), nil, "list", Filter{}},
+		{"capability keeps", scopedUser(&principal.CredentialScope{Rules: readDocs}), nil, "get",
 			Filter{Scopes: []Scope{folder1}}},
-		{"narrowed by Within", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {org1, {Kind: "document", ID: "d1"}}}}}, nil, "get",
+		{"narrowed by Within", scopedUser(&principal.CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {org1, {Kind: "document", ID: "d1"}}}}), nil, "get",
 			Filter{Scopes: []Scope{folder1}, Within: []Scope{org1, {Kind: "document", ID: "d1"}}}},
-		{"an admin narrowed by Within", &Principal{Admin: true, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {folder2}}}}, nil, "get",
+		{"an admin narrowed by Within", &principal.Principal{Admin: true, Credential: principal.Credential{Scope: &principal.CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {folder2}}}}}, nil, "get",
 			Filter{All: true, Within: []Scope{folder2}}},
-		{"an empty Within", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {}}}}, nil, "get",
+		{"an empty Within", scopedUser(&principal.CredentialScope{Rules: readDocs, Within: map[string][]Scope{"documents": {}}}), nil, "get",
 			Filter{}},
-		{"Within on another kind", &Principal{ID: "u", Subjects: []string{"user:r"}, Credential: &CredentialScope{Rules: readDocs, Within: map[string][]Scope{"notes": {}}}}, nil, "get",
+		{"Within on another kind", scopedUser(&principal.CredentialScope{Rules: readDocs, Within: map[string][]Scope{"notes": {}}}), nil, "get",
 			Filter{Scopes: []Scope{folder1}}},
 	}
 	for _, tt := range tests {
@@ -94,14 +99,14 @@ func TestScopeOf(t *testing.T) {
 func TestScopeOfFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	p := user("u", "user:r")
-	plain := RuleFunc(func(context.Context, *Principal, string, string, authz.Resource) (Decision, error) {
+	plain := RuleFunc(func(context.Context, *principal.Principal, string, string, authz.Resource) (Decision, error) {
 		return Continue, nil
 	})
 	bound := map[string][]Binding{"user:r": {{RoleID: "reader", Scope: folder1}}}
 
 	for _, tt := range []struct {
 		name  string
-		p     *Principal
+		p     *principal.Principal
 		rules []ProductRule
 		setup func(*Engine, *memSource)
 		want  error

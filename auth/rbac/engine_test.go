@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 var (
@@ -73,11 +74,13 @@ func doc(folder string) authz.Resource {
 	return authz.Resource{Kind: "document", ID: "d-" + folder, Owner: &authz.Owner{Kind: "folder", ID: folder}}
 }
 
-func user(id string, subjects ...string) *Principal { return &Principal{ID: id, Subjects: subjects} }
+func user(id string, subjects ...string) *principal.Principal {
+	return &principal.Principal{ID: id, Subjects: subjects}
+}
 
 func TestAuthorizeRefusesUnauthenticated(t *testing.T) {
 	e, _ := newEngine(nil)
-	for name, p := range map[string]*Principal{
+	for name, p := range map[string]*principal.Principal{
 		"nil":                    nil,
 		"empty":                  {},
 		"subjects without an id": {Subjects: []string{"user:u"}},
@@ -99,7 +102,7 @@ func TestBindingsFollowTheScopeChain(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name   string
-		p      *Principal
+		p      *principal.Principal
 		action string
 		res    authz.Resource
 		want   error
@@ -116,7 +119,7 @@ func TestBindingsFollowTheScopeChain(t *testing.T) {
 		{"a resource is its own scope", user("u1", "user:folder-reader"), "documents.get",
 			authz.Resource{Kind: "folder", ID: "f1", Owner: &authz.Owner{Kind: "org", ID: "o1"}}, nil},
 		{"no binding", user("u6"), "documents.get", doc("f1"), authz.ErrForbidden},
-		{"admin", &Principal{Admin: true}, "anything.delete", authz.Resource{}, nil},
+		{"admin", &principal.Principal{Admin: true}, "anything.delete", authz.Resource{}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,7 +164,7 @@ func TestReservedAuthenticatedSubject(t *testing.T) {
 func TestProductRulesRunInOrderBeforeBindings(t *testing.T) {
 	var calls []string
 	rule := func(name string, d Decision, err error) ProductRule {
-		return RuleFunc(func(context.Context, *Principal, string, string, authz.Resource) (Decision, error) {
+		return RuleFunc(func(context.Context, *principal.Principal, string, string, authz.Resource) (Decision, error) {
 			calls = append(calls, name)
 			return d, err
 		})
@@ -248,7 +251,7 @@ func TestAllowedAndVisible(t *testing.T) {
 	ctx := context.Background()
 	p := user("u", "user:r")
 	for _, tt := range []struct {
-		p      *Principal
+		p      *principal.Principal
 		action string
 		res    authz.Resource
 		want   bool
@@ -269,7 +272,7 @@ func TestAllowedAndVisible(t *testing.T) {
 
 func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 	ctx := context.Background()
-	allowAll := RuleFunc(func(_ context.Context, _ *Principal, kind, _ string, _ authz.Resource) (Decision, error) {
+	allowAll := RuleFunc(func(_ context.Context, _ *principal.Principal, kind, _ string, _ authz.Resource) (Decision, error) {
 		if kind == "notes" {
 			return Allow, nil
 		}
@@ -278,8 +281,8 @@ func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 	e, _ := newEngine(map[string][]Binding{"user:o": {{RoleID: "owner", Scope: global}}}, allowAll)
 	readDocs := []Rule{{Kinds: []string{"documents", "notes"}, Verbs: []string{"get", "list", "create"}}}
 	note := authz.Resource{Kind: "note", ID: "n1"}
-	within := func(kind string, scopes ...Scope) *CredentialScope {
-		return &CredentialScope{Rules: readDocs, Within: map[string][]Scope{kind: scopes}}
+	within := func(kind string, scopes ...Scope) *principal.CredentialScope {
+		return &principal.CredentialScope{Rules: readDocs, Within: map[string][]Scope{kind: scopes}}
 	}
 	noteIn := func(folder string) authz.Resource {
 		return authz.Resource{Kind: "note", ID: "n-" + folder, Owner: &authz.Owner{Kind: "folder", ID: folder}}
@@ -288,18 +291,18 @@ func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		cred   *CredentialScope
+		cred   *principal.CredentialScope
 		admin  bool
 		action string
 		res    authz.Resource
 		want   error
 	}{
 		{"unrestricted", nil, false, "documents.delete", doc("f1"), nil},
-		{"capability covers", &CredentialScope{Rules: readDocs}, false, "documents.get", doc("f1"), nil},
-		{"capability refuses a binding", &CredentialScope{Rules: readDocs}, false, "documents.delete", doc("f1"), authz.ErrForbidden},
-		{"capability refuses a product rule", &CredentialScope{Rules: readDocs}, false, "notes.delete", note, authz.ErrForbidden},
-		{"capability refuses an admin", &CredentialScope{Rules: readDocs}, true, "documents.delete", doc("f1"), authz.ErrForbidden},
-		{"no rules permit nothing", &CredentialScope{}, false, "documents.get", doc("f1"), authz.ErrForbidden},
+		{"capability covers", &principal.CredentialScope{Rules: readDocs}, false, "documents.get", doc("f1"), nil},
+		{"capability refuses a binding", &principal.CredentialScope{Rules: readDocs}, false, "documents.delete", doc("f1"), authz.ErrForbidden},
+		{"capability refuses a product rule", &principal.CredentialScope{Rules: readDocs}, false, "notes.delete", note, authz.ErrForbidden},
+		{"capability refuses an admin", &principal.CredentialScope{Rules: readDocs}, true, "documents.delete", doc("f1"), authz.ErrForbidden},
+		{"no rules permit nothing", &principal.CredentialScope{}, false, "documents.get", doc("f1"), authz.ErrForbidden},
 		{"a parent-scope limit reaches a child", within("documents", org1), false, "documents.get", doc("f2"), nil},
 		{"a scope limit reaches its own resource", within("documents", folder1), false, "documents.get", doc("f1"), nil},
 		{"a sibling scope is refused", within("documents", folder1), false, "documents.get", doc("f2"), authz.ErrForbidden},
@@ -320,7 +323,7 @@ func TestCredentialScopeNarrowsEveryAllow(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &Principal{ID: "u", Subjects: []string{"user:o"}, Admin: tt.admin, Credential: tt.cred}
+			p := &principal.Principal{ID: "u", Subjects: []string{"user:o"}, Admin: tt.admin, Credential: principal.Credential{Scope: tt.cred}}
 			if err := e.Authorize(ctx, p, tt.action, tt.res); err != tt.want {
 				t.Fatalf("Authorize(%s) = %v, want %v", tt.action, err, tt.want)
 			}
@@ -341,25 +344,25 @@ func (c countingChains) ChainFor(ctx context.Context, res authz.Resource) ([]Sco
 
 func TestCredentialScopeResolvesTheChainOnce(t *testing.T) {
 	ctx := context.Background()
-	cred := &CredentialScope{Rules: []Rule{{Kinds: []string{Wildcard}, Verbs: []string{Wildcard}}}, Within: map[string][]Scope{"documents": {folder1}}}
+	cred := &principal.CredentialScope{Rules: []Rule{{Kinds: []string{Wildcard}, Verbs: []string{Wildcard}}}, Within: map[string][]Scope{"documents": {folder1}}}
 	e, _ := newEngine(map[string][]Binding{"user:o": {{RoleID: "owner", Scope: global}}})
 	calls := 0
 	e.Scopes = countingChains{calls: &calls}
 
-	if err := e.Authorize(ctx, &Principal{ID: "u", Subjects: []string{"user:o"}, Credential: cred}, "documents.get", doc("f1")); err != nil || calls != 1 {
+	if err := e.Authorize(ctx, &principal.Principal{ID: "u", Subjects: []string{"user:o"}, Credential: principal.Credential{Scope: cred}}, "documents.get", doc("f1")); err != nil || calls != 1 {
 		t.Fatalf("binding path: %v after %d chain lookups, want allowed after 1", err, calls)
 	}
 	calls = 0
-	if err := e.Authorize(ctx, &Principal{Admin: true, Credential: cred}, "documents.get", doc("f1")); err != nil || calls != 1 {
+	if err := e.Authorize(ctx, &principal.Principal{Admin: true, Credential: principal.Credential{Scope: cred}}, "documents.get", doc("f1")); err != nil || calls != 1 {
 		t.Fatalf("admin path: %v after %d chain lookups, want allowed after 1", err, calls)
 	}
 
 	e.Scopes = folderChains{err: errDown}
-	if err := e.Authorize(ctx, &Principal{Admin: true, Credential: cred}, "documents.get", doc("f1")); err != errDown {
+	if err := e.Authorize(ctx, &principal.Principal{Admin: true, Credential: principal.Credential{Scope: cred}}, "documents.get", doc("f1")); err != errDown {
 		t.Fatalf("chain failure in the credential check = %v, want it returned", err)
 	}
 	e.Scopes = nil
-	if err := e.Authorize(ctx, &Principal{Admin: true, Credential: cred}, "documents.get", doc("f1")); !errors.Is(err, authz.ErrForbidden) {
+	if err := e.Authorize(ctx, &principal.Principal{Admin: true, Credential: principal.Credential{Scope: cred}}, "documents.get", doc("f1")); !errors.Is(err, authz.ErrForbidden) {
 		t.Fatalf("no resolver = %v, want forbidden", err)
 	}
 }
@@ -368,10 +371,10 @@ func TestCredentialScopeResolvesTheChainOnce(t *testing.T) {
 func TestLimitedListIsAdmittedThenFiltered(t *testing.T) {
 	ctx := context.Background()
 	e, _ := newEngine(map[string][]Binding{"user:o": {{RoleID: "owner", Scope: global}}})
-	p := &Principal{ID: "u", Subjects: []string{"user:o"}, Credential: &CredentialScope{
+	p := &principal.Principal{ID: "u", Subjects: []string{"user:o"}, Credential: principal.Credential{Scope: &principal.CredentialScope{
 		Rules:  []Rule{{Kinds: []string{"documents"}, Verbs: []string{"get", "list", "create"}}},
 		Within: map[string][]Scope{"documents": {folder1}},
-	}}
+	}}}
 	if err := e.Authorize(ctx, p, "documents.list", authz.Resource{Kind: "document"}); err != nil {
 		t.Fatalf("list = %v, want admitted", err)
 	}
@@ -390,7 +393,7 @@ func TestLimitedListIsAdmittedThenFiltered(t *testing.T) {
 func TestMatchesSubject(t *testing.T) {
 	p := user("u", "user:u", "group:g")
 	for _, tt := range []struct {
-		p       *Principal
+		p       *principal.Principal
 		subject string
 		want    bool
 	}{
@@ -398,9 +401,9 @@ func TestMatchesSubject(t *testing.T) {
 		{p, "group:g", true},
 		{p, "group:other", false},
 		{p, SubjectAuthenticated, true},
-		{&Principal{Admin: true}, SubjectAuthenticated, true},
+		{&principal.Principal{Admin: true}, SubjectAuthenticated, true},
 		{nil, SubjectAuthenticated, false},
-		{&Principal{Subjects: []string{"user:u"}}, "user:u", false},
+		{&principal.Principal{Subjects: []string{"user:u"}}, "user:u", false},
 	} {
 		if got := MatchesSubject(tt.p, tt.subject); got != tt.want {
 			t.Errorf("MatchesSubject(%+v, %q) = %v, want %v", tt.p, tt.subject, got, tt.want)

@@ -6,10 +6,11 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 // CheckGrant reports whether p may bind role at scope: binding hands out every permission in the role, so p must already hold each one there. A wildcard in a rule expands over kinds or verbs, the product's full vocabulary; with a nil vocabulary it is checked as itself, so binding a wildcard takes holding one.
-func (e *Engine) CheckGrant(ctx context.Context, p *Principal, role Role, scope Scope, kinds, verbs []string) error {
+func (e *Engine) CheckGrant(ctx context.Context, p *principal.Principal, role Role, scope Scope, kinds, verbs []string) error {
 	owner := authz.Owner(scope)
 	return EachPermission(role.Rules, kinds, verbs, func(kind, verb string) error {
 		err := e.decide(ctx, p, kind, verb, authz.Resource{Kind: kind, Owner: &owner})

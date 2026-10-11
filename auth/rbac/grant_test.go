@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/auth/principal"
 )
 
 func TestCheckGrant(t *testing.T) {
@@ -23,7 +24,7 @@ func TestCheckGrant(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		p            *Principal
+		p            *principal.Principal
 		role         Role
 		scope        Scope
 		kinds, verbs []string
@@ -36,7 +37,7 @@ func TestCheckGrant(t *testing.T) {
 		{"the vocabulary can exceed what is held", editor, roles["anyget"], folder1, []string{"documents", "widgets"}, verbs, authz.ErrForbidden},
 		{"no vocabulary: wildcard checked as itself", owner, roles["owner"], folder1, nil, nil, nil},
 		{"no vocabulary: a wildcard is not held", editor, roles["anyget"], folder1, nil, nil, authz.ErrForbidden},
-		{"admin", &Principal{Admin: true}, roles["owner"], global, kinds, verbs, nil},
+		{"admin", &principal.Principal{Admin: true}, roles["owner"], global, kinds, verbs, nil},
 		{"unauthenticated", nil, roles["reader"], folder1, kinds, verbs, authz.ErrUnauthenticated},
 	}
 	for _, tt := range tests {

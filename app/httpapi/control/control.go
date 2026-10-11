@@ -64,7 +64,7 @@ type Deps struct {
 	RotateTokenKey func(ctx context.Context) error
 
 	// AdminToken is the cleartext break-glass bearer. Empty disables the
-	// bypass. Validated by AdminTokenMiddleware; not used directly by
+	// bypass. Validated by the authenticator chain; not used directly by
 	// handlers.
 	AdminToken string
 
@@ -141,20 +141,20 @@ type HostHealthReader interface {
 // Middleware order on r (caller is responsible for wiring these onto the
 // chi router before any operations are matched):
 //
-//  1. session.Manager.Middleware  — loads cookie session, sets Actor in ctx
-//  2. AdminTokenMiddleware        — sets Actor in ctx when bearer matches
+//  1. session.Manager.Middleware  — loads and saves the cookie session
+//  2. authenticate                — admin token, then session; sets Actor in ctx
 //
 // Per-operation Middlewares attached by Mount enforce RequireActor on
 // every protected route. Public ops (/auth/login, /version) omit it.
 func Mount(r chi.Router, d Deps) huma.API {
 	httpapi.InstallErrorRewriter()
 
-	// Wire session + admin-token middlewares onto the chi router so all
+	// Wire session loading + authentication onto the chi router so all
 	// downstream operations see Actor in context when present.
 	if d.Sessions != nil {
 		r.Use(d.Sessions.Middleware)
 	}
-	r.Use(AdminTokenMiddleware(d.AdminToken))
+	r.Use(authenticate(d))
 	// Audit last in the chain so it sees the Actor either auth path set.
 	if d.Audit != nil {
 		r.Use(audit.Middleware(d.Audit, d.TrustedProxies))

@@ -1,6 +1,6 @@
 // Package session wraps alexedwards/scs/v2 with a kv.Store-backed session
-// store and the small amount of glue that turns scs payloads into our
-// app/actor.Actor.
+// store and the small amount of glue that turns scs payloads into the auth
+// module's principal.
 //
 // Why scs? Mature, well-tested session manager that handles cookie
 // attributes, ID generation, rotation, and expiry correctly. We supply the
@@ -21,12 +21,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -147,41 +148,44 @@ func (o *onceWriter) fail(code int, contentType string, body []byte) {
 func (o *onceWriter) Unwrap() http.ResponseWriter { return o.ResponseWriter }
 
 // Middleware wraps h with scs's LoadAndSave middleware (reads cookie,
-// loads session from kv, persists changes on response). It also reads the
-// session payload after load and stamps an Actor onto the request context
-// so handlers can call actor.From(ctx) directly.
+// loads session from kv, persists changes on response). Who the session
+// belongs to is Authenticate's answer, read inside it.
 func (m *Manager) Middleware(h http.Handler) http.Handler {
-	inner := m.loadAndSave(h)
+	inner := m.sm.LoadAndSave(h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		inner.ServeHTTP(&onceWriter{ResponseWriter: w, req: r}, r)
 	})
 }
 
-func (m *Manager) loadAndSave(h http.Handler) http.Handler {
-	return m.sm.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		uid := m.sm.GetString(ctx, keyUserID)
-		if uid != "" {
-			a := &actor.Actor{
-				UserID:    uid,
-				Username:  m.sm.GetString(ctx, keyUsername),
-				SessionID: sessionID(m.sm.Token(ctx)),
-			}
-			if raw := m.sm.GetString(ctx, keyRoles); raw != "" {
-				_ = json.Unmarshal([]byte(raw), &a.Roles)
-			}
-			if raw := m.sm.GetString(ctx, keyGroups); raw != "" {
-				_ = json.Unmarshal([]byte(raw), &a.IdPGroups)
-			}
-			var local []string
-			if m.groupsOf != nil {
-				local = m.groupsOf(uid)
-			}
-			a.Subjects = catalog.UserSubjects(uid, local, a.IdPGroups)
-			ctx = actor.WithActor(ctx, a)
-		}
-		h.ServeHTTP(w, r.WithContext(ctx))
-	}))
+// Authenticate implements authn.Authenticator over the session Middleware loaded for r, which must run first. A request with no session, or one that expired or never existed, is not claimed: it continues as anonymous, as a missing cookie would.
+func (m *Manager) Authenticate(r *http.Request) (*principal.Principal, bool, error) {
+	ctx := r.Context()
+	uid := m.sm.GetString(ctx, keyUserID)
+	if uid == "" {
+		return nil, false, nil
+	}
+	p := &principal.Principal{
+		ID:         uid,
+		Kind:       principal.KindUser,
+		Username:   m.sm.GetString(ctx, keyUsername),
+		SessionID:  sessionID(m.sm.Token(ctx)),
+		Credential: principal.Credential{Kind: principal.CredentialSession},
+	}
+	if issuer, subject, ok := strings.Cut(m.sm.GetString(ctx, keyOIDCSubject), "|"); ok {
+		p.Issuer, p.Subject = issuer, subject
+	}
+	if raw := m.sm.GetString(ctx, keyRoles); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &p.Roles)
+	}
+	if raw := m.sm.GetString(ctx, keyGroups); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &p.Groups)
+	}
+	var local []string
+	if m.groupsOf != nil {
+		local = m.groupsOf(uid)
+	}
+	p.Subjects = catalog.UserSubjects(uid, local, p.Groups)
+	return p, true, nil
 }
 
 // sessionID derives the non-secret id an actor carries from the session's

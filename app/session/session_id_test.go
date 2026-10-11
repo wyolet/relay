@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -32,20 +32,10 @@ func TestActorSessionIDDoesNotAuthenticate(t *testing.T) {
 		t.Fatalf("no %s cookie set on login: %v", cookieName, rec.Result().Cookies())
 	}
 
-	stampedOn := func(c *http.Cookie) *actor.Actor {
-		var got *actor.Actor
-		h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			got = actor.From(r.Context())
-			w.WriteHeader(http.StatusNoContent)
-		}))
-		req := httptest.NewRequest(http.MethodGet, "/api/auth/whoami", nil)
-		req.AddCookie(c)
-		h.ServeHTTP(httptest.NewRecorder(), req)
-		return got
-	}
+	stampedOn := func(c *http.Cookie) *principal.Principal { return principalFor(t, m, c) }
 
 	first := stampedOn(cookie)
-	if first == nil || first.UserID != "u-admin" {
+	if first == nil || first.ID != "u-admin" {
 		t.Fatalf("session cookie did not authenticate: %+v", first)
 	}
 	if first.SessionID == "" {
