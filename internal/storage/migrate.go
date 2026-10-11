@@ -12,15 +12,27 @@ import (
 	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
 
 // MigrateUp runs the pending up-migrations, as boot does, for a deployment that applies them in a step of its own before the pods roll.
 func MigrateUp(dsn string) error { return runMigrations(dsn) }
 
-// runMigrations runs all pending up-migrations against dsn.
+// runMigrations runs all pending up-migrations against dsn, the relay's and then the auth module's.
 // It is a no-op when no new migrations exist.
 func runMigrations(dsn string) error {
+	if err := runRelayMigrations(dsn); err != nil {
+		return err
+	}
+	// The module's tables are the relay's own (its first migration is a no-op here); it records its version in a table of its own.
+	if err := authpg.Migrate(dsn); err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	return nil
+}
+
+func runRelayMigrations(dsn string) error {
 	src, err := iofs.New(pgmigrations.FS, ".")
 	if err != nil {
 		return fmt.Errorf("storage: open migration source: %w", err)
