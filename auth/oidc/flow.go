@@ -24,6 +24,7 @@ type flowState struct {
 	State    string `json:"s"`
 	Verifier string `json:"v"`
 	Return   string `json:"r,omitempty"`
+	Nonce    string `json:"n,omitempty"`
 }
 
 func (rp *RelyingParty[U]) flowCookieName() string {
@@ -73,7 +74,7 @@ func (rp *RelyingParty[U]) setFlowCookie(w http.ResponseWriter, fs flowState) {
 	})
 }
 
-// takeFlowCookie reads, decodes and expires the flow cookie.
+// takeFlowCookie reads, decodes and expires the flow cookie. A cookie without a nonce predates nonce checking and is treated as expired, so that login restarts once.
 func (rp *RelyingParty[U]) takeFlowCookie(w http.ResponseWriter, r *http.Request) (flowState, bool) {
 	var fs flowState
 	c, err := r.Cookie(rp.flowCookieName())
@@ -88,7 +89,7 @@ func (rp *RelyingParty[U]) takeFlowCookie(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return fs, false
 	}
-	if err := json.Unmarshal(raw, &fs); err != nil || fs.State == "" || fs.Verifier == "" {
+	if err := json.Unmarshal(raw, &fs); err != nil || fs.State == "" || fs.Verifier == "" || fs.Nonce == "" {
 		return flowState{}, false
 	}
 	return fs, true
