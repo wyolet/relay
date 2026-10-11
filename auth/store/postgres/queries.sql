@@ -267,17 +267,11 @@ SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM
 -- name: ListSCIMClients :many
 SELECT name, token_hash, token_prefix, created_at, last_used_at, revoked_at FROM scim_clients ORDER BY name;
 
--- A revoked client's name is issued again with a fresh token; a live one is left alone and the insert touches no row.
+-- A name is never issued twice, revoked or not, so a new token never inherits the rows an old one provisioned; the insert touches no row.
 -- name: CreateSCIMClient :execrows
 INSERT INTO scim_clients (name, token_hash, token_prefix)
 VALUES ($1, $2, $3)
-ON CONFLICT (name) DO UPDATE SET
-    token_hash   = EXCLUDED.token_hash,
-    token_prefix = EXCLUDED.token_prefix,
-    created_at   = now(),
-    last_used_at = NULL,
-    revoked_at   = NULL
-WHERE scim_clients.revoked_at IS NOT NULL;
+ON CONFLICT (name) DO NOTHING;
 
 -- Writes at most once a minute per client, so a burst of provisioning calls is not a burst of updates.
 -- name: MarkSCIMClientUsed :exec

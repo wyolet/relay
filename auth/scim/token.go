@@ -17,7 +17,7 @@ import (
 const TokenPrefix = "scim_"
 
 var (
-	// ErrClientExists reports a create for a name a live client holds.
+	// ErrClientExists reports a create for a name a client holds or held: a revoked client's name is not issued again.
 	ErrClientExists = errors.New("scim: client exists")
 	// ErrNoClient reports an operation on a client that does not exist.
 	ErrNoClient = errors.New("scim: no such client")
@@ -42,7 +42,7 @@ type TokenStore interface {
 	ClientByTokenHash(ctx context.Context, hash string) (*Client, error)
 	// MarkUsed records that the client authenticated at t. A store may skip writes closer together than it cares to keep.
 	MarkUsed(ctx context.Context, name string, t time.Time) error
-	// CreateClient stores c. A name a live client holds is ErrClientExists; a revoked client's name is issued again, so the new token takes over the rows the old one provisioned.
+	// CreateClient stores c. A name any client holds, revoked or not, is ErrClientExists: the name is the source stamped on the rows a client provisions, so issuing it again would hand those rows to the new token.
 	CreateClient(ctx context.Context, c *Client) error
 	// ListClients returns every client ordered by name.
 	ListClients(ctx context.Context) ([]*Client, error)

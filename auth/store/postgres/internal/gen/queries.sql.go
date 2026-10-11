@@ -32,13 +32,7 @@ func (q *Queries) ClearPrimaryIdentity(ctx context.Context, id string) error {
 const createSCIMClient = `-- name: CreateSCIMClient :execrows
 INSERT INTO scim_clients (name, token_hash, token_prefix)
 VALUES ($1, $2, $3)
-ON CONFLICT (name) DO UPDATE SET
-    token_hash   = EXCLUDED.token_hash,
-    token_prefix = EXCLUDED.token_prefix,
-    created_at   = now(),
-    last_used_at = NULL,
-    revoked_at   = NULL
-WHERE scim_clients.revoked_at IS NOT NULL
+ON CONFLICT (name) DO NOTHING
 `
 
 type CreateSCIMClientParams struct {
@@ -47,7 +41,7 @@ type CreateSCIMClientParams struct {
 	TokenPrefix string
 }
 
-// A revoked client's name is issued again with a fresh token; a live one is left alone and the insert touches no row.
+// A name is never issued twice, revoked or not, so a new token never inherits the rows an old one provisioned; the insert touches no row.
 func (q *Queries) CreateSCIMClient(ctx context.Context, arg CreateSCIMClientParams) (int64, error) {
 	result, err := q.db.Exec(ctx, createSCIMClient, arg.Name, arg.TokenHash, arg.TokenPrefix)
 	if err != nil {

@@ -100,8 +100,8 @@ curl -X PUT https://relay.example.com/api/settings/auth:scim \
 - An identity provider that returns no ID token links nothing, because the claim is read only from the verified token.
 - While `auth:scim` is disabled, nothing is linked.
 
-## Rotating and revoking
+## Revoking
 
-`GET /api/scim-clients` lists the clients with the start of each token and when it was last used. `POST /api/scim-clients/<name>/revoke` stops the token at once; the users and groups it provisioned stay. Creating a client again under a revoked name issues a new token that takes over those users and groups, which is how you rotate a token.
+`GET /api/scim-clients` lists the clients with the start of each token and when it was last used. `POST /api/scim-clients/<name>/revoke` stops the token at once; the users and groups it provisioned stay, still stamped with its name. A revoked name is not issued again (creating it answers `409`), so a new token never takes over what an old one provisioned; a replacement client needs a new name.
 
-Under `RELAY_AUTHZ=rbac`, managing SCIM clients takes the `scim-clients` kind (`list`, `create`, `revoke`), which of the built-in roles only `admin` holds. Changing the `auth:scim` section takes an admin in either mode.
+Under `RELAY_AUTHZ=rbac`, managing SCIM clients (`list`, `create`, `revoke`) takes an admin: a custom role holding the `scim-clients` verbs is not enough. Changing the `auth:scim` section takes an admin in either mode.

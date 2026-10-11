@@ -50,7 +50,7 @@ func (m *memTokens) MarkUsed(_ context.Context, name string, t time.Time) error 
 func (m *memTokens) CreateClient(_ context.Context, c *Client) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if old, ok := m.byName[c.Name]; ok && !old.Revoked {
+	if _, ok := m.byName[c.Name]; ok {
 		return ErrClientExists
 	}
 	cp := *c
