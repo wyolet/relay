@@ -79,6 +79,13 @@ func HeaderKeyID(token string) string { return readHeader(token).Kid }
 // Reads the header only; Parse refuses any typ but TypeJWT and TypeAccessToken.
 func HeaderType(token string) string { return readHeader(token).Typ }
 
+// ReadHeader returns the header's `kid` and `typ` in one decode, for a caller
+// that needs both on a hot path.
+func ReadHeader(token string) (kid, typ string) {
+	h := readHeader(token)
+	return h.Kid, h.Typ
+}
+
 // The header types Parse accepts: a plain JWT, and an OAuth 2.0 access token
 // (RFC 9068). Sign writes TypeJWT.
 const (

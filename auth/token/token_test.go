@@ -135,6 +135,9 @@ func TestParse_HeaderType(t *testing.T) {
 		if got := HeaderType(tok); got != tc.wantTyp {
 			t.Errorf("%s: HeaderType = %q, want %q", tc.header, got, tc.wantTyp)
 		}
+		if kid, typ := ReadHeader(tok); kid != HeaderKeyID(tok) || typ != tc.wantTyp {
+			t.Errorf("%s: ReadHeader = (%q, %q), want (%q, %q)", tc.header, kid, typ, HeaderKeyID(tok), tc.wantTyp)
+		}
 		_, err := Parse[testClaims](pub, tok)
 		if tc.ok && err != nil {
 			t.Errorf("%s: Parse: %v", tc.header, err)

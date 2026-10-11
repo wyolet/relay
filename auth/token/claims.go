@@ -93,6 +93,10 @@ var (
 // Validate checks c against want at now, in a fixed order: typ, issuer,
 // audience, then exp (required), nbf and iat (each checked when non-zero).
 // The first failing check is returned. Signature verification is Parse's.
+//
+// An empty Want.Issuer or Want.Type skips that check. An empty Want.Audience
+// does not: it refuses any token that names an audience, so a token bound to
+// another service cannot be replayed here.
 func Validate(c Claims, now time.Time, want Want) error {
 	leeway := max(want.Leeway, 0)
 	switch {

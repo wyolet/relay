@@ -18,7 +18,7 @@ import (
 // pick a shard.
 const cacheShards = 16
 
-// cacheEntry is one verified bearer. claims and exp are fixed at insert;
+// cacheEntry is one verified bearer. claims, typ and exp are fixed at insert;
 // subjects is recomputed whenever the snapshot they were derived from is
 // replaced, so a membership change is not held until the token expires.
 // The snapshot is remembered by generation, never by pointer: an entry lives
@@ -26,7 +26,9 @@ const cacheShards = 16
 // reachable.
 type cacheEntry struct {
 	claims crypto.TokenClaims
-	exp    time.Time
+	// typ is the header's, kept so the per-request check never re-reads it.
+	typ string
+	exp time.Time
 
 	mu       sync.Mutex
 	snapGen  uint64

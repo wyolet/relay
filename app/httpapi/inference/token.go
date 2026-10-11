@@ -124,15 +124,28 @@ var ErrTokensDisabled = errors.New("inference: tokens are not enabled")
 // Verify checks the signature and returns the claims. Claim policy (expiry,
 // issuer, version) is the caller's.
 func (v *TokenVerifier) Verify(token string) (crypto.TokenClaims, error) {
+	claims, _, err := v.verify(token)
+	return claims, err
+}
+
+// verify also returns the header's typ, read in the same decode as the kid
+// so checking it costs nothing extra.
+func (v *TokenVerifier) verify(token string) (crypto.TokenClaims, string, error) {
 	if v == nil {
-		return crypto.TokenClaims{}, ErrTokensDisabled
+		return crypto.TokenClaims{}, "", ErrTokensDisabled
 	}
 	ks := v.keySet()
 	if ks.Current() == nil {
-		return crypto.TokenClaims{}, ErrTokensDisabled
+		return crypto.TokenClaims{}, "", ErrTokensDisabled
 	}
+	kid, typ := authtoken.ReadHeader(token)
 	// Reloads are off on this key set, so the context is never waited on.
-	return authtoken.Verify[crypto.TokenClaims](context.Background(), ks, token)
+	pub, err := ks.PublicKey(context.Background(), kid)
+	if err != nil {
+		return crypto.TokenClaims{}, "", err
+	}
+	claims, err := authtoken.Parse[crypto.TokenClaims](pub, token)
+	return claims, typ, err
 }
 
 // looksLikeToken classifies a bearer by shape: a compact JWT is three
@@ -159,10 +172,11 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 	claims := ent.claims
 	userID := claims.UserID()
 	// iat stays out: tokens minted on another pod would fail on clock skew,
-	// which relay has never checked. Validate checks iss before exp, so a
-	// foreign token reads as invalid, not expired.
-	err := authtoken.Validate(authtoken.Claims{Issuer: claims.Iss, Expiry: claims.Exp}, now,
-		authtoken.Want{Issuer: crypto.TokenIssuer})
+	// which relay has never checked. Validate checks typ and iss before exp,
+	// so a foreign token reads as invalid, not expired. Relay mints only JWT;
+	// an at+jwt is an access token issued for some other resource.
+	err := authtoken.Validate(authtoken.Claims{Issuer: claims.Iss, Expiry: claims.Exp, Type: ent.typ}, now,
+		authtoken.Want{Issuer: crypto.TokenIssuer, Type: authtoken.TypeJWT})
 	switch {
 	case userID == "", err != nil && !errors.Is(err, authtoken.ErrExpired):
 		writeAuthErr(w, "invalid token")
@@ -208,11 +222,11 @@ func (v *TokenVerifier) verified(bearer string, now time.Time) (*cacheEntry, boo
 	if ent := v.cache.get(digest, now); ent != nil {
 		return ent, true
 	}
-	claims, err := v.Verify(bearer)
+	claims, typ, err := v.verify(bearer)
 	if err != nil {
 		return nil, false
 	}
-	ent := &cacheEntry{claims: claims, exp: time.Unix(claims.Exp, 0)}
+	ent := &cacheEntry{claims: claims, typ: typ, exp: time.Unix(claims.Exp, 0)}
 	v.cache.put(digest, ent)
 	return ent, true
 }
