@@ -315,8 +315,9 @@ control-openapi: ## list paths from /openapi.json
 
 # --- go ---
 
-sqlc-generate: ## regenerate sqlc code
+sqlc-generate: ## regenerate sqlc code (root module and auth module)
 	sqlc generate
+	cd auth && sqlc generate
 
 UI_REPO     := wyolet/relay-ui
 UI_TARBALL  := relay-ui-$(UI_VERSION).tar.gz
@@ -475,8 +476,10 @@ test-integration-run: ## integration-tagged tests of every module against $$RELA
 	$(GO_TEST) -tags=integration -race -count=1 \
 		-coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/integration.out ./... ; \
 		status=$$?; \
-		cd jobq && $(GO_TEST) -tags=integration -race -count=1 \
-			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq-integration.out ./... || status=$$?; \
+		(cd jobq && $(GO_TEST) -tags=integration -race -count=1 \
+			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq-integration.out ./...) || status=$$?; \
+		(cd auth && $(GO_TEST) -tags=integration -race -count=1 \
+			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/auth-integration.out ./...) || status=$$?; \
 		exit $$status
 
 # Smoke: relay → openai-mock.wyolet.dev (via Caddy on dev-stack, mock on Mac:5180).
