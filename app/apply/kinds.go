@@ -5,6 +5,8 @@ import (
 
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/auth/directory"
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 // KindRoutes maps a manifest kind to the API plural and singular the RBAC
@@ -28,6 +30,7 @@ var KindRoutes = map[string]struct{ Plural, Singular string }{
 	"RoleBinding":    {"role-bindings", "role-binding"},
 	"PolicyBinding":  {"policy-bindings", "policy-binding"},
 	"Overlay":        {"models.overlay", "model"},
+	"User":           {"users", "user"},
 }
 
 func singularOf(plural string) string {
@@ -51,6 +54,10 @@ type builder struct {
 	// lic gates the features a manifest may declare. Nil is no gate — see
 	// Options.License.
 	lic license.Checker
+
+	// dir writes the auth module's kinds; dirErr is why there is none.
+	dir    *directory.Directory
+	dirErr error
 
 	// declared holds the rows this run writes, by id, so a later kind's
 	// reference checks see what an earlier kind in the same bundle declared.
@@ -82,6 +89,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		pbDocs   []*manifest.PolicyBindingDTO
 		keyDocs  []*manifest.KeyDTO
 		ovDocs   []*manifest.OverlayDTO
+		userDocs []*authmanifest.Document
 	)
 	for _, d := range docs {
 		if d.Setting != nil || d.Foreign != "" {
@@ -122,6 +130,8 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 			keyDocs = append(keyDocs, d.Key)
 		case d.Overlay != nil:
 			ovDocs = append(ovDocs, d.Overlay)
+		case d.User != nil:
+			userDocs = append(userDocs, d.User)
 		}
 	}
 
@@ -143,6 +153,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	mintIDs(b.idx.RoleBindings, rbDocs, docName[manifest.RoleBindingDTO])
 	mintIDs(b.idx.PolicyBindings, pbDocs, docName[manifest.PolicyBindingDTO])
 	mintIDs(b.idx.Keys, keyDocs, docName[manifest.KeyDTO])
+	mintIDs(b.idx.Users, userDocs, (*authmanifest.Document).Name)
 
 	if err := b.checkRoleDocs(roleDocs); err != nil {
 		return err
@@ -153,6 +164,10 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		return err
 	}
 	if err := b.planCatalog(ctx, provDocs, hostDocs, rlDocs, hkDocs, mDocs, prDocs, bndDocs, polDocs); err != nil {
+		return err
+	}
+	// Accounts before groups, keys and bindings, which name them.
+	if err := b.planUsers(ctx, userDocs); err != nil {
 		return err
 	}
 	if err := b.planGroupsAndRoles(ctx, grpDocs, roleDocs); err != nil {

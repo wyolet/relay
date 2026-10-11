@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 // SchemaVersion is the path segment the JSON Schemas are served under —
@@ -24,13 +26,22 @@ func Render(docs []Document, schemaBase string) ([]byte, error) {
 	first := true
 	for _, d := range docs {
 		body := d.Payload()
-		if body == nil {
+		if body == nil && d.User == nil {
 			continue
 		}
 		if !first {
 			buf.WriteString("---\n")
 		}
 		first = false
+		// An account has no relay DTO or relay schema; the auth module renders it.
+		if d.User != nil {
+			out, err := authmanifest.Render([]*authmanifest.Document{d.User})
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(out)
+			continue
+		}
 		buf.WriteString(SchemaRef(d.Kind(), schemaBase))
 		enc := yaml.NewEncoder(&buf)
 		enc.SetIndent(2)

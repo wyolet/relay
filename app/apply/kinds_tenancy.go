@@ -13,18 +13,17 @@ import (
 )
 
 func (b *builder) planTenancy(ctx context.Context, teamDocs []*manifest.TeamDTO, projDocs []*manifest.ProjectDTO) error {
-	s := b.opts.Stores
 	if err := planKind(ctx, b, kindWiring[manifest.TeamDTO, team.Team]{
 		Kind: "Team", Docs: teamDocs, Names: b.idx.Teams, Rows: b.rows.Teams,
 		To: manifest.ToTeam, Meta: func(t *team.Team) *meta.Metadata { return &t.Meta },
-		Upsert: s.Team.Upsert, Delete: s.Team.Delete,
+		Upsert: throughDirectory(b, converted((*team.Team).ToDirectory)), Delete: deleteThroughDirectory(b, "Team"),
 	}); err != nil {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.ProjectDTO, project.Project]{
 		Kind: "Project", Docs: projDocs, Names: b.idx.Projects, Rows: b.rows.Projects,
 		To: manifest.ToProject, Meta: func(p *project.Project) *meta.Metadata { return &p.Meta },
-		Upsert: s.Project.Upsert, Delete: s.Project.Delete,
+		Upsert: throughDirectory(b, converted((*project.Project).ToDirectory)), Delete: deleteThroughDirectory(b, "Project"),
 		Check: refsFor(b, refcheck.Checker.Project),
 	}); err != nil {
 		return err
@@ -37,7 +36,7 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 	if err := planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
-		Upsert: s.ServiceAccount.Upsert, Delete: s.ServiceAccount.Delete,
+		Upsert: throughDirectory(b, converted((*serviceaccount.ServiceAccount).ToDirectory)), Delete: deleteThroughDirectory(b, "ServiceAccount"),
 		Check: refsFor(b, refcheck.Checker.ServiceAccount),
 	}); err != nil {
 		return err

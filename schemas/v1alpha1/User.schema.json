@@ -1,0 +1,124 @@
+{
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha1/User.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "enum": [
+        "auth.wyolet.dev/v1alpha1"
+      ],
+      "type": "string"
+    },
+    "kind": {
+      "const": "User"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The username.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {
+          "type": "boolean"
+        },
+        "email": {
+          "type": "string"
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "issuer": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "issuer",
+                "subject"
+              ],
+              "type": "object"
+            },
+            {
+              "maxProperties": 0,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The identity provider's issuer and subject. Omit to keep the stored identity; null, \"\" or {} clears it."
+        },
+        "password": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "maxProperties": 1,
+              "properties": {
+                "hash": {
+                  "description": "A bcrypt hash.",
+                  "pattern": "^\\$2[aby]\\$",
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "additionalProperties": false,
+                  "description": "An environment variable holding a password or a bcrypt hash.",
+                  "properties": {
+                    "env": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "env"
+                  ],
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "A bcrypt hash or an environment variable; plain text is refused. Omit to keep the stored password; null, \"\" or {} clears it."
+        },
+        "roles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata"
+  ],
+  "title": "User",
+  "type": "object"
+}

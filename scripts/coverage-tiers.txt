@@ -37,6 +37,7 @@ auth/authn			95
 auth/directory			91
 auth/directory/memstore		94
 auth/directory/storetest	80
+auth/manifest			81
 auth/oidc			93
 auth/password			95
 auth/principal			95

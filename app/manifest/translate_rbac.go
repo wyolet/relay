@@ -3,7 +3,6 @@ package manifest
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -13,32 +12,20 @@ import (
 // Role / RoleBinding / PolicyBinding
 // ---------------------------------------------------------------------------
 
-func ToRole(d RoleDTO, _ Resolver) (*role.Role, error) {
-	m := d.Metadata.toMeta()
-	// A Role is a rule set anyone may be bound to; ownership is relay's,
-	// not the manifest author's.
-	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
-	rules := make([]role.Rule, 0, len(d.Spec.Rules))
-	for _, r := range d.Spec.Rules {
-		rules = append(rules, role.Rule{Kinds: r.Kinds, Verbs: r.Verbs})
+// ToRole translates through the auth module, which makes every role system-owned: a role is a rule set anyone may be bound to, so ownership is relay's, not the manifest author's.
+func ToRole(d RoleDTO, idx Resolver) (*role.Role, error) {
+	row, err := AuthManifests.ToRole(roleDoc(d), authRefs{idx})
+	if err != nil {
+		return nil, fromAuthError(err)
 	}
-	return &role.Role{
-		Meta: m,
-		Spec: role.Spec{Rules: rules, Enabled: d.Spec.Enabled},
-	}, nil
+	return role.FromDirectory(row), nil
 }
 
-func FromRole(r *role.Role, _ ReverseResolver) RoleDTO {
-	rules := make([]RoleRuleDTO, 0, len(r.Spec.Rules))
-	for _, rule := range r.Spec.Rules {
-		rules = append(rules, RoleRuleDTO{Kinds: rule.Kinds, Verbs: rule.Verbs})
-	}
-	return RoleDTO{
-		APIVersion: APIVersion,
-		Kind:       "Role",
-		Metadata:   metaToWire(r.Meta),
-		Spec:       RoleSpec{Rules: rules, Enabled: r.Spec.Enabled},
-	}
+func FromRole(r *role.Role, rev ReverseResolver) RoleDTO {
+	d, _ := fromAuthDoc(rendered(AuthManifests.FromRole(r.ToDirectory(), authNames{rev})))
+	dto := *d.Role
+	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(r.Meta)
+	return dto
 }
 
 // toSubjects resolves named subjects to the form the snapshot indexes:
@@ -91,75 +78,23 @@ func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []Subject
 	return out
 }
 
-// ToRoleBinding resolves the role name, the scope target, and the subjects.
-// Owner mirrors spec.scope, so it is re-derived rather than read from the
-// wire form.
+// ToRoleBinding resolves the role name, the scope target, and the subjects
+// through the auth module. Owner mirrors spec.scope, so it is re-derived
+// rather than read from the wire form.
 func ToRoleBinding(d RoleBindingDTO, idx Resolver) (*rolebinding.RoleBinding, error) {
-	roleID, ok := idx.RoleID(d.Spec.Role)
-	if !ok {
-		return nil, refNotFound("rolebinding %q: role %q not found", d.Metadata.Name, d.Spec.Role)
-	}
-	scope := meta.Owner{Kind: d.Spec.Scope.Kind, ID: d.Spec.Scope.ref()}
-	switch scope.Kind {
-	case meta.OwnerTeam:
-		id, ok := idx.TeamID(scope.ID)
-		if !ok {
-			return nil, refNotFound("rolebinding %q: team %q not found", d.Metadata.Name, scope.ID)
-		}
-		scope.ID = id
-	case meta.OwnerProject:
-		id, ok := idx.ProjectID(scope.ID)
-		if !ok {
-			return nil, refNotFound("rolebinding %q: project %q not found", d.Metadata.Name, scope.ID)
-		}
-		scope.ID = id
-	}
-	subjects, err := toSubjects(d.Metadata.Name, d.Spec.Subjects, idx)
+	row, err := AuthManifests.ToRoleBinding(roleBindingDoc(d), authRefs{idx})
 	if err != nil {
-		return nil, err
+		return nil, fromAuthError(err)
 	}
-	b := &rolebinding.RoleBinding{
-		Meta: d.Metadata.toMeta(),
-		Spec: rolebinding.Spec{
-			RoleID:   roleID,
-			Scope:    scope,
-			Subjects: subjects,
-			Enabled:  d.Spec.Enabled,
-		},
-	}
-	b.StampOwner()
-	return b, nil
+	return rolebinding.FromDirectory(row), nil
 }
 
 func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindingDTO {
-	roleName, _ := rev.RoleName(b.Spec.RoleID)
-	if roleName == "" {
-		roleName = b.Spec.RoleID
-	}
-	scope := WireOwner{Kind: b.Spec.Scope.Kind, Name: b.Spec.Scope.ID}
-	switch b.Spec.Scope.Kind {
-	case meta.OwnerTeam:
-		if name, ok := rev.TeamName(b.Spec.Scope.ID); ok {
-			scope.Name = name
-		}
-	case meta.OwnerProject:
-		if name, ok := rev.ProjectName(b.Spec.Scope.ID); ok {
-			scope.Name = name
-		}
-	}
-	wm := metaToWire(b.Meta)
-	wm.Owner.Name = scope.Name
-	return RoleBindingDTO{
-		APIVersion: APIVersion,
-		Kind:       "RoleBinding",
-		Metadata:   wm,
-		Spec: RoleBindingSpec{
-			Role:     roleName,
-			Scope:    scope,
-			Subjects: fromSubjects(b.Spec.Subjects, rev),
-			Enabled:  b.Spec.Enabled,
-		},
-	}
+	d, _ := fromAuthDoc(rendered(AuthManifests.FromRoleBinding(b.ToDirectory(), authNames{rev})))
+	dto := *d.RoleBinding
+	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(b.Meta)
+	dto.Metadata.Owner.Name = dto.Spec.Scope.Name
+	return dto
 }
 
 // ToPolicyBinding resolves the project, the policy, and the subjects. Owner

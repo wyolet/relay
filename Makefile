@@ -444,8 +444,9 @@ check: ## the CI gate: gofmt, codebase rules, golangci-lint, tests, chart lint
 chart-lint: ## helm lint chart/
 	helm lint chart
 
-schemas: ## regenerate JSON Schemas for catalog kinds → schemas/v1alpha2/
+schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha2/ (relay) and schemas/v1alpha1/ (auth module)
 	go run ./cmd/catalog-schemas schemas/v1alpha2
+	go run ./cmd/auth-schemas schemas/v1alpha1
 
 catalog-validate: ## graph-lint the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
 	go run ./cmd/catalog-validate $${RELAY_CATALOG_DIR:-../relay-catalog/data}
