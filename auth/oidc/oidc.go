@@ -58,6 +58,8 @@ type RelyingParty[U any] struct {
 	FlowCookie string
 	// CookieSecure marks the flow cookie HTTPS-only.
 	CookieSecure bool
+	// ReturnParam names the Start query parameter holding where the browser goes after this login instead of PostLoginURL; it defaults to "rd". Only a path on this origin is honoured, anything else is ignored.
+	ReturnParam string
 	// Provision returns the product's user for c, creating it if the product's rules allow.
 	Provision func(ctx context.Context, c Claims) (U, error)
 	// Login starts the product's session for u.
@@ -98,11 +100,15 @@ func (rp *RelyingParty[U]) Start(w http.ResponseWriter, r *http.Request) {
 	opts = append(opts, oauth2.S256ChallengeOption(verifier))
 	authURL := oc.AuthCodeURL(state, opts...)
 
-	rp.setFlowCookie(w, flowState{State: state, Verifier: verifier})
+	fs := flowState{State: state, Verifier: verifier}
+	if rd := r.URL.Query().Get(rp.returnParamName()); safeReturnPath(rd) {
+		fs.Return = rd
+	}
+	rp.setFlowCookie(w, fs)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// Callback completes the login the provider redirected back: it checks state, exchanges the code, reads the claims, then runs Provision and Login and redirects to PostLoginURL.
+// Callback completes the login the provider redirected back: it checks state, exchanges the code, reads the claims, then runs Provision and Login and redirects to the return path Start accepted, or PostLoginURL without one.
 func (rp *RelyingParty[U]) Callback(w http.ResponseWriter, r *http.Request) {
 	cfg := rp.Config()
 	if cfg == nil {
@@ -163,6 +169,10 @@ func (rp *RelyingParty[U]) Callback(w http.ResponseWriter, r *http.Request) {
 	target := cfg.PostLoginURL
 	if target == "" {
 		target = "/"
+	}
+	// The flow cookie is not signed, so its return path is checked again.
+	if safeReturnPath(fs.Return) {
+		target = fs.Return
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }

@@ -91,8 +91,13 @@ func newRP(p *provider, rec *recorder) *RelyingParty[string] {
 
 func start(t *testing.T, rp *RelyingParty[string]) (url.Values, *http.Cookie) {
 	t.Helper()
+	return startAt(t, rp, "/start")
+}
+
+func startAt(t *testing.T, rp *RelyingParty[string], target string) (url.Values, *http.Cookie) {
+	t.Helper()
 	w := httptest.NewRecorder()
-	rp.Start(w, httptest.NewRequest("GET", "/start", nil))
+	rp.Start(w, httptest.NewRequest("GET", target, nil))
 	if w.Code != http.StatusFound {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}
@@ -184,6 +189,93 @@ func TestCallbackSuccess(t *testing.T) {
 	rp.Config().PostLoginURL = "https://ui.test/"
 	if w := login(t, rp, "good"); w.Header().Get("Location") != "https://ui.test/" {
 		t.Fatalf("location = %q", w.Header().Get("Location"))
+	}
+}
+
+func TestSafeReturnPath(t *testing.T) {
+	accepted := []string{"/", "/ui/keys", "/ui/keys?tab=a&x=1#top", "/a%20b", "/a/../b"}
+	for _, s := range accepted {
+		if !safeReturnPath(s) {
+			t.Errorf("rejected %q", s)
+		}
+	}
+	rejected := []string{
+		"", "ui/keys", "//evil.com", "///evil.com", "/\\evil.com", "\\evil.com", "/ui\\x",
+		"https://evil.com", "http:/evil.com", "javascript:alert(1)", "data:text/html,x",
+		"/%2Fevil.com", "/%2F/evil.com", "/%5Cevil.com", "/%zz", "/a%0d%0aSet-Cookie:x=y",
+		"/a\tb", "/a\nb", "/a\x7f", "/a\u0085", "/a\xff", "/" + strings.Repeat("a", maxReturnLen),
+	}
+	for _, s := range rejected {
+		if safeReturnPath(s) {
+			t.Errorf("accepted %q", s)
+		}
+	}
+}
+
+func flowOf(t *testing.T, c *http.Cookie) flowState {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fs flowState
+	if err := json.Unmarshal(raw, &fs); err != nil {
+		t.Fatal(err)
+	}
+	return fs
+}
+
+func TestReturnPath(t *testing.T) {
+	p := newProvider(t)
+	rp := newRP(p, &recorder{})
+	rp.Config().PostLoginURL = "https://ui.test/"
+	loginFrom := func(target string) *httptest.ResponseRecorder {
+		q, c := startAt(t, rp, target)
+		return callback(rp, "code=good&state="+q.Get("state"), c)
+	}
+
+	if w := loginFrom("/start?rd=" + url.QueryEscape("/ui/keys?tab=a")); w.Code != http.StatusFound || w.Header().Get("Location") != "/ui/keys?tab=a" {
+		t.Fatalf("accepted rd: %d %q", w.Code, w.Header().Get("Location"))
+	}
+
+	for _, rd := range []string{"//evil.com", "/\\evil.com", "https://evil.com", "javascript:alert(1)", "/%2F%2Fevil.com", "%2F%2Fevil.com"} {
+		target := "/start?rd=" + url.QueryEscape(rd)
+		if _, c := startAt(t, rp, target); flowOf(t, c).Return != "" {
+			t.Errorf("rd %q carried in the flow cookie", rd)
+		}
+		if w := loginFrom(target); w.Header().Get("Location") != "https://ui.test/" {
+			t.Errorf("rd %q: location %q, want PostLoginURL", rd, w.Header().Get("Location"))
+		}
+	}
+	// Already-decoded by the query parser: rd=%2F%2Fevil.com arrives as //evil.com.
+	if w := loginFrom("/start?rd=%2F%2Fevil.com"); w.Header().Get("Location") != "https://ui.test/" {
+		t.Errorf("encoded rd: location %q", w.Header().Get("Location"))
+	}
+
+	// Without rd the flow cookie has the payload it always had.
+	_, c := start(t, rp)
+	raw, _ := base64.RawURLEncoding.DecodeString(c.Value)
+	if strings.Contains(string(raw), `"r"`) {
+		t.Errorf("flow cookie without rd = %s", raw)
+	}
+
+	rp.ReturnParam = "next"
+	if w := loginFrom("/start?rd=/ignored&next=/ui/next"); w.Header().Get("Location") != "/ui/next" {
+		t.Errorf("renamed param: location %q", w.Header().Get("Location"))
+	}
+}
+
+// The flow cookie is not signed: a return path planted in it is checked again at the callback.
+func TestReturnPathTamperedCookie(t *testing.T) {
+	p := newProvider(t)
+	rp := newRP(p, &recorder{})
+	q, c := start(t, rp)
+	fs := flowOf(t, c)
+	fs.Return = "//evil.com"
+	raw, _ := json.Marshal(fs)
+	c.Value = base64.RawURLEncoding.EncodeToString(raw)
+	if w := callback(rp, "code=good&state="+q.Get("state"), c); w.Code != http.StatusFound || w.Header().Get("Location") != "/" {
+		t.Fatalf("tampered cookie: %d %q", w.Code, w.Header().Get("Location"))
 	}
 }
 

@@ -4,18 +4,26 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
-	defaultFlowCookie = "oidc_flow"
-	flowTTL           = 10 * time.Minute
+	defaultFlowCookie  = "oidc_flow"
+	defaultReturnParam = "rd"
+	flowTTL            = 10 * time.Minute
+	// maxReturnLen keeps the flow cookie well under the 4 KB browsers accept; a longer cookie is dropped and the login fails as expired.
+	maxReturnLen = 2048
 )
 
 // flowState is the per-login payload carried in the flow cookie.
 type flowState struct {
 	State    string `json:"s"`
 	Verifier string `json:"v"`
+	Return   string `json:"r,omitempty"`
 }
 
 func (rp *RelyingParty[U]) flowCookieName() string {
@@ -23,6 +31,33 @@ func (rp *RelyingParty[U]) flowCookieName() string {
 		return defaultFlowCookie
 	}
 	return rp.FlowCookie
+}
+
+func (rp *RelyingParty[U]) returnParamName() string {
+	if rp.ReturnParam == "" {
+		return defaultReturnParam
+	}
+	return rp.ReturnParam
+}
+
+// safeReturnPath reports whether raw is a path on this origin, so redirecting there cannot leave the site. It also checks the percent-decoded form, in case anything between here and the browser decodes it.
+func safeReturnPath(raw string) bool {
+	if len(raw) > maxReturnLen || !isLocalPath(raw) {
+		return false
+	}
+	decoded, err := url.PathUnescape(raw)
+	return err == nil && isLocalPath(decoded)
+}
+
+func isLocalPath(s string) bool {
+	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") || strings.ContainsRune(s, '\\') {
+		return false
+	}
+	if !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "" && u.Host == ""
 }
 
 func (rp *RelyingParty[U]) setFlowCookie(w http.ResponseWriter, fs flowState) {
