@@ -6,10 +6,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/auth/directory"
@@ -50,29 +48,16 @@ func (o directoryOps) directory() (*directory.Directory, error) {
 	return o.dir, nil
 }
 
-// principalOf is the caller as the directory sees it. Admin is relay's RequireAdmin rule (the admin role or token, or any caller in single-user mode), so the directory's admin-only paths open exactly where relay's do.
+// principalOf is the caller as the directory sees it; see refcheck.Principal.
 func principalOf(ctx context.Context, az authz.Authorizer) *principal.Principal {
-	var p principal.Principal
-	if a := actor.From(ctx); a != nil {
-		p = a.Principal()
-	}
-	p.Admin = refcheck.RequireAdmin(ctx, az, "") == nil
-	return &p
+	return refcheck.Principal(ctx, az)
 }
 
-// grantChecker is the directory's grant check in relay: relay's own CheckGrant, which expands wildcards over the closed vocabulary and probes through the authorizer.
+// grantChecker is the directory's grant check in relay; see refcheck.Grants.
 type grantChecker struct{ authz authz.Authorizer }
 
-func (g grantChecker) CheckGrant(ctx context.Context, p *principal.Principal, r rbac.Role, scope rbac.Scope, _, _ []string) error {
-	if p != nil && p.Admin {
-		return nil
-	}
-	rules := make([]role.Rule, len(r.Rules))
-	for i, rule := range r.Rules {
-		rules[i] = role.Rule{Kinds: rule.Kinds, Verbs: rule.Verbs}
-	}
-	return authz.CheckGrant(ctx, g.authz, &role.Role{Meta: meta.Metadata{ID: r.ID, Name: r.ID}, Spec: role.Spec{Rules: rules}},
-		meta.Owner{Kind: meta.OwnerKind(scope.Kind), ID: scope.ID})
+func (g grantChecker) CheckGrant(ctx context.Context, p *principal.Principal, r rbac.Role, scope rbac.Scope, kinds, verbs []string) error {
+	return refcheck.Grants{Authz: g.authz}.CheckGrant(ctx, p, r, scope, kinds, verbs)
 }
 
 // unaudited strips the audit wrapper: audit marks a request by its last mutating decision, and the directory's probes run after the handler's own Authorize.

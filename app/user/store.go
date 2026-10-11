@@ -23,6 +23,9 @@ func NewStore(db storage.DB) *Store {
 	return &Store{rows: authpg.New(db).Users, q: gen.New(db)}
 }
 
+// Directory is the auth module's store under this one, for writes that run through the directory.
+func (s *Store) Directory() directory.UserStore { return s.rows }
+
 // Get returns the user with the given id, or (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*User, error) {
 	u, err := s.rows.Get(ctx, id)

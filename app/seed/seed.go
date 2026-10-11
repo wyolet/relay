@@ -44,6 +44,7 @@ type Options struct {
 var nonCatalogKinds = map[string]bool{
 	"Team": true, "Project": true, "Group": true, "ServiceAccount": true,
 	"Key": true, "HostKey": true, "Role": true, "RoleBinding": true, "PolicyBinding": true,
+	"User": true,
 }
 
 // Result summarises a seed run. Per-kind counts are the rows the run
@@ -66,6 +67,7 @@ type Result struct {
 	PolicyBindings  int
 	Keys            int
 	Overlays        int
+	Users           int
 	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
 }
 
@@ -137,6 +139,9 @@ func splitSeedDocs(docs []manifest.Document, catalogKindsOnly bool) (keep []mani
 
 // docName is the metadata name of a document, for logs.
 func docName(d manifest.Document) string {
+	if d.User != nil {
+		return d.User.Metadata.Name
+	}
 	if m := d.Meta(); m != nil {
 		return m.Name
 	}
@@ -152,6 +157,7 @@ func tally(p *apply.Result) *Result {
 		"Policy": &res.Policies, "ServiceAccount": &res.ServiceAccounts,
 		"Group": &res.Groups, "Role": &res.Roles, "RoleBinding": &res.RoleBindings,
 		"PolicyBinding": &res.PolicyBindings, "Key": &res.Keys, "Overlay": &res.Overlays,
+		"User": &res.Users,
 	}
 	for _, e := range p.Entries {
 		if e.Action == apply.ActionSkipDirty {

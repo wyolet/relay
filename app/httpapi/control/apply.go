@@ -88,6 +88,8 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			Gov:      d.Catalog,
 			License:  applyLicense(d),
 			Authz:    d.Authz,
+			// The handlers' directory: grant probes skip the audit wrapper and an account change ends its sessions.
+			Directory: newDirectoryOps(d).dir,
 		})
 		if err != nil {
 			return nil, planFailure(ctx, d.Authz, err)

@@ -53,9 +53,8 @@ type Stores struct {
 	PolicyBinding  *policybinding.Store
 	Overlay        *overlay.Store
 
-	// User is read-only here: users are not a manifest kind, but group
-	// members and user-principal keys name them, so the resolver needs
-	// their slugs.
+	// User resolves the usernames group members, subjects and user-principal
+	// keys name, and holds the accounts User documents write.
 	User *user.Store
 }
 
@@ -182,6 +181,10 @@ func rowStates(r *Rows) map[string]map[string]rowState {
 	}
 	for _, x := range r.PolicyBindings {
 		add("PolicyBinding", &x.Meta)
+	}
+	// Accounts carry no metadata envelope; their username and last write stand in for it.
+	for _, u := range r.Users {
+		add("User", &meta.Metadata{Name: u.Username, UpdatedAt: u.UpdatedAt})
 	}
 	return out
 }

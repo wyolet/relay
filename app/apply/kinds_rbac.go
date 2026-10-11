@@ -14,11 +14,10 @@ import (
 )
 
 func (b *builder) planGroupsAndRoles(ctx context.Context, grpDocs []*manifest.GroupDTO, roleDocs []*manifest.RoleDTO) error {
-	s := b.opts.Stores
 	if err := planKind(ctx, b, kindWiring[manifest.GroupDTO, group.Group]{
 		Kind: "Group", Docs: grpDocs, Names: b.idx.Groups, Rows: b.rows.Groups,
 		To: manifest.ToGroup, Meta: func(g *group.Group) *meta.Metadata { return &g.Meta },
-		Upsert: s.Group.Upsert, Delete: s.Group.Delete,
+		Upsert: throughDirectory(b, infallible((*group.Group).ToDirectory)), Delete: deleteThroughDirectory(b, "Group"),
 		Check: refsFor(b, refcheck.Checker.Group),
 	}); err != nil {
 		return err
@@ -26,7 +25,7 @@ func (b *builder) planGroupsAndRoles(ctx context.Context, grpDocs []*manifest.Gr
 	if err := planKind(ctx, b, kindWiring[manifest.RoleDTO, role.Role]{
 		Kind: "Role", Docs: roleDocs, Names: b.idx.Roles, Rows: b.rows.Roles,
 		To: manifest.ToRole, Meta: func(r *role.Role) *meta.Metadata { return &r.Meta },
-		Upsert: s.Role.Upsert, Delete: s.Role.Delete,
+		Upsert: throughDirectory(b, infallible((*role.Role).ToDirectory)), Delete: deleteThroughDirectory(b, "Role"),
 		Check: refsFor(b, refcheck.Checker.Role),
 	}); err != nil {
 		return err
@@ -39,7 +38,7 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 	if err := planKind(ctx, b, kindWiring[manifest.RoleBindingDTO, rolebinding.RoleBinding]{
 		Kind: "RoleBinding", Docs: rbDocs, Names: b.idx.RoleBindings, Rows: b.rows.RoleBindings,
 		To: manifest.ToRoleBinding, Meta: func(x *rolebinding.RoleBinding) *meta.Metadata { return &x.Meta },
-		Upsert: s.RoleBinding.Upsert, Delete: s.RoleBinding.Delete,
+		Upsert: throughDirectory(b, infallible((*rolebinding.RoleBinding).ToDirectory)), Delete: deleteThroughDirectory(b, "RoleBinding"),
 		Check: refsFor(b, refcheck.Checker.RoleBinding),
 	}); err != nil {
 		return err

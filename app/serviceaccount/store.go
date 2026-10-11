@@ -18,6 +18,9 @@ type Store struct {
 
 func NewStore(db storage.DB) *Store { return &Store{rows: authpg.New(db).ServiceAccounts} }
 
+// Directory is the auth module's store under this one, for writes that run through the directory.
+func (s *Store) Directory() directory.Store[directory.ServiceAccount] { return s.rows }
+
 func (s *Store) List(ctx context.Context) ([]*ServiceAccount, error) {
 	rows, err := s.rows.List(ctx)
 	if err != nil {

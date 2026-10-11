@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/auth/directory"
 )
 
 // Action is what a plan entry would do to one row.
@@ -122,6 +123,11 @@ type Options struct {
 	// re-parent a row the same way an admin can. The control plane always
 	// supplies one, so a scoped caller still cannot chown across scopes.
 	Authz authz.Authorizer
+
+	// Directory writes the auth module's kinds. Nil builds one over Stores
+	// whose grant check probes Authz; the control plane passes its own, which
+	// also ends an account's sessions when apply changes it.
+	Directory *directory.Directory
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -233,6 +239,7 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 
 	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
 		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License}
+	b.dir, b.dirErr = directoryFor(opts)
 	if err := b.run(ctx, docs); err != nil {
 		return nil, err
 	}
