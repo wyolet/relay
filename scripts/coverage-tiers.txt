@@ -37,6 +37,7 @@ auth/authn			95
 auth/password			95
 auth/principal			95
 auth/rbac			95
+auth/session			93
 auth/token			85
 
 sdk/adapters/anthropic		75

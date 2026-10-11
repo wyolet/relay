@@ -127,7 +127,7 @@ func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("committed session not found: %v", err)
 	}
-	for _, want := range []string{keyOIDCSubject, keyOIDCSid, keyGroups, "https://idp|sub-1", "sid-42", "platform-eng"} {
+	for _, want := range []string{"oidc_subject", "oidc_sid", "idp_groups", "https://idp|sub-1", "sid-42", "platform-eng"} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("session payload missing %q", want)
 		}
