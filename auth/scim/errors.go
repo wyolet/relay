@@ -67,7 +67,8 @@ func toError(err error) *Error {
 	case errors.Is(err, directory.ErrNotFound):
 		return errorf(http.StatusNotFound, "", "resource not found")
 	case errors.Is(err, directory.ErrConflict):
-		return errorf(http.StatusConflict, typeUniqueness, "%s", err.Error())
+		// The directory's message names the taken value and may come from another account's row, which the client must not learn.
+		return errorf(http.StatusConflict, typeUniqueness, "uniqueness conflict")
 	case errors.Is(err, directory.ErrInvalid):
 		return badRequest(typeInvalidValue, "%s", err.Error())
 	case errors.Is(err, ErrRefused):
