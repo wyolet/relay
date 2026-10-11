@@ -102,7 +102,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		slog.Debug("relay control: serving embedded UI")
 	}
 	ctrlSrv := &http.Server{
-		Addr:              ":" + cfg.ControlPort,
+		Addr:              cfg.ControlAddr(),
 		Handler:           ctrlRouter,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -112,7 +112,6 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		// constraint and gains nothing from a response-duration cap here.
 	}
 	slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
-	ch := make(chan error, 1)
-	go func() { ch <- ctrlSrv.ListenAndServe() }()
+	_, ch := serve(ctrlSrv)
 	return ctrlSrv, ch
 }
