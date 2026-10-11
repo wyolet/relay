@@ -5,6 +5,7 @@ package integration_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,16 @@ func TestIntegration_ApplyPruneDeletesBindingsAtPrunedScopes(t *testing.T) {
 	st.bindRole(t, "alpha-viewers", roles["viewer"].Meta.ID, userID, "team", ids["alpha"])
 	st.bindRole(t, "search-viewers", roles["viewer"].Meta.ID, userID, "project", projects[0].Meta.ID)
 	st.bindRole(t, "beta-viewers", roles["viewer"].Meta.ID, userID, "team", ids["beta"])
+
+	// A bundle that keeps a binding at a scope it prunes is refused before anything is written.
+	declared := "---\napiVersion: relay.wyolet.dev/v1alpha2\nkind: RoleBinding\nmetadata: {name: search-readers, owner: {kind: project, name: search}}\n" +
+		"spec: {role: viewer, scope: {kind: project, name: search}, subjects: [{kind: user, name: dev}]}\n"
+	if code, _, raw := st.applyBundle(keep+declared, "prune=true&selector=managed=gitops"); code != http.StatusBadRequest || !strings.Contains(string(raw), "pruned in the same apply") {
+		t.Fatalf("prune keeping a binding at the pruned project = %d, want 400: %s", code, raw)
+	}
+	if got, err := st.stores.Team.Get(ctx, ids["alpha"]); err != nil || got == nil {
+		t.Fatalf("the refused prune deleted the team: %v", err)
+	}
 
 	code, plan, raw := st.applyBundle(keep, "prune=true&selector=managed=gitops")
 	if code != http.StatusOK || plan.action("Team", "alpha") != "delete" || plan.action("Project", "search") != "delete" {

@@ -96,6 +96,9 @@ func (p *planner) run() error {
 		create: granted((*dir).CreateRoleBinding), update: granted((*dir).UpdateRoleBinding), remove: (*dir).DeleteRoleBinding}); err != nil {
 		return err
 	}
+	if err := p.checkPrunedScopes(); err != nil {
+		return err
+	}
 	for i := len(p.deletes) - 1; i >= 0; i-- {
 		p.entries = append(p.entries, p.deletes[i]...)
 	}

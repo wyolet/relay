@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 func (b *builder) planTenancy(ctx context.Context, teamDocs []*manifest.TeamDTO, projDocs []*manifest.ProjectDTO) error {
@@ -90,6 +91,33 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 			if len(deps) > 0 || hidden > 0 {
 				return &InvalidError{Kind: e.Kind, Name: e.Name, Err: &project.DependentsError{Rows: deps, Hidden: hidden}}
 			}
+		}
+	}
+	return b.checkBindingsAtPrunedScopes()
+}
+
+// checkBindingsAtPrunedScopes refuses a RoleBinding document scoped to a team or project this run prunes, or to a project of a pruned team: the delete takes the scope's bindings with it, so the binding would be written and then lost.
+func (b *builder) checkBindingsAtPrunedScopes() error {
+	gone := map[meta.Owner]bool{}
+	for _, kind := range b.deletes {
+		for _, e := range kind {
+			switch e.Kind {
+			case "Team":
+				gone[meta.Owner{Kind: meta.OwnerTeam, ID: e.ID}] = true
+				for _, p := range b.rows.Projects {
+					if p.Spec.TeamID == e.ID {
+						gone[meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}] = true
+					}
+				}
+			case "Project":
+				gone[meta.Owner{Kind: meta.OwnerProject, ID: e.ID}] = true
+			}
+		}
+	}
+	// A binding's owner mirrors its scope.
+	for _, e := range b.entries {
+		if e.Kind == "RoleBinding" && gone[e.owner] {
+			return &InvalidError{Kind: e.Kind, Name: e.Name, Err: authmanifest.ErrScopePruned}
 		}
 	}
 	return nil

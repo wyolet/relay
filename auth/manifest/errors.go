@@ -46,6 +46,9 @@ var ErrPlainPassword = errors.New("plain-text passwords are refused; set passwor
 // ErrNoSignIn reports a User document that clears every identity of an account and leaves it no password.
 var ErrNoSignIn = errors.New("an account without a password keeps its identities; clearing them would leave it no way to sign in, so set a password in the same document or keep an identity")
 
+// ErrScopePruned reports a RoleBinding document whose team or project the same apply prunes, which would delete the binding right after writing it.
+var ErrScopePruned = errors.New("scope is pruned in the same apply, which deletes the binding with it; drop the binding or keep its scope")
+
 // ErrOwnerDerived reports a metadata.owner, which these kinds derive rather than take.
 var ErrOwnerDerived = errors.New("metadata.owner is not accepted: the owner is derived from the kind and its spec (the system for Team, Role and Group, the parent for Project and ServiceAccount, the scope for RoleBinding)")
 
