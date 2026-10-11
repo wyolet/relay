@@ -34,6 +34,7 @@ jobq/payload			66
 
 auth/apikey			85
 auth/password			95
+auth/rbac			95
 auth/token			85
 
 sdk/adapters/anthropic		75
