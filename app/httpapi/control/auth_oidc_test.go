@@ -156,6 +156,8 @@ func (f *fakeUsers) ByOIDCSubject(_ context.Context, s string) (*user.User, erro
 	return f.bySubject[s], nil
 }
 
+func (f *fakeUsers) Create(ctx context.Context, u *user.User) error { return f.Upsert(ctx, u) }
+
 func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
 	f.bySubject[u.OIDCSubject] = u
 	f.byName[u.Username] = u

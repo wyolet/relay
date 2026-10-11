@@ -7,8 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // refusingDB records whether the store was reached and fails every query, so
@@ -30,11 +28,15 @@ func (d *refusingDB) CopyFrom(context.Context, pgx.Identifier, []string, pgx.Cop
 	return 0, errors.New("refusingDB")
 }
 
+func (d *refusingDB) Begin(context.Context) (pgx.Tx, error) {
+	return nil, errors.New("refusingDB")
+}
+
 // Pods booting together must not each mint an id for the same missing role,
 // so every read and write of the seed runs inside the caller's lock.
 func TestSeedBuiltinsRunsInsideTheLock(t *testing.T) {
 	db := &refusingDB{}
-	s := NewStore(gen.New(db))
+	s := NewStore(db)
 
 	locked, unlocked := false, false
 	lock := func(ctx context.Context, fn func(context.Context) error) error {

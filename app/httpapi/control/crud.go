@@ -328,7 +328,11 @@ func registerKind[T any](
 				}
 			}
 			audit.Changed(ctx, []string{audit.AnyField})
-			if err := store.Upsert(ctx, v); err != nil {
+			create := store.Upsert
+			if w, ok := store.(kindWriter[T]); ok {
+				create = w.Create
+			}
+			if err := create(ctx, v); err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
 			created, err := store.Get(ctx, m.ID)
@@ -403,7 +407,11 @@ func registerKind[T any](
 		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
 		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
-		if err := store.Upsert(ctx, v); err != nil {
+		update := store.Upsert
+		if w, ok := store.(kindWriter[T]); ok {
+			update = w.Update
+		}
+		if err := update(ctx, v); err != nil {
 			return nil, mapWriteErr(singular, in.ID, err)
 		}
 		updated, err := store.Get(ctx, in.ID)

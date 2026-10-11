@@ -124,7 +124,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		t.Fatalf("catalog.Bootstrap: %v", err)
 	}
 
-	usersStore := user.NewStore(gen.New(st.Pool()))
+	usersStore := user.NewStore(st.Pool())
 	// Token verification reads the per-user version off the snapshot. The
 	// composition root attaches the source before the first build; Bootstrap
 	// has already built one here, so refresh the map straight away. Before

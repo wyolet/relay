@@ -4,10 +4,13 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/url"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // registers the pgx5:// driver
+	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
@@ -17,33 +20,55 @@ const MigrationsTable = "auth_schema_migrations"
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// Migrate runs the module's pending up-migrations against dsn, a postgres:// or postgresql:// URL. Running it when nothing is pending does nothing.
+// Migrate runs the module's pending up-migrations against dsn, a postgres:// or postgresql:// URL. Running it when nothing is pending does nothing. A clean schema at a version newer than this binary embeds is left alone, so an older binary still boots during a rolling upgrade or a rollback; that relies on the module's migrations staying backward-compatible.
 func Migrate(dsn string) error {
-	m, err := newMigrate(dsn)
+	src, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("auth migrations: open source: %w", err)
+	}
+	embeddedMax, err := lastVersion(src)
+	if err != nil {
+		return fmt.Errorf("auth migrations: read source: %w", err)
+	}
+	target, err := migrateURL(dsn)
 	if err != nil {
 		return err
 	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, target)
+	if err != nil {
+		return fmt.Errorf("auth migrations: init: %w", err)
+	}
 	defer m.Close()
+	current, dirty, err := m.Version()
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
+		return fmt.Errorf("auth migrations: read schema version: %w", err)
+	}
+	if err == nil && !dirty && current > embeddedMax {
+		slog.Warn("auth migrations: schema is newer than this binary; skipping", "db_version", current, "embedded_max", embeddedMax)
+		return nil
+	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("auth migrations: up: %w", err)
 	}
 	return nil
 }
 
-func newMigrate(dsn string) (*migrate.Migrate, error) {
-	src, err := iofs.New(migrationFiles, "migrations")
+// lastVersion returns the highest migration version src holds.
+func lastVersion(src source.Driver) (uint, error) {
+	v, err := src.First()
 	if err != nil {
-		return nil, fmt.Errorf("auth migrations: open source: %w", err)
+		return 0, err
 	}
-	target, err := migrateURL(dsn)
-	if err != nil {
-		return nil, err
+	for {
+		next, err := src.Next(v)
+		if errors.Is(err, fs.ErrNotExist) {
+			return v, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		v = next
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, target)
-	if err != nil {
-		return nil, fmt.Errorf("auth migrations: init: %w", err)
-	}
-	return m, nil
 }
 
 // migrateURL points dsn at golang-migrate's pgx driver and at MigrationsTable.

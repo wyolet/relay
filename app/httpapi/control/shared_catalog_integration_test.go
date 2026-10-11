@@ -18,7 +18,6 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -50,7 +49,7 @@ func TestHostWritesNeedACatalogRole(t *testing.T) {
 		t.Fatal("no catalog-editor role seeded")
 	}
 
-	users := user.NewStore(gen.New(pool))
+	users := user.NewStore(pool)
 	editorID, nobodyID := ids.New(), ids.New()
 	for id, name := range map[string]string{editorID: "editor", nobodyID: "nobody"} {
 		if err := users.Upsert(ctx, &user.User{ID: id, Username: name}); err != nil {

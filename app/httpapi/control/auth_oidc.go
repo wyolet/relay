@@ -30,11 +30,11 @@ import (
 const oidcFlowCookie = "relay_oidc_flow"
 
 // oidcUserStore is the narrow user-store surface the callback needs.
-// *user.Store satisfies it; tests supply a fake.
+// directoryUsers satisfies it; tests supply a fake.
 type oidcUserStore interface {
 	ByUsername(ctx context.Context, username string) (*user.User, error)
 	ByOIDCSubject(ctx context.Context, subject string) (*user.User, error)
-	Upsert(ctx context.Context, u *user.User) error
+	Create(ctx context.Context, u *user.User) error
 }
 
 // sessionLogin is the slice of session.Manager the callback needs.
@@ -51,7 +51,8 @@ type oidcDeps struct {
 }
 
 func newOIDCDeps(d Deps) *oidcDeps {
-	return newOIDC(func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) }, d.Users, d.Sessions, d.CookieSecure)
+	users := directoryUsers{Store: d.Users, ops: newDirectoryOps(d)}
+	return newOIDC(func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) }, users, d.Sessions, d.CookieSecure)
 }
 
 func newOIDC(cfg func() *settings.AuthOIDC, users oidcUserStore, sessions sessionLogin, cookieSecure bool) *oidcDeps {
@@ -197,7 +198,7 @@ func (od *oidcDeps) provision(ctx context.Context, subject string, c oidc.Claims
 		Email:       c.Email,
 		OIDCSubject: subject,
 	}
-	if err := od.users.Upsert(ctx, u); err != nil {
+	if err := od.users.Create(ctx, u); err != nil {
 		return nil, err
 	}
 	return u, nil

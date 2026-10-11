@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
@@ -115,6 +116,9 @@ type Stores struct {
 	// Users is the account store, here so a cross-row edit (see InTx) can
 	// write account rows in the same transaction as catalog rows.
 	Users *user.Store
+
+	// Directory is the auth module's view of the account, tenancy and RBAC tables, the stores its operations write through.
+	Directory directory.Stores
 
 	// pool is what InTx opens its transaction on.
 	pool *pgxpool.Pool

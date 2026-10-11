@@ -74,17 +74,17 @@ func NewStores(pool *pgxpool.Pool, masterKey []byte) *Stores {
 		Pricing:     pricing.NewStore(pool),
 		HostBinding: binding.NewStore(pool),
 		Key:         key.NewStore(q),
-		Team:        team.NewStore(q),
-		Project:     project.NewStore(q),
+		Team:        team.NewStore(pool),
+		Project:     project.NewStore(pool),
 
-		ServiceAccount: serviceaccount.NewStore(q),
+		ServiceAccount: serviceaccount.NewStore(pool),
 		Group:          group.NewStore(pool),
-		Role:           role.NewStore(q),
+		Role:           role.NewStore(pool),
 		RoleBinding:    rolebinding.NewStore(pool),
 		PolicyBinding:  policybinding.NewStore(pool),
 		Overlay:        overlay.NewStore(q),
 
-		User: user.NewStore(q),
+		User: user.NewStore(pool),
 	}
 }
 

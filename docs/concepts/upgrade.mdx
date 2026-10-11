@@ -52,6 +52,8 @@ If the new version needs to be backed out:
 
 If a migration fails part-way, the schema is left marked dirty and every later migrate refuses it. Repair the schema by hand (or restore the backup), then record the version it is now at with `relay migrate force <version>`; this clears the flag without running any migration.
 
+`relay migrate down` and `relay migrate force` read and write only relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`, and neither command changes it.
+
 <Warning>
 `relay migrate down` is destructive — it drops the tables and columns its down-migrations remove, including any teams, projects, roles, bindings, and service accounts created since the upgrade. Take the backup in step 1 before you need this, not after.
 </Warning>

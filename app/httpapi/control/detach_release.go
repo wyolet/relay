@@ -166,7 +166,11 @@ func (d Deps) releaseRole(ctx context.Context, it referenceItem, t detachTarget)
 	}
 	in := &userUpdateInput{ID: u.ID}
 	in.Body.Roles = &roles
-	if _, err := updateUser(ctx, d.Users, d.Authz, nil, in); err != nil {
+	// No revoker: ending a session cannot roll back with the transaction.
+	inTx := d
+	inTx.Sessions = nil
+	users := directoryUsers{Store: d.Users, ops: newDirectoryOps(inTx)}
+	if _, err := updateUser(ctx, users, d.Authz, in); err != nil {
 		return nil, failOrKeep(err)
 	}
 	return &releasedRow{item: it, action: "users.update", fields: []string{"roles"}}, nil

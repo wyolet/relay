@@ -24,7 +24,6 @@ import (
 
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -588,7 +587,7 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 	p := testPool(t, dsn)
 	ctx := context.Background()
 	userID := ids.New()
-	if err := user.NewStore(gen.New(p)).Upsert(ctx, &user.User{ID: userID, Username: "alice"}); err != nil {
+	if err := user.NewStore(p).Upsert(ctx, &user.User{ID: userID, Username: "alice"}); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 

@@ -22,7 +22,6 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/apikey"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -66,7 +65,7 @@ func policylessCaptureCatalog(t *testing.T, upstreamURL string) (*appcatalog.Cat
 	}
 
 	u := &user.User{ID: meta.NewID(), Username: "capture-" + sfx}
-	if err := user.NewStore(gen.New(pool)).Upsert(ctx, u); err != nil {
+	if err := user.NewStore(pool).Upsert(ctx, u); err != nil {
 		t.Fatalf("upsert user: %v", err)
 	}
 	plaintexts := map[bool]string{}

@@ -15,7 +15,6 @@ import (
 
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/internal/storage"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
@@ -27,7 +26,7 @@ const roleSeedLock int64 = 0x52454C41595F5242
 // re-seed after that must not re-mint the ids RoleBindings point at.
 func TestIntegration_ConcurrentSeedBuiltinsProducesEachRoleOnce(t *testing.T) {
 	pool, ctx := storagetest.Pool(t), context.Background()
-	store := role.NewStore(gen.New(pool))
+	store := role.NewStore(pool)
 
 	builtins, err := role.Builtins()
 	if err != nil {

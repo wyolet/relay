@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
-	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // builtinRoleSeedLock is the advisory-lock id the built-in role seed
@@ -36,7 +35,7 @@ func loadUsers(bootCtx context.Context, cfg *config.Config, st *storagemod.Stora
 
 	// DB-backed users: login reads the table; YAML identity is the
 	// seed-if-absent bootstrap (and break-glass fallback at login).
-	usersStore := user.NewStore(gen.New(st.Pool()))
+	usersStore := user.NewStore(st.Pool())
 	if err := user.SeedFromIdentity(bootCtx, usersStore, idStore, slog.Default()); err != nil {
 		slog.Error("user seed from identity YAML failed", "err", err)
 		os.Exit(1)
