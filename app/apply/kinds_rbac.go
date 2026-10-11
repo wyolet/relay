@@ -18,7 +18,8 @@ func (b *builder) planGroupsAndRoles(ctx context.Context, grpDocs []*manifest.Gr
 		Kind: "Group", Docs: grpDocs, Names: b.idx.Groups, Rows: b.rows.Groups,
 		To: manifest.ToGroup, Meta: func(g *group.Group) *meta.Metadata { return &g.Meta },
 		Upsert: throughDirectory(b, infallible((*group.Group).ToDirectory)), Delete: deleteThroughDirectory(b, "Group"),
-		Check: groupChecks(b),
+		Check:       groupChecks(b),
+		CheckDelete: func(g *group.Group) error { return b.refuseManagedGroup(g.Meta.ID) },
 	}); err != nil {
 		return err
 	}

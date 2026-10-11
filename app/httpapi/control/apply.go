@@ -170,6 +170,9 @@ func planFailure(ctx context.Context, a authz.Authorizer, err error) error {
 	if errors.As(err, &ge) {
 		return huma.Error403Forbidden(ge.Error())
 	}
+	if me, ok := errors.AsType[*directory.ManagedError](err); ok {
+		return &applyFailure{status: http.StatusConflict, Message: managedMessage(me)}
+	}
 	if errors.Is(err, license.ErrRequired) || errors.Is(err, authz.ErrForbidden) {
 		return huma.Error403Forbidden(err.Error())
 	}
