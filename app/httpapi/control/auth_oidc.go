@@ -246,8 +246,7 @@ func (od *oidcDeps) login(_ http.ResponseWriter, r *http.Request, u *user.User, 
 	return nil
 }
 
-// provision creates a user row for a first-time OIDC login. Username derives
-// from the email local part (or the subject tail) with a collision suffix.
+// provision creates a user row for a first-time OIDC login. Username derives from preferred_username, else the email local part, else the literal "user", with a collision suffix.
 func (od *oidcDeps) provision(ctx context.Context, subject string, c oidc.Claims) (*user.User, error) {
 	base := c.PreferredUsername
 	if base == "" && c.Email != "" {

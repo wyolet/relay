@@ -84,6 +84,13 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 
 The DB-backed `auth:oidc` section names its client secret by env var (`clientSecretEnv`). The name must start with `RELAY_OIDC_` (for example `RELAY_OIDC_CLIENT_SECRET`) or `WYOLET_OIDC_`, the issuer must be `https://` (unless `RELAY_COOKIE_SECURE=false`), and only an admin may change the section. A stored section that breaks these rules is read as disabled and logged at startup; rename the variable and write the section again.
 
+Set the issuer to the `issuer` value of the provider's discovery document (`<issuer>/.well-known/openid-configuration`). A configured issuer that differs from it only by a trailing slash is accepted, and accounts are matched with or without the slash; ID tokens must carry the document's `issuer` exactly.
+
+With Zitadel:
+
+- Turn on **User Info inside ID Token** (`idTokenUserinfoAssertion`) for the application. Without it the ID token carries no email or username, and new accounts get generic usernames (`user`, `user-2`, …).
+- Zitadel has no flat `groups` claim, which relay reads groups from by default (`groupsClaim`). Add an Action that collects the role keys of the user's grants (`ctx.v1.user.grants`) and sets them as a `groups` claim, and attach it to the **Complement Token** flow on both the **Pre Userinfo creation** and **Pre access token creation** triggers.
+
 ### Admin UI & CORS
 
 | Variable | Default | Description |
