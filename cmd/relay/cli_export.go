@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/auth/apikey"
 )
 
 // runExport implements `relay export`.
@@ -51,7 +52,7 @@ func runKeygen(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	g, err := key.Generate()
+	g, err := apikey.Generate(key.TokenPrefix)
 	if err != nil {
 		return err
 	}
@@ -59,6 +60,6 @@ func runKeygen(args []string) error {
 		fmt.Println(g.Prefix)
 		return nil
 	}
-	fmt.Printf("plaintext: %s\nkeyHash:   %s\nprefix:    %s\n", g.Plaintext, g.KeyHash, g.Prefix)
+	fmt.Printf("plaintext: %s\nkeyHash:   %s\nprefix:    %s\n", g.Plaintext, g.Hash, g.Prefix)
 	return nil
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/apikey"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
@@ -48,15 +49,15 @@ func TestIntegration_ConcurrentRotatesLeaveOneLiveHash(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = users.Delete(ctx, u.ID) })
 
-	gen0, err := key.Generate()
+	gen0, err := apikey.Generate(key.TokenPrefix)
 	if err != nil {
-		t.Fatalf("key.Generate: %v", err)
+		t.Fatalf("apikey.Generate: %v", err)
 	}
 	k := &key.Key{Meta: meta.Metadata{
 		ID: meta.NewID(), Name: "rotate-race", Owner: meta.Owner{Kind: meta.OwnerUser, ID: u.ID},
 	}}
 	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: u.ID}
-	k.Spec.KeyHash = gen0.KeyHash
+	k.Spec.KeyHash = gen0.Hash
 	k.Spec.Prefix = gen0.Prefix
 	if err := stores.Key.Upsert(ctx, k); err != nil {
 		t.Fatalf("upsert key: %v", err)

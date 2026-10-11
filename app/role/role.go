@@ -12,10 +12,11 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/auth/rbac"
 )
 
 // Wildcard matches any kind or verb inside a rule.
-const Wildcard = "*"
+const Wildcard = rbac.Wildcard
 
 // Kinds is the closed set a rule may name: the control-API plurals plus
 // the wildcard. Sorted — membership is a binary search.
@@ -92,16 +93,7 @@ func (r *Role) Validate() error {
 // its kinds hold kind or "*" and its verbs hold verb or "*".
 func (r *Role) Allows(kind, verb string) bool {
 	for _, rule := range r.Spec.Rules {
-		if covers(rule.Kinds, kind) && covers(rule.Verbs, verb) {
-			return true
-		}
-	}
-	return false
-}
-
-func covers(set []string, want string) bool {
-	for _, v := range set {
-		if v == Wildcard || v == want {
+		if (rbac.Rule{Kinds: rule.Kinds, Verbs: rule.Verbs}).Allows(kind, verb) {
 			return true
 		}
 	}

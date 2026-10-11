@@ -28,6 +28,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -161,7 +162,7 @@ func TestMintToken_Claims(t *testing.T) {
 		}
 	})
 
-	claims, err := crypto.ParseToken(f.signer.PublicKey(), out.Body.Token)
+	claims, err := authtoken.Parse[crypto.TokenClaims](f.signer.PublicKey(), out.Body.Token)
 	if err != nil {
 		t.Fatalf("the minted token does not verify: %v", err)
 	}

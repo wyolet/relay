@@ -1,9 +1,13 @@
 package user
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wyolet/relay/auth/password"
+)
 
 func TestVerifyPassword(t *testing.T) {
-	hash, err := HashPassword("s3cret")
+	hash, err := password.Hash("s3cret")
 	if err != nil {
 		t.Fatal(err)
 	}

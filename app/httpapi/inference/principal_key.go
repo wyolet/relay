@@ -1,20 +1,19 @@
 package inference
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/auth/apikey"
 )
 
 // keyPrincipal authenticates a key bearer, writing the 401 and reporting
 // false when the key is unknown or no longer usable.
 func keyPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, bearer string) (*Principal, *key.Key, bool) {
-	hash := hashToken(bearer)
+	hash := apikey.Hash(bearer)
 	k, matchedPrevious := snap.KeyByHash(hash)
 	if k == nil {
 		writeAuthErr(w, "invalid api key")
@@ -82,9 +81,4 @@ func buildPrincipal(snap *appcatalog.Snapshot, k *key.Key, hash string) *Princip
 		}
 	}
 	return p
-}
-
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }

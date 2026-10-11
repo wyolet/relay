@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/meta"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -26,7 +27,7 @@ func mintToken(t testing.TB, priv ed25519.PrivateKey, kid, userID, projectID str
 	if mutate != nil {
 		mutate(&claims)
 	}
-	tok, err := crypto.SignToken(priv, kid, claims)
+	tok, err := authtoken.Sign(priv, kid, claims)
 	if err != nil {
 		t.Fatalf("sign token: %v", err)
 	}

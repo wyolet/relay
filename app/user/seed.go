@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -32,8 +33,8 @@ func SeedFromIdentity(ctx context.Context, s *Store, id *identity.Store, log *sl
 			continue
 		}
 		hash := yu.Spec.Password.Get()
-		if hash != "" && !isBcrypt(hash) {
-			hash, err = HashPassword(hash)
+		if hash != "" && !password.IsBcryptHash(hash) {
+			hash, err = password.Hash(hash)
 			if err != nil {
 				return fmt.Errorf("user seed: hash %q: %w", username, err)
 			}

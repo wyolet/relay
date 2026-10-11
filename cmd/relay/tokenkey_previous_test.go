@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/settings"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/crypto"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
@@ -65,7 +66,7 @@ func TestBootLoadsThePreviousSigningKey(t *testing.T) {
 	retired := ed25519.NewKeyFromSeed(previous)
 	claims := crypto.TokenClaims{Sub: "user:u-1", Exp: time.Now().Add(time.Hour).Unix()}
 	retiredPub, _ := retired.Public().(ed25519.PublicKey)
-	token, err := crypto.SignToken(retired, crypto.KeyID(retiredPub), claims)
+	token, err := authtoken.Sign(retired, authtoken.KeyID(retiredPub), claims)
 	if err != nil {
 		t.Fatalf("sign with the retired key: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestBootLoadsThePreviousSigningKey(t *testing.T) {
 	// And so does one minted under the live key.
 	livePriv := ed25519.NewKeyFromSeed(current)
 	livePub, _ := livePriv.Public().(ed25519.PublicKey)
-	live, err := crypto.SignToken(livePriv, crypto.KeyID(livePub), claims)
+	live, err := authtoken.Sign(livePriv, authtoken.KeyID(livePub), claims)
 	if err != nil {
 		t.Fatalf("sign with the live key: %v", err)
 	}

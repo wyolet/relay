@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
+	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -27,7 +28,7 @@ func TestVerifiedClaimsAreCachedPerBearer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.tokens.keys.Store(&verifyKeys{current: otherPub, currentKID: crypto.KeyID(otherPub)})
+	f.tokens.keys.Store(&verifyKeys{current: otherPub, currentKID: authtoken.KeyID(otherPub)})
 	if _, ok := f.tokens.verified(token, time.Now()); !ok {
 		t.Fatal("second verification missed the cache")
 	}
@@ -66,7 +67,7 @@ func TestExpiredCacheEntryIsNotServed(t *testing.T) {
 		// the entry being returned as live past its expiry.
 		t.Log("expired entry correctly missed and re-verified")
 	}
-	ent := f.tokens.cache.get(hashToken(token), now.Add(2*time.Minute))
+	ent := f.tokens.cache.get(sha(token), now.Add(2*time.Minute))
 	if ent != nil {
 		t.Fatal("cache served an entry past the token's expiry")
 	}
@@ -132,7 +133,7 @@ func TestCacheDisabledStillVerifies(t *testing.T) {
 	if _, ok := f.tokens.verified(token, time.Now()); !ok {
 		t.Fatal("verification failed with the cache off")
 	}
-	if ent := f.tokens.cache.get(hashToken(token), time.Now()); ent != nil {
+	if ent := f.tokens.cache.get(sha(token), time.Now()); ent != nil {
 		t.Fatal("an entry was stored with the cache off")
 	}
 }

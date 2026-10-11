@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/auth/apikey"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -61,7 +62,7 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *createKeyInput) (*createKeyResponse, error) {
-		gen, err := key.Generate()
+		gen, err := apikey.Generate(key.TokenPrefix)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -94,7 +95,7 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		k.Spec.Enabled = in.Body.Spec.Enabled
 		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed
 		k.Spec.PayloadLoggingEnabled = in.Body.Spec.PayloadLoggingEnabled
-		k.Spec.KeyHash = gen.KeyHash
+		k.Spec.KeyHash = gen.Hash
 		k.Spec.Prefix = gen.Prefix
 
 		if err := k.Validate(); err != nil {

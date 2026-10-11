@@ -6,11 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -126,24 +127,47 @@ func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("committed session not found: %v", err)
 	}
-	for _, want := range []string{keyOIDCSubject, keyOIDCSid, keyGroups, "https://idp|sub-1", "sid-42", "platform-eng"} {
+	for _, want := range []string{"oidc_subject", "oidc_sid", "idp_groups", "https://idp|sub-1", "sid-42", "platform-eng"} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("session payload missing %q", want)
 		}
 	}
 
-	next := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a := actor.From(r.Context())
-		if a == nil || a.UserID != "u-1" || a.Username != "alice" {
-			t.Errorf("actor did not round-trip: %+v", a)
-		}
-		if a == nil || len(a.IdPGroups) != 1 || a.IdPGroups[0] != "platform-eng" {
-			t.Errorf("IdP groups did not round-trip: %+v", a)
-		}
-	}))
-	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(cookies[0])
-	next.ServeHTTP(httptest.NewRecorder(), req)
+	p := principalFor(t, m, cookies[0])
+	if p == nil || p.ID != "u-1" || p.Username != "alice" || p.Kind != principal.KindUser || p.Credential.Kind != principal.CredentialSession {
+		t.Errorf("principal did not round-trip: %+v", p)
+	}
+	if p == nil || len(p.Groups) != 1 || p.Groups[0] != "platform-eng" {
+		t.Errorf("IdP groups did not round-trip: %+v", p)
+	}
+	if p == nil || p.Issuer != "https://idp" || p.Subject != "sub-1" {
+		t.Errorf("IdP identity did not round-trip: %+v", p)
+	}
+	if p == nil || !slices.Equal(p.Subjects, []string{"user:u-1", "group:platform-eng", "group:system:authenticated"}) || !slices.Equal(p.Roles, []string{"admin"}) {
+		t.Errorf("subjects and roles did not round-trip: %+v", p)
+	}
+}
+
+func TestNewWithGroupsAddsLocalGroups(t *testing.T) {
+	m := NewWithGroups(kv.NewMem(), false, "sess:", func(userID string) []string { return []string{"local-of-" + userID} })
+	p := principalFor(t, m, loginCookie(t, m, "u-1"))
+	if p == nil || !slices.Equal(p.Subjects, []string{"user:u-1", "group:local-of-u-1", "group:system:authenticated"}) {
+		t.Errorf("principal = %+v", p)
+	}
+}
+
+// A request with no session, or a session that names no user, is not the session's to claim.
+func TestAuthenticateLeavesAnonymousRequests(t *testing.T) {
+	m := New(kv.NewMem(), false, "sess:")
+	if p := principalFor(t, m, nil); p != nil {
+		t.Errorf("no cookie authenticated as %+v", p)
+	}
+	if p := principalFor(t, m, &http.Cookie{Name: cookieName, Value: "unknown"}); p != nil {
+		t.Errorf("unknown token authenticated as %+v", p)
+	}
+	if p := principalFor(t, m, loginCookie(t, m, "")); p != nil {
+		t.Errorf("a session with no user id authenticated as %+v", p)
+	}
 }
 
 // commitFailStore reads fine but fails writes — exercises scs's mid-response

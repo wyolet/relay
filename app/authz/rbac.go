@@ -2,7 +2,6 @@ package authz
 
 import (
 	"context"
-	"strings"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/meta"
@@ -10,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/rbac"
 )
 
 // catalogKinds are the shared template kinds every authenticated caller may
@@ -118,7 +118,7 @@ type Snapshot interface {
 // row being touched. Default deny.
 //
 // Everything it reads comes from the in-memory catalog snapshot; Snap is
-// catalog.Catalog.Current.
+// catalog.Catalog.Current. The auth/rbac engine evaluates; relay's shortcuts are the product rules it is handed.
 type RBAC struct{ Snap func() Snapshot }
 
 // Authorize implements Authorizer.
@@ -127,106 +127,37 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 	if !a.IsAuthenticated() {
 		return ErrUnauthenticated
 	}
-	if adminActor(a) {
-		return nil
-	}
-	kind, verb := splitAction(action)
-	if res.Owner != nil && ownedBy(*res.Owner, a) && !sharedCatalogKinds[kind] {
-		return nil // personal row: its owner holds every verb on it
-	}
-	if (verb == "get" || verb == "list") && catalogKinds[kind] &&
-		(res.Owner == nil || isCatalogOwner(*res.Owner)) {
-		return nil
-	}
-	// A policy owned by the system or by a host is shared configuration, not
-	// tenant data — the tier menu an upstream publishes and the relay-wide
-	// defaults. A scoped admin has to read them to bind or reference one.
-	if (verb == "get" || verb == "list") && kind == "policies" && res.Owner != nil &&
-		(res.Owner.Kind == meta.OwnerSystem || res.Owner.Kind == meta.OwnerHost) {
-		return nil
-	}
-	// A system-owned Role is a shared rule set, not tenant data: creating a
-	// binding means reading the role it names, and a scoped admin holds no
-	// binding at the global scope the row lives in.
-	if (verb == "get" || verb == "list") && kind == "roles" &&
-		res.Owner != nil && res.Owner.Kind == meta.OwnerSystem {
-		return nil
-	}
-	// A list call names no row and its result is filtered through Visible, so
-	// the call itself needs no binding: a deployment whose bindings have not
-	// been written yet answers an empty list rather than 403 everywhere.
-	if verb == "list" && res.Owner == nil && scopedKinds[kind] {
-		return nil
-	}
-	if r.Snap == nil {
-		return ErrForbidden
-	}
-	snap := r.Snap()
-	if snap == nil {
-		return ErrForbidden
-	}
-	// Working in a project includes resolving the team it belongs to, so a
-	// binding at a project reads that project's team row.
-	if (verb == "get" || verb == "list") && kind == "teams" && res.ID != "" &&
-		boundInTeamProject(snap, a.Subjects, res.ID) {
-		return nil
-	}
-	chain := snap.ScopeChainFor(res.Kind, res.ID, res.Owner)
-	// A list call names no row; the rows it returns are filtered by Visible
-	// afterwards, so any binding granting the verb admits the call.
-	anyScope := verb == "list" && res.Owner == nil
-	for _, subj := range a.Subjects {
-		for _, b := range snap.RoleBindingsForSubject(subj) {
-			if !anyScope && !inChain(chain, b.Spec.Scope) {
-				continue
-			}
-			if role, ok := snap.Role(b.Spec.RoleID); ok && role.Allows(kind, verb) {
-				return nil
-			}
-		}
-	}
-	return ErrForbidden
+	ev := acquireEvaluation(r.Snap, a)
+	defer ev.release()
+	engine := ev.engine()
+	return engine.Authorize(ctx, &ev.principal, action, ev.resource(res))
 }
 
 // Visible implements Scoper. Seeing one row is exactly the get verb on it,
 // so list filtering and per-row reads can never disagree.
 func (r RBAC) Visible(ctx context.Context, kind, id string, owner meta.Owner) bool {
-	return r.Authorize(ctx, plural(kind)+".get", Resource{Kind: kind, ID: id, Owner: &owner}) == nil
-}
-
-// boundInTeamProject reports whether any of subjects holds a binding at a
-// project belonging to teamID.
-func boundInTeamProject(snap Snapshot, subjects []string, teamID string) bool {
-	projects := snap.ProjectsInTeam(teamID)
-	if len(projects) == 0 {
+	a := actor.From(ctx)
+	if !a.IsAuthenticated() {
 		return false
 	}
-	for _, subj := range subjects {
-		for _, b := range snap.RoleBindingsForSubject(subj) {
-			if b.Spec.Scope.Kind != meta.OwnerProject {
-				continue
-			}
-			for _, p := range projects {
-				if p.Meta.ID == b.Spec.Scope.ID {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	ev := acquireEvaluation(r.Snap, a)
+	defer ev.release()
+	engine := ev.engine()
+	// The kind half of "<plural>.get", without building the string.
+	actionKind, _ := rbac.SplitAction(plural(kind))
+	return engine.Visible(ctx, &ev.principal, actionKind, ev.resource(Resource{Kind: kind, ID: id, Owner: &owner}))
 }
 
-func inChain(chain []meta.Owner, scope meta.Owner) bool {
-	for _, o := range chain {
-		if o.Kind == scope.Kind && o.ID == scope.ID {
-			return true
-		}
+// scopeOf is the engine's ScopeOf over relay's rules: the owned rows of kind the caller in ctx may perform verb on.
+func (r RBAC) scopeOf(ctx context.Context, verb, kind string) (rbac.Filter, error) {
+	a := actor.From(ctx)
+	if !a.IsAuthenticated() {
+		return rbac.Filter{}, ErrUnauthenticated
 	}
-	return false
-}
-
-func ownedBy(o meta.Owner, a *actor.Actor) bool {
-	return o.Kind == meta.OwnerUser && o.ID != "" && o.ID == a.UserID
+	ev := acquireEvaluation(r.Snap, a)
+	defer ev.release()
+	engine := ev.engine()
+	return engine.ScopeOf(ctx, &ev.principal, verb, kind)
 }
 
 func adminActor(a *actor.Actor) bool {
@@ -240,26 +171,4 @@ func adminActor(a *actor.Actor) bool {
 func IsAdmin(ctx context.Context) bool {
 	a := actor.From(ctx)
 	return a != nil && a.IsAuthenticated() && adminActor(a)
-}
-
-func isCatalogOwner(o meta.Owner) bool {
-	switch o.Kind {
-	case meta.OwnerSystem, meta.OwnerProvider, meta.OwnerHost:
-		return true
-	}
-	return false
-}
-
-// splitAction cuts "<plural>.<verb>" into its two halves. Sub-resource
-// actions carry a middle segment ("models.overlay.get"): the kind is
-// everything before the first dot, the verb everything after the last.
-func splitAction(action string) (kind, verb string) {
-	kind, verb = action, action
-	if i := strings.IndexByte(action, '.'); i >= 0 {
-		kind = action[:i]
-	}
-	if i := strings.LastIndexByte(action, '.'); i >= 0 {
-		verb = action[i+1:]
-	}
-	return kind, verb
 }

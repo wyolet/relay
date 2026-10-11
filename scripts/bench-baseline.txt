@@ -15,6 +15,6 @@ app/policy/BenchmarkReserveInboundToken 120
 app/policy/BenchmarkResolveRules 8
 app/routing/BenchmarkResolvePolicyless 3
 app/routing/BenchmarkResolveTwoBindings 5
-pkg/crypto/BenchmarkParseToken 19
-pkg/crypto/BenchmarkSignToken 12
-pkg/crypto/BenchmarkTokenKeyID 9
+auth/token/BenchmarkHeaderKeyID 9
+auth/token/BenchmarkParse 19
+auth/token/BenchmarkSign 12

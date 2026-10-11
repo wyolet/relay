@@ -3,8 +3,6 @@ package inference
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +17,7 @@ import (
 	apprl "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/auth/apikey"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -261,8 +260,7 @@ func relayKeyHashSubject(ctx context.Context) string {
 	}
 	// Fallback shouldn't happen — KeyByHash matched by hash.
 	cls := ClassificationFrom(ctx)
-	sum := sha256.Sum256([]byte(cls.Key))
-	return hex.EncodeToString(sum[:])
+	return apikey.Hash(cls.Key)
 }
 
 func mapProxyErr(w http.ResponseWriter, err error) {

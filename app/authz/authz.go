@@ -16,19 +16,19 @@ package authz
 
 import (
 	"context"
-	"errors"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/meta"
+	coreauthz "github.com/wyolet/relay/auth/authz"
 )
 
 // ErrUnauthenticated is returned when the call has no actor in context.
 // Mapped to HTTP 401 by the control-plane middleware.
-var ErrUnauthenticated = errors.New("authz: unauthenticated")
+var ErrUnauthenticated = coreauthz.ErrUnauthenticated
 
 // ErrForbidden is returned when an authenticated actor lacks permission.
 // Mapped to HTTP 403.
-var ErrForbidden = errors.New("authz: forbidden")
+var ErrForbidden = coreauthz.ErrForbidden
 
 // Resource describes the target of an authorization check. Fields are
 // optional; populate what the action needs.

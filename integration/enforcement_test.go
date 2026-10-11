@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/user"
+	authpassword "github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/pkg/ids"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -360,7 +361,7 @@ func TestIntegration_YAMLLoginCarriesTheRowUUID(t *testing.T) {
 	if err != nil || row == nil {
 		t.Fatalf("seeded row lookup: %v", err)
 	}
-	stale, err := user.HashPassword("a-different-password")
+	stale, err := authpassword.Hash("a-different-password")
 	if err != nil {
 		t.Fatal(err)
 	}

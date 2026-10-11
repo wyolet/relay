@@ -1,9 +1,9 @@
-package crypto
+package token
 
-// jwt_fuzz_test.go fuzzes the token parser. ParseToken is reached by every
-// unauthenticated caller of the data plane, so the properties it must hold
-// for arbitrary bytes are: never panic, and never return claims for a token
-// the verification key did not sign.
+// token_fuzz_test.go fuzzes the token parser. Parse is reached by every
+// unauthenticated caller of a service that accepts these tokens, so the
+// properties it must hold for arbitrary bytes are: never panic, and never
+// return claims for a token the verification key did not sign.
 
 import (
 	"crypto/ed25519"
@@ -21,9 +21,9 @@ func fuzzKeys(t testing.TB) (ed25519.PrivateKey, ed25519.PublicKey, ed25519.Publ
 	return priv, priv.Public().(ed25519.PublicKey), other.Public().(ed25519.PublicKey)
 }
 
-func fuzzClaims() TokenClaims {
-	return TokenClaims{
-		Iss: TokenIssuer,
+func fuzzClaims() testClaims {
+	return testClaims{
+		Iss: "relay",
 		Sub: "user:0192aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		Prj: "0192ffff-1111-2222-3333-444444444444",
 		Grp: []string{"group:platform"},
@@ -34,17 +34,17 @@ func fuzzClaims() TokenClaims {
 	}
 }
 
-// FuzzParseToken drives the parser with arbitrary bearers. Any input may be
+// FuzzParse drives the parser with arbitrary bearers. Any input may be
 // rejected; none may panic, and an accepted one must carry a signature this
 // key made — checked by re-parsing under a key that signed nothing.
-func FuzzParseToken(f *testing.F) {
+func FuzzParse(f *testing.F) {
 	priv, pub, other := fuzzKeys(f)
 
-	valid, err := SignToken(priv, KeyID(pub), fuzzClaims())
+	valid, err := Sign(priv, KeyID(pub), fuzzClaims())
 	if err != nil {
 		f.Fatalf("sign seed token: %v", err)
 	}
-	bare, err := SignToken(priv, "", fuzzClaims())
+	bare, err := Sign(priv, "", fuzzClaims())
 	if err != nil {
 		f.Fatalf("sign bare-header seed token: %v", err)
 	}
@@ -75,21 +75,18 @@ func FuzzParseToken(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, token string) {
-		claims, err := ParseToken(pub, token)
-		// TokenKeyID reads the same header on every bearer, before any trust
+		_, err := Parse[testClaims](pub, token)
+		// HeaderKeyID reads the same header on every bearer, before any trust
 		// decision, so it has to survive the same inputs.
-		_ = TokenKeyID(token)
+		_ = HeaderKeyID(token)
 		if err != nil {
 			return
 		}
-		if _, otherErr := ParseToken(other, token); otherErr == nil {
+		if _, otherErr := Parse[testClaims](other, token); otherErr == nil {
 			t.Fatalf("token %q verified under a key that signed nothing", token)
 		}
 		if !headerDeclaresEdDSA(token) {
 			t.Fatalf("accepted token %q whose header does not declare EdDSA", token)
-		}
-		if id := claims.UserID(); id != "" && !strings.HasPrefix(claims.Sub, "user:") {
-			t.Fatalf("UserID %q derived from a non-user subject %q", id, claims.Sub)
 		}
 	})
 }

@@ -1,16 +1,17 @@
 // Package actor carries the identity of the caller making a request.
 //
-// An Actor is set by the auth middleware after a session lookup (or admin
-// token bypass) and read by handlers via From(ctx). Today the only relevant
-// fields are UserID + Username; ActiveOrgID/Roles are reserved for the
-// multi-tenant + RBAC work that will land after the catalog cutover.
+// An Actor is relay's view of the auth module's principal: the control-plane middleware converts the principal its authenticator chain produced (FromPrincipal) and handlers read it via From(ctx).
 //
 // Handlers should never read cookies or tokens directly — they go through
 // the Actor in context. This keeps call sites stable across changes to the
 // identity backend (YAML today, Postgres/Kratos/SuperTokens later).
 package actor
 
-import "context"
+import (
+	"context"
+
+	"github.com/wyolet/relay/auth/principal"
+)
 
 // Actor is the authenticated caller for the current request.
 type Actor struct {
@@ -70,6 +71,36 @@ func (a *Actor) HasRole(role string) bool {
 // caller (real user session or admin-token bypass).
 func (a *Actor) IsAuthenticated() bool {
 	return a != nil && (a.UserID != "" || a.AdminToken)
+}
+
+// FromPrincipal converts an authenticated principal to an Actor. The admin-kind principal is the admin-token bypass.
+func FromPrincipal(p *principal.Principal) *Actor {
+	return &Actor{
+		UserID:     p.ID,
+		Username:   p.Username,
+		SessionID:  p.SessionID,
+		AdminToken: p.Kind == principal.KindAdmin,
+		Roles:      p.Roles,
+		Subjects:   p.Subjects,
+		IdPGroups:  p.Groups,
+	}
+}
+
+// Principal converts a back to the module's principal, as the authorization engine reads it. Admin is set for the admin-token bypass only; which roles also make an admin is authz's rule. An Actor records no credential, so that part is left empty.
+func (a *Actor) Principal() principal.Principal {
+	p := principal.Principal{
+		ID:        a.UserID,
+		Kind:      principal.KindUser,
+		Username:  a.Username,
+		Groups:    a.IdPGroups,
+		Subjects:  a.Subjects,
+		Roles:     a.Roles,
+		SessionID: a.SessionID,
+	}
+	if a.AdminToken {
+		p.Kind, p.Admin = principal.KindAdmin, true
+	}
+	return p
 }
 
 type ctxKey struct{}

@@ -9,11 +9,9 @@
 package user
 
 import (
-	"crypto/subtle"
-	"strings"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
+	"github.com/wyolet/relay/auth/password"
 )
 
 // RoleAdmin is the only role with defined meaning today: full access,
@@ -48,30 +46,11 @@ func (u *User) HasRole(role string) bool {
 	return false
 }
 
-// VerifyPassword checks cleartext against the stored hash. bcrypt hashes
-// ("$2a$"/"$2b$"/"$2y$" prefix) compare via bcrypt; anything else is treated
-// as a legacy plain value and compared constant-time (the YAML seed hashes
-// plain passwords on ingest, so plain values here should not occur — kept
-// for defense in depth). Empty hash never matches: an OIDC-only user has no
-// password login.
-func VerifyPassword(hash, password string) bool {
-	if hash == "" || password == "" {
-		return false
-	}
-	if isBcrypt(hash) {
-		return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
-	}
-	return subtle.ConstantTimeCompare([]byte(hash), []byte(password)) == 1
-}
-
-// HashPassword bcrypt-hashes a cleartext password for storage.
-func HashPassword(password string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	return string(b), err
-}
-
-func isBcrypt(s string) bool {
-	return strings.HasPrefix(s, "$2a$") ||
-		strings.HasPrefix(s, "$2b$") ||
-		strings.HasPrefix(s, "$2y$")
+// VerifyPassword checks cleartext against the stored hash. A plain stored
+// value is accepted without a warning: the YAML seed hashes plain passwords
+// on ingest, so one here should not occur and is kept for defense in depth.
+// Empty hash never matches: an OIDC-only user has no password login.
+func VerifyPassword(hash, cleartext string) bool {
+	ok, _ := password.Verify(hash, cleartext)
+	return ok
 }

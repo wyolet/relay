@@ -11,7 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/session"
-	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -20,7 +20,7 @@ import (
 // row, or a bcrypt hash the loader cannot inspect) must still not log in.
 func TestLoginRefusesPlaceholderPassword(t *testing.T) {
 	const placeholder = "change-me-please"
-	hash, err := user.HashPassword(placeholder)
+	hash, err := password.Hash(placeholder)
 	if err != nil {
 		t.Fatal(err)
 	}

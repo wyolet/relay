@@ -17,6 +17,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/auth/apikey"
 )
 
 type rotateKeyBody struct {
@@ -77,7 +78,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if max := maxRotateGrace(d); grace > max {
 			return nil, huma.Error400BadRequest(fmt.Sprintf("graceSeconds %d exceeds the configured maximum of %d", grace, max))
 		}
-		gen, err := key.Generate()
+		gen, err := apikey.Generate(key.TokenPrefix)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -91,7 +92,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 			existing.Spec.PreviousKeyHash = ""
 			existing.Spec.GraceUntil = nil
 		}
-		existing.Spec.KeyHash = gen.KeyHash
+		existing.Spec.KeyHash = gen.Hash
 		existing.Spec.Prefix = gen.Prefix
 		// A rotation is an operator edit: without the flag the next apply of
 		// the declaring manifest would write the pre-rotation hash back.
