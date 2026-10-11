@@ -74,7 +74,7 @@ SCIM creates the account without a password or sign-in identity. Relay expects t
 
 When no account holds the sign-in's identity (issuer and subject), relay looks for an account to link before it provisions a new one. It links the account when all of these hold:
 
-- a SCIM client created it;
+- a SCIM client created it, and that client is not revoked;
 - it has no sign-in identity yet;
 - its `externalId` equals the value of the `linkClaim` claim in the verified ID token.
 

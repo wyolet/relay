@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/settings"
@@ -17,8 +19,18 @@ import (
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-// Entra provisions an account through SCIM, then its user signs in through OIDC for the first time with the object id as oid: the sign-in lands on the provisioned account, its identity row is written, and the link is in the audit log.
-func TestSCIMProvisionedAccountLinksOnFirstSignIn(t *testing.T) {
+// scimLink is ada, provisioned through an Entra SCIM client, and an OIDC harness whose first sign-in carries her object id as oid.
+type scimLink struct {
+	h       *oidcHarness
+	stores  *appcatalog.Stores
+	pool    *pgxpool.Pool
+	idp     *fakeIdP
+	audit   *audit.Store
+	created string
+}
+
+func newSCIMLink(t *testing.T) *scimLink {
+	t.Helper()
 	ctx := t.Context()
 	pool := storagetest.Pool(t)
 	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
@@ -66,33 +78,55 @@ func TestSCIMProvisionedAccountLinksOnFirstSignIn(t *testing.T) {
 	h := newOIDCHarnessOver(t, idp, &settings.AuthOIDC{
 		Enabled: true, Issuer: idp.srv.URL, ClientID: "client-1",
 		RedirectURL: "http://relay.test/auth/callback", Registration: "closed",
-	}, directoryUsers{Store: stores.Users, ops: ops}, auditStore)
+	}, directoryUsers{Store: stores.Users, ops: ops, clients: stores.SCIMClients}, auditStore)
 	h.scim = &settings.AuthSCIM{Enabled: true, LinkClaim: "oid"}
+	return &scimLink{h: h, stores: stores, pool: pool, idp: idp, audit: auditStore, created: created.ID}
+}
 
-	if rec := h.login("/auth/callback"); rec.Code != http.StatusFound {
+// identityOwner returns the account holding the fake IdP's sign-in identity and how many rows hold it.
+func (l *scimLink) identityOwner(t *testing.T) (owner string, n int) {
+	t.Helper()
+	rows, err := l.pool.Query(t.Context(), `SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2`, l.idp.srv.URL, l.idp.sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := rows.Scan(&owner); err != nil {
+			t.Fatal(err)
+		}
+		n++
+	}
+	return owner, n
+}
+
+// Entra provisions an account through SCIM, then its user signs in through OIDC for the first time with the object id as oid: the sign-in lands on the provisioned account, its identity row is written, and the link is in the audit log.
+func TestSCIMProvisionedAccountLinksOnFirstSignIn(t *testing.T) {
+	ctx := t.Context()
+	l := newSCIMLink(t)
+	if rec := l.h.login("/auth/callback"); rec.Code != http.StatusFound {
 		t.Fatalf("first sign-in = %d: %s", rec.Code, rec.Body.String())
 	}
-	h.em.Close()
-	if h.sess.userID != created.ID || h.sess.username != "ada@contoso.example" {
-		t.Fatalf("signed in as %q (%s), want the provisioned account %s", h.sess.userID, h.sess.username, created.ID)
+	l.h.em.Close()
+	if l.h.sess.userID != l.created || l.h.sess.username != "ada@contoso.example" {
+		t.Fatalf("signed in as %q (%s), want the provisioned account %s", l.h.sess.userID, l.h.sess.username, l.created)
 	}
-	var owner string
-	if err := pool.QueryRow(ctx, `SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2`, idp.srv.URL, idp.sub).Scan(&owner); err != nil || owner != created.ID {
-		t.Fatalf("identity row owner = %q, %v; want %s", owner, err, created.ID)
+	if owner, n := l.identityOwner(t); n != 1 || owner != l.created {
+		t.Fatalf("identity rows = %d owned by %q; want one owned by %s", n, owner, l.created)
 	}
-	accounts, err := stores.Users.List(ctx)
+	accounts, err := l.stores.Users.List(ctx)
 	if err != nil || len(accounts) != 1 {
 		t.Fatalf("accounts = %d, %v; want only the provisioned one", len(accounts), err)
 	}
 
-	evs, err := auditStore.Events(ctx, audit.Query{ResourceID: created.ID})
+	evs, err := l.audit.Events(ctx, audit.Query{ResourceID: l.created})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var linked, loggedIn bool
 	for _, ev := range evs {
 		switch {
-		case ev.Action == "users.update" && ev.Outcome.Status == audit.StatusAllowed && ev.Actor.ID == created.ID &&
+		case ev.Action == "users.update" && ev.Outcome.Status == audit.StatusAllowed && ev.Actor.ID == l.created &&
 			ev.Change != nil && len(ev.Change.Fields) == 1 && ev.Change.Fields[0] == "identities":
 			linked = true
 		case ev.Action == "auth.login" && ev.Outcome.Status == audit.StatusAllowed:
@@ -101,5 +135,20 @@ func TestSCIMProvisionedAccountLinksOnFirstSignIn(t *testing.T) {
 	}
 	if !linked || !loggedIn {
 		t.Fatalf("audit rows %+v lack the link or the login", evs)
+	}
+}
+
+// An account a revoked SCIM client provisioned is no longer the identity provider's to hand out: a first sign-in that matches it links nothing, and with registration closed it is refused.
+func TestSCIMRevokedClientsAccountsDoNotLink(t *testing.T) {
+	l := newSCIMLink(t)
+	if err := l.stores.SCIMClients.RevokeClient(t.Context(), "entra"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := l.h.login("/auth/callback"); rec.Code != http.StatusForbidden {
+		t.Fatalf("first sign-in after the client was revoked = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	l.h.em.Close()
+	if _, n := l.identityOwner(t); n != 0 {
+		t.Fatalf("the revoked client's account was linked (%d identity rows)", n)
 	}
 }
