@@ -8,8 +8,20 @@ import (
 	"github.com/wyolet/relay/auth/principal"
 )
 
-// checkMembershipGrants runs the grant check for every role bound to the group, at each binding's scope, when the write gives a user the group: a member acts under every binding that names it, so adding one hands those roles out. A write that only removes members needs no check.
-func (d *Directory) checkMembershipGrants(ctx context.Context, p *principal.Principal, stored, g *Group) error {
+// CheckMembershipGrants runs the grant check that writing g would run, against the stored group with g's id (none for a create), and writes nothing. A product planning several writes calls it to refuse a group before any write lands; the write checks again.
+func (d *Directory) CheckMembershipGrants(ctx context.Context, p *principal.Principal, g *Group) error {
+	var stored *Group
+	if g.Meta.ID != "" {
+		var err error
+		if stored, err = d.cfg.Stores.Groups.Get(ctx, g.Meta.ID); err != nil {
+			return err
+		}
+	}
+	return d.checkAddedMembers(ctx, p, stored, g)
+}
+
+// checkAddedMembers runs the grant check for every role bound to the group, at each binding's scope, when the write gives a user the group: a member acts under every binding that names it, so adding one hands those roles out. A write that only removes members needs no check.
+func (d *Directory) checkAddedMembers(ctx context.Context, p *principal.Principal, stored, g *Group) error {
 	if !addsMembers(stored, g) {
 		return nil
 	}

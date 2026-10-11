@@ -77,6 +77,27 @@ func TestGroupRenameAndCreateUnderABoundName(t *testing.T) {
 	wantErr(t, "re-enable a bound group", h.d.UpdateGroup(ctx, caller, off), authz.ErrForbidden)
 }
 
+// CheckMembershipGrants answers what the write would, against the stored group, and writes nothing.
+func TestCheckMembershipGrantsWritesNothing(t *testing.T) {
+	h := newHarness(t)
+	_, _, _, ada := tenancy(t, h)
+	wide := addRole(t, h, "wide")
+	bindGroup(t, h, "ops-wide", wide.Meta.ID, directory.Global, directory.Subject{Kind: directory.SubjectGroup, Name: "ops"})
+	g := &directory.Group{Meta: directory.Metadata{Name: "ops"}}
+	must(t, h.d.CreateGroup(ctx, caller, g))
+	h.grants.deny[wide.Meta.ID] = true
+
+	stored, _ := h.s.Groups.Get(ctx, g.Meta.ID)
+	wantErr(t, "adding a member", h.d.CheckMembershipGrants(ctx, caller, withMembers(stored, ada.ID)), authz.ErrForbidden)
+	wantErr(t, "a new group under the bound name", h.d.CheckMembershipGrants(ctx, caller,
+		&directory.Group{Meta: directory.Metadata{Name: "ops"}, Spec: directory.GroupSpec{MemberIDs: []string{ada.ID}}}), authz.ErrForbidden)
+	must(t, h.d.CheckMembershipGrants(ctx, caller, stored))
+	must(t, h.d.CheckMembershipGrants(ctx, admin, withMembers(stored, ada.ID)))
+	if got, _ := h.s.Groups.Get(ctx, g.Meta.ID); got.Meta.ResourceVersion != stored.Meta.ResourceVersion || len(got.Spec.MemberIDs) != 0 {
+		t.Fatalf("the check wrote the group: %+v", got)
+	}
+}
+
 // Through the real engine: a caller holding every permission inside one team may add members to a group bound only within that team, not to one bound globally.
 func TestGroupMembershipThroughEngine(t *testing.T) {
 	s := memstore.New().Stores()

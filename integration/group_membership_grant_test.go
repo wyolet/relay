@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,14 +85,18 @@ func TestIntegration_GroupMembershipIsAGrant(t *testing.T) {
 	if code, raw := lead.do(http.MethodPut, "/api/groups/by-id/"+opsAdmins, `{"metadata":{"name":"ops-admins"},"spec":{}}`); code != http.StatusOK {
 		t.Fatalf("removing a member = %d, want 200: %s", code, raw)
 	}
-	// Apply writes groups through the same directory and answers the same 403; a binding may name a group before it exists.
+	// Apply refuses the same group while planning, so the rest of the bundle is not written either; a binding may name a group before it exists.
 	bindGroup("root-ops", roles["admin"].Meta.ID, `{"kind":"system"}`, "root-ops")
-	bundle := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Group\nmetadata: {name: root-ops, owner: {kind: system}}\nspec: {members: [dev]}\n"
-	if code, raw := lead.doAs(http.MethodPost, "/api/apply", bundle, "application/yaml"); code != http.StatusForbidden {
-		t.Fatalf("apply creating a globally bound group with a member = %d, want 403: %s", code, raw)
+	bundle := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Group\nmetadata: {name: harmless, owner: {kind: system}}\nspec: {members: [dev]}\n" +
+		"---\napiVersion: relay.wyolet.dev/v1alpha2\nkind: Group\nmetadata: {name: root-ops, owner: {kind: system}}\nspec: {members: [dev]}\n"
+	code, raw := lead.doAs(http.MethodPost, "/api/apply", bundle, "application/yaml")
+	if code != http.StatusForbidden || strings.Contains(string(raw), `"applied"`) {
+		t.Fatalf("apply creating a globally bound group with a member = %d, want a 403 plan refusal: %s", code, raw)
 	}
-	if code, raw := st.adminDo(http.MethodGet, "/api/groups/root-ops", ""); code != http.StatusNotFound {
-		t.Fatalf("the refused apply wrote the group: %d %s", code, raw)
+	for _, name := range []string{"harmless", "root-ops"} {
+		if code, raw := st.adminDo(http.MethodGet, "/api/groups/"+name, ""); code != http.StatusNotFound {
+			t.Fatalf("the refused apply wrote group %s: %d %s", name, code, raw)
+		}
 	}
 
 	// The probes skip the audit wrapper, so the refused request is recorded as the group update it was.

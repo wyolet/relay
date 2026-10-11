@@ -23,7 +23,7 @@ func (d *Directory) CreateGroup(ctx context.Context, p *principal.Principal, g *
 	if err := d.checkUsersExist(ctx, g.Spec.MemberIDs, nil); err != nil {
 		return err
 	}
-	if err := d.checkMembershipGrants(ctx, p, nil, g); err != nil {
+	if err := d.checkAddedMembers(ctx, p, nil, g); err != nil {
 		return err
 	}
 	return d.writeGroup(ctx, g)
@@ -48,7 +48,7 @@ func (d *Directory) UpdateGroup(ctx context.Context, p *principal.Principal, g *
 	if err := d.checkUsersExist(ctx, g.Spec.MemberIDs, stored.Spec.MemberIDs); err != nil {
 		return err
 	}
-	if err := d.checkMembershipGrants(ctx, p, stored, g); err != nil {
+	if err := d.checkAddedMembers(ctx, p, stored, g); err != nil {
 		return err
 	}
 	return d.writeGroup(ctx, g)
@@ -79,7 +79,7 @@ func (d *Directory) AddGroupMember(ctx context.Context, p *principal.Principal, 
 		}
 		next := *g
 		next.Spec.MemberIDs = append(ids, userID)
-		if err := d.checkMembershipGrants(ctx, p, g, &next); err != nil {
+		if err := d.checkAddedMembers(ctx, p, g, &next); err != nil {
 			return nil, err
 		}
 		return next.Spec.MemberIDs, nil
