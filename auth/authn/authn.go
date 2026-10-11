@@ -12,6 +12,8 @@ import (
 )
 
 // Authenticator recognises one credential format.
+//
+// An implementation must decline a credential that is not in its format with (nil, false, nil), never with an error: the chain stops at the first authenticator that claims the request or errors, so an error on a foreign format hides every later authenticator.
 type Authenticator interface {
 	// Authenticate returns (nil, false, nil) when the request carries no credential in its format, so the chain tries the next one. An error means the credential is in its format but is not accepted.
 	Authenticate(r *http.Request) (*principal.Principal, bool, error)
@@ -76,6 +78,8 @@ func (c Chain) Authenticate(r *http.Request) (*principal.Principal, error) {
 }
 
 // AdmitActive admits a principal whose Status is StatusActive and refuses every other, an unresolved one included.
+//
+// It fails closed for every Kind: a service account or an admin principal is refused too unless ResolveUser, or the authenticator, sets its Status to StatusActive. A product that admits such callers marks them active there; AdmitActive makes no exception by kind.
 func AdmitActive(_ context.Context, p *principal.Principal) error {
 	if p.Status != principal.StatusActive {
 		return ErrInactive
