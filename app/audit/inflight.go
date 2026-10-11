@@ -38,24 +38,38 @@ type inflight struct {
 	// discard drops the request's row altogether.
 	each    []Row
 	discard bool
+	// extra, set by RecordExtra, are rows emitted after the request's own.
+	extra []Row
 }
 
 // events assembles every row the request earns.
 func (f *inflight) events(code int) []Event {
 	f.mu.Lock()
-	discard, each := f.discard, f.each
+	discard, each, extra := f.discard, f.each, f.extra
 	f.mu.Unlock()
 	if discard {
 		return nil
 	}
+	var out []Event
 	if len(each) == 0 {
 		if ev, ok := f.event(code); ok {
-			return []Event{ev}
+			out = append(out, ev)
 		}
+	} else {
+		out = f.rowEvents(each, code)
+	}
+	return append(out, f.rowEvents(extra, code)...)
+}
+
+// rowEvents turns recorded rows into events attributed to the request's actor.
+func (f *inflight) rowEvents(rows []Row, code int) []Event {
+	if len(rows) == 0 {
 		return nil
 	}
-	out := make([]Event, 0, len(each))
-	for _, r := range each {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]Event, 0, len(rows))
+	for _, r := range rows {
 		status := r.Status
 		if status == "" {
 			status = StatusAllowed

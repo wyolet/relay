@@ -143,10 +143,52 @@ func (f *fakeIdP) idToken() string {
 type fakeUsers struct {
 	bySubject map[string]*user.User
 	byName    map[string]*user.User
+	// external is the SCIM externalId of a provisioned account, by user id.
+	external map[string]string
+	// beforeLink, when set, runs once just before AddFirstIdentity writes.
+	beforeLink func()
+	links      int
 }
 
 func newFakeUsers() *fakeUsers {
-	return &fakeUsers{bySubject: map[string]*user.User{}, byName: map[string]*user.User{}}
+	return &fakeUsers{bySubject: map[string]*user.User{}, byName: map[string]*user.User{}, external: map[string]string{}}
+}
+
+// provisioned adds an account as a SCIM client creates it: no identity, the client's externalId.
+func (f *fakeUsers) provisioned(u *user.User, externalID string) {
+	f.byName[u.Username] = u
+	f.external[u.ID] = externalID
+}
+
+func (f *fakeUsers) UnlinkedByExternalID(_ context.Context, externalID string) ([]*user.User, error) {
+	var out []*user.User
+	for _, u := range f.byName {
+		if id, ok := f.external[u.ID]; ok && id == externalID && u.OIDCSubject == "" {
+			c := *u
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeUsers) AddFirstIdentity(_ context.Context, userID string, id directory.Identity) error {
+	if hook := f.beforeLink; hook != nil {
+		f.beforeLink = nil
+		hook()
+	}
+	for _, u := range f.byName {
+		if u.ID != userID {
+			continue
+		}
+		if u.OIDCSubject != "" {
+			return directory.ErrConflict
+		}
+		u.OIDCSubject = id.Issuer + directory.IdentitySeparator + id.Subject
+		f.bySubject[u.OIDCSubject] = u
+		f.links++
+		return nil
+	}
+	return directory.ErrNotFound
 }
 
 func (f *fakeUsers) ByUsername(_ context.Context, u string) (*user.User, error) {
@@ -193,6 +235,7 @@ type oidcHarness struct {
 	t     *testing.T
 	idp   *fakeIdP
 	cfg   *settings.AuthOIDC
+	scim  *settings.AuthSCIM
 	users *fakeUsers
 	sess  *fakeSessions
 	sink  *auditSink
@@ -213,9 +256,21 @@ func newTestOIDC(t *testing.T, idp *fakeIdP, registration string) *oidcHarness {
 
 func newOIDCHarness(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC) *oidcHarness {
 	t.Helper()
-	h := &oidcHarness{t: t, idp: idp, cfg: cfg, users: newFakeUsers(), sess: &fakeSessions{}, sink: &auditSink{}}
-	h.em = audit.NewEmitter(h.sink, slog.New(slog.DiscardHandler))
-	od := newOIDC(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, false)
+	users := newFakeUsers()
+	h := newOIDCHarnessOver(t, idp, cfg, users, nil)
+	h.users = users
+	return h
+}
+
+// newOIDCHarnessOver serves the routes over users, auditing to sink (h.sink when nil); SCIM is off until the test turns h.scim on.
+func newOIDCHarnessOver(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC, users oidcUserStore, sink audit.Sink) *oidcHarness {
+	t.Helper()
+	h := &oidcHarness{t: t, idp: idp, cfg: cfg, scim: &settings.AuthSCIM{}, sess: &fakeSessions{}, sink: &auditSink{}}
+	if sink == nil {
+		sink = h.sink
+	}
+	h.em = audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
+	od := newOIDC(func() *settings.AuthOIDC { return h.cfg }, func() *settings.AuthSCIM { return h.scim }, users, h.sess, false)
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
 		api.Use(audit.Middleware(h.em, nil))
@@ -365,7 +420,7 @@ func TestOIDCStart_SecureCookie(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
 	r := chi.NewRouter()
-	mountOIDCRoutes(r, newOIDC(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, true))
+	mountOIDCRoutes(r, newOIDC(func() *settings.AuthOIDC { return h.cfg }, func() *settings.AuthSCIM { return h.scim }, h.users, h.sess, true))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/auth/oidc/start", nil))
 	if c := cookieNamed(rec, oidcFlowCookie); c == nil || !c.Secure {

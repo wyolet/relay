@@ -170,6 +170,32 @@ func TestMiddlewareWritesOneRowPerRecordedChange(t *testing.T) {
 	}
 }
 
+// An extra row lands after the request's own, under the request's final actor, and a dry run drops it too.
+func TestMiddlewareWritesExtraRows(t *testing.T) {
+	sink := &memSink{}
+	em := NewEmitter(sink, quietLogger())
+	run := func(fn func(context.Context)) {
+		h := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			RecordExtra(r.Context(), Row{Action: "users.update", Resource: Resource{Kind: "user", ID: "u-1"}, Fields: []string{"identities"}})
+			fn(r.Context())
+			w.WriteHeader(http.StatusFound)
+		}))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/auth/callback", nil))
+	}
+	run(func(ctx context.Context) {
+		Record(ctx, "auth.login", Resource{Kind: "user", ID: "u-1"}, StatusAllowed, Actor{Kind: ActorUser, ID: "u-1", Name: "ada"})
+	})
+	run(Discard)
+	em.Close()
+	evs := sink.all()
+	if len(evs) != 2 || evs[0].Action != "auth.login" || evs[1].Action != "users.update" {
+		t.Fatalf("events = %+v, want the login then the extra row", evs)
+	}
+	if ev := evs[1]; ev.Actor.Name != "ada" || ev.Outcome != (Outcome{Status: StatusAllowed, Code: http.StatusFound}) || ev.Change == nil || ev.Change.Fields[0] != "identities" {
+		t.Fatalf("extra row = %+v", ev)
+	}
+}
+
 // With no trusted proxies configured, a caller-supplied forwarding header
 // must never become the audited address.
 func TestMiddlewareIgnoresForwardedFor(t *testing.T) {

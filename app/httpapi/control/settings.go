@@ -59,7 +59,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.AuthSCIM](api, d, protect, settings.Section{
 		Name:        settings.AuthSCIMSection,
-		Description: "SCIM 2.0 provisioning from an identity provider at /scim/v2 on the control listener; disabled by default, and the endpoint answers 404 while it is. Each identity provider authenticates with a token from /scim-clients. deleteDisables makes a SCIM DELETE of a user disable the account instead of deleting it. Hot-reloaded. Admin only.",
+		Description: "SCIM 2.0 provisioning from an identity provider at /scim/v2 on the control listener; disabled by default, and the endpoint answers 404 while it is. Each identity provider authenticates with a token from /scim-clients. deleteDisables makes a SCIM DELETE of a user disable the account instead of deleting it. linkClaim names the id_token claim (default sub; oid for Entra) a first OIDC sign-in is matched on against a provisioned account's externalId, linking that account when it has no sign-in identity yet. Hot-reloaded. Admin only.",
 	})
 	registerSettingsSection[settings.OTLPReceiver](api, d, protect, settings.Section{
 		Name:        settings.SectionOTLPReceiver,

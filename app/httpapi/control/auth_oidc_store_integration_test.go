@@ -24,7 +24,7 @@ func TestOIDCSignInOverIdentities(t *testing.T) {
 	}
 	cfg := &settings.AuthOIDC{Enabled: true, Issuer: "https://idp.example.com", ClientID: "c", Registration: "open"}
 	ops := newDirectoryOps(Deps{Stores: stores})
-	od := newOIDC(func() *settings.AuthOIDC { return cfg }, directoryUsers{Store: stores.Users, ops: ops}, &fakeSessions{}, false)
+	od := newOIDC(func() *settings.AuthOIDC { return cfg }, func() *settings.AuthSCIM { return &settings.AuthSCIM{} }, directoryUsers{Store: stores.Users, ops: ops}, &fakeSessions{}, false)
 	claims := func(sub, username string) oidc.Claims {
 		return oidc.Claims{Issuer: cfg.Issuer, Subject: sub, PreferredUsername: username}
 	}

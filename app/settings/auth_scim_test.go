@@ -17,11 +17,14 @@ func TestAuthSCIMIsOffByDefaultAndAdminOnly(t *testing.T) {
 	if d := sec.Defaults().(*AuthSCIM); d.Enabled {
 		t.Fatal("auth:scim is on by default")
 	}
-	v, err := sec.Decode([]byte(`{"enabled":true,"deleteDisables":true}`))
+	if c := AuthSCIMFrom(nil); c.EffectiveLinkClaim() != "sub" {
+		t.Fatalf("default link claim = %q, want sub", c.EffectiveLinkClaim())
+	}
+	v, err := sec.Decode([]byte(`{"enabled":true,"deleteDisables":true,"linkClaim":"oid"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := AuthSCIMFrom(settingstest.Sections(map[string]any{AuthSCIMSection: v})); !c.Enabled || !c.DeleteDisables {
+	if c := AuthSCIMFrom(settingstest.Sections(map[string]any{AuthSCIMSection: v})); !c.Enabled || !c.DeleteDisables || c.EffectiveLinkClaim() != "oid" {
 		t.Fatalf("decoded %+v", c)
 	}
 	if !AdminOnly(AuthSCIMSection) {
