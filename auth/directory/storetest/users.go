@@ -73,7 +73,7 @@ func testUsers(t *testing.T, s directory.Stores) {
 	dupEmail := &directory.User{ID: directory.NewID(), Username: "eve", Email: "bob@example.com"}
 	local.Email = "bob@example.com"
 	must(t, u.Upsert(ctx, local))
-	wantErr(t, "duplicate email", u.Upsert(ctx, dupEmail), directory.ErrConflict)
+	wantErr(t, "duplicate email", u.Upsert(ctx, dupEmail), directory.ErrEmailTaken)
 	dupIdentity := &directory.User{ID: directory.NewID(), Username: "eve", Identity: f.user.Identity}
 	wantErr(t, "duplicate identity", u.Upsert(ctx, dupIdentity), directory.ErrConflict)
 

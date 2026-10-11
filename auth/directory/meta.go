@@ -2,6 +2,7 @@ package directory
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -29,6 +30,8 @@ var (
 	ErrInvalid = errors.New("directory: invalid")
 	// ErrConflict reports a write that would duplicate a unique name, username, email or identity.
 	ErrConflict = errors.New("directory: conflict")
+	// ErrEmailTaken is the ErrConflict of an account whose email another account holds.
+	ErrEmailTaken = fmt.Errorf("%w: email is taken", ErrConflict)
 	// ErrStaleResourceVersion reports a conditional update whose ResourceVersion no longer matches the stored row.
 	ErrStaleResourceVersion = errors.New("directory: resource changed since it was read")
 )

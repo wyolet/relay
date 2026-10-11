@@ -5,7 +5,7 @@ import (
 	"github.com/wyolet/relay/auth/rbac"
 )
 
-// checkPrunedScopes refuses a RoleBinding document scoped to a team or project the plan prunes, or to a project of a pruned team: the store deletes a scope's bindings with it, so the binding would be written and then lost.
+// checkPrunedScopes refuses a RoleBinding document scoped to, or a ServiceAccount document in, a team or project the plan prunes, or a project of a pruned team: the store deletes them with their scope, so they would be written and then lost.
 func (p *planner) checkPrunedScopes() error {
 	gone := map[rbac.Scope]bool{}
 	for _, kind := range p.deletes {
@@ -36,6 +36,15 @@ func (p *planner) checkPrunedScopes() error {
 		}
 		if gone[b.Spec.Scope] {
 			return docError(d, "spec.scope", ErrScopePruned)
+		}
+	}
+	for _, d := range p.docs[KindServiceAccount] {
+		sa, err := p.reg.ToServiceAccount(d, p.idx)
+		if err != nil {
+			return err
+		}
+		if gone[rbac.Scope{Kind: directory.OwnerProject, ID: sa.Spec.ProjectID}] {
+			return docError(d, "spec.project", ErrScopePruned)
 		}
 	}
 	return nil

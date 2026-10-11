@@ -82,6 +82,10 @@ func mapErr(op string, err error) error {
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case "23505":
+			// Postgres names the UNIQUE constraint on users.email this, and callers act on a taken email.
+			if pgErr.ConstraintName == "users_email_key" {
+				return fmt.Errorf("%s: %w", op, directory.ErrEmailTaken)
+			}
 			return fmt.Errorf("%s: %w: %s", op, directory.ErrConflict, pgErr.ConstraintName)
 		case "23503":
 			return fmt.Errorf("%s: %w: %s", op, directory.ErrInvalid, pgErr.Detail)
