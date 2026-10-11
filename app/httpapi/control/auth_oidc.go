@@ -3,46 +3,31 @@
 // authorization code and mints the same scs session password login mints,
 // so everything downstream of login is identical for both paths.
 //
-// These are raw chi handlers, not huma operations: they speak browser
-// redirects and cookies, not JSON.
-//
-// The provider is generic OIDC (issuer discovery via sdk/oauth). Per-dance
-// state + PKCE verifier travel in a short-lived HttpOnly SameSite=Lax
-// cookie rather than the session: the callback arrives as a cross-site
-// top-level navigation, which a SameSite=Strict session cookie does not
-// accompany.
+// The flow is auth/oidc's relying party; this file feeds it the auth:oidc
+// settings and supplies relay's user provisioning, session and audit. These
+// are raw chi handlers, not huma operations: they speak browser redirects
+// and cookies, not JSON.
 
 package control
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/oidc"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
-	"github.com/wyolet/relay/sdk/oauth"
 )
 
-const (
-	oidcFlowCookie = "relay_oidc_flow"
-	oidcFlowTTL    = 10 * time.Minute
-)
+const oidcFlowCookie = "relay_oidc_flow"
 
 // oidcUserStore is the narrow user-store surface the callback needs.
 // *user.Store satisfies it; tests supply a fake.
@@ -57,26 +42,29 @@ type sessionLogin interface {
 	LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error
 }
 
-// oidcDeps carries the seams the two handlers use, injectable for tests.
+// oidcDeps carries the seams the relying party's hooks use, injectable for tests.
 type oidcDeps struct {
-	cfg          func() *settings.AuthOIDC
-	users        oidcUserStore
-	sessions     sessionLogin
-	cookieSecure bool
-
-	// discover resolves issuer metadata; defaults to sdk/oauth discovery
-	// with a small per-process cache. Tests point it at a fake IdP.
-	discover func(ctx context.Context, pc oauth.ProviderConfig) (oauth.ProviderConfig, error)
+	cfg      func() *settings.AuthOIDC
+	users    oidcUserStore
+	sessions sessionLogin
+	rp       *oidc.RelyingParty[*user.User]
 }
 
 func newOIDCDeps(d Deps) *oidcDeps {
-	return &oidcDeps{
-		cfg:          func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) },
-		users:        d.Users,
-		sessions:     d.Sessions,
-		cookieSecure: d.CookieSecure,
-		discover:     cachedDiscover(),
+	return newOIDC(func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) }, d.Users, d.Sessions, d.CookieSecure)
+}
+
+func newOIDC(cfg func() *settings.AuthOIDC, users oidcUserStore, sessions sessionLogin, cookieSecure bool) *oidcDeps {
+	od := &oidcDeps{cfg: cfg, users: users, sessions: sessions}
+	od.rp = &oidc.RelyingParty[*user.User]{
+		Config:       od.config,
+		FlowCookie:   oidcFlowCookie,
+		CookieSecure: cookieSecure,
+		Provision:    od.resolveUser,
+		Login:        od.login,
+		OnDenied:     func(r *http.Request, f *oidc.Failure) { auditLoginDenied(r.Context(), f.Name) },
 	}
+	return od
 }
 
 // registerAuthOIDC mounts the two routes. Callers guarantee r already has
@@ -89,8 +77,8 @@ func registerAuthOIDC(r chi.Router, d Deps) {
 }
 
 func mountOIDCRoutes(r chi.Router, od *oidcDeps) {
-	r.Get("/auth/oidc/start", od.start)
-	r.Get("/auth/oidc/callback", od.callback)
+	r.Get("/auth/oidc/start", od.rp.Start)
+	r.Get("/auth/oidc/callback", od.rp.Callback)
 }
 
 // MountOIDCCallbackRoot mounts GET /auth/callback at the listener root —
@@ -115,48 +103,29 @@ func mountOIDCCallbackRoot(r chi.Router, d Deps, od *oidcDeps) {
 		if d.Audit != nil {
 			g.Use(audit.Middleware(d.Audit, d.TrustedProxies))
 		}
-		g.Get("/auth/callback", od.callback)
+		g.Get("/auth/callback", od.rp.Callback)
 	})
 }
 
-// flowState is the per-dance payload carried in the flow cookie.
-type flowState struct {
-	State    string `json:"s"`
-	Verifier string `json:"v"`
-}
-
-func (od *oidcDeps) start(w http.ResponseWriter, r *http.Request) {
+// config renders the auth:oidc section for the relying party; nil when disabled.
+func (od *oidcDeps) config() *oidc.Config {
 	cfg := od.cfg()
 	if !cfg.Enabled {
-		http.Error(w, "oidc login is not enabled", http.StatusNotFound)
-		return
+		return nil
 	}
-	pc, err := od.provider(r.Context(), cfg)
-	if err != nil {
-		slog.Error("oidc start: discovery failed", "issuer", cfg.Issuer, "err", err)
-		http.Error(w, "identity provider unavailable", http.StatusBadGateway)
-		return
+	c := &oidc.Config{
+		Issuer:       cfg.Issuer,
+		ClientID:     cfg.ClientID,
+		RedirectURL:  cfg.RedirectURL,
+		Scopes:       cfg.EffectiveScopes(),
+		AuthParams:   cfg.AuthParams,
+		GroupsClaim:  cfg.EffectiveGroupsClaim(),
+		PostLoginURL: cfg.PostLoginURL,
 	}
-
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		http.Error(w, "entropy unavailable", http.StatusInternalServerError)
-		return
+	if cfg.ClientSecretEnv != "" {
+		c.ClientSecret = os.Getenv(cfg.ClientSecretEnv)
 	}
-	state := hex.EncodeToString(buf)
-
-	authURL, verifier := oauth.New(pc.OAuth2()).AuthorizeURL(state, pc.AuthCodeOptions()...)
-	raw, _ := json.Marshal(flowState{State: state, Verifier: verifier})
-	http.SetCookie(w, &http.Cookie{
-		Name:     oidcFlowCookie,
-		Value:    base64.RawURLEncoding.EncodeToString(raw),
-		Path:     "/",
-		MaxAge:   int(oidcFlowTTL.Seconds()),
-		HttpOnly: true,
-		Secure:   od.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-	})
-	http.Redirect(w, r, authURL, http.StatusFound)
+	return c
 }
 
 // auditLoginDenied records a failed SSO login. The subject (or the username,
@@ -166,146 +135,50 @@ func auditLoginDenied(ctx context.Context, name string) {
 		audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: name})
 }
 
-func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
-	cfg := od.cfg()
-	if !cfg.Enabled {
-		http.Error(w, "oidc login is not enabled", http.StatusNotFound)
-		return
-	}
-	if e := r.URL.Query().Get("error"); e != "" {
-		slog.Warn("oidc callback: provider returned error", "error", e,
-			"description", r.URL.Query().Get("error_description"))
-		auditLoginDenied(r.Context(), "")
-		http.Error(w, "login failed at identity provider: "+e, http.StatusBadGateway)
-		return
-	}
+// oidcSubject is the user row's key for an IdP identity: the configured issuer and the token's sub.
+func oidcSubject(c oidc.Claims) string { return c.Issuer + "|" + c.Subject }
 
-	fs, ok := od.takeFlowCookie(w, r)
-	if !ok {
-		auditLoginDenied(r.Context(), "")
-		http.Error(w, "login flow expired — start again", http.StatusBadRequest)
-		return
-	}
-	qstate := r.URL.Query().Get("state")
-	if qstate == "" || subtle.ConstantTimeCompare([]byte(qstate), []byte(fs.State)) != 1 {
-		auditLoginDenied(r.Context(), "")
-		http.Error(w, "state mismatch", http.StatusBadRequest)
-		return
-	}
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		auditLoginDenied(r.Context(), "")
-		http.Error(w, "missing code", http.StatusBadRequest)
-		return
-	}
-
-	pc, err := od.provider(r.Context(), cfg)
-	if err != nil {
-		slog.Error("oidc callback: discovery failed", "issuer", cfg.Issuer, "err", err)
-		http.Error(w, "identity provider unavailable", http.StatusBadGateway)
-		return
-	}
-	oc := pc.OAuth2()
-	if cfg.ClientSecretEnv != "" {
-		oc.ClientSecret = os.Getenv(cfg.ClientSecretEnv)
-	}
-	tok, err := oauth.New(oc).Exchange(r.Context(), code, fs.Verifier)
-	if err != nil {
-		slog.Error("oidc callback: code exchange failed", "err", err)
-		auditLoginDenied(r.Context(), "")
-		http.Error(w, "code exchange failed", http.StatusBadGateway)
-		return
-	}
-
-	claims, err := idTokenClaims(tok)
-	if err != nil {
-		slog.Error("oidc callback: id_token unusable", "err", err)
-		auditLoginDenied(r.Context(), "")
-		http.Error(w, "identity provider returned no usable identity", http.StatusBadGateway)
-		return
-	}
-	subject := cfg.Issuer + "|" + claims.Sub
-
-	ctx := r.Context()
+// resolveUser finds the user for an OIDC identity, provisioning one when registration is open, and refuses disabled accounts.
+func (od *oidcDeps) resolveUser(ctx context.Context, c oidc.Claims) (*user.User, error) {
+	subject := oidcSubject(c)
 	u, err := od.users.ByOIDCSubject(ctx, subject)
 	if err != nil {
 		slog.Error("oidc callback: user lookup failed", "err", err)
-		auditLoginDenied(ctx, subject)
-		http.Error(w, "user lookup failed", http.StatusInternalServerError)
-		return
+		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "user lookup failed", Name: subject, Err: err}
 	}
 	if u == nil {
-		if !cfg.OpenRegistration() {
-			auditLoginDenied(ctx, subject)
-			http.Error(w, "no account for this identity (registration is closed)", http.StatusForbidden)
-			return
+		if !od.cfg().OpenRegistration() {
+			return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "no account for this identity (registration is closed)", Name: subject}
 		}
-		u, err = od.provision(ctx, subject, claims)
+		u, err = od.provision(ctx, subject, c)
 		if err != nil {
 			slog.Error("oidc callback: provision failed", "err", err)
-			auditLoginDenied(ctx, subject)
-			http.Error(w, "account provisioning failed", http.StatusInternalServerError)
-			return
+			return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "account provisioning failed", Name: subject, Err: err}
 		}
 		slog.Info("oidc: user auto-provisioned", "username", u.Username)
 	}
 	if u.Disabled {
-		auditLoginDenied(ctx, u.Username)
-		http.Error(w, "account disabled", http.StatusForbidden)
-		return
+		return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "account disabled", Name: u.Username}
 	}
+	return u, nil
+}
 
-	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, subject, claims.Sid, claims.groups(cfg.EffectiveGroupsClaim()), u.Roles...); err != nil {
+// login mints the relay session for u and records the allowed login.
+func (od *oidcDeps) login(_ http.ResponseWriter, r *http.Request, u *user.User, c oidc.Claims) error {
+	ctx := r.Context()
+	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, oidcSubject(c), c.SessionID, c.Groups, u.Roles...); err != nil {
 		slog.Error("oidc callback: session create failed", "err", err)
-		auditLoginDenied(ctx, u.Username)
-		http.Error(w, "session create failed", http.StatusInternalServerError)
-		return
+		return &oidc.Failure{Status: http.StatusInternalServerError, Message: "session create failed", Name: u.Username, Err: err}
 	}
 	audit.Record(ctx, "auth.login",
 		audit.Resource{Kind: "user", ID: u.ID, Name: u.Username}, audit.StatusAllowed,
 		audit.Actor{Kind: audit.ActorUser, ID: u.ID, Name: u.Username})
-	target := cfg.PostLoginURL
-	if target == "" {
-		target = "/"
-	}
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-// provider fills endpoints from issuer metadata and shapes the oauth config.
-func (od *oidcDeps) provider(ctx context.Context, cfg *settings.AuthOIDC) (oauth.ProviderConfig, error) {
-	return od.discover(ctx, oauth.ProviderConfig{
-		Issuer:      cfg.Issuer,
-		ClientID:    cfg.ClientID,
-		RedirectURI: cfg.RedirectURL,
-		Scopes:      cfg.EffectiveScopes(),
-		AuthParams:  cfg.AuthParams,
-	})
-}
-
-// takeFlowCookie reads, decodes, and expires the per-dance cookie.
-func (od *oidcDeps) takeFlowCookie(w http.ResponseWriter, r *http.Request) (flowState, bool) {
-	var fs flowState
-	c, err := r.Cookie(oidcFlowCookie)
-	if err != nil || c.Value == "" {
-		return fs, false
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: oidcFlowCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: od.cookieSecure, SameSite: http.SameSiteLaxMode,
-	})
-	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
-	if err != nil {
-		return fs, false
-	}
-	if err := json.Unmarshal(raw, &fs); err != nil || fs.State == "" || fs.Verifier == "" {
-		return flowState{}, false
-	}
-	return fs, true
+	return nil
 }
 
 // provision creates a user row for a first-time OIDC login. Username derives
 // from the email local part (or the subject tail) with a collision suffix.
-func (od *oidcDeps) provision(ctx context.Context, subject string, c *idClaims) (*user.User, error) {
+func (od *oidcDeps) provision(ctx context.Context, subject string, c oidc.Claims) (*user.User, error) {
 	base := c.PreferredUsername
 	if base == "" && c.Email != "" {
 		base = c.Email[:strings.IndexByte(c.Email+"@", '@')]
@@ -328,110 +201,4 @@ func (od *oidcDeps) provision(ctx context.Context, subject string, c *idClaims) 
 		return nil, err
 	}
 	return u, nil
-}
-
-// idClaims is the subset of ID-token claims login consumes. Sid is the IdP
-// session id — stored on the relay session so a back-channel-logout receiver
-// can find sessions minted from a given IdP session.
-type idClaims struct {
-	Sub               string `json:"sub"`
-	Email             string `json:"email"`
-	PreferredUsername string `json:"preferred_username"`
-	Sid               string `json:"sid"`
-
-	// raw keeps the decoded payload so the groups claim — whose name is
-	// deployment config, not a fixed field — can be read out of it.
-	raw map[string]any
-}
-
-// groups returns the string values of the named claim. Providers render it
-// as an array of strings; anything else is ignored rather than guessed at.
-func (c *idClaims) groups(claim string) []string {
-	if c == nil || claim == "" {
-		return nil
-	}
-	list, _ := c.raw[claim].([]any)
-	out := make([]string, 0, len(list))
-	for _, v := range list {
-		if name, ok := v.(string); ok && name != "" {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// idTokenClaims extracts claims from the token response's id_token. The
-// payload is decoded without signature verification: the token arrived on
-// the code-exchange response over TLS with client authentication, so the
-// channel — not the signature — is the trust anchor here. (Bearer-token
-// auth on the API, where tokens arrive from the caller, must verify
-// against JWKS; that surface is separate.)
-// idTokenClaims extracts the caller's identity from the code-exchange
-// response. Standard OIDC carries it as an id_token JWT; some hosted
-// user-management providers instead inline a profile object on the token
-// response ({"user": {"id": ..., "email": ...}}) — both are accepted, JWT
-// first. The payload is decoded without signature verification: the token
-// arrived on the code-exchange response over TLS with client
-// authentication, so the channel — not the signature — is the trust anchor
-// here. (Bearer-token auth on the API, where tokens arrive from the caller,
-// must verify against JWKS; that surface is separate.)
-func idTokenClaims(tok *oauth.Token) (*idClaims, error) {
-	if raw, _ := tok.Extra("id_token").(string); raw != "" {
-		parts := strings.Split(raw, ".")
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("id_token is not a JWT")
-		}
-		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("id_token payload: %w", err)
-		}
-		var c idClaims
-		if err := json.Unmarshal(payload, &c); err != nil {
-			return nil, fmt.Errorf("id_token claims: %w", err)
-		}
-		_ = json.Unmarshal(payload, &c.raw)
-		if c.Sub == "" {
-			return nil, fmt.Errorf("id_token has no sub")
-		}
-		return &c, nil
-	}
-	if m, ok := tok.Extra("user").(map[string]any); ok {
-		c := &idClaims{}
-		c.Sub, _ = m["id"].(string)
-		c.Email, _ = m["email"].(string)
-		if c.Sub != "" {
-			return c, nil
-		}
-	}
-	return nil, fmt.Errorf("token response carried neither an id_token nor an inline user profile (is the openid scope configured?)")
-}
-
-// cachedDiscover wraps sdk/oauth issuer discovery with a small per-process
-// cache so each login dance doesn't refetch provider metadata.
-func cachedDiscover() func(ctx context.Context, pc oauth.ProviderConfig) (oauth.ProviderConfig, error) {
-	type entry struct {
-		pc  oauth.ProviderConfig
-		exp time.Time
-	}
-	var (
-		mu    sync.Mutex
-		cache = map[string]entry{}
-	)
-	return func(ctx context.Context, pc oauth.ProviderConfig) (oauth.ProviderConfig, error) {
-		key := pc.Issuer + "|" + pc.ClientID + "|" + pc.RedirectURI
-		mu.Lock()
-		if e, ok := cache[key]; ok && time.Now().Before(e.exp) {
-			mu.Unlock()
-			return e.pc, nil
-		}
-		mu.Unlock()
-		out, err := pc.Discover(ctx, http.DefaultClient)
-		if err != nil {
-			return out, err
-		}
-		mu.Lock()
-		cache[key] = entry{pc: out, exp: time.Now().Add(time.Hour)}
-		mu.Unlock()
-		return out, nil
-	}
 }

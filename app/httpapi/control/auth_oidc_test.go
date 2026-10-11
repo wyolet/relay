@@ -22,7 +22,6 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/kv"
-	"github.com/wyolet/relay/sdk/oauth"
 )
 
 // fakeIdP is an OIDC provider: discovery, JWKS and a token endpoint that checks the code and returns an EdDSA-signed id_token.
@@ -176,10 +175,6 @@ func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubjec
 	return nil
 }
 
-func testOIDCDeps(cfg func() *settings.AuthOIDC, users oidcUserStore, sess sessionLogin, secure bool) *oidcDeps {
-	return &oidcDeps{cfg: cfg, users: users, sessions: sess, cookieSecure: secure, discover: cachedDiscover()}
-}
-
 // oidcHarness serves the OIDC routes as the control listener mounts them: start and callback under /api behind the audit middleware, and the root /auth/callback.
 type oidcHarness struct {
 	t     *testing.T
@@ -207,7 +202,7 @@ func newOIDCHarness(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC) *oidcHar
 	t.Helper()
 	h := &oidcHarness{t: t, idp: idp, cfg: cfg, users: newFakeUsers(), sess: &fakeSessions{}, sink: &auditSink{}}
 	h.em = audit.NewEmitter(h.sink, slog.New(slog.DiscardHandler))
-	od := testOIDCDeps(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, false)
+	od := newOIDC(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, false)
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
 		api.Use(audit.Middleware(h.em, nil))
@@ -355,7 +350,7 @@ func TestOIDCStart_SecureCookie(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
 	r := chi.NewRouter()
-	mountOIDCRoutes(r, testOIDCDeps(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, true))
+	mountOIDCRoutes(r, newOIDC(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, true))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/auth/oidc/start", nil))
 	if c := cookieNamed(rec, oidcFlowCookie); c == nil || !c.Secure {
@@ -708,23 +703,5 @@ func TestOIDCFlow_AuditsLogin(t *testing.T) {
 				t.Fatalf("event = %+v, want the provisioned user alice", ev)
 			}
 		})
-	}
-}
-
-// Guard: the id_token parser rejects garbage tokens.
-func TestIDTokenClaims(t *testing.T) {
-	mk := func(payload string) *oauth.Token {
-		tok := &oauth.Token{}
-		raw := "h." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".s"
-		return tok.WithExtra(map[string]any{"id_token": raw})
-	}
-	if _, err := idTokenClaims(mk(`{"sub":"x"}`)); err != nil {
-		t.Errorf("valid claims rejected: %v", err)
-	}
-	if _, err := idTokenClaims(mk(`{}`)); err == nil || !strings.Contains(err.Error(), "sub") {
-		t.Errorf("missing sub accepted: %v", err)
-	}
-	if _, err := idTokenClaims(&oauth.Token{}); err == nil {
-		t.Error("absent id_token accepted")
 	}
 }
