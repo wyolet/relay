@@ -1,6 +1,6 @@
 // Package oidc is an OpenID Connect relying party for browser login: Start redirects to the provider's hosted login, Callback exchanges the authorization code and hands the caller's claims to the product.
 //
-// Any provider publishing an OAuth 2.0 authorization-server (RFC 8414) or OpenID discovery document works. The product owns accounts and sessions through the Provision and Login hooks; this package stores nothing. State and the PKCE verifier travel in a short-lived SameSite=Lax cookie rather than a session, because the callback arrives as a cross-site top-level navigation that a SameSite=Strict session cookie does not accompany.
+// Any provider publishing an OpenID discovery document whose issuer equals the configured issuer works. The product owns accounts and sessions through the Provision and Login hooks; this package stores nothing. State, the PKCE verifier and the nonce travel in a short-lived SameSite=Lax cookie rather than a session, because the callback arrives as a cross-site top-level navigation that a SameSite=Strict session cookie does not accompany.
 package oidc
 
 import (
@@ -13,12 +13,13 @@ import (
 	"net/http"
 	"sync"
 
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
 
 // Config is one provider registration. A RelyingParty reads it on every request, so a changed setting applies to the next login.
 type Config struct {
-	// Issuer is the provider's issuer URL; endpoints are discovered from its metadata.
+	// Issuer is the provider's issuer URL; endpoints and signing keys are discovered from its metadata. It must equal the metadata's issuer exactly, trailing slash included.
 	Issuer   string
 	ClientID string
 	// ClientSecret is sent in the token request's form parameters; empty for a public client, which relies on PKCE alone.
@@ -68,7 +69,7 @@ type RelyingParty[U any] struct {
 	OnDenied func(r *http.Request, f *Failure)
 
 	mu        sync.Mutex
-	discovery map[string]cachedEndpoint
+	discovery map[string]cachedProvider
 }
 
 // Start redirects the browser to the provider's authorization endpoint and sets the flow cookie.
@@ -78,29 +79,33 @@ func (rp *RelyingParty[U]) Start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "oidc login is not enabled", http.StatusNotFound)
 		return
 	}
-	oc, err := rp.oauth2Config(r.Context(), cfg)
+	_, oc, err := rp.oauth2Config(r.Context(), cfg)
 	if err != nil {
 		slog.Error("oidc start: discovery failed", "issuer", cfg.Issuer, "err", err)
 		http.Error(w, "identity provider unavailable", http.StatusBadGateway)
 		return
 	}
 
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
+	state, err := randomHex()
+	if err != nil {
 		http.Error(w, "entropy unavailable", http.StatusInternalServerError)
 		return
 	}
-	state := hex.EncodeToString(buf)
+	nonce, err := randomHex()
+	if err != nil {
+		http.Error(w, "entropy unavailable", http.StatusInternalServerError)
+		return
+	}
 
 	verifier := oauth2.GenerateVerifier()
-	opts := make([]oauth2.AuthCodeOption, 0, len(cfg.AuthParams)+1)
+	opts := make([]oauth2.AuthCodeOption, 0, len(cfg.AuthParams)+2)
 	for k, v := range cfg.AuthParams {
 		opts = append(opts, oauth2.SetAuthURLParam(k, v))
 	}
-	opts = append(opts, oauth2.S256ChallengeOption(verifier))
+	opts = append(opts, oauth2.S256ChallengeOption(verifier), gooidc.Nonce(nonce))
 	authURL := oc.AuthCodeURL(state, opts...)
 
-	fs := flowState{State: state, Verifier: verifier}
+	fs := flowState{State: state, Verifier: verifier, Nonce: nonce}
 	if rd := r.URL.Query().Get(rp.returnParamName()); safeReturnPath(rd) {
 		fs.Return = rd
 	}
@@ -138,7 +143,7 @@ func (rp *RelyingParty[U]) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oc, err := rp.oauth2Config(r.Context(), cfg)
+	p, oc, err := rp.oauth2Config(r.Context(), cfg)
 	if err != nil {
 		slog.Error("oidc callback: discovery failed", "issuer", cfg.Issuer, "err", err)
 		http.Error(w, "identity provider unavailable", http.StatusBadGateway)
@@ -150,10 +155,14 @@ func (rp *RelyingParty[U]) Callback(w http.ResponseWriter, r *http.Request) {
 		rp.deny(w, r, &Failure{Status: http.StatusBadGateway, Message: "code exchange failed", Err: err})
 		return
 	}
-	claims, err := claimsFromToken(tok, cfg.Issuer, cfg.GroupsClaim)
+	claims, err := claimsFromToken(r.Context(), tok, p, cfg, fs.Nonce)
 	if err != nil {
 		slog.Error("oidc callback: id_token unusable", "err", err)
-		rp.deny(w, r, &Failure{Status: http.StatusBadGateway, Message: "identity provider returned no usable identity", Err: err})
+		msg := "identity provider returned no usable identity"
+		if errors.Is(err, errInvalidIDToken) {
+			msg = "identity provider returned an invalid id_token"
+		}
+		rp.deny(w, r, &Failure{Status: http.StatusBadGateway, Message: msg, Err: err})
 		return
 	}
 
@@ -193,21 +202,30 @@ func (rp *RelyingParty[U]) deny(w http.ResponseWriter, r *http.Request, f *Failu
 	http.Error(w, f.Message, f.Status)
 }
 
-// oauth2Config shapes cfg and its discovered endpoints for x/oauth2. Client credentials go in the form parameters, which a public client without a secret needs.
-func (rp *RelyingParty[U]) oauth2Config(ctx context.Context, cfg *Config) (*oauth2.Config, error) {
-	ep, err := rp.endpoints(ctx, cfg)
+// oauth2Config returns cfg's discovered provider and shapes cfg and its endpoints for x/oauth2. Client credentials go in the form parameters, which a public client without a secret needs.
+func (rp *RelyingParty[U]) oauth2Config(ctx context.Context, cfg *Config) (*gooidc.Provider, *oauth2.Config, error) {
+	p, err := rp.provider(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &oauth2.Config{
+	ep := p.Endpoint()
+	return p, &oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  cfg.RedirectURL,
 		Scopes:       cfg.Scopes,
 		Endpoint: oauth2.Endpoint{
-			AuthURL:   ep.authURL,
-			TokenURL:  ep.tokenURL,
+			AuthURL:   ep.AuthURL,
+			TokenURL:  ep.TokenURL,
 			AuthStyle: oauth2.AuthStyleInParams,
 		},
 	}, nil
+}
+
+func randomHex() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }

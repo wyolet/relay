@@ -41,6 +41,9 @@ type fakeIdP struct {
 	// the hosted-user-management shape: a {"user": {...}} object and no JWT.
 	inlineProfile bool
 
+	// nonce is the authorize request's nonce, which the id_token echoes.
+	nonce string
+
 	sawVerifier  string
 	sawSecret    string
 	discoveryHit atomic.Int32
@@ -55,15 +58,14 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	}
 	f := &fakeIdP{issuedCode: "code-123", sub: "user_abc", email: "alice@example.com", key: key}
 	mux := http.NewServeMux()
-	// Deliberately only the OIDC discovery path (the WorkOS shape) so the
-	// RFC 8414 → openid-configuration fallback is exercised end to end.
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		f.discoveryHit.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"issuer":                 f.srv.URL,
-			"authorization_endpoint": f.srv.URL + "/authorize",
-			"token_endpoint":         f.srv.URL + "/token",
-			"jwks_uri":               f.srv.URL + "/jwks",
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                f.srv.URL,
+			"authorization_endpoint":                f.srv.URL + "/authorize",
+			"token_endpoint":                        f.srv.URL + "/token",
+			"jwks_uri":                              f.srv.URL + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"EdDSA"},
 		})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
@@ -117,6 +119,7 @@ func (f *fakeIdP) idToken() string {
 		"iat":    now.Unix(),
 		"exp":    now.Add(5 * time.Minute).Unix(),
 		"groups": []string{"eng", "ops"},
+		"nonce":  f.nonce,
 	}
 	for k, v := range f.claims {
 		if v == nil {
@@ -219,7 +222,7 @@ func (h *oidcHarness) do(req *http.Request) *httptest.ResponseRecorder {
 	return rec
 }
 
-// start runs the start handler and returns the IdP redirect URL and the flow cookie.
+// start runs the start handler, hands the authorize request's nonce to the IdP, and returns the IdP redirect URL and the flow cookie.
 func (h *oidcHarness) start() (*url.URL, *http.Cookie) {
 	h.t.Helper()
 	rec := h.do(httptest.NewRequest("GET", "/api/auth/oidc/start", nil))
@@ -230,6 +233,7 @@ func (h *oidcHarness) start() (*url.URL, *http.Cookie) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	h.idp.nonce = loc.Query().Get("nonce")
 	flow := cookieNamed(rec, oidcFlowCookie)
 	if flow == nil {
 		h.t.Fatal("start set no flow cookie")
@@ -288,7 +292,7 @@ func wantResponse(t *testing.T, rec *httptest.ResponseRecorder, status int, body
 	}
 }
 
-// The authorize redirect carries state and a PKCE S256 challenge but no nonce; the flow cookie is HttpOnly, SameSite=Lax, Path=/ and lives ten minutes.
+// The authorize redirect carries state, a PKCE S256 challenge and a nonce; the flow cookie holds all three, is HttpOnly, SameSite=Lax, Path=/ and lives ten minutes.
 func TestOIDCStart_RedirectAndFlowCookie(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
@@ -319,8 +323,8 @@ func TestOIDCStart_RedirectAndFlowCookie(t *testing.T) {
 	if len(q.Get("state")) != 32 || q.Get("code_challenge") == "" {
 		t.Errorf("state %q / code_challenge %q", q.Get("state"), q.Get("code_challenge"))
 	}
-	if q.Has("nonce") {
-		t.Errorf("authorize URL carries a nonce: %s", loc)
+	if len(q.Get("nonce")) != 32 {
+		t.Errorf("authorize nonce = %q", q.Get("nonce"))
 	}
 
 	c := cookieNamed(rec, "relay_oidc_flow")
@@ -337,8 +341,9 @@ func TestOIDCStart_RedirectAndFlowCookie(t *testing.T) {
 	var fs struct {
 		S string `json:"s"`
 		V string `json:"v"`
+		N string `json:"n"`
 	}
-	if err := json.Unmarshal(raw, &fs); err != nil || fs.S != q.Get("state") || fs.V == "" {
+	if err := json.Unmarshal(raw, &fs); err != nil || fs.S != q.Get("state") || fs.V == "" || fs.N != q.Get("nonce") {
 		t.Fatalf("flow cookie payload = %s", raw)
 	}
 	if evs := h.events(); len(evs) != 0 {
@@ -399,16 +404,19 @@ func TestOIDCFlow_ProvisionsAndLogsIn(t *testing.T) {
 			if strings.Join(s.groups, ",") != "eng,ops" {
 				t.Errorf("session groups = %q", s.groups)
 			}
-			if idp.jwksHits.Load() != 0 {
+			if idp.jwksHits.Load() != 1 {
 				t.Errorf("JWKS fetched %d times", idp.jwksHits.Load())
 			}
 
-			// Second login with the same subject reuses the row.
+			// Second login with the same subject reuses the row and the cached signing keys.
 			if rec := h.login(path); rec.Code != http.StatusFound {
 				t.Fatalf("second callback: status %d", rec.Code)
 			}
 			if len(h.users.bySubject) != 1 {
 				t.Errorf("second login created a duplicate user")
+			}
+			if idp.jwksHits.Load() != 1 {
+				t.Errorf("JWKS fetched %d times over two logins", idp.jwksHits.Load())
 			}
 		})
 	}
@@ -437,6 +445,8 @@ func TestOIDCFlow_UsernameAndRoles(t *testing.T) {
 		{"email local part", nil, "", "alice"},
 		{"collision suffix", nil, "alice", "alice-2"},
 		{"fallback", map[string]any{"email": nil}, "", "user"},
+		// Zitadel without idTokenUserinfoAssertion signs an id_token carrying sub alone.
+		{"sub-only id_token", map[string]any{"email": nil, "sid": nil, "groups": nil}, "", "user"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -456,29 +466,27 @@ func TestOIDCFlow_UsernameAndRoles(t *testing.T) {
 	}
 }
 
-// The id_token is decoded, not verified: signature, audience, issuer, expiry and nonce are not checked, and the session subject uses the configured issuer, not the token's iss.
-func TestOIDCFlow_IDTokenClaimsNotVerified(t *testing.T) {
+// The id_token is verified before any claim is read: a bad signature, audience, issuer, expiry or nonce is a 502 with a denied audit row and no session.
+func TestOIDCFlow_IDTokenRejected(t *testing.T) {
 	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
 	cases := map[string]func(*fakeIdP){
 		"wrong signature": func(f *fakeIdP) { f.signWith = otherKey },
 		"wrong audience":  func(f *fakeIdP) { f.claims = map[string]any{"aud": "someone-else"} },
 		"wrong issuer":    func(f *fakeIdP) { f.claims = map[string]any{"iss": "https://evil.example"} },
 		"expired":         func(f *fakeIdP) { f.claims = map[string]any{"exp": time.Now().Add(-time.Hour).Unix()} },
-		"unexpected nonce": func(f *fakeIdP) {
-			f.claims = map[string]any{"nonce": "attacker"}
-		},
+		"wrong nonce":     func(f *fakeIdP) { f.claims = map[string]any{"nonce": "attacker"} },
+		"missing nonce":   func(f *fakeIdP) { f.claims = map[string]any{"nonce": nil} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			idp := newFakeIdP(t)
 			mutate(idp)
 			h := newTestOIDC(t, idp, "open")
-			if rec := h.login("/api/auth/oidc/callback"); rec.Code != http.StatusFound {
-				t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+			wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusBadGateway, "identity provider returned an invalid id_token")
+			if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
+				t.Fatalf("session = %+v, users = %d", h.sess, len(h.users.bySubject))
 			}
-			if h.sess.calls != 1 || h.sess.subject != h.subject() {
-				t.Fatalf("session = %+v", h.sess)
-			}
+			wantDenied(t, h.events(), "")
 		})
 	}
 }
@@ -560,6 +568,9 @@ func TestOIDCFlow_InlineProfileTokenResponse(t *testing.T) {
 	if h.sess.calls != 1 || h.sess.sid != "" || len(h.sess.groups) != 0 {
 		t.Errorf("session = %+v", h.sess)
 	}
+	if idp.jwksHits.Load() != 0 {
+		t.Errorf("JWKS fetched %d times without an id_token", idp.jwksHits.Load())
+	}
 }
 
 func TestOIDCFlow_ClosedRegistrationRejectsUnknown(t *testing.T) {
@@ -600,7 +611,9 @@ func TestOIDCFlow_FlowCookieRejected(t *testing.T) {
 		"not json":    {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte("nope"))},
 		"no verifier": {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y"}`))},
 		"no state":    {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(`{"v":"v"}`))},
-		"other name":  {Name: "relay_session", Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y","v":"v"}`))},
+		// Set before nonces existed: that one login restarts.
+		"no nonce":   {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y","v":"v"}`))},
+		"other name": {Name: "relay_session", Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y","v":"v"}`))},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
