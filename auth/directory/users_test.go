@@ -159,7 +159,7 @@ func TestDeleteUser(t *testing.T) {
 	u := &directory.User{Username: "ada"}
 	must(t, h.d.CreateUser(ctx, nil, u))
 	g := &directory.Group{Meta: directory.Metadata{Name: "ops"}, Spec: directory.GroupSpec{MemberIDs: []string{u.ID}}}
-	must(t, h.d.CreateGroup(ctx, g))
+	must(t, h.d.CreateGroup(ctx, caller, g))
 
 	must(t, h.d.DeleteUser(ctx, u.ID))
 	if c := h.notes.last(t); c != (directory.Change{Kind: directory.KindUser, Op: directory.OpDelete, ID: u.ID}) {

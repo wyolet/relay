@@ -333,6 +333,9 @@ func registerKind[T any](
 				create = w.Create
 			}
 			if err := create(ctx, v); err != nil {
+				if refused := grantRefusal(err); refused != nil {
+					return nil, refused
+				}
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
 			created, err := store.Get(ctx, m.ID)

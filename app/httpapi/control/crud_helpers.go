@@ -84,7 +84,18 @@ func mapWriteErr(kind, id string, err error) error {
 	if managed := managedError(err); managed != nil {
 		return managed
 	}
+	if refused := grantRefusal(err); refused != nil {
+		return refused
+	}
 	return huma.Error500InternalServerError(err.Error())
+}
+
+// grantRefusal is the 403 for a write the directory's grant check refused, or nil when err is not one.
+func grantRefusal(err error) error {
+	if errors.Is(err, authz.ErrForbidden) {
+		return huma.Error403Forbidden(err.Error())
+	}
+	return nil
 }
 
 // managedError is the 409 for a write to a row a provisioning source

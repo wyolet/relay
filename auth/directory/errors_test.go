@@ -118,7 +118,7 @@ func TestStoreErrorsReachTheCaller(t *testing.T) {
 	sa := &directory.ServiceAccount{Meta: directory.Metadata{Name: "ci"}, Spec: directory.ServiceAccountSpec{ProjectID: p.Meta.ID}}
 	must(t, d.CreateServiceAccount(ctx, sa))
 	g := &directory.Group{Meta: directory.Metadata{Name: "ops"}}
-	must(t, d.CreateGroup(ctx, g))
+	must(t, d.CreateGroup(ctx, admin, g))
 	r := &directory.Role{Meta: directory.Metadata{Name: "reader"}, Spec: directory.RoleSpec{Rules: []rbac.Rule{{Kinds: []string{"d"}, Verbs: []string{"get"}}}}}
 	must(t, d.CreateRole(ctx, r))
 	b := &directory.RoleBinding{Meta: directory.Metadata{Name: "readers"}, Spec: directory.RoleBindingSpec{RoleID: r.Meta.ID,
@@ -139,14 +139,16 @@ func TestStoreErrorsReachTheCaller(t *testing.T) {
 		},
 		"disable user": func() error { return d.DisableUser(ctx, u.ID) },
 		"delete user":  func() error { return d.DeleteUser(ctx, u.ID) },
-		"create group": func() error { return d.CreateGroup(ctx, &directory.Group{Meta: directory.Metadata{DisplayName: "x"}}) },
+		"create group": func() error {
+			return d.CreateGroup(ctx, admin, &directory.Group{Meta: directory.Metadata{DisplayName: "x"}})
+		},
 		"create group id": func() error {
-			return d.CreateGroup(ctx, &directory.Group{Meta: directory.Metadata{ID: "x", Name: "x"}})
+			return d.CreateGroup(ctx, admin, &directory.Group{Meta: directory.Metadata{ID: "x", Name: "x"}})
 		},
 		"update group": func() error {
-			return d.UpdateGroup(ctx, &directory.Group{Meta: directory.Metadata{ID: g.Meta.ID}, Spec: directory.GroupSpec{MemberIDs: []string{u.ID}}})
+			return d.UpdateGroup(ctx, admin, &directory.Group{Meta: directory.Metadata{ID: g.Meta.ID}, Spec: directory.GroupSpec{MemberIDs: []string{u.ID}}})
 		},
-		"add member":   func() error { return d.AddGroupMember(ctx, g.Meta.ID, u.ID) },
+		"add member":   func() error { return d.AddGroupMember(ctx, admin, g.Meta.ID, u.ID) },
 		"delete group": func() error { return d.DeleteGroup(ctx, g.Meta.ID) },
 		"create team":  func() error { return d.CreateTeam(ctx, &directory.Team{Meta: directory.Metadata{DisplayName: "x"}}) },
 		"update team":  func() error { return d.UpdateTeam(ctx, &directory.Team{Meta: directory.Metadata{ID: team.Meta.ID}}) },

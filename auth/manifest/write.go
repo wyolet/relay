@@ -21,7 +21,7 @@ func Write(ctx context.Context, dir *directory.Directory, caller *principal.Prin
 	case *directory.Role:
 		return upsert(ctx, s.Roles, x.Meta.ID, func() error { return dir.CreateRole(ctx, x) }, func() error { return dir.UpdateRole(ctx, caller, x) })
 	case *directory.Group:
-		return upsert(ctx, s.Groups, x.Meta.ID, func() error { return dir.CreateGroup(ctx, x) }, func() error { return dir.UpdateGroup(ctx, x) })
+		return upsert(ctx, s.Groups, x.Meta.ID, func() error { return dir.CreateGroup(ctx, caller, x) }, func() error { return dir.UpdateGroup(ctx, caller, x) })
 	case *directory.RoleBinding:
 		return upsert(ctx, s.RoleBindings, x.Meta.ID, func() error { return dir.CreateRoleBinding(ctx, caller, x) }, func() error { return dir.UpdateRoleBinding(ctx, caller, x) })
 	case *directory.User:

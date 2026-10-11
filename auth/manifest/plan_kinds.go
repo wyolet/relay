@@ -87,7 +87,7 @@ func (p *planner) run() error {
 	}
 	if err := planKind(p, kindOps[directory.Group]{kind: KindGroup, rows: rs.groups,
 		meta: func(x *directory.Group) *directory.Metadata { return &x.Meta }, to: r.ToGroup, from: r.FromGroup,
-		create: ungranted((*dir).CreateGroup), update: ungranted((*dir).UpdateGroup), remove: (*dir).DeleteGroup,
+		create: granted((*dir).CreateGroup), update: granted((*dir).UpdateGroup), remove: (*dir).DeleteGroup,
 		managed: func(x *directory.Group) bool { return x.Spec.External.Source != "" }}); err != nil {
 		return err
 	}
