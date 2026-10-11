@@ -11,7 +11,6 @@ import (
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
-	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -28,7 +27,7 @@ func TestVerifiedClaimsAreCachedPerBearer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.tokens.keys.Store(&verifyKeys{current: otherPub, currentKID: authtoken.KeyID(otherPub)})
+	f.tokens.install(otherPub, nil)
 	if _, ok := f.tokens.verified(token, time.Now()); !ok {
 		t.Fatal("second verification missed the cache")
 	}

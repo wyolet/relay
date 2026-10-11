@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"context"
 	"crypto/ed25519"
 	"os"
 	"reflect"
@@ -74,6 +75,65 @@ func TestTokenClaims_PreviouslyMintedTokensVerify(t *testing.T) {
 				t.Errorf("minted token differs from the fixture:\n got %s\nwant %s", minted, old)
 			}
 		})
+	}
+}
+
+// The key set must mint and verify exactly what the bare functions do, so a
+// token in circulation is unaffected by which path minted or checks it.
+func TestTokenClaims_KeySetMatchesTheFixture(t *testing.T) {
+	fx := readTokenFixture(t)
+	ctx := context.Background()
+	priv := ed25519.NewKeyFromSeed([]byte(compatSeed))
+	other, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// As the current key, and as the previous one after a rotation.
+	current := authtoken.NewKeySet(authtoken.NewStaticStore(authtoken.Keys{Signing: priv}), authtoken.KeySetOptions{})
+	rotated := authtoken.NewKeySet(authtoken.NewStaticStore(authtoken.Keys{
+		Current: other, Previous: []ed25519.PublicKey{priv.Public().(ed25519.PublicKey)},
+	}), authtoken.KeySetOptions{MinReloadInterval: -1})
+	for _, ks := range []*authtoken.KeySet{current, rotated} {
+		if err := ks.Reload(ctx); err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+	}
+
+	minted, err := current.Sign(compatClaims())
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if minted != fx["with-kid"] {
+		t.Errorf("key set minted a token that differs from the fixture:\n got %s\nwant %s", minted, fx["with-kid"])
+	}
+	for _, tc := range []struct {
+		name string
+		ks   *authtoken.KeySet
+		ok   bool
+	}{
+		{"with-kid", current, true},
+		{"bare", current, true},
+		{"with-kid", rotated, true},
+		// A token with no kid has only ever been checked against the current key.
+		{"bare", rotated, false},
+	} {
+		claims, err := authtoken.Verify[TokenClaims](ctx, tc.ks, fx[tc.name])
+		if !tc.ok {
+			if err == nil {
+				t.Errorf("%s verified against a key set it was not minted under as current", tc.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: Verify: %v", tc.name, err)
+		} else if !reflect.DeepEqual(claims, compatClaims()) {
+			t.Errorf("%s: claims = %+v, want %+v", tc.name, claims, compatClaims())
+		}
+	}
+	set, err := current.JWKSet()
+	if err != nil || len(set.Keys) != 1 || set.Keys[0].Kid != fx["kid"] {
+		t.Errorf("JWKSet = %+v, %v; want one key whose kid is the fixture's %q", set, err, fx["kid"])
 	}
 }
 
