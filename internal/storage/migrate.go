@@ -16,6 +16,12 @@ import (
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
 
+// groupsVersion is relay's migration that creates groups; authFirstVersion is the auth module's migration whose schema relay's own migrations already hold.
+const (
+	groupsVersion    = 26
+	authFirstVersion = 1
+)
+
 // MigrateUp runs the pending up-migrations, as boot does, for a deployment that applies them in a step of its own before the pods roll.
 func MigrateUp(dsn string) error { return runMigrations(dsn) }
 
@@ -133,6 +139,12 @@ func MigrateTo(dsn string, version uint) error {
 	downAllRun, err := migrateDownTarget(current, err == nil, version)
 	if err != nil {
 		return err
+	}
+	// Below groupsVersion relay's down-migrations drop groups, and further down users, which the auth module's later migrations extend. The module returns to its first migration, whose schema relay's up-migrations recreate, so the next boot applies the rest again.
+	if version < groupsVersion {
+		if err := authpg.MigrateDown(dsn, authFirstVersion); err != nil {
+			return fmt.Errorf("storage: %w", err)
+		}
 	}
 	// Migrate(0) is not a valid target for golang-migrate; unwinding
 	// everything is its own call.

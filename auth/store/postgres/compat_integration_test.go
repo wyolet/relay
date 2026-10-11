@@ -9,17 +9,20 @@ import (
 	"testing"
 )
 
-// The product in this repository created the directory tables before the module existed. These tests prove the module's migration leaves its schema alone, that the two schemas agree, and that the module reads and writes the rows it has.
+// The product in this repository created the directory tables before the module existed. These tests prove the module's first migration leaves its schema alone, that the product's schema with the module's later migrations on top agrees with the module's own, and that the module reads and writes the rows it has.
 
 var directoryTables = []string{
 	"users", "teams", "projects", "service_accounts", "groups", "group_members",
-	"roles", "role_bindings", "role_binding_subjects",
+	"roles", "role_bindings", "role_binding_subjects", "identities",
 }
 
 // productOnly are the schema entries the product adds to the shared tables and the module deliberately leaves out.
 var productOnly = []string{
 	"con role_bindings role_bindings_scope_kind_check",
 }
+
+// moduleTriggers are the triggers the module creates; every other trigger on the shared tables is the product's.
+var moduleTriggers = []string{"_resource_version ", "users_primary_identity "}
 
 const schemaQuery = `
 SELECT 'col ' || table_name || ' ' || ordinal_position || ' ' || column_name || ' ' || data_type || ' ' ||
@@ -88,18 +91,19 @@ func TestMigrationIsNoOpOnProductSchema(t *testing.T) {
 	migrateProduct(t, dsn)
 	tables := allTables(t, dsn)
 	before := schema(t, dsn, tables, true)
-	if err := Migrate(dsn); err != nil {
-		t.Fatal(err)
-	}
+	migrateModule(t, dsn, 1)
 	if after := allTables(t, dsn); !slices.Equal(after, tables) {
 		t.Fatalf("tables changed:\n before %v\n after  %v", tables, after)
 	}
-	diff(t, "after the module's migration", schema(t, dsn, tables, true), before)
+	diff(t, "after the module's first migration", schema(t, dsn, tables, true), before)
 }
 
 func TestSchemaMatchesProduct(t *testing.T) {
 	product := emptyDB(t)
 	migrateProduct(t, product)
+	if err := Migrate(product); err != nil {
+		t.Fatal(err)
+	}
 	module := migratedDB(t)
 
 	want := slices.DeleteFunc(schema(t, product, directoryTables, false), func(s string) bool {
@@ -109,14 +113,32 @@ func TestSchemaMatchesProduct(t *testing.T) {
 			}
 		}
 		// The product's change-notification triggers are its own; the module reports changes in Go.
-		return strings.HasPrefix(s, "trg ") && !strings.Contains(s, "_resource_version ")
+		return strings.HasPrefix(s, "trg ") && !slices.ContainsFunc(moduleTriggers, func(m string) bool { return strings.Contains(s, m) })
 	})
+	got := schema(t, module, directoryTables, false)
 	for _, table := range directoryTables {
-		if !slices.ContainsFunc(want, func(s string) bool { return strings.HasPrefix(s, "col "+table+" ") }) {
-			t.Fatalf("product schema has no table %s", table)
+		for name, s := range map[string][]string{"product": want, "module": got} {
+			if !slices.ContainsFunc(s, func(s string) bool { return strings.HasPrefix(s, "col "+table+" ") }) {
+				t.Fatalf("%s schema has no table %s", name, table)
+			}
 		}
 	}
-	diff(t, "module schema vs product schema", schema(t, module, directoryTables, false), want)
+	diff(t, "module schema vs product schema", got, want)
+	if a, b := mirrorFunction(t, module), mirrorFunction(t, product); a != b {
+		t.Fatalf("identity mirror function differs:\n module  %s\n product %s", a, b)
+	}
+}
+
+// mirrorFunction is the identity mirror's entry in dsn's schema: its name and source digest. The product created bump_resource_version itself, with a source of its own.
+func mirrorFunction(t *testing.T, dsn string) string {
+	t.Helper()
+	for _, s := range schema(t, dsn, nil, true) {
+		if strings.HasPrefix(s, "fn mirror_primary_identity ") {
+			return s
+		}
+	}
+	t.Fatalf("no mirror_primary_identity function in %s", dsn)
+	return ""
 }
 
 func TestProductMigrationsRunAfterModule(t *testing.T) {

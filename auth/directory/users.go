@@ -38,7 +38,7 @@ func (d *Directory) CreateUser(ctx context.Context, p *principal.Principal, u *U
 	return nil
 }
 
-// UpdateUser replaces the account with id u.ID. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Disabling or re-enabling bumps the token version, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed; read the user back for it.
+// UpdateUser replaces the account with id u.ID; a zero u.External keeps the stored one. A role change goes through the grant check for every role added or removed and ends the user's sessions, which carry the roles they logged in with. Disabling or re-enabling bumps the token version, so no token minted before survives, and ends the sessions. u.TokenVersion is not refreshed; read the user back for it.
 func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *User) error {
 	users := d.cfg.Stores.Users
 	stored, err := users.Get(ctx, u.ID)
@@ -66,6 +66,9 @@ func (d *Directory) UpdateUser(ctx context.Context, p *principal.Principal, u *U
 		}
 	}
 	u.TokenVersion, u.CreatedAt = stored.TokenVersion, stored.CreatedAt
+	if u.External.IsZero() {
+		u.External = stored.External
+	}
 	if err := users.Upsert(ctx, u); err != nil {
 		return err
 	}

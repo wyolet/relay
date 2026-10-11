@@ -18,7 +18,9 @@ const (
 	ActionUnchanged Action = "unchanged"
 	// ActionSkipDirty is a row an operator edited after a manifest wrote it; it is left alone unless Options.Force is set.
 	ActionSkipDirty Action = "skip-dirty"
-	ActionDelete    Action = "delete"
+	// ActionSkipManaged is a row a provisioning source manages (see directory.Writer); it is left alone unless Options.Force is set.
+	ActionSkipManaged Action = "skip-managed"
+	ActionDelete      Action = "delete"
 )
 
 // Entry is one planned row change.
@@ -42,7 +44,7 @@ type Plan struct {
 
 // Options configures Plan.
 type Options struct {
-	// Force writes over rows marked Dirty.
+	// Force writes over rows marked Dirty and rows a provisioning source manages.
 	Force bool
 	// Prune deletes stored rows that carry every Selector label and are not in the documents. Users are never pruned: an account carries no labels to say a manifest owns it.
 	Prune    bool

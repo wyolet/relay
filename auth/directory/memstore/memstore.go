@@ -67,6 +67,14 @@ func (s *Store) checkGroup(g *directory.Group) error {
 			return invalid("group %q: user %q does not exist", g.Meta.Name, id)
 		}
 	}
+	if g.Spec.External.ID == "" {
+		return nil
+	}
+	for id, other := range s.groups.rows {
+		if id != g.Meta.ID && other.Spec.External == g.Spec.External {
+			return fmt.Errorf("%w: group %q: external id is taken", directory.ErrConflict, g.Meta.Name)
+		}
+	}
 	return nil
 }
 

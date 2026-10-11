@@ -24,7 +24,7 @@ func (u userStore) ByIdentity(_ context.Context, id directory.Identity) (*direct
 	if id.IsZero() {
 		return nil, nil
 	}
-	return u.find(func(x *directory.User) bool { return x.Identity == id }), nil
+	return u.find(func(x *directory.User) bool { return x.HasIdentity(id) }), nil
 }
 
 func (u userStore) find(match func(*directory.User) bool) *directory.User {
@@ -60,17 +60,26 @@ func (u userStore) Upsert(_ context.Context, in *directory.User) error {
 			return fmt.Errorf("%w: username %q is taken", directory.ErrConflict, in.Username)
 		case in.Email != "" && x.Email == in.Email:
 			return fmt.Errorf("%w: email %q is taken", directory.ErrConflict, in.Email)
-		case !in.Identity.IsZero() && x.Identity == in.Identity:
+		case !in.Identity.IsZero() && x.HasIdentity(in.Identity):
 			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
+		case in.External.ID != "" && x.External == in.External:
+			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
 		}
 	}
 	c := cloneUser(in)
 	stored := u.s.users[in.ID]
-	c.TokenVersion, c.CreatedAt = 1, now()
+	c.TokenVersion, c.CreatedAt, c.Identities = 1, now(), nil
 	if stored != nil {
 		c.TokenVersion, c.CreatedAt = stored.TokenVersion, stored.CreatedAt
+		c.Identities = stored.Identities
+		if stored.Identity != in.Identity {
+			c.Identities = withoutIdentity(c.Identities, stored.Identity)
+		}
 	} else {
 		u.s.userOrder = append(u.s.userOrder, in.ID)
+	}
+	if !in.Identity.IsZero() && !c.HasIdentity(in.Identity) {
+		c.Identities = append(c.Identities, directory.UserIdentity{Identity: in.Identity, CreatedAt: now()})
 	}
 	c.UpdatedAt = now()
 	u.s.users[in.ID] = c
@@ -97,4 +106,57 @@ func (u userStore) BumpTokenVersion(_ context.Context, id string) error {
 		x.UpdatedAt = now()
 	}
 	return nil
+}
+
+func (u userStore) AddIdentity(_ context.Context, userID string, id directory.UserIdentity) error {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	x, ok := u.s.users[userID]
+	if !ok {
+		return invalid("identity: user %q does not exist", userID)
+	}
+	for otherID, other := range u.s.users {
+		if otherID != userID && other.HasIdentity(id.Identity) {
+			return fmt.Errorf("%w: identity is taken", directory.ErrConflict)
+		}
+		if id.ExternalID != "" && slices.ContainsFunc(other.Identities, func(o directory.UserIdentity) bool {
+			return o.Issuer == id.Issuer && o.ExternalID == id.ExternalID && (otherID != userID || o.Identity != id.Identity)
+		}) {
+			return fmt.Errorf("%w: external id is taken", directory.ErrConflict)
+		}
+	}
+	if i := slices.IndexFunc(x.Identities, func(o directory.UserIdentity) bool { return o.Identity == id.Identity }); i >= 0 {
+		x.Identities[i].ExternalID = id.ExternalID
+		return nil
+	}
+	x.Identities = append(x.Identities, directory.UserIdentity{Identity: id.Identity, ExternalID: id.ExternalID, CreatedAt: now()})
+	if x.Identity.IsZero() {
+		x.Identity = id.Identity
+	}
+	return nil
+}
+
+func (u userStore) RemoveIdentity(_ context.Context, userID string, id directory.Identity) error {
+	u.s.mu.Lock()
+	defer u.s.mu.Unlock()
+	x, ok := u.s.users[userID]
+	if !ok {
+		return nil
+	}
+	x.Identities = withoutIdentity(x.Identities, id)
+	if x.Identity == id {
+		x.Identity = directory.Identity{}
+		if len(x.Identities) > 0 {
+			x.Identity = x.Identities[0].Identity
+		}
+	}
+	return nil
+}
+
+func withoutIdentity(ids []directory.UserIdentity, id directory.Identity) []directory.UserIdentity {
+	out := slices.DeleteFunc(slices.Clone(ids), func(o directory.UserIdentity) bool { return o.Identity == id })
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

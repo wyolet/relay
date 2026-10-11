@@ -11,18 +11,23 @@ type Store[T any] interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// UserStore is the storage of accounts. Lookups return (nil, nil) when no account matches; a duplicate username, email or identity is ErrConflict.
+// UserStore is the storage of accounts. Lookups return (nil, nil) when no account matches; a duplicate username, email, identity or external id is ErrConflict.
 type UserStore interface {
 	Get(ctx context.Context, id string) (*User, error)
 	ByUsername(ctx context.Context, username string) (*User, error)
+	// ByIdentity finds the account holding id among its identities, primary or not.
 	ByIdentity(ctx context.Context, id Identity) (*User, error)
 	// List returns every account, oldest first.
 	List(ctx context.Context) ([]*User, error)
-	// Upsert inserts or replaces by ID and leaves TokenVersion as stored; a new account starts at version 1.
+	// Upsert inserts or replaces by ID and leaves TokenVersion as stored; a new account starts at version 1. It writes Identity as the primary identity, replacing the stored primary when it differs, and ignores Identities.
 	Upsert(ctx context.Context, u *User) error
 	Delete(ctx context.Context, id string) error
 	// BumpTokenVersion invalidates every token the user holds.
 	BumpTokenVersion(ctx context.Context, id string) error
+	// AddIdentity links id to the user, or updates its external id when the user already holds it. The first identity of an account with no primary becomes its primary.
+	AddIdentity(ctx context.Context, userID string, id UserIdentity) error
+	// RemoveIdentity unlinks id from the user; one the user does not hold is not an error. Removing the primary makes the oldest remaining identity primary.
+	RemoveIdentity(ctx context.Context, userID string, id Identity) error
 }
 
 // Stores is every store the directory reads and writes. A delete cascades in the store: a team takes its projects, a project its service accounts, a role its bindings, and a user or service account leaves every group and binding it was in.

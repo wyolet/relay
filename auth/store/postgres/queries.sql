@@ -1,38 +1,66 @@
 -- Columns are listed, never *, so a column a product adds to a shared table does not break these reads.
 
 -- name: GetUser :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users WHERE id = $1;
 
 -- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users WHERE username = $1;
 
--- name: GetUserByOIDCSubject :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
-FROM users WHERE oidc_subject = $1;
+-- name: GetUserByIdentity :one
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
+FROM users WHERE id = (SELECT user_id FROM identities WHERE issuer = $1 AND subject = $2);
 
 -- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version, external_source, external_id
 FROM users ORDER BY created_at ASC, id ASC;
 
 -- name: UpsertUser :exec
-INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled, external_source, external_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE SET
-    username      = EXCLUDED.username,
-    email         = EXCLUDED.email,
-    password_hash = EXCLUDED.password_hash,
-    oidc_subject  = EXCLUDED.oidc_subject,
-    roles         = EXCLUDED.roles,
-    disabled      = EXCLUDED.disabled,
-    updated_at    = now();
+    username        = EXCLUDED.username,
+    email           = EXCLUDED.email,
+    password_hash   = EXCLUDED.password_hash,
+    oidc_subject    = EXCLUDED.oidc_subject,
+    roles           = EXCLUDED.roles,
+    disabled        = EXCLUDED.disabled,
+    external_source = EXCLUDED.external_source,
+    external_id     = EXCLUDED.external_id,
+    updated_at      = now();
 
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;
 
 -- name: BumpUserTokenVersion :exec
 UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1;
+
+-- Identities read oldest first; that order also picks the next primary when the primary is removed.
+
+-- name: ListUserIdentities :many
+SELECT user_id, issuer, subject, external_id, created_at FROM identities WHERE user_id = $1 ORDER BY created_at, issuer, subject;
+
+-- name: ListIdentities :many
+SELECT user_id, issuer, subject, external_id, created_at FROM identities ORDER BY user_id, created_at, issuer, subject;
+
+-- An identity another account holds matches no row, which the store reads as a conflict.
+-- name: UpsertIdentity :execrows
+INSERT INTO identities (user_id, issuer, subject, external_id) VALUES ($1, $2, $3, $4)
+ON CONFLICT (issuer, subject) DO UPDATE SET external_id = EXCLUDED.external_id
+WHERE identities.user_id = EXCLUDED.user_id;
+
+-- name: SetPrimaryIdentityIfNone :exec
+UPDATE users SET oidc_subject = $2 WHERE id = $1 AND oidc_subject IS NULL;
+
+-- name: DeleteIdentity :exec
+DELETE FROM identities WHERE user_id = $1 AND issuer = $2 AND subject = $3;
+
+-- name: PromoteOldestIdentity :exec
+UPDATE users SET oidc_subject = (
+    SELECT i.issuer || '|' || i.subject FROM identities i WHERE i.user_id = users.id
+     ORDER BY i.created_at, i.issuer, i.subject LIMIT 1)
+WHERE id = $1 AND oidc_subject = $2;
 
 -- name: ListTeams :many
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams ORDER BY name;
@@ -97,20 +125,22 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR service_accounts.resource
 DELETE FROM service_accounts WHERE id = $1;
 
 -- name: ListGroups :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version, external_source, external_id FROM groups ORDER BY name;
 
 -- name: GetGroup :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version, external_source, external_id FROM groups WHERE id = $1;
 
 -- name: UpsertGroup :execrows
-INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
+INSERT INTO groups (id, name, display_name, metadata, spec, external_source, external_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
+    name            = EXCLUDED.name,
+    display_name    = EXCLUDED.display_name,
+    metadata        = EXCLUDED.metadata,
+    spec            = EXCLUDED.spec,
+    external_source = EXCLUDED.external_source,
+    external_id     = EXCLUDED.external_id,
+    updated_at      = NOW()
 WHERE sqlc.narg('expected_version')::bigint IS NULL OR groups.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteGroup :exec

@@ -22,6 +22,8 @@ type GroupSpec struct {
 	MemberIDs []string
 	// Enabled nil means enabled.
 	Enabled *bool
+	// External is the provisioning source that manages the group and its id there; see Writer. An update that leaves it zero keeps the stored one.
+	External External
 	// Attributes are product fields stored next to the spec, keyed by field name; the module round-trips them untouched.
 	Attributes map[string]json.RawMessage
 }
@@ -35,6 +37,9 @@ func (g *Group) validate() error {
 		return fmt.Errorf("%w: group %q: names starting with %q are reserved", ErrInvalid, g.Meta.Name, ReservedGroupPrefix)
 	}
 	if err := validateMeta("group", &g.Meta, OwnerUser, OwnerSystem); err != nil {
+		return err
+	}
+	if err := g.Spec.External.validate("group", g.Meta.Name); err != nil {
 		return err
 	}
 	seen := make(map[string]struct{}, len(g.Spec.MemberIDs))

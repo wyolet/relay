@@ -95,10 +95,32 @@ func sameUser(t *testing.T, what string, got, want *directory.User) {
 	if w.Roles == nil {
 		w.Roles = []string{}
 	}
+	// A row written with only a primary identity reads back holding it.
+	if w.Identities == nil && !w.Identity.IsZero() {
+		w.Identities = []directory.UserIdentity{{Identity: w.Identity}}
+	}
+	g.Identities, w.Identities = identityKeys(g.Identities), identityKeys(w.Identities)
 	if !reflect.DeepEqual(g, w) {
 		t.Fatalf("%s:\n got  %+v\n want %+v", what, g, w)
 	}
 	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 		t.Fatalf("%s: store did not set timestamps", what)
 	}
+	for _, x := range got.Identities {
+		if x.CreatedAt.IsZero() {
+			t.Fatalf("%s: store did not set the identity timestamp: %+v", what, x)
+		}
+	}
+}
+
+// identityKeys drops the store-set timestamps so identities compare by value.
+func identityKeys(ids []directory.UserIdentity) []directory.UserIdentity {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]directory.UserIdentity, len(ids))
+	for i, x := range ids {
+		out[i] = directory.UserIdentity{Identity: x.Identity, ExternalID: x.ExternalID}
+	}
+	return out
 }

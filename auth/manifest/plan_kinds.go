@@ -32,6 +32,18 @@ type kindOps[T any] struct {
 	create writeFunc[T]
 	update writeFunc[T]
 	remove func(*directory.Directory, context.Context, string) error
+	// managed reports a row a provisioning source manages; nil for kinds none can.
+	managed func(*T) bool
+}
+
+func (k kindOps[T]) isManaged(row *T) bool { return k.managed != nil && k.managed(row) }
+
+// forced is dir writing over a managed row, which a planned write reaches only under Options.Force.
+func forced(dir *directory.Directory, managed bool) *directory.Directory {
+	if !managed {
+		return dir
+	}
+	return dir.WithWriter(directory.Writer{Force: true})
 }
 
 // ungranted adapts a directory operation that hands out no permission and so takes no caller.
@@ -75,7 +87,8 @@ func (p *planner) run() error {
 	}
 	if err := planKind(p, kindOps[directory.Group]{kind: KindGroup, rows: rs.groups,
 		meta: func(x *directory.Group) *directory.Metadata { return &x.Meta }, to: r.ToGroup, from: r.FromGroup,
-		create: ungranted((*dir).CreateGroup), update: ungranted((*dir).UpdateGroup), remove: (*dir).DeleteGroup}); err != nil {
+		create: ungranted((*dir).CreateGroup), update: ungranted((*dir).UpdateGroup), remove: (*dir).DeleteGroup,
+		managed: func(x *directory.Group) bool { return x.Spec.External.Source != "" }}); err != nil {
 		return err
 	}
 	if err := planKind(p, kindOps[directory.RoleBinding]{kind: KindRoleBinding, rows: rs.bindings,
@@ -120,6 +133,8 @@ func planKind[T any](p *planner, k kindOps[T]) error {
 			}
 		case k.meta(prev).Dirty && !p.opts.Force:
 			e.Action = ActionSkipDirty
+		case k.isManaged(prev) && !p.opts.Force:
+			e.Action = ActionSkipManaged
 		default:
 			// The update applies only while the row is as this plan read it.
 			m.ResourceVersion = k.meta(prev).ResourceVersion
@@ -136,8 +151,9 @@ func planKind[T any](p *planner, k kindOps[T]) error {
 				break
 			}
 			e.Action = ActionUpdate
+			managed := k.isManaged(prev)
 			e.write = func(ctx context.Context, dir *directory.Directory, c *principal.Principal) error {
-				return k.update(ctx, dir, c, row)
+				return k.update(ctx, forced(dir, managed), c, row)
 			}
 		}
 		p.entries = append(p.entries, e)
@@ -149,10 +165,14 @@ func planKind[T any](p *planner, k kindOps[T]) error {
 			if declared[m.Name] || !labelsMatch(p.opts.Selector, m.Labels) {
 				continue
 			}
-			id := m.ID
+			id, managed := m.ID, k.isManaged(row)
+			if managed && !p.opts.Force {
+				pruned = append(pruned, Entry{Kind: k.kind, Name: m.Name, ID: id, Action: ActionSkipManaged})
+				continue
+			}
 			pruned = append(pruned, Entry{Kind: k.kind, Name: m.Name, ID: id, Action: ActionDelete,
 				write: func(ctx context.Context, dir *directory.Directory, _ *principal.Principal) error {
-					return k.remove(dir, ctx, id)
+					return k.remove(forced(dir, managed), ctx, id)
 				}})
 		}
 	}

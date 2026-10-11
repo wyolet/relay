@@ -29,8 +29,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		"SELECT version, dirty FROM "+MigrationsTable).Scan(&version, &dirty); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 || dirty {
-		t.Fatalf("recorded version %d dirty=%v, want 1 clean", version, dirty)
+	if want := embeddedVersion(t); version != int64(want) || dirty {
+		t.Fatalf("recorded version %d dirty=%v, want %d clean", version, dirty, want)
 	}
 }
 

@@ -17,12 +17,22 @@ type Group struct {
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
 	ResourceVersion int64
+	ExternalSource  pgtype.Text
+	ExternalID      pgtype.Text
 }
 
 type GroupMember struct {
 	GroupID  string
 	UserID   string
 	Position int32
+}
+
+type Identity struct {
+	UserID     string
+	Issuer     string
+	Subject    string
+	ExternalID pgtype.Text
+	CreatedAt  pgtype.Timestamptz
 }
 
 type Project struct {
@@ -96,14 +106,16 @@ type Team struct {
 }
 
 type User struct {
-	ID           string
-	Username     string
-	Email        pgtype.Text
-	PasswordHash pgtype.Text
-	OidcSubject  pgtype.Text
-	Roles        []string
-	Disabled     bool
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
-	TokenVersion int32
+	ID             string
+	Username       string
+	Email          pgtype.Text
+	PasswordHash   pgtype.Text
+	OidcSubject    pgtype.Text
+	Roles          []string
+	Disabled       bool
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	TokenVersion   int32
+	ExternalSource pgtype.Text
+	ExternalID     pgtype.Text
 }

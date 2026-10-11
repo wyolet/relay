@@ -24,11 +24,17 @@ func (d *Directory) CreateGroup(ctx context.Context, g *Group) error {
 	return d.writeGroup(ctx, g)
 }
 
-// UpdateGroup replaces the group with id g.Meta.ID, members included.
+// UpdateGroup replaces the group with id g.Meta.ID, members included. A group a provisioning source manages is refused with ErrManaged unless the writer is that source or forced.
 func (d *Directory) UpdateGroup(ctx context.Context, g *Group) error {
 	stored, err := loadForUpdate(ctx, d.cfg.Stores.Groups, "group", &g.Meta, groupMeta)
 	if err != nil {
 		return err
+	}
+	if err := d.checkManaged(stored); err != nil {
+		return err
+	}
+	if g.Spec.External.IsZero() {
+		g.Spec.External = stored.Spec.External
 	}
 	defaultOwner(&g.Meta)
 	if err := g.validate(); err != nil {
@@ -40,8 +46,17 @@ func (d *Directory) UpdateGroup(ctx context.Context, g *Group) error {
 	return d.writeGroup(ctx, g)
 }
 
-// DeleteGroup removes the group. A binding naming it by name keeps the name, which may still match a group an identity provider asserts.
+// DeleteGroup removes the group, refusing a managed one as UpdateGroup does. A binding naming it by name keeps the name, which may still match a group an identity provider asserts.
 func (d *Directory) DeleteGroup(ctx context.Context, id string) error {
+	g, err := d.cfg.Stores.Groups.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if g != nil {
+		if err := d.checkManaged(g); err != nil {
+			return err
+		}
+	}
 	return deleteRow(ctx, d, d.cfg.Stores.Groups, KindGroup, id)
 }
 
@@ -77,6 +92,9 @@ func (d *Directory) changeMembers(ctx context.Context, groupID string, edit func
 	}
 	if g == nil {
 		return fmt.Errorf("%w: group %s", ErrNotFound, groupID)
+	}
+	if err := d.checkManaged(g); err != nil {
+		return err
 	}
 	ids, err := edit(slices.Clone(g.Spec.MemberIDs))
 	if err != nil || ids == nil {
