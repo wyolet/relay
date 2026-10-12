@@ -71,6 +71,8 @@ Argo CD renders the chart with `helm template` and runs the Job as a PreSync hoo
 
 Set `migrations.job.enabled: false` to drop the Job and migrate on boot on every install and upgrade.
 
+A migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` (10s) for a table lock. One queued behind a long transaction fails the Job with a lock timeout, applies nothing and leaves the schema clean, so run the upgrade again once the transaction ends.
+
 ### Recovering from a dirty schema version
 
 If a migration is interrupted, the schema is recorded as dirty at that version and every later migrate (the Job, or a pod migrating on boot) fails with `Dirty database version N`. To recover:

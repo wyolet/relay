@@ -72,6 +72,9 @@ type Config struct {
 	// schema back, so a restarting pod doesn't re-apply what was just undone.
 	MigrateOnBoot bool
 
+	// MigrateLockTimeout bounds how long a migration statement waits for a table lock (RELAY_MIGRATE_LOCK_TIMEOUT_S, default 10s; 0 waits indefinitely). A migration queued behind a long transaction holds every later query on that table behind it, logins included.
+	MigrateLockTimeout time.Duration
+
 	// Behavior knobs
 	AutoSeedIfEmpty bool
 	ConfigDir       string
@@ -115,9 +118,18 @@ type Config struct {
 	// Dev/replay tooling only — never enable in production.
 	DevTrustEventTime bool
 
+	// Port is the inference listener's port (RELAY_PORT, default 8080).
+	Port string
+
 	// ControlPort is the listener port for the control-plane HTTP server.
 	// Empty disables the control listener entirely (data plane only).
 	ControlPort string
+
+	// ListenHost is the address the inference listener binds (RELAY_LISTEN_HOST) and the control listener's default. Empty binds every interface.
+	ListenHost string
+
+	// ControlListenHost is the address the control listener binds (RELAY_CONTROL_LISTEN_HOST, default ListenHost), so the admin plane can stay private while inference is reachable.
+	ControlListenHost string
 
 	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
 	// separated list of exact origin strings (no wildcards — credentialed
@@ -263,6 +275,11 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf(`RELAY_MIGRATE_ON_BOOT must be "on" or "off", got %q`, v)
 	}
+	if v := envInt("RELAY_MIGRATE_LOCK_TIMEOUT_S", 10); v < 0 {
+		return nil, fmt.Errorf("RELAY_MIGRATE_LOCK_TIMEOUT_S must be >= 0")
+	} else {
+		cfg.MigrateLockTimeout = time.Duration(v) * time.Second
+	}
 
 	// --- Behavior knobs ---
 	cfg.AutoSeedIfEmpty = os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
@@ -379,9 +396,16 @@ func Load() (*Config, error) {
 		cfg.Runtime.Mode = "oss"
 	}
 
+	cfg.Port = os.Getenv("RELAY_PORT")
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+	}
 	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
 	if cfg.ControlPort == "" {
 		cfg.ControlPort = "8081"
+	}
+	if err := loadListenHosts(cfg); err != nil {
+		return nil, err
 	}
 
 	if raw := os.Getenv("RELAY_CONTROL_ALLOW_ORIGINS"); raw != "" {

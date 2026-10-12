@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -41,6 +42,9 @@ type fakeIdP struct {
 	// the hosted-user-management shape: a {"user": {...}} object and no JWT.
 	inlineProfile bool
 
+	// nonce is the authorize request's nonce, which the id_token echoes.
+	nonce string
+
 	sawVerifier  string
 	sawSecret    string
 	discoveryHit atomic.Int32
@@ -55,15 +59,14 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	}
 	f := &fakeIdP{issuedCode: "code-123", sub: "user_abc", email: "alice@example.com", key: key}
 	mux := http.NewServeMux()
-	// Deliberately only the OIDC discovery path (the WorkOS shape) so the
-	// RFC 8414 → openid-configuration fallback is exercised end to end.
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		f.discoveryHit.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"issuer":                 f.srv.URL,
-			"authorization_endpoint": f.srv.URL + "/authorize",
-			"token_endpoint":         f.srv.URL + "/token",
-			"jwks_uri":               f.srv.URL + "/jwks",
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                f.srv.URL,
+			"authorization_endpoint":                f.srv.URL + "/authorize",
+			"token_endpoint":                        f.srv.URL + "/token",
+			"jwks_uri":                              f.srv.URL + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"EdDSA"},
 		})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
@@ -117,6 +120,7 @@ func (f *fakeIdP) idToken() string {
 		"iat":    now.Unix(),
 		"exp":    now.Add(5 * time.Minute).Unix(),
 		"groups": []string{"eng", "ops"},
+		"nonce":  f.nonce,
 	}
 	for k, v := range f.claims {
 		if v == nil {
@@ -139,10 +143,52 @@ func (f *fakeIdP) idToken() string {
 type fakeUsers struct {
 	bySubject map[string]*user.User
 	byName    map[string]*user.User
+	// external is the SCIM externalId of a provisioned account, by user id.
+	external map[string]string
+	// beforeLink, when set, runs once just before AddFirstIdentity writes.
+	beforeLink func()
+	links      int
 }
 
 func newFakeUsers() *fakeUsers {
-	return &fakeUsers{bySubject: map[string]*user.User{}, byName: map[string]*user.User{}}
+	return &fakeUsers{bySubject: map[string]*user.User{}, byName: map[string]*user.User{}, external: map[string]string{}}
+}
+
+// provisioned adds an account as a SCIM client creates it: no identity, the client's externalId.
+func (f *fakeUsers) provisioned(u *user.User, externalID string) {
+	f.byName[u.Username] = u
+	f.external[u.ID] = externalID
+}
+
+func (f *fakeUsers) UnlinkedByExternalID(_ context.Context, externalID string) ([]*user.User, error) {
+	var out []*user.User
+	for _, u := range f.byName {
+		if id, ok := f.external[u.ID]; ok && id == externalID && u.OIDCSubject == "" {
+			c := *u
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeUsers) AddFirstIdentity(_ context.Context, userID string, id directory.Identity) error {
+	if hook := f.beforeLink; hook != nil {
+		f.beforeLink = nil
+		hook()
+	}
+	for _, u := range f.byName {
+		if u.ID != userID {
+			continue
+		}
+		if u.OIDCSubject != "" {
+			return directory.ErrConflict
+		}
+		u.OIDCSubject = id.Issuer + directory.IdentitySeparator + id.Subject
+		f.bySubject[u.OIDCSubject] = u
+		f.links++
+		return nil
+	}
+	return directory.ErrNotFound
 }
 
 func (f *fakeUsers) ByUsername(_ context.Context, u string) (*user.User, error) {
@@ -151,6 +197,15 @@ func (f *fakeUsers) ByUsername(_ context.Context, u string) (*user.User, error) 
 
 func (f *fakeUsers) ByOIDCSubject(_ context.Context, s string) (*user.User, error) {
 	return f.bySubject[s], nil
+}
+
+func (f *fakeUsers) Create(ctx context.Context, u *user.User) error {
+	for _, other := range f.byName {
+		if u.Email != "" && other.Email == u.Email {
+			return directory.ErrEmailTaken
+		}
+	}
+	return f.Upsert(ctx, u)
 }
 
 func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
@@ -180,6 +235,7 @@ type oidcHarness struct {
 	t     *testing.T
 	idp   *fakeIdP
 	cfg   *settings.AuthOIDC
+	scim  *settings.AuthSCIM
 	users *fakeUsers
 	sess  *fakeSessions
 	sink  *auditSink
@@ -200,9 +256,21 @@ func newTestOIDC(t *testing.T, idp *fakeIdP, registration string) *oidcHarness {
 
 func newOIDCHarness(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC) *oidcHarness {
 	t.Helper()
-	h := &oidcHarness{t: t, idp: idp, cfg: cfg, users: newFakeUsers(), sess: &fakeSessions{}, sink: &auditSink{}}
-	h.em = audit.NewEmitter(h.sink, slog.New(slog.DiscardHandler))
-	od := newOIDC(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, false)
+	users := newFakeUsers()
+	h := newOIDCHarnessOver(t, idp, cfg, users, nil)
+	h.users = users
+	return h
+}
+
+// newOIDCHarnessOver serves the routes over users, auditing to sink (h.sink when nil); SCIM is off until the test turns h.scim on.
+func newOIDCHarnessOver(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC, users oidcUserStore, sink audit.Sink) *oidcHarness {
+	t.Helper()
+	h := &oidcHarness{t: t, idp: idp, cfg: cfg, scim: &settings.AuthSCIM{}, sess: &fakeSessions{}, sink: &auditSink{}}
+	if sink == nil {
+		sink = h.sink
+	}
+	h.em = audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
+	od := newOIDC(func() *settings.AuthOIDC { return h.cfg }, func() *settings.AuthSCIM { return h.scim }, users, h.sess, false)
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
 		api.Use(audit.Middleware(h.em, nil))
@@ -219,7 +287,7 @@ func (h *oidcHarness) do(req *http.Request) *httptest.ResponseRecorder {
 	return rec
 }
 
-// start runs the start handler and returns the IdP redirect URL and the flow cookie.
+// start runs the start handler, hands the authorize request's nonce to the IdP, and returns the IdP redirect URL and the flow cookie.
 func (h *oidcHarness) start() (*url.URL, *http.Cookie) {
 	h.t.Helper()
 	rec := h.do(httptest.NewRequest("GET", "/api/auth/oidc/start", nil))
@@ -230,6 +298,7 @@ func (h *oidcHarness) start() (*url.URL, *http.Cookie) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	h.idp.nonce = loc.Query().Get("nonce")
 	flow := cookieNamed(rec, oidcFlowCookie)
 	if flow == nil {
 		h.t.Fatal("start set no flow cookie")
@@ -288,7 +357,7 @@ func wantResponse(t *testing.T, rec *httptest.ResponseRecorder, status int, body
 	}
 }
 
-// The authorize redirect carries state and a PKCE S256 challenge but no nonce; the flow cookie is HttpOnly, SameSite=Lax, Path=/ and lives ten minutes.
+// The authorize redirect carries state, a PKCE S256 challenge and a nonce; the flow cookie holds all three, is HttpOnly, SameSite=Lax, Path=/ and lives ten minutes.
 func TestOIDCStart_RedirectAndFlowCookie(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
@@ -319,8 +388,8 @@ func TestOIDCStart_RedirectAndFlowCookie(t *testing.T) {
 	if len(q.Get("state")) != 32 || q.Get("code_challenge") == "" {
 		t.Errorf("state %q / code_challenge %q", q.Get("state"), q.Get("code_challenge"))
 	}
-	if q.Has("nonce") {
-		t.Errorf("authorize URL carries a nonce: %s", loc)
+	if len(q.Get("nonce")) != 32 {
+		t.Errorf("authorize nonce = %q", q.Get("nonce"))
 	}
 
 	c := cookieNamed(rec, "relay_oidc_flow")
@@ -337,8 +406,9 @@ func TestOIDCStart_RedirectAndFlowCookie(t *testing.T) {
 	var fs struct {
 		S string `json:"s"`
 		V string `json:"v"`
+		N string `json:"n"`
 	}
-	if err := json.Unmarshal(raw, &fs); err != nil || fs.S != q.Get("state") || fs.V == "" {
+	if err := json.Unmarshal(raw, &fs); err != nil || fs.S != q.Get("state") || fs.V == "" || fs.N != q.Get("nonce") {
 		t.Fatalf("flow cookie payload = %s", raw)
 	}
 	if evs := h.events(); len(evs) != 0 {
@@ -350,7 +420,7 @@ func TestOIDCStart_SecureCookie(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
 	r := chi.NewRouter()
-	mountOIDCRoutes(r, newOIDC(func() *settings.AuthOIDC { return h.cfg }, h.users, h.sess, true))
+	mountOIDCRoutes(r, newOIDC(func() *settings.AuthOIDC { return h.cfg }, func() *settings.AuthSCIM { return h.scim }, h.users, h.sess, true))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/auth/oidc/start", nil))
 	if c := cookieNamed(rec, oidcFlowCookie); c == nil || !c.Secure {
@@ -399,16 +469,19 @@ func TestOIDCFlow_ProvisionsAndLogsIn(t *testing.T) {
 			if strings.Join(s.groups, ",") != "eng,ops" {
 				t.Errorf("session groups = %q", s.groups)
 			}
-			if idp.jwksHits.Load() != 0 {
+			if idp.jwksHits.Load() != 1 {
 				t.Errorf("JWKS fetched %d times", idp.jwksHits.Load())
 			}
 
-			// Second login with the same subject reuses the row.
+			// Second login with the same subject reuses the row and the cached signing keys.
 			if rec := h.login(path); rec.Code != http.StatusFound {
 				t.Fatalf("second callback: status %d", rec.Code)
 			}
 			if len(h.users.bySubject) != 1 {
 				t.Errorf("second login created a duplicate user")
+			}
+			if idp.jwksHits.Load() != 1 {
+				t.Errorf("JWKS fetched %d times over two logins", idp.jwksHits.Load())
 			}
 		})
 	}
@@ -437,6 +510,8 @@ func TestOIDCFlow_UsernameAndRoles(t *testing.T) {
 		{"email local part", nil, "", "alice"},
 		{"collision suffix", nil, "alice", "alice-2"},
 		{"fallback", map[string]any{"email": nil}, "", "user"},
+		// Zitadel without idTokenUserinfoAssertion signs an id_token carrying sub alone.
+		{"sub-only id_token", map[string]any{"email": nil, "sid": nil, "groups": nil}, "", "user"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -456,29 +531,27 @@ func TestOIDCFlow_UsernameAndRoles(t *testing.T) {
 	}
 }
 
-// The id_token is decoded, not verified: signature, audience, issuer, expiry and nonce are not checked, and the session subject uses the configured issuer, not the token's iss.
-func TestOIDCFlow_IDTokenClaimsNotVerified(t *testing.T) {
+// The id_token is verified before any claim is read: a bad signature, audience, issuer, expiry or nonce is a 502 with a denied audit row and no session.
+func TestOIDCFlow_IDTokenRejected(t *testing.T) {
 	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
 	cases := map[string]func(*fakeIdP){
 		"wrong signature": func(f *fakeIdP) { f.signWith = otherKey },
 		"wrong audience":  func(f *fakeIdP) { f.claims = map[string]any{"aud": "someone-else"} },
 		"wrong issuer":    func(f *fakeIdP) { f.claims = map[string]any{"iss": "https://evil.example"} },
 		"expired":         func(f *fakeIdP) { f.claims = map[string]any{"exp": time.Now().Add(-time.Hour).Unix()} },
-		"unexpected nonce": func(f *fakeIdP) {
-			f.claims = map[string]any{"nonce": "attacker"}
-		},
+		"wrong nonce":     func(f *fakeIdP) { f.claims = map[string]any{"nonce": "attacker"} },
+		"missing nonce":   func(f *fakeIdP) { f.claims = map[string]any{"nonce": nil} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			idp := newFakeIdP(t)
 			mutate(idp)
 			h := newTestOIDC(t, idp, "open")
-			if rec := h.login("/api/auth/oidc/callback"); rec.Code != http.StatusFound {
-				t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+			wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusBadGateway, "identity provider returned an invalid id_token")
+			if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
+				t.Fatalf("session = %+v, users = %d", h.sess, len(h.users.bySubject))
 			}
-			if h.sess.calls != 1 || h.sess.subject != h.subject() {
-				t.Fatalf("session = %+v", h.sess)
-			}
+			wantDenied(t, h.events(), "")
 		})
 	}
 }
@@ -560,6 +633,9 @@ func TestOIDCFlow_InlineProfileTokenResponse(t *testing.T) {
 	if h.sess.calls != 1 || h.sess.sid != "" || len(h.sess.groups) != 0 {
 		t.Errorf("session = %+v", h.sess)
 	}
+	if idp.jwksHits.Load() != 0 {
+		t.Errorf("JWKS fetched %d times without an id_token", idp.jwksHits.Load())
+	}
 }
 
 func TestOIDCFlow_ClosedRegistrationRejectsUnknown(t *testing.T) {
@@ -569,6 +645,19 @@ func TestOIDCFlow_ClosedRegistrationRejectsUnknown(t *testing.T) {
 	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "no account for this identity (registration is closed)")
 	if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
 		t.Error("session minted or user created despite closed registration")
+	}
+	wantDenied(t, h.events(), h.subject())
+}
+
+// A first sign-in whose email belongs to an account with no identity linked, as SCIM or YAML creates, is refused like closed registration rather than linked or answered with a 500.
+func TestOIDCFlow_EmailTakenRejected(t *testing.T) {
+	idp := newFakeIdP(t)
+	h := newTestOIDC(t, idp, "open")
+	_ = h.users.Upsert(context.Background(), &user.User{ID: "u1", Username: "alice-scim", Email: idp.email})
+
+	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
+	if h.sess.calls != 0 || h.users.bySubject[h.subject()] != nil || h.users.byName["alice-scim"].OIDCSubject != "" {
+		t.Error("session minted, account created or identity linked despite the taken email")
 	}
 	wantDenied(t, h.events(), h.subject())
 }
@@ -600,7 +689,9 @@ func TestOIDCFlow_FlowCookieRejected(t *testing.T) {
 		"not json":    {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte("nope"))},
 		"no verifier": {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y"}`))},
 		"no state":    {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(`{"v":"v"}`))},
-		"other name":  {Name: "relay_session", Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y","v":"v"}`))},
+		// Set before nonces existed: that one login restarts.
+		"no nonce":   {Name: oidcFlowCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y","v":"v"}`))},
+		"other name": {Name: "relay_session", Value: base64.RawURLEncoding.EncodeToString([]byte(`{"s":"y","v":"v"}`))},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
@@ -35,6 +36,32 @@ func TestIntegration_Open_SchemaNewerThanBinary(t *testing.T) {
 		t.Fatalf("Open on newer schema: %v", err)
 	}
 	st.Close()
+}
+
+// The auth module's migrations run after the relay's, under their own version table.
+func TestIntegration_Open_RunsAuthMigrations(t *testing.T) {
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	st, err := storage.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+	var version int64
+	if err := st.Pool().QueryRow(ctx, "SELECT version FROM "+authpg.MigrationsTable).Scan(&version); err != nil {
+		t.Fatalf("auth schema version: %v", err)
+	}
+	if version < 1 {
+		t.Fatalf("auth schema version %d, want at least 1", version)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE "+authpg.MigrationsTable+" SET version = version + 5"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := storage.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open on an auth schema a newer binary migrated: %v", err)
+	}
+	again.Close()
 }
 
 func TestIntegration_Open_NewerSchemaDirtyFails(t *testing.T) {

@@ -41,7 +41,7 @@ func runApply(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	from := fs.String("f", "", "Manifest file or directory to apply.")
 	dryRun := fs.Bool("dry-run", false, "Print the plan; write nothing.")
-	force := fs.Bool("force", false, "Write over operator-edited (dirty) rows.")
+	force := fs.Bool("force", false, "Write over operator-edited (dirty) rows and groups a provisioning source manages.")
 	prune := fs.Bool("prune", false, "Delete selected rows the bundle omits. Requires --selector.")
 	selector := fs.String("selector", "", "Label selector naming the managed set, e.g. env=prod,team=platform.")
 	serverURL := fs.String("url", "", "Control API base URL. Default $RELAY_URL, else "+DefaultControlURL+".")
@@ -110,14 +110,17 @@ func runApply(args []string) error {
 			"apply: %d row(s) changed between plan and write and were skipped; re-run to converge",
 			conflicts)}
 	}
-	if !*force {
-		for _, e := range resp.Plan {
-			if e.Action == apply.ActionSkipDirty {
-				return &exitError{code: exitDrift, err: fmt.Errorf(
-					"apply: %d row(s) differ from the manifest and were left alone; re-run with --force to overwrite",
-					resp.Counts.SkipDirty)}
-			}
+	// The server plans a dirty row the manifest matches as unchanged, so every skip-dirty entry is one that differs.
+	differing := 0
+	for _, e := range resp.Plan {
+		if e.Action == apply.ActionSkipDirty {
+			differing++
 		}
+	}
+	if differing > 0 && !*force {
+		return &exitError{code: exitDrift, err: fmt.Errorf(
+			"apply: %d row(s) differ from the manifest and were left alone; re-run with --force to overwrite",
+			differing)}
 	}
 	return nil
 }

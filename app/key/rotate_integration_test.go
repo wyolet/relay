@@ -23,9 +23,10 @@ import (
 func setupKeyDB(t *testing.T) (*key.Store, context.Context, string) {
 	t.Helper()
 	ctx := context.Background()
-	q := gen.New(storagetest.Pool(t))
+	pool := storagetest.Pool(t)
+	q := gen.New(pool)
 	u := &user.User{ID: meta.NewID(), Username: "rotate-" + meta.NewID()[:8]}
-	if err := user.NewStore(q).Upsert(ctx, u); err != nil {
+	if err := user.NewStore(pool).Upsert(ctx, u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	return key.NewStore(q), ctx, u.ID

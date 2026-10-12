@@ -79,6 +79,17 @@ func RecordEach(ctx context.Context, rows []Row) {
 	f.mu.Unlock()
 }
 
+// RecordExtra adds a row beside the request's own, for a write a handler makes on the way to recording something else: a sign-in that links an account is still recorded as the login. No-op outside an audited request.
+func RecordExtra(ctx context.Context, row Row) {
+	f := fromContext(ctx)
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.extra = append(f.extra, row)
+	f.mu.Unlock()
+}
+
 // Discard drops the request's row: a dry run changes nothing, and its
 // authorization pass would otherwise read as the writes it only planned.
 func Discard(ctx context.Context) {

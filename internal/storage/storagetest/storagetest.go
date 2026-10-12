@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
@@ -165,7 +166,7 @@ func ensureTemplate(server string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := storage.MigrateTo(buildDSN, version); err != nil {
+	if err := storage.MigrateUp(buildDSN); err != nil {
 		return "", err
 	}
 	if _, err := conn.Exec(ctx, "ALTER DATABASE "+pgx.Identifier{building}.Sanitize()+" RENAME TO "+pgx.Identifier{name}.Sanitize()); err != nil {
@@ -205,6 +206,21 @@ func migrationsVersion() (uint, string, error) {
 			return 0, "", fmt.Errorf("migration %s: version prefix: %w", n, err)
 		}
 		latest = max(latest, uint(v))
+	}
+	// The template also carries the auth module's migrations, so they key it too.
+	authFS := authpg.MigrationFiles()
+	authNames, err := fs.Glob(authFS, "*.sql")
+	if err != nil {
+		return 0, "", err
+	}
+	sort.Strings(authNames)
+	for _, n := range authNames {
+		body, err := fs.ReadFile(authFS, n)
+		if err != nil {
+			return 0, "", err
+		}
+		fmt.Fprintf(h, "auth/%s\x00%d\x00", n, len(body))
+		h.Write(body)
 	}
 	return latest, hex.EncodeToString(h.Sum(nil))[:8], nil
 }

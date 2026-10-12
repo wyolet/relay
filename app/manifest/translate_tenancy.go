@@ -54,69 +54,42 @@ func fromBudget(b *team.Budget) *BudgetDTO {
 	return &BudgetDTO{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
 }
 
-func ToTeam(d TeamDTO, _ Resolver) (*team.Team, error) {
-	m := d.Metadata.toMeta()
-	// A Team names a scope: a user-owned one would let its author inherit
-	// every binding made at that scope, so the owner is not the manifest's
-	// to choose.
-	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
-	return &team.Team{
-		Meta: m,
-		Spec: team.Spec{
-			Enabled: d.Spec.Enabled,
-			Budget:  toBudget(d.Spec.Budget),
-		},
-	}, nil
+// ToTeam translates through the auth module, which makes every team system-owned: a user-owned one would let its author inherit every binding made at its scope.
+func ToTeam(d TeamDTO, idx Resolver) (*team.Team, error) {
+	row, err := AuthManifests.ToTeam(teamDoc(d), authRefs{idx})
+	if err != nil {
+		return nil, fromAuthError(err)
+	}
+	return team.FromDirectory(row)
 }
 
-func FromTeam(t *team.Team, _ ReverseResolver) TeamDTO {
-	return TeamDTO{
-		APIVersion: APIVersion,
-		Kind:       "Team",
-		Metadata:   metaToWire(t.Meta),
-		Spec: TeamSpec{
-			Enabled: t.Spec.Enabled,
-			Budget:  fromBudget(t.Spec.Budget),
-		},
-	}
+// FromTeam renders through the auth module; the metadata keeps relay's wire form.
+func FromTeam(t *team.Team, rev ReverseResolver) TeamDTO {
+	// A budget of plain strings always marshals.
+	row, _ := t.ToDirectory()
+	d, _ := fromAuthDoc(rendered(AuthManifests.FromTeam(row, authNames{rev})))
+	dto := *d.Team
+	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(t.Meta)
+	return dto
 }
 
 // ToProject resolves the owning team name → id. Owner mirrors spec.team,
 // so it is re-derived rather than read from the wire form.
 func ToProject(d ProjectDTO, idx Resolver) (*project.Project, error) {
-	teamID, ok := idx.TeamID(d.Spec.Team)
-	if !ok {
-		return nil, refNotFound("project %q: team %q not found", d.Metadata.Name, d.Spec.Team)
+	row, err := AuthManifests.ToProject(projectDoc(d), authRefs{idx})
+	if err != nil {
+		return nil, fromAuthError(err)
 	}
-	p := &project.Project{
-		Meta: d.Metadata.toMeta(),
-		Spec: project.Spec{
-			TeamID:  teamID,
-			Enabled: d.Spec.Enabled,
-			Budget:  toBudget(d.Spec.Budget),
-		},
-	}
-	p.StampOwner()
-	return p, nil
+	return project.FromDirectory(row)
 }
 
 func FromProject(p *project.Project, rev ReverseResolver) ProjectDTO {
-	teamName, _ := rev.TeamName(p.Spec.TeamID)
-	if teamName == "" {
-		teamName = p.Spec.TeamID
-	}
-	wm := metaToWire(p.Meta)
-	wm.Owner.Name = teamName
-	return ProjectDTO{
-		APIVersion: APIVersion,
-		Kind:       "Project",
-		Metadata:   wm,
-		Spec: ProjectSpec{
-			Team:    teamName,
-			Enabled: p.Spec.Enabled,
-			Budget:  fromBudget(p.Spec.Budget),
-		},
-	}
+	row, _ := p.ToDirectory()
+	d, _ := fromAuthDoc(rendered(AuthManifests.FromProject(row, authNames{rev})))
+	dto := *d.Project
+	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(p.Meta)
+	dto.Metadata.Owner.Name = dto.Spec.Team
+	return dto
 }
 
 // ---------------------------------------------------------------------------
@@ -127,88 +100,34 @@ func FromProject(p *project.Project, rev ReverseResolver) ProjectDTO {
 // policy override. Owner mirrors spec.project, so it is re-derived rather
 // than read from the wire form.
 func ToServiceAccount(d ServiceAccountDTO, idx Resolver) (*serviceaccount.ServiceAccount, error) {
-	projectID, ok := idx.ProjectID(d.Spec.Project)
-	if !ok {
-		return nil, refNotFound("serviceaccount %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+	row, err := AuthManifests.ToServiceAccount(serviceAccountDoc(d), authRefs{idx})
+	if err != nil {
+		return nil, fromAuthError(err)
 	}
-	var policyID string
-	if d.Spec.Policy != "" {
-		policyID, ok = idx.PolicyID(d.Spec.Policy)
-		if !ok {
-			return nil, refNotFound("serviceaccount %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
-		}
-	}
-	sa := &serviceaccount.ServiceAccount{
-		Meta: d.Metadata.toMeta(),
-		Spec: serviceaccount.Spec{
-			ProjectID: projectID,
-			PolicyID:  policyID,
-			Enabled:   d.Spec.Enabled,
-		},
-	}
-	sa.StampOwner()
-	return sa, nil
+	return serviceaccount.FromDirectory(row)
 }
 
 func FromServiceAccount(sa *serviceaccount.ServiceAccount, rev ReverseResolver) ServiceAccountDTO {
-	projectName, _ := rev.ProjectName(sa.Spec.ProjectID)
-	if projectName == "" {
-		projectName = sa.Spec.ProjectID
-	}
-	policyName := ""
-	if sa.Spec.PolicyID != "" {
-		policyName, _ = rev.PolicyName(sa.Spec.PolicyID)
-		if policyName == "" {
-			policyName = sa.Spec.PolicyID
-		}
-	}
-	wm := metaToWire(sa.Meta)
-	wm.Owner.Name = projectName
-	return ServiceAccountDTO{
-		APIVersion: APIVersion,
-		Kind:       "ServiceAccount",
-		Metadata:   wm,
-		Spec: ServiceAccountSpec{
-			Project: projectName,
-			Policy:  policyName,
-			Enabled: sa.Spec.Enabled,
-		},
-	}
+	row, _ := sa.ToDirectory()
+	d, _ := fromAuthDoc(rendered(AuthManifests.FromServiceAccount(row, authNames{rev})))
+	dto := *d.ServiceAccount
+	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(sa.Meta)
+	dto.Metadata.Owner.Name = dto.Spec.Project
+	return dto
 }
 
-// ToGroup resolves member usernames → user ids.
+// ToGroup resolves member usernames → user ids. The module makes every group system-owned: a user-owned one named after an IdP group would inherit that group's bindings.
 func ToGroup(d GroupDTO, idx Resolver) (*group.Group, error) {
-	m := d.Metadata.toMeta()
-	// A Group is a grant target: a user-owned one named after an IdP group
-	// would inherit that group's bindings, so the owner is fixed here.
-	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
-	var memberIDs []string
-	for _, username := range d.Spec.Members {
-		id, ok := idx.UserID(username)
-		if !ok {
-			return nil, refNotFound("group %q: user %q not found", d.Metadata.Name, username)
-		}
-		memberIDs = append(memberIDs, id)
+	row, err := AuthManifests.ToGroup(groupDoc(d), authRefs{idx})
+	if err != nil {
+		return nil, fromAuthError(err)
 	}
-	return &group.Group{
-		Meta: m,
-		Spec: group.Spec{MemberIDs: memberIDs, Enabled: d.Spec.Enabled},
-	}, nil
+	return group.FromDirectory(row), nil
 }
 
 func FromGroup(g *group.Group, rev ReverseResolver) GroupDTO {
-	var members []string
-	for _, id := range g.Spec.MemberIDs {
-		name, ok := rev.Username(id)
-		if !ok {
-			name = id
-		}
-		members = append(members, name)
-	}
-	return GroupDTO{
-		APIVersion: APIVersion,
-		Kind:       "Group",
-		Metadata:   metaToWire(g.Meta),
-		Spec:       GroupSpec{Members: members, Enabled: g.Spec.Enabled},
-	}
+	d, _ := fromAuthDoc(rendered(AuthManifests.FromGroup(g.ToDirectory(), authNames{rev})))
+	dto := *d.Group
+	dto.APIVersion, dto.Metadata = APIVersion, metaToWire(g.Meta)
+	return dto
 }

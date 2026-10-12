@@ -66,7 +66,8 @@ func openStorage(bootCtx context.Context, cfg *config.Config) *storagemod.Storag
 	st, err := storagemod.Open(bootCtx, cfg.PGDSN,
 		storagemod.WithMaxConns(cfg.PGMaxConns),
 		storagemod.WithMinConns(cfg.PGMinConns),
-		storagemod.WithMigrateOnBoot(cfg.MigrateOnBoot))
+		storagemod.WithMigrateOnBoot(cfg.MigrateOnBoot),
+		storagemod.WithMigrateLockTimeout(cfg.MigrateLockTimeout))
 	if err != nil {
 		slog.Error("storage.Open failed", "err", err)
 		os.Exit(1)

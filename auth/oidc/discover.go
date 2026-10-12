@@ -2,97 +2,82 @@ package oidc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
+
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 )
 
-// discoveryTTL bounds how long a provider's endpoints are reused before its metadata is fetched again.
+// discoveryTTL bounds how long a provider's metadata and signing keys are reused before its metadata is fetched again.
 const discoveryTTL = time.Hour
 
-type cachedEndpoint struct {
-	authURL, tokenURL string
-	expires           time.Time
+// cachedProvider holds the discovered endpoints and the provider's JWKS cache; the oauth2 config is rebuilt per login so setting edits apply on the next one.
+type cachedProvider struct {
+	provider *gooidc.Provider
+	expires  time.Time
 }
 
-// serverMetadata is the subset of RFC 8414 / OpenID discovery metadata the login flow uses.
-type serverMetadata struct {
-	AuthorizationEndpoint string `json:"authorization_endpoint"`
-	TokenEndpoint         string `json:"token_endpoint"`
-}
-
-// endpoints returns cfg's authorization and token endpoints, fetched from the issuer's metadata at most once per discoveryTTL for each issuer, client and redirect URL.
-func (rp *RelyingParty[U]) endpoints(ctx context.Context, cfg *Config) (cachedEndpoint, error) {
+// provider returns cfg's discovered provider, fetched from the issuer's OpenID discovery document at most once per discoveryTTL for each issuer, client and redirect URL.
+func (rp *RelyingParty[U]) provider(ctx context.Context, cfg *Config) (*gooidc.Provider, error) {
 	key := cfg.Issuer + "|" + cfg.ClientID + "|" + cfg.RedirectURL
 	rp.mu.Lock()
 	if e, ok := rp.discovery[key]; ok && time.Now().Before(e.expires) {
 		rp.mu.Unlock()
-		return e, nil
+		return e.provider, nil
 	}
 	rp.mu.Unlock()
 
-	md, err := discover(ctx, cfg.Issuer)
+	p, err := discover(ctx, cfg.Issuer)
 	if err != nil {
-		return cachedEndpoint{}, err
+		return nil, err
 	}
-	e := cachedEndpoint{authURL: md.AuthorizationEndpoint, tokenURL: md.TokenEndpoint, expires: time.Now().Add(discoveryTTL)}
 	rp.mu.Lock()
 	if rp.discovery == nil {
-		rp.discovery = map[string]cachedEndpoint{}
+		rp.discovery = map[string]cachedProvider{}
 	}
-	rp.discovery[key] = e
+	rp.discovery[key] = cachedProvider{provider: p, expires: time.Now().Add(discoveryTTL)}
 	rp.mu.Unlock()
-	return e, nil
+	return p, nil
 }
 
-// discover fetches the issuer's metadata, RFC 8414 first and then OpenID discovery: providers commonly publish only one of the two.
-func discover(ctx context.Context, issuer string) (serverMetadata, error) {
+// discover fetches the issuer's OpenID discovery document. Its issuer must equal the configured one or differ from it only by a trailing slash, and every id_token's iss must then equal the document's issuer exactly.
+func discover(ctx context.Context, issuer string) (*gooidc.Provider, error) {
 	if issuer == "" {
-		return serverMetadata{}, errors.New("oidc: discovery needs an issuer")
+		return nil, errors.New("oidc: discovery needs an issuer")
 	}
-	base := strings.TrimRight(issuer, "/")
-	var (
-		md      serverMetadata
-		lastErr error
-	)
-	for _, url := range []string{
-		base + "/.well-known/oauth-authorization-server",
-		base + "/.well-known/openid-configuration",
-	} {
-		md, lastErr = fetchMetadata(ctx, url)
-		if lastErr == nil {
-			break
-		}
+	p, err := gooidc.NewProvider(ctx, issuer)
+	if mismatch, ok := errors.AsType[*gooidc.IssuerMismatchError](err); ok && slashOnly(issuer, mismatch.Discovered) {
+		p, err = providerAt(ctx, issuer, mismatch.Discovered)
 	}
-	if lastErr != nil {
-		return serverMetadata{}, lastErr
+	if err != nil {
+		return nil, fmt.Errorf("oidc: discover %s: %w", issuer, err)
 	}
-	if md.AuthorizationEndpoint == "" || md.TokenEndpoint == "" {
-		return serverMetadata{}, fmt.Errorf("oidc: discover %s: metadata missing authorization_endpoint or token_endpoint", issuer)
+	if ep := p.Endpoint(); ep.AuthURL == "" || ep.TokenURL == "" {
+		return nil, fmt.Errorf("oidc: discover %s: metadata missing authorization_endpoint or token_endpoint", issuer)
 	}
-	return md, nil
+	return p, nil
 }
 
-func fetchMetadata(ctx context.Context, url string) (serverMetadata, error) {
-	var md serverMetadata
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// slashOnly reports whether a and b differ by exactly one trailing slash.
+func slashOnly(a, b string) bool {
+	return a+"/" == b || a == b+"/"
+}
+
+// providerAt fetches the document again with discovered as the issuer id_tokens must carry. go-oidc then skips its own issuer check, so the refetched document must still name discovered.
+func providerAt(ctx context.Context, issuer, discovered string) (*gooidc.Provider, error) {
+	p, err := gooidc.NewProvider(gooidc.InsecureIssuerURLContext(ctx, discovered), issuer)
 	if err != nil {
-		return md, err
+		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return md, fmt.Errorf("oidc: discover %s: %w", url, err)
+	var md struct {
+		Issuer string `json:"issuer"`
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return md, fmt.Errorf("oidc: discover %s: status %d", url, resp.StatusCode)
+	if err := p.Claims(&md); err != nil {
+		return nil, err
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&md); err != nil {
-		return md, fmt.Errorf("oidc: discover %s: decode: %w", url, err)
+	if md.Issuer != discovered {
+		return nil, &gooidc.IssuerMismatchError{Provided: discovered, Discovered: md.Issuer}
 	}
-	return md, nil
+	return p, nil
 }

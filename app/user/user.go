@@ -32,6 +32,9 @@ type User struct {
 	// must carry. Bumping it invalidates all of them at once.
 	TokenVersion int `json:"tokenVersion,omitempty"`
 
+	// ResourceVersion is the stored row's version; a write carrying it applies only while the row still has it.
+	ResourceVersion string `json:"-"`
+
 	CreatedAt time.Time `json:"createdAt,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }

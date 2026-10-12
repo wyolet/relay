@@ -315,8 +315,9 @@ control-openapi: ## list paths from /openapi.json
 
 # --- go ---
 
-sqlc-generate: ## regenerate sqlc code
+sqlc-generate: ## regenerate sqlc code (root module and auth module)
 	sqlc generate
+	cd auth && sqlc generate
 
 UI_REPO     := wyolet/relay-ui
 UI_TARBALL  := relay-ui-$(UI_VERSION).tar.gz
@@ -443,8 +444,9 @@ check: ## the CI gate: gofmt, codebase rules, golangci-lint, tests, chart lint
 chart-lint: ## helm lint chart/
 	helm lint chart
 
-schemas: ## regenerate JSON Schemas for catalog kinds → schemas/v1alpha2/
+schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha2/ (relay) and schemas/v1alpha1/ (auth module)
 	go run ./cmd/catalog-schemas schemas/v1alpha2
+	go run ./cmd/auth-schemas schemas/v1alpha1
 
 catalog-validate: ## graph-lint the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
 	go run ./cmd/catalog-validate $${RELAY_CATALOG_DIR:-../relay-catalog/data}
@@ -475,8 +477,10 @@ test-integration-run: ## integration-tagged tests of every module against $$RELA
 	$(GO_TEST) -tags=integration -race -count=1 \
 		-coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/integration.out ./... ; \
 		status=$$?; \
-		cd jobq && $(GO_TEST) -tags=integration -race -count=1 \
-			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq-integration.out ./... || status=$$?; \
+		(cd jobq && $(GO_TEST) -tags=integration -race -count=1 \
+			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq-integration.out ./...) || status=$$?; \
+		(cd auth && $(GO_TEST) -tags=integration -race -count=1 \
+			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/auth-integration.out ./...) || status=$$?; \
 		exit $$status
 
 # Smoke: relay → openai-mock.wyolet.dev (via Caddy on dev-stack, mock on Mac:5180).
@@ -499,7 +503,7 @@ smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-moc
 		obj=json.loads(open(sorted(glob.glob('$(MOCK_FIXTURES)/session-*.jsonl'))[0]).readline()); \
 		open('/tmp/fixbody.json','w').write(json.dumps(obj['match']['body_json_equals']))"
 	@test -f /tmp/fixbody-parallel.json || python3 -c "import json; \
-		obj=json.loads(open('$(MOCK_FIXTURES)/session-1779156057-87325-4.jsonl').readlines()[9]); \
+		obj=json.loads(open('$(MOCK_FIXTURES)/session-1779163989-65437-1.jsonl').readlines()[8]); \
 		open('/tmp/fixbody-parallel.json','w').write(json.dumps(obj['match']['body_json_equals']))"
 	@pgrep -f 'spec-mock-openai.*-addr.*5180' >/dev/null || \
 		( $(MOCK_BIN) -addr ":5180" \

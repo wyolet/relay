@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/auth/directory"
 )
 
 // Action is what a plan entry would do to one row.
@@ -32,8 +33,9 @@ const (
 	ActionCreate    Action = "create"
 	ActionUpdate    Action = "update"
 	ActionUnchanged Action = "unchanged"
-	// ActionSkipDirty is an operator-edited row the run refused to
-	// overwrite. Reported as drift; nothing is written.
+	// ActionSkipDirty is an operator-edited row that differs from the
+	// document and the run refused to overwrite. Reported as drift; nothing
+	// is written.
 	ActionSkipDirty Action = "skip-dirty"
 	ActionDelete    Action = "delete"
 	// ActionConflict is a row another writer changed between Plan and
@@ -96,7 +98,7 @@ type Options struct {
 
 	// Force writes over rows an operator edited via the control API
 	// (meta.Dirty), resetting them to the manifest. Default false: dirty
-	// rows are reported as skip-dirty and left alone.
+	// rows that differ are reported as skip-dirty and left alone.
 	Force bool
 
 	// Prune deletes rows that match Selector and are absent from the
@@ -122,6 +124,17 @@ type Options struct {
 	// re-parent a row the same way an admin can. The control plane always
 	// supplies one, so a scoped caller still cannot chown across scopes.
 	Authz authz.Authorizer
+
+	// Directory writes the auth module's kinds. Nil builds one over Stores
+	// whose grant check probes Authz; the control plane passes its own, which
+	// also ends an account's sessions when apply changes it.
+	Directory *directory.Directory
+
+	// EnvPasswords lets a User document read its password from this
+	// process's environment (password.valueFrom.env). Only `relay seed`
+	// sets it: over the API it would let a caller read the server's
+	// variables into an account's password.
+	EnvPasswords bool
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -233,6 +246,7 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 
 	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
 		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License}
+	b.dir, b.dirErr = directoryFor(opts)
 	if err := b.run(ctx, docs); err != nil {
 		return nil, err
 	}

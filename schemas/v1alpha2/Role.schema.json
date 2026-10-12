@@ -26,6 +26,7 @@
               "rate-limits",
               "role-bindings",
               "roles",
+              "scim-clients",
               "service-accounts",
               "settings",
               "system",

@@ -3,7 +3,6 @@ package main
 import (
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -74,12 +73,8 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 	otlpRoutes.Method(http.MethodPost, otlpreceiver.TracesPath, otlpReceiver.Traces())
 	otlpRoutes.Method(http.MethodPost, otlpreceiver.LogsPath, otlpReceiver.Logs())
 
-	inferAddr := ":8080"
-	if p := os.Getenv("RELAY_PORT"); p != "" {
-		inferAddr = ":" + p
-	}
 	inferSrv := &http.Server{
-		Addr:              inferAddr,
+		Addr:              cfg.InferenceAddr(),
 		Handler:           inferRouter,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -89,8 +84,7 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		// mid-flight. Header/idle limits plus the in-flight admission cap bound
 		// resource use instead of a response-duration cap.
 	}
-	slog.Info("relay inference listening", "addr", inferAddr)
-	inferErr := make(chan error, 1)
-	go func() { inferErr <- inferSrv.ListenAndServe() }()
+	slog.Info("relay inference listening", "addr", inferSrv.Addr)
+	_, inferErr := serve(inferSrv)
 	return inferSrv, inferErr
 }

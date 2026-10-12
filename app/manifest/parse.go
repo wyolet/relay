@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 // Document is a discriminated union over all supported wire kinds. Exactly one
@@ -32,6 +34,10 @@ type Document struct {
 	// the config tree. LoadDir drops these; a caller parsing a submitted
 	// bundle sees them, so it can refuse rather than ignore them silently.
 	Foreign string
+
+	// User is an account under the auth module's apiVersion; relay has no
+	// wire DTO of its own for it.
+	User *authmanifest.Document
 
 	ServiceAccount *ServiceAccountDTO
 	Group          *GroupDTO
@@ -80,6 +86,8 @@ func (d Document) Kind() string {
 		return "PolicyBinding"
 	case d.Overlay != nil:
 		return "Overlay"
+	case d.User != nil:
+		return authmanifest.KindUser
 	case d.Foreign != "":
 		return d.Foreign
 	default:
@@ -97,21 +105,35 @@ type rawEnvelope struct {
 }
 
 // Parse reads one or more YAML documents from r and returns a Document slice.
-// Multi-doc YAML (--- separated) is fully supported.
+// Multi-doc YAML (--- separated) is fully supported. The auth module's kinds
+// are decoded by the module, strictly, under either apiVersion.
 func Parse(r io.Reader) ([]Document, error) {
 	dec := yaml.NewDecoder(r)
 	var docs []Document
 	docIdx := 0
 	for {
-		var env rawEnvelope
-		err := dec.Decode(&env)
+		var node yaml.Node
+		err := dec.Decode(&node)
 		if errors.Is(err, io.EOF) {
 			break
+		}
+		var env rawEnvelope
+		if err == nil {
+			err = node.Decode(&env)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("wire: doc %d: %w", docIdx, err)
 		}
 		if env.Kind == "" && env.APIVersion == "" {
+			docIdx++
+			continue
+		}
+		if authKind(env.APIVersion, env.Kind) {
+			doc, err := parseAuthDoc(docIdx, &node)
+			if err != nil {
+				return nil, fmt.Errorf("wire: %w", err)
+			}
+			docs = append(docs, doc)
 			docIdx++
 			continue
 		}
@@ -192,6 +214,9 @@ func LoadDir(dir string) ([]Document, error) {
 }
 
 func dispatchKind(env *rawEnvelope) (Document, error) {
+	if doc, ok, err := decodeRelayAuthKind(env); ok {
+		return doc, err
+	}
 	switch env.Kind {
 	case "Provider":
 		var spec ProviderSpec
@@ -255,48 +280,6 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 			return Document{}, err
 		}
 		return Document{HostBinding: &HostBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Team":
-		var spec TeamSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Team: &TeamDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Project":
-		var spec ProjectSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "ServiceAccount":
-		var spec ServiceAccountSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{ServiceAccount: &ServiceAccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Group":
-		var spec GroupSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Group: &GroupDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Role":
-		var spec RoleSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Role: &RoleDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "RoleBinding":
-		var spec RoleBindingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{RoleBinding: &RoleBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
 	case "PolicyBinding":
 		var spec PolicyBindingSpec

@@ -4,13 +4,14 @@
 package inference
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -18,21 +19,47 @@ import (
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
-// verifyKeys is the key set one verification reads: the key tokens are
-// minted under now, plus the one rotated out, so a rotation is not a global
-// logout. Replaced wholesale, never mutated.
-type verifyKeys struct {
-	current, previous       ed25519.PublicKey
-	currentKID, previousKID string
+// TokenVerifier holds the public half of the token signing key, plus the one
+// rotated out, so a rotation is not a global logout. The composition root
+// swaps the keys in when the auth:tokens section changes; a nil verifier (or
+// one with no key) rejects every token, which is what a deployment with
+// tokens disabled wants.
+type TokenVerifier struct {
+	init  sync.Once
+	store *authtoken.StaticStore
+	keys  *authtoken.KeySet
+	// mu serializes key changes: SetKey reads the set it replaces.
+	mu    sync.Mutex
+	cache claimsCache
 }
 
-// TokenVerifier holds the public half of the token signing key. The
-// composition root swaps the key in when the auth:tokens section changes; a
-// nil verifier (or one with no key) rejects every token, which is what a
-// deployment with tokens disabled wants.
-type TokenVerifier struct {
-	keys  atomic.Pointer[verifyKeys]
-	cache claimsCache
+func (v *TokenVerifier) keySet() *authtoken.KeySet {
+	v.init.Do(func() {
+		v.store = &authtoken.StaticStore{}
+		// The settings section pushes every key change here, so an unknown
+		// kid has nothing new to find in the store.
+		v.keys = authtoken.NewKeySet(v.store, authtoken.KeySetOptions{MinReloadInterval: -1})
+	})
+	return v.keys
+}
+
+// install replaces the key set. A key of the wrong size verifies nothing, so
+// it is left out rather than installed.
+func (v *TokenVerifier) install(current, previous ed25519.PublicKey) {
+	ks := v.keySet()
+	var next authtoken.Keys
+	if len(current) == ed25519.PublicKeySize {
+		next.Current = current
+		if len(previous) == ed25519.PublicKeySize {
+			next.Previous = []ed25519.PublicKey{previous}
+		}
+	}
+	v.store.Set(next)
+	if err := ks.Reload(context.Background()); err != nil {
+		// Unreachable with the sizes checked above; fail closed regardless.
+		v.store.Set(authtoken.Keys{})
+		_ = ks.Reload(context.Background())
+	}
 }
 
 // SetKey installs the verification key, demoting the one it replaces so
@@ -40,15 +67,13 @@ type TokenVerifier struct {
 // and drops both.
 func (v *TokenVerifier) SetKey(pub ed25519.PublicKey) {
 	defer v.cache.clear()
-	if len(pub) == 0 {
-		v.keys.Store(nil)
-		return
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var previous ed25519.PublicKey
+	if old := v.keySet().Current(); old != nil && !old.Equal(pub) {
+		previous = old
 	}
-	next := &verifyKeys{current: pub, currentKID: authtoken.KeyID(pub)}
-	if old := v.keys.Load(); old != nil && !old.current.Equal(pub) {
-		next.previous, next.previousKID = old.current, old.currentKID
-	}
-	v.keys.Store(next)
+	v.install(pub, previous)
 }
 
 // SetKeys installs the current key alongside the one rotation replaced, so
@@ -60,14 +85,9 @@ func (v *TokenVerifier) SetKeys(current, previous ed25519.PublicKey) {
 		return
 	}
 	defer v.cache.clear()
-	if len(current) == 0 {
-		v.keys.Store(nil)
-		return
-	}
-	v.keys.Store(&verifyKeys{
-		current: current, currentKID: authtoken.KeyID(current),
-		previous: previous, previousKID: authtoken.KeyID(previous),
-	})
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.install(current, previous)
 }
 
 // SetCacheSize bounds the verified-claims cache. 0 turns it off.
@@ -83,11 +103,7 @@ func (v *TokenVerifier) PublicKey() ed25519.PublicKey {
 	if v == nil {
 		return nil
 	}
-	k := v.keys.Load()
-	if k == nil {
-		return nil
-	}
-	return k.current
+	return v.keySet().Current()
 }
 
 // PreviousPublicKey returns the key a rotation retired, or nil.
@@ -95,11 +111,10 @@ func (v *TokenVerifier) PreviousPublicKey() ed25519.PublicKey {
 	if v == nil {
 		return nil
 	}
-	k := v.keys.Load()
-	if k == nil {
-		return nil
+	if prev := v.keySet().Keys().Previous; len(prev) > 0 {
+		return prev[0]
 	}
-	return k.previous
+	return nil
 }
 
 // ErrTokensDisabled means no signing key is configured, so no token can be
@@ -109,30 +124,28 @@ var ErrTokensDisabled = errors.New("inference: tokens are not enabled")
 // Verify checks the signature and returns the claims. Claim policy (expiry,
 // issuer, version) is the caller's.
 func (v *TokenVerifier) Verify(token string) (crypto.TokenClaims, error) {
-	if v == nil {
-		return crypto.TokenClaims{}, ErrTokensDisabled
-	}
-	k := v.keys.Load()
-	if k == nil || len(k.current) == 0 {
-		return crypto.TokenClaims{}, ErrTokensDisabled
-	}
-	pub, ok := k.pick(authtoken.HeaderKeyID(token))
-	if !ok {
-		return crypto.TokenClaims{}, authtoken.ErrSignature
-	}
-	return authtoken.Parse[crypto.TokenClaims](pub, token)
+	claims, _, err := v.verify(token)
+	return claims, err
 }
 
-// pick resolves the key a token's kid names. A token with no kid predates
-// the rotation support and is treated as minted under the current key.
-func (k *verifyKeys) pick(kid string) (ed25519.PublicKey, bool) {
-	switch {
-	case kid == "", kid == k.currentKID:
-		return k.current, true
-	case kid == k.previousKID && len(k.previous) > 0:
-		return k.previous, true
+// verify also returns the header's typ, read in the same decode as the kid
+// so checking it costs nothing extra.
+func (v *TokenVerifier) verify(token string) (crypto.TokenClaims, string, error) {
+	if v == nil {
+		return crypto.TokenClaims{}, "", ErrTokensDisabled
 	}
-	return nil, false
+	ks := v.keySet()
+	if ks.Current() == nil {
+		return crypto.TokenClaims{}, "", ErrTokensDisabled
+	}
+	kid, typ := authtoken.ReadHeader(token)
+	// Reloads are off on this key set, so the context is never waited on.
+	pub, err := ks.PublicKey(context.Background(), kid)
+	if err != nil {
+		return crypto.TokenClaims{}, "", err
+	}
+	claims, err := authtoken.Parse[crypto.TokenClaims](pub, token)
+	return claims, typ, err
 }
 
 // looksLikeToken classifies a bearer by shape: a compact JWT is three
@@ -158,11 +171,17 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 	}
 	claims := ent.claims
 	userID := claims.UserID()
+	// iat stays out: tokens minted on another pod would fail on clock skew,
+	// which relay has never checked. Validate checks typ and iss before exp,
+	// so a foreign token reads as invalid, not expired. Relay mints only JWT;
+	// an at+jwt is an access token issued for some other resource.
+	err := authtoken.Validate(authtoken.Claims{Issuer: claims.Iss, Expiry: claims.Exp, Type: ent.typ}, now,
+		authtoken.Want{Issuer: crypto.TokenIssuer, Type: authtoken.TypeJWT})
 	switch {
-	case claims.Iss != crypto.TokenIssuer, userID == "":
+	case userID == "", err != nil && !errors.Is(err, authtoken.ErrExpired):
 		writeAuthErr(w, "invalid token")
 		return nil, false
-	case claims.Exp <= now.Unix():
+	case err != nil:
 		writeAuthErr(w, "token expired")
 		return nil, false
 	}
@@ -203,11 +222,11 @@ func (v *TokenVerifier) verified(bearer string, now time.Time) (*cacheEntry, boo
 	if ent := v.cache.get(digest, now); ent != nil {
 		return ent, true
 	}
-	claims, err := v.Verify(bearer)
+	claims, typ, err := v.verify(bearer)
 	if err != nil {
 		return nil, false
 	}
-	ent := &cacheEntry{claims: claims, exp: time.Unix(claims.Exp, 0)}
+	ent := &cacheEntry{claims: claims, typ: typ, exp: time.Unix(claims.Exp, 0)}
 	v.cache.put(digest, ent)
 	return ent, true
 }

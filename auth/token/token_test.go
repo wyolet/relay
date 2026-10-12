@@ -112,6 +112,49 @@ func TestParse_Rejections(t *testing.T) {
 	}
 }
 
+// signWithHeader signs claims under a header Sign never writes.
+func signWithHeader(t *testing.T, priv ed25519.PrivateKey, header, payload string) string {
+	t.Helper()
+	signing := base64url([]byte(header)) + "." + base64url([]byte(payload))
+	return signing + "." + base64url(ed25519.Sign(priv, []byte(signing)))
+}
+
+func TestParse_HeaderType(t *testing.T) {
+	pub, priv := testKey(t)
+	for _, tc := range []struct {
+		header  string
+		wantTyp string
+		ok      bool
+	}{
+		{`{"alg":"EdDSA","typ":"at+jwt","kid":"k1"}`, TypeAccessToken, true},
+		{`{"alg":"EdDSA","typ":"JWT","kid":"k1"}`, TypeJWT, true},
+		{`{"alg":"EdDSA","typ":"dpop+jwt"}`, "dpop+jwt", false},
+		{`{"alg":"EdDSA"}`, "", false},
+	} {
+		tok := signWithHeader(t, priv, tc.header, `{"sub":"user:u1"}`)
+		if got := HeaderType(tok); got != tc.wantTyp {
+			t.Errorf("%s: HeaderType = %q, want %q", tc.header, got, tc.wantTyp)
+		}
+		if kid, typ := ReadHeader(tok); kid != HeaderKeyID(tok) || typ != tc.wantTyp {
+			t.Errorf("%s: ReadHeader = (%q, %q), want (%q, %q)", tc.header, kid, typ, HeaderKeyID(tok), tc.wantTyp)
+		}
+		_, err := Parse[testClaims](pub, tok)
+		if tc.ok && err != nil {
+			t.Errorf("%s: Parse: %v", tc.header, err)
+		}
+		if !tc.ok && !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: Parse = %v, want ErrMalformed", tc.header, err)
+		}
+	}
+	bare, err := Sign(priv, "", testClaims{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := HeaderType(bare); got != TypeJWT {
+		t.Errorf("HeaderType(bare) = %q, want JWT", got)
+	}
+}
+
 // tamper flips one byte of the payload segment, leaving the shape intact.
 func tamper(token string) string {
 	parts := strings.SplitN(token, ".", 3)

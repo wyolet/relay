@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/golang-migrate/migrate/v4"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
@@ -28,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -165,13 +165,12 @@ func walkUsernameOwnedKeysAfterUpgrade(t *testing.T) {
 		t.Fatalf("seed the other user: %v", err)
 	}
 
-	m := migrator(t, st.dsn)
-	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
+	if err := storagemod.MigrateTo(st.dsn, 25); err != nil {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
 	insertUsernameOwnedKey(t, st.dsn, "mine", "sluggy")
 	insertUsernameOwnedKey(t, st.dsn, "theirs", "otherguy")
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := storagemod.MigrateUp(st.dsn); err != nil {
 		t.Fatalf("migrate back up to head: %v", err)
 	}
 	if err := st.cat.Reload(ctx); err != nil {

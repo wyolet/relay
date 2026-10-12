@@ -40,10 +40,15 @@ var retentionSections = map[string]bool{
 	SectionUsageLogging: true,
 }
 
+// provisioningSections decide whether an identity provider may provision accounts and whether its delete removes them, so writing them takes an admin.
+var provisioningSections = map[string]bool{
+	AuthSCIMSection: true,
+}
+
 // AdminOnly reports whether writing section requires an admin caller.
 func AdminOnly(section string) bool {
 	_, ok := secretScopes[section]
-	return ok || retentionSections[section]
+	return ok || retentionSections[section] || provisioningSections[section]
 }
 
 func checkSecretRef(section, field string, r secret.Ref) error {

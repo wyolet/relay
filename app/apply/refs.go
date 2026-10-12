@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/auth/directory"
 )
 
 // refs is the control API's cross-row rule set over this run's rows: the
@@ -72,7 +73,8 @@ func (b *builder) missingUsers(_ context.Context, ids []string) ([]string, error
 	}
 	var missing []string
 	for _, id := range ids {
-		if !known[id] {
+		// An account the same bundle declares is written before anything that names it.
+		if _, declared := b.declared[id].(*directory.User); !known[id] && !declared {
 			missing = append(missing, id)
 		}
 	}

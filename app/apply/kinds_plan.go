@@ -27,6 +27,8 @@ type kindWiring[D any, T any] struct {
 	// reads one row, not the plan). Runs on create and update only, and
 	// reports the same error the API's guard for that rule reports.
 	Check func(context.Context, *T) error
+	// CheckDelete refuses a prune of a stored row before anything is written, as Check does a write.
+	CheckDelete func(*T) error
 	// Keep copies server-managed state from the stored row onto the declared
 	// one before the diff, so neither the diff nor an update touches it.
 	Keep func(prev, next *T)
@@ -81,12 +83,9 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 			pm := k.Meta(prev)
 			e.prev = rowState{present: true, dirty: pm.Dirty, updatedAt: pm.UpdatedAt}
 		}
-		switch {
-		case !found:
+		if !found {
 			e.Action = ActionCreate
-		case k.Meta(prev).Dirty && !b.opts.Force:
-			e.Action = ActionSkipDirty
-		default:
+		} else {
 			// The stored owner wins: a document must not move a row into
 			// another tenant's scope. An operator may still re-parent.
 			if !b.admin {
@@ -97,9 +96,14 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				k.Keep(prev, obj)
 			}
 			fields := changedFields(viewOf(k.Kind, prev, k.Meta(prev)), viewOf(k.Kind, obj, m))
-			if len(fields) == 0 {
+			switch {
+			case len(fields) == 0:
+				// A dirty row the document already matches is not drift: an exported operator edit applies back as a no-op.
 				e.Action = ActionUnchanged
-			} else {
+			case k.Meta(prev).Dirty && !b.opts.Force:
+				e.Action = ActionSkipDirty
+				e.ChangedFields = fields
+			default:
 				e.Action = ActionUpdate
 				e.ChangedFields = fields
 			}
@@ -149,6 +153,11 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 			}
 			if err := b.governs(settings.OpDelete, route.Singular, m.Owner); err != nil {
 				return &GovernanceError{Kind: k.Kind, Name: m.Name, Err: err}
+			}
+			if k.CheckDelete != nil {
+				if err := k.CheckDelete(row); err != nil {
+					return &InvalidError{Kind: k.Kind, Name: m.Name, Err: err}
+				}
 			}
 			id := m.ID
 			pruned = append(pruned, Entry{

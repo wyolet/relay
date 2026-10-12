@@ -2,29 +2,31 @@ package apply
 
 import (
 	"context"
+	"errors"
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 func (b *builder) planTenancy(ctx context.Context, teamDocs []*manifest.TeamDTO, projDocs []*manifest.ProjectDTO) error {
-	s := b.opts.Stores
 	if err := planKind(ctx, b, kindWiring[manifest.TeamDTO, team.Team]{
 		Kind: "Team", Docs: teamDocs, Names: b.idx.Teams, Rows: b.rows.Teams,
 		To: manifest.ToTeam, Meta: func(t *team.Team) *meta.Metadata { return &t.Meta },
-		Upsert: s.Team.Upsert, Delete: s.Team.Delete,
+		Upsert: throughDirectory(b, converted((*team.Team).ToDirectory)), Delete: deleteThroughDirectory(b, "Team"),
 	}); err != nil {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.ProjectDTO, project.Project]{
 		Kind: "Project", Docs: projDocs, Names: b.idx.Projects, Rows: b.rows.Projects,
 		To: manifest.ToProject, Meta: func(p *project.Project) *meta.Metadata { return &p.Meta },
-		Upsert: s.Project.Upsert, Delete: s.Project.Delete,
+		Upsert: throughDirectory(b, converted((*project.Project).ToDirectory)), Delete: deleteThroughDirectory(b, "Project"),
 		Check: refsFor(b, refcheck.Checker.Project),
 	}); err != nil {
 		return err
@@ -37,7 +39,7 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 	if err := planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
-		Upsert: s.ServiceAccount.Upsert, Delete: s.ServiceAccount.Delete,
+		Upsert: throughDirectory(b, converted((*serviceaccount.ServiceAccount).ToDirectory)), Delete: deleteThroughDirectory(b, "ServiceAccount"),
 		Check: refsFor(b, refcheck.Checker.ServiceAccount),
 	}); err != nil {
 		return err
@@ -91,6 +93,63 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 			if len(deps) > 0 || hidden > 0 {
 				return &InvalidError{Kind: e.Kind, Name: e.Name, Err: &project.DependentsError{Rows: deps, Hidden: hidden}}
 			}
+		}
+	}
+	return b.checkDocsAtPrunedScopes(ctx)
+}
+
+// errOwnerPruned refuses a Policy, HostKey or RateLimit document owned by a project this run prunes, directly or with its team. Their owner lives only in metadata, so no delete takes them along: they would be written and left owned by a project that no longer exists.
+var errOwnerPruned = errors.New("its project or the project's team is pruned in the same apply, which would leave it owned by a project that no longer exists; drop the document or keep its team and project")
+
+// checkDocsAtPrunedScopes refuses a document this run writes into a team or project it also prunes, or into a project of a pruned team. A Project, ServiceAccount, Key, RoleBinding or PolicyBinding goes with the delete, so it would be written and then lost; a Policy, HostKey or RateLimit would outlive its owner.
+func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
+	gone := map[meta.Owner]bool{}
+	for _, kind := range b.deletes {
+		for _, e := range kind {
+			switch e.Kind {
+			case "Team":
+				gone[meta.Owner{Kind: meta.OwnerTeam, ID: e.ID}] = true
+				for _, p := range b.rows.Projects {
+					if p.Spec.TeamID == e.ID {
+						gone[meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}] = true
+					}
+				}
+			case "Project":
+				gone[meta.Owner{Kind: meta.OwnerProject, ID: e.ID}] = true
+			}
+		}
+	}
+	if len(gone) == 0 {
+		return nil
+	}
+	serviceAccount := lookup(b, b.rows.ServiceAccounts, func(x *serviceaccount.ServiceAccount) *meta.Metadata { return &x.Meta })
+	for _, e := range b.entries {
+		var err error
+		switch e.Kind {
+		case "Project", "RoleBinding", "ServiceAccount":
+			// The owner mirrors the team, the scope, and the project.
+			if gone[e.owner] {
+				err = authmanifest.ErrScopePruned
+			}
+		case "Policy", "HostKey", "RateLimit":
+			if gone[e.owner] {
+				err = errOwnerPruned
+			}
+		case "Key":
+			// The key goes with its service account, so its scope is the account's project, whatever the document's owner says.
+			k, _ := b.declared[e.ID].(*key.Key)
+			if k != nil && k.Spec.Principal.Kind == key.PrincipalServiceAccount {
+				if sa := serviceAccount(ctx, k.Spec.Principal.ID); sa != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}] {
+					err = authmanifest.ErrScopePruned
+				}
+			}
+		case "PolicyBinding":
+			if pb, _ := b.declared[e.ID].(*policybinding.PolicyBinding); pb != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: pb.Spec.ProjectID}] {
+				err = authmanifest.ErrScopePruned
+			}
+		}
+		if err != nil {
+			return &InvalidError{Kind: e.Kind, Name: e.Name, Err: err}
 		}
 	}
 	return nil

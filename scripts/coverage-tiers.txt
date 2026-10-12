@@ -34,11 +34,16 @@ jobq/payload			66
 
 auth/apikey			85
 auth/authn			95
+auth/directory			91
+auth/directory/memstore		94
+auth/directory/storetest	80
+auth/manifest			81
 auth/oidc			93
 auth/password			95
 auth/principal			95
 auth/rbac			95
 auth/session			93
+auth/store/postgres		77
 auth/token			85
 
 sdk/adapters/anthropic		75

@@ -24,7 +24,7 @@ import (
 
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -588,7 +588,7 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 	p := testPool(t, dsn)
 	ctx := context.Background()
 	userID := ids.New()
-	if err := user.NewStore(gen.New(p)).Upsert(ctx, &user.User{ID: userID, Username: "alice"}); err != nil {
+	if err := user.NewStore(p).Upsert(ctx, &user.User{ID: userID, Username: "alice"}); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 
@@ -718,10 +718,10 @@ func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	m := migrator(t, st.dsn)
-	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
+	if err := storagemod.MigrateTo(st.dsn, 25); err != nil {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
+	m := migrator(t, st.dsn)
 	p := testPool(t, st.dsn)
 	keyID := ids.New()
 	if _, err := p.Exec(ctx,
@@ -734,7 +734,7 @@ func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
 	if err := m.Migrate(26); err != nil {
 		t.Fatalf("migrate up to 26: %v", err)
 	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := storagemod.MigrateUp(st.dsn); err != nil {
 		t.Fatalf("migrate back up to head: %v", err)
 	}
 

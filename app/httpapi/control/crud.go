@@ -328,7 +328,14 @@ func registerKind[T any](
 				}
 			}
 			audit.Changed(ctx, []string{audit.AnyField})
-			if err := store.Upsert(ctx, v); err != nil {
+			create := store.Upsert
+			if w, ok := store.(kindWriter[T]); ok {
+				create = w.Create
+			}
+			if err := create(ctx, v); err != nil {
+				if refused := grantRefusal(err); refused != nil {
+					return nil, refused
+				}
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
 			created, err := store.Get(ctx, m.ID)
@@ -403,7 +410,11 @@ func registerKind[T any](
 		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
 		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
-		if err := store.Upsert(ctx, v); err != nil {
+		update := store.Upsert
+		if w, ok := store.(kindWriter[T]); ok {
+			update = w.Update
+		}
+		if err := update(ctx, v); err != nil {
 			return nil, mapWriteErr(singular, in.ID, err)
 		}
 		updated, err := store.Get(ctx, in.ID)
@@ -456,6 +467,9 @@ func registerKind[T any](
 		}
 		audit.Changed(ctx, []string{audit.AnyField})
 		if err := store.Delete(ctx, in.ID); err != nil {
+			if managed := managedError(err); managed != nil {
+				return nil, managed
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
 		return &emptyResponse{}, nil

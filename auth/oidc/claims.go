@@ -1,20 +1,27 @@
 package oidc
 
 import (
-	"encoding/base64"
-	"encoding/json"
+	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
-	"strings"
+	"time"
 
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
 
+// iatLeeway is the clock skew allowed on iat, the leeway go-oidc applies to nbf.
+const iatLeeway = 5 * time.Minute
+
+// errInvalidIDToken marks an id_token that failed verification, as opposed to a verified one that names nobody.
+var errInvalidIDToken = errors.New("id_token rejected")
+
 // Claims is the identity a login produced.
 //
-// The id_token is decoded without signature verification, and its iss, aud, exp and nonce are not checked: it arrives on the code-exchange response over TLS with client authentication, so the channel, not the signature, is the trust anchor. Bearer tokens presented by callers are a different surface and must be verified.
+// An id_token is verified per OIDC Core 3.1.3.7 before any claim is read: signature against the provider's JWKS (asymmetric algorithms only), iss, aud and azp, exp, iat and the nonce sent with the authorization request. A response with no id_token but an inline profile is trusted on the server-side code exchange alone: TLS, client authentication, state and PKCE. Bearer tokens presented by callers are a different surface.
 type Claims struct {
-	// Issuer is the configured issuer the login went through, not the token's iss claim.
+	// Issuer is the configured issuer the login went through; a verified id_token's iss equals it or differs from it only by a trailing slash.
 	Issuer            string
 	Subject           string
 	Email             string
@@ -23,55 +30,82 @@ type Claims struct {
 	SessionID string
 	// Groups holds the string values of Config.GroupsClaim.
 	Groups []string
+
+	// verified is every claim of the verified id_token; nil for an inline profile, which nothing signed.
+	verified map[string]any
+}
+
+// StringClaim returns the named claim of the verified id_token when its value is a string, else "". A login with no id_token has no verified claims, so it reads "" for every name.
+func (c Claims) StringClaim(name string) string {
+	s, _ := c.verified[name].(string)
+	return s
 }
 
 type idTokenPayload struct {
-	Sub               string `json:"sub"`
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`
 	Sid               string `json:"sid"`
+	Azp               string `json:"azp"`
 }
 
-// claimsFromToken reads the caller's identity from the code-exchange response. Standard OIDC carries it as an id_token JWT; some hosted user-management providers instead inline a profile object ({"user": {"id": ..., "email": ...}}). Both are accepted, the JWT first.
-func claimsFromToken(tok *oauth2.Token, issuer, groupsClaim string) (Claims, error) {
+// claimsFromToken reads the caller's identity from the code-exchange response. Standard OIDC carries it as an id_token JWT, which must verify; some hosted user-management providers send no id_token and inline a profile object ({"user": {"id": ..., "email": ...}}) instead. The JWT is used whenever present.
+func claimsFromToken(ctx context.Context, tok *oauth2.Token, p *gooidc.Provider, cfg *Config, nonce string) (Claims, error) {
 	if raw, _ := tok.Extra("id_token").(string); raw != "" {
-		parts := strings.Split(raw, ".")
-		if len(parts) != 3 {
-			return Claims{}, errors.New("id_token is not a JWT")
-		}
-		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		idt, payload, err := verifyIDToken(ctx, p, cfg.ClientID, nonce, raw)
 		if err != nil {
-			return Claims{}, fmt.Errorf("id_token payload: %w", err)
+			return Claims{}, fmt.Errorf("%w: %w", errInvalidIDToken, err)
 		}
-		var p idTokenPayload
-		if err := json.Unmarshal(payload, &p); err != nil {
-			return Claims{}, fmt.Errorf("id_token claims: %w", err)
-		}
-		// The groups claim's name is configuration, so it is read from the generic decode.
-		var all map[string]any
-		_ = json.Unmarshal(payload, &all)
-		if p.Sub == "" {
+		if idt.Subject == "" {
 			return Claims{}, errors.New("id_token has no sub")
 		}
+		// Claim names a product configures (groups, StringClaim) are read from the generic decode.
+		var all map[string]any
+		_ = idt.Claims(&all)
 		return Claims{
-			Issuer:            issuer,
-			Subject:           p.Sub,
-			Email:             p.Email,
-			PreferredUsername: p.PreferredUsername,
-			SessionID:         p.Sid,
-			Groups:            stringsClaim(all, groupsClaim),
+			Issuer:            cfg.Issuer,
+			Subject:           idt.Subject,
+			Email:             payload.Email,
+			PreferredUsername: payload.PreferredUsername,
+			SessionID:         payload.Sid,
+			Groups:            stringsClaim(all, cfg.GroupsClaim),
+			verified:          all,
 		}, nil
 	}
 	if m, ok := tok.Extra("user").(map[string]any); ok {
-		c := Claims{Issuer: issuer}
+		c := Claims{Issuer: cfg.Issuer}
 		c.Subject, _ = m["id"].(string)
 		c.Email, _ = m["email"].(string)
 		if c.Subject != "" {
-			c.Groups = stringsClaim(nil, groupsClaim)
+			c.Groups = stringsClaim(nil, cfg.GroupsClaim)
 			return c, nil
 		}
 	}
 	return Claims{}, errors.New("token response carried neither an id_token nor an inline user profile (is the openid scope configured?)")
+}
+
+// verifyIDToken checks raw with go-oidc, then the claims it leaves to the caller: azp, iat and the nonce.
+func verifyIDToken(ctx context.Context, p *gooidc.Provider, clientID, nonce, raw string) (*gooidc.IDToken, idTokenPayload, error) {
+	var payload idTokenPayload
+	idt, err := p.Verifier(&gooidc.Config{ClientID: clientID}).Verify(ctx, raw)
+	if err != nil {
+		return nil, payload, err
+	}
+	if err := idt.Claims(&payload); err != nil {
+		return nil, payload, fmt.Errorf("claims: %w", err)
+	}
+	if (len(idt.Audience) > 1 || payload.Azp != "") && payload.Azp != clientID {
+		return nil, payload, fmt.Errorf("azp %q is not the client id", payload.Azp)
+	}
+	if idt.IssuedAt.After(time.Now().Add(iatLeeway)) {
+		return nil, payload, fmt.Errorf("iat %v is in the future", idt.IssuedAt)
+	}
+	if idt.Nonce == "" {
+		return nil, payload, errors.New("nonce missing")
+	}
+	if nonce == "" || subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(nonce)) != 1 {
+		return nil, payload, errors.New("nonce mismatch")
+	}
+	return idt, payload, nil
 }
 
 // stringsClaim returns the string values of the named claim. Providers render groups as an array of strings; anything else is ignored rather than guessed at.

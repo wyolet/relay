@@ -22,7 +22,6 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -35,7 +34,7 @@ func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
 	p := testPool(t, dsn)
 	ctx := context.Background()
 	u := &user.User{ID: ids.New(), Username: "alice"}
-	if err := user.NewStore(gen.New(p)).Upsert(ctx, u); err != nil {
+	if err := user.NewStore(p).Upsert(ctx, u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 
@@ -112,7 +111,7 @@ func TestIntegration_UsersNotifyOnlyOnTokenVersion(t *testing.T) {
 
 	var triggers []string
 	rows, err := p.Query(ctx,
-		`SELECT tgname FROM pg_trigger WHERE tgrelid = 'users'::regclass AND NOT tgisinternal ORDER BY tgname`)
+		`SELECT tgname FROM pg_trigger WHERE tgrelid = 'users'::regclass AND NOT tgisinternal AND tgfoid = 'catalog_notify'::regproc ORDER BY tgname`)
 	if err != nil {
 		t.Fatalf("read triggers: %v", err)
 	}

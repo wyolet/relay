@@ -2,8 +2,12 @@
 // the verification key by `kid`. The claim set is the caller's: any value that
 // encodes to a JSON object.
 //
-// Claim policy (issuer, audience, expiry, versioning) and verification
-// caching are the caller's. Other JOSE algorithms are out of scope.
+// A KeySet holds the current signing key and the retired keys that still
+// verify, loaded through a KeyStore so a rotation reaches every replica, and
+// publishes them as a JWK Set. Validate checks the registered claims (issuer,
+// audience, times, typ) when a caller opts in; any other claim policy, such as
+// versioning, and verification caching are the caller's. Other JOSE
+// algorithms are out of scope.
 package token
 
 import (
@@ -69,20 +73,43 @@ type header struct {
 
 // HeaderKeyID reports the `kid` a token names, or "" when it carries none.
 // Reads the header only — nothing here is a trust decision.
-func HeaderKeyID(token string) string {
+func HeaderKeyID(token string) string { return readHeader(token).Kid }
+
+// HeaderType reports the `typ` a token's header carries, for Claims.Type.
+// Reads the header only; Parse refuses any typ but TypeJWT and TypeAccessToken.
+func HeaderType(token string) string { return readHeader(token).Typ }
+
+// ReadHeader returns the header's `kid` and `typ` in one decode, for a caller
+// that needs both on a hot path.
+func ReadHeader(token string) (kid, typ string) {
+	h := readHeader(token)
+	return h.Kid, h.Typ
+}
+
+// The header types Parse accepts: a plain JWT, and an OAuth 2.0 access token
+// (RFC 9068). Sign writes TypeJWT.
+const (
+	TypeJWT         = "JWT"
+	TypeAccessToken = "at+jwt"
+)
+
+func readHeader(token string) header {
 	seg, _, ok := strings.Cut(token, ".")
-	if !ok || seg == jwtHeader {
-		return ""
+	if !ok {
+		return header{}
+	}
+	if seg == jwtHeader {
+		return header{Alg: "EdDSA", Typ: TypeJWT}
 	}
 	raw, err := rawURL.DecodeString(seg)
 	if err != nil {
-		return ""
+		return header{}
 	}
 	var h header
 	if json.Unmarshal(raw, &h) != nil {
-		return ""
+		return header{}
 	}
-	return h.Kid
+	return h
 }
 
 // Parse verifies the signature with pub and decodes the payload into C. It
@@ -120,7 +147,8 @@ func Parse[C any](pub ed25519.PublicKey, token string) (C, error) {
 }
 
 // validHeader accepts the bare header verbatim and otherwise insists on
-// EdDSA/JWT: `alg` is a trust decision, so it is never taken on faith.
+// EdDSA with a typ of JWT or at+jwt: `alg` is a trust decision, so it is never
+// taken on faith.
 func validHeader(seg string) bool {
 	if seg == jwtHeader {
 		return true
@@ -132,7 +160,8 @@ func validHeader(seg string) bool {
 		return false
 	}
 	s := string(raw)
-	return strings.Contains(s, `"alg":"EdDSA"`) && strings.Contains(s, `"typ":"JWT"`)
+	return strings.Contains(s, `"alg":"EdDSA"`) &&
+		(strings.Contains(s, `"typ":"`+TypeJWT+`"`) || strings.Contains(s, `"typ":"`+TypeAccessToken+`"`))
 }
 
 // maxHeaderBytes bounds the JOSE header a token may carry. The one Sign

@@ -87,11 +87,11 @@ func mountDeps(t *testing.T) Deps {
 		Key:            key.NewStore(q),
 		Overlay:        overlay.NewStore(q),
 		Settings:       settings.NewStore(q),
-		Team:           team.NewStore(q),
-		Project:        project.NewStore(q),
-		ServiceAccount: serviceaccount.NewStore(q),
+		Team:           team.NewStore(pool),
+		Project:        project.NewStore(pool),
+		ServiceAccount: serviceaccount.NewStore(pool),
 		Group:          group.NewStore(pool),
-		Role:           role.NewStore(q),
+		Role:           role.NewStore(pool),
 		RoleBinding:    rolebinding.NewStore(pool),
 		PolicyBinding:  policybinding.NewStore(pool),
 		Secrets:        secReg,
@@ -103,7 +103,7 @@ func mountDeps(t *testing.T) Deps {
 		stores.Role, stores.RoleBinding, stores.PolicyBinding)
 	sink := &auditSink{}
 	return Deps{
-		Users:         user.NewStore(q),
+		Users:         user.NewStore(pool),
 		Sessions:      session.New(kvStore, false, "sess:"),
 		TokenSigner:   &TokenSigner{},
 		TokenDenylist: fakeDenylist{},

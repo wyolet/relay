@@ -57,7 +57,7 @@ func runSeed(args []string) error {
 	}
 
 	ctx := context.Background()
-	st, err := storagemod.Open(ctx, cfg.PGDSN)
+	st, err := storagemod.Open(ctx, cfg.PGDSN, storagemod.WithMigrateLockTimeout(cfg.MigrateLockTimeout))
 	if err != nil {
 		return fmt.Errorf("storage.Open: %w", err)
 	}

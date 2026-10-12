@@ -16,5 +16,7 @@ app/policy/BenchmarkResolveRules 8
 app/routing/BenchmarkResolvePolicyless 3
 app/routing/BenchmarkResolveTwoBindings 5
 auth/token/BenchmarkHeaderKeyID 9
+auth/token/BenchmarkKeySetVerify 28
 auth/token/BenchmarkParse 19
 auth/token/BenchmarkSign 12
+auth/token/BenchmarkValidate 0

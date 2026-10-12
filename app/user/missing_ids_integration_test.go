@@ -12,13 +12,12 @@ import (
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 func setupUserDB(t *testing.T) (*user.Store, context.Context) {
 	t.Helper()
-	return user.NewStore(gen.New(storagetest.Pool(t))), context.Background()
+	return user.NewStore(storagetest.Pool(t)), context.Background()
 }
 
 func TestMissingIDsReportsOnlyAbsentUsers(t *testing.T) {

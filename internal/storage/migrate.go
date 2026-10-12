@@ -12,15 +12,33 @@ import (
 	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+)
+
+// groupsVersion is relay's migration that creates groups; authFirstVersion is the auth module's migration whose schema relay's own migrations already hold.
+const (
+	groupsVersion    = 26
+	authFirstVersion = 1
 )
 
 // MigrateUp runs the pending up-migrations, as boot does, for a deployment that applies them in a step of its own before the pods roll.
 func MigrateUp(dsn string) error { return runMigrations(dsn) }
 
-// runMigrations runs all pending up-migrations against dsn.
+// runMigrations runs all pending up-migrations against dsn, the relay's and then the auth module's.
 // It is a no-op when no new migrations exist.
 func runMigrations(dsn string) error {
+	if err := runRelayMigrations(dsn); err != nil {
+		return err
+	}
+	// The module's tables are the relay's own (its first migration is a no-op here); it records its version in a table of its own.
+	if err := authpg.Migrate(dsn); err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	return nil
+}
+
+func runRelayMigrations(dsn string) error {
 	src, err := iofs.New(pgmigrations.FS, ".")
 	if err != nil {
 		return fmt.Errorf("storage: open migration source: %w", err)
@@ -49,7 +67,7 @@ func runMigrations(dsn string) error {
 	}
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("storage: migrate up: %w", err)
+		return fmt.Errorf("storage: migrate up: %w", retryable(m, src, true, err))
 	}
 	return nil
 }
@@ -122,16 +140,22 @@ func MigrateTo(dsn string, version uint) error {
 	if err != nil {
 		return err
 	}
+	// Below groupsVersion relay's down-migrations drop groups, and further down users, which the auth module's later migrations extend. The module returns to its first migration, whose schema relay's up-migrations recreate, so the next boot applies the rest again.
+	if version < groupsVersion {
+		if err := authpg.MigrateDown(dsn, authFirstVersion); err != nil {
+			return fmt.Errorf("storage: %w", err)
+		}
+	}
 	// Migrate(0) is not a valid target for golang-migrate; unwinding
 	// everything is its own call.
 	if downAllRun {
 		if err := m.Down(); err != nil && err != migrate.ErrNoChange {
-			return fmt.Errorf("storage: migrate down to 0: %w", err)
+			return fmt.Errorf("storage: migrate down to 0: %w", retryable(m, src, false, err))
 		}
 		return nil
 	}
 	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("storage: migrate to %d: %w", version, err)
+		return fmt.Errorf("storage: migrate to %d: %w", version, retryable(m, src, false, err))
 	}
 	return nil
 }
