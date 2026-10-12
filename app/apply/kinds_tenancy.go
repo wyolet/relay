@@ -2,10 +2,12 @@ package apply
 
 import (
 	"context"
+	"errors"
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -93,11 +95,14 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 			}
 		}
 	}
-	return b.checkDocsAtPrunedScopes()
+	return b.checkDocsAtPrunedScopes(ctx)
 }
 
-// checkDocsAtPrunedScopes refuses a RoleBinding scoped to, or a ServiceAccount in, a team or project this run prunes, or a project of a pruned team: the delete cascades to them, so they would be written and then lost.
-func (b *builder) checkDocsAtPrunedScopes() error {
+// errOwnerPruned refuses a Policy, HostKey or RateLimit document owned by a project this run prunes, directly or with its team. Their owner lives only in metadata, so no delete takes them along: they would be written and left owned by a project that no longer exists.
+var errOwnerPruned = errors.New("its project or the project's team is pruned in the same apply, which would leave it owned by a project that no longer exists; drop the document or keep its team and project")
+
+// checkDocsAtPrunedScopes refuses a document this run writes into a team or project it also prunes, or into a project of a pruned team. A Project, ServiceAccount, Key, RoleBinding or PolicyBinding goes with the delete, so it would be written and then lost; a Policy, HostKey or RateLimit would outlive its owner.
+func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 	gone := map[meta.Owner]bool{}
 	for _, kind := range b.deletes {
 		for _, e := range kind {
@@ -114,10 +119,37 @@ func (b *builder) checkDocsAtPrunedScopes() error {
 			}
 		}
 	}
-	// A binding's owner mirrors its scope and an account's its project.
+	if len(gone) == 0 {
+		return nil
+	}
+	serviceAccount := lookup(b, b.rows.ServiceAccounts, func(x *serviceaccount.ServiceAccount) *meta.Metadata { return &x.Meta })
 	for _, e := range b.entries {
-		if (e.Kind == "RoleBinding" || e.Kind == "ServiceAccount") && gone[e.owner] {
-			return &InvalidError{Kind: e.Kind, Name: e.Name, Err: authmanifest.ErrScopePruned}
+		var err error
+		switch e.Kind {
+		case "Project", "RoleBinding", "ServiceAccount":
+			// The owner mirrors the team, the scope, and the project.
+			if gone[e.owner] {
+				err = authmanifest.ErrScopePruned
+			}
+		case "Policy", "HostKey", "RateLimit":
+			if gone[e.owner] {
+				err = errOwnerPruned
+			}
+		case "Key":
+			// The key goes with its service account, so its scope is the account's project, whatever the document's owner says.
+			k, _ := b.declared[e.ID].(*key.Key)
+			if k != nil && k.Spec.Principal.Kind == key.PrincipalServiceAccount {
+				if sa := serviceAccount(ctx, k.Spec.Principal.ID); sa != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}] {
+					err = authmanifest.ErrScopePruned
+				}
+			}
+		case "PolicyBinding":
+			if pb, _ := b.declared[e.ID].(*policybinding.PolicyBinding); pb != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: pb.Spec.ProjectID}] {
+				err = authmanifest.ErrScopePruned
+			}
+		}
+		if err != nil {
+			return &InvalidError{Kind: e.Kind, Name: e.Name, Err: err}
 		}
 	}
 	return nil
