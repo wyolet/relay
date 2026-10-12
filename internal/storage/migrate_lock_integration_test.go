@@ -77,6 +77,7 @@ func TestIntegration_AuthMigrationGivesUpOnALockedTable(t *testing.T) {
 	if err := storage.MigrateUp(dsn); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
+	head, _ := schemaVersion(t, dsn, authpg.MigrationsTable)
 	if err := authpg.MigrateDown(dsn, 3); err != nil {
 		t.Fatalf("auth down to 3: %v", err)
 	}
@@ -94,10 +95,13 @@ func TestIntegration_AuthMigrationGivesUpOnALockedTable(t *testing.T) {
 	if err := storage.MigrateUp(migrationDSN); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if v, dirty := schemaVersion(t, dsn, authpg.MigrationsTable); v != 4 || dirty {
-		t.Fatalf("auth schema after the retry = %d dirty=%v, want 4 clean", v, dirty)
+	if v, dirty := schemaVersion(t, dsn, authpg.MigrationsTable); v != head || dirty {
+		t.Fatalf("auth schema after the retry = %d dirty=%v, want %d clean", v, dirty, head)
 	}
 
+	if err := authpg.MigrateDown(migrationDSN, 4); err != nil {
+		t.Fatalf("auth down to 4: %v", err)
+	}
 	release = holdLock(t, dsn, "users")
 	migrateBlocked(t, func() error { return authpg.MigrateDown(migrationDSN, 3) })
 	if v, dirty := schemaVersion(t, dsn, authpg.MigrationsTable); v != 4 || dirty {
