@@ -11,7 +11,7 @@ replace github.com/wyolet/relay/jobq => ./jobq
 replace github.com/wyolet/relay/auth => ./auth
 
 require (
-	github.com/1password/onepassword-sdk-go v0.4.0
+	github.com/1password/onepassword-sdk-go v0.4.1
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/andybalholm/brotli v1.2.0
