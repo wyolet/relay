@@ -22,9 +22,9 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
-// registerCRUD wires the eight kinds onto api. metaOf closures + slug
-// resolvers are supplied per kind.
-func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
+// registerCRUD wires the eight kinds onto api and returns how each finds its rows. metaOf closures + slug resolvers are supplied per kind.
+func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
+	rows := kindIndex{}
 	pmeta := func(p *provider.Provider) *meta.Metadata { return &p.Meta }
 	hmeta := func(h *host.Host) *meta.Metadata { return &h.Meta }
 	mmeta := func(m *model.Model) *meta.Metadata { return &m.Meta }
@@ -43,7 +43,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	pbmeta := func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta }
 	dk := newDirectoryKinds(d, newDirectoryOps(d))
 
-	registerKind[team.Team](
+	rows.add(registerKind[team.Team](
 		api, "teams", "team", dk.teams, d.Authz, tmeta,
 		func(t *team.Team) error { return t.Validate() },
 		meta.OwnerSystem,
@@ -57,9 +57,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&teamFilter,
-	)
+	))
 
-	registerKind[project.Project](
+	rows.add(registerKind[project.Project](
 		api, "projects", "project", dk.projects, d.Authz, projmeta,
 		func(p *project.Project) error { return p.Validate() },
 		meta.OwnerTeam,
@@ -73,9 +73,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&projectFilter,
-	)
+	))
 
-	registerKind[serviceaccount.ServiceAccount](
+	rows.add(registerKind[serviceaccount.ServiceAccount](
 		api, "service-accounts", "service-account", dk.serviceAccounts, d.Authz, sameta,
 		func(sa *serviceaccount.ServiceAccount) error { return sa.Validate() },
 		meta.OwnerProject,
@@ -89,9 +89,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&serviceAccountFilter,
-	)
+	))
 
-	registerKind[group.Group](
+	rows.add(registerKind[group.Group](
 		api, "groups", "group", dk.groups, d.Authz, gmeta,
 		func(g *group.Group) error { return g.Validate() },
 		meta.OwnerSystem,
@@ -105,9 +105,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&groupFilter,
-	)
+	))
 
-	registerKind[role.Role](
+	rows.add(registerKind[role.Role](
 		api, "roles", "role", dk.roles, d.Authz, rolemeta,
 		func(r *role.Role) error { return r.Validate() },
 		meta.OwnerSystem,
@@ -121,9 +121,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&roleFilter,
-	)
+	))
 
-	registerKind[rolebinding.RoleBinding](
+	rows.add(registerKind[rolebinding.RoleBinding](
 		api, "role-bindings", "role-binding", dk.roleBindings, d.Authz, rbmeta,
 		// Owner mirrors the scope exactly, so it is re-derived before the
 		// row is checked rather than in the guard that runs after.
@@ -139,9 +139,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&roleBindingFilter,
-	)
+	))
 
-	registerKind[policybinding.PolicyBinding](
+	rows.add(registerKind[policybinding.PolicyBinding](
 		api, "policy-bindings", "policy-binding", d.Stores.PolicyBinding, d.Authz, pbmeta,
 		func(b *policybinding.PolicyBinding) error { return b.Validate() },
 		meta.OwnerProject,
@@ -155,9 +155,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&policyBindingFilter,
-	)
+	))
 
-	registerKind[provider.Provider](
+	rows.add(registerKind[provider.Provider](
 		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
 		func(p *provider.Provider) error { return p.Validate() },
 		"",
@@ -171,9 +171,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&providerFilter,
-	)
+	))
 
-	registerKind[host.Host](
+	rows.add(registerKind[host.Host](
 		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
 		func(h *host.Host) error { return h.Validate() },
 		"",
@@ -187,9 +187,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&hostFilter,
-	)
+	))
 
-	registerKind[model.Model](
+	rows.add(registerKind[model.Model](
 		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
 		func(m *model.Model) error { return m.Validate() },
 		"",
@@ -203,9 +203,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&modelFilter,
-	)
+	))
 
-	registerKind[hostkey.HostKey](
+	rows.add(registerKind[hostkey.HostKey](
 		api, "host-keys", "host-key", d.Stores.HostKey, d.Authz, kmeta,
 		func(k *hostkey.HostKey) error { return k.Validate() },
 		meta.OwnerUser,
@@ -219,9 +219,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&hostKeyFilter,
-	)
+	))
 
-	registerKind[ratelimit.RateLimit](
+	rows.add(registerKind[ratelimit.RateLimit](
 		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		meta.OwnerUser,
@@ -235,9 +235,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&rateLimitFilter,
-	)
+	))
 
-	registerKind[policy.Policy](
+	rows.add(registerKind[policy.Policy](
 		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
 		func(p *policy.Policy) error { return p.Validate() },
 		meta.OwnerUser,
@@ -251,9 +251,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&policyFilter,
-	)
+	))
 
-	registerKind[pricing.Pricing](
+	rows.add(registerKind[pricing.Pricing](
 		api, "pricings", "pricing", d.Stores.Pricing, d.Authz, prmeta,
 		func(p *pricing.Pricing) error { return p.Validate() },
 		"",
@@ -267,9 +267,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&pricingFilter,
-	)
+	))
 
-	registerKind[binding.Binding](
+	rows.add(registerKind[binding.Binding](
 		api, "host-bindings", "host-binding", d.Stores.Binding, d.Authz, bmeta,
 		func(b *binding.Binding) error { return b.Validate() },
 		"",
@@ -283,12 +283,12 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&bindingFilter,
-	)
+	))
 
 	// keys uses a custom POST handler (registerKeyCreate) that
 	// generates the bearer plaintext server-side and returns it once. The
 	// generic CRUD POST is therefore skipped here.
-	registerKind[key.Key](
+	rows.add(registerKind[key.Key](
 		api, "keys", "key", d.Stores.Key, d.Authz, rkmeta,
 		func(k *key.Key) error { return k.Validate() },
 		meta.OwnerProject,
@@ -310,6 +310,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		true, // skipCreate
 		protect,
 		&keyFilter,
-	)
+	))
 	registerKeyCreate(api, d, protect)
+	return rows
 }

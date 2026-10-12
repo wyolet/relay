@@ -21,17 +21,22 @@ const (
 func keySubjects(s *Snapshot, k *key.Key) []string {
 	switch k.Spec.Principal.Kind {
 	case key.PrincipalServiceAccount:
-		subs := []string{"serviceaccount:" + k.Spec.Principal.ID, SubjectServiceAccounts}
-		if sa, ok := s.serviceAccountsByID[k.Spec.Principal.ID]; ok {
-			if p, ok := s.projectsByID[sa.Spec.ProjectID]; ok {
-				subs = append(subs, SubjectServiceAccounts+":"+p.Meta.Name)
-			}
-		}
-		return append(subs, SubjectAuthenticated)
+		return s.SubjectsForServiceAccount(k.Spec.Principal.ID)
 	case key.PrincipalUser:
 		return UserSubjects(k.Spec.Principal.ID, s.groupsByUser[k.Spec.Principal.ID], nil)
 	}
 	return []string{SubjectAuthenticated}
+}
+
+// SubjectsForServiceAccount renders the subjects a service account acts under: its own, the all-accounts group, its project's group when the project is known, then the catch-all.
+func (s *Snapshot) SubjectsForServiceAccount(id string) []string {
+	subs := []string{"serviceaccount:" + id, SubjectServiceAccounts}
+	if sa, ok := s.serviceAccountsByID[id]; ok {
+		if p, ok := s.projectsByID[sa.Spec.ProjectID]; ok {
+			subs = append(subs, SubjectServiceAccounts+":"+p.Meta.Name)
+		}
+	}
+	return append(subs, SubjectAuthenticated)
 }
 
 // UserSubjects renders a user's subjects from their local group names and

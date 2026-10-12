@@ -86,9 +86,7 @@ func refuseTenantOwner(singular string, o meta.Owner) error {
 	return huma.Error400BadRequest(fmt.Sprintf("%s is shared catalog data and cannot be owned by a %s; omit metadata.owner", singular, o.Kind))
 }
 
-// registerKind installs the five CRUD operations for kind T on api. The
-// metaOf, validate, defaultOwnerKind, and resolveSlug closures supply
-// the kind-specific glue.
+// registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
 //
 // defaultOwnerKind is stamped on Create when the caller omits
 // metadata.owner.kind. Pass "" for kinds where the caller must always
@@ -142,9 +140,28 @@ func registerKind[T any](
 	skipCreate bool,
 	protect huma.Middlewares,
 	filterSchema *filter.Schema[T],
-) {
+) kindRows {
 	base := "/" + plural
 	tag := plural
+
+	findRow := func(ctx context.Context, ref string) (*T, authz.Resource, error) {
+		id := ref
+		if !ids.Valid(id) {
+			resolved, err := resolveSlug(id)
+			if err != nil {
+				return nil, authz.Resource{}, err
+			}
+			id = resolved
+		}
+		v, err := store.Get(ctx, id)
+		if err != nil {
+			return nil, authz.Resource{}, err
+		}
+		if v == nil {
+			return nil, authz.Resource{}, errSlugNotFound
+		}
+		return v, authz.Resource{Kind: singular, ID: id, Name: ref, Owner: &metaOf(v).Owner}, nil
+	}
 
 	// List. When a filterSchema is supplied the route also parses the raw
 	// query (stashed by withRawQuery) into a validated filter/sort/window;
@@ -229,23 +246,14 @@ func registerKind[T any](
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
 	}, func(ctx context.Context, in *refInput) (*itemResponse[T], error) {
-		id := in.Ref
-		if !ids.Valid(id) {
-			resolved, err := resolveSlug(id)
-			if err != nil {
-				return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
-			}
-			id = resolved
-		}
-		v, err := store.Get(ctx, id)
+		v, res, err := findRow(ctx, in.Ref)
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
 		// Authorized on the fetched row: the decision needs its owner. 404,
 		// not 403 — a row the caller may not see must not confirm its
 		// existence.
-		if err := authzr.Authorize(ctx, plural+".get",
-			authz.Resource{Kind: singular, ID: id, Name: in.Ref, Owner: &metaOf(v).Owner}); err != nil {
+		if err := authzr.Authorize(ctx, plural+".get", res); err != nil {
 			if errors.Is(err, authz.ErrUnauthenticated) {
 				return nil, mapAuthzErr(err)
 			}
@@ -474,4 +482,16 @@ func registerKind[T any](
 		}
 		return &emptyResponse{}, nil
 	})
+
+	return kindRows{
+		plural: plural, singular: singular, defaultOwner: defaultOwnerKind,
+		find: func(ctx context.Context, ref string) (authz.Resource, error) {
+			v, res, err := findRow(ctx, ref)
+			if err != nil {
+				return authz.Resource{}, err
+			}
+			res.Name = metaOf(v).Name
+			return res, nil
+		},
+	}
 }
