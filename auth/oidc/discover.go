@@ -41,17 +41,43 @@ func (rp *RelyingParty[U]) provider(ctx context.Context, cfg *Config) (*gooidc.P
 	return p, nil
 }
 
-// discover fetches the issuer's OpenID discovery document; go-oidc refuses one whose issuer differs from the configured issuer, the value every id_token's iss must then equal.
+// discover fetches the issuer's OpenID discovery document. Its issuer must equal the configured one or differ from it only by a trailing slash, and every id_token's iss must then equal the document's issuer exactly.
 func discover(ctx context.Context, issuer string) (*gooidc.Provider, error) {
 	if issuer == "" {
 		return nil, errors.New("oidc: discovery needs an issuer")
 	}
 	p, err := gooidc.NewProvider(ctx, issuer)
+	if mismatch, ok := errors.AsType[*gooidc.IssuerMismatchError](err); ok && slashOnly(issuer, mismatch.Discovered) {
+		p, err = providerAt(ctx, issuer, mismatch.Discovered)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("oidc: discover %s: %w", issuer, err)
 	}
 	if ep := p.Endpoint(); ep.AuthURL == "" || ep.TokenURL == "" {
 		return nil, fmt.Errorf("oidc: discover %s: metadata missing authorization_endpoint or token_endpoint", issuer)
+	}
+	return p, nil
+}
+
+// slashOnly reports whether a and b differ by exactly one trailing slash.
+func slashOnly(a, b string) bool {
+	return a+"/" == b || a == b+"/"
+}
+
+// providerAt fetches the document again with discovered as the issuer id_tokens must carry. go-oidc then skips its own issuer check, so the refetched document must still name discovered.
+func providerAt(ctx context.Context, issuer, discovered string) (*gooidc.Provider, error) {
+	p, err := gooidc.NewProvider(gooidc.InsecureIssuerURLContext(ctx, discovered), issuer)
+	if err != nil {
+		return nil, err
+	}
+	var md struct {
+		Issuer string `json:"issuer"`
+	}
+	if err := p.Claims(&md); err != nil {
+		return nil, err
+	}
+	if md.Issuer != discovered {
+		return nil, &gooidc.IssuerMismatchError{Provided: discovered, Discovered: md.Issuer}
 	}
 	return p, nil
 }

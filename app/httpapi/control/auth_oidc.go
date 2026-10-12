@@ -146,7 +146,7 @@ func auditLoginDenied(ctx context.Context, name string) {
 		audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: name})
 }
 
-// oidcSubject is the user row's key for an IdP identity: the configured issuer and the token's sub.
+// oidcSubject is the user row's key for an IdP identity: the configured issuer and the token's sub. It is stored as written, because an older binary matches it exactly on a rollback; lookups ignore trailing slashes on the issuer.
 func oidcSubject(c oidc.Claims) string { return c.Issuer + "|" + c.Subject }
 
 // resolveUser finds the user for an OIDC identity, linking it to a SCIM-provisioned account or provisioning one when registration is open, and refuses disabled accounts.
@@ -246,8 +246,7 @@ func (od *oidcDeps) login(_ http.ResponseWriter, r *http.Request, u *user.User, 
 	return nil
 }
 
-// provision creates a user row for a first-time OIDC login. Username derives
-// from the email local part (or the subject tail) with a collision suffix.
+// provision creates a user row for a first-time OIDC login. Username derives from preferred_username, else the email local part, else the literal "user", with a collision suffix.
 func (od *oidcDeps) provision(ctx context.Context, subject string, c oidc.Claims) (*user.User, error) {
 	base := c.PreferredUsername
 	if base == "" && c.Email != "" {

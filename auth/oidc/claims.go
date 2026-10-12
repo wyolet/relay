@@ -21,7 +21,7 @@ var errInvalidIDToken = errors.New("id_token rejected")
 //
 // An id_token is verified per OIDC Core 3.1.3.7 before any claim is read: signature against the provider's JWKS (asymmetric algorithms only), iss, aud and azp, exp, iat and the nonce sent with the authorization request. A response with no id_token but an inline profile is trusted on the server-side code exchange alone: TLS, client authentication, state and PKCE. Bearer tokens presented by callers are a different surface.
 type Claims struct {
-	// Issuer is the configured issuer the login went through; a verified id_token's iss equals it.
+	// Issuer is the configured issuer the login went through; a verified id_token's iss equals it or differs from it only by a trailing slash.
 	Issuer            string
 	Subject           string
 	Email             string

@@ -136,6 +136,47 @@ func testFirstIdentity(t *testing.T, s directory.Stores) {
 	}
 }
 
+// An issuer with or without trailing slashes is one issuer: the primary keeps the form it was written in, while the identities and every lookup and conflict check use the canonical form.
+func testIssuerSlash(t *testing.T, s directory.Stores) {
+	ctx := context.Background()
+	u := s.Users
+	user := func(id string) *directory.User {
+		return fetch(t, func() (*directory.User, error) { return u.Get(ctx, id) })
+	}
+	slashed := directory.Identity{Issuer: "https://idp.example.com/", Subject: "s-1"}
+	plain := slashed.Canonical()
+	ada := &directory.User{ID: directory.NewID(), Username: "ada", Identity: slashed}
+	must(t, u.Upsert(ctx, ada))
+	wantIdentities(t, "written with a slash", user(ada.ID), slashed, directory.UserIdentity{Identity: plain})
+	for _, id := range []directory.Identity{slashed, plain, {Issuer: "https://idp.example.com//", Subject: "s-1"}} {
+		if got, err := u.ByIdentity(ctx, id); err != nil || got == nil || got.ID != ada.ID {
+			t.Fatalf("by identity %+v = %+v, %v; want ada", id, got, err)
+		}
+	}
+
+	bob := &directory.User{ID: directory.NewID(), Username: "bob", Identity: plain}
+	wantErr(t, "a primary another account holds with a slash", u.Upsert(ctx, bob), directory.ErrConflict)
+	bob.Identity = directory.Identity{}
+	must(t, u.Upsert(ctx, bob))
+	wantErr(t, "adding it without the slash", u.AddIdentity(ctx, bob.ID, directory.UserIdentity{Identity: plain}), directory.ErrConflict)
+	wantErr(t, "linking it first without the slash", u.AddFirstIdentity(ctx, bob.ID, plain), directory.ErrConflict)
+
+	must(t, u.AddIdentity(ctx, ada.ID, directory.UserIdentity{Identity: plain, ExternalID: "obj-1"}))
+	wantIdentities(t, "re-added without the slash", user(ada.ID), slashed, directory.UserIdentity{Identity: plain, ExternalID: "obj-1"})
+	got := user(ada.ID)
+	got.Identity = plain
+	must(t, u.Upsert(ctx, got))
+	wantIdentities(t, "primary rewritten without the slash", user(ada.ID), plain, directory.UserIdentity{Identity: plain, ExternalID: "obj-1"})
+
+	got = user(ada.ID)
+	got.Identity = slashed
+	must(t, u.Upsert(ctx, got))
+	other := directory.UserIdentity{Identity: directory.Identity{Issuer: "https://other.example.com", Subject: "o-1"}}
+	must(t, u.AddIdentity(ctx, ada.ID, other))
+	must(t, u.RemoveIdentity(ctx, ada.ID, plain))
+	wantIdentities(t, "slashed primary removed by its canonical form", user(ada.ID), other.Identity, other)
+}
+
 func wantIdentities(t *testing.T, what string, u *directory.User, primary directory.Identity, all ...directory.UserIdentity) {
 	t.Helper()
 	if u.Identity != primary {
