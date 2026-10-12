@@ -259,6 +259,29 @@ logs narrow the same way: a caller with a global binding reads the whole
 stream, everyone else reads the events of the projects they can see plus the
 events their own keys produced.
 
+### Checking access
+
+`POST /api/access-review` answers whether a user or service account may perform an action on a resource, and which role binding or rule decides it, without performing the action. Leave out the subject to check yourself, which any signed-in caller may do. Checking anyone else takes an admin and writes an `access-review.create` audit row.
+
+```bash
+relay auth can-i keys.get keys/ci-key --as alice
+# yes: role binding ml-devs grants developer at project ml to group eng (keys.get on key ci-key)
+
+relay auth can-i delete projects/ml --as sa:ci-deployer
+# no: no rule or role binding grants projects.delete on project ml
+```
+
+The command exits `0` when the action is allowed, `1` when it is denied, and `2` when the request fails. A bare verb takes the resource's kind. To ask about a list or a create, name the collection and its owner (`keys --owner project/ml`); `-o json` prints the full answer. Over HTTP:
+
+```bash
+curl -X POST http://localhost:8081/api/access-review \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"subject": {"kind": "user", "name": "alice"}, "action": "keys.create",
+       "resource": {"kind": "keys", "owner": {"kind": "project", "name": "ml"}}}'
+```
+
+The answer's `reason` is `admin`, `rule` (one of the shortcuts above, such as `personal-row` or `catalog-read`), `binding` (with the binding, role, and scope that matched), or `none`, alongside the resource's scope chain. It covers authorization only: a request it allows can still fail validation, a governance setting, or a reference check. A resource you cannot see answers `404`, as its own routes do. Another user is checked with their roles and local groups; groups an identity provider asserts live only in their session, so they are not part of the answer. The endpoint needs `RELAY_AUTHZ=rbac` and answers `501` under `single`.
+
 <Note>
 Run the control plane on its own port behind your network controls, and use
 the admin bearer (`RELAY_ADMIN_TOKEN`) for operators and CI. The inference
