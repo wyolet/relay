@@ -47,6 +47,12 @@ func TestMigrateDownArguments(t *testing.T) {
 		{"no dsn", []string{"down", "24"}, "RELAY_PG_DSN required"},
 		{"up with a version", []string{"up", "24"}, "takes no arguments"},
 		{"up without a dsn", []string{"up"}, "RELAY_PG_DSN required"},
+		{"auth without a direction", []string{"auth"}, "want 'auth down <version>'"},
+		{"auth up", []string{"auth", "up"}, "want 'auth down <version>'"},
+		{"auth down without a target", []string{"auth", "down"}, "want 'auth down <version>'"},
+		{"auth target is not a number", []string{"auth", "down", "v3"}, "not a schema version"},
+		{"auth below the module's first version", []string{"auth", "down", "0"}, "lowest target is 1"},
+		{"auth without a dsn", []string{"auth", "down", "3"}, "RELAY_PG_DSN required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := runMigrate(tc.args)

@@ -36,6 +36,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CATALOG_URL` | _(GitHub archive)_ | Override the archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point at a mirror for airgapped deployments. |
 | `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). It also lets the `auth:oidc` issuer and the payload-logging S3 endpoint use plain HTTP; otherwise both must use TLS. |
 | `RELAY_MIGRATE_ON_BOOT` | `on` | Run pending schema migrations at startup. Set `off` while [rolling the schema back](/concepts/upgrade#rolling-back) so a restarting pod doesn't re-apply them. |
+| `RELAY_MIGRATE_LOCK_TIMEOUT_S` | `10` | Seconds a migration waits for a table lock before it fails and applies nothing, so it can be retried; see [Lock timeout](/concepts/upgrade#lock-timeout). `0` waits indefinitely. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget in seconds. |
 | `RELAY_LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warn` \| `error`. |
 

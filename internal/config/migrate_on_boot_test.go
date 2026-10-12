@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMigrateOnBootDefaultsToTrue(t *testing.T) {
@@ -30,6 +31,30 @@ func TestMigrateOnBootDefaultsToTrue(t *testing.T) {
 	t.Setenv("RELAY_MIGRATE_ON_BOOT", "maybe")
 	if _, err := Load(); err == nil {
 		t.Error("an unparseable value was accepted")
+	}
+}
+
+func TestMigrateLockTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want time.Duration
+	}{
+		{"", 10 * time.Second},
+		{"3", 3 * time.Second},
+		{"0", 0},
+	} {
+		t.Setenv("RELAY_MIGRATE_LOCK_TIMEOUT_S", tc.env)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("RELAY_MIGRATE_LOCK_TIMEOUT_S=%q: %v", tc.env, err)
+		}
+		if cfg.MigrateLockTimeout != tc.want {
+			t.Errorf("RELAY_MIGRATE_LOCK_TIMEOUT_S=%q → %v, want %v", tc.env, cfg.MigrateLockTimeout, tc.want)
+		}
+	}
+	t.Setenv("RELAY_MIGRATE_LOCK_TIMEOUT_S", "-1")
+	if _, err := Load(); err == nil {
+		t.Error("a negative timeout was accepted")
 	}
 }
 

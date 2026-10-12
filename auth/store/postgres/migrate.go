@@ -29,7 +29,7 @@ func MigrationFiles() fs.FS {
 	return sub
 }
 
-// Migrate runs the module's pending up-migrations against dsn, a postgres:// or postgresql:// URL. Running it when nothing is pending does nothing. A clean schema at a version newer than this binary embeds is left alone, so an older binary still boots during a rolling upgrade or a rollback; that relies on the module's migrations staying backward-compatible.
+// Migrate runs the module's pending up-migrations against dsn, a postgres:// or postgresql:// URL. Running it when nothing is pending does nothing. A lock_timeout parameter in dsn bounds how long a migration waits for a table lock; one that gives up applied nothing and is left clean, so running Migrate again retries it. A clean schema at a version newer than this binary embeds is left alone, so an older binary still boots during a rolling upgrade or a rollback; that relies on the module's migrations staying backward-compatible.
 func Migrate(dsn string) error {
 	src, err := iofs.New(migrationFiles, "migrations")
 	if err != nil {
@@ -57,7 +57,7 @@ func Migrate(dsn string) error {
 		return nil
 	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("auth migrations: up: %w", err)
+		return fmt.Errorf("auth migrations: up: %w", retryable(m, src, true, err))
 	}
 	return nil
 }
@@ -88,7 +88,7 @@ func MigrateDown(dsn string, version uint) error {
 		return nil
 	}
 	if err := m.Migrate(version); err != nil {
-		return fmt.Errorf("auth migrations: down to %d: %w", version, err)
+		return fmt.Errorf("auth migrations: down to %d: %w", version, retryable(m, src, false, err))
 	}
 	return nil
 }
