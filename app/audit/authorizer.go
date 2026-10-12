@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/auth/rbac"
 )
 
 // Authorizer wraps the configured authorizer and feeds every decision into
@@ -48,6 +50,15 @@ func (a Authorizer) Visible(ctx context.Context, kind, id string, owner meta.Own
 		return true
 	}
 	return s.Visible(ctx, kind, id, owner)
+}
+
+// Explain implements authz.Explainer by delegation. An explanation acts on nothing, so it adds no decision to the in-flight event; the access review records its own row.
+func (a Authorizer) Explain(ctx context.Context, who *actor.Actor, action string, res authz.Resource) (rbac.Explanation, error) {
+	e, ok := a.Inner.(authz.Explainer)
+	if !ok {
+		return rbac.Explanation{}, authz.ErrNoExplanation
+	}
+	return e.Explain(ctx, who, action, res)
 }
 
 // scopeOf renders the owner's scope chain as "<kind>:<id>", most specific

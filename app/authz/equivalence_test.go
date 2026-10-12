@@ -1,8 +1,10 @@
-// equivalence_test.go runs the evaluator kept in legacy_test.go and the auth/rbac-backed RBAC over the same snapshots and requires the same answer on every case of a generated matrix.
+// equivalence_test.go runs the evaluator kept in legacy_test.go and the auth/rbac-backed RBAC over the same snapshots and requires the same answer on every case of a generated matrix, from Authorize and from Explain.
 
 package authz_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -210,6 +212,9 @@ func compareAuthorize(t *testing.T, f *eqFixture, snap func() authz.Snapshot) in
 								t.Fatalf("%s: %s on %s id=%q owner=%+v: legacy %v, rbac %v",
 									ea.name, action, kind, id, o, want, got)
 							}
+							if err := explainAgrees(ctx, current, ea.a, action, res, got); err != nil {
+								t.Fatalf("%s: %s on %s id=%q owner=%+v: %v", ea.name, action, kind, id, o, err)
+							}
 						}
 					}
 				}
@@ -311,6 +316,9 @@ func TestEquivalenceOverGeneratedWorlds(t *testing.T) {
 									t.Fatalf("seed %d, %s: %s on %s id=%q owner=%+v: legacy %v, rbac %v",
 										seed, name, action, kind, id, o, want, got)
 								}
+								if err := explainAgrees(ctx, current, a, action, res, got); err != nil {
+									t.Fatalf("seed %d, %s: %s on %s id=%q owner=%+v: %v", seed, name, action, kind, id, o, err)
+								}
 							}
 						}
 					}
@@ -319,6 +327,19 @@ func TestEquivalenceOverGeneratedWorlds(t *testing.T) {
 		}
 	}
 	t.Logf("%d cases agree", total)
+}
+
+// explainAgrees requires Explain to give the answer Authorize gave: allowed exactly when Authorize returned nil, and Authorize's error when it failed for any reason but a denial.
+func explainAgrees(ctx context.Context, r authz.RBAC, a *actor.Actor, action string, res authz.Resource, authorized error) error {
+	x, err := r.Explain(ctx, a, action, res)
+	denied := errors.Is(authorized, authz.ErrForbidden)
+	switch {
+	case authorized == nil && x.Allowed && err == nil,
+		denied && !x.Allowed && err == nil,
+		authorized != nil && !denied && err == authorized && !x.Allowed:
+		return nil
+	}
+	return fmt.Errorf("Authorize %v, Explain %+v / %v", authorized, x, err)
 }
 
 // compareCheckGrant binds every role at every scope as every actor, through both evaluators, and requires the same verdict and message.
