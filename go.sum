@@ -1,5 +1,5 @@
-github.com/1password/onepassword-sdk-go v0.4.0 h1:Nou39yuC6Q0om03irkh5UurfPdX3wx26qZZhQeC9TBU=
-github.com/1password/onepassword-sdk-go v0.4.0/go.mod h1:j/CbzhucTywjlYrd6SE6k0LcQaFZ2l8OLBsAsOYtvD0=
+github.com/1password/onepassword-sdk-go v0.4.1 h1:My/Q2QXemep0I0qHgGrOs7EEzpPh2QZ1/II+S3YqOG0=
+github.com/1password/onepassword-sdk-go v0.4.1/go.mod h1:j/CbzhucTywjlYrd6SE6k0LcQaFZ2l8OLBsAsOYtvD0=
 github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c h1:udKWzYgxTojEKWjV8V+WSxDXJ4NFATAsZjh8iIbsQIg=
 github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
 github.com/ClickHouse/ch-go v0.71.0 h1:bUdZ/EZj/LcVHsMqaRUP2holqygrPWQKeMjc6nZoyRM=
