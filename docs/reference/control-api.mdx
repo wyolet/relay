@@ -203,6 +203,7 @@ GET  /api/users            list users (id, username, email, roles, disabled — 
 PUT  /api/users/by-id/{id} edit `disabled` and `roles`; disabling also bumps token_version
 GET  /api/audit            the admin audit log; filter by actor_id, actor_name, action,
                             resource_kind, resource_id, scope, status, from, to
+POST /api/access-review    explain whether a user or service account may perform an action
 ```
 
 Both user endpoints authorize at the global scope: an account belongs to the
@@ -212,7 +213,7 @@ inference token it holds (the `token_version` bump), so re-enabling it does not
 bring those tokens back. A session already open is not destroyed — log the user
 out, or wait for the session to expire.
 
-See [Audit Log](/concepts/audit) for the audit event shape and retention.
+See [Audit Log](/concepts/audit) for the audit event shape and retention, and [Checking access](/concepts/auth#checking-access) for the access review.
 
 ## SCIM clients
 

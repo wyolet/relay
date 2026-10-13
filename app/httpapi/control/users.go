@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/principal"
+	"github.com/wyolet/relay/pkg/ids"
 )
 
 // userRow is the projection returned by GET /users.
@@ -56,8 +57,7 @@ func registerUsers(api huma.API, d Deps, protect huma.Middlewares) {
 		// The global scope, not "any scope": the list is every account in
 		// the deployment, so a binding inside one team or project is not a
 		// grant to enumerate it.
-		owner := meta.Owner{Kind: meta.OwnerSystem}
-		if err := d.Authz.Authorize(ctx, "users.list", authz.Resource{Kind: "user", Owner: &owner}); err != nil {
+		if err := d.Authz.Authorize(ctx, "users.list", userResource("")); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		all, err := d.Users.List(ctx)
@@ -116,6 +116,49 @@ func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 }
 
+// userResource is the resource every account route authorizes: an account belongs to the deployment, so it lives in the global scope. id is empty for the list.
+func userResource(id string) authz.Resource {
+	return authz.Resource{Kind: "user", ID: id, Owner: &meta.Owner{Kind: meta.OwnerSystem}}
+}
+
+// userFinder reads one account by id or by username.
+type userFinder interface {
+	Get(ctx context.Context, id string) (*user.User, error)
+	ByUsername(ctx context.Context, username string) (*user.User, error)
+}
+
+// findUser resolves ref, an id or a username, to its account.
+func findUser(ctx context.Context, users userFinder, ref string) (*user.User, error) {
+	get := users.ByUsername
+	if ids.Valid(ref) {
+		get = users.Get
+	}
+	u, err := get(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		return nil, errSlugNotFound
+	}
+	return u, nil
+}
+
+// userRows finds accounts the way the account routes authorize them; the list is at the global scope too.
+func userRows(users userFinder) kindRows {
+	return kindRows{
+		plural: "users", singular: "user", listOwner: userResource("").Owner,
+		find: func(ctx context.Context, ref string) (authz.Resource, error) {
+			u, err := findUser(ctx, users, ref)
+			if err != nil {
+				return authz.Resource{}, err
+			}
+			res := userResource(u.ID)
+			res.Name = u.Username
+			return res, nil
+		},
+	}
+}
+
 func isActiveAdmin(disabled bool, roles []string) bool {
 	return !disabled && slices.Contains(roles, user.RoleAdmin)
 }
@@ -139,8 +182,8 @@ func keepOneAdmin(ctx context.Context, users userWriter, changing string) error 
 // scope, like the list: an account belongs to the deployment, not to a team,
 // so a binding inside one project is not a grant to edit anyone.
 func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *userUpdateInput) (*userUpdateOutput, error) {
-	owner := meta.Owner{Kind: meta.OwnerSystem}
-	if err := az.Authorize(ctx, "users.update", authz.Resource{Kind: "user", ID: in.ID, Owner: &owner}); err != nil {
+	res := userResource(in.ID)
+	if err := az.Authorize(ctx, "users.update", res); err != nil {
 		return nil, mapAuthzErr(err)
 	}
 	u, err := users.Get(ctx, in.ID)
@@ -192,7 +235,7 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *
 	}
 	u.Disabled, u.Roles = disabled, roles
 	audit.Record(ctx, "users.update", audit.Resource{
-		Kind: "user", ID: u.ID, Name: u.Username, Owner: &owner,
+		Kind: "user", ID: u.ID, Name: u.Username, Owner: res.Owner,
 	}, audit.StatusAllowed)
 	return &userUpdateOutput{Body: userRow{
 		ID: u.ID, Username: u.Username, Email: u.Email,

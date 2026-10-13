@@ -180,7 +180,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
-	registerCRUD(api, d, protect) // generic CRUD for every registered kind
+	// Generic CRUD for every registered kind; the rows are how each kind finds one.
+	rows := registerCRUD(api, d, protect)
 	registerHostKeyRotate(api, d, protect)
 	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
@@ -202,6 +203,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSchemas(r) // public: the JSON Schemas the manifests reference
 	registerTokens(api, d, protect)
 	registerUsers(api, d, protect)
+	registerAccessReview(api, d, protect, rows)
 	registerSCIMClients(api, d, protect) // the /scim/v2 endpoint itself is MountSCIM, outside /api
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types

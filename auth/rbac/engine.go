@@ -61,7 +61,7 @@ type Engine struct {
 // Authorize returns nil when p may perform action on res, authz.ErrUnauthenticated or authz.ErrForbidden when not, and any other error when a lookup failed.
 func (e *Engine) Authorize(ctx context.Context, p *principal.Principal, action string, res authz.Resource) error {
 	kind, verb := SplitAction(action)
-	return e.decide(ctx, p, kind, verb, res)
+	return e.decide(ctx, p, kind, verb, res, nil)
 }
 
 // Allowed is Authorize as a boolean; the error is only a failed lookup.
@@ -78,23 +78,28 @@ func (e *Engine) Allowed(ctx context.Context, p *principal.Principal, action str
 
 // Visible reports whether p may get res, an action of kind. A failed lookup hides the resource.
 func (e *Engine) Visible(ctx context.Context, p *principal.Principal, kind string, res authz.Resource) bool {
-	return e.decide(ctx, p, kind, VerbGet, res) == nil
+	return e.decide(ctx, p, kind, VerbGet, res, nil) == nil
 }
 
-func (e *Engine) decide(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) error {
+// decide is the one decision path; x, when not nil, records why it answered as it did.
+func (e *Engine) decide(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource, x *Explanation) error {
 	if !p.Authenticated() {
 		return authz.ErrUnauthenticated
 	}
-	ok, chain, err := e.allows(ctx, p, kind, verb, res)
+	ok, chain, err := e.allows(ctx, p, kind, verb, res, x)
 	if err != nil {
 		return err
 	}
 	if ok && p.Credential.Scope != nil {
-		ok, err = e.credentialPermits(ctx, p.Credential.Scope, kind, verb, res, chain)
+		ok, chain, err = e.credentialPermits(ctx, p.Credential.Scope, kind, verb, res, chain)
 		if err != nil {
 			return err
 		}
+		if !ok {
+			x.credentialRefused()
+		}
 	}
+	x.finish(ok, chain)
 	if !ok {
 		return authz.ErrForbidden
 	}
@@ -102,8 +107,9 @@ func (e *Engine) decide(ctx context.Context, p *principal.Principal, kind, verb 
 }
 
 // allows also returns res's scope chain when the bindings had to resolve it, so the credential check can reuse it.
-func (e *Engine) allows(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
+func (e *Engine) allows(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource, x *Explanation) (bool, []Scope, error) {
 	if p.Admin {
+		x.decidedBy(ReasonAdmin)
 		return true, nil, nil
 	}
 	for _, r := range e.Rules {
@@ -113,16 +119,18 @@ func (e *Engine) allows(ctx context.Context, p *principal.Principal, kind, verb 
 		}
 		switch d {
 		case Allow:
+			x.decidedByRule(r)
 			return true, nil, nil
 		case Deny:
+			x.decidedByRule(r)
 			return false, nil, nil
 		}
 	}
-	return e.bound(ctx, p, kind, verb, res)
+	return e.bound(ctx, p, kind, verb, res, x)
 }
 
 // bound scans the bindings of p's subjects for one at a scope in res's chain whose role covers (kind, verb).
-func (e *Engine) bound(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource) (bool, []Scope, error) {
+func (e *Engine) bound(ctx context.Context, p *principal.Principal, kind, verb string, res authz.Resource, x *Explanation) (bool, []Scope, error) {
 	if e.Source == nil {
 		return false, nil, nil
 	}
@@ -143,7 +151,8 @@ func (e *Engine) bound(ctx context.Context, p *principal.Principal, kind, verb s
 		if err != nil {
 			return false, nil, err
 		}
-		for _, b := range bindings {
+		for j := range bindings {
+			b := &bindings[j]
 			if !anyScope && !slices.Contains(chain, b.Scope) {
 				continue
 			}
@@ -152,6 +161,10 @@ func (e *Engine) bound(ctx context.Context, p *principal.Principal, kind, verb s
 				return false, nil, err
 			}
 			if found && role.Allows(kind, verb) {
+				// Checked here so Authorize never evaluates subjectAt for a recorder it does not have.
+				if x != nil {
+					x.matched(subjectAt(p, i), b)
+				}
 				return true, chain, nil
 			}
 		}
@@ -159,36 +172,36 @@ func (e *Engine) bound(ctx context.Context, p *principal.Principal, kind, verb s
 	return false, chain, nil
 }
 
-// credentialPermits applies c to an allowed request. chain is res's scope chain when already resolved, else nil.
-func (e *Engine) credentialPermits(ctx context.Context, c *principal.CredentialScope, kind, verb string, res authz.Resource, chain []Scope) (bool, error) {
+// credentialPermits applies c to an allowed request. chain is res's scope chain when already resolved, else nil; it is returned, resolved if the check needed it.
+func (e *Engine) credentialPermits(ctx context.Context, c *principal.CredentialScope, kind, verb string, res authz.Resource, chain []Scope) (bool, []Scope, error) {
 	if !rulesAllow(c.Rules, kind, verb) {
-		return false, nil
+		return false, chain, nil
 	}
 	within, limited := c.Within[kind]
 	if !limited {
-		return true, nil
+		return true, chain, nil
 	}
 	if len(within) == 0 {
-		return false, nil
+		return false, chain, nil
 	}
 	if res.ID == "" && res.Owner == nil {
-		return verb == VerbList, nil
+		return verb == VerbList, chain, nil
 	}
 	if chain == nil {
 		if e.Scopes == nil {
-			return false, nil
+			return false, nil, nil
 		}
 		var err error
 		if chain, err = e.Scopes.ChainFor(ctx, res); err != nil {
-			return false, err
+			return false, nil, err
 		}
 	}
 	for _, s := range within {
 		if slices.Contains(chain, s) {
-			return true, nil
+			return true, chain, nil
 		}
 	}
-	return false, nil
+	return false, chain, nil
 }
 
 // subjectCount and subjectAt walk p's subjects followed by SubjectAuthenticated, unless p already lists it.

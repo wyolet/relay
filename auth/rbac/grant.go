@@ -13,7 +13,7 @@ import (
 func (e *Engine) CheckGrant(ctx context.Context, p *principal.Principal, role Role, scope Scope, kinds, verbs []string) error {
 	owner := authz.Owner(scope)
 	return EachPermission(role.Rules, kinds, verbs, func(kind, verb string) error {
-		err := e.decide(ctx, p, kind, verb, authz.Resource{Kind: kind, Owner: &owner})
+		err := e.decide(ctx, p, kind, verb, authz.Resource{Kind: kind, Owner: &owner}, nil)
 		if errors.Is(err, authz.ErrForbidden) {
 			return fmt.Errorf("%w: role %q grants %s.%s, which the caller does not hold at this scope",
 				authz.ErrForbidden, role.ID, kind, verb)
