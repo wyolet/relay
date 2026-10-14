@@ -56,12 +56,12 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: gofmt
@@ -77,9 +77,9 @@ jobs:
       # Installs the pinned binary and, on GitHub-hosted runners, restores its
       # analysis cache (self-hosted runners keep it on a volume); make lint
       # runs it over every module.
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
-          version: v2.12.2
+          version: v2.14.0
           install-only: true
           skip-cache: ${{ runner.environment == 'self-hosted' }}
 
@@ -100,18 +100,18 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Test
         run: make test-race-cover
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: unit-coverage
           path: .cover/*.out
@@ -123,12 +123,12 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Fuzz
@@ -139,12 +139,12 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Allocation gate
@@ -155,12 +155,12 @@ jobs:
     if: needs.changes.outputs.go == 'true' || github.event_name == 'schedule'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: govulncheck
@@ -182,7 +182,7 @@ jobs:
       TRIVY_SKIP_VERSION_CHECK: 'true'
       TRIVY_DISABLE_TELEMETRY: 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install trivy
         run: |
@@ -197,7 +197,7 @@ jobs:
           trivy convert --format sarif --output "$RUNNER_TEMP/trivy.sarif" "$RUNNER_TEMP/trivy.json"
 
       # A fork's token cannot write security events.
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         with:
           sarif_file: ${{ runner.temp }}/trivy.sarif
@@ -243,18 +243,18 @@ jobs:
       RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
       RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Integration tests
         run: make test-integration-run
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: integration-coverage
           path: .cover/*.out
@@ -268,9 +268,9 @@ jobs:
     needs: [changes, test, integration]
     if: needs.changes.outputs.go == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: '*-coverage'
           merge-multiple: true
@@ -284,8 +284,8 @@ jobs:
     if: needs.changes.outputs.chart == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         if: runner.environment == 'github-hosted'
       - name: helm lint
         run: helm lint chart
@@ -314,11 +314,11 @@ jobs:
     env:
       RELAY_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Boot smoke
