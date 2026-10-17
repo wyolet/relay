@@ -47,7 +47,7 @@ func authHarness(t *testing.T) (http.Handler, kv.Store) {
 	store := kv.NewMem()
 	t.Cleanup(func() { _ = store.Close() })
 	d := mountDeps(t)
-	d.Sessions = session.New(store, false, "sess:")
+	d.Sessions = session.New(store, false)
 	r := chi.NewRouter()
 	api := Mount(r, d)
 	huma.Register(api, huma.Operation{OperationID: "test_login_as", Method: http.MethodPost, Path: "/test/login-as"},
@@ -99,7 +99,8 @@ func TestControlAuthOutcomes(t *testing.T) {
 	oidc := loginAs(t, h, `{"userId":"u-2","groups":["platform-eng","system:admins"]}`)
 
 	expired := &http.Cookie{Name: "relay_session", Value: "expired-token"}
-	if err := store.Set(context.Background(), "sess:expired-token", []byte(`{"d":"","e":"2000-01-01T00:00:00Z"}`), time.Hour); err != nil {
+	expiredSum := sha256.Sum256([]byte("expired-token"))
+	if err := store.Set(context.Background(), "{sess:"+hex.EncodeToString(expiredSum[:])+"}:data", []byte(`{"d":"","e":"2000-01-01T00:00:00Z"}`), time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,7 +218,7 @@ func TestControlAuthSessionDoesNotReadAccountStatus(t *testing.T) {
 // A session store that cannot answer fails the request before any handler runs.
 func TestControlAuthSessionStoreDown(t *testing.T) {
 	d := mountDeps(t)
-	d.Sessions = session.New(downStore{kv.NewMem()}, false, "sess:")
+	d.Sessions = session.New(downStore{kv.NewMem()}, false)
 	r := chi.NewRouter()
 	Mount(r, d)
 	req := httptest.NewRequest(http.MethodPost, "/master-key/generate", nil)

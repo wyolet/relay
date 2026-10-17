@@ -276,7 +276,7 @@ func newOIDCHarnessOver(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC, user
 		api.Use(audit.Middleware(h.em, nil))
 		mountOIDCRoutes(api, od)
 	})
-	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false, "sess:"), Audit: h.em}, od)
+	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false), Audit: h.em}, od)
 	h.h = r
 	return h
 }
