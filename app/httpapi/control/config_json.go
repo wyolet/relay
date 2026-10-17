@@ -20,6 +20,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/settings"
 )
@@ -46,17 +47,18 @@ func ConfigJSONHandler(d Deps) http.HandlerFunc {
 // withFeatures overlays the feature flags onto the static runtime config: what
 // the deployment wired (a token signing key, a user store, an audit reader)
 // and what its settings enable. The rc value is copied; its Features map is
-// never mutated. `tokens`, `users` and `audit` are always present, false
+// never mutated. `tokens`, `users`, `audit` and `accessReview` are always present, false
 // included — the UI hides the nav on a false, and cannot tell a missing key
 // from an unknown one. `oidc` appears only when enabled.
 func withFeatures(rc RuntimeConfig, d Deps) RuntimeConfig {
-	f := make(map[string]bool, len(rc.Features)+4)
+	f := make(map[string]bool, len(rc.Features)+5)
 	for k, v := range rc.Features {
 		f[k] = v
 	}
 	f["tokens"] = d.TokenSigner != nil && d.TokenSigner.PublicKey() != nil
 	f["users"] = d.Users != nil
 	f["audit"] = d.AuditReader != nil
+	f["accessReview"] = authz.Explains(d.Authz)
 	var settingsSrc settings.Reader
 	if d.Catalog != nil {
 		settingsSrc = d.Catalog
