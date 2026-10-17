@@ -114,7 +114,7 @@ The CLI uses both: `relay apply` and `relay export` send the admin bearer
 password and carries the session it gets back, because a token names the user
 it was minted for and the admin bearer names no user.
 
-An account is disabled with `PUT /api/users/by-id/{id}` (`{"disabled": true}`). Disabling refuses the account on every request: its sessions end, its personal keys and inference tokens stop at once, and any request on a session it still holds, other than `POST /api/auth/logout`, gets `403` with the message `account is disabled`.
+An account is disabled with `PUT /api/users/by-id/{id}` (`{"disabled": true}`). A disabled account is signed out on its next request and refused at login, and its personal keys and inference tokens stop at once. The control plane answers it `401` with the error code `account_disabled`.
 
 Run the control plane on its own port (`RELAY_CONTROL_PORT`) and keep it off
 the public internet; expose only the inference plane.

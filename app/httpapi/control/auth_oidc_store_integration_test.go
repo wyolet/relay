@@ -74,7 +74,7 @@ func TestOIDCSignInOverIdentities(t *testing.T) {
 	if err := dir.DisableUser(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	wantFailure(t, "disabled account", od, claims("sub-new", ""), http.StatusForbidden, "account disabled")
+	wantFailure(t, "disabled account", od, claims("sub-new", ""), http.StatusUnauthorized, "account is disabled; contact your administrator")
 }
 
 // An account a binary from before the identities table wrote under a configured issuer with a trailing slash signs in after the upgrade whichever form is configured, and that binary's exact oidc_subject lookup still finds it and the accounts provisioned since.

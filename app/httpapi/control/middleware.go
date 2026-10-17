@@ -3,18 +3,19 @@ package control
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/auth/authn"
 	"github.com/wyolet/relay/auth/principal"
 )
 
-// authenticate runs the control plane's authenticator chain and hands handlers its principal as an Actor. The admin token comes first, so it outranks a session the same request carries; a request neither claims continues with no Actor and the protected routes refuse it. A session of a disabled account is refused on every route but logout.
+// authenticate runs the control plane's authenticator chain and hands handlers its principal as an Actor. The admin token comes first, so it outranks a session the same request carries; a request neither claims continues with no Actor and the protected routes refuse it. A session of a disabled account is ended and refused.
 func authenticate(d Deps) func(http.Handler) http.Handler {
 	chain := authn.Chain{
 		Authenticators: []authn.Authenticator{adminTokenAuth(d.AdminToken)},
@@ -23,26 +24,20 @@ func authenticate(d Deps) func(http.Handler) http.Handler {
 	}
 	if d.Sessions != nil {
 		chain.Authenticators = append(chain.Authenticators, d.Sessions)
+		chain.Admit = admitOrEndSession(d.Sessions)
 	}
+	withPrincipal := authn.Middleware(chain, rejectAuthentication)
 	return func(next http.Handler) http.Handler {
-		withActor := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return withPrincipal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if p := principal.From(r.Context()); p != nil {
 				r = r.WithContext(actor.WithActor(r.Context(), actor.FromPrincipal(p)))
 			}
 			next.ServeHTTP(w, r)
-		})
-		return authn.Middleware(chain, func(w http.ResponseWriter, r *http.Request, err error) {
-			// A disabled account must still be able to end its own session.
-			if errors.Is(err, authn.ErrInactive) && isLogout(r) {
-				withActor.ServeHTTP(w, r)
-				return
-			}
-			rejectAuthentication(w, r, err)
-		})(withActor)
+		}))
 	}
 }
 
-// resolveAccountStatus marks the admin token active, and a session active unless the snapshot holds its account as disabled. Snapshot reads only: an account disabled while its session survived (a failed session purge, a login racing the disable) is refused here within one NOTIFY. A nil catalog cannot tell, so it admits.
+// resolveAccountStatus marks the admin token active, and a session active unless the snapshot holds its account as disabled. Snapshot reads only: an account disabled while its session survived (a failed session purge, a login racing the disable, a raw UPDATE) is caught here within one NOTIFY. A nil catalog cannot tell, so it admits.
 func resolveAccountStatus(cat *appcatalog.Catalog) func(context.Context, *principal.Principal) error {
 	return func(_ context.Context, p *principal.Principal) error {
 		p.Status = principal.StatusActive
@@ -53,19 +48,35 @@ func resolveAccountStatus(cat *appcatalog.Catalog) func(context.Context, *princi
 	}
 }
 
-// isLogout reports whether r is POST /auth/logout under wherever the control API is mounted, reading the path the way chi routes it.
-func isLogout(r *http.Request) bool {
-	if r.Method != http.MethodPost {
-		return false
+// sessionEnder is what admitOrEndSession needs from the session manager.
+type sessionEnder interface {
+	DestroyUser(ctx context.Context, userID string) error
+	Logout(ctx context.Context) error
+}
+
+// admitOrEndSession is authn.AdmitActive that, on refusing a session, ends every session of that account and expires this request's cookie, so the browser is signed out rather than refused on every later request. A failure to end them is logged and the request is still refused.
+func admitOrEndSession(sessions sessionEnder) func(context.Context, *principal.Principal) error {
+	return func(ctx context.Context, p *principal.Principal) error {
+		err := authn.AdmitActive(ctx, p)
+		if err == nil || p.Credential.Kind != principal.CredentialSession {
+			return err
+		}
+		if derr := sessions.DestroyUser(ctx, p.ID); derr != nil {
+			slog.Error("disabled account: ending its sessions failed", "user_id", p.ID, "err", derr)
+		}
+		if lerr := sessions.Logout(ctx); lerr != nil {
+			slog.Error("disabled account: ending this session failed", "user_id", p.ID, "err", lerr)
+		}
+		return err
 	}
-	path := r.URL.Path
-	if r.URL.RawPath != "" {
-		path = r.URL.RawPath
+}
+
+// accountDisabledError is the one answer every control path gives a disabled account, so a client can show one notice.
+func accountDisabledError() *httpapi.APIError {
+	return &httpapi.APIError{
+		Err:        httpapi.APIErrorBody{Type: "authentication_error", Code: "account_disabled", Message: "account is disabled; contact your administrator"},
+		HTTPStatus: http.StatusUnauthorized,
 	}
-	if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePath != "" {
-		path = rctx.RoutePath
-	}
-	return path == "/auth/logout"
 }
 
 // adminTokenAuth claims a request whose bearer is RELAY_ADMIN_TOKEN. Any other request, a wrong bearer included, is left to the next authenticator. Empty disables the bypass.
@@ -87,14 +98,17 @@ func (t adminTokenAuth) Authenticate(r *http.Request) (*principal.Principal, boo
 	}, true, nil
 }
 
-// rejectAuthentication answers a credential an authenticator refused, in the shape RequireActor answers a missing one. A disabled account gets the answer token mint gives it.
+// rejectAuthentication answers a credential an authenticator refused, in the shape RequireActor answers a missing one. The only inactive control principal is a disabled account's session, which gets accountDisabledError.
 func rejectAuthentication(w http.ResponseWriter, _ *http.Request, err error) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(authn.Status(err))
 	if errors.Is(err, authn.ErrInactive) {
-		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"account is disabled"}}`))
+		disabled := accountDisabledError()
+		body, _ := json.Marshal(disabled)
+		w.WriteHeader(disabled.HTTPStatus)
+		_, _ = w.Write(body)
 		return
 	}
+	w.WriteHeader(authn.Status(err))
 	_, _ = w.Write([]byte(`{"error":{"type":"authentication_error","message":"` + http.StatusText(authn.Status(err)) + `"}}`))
 }
 

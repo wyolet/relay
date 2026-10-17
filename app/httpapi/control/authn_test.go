@@ -255,7 +255,7 @@ func TestControlAuthSessionStoreDown(t *testing.T) {
 
 type downStore struct{ kv.Store }
 
-// Every refusal answers in the control plane's JSON error shape; a disabled account's matches what token mint answers it.
+// Every refusal answers in the control plane's JSON error shape; a disabled account gets the account_disabled answer login and token mint give it.
 func TestRejectAuthentication(t *testing.T) {
 	tests := []struct {
 		err    error
@@ -264,7 +264,7 @@ func TestRejectAuthentication(t *testing.T) {
 	}{
 		{authn.ErrInvalidCredential, http.StatusUnauthorized, `{"error":{"type":"authentication_error","message":"Unauthorized"}}`},
 		{authn.ErrUnavailable, http.StatusServiceUnavailable, `{"error":{"type":"authentication_error","message":"Service Unavailable"}}`},
-		{authn.ErrInactive, http.StatusForbidden, `{"error":{"type":"invalid_request_error","message":"account is disabled"}}`},
+		{authn.ErrInactive, http.StatusUnauthorized, accountDisabledBody},
 	}
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()
