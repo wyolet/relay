@@ -5,13 +5,15 @@ variable "DOCKERHUB"    { default = "docker.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
-# UI_VERSION + CATALOG_REF are pinned in versions.env (the release BOM); the
-# Makefile `include`s it and passes both through as env on every bake call.
-# Bump them in versions.env, nowhere else. The defaults here are only fallbacks
-# for a bare `docker buildx bake` with no Makefile: UI_VERSION="" fails the UI
-# fetch loudly rather than embedding the wrong version; CATALOG_REF="main"
-# tracks the branch (non-reproducible) and is why releases must go through Make.
+# UI_VERSION, UI_SHA256 + CATALOG_REF are pinned in versions.env (the release
+# BOM); the Makefile `include`s it and passes them through as env on every bake
+# call. Bump them in versions.env, nowhere else. The defaults here are only
+# fallbacks for a bare `docker buildx bake` with no Makefile: an empty
+# UI_VERSION or UI_SHA256 fails the UI fetch loudly rather than embedding an
+# unverified UI; CATALOG_REF="main" tracks the branch (non-reproducible) and is
+# why releases must go through Make.
 variable "UI_VERSION"   { default = "" }
+variable "UI_SHA256"    { default = "" }
 variable "CATALOG_REF"  { default = "main" }
 
 target "_common" {
@@ -24,6 +26,7 @@ target "_common" {
   platforms  = ["linux/amd64"] // , "linux/arm64"
   args = {
     UI_VERSION  = "${UI_VERSION}"
+    UI_SHA256   = "${UI_SHA256}"
     CATALOG_REF = "${CATALOG_REF}"
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
@@ -87,6 +90,7 @@ target "local" {
   tags        = ["${IMAGE_NAME}:dev"]
   args = {
     UI_VERSION  = "${UI_VERSION}"
+    UI_SHA256   = "${UI_SHA256}"
     CATALOG_REF = "${CATALOG_REF}"
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
@@ -104,6 +108,7 @@ target "local-standalone" {
   tags        = ["${IMAGE_NAME}:standalone"]
   args = {
     UI_VERSION  = "${UI_VERSION}"
+    UI_SHA256   = "${UI_SHA256}"
     CATALOG_REF = "${CATALOG_REF}"
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
