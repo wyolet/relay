@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/actor"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/auth/authn"
@@ -44,12 +45,26 @@ type loginAsInput struct {
 // authHarness mounts the control API with its real session and admin-token wiring plus two test operations: one that logs a session in and one, protected, that echoes the caller every handler sees.
 func authHarness(t *testing.T) (http.Handler, kv.Store) {
 	t.Helper()
+	return authHarnessAt(t, "", nil)
+}
+
+// authHarnessAt is authHarness with the API mounted under prefix, the way the composition root mounts it under /api, and with cat as the catalog when non-nil.
+func authHarnessAt(t *testing.T, prefix string, cat *appcatalog.Catalog) (http.Handler, kv.Store) {
+	t.Helper()
 	store := kv.NewMem()
 	t.Cleanup(func() { _ = store.Close() })
 	d := mountDeps(t)
 	d.Sessions = session.New(store, false, "sess:")
+	if cat != nil {
+		d.Catalog = cat
+	}
 	r := chi.NewRouter()
-	api := Mount(r, d)
+	var api huma.API
+	if prefix == "" {
+		api = Mount(r, d)
+	} else {
+		r.Route(prefix, func(sub chi.Router) { api = Mount(sub, d) })
+	}
 	huma.Register(api, huma.Operation{OperationID: "test_login_as", Method: http.MethodPost, Path: "/test/login-as"},
 		func(ctx context.Context, in *loginAsInput) (*struct{}, error) {
 			if len(in.Body.Groups) > 0 {
@@ -71,7 +86,12 @@ func authHarness(t *testing.T) (http.Handler, kv.Store) {
 
 func loginAs(t *testing.T, h http.Handler, body string) *http.Cookie {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/test/login-as", strings.NewReader(body))
+	return loginAtPrefix(t, h, "", body)
+}
+
+func loginAtPrefix(t *testing.T, h http.Handler, prefix, body string) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, prefix+"/test/login-as", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -201,8 +221,8 @@ func TestControlAuthPublicRoutes(t *testing.T) {
 	}
 }
 
-// A session is honoured without consulting the account it names: relay ends a disabled user's sessions when the account is disabled, not on each request. mountDeps' user store has no pool, so a per-request lookup would fail this test.
-func TestControlAuthSessionDoesNotReadAccountStatus(t *testing.T) {
+// A session's account status is read from the snapshot, never from Postgres: mountDeps' user store has no pool, so a per-request lookup would fail this test.
+func TestControlAuthSessionStatusReadsNoPostgres(t *testing.T) {
 	h, _ := authHarness(t)
 	sess := loginAs(t, h, `{"userId":"u-disabled"}`)
 	req := httptest.NewRequest(http.MethodGet, "/test/caller", nil)
@@ -235,7 +255,7 @@ func TestControlAuthSessionStoreDown(t *testing.T) {
 
 type downStore struct{ kv.Store }
 
-// No control authenticator rejects today; a refusal still answers in the control plane's JSON error shape.
+// Every refusal answers in the control plane's JSON error shape; a disabled account's matches what token mint answers it.
 func TestRejectAuthentication(t *testing.T) {
 	tests := []struct {
 		err    error
@@ -244,6 +264,7 @@ func TestRejectAuthentication(t *testing.T) {
 	}{
 		{authn.ErrInvalidCredential, http.StatusUnauthorized, `{"error":{"type":"authentication_error","message":"Unauthorized"}}`},
 		{authn.ErrUnavailable, http.StatusServiceUnavailable, `{"error":{"type":"authentication_error","message":"Service Unavailable"}}`},
+		{authn.ErrInactive, http.StatusForbidden, `{"error":{"type":"invalid_request_error","message":"account is disabled"}}`},
 	}
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()

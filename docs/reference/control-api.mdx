@@ -206,12 +206,7 @@ GET  /api/audit            the admin audit log; filter by actor_id, actor_name, 
 POST /api/access-review    explain whether a user or service account may perform an action
 ```
 
-Both user endpoints authorize at the global scope: an account belongs to the
-deployment, so a binding inside one team or project grants neither the list nor
-an edit. Disabling an account refuses its next login and invalidates every
-inference token it holds (the `token_version` bump), so re-enabling it does not
-bring those tokens back. A session already open is not destroyed — log the user
-out, or wait for the session to expire.
+Both user endpoints authorize at the global scope: an account belongs to the deployment, so a binding inside one team or project grants neither the list nor an edit. Disabling an account refuses its next login, ends its sessions and invalidates every inference token it holds (the `token_version` bump), so re-enabling it does not bring those tokens back. A request on a session the account still holds gets `403` (`account is disabled`) on every route but `POST /api/auth/logout`.
 
 See [Audit Log](/concepts/audit) for the audit event shape and retention, and [Checking access](/concepts/auth#checking-access) for the access review.
 

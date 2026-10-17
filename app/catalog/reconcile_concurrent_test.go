@@ -31,12 +31,12 @@ import (
 // older snapshot's readers are still walking.
 type raceVersionList map[string]int
 
-func (l raceVersionList) TokenVersions(context.Context) (map[string]int, error) {
+func (l raceVersionList) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
 	out := make(map[string]int, len(l))
 	for k, v := range l {
 		out[k] = v
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 // raceWorld is the row set the writers churn. Every row here is read-only

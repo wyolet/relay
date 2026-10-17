@@ -34,6 +34,29 @@ func TestPrincipalRecheckOnKeyRevocation(t *testing.T) {
 	}
 }
 
+// Disabling the service account behind an admitted key stops the next frame.
+func TestPrincipalRecheckOnServiceAccountDisable(t *testing.T) {
+	f := newPrincipalFixture()
+	st := f.stack(t, saKey(f, "sk-wr-live"))
+	if w := st.do("sk-wr-live"); w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	p := st.seen
+	if err := p.Recheck(st.cat.Current(), time.Now()); err != nil {
+		t.Fatalf("Recheck on a live service account: %v", err)
+	}
+
+	fls := false
+	disabled := *f.sa
+	disabled.Spec.Enabled = &fls
+	if err := st.cat.ApplyServiceAccountUpsert(&disabled); err != nil {
+		t.Fatalf("apply service account: %v", err)
+	}
+	if err := p.Recheck(st.cat.Current(), time.Now()); err == nil {
+		t.Fatal("Recheck accepted a key whose service account is disabled")
+	}
+}
+
 func TestPrincipalRecheckOnKeyDeletion(t *testing.T) {
 	f := newPrincipalFixture()
 	k := saKey(f, "sk-wr-live")

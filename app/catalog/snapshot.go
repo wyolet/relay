@@ -131,9 +131,11 @@ type Snapshot struct {
 	// keys produced", and disabling a key does not un-own its past traffic.
 	hashesByUser map[string][]string
 
-	// tokenVersionByUser mirrors users.token_version — the only user state
-	// the snapshot carries, so token verification stays a map read.
+	// tokenVersionByUser mirrors users.token_version of enabled users, so
+	// token verification stays a map read.
 	tokenVersionByUser map[string]int
+	// disabledUsers holds the ids of users rows marked disabled. An id absent from tokenVersionByUser is not enough to refuse a session: a YAML-file login carries an id with no users row.
+	disabledUsers map[string]struct{}
 	// usersLoaded records that tokenVersionByUser came from a users source,
 	// so an absent id means a disabled or deleted user rather than "unknown".
 	usersLoaded bool

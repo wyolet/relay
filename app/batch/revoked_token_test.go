@@ -48,7 +48,9 @@ const (
 
 type fixtureVersions map[string]int
 
-func (v fixtureVersions) TokenVersions(context.Context) (map[string]int, error) { return v, nil }
+func (v fixtureVersions) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
+	return v, nil, nil
+}
 
 // keyAttr and tokenAttr are submissions by the fixture's key and its user.
 func keyAttr() Attribution {
