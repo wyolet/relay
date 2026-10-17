@@ -134,6 +134,9 @@ jobs:
       - name: Fuzz
         run: make test-fuzz
 
+      - name: Authz equivalence (no -race)
+        run: make test-equivalence
+
   bench:
     needs: changes
     if: needs.changes.outputs.go == 'true'
