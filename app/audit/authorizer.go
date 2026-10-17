@@ -41,6 +41,9 @@ func (a Authorizer) Authorize(ctx context.Context, action string, res authz.Reso
 	return err
 }
 
+// Unwrap returns the wrapped authorizer, for capability checks such as authz.Explains.
+func (a Authorizer) Unwrap() authz.Authorizer { return a.Inner }
+
 // Visible implements authz.Scoper by delegation. An inner authorizer that
 // doesn't scope reads stays unscoped — wrapping must not change what a
 // caller can see.
