@@ -17,7 +17,7 @@ spec:
   policyId: tree-tier
   valueFrom:
     kind: env
-    env: RELAY_ADMIN_TOKEN
+    env: TREE_UPSTREAM_KEY
 `
 
 // A catalog tree carries templates, not credentials: a HostKey in it would
