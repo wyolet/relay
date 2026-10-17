@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/actor"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/auth/authn"
@@ -44,12 +45,27 @@ type loginAsInput struct {
 // authHarness mounts the control API with its real session and admin-token wiring plus two test operations: one that logs a session in and one, protected, that echoes the caller every handler sees.
 func authHarness(t *testing.T) (http.Handler, kv.Store) {
 	t.Helper()
+	return authHarnessAt(t, "", nil)
+}
+
+// authHarnessAt is authHarness with the API mounted under prefix, the way the composition root mounts it under /api, and with cat as the catalog when non-nil.
+func authHarnessAt(t *testing.T, prefix string, cat *appcatalog.Catalog) (http.Handler, kv.Store) {
+	t.Helper()
 	store := kv.NewMem()
 	t.Cleanup(func() { _ = store.Close() })
 	d := mountDeps(t)
-	d.Sessions = session.New(store, false, "sess:")
+	d.Sessions = session.New(store, false)
+	if cat != nil {
+		// The test catalog carries its own users and no users table stands behind it, so the store has nothing to confirm.
+		d.Catalog, d.Users = cat, nil
+	}
 	r := chi.NewRouter()
-	api := Mount(r, d)
+	var api huma.API
+	if prefix == "" {
+		api = Mount(r, d)
+	} else {
+		r.Route(prefix, func(sub chi.Router) { api = Mount(sub, d) })
+	}
 	huma.Register(api, huma.Operation{OperationID: "test_login_as", Method: http.MethodPost, Path: "/test/login-as"},
 		func(ctx context.Context, in *loginAsInput) (*struct{}, error) {
 			if len(in.Body.Groups) > 0 {
@@ -71,7 +87,12 @@ func authHarness(t *testing.T) (http.Handler, kv.Store) {
 
 func loginAs(t *testing.T, h http.Handler, body string) *http.Cookie {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/test/login-as", strings.NewReader(body))
+	return loginAtPrefix(t, h, "", body)
+}
+
+func loginAtPrefix(t *testing.T, h http.Handler, prefix, body string) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, prefix+"/test/login-as", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -92,6 +113,17 @@ func derivedSessionID(token string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// sessionKVKey and sessionIndexKVKey spell out app/session's kv layout for tests that inspect the store directly.
+func sessionKVKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "{sess:" + hex.EncodeToString(sum[:]) + "}:data"
+}
+
+func sessionIndexKVKey(userID, token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "{sessuser:" + userID + "}:" + hex.EncodeToString(sum[:])
+}
+
 // The control plane's authentication outcomes: which caller each credential yields, which requests are refused and how, and that the admin token outranks a session.
 func TestControlAuthOutcomes(t *testing.T) {
 	h, store := authHarness(t)
@@ -99,7 +131,7 @@ func TestControlAuthOutcomes(t *testing.T) {
 	oidc := loginAs(t, h, `{"userId":"u-2","groups":["platform-eng","system:admins"]}`)
 
 	expired := &http.Cookie{Name: "relay_session", Value: "expired-token"}
-	if err := store.Set(context.Background(), "sess:expired-token", []byte(`{"d":"","e":"2000-01-01T00:00:00Z"}`), time.Hour); err != nil {
+	if err := store.Set(context.Background(), sessionKVKey("expired-token"), []byte(`{"d":"","e":"2000-01-01T00:00:00Z"}`), time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,8 +233,8 @@ func TestControlAuthPublicRoutes(t *testing.T) {
 	}
 }
 
-// A session is honoured without consulting the account it names: relay ends a disabled user's sessions when the account is disabled, not on each request. mountDeps' user store has no pool, so a per-request lookup would fail this test.
-func TestControlAuthSessionDoesNotReadAccountStatus(t *testing.T) {
+// A session's account status is read from the snapshot, never from Postgres: mountDeps' user store has no pool, so a per-request lookup would fail this test.
+func TestControlAuthSessionStatusReadsNoPostgres(t *testing.T) {
 	h, _ := authHarness(t)
 	sess := loginAs(t, h, `{"userId":"u-disabled"}`)
 	req := httptest.NewRequest(http.MethodGet, "/test/caller", nil)
@@ -217,7 +249,7 @@ func TestControlAuthSessionDoesNotReadAccountStatus(t *testing.T) {
 // A session store that cannot answer fails the request before any handler runs.
 func TestControlAuthSessionStoreDown(t *testing.T) {
 	d := mountDeps(t)
-	d.Sessions = session.New(downStore{kv.NewMem()}, false, "sess:")
+	d.Sessions = session.New(downStore{kv.NewMem()}, false)
 	r := chi.NewRouter()
 	Mount(r, d)
 	req := httptest.NewRequest(http.MethodPost, "/master-key/generate", nil)
@@ -235,7 +267,7 @@ func TestControlAuthSessionStoreDown(t *testing.T) {
 
 type downStore struct{ kv.Store }
 
-// No control authenticator rejects today; a refusal still answers in the control plane's JSON error shape.
+// Every refusal answers in the control plane's JSON error shape; a disabled account gets the account_disabled answer login and token mint give it.
 func TestRejectAuthentication(t *testing.T) {
 	tests := []struct {
 		err    error
@@ -244,6 +276,7 @@ func TestRejectAuthentication(t *testing.T) {
 	}{
 		{authn.ErrInvalidCredential, http.StatusUnauthorized, `{"error":{"type":"authentication_error","message":"Unauthorized"}}`},
 		{authn.ErrUnavailable, http.StatusServiceUnavailable, `{"error":{"type":"authentication_error","message":"Service Unavailable"}}`},
+		{authn.ErrInactive, http.StatusUnauthorized, accountDisabledBody},
 	}
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()

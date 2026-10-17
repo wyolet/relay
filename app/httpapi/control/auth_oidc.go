@@ -6,7 +6,7 @@
 // The flow is auth/oidc's relying party; this file feeds it the auth:oidc
 // settings and supplies relay's user provisioning, session and audit. These
 // are raw chi handlers, not huma operations: they speak browser redirects
-// and cookies, not JSON.
+// and cookies, and JSON only for a failure with no return target.
 
 package control
 
@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -54,6 +55,9 @@ type oidcDeps struct {
 	users    oidcUserStore
 	sessions sessionLogin
 	rp       *oidc.RelyingParty[*user.User]
+	// allowOrigins and trustedProxies widen the origins validateReturn accepts.
+	allowOrigins   []string
+	trustedProxies []*net.IPNet
 }
 
 func newOIDCDeps(d Deps) *oidcDeps {
@@ -61,19 +65,24 @@ func newOIDCDeps(d Deps) *oidcDeps {
 	if d.Stores != nil {
 		users.clients = d.Stores.SCIMClients
 	}
-	return newOIDC(func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) },
+	od := newOIDC(func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) },
 		func() *settings.AuthSCIM { return settings.AuthSCIMFrom(d.Catalog) }, users, d.Sessions, d.CookieSecure)
+	od.allowOrigins, od.trustedProxies = d.AllowOrigins, d.TrustedProxies
+	return od
 }
 
 func newOIDC(cfg func() *settings.AuthOIDC, scim func() *settings.AuthSCIM, users oidcUserStore, sessions sessionLogin, cookieSecure bool) *oidcDeps {
 	od := &oidcDeps{cfg: cfg, scim: scim, users: users, sessions: sessions}
 	od.rp = &oidc.RelyingParty[*user.User]{
-		Config:       od.config,
-		FlowCookie:   oidcFlowCookie,
-		CookieSecure: cookieSecure,
-		Provision:    od.resolveUser,
-		Login:        od.login,
-		OnDenied:     func(r *http.Request, f *oidc.Failure) { auditLoginDenied(r.Context(), f.Name) },
+		Config:         od.config,
+		FlowCookie:     oidcFlowCookie,
+		CookieSecure:   cookieSecure,
+		ReturnParam:    "return_to",
+		ValidateReturn: od.validateReturn,
+		Provision:      od.resolveUser,
+		Login:          od.login,
+		OnDenied:       func(r *http.Request, f *oidc.Failure) { auditLoginDenied(r.Context(), f.Name) },
+		Render:         renderOIDCFailure,
 	}
 	return od
 }
@@ -155,7 +164,7 @@ func (od *oidcDeps) resolveUser(ctx context.Context, c oidc.Claims) (*user.User,
 	u, err := od.users.ByOIDCSubject(ctx, subject)
 	if err != nil {
 		slog.Error("oidc callback: user lookup failed", "err", err)
-		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "user lookup failed", Name: subject, Err: err}
+		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Code: oidc.CodeLoginFailed, Message: "user lookup failed", Name: subject, Err: err}
 	}
 	if u == nil {
 		if u, err = od.linkProvisioned(ctx, c); err != nil {
@@ -164,21 +173,22 @@ func (od *oidcDeps) resolveUser(ctx context.Context, c oidc.Claims) (*user.User,
 	}
 	if u == nil {
 		if !od.cfg().OpenRegistration() {
-			return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "no account for this identity (registration is closed)", Name: subject}
+			return nil, &oidc.Failure{Status: http.StatusForbidden, Code: "registration_closed", Message: "no account for this identity (registration is closed)", Name: subject}
 		}
 		u, err = od.provision(ctx, subject, c)
 		// Linking a sign-in to an existing account is an administrator's decision, never an email match.
 		if errors.Is(err, directory.ErrEmailTaken) {
-			return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "an account with this email already exists; an administrator must link it to this sign-in", Name: subject, Err: err}
+			return nil, &oidc.Failure{Status: http.StatusForbidden, Code: "email_in_use", Message: "an account with this email already exists; an administrator must link it to this sign-in", Name: subject, Err: err}
 		}
 		if err != nil {
 			slog.Error("oidc callback: provision failed", "err", err)
-			return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "account provisioning failed", Name: subject, Err: err}
+			return nil, &oidc.Failure{Status: http.StatusInternalServerError, Code: oidc.CodeLoginFailed, Message: "account provisioning failed", Name: subject, Err: err}
 		}
 		slog.Info("oidc: user auto-provisioned", "username", u.Username)
 	}
 	if u.Disabled {
-		return nil, &oidc.Failure{Status: http.StatusForbidden, Message: "account disabled", Name: u.Username}
+		disabled := accountDisabledError()
+		return nil, &oidc.Failure{Status: disabled.HTTPStatus, Code: disabled.Err.Code, Message: disabled.Err.Message, Name: u.Username}
 	}
 	return u, nil
 }
@@ -197,14 +207,14 @@ func (od *oidcDeps) linkProvisioned(ctx context.Context, c oidc.Claims) (*user.U
 	matches, err := od.users.UnlinkedByExternalID(ctx, externalID)
 	if err != nil {
 		slog.Error("oidc callback: provisioned account lookup failed", "err", err)
-		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "user lookup failed", Name: subject, Err: err}
+		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Code: oidc.CodeLoginFailed, Message: "user lookup failed", Name: subject, Err: err}
 	}
 	switch {
 	case len(matches) == 0:
 		return nil, nil
 	case len(matches) > 1:
 		slog.Error("oidc callback: sign-in matches more than one provisioned account", "claim", section.EffectiveLinkClaim(), "accounts", len(matches))
-		return nil, &oidc.Failure{Status: http.StatusConflict, Message: "this sign-in matches more than one provisioned account; an administrator must resolve it", Name: subject}
+		return nil, &oidc.Failure{Status: http.StatusConflict, Code: "account_ambiguous", Message: "this sign-in matches more than one provisioned account; an administrator must resolve it", Name: subject}
 	}
 	u := matches[0]
 	if u.Disabled {
@@ -216,11 +226,11 @@ func (od *oidcDeps) linkProvisioned(ctx context.Context, c oidc.Claims) (*user.U
 		if again, lerr := od.users.ByOIDCSubject(ctx, subject); lerr == nil && again != nil {
 			return again, nil
 		}
-		return nil, &oidc.Failure{Status: http.StatusConflict, Message: "the provisioned account is linked to another sign-in", Name: subject, Err: err}
+		return nil, &oidc.Failure{Status: http.StatusConflict, Code: "identity_conflict", Message: "the provisioned account is linked to another sign-in", Name: subject, Err: err}
 	}
 	if err != nil {
 		slog.Error("oidc callback: account link failed", "err", err)
-		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Message: "account link failed", Name: subject, Err: err}
+		return nil, &oidc.Failure{Status: http.StatusInternalServerError, Code: oidc.CodeLoginFailed, Message: "account link failed", Name: subject, Err: err}
 	}
 	u.OIDCSubject = subject
 	slog.Info("oidc: sign-in linked to a provisioned account", "username", u.Username)
@@ -238,7 +248,7 @@ func (od *oidcDeps) login(_ http.ResponseWriter, r *http.Request, u *user.User, 
 	ctx := r.Context()
 	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, oidcSubject(c), c.SessionID, c.Groups, u.Roles...); err != nil {
 		slog.Error("oidc callback: session create failed", "err", err)
-		return &oidc.Failure{Status: http.StatusInternalServerError, Message: "session create failed", Name: u.Username, Err: err}
+		return &oidc.Failure{Status: http.StatusInternalServerError, Code: oidc.CodeLoginFailed, Message: "session create failed", Name: u.Username, Err: err}
 	}
 	audit.Record(ctx, "auth.login",
 		audit.Resource{Kind: "user", ID: u.ID, Name: u.Username}, audit.StatusAllowed,

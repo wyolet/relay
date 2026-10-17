@@ -154,6 +154,10 @@ func (m *Manager) Login(ctx context.Context, userID, username string, roles ...s
 	if err := m.sm.RenewToken(ctx); err != nil {
 		return err
 	}
+	// RenewToken keeps the session's data, and a login on a browser that still holds another account's session must not inherit its roles, IdP groups or subject.
+	if err := m.sm.Clear(ctx); err != nil {
+		return err
+	}
 	m.sm.Put(ctx, keyUserID, userID)
 	m.sm.Put(ctx, keyUsername, username)
 	if len(roles) > 0 {

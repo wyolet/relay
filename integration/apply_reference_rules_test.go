@@ -118,7 +118,7 @@ spec: {project: own-proj, policy: victim-pol}
 `,
 		"non-admin host key reading the relay's environment": header + `kind: HostKey
 metadata: {name: env-probe, owner: {kind: project, name: own-proj}}
-spec: {hostId: shared-host, policyId: shared-host-tier, valueFrom: {kind: env, env: RELAY_MASTER_KEY}}
+spec: {hostId: shared-host, policyId: shared-host-tier, valueFrom: {kind: env, env: ACME_API_KEY}}
 `,
 	}
 	for name, bundle := range cases {

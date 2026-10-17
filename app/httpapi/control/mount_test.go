@@ -104,7 +104,7 @@ func mountDeps(t *testing.T) Deps {
 	sink := &auditSink{}
 	return Deps{
 		Users:         user.NewStore(pool),
-		Sessions:      session.New(kvStore, false, "sess:"),
+		Sessions:      session.New(kvStore, false),
 		TokenSigner:   &TokenSigner{},
 		TokenDenylist: fakeDenylist{},
 		AdminToken:    "test-admin-token",

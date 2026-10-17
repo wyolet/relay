@@ -20,8 +20,7 @@ type sessionKV interface {
 
 // kvStore implements the auth module's session.Store on kv. scs's store methods take no context, so each gets a short timeout of its own.
 type kvStore struct {
-	kv     sessionKV
-	prefix string
+	kv sessionKV
 }
 
 type kvEntry struct {
@@ -34,7 +33,7 @@ const storeTimeout = 2 * time.Second
 func (s *kvStore) Find(token string) ([]byte, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
-	raw, err := s.kv.Get(ctx, sessionKey(s.prefix, token))
+	raw, err := s.kv.Get(ctx, sessionKey(token))
 	if err != nil {
 		// scs convention: (nil, false, nil) for "no such session."
 		if errors.Is(err, kv.ErrNotFound) {
@@ -62,7 +61,7 @@ func (s *kvStore) Commit(token string, b []byte, expiry time.Time) error {
 	if err != nil {
 		return fmt.Errorf("session commit (encode): %w", err)
 	}
-	if err := s.kv.Set(ctx, sessionKey(s.prefix, token), raw, time.Until(expiry)); err != nil {
+	if err := s.kv.Set(ctx, sessionKey(token), raw, time.Until(expiry)); err != nil {
 		return fmt.Errorf("session commit (kv set): %w", err)
 	}
 	return nil
@@ -71,18 +70,18 @@ func (s *kvStore) Commit(token string, b []byte, expiry time.Time) error {
 func (s *kvStore) Delete(token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
-	if err := s.kv.Del(ctx, sessionKey(s.prefix, token)); err != nil {
+	if err := s.kv.Del(ctx, sessionKey(token)); err != nil {
 		return fmt.Errorf("session delete (kv del): %w", err)
 	}
 	return nil
 }
 
 func (s *kvStore) IndexUserToken(ctx context.Context, userID, token string, ttl time.Duration) error {
-	return s.kv.Set(ctx, userIndexKey(s.prefix, userID, token), []byte(token), ttl)
+	return s.kv.Set(ctx, userIndexKey(userID, token), []byte(token), ttl)
 }
 
 func (s *kvStore) UserTokens(ctx context.Context, userID string) ([]string, error) {
-	entries, err := s.kv.Range(ctx, userIndexPrefix(s.prefix, userID))
+	entries, err := s.kv.Range(ctx, userIndexPrefix(userID))
 	if err != nil {
 		return nil, fmt.Errorf("session destroy user (kv range): %w", err)
 	}
@@ -94,10 +93,10 @@ func (s *kvStore) UserTokens(ctx context.Context, userID string) ([]string, erro
 }
 
 func (s *kvStore) DeleteUserToken(ctx context.Context, userID, token string) error {
-	if err := s.kv.Del(ctx, sessionKey(s.prefix, token)); err != nil {
+	if err := s.kv.Del(ctx, sessionKey(token)); err != nil {
 		return fmt.Errorf("session destroy user (kv del): %w", err)
 	}
-	if err := s.kv.Del(ctx, userIndexKey(s.prefix, userID, token)); err != nil {
+	if err := s.kv.Del(ctx, userIndexKey(userID, token)); err != nil {
 		return fmt.Errorf("session destroy user (kv del): %w", err)
 	}
 	return nil

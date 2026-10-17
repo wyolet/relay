@@ -177,11 +177,11 @@ type armedVersions struct {
 	armed *atomic.Bool
 }
 
-func (v armedVersions) TokenVersions(context.Context) (map[string]int, error) {
+func (v armedVersions) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
 	if v.armed.Load() {
 		panic("token-version store read on the request path")
 	}
-	return v.rows, nil
+	return v.rows, nil, nil
 }
 
 // --- the fixture ---------------------------------------------------------

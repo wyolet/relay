@@ -214,20 +214,21 @@ func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
 	return nil
 }
 
-// fakeSessions records the LoginOIDC call.
+// fakeSessions records the LoginOIDC call and answers it with err.
 type fakeSessions struct {
 	userID, username string
 	subject, sid     string
 	groups           []string
 	roles            []string
 	calls            int
+	err              error
 }
 
 func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error {
 	f.userID, f.username, f.roles = userID, username, roles
 	f.subject, f.sid, f.groups = oidcSubject, idpSessionID, groups
 	f.calls++
-	return nil
+	return f.err
 }
 
 // oidcHarness serves the OIDC routes as the control listener mounts them: start and callback under /api behind the audit middleware, and the root /auth/callback.
@@ -240,6 +241,7 @@ type oidcHarness struct {
 	sess  *fakeSessions
 	sink  *auditSink
 	em    *audit.Emitter
+	od    *oidcDeps
 	h     http.Handler
 }
 
@@ -271,12 +273,13 @@ func newOIDCHarnessOver(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC, user
 	}
 	h.em = audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	od := newOIDC(func() *settings.AuthOIDC { return h.cfg }, func() *settings.AuthSCIM { return h.scim }, users, h.sess, false)
+	h.od = od
 	r := chi.NewRouter()
 	r.Route("/api", func(api chi.Router) {
 		api.Use(audit.Middleware(h.em, nil))
 		mountOIDCRoutes(api, od)
 	})
-	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false, "sess:"), Audit: h.em}, od)
+	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false), Audit: h.em}, od)
 	h.h = r
 	return h
 }
@@ -354,6 +357,18 @@ func wantResponse(t *testing.T, rec *httptest.ResponseRecorder, status int, body
 	t.Helper()
 	if rec.Code != status || strings.TrimSpace(rec.Body.String()) != body {
 		t.Fatalf("response = %d %q, want %d %q", rec.Code, rec.Body.String(), status, body)
+	}
+}
+
+// wantOIDCError checks a sign-in failure without a return target: the API error envelope with status, code and message.
+func wantOIDCError(t *testing.T, rec *httptest.ResponseRecorder, status int, code, message string) {
+	t.Helper()
+	var env struct {
+		Error struct{ Type, Code, Message string }
+	}
+	if rec.Code != status || rec.Header().Get("Content-Type") != "application/json" || json.Unmarshal(rec.Body.Bytes(), &env) != nil ||
+		env.Error.Type != "authentication_error" || env.Error.Code != code || env.Error.Message != message {
+		t.Fatalf("response = %d %s %q, want %d authentication_error %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String(), status, code, message)
 	}
 }
 
@@ -547,7 +562,7 @@ func TestOIDCFlow_IDTokenRejected(t *testing.T) {
 			idp := newFakeIdP(t)
 			mutate(idp)
 			h := newTestOIDC(t, idp, "open")
-			wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusBadGateway, "identity provider returned an invalid id_token")
+			wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusBadGateway, "invalid_identity", "identity provider returned an invalid id_token")
 			if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
 				t.Fatalf("session = %+v, users = %d", h.sess, len(h.users.bySubject))
 			}
@@ -561,7 +576,7 @@ func TestOIDCFlow_UnusableIDToken(t *testing.T) {
 	idp := newFakeIdP(t)
 	idp.claims = map[string]any{"sub": nil}
 	h := newTestOIDC(t, idp, "open")
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusBadGateway, "identity provider returned no usable identity")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusBadGateway, "invalid_identity", "identity provider returned no usable identity")
 	if h.sess.calls != 0 {
 		t.Error("session minted without a subject")
 	}
@@ -642,7 +657,7 @@ func TestOIDCFlow_ClosedRegistrationRejectsUnknown(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "closed")
 
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "no account for this identity (registration is closed)")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "registration_closed", "no account for this identity (registration is closed)")
 	if h.sess.calls != 0 || len(h.users.bySubject) != 0 {
 		t.Error("session minted or user created despite closed registration")
 	}
@@ -655,7 +670,7 @@ func TestOIDCFlow_EmailTakenRejected(t *testing.T) {
 	h := newTestOIDC(t, idp, "open")
 	_ = h.users.Upsert(context.Background(), &user.User{ID: "u1", Username: "alice-scim", Email: idp.email})
 
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "email_in_use", "an account with this email already exists; an administrator must link it to this sign-in")
 	if h.sess.calls != 0 || h.users.bySubject[h.subject()] != nil || h.users.byName["alice-scim"].OIDCSubject != "" {
 		t.Error("session minted, account created or identity linked despite the taken email")
 	}
@@ -668,7 +683,7 @@ func TestOIDCFlow_StateMismatchRejected(t *testing.T) {
 
 	_, flow := h.start()
 	rec := h.callback("/api/auth/oidc/callback", "code="+idp.issuedCode+"&state=forged", flow)
-	wantResponse(t, rec, http.StatusBadRequest, "state mismatch")
+	wantOIDCError(t, rec, http.StatusBadRequest, "state_mismatch", "state mismatch")
 	if c := cookieNamed(rec, oidcFlowCookie); c == nil || c.MaxAge != -1 {
 		t.Errorf("flow cookie not cleared on mismatch: %+v", c)
 	}
@@ -696,7 +711,7 @@ func TestOIDCFlow_FlowCookieRejected(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			h := newTestOIDC(t, newFakeIdP(t), "open")
-			wantResponse(t, h.callback("/api/auth/oidc/callback", "code=x&state=y", c), http.StatusBadRequest, "login flow expired — start again")
+			wantOIDCError(t, h.callback("/api/auth/oidc/callback", "code=x&state=y", c), http.StatusBadRequest, "flow_expired", "login flow expired — start again")
 			wantDenied(t, h.events(), "")
 		})
 	}
@@ -705,7 +720,7 @@ func TestOIDCFlow_FlowCookieRejected(t *testing.T) {
 func TestOIDCFlow_MissingCode(t *testing.T) {
 	h := newTestOIDC(t, newFakeIdP(t), "open")
 	loc, flow := h.start()
-	wantResponse(t, h.callback("/api/auth/oidc/callback", "state="+loc.Query().Get("state"), flow), http.StatusBadRequest, "missing code")
+	wantOIDCError(t, h.callback("/api/auth/oidc/callback", "state="+loc.Query().Get("state"), flow), http.StatusBadRequest, "missing_code", "missing code")
 	wantDenied(t, h.events(), "")
 }
 
@@ -713,7 +728,7 @@ func TestOIDCFlow_ProviderError(t *testing.T) {
 	h := newTestOIDC(t, newFakeIdP(t), "open")
 	_, flow := h.start()
 	rec := h.callback("/api/auth/oidc/callback", "error=access_denied&error_description=nope", flow)
-	wantResponse(t, rec, http.StatusBadGateway, "login failed at identity provider: access_denied")
+	wantOIDCError(t, rec, http.StatusBadGateway, "idp_error", "login failed at identity provider")
 	if c := cookieNamed(rec, oidcFlowCookie); c != nil {
 		t.Errorf("provider error touched the flow cookie: %+v", c)
 	}
@@ -724,7 +739,7 @@ func TestOIDCFlow_CodeExchangeFailure(t *testing.T) {
 	idp := newFakeIdP(t)
 	h := newTestOIDC(t, idp, "open")
 	loc, flow := h.start()
-	wantResponse(t, h.callback("/api/auth/oidc/callback", "code=wrong&state="+loc.Query().Get("state"), flow), http.StatusBadGateway, "code exchange failed")
+	wantOIDCError(t, h.callback("/api/auth/oidc/callback", "code=wrong&state="+loc.Query().Get("state"), flow), http.StatusBadGateway, "exchange_failed", "code exchange with the identity provider failed")
 	wantDenied(t, h.events(), "")
 }
 
@@ -743,7 +758,7 @@ func TestOIDCFlow_Discovery(t *testing.T) {
 
 	loc, flow := h.start()
 	h.cfg.Issuer = idp.srv.URL + "/missing"
-	wantResponse(t, h.callback("/api/auth/oidc/callback", "code="+idp.issuedCode+"&state="+loc.Query().Get("state"), flow), http.StatusBadGateway, "identity provider unavailable")
+	wantOIDCError(t, h.callback("/api/auth/oidc/callback", "code="+idp.issuedCode+"&state="+loc.Query().Get("state"), flow), http.StatusBadGateway, "idp_unavailable", "identity provider unavailable")
 	if evs := h.events(); len(evs) != 2 {
 		t.Fatalf("events = %d, want the two logins only", len(evs))
 	}
@@ -763,7 +778,7 @@ func TestOIDCFlow_DisabledUserRejected(t *testing.T) {
 		ID: "u1", Username: "alice", OIDCSubject: h.subject(), Disabled: true,
 	})
 
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "account disabled")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account is disabled; contact your administrator")
 	if h.sess.calls != 0 {
 		t.Error("session minted for disabled user")
 	}

@@ -189,7 +189,7 @@ func newAuthAuditHarness(t *testing.T) (http.Handler, *auditSink, *audit.Emitter
 	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	kvStore := kv.NewMem()
 	t.Cleanup(func() { _ = kvStore.Close() })
-	sessions := session.New(kvStore, false, "sess:")
+	sessions := session.New(kvStore, false)
 
 	r := chi.NewRouter()
 	r.Use(sessions.Middleware)

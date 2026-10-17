@@ -127,10 +127,9 @@ type PolicyBindingLister interface {
 	List(ctx context.Context) ([]*policybinding.PolicyBinding, error)
 }
 
-// TokenVersionLister reads users.token_version for every user. Satisfied by
-// *app/user.Store.
+// TokenVersionLister reads, in one pass over the users table, every enabled user's token version and the ids of disabled users. Satisfied by *app/user.Store.
 type TokenVersionLister interface {
-	TokenVersions(ctx context.Context) (map[string]int, error)
+	TokenVersionsAndDisabled(ctx context.Context) (map[string]int, map[string]struct{}, error)
 }
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot

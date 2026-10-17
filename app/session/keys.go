@@ -1,12 +1,22 @@
 package session
 
-// Keys carry no {tag}: hash tag: no script or lock spans them, and sessions issued before a deploy must resolve after it. Both are written with the session lifetime as TTL.
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
 
-func sessionKey(prefix, token string) string { return prefix + token }
+// No script or lock spans these keys, so each is tagged by its own scope: one tag per session spreads sessions over every slot, and one per user keeps a user's index entries on one slot for DestroyUser's Range. No key holds a token, only its sha256: kv keeps a key's {tag} in logs and errors, and a key listing must not hand out live sessions. Both are written with the session lifetime as TTL.
 
-// userIndexPrefix covers every index entry of one user. Session tokens are base64url, so the "user:" segment never collides with a session key.
-func userIndexPrefix(prefix, userID string) string { return prefix + "user:" + userID + ":" }
+func tokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
 
-func userIndexKey(prefix, userID, token string) string {
-	return userIndexPrefix(prefix, userID) + token
+func sessionKey(token string) string { return "{sess:" + tokenHash(token) + "}:data" }
+
+// userIndexPrefix covers every index entry of one user.
+func userIndexPrefix(userID string) string { return "{sessuser:" + userID + "}:" }
+
+func userIndexKey(userID, token string) string {
+	return userIndexPrefix(userID) + tokenHash(token)
 }
