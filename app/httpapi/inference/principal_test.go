@@ -53,7 +53,9 @@ type principalFixture struct {
 // stubVersions is the catalog's token-version source in tests.
 type stubVersions map[string]int
 
-func (v stubVersions) TokenVersions(context.Context) (map[string]int, error) { return v, nil }
+func (v stubVersions) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
+	return v, nil, nil
+}
 
 func testPolicy(name string, projectID string) *policy.Policy {
 	return &policy.Policy{
@@ -201,6 +203,42 @@ func TestPrincipalMiddleware_Rejections(t *testing.T) {
 		if got := authCode(t, w.Body.Bytes()); got != "invalid api key" {
 			t.Errorf("message = %q, want %q", got, "invalid api key")
 		}
+	})
+}
+
+// A service account's key acts as the account: disabling the account refuses the key, whether the disable reaches the snapshot through a full reload or a NOTIFY-driven copy-on-write apply.
+func TestPrincipalMiddleware_DisabledServiceAccountKey(t *testing.T) {
+	fls := false
+	wantRefused := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401: %s", w.Code, w.Body)
+		}
+		if got := authCode(t, w.Body.Bytes()); got != "invalid api key" {
+			t.Errorf("message = %q, want %q", got, "invalid api key")
+		}
+	}
+
+	t.Run("full reload", func(t *testing.T) {
+		f := newPrincipalFixture()
+		disabled := *f.sa
+		disabled.Spec.Enabled = &fls
+		f.sa = &disabled
+		wantRefused(t, f.stack(t, saKey(f, "sk-wr-live")).do("sk-wr-live"))
+	})
+
+	t.Run("incremental apply", func(t *testing.T) {
+		f := newPrincipalFixture()
+		st := f.stack(t, saKey(f, "sk-wr-live"))
+		if w := st.do("sk-wr-live"); w.Code != http.StatusOK {
+			t.Fatalf("status before disable = %d: %s", w.Code, w.Body)
+		}
+		disabled := *f.sa
+		disabled.Spec.Enabled = &fls
+		if err := st.cat.ApplyServiceAccountUpsert(&disabled); err != nil {
+			t.Fatalf("apply service account: %v", err)
+		}
+		wantRefused(t, st.do("sk-wr-live"))
 	})
 }
 

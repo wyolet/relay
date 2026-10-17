@@ -232,8 +232,7 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 		return l.cat.ApplyOverlayUpsert(o)
 
 	case "user":
-		// Users are not catalog rows; only their token version reaches the
-		// snapshot, and the map is cheap enough to rebuild whole.
+		// Users are not catalog rows; only their token version and disabled flag reach the snapshot, and both are cheap enough to rebuild whole.
 		return l.cat.ReloadTokenVersions(ctx)
 
 	case "settings":

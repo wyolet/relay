@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -29,8 +30,11 @@ func TestMintRefusesADisabledAccount(t *testing.T) {
 	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: f.userID, Username: "alice"})
 
 	_, err := mintToken(ctx, f.deps, mintBody(f.project.Meta.Name, ""))
-	if got := statusOf(t, err); got != 403 {
-		t.Fatalf("status = %d, want 403", got)
+	if got := statusOf(t, err); got != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", got)
+	}
+	if apiErr, ok := err.(*httpapi.APIError); !ok || apiErr.Err.Code != "account_disabled" {
+		t.Fatalf("error = %#v, want the account_disabled code", err)
 	}
 }
 

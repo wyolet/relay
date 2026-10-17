@@ -136,7 +136,7 @@ func TestIntegration_RelayMigrationGivesUpOnALockedTable(t *testing.T) {
 	if err := storage.MigrateUp(migrationDSN); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if v, dirty := schemaVersion(t, dsn, "schema_migrations"); v != 32 || dirty {
-		t.Fatalf("schema after the retry = %d dirty=%v, want 32 clean", v, dirty)
+	if v, dirty := schemaVersion(t, dsn, "schema_migrations"); v != 33 || dirty {
+		t.Fatalf("schema after the retry = %d dirty=%v, want 33 clean", v, dirty)
 	}
 }
