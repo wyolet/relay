@@ -24,8 +24,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
-// ReloadTokenVersions rebuilds only the token-version map — the whole
-// snapshot reaction to a users write.
+// ReloadTokenVersions rebuilds only the token-version map and the disabled set — the whole snapshot reaction to a users write.
 func (c *Catalog) ReloadTokenVersions(ctx context.Context) error {
 	if c.tokenVersions == nil {
 		return nil
@@ -35,12 +34,13 @@ func (c *Catalog) ReloadTokenVersions(ctx context.Context) error {
 	// than the ones it just published.
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
-	versions, err := c.tokenVersions.TokenVersions(ctx)
+	versions, disabled, err := c.tokenVersions.TokenVersionsAndDisabled(ctx)
 	if err != nil {
 		return fmt.Errorf("catalog: token versions: %w", err)
 	}
 	s := c.snap.Load().clone()
 	s.tokenVersionByUser = versions
+	s.disabledUsers = disabled
 	s.usersLoaded = true
 	c.snap.Store(s)
 	return nil
@@ -147,8 +147,9 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 		}
 	}
 	var tokenVersions map[string]int
+	var disabledUsers map[string]struct{}
 	if c.tokenVersions != nil {
-		tokenVersions, err = c.tokenVersions.TokenVersions(ctx)
+		tokenVersions, disabledUsers, err = c.tokenVersions.TokenVersionsAndDisabled(ctx)
 		if err != nil {
 			return fmt.Errorf("catalog reload: token versions: %w", err)
 		}
@@ -199,6 +200,7 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	}
 	if tokenVersions != nil {
 		snap.tokenVersionByUser = tokenVersions
+		snap.disabledUsers = disabledUsers
 		snap.usersLoaded = true
 	}
 	c.snap.Store(snap)

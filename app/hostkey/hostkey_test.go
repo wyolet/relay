@@ -1,6 +1,7 @@
 package hostkey
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -127,5 +128,28 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("got %v, want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A key's value goes to its host, so an env ref may not name relay's own configuration, and the refusal does not echo the name.
+func TestValidateRefusesReservedEnvNames(t *testing.T) {
+	for _, name := range []string{"RELAY_MASTER_KEY", "RELAY_ADMIN_TOKEN", "RELAY_PG_DSN", "WYOLET_OIDC_CLIENT_SECRET", "relay_master_key"} {
+		k := fix("k", ValueKindEnv)
+		k.Spec.ValueFrom.Env = name
+		err := k.Validate()
+		if !errors.Is(err, ErrReservedEnv) {
+			t.Errorf("%s: err = %v, want ErrReservedEnv", name, err)
+			continue
+		}
+		if strings.Contains(err.Error(), name) {
+			t.Errorf("%s: error echoes the variable name: %v", name, err)
+		}
+	}
+	for _, name := range []string{"OPENAI_API_KEY", "MY_RELAY_KEY", "RELAYER_KEY"} {
+		k := fix("k", ValueKindEnv)
+		k.Spec.ValueFrom.Env = name
+		if err := k.Validate(); err != nil {
+			t.Errorf("%s: unexpected: %v", name, err)
+		}
 	}
 }

@@ -763,7 +763,7 @@ func TestOIDCFlow_DisabledUserRejected(t *testing.T) {
 		ID: "u1", Username: "alice", OIDCSubject: h.subject(), Disabled: true,
 	})
 
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "account disabled")
+	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account is disabled; contact your administrator")
 	if h.sess.calls != 0 {
 		t.Error("session minted for disabled user")
 	}

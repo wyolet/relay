@@ -1,4 +1,4 @@
-// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the two reads it has no equivalent for (a batched existence check and the snapshot's token versions) stay on relay's sqlc queries. (nil, nil) on not-found.
+// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the two reads it has no equivalent for (a batched existence check and the snapshot's token versions and disabled ids) stay on relay's sqlc queries. (nil, nil) on not-found.
 
 package user
 
@@ -104,20 +104,22 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.rows.Delete(ctx, id)
 }
 
-// TokenVersions returns every enabled user's current token version, keyed
-// by id. The map is the snapshot's whole view of users — small enough to
-// rebuild on every NOTIFY. A disabled account is absent, which is what
-// makes its live tokens stop verifying.
-func (s *Store) TokenVersions(ctx context.Context) (map[string]int, error) {
-	rows, err := s.q.ListUserTokenVersions(ctx)
+// TokenVersionsAndDisabled returns every enabled user's current token version and the set of disabled user ids from one read. They are the snapshot's whole view of users — small enough to rebuild on every NOTIFY. A disabled account is absent from the versions, which is what makes its live tokens stop verifying.
+func (s *Store) TokenVersionsAndDisabled(ctx context.Context) (map[string]int, map[string]struct{}, error) {
+	rows, err := s.q.ListUserTokenVersionsAndDisabled(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("user.TokenVersions: %w", err)
+		return nil, nil, fmt.Errorf("user.TokenVersionsAndDisabled: %w", err)
 	}
-	out := make(map[string]int, len(rows))
+	versions := make(map[string]int, len(rows))
+	disabled := map[string]struct{}{}
 	for _, r := range rows {
-		out[r.ID] = int(r.TokenVersion)
+		if r.Disabled {
+			disabled[r.ID] = struct{}{}
+			continue
+		}
+		versions[r.ID] = int(r.TokenVersion)
 	}
-	return out, nil
+	return versions, disabled, nil
 }
 
 // BumpTokenVersion invalidates every token the user holds.

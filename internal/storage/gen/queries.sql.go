@@ -1908,27 +1908,27 @@ func (q *Queries) ListUserIDsIn(ctx context.Context, dollar_1 []string) ([]strin
 	return items, nil
 }
 
-const listUserTokenVersions = `-- name: ListUserTokenVersions :many
-SELECT id, token_version FROM users WHERE NOT disabled
+const listUserTokenVersionsAndDisabled = `-- name: ListUserTokenVersionsAndDisabled :many
+SELECT id, token_version, disabled FROM users
 `
 
-type ListUserTokenVersionsRow struct {
+type ListUserTokenVersionsAndDisabledRow struct {
 	ID           string `db:"id" json:"id"`
 	TokenVersion int32  `db:"token_version" json:"token_version"`
+	Disabled     bool   `db:"disabled" json:"disabled"`
 }
 
-// Disabled accounts are omitted: a missing id fails the version check on
-// the data plane, so disabling a user stops their tokens.
-func (q *Queries) ListUserTokenVersions(ctx context.Context) ([]ListUserTokenVersionsRow, error) {
-	rows, err := q.db.Query(ctx, listUserTokenVersions)
+// One read feeds both snapshot views of users: enabled accounts' token versions and the ids of disabled ones.
+func (q *Queries) ListUserTokenVersionsAndDisabled(ctx context.Context) ([]ListUserTokenVersionsAndDisabledRow, error) {
+	rows, err := q.db.Query(ctx, listUserTokenVersionsAndDisabled)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListUserTokenVersionsRow
+	var items []ListUserTokenVersionsAndDisabledRow
 	for rows.Next() {
-		var i ListUserTokenVersionsRow
-		if err := rows.Scan(&i.ID, &i.TokenVersion); err != nil {
+		var i ListUserTokenVersionsAndDisabledRow
+		if err := rows.Scan(&i.ID, &i.TokenVersion, &i.Disabled); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

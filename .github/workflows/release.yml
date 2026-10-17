@@ -51,6 +51,7 @@ jobs:
       publish: ${{ steps.v.outputs.publish }}
       version: ${{ steps.v.outputs.version }}
       ui_version: ${{ steps.v.outputs.ui_version }}
+      ui_sha256: ${{ steps.v.outputs.ui_sha256 }}
       catalog_ref: ${{ steps.v.outputs.catalog_ref }}
     steps:
       - uses: actions/checkout@v7
@@ -76,11 +77,13 @@ jobs:
           fi
           set -a; . ./versions.env; set +a
           [ -n "$UI_VERSION" ]      || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
+          [ -n "$UI_SHA256" ]       || { echo "::error::could not resolve UI_SHA256 from versions.env"; exit 1; }
           [ -n "$CATALOG_VERSION" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
           {
             echo "publish=$publish"
             echo "version=$version"
             echo "ui_version=$UI_VERSION"
+            echo "ui_sha256=$UI_SHA256"
             echo "catalog_ref=$CATALOG_VERSION"
           } >> "$GITHUB_OUTPUT"
           echo "publish=$publish version=$version"
@@ -166,6 +169,7 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ needs.guard.outputs.ui_version }}
+          UI_SHA256: ${{ needs.guard.outputs.ui_sha256 }}
           CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
         run: |
           docker buildx bake -f docker-bake.hcl --allow "fs.write=$RUNNER_TEMP" --set '*.platform=linux/amd64' \
@@ -248,6 +252,7 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ needs.guard.outputs.ui_version }}
+          UI_SHA256: ${{ needs.guard.outputs.ui_sha256 }}
           CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
         run: |
           meta="$RUNNER_TEMP/bake-metadata.json"
@@ -316,6 +321,7 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ needs.guard.outputs.ui_version }}
+          UI_SHA256: ${{ needs.guard.outputs.ui_sha256 }}
           CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
         run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --set '*.output=type=cacheonly' release
 

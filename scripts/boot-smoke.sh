@@ -37,10 +37,9 @@ fail() {
 
 tarball="relay-ui-${UI_VERSION}.tar.gz"
 base="https://github.com/wyolet/relay-ui/releases/download/${UI_VERSION}"
+[ -n "${UI_SHA256:-}" ] || fail "versions.env has no UI_SHA256; pin it with 'make ui-pin UI_VERSION=$UI_VERSION'"
 curl -fsSL -o "$work/$tarball" "$base/$tarball" || fail "UI release $UI_VERSION has no $tarball"
-if curl -fsSL -o "$work/$tarball.sha256" "$base/$tarball.sha256"; then
-  (cd "$work" && shasum -a 256 -c "$tarball.sha256") || fail "UI $tarball checksum mismatch"
-fi
+(cd "$work" && echo "$UI_SHA256  $tarball" | shasum -a 256 -c -) || fail "UI $tarball does not match UI_SHA256 in versions.env"
 dist=cmd/relay/web/dist
 find "$dist" -mindepth 1 ! -name .gitkeep -delete
 tar -xz -C "$dist" --strip-components=1 -f "$work/$tarball"

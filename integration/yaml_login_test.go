@@ -35,7 +35,7 @@ func yamlLoginStack(t *testing.T, mode string) (*stack, func() int) {
 // a bootstrap credential, not a way around the operator's switch.
 func TestIntegration_DisabledUserCannotLogInThroughYAML(t *testing.T) {
 	t.Parallel()
-	st, login := yamlLoginStack(t, "")
+	st, _ := yamlLoginStack(t, "")
 	ctx := context.Background()
 	row, err := st.users.ByUsername(ctx, "yamlop")
 	if err != nil || row == nil {
@@ -45,8 +45,13 @@ func TestIntegration_DisabledUserCannotLogInThroughYAML(t *testing.T) {
 	if err := st.users.Upsert(ctx, row); err != nil {
 		t.Fatal(err)
 	}
-	if code := login(); code != http.StatusUnauthorized {
-		t.Fatalf("disabled user's YAML login = %d, want 401", code)
+	us := &userSession{t: t, base: st.control.URL, client: &http.Client{}}
+	if code, raw := us.do(http.MethodPost, "/api/auth/login", `{"username":"yamlop","password":"yaml-pw-12345"}`); code != http.StatusUnauthorized || !isAccountDisabled(raw) {
+		t.Fatalf("disabled user's YAML login = %d %s, want 401 account_disabled", code, raw)
+	}
+	// A wrong password learns nothing about the account.
+	if code, raw := us.do(http.MethodPost, "/api/auth/login", `{"username":"yamlop","password":"wrong-pw-12345"}`); code != http.StatusUnauthorized || isAccountDisabled(raw) {
+		t.Fatalf("disabled user's YAML login with a wrong password = %d %s, want 401 invalid credentials", code, raw)
 	}
 }
 

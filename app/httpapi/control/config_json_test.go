@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/user"
 )
 
@@ -25,8 +27,12 @@ func configFeatures(t *testing.T, d Deps) map[string]bool {
 }
 
 func TestConfigJSONAdvertisesTheWiredFeatures(t *testing.T) {
+	// The env overlay would otherwise advertise oidc from the developer's own environment.
+	t.Setenv("WYOLET_AUTH_MODE", "")
+	alwaysPresent := []string{"tokens", "users", "audit", "accessReview"}
+
 	off := configFeatures(t, Deps{})
-	for _, name := range []string{"tokens", "users", "audit"} {
+	for _, name := range alwaysPresent {
 		v, ok := off[name]
 		if !ok {
 			t.Errorf("feature %q is absent; the UI cannot tell it off from unknown", name)
@@ -46,10 +52,30 @@ func TestConfigJSONAdvertisesTheWiredFeatures(t *testing.T) {
 		TokenSigner: signer,
 		Users:       &user.Store{},
 		AuditReader: staticAudit{},
+		Authz:       audit.Authorizer{Inner: authz.RBAC{}},
 	})
-	for _, name := range []string{"tokens", "users", "audit"} {
+	for _, name := range alwaysPresent {
 		if !on[name] {
 			t.Errorf("feature %q is false though it is wired", name)
 		}
+	}
+}
+
+// The access review answers only under an authorizer that explains; the audit wrapper delegates Explain either way, so the flag must look through it.
+func TestConfigJSONAccessReviewFollowsTheAuthorizer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		az   authz.Authorizer
+		want bool
+	}{
+		"single":         {authz.AlwaysAllowAuthenticated{}, false},
+		"single audited": {audit.Authorizer{Inner: authz.AlwaysAllowAuthenticated{}}, false},
+		"rbac":           {authz.RBAC{}, true},
+		"rbac audited":   {audit.Authorizer{Inner: authz.RBAC{}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := configFeatures(t, Deps{Authz: tc.az})["accessReview"]; got != tc.want {
+				t.Errorf("accessReview = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
