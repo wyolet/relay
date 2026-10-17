@@ -67,14 +67,14 @@ func TestOIDCSignInOverIdentities(t *testing.T) {
 	}
 	taken := claims("sub-grace", "grace")
 	taken.Email = "grace@example.com"
-	wantFailure(t, "email of an account with no identity", od, taken, http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
+	wantFailure(t, "email of an account with no identity", od, taken, http.StatusForbidden, "email_in_use", "an account with this email already exists; an administrator must link it to this sign-in")
 
 	cfg.Registration = "closed"
-	wantFailure(t, "closed registration", od, claims("sub-unknown", "x"), http.StatusForbidden, "no account for this identity (registration is closed)")
+	wantFailure(t, "closed registration", od, claims("sub-unknown", "x"), http.StatusForbidden, "registration_closed", "no account for this identity (registration is closed)")
 	if err := dir.DisableUser(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	wantFailure(t, "disabled account", od, claims("sub-new", ""), http.StatusForbidden, "account disabled")
+	wantFailure(t, "disabled account", od, claims("sub-new", ""), http.StatusUnauthorized, "account_disabled", "account disabled")
 }
 
 // An account a binary from before the identities table wrote under a configured issuer with a trailing slash signs in after the upgrade whichever form is configured, and that binary's exact oidc_subject lookup still finds it and the accounts provisioned since.
@@ -124,11 +124,11 @@ func TestOIDCSignInAfterIssuerSlashUpgrade(t *testing.T) {
 	}
 }
 
-func wantFailure(t *testing.T, what string, od *oidcDeps, c oidc.Claims, status int, message string) {
+func wantFailure(t *testing.T, what string, od *oidcDeps, c oidc.Claims, status int, code, message string) {
 	t.Helper()
 	_, err := od.resolveUser(t.Context(), c)
 	f, ok := errors.AsType[*oidc.Failure](err)
-	if !ok || f.Status != status || f.Message != message {
-		t.Fatalf("%s: err = %v, want %d %q", what, err, status, message)
+	if !ok || f.Status != status || f.Code != code || f.Message != message {
+		t.Fatalf("%s: err = %v, want %d %s %q", what, err, status, code, message)
 	}
 }

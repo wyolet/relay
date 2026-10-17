@@ -83,6 +83,16 @@ func ClientIP(r *http.Request, trusted []*net.IPNet) string {
 	return remote
 }
 
+// FromTrustedProxy reports whether the request's immediate peer is in trusted, so its forwarding headers may be believed.
+func FromTrustedProxy(r *http.Request, trusted []*net.IPNet) bool {
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remote = r.RemoteAddr
+	}
+	peer := net.ParseIP(remote)
+	return peer != nil && isTrustedProxy(peer, trusted)
+}
+
 func isTrustedProxy(ip net.IP, trusted []*net.IPNet) bool {
 	for _, cidr := range trusted {
 		if cidr.Contains(ip) {
