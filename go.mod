@@ -28,7 +28,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/redis/go-redis/v9 v9.19.0
-	github.com/wyolet/relay/auth v0.2.0
+	github.com/wyolet/relay/auth v0.3.0
 	github.com/wyolet/relay/jobq v0.1.1
 	github.com/wyolet/relay/sdk v0.7.19
 	go.opentelemetry.io/proto/otlp v1.9.0
