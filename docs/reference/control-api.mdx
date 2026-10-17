@@ -96,6 +96,8 @@ Two value modes:
 Stored-mode values are encrypted with `RELAY_MASTER_KEY` and only the
 ciphertext is persisted.
 
+An env-ref may not name a `RELAY_*` or `WYOLET_*` variable: those hold relay's own configuration, and a host key's value is sent to its host. Such a key is refused on write, and one already stored loads unresolved and is never used.
+
 ## Relay keys
 
 A **key** is the inbound bearer your callers use. It is a credential of a

@@ -21,7 +21,9 @@
 package hostkey
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/meta"
@@ -152,6 +154,23 @@ const (
 	ValueKindOAuth ValueKind = "oauth"
 )
 
+// reservedEnvPrefixes name relay's own configuration (master key, admin token, DSNs, sign-in secrets). A key's value is sent to its host, so an env ref under them would hand that configuration to whoever controls the host.
+var reservedEnvPrefixes = []string{"RELAY_", "WYOLET_"}
+
+// ErrReservedEnv refuses an env ref under a reserved name. It leaves the variable name out: the reason is shown to anyone who can read the key.
+var ErrReservedEnv = errors.New("valueFrom.env names a variable reserved for relay's own configuration (RELAY_*, WYOLET_*)")
+
+// reservedEnv reports whether name falls under relay's own configuration. Case is ignored because some platforms resolve env names case-insensitively.
+func reservedEnv(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, p := range reservedEnvPrefixes {
+		if strings.HasPrefix(upper, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Enabled }
 
@@ -161,7 +180,7 @@ func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Ena
 //   - Spec.HostID is required; it points at the Host this key targets.
 //   - Spec.PolicyID is required; it picks the upstream tier Policy this
 //     key mirrors.
-//   - ValueKindEnv requires Spec.ValueFrom.Env; cleartext Value must be empty.
+//   - ValueKindEnv requires Spec.ValueFrom.Env outside the reserved RELAY_*/WYOLET_* names; cleartext Value must be empty.
 //   - ValueKindStored requires non-empty cleartext Spec.Value at write time;
 //     ValueFrom.Env must be empty.
 //
@@ -186,6 +205,9 @@ func (k *HostKey) Validate() error {
 	case ValueKindEnv:
 		if k.Spec.ValueFrom.Env == "" {
 			return fmt.Errorf("hostkey %q: valueFrom.env required for env mode", k.Meta.Name)
+		}
+		if reservedEnv(k.Spec.ValueFrom.Env) {
+			return fmt.Errorf("hostkey %q: %w", k.Meta.Name, ErrReservedEnv)
 		}
 		if k.Spec.Value != "" {
 			return fmt.Errorf("hostkey %q: value must be empty for env mode", k.Meta.Name)

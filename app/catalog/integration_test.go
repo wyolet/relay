@@ -312,7 +312,7 @@ func TestIntegration_UnresolvedEnvHostKey(t *testing.T) {
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
 			PolicyID:  tier.Meta.ID,
-			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "RELAY_TEST_UNSET_ENV_KEY"},
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_TEST_UNSET_ENV_KEY"},
 		},
 	}
 	if err := stores.HostKey.Upsert(ctx, k); err != nil {
