@@ -102,6 +102,8 @@ own data — are never candidates, no matter what labels they carry: a
 manifest that omits a catalog-managed provider or host is not asking for
 its removal. Accounts carry no labels, so prune never deletes a user.
 
+A prune never takes rows along unannounced. Pruning a team, project or service account is refused while rows under it stay out of the prune; for a service account those are its keys and the role and policy bindings that name it as a subject. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
+
 ## Authorization and partial failure
 
 Every row in the plan is authorized before anything is written. A denied
