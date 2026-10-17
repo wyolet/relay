@@ -59,7 +59,7 @@ func (f *failingSessionEnder) Logout(context.Context) error {
 // Ending the sessions is best effort; the request is refused whether or not it succeeds, and an active or non-session principal ends nothing.
 func TestAdmitOrEndSessionRefusesWhenTheEndFails(t *testing.T) {
 	ender := &failingSessionEnder{}
-	admit := admitOrEndSession(ender)
+	admit := admitOrEndSession(ender, func(context.Context, string) (bool, error) { return true, nil })
 	disabled := &principal.Principal{ID: "u-1", Kind: principal.KindUser, Status: principal.StatusDisabled, Credential: principal.Credential{Kind: principal.CredentialSession}}
 	if err := admit(t.Context(), disabled); !errors.Is(err, authn.ErrInactive) {
 		t.Fatalf("admit = %v, want ErrInactive", err)
@@ -77,6 +77,31 @@ func TestAdmitOrEndSessionRefusesWhenTheEndFails(t *testing.T) {
 	}
 	if ender.destroyed != 1 || ender.loggedOut != 1 {
 		t.Fatalf("a non-refused or non-session principal ended sessions: DestroyUser %d, Logout %d", ender.destroyed, ender.loggedOut)
+	}
+}
+
+// The snapshot trails a re-enable by up to one NOTIFY while login reads the store, so a disabled verdict the store contradicts admits and ends nothing, and one the store cannot confirm refuses without ending anything.
+func TestAdmitOrEndSessionConfirmsWithTheStore(t *testing.T) {
+	ender := &failingSessionEnder{}
+	disabled := func() *principal.Principal {
+		return &principal.Principal{ID: "u-1", Kind: principal.KindUser, Status: principal.StatusDisabled, Credential: principal.Credential{Kind: principal.CredentialSession}}
+	}
+
+	stale := admitOrEndSession(ender, func(context.Context, string) (bool, error) { return false, nil })
+	p := disabled()
+	if err := stale(t.Context(), p); err != nil {
+		t.Fatalf("admit with a stale snapshot = %v, want admitted", err)
+	}
+	if p.Status != principal.StatusActive {
+		t.Errorf("status = %q, want active", p.Status)
+	}
+
+	unknown := admitOrEndSession(ender, func(context.Context, string) (bool, error) { return false, errors.New("pg down") })
+	if err := unknown(t.Context(), disabled()); !errors.Is(err, authn.ErrInactive) {
+		t.Fatalf("admit when the store is unreachable = %v, want ErrInactive", err)
+	}
+	if ender.destroyed != 0 || ender.loggedOut != 0 {
+		t.Fatalf("sessions ended without a confirmed disable: DestroyUser %d, Logout %d", ender.destroyed, ender.loggedOut)
 	}
 }
 

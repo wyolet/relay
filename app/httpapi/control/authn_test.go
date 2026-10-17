@@ -56,7 +56,8 @@ func authHarnessAt(t *testing.T, prefix string, cat *appcatalog.Catalog) (http.H
 	d := mountDeps(t)
 	d.Sessions = session.New(store, false)
 	if cat != nil {
-		d.Catalog = cat
+		// The test catalog carries its own users and no users table stands behind it, so the store has nothing to confirm.
+		d.Catalog, d.Users = cat, nil
 	}
 	r := chi.NewRouter()
 	var api huma.API

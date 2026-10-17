@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/authn"
 	"github.com/wyolet/relay/auth/principal"
 )
@@ -24,7 +25,7 @@ func authenticate(d Deps) func(http.Handler) http.Handler {
 	}
 	if d.Sessions != nil {
 		chain.Authenticators = append(chain.Authenticators, d.Sessions)
-		chain.Admit = admitOrEndSession(d.Sessions)
+		chain.Admit = admitOrEndSession(d.Sessions, userStoreDisabled(d.Users))
 	}
 	withPrincipal := authn.Middleware(chain, rejectAuthentication)
 	return func(next http.Handler) http.Handler {
@@ -54,12 +55,39 @@ type sessionEnder interface {
 	Logout(ctx context.Context) error
 }
 
+// disabledInStore reports whether the user store holds the account as disabled; a missing row counts as disabled. With no store there is nothing to ask, so the snapshot's verdict stands.
+type disabledInStore func(ctx context.Context, userID string) (bool, error)
+
+func userStoreDisabled(users *user.Store) disabledInStore {
+	return func(ctx context.Context, userID string) (bool, error) {
+		if users == nil {
+			return true, nil
+		}
+		u, err := users.Get(ctx, userID)
+		if err != nil {
+			return false, err
+		}
+		return u == nil || u.Disabled, nil
+	}
+}
+
 // admitOrEndSession is authn.AdmitActive that, on refusing a session, ends every session of that account and expires this request's cookie, so the browser is signed out rather than refused on every later request. A failure to end them is logged and the request is still refused.
-func admitOrEndSession(sessions sessionEnder) func(context.Context, *principal.Principal) error {
+//
+// The snapshot trails a re-enable by up to one NOTIFY while login reads the store, so a disabled verdict is confirmed against the store before anything is ended; a stale one admits. It runs only when the snapshot already says disabled.
+func admitOrEndSession(sessions sessionEnder, confirm disabledInStore) func(context.Context, *principal.Principal) error {
 	return func(ctx context.Context, p *principal.Principal) error {
 		err := authn.AdmitActive(ctx, p)
 		if err == nil || p.Credential.Kind != principal.CredentialSession {
 			return err
+		}
+		disabled, cerr := confirm(ctx, p.ID)
+		if cerr != nil {
+			slog.Error("disabled account: confirming with the user store failed", "user_id", p.ID, "err", cerr)
+			return err
+		}
+		if !disabled {
+			p.Status = principal.StatusActive
+			return nil
 		}
 		if derr := sessions.DestroyUser(ctx, p.ID); derr != nil {
 			slog.Error("disabled account: ending its sessions failed", "user_id", p.ID, "err", derr)
