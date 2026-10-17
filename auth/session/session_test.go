@@ -167,6 +167,34 @@ func TestLoginRoundTripsAndRotatesToken(t *testing.T) {
 	}
 }
 
+// A login on a browser that still holds another account's session starts from an empty session: the new account inherits none of the old one's roles, IdP groups or subject, by password or by OIDC.
+func TestLoginOverAnotherSessionStartsClean(t *testing.T) {
+	for name, second := range map[string]func(m *Manager, ctx context.Context) error{
+		"password": func(m *Manager, ctx context.Context) error { return m.Login(ctx, "u-bob", "bob") },
+		"oidc":     func(m *Manager, ctx context.Context) error { return m.LoginOIDC(ctx, "u-bob", "bob", "", "", nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := New(newMemStore(), Options{})
+			first := login(t, m, func(ctx context.Context) error {
+				return m.LoginOIDC(ctx, "u-admin", "alice", "https://idp|sub-a", "sid-a", []string{"eng"}, "admin")
+			})
+			rec := serve(m, first, func(_ http.ResponseWriter, r *http.Request) {
+				if err := second(m, r.Context()); err != nil {
+					t.Fatalf("login: %v", err)
+				}
+			})
+			cookies := rec.Result().Cookies()
+			if len(cookies) != 1 || cookies[0].Value == first.Value {
+				t.Fatalf("second login set cookies %v, want one fresh token", cookies)
+			}
+			p := whoami(t, m, cookies[0])
+			if p == nil || p.ID != "u-bob" || p.Username != "bob" || p.Roles != nil || p.Groups != nil || p.Issuer != "" || p.Subject != "" {
+				t.Errorf("principal after the second login = %+v, want bob with nothing carried over", p)
+			}
+		})
+	}
+}
+
 type ctxMarker struct{}
 
 func TestLoginOIDCAndSubjects(t *testing.T) {
