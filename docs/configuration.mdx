@@ -89,6 +89,27 @@ The DB-backed `auth:oidc` section names its client secret by env var (`clientSec
 
 Set the issuer to the `issuer` value of the provider's discovery document (`<issuer>/.well-known/openid-configuration`). A configured issuer that differs from it only by a trailing slash is accepted, and accounts are matched with or without the slash; ID tokens must carry the document's `issuer` exactly.
 
+Sign-in starts at `GET /api/auth/oidc/start`. Its optional `return_to` parameter is an absolute `http`/`https` URL the browser goes to after sign-in instead of the post-login URL. Its origin (scheme, host and port) must be one of: the origin of the redirect URL, the origin of the post-login URL when that is absolute, an entry of `RELAY_CONTROL_ALLOW_ORIGINS`, or the origin the start request reached. That last origin is `https` only over TLS, or when the peer is in `RELAY_TRUSTED_PROXIES` and sends `X-Forwarded-Proto: https`. Any other `return_to` is refused with `400` and code `invalid_return_to`.
+
+When sign-in fails after a `return_to` was accepted, the browser is redirected there with `error=<code>` added to its query. Without one, the callback answers `{"error":{"type":"authentication_error","code":"<code>","message":"..."}}` with the status below.
+
+| Code | Status | Cause |
+| --- | --- | --- |
+| `flow_expired` | `400` | The login flow cookie is missing or expired; start again. |
+| `state_mismatch` | `400` | The callback's `state` does not match the login flow. |
+| `missing_code` | `400` | The callback carries no authorization code. |
+| `invalid_return_to` | `400` | `return_to` is not allowed (start only). |
+| `idp_error` | `502` | The provider returned an error, for example because the user cancelled. |
+| `exchange_failed` | `502` | The authorization code could not be exchanged. |
+| `invalid_identity` | `502` | The ID token is invalid or names no user. |
+| `idp_unavailable` | `502` | The provider's discovery document could not be fetched. |
+| `account_disabled` | `401` | The account is disabled. |
+| `registration_closed` | `403` | No account has this identity and registration is closed. |
+| `email_in_use` | `403` | An account with this email exists; an administrator must link it to this sign-in. |
+| `account_ambiguous` | `409` | The sign-in matches more than one provisioned account. |
+| `identity_conflict` | `409` | The provisioned account is linked to another sign-in. |
+| `login_failed` | `500` | Looking up, provisioning or linking the account, or creating the session, failed. |
+
 With Zitadel:
 
 - Turn on **User Info inside ID Token** (`idTokenUserinfoAssertion`) for the application. Without it the ID token carries no email or username, and new accounts get generic usernames (`user`, `user-2`, …).

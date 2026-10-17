@@ -41,6 +41,44 @@ func (rp *RelyingParty[U]) returnParamName() string {
 	return rp.ReturnParam
 }
 
+// startReturn reads the ReturnParam value for Start; ok is false only when ValidateReturn refuses one, because without it an unsafe value is ignored.
+func (rp *RelyingParty[U]) startReturn(r *http.Request) (string, bool) {
+	raw := r.URL.Query().Get(rp.returnParamName())
+	if rp.ValidateReturn == nil {
+		if !safeReturnPath(raw) {
+			return "", true
+		}
+		return raw, true
+	}
+	if raw == "" {
+		return "", true
+	}
+	return rp.validReturn(r, raw)
+}
+
+// storedReturn checks the flow cookie's return target again, since the cookie is not signed; "" when there is none or it fails.
+func (rp *RelyingParty[U]) storedReturn(r *http.Request, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if rp.ValidateReturn == nil {
+		if !safeReturnPath(raw) {
+			return ""
+		}
+		return raw
+	}
+	target, _ := rp.validReturn(r, raw)
+	return target
+}
+
+func (rp *RelyingParty[U]) validReturn(r *http.Request, raw string) (string, bool) {
+	target, ok := rp.ValidateReturn(r, raw)
+	if !ok || target == "" || len(target) > maxReturnLen {
+		return "", false
+	}
+	return target, true
+}
+
 // safeReturnPath reports whether raw is a path on this origin, so redirecting there cannot leave the site. It also checks the percent-decoded form, in case anything between here and the browser decodes it.
 func safeReturnPath(raw string) bool {
 	if len(raw) > maxReturnLen || !isLocalPath(raw) {
@@ -74,21 +112,35 @@ func (rp *RelyingParty[U]) setFlowCookie(w http.ResponseWriter, fs flowState) {
 	})
 }
 
-// takeFlowCookie reads, decodes and expires the flow cookie. A cookie without a nonce predates nonce checking and is treated as expired, so that login restarts once.
-func (rp *RelyingParty[U]) takeFlowCookie(w http.ResponseWriter, r *http.Request) (flowState, bool) {
-	var fs flowState
+// readFlowCookie decodes the flow cookie and leaves it in place.
+func (rp *RelyingParty[U]) readFlowCookie(r *http.Request) (flowState, bool) {
 	c, err := r.Cookie(rp.flowCookieName())
 	if err != nil || c.Value == "" {
-		return fs, false
+		return flowState{}, false
+	}
+	return decodeFlow(c.Value)
+}
+
+// takeFlowCookie reads, decodes and expires the flow cookie.
+func (rp *RelyingParty[U]) takeFlowCookie(w http.ResponseWriter, r *http.Request) (flowState, bool) {
+	c, err := r.Cookie(rp.flowCookieName())
+	if err != nil || c.Value == "" {
+		return flowState{}, false
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: c.Name, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: rp.CookieSecure, SameSite: http.SameSiteLaxMode,
 	})
-	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	return decodeFlow(c.Value)
+}
+
+// decodeFlow decodes a flow cookie value. A cookie without a nonce predates nonce checking and is treated as expired, so that login restarts once.
+func decodeFlow(value string) (flowState, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
-		return fs, false
+		return flowState{}, false
 	}
+	var fs flowState
 	if err := json.Unmarshal(raw, &fs); err != nil || fs.State == "" || fs.Verifier == "" || fs.Nonce == "" {
 		return flowState{}, false
 	}

@@ -736,14 +736,14 @@ metadata:
 spec:
   hostId: tree-host
   policyId: tree-tier
-  valueFrom: {kind: env, env: RELAY_ADMIN_TOKEN}
+  valueFrom: {kind: env, env: TREE_UPSTREAM_KEY}
 `
 
 // A boot seed must not take credentials from a catalog tree: an env-sourced
 // key would carry a relay variable to the host the same tree defines. The
 // operator's own `relay seed --apply` still writes it.
 func TestIntegration_BootSeedRefusesHostKeys(t *testing.T) {
-	t.Setenv("RELAY_ADMIN_TOKEN", "dummy-admin-token")
+	t.Setenv("TREE_UPSTREAM_KEY", "dummy-upstream-key")
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)

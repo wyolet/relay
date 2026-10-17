@@ -3,6 +3,8 @@ package httpmw
 import (
 	"bytes"
 	"log/slog"
+	"net"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -26,5 +28,20 @@ func TestUnparseableTrustedProxyIsLogged(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "not-an-ip") {
 		t.Errorf("the rejected entry was not logged: %q", buf.String())
+	}
+}
+
+func TestFromTrustedProxy(t *testing.T) {
+	_, cidr, _ := net.ParseCIDR("10.0.0.0/8")
+	trusted := []*net.IPNet{cidr}
+	for addr, want := range map[string]bool{"10.1.2.3:443": true, "10.1.2.3": true, "192.0.2.1:443": false, "garbage": false} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = addr
+		if got := FromTrustedProxy(r, trusted); got != want {
+			t.Errorf("FromTrustedProxy(%q) = %v, want %v", addr, got, want)
+		}
+	}
+	if FromTrustedProxy(httptest.NewRequest("GET", "/", nil), nil) {
+		t.Error("an empty trusted set trusted the peer")
 	}
 }

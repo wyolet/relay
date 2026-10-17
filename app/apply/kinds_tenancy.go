@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
@@ -64,9 +65,7 @@ func keepKeyServerFields(prev, next *key.Key) {
 	next.Spec.GraceUntil = prev.Spec.GraceUntil
 }
 
-// checkPrunedTenancy refuses pruning a team or project with rows still under
-// it, as the control API's delete does. Rows this run prunes too are deleted
-// explicitly, children first, so they are not in the way.
+// checkPrunedTenancy refuses pruning a team, project or service account with rows still under it, as the control API's delete does. Rows this run prunes too are deleted explicitly, children first, so they are not in the way.
 func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	pruned := map[string]bool{}
 	for _, kind := range b.deletes {
@@ -89,6 +88,8 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 				deps, hidden = project.OfTeam(e.ID, b.rows.Projects, gone, visible)
 			case "Project":
 				deps, hidden = under.Dependents(e.ID, gone, visible)
+			case "ServiceAccount":
+				deps, hidden = b.serviceAccountDependents(e.ID, gone, visible)
 			}
 			if len(deps) > 0 || hidden > 0 {
 				return &InvalidError{Kind: e.Kind, Name: e.Name, Err: &project.DependentsError{Rows: deps, Hidden: hidden}}
@@ -98,15 +99,78 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	return b.checkDocsAtPrunedScopes(ctx)
 }
 
+// serviceAccountDependents names, as "Kind/name", the rows deleting service account id would change through the foreign keys: its keys, which go with it, and the bindings that name it as a subject, which lose it. Bindings are read as this run leaves them, since its writes land before its deletes.
+func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible project.Visible) (named []string, hidden int) {
+	add := func(kind string, m meta.Metadata) {
+		switch {
+		case gone(kind, m.ID):
+		case !visible(kind, m):
+			hidden++
+		default:
+			named = append(named, kind+"/"+m.Name)
+		}
+	}
+	for _, k := range b.rows.Keys {
+		if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Spec.Principal.ID == id {
+			add("Key", k.Meta)
+		}
+	}
+	account := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id}
+	subject := account.Key()
+	for _, rb := range afterRun(b, b.rows.RoleBindings, func(x *rolebinding.RoleBinding) *meta.Metadata { return &x.Meta }) {
+		if namesSubject(rb.Spec.Subjects, subject) {
+			add("RoleBinding", rb.Meta)
+		}
+	}
+	for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
+		if namesSubject(pb.Spec.Subjects, subject) {
+			add("PolicyBinding", pb.Meta)
+		}
+	}
+	return named, hidden
+}
+
+// afterRun is rows as this run leaves them: a declared row replaces its stored one, and rows the run creates are added in plan order.
+func afterRun[T any](b *builder, rows []*T, metaOf func(*T) *meta.Metadata) []*T {
+	out := make([]*T, 0, len(rows))
+	for _, r := range rows {
+		if d, ok := b.declared[metaOf(r).ID].(*T); ok {
+			r = d
+		}
+		out = append(out, r)
+	}
+	for _, e := range b.entries {
+		if d, ok := b.declared[e.ID].(*T); ok && e.Action == ActionCreate {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func namesSubject(subjects []rolebinding.Subject, key string) bool {
+	for i := range subjects {
+		if subjects[i].Key() == key {
+			return true
+		}
+	}
+	return false
+}
+
+// errPrincipalPruned refuses a Key document whose service account this run prunes: the key goes with the account, so it would be written and then lost.
+var errPrincipalPruned = errors.New("its service account is pruned in the same apply, which deletes it too; drop the document or keep the service account")
+
 // errOwnerPruned refuses a Policy, HostKey or RateLimit document owned by a project this run prunes, directly or with its team. Their owner lives only in metadata, so no delete takes them along: they would be written and left owned by a project that no longer exists.
 var errOwnerPruned = errors.New("its project or the project's team is pruned in the same apply, which would leave it owned by a project that no longer exists; drop the document or keep its team and project")
 
-// checkDocsAtPrunedScopes refuses a document this run writes into a team or project it also prunes, or into a project of a pruned team. A Project, ServiceAccount, Key, RoleBinding or PolicyBinding goes with the delete, so it would be written and then lost; a Policy, HostKey or RateLimit would outlive its owner.
+// checkDocsAtPrunedScopes refuses a document this run writes into a team or project it also prunes, or into a project of a pruned team, and a Key of a service account it prunes. A Project, ServiceAccount, Key, RoleBinding or PolicyBinding goes with the delete, so it would be written and then lost; a Policy, HostKey or RateLimit would outlive its owner.
 func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 	gone := map[meta.Owner]bool{}
+	goneAccounts := map[string]bool{}
 	for _, kind := range b.deletes {
 		for _, e := range kind {
 			switch e.Kind {
+			case "ServiceAccount":
+				goneAccounts[e.ID] = true
 			case "Team":
 				gone[meta.Owner{Kind: meta.OwnerTeam, ID: e.ID}] = true
 				for _, p := range b.rows.Projects {
@@ -119,7 +183,7 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 			}
 		}
 	}
-	if len(gone) == 0 {
+	if len(gone) == 0 && len(goneAccounts) == 0 {
 		return nil
 	}
 	serviceAccount := lookup(b, b.rows.ServiceAccounts, func(x *serviceaccount.ServiceAccount) *meta.Metadata { return &x.Meta })
@@ -141,6 +205,8 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 			if k != nil && k.Spec.Principal.Kind == key.PrincipalServiceAccount {
 				if sa := serviceAccount(ctx, k.Spec.Principal.ID); sa != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}] {
 					err = authmanifest.ErrScopePruned
+				} else if goneAccounts[k.Spec.Principal.ID] {
+					err = errPrincipalPruned
 				}
 			}
 		case "PolicyBinding":

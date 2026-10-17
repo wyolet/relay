@@ -202,8 +202,8 @@ func TestDisablingAUserRevokesTokensAndRefusesMintAndLogin(t *testing.T) {
 
 	fresh := f.freshSession()
 	if code, raw := fresh.do(http.MethodPost, "/api/auth/login",
-		`{"username":"`+f.username+`","password":"`+f.password+`"}`); code != http.StatusUnauthorized {
-		t.Errorf("login on a disabled account = %d: %s, want 401", code, raw)
+		`{"username":"`+f.username+`","password":"`+f.password+`"}`); code != http.StatusUnauthorized || !isAccountDisabled(raw) {
+		t.Errorf("login on a disabled account = %d: %s, want 401 %s", code, raw, accountDisabledBody)
 	}
 }
 

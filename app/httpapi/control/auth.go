@@ -88,7 +88,12 @@ func registerAuth(api huma.API, d Deps) {
 			if err != nil {
 				return nil, huma.Error500InternalServerError("user lookup failed: " + err.Error())
 			}
-			if u != nil && !u.Disabled && user.VerifyPassword(u.PasswordHash, in.Body.Password) {
+			if u != nil && user.VerifyPassword(u.PasswordHash, in.Body.Password) {
+				// Said only after the password verified, so it never confirms an account to a guess.
+				if u.Disabled {
+					audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: u.ID, Name: u.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: u.Username})
+					return nil, accountDisabledError()
+				}
 				if err := d.Sessions.Login(ctx, u.ID, u.Username, u.Roles...); err != nil {
 					return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 				}
@@ -133,6 +138,9 @@ func registerAuth(api huma.API, d Deps) {
 		_, scoped := d.Authz.(authz.Scoper)
 		if (row != nil && row.Disabled) || (row == nil && scoped) {
 			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: userID, Name: username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: username})
+			if row != nil && row.Disabled {
+				return nil, accountDisabledError()
+			}
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		if err := d.Sessions.Login(ctx, userID, username, roles...); err != nil {

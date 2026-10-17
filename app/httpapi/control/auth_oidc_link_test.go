@@ -85,7 +85,7 @@ func TestOIDCFlow_NoLinkOnEmailAlone(t *testing.T) {
 	h := newLinkOIDC(t, "open")
 	h.idp.claims = map[string]any{"oid": "obj-other"}
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada", Email: h.idp.email}, "obj-1")
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "email_in_use", "an account with this email already exists; an administrator must link it to this sign-in")
 	if h.users.links != 0 || h.users.byName["ada"].OIDCSubject != "" || h.sess.calls != 0 {
 		t.Fatalf("linked on email: links %d, account %+v", h.users.links, h.users.byName["ada"])
 	}
@@ -96,7 +96,7 @@ func TestOIDCFlow_NoLinkOnEmailAlone(t *testing.T) {
 func TestOIDCFlow_NoLinkWhenAccountHasIdentity(t *testing.T) {
 	h := newLinkOIDC(t, "closed")
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada", OIDCSubject: "https://other.example|x"}, "obj-1")
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "no account for this identity (registration is closed)")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "registration_closed", "no account for this identity (registration is closed)")
 	if h.users.links != 0 || h.users.byName["ada"].OIDCSubject != "https://other.example|x" {
 		t.Fatalf("links %d, account %+v", h.users.links, h.users.byName["ada"])
 	}
@@ -107,7 +107,7 @@ func TestOIDCFlow_NoLinkWhenAccountHasIdentity(t *testing.T) {
 func TestOIDCFlow_DisabledProvisionedAccountRefused(t *testing.T) {
 	h := newLinkOIDC(t, "open")
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada", Disabled: true}, "obj-1")
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "account disabled")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account is disabled; contact your administrator")
 	if h.users.links != 0 || h.users.byName["ada"].OIDCSubject != "" || h.sess.calls != 0 || len(h.users.byName) != 1 {
 		t.Fatalf("links %d, accounts %+v, sessions %d", h.users.links, h.users.byName, h.sess.calls)
 	}
@@ -119,7 +119,7 @@ func TestOIDCFlow_TwoProvisionedMatchesRefused(t *testing.T) {
 	h := newLinkOIDC(t, "open")
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada"}, "obj-1")
 	h.users.provisioned(&user.User{ID: "u2", Username: "ada-okta"}, "obj-1")
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusConflict, "this sign-in matches more than one provisioned account; an administrator must resolve it")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusConflict, "account_ambiguous", "this sign-in matches more than one provisioned account; an administrator must resolve it")
 	if h.users.links != 0 || h.sess.calls != 0 || len(h.users.byName) != 2 {
 		t.Fatalf("links %d, accounts %d, sessions %d", h.users.links, len(h.users.byName), h.sess.calls)
 	}
@@ -131,7 +131,7 @@ func TestOIDCFlow_NoLinkWithSCIMOff(t *testing.T) {
 	h := newLinkOIDC(t, "open")
 	h.scim.Enabled = false
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada", Email: h.idp.email}, "obj-1")
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "an account with this email already exists; an administrator must link it to this sign-in")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "email_in_use", "an account with this email already exists; an administrator must link it to this sign-in")
 	if h.users.links != 0 || h.users.byName["ada"].OIDCSubject != "" {
 		t.Fatalf("linked with SCIM off: links %d", h.users.links)
 	}
@@ -144,7 +144,7 @@ func TestOIDCFlow_NoLinkFromInlineProfile(t *testing.T) {
 	h.idp.inlineProfile = true
 	h.scim = &settings.AuthSCIM{Enabled: true}
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada"}, h.idp.sub)
-	wantResponse(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "no account for this identity (registration is closed)")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusForbidden, "registration_closed", "no account for this identity (registration is closed)")
 	if h.users.links != 0 {
 		t.Fatalf("linked from an inline profile")
 	}
