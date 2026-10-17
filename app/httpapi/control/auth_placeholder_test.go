@@ -35,7 +35,7 @@ func TestLoginRefusesPlaceholderPassword(t *testing.T) {
 	}
 	kvStore := kv.NewMem()
 	t.Cleanup(func() { _ = kvStore.Close() })
-	sessions := session.New(kvStore, false, "sess:")
+	sessions := session.New(kvStore, false)
 
 	r := chi.NewRouter()
 	r.Use(sessions.Middleware)

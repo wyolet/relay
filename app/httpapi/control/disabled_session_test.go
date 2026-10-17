@@ -134,7 +134,7 @@ func TestControlEndsDisabledAccountSession(t *testing.T) {
 			users.setDisabled(t, cat, "u-1")
 			// The admin token outranks the session, so the session is never evaluated and survives.
 			want(do(http.MethodGet, "/test/caller", "test-admin-token", sess), http.StatusOK, "", "admin token beside the disabled session")
-			if !stored("sess:" + sess.Value) {
+			if !stored(sessionKVKey(sess.Value)) {
 				t.Fatal("the admin token's request ended the session it outranked")
 			}
 			want(do(http.MethodGet, "/test/caller", "", yamlSess), http.StatusOK, "", "session with no users row")
@@ -152,7 +152,7 @@ func TestControlEndsDisabledAccountSession(t *testing.T) {
 				t.Errorf("response cookies %v, want relay_session expired", rec.Result().Cookies())
 			}
 			for _, c := range []*http.Cookie{sess, other} {
-				if stored("sess:"+c.Value) || stored("sess:user:u-1:"+c.Value) {
+				if stored(sessionKVKey(c.Value)) || stored(sessionIndexKVKey("u-1", c.Value)) {
 					t.Fatalf("session %s or its index entry survived", c.Value)
 				}
 			}

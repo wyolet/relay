@@ -12,7 +12,7 @@ import (
 // The actor's SessionID ends up in audit rows readable by lower-privileged
 // principals, so it must identify the session without being its credential.
 func TestActorSessionIDDoesNotAuthenticate(t *testing.T) {
-	m := New(kv.NewMem(), false, "sess:")
+	m := New(kv.NewMem(), false)
 
 	login := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := m.Login(r.Context(), "u-admin", "admin", "admin"); err != nil {

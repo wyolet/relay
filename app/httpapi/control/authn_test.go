@@ -54,7 +54,7 @@ func authHarnessAt(t *testing.T, prefix string, cat *appcatalog.Catalog) (http.H
 	store := kv.NewMem()
 	t.Cleanup(func() { _ = store.Close() })
 	d := mountDeps(t)
-	d.Sessions = session.New(store, false, "sess:")
+	d.Sessions = session.New(store, false)
 	if cat != nil {
 		d.Catalog = cat
 	}
@@ -112,6 +112,17 @@ func derivedSessionID(token string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// sessionKVKey and sessionIndexKVKey spell out app/session's kv layout for tests that inspect the store directly.
+func sessionKVKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "{sess:" + hex.EncodeToString(sum[:]) + "}:data"
+}
+
+func sessionIndexKVKey(userID, token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "{sessuser:" + userID + "}:" + hex.EncodeToString(sum[:])
+}
+
 // The control plane's authentication outcomes: which caller each credential yields, which requests are refused and how, and that the admin token outranks a session.
 func TestControlAuthOutcomes(t *testing.T) {
 	h, store := authHarness(t)
@@ -119,7 +130,7 @@ func TestControlAuthOutcomes(t *testing.T) {
 	oidc := loginAs(t, h, `{"userId":"u-2","groups":["platform-eng","system:admins"]}`)
 
 	expired := &http.Cookie{Name: "relay_session", Value: "expired-token"}
-	if err := store.Set(context.Background(), "sess:expired-token", []byte(`{"d":"","e":"2000-01-01T00:00:00Z"}`), time.Hour); err != nil {
+	if err := store.Set(context.Background(), sessionKVKey("expired-token"), []byte(`{"d":"","e":"2000-01-01T00:00:00Z"}`), time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,7 +248,7 @@ func TestControlAuthSessionStatusReadsNoPostgres(t *testing.T) {
 // A session store that cannot answer fails the request before any handler runs.
 func TestControlAuthSessionStoreDown(t *testing.T) {
 	d := mountDeps(t)
-	d.Sessions = session.New(downStore{kv.NewMem()}, false, "sess:")
+	d.Sessions = session.New(downStore{kv.NewMem()}, false)
 	r := chi.NewRouter()
 	Mount(r, d)
 	req := httptest.NewRequest(http.MethodPost, "/master-key/generate", nil)
