@@ -6,29 +6,35 @@
 # comes up with a populated catalog and a working UI.
 #
 # Build args:
-#   UI_VERSION   relay-ui release tag to embed (default below)
+#   UI_VERSION   relay-ui release tag to embed
+#   UI_SHA256    sha256 of that release's tarball
 #   CATALOG_REF  relay-catalog git ref (tag/branch/sha) to seed (default below)
 
-# UI_VERSION has no literal default — it's the Makefile's job (UI_VERSION ?= ...),
-# threaded through docker-bake.hcl. A bare `docker build` must pass --build-arg
-# UI_VERSION=... or the UI fetch fails loudly. Single source: the Makefile.
+# UI_VERSION and UI_SHA256 have no literal default: versions.env pins both and
+# docker-bake.hcl threads them through. A bare `docker build` must pass both as
+# --build-arg or the UI fetch fails loudly.
 ARG UI_VERSION
+ARG UI_SHA256
 ARG CATALOG_REF=main
 
 # --- assets: fetch pinned UI dist + catalog data; no toolchain reaches final ---
-FROM alpine:3.20 AS assets
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS assets
 RUN apk add --no-cache curl tar jq ca-certificates
 ARG UI_VERSION
+ARG UI_SHA256
 ARG CATALOG_REF
 WORKDIR /assets
 
 # UI dist (relay-ui release tarball, public repo). A miss is a real error —
 # a silent fallback here ships an API-only image that looks healthy until
-# someone opens the admin UI.
+# someone opens the admin UI. The pinned hash is the authority: the release's
+# own .sha256 is served from the same place as the tarball, so it proves nothing.
 RUN set -eu; \
-  mkdir -p /assets/ui; \
-  curl -fsSL "https://github.com/wyolet/relay-ui/releases/download/${UI_VERSION}/relay-ui-${UI_VERSION}.tar.gz" \
-    | tar -xz -C /assets/ui --strip-components=1; \
+  [ -n "${UI_SHA256}" ] || { echo "UI_SHA256 is not set; pin it in versions.env" >&2; exit 1; }; \
+  mkdir -p /tmp/ui /assets/ui; \
+  curl -fsSL -o /tmp/ui/ui.tar.gz "https://github.com/wyolet/relay-ui/releases/download/${UI_VERSION}/relay-ui-${UI_VERSION}.tar.gz"; \
+  echo "${UI_SHA256}  /tmp/ui/ui.tar.gz" | sha256sum -c -; \
+  tar -xz -C /assets/ui --strip-components=1 -f /tmp/ui/ui.tar.gz; \
   echo "fetched UI ${UI_VERSION}"
 
 # Catalog data (public repo). No release tarballs yet, so fetch the source
@@ -43,7 +49,7 @@ RUN set -eu; \
   printf '%s\n' "${CATALOG_REF}" > /assets/catalog/.version
 
 # --- builder: compile the binary with the UI embedded ---
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS builder
 WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
@@ -80,7 +86,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -o /relay ./cmd/relay
 
 # --- final (lean): distroless, nonroot — production image, external Postgres ---
-FROM gcr.io/distroless/static-debian12:nonroot AS lean
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS lean
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 COPY --from=builder /relay /relay
 COPY --from=assets /assets/catalog /catalog
@@ -96,7 +102,7 @@ ENTRYPOINT ["/relay"]
 # the apk postgresql16 package (no LLVM JIT) — a fraction of the official
 # postgres image's size. Single-node only; production uses the lean image above
 # against managed PG.
-FROM alpine:3.20 AS standalone
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS standalone
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 RUN apk add --no-cache postgresql16 postgresql16-client tzdata \
     && mkdir -p /var/lib/postgresql/data /run/postgresql \
