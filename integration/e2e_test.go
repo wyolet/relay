@@ -151,7 +151,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	kvStore := kv.NewMem()
 	t.Cleanup(func() { _ = kvStore.Close() })
 
-	sessMgr := session.NewWithGroups(kvStore, false, "sess:", func(userID string) []string { return cat.Current().GroupsForUser(userID) })
+	sessMgr := session.NewWithGroups(kvStore, false, func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	policySvc := policy.NewService(catSnapReader{cat: cat}, selector, limiter)

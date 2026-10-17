@@ -38,7 +38,7 @@ func TestMiddlewareStoreFailure(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
 	defer slog.SetDefault(prev)
 
-	m := New(&failStore{err: context.DeadlineExceeded}, false, "sess:")
+	m := New(&failStore{err: context.DeadlineExceeded}, false)
 	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -74,7 +74,7 @@ func TestMiddlewareStoreFailure(t *testing.T) {
 }
 
 func TestMiddlewareHealthyStore(t *testing.T) {
-	m := New(kv.NewMem(), false, "sess:")
+	m := New(kv.NewMem(), false)
 
 	var loggedIn bool
 	login := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +96,7 @@ func TestMiddlewareHealthyStore(t *testing.T) {
 	}
 
 	var errFind error
-	_, found, errFind := (&kvStore{kv: kv.NewMem(), prefix: "sess:"}).Find("missing")
+	_, found, errFind := (&kvStore{kv: kv.NewMem()}).Find("missing")
 	if errFind != nil || found {
 		t.Fatalf("Find(missing) = found=%v err=%v, want miss with nil error", found, errFind)
 	}
@@ -106,7 +106,7 @@ func TestMiddlewareHealthyStore(t *testing.T) {
 // payload, and the session round-trips like a password login.
 func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 	store := kv.NewMem()
-	m := New(store, false, "sess:")
+	m := New(store, false)
 
 	login := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := m.LoginOIDC(r.Context(), "u-1", "alice", "https://idp|sub-1", "sid-42", []string{"platform-eng"}, "admin"); err != nil {
@@ -123,7 +123,7 @@ func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 
 	// The committed scs payload (gob-encoded) must carry both keys and both
 	// values — and the actor must round-trip on the next request.
-	raw, found, err := (&kvStore{kv: store, prefix: "sess:"}).Find(cookies[0].Value)
+	raw, found, err := (&kvStore{kv: store}).Find(cookies[0].Value)
 	if err != nil || !found {
 		t.Fatalf("committed session not found: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 }
 
 func TestNewWithGroupsAddsLocalGroups(t *testing.T) {
-	m := NewWithGroups(kv.NewMem(), false, "sess:", func(userID string) []string { return []string{"local-of-" + userID} })
+	m := NewWithGroups(kv.NewMem(), false, func(userID string) []string { return []string{"local-of-" + userID} })
 	p := principalFor(t, m, loginCookie(t, m, "u-1"))
 	if p == nil || !slices.Equal(p.Subjects, []string{"user:u-1", "group:local-of-u-1", "group:system:authenticated"}) {
 		t.Errorf("principal = %+v", p)
@@ -158,7 +158,7 @@ func TestNewWithGroupsAddsLocalGroups(t *testing.T) {
 
 // A request with no session, or a session that names no user, is not the session's to claim.
 func TestAuthenticateLeavesAnonymousRequests(t *testing.T) {
-	m := New(kv.NewMem(), false, "sess:")
+	m := New(kv.NewMem(), false)
 	if p := principalFor(t, m, nil); p != nil {
 		t.Errorf("no cookie authenticated as %+v", p)
 	}
@@ -180,7 +180,7 @@ type commitFailStore struct {
 // Set fails session commits only; Login's per-user index write goes through
 // so the handler reaches the commit this test is about.
 func (c *commitFailStore) Set(ctx context.Context, key string, v []byte, ttl time.Duration) error {
-	if strings.HasPrefix(key, "sess:user:") {
+	if strings.HasPrefix(key, "{sessuser:") {
 		return c.Store.Set(ctx, key, v, ttl)
 	}
 	return c.err
@@ -192,7 +192,7 @@ func TestCommitFailure_CleanErrorResponse(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
 	defer slog.SetDefault(prev)
 
-	m := New(&commitFailStore{Store: kv.NewMem(), err: context.DeadlineExceeded}, false, "sess:")
+	m := New(&commitFailStore{Store: kv.NewMem(), err: context.DeadlineExceeded}, false)
 	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := m.Login(r.Context(), "u-1", "admin"); err != nil {
 			t.Fatalf("Login: %v", err)
@@ -222,7 +222,7 @@ func TestDuplicateWriteHeader_SuppressedAndAttributed(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
 	defer slog.SetDefault(prev)
 
-	m := New(kv.NewMem(), false, "sess:")
+	m := New(kv.NewMem(), false)
 	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.WriteHeader(http.StatusTeapot) // buggy double write

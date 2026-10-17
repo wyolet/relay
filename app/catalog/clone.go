@@ -54,6 +54,8 @@ func (s *Snapshot) clone() *Snapshot {
 
 		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
 		usersLoaded:        s.usersLoaded,
+		// Replaced wholesale on a users reload, never written in place.
+		disabledUsers: s.disabledUsers,
 
 		modelsByPolicy:        copySliceMap(s.modelsByPolicy),
 		hostKeysByPolicy:      copySliceMap(s.hostKeysByPolicy),

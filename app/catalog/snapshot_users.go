@@ -83,3 +83,9 @@ func (s *Snapshot) UserEnabled(userID string) bool {
 	_, ok := s.tokenVersionByUser[userID]
 	return ok
 }
+
+// UserDisabled reports whether userID names a users row marked disabled. False when no users source is attached and for an id with no row.
+func (s *Snapshot) UserDisabled(userID string) bool {
+	_, ok := s.disabledUsers[userID]
+	return ok
+}

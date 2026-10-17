@@ -18,6 +18,19 @@ type Explainer interface {
 	Explain(ctx context.Context, a *actor.Actor, action string, res Resource) (rbac.Explanation, error)
 }
 
+// Explains reports whether a can answer an access review. A wrapper may implement Explainer only to delegate, so it is unwrapped (via an Unwrap() Authorizer method) down to the authorizer that decides.
+func Explains(a Authorizer) bool {
+	for {
+		w, ok := a.(interface{ Unwrap() Authorizer })
+		if !ok {
+			break
+		}
+		a = w.Unwrap()
+	}
+	_, ok := a.(Explainer)
+	return ok
+}
+
 // Explain implements Explainer over the same evaluation Authorize runs, so the two cannot disagree.
 func (r RBAC) Explain(ctx context.Context, a *actor.Actor, action string, res Resource) (rbac.Explanation, error) {
 	if !a.IsAuthenticated() {

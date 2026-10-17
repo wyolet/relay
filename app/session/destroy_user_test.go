@@ -43,7 +43,7 @@ func principalFor(t *testing.T, m *Manager, c *http.Cookie) *principal.Principal
 
 // DestroyUser ends every session of one account and no one else's.
 func TestDestroyUserEndsOnlyThatUsersSessions(t *testing.T) {
-	m := New(kv.NewMem(), false, "sess:")
+	m := New(kv.NewMem(), false)
 	a1, a2, b := loginCookie(t, m, "u-a"), loginCookie(t, m, "u-a"), loginCookie(t, m, "u-b")
 	if err := m.DestroyUser(context.Background(), "u-a"); err != nil {
 		t.Fatalf("DestroyUser: %v", err)

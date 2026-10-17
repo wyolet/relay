@@ -187,7 +187,8 @@ func (od *oidcDeps) resolveUser(ctx context.Context, c oidc.Claims) (*user.User,
 		slog.Info("oidc: user auto-provisioned", "username", u.Username)
 	}
 	if u.Disabled {
-		return nil, &oidc.Failure{Status: http.StatusUnauthorized, Code: "account_disabled", Message: "account disabled", Name: u.Username}
+		disabled := accountDisabledError()
+		return nil, &oidc.Failure{Status: disabled.HTTPStatus, Code: disabled.Err.Code, Message: disabled.Err.Message, Name: u.Username}
 	}
 	return u, nil
 }

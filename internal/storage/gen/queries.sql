@@ -439,10 +439,9 @@ DELETE FROM overlays WHERE kind = $1 AND resource_id = $2;
 -- Membership check for a whole id list in one round trip.
 SELECT id FROM users WHERE id = ANY($1::text[]);
 
--- name: ListUserTokenVersions :many
--- Disabled accounts are omitted: a missing id fails the version check on
--- the data plane, so disabling a user stops their tokens.
-SELECT id, token_version FROM users WHERE NOT disabled;
+-- name: ListUserTokenVersionsAndDisabled :many
+-- One read feeds both snapshot views of users: enabled accounts' token versions and the ids of disabled ones.
+SELECT id, token_version, disabled FROM users;
 
 -- name: UpdateSecretStatus :exec
 UPDATE secrets SET status = $2 WHERE id = $1;

@@ -126,6 +126,8 @@ pushes. To exercise the release pipeline without publishing, run it manually:
 `gh workflow run release.yml --ref <branch>` (`dry_run` defaults to true). To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at
 the repo root (`docker buildx bake`), or `docker compose up --build`.
 
+`versions.env` pins the admin UI and catalog the image bundles. Bump the UI with `make ui-pin UI_VERSION=vX.Y.Z`: it downloads the release tarball, verifies the release's signed attestation with `gh attestation verify`, and writes the version and the tarball's sha256. The image build, `make ui-fetch` and the boot smoke refuse a tarball that doesn't match that hash, and a bare `docker build` needs both `UI_VERSION` and `UI_SHA256` as build args. `make image-assets-check` shows the check: the asset stage builds with the pinned hash and fails with a wrong or empty one. `CATALOG_VERSION` is bumped by hand; the catalog source archive is not hash-checked. Base images in the `Dockerfile` are pinned as `tag@sha256:digest`, and Renovate updates the digests.
+
 ## Reporting bugs / requesting features
 
 Open an issue using the templates. For security issues, **do not open a

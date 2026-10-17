@@ -14,7 +14,9 @@ import (
 // versionList is the snapshot's token-version source in tests.
 type versionList map[string]int
 
-func (v versionList) TokenVersions(context.Context) (map[string]int, error) { return v, nil }
+func (v versionList) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
+	return v, nil, nil
+}
 
 // userKey is a personal key for one of the fixture's users.
 func userKey(userID, keyHash string) *key.Key {
@@ -133,6 +135,53 @@ func TestSnapshot_TokenVersions(t *testing.T) {
 	}
 }
 
+// disabledList is a users source whose disabled ids a test can change between reloads.
+type disabledList struct{ disabled map[string]struct{} }
+
+func (d *disabledList) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
+	return map[string]int{}, d.disabled, nil
+}
+
+// UserDisabled reads the users source on both reload paths, survives a copy-on-write apply, and is false for an id with no row and for a catalog with no source.
+func TestSnapshot_UserDisabled(t *testing.T) {
+	f := newSubjectsFixture()
+	if f.catalog(t).Current().UserDisabled(f.alice) {
+		t.Fatal("UserDisabled with no users source = true, want false")
+	}
+
+	users := &disabledList{disabled: map[string]struct{}{f.alice: {}}}
+	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{}, rcList{}, bndList{})
+	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
+		roleList{}, rbList{}, pbList{})
+	c.UseTokenVersions(users)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !c.Current().UserDisabled(f.alice) {
+		t.Error("UserDisabled(alice) after Reload = false, want true")
+	}
+	if c.Current().UserDisabled(f.bob) {
+		t.Error("UserDisabled(bob), an id with no row, = true, want false")
+	}
+
+	renamed := *f.project
+	renamed.Meta.Name = "ml-ranking"
+	if err := c.ApplyProjectUpsert(&renamed); err != nil {
+		t.Fatalf("project upsert: %v", err)
+	}
+	if !c.Current().UserDisabled(f.alice) {
+		t.Error("UserDisabled(alice) after a copy-on-write apply = false, want true")
+	}
+
+	users.disabled = nil
+	if err := c.ReloadTokenVersions(context.Background()); err != nil {
+		t.Fatalf("ReloadTokenVersions: %v", err)
+	}
+	if c.Current().UserDisabled(f.alice) {
+		t.Error("UserDisabled(alice) after re-enable = true, want false")
+	}
+}
+
 // blockingVersionLister lets a test hold TokenVersions open so it can probe
 // whether c.rmu is already held while the read is in flight. A full Reload
 // also consults the lister when one is configured, so a second call must
@@ -143,10 +192,10 @@ type blockingVersionLister struct {
 	release   chan struct{}
 }
 
-func (b *blockingVersionLister) TokenVersions(context.Context) (map[string]int, error) {
+func (b *blockingVersionLister) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
 	b.closeOnce.Do(func() { close(b.entered) })
 	<-b.release
-	return map[string]int{}, nil
+	return map[string]int{}, nil, nil
 }
 
 // TestReloadTokenVersions_ReadHappensUnderTheLock proves the version read

@@ -107,7 +107,7 @@ func TestOIDCFlow_NoLinkWhenAccountHasIdentity(t *testing.T) {
 func TestOIDCFlow_DisabledProvisionedAccountRefused(t *testing.T) {
 	h := newLinkOIDC(t, "open")
 	h.users.provisioned(&user.User{ID: "u1", Username: "ada", Disabled: true}, "obj-1")
-	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account disabled")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account is disabled; contact your administrator")
 	if h.users.links != 0 || h.users.byName["ada"].OIDCSubject != "" || h.sess.calls != 0 || len(h.users.byName) != 1 {
 		t.Fatalf("links %d, accounts %+v, sessions %d", h.users.links, h.users.byName, h.sess.calls)
 	}

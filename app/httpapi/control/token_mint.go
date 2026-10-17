@@ -75,7 +75,7 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 			return nil, huma.Error404NotFound("user not found")
 		}
 		if u.Disabled {
-			return nil, huma.Error403Forbidden("account is disabled")
+			return nil, accountDisabledError()
 		}
 		version = u.TokenVersion
 	}

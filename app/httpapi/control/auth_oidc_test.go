@@ -279,7 +279,7 @@ func newOIDCHarnessOver(t *testing.T, idp *fakeIdP, cfg *settings.AuthOIDC, user
 		api.Use(audit.Middleware(h.em, nil))
 		mountOIDCRoutes(api, od)
 	})
-	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false, "sess:"), Audit: h.em}, od)
+	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false), Audit: h.em}, od)
 	h.h = r
 	return h
 }
@@ -778,7 +778,7 @@ func TestOIDCFlow_DisabledUserRejected(t *testing.T) {
 		ID: "u1", Username: "alice", OIDCSubject: h.subject(), Disabled: true,
 	})
 
-	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account disabled")
+	wantOIDCError(t, h.login("/api/auth/oidc/callback"), http.StatusUnauthorized, "account_disabled", "account is disabled; contact your administrator")
 	if h.sess.calls != 0 {
 		t.Error("session minted for disabled user")
 	}

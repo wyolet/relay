@@ -240,6 +240,11 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 		if k.Spec.ValueFrom.Env == "" {
 			return nil, errors.New("env-mode row missing value_from_env")
 		}
+		// A row stored before reserved names were refused must not send relay's configuration upstream; it loads unresolved instead.
+		if reservedEnv(k.Spec.ValueFrom.Env) {
+			k.Status.Unresolved = &UnresolvedStatus{Reason: ErrReservedEnv.Error()}
+			return k, nil
+		}
 		ref = secret.Ref{Kind: secret.KindEnv, Env: k.Spec.ValueFrom.Env}
 	case string(ValueKindStored):
 		// value_kind='stored' is the at-rest storage kind; the spec JSON says

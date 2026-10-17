@@ -1,10 +1,10 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
-        image dev-push push-all local-image run-local \
+        image dev-push push-all local-image run-local image-assets-check \
         version release release-patch release-minor release-major _release _release-preflight \
         check chart-lint sqlc-generate test test-race test-fuzz test-cover test-race-cover cover-check \
         bench-gate bench-baseline test-integration test-integration-run smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
-        ui-fetch build clean schemas catalog-validate catalog-embed lint-rules lint vulncheck
+        ui-fetch ui-pin build clean schemas catalog-validate catalog-embed lint-rules lint vulncheck
 
 # Load .env if present.
 -include .env
@@ -88,6 +88,7 @@ help: ## Show this help
 	@echo '  make push-all          build + push prod and dev'
 	@echo '  make local-image       bake into local docker daemon as relay:dev'
 	@echo '  make run-local         boot the local image on :8080'
+	@echo '  make image-assets-check  asset stage passes with the pinned UI hash, fails with a wrong one'
 	@echo ''
 	@echo '🏷️  Release (tag + push; CI publishes images + chart):'
 	@echo '  make version           show current version'
@@ -112,6 +113,7 @@ help: ## Show this help
 	@echo '  make test-integration-run  the same against $$RELAY_TEST_PG_DSN + $$RELAY_TEST_REDIS_ADDR (no compose)'
 	@echo '  make smoke-mock        replay recorded fixtures through relay → openai-mock.wyolet.dev'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
+	@echo '  make ui-pin UI_VERSION=vX.Y.Z  pin a relay-ui release + its sha256 in versions.env'
 	@echo '  make build             ui-fetch + go build → ./relay'
 	@echo '  make clean             drop UI dist + binary'
 	@echo ''
@@ -227,17 +229,17 @@ restart: ## restart relay-a/b + nginx after a rebuild
 
 image: ## build + push prod (multi-tag)
 	@echo "▸ pushing $(REGISTRY)/$(IMAGE_NAME) — version=$(VERSION) sha=$(GIT_REVISION)"
-	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push prod
+	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push prod
 
 dev-push: ## build + push :dev moving label
 	@echo "▸ pushing $(REGISTRY)/$(IMAGE_NAME):dev — sha=$(GIT_REVISION)"
-	GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push dev
+	GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push dev
 
 push-all: ## build + push both prod and dev
-	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push all
+	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push all
 
 local-image: ## bake into local docker as relay:dev
-	UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl local
+	UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl local
 
 run-local: local-image ## boot the local image on :8080
 	docker run --rm -p 8080:8080 --name relay-local relay:dev
@@ -322,22 +324,38 @@ sqlc-generate: ## regenerate sqlc code (root module and auth module)
 UI_REPO     := wyolet/relay-ui
 UI_TARBALL  := relay-ui-$(UI_VERSION).tar.gz
 
-ui-fetch: ## fetch + verify relay-ui release tarball (private repo → gh auth)
-	@command -v gh >/dev/null || { echo "ui-fetch: 'gh' is required (relay-ui is a private repo; plain curl 404s on its release assets). Install GitHub CLI and 'gh auth login'."; exit 1; }
+ui-fetch: ## fetch relay-ui $(UI_VERSION) and verify it against UI_SHA256 from versions.env
+	@command -v gh >/dev/null || { echo "ui-fetch: 'gh' is required. Install GitHub CLI and 'gh auth login'."; exit 1; }
+	@[ -n "$(UI_SHA256)" ] || { echo "ui-fetch: UI_SHA256 is not set; pin it with 'make ui-pin UI_VERSION=$(UI_VERSION)'."; exit 1; }
 	@echo "Fetching relay-ui $(UI_VERSION) from $(UI_REPO)..."
 	@mkdir -p $(UI_DIST_DIR)
 	@tmp=$$(mktemp -d); \
 	  gh release download "$(UI_VERSION)" --repo "$(UI_REPO)" \
-	    --pattern "$(UI_TARBALL)" --pattern "$(UI_TARBALL).sha256" --dir "$$tmp" --clobber \
+	    --pattern "$(UI_TARBALL)" --dir "$$tmp" --clobber \
 	    || { echo "ui-fetch: download failed (check 'gh auth status' and that release $(UI_VERSION) exists)."; rm -rf "$$tmp"; exit 1; }; \
-	  if [ -f "$$tmp/$(UI_TARBALL).sha256" ]; then \
-	    ( cd "$$tmp" && shasum -a 256 -c "$(UI_TARBALL).sha256" ) \
-	      || { echo "ui-fetch: sha256 verification FAILED."; rm -rf "$$tmp"; exit 1; }; \
-	  else echo "ui-fetch: no .sha256 sidecar; skipping checksum verify."; fi; \
+	  ( cd "$$tmp" && echo "$(UI_SHA256)  $(UI_TARBALL)" | shasum -a 256 -c - ) \
+	    || { echo "ui-fetch: $(UI_TARBALL) does not match UI_SHA256 in versions.env."; rm -rf "$$tmp"; exit 1; }; \
 	  rm -rf $(UI_DIST_DIR)/* ; \
 	  tar -xz -C $(UI_DIST_DIR) --strip-components=1 -f "$$tmp/$(UI_TARBALL)"; \
 	  rm -rf "$$tmp"
 	@echo "UI fetched into $(UI_DIST_DIR)"
+
+ui-pin: ## pin a relay-ui release in versions.env: make ui-pin UI_VERSION=vX.Y.Z
+	scripts/pin-ui.sh "$(UI_VERSION)"
+
+UI_SHA256_WRONG := 0000000000000000000000000000000000000000000000000000000000000000
+
+image-assets-check: ## build the image's asset stage with the pinned UI hash (must pass), then a wrong and an empty one (must fail)
+	docker buildx build --target assets --output type=cacheonly --no-cache-filter assets \
+	  --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$(UI_SHA256) --build-arg CATALOG_REF=$(CATALOG_VERSION) .
+	@for sum in $(UI_SHA256_WRONG) ""; do \
+	  out=$$(docker buildx build --progress=plain --target assets --output type=cacheonly --no-cache-filter assets \
+	    --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$$sum --build-arg CATALOG_REF=$(CATALOG_VERSION) . 2>&1) \
+	    && { echo "image-assets-check: the asset stage built with UI_SHA256='$$sum'"; exit 1; }; \
+	  echo "$$out" | grep -qE 'ui.tar.gz: FAILED|UI_SHA256 is not set' \
+	    || { echo "$$out"; echo "image-assets-check: UI_SHA256='$$sum' failed for another reason"; exit 1; }; \
+	  echo "image-assets-check: UI_SHA256='$$sum' refused"; \
+	done
 
 build: ui-fetch ## ui-fetch + go build → ./relay
 	CGO_ENABLED=0 go build -trimpath -ldflags "-X github.com/wyolet/relay/internal/config.DefaultCatalogVersion=$(CATALOG_VERSION)" -o relay ./cmd/relay
