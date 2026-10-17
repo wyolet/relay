@@ -103,6 +103,9 @@ type Deps struct {
 	// X-Forwarded-For behind. nil records the peer address.
 	TrustedProxies []*net.IPNet
 
+	// AllowOrigins is the control API's CORS allowlist; OIDC sign-in also returns the browser to these origins.
+	AllowOrigins []string
+
 	// PayloadReader serves /payloads/* read-side endpoints (the Logs view).
 	// nil disables them — e.g. minimal builds or deployments where captured
 	// bodies are consumed from a separate store.

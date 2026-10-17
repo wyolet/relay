@@ -73,6 +73,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Audit:          auditEmitter,
 		AuditReader:    auditStore,
 		TrustedProxies: httpmw.TrustedProxies(),
+		AllowOrigins:   cfg.ControlAllowOrigins,
 		PayloadReader:  payloadReader,
 		Selector:       selector,
 		HostHealth:     hostHealth,
