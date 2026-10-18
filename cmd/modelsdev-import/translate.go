@@ -19,6 +19,7 @@ type TranslateResult struct {
 	SkippedNoBaseURL int
 	SkippedExisting  int            // folded models skipped because already in catalog (additive)
 	UnsupportedNPM   map[string]int // npm tag → count routed to drafts
+	UnmappedFamilies []UnmappedFamily
 }
 
 // DraftSet mirrors the shipped partition for drafts/.
@@ -41,6 +42,7 @@ type Opts struct {
 	// entirely (additive import: never touch existing curated/imported
 	// entries — refresh is the watcher's surgical, reviewed job).
 	Existing map[string]bool
+	Families *familyList // allowlist spec.family is resolved against
 }
 
 // Translate converts allowlisted models.dev providers into catalog DTOs.
@@ -140,7 +142,11 @@ func Translate(providers []MDProvider, o Opts) (*TranslateResult, error) {
 			primary := choosePrimary(members, base)
 			pm := p.Models[primary]
 
-			modelDTO := buildFoldedModel(p, pm, base, members, o.Version)
+			family := o.Families.resolve(pm.Family)
+			if _, dup := acc[base]; !dup && family == "" {
+				r.UnmappedFamilies = append(r.UnmappedFamilies, UnmappedFamily{Provider: p.ID, Model: base, Value: pm.Family})
+			}
+			modelDTO := buildFoldedModel(p, pm, base, members, o.Version, family)
 			bindingDTO := buildFoldedBinding(base, p.ID, adapter, primary, members)
 			pricingDTO, hasPricing := buildPricing(p.ID, base, pm.Cost)
 
