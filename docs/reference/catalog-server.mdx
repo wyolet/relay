@@ -1,0 +1,180 @@
+---
+title: "Catalog server"
+description: "The HTTP layout catalog releases are served from, and how to run catalog-server"
+---
+
+Relay and the Go SDK resolve [catalog](/concepts/catalog) releases over plain
+HTTP: one YAML read for the channel index, then a GET for the release file and
+its `.sha256`. No git, GitHub API, or credentials are involved, so any host
+that serves this layout works. `catalog-server` serves it from a git mirror of
+[`wyolet/relay-catalog`](https://github.com/wyolet/relay-catalog).
+
+The examples use `https://catalog.example.com` for the server's address.
+
+## Paths
+
+| Path | Response | Caching |
+| --- | --- | --- |
+| `/index.yaml` | The channel index (below). | `public, max-age=60`; `ETag` is the quoted sha256 of the body, `If-None-Match` gets `304`. |
+| `/releases/<tag>/catalog.json.gz` | The SDK catalog of release `<tag>`. | `public, max-age=31536000, immutable`; `ETag: "<sha256>"`, `If-None-Match` gets `304`. |
+| `/releases/<tag>/relay-catalog-data-<tag>.tar.gz` | The release's `data/` tree, which relay seeds from. | As above. |
+| `/releases/<tag>/<file>.sha256` | The sum file published with the release on GitHub, byte for byte. | As above. |
+| `/channels/<channel>/latest/<file>` | `302` to `/releases/<tag>/<file>` for the channel's latest tag. `<file>` is `catalog.json.gz` or `relay-catalog-data.tar.gz`, optionally with `.sha256`. For curl and people; clients read the index. | `public, max-age=60` |
+| `/livez`, `/readyz`, `/metrics` | Health and Prometheus metrics; see [Running catalog-server](#running-catalog-server). | none |
+
+Release files are served as `Content-Type: application/gzip` with no
+`Content-Encoding`: the body is the stored `.gz` file, and clients check the
+sha256 of exactly those bytes. A proxy in front of the server must not compress
+or decompress `/releases/*`, or every checksum fails.
+
+## Verifying a download
+
+```bash
+curl -fsSLO https://catalog.example.com/releases/v0.1.18/catalog.json.gz
+curl -fsSLO https://catalog.example.com/releases/v0.1.18/catalog.json.gz.sha256
+sha256sum -c catalog.json.gz.sha256
+```
+
+The sum files are `sha256sum` output: `<hex digest>  <file name>`.
+
+`catalog-server` rebuilds each file from the tag's tree and serves the rebuild
+only when its sha256 equals the published sum. When it differs (a newer builder
+composes the catalog differently) or the build fails, the server downloads the
+published file, checks it against the same sum, and serves that. A tag's bytes
+therefore never change, whichever server version serves them. The check runs on
+the same origin as the download, so it catches corruption and builder drift,
+not a compromised host.
+
+## Schema channels
+
+```yaml
+channels:
+    v1alpha2:
+        latest: v0.1.18
+```
+
+A tag's channel is the last segment of the `apiVersion` every document in its
+data tree shares: `relay.wyolet.dev/v1alpha2` is channel `v1alpha2`. A client
+reads only the channel of the schema it was built for. A release with a new
+schema is published under a new channel, so a client that can't parse it never
+picks it up; it takes a client upgrade.
+
+`latest` is the highest release tag of the channel whose two sum files are
+published and whose two files verified. Release tags are `vX.Y.Z` with no
+pre-release or build suffix. The index never names a tag that can't be
+downloaded, whatever order the release's files were uploaded in. A tag whose
+documents disagree on `apiVersion` is never indexed.
+
+## Status codes
+
+- **404**: an unknown tag, a tag that isn't a release tag, a file name other
+  than the two above, or a file the release didn't publish. v0.1.0 to v0.1.9
+  publish no files, and v0.1.10 to v0.1.14 only `catalog.json.gz`.
+- **503**: the file is published but couldn't be verified: the published file
+  failed its own sum or couldn't be fetched. Sent with `Retry-After: 60`.
+
+A tag pushed moments ago can return 404 until the server's next fetch, at most
+one sync interval later. A request for an unknown tag triggers an early fetch,
+at most once every 10 seconds.
+
+## Stability
+
+This layout never changes in place. Files under `/releases/<tag>/` never change
+once served. A breaking change to the layout ships beside this one, under new
+paths, and this one keeps serving.
+
+## Pointing clients at a server
+
+### Relay
+
+```bash
+RELAY_CATALOG_VERSION=latest
+RELAY_CATALOG_INDEX_URL=https://catalog.example.com/index.yaml
+RELAY_CATALOG_URL=https://catalog.example.com/releases/{version}/relay-catalog-data-{version}.tar.gz
+```
+
+`RELAY_CATALOG_INDEX_URL` is read only when `RELAY_CATALOG_VERSION` is `latest`;
+a pinned tag goes straight to `RELAY_CATALOG_URL`, with `{version}` replaced by
+the tag. Tags before v0.1.15 have no data tarball, so a relay pinned to one
+needs `RELAY_CATALOG_URL` pointing at a source archive instead.
+
+### Go SDK
+
+```go
+src := catalogsource.Release("", cacheDir,
+	catalogsource.WithIndexURL("https://catalog.example.com/index.yaml"),
+	catalogsource.WithDownloadURL("https://catalog.example.com/releases"),
+)
+```
+
+Tag `""` resolves the SDK's channel through the index; a concrete tag skips the
+index. Files are fetched from `<download URL>/<tag>/catalog.json.gz` and checked
+against `catalog.json.gz.sha256` before they are used or cached.
+
+## Running catalog-server
+
+```bash
+go build -o catalog-server ./cmd/catalog-server
+catalog-server serve
+```
+
+It needs the `git` binary on `PATH`: the data tarball is `git archive` output,
+and Go's gzip writer produces different bytes, so a pure-Go build could never
+match the published sums. It needs outbound HTTPS to the repository (git fetch)
+and to its release downloads. For GitHub that is `github.com` plus the host
+release downloads redirect to. It holds no credentials and no state beyond the
+mirror directory and memory, so replicas run independently.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_CATALOG_SERVER_ADDR` | `:8080` | Listen address. |
+| `RELAY_CATALOG_SERVER_REPO` | `https://github.com/wyolet/relay-catalog.git` | Repository to mirror. Only its tags and `main` are fetched. |
+| `RELAY_CATALOG_SERVER_RELEASES_URL` | `https://github.com/wyolet/relay-catalog/releases/download` | Where each tag's published files and sums live, as `<url>/<tag>/<file>`. |
+| `RELAY_CATALOG_SERVER_SYNC_INTERVAL` | `60s` | How often the mirror is fetched, as a Go duration. Matches the index's `max-age`. |
+| `RELAY_CATALOG_SERVER_CACHE_BYTES` | `64Mi` | Memory budget for release files, in bytes or with a `Ki`, `Mi` or `Gi` suffix. One tag is about 110 KB today. |
+| `RELAY_CATALOG_SERVER_MIRROR_DIR` | `<temp dir>/relay-catalog-mirror` | The bare clone. |
+| `RELAY_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. Logs are JSON on stdout. |
+
+The mirror defaults to the temp directory because it is a disposable cache: a
+few MB that clone again in about a second, and the temp directory is writable
+for any user. Point it at a volume to skip the clone after a container restart.
+
+At every sync the server fetches the mirror, reads each new release tag's
+channel, fetches the sums it doesn't have yet, and builds and verifies the
+latest tag of each channel. Missing sums are retried every sync while the tag
+is less than a day old, hourly after that. Other tags are built on first
+request. Each channel's latest files stay in memory; other files are kept in a
+least-recently-used cache within `RELAY_CATALOG_SERVER_CACHE_BYTES` and rebuilt
+when evicted. At most two builds run at once, and concurrent requests for the
+same file share one build. When the repository or the release host is
+unreachable, the server keeps serving what it holds and the index doesn't
+move.
+
+`/livez` answers `200` while the process runs. `/readyz` answers `200` once the
+first sync has finished and the index names at least one tag, which means every
+channel's latest files are verified.
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `catalog_server_last_fetch_success_timestamp_seconds` | gauge | | When the mirror last fetched successfully. |
+| `catalog_server_fetch_failures_total` | counter | | Failed git fetches. |
+| `catalog_server_tags_known` | gauge | | Release tags in the mirror. |
+| `catalog_server_tags_ready` | gauge | | Release tags whose two files are verified so far. |
+| `catalog_server_builds_total` | counter | `asset` | Files rebuilt from the mirror. `asset` is `catalog` or `data`. |
+| `catalog_server_build_failures_total` | counter | `asset` | Rebuilds that failed, such as a schema this server can't compose. |
+| `catalog_server_rebuild_mismatch_total` | counter | `asset` | Rebuilds whose sha256 differs from the published sum; the published file is served. |
+| `catalog_server_release_fetch_failures_total` | counter | `asset` | Published sums or files that couldn't be fetched or failed their sum. |
+| `catalog_server_cache_bytes` | gauge | | Bytes of release files in memory. |
+
+### Building a release's files
+
+```bash
+catalog-server build --repo ./relay-catalog --ref <commit> --version <tag> --out out
+```
+
+This writes `relay-catalog-data-<tag>.tar.gz`, `catalog.json.gz` and their
+`.sha256` files. The data tarball is `git archive` of `data/` without
+`data/drafts` at the commit. The catalog is composed from that tarball, with the
+commit's committer time as its `generatedAt`. Both are reproducible from the
+tag, so comparing the output with a release's published sum files shows whether
+this build reproduces it.

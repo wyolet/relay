@@ -33,6 +33,7 @@ require (
 	github.com/wyolet/relay/sdk v0.7.22
 	go.opentelemetry.io/proto/otlp v1.9.0
 	golang.org/x/crypto v0.57.0
+	golang.org/x/mod v0.41.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0
