@@ -1,10 +1,9 @@
 // store.go is the data-access layer for HostKey. It owns the secrets-table
 // rows (metadata/spec + value_kind/value_from_env) but delegates ALL secret
-// material to pkg/secret: env lookups and stored AES-GCM ciphertext resolve
-// through a secret.Registry, stored values are written via the
-// StoredResolver into the generic secret_values table, and master-key
-// rotation is the StoredResolver's job. This package no longer touches
-// crypto or env directly.
+// material: env lookups and stored ciphertext resolve through a
+// secret.Registry, and stored values are written through the stored backend
+// into secret_values, sealed under the scope of the key's owner. This package
+// never touches crypto or env directly.
 //
 // One Upsert routes to the env or stored path based on Spec.ValueFrom.Kind.
 // List/Get reconstruct Spec from JSONB and populate the runtime-only
@@ -24,42 +23,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/secret/stored"
+	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // Store is the HostKey data-access type. resolver resolves env + stored
-// refs to plaintext; stored is the write/rotate/version authority for the
-// stored backend (nil for env-only deployments — stored-mode operations
-// then error loudly).
+// refs to plaintext; stored writes stored-mode values (nil for env-only
+// deployments — stored-mode operations then error loudly).
 type Store struct {
+	db       storage.DB
 	q        *gen.Queries
 	resolver *secret.Registry
-	stored   *secret.StoredResolver
+	stored   *stored.Backend
 }
 
-// NewStore constructs a Store. Pass the shared secret Registry + the stored
-// resolver (see app/secret.Wire); stored may be nil to run env-only.
-func NewStore(q *gen.Queries, resolver *secret.Registry, stored *secret.StoredResolver) *Store {
-	return &Store{q: q, resolver: resolver, stored: stored}
+// NewStore constructs a Store over db. Pass the shared secret Registry + the
+// stored backend (see app/secret.Wire); backend may be nil to run env-only.
+func NewStore(db storage.DB, resolver *secret.Registry, backend *stored.Backend) *Store {
+	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend}
 }
 
-// LoadKeyVersion aligns the stored resolver's in-memory key version to the
-// maximum recorded in the store, so new secrets are tagged with the
-// generation operators last rotated to. No-op when env-only.
-func (s *Store) LoadKeyVersion(ctx context.Context) error {
-	if s.stored == nil {
-		return nil
-	}
-	return s.stored.LoadKeyVersion(ctx)
-}
-
-// KeyVersion returns the current master-key version (0 when env-only).
-func (s *Store) KeyVersion() int32 {
-	if s.stored == nil {
-		return 0
-	}
-	return s.stored.KeyVersion()
+// SecretScope is the scope a key's stored value is sealed under: its owner.
+func SecretScope(o meta.Owner) string {
+	return stored.OwnerScope(string(o.Kind), o.ID)
 }
 
 // List returns every HostKey row with Resolved + KeyHash populated.
@@ -111,21 +99,24 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 		return staleIfNoRow(err)
 	case ValueKindStored, ValueKindOAuth:
 		// OAuth credentials share stored's at-rest path: the value (an OAuth
-		// token blob for oauth mode) is AES-GCM-encrypted into secret_values and
+		// token blob for oauth mode) is sealed into secret_values and
 		// the row records value_kind='stored'. The oauth semantics + provider
 		// live in the spec JSON (ValueFrom.Kind/Provider), recovered in fromRow.
 		if s.stored == nil {
 			return errors.New("hostkey.Upsert: stored/oauth mode requires a secret backend (master key)")
 		}
-		// Without a new value this is a metadata-only update: the
-		// secret_values ciphertext stays untouched. It is the only way to edit
-		// an oauth key without re-supplying its token blob (its Resolved is the
-		// access token, not the stored blob).
+		// Without a new value this is a metadata-only update: the stored
+		// value is kept, only moved to the owner's scope if the owner changed.
+		// It is the only way to edit an oauth key without re-supplying its
+		// token blob (its Resolved is the access token, not the stored blob).
 		if k.Spec.Value == "" && k.Resolved == "" {
 			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
-		writeRow := func() error {
-			_, err := s.q.InsertSecretStoredRef(ctx, gen.InsertSecretStoredRefParams{
+		scope := SecretScope(k.Meta.Owner)
+		// The row and its value commit together, so a stale conditional write
+		// replaces no value and a failed create leaves no valueless row.
+		err := s.inTx(ctx, func(q *gen.Queries, backend *stored.Backend) error {
+			_, err := q.InsertSecretStoredRef(ctx, gen.InsertSecretStoredRefParams{
 				ID:              k.Meta.ID,
 				Name:            k.Meta.Name,
 				DisplayName:     k.Meta.DisplayName,
@@ -133,25 +124,19 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 				Spec:            specJSON,
 				ExpectedVersion: expected,
 			})
-			return staleIfNoRow(err)
-		}
-		// A conditional write passes the version check before the value is
-		// replaced, so a stale caller cannot rotate it. An unconditional one
-		// keeps writing the value first: a failed create leaves no valueless row.
-		if expected.Valid {
-			if err := writeRow(); err != nil {
+			if err := staleIfNoRow(err); err != nil {
 				return err
 			}
-		}
-		if k.Spec.Value != "" {
-			if _, err := s.stored.Create(ctx, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
+			if k.Spec.Value == "" {
+				return backend.Rescope(ctx, k.Meta.ID, scope)
+			}
+			if _, err := backend.CreateScoped(ctx, scope, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
 				return fmt.Errorf("hostkey.Upsert store secret: %w", err)
 			}
-		}
-		if !expected.Valid {
-			if err := writeRow(); err != nil {
-				return err
-			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 		k.Spec.Value = ""
 		return nil
@@ -190,25 +175,16 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// RotateResult is the outcome of a successful Rotate call.
-type RotateResult struct {
-	Rotated    int
-	NewVersion int32
-}
-
-// Rotate re-encrypts every stored secret under newKey (transactionally, via
-// the stored resolver) and swaps the live master key so the process keeps
-// resolving without a restart. The caller persists newKey to the
-// deployment's RELAY_MASTER_KEY for future boots.
-func (s *Store) Rotate(ctx context.Context, newKey []byte) (RotateResult, error) {
-	if s.stored == nil {
-		return RotateResult{}, errors.New("hostkey.Rotate: no secret backend configured")
-	}
-	r, err := s.stored.Rotate(ctx, newKey)
+func (s *Store) inTx(ctx context.Context, fn func(q *gen.Queries, backend *stored.Backend) error) error {
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return RotateResult{}, err
+		return fmt.Errorf("hostkey: begin: %w", err)
 	}
-	return RotateResult{Rotated: r.Rotated, NewVersion: r.NewVersion}, nil
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(gen.New(tx), s.stored.WithDB(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, error) {
@@ -261,7 +237,8 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 		return nil, fmt.Errorf("unknown value_kind %q", r.ValueKind)
 	}
 
-	plain, err := s.resolver.Resolve(ctx, ref)
+	// The owner, not the row's scope column, decides the scope, so a value that missed a rescope or whose column was edited loads unresolved.
+	plain, err := s.resolver.Resolve(stored.WithScope(ctx, SecretScope(md.Owner)), ref)
 	if err != nil {
 		// One unreadable secret must not take the whole catalog down: the row
 		// loads valueless and marked, so lists, edits and every other key keep

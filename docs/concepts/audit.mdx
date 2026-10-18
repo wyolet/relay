@@ -28,6 +28,8 @@ Each row carries the actor (user id and name, session id, client IP — or
 target resource with its owner and project/team scope, the outcome
 (allow/deny plus the HTTP status), and the request's method, path and id.
 
+The `relay secret` commands, which change the [secret key ring](/concepts/secret-keys) directly in Postgres, write their rows too: the actor kind is `cli`, its name the operating-system user, the status the one the control API would have answered, and the path the command (`relay secret rotate`). They write synchronously and fail the command when the write fails.
+
 ## What is never recorded
 
 Values. A write records only the **JSON paths** it touched — for example

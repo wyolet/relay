@@ -14,10 +14,11 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // tokenSigningKeyID is the stored-secret row the Ed25519 seed lives in.
@@ -102,7 +103,7 @@ func generateSigningKey(ctx context.Context, pool *pgxpool.Pool, stores *appcata
 		if _, err := rand.Read(seed); err != nil {
 			return fmt.Errorf("generate signing key: %w", err)
 		}
-		ref, err := stores.Stored.Create(ctx, secretID, seed)
+		ref, err := stores.Stored.CreateScoped(ctx, stored.ScopeSystem, secretID, seed)
 		if err != nil {
 			return fmt.Errorf("store signing key: %w", err)
 		}
@@ -158,7 +159,7 @@ func applyAuthTokensSection(ctx context.Context, pool *pgxpool.Pool, stores *app
 		return loadTokenSigningKey(ctx, pool, stores, masterKey, signer, verifier)
 	}
 	if !a.Enabled {
-		a.SigningKey, a.PreviousSigningKey = pkgsecret.Ref{}, pkgsecret.Ref{}
+		a.SigningKey, a.PreviousSigningKey = secret.Ref{}, secret.Ref{}
 	}
 	return applyTokenSigningKey(ctx, stores.Secrets, &a, signer, verifier)
 }
@@ -168,7 +169,7 @@ func applyAuthTokensSection(ctx context.Context, pool *pgxpool.Pool, stores *app
 // verifies. An empty current ref clears them, which disables tokens without
 // a restart. A previous ref that no longer resolves is logged and skipped —
 // minting under the live key must not depend on the retired one.
-func applyTokenSigningKey(ctx context.Context, secrets *pkgsecret.Registry, cfg *settings.AuthTokens,
+func applyTokenSigningKey(ctx context.Context, secrets *secret.Registry, cfg *settings.AuthTokens,
 	signer *control.TokenSigner, verifier *inference.TokenVerifier) error {
 	if cfg == nil || cfg.SigningKey.ID == "" {
 		signer.SetSeed(nil)
@@ -201,7 +202,7 @@ func applyTokenSigningKey(ctx context.Context, secrets *pkgsecret.Registry, cfg 
 // previousPublicKey resolves the retired signing key's public half. The
 // resolve error is returned so the caller can tell a transient failure from
 // a key that is genuinely absent or malformed (both nil, nil).
-func previousPublicKey(ctx context.Context, secrets *pkgsecret.Registry, ref pkgsecret.Ref) (ed25519.PublicKey, error) {
+func previousPublicKey(ctx context.Context, secrets *secret.Registry, ref secret.Ref) (ed25519.PublicKey, error) {
 	if ref.ID == "" {
 		return nil, nil
 	}

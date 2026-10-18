@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // AuthTokens is the auth:tokens settings section: short-lived, relay-signed

@@ -19,13 +19,15 @@ import (
 
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/manifest"
+	appsecret "github.com/wyolet/relay/app/secret"
 )
 
 // Options configures a seed run.
 type Options struct {
-	Pool      *pgxpool.Pool
-	YAMLDir   string
-	MasterKey []byte // for stored-mode HostKey rows; nil disables them
+	Pool    *pgxpool.Pool
+	YAMLDir string
+	// Secrets writes stored-mode HostKey values; nil disables them.
+	Secrets *appsecret.Secrets
 
 	// ClearDirty re-seeds (overwrites) rows an operator has edited, resetting
 	// them to the catalog version and clearing their dirty flag. Default false:
@@ -107,7 +109,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			"dir", opts.YAMLDir, "count", len(refused), "documents", refused)
 	}
 
-	stores := apply.NewStores(opts.Pool, opts.MasterKey)
+	stores := apply.NewStores(opts.Pool, opts.Secrets)
 	plan, err := apply.Plan(ctx, docs, apply.Options{
 		Stores: stores,
 		Force:  opts.ClearDirty,

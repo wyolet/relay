@@ -8,7 +8,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	chpayload "github.com/wyolet/relay/pkg/payload/clickhouse"
 	payloadfile "github.com/wyolet/relay/pkg/payload/file"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // payloadSinkBuilder returns the payloadlog.SinkBuilder the Controller calls

@@ -8,7 +8,7 @@ import (
 
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/settings"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // newS3PayloadReader is the minimal-build stub: the s3 backend (and its

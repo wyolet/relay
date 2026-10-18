@@ -79,7 +79,7 @@ Two value modes:
 }
 ```
 
-```json Stored (AES-GCM encrypted in Postgres)
+```json Stored (encrypted in Postgres)
 {
   "metadata": { "displayName": "My OpenAI key" },
   "spec": {
@@ -93,8 +93,9 @@ Two value modes:
 
 </CodeGroup>
 
-Stored-mode values are encrypted with `RELAY_MASTER_KEY` and only the
-ciphertext is persisted.
+Stored-mode values are encrypted under the owner's data key, which
+`RELAY_MASTER_KEY` wraps, and only the ciphertext is persisted; see
+[Stored secrets and key rotation](/concepts/secret-keys).
 
 An env-ref may not name a `RELAY_*` or `WYOLET_*` variable: those hold relay's own configuration, and a host key's value is sent to its host. Such a key is refused on write, and one already stored loads unresolved and is never used.
 
@@ -258,3 +259,19 @@ GET    /api/openapi.json         generated typed spec
 
 `/reload` is a manual fallback; normal CRUD writes propagate automatically
 via `NOTIFY`.
+
+## Secret keys
+
+```
+GET  /api/secret-keys                     data keys, target KEK, KEKs this pod holds, legacy rows left
+POST /api/secret-keys/rotate              {"scope": "project:<id>"} or {"all": true} → the new data keys
+POST /api/secret-keys/rewrap              {"to": "<kek id>"} → target, rewrapped count, skipped keys
+POST /api/secret-keys/by-id/{id}/destroy  optional {"force": true} → the destroyed key
+```
+
+Admin only, and audited. Refusals answer `409` with the reason: rewrap to a
+KEK the pod does not hold or while legacy rows remain; destroy of a scope's
+primary, of a key stored values still use, or within 24 hours of demotion
+without `force`. An unknown key or a scope with no data key answers `404`, a
+malformed id `400`. No response carries key bytes. See
+[Stored secrets and key rotation](/concepts/secret-keys).

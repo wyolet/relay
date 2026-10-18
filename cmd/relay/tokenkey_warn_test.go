@@ -14,7 +14,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // countingHandler tallies log records whose message contains a needle.
@@ -53,7 +53,7 @@ func TestTokensDisabledWarningLogsOnce(t *testing.T) {
 		Settings: settings.NewStore(gen.New(stubDBTX{row: settingsRow{
 			section: settings.AuthTokensSection, value: raw,
 		}})),
-		Secrets: pkgsecret.NewRegistry(),
+		Secrets: secret.NewRegistry(),
 	}
 
 	h := &countingHandler{needle: "no RELAY_MASTER_KEY"}

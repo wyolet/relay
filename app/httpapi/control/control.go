@@ -1,5 +1,5 @@
 // Package control is the admin-plane HTTP API: /auth/*, CRUD across the
-// catalog and tenancy kinds, /version, /master-key/*, /reload.
+// catalog and tenancy kinds, /version, /master-key/*, /secret-keys, /reload.
 //
 // Mount(r, deps) wires huma+chi onto an existing chi router and returns the
 // huma.API. main.go constructs Deps and calls Mount.
@@ -67,6 +67,9 @@ type Deps struct {
 	// ref in the auth:tokens section. Wired by the composition root, which
 	// owns the secret store and the master key; nil disables the endpoint.
 	RotateTokenKey func(ctx context.Context) error
+
+	// SecretKeys manages the key ring stored secrets are sealed under. nil disables /secret-keys.
+	SecretKeys SecretKeyManager
 
 	// AdminToken is the cleartext break-glass bearer. Empty disables the
 	// bypass. Validated by the authenticator chain; not used directly by
@@ -194,6 +197,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
+	registerSecretKeys(api, d, protect)
 	// Generic CRUD for every registered kind; the rows are how each kind finds one.
 	rows := registerCRUD(api, d, protect)
 	registerHostKeyRotate(api, d, protect)

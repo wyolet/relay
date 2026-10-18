@@ -15,13 +15,13 @@ import (
 	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/crypto"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // seedResolver serves fixed seeds by secret id.
 type seedResolver map[string][]byte
 
-func (m seedResolver) Resolve(_ context.Context, ref pkgsecret.Ref) ([]byte, error) {
+func (m seedResolver) Resolve(_ context.Context, ref secret.Ref) ([]byte, error) {
 	if seed, ok := m[ref.ID]; ok {
 		return seed, nil
 	}
@@ -38,8 +38,8 @@ func TestBootLoadsThePreviousSigningKey(t *testing.T) {
 
 	cfg := settings.AuthTokens{
 		Enabled: true, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour,
-		SigningKey:         pkgsecret.Ref{Kind: pkgsecret.KindStored, ID: "current"},
-		PreviousSigningKey: pkgsecret.Ref{Kind: pkgsecret.KindStored, ID: "previous"},
+		SigningKey:         secret.Ref{Kind: secret.KindStored, ID: "current"},
+		PreviousSigningKey: secret.Ref{Kind: secret.KindStored, ID: "previous"},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("section with both refs is invalid: %v", err)
@@ -49,8 +49,8 @@ func TestBootLoadsThePreviousSigningKey(t *testing.T) {
 		t.Fatalf("marshal cfg: %v", err)
 	}
 
-	secrets := pkgsecret.NewRegistry()
-	secrets.Register(pkgsecret.KindStored, seedResolver{"current": current, "previous": previous})
+	secrets := secret.NewRegistry()
+	secrets.Register(secret.KindStored, seedResolver{"current": current, "previous": previous})
 	stores := &appcatalog.Stores{
 		Settings: settings.NewStore(gen.New(stubDBTX{row: settingsRow{section: settings.AuthTokensSection, value: raw}})),
 		Secrets:  secrets,

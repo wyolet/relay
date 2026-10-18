@@ -15,7 +15,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // settingsRow fakes the single-row pgx.Row GetSetting scans — enough to
@@ -55,7 +55,7 @@ func (s stubDBTX) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFr
 // should log a warning, clear the signer and verifier, and let the gateway
 // come up with tokens disabled (mint then answers 503).
 func TestLoadTokenSigningKey_UnresolvableRefDisablesTokensInsteadOfFailingBoot(t *testing.T) {
-	badRef := pkgsecret.Ref{Kind: pkgsecret.KindStored, ID: "does-not-exist"}
+	badRef := secret.Ref{Kind: secret.KindStored, ID: "does-not-exist"}
 	cfg := settings.AuthTokens{Enabled: true, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour, SigningKey: badRef}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestLoadTokenSigningKey_UnresolvableRefDisablesTokensInsteadOfFailingBoot(t
 		Settings: settings.NewStore(gen.New(db)),
 		// No backend registered for "stored": resolving the ref fails
 		// exactly like a rotated master key or a deleted secret row would.
-		Secrets: pkgsecret.NewRegistry(),
+		Secrets: secret.NewRegistry(),
 	}
 
 	signer := &control.TokenSigner{}

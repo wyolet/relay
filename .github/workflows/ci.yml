@@ -217,6 +217,7 @@ jobs:
           (cd sdk && go build ./...)
           (cd jobq && go build ./...)
           (cd auth && go build ./...)
+          (cd secret && go build ./...)
 
   # Every module's unit tests, once, under -race and writing the unit
   # coverprofiles the coverage job merges.
