@@ -70,6 +70,18 @@ Configuration: the `DEV_FIXER_RELAY_KEY` secret (a relay key dedicated to the fi
 
 `full.yml` dispatches it on `dev` (`--ref dev`), so it runs in dev's context. A workflow file that isn't on `main` can't be dispatched by name; to try a change on another branch, register it there once (a push run whose jobs skip), then dispatch by id: `gh api -X POST repos/{owner}/{repo}/actions/workflows/<id>/dispatches -f ref=<branch> -f 'inputs[sha]=…' -f 'inputs[run_id]=…' -f 'inputs[base]=<branch>'`.
 
+## AI review of `dev`
+
+Every day `.github/workflows/review-dev.yml` reviews the code that changed on `dev` since the `ai-reviewed` tag (or, before the first run, since the latest release). The schedule only dispatches the workflow on `dev`, so the review runs in dev's context.
+
+- `plan` splits the range into units with `scripts/review-units.sh`: one per area (a Go package; the `auth`, `sdk`, `jobq` and `secret` modules as one each; `migrations/`, `.github/` and `chart/`), large areas split by file, and one approach unit per PR that touched reviewed code.
+- `review` runs one unit per matrix job through `scripts/review-run.sh`: a bare `claude -p` with only Read and read-only Bash, no GitHub token, and a final answer validated against `scripts/review-schema.json`. Area units get the changed files, the area's diff and the PRs' descriptions; approach units judge one PR's approach (`fine` unless an alternative wins on a named, concrete criterion). Then `cross` makes one pass over the interactions between areas.
+- `report` (`scripts/review-report.sh`) files the issues. A high- or medium-severity finding with at least medium confidence, or one that needs a design call (`needs-decision`), gets an issue labelled `ai-review` plus `severity:<level>`. If an open `ai-review` issue already covers the same file and kind, it gets a comment instead. Everything else goes into one digest issue per run, along with the approach verdicts and the units that didn't complete. The tag moves only when every unit completed.
+
+To run a review now, or on another range: `gh workflow run review-dev.yml --ref dev [-f from=<sha>] [-f to=<sha>] [-f dry_run=true]`. A dry run prints the issues and the tag move instead of making them.
+
+Configuration: the `AI_REVIEW_RELAY_KEY` secret (a relay key of its own, so review spend shows separately) and the `AI_REVIEW_BASE_URL` variable. `AI_REVIEW_MODEL` (areas and approach) and `AI_REVIEW_CROSS_MODEL` both default to Opus. `AI_REVIEW_MAX_PARALLEL` (default 4) caps the concurrent reviews. Without the key the run plans, says so, and opens nothing.
+
 ## Releasing
 
 `release/next` follows the last `dev` commit whose full run passed, and there is always one open PR `release/next` → `main`. After each green full run, `scripts/release-pr.sh` (from `full.yml`) fast-forwards the branch and rewrites that PR's description: the commits since the latest release grouped as draft release notes, a link to the green run, and a checklist of what needs coordinating (a `versions.env` change, new migrations, control API code changes that may need a UI release). The PR runs no CI of its own: its head already has a green full run, and the required checks match by commit. Nothing merges or tags automatically. `DRY_RUN=1 scripts/release-pr.sh <sha> <run-url>` prints the description without touching anything.
