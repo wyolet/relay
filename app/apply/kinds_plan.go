@@ -82,6 +82,9 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		if found {
 			pm := k.Meta(prev)
 			e.prev = rowState{present: true, dirty: pm.Dirty, updatedAt: pm.UpdatedAt}
+			// Only the versioned catalog reseed moves the marker; an apply
+			// carries it over and the diff never sees it.
+			m.CatalogDetachedAt = pm.CatalogDetachedAt
 		}
 		if !found {
 			e.Action = ActionCreate
@@ -132,7 +135,7 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				b.declared = map[string]any{}
 			}
 			b.declared[m.ID] = obj
-			if err := b.governs(settings.OpEdit, route.Singular, e.owner); err != nil {
+			if err := b.governs(settings.OpEdit, route.Singular, m); err != nil {
 				return &GovernanceError{Kind: k.Kind, Name: name, Err: err}
 			}
 			row := obj
@@ -151,7 +154,7 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				!b.visible(ctx, k.Kind, m.ID, m.Owner) {
 				continue
 			}
-			if err := b.governs(settings.OpDelete, route.Singular, m.Owner); err != nil {
+			if err := b.governs(settings.OpDelete, route.Singular, m); err != nil {
 				return &GovernanceError{Kind: k.Kind, Name: m.Name, Err: err}
 			}
 			if k.CheckDelete != nil {
@@ -193,9 +196,10 @@ func (b *builder) visible(ctx context.Context, kind, id string, owner meta.Owner
 // system tier of settings.Governs is a rule about generic CRUD; apply is the
 // declarative loader that owns system rows (providers, hosts, built-in
 // roles), so system-owned rows are exempt here.
-func (b *builder) governs(op settings.Op, kind string, owner meta.Owner) error {
-	if b.opts.Gov == nil || owner.Kind == meta.OwnerSystem {
+func (b *builder) governs(op settings.Op, kind string, m *meta.Metadata) error {
+	ownerKind := m.GovernedOwnerKind()
+	if b.opts.Gov == nil || ownerKind == meta.OwnerSystem {
 		return nil
 	}
-	return settings.Governs(b.opts.Gov, op, kind, string(owner.Kind), b.admin)
+	return settings.Governs(b.opts.Gov, op, kind, string(ownerKind), b.admin)
 }

@@ -84,10 +84,26 @@ type Metadata struct {
 	// from manifest YAML.
 	Dirty bool `json:"dirty,omitempty" yaml:"-"`
 
+	// CatalogDetachedAt is when a catalog upgrade stopped shipping this row.
+	// The row stays in place and is the operator's from then on. Server-
+	// authoritative like Dirty: only the versioned catalog reseed sets or
+	// clears it.
+	CatalogDetachedAt *time.Time `json:"catalogDetachedAt,omitempty" yaml:"-" doc:"Set when the catalog version this relay seeds no longer ships the row. The row keeps working and is governed as the operator's own. Server-managed; ignored on write."`
+
 	// ResourceVersion is an opaque token that changes on every write to the
 	// row. An update carrying it only applies while the stored row still has
 	// it; an empty value updates unconditionally.
 	ResourceVersion string `json:"resourceVersion,omitempty" yaml:"-" doc:"Opaque version of the stored row; changes on every write. Send the value you read on update: a mismatch fails with 409 stale_resource_version. Omit to update unconditionally."`
+}
+
+// GovernedOwnerKind is the owner kind mutation governance judges the row by.
+// A row the catalog no longer ships is the operator's, so it is judged as
+// user-owned whatever its stored owner says.
+func (m Metadata) GovernedOwnerKind() OwnerKind {
+	if m.CatalogDetachedAt != nil {
+		return OwnerUser
+	}
+	return m.Owner.Kind
 }
 
 // ErrStaleResourceVersion reports a conditional update whose
