@@ -17,6 +17,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      args:
+        UI_VERSION: ${UI_VERSION:?UI_VERSION not set — run with versions.env loaded}
+        UI_SHA256: ${UI_SHA256:?UI_SHA256 not set — run with versions.env loaded}
+        CATALOG_REF: ${CATALOG_VERSION:-main}
     networks: [default, dev-net]
 
   relay-b:
@@ -24,4 +28,8 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      args:
+        UI_VERSION: ${UI_VERSION:?UI_VERSION not set — run with versions.env loaded}
+        UI_SHA256: ${UI_SHA256:?UI_SHA256 not set — run with versions.env loaded}
+        CATALOG_REF: ${CATALOG_VERSION:-main}
     networks: [default, dev-net]

@@ -4,4 +4,6 @@
 # fresh machine with no published image. Drop this file (or run the base
 # docker-compose.yml alone) to pull a published image instead.
 include:
-  - deploy/compose/docker-compose.override.yml
+  - path: deploy/compose/docker-compose.override.yml
+    env_file:
+      - versions.env
