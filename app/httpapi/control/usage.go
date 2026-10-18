@@ -310,6 +310,7 @@ type usageEventsOutput struct {
 type usageSummaryInput struct {
 	UsageFilterInput
 	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"none\" (one row over the whole filtered set, group {}) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	Compare string `query:"compare" doc:"\"previous\" (the only accepted value) adds each row's numbers over the window of equal length just before this one as previous, and that window's bounds as previous_from/previous_to (previous_to exclusive). Rows stay those of the requested window: a group without traffic in the previous window has no previous, and a group seen only there has no row. The window is resolved once (since counts back from the request time, an open to becomes that time); one with no start or a start after its end is a 400."`
 }
 
 type usageSummaryOutput struct {
@@ -410,18 +411,24 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if in.GroupBy != "" && !usagelog.IsValidGroupBy(in.GroupBy) {
 			return nil, huma.Error400BadRequest("invalid group_by: " + in.GroupBy)
 		}
+		compare, err := parseCompare(in.Compare)
+		if err != nil {
+			return nil, err
+		}
 		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
 		from, to := requestedWindow(base)
 		if !scopeEventQuery(&base, sc) {
-			return &usageSummaryOutput{Body: usagelog.SummaryResult{
-				Rows: []usagelog.SummaryRow{}, From: from, To: to,
-			}}, nil
+			empty, err := emptySummary(base, compare)
+			if err != nil {
+				return nil, err
+			}
+			return &usageSummaryOutput{Body: empty}, nil
 		}
 		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy}
-		res, err := d.UsageReader.Summary(ctx, q)
+		res, err := readSummary(ctx, d.UsageReader, q, compare)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}

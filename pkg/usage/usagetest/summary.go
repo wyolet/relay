@@ -169,12 +169,22 @@ func runSummary(t *testing.T, r usage.Reader) {
 }
 
 func normalizeSummary(res usage.SummaryResult, percentiles bool) usage.SummaryResult {
-	out := usage.SummaryResult{From: normalizeTime(res.From), To: normalizeTime(res.To)}
+	out := usage.SummaryResult{
+		From: normalizeTime(res.From), To: normalizeTime(res.To),
+		PreviousFrom: normalizeTime(res.PreviousFrom), PreviousTo: normalizeTime(res.PreviousTo),
+	}
 	for _, row := range res.Rows {
 		row.Tokens = normalizeTokens(row.Tokens)
 		row.DurationMs = normalizeStats(row.DurationMs, percentiles)
 		row.TTFTMs = normalizeTTFT(row.TTFTMs, percentiles)
 		row.FirstSeen, row.LastSeen = normalizeTime(row.FirstSeen), normalizeTime(row.LastSeen)
+		if row.Previous != nil {
+			p := *row.Previous
+			p.Tokens = normalizeTokens(p.Tokens)
+			p.DurationMs = normalizeStats(p.DurationMs, percentiles)
+			p.TTFTMs = normalizeTTFT(p.TTFTMs, percentiles)
+			row.Previous = &p
+		}
 		out.Rows = append(out.Rows, row)
 	}
 	sortByGroup(out.Rows, func(r usage.SummaryRow) map[string]string { return r.Group })

@@ -15,12 +15,13 @@ import (
 // Open returns a Reader whose store holds exactly events, registering any teardown on t. Run calls it once and only reads from the result.
 type Open func(t *testing.T, events []usage.Event) usage.Reader
 
-// Run loads Fixture through open and checks Events, Summary and TimeSeries against the expected results in this package's case tables.
+// Run loads Fixture through open and checks Events, Summary (alone and through usage.SummaryWithPrevious) and TimeSeries against the expected results in this package's case tables.
 func Run(t *testing.T, open Open) {
 	t.Helper()
 	r := open(t, Fixture())
 	t.Run("events", func(t *testing.T) { runEvents(t, r) })
 	t.Run("summary", func(t *testing.T) { runSummary(t, r) })
+	t.Run("summary with previous", func(t *testing.T) { runSummaryWithPrevious(t, r) })
 	t.Run("timeseries", func(t *testing.T) { runTimeSeries(t, r) })
 }
 

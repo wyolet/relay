@@ -15,6 +15,7 @@ type (
 	EventQuery       = usage.EventQuery
 	SummaryQuery     = usage.SummaryQuery
 	SummaryRow       = usage.SummaryRow
+	SummaryPrevious  = usage.SummaryPrevious
 	DurationStats    = usage.DurationStats
 	SummaryResult    = usage.SummaryResult
 	TimeSeriesQuery  = usage.TimeSeriesQuery

@@ -60,6 +60,8 @@ type EventQuery struct {
 	Since time.Duration
 	From  time.Time
 	To    time.Time
+	// Before is an exclusive upper bound (ts < Before), ANDed with To. It lets two adjacent windows split on one instant without counting an event on it twice.
+	Before time.Time
 
 	// RequestID is an exact single-value lookup (deep-link one event).
 	RequestID string
@@ -199,6 +201,8 @@ type SummaryRow struct {
 	// cost total always says how complete it is.
 	CostNanos int64 `json:"cost_nanos"`
 	Unpriced  int64 `json:"unpriced"`
+	// Previous is the same group over the previous window, set only by SummaryWithPrevious. Nil when the group had no traffic there; a group seen only in the previous window has no row at all.
+	Previous *SummaryPrevious `json:"previous,omitempty"`
 }
 
 // DurationStats holds latency aggregates in milliseconds.
@@ -217,6 +221,9 @@ type SummaryResult struct {
 	Rows []SummaryRow `json:"rows"`
 	From time.Time    `json:"from"`
 	To   time.Time    `json:"to"`
+	// PreviousFrom / PreviousTo bound the window rows' Previous covers: the requested window's length, ending where it starts. PreviousTo is exclusive. Zero unless SummaryWithPrevious built the result.
+	PreviousFrom time.Time `json:"previous_from,omitzero"`
+	PreviousTo   time.Time `json:"previous_to,omitzero"`
 }
 
 // TimeSeriesQuery is EventQuery + a bucket width + optional group
