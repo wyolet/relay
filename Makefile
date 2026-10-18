@@ -40,7 +40,7 @@ NEXT_MAJOR       := v$(shell echo $$(($(VERSION_MAJOR) + 1))).0.0
 # (standalone mode — bundles PG/CH/Jaeger).
 COMPOSE_BASE := deploy/compose/docker-compose.yml
 COMPOSE_DEV  := deploy/compose/docker-compose.dev.yml
-COMPOSE_DEV_ARGS := --env-file .env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
+COMPOSE_DEV_ARGS := --env-file .env --env-file versions.env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 
 # PG DSN for host-side migrate/seed (talks to dev-stack PG).
 PG_DSN := $(RELAY_PG_DSN)
