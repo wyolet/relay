@@ -151,8 +151,8 @@ var summaryCases = []summaryCase{
 	},
 }
 
-func runSummary(t *testing.T, r usage.Reader) {
-	for _, tc := range summaryCases {
+func runSummary(t *testing.T, r usage.Reader, cases []summaryCase) {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := r.Summary(t.Context(), tc.q)
 			if err != nil {

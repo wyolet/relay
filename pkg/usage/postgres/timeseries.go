@@ -26,6 +26,10 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	if groupBy != "" && !usage.IsValidGroupBy(groupBy) {
 		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
 	}
+	selDistinct, err := distinctSelect(q.Distinct)
+	if err != nil {
+		return usage.TimeSeriesResult{}, err
+	}
 
 	where, args := buildWhere(q.EventQuery, true)
 	bucketExpr := fmt.Sprintf("date_bin(interval '%d seconds', ts, TIMESTAMPTZ 'epoch')", intervalSec)
@@ -53,11 +57,11 @@ SELECT
     `+ttftSelectSQL+`,
     `+costSelectSQL+`,
     min(ts)                                       AS first_seen,
-    max(ts)                                       AS last_seen
+    max(ts)                                       AS last_seen%s
 FROM %s%s
 GROUP BY %sbucket
 ORDER BY %sbucket`,
-		selPrefix, bucketExpr, s.cfg.Table, where, grpCols, grpCols)
+		selPrefix, bucketExpr, selDistinct, s.cfg.Table, where, grpCols, grpCols)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
 	if err != nil {
@@ -82,6 +86,7 @@ ORDER BY %sbucket`,
 			ttft                 ttftCols
 			costNanos, unpriced  int64
 			first, last          time.Time
+			distinct             int64
 		)
 		dest := []any{&bucket, &requests, &errs.total, &errs.c4xx, &errs.c5xx, &errs.throttled,
 			&avgMs, &p50, &p95, &p99, &maxMs,
@@ -90,6 +95,9 @@ ORDER BY %sbucket`,
 			&first, &last}
 		if grouped {
 			dest = append([]any{&grp}, dest...)
+		}
+		if selDistinct != "" {
+			dest = append(dest, &distinct)
 		}
 		if err := scalarRows.Scan(dest...); err != nil {
 			return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: scan timeseries scalar: %w", err)
@@ -112,6 +120,7 @@ ORDER BY %sbucket`,
 			TTFTMs:     ttft.stats(),
 			CostNanos:  costNanos,
 			Unpriced:   unpriced,
+			Distinct:   distinctCount(q.Distinct, distinct),
 		})
 		pointIdx[pkey(grp, bucket.Unix())] = len(res.Rows[ri].Points) - 1
 		totals[grp] += requests

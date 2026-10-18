@@ -24,6 +24,10 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	if groupBy != "" && !usage.IsValidGroupBy(groupBy) {
 		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
 	}
+	selDistinct, err := distinctSelect(q.Distinct)
+	if err != nil {
+		return usage.TimeSeriesResult{}, err
+	}
 
 	where, args := buildWhere(q.EventQuery, true)
 
@@ -57,11 +61,11 @@ SELECT
     `+ttftSelectSQL+`,
     `+costSelectSQL+`,
     min(ts)                         AS first_seen,
-    max(ts)                         AS last_seen
+    max(ts)                         AS last_seen%s
 FROM %s%s
 GROUP BY %s
 ORDER BY %s`,
-		selCols, chTable, where, groupOrder, groupOrder)
+		selCols, selDistinct, chTable, where, groupOrder, groupOrder)
 
 	rows, err := s.conn.Query(ctx, sql, args...)
 	if err != nil {
@@ -85,6 +89,7 @@ ORDER BY %s`,
 			costNanos, unpriced  int64
 			first                time.Time
 			last                 time.Time
+			distinct             int64
 		)
 		dest := []any{&bucket, &requests, &errs.total, &errs.c4xx, &errs.c5xx, &errs.throttled, &tokens,
 			&avgMs, &p50, &p95, &p99, &maxMs,
@@ -93,6 +98,9 @@ ORDER BY %s`,
 			&first, &last}
 		if grouped {
 			dest = append([]any{&grp}, dest...)
+		}
+		if selDistinct != "" {
+			dest = append(dest, &distinct)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: scan timeseries: %w", err)
@@ -115,6 +123,7 @@ ORDER BY %s`,
 			TTFTMs:     ttft.stats(),
 			CostNanos:  costNanos,
 			Unpriced:   unpriced,
+			Distinct:   distinctCount(q.Distinct, distinct),
 		})
 		totals[grp] += requests
 		if res.From.IsZero() || first.Before(res.From) {

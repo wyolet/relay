@@ -13,11 +13,19 @@ import (
 // the logs view, not usage stats. Returns an error for an unknown groupBy
 // dimension.
 func Summarize(events []Event, groupBy string) (SummaryResult, error) {
+	return SummarizeWithDistinct(events, groupBy, "")
+}
+
+// SummarizeWithDistinct is Summarize plus SummaryRow.Distinct over the distinct dimension (a ValidDistinct entry; "" for none).
+func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryResult, error) {
 	if groupBy == "" {
 		groupBy = "source"
 	}
 	if !IsValidGroupBy(groupBy) {
 		return SummaryResult{}, fmt.Errorf("usage.Summarize: invalid group_by %q", groupBy)
+	}
+	if _, ok := DistinctColumn(distinct); distinct != "" && !ok {
+		return SummaryResult{}, fmt.Errorf("usage.Summarize: invalid distinct %q", distinct)
 	}
 
 	type bucket struct {
@@ -28,6 +36,7 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 		ttfts          []int64
 		first, last    time.Time
 		cost, unpriced int64
+		distinct       distinctValues
 	}
 	groups := map[string]*bucket{}
 	from, to := time.Time{}, time.Time{}
@@ -39,10 +48,11 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 		key := groupKey(ev, groupBy)
 		b, ok := groups[key]
 		if !ok {
-			b = &bucket{tokens: map[string]int64{}, first: ev.Timestamp, last: ev.Timestamp}
+			b = &bucket{tokens: map[string]int64{}, first: ev.Timestamp, last: ev.Timestamp, distinct: newDistinctValues(distinct)}
 			groups[key] = b
 		}
 		b.count++
+		b.distinct.add(ev, distinct)
 		b.errs.add(ev.Status)
 		for k, v := range ev.Tokens {
 			b.tokens[k] += v
@@ -86,6 +96,7 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 			LastSeen:   b.last,
 			CostNanos:  b.cost,
 			Unpriced:   b.unpriced,
+			Distinct:   b.distinct.count(),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -101,11 +112,19 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 // oldest-first; series (rows) are ordered by total request count desc.
 // Returns an error for a non-positive interval or unknown groupBy.
 func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeriesResult, error) {
+	return BucketizeWithDistinct(events, interval, groupBy, "")
+}
+
+// BucketizeWithDistinct is Bucketize plus TimeSeriesPoint.Distinct over the distinct dimension (a ValidDistinct entry; "" for none).
+func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, distinct string) (TimeSeriesResult, error) {
 	if interval <= 0 {
 		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: interval must be > 0")
 	}
 	if groupBy != "" && !IsValidGroupBy(groupBy) {
 		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: invalid group_by %q", groupBy)
+	}
+	if _, ok := DistinctColumn(distinct); distinct != "" && !ok {
+		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: invalid distinct %q", distinct)
 	}
 	intervalSec := int64(interval / time.Second)
 	if intervalSec <= 0 {
@@ -119,6 +138,7 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		latencies      []int64
 		ttfts          []int64
 		cost, unpriced int64
+		distinct       distinctValues
 	}
 	// seriesKey -> bucketUnix -> point
 	series := map[string]map[int64]*point{}
@@ -138,10 +158,11 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		bu := ev.Timestamp.Unix() - (ev.Timestamp.Unix() % intervalSec)
 		p, ok := buckets[bu]
 		if !ok {
-			p = &point{tokens: map[string]int64{}}
+			p = &point{tokens: map[string]int64{}, distinct: newDistinctValues(distinct)}
 			buckets[bu] = p
 		}
 		p.requests++
+		p.distinct.add(ev, distinct)
 		totals[sk]++
 		p.errs.add(ev.Status)
 		for k, v := range ev.Tokens {
@@ -187,6 +208,7 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 				TTFTMs:     ttftStats(p.ttfts),
 				CostNanos:  p.cost,
 				Unpriced:   p.unpriced,
+				Distinct:   p.distinct.count(),
 			})
 		}
 		rows = append(rows, TimeSeriesRow{Group: GroupLabel(groupBy, sk), Points: points})

@@ -113,6 +113,7 @@ type fakeUsageReader struct {
 	last       usagelog.EventQuery
 	lastCount  usagelog.EventQuery
 	countLimit int
+	distinct   string
 	events     []usagelog.Event
 }
 
@@ -136,15 +137,15 @@ func (f *fakeUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (u
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	f.last = q.EventQuery
-	return usage.Summarize(f.events, q.GroupBy)
+	f.last, f.distinct = q.EventQuery, q.Distinct
+	return usage.SummarizeWithDistinct(f.events, q.GroupBy, q.Distinct)
 }
 
 func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQuery) (usagelog.TimeSeriesResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	f.last = q.EventQuery
+	f.last, f.distinct = q.EventQuery, q.Distinct
 	return usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}, nil
 }
 

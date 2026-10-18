@@ -169,6 +169,9 @@ type SummaryQuery struct {
 	// GroupByNone → one row over the whole filtered slice, Group {}.
 	// Empty → "source".
 	GroupBy string
+
+	// Distinct, when set, is a ValidDistinct dimension whose distinct non-empty values each row counts in SummaryRow.Distinct.
+	Distinct string
 }
 
 // DefaultEventLimit caps an unbounded Events query so a misconfigured
@@ -206,6 +209,8 @@ type SummaryRow struct {
 	Unpriced  int64 `json:"unpriced"`
 	// Previous is the same group over the previous window, set only by SummaryWithPrevious. Nil when the group had no traffic there; a group seen only in the previous window has no row at all.
 	Previous *SummaryPrevious `json:"previous,omitempty"`
+
+	Distinct *int64 `json:"distinct,omitempty" doc:"Number of distinct non-empty values of the distinct dimension among this row's events (keyless traffic is not a key). Present only with distinct set."`
 }
 
 // DurationStats holds latency aggregates in milliseconds.
@@ -241,6 +246,9 @@ type TimeSeriesQuery struct {
 
 	// GroupBy splits the result into one series per dimension value. Empty means a single series with a nil Group; GroupByNone means the same single series with Group {}. Otherwise IsValidGroupBy applies.
 	GroupBy string
+
+	// Distinct — see SummaryQuery.Distinct; counted per point in TimeSeriesPoint.Distinct.
+	Distinct string
 }
 
 // TimeSeriesPoint is one time bucket's aggregates. Bucket is the bucket's
@@ -262,6 +270,8 @@ type TimeSeriesPoint struct {
 	// CostNanos / Unpriced — see SummaryRow.
 	CostNanos int64 `json:"cost_nanos"`
 	Unpriced  int64 `json:"unpriced"`
+
+	Distinct *int64 `json:"distinct,omitempty" doc:"Number of distinct non-empty values of the distinct dimension among this bucket's events. Per-bucket values cannot be summed across buckets; use /usage/summary for a window total. Present only with distinct set."`
 }
 
 // TimeSeriesRow is one series. Group is nil for the single-series case, {} for GroupByNone, and carries the grouping dimension keyed by column name otherwise; omitzero drops only the nil case, so none still emits "group": {}.

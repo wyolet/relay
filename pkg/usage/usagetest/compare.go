@@ -83,6 +83,29 @@ var summaryWithPreviousCases = []summaryCase{
 		}}, From: at(45), To: at(95), PreviousFrom: at(-15), PreviousTo: at(45)},
 	},
 	{
+		// One key now (r05 is keyless), key-a and key-b before: the previous window carries its own distinct count.
+		name: "distinct counts each window separately",
+		q: func() usage.SummaryQuery {
+			q := windowQuery(usage.GroupByNone, 45, 105)
+			q.Distinct = "relay_key"
+			return q
+		}(),
+		want: usage.SummaryResult{Rows: []usage.SummaryRow{{
+			Group: map[string]string{}, Requests: 5,
+			ErrorCount: 3, Errors4xx: 1, Errors5xx: 2, Throttled: 1,
+			Tokens:     map[string]int64{"input": 31, "output": 17},
+			DurationMs: mixed(160, 200), TTFTMs: ptr(flat(40)),
+			FirstSeen: at(45), LastSeen: at(95), CostNanos: 2250, Unpriced: 3,
+			Distinct: ptr64(1),
+			Previous: &usage.SummaryPrevious{
+				Requests: 4, ErrorCount: 2, Errors4xx: 2, Throttled: 1,
+				Tokens:     map[string]int64{"input": 30, "output": 15, "cache_read": 7},
+				DurationMs: mixed(150, 200), TTFTMs: ptr(mixed(41, 41)),
+				CostNanos: 4000, Unpriced: 1, Distinct: ptr64(2),
+			},
+		}}, From: at(45), To: at(95), PreviousFrom: at(-15), PreviousTo: at(45)},
+	},
+	{
 		// The previous window is [at(30), at(45)): r04 on its start is in, r05 on its end belongs to the current window only.
 		name: "an event on either previous bound",
 		q:    windowQuery(usage.GroupByNone, 45, 60),
@@ -163,6 +186,32 @@ var explicitWindowCases = []explicitWindowCase{
 			}}, From: at(45), To: at(95), PreviousFrom: at(30), PreviousTo: at(50)},
 		},
 		prevFrom: 30, prevTo: 50,
+	},
+	{
+		// [at(10), at(50)) holds key-a, key-b and keyless r05; the current window holds key-b and r05 again.
+		summaryCase: summaryCase{
+			name: "distinct counts the explicit window separately",
+			q: func() usage.SummaryQuery {
+				q := windowQuery(usage.GroupByNone, 45, 105)
+				q.Distinct = "relay_key"
+				return q
+			}(),
+			want: usage.SummaryResult{Rows: []usage.SummaryRow{{
+				Group: map[string]string{}, Requests: 5,
+				ErrorCount: 3, Errors4xx: 1, Errors5xx: 2, Throttled: 1,
+				Tokens:     map[string]int64{"input": 31, "output": 17},
+				DurationMs: mixed(160, 200), TTFTMs: ptr(flat(40)),
+				FirstSeen: at(45), LastSeen: at(95), CostNanos: 2250, Unpriced: 3,
+				Distinct: ptr64(1),
+				Previous: &usage.SummaryPrevious{
+					Requests: 4, ErrorCount: 2, Errors4xx: 2, Throttled: 1,
+					Tokens:     map[string]int64{"input": 21, "output": 12, "cache_read": 7},
+					DurationMs: mixed(150, 200), TTFTMs: ptr(mixed(41, 41)),
+					CostNanos: 3250, Unpriced: 1, Distinct: ptr64(2),
+				},
+			}}, From: at(45), To: at(95), PreviousFrom: at(10), PreviousTo: at(50)},
+		},
+		prevFrom: 10, prevTo: 50,
 	},
 }
 

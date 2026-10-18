@@ -105,7 +105,7 @@ func (sk *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summar
 	if err != nil {
 		return usage.SummaryResult{}, err
 	}
-	return usage.Summarize(usage.FilterEvents(all, q.EventQuery), q.GroupBy)
+	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct)
 }
 
 // TimeSeries buckets the matching events into time series via
@@ -115,7 +115,7 @@ func (sk *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
-	res, err := usage.Bucketize(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy)
+	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
