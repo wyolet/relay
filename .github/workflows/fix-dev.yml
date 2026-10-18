@@ -39,6 +39,7 @@ concurrency:
 
 env:
   CLAUDE_CODE_VERSION: 2.1.302
+  GH_VERSION: 2.102.0
   SHA: ${{ inputs.sha }}
   GOOD: ${{ inputs.good }}
   RUN_ID: ${{ inputs.run_id }}
@@ -93,7 +94,7 @@ jobs:
   fix:
     needs: guard
     if: needs.guard.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_POOL == 'cluster' && 'relay-ci-integration' || 'ubuntu-latest' }}
     # Claude itself stops at 30 minutes, which leaves time to report the run.
     timeout-minutes: 40
     # No actions or workflows permission: Claude cannot start runs or change
@@ -103,9 +104,11 @@ jobs:
       pull-requests: write
       issues: write
       actions: read
+    # The cluster pool runs Postgres and Valkey as pod sidecars on the same
+    # addresses and has no ClickHouse. An empty image skips a service.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: ${{ vars.CI_POOL != 'cluster' && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: relay_test
           POSTGRES_USER: relay
@@ -118,7 +121,7 @@ jobs:
           --health-timeout 2s
           --health-retries 30
       valkey:
-        image: valkey/valkey:8-alpine
+        image: ${{ vars.CI_POOL != 'cluster' && 'valkey/valkey:8-alpine' || '' }}
         ports:
           - 6379:6379
         options: >-
@@ -127,7 +130,7 @@ jobs:
           --health-timeout 2s
           --health-retries 30
       clickhouse:
-        image: clickhouse/clickhouse-server:24.8-alpine
+        image: ${{ vars.CI_POOL != 'cluster' && 'clickhouse/clickhouse-server:24.8-alpine' || '' }}
         env:
           CLICKHOUSE_USER: relay
           CLICKHOUSE_PASSWORD: relay
@@ -141,7 +144,7 @@ jobs:
     env:
       RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
       RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
-      RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
+      RELAY_TEST_CH_DSN: ${{ vars.CI_POOL != 'cluster' && 'clickhouse://relay:relay@127.0.0.1:9000/default' || '' }}
       SHORT: ${{ needs.guard.outputs.short }}
     steps:
       - uses: actions/checkout@v7
@@ -150,6 +153,7 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-go@v7
+        if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
           cache: true
@@ -159,8 +163,26 @@ jobs:
         with:
           version: v2.12.2
           install-only: true
+          skip-cache: ${{ runner.environment == 'self-hosted' }}
 
       - uses: azure/setup-helm@v5
+        if: runner.environment == 'github-hosted'
+
+      # The cluster runner image has neither Node (for Claude Code) nor gh.
+      - uses: actions/setup-node@v5
+        if: runner.environment == 'self-hosted'
+        with:
+          node-version: '24'
+
+      - name: Install gh
+        if: runner.environment == 'self-hosted'
+        run: |
+          base="https://github.com/cli/cli/releases/download/v$GH_VERSION"
+          tgz="gh_${GH_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tgz" "$base/$tgz"
+          curl -fsSL "$base/gh_${GH_VERSION}_checksums.txt" | grep " $tgz\$" | (cd "$RUNNER_TEMP" && sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gh_${GH_VERSION}_linux_amd64/bin" >> "$GITHUB_PATH"
 
       - name: Collect the failed jobs' logs
         env:
@@ -209,7 +231,7 @@ jobs:
 
           Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-$SHORT, created at the failing commit.
 
-          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
+          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres and Valkey are running (RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR); ClickHouse is available only when RELAY_TEST_CH_DSN is set.
           2. Bisect the range with that test only (\`git bisect start <bad> <good>\`, \`git bisect run ...\`) to find the culprit commit, then \`git bisect reset\` and \`git switch fix/dev-$SHORT\`.
           3. Take exactly one outcome.
 
