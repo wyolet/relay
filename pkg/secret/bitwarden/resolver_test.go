@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 func TestResolver_EndToEnd_PersonalItem(t *testing.T) {

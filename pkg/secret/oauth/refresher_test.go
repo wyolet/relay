@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
-	"github.com/wyolet/relay/pkg/secret"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
 // memVault is an in-memory Vault: id → token blob.

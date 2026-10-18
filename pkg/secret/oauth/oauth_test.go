@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
 type memVault struct {

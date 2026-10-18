@@ -11,7 +11,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/settings"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // failingResolver answers from seeds and fails for the ids in broken.
@@ -20,7 +20,7 @@ type failingResolver struct {
 	broken map[string]bool
 }
 
-func (f failingResolver) Resolve(_ context.Context, ref pkgsecret.Ref) ([]byte, error) {
+func (f failingResolver) Resolve(_ context.Context, ref secret.Ref) ([]byte, error) {
 	if f.broken[ref.ID] {
 		return nil, errors.New("failingResolver: backend unavailable")
 	}
@@ -30,14 +30,14 @@ func (f failingResolver) Resolve(_ context.Context, ref pkgsecret.Ref) ([]byte, 
 func tokenSection() *settings.AuthTokens {
 	return &settings.AuthTokens{
 		Enabled: true, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour,
-		SigningKey:         pkgsecret.Ref{Kind: pkgsecret.KindStored, ID: "current"},
-		PreviousSigningKey: pkgsecret.Ref{Kind: pkgsecret.KindStored, ID: "previous"},
+		SigningKey:         secret.Ref{Kind: secret.KindStored, ID: "current"},
+		PreviousSigningKey: secret.Ref{Kind: secret.KindStored, ID: "previous"},
 	}
 }
 
-func registryFor(r pkgsecret.Resolver) *pkgsecret.Registry {
-	reg := pkgsecret.NewRegistry()
-	reg.Register(pkgsecret.KindStored, r)
+func registryFor(r secret.Resolver) *secret.Registry {
+	reg := secret.NewRegistry()
+	reg.Register(secret.KindStored, r)
 	return reg
 }
 

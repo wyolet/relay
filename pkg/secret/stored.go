@@ -1,3 +1,4 @@
+// Package secret is relay's master-key stored-secret backend: StoredResolver encrypts values with RELAY_MASTER_KEY (pkg/crypto, AES-256-GCM) into a Store and resolves "stored" refs back to plaintext, with whole-table rotation to a new master key. Refs, kinds and the Registry live in the github.com/wyolet/relay/secret module; the external fetch-only backends are the subpackages.
 package secret
 
 import (
@@ -6,11 +7,12 @@ import (
 	"sync"
 
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/secret"
 )
 
 var (
-	_ Resolver = (*StoredResolver)(nil)
-	_ Writer   = (*StoredResolver)(nil)
+	_ secret.Resolver = (*StoredResolver)(nil)
+	_ secret.Writer   = (*StoredResolver)(nil)
 )
 
 // Store is the persistence seam for stored-secret ciphertext. Its Postgres
@@ -54,8 +56,8 @@ func (s *StoredResolver) SetMasterKey(masterKey []byte, keyVersion int32) {
 	s.keyVersion = keyVersion
 }
 
-func (s *StoredResolver) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
-	if ref.Kind != KindStored {
+func (s *StoredResolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) {
+	if ref.Kind != secret.KindStored {
 		return nil, fmt.Errorf("secret/stored: wrong kind %q", ref.Kind)
 	}
 	ct, nonce, _, err := s.store.Get(ctx, ref.ID)
@@ -169,19 +171,19 @@ func (s *StoredResolver) Delete(ctx context.Context, id string) error {
 
 // Create encrypts plaintext under the current master key and persists it
 // at id, returning a stored Ref. Overwrites any existing secret at id.
-func (s *StoredResolver) Create(ctx context.Context, id string, plaintext []byte) (Ref, error) {
+func (s *StoredResolver) Create(ctx context.Context, id string, plaintext []byte) (secret.Ref, error) {
 	if id == "" {
-		return Ref{}, fmt.Errorf("secret/stored: id is required")
+		return secret.Ref{}, fmt.Errorf("secret/stored: id is required")
 	}
 	s.mu.RLock()
 	mk, ver := s.masterKey, s.keyVersion
 	s.mu.RUnlock()
 	ct, nonce, err := crypto.Encrypt(mk, plaintext)
 	if err != nil {
-		return Ref{}, fmt.Errorf("secret/stored: encrypt %q: %w", id, err)
+		return secret.Ref{}, fmt.Errorf("secret/stored: encrypt %q: %w", id, err)
 	}
 	if err := s.store.Put(ctx, id, ct, nonce, ver); err != nil {
-		return Ref{}, fmt.Errorf("secret/stored: put %q: %w", id, err)
+		return secret.Ref{}, fmt.Errorf("secret/stored: put %q: %w", id, err)
 	}
-	return Ref{Kind: KindStored, ID: id}, nil
+	return secret.Ref{Kind: secret.KindStored, ID: id}, nil
 }

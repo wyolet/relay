@@ -38,6 +38,7 @@ import (
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
 // BootstrapOptions configures the one-call Bootstrap helper. Pool and
@@ -130,7 +131,7 @@ type Stores struct {
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
 	// controller resolving S3 credentials) resolve through the same seam.
-	Secrets *pkgsecret.Registry
+	Secrets *secret.Registry
 
 	// Stored is the AES-GCM stored-secret backend registered in Secrets,
 	// exposed so the composition root can write a secret (the generated
@@ -187,7 +188,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 			}
 			return pc.ProviderConfig, true
 		})
-	secReg.Register(pkgsecret.KindOAuth, oauthResolver)
+	secReg.Register(secret.KindOAuth, oauthResolver)
 	stores.OAuthResolver = oauthResolver
 
 	return cat, stores, nil

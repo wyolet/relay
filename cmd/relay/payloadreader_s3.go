@@ -8,7 +8,7 @@ import (
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/settings"
 	payloads3 "github.com/wyolet/relay/pkg/payload/s3"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // newS3PayloadReader builds the object-store payload reader, resolving the

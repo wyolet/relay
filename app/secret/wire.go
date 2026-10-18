@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/pkg/secret/azure"
 	"github.com/wyolet/relay/pkg/secret/bitwarden"
 	"github.com/wyolet/relay/pkg/secret/gcp"
+	"github.com/wyolet/relay/secret"
 )
 
 // Wire builds the relay's secret-resolution stack over Postgres: the
@@ -25,25 +26,25 @@ import (
 // errors loudly, which is the intended behavior when no key is configured.
 // Optional external backends (Bitwarden, AWS SM, GCP SM, …) register here when their
 // env config is present.
-func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Registry, *pkgsecret.StoredResolver) {
+func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*secret.Registry, *pkgsecret.StoredResolver) {
 	store := NewStore(q, pool)
 	stored := pkgsecret.NewStoredResolver(store, masterKey, 1)
 
-	reg := pkgsecret.NewRegistry()
-	reg.Register(pkgsecret.KindEnv, pkgsecret.EnvResolver{})
-	reg.Register(pkgsecret.KindStored, stored)
+	reg := secret.NewRegistry()
+	reg.Register(secret.KindEnv, secret.EnvResolver{})
+	reg.Register(secret.KindStored, stored)
 
 	if cfg, err := aws.ConfigFromEnv(); err == nil {
-		reg.Register(pkgsecret.KindAWS, aws.New(cfg))
+		reg.Register(secret.KindAWS, aws.New(cfg))
 	}
 	if cfg, ok := bitwardenConfigFromEnv(); ok {
-		reg.Register(pkgsecret.KindBitwarden, bitwarden.New(cfg))
+		reg.Register(secret.KindBitwarden, bitwarden.New(cfg))
 	}
 	if cfg, err := azure.ConfigFromEnv(); err == nil {
-		reg.Register(pkgsecret.KindAzure, azure.New(cfg))
+		reg.Register(secret.KindAzure, azure.New(cfg))
 	}
 	if cfg, err := gcp.ConfigFromEnv(); err == nil {
-		reg.Register(pkgsecret.KindGCP, gcp.New(cfg))
+		reg.Register(secret.KindGCP, gcp.New(cfg))
 	}
 	// 1Password's SDK requires CGO, so it's only compiled into cgo builds
 	// (see onepassword_cgo.go / onepassword_nocgo.go). Relay's default

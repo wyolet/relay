@@ -1,6 +1,6 @@
 package settings
 
-import "github.com/wyolet/relay/pkg/secret"
+import "github.com/wyolet/relay/secret"
 
 // SecretRefs returns the secret refs a section value holds, keyed by field
 // path, so deleting a stored secret can tell whether a section still names

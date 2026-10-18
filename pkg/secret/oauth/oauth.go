@@ -25,8 +25,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/wyolet/relay/pkg/secret"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
 // Vault is the encrypt/decrypt persistence the resolver delegates to — the

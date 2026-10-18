@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/pkg/payload"
 	chpayload "github.com/wyolet/relay/pkg/payload/clickhouse"
 	payloadfile "github.com/wyolet/relay/pkg/payload/file"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // payloadReaderResolver is the read-side counterpart to the sink Controller:

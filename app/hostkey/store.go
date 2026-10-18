@@ -25,7 +25,8 @@ import (
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
-	"github.com/wyolet/relay/pkg/secret"
+	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // Store is the HostKey data-access type. resolver resolves env + stored
@@ -35,12 +36,12 @@ import (
 type Store struct {
 	q        *gen.Queries
 	resolver *secret.Registry
-	stored   *secret.StoredResolver
+	stored   *pkgsecret.StoredResolver
 }
 
 // NewStore constructs a Store. Pass the shared secret Registry + the stored
 // resolver (see app/secret.Wire); stored may be nil to run env-only.
-func NewStore(q *gen.Queries, resolver *secret.Registry, stored *secret.StoredResolver) *Store {
+func NewStore(q *gen.Queries, resolver *secret.Registry, stored *pkgsecret.StoredResolver) *Store {
 	return &Store{q: q, resolver: resolver, stored: stored}
 }
 

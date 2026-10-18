@@ -9,3 +9,5 @@ use ./sdk
 use ./jobq
 
 use ./auth
+
+use ./secret
