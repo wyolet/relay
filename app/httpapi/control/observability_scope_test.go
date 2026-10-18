@@ -106,7 +106,7 @@ func TestScopeEventQuery(t *testing.T) {
 
 // fakeUsageReader records the query it was handed; calls counts invocations
 // so tests can assert the scoped-out short-circuit never reaches the store.
-// The mutex covers /logs?count=true, which calls Events and Count concurrently.
+// The mutex covers /logs?count=true, which calls Events and Count concurrently, and /usage/facets, which runs one Facet per dimension concurrently.
 type fakeUsageReader struct {
 	mu         sync.Mutex
 	calls      int
@@ -149,6 +149,14 @@ func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQue
 	return usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}, nil
 }
 
+func (f *fakeUsageReader) Facet(_ context.Context, q usagelog.FacetQuery) ([]usagelog.FacetValue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.last = q.EventQuery
+	return usage.TopValues(usage.FilterEvents(f.events, q.EventQuery), q.Dim, q.Limit)
+}
+
 // newUsageHarness mounts the usage + logs read endpoints behind the actor-
 // injecting middleware from scope_test.go. Stores is nil, so a scoped
 // caller resolves to zero owned keys (the fail-closed path).
@@ -159,6 +167,7 @@ func newUsageHarness(t *testing.T, authzr authz.Authorizer, reader *fakeUsageRea
 	api := humachi.New(r, huma.DefaultConfig("usage-scope-test", "0"))
 	d := Deps{Authz: authzr, UsageReader: reader}
 	registerUsage(api, d, nil)
+	registerUsageFacets(api, d, nil)
 	registerLogs(api, d, nil)
 	return r
 }

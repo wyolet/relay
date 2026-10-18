@@ -123,6 +123,15 @@ func (sk *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.
 	return res, nil
 }
 
+// Facet counts q.Dim's values over the matching events via usage.TopValues.
+func (sk *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetValue, error) {
+	all, err := sk.scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit)
+}
+
 // scan fetches and decodes all events from the store, skipping malformed
 // values (so a single bad entry never breaks a query).
 func (sk *Sink) scan(ctx context.Context) ([]usage.Event, error) {

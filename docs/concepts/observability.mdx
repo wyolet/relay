@@ -23,8 +23,9 @@ Read it back through the control plane:
 | `GET /usage/events` | Raw usage events, filterable. |
 | `GET /usage/summary` | Aggregated totals (tokens, counts) over a window. |
 | `GET /usage/timeseries` | Bucketed usage over time. |
+| `GET /usage/facets` | The most frequent values of chosen dimensions, for filter dropdowns. |
 
-All three endpoints share the same filter parameters: `since` (default
+All the usage endpoints share the same filter parameters: `since` (default
 `1h`) or an absolute `from`/`to` window; `status_min`/`status_max` or the
 `status_class` shorthand (`2xx`/`4xx`/`5xx`); `model_id`, `host_id`,
 `policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`
@@ -79,6 +80,34 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/usage/summary?group_by=none&distinct=relay_key_hash&since=24h"
+```
+
+### Filter values
+
+`GET /usage/facets` lists the values a filter can take. `dims` names up to 16 dimensions, comma-separated, from the `group_by` vocabulary (`none` excluded, `tags.<key>` and `extras.<key>` allowed); `limit` caps the values per dimension (default 50, max 200). Each dimension is counted with every filter applied except its own, so `model_id` values honour `host_id=` but ignore `model_id=`, and a dropdown keeps showing the alternatives to what is selected. Values are ordered by request count, then by value; the empty value is listed like any other (traffic without a relay key, for example). Rows are counted as in summaries, so requests rejected before reaching a provider are left out.
+
+An id value carries a `label`: the latest non-empty slug recorded beside that id in the window, so a renamed model shows its current name. When the events carry none (rows recorded before the slug existed, host keys), the label comes from the current catalog: models, hosts, policies, projects, teams, service accounts, relay keys and host keys. User principals have no label. `from`/`to` echo the requested window.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/facets?dims=model_id,host_id&host_id=<id>&since=24h"
+```
+
+```json
+{
+  "facets": {
+    "model_id": [
+      {"value": "0199…", "label": "claude-sonnet-4-5", "requests": 412},
+      {"value": "0198…", "label": "gpt-5", "requests": 97}
+    ],
+    "host_id": [
+      {"value": "0197…", "label": "anthropic", "requests": 509},
+      {"value": "0196…", "label": "openrouter", "requests": 33}
+    ]
+  },
+  "from": "2026-10-17T09:00:00Z",
+  "to": "2026-10-18T09:00:00Z"
+}
 ```
 
 ### Failed requests

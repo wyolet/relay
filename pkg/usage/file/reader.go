@@ -70,6 +70,15 @@ func (r *Reader) TimeSeries(_ context.Context, q usage.TimeSeriesQuery) (usage.T
 	return res, nil
 }
 
+// Facet streams the file, applies filters, and counts q.Dim's values via usage.TopValues.
+func (r *Reader) Facet(_ context.Context, q usage.FacetQuery) ([]usage.FacetValue, error) {
+	all, err := r.scan()
+	if err != nil {
+		return nil, err
+	}
+	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit)
+}
+
 // scan reads every event in the file (no filter/limit; callers evaluate
 // via usage.FilterEvents). A missing file yields an empty slice, not an
 // error — useful at boot before any request has fired.

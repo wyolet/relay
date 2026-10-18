@@ -43,6 +43,10 @@ func (f *filteringUsageReader) TimeSeries(context.Context, usagelog.TimeSeriesQu
 	return usagelog.TimeSeriesResult{}, nil
 }
 
+func (f *filteringUsageReader) Facet(context.Context, usagelog.FacetQuery) ([]usagelog.FacetValue, error) {
+	return nil, nil
+}
+
 func newCompareHarness(t *testing.T, authzr authz.Authorizer, reader usagelog.Reader) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
