@@ -513,7 +513,6 @@ SPEC_MOCK_DIR    ?= $(HOME)/projects/wyolet/spec-mock-openai
 MOCK_BIN         := /tmp/spec-mock-openai
 MOCK_FIXTURES    := /tmp/mock-fixtures
 MOCK_CORPUS      := $(SPEC_MOCK_DIR)/fixtures-corpus/openai-mini-2026-05-19.tar.zst
-RELAY_MOCK_BASE_URL ?=
 
 smoke-mock: ## replay recorded openai-mini fixtures through relay → $$RELAY_MOCK_BASE_URL
 	@test -n "$(RELAY_MOCK_BASE_URL)" || { echo "RELAY_MOCK_BASE_URL is not set — set it to the mock base URL (e.g. http://localhost:5180) and re-run"; exit 1; }
