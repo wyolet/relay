@@ -147,6 +147,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 		mount(api, d, mw)
 	}
 	registerModels(api, d, mw)
+	registerCatalog(api, d, mw)
 	registerProxyHosts(api, d, mw)
 
 	// /v1/ws is a raw upgrade, not a huma POST operation, so it mounts

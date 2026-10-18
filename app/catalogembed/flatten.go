@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
@@ -16,6 +17,11 @@ import (
 )
 
 func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
+	return FlattenScoped(snap, at, nil)
+}
+
+// FlattenScoped projects the snapshot into the SDK catalog schema, keeping only the enabled bindings keep accepts; nil keep keeps all. Hosts left without a binding and sidecars for unserved slugs drop out, so a scoped document never names what keep refused.
+func FlattenScoped(snap *catalog.Snapshot, at time.Time, keep func(*model.Model, *binding.Binding) bool) *sdkcatalog.Catalog {
 	version := "relay-catalog@" + strings.TrimPrefix(manifest.APIVersion, "relay.wyolet.dev/")
 	out := &sdkcatalog.Catalog{
 		Version:     version,
@@ -44,13 +50,16 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 				if hb.Spec.HostID != h.Meta.ID || !hb.IsEnabled() {
 					continue
 				}
+				if keep != nil && !keep(m, hb) {
+					continue
+				}
 				for i := range m.Spec.Snapshots {
 					snapEntry := &m.Spec.Snapshots[i]
 					if !hb.Serves(snapEntry.Name) {
 						continue
 					}
 					var rates []sdkcatalog.Rate
-					if pr, ok := snap.PriceByModelHost(m.Meta.ID, h.Meta.ID); ok && pr.IsEnabled() {
+					if pr, ok := snap.PricingForBinding(hb); ok && pr.IsEnabled() {
 						rates = ratesFrom(pr)
 					}
 					// Declared aliases resolve to the pointer snapshot, so they
