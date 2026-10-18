@@ -93,3 +93,4 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 
 `release/next` needs its own ruleset that blocks deletion (auto-delete would remove it when the release PR merges) and force pushes. It must not get the `dev` ruleset: `full.yml` moves it with a direct ref update, which a PR-only rule would reject.
 
+
