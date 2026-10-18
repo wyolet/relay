@@ -8,7 +8,7 @@
 // baseURL/path/auth wiring. OpenAI, Anthropic, and Gemini constructors remain
 // for explicit off-catalog targets.
 //
-// A relay client also reads what its credential can use: Models lists the model ids and Catalog the catalog document behind a model picker. Each result names its Origin: OriginRelay is relay's answer for the credential, OriginEmbedded the public catalog compiled into this SDK, served when relay is unreachable and no earlier copy is held. Stale marks an earlier relay copy served after a failed refresh.
+// Models lists the model ids a client can use and Catalog the catalog document behind a model picker. A relay client reads them from relay, scoped to its credential; any other client reads the latest public catalog through catalogsource.Latest, narrowed to its catalog host, and never contacts relay. Each result names its Origin: OriginRelay is relay's answer for the credential, OriginCatalog the catalog server's latest release, OriginEmbedded the public catalog compiled into this SDK, served when neither can be read. Stale marks an earlier copy served after a failed refresh.
 //
 // Configuration mirrors the OpenAI SDK: base URL, API key, auth header/scheme,
 // extra default headers, request path, and HTTP client are all settable.
@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/sdk/catalogsource"
 	"github.com/wyolet/relay/sdk/telemetry"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -51,6 +52,8 @@ type Client struct {
 	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
 	target      Target                                 // set by For(); zero for Relay/manual constructors
 	relay       *relayCache                            // set by newRelayClient; nil = not a relay client
+	// catalogSource is where a non-relay client's Models and Catalog read; nil = the process-wide catalogsource.Latest().
+	catalogSource *catalogsource.LatestSource
 
 	telemetry     *telemetry.Emitter // nil = calls are not reported
 	ownsTelemetry bool               // Close closes the emitter (ForMode built it)

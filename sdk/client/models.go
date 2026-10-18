@@ -19,11 +19,13 @@ type Origin string
 const (
 	// OriginRelay is a result the relay server returned for the client's credential: only what that credential can route to, from the deployment's live catalog.
 	OriginRelay Origin = "relay"
-	// OriginEmbedded is the public catalog compiled into this SDK, served when relay could not be reached and no earlier relay copy is held. It is not scoped to the credential and may list models the relay doesn't serve.
+	// OriginCatalog is the latest public catalog from the catalog server, read by a client that doesn't go through relay. It is what the catalog says the host serves, not what the provider key can call.
+	OriginCatalog Origin = "catalog"
+	// OriginEmbedded is the public catalog compiled into this SDK. A relay client gets it when relay could not be reached and no earlier relay copy is held; it is not scoped to the credential and may list models the relay doesn't serve. Any other client gets it when the catalog server is off or unreachable, or its latest release is older than the embed.
 	OriginEmbedded Origin = "embedded"
 )
 
-// ModelList is the model ids a relay credential can use, in the order relay lists them.
+// ModelList is the model ids a client can use: for a relay client those its credential can use, in the order relay lists them; for any other client those its catalog host serves, in catalog order.
 type ModelList struct {
 	IDs    []string
 	Origin Origin
@@ -46,8 +48,6 @@ type ModelCatalog struct {
 // maxListBytes caps a /v1/models or /v1/catalog body; the full public catalog is well under 1 MiB.
 const maxListBytes = 32 << 20
 
-var errNotRelayClient = errors.New("relay client: Models and Catalog need a relay client (Relay, RelayWS, or ForMode in proxy mode)")
-
 // relayCache holds a relay client's last good results. A non-nil one is also what marks a client as a relay client.
 type relayCache struct {
 	mu      sync.Mutex
@@ -64,9 +64,11 @@ func (r *relayCache) drop() {
 }
 
 // Models returns the model ids relay lists for the client's credential (GET /v1/models). When the refresh fails on a network error or a 5xx, the last good list is returned with Stale and Err set; with none held, the error is returned, since the embedded catalog's ids are not the credential's. A 401 or 403 returns an error and forgets the held list.
+//
+// A client that doesn't go through relay returns the binding slugs of Catalog instead, with its Origin, Stale and Err.
 func (c *Client) Models(ctx context.Context) (*ModelList, error) {
 	if c.relay == nil {
-		return nil, errNotRelayClient
+		return c.publicModels(ctx)
 	}
 	if c.configErr != nil {
 		return nil, c.configErr
@@ -106,9 +108,11 @@ func (c *Client) Models(ctx context.Context) (*ModelList, error) {
 }
 
 // Catalog returns the catalog relay serves for the client's credential (GET /v1/catalog): the models, hosts and prices it can route to, with no upstream addresses. The last good copy is kept in memory and revalidated with its ETag. When the refresh fails on a network error or a 5xx, the last good copy is returned with Stale and Err set; with none held, the embedded catalog is returned with Origin embedded and Err set. A 401 or 403 returns an error and forgets the held copy; a 404 means the relay predates /v1/catalog and returns an error.
+//
+// A client that doesn't go through relay reads the latest public catalog from its catalog source (WithCatalogSource) and sends nothing to its base URL or to relay. A client built by For, ForFrom or ForMode gets only its catalog host, with the models and providers that host's bindings reference; a host the fetched catalog lacks gives an empty catalog. A client built by a constructor (OpenAI, Anthropic, New, ...) has no catalog host and gets the whole catalog.
 func (c *Client) Catalog(ctx context.Context) (*ModelCatalog, error) {
 	if c.relay == nil {
-		return nil, errNotRelayClient
+		return c.publicCatalog(ctx)
 	}
 	if c.configErr != nil {
 		return nil, c.configErr
