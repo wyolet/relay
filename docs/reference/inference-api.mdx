@@ -53,7 +53,8 @@ namespace belongs to Relay's canonical shape.
 | `GET` | `/v1/catalog` | Catalog document (models, hosts, prices) scoped to the relay key; see [Catalog](#catalog) |
 | `POST` | `/otlp/v1/traces` | OpenTelemetry trace export (OTLP/HTTP); see [Reported usage](/concepts/observability#reported-usage-opentelemetry). 404 unless the `otlp-receiver` setting is enabled |
 | `POST` | `/otlp/v1/logs` | OpenTelemetry logs export (OTLP/HTTP) for model calls reported as events; same rules as the trace export |
-| `GET` | `/healthz` | Liveness + Postgres ping (public) |
+| `GET` | `/healthz` | Readiness: Postgres ping and a loaded catalog; 503 until both hold (public) |
+| `GET` | `/livez` | Liveness: the process is serving, no dependency checks (public) |
 | `GET` | `/openapi.json` | Generated typed OpenAPI spec |
 
 ## Examples
