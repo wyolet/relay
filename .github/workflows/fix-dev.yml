@@ -172,8 +172,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
         id: claude
-        # Claude Code otherwise asks for 128k output tokens per request, which a
-        # low-tier API account rejects as "Credit balance is too low".
+        # Claude Code otherwise asks for up to 128k output tokens per request.
         env:
           ANTHROPIC_BASE_URL: ${{ vars.DEV_FIXER_BASE_URL }}
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ vars.DEV_FIXER_MAX_OUTPUT_TOKENS || '32000' }}
