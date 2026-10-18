@@ -124,8 +124,9 @@ type ModelDTO struct {
 }
 
 type ModelSpec struct {
-	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
-	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+	Family      string `json:"family,omitempty"      yaml:"family,omitempty"`
+	ProductLine string `json:"productLine,omitempty" yaml:"productLine,omitempty"`
+	Version     string `json:"version,omitempty"     yaml:"version,omitempty"`
 
 	Capabilities model.Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 	Modalities   model.Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"`

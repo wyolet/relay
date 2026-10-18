@@ -181,6 +181,9 @@
         "pointer": {
           "type": "string"
         },
+        "productLine": {
+          "type": "string"
+        },
         "providerModelPageURL": {
           "type": "string"
         },

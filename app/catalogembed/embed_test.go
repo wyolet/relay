@@ -150,6 +150,7 @@ metadata:
     id: acme
 spec:
   family: rocket
+  productLine: booster
   version: "1"
   capabilities:
     chat: true
@@ -224,7 +225,7 @@ spec:
 	if mi == nil {
 		t.Fatalf("rocket-2026 ModelInfo missing; got %+v", cat.Models)
 	}
-	if mi.Provider != "acme" || mi.DisplayName != "Rocket" || mi.Family != "rocket" {
+	if mi.Provider != "acme" || mi.DisplayName != "Rocket" || mi.Family != "rocket" || mi.ProductLine != "booster" {
 		t.Fatalf("model identity wrong: %+v", mi)
 	}
 	if !mi.Capabilities.Vision || !mi.Capabilities.Tools || !mi.Capabilities.Chat {

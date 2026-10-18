@@ -81,6 +81,26 @@ func TestModelFilter(t *testing.T) {
 	}
 }
 
+func TestModelFilter_ProductLine(t *testing.T) {
+	items := []*model.Model{
+		{Meta: meta.Metadata{Name: "m1"}, Spec: model.Spec{Family: "claude", ProductLine: "opus"}},
+		{Meta: meta.Metadata{Name: "m2"}, Spec: model.Spec{Family: "claude", ProductLine: "haiku"}},
+		{Meta: meta.Metadata{Name: "m3"}, Spec: model.Spec{Family: "gpt"}},
+	}
+	got, _ := applyQ(t, modelFilter, "product_line=opus&product_line=haiku", items)
+	if want := []string{"m1", "m2"}; !eqNames(got, want) {
+		t.Fatalf("product_line=opus,haiku => %v, want %v", names(got), want)
+	}
+	got, _ = applyQ(t, modelFilter, "sort=product_line", items)
+	if want := []string{"m3", "m2", "m1"}; !eqNames(got, want) {
+		t.Fatalf("sort=product_line => %v, want %v", names(got), want)
+	}
+	got, _ = applyQ(t, modelFilter, "q=haik", items)
+	if want := []string{"m2"}; !eqNames(got, want) { // matches the line, not the name
+		t.Fatalf("q=haik => %v, want %v", names(got), want)
+	}
+}
+
 func TestModelFilter_Timestamps(t *testing.T) {
 	jan := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	mar := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)

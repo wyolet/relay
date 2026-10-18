@@ -20,6 +20,7 @@ type TranslateResult struct {
 	SkippedExisting  int            // folded models skipped because already in catalog (additive)
 	UnsupportedNPM   map[string]int // npm tag → count routed to drafts
 	UnmappedFamilies []UnmappedFamily
+	UnmappedLines    []UnmappedLine
 }
 
 // DraftSet mirrors the shipped partition for drafts/.
@@ -142,11 +143,17 @@ func Translate(providers []MDProvider, o Opts) (*TranslateResult, error) {
 			primary := choosePrimary(members, base)
 			pm := p.Models[primary]
 
-			family := o.Families.resolve(pm.Family)
-			if _, dup := acc[base]; !dup && family == "" {
-				r.UnmappedFamilies = append(r.UnmappedFamilies, UnmappedFamily{Provider: p.ID, Model: base, Value: pm.Family})
+			family, lineCandidate := o.Families.resolve(pm.Family)
+			line := o.Families.line(family, lineCandidate)
+			if _, dup := acc[base]; !dup {
+				switch {
+				case family == "":
+					r.UnmappedFamilies = append(r.UnmappedFamilies, UnmappedFamily{Provider: p.ID, Model: base, Value: pm.Family})
+				case line == "" && lineCandidate != "" && !isVersion(lineCandidate):
+					r.UnmappedLines = append(r.UnmappedLines, UnmappedLine{Provider: p.ID, Model: base, Value: pm.Family})
+				}
 			}
-			modelDTO := buildFoldedModel(p, pm, base, members, o.Version, family)
+			modelDTO := buildFoldedModel(p, pm, base, members, o.Version, family, line)
 			bindingDTO := buildFoldedBinding(base, p.ID, adapter, primary, members)
 			pricingDTO, hasPricing := buildPricing(p.ID, base, pm.Cost)
 
