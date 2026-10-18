@@ -98,6 +98,10 @@ counts come from the provider response, not relay-side tokenization;
 all emits (usage, traces, payloads) are async via bounded channels with
 drop-on-full — never block the response.
 
+## Schema changes
+
+A column added to the usage or payload tables (ClickHouse or Postgres) must carry a default. The sinks insert by column name, so a relay one version behind keeps writing during a rolling upgrade only if the store can fill every column it doesn't know. In ClickHouse, set an explicit `DEFAULT` when the type's zero value would read as real data, as `cost_nanos DEFAULT -1` does for "unpriced".
+
 ## Pull request workflow
 
 - **Branch off `dev` and open the PR against `dev`.** One logical change per PR — don't pile unrelated changes onto one branch. PRs into `dev` are squash-merged.
