@@ -15,13 +15,7 @@ import (
 // dimension filters, and status range. It does not sort or apply Limit;
 // use SortAndLimit for that.
 func FilterEvents(events []Event, q EventQuery) []Event {
-	var cutoff time.Time
-	switch {
-	case !q.From.IsZero():
-		cutoff = q.From
-	case q.Since > 0:
-		cutoff = time.Now().Add(-q.Since)
-	}
+	cutoff := lowerBound(q)
 	out := events[:0:0]
 	for _, ev := range events {
 		if matches(ev, q, cutoff) {
@@ -29,6 +23,17 @@ func FilterEvents(events []Event, q EventQuery) []Event {
 		}
 	}
 	return out
+}
+
+// lowerBound resolves q's lower time bound: From, else now-Since, else zero (unbounded).
+func lowerBound(q EventQuery) time.Time {
+	switch {
+	case !q.From.IsZero():
+		return q.From
+	case q.Since > 0:
+		return time.Now().Add(-q.Since)
+	}
+	return time.Time{}
 }
 
 // SortAndLimit sorts events newest-first and caps to limit (clamped to

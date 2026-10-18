@@ -90,6 +90,15 @@ func (sk *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, 
 	return usage.SortAndLimit(usage.FilterEvents(all, q), q.Limit), nil
 }
 
+// Count returns how many events Events would match, up to limit.
+func (sk *Sink) Count(ctx context.Context, q usage.EventQuery, limit int) (int64, error) {
+	all, err := sk.scan(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return usage.CountEvents(all, q, limit), nil
+}
+
 // Summary returns aggregated rows grouped by q.GroupBy.
 func (sk *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.SummaryResult, error) {
 	all, err := sk.scan(ctx)

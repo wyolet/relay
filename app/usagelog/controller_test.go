@@ -26,6 +26,9 @@ func (f *fakeBackend) Close() error      { f.closed.Store(true); return nil }
 func (f *fakeBackend) Events(context.Context, EventQuery) ([]Event, error) {
 	return nil, nil
 }
+func (f *fakeBackend) Count(context.Context, EventQuery, int) (int64, error) {
+	return 0, nil
+}
 func (f *fakeBackend) Summary(context.Context, SummaryQuery) (SummaryResult, error) {
 	return SummaryResult{}, nil
 }

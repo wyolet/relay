@@ -30,12 +30,15 @@ type logsListInput struct {
 	UsageFilterInput
 	Limit  int    `query:"limit" doc:"Cap on returned records (page size). Default 100, max 10000."`
 	Cursor string `query:"cursor" doc:"Opaque pagination cursor from a previous response's next_cursor. Returns the next (older) page."`
+	Count  bool   `query:"count" doc:"When true, the response adds total and total_capped: the size of the whole filtered result set, counted regardless of cursor and limit."`
 }
 
 type logsListOutput struct {
 	Body struct {
-		Logs       []usagelog.Event `json:"logs"`
-		NextCursor string           `json:"next_cursor,omitempty"`
+		Logs        []usagelog.Event `json:"logs"`
+		NextCursor  string           `json:"next_cursor,omitempty"`
+		Total       *int64           `json:"total,omitempty" doc:"Number of records matching the filters across all pages, capped at 10000. Present only with count=true."`
+		TotalCapped *bool            `json:"total_capped,omitempty" doc:"True when more than 10000 records match, so total is the cap rather than the exact count. Present only with count=true."`
 	}
 }
 
@@ -100,9 +103,12 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		if !scopeEventQuery(&q, sc) {
 			out := &logsListOutput{}
 			out.Body.Logs = []usagelog.Event{}
+			if in.Count {
+				out.Body.Total, out.Body.TotalCapped = cappedTotal(0)
+			}
 			return out, nil
 		}
-		events, err := d.UsageReader.Events(ctx, q)
+		events, total, err := fetchLogs(ctx, d.UsageReader, q, in.Count)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -111,6 +117,9 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		out := &logsListOutput{}
 		out.Body.Logs = events
+		if in.Count {
+			out.Body.Total, out.Body.TotalCapped = cappedTotal(total)
+		}
 		if n := len(events); n > 0 && n == effectiveLimit(in.Limit) {
 			last := events[n-1]
 			out.Body.NextCursor = encodeCursor(last.Timestamp, last.RequestID)

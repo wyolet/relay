@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -105,25 +106,43 @@ func TestScopeEventQuery(t *testing.T) {
 
 // fakeUsageReader records the query it was handed; calls counts invocations
 // so tests can assert the scoped-out short-circuit never reaches the store.
+// The mutex covers /logs?count=true, which calls Events and Count concurrently.
 type fakeUsageReader struct {
-	calls  int
-	last   usagelog.EventQuery
-	events []usagelog.Event
+	mu         sync.Mutex
+	calls      int
+	last       usagelog.EventQuery
+	lastCount  usagelog.EventQuery
+	countLimit int
+	events     []usagelog.Event
 }
 
 func (f *fakeUsageReader) Events(_ context.Context, q usagelog.EventQuery) ([]usagelog.Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.last = q
 	return f.events, nil
 }
 
+func (f *fakeUsageReader) Count(_ context.Context, q usagelog.EventQuery, limit int) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastCount, f.countLimit = q, limit
+	return usage.CountEvents(f.events, q, limit), nil
+}
+
 func (f *fakeUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (usagelog.SummaryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.last = q.EventQuery
 	return usage.Summarize(f.events, q.GroupBy)
 }
 
 func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQuery) (usagelog.TimeSeriesResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.last = q.EventQuery
 	return usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}, nil

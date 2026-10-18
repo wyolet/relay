@@ -18,7 +18,7 @@ Read it back through the control plane:
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /logs` | The request log, newest first (paginated with `limit` + `cursor`). |
+| `GET /logs` | The request log, newest first (paginated with `limit` + `cursor`). With `count=true` the response adds `total` and `total_capped`. |
 | `GET /logs/{request_id}` | A single request, with captured bodies attached if payload logging was on. |
 | `GET /usage/events` | Raw usage events, filterable. |
 | `GET /usage/summary` | Aggregated totals (tokens, counts) over a window. |
@@ -34,6 +34,8 @@ All three endpoints share the same filter parameters: `since` (default
 (`true`/`false`); `attempts_min`, `duration_ms_min`/`max`,
 `ttft_ms_min`/`max`; `tag` (`key:value`, repeatable); `q` (free-text
 substring); and `request_id` / `relay_key_hash` for a single event.
+
+`GET /logs?count=true` also returns how many records the filters match across all pages, ignoring `cursor` and `limit`: `total` counts up to 10,000, and `total_capped` is `true` when more match, in which case `total` is 10,000. Without `count=true` neither field is present.
 
 Every event also carries who made the request: `project_id` / `team_id` /
 `principal_id` (with the `project`, `team`, `principal` slugs as of the

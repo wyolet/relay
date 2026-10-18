@@ -123,6 +123,8 @@ type queryRecorder struct {
 
 func (r *queryRecorder) Events(context.Context, EventQuery) ([]Event, error) { return nil, nil }
 
+func (r *queryRecorder) Count(context.Context, EventQuery, int) (int64, error) { return 0, nil }
+
 func (r *queryRecorder) TimeSeries(context.Context, TimeSeriesQuery) (TimeSeriesResult, error) {
 	return TimeSeriesResult{}, nil
 }
