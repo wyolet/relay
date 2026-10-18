@@ -35,6 +35,9 @@ type Reader interface {
 	// order (newest first), capped at q.Limit.
 	Events(ctx context.Context, q EventQuery) ([]Event, error)
 
+	// Count returns how many events Events would match without a page limit, LogOnly events included; q.Limit and the cursor are ignored. Counting stops past limit (<= 0 counts all), so a caller passes cap+1 and reads n > cap as "more than cap".
+	Count(ctx context.Context, q EventQuery, limit int) (int64, error)
+
 	// Summary returns aggregated rows grouped by q.GroupBy. Each row
 	// carries totals + latency percentiles over the events matching
 	// the filter. Rows are sorted by Requests descending. LogOnly

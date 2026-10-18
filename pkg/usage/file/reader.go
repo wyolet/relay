@@ -36,6 +36,15 @@ func (r *Reader) Events(_ context.Context, q usage.EventQuery) ([]usage.Event, e
 	return usage.SortAndLimit(usage.FilterEvents(all, q), q.Limit), nil
 }
 
+// Count streams the file and counts the events Events would match, up to limit.
+func (r *Reader) Count(_ context.Context, q usage.EventQuery, limit int) (int64, error) {
+	all, err := r.scan()
+	if err != nil {
+		return 0, err
+	}
+	return usage.CountEvents(all, q, limit), nil
+}
+
 // Summary streams the file, applies filters, builds per-group aggregates
 // including latency percentiles.
 func (r *Reader) Summary(_ context.Context, q usage.SummaryQuery) (usage.SummaryResult, error) {

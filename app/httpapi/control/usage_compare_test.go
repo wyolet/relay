@@ -28,6 +28,10 @@ func (f *filteringUsageReader) Events(context.Context, usagelog.EventQuery) ([]u
 	return nil, nil
 }
 
+func (f *filteringUsageReader) Count(context.Context, usagelog.EventQuery, int) (int64, error) {
+	return 0, nil
+}
+
 func (f *filteringUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (usagelog.SummaryResult, error) {
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
