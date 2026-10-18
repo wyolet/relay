@@ -44,7 +44,7 @@ target "_common" {
 // registries (ghcr + Docker Hub).
 target "prod" {
   inherits    = ["_common"]
-  description = "Lean multi-arch production image (external Postgres); pushes :VERSION + :latest + :sha to ghcr + Docker Hub"
+  description = "Lean multi-arch production image (external Postgres); pushes :VERSION + :latest + :sha to ghcr"
   tags = compact([
     "${REGISTRY}/${IMAGE_NAME}:${VERSION}",
     "${REGISTRY}/${IMAGE_NAME}:latest",
@@ -80,7 +80,7 @@ target "standalone" {
 }
 
 // catalog-server (Dockerfile `catalog-server` stage), versioned with relay;
-// same tags as prod.
+// same tags as prod, on GHCR only.
 target "catalog-server" {
   inherits    = ["_common"]
   description = "catalog-server image (catalog-server + catalog-validate + git); pushes :VERSION + :latest + :sha to ghcr + Docker Hub"
@@ -89,9 +89,6 @@ target "catalog-server" {
     "${REGISTRY}/${CATALOG_SERVER_IMAGE_NAME}:${VERSION}",
     "${REGISTRY}/${CATALOG_SERVER_IMAGE_NAME}:latest",
     notequal("", GIT_REVISION) ? "${REGISTRY}/${CATALOG_SERVER_IMAGE_NAME}:${GIT_REVISION}" : "",
-    "${DOCKERHUB}/${CATALOG_SERVER_IMAGE_NAME}:${VERSION}",
-    "${DOCKERHUB}/${CATALOG_SERVER_IMAGE_NAME}:latest",
-    notequal("", GIT_REVISION) ? "${DOCKERHUB}/${CATALOG_SERVER_IMAGE_NAME}:${GIT_REVISION}" : "",
   ])
 }
 
