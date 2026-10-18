@@ -22,9 +22,7 @@ func (r *Registry) Register(kind Kind, res Resolver) {
 	r.byKind[kind] = res
 }
 
-// Resolve validates the Ref and dispatches to the registered Resolver.
-// Returns a clear error when no backend is registered for the Kind — e.g.
-// a "stored" ref in a minimal build that wired only env.
+// Resolve validates the Ref and dispatches to the registered Resolver. Returns a clear error when no backend is registered for the Kind, e.g. a "stored" ref in a build that registered only env.
 func (r *Registry) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 	if err := ref.Validate(); err != nil {
 		return nil, err

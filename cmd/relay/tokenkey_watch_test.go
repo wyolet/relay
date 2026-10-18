@@ -14,7 +14,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // The control listener's default URL has to be the control listener's
@@ -36,7 +36,7 @@ func TestEnablingTokensLaterGeneratesASigningKey(t *testing.T) {
 	db := stubDBTX{row: settingsRow{section: settings.AuthTokensSection, value: raw}}
 	stores := &appcatalog.Stores{
 		Settings: settings.NewStore(gen.New(db)),
-		Secrets:  pkgsecret.NewRegistry(),
+		Secrets:  secret.NewRegistry(),
 	}
 	signer := &control.TokenSigner{}
 	verifier := &inference.TokenVerifier{}

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 const (

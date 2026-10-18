@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // ErrSecretRefNotAllowed marks a section value that would resolve a secret

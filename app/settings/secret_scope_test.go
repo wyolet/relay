@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 func oidcWith(issuer, env string) *AuthOIDC {

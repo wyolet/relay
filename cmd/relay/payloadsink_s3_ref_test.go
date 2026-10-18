@@ -14,7 +14,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/settings"
-	"github.com/wyolet/relay/pkg/secret"
+	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 type memSecretRow struct {
@@ -86,7 +87,7 @@ func TestPayloadS3RefOutsideScopeNeverReachesEndpoint(t *testing.T) {
 	endpoint := strings.TrimPrefix(srv.URL, "http://")
 
 	masterKey := []byte("0123456789abcdef0123456789abcdef")
-	stored := secret.NewStoredResolver(&memSecretStore{m: map[string]memSecretRow{}}, masterKey, 1)
+	stored := pkgsecret.NewStoredResolver(&memSecretStore{m: map[string]memSecretRow{}}, masterKey, 1)
 	const hostKeyID = "0192f3a0-0000-7000-8000-0000000000aa"
 	if _, err := stored.Create(context.Background(), hostKeyID, []byte("DUMMYHOSTKEY0001")); err != nil {
 		t.Fatal(err)

@@ -15,7 +15,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/storagetest"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // Under the default single-user authorizer every signed-in user holds

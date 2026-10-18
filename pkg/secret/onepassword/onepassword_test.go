@@ -12,7 +12,7 @@ import (
 
 	onepassword "github.com/1password/onepassword-sdk-go"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 type mockSecrets struct {

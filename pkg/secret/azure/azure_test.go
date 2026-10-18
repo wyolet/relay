@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 func TestParsePath(t *testing.T) {

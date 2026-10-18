@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/settings/settingstest"
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 func TestAuthTokens_Defaults(t *testing.T) {

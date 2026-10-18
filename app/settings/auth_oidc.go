@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // AuthOIDC is the auth:oidc settings section: inbound OpenID Connect login

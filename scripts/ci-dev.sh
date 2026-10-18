@@ -21,7 +21,7 @@ part_lint() {
   unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
   [ -z "$unformatted" ] || { echo "These files need gofmt:"; echo "$unformatted"; return 1; }
   make --no-print-directory lint-rules && make --no-print-directory lint || return 1
-  for m in . sdk jobq auth; do (cd "$m" && go build ./...) || return 1; done
+  for m in . sdk jobq auth secret; do (cd "$m" && go build ./...) || return 1; done
 }
 
 part_test() { make --no-print-directory test; }
@@ -39,7 +39,7 @@ part_integration() {
   [ -n "$list" ] || { echo "No integration package depends on the changed files."; return 0; }
   echo "Integration packages:"; awk '{print "  " $2}' <<<"$list"
   local status=0 m pkgs
-  for m in . jobq auth; do
+  for m in . jobq auth secret; do
     mapfile -t pkgs < <(awk -v m="$m" '$1 == m {print $2}' <<<"$list")
     [ "${#pkgs[@]}" -gt 0 ] || continue
     (cd "$m" && gotest -tags=integration -race -count=1 "${pkgs[@]}") || status=1
