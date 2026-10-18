@@ -221,7 +221,7 @@ type SummaryResult struct {
 	Rows []SummaryRow `json:"rows"`
 	From time.Time    `json:"from"`
 	To   time.Time    `json:"to"`
-	// PreviousFrom / PreviousTo bound the window rows' Previous covers: the requested window's length, ending where it starts. PreviousTo is exclusive. Zero unless SummaryWithPrevious built the result.
+	// PreviousFrom / PreviousTo bound the window rows' Previous covers: the one the caller gave, or the requested window's length ending where it starts. PreviousTo is exclusive. Zero unless SummaryWithPrevious built the result.
 	PreviousFrom time.Time `json:"previous_from,omitzero"`
 	PreviousTo   time.Time `json:"previous_to,omitzero"`
 }

@@ -133,6 +133,12 @@ func TestUsageSummaryRejectsABadCompare(t *testing.T) {
 	for _, path := range []string{
 		"/usage/summary?compare=yesterday",
 		"/usage/summary?compare=previous&since=0s",
+		"/usage/summary?compare=previous&compare_from=2026-03-01T00:00:00Z&compare_to=2026-03-02T00:00:00Z",
+		"/usage/summary?compare_from=2026-03-01T00:00:00Z",
+		"/usage/summary?compare_to=2026-03-02T00:00:00Z",
+		"/usage/summary?compare_from=2026-03-02T00:00:00Z&compare_to=2026-03-02T00:00:00Z",
+		"/usage/summary?compare_from=2026-03-02T00:00:00Z&compare_to=2026-03-01T00:00:00Z",
+		"/usage/summary?compare_from=yesterday&compare_to=2026-03-01T00:00:00Z",
 	} {
 		reader := &filteringUsageReader{}
 		h := newCompareHarness(t, testRBAC(), reader)

@@ -134,7 +134,7 @@ func (r *queryRecorder) Summary(_ context.Context, q SummaryQuery) (SummaryResul
 	return SummaryResult{Rows: r.rows[q.From]}, r.err
 }
 
-func TestSummaryWithPreviousQueriesBothWindowsWithTheSameFilters(t *testing.T) {
+func TestSummaryWithPrecedingWindowQueriesBothWindowsWithTheSameFilters(t *testing.T) {
 	from := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
 	prevFrom := from.Add(-time.Hour)
@@ -146,7 +146,7 @@ func TestSummaryWithPreviousQueriesBothWindowsWithTheSameFilters(t *testing.T) {
 		EventQuery: EventQuery{From: from, To: to, Model: []string{"m"}, ScopePrincipalID: []string{"u-1"}},
 		GroupBy:    "tags.env",
 	}
-	res, err := SummaryWithPrevious(t.Context(), r, q)
+	res, err := SummaryWithPrecedingWindow(t.Context(), r, q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,10 +178,52 @@ func TestSummaryWithPreviousQueriesBothWindowsWithTheSameFilters(t *testing.T) {
 	}
 }
 
+func TestSummaryWithPreviousQueriesTheGivenWindow(t *testing.T) {
+	prevFrom := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	prevTo := prevFrom.Add(30 * time.Minute)
+	r := &queryRecorder{}
+	q := SummaryQuery{EventQuery: EventQuery{Since: 2 * time.Hour, Model: []string{"m"}, ScopeProjectID: []string{"p-1"}}, GroupBy: "model"}
+	res, err := SummaryWithPrevious(t.Context(), r, q, prevFrom, prevTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.queries) != 2 {
+		t.Fatalf("queries = %d, want 2", len(r.queries))
+	}
+	for _, got := range r.queries {
+		if got.GroupBy != "model" || len(got.Model) != 1 || len(got.ScopeProjectID) != 1 {
+			t.Errorf("query = %+v, want the caller's filters, group and scope", got)
+		}
+		if got.From.IsZero() {
+			if got.Since != 2*time.Hour || !got.Before.IsZero() {
+				t.Errorf("current window query = %+v, want q unchanged", got)
+			}
+			continue
+		}
+		if !got.From.Equal(prevFrom) || !got.Before.Equal(prevTo) || !got.To.IsZero() || got.Since != 0 {
+			t.Errorf("previous window query = %v..%v before %v since %v, want [%v, %v)", got.From, got.To, got.Before, got.Since, prevFrom, prevTo)
+		}
+	}
+	if !res.PreviousFrom.Equal(prevFrom) || !res.PreviousTo.Equal(prevTo) {
+		t.Fatalf("previous window = %v..%v, want the given one", res.PreviousFrom, res.PreviousTo)
+	}
+}
+
+func TestSummaryWithPrecedingWindowRejectsAWindowWithoutAStart(t *testing.T) {
+	r := &queryRecorder{}
+	_, err := SummaryWithPrecedingWindow(t.Context(), r, SummaryQuery{})
+	if !errors.Is(err, ErrNoPreviousWindow) {
+		t.Fatalf("err = %v, want ErrNoPreviousWindow", err)
+	}
+	if len(r.queries) != 0 {
+		t.Fatalf("queries = %d, want none", len(r.queries))
+	}
+}
+
 func TestSummaryWithPreviousReturnsAReaderError(t *testing.T) {
 	boom := errors.New("boom")
 	r := &queryRecorder{err: boom}
-	_, err := SummaryWithPrevious(t.Context(), r, SummaryQuery{EventQuery: EventQuery{Since: time.Hour}})
+	_, err := SummaryWithPrecedingWindow(t.Context(), r, SummaryQuery{EventQuery: EventQuery{Since: time.Hour}})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the reader's", err)
 	}

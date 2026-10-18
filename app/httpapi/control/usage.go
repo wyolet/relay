@@ -309,8 +309,10 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"none\" (one row over the whole filtered set, group {}) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
-	Compare string `query:"compare" doc:"\"previous\" (the only accepted value) adds each row's numbers over the window of equal length just before this one as previous, and that window's bounds as previous_from/previous_to (previous_to exclusive). Rows stay those of the requested window: a group without traffic in the previous window has no previous, and a group seen only there has no row. The window is resolved once (since counts back from the request time, an open to becomes that time); one with no start or a start after its end is a 400."`
+	GroupBy     string `query:"group_by" doc:"\"source\" (default) | \"none\" (one row over the whole filtered set, group {}) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	Compare     string `query:"compare" doc:"\"previous\" (the only accepted value) adds each row's numbers over the window of equal length just before this one as previous, and that window's bounds as previous_from/previous_to (previous_to exclusive). Rows stay those of the requested window: a group without traffic in the previous window has no previous, and a group seen only there has no row. The window is resolved once (since counts back from the request time, an open to becomes that time); one with no start or a start after its end is a 400. Not combinable with compare_from/compare_to."`
+	CompareFrom string `query:"compare_from" doc:"Start (RFC3339, inclusive) of an explicit window to compare rows with, instead of compare=previous; needs compare_to. Rows gain previous exactly as with compare=previous, and previous_from/previous_to echo this window. Its length may differ from the requested window's and it may overlap it: the caller picks it."`
+	CompareTo   string `query:"compare_to" doc:"End (RFC3339, exclusive) of the explicit compare window; needs compare_from and must be after it."`
 }
 
 type usageSummaryOutput struct {
@@ -411,7 +413,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if in.GroupBy != "" && !usagelog.IsValidGroupBy(in.GroupBy) {
 			return nil, huma.Error400BadRequest("invalid group_by: " + in.GroupBy)
 		}
-		compare, err := parseCompare(in.Compare)
+		compare, err := parseCompare(in.Compare, in.CompareFrom, in.CompareTo)
 		if err != nil {
 			return nil, err
 		}
