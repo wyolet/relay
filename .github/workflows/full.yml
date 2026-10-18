@@ -6,7 +6,7 @@ name: Full CI on dev
 # caches stay scoped to dev. When a dispatched run on dev finishes, a green one
 # moves the ci-full-passed tag and release/next (scripts/release-pr.sh keeps
 # the one release pull request into main up to date); a red one gets the range
-# to bisect in this run's summary. To run the full tier now:
+# to bisect in this run's summary and starts fix-dev.yml. To run the full tier now:
 # gh workflow run ci.yml --ref dev
 
 on:
@@ -53,6 +53,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - id: tag
         env:
@@ -60,6 +61,7 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           repo="repos/$GITHUB_REPOSITORY"
           # gh prints a 404's body to stdout, so a failed lookup must clear it.
@@ -89,6 +91,11 @@ jobs:
             fi
             echo "Bisect them, then fix forward with a pull request into dev naming the culprit, or \`git revert\` that one commit."
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$CONCLUSION" = failure ]; then
+            gh workflow run fix-dev.yml --repo "$GITHUB_REPOSITORY" --ref dev \
+              -f sha="$SHA" -f good="$passed" -f run_id="$RUN_ID"
+            echo "Started fix-dev.yml." >> "$GITHUB_STEP_SUMMARY"
+          fi
           exit 1
 
       - uses: actions/checkout@v7
