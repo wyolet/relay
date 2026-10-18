@@ -397,3 +397,14 @@ func verbOf(a Action) Action {
 	}
 	return ActionUpdate
 }
+
+// CheckDocs plans docs against an empty deployment with the boot seed's
+// options and writes nothing, so a catalog's CI refuses what a first seed
+// would: unresolved names, a row's own Validate, the shared-catalog owner rules.
+func CheckDocs(ctx context.Context, docs []manifest.Document) error {
+	rows := &Rows{}
+	opts := Options{Stores: &Stores{}}
+	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), admin: true}
+	b.dir, b.dirErr = directoryFor(opts)
+	return b.run(ctx, docs)
+}

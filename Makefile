@@ -469,7 +469,7 @@ schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha2/ (re
 	go run ./cmd/catalog-schemas schemas/v1alpha2
 	go run ./cmd/auth-schemas schemas/v1alpha1
 
-catalog-validate: ## graph-lint the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
+catalog-validate: ## graph-lint and seed-check the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
 	go run ./cmd/catalog-validate $${RELAY_CATALOG_DIR:-../relay-catalog/data}
 
 catalog-embed: ## generate sdk/catalog/catalog.json.gz from the public catalog, checked out at CATALOG_VERSION
