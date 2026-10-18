@@ -48,8 +48,8 @@ RUN set -eu; \
   rm -rf /assets/catalog/drafts; \
   printf '%s\n' "${CATALOG_REF}" > /assets/catalog/.version
 
-# --- builder: compile the binary with the UI embedded ---
-FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS builder
+# --- source: module cache + source tree, shared by the binary builds below ---
+FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS source
 WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
@@ -69,6 +69,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private; fi; \
     go mod download
 COPY . .
+
+# --- builder: compile the binary with the UI embedded ---
+FROM source AS builder
+ARG GO_CACHE_MOUNTS=1
 # Land the fetched UI (may be empty if no token + private repo). The .gitkeep
 # guarantees dist/ is non-empty so `//go:embed all:dist` always compiles; an
 # empty dist means Present() is false and no UI is served.
@@ -85,6 +89,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/wyolet/relay/app/httpapi.Version=${VERSION}" \
     -o /relay ./cmd/relay
+
+# --- catalog-builder: catalog-server + catalog-validate; no UI or catalog assets ---
+FROM source AS catalog-builder
+ARG GO_CACHE_MOUNTS=1
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/catalog-server ./cmd/catalog-validate
 
 # --- final (lean): distroless, nonroot — production image, external Postgres ---
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS lean
@@ -132,3 +144,16 @@ ENV RELAY_CATALOG_DIR=/catalog \
 # exposed — use `docker exec` if you need to poke at it.
 EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/relay-standalone-entrypoint.sh"]
+
+# --- catalog-server: serves relay-catalog releases; also the catalog repo's CI tools ---
+# git is required: release data tarballs are `git archive` output. No ENTRYPOINT,
+# so `docker run <image> catalog-validate ...` runs either binary.
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS catalog-server
+LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
+RUN apk add --no-cache git \
+    && addgroup -S -g 65532 catalog \
+    && adduser -S -D -H -u 65532 -G catalog catalog
+COPY --from=catalog-builder /out/catalog-server /out/catalog-validate /usr/local/bin/
+USER 65532:65532
+EXPOSE 8080
+CMD ["catalog-server", "serve"]

@@ -10,7 +10,7 @@ import (
 type healthzOutput struct {
 	Body struct {
 		Status   string            `json:"status" enum:"ok,degraded" doc:"Overall health verdict."`
-		Backends map[string]string `json:"backends" doc:"Per-backend status; \"ok\" or an error string."`
+		Backends map[string]string `json:"backends" doc:"Per-backend status; \"ok\" or an error string. catalog is \"loading\" until the first snapshot is installed."`
 	}
 }
 
@@ -25,7 +25,8 @@ func registerHealth(api huma.API, d Deps) {
 	// serving, with NO backend dependency. Liveness probes point here so a
 	// transient PG/DNS blip (which degrades /healthz to 503) never gets a
 	// healthy pod killed — that would cascade restarts at the exact moment
-	// the backend is stressed. Backend health belongs on readiness/startup.
+	// the backend is stressed. Backend health and catalog loading belong on
+	// readiness/startup.
 	huma.Register(api, huma.Operation{
 		OperationID: "livez",
 		Method:      "GET",
@@ -42,7 +43,7 @@ func registerHealth(api huma.API, d Deps) {
 		OperationID: "healthz",
 		Method:      "GET",
 		Path:        "/healthz",
-		Summary:     "Readiness: process + backend health",
+		Summary:     "Readiness: process, backend health and a loaded catalog",
 		Tags:        []string{"system"},
 	}, func(ctx context.Context, _ *struct{}) (*healthzOutput, error) {
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -50,6 +51,15 @@ func registerHealth(api huma.API, d Deps) {
 
 		backends := map[string]string{}
 		status := "ok"
+		// Inference refuses every request until the first snapshot is installed, so the pod is not ready before then. An empty catalog still installs a snapshot and counts as ready.
+		if d.Catalog != nil {
+			if d.Catalog.IsReady() {
+				backends["catalog"] = "ok"
+			} else {
+				backends["catalog"] = "loading"
+				status = "degraded"
+			}
+		}
 		if d.Pinger != nil {
 			if err := d.Pinger.Ping(pingCtx); err != nil {
 				backends["pg"] = "error: " + err.Error()
@@ -63,7 +73,7 @@ func registerHealth(api huma.API, d Deps) {
 		out.Body.Status = status
 		out.Body.Backends = backends
 		if status != "ok" {
-			return out, huma.Error503ServiceUnavailable("backend(s) unhealthy")
+			return out, huma.Error503ServiceUnavailable("not ready: a backend is unhealthy or the catalog is still loading")
 		}
 		return out, nil
 	})

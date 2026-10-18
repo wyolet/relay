@@ -367,3 +367,58 @@ topologySpreadConstraints:
       matchLabels:
         app.kubernetes.io/name: relay
         app.kubernetes.io/component: relay
+
+# ----------------------------------------------------------------------------
+# catalog-server: serves relay-catalog releases over HTTP from a git mirror
+# (docs/reference/catalog-server.mdx). Independent of relay: it reads no relay
+# Secret, ConfigMap or data store. Off by default.
+# ----------------------------------------------------------------------------
+catalogServer:
+  enabled: false
+  replicaCount: 2
+  image:
+    repository: ghcr.io/wyolet/catalog-server
+    tag: ""          # defaults to .Chart.appVersion when empty
+    pullPolicy: IfNotPresent
+  # -- RELAY_CATALOG_SERVER_* variables (name/value). Unset ones keep the
+  # binary's defaults (wyolet/relay-catalog on GitHub, 60s sync, 64Mi cache).
+  # The listen address stays :8080.
+  env: []
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { memory: 256Mi }
+  # -- emptyDir at /tmp: holds the git mirror (a few MB) and build scratch.
+  tmpSizeLimit: 256Mi
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  serviceAccount:
+    annotations: {}
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+  # The proxy must not compress /releases/*: clients check the sha256 of the
+  # stored .gz bytes, so a re-encoded body fails every checksum.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""           # catalog.example.com
+    tls: []            # [{secretName: catalog-tls, hosts: [catalog.example.com]}]
+  # Gateway API alternative to ingress: an HTTPRoute on an existing Gateway.
+  httpRoute:
+    enabled: false
+    parentRefs: []     # [{name: public, namespace: gateway, sectionName: https}]
+    host: ""
+  # Restricts ingress to the server port from the listed peers (e.g. the
+  # ingress controller's namespace); empty `from` allows any source on that port.
+  networkPolicy:
+    enabled: false
+    from: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []

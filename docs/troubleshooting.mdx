@@ -149,7 +149,7 @@ When `RELAY_MASTER_KEY` held a different key than the one the stored values were
 ## Health checks
 
 ```bash
-# Inference liveness + Postgres ping (public)
+# Inference readiness: Postgres ping + catalog loaded (public)
 curl http://localhost:8080/healthz
 
 # Control plane build version (public)

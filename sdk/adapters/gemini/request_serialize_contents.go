@@ -166,11 +166,13 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			}
 
 		case *v1.FunctionCall:
+			// canonical: ItemCacheConfig.Anchor dropped — Gemini caches implicitly; it has no breakpoint.
 			seenConversation = true
 			flushFCOs()
 			pendingFCs = append(pendingFCs, *v)
 
 		case *v1.FunctionCallOutput:
+			// canonical: ItemCacheConfig.Anchor dropped — Gemini caches implicitly; it has no breakpoint.
 			seenConversation = true
 			flushFCs()
 			pendingFCOs = append(pendingFCOs, *v)

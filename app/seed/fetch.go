@@ -66,6 +66,12 @@ func FetchCatalog(ctx context.Context, urlTemplate, version, destDir string) (st
 	return findDataRoot(destDir)
 }
 
+// ExtractCatalogArchive extracts a gzipped catalog tarball under destDir
+// with FetchCatalog's size, entry-count and path limits.
+func ExtractCatalogArchive(r io.Reader, destDir string) error {
+	return extractTarGz(r, destDir, maxCatalogBytes, maxCatalogEntries)
+}
+
 // extractTarGz writes at most maxBytes of file content (sparse holes count
 // at their logical size) and at most maxEntries entries under destDir.
 func extractTarGz(r io.Reader, destDir string, maxBytes int64, maxEntries int) error {

@@ -23,7 +23,7 @@ type Catalog struct {
 // fields are operator-set metadata for catalog UIs; they do not affect routing.
 type Host struct {
 	Name    string `json:"name"`
-	BaseURL string `json:"baseURL"`
+	BaseURL string `json:"baseURL,omitempty"`
 	// Path overrides the adapter's default request path, with relay's host semantics: nil keeps the default, a set value is used verbatim, and "" means BaseURL is the complete endpoint.
 	Path   *string   `json:"path,omitempty"`
 	Models []Binding `json:"models"`
@@ -48,6 +48,7 @@ type ModelInfo struct {
 	DisplayName string `json:"displayName,omitempty"`
 	Description string `json:"description,omitempty"`
 	Family      string `json:"family,omitempty"`
+	ProductLine string `json:"productLine,omitempty"`
 	Version     string `json:"version,omitempty"`
 
 	Capabilities Capabilities `json:"capabilities,omitempty"`

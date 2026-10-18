@@ -32,10 +32,11 @@ require (
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/wyolet/relay/auth v0.3.0
 	github.com/wyolet/relay/jobq v0.1.1
-	github.com/wyolet/relay/sdk v0.7.21
+	github.com/wyolet/relay/sdk v0.7.23
 	github.com/wyolet/relay/secret v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/proto/otlp v1.9.0
 	golang.org/x/crypto v0.57.0
+	golang.org/x/mod v0.41.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0

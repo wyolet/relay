@@ -50,9 +50,11 @@ namespace belongs to Relay's canonical shape.
 | `POST` | `/anthropic/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/generate` | Relay canonical request/response |
 | `GET` | `/v1/models` | Models accessible to the relay key |
+| `GET` | `/v1/catalog` | Catalog document (models, hosts, prices) scoped to the relay key; see [Catalog](#catalog) |
 | `POST` | `/otlp/v1/traces` | OpenTelemetry trace export (OTLP/HTTP); see [Reported usage](/concepts/observability#reported-usage-opentelemetry). 404 unless the `otlp-receiver` setting is enabled |
 | `POST` | `/otlp/v1/logs` | OpenTelemetry logs export (OTLP/HTTP) for model calls reported as events; same rules as the trace export |
-| `GET` | `/healthz` | Liveness + Postgres ping (public) |
+| `GET` | `/healthz` | Readiness: Postgres ping and a loaded catalog; 503 until both hold (public) |
+| `GET` | `/livez` | Liveness: the process is serving, no dependency checks (public) |
 | `GET` | `/openapi.json` | Generated typed OpenAPI spec |
 
 ## Examples
@@ -142,6 +144,21 @@ enabled host binding with a healthy host key. List what your key can reach:
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer <relay-key>"
 ```
+
+## Catalog
+
+`GET /v1/catalog` returns the catalog document the Go SDK embeds (`sdk/catalog`: hosts with their model bindings and pricing, plus the `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential without a policy gets the same `403` when policy-less traffic is off.
+
+The document omits each host's `baseURL`, `path` and `consoleURL`: calls go through Relay, not to the upstream. `version` is `deployment@<tag>` when the catalog was seeded from a release tag, else `deployment`; `generatedAt` is when the document was rendered.
+
+The response carries a weak `ETag` and `Cache-Control: private, no-cache`. Send the tag back in `If-None-Match` to get `304 Not Modified` while the catalog is unchanged. With `Accept-Encoding: gzip` the body is gzip-compressed.
+
+```bash
+curl --compressed http://localhost:8080/v1/catalog \
+  -H "Authorization: Bearer <relay-key>"
+```
+
+In Go, `client.Relay(...).Catalog(ctx)` fetches and revalidates it, and `Models(ctx)` returns the `/v1/models` ids.
 
 ## Errors
 

@@ -167,6 +167,7 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 
 	m.Spec = model.Spec{
 		Family:               d.Spec.Family,
+		ProductLine:          d.Spec.ProductLine,
 		Version:              d.Spec.Version,
 		Capabilities:         d.Spec.Capabilities,
 		Modalities:           d.Spec.Modalities,
@@ -213,6 +214,7 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 		Metadata:   wm,
 		Spec: ModelSpec{
 			Family:               m.Spec.Family,
+			ProductLine:          m.Spec.ProductLine,
 			Version:              m.Spec.Version,
 			Capabilities:         m.Spec.Capabilities,
 			Modalities:           m.Spec.Modalities,

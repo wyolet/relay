@@ -184,6 +184,7 @@ func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) R
 
 	case *v1.FunctionCall:
 		// canonical: FunctionCall.ProviderData dropped unless it is the custom-call marker — a Responses function_call has no field for another vendor's blob.
+		// canonical: ItemCacheConfig.Anchor dropped — OpenAI caches prefixes automatically; a per-item breakpoint has no wire form.
 		if custom.noteCall(v) {
 			return &ResponsesCustomToolCall{
 				ID:     v.ID,
@@ -202,6 +203,7 @@ func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) R
 		}
 
 	case *v1.FunctionCallOutput:
+		// canonical: ItemCacheConfig.Anchor dropped — OpenAI caches prefixes automatically; a per-item breakpoint has no wire form.
 		// A tool result carries neither name nor provider data, so its call id — recorded when the matching call was emitted just above — is the only thing that pairs it with a custom tool.
 		if custom.isCustomOutput(v.CallID) {
 			// canonical: typed parts on a custom tool result dropped — the Responses custom_tool_call_output takes a plain string.

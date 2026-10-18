@@ -225,8 +225,8 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	if req.CacheConfig != nil {
 		rreq.PromptCacheKey = req.CacheConfig.Key
 		rreq.PromptCacheRetention = openaiCacheRetention(req.CacheConfig)
-		// canonical: CacheConfig.Instructions/Tools dropped — OpenAI caches
-		// prefixes automatically; the breakpoint flags have no wire form.
+		// canonical: CacheConfig.Instructions/Tools/History dropped — OpenAI
+		// caches prefixes automatically; the breakpoint flags have no wire form.
 	}
 
 	// canonical: Extensions keys other than openai.service_tier dropped — the

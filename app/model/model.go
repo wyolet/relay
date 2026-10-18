@@ -32,8 +32,10 @@ type Model struct {
 // Per-Host serving info (which Hosts can serve this Model) lives in
 // standalone HostBinding entities (app/binding), not in Spec.
 type Spec struct {
-	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
-	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+	Family string `json:"family,omitempty" yaml:"family,omitempty"`
+	// ProductLine is the vendor's named tier or variant inside Family (opus, flash-lite); never a version or size. Allowed values are checked by the catalog validator, not here.
+	ProductLine string `json:"productLine,omitempty" yaml:"productLine,omitempty"`
+	Version     string `json:"version,omitempty"     yaml:"version,omitempty"`
 
 	Capabilities Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 	Modalities   Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"`

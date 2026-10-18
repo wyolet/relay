@@ -81,5 +81,8 @@ func ForFrom(cat *catalog.IndexedCatalog, ref, apiKey string, opts ...TargetOpti
 			return nil, err
 		}
 	}
+	if t.baseURL == "" {
+		return nil, fmt.Errorf("relay client: catalog host %q has no base URL (a relay-scoped catalog, or a self-hosted host); use Relay, or pass WithBaseURL", host.Name)
+	}
 	return t.client(apiKey), nil
 }
