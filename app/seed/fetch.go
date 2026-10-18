@@ -2,8 +2,11 @@ package seed
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,8 +18,8 @@ import (
 
 // DefaultCatalogURLTemplate is where versioned catalog trees are fetched
 // from when RELAY_CATALOG_URL is unset. "{version}" is replaced with the
-// requested ref; GitHub serves source archives for any tag/branch/sha.
-const DefaultCatalogURLTemplate = "https://github.com/wyolet/relay-catalog/archive/{version}.tar.gz"
+// requested release tag.
+const DefaultCatalogURLTemplate = "https://catalog.wyolet.com/releases/{version}/relay-catalog-data-{version}.tar.gz"
 
 // maxCatalogBytes caps the decompressed archive size. The real catalog is
 // a few MB of YAML; the cap only exists so a mispointed URL (or a
@@ -27,16 +30,24 @@ const maxCatalogBytes = 512 << 20
 // few thousand files at most.
 const maxCatalogEntries = 50_000
 
-// FetchCatalog downloads the catalog source archive for version from
-// urlTemplate ("{version}" substituted; empty = DefaultCatalogURLTemplate),
-// extracts it under destDir, and returns the directory holding the
-// catalog data tree. Only regular files and directories are extracted —
-// symlinks and entries escaping destDir are rejected.
+// maxArchiveBytes caps the compressed download, which is held in memory until
+// its sha256 is checked. A release's data tarball is about 100 KB.
+const maxArchiveBytes = 64 << 20
+
+// maxSumBytes caps the .sha256 response: one "<hex>  <name>" line.
+const maxSumBytes = 4 << 10
+
+// FetchCatalog downloads the catalog archive for version from urlTemplate
+// ("{version}" substituted; empty = DefaultCatalogURLTemplate), checks it
+// against the sha256sum file at the same URL plus ".sha256", extracts it
+// under destDir, and returns the directory holding the catalog data tree.
+// A missing, malformed or mismatching sum is an error and nothing is
+// extracted. Only regular files and directories are extracted — symlinks
+// and entries escaping destDir are rejected.
 //
-// The returned root follows the source-archive convention: a top-level
-// `data/` dir wins (directly under destDir, or inside a single wrapping
-// directory the way GitHub archives unpack); otherwise destDir itself is
-// assumed to be the data tree.
+// A top-level `data/` dir is the data root (directly under destDir, or
+// inside a single wrapping directory); otherwise destDir itself is assumed
+// to be the data tree.
 func FetchCatalog(ctx context.Context, urlTemplate, version, destDir string) (string, error) {
 	if version == "" {
 		return "", fmt.Errorf("seed: fetch catalog: version is required")
@@ -48,22 +59,62 @@ func FetchCatalog(ctx context.Context, urlTemplate, version, destDir string) (st
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	sumBody, err := httpGet(ctx, url+".sha256", maxSumBytes)
+	if err != nil {
+		return "", fmt.Errorf("seed: fetch catalog checksum: %w", err)
+	}
+	want, err := parseSHA256Sum(sumBody)
+	if err != nil {
+		return "", fmt.Errorf("seed: catalog checksum %s.sha256: %w", url, err)
+	}
+	archive, err := httpGet(ctx, url, maxArchiveBytes)
 	if err != nil {
 		return "", fmt.Errorf("seed: fetch catalog: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("seed: fetch catalog %s: %w", url, err)
+	if got := sha256.Sum256(archive); got != want {
+		return "", fmt.Errorf("seed: catalog %s: sha256 %x does not match the published %x", url, got, want)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("seed: fetch catalog %s: HTTP %d", url, resp.StatusCode)
-	}
-	if err := extractTarGz(resp.Body, destDir, maxCatalogBytes, maxCatalogEntries); err != nil {
+	if err := extractTarGz(bytes.NewReader(archive), destDir, maxCatalogBytes, maxCatalogEntries); err != nil {
 		return "", fmt.Errorf("seed: extract catalog %s: %w", url, err)
 	}
 	return findDataRoot(destDir)
+}
+
+// httpGet returns the body of a 200 response, failing when it exceeds maxBytes.
+func httpGet(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("%s: response exceeds %d bytes", url, maxBytes)
+	}
+	return body, nil
+}
+
+// parseSHA256Sum reads the digest from sha256sum output ("<hex>  <name>").
+func parseSHA256Sum(b []byte) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	fields := strings.Fields(string(b))
+	if len(fields) == 0 || len(fields[0]) != hex.EncodedLen(sha256.Size) {
+		return sum, fmt.Errorf("not sha256sum output")
+	}
+	if _, err := hex.Decode(sum[:], []byte(fields[0])); err != nil {
+		return sum, fmt.Errorf("not sha256sum output")
+	}
+	return sum, nil
 }
 
 // ExtractCatalogArchive extracts a gzipped catalog tarball under destDir

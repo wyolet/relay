@@ -306,7 +306,7 @@ func Load() (*Config, error) {
 	// against the concrete version; on mismatch the tree is seeded — from
 	// the local CatalogDir when its .version stamp matches (baked image
 	// or self-stamped custom catalog, no network), else fetched from
-	// CatalogURL (default the wyolet/relay-catalog GitHub archive) — no
+	// CatalogURL (default seed.DefaultCatalogURLTemplate) — no
 	// image rebuild to move catalog versions. Re-seeds skip
 	// operator-edited (dirty) rows and overlays re-merge at snapshot load,
 	// so user changes survive. Unset = DefaultCatalogVersion when CatalogDir

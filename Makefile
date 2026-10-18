@@ -4,7 +4,7 @@
         check chart-lint sqlc-generate test test-race test-fuzz test-equivalence test-cover test-race-cover cover-check \
         bench-gate bench-baseline test-integration test-integration-run smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
-        ui-fetch ui-pin build clean schemas catalog-validate catalog-embed lint-rules lint vulncheck
+        ui-fetch ui-pin catalog-pin build clean schemas catalog-validate catalog-embed lint-rules lint vulncheck
 
 # Load .env if present.
 -include .env
@@ -88,7 +88,7 @@ help: ## Show this help
 	@echo '  make push-all          build + push prod and dev'
 	@echo '  make local-image       bake into local docker daemon as relay:dev'
 	@echo '  make run-local         boot the local image on :8080'
-	@echo '  make image-assets-check  asset stage passes with the pinned UI hash, fails with a wrong one'
+	@echo '  make image-assets-check  asset stage passes with the pinned UI + catalog hashes, fails with wrong ones'
 	@echo ''
 	@echo '🏷️  Release (tag + push; CI publishes images + chart):'
 	@echo '  make version           show current version'
@@ -114,6 +114,7 @@ help: ## Show this help
 	@echo '  make smoke-mock        replay recorded fixtures through relay → RELAY_MOCK_BASE_URL'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
 	@echo '  make ui-pin UI_VERSION=vX.Y.Z  pin a relay-ui release + its sha256 in versions.env'
+	@echo '  make catalog-pin CATALOG_VERSION=vX.Y.Z  pin a relay-catalog release + its data tarball sha256 in versions.env'
 	@echo '  make build             ui-fetch + go build → ./relay'
 	@echo '  make clean             drop UI dist + binary'
 	@echo ''
@@ -229,17 +230,17 @@ restart: ## restart relay-a/b + nginx after a rebuild
 
 image: ## build + push prod (multi-tag)
 	@echo "▸ pushing $(REGISTRY)/$(IMAGE_NAME) — version=$(VERSION) sha=$(GIT_REVISION)"
-	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push prod
+	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) CATALOG_SHA256=$(CATALOG_SHA256) docker buildx bake -f docker-bake.hcl --push prod
 
 dev-push: ## build + push :dev moving label
 	@echo "▸ pushing $(REGISTRY)/$(IMAGE_NAME):dev — sha=$(GIT_REVISION)"
-	GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push dev
+	GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) CATALOG_SHA256=$(CATALOG_SHA256) docker buildx bake -f docker-bake.hcl --push dev
 
 push-all: ## build + push both prod and dev
-	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push all
+	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) CATALOG_SHA256=$(CATALOG_SHA256) docker buildx bake -f docker-bake.hcl --push all
 
 local-image: ## bake into local docker as relay:dev
-	UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl local
+	UI_VERSION=$(UI_VERSION) UI_SHA256=$(UI_SHA256) CATALOG_REF=$(CATALOG_VERSION) CATALOG_SHA256=$(CATALOG_SHA256) docker buildx bake -f docker-bake.hcl local
 
 run-local: local-image ## boot the local image on :8080
 	docker run --rm -p 8080:8080 --name relay-local relay:dev
@@ -345,18 +346,28 @@ ui-fetch: ## fetch relay-ui $(UI_VERSION) and verify it against UI_SHA256 from v
 ui-pin: ## pin a relay-ui release in versions.env: make ui-pin UI_VERSION=vX.Y.Z
 	scripts/pin-ui.sh "$(UI_VERSION)"
 
-UI_SHA256_WRONG := 0000000000000000000000000000000000000000000000000000000000000000
+catalog-pin: ## pin a relay-catalog release in versions.env: make catalog-pin CATALOG_VERSION=vX.Y.Z
+	scripts/pin-catalog.sh "$(CATALOG_VERSION)"
 
-image-assets-check: ## build the image's asset stage with the pinned UI hash (must pass), then a wrong and an empty one (must fail)
-	docker buildx build --target assets --output type=cacheonly --no-cache-filter assets \
-	  --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$(UI_SHA256) --build-arg CATALOG_REF=$(CATALOG_VERSION) .
-	@for sum in $(UI_SHA256_WRONG) ""; do \
-	  out=$$(docker buildx build --progress=plain --target assets --output type=cacheonly --no-cache-filter assets \
-	    --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$$sum --build-arg CATALOG_REF=$(CATALOG_VERSION) . 2>&1) \
+SHA256_WRONG := 0000000000000000000000000000000000000000000000000000000000000000
+ASSETS_BUILD := docker buildx build --progress=plain --target assets --output type=cacheonly --no-cache-filter assets
+
+image-assets-check: ## build the image's asset stage with the pinned UI + catalog hashes (must pass), then a wrong and an empty one of each (must fail)
+	$(ASSETS_BUILD) --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$(UI_SHA256) \
+	  --build-arg CATALOG_REF=$(CATALOG_VERSION) --build-arg CATALOG_SHA256=$(CATALOG_SHA256) .
+	@for sum in $(SHA256_WRONG) ""; do \
+	  out=$$($(ASSETS_BUILD) --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$$sum \
+	    --build-arg CATALOG_REF=$(CATALOG_VERSION) --build-arg CATALOG_SHA256=$(CATALOG_SHA256) . 2>&1) \
 	    && { echo "image-assets-check: the asset stage built with UI_SHA256='$$sum'"; exit 1; }; \
 	  echo "$$out" | grep -qE 'ui.tar.gz: FAILED|UI_SHA256 is not set' \
 	    || { echo "$$out"; echo "image-assets-check: UI_SHA256='$$sum' failed for another reason"; exit 1; }; \
 	  echo "image-assets-check: UI_SHA256='$$sum' refused"; \
+	  out=$$($(ASSETS_BUILD) --build-arg UI_VERSION=$(UI_VERSION) --build-arg UI_SHA256=$(UI_SHA256) \
+	    --build-arg CATALOG_REF=$(CATALOG_VERSION) --build-arg CATALOG_SHA256=$$sum . 2>&1) \
+	    && { echo "image-assets-check: the asset stage built with CATALOG_SHA256='$$sum'"; exit 1; }; \
+	  echo "$$out" | grep -qE 'catalog.tar.gz: FAILED|CATALOG_SHA256 is not set' \
+	    || { echo "$$out"; echo "image-assets-check: CATALOG_SHA256='$$sum' failed for another reason"; exit 1; }; \
+	  echo "image-assets-check: CATALOG_SHA256='$$sum' refused"; \
 	done
 
 build: ui-fetch ## ui-fetch + go build → ./relay

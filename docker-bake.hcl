@@ -6,16 +6,15 @@ variable "IMAGE_NAME"   { default = "relay" }
 variable "CATALOG_SERVER_IMAGE_NAME" { default = "catalog-server" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
-# UI_VERSION, UI_SHA256 + CATALOG_REF are pinned in versions.env (the release
-# BOM); the Makefile `include`s it and passes them through as env on every bake
-# call. Bump them in versions.env, nowhere else. The defaults here are only
-# fallbacks for a bare `docker buildx bake` with no Makefile: an empty
-# UI_VERSION or UI_SHA256 fails the UI fetch loudly rather than embedding an
-# unverified UI; CATALOG_REF="main" tracks the branch (non-reproducible) and is
-# why releases must go through Make.
-variable "UI_VERSION"   { default = "" }
-variable "UI_SHA256"    { default = "" }
-variable "CATALOG_REF"  { default = "main" }
+# UI_VERSION, UI_SHA256, CATALOG_REF + CATALOG_SHA256 are pinned in versions.env
+# (the release BOM); the Makefile `include`s it and passes them through as env
+# on every bake call. Bump them in versions.env, nowhere else. The empty
+# defaults make a bare `docker buildx bake` with none of them set fail the
+# asset fetch loudly rather than bundle an unverified UI or catalog.
+variable "UI_VERSION"     { default = "" }
+variable "UI_SHA256"      { default = "" }
+variable "CATALOG_REF"    { default = "" }
+variable "CATALOG_SHA256" { default = "" }
 
 target "_common" {
   context    = "."
@@ -26,9 +25,10 @@ target "_common" {
   // an arm machine instead.
   platforms  = ["linux/amd64"] // , "linux/arm64"
   args = {
-    UI_VERSION  = "${UI_VERSION}"
-    UI_SHA256   = "${UI_SHA256}"
-    CATALOG_REF = "${CATALOG_REF}"
+    UI_VERSION     = "${UI_VERSION}"
+    UI_SHA256      = "${UI_SHA256}"
+    CATALOG_REF    = "${CATALOG_REF}"
+    CATALOG_SHA256 = "${CATALOG_SHA256}"
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
@@ -103,9 +103,10 @@ target "local" {
   output      = ["type=docker"]
   tags        = ["${IMAGE_NAME}:dev"]
   args = {
-    UI_VERSION  = "${UI_VERSION}"
-    UI_SHA256   = "${UI_SHA256}"
-    CATALOG_REF = "${CATALOG_REF}"
+    UI_VERSION     = "${UI_VERSION}"
+    UI_SHA256      = "${UI_SHA256}"
+    CATALOG_REF    = "${CATALOG_REF}"
+    CATALOG_SHA256 = "${CATALOG_SHA256}"
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
@@ -121,9 +122,10 @@ target "local-standalone" {
   output      = ["type=docker"]
   tags        = ["${IMAGE_NAME}:standalone"]
   args = {
-    UI_VERSION  = "${UI_VERSION}"
-    UI_SHA256   = "${UI_SHA256}"
-    CATALOG_REF = "${CATALOG_REF}"
+    UI_VERSION     = "${UI_VERSION}"
+    UI_SHA256      = "${UI_SHA256}"
+    CATALOG_REF    = "${CATALOG_REF}"
+    CATALOG_SHA256 = "${CATALOG_SHA256}"
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
