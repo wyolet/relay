@@ -96,7 +96,8 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     principal_id             String,
     principal                LowCardinality(String),
     credential_kind          LowCardinality(String),
-    credential_id            String
+    credential_id            String,
+    relay_key                LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)`
@@ -114,6 +115,7 @@ var expectedColumns = []string{
 	"project_id", "project", "team_id", "team",
 	"principal_kind", "principal_id", "principal",
 	"credential_kind", "credential_id",
+	"relay_key",
 }
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -141,6 +143,7 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_kind LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS relay_key LowCardinality(String)`,
 	// Scoped reads (one project's events, one team's, one key's) filter on
 	// columns the ORDER BY does not lead with, so without a skip index every
 	// partition in the window is read.
@@ -384,6 +387,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.Principal,
 			ev.CredentialKind,
 			ev.CredentialID,
+			ev.RelayKey,
 		)
 		if err != nil {
 			return fmt.Errorf("append row: %w", err)
@@ -406,7 +410,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id, relay_key FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -471,6 +475,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.Principal,
 			&ev.CredentialKind,
 			&ev.CredentialID,
+			&ev.RelayKey,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -498,276 +503,6 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		events = append(events, ev)
 	}
 	return events, rows.Err()
-}
-
-// Summary returns aggregated rows grouped by q.GroupBy.
-func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.SummaryResult, error) {
-	groupBy := q.GroupBy
-	if groupBy == "" {
-		groupBy = "source"
-	}
-	if !usage.IsValidGroupBy(groupBy) {
-		return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
-	}
-
-	grpExpr := groupBy // column name matches the GroupBy value in this schema
-	var preArgs []any
-	if column, key, ok := usage.MapGroupKey(groupBy); ok {
-		// <map>[?] binds the key (never spliced into SQL text); a missing
-		// key yields '' (Map default), matching the other backends.
-		grpExpr = column + "[?]"
-		preArgs = []any{key}
-	}
-
-	where, args := buildWhere(q.EventQuery, true)
-	// clickhouse-go substitutes ? placeholders in text order — the group
-	// key appears in the SELECT list, ahead of the WHERE args.
-	args = append(preArgs, args...)
-
-	sql := fmt.Sprintf(`
-SELECT
-    %s AS grp,
-    toInt64(count())                    AS requests,
-    toInt64(countIf(status >= 400))     AS error_count,
-    sumMap(tokens)                      AS tokens,
-    toInt64(avg(duration_ms))           AS avg_ms,
-    toInt64(quantile(0.5)(duration_ms)) AS p50,
-    toInt64(quantile(0.95)(duration_ms)) AS p95,
-    toInt64(quantile(0.99)(duration_ms)) AS p99,
-    max(duration_ms)                    AS max_ms,
-    `+ttftSelectSQL+`,
-    `+costSelectSQL+`,
-    min(ts)                             AS first_seen,
-    max(ts)                             AS last_seen
-FROM %s%s
-GROUP BY grp
-ORDER BY requests DESC`,
-		grpExpr, chTable, where)
-
-	rows, err := s.conn.Query(ctx, sql, args...)
-	if err != nil {
-		return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: summary query: %w", err)
-	}
-	defer rows.Close()
-
-	var result usage.SummaryResult
-	for rows.Next() {
-		var (
-			groupVal             string
-			requests             int64
-			errCount             int64
-			tokens               map[string]int64
-			avgMs                int64
-			p50, p95, p99, maxMs int64
-			ttft                 ttftCols
-			costNanos, unpriced  int64
-			firstSeen, lastSeen  time.Time
-		)
-		if err := rows.Scan(&groupVal, &requests, &errCount, &tokens, &avgMs, &p50, &p95, &p99, &maxMs,
-			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
-			&costNanos, &unpriced,
-			&firstSeen, &lastSeen); err != nil {
-			return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: scan summary: %w", err)
-		}
-		result.Rows = append(result.Rows, usage.SummaryRow{
-			Group:      map[string]string{groupBy: groupVal},
-			Requests:   requests,
-			ErrorCount: errCount,
-			Tokens:     tokens,
-			DurationMs: usage.DurationStats{
-				Avg: avgMs,
-				P50: p50,
-				P95: p95,
-				P99: p99,
-				Max: maxMs,
-			},
-			TTFTMs:    ttft.stats(),
-			FirstSeen: firstSeen,
-			LastSeen:  lastSeen,
-			CostNanos: costNanos,
-			Unpriced:  unpriced,
-		})
-		if result.From.IsZero() || firstSeen.Before(result.From) {
-			result.From = firstSeen
-		}
-		if lastSeen.After(result.To) {
-			result.To = lastSeen
-		}
-	}
-	return result, rows.Err()
-}
-
-// TimeSeries buckets matched events by q.Interval (epoch-aligned via
-// toStartOfInterval), optionally split into one series per q.GroupBy
-// value. Empty buckets are not emitted. Series are ordered by total
-// requests desc; points within a series oldest-first.
-func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.TimeSeriesResult, error) {
-	if q.Interval <= 0 {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: interval must be > 0")
-	}
-	intervalSec := int64(q.Interval / time.Second)
-	if intervalSec <= 0 {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: interval must be >= 1s")
-	}
-	groupBy := q.GroupBy
-	if groupBy != "" && !usage.IsValidGroupBy(groupBy) {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
-	}
-
-	where, args := buildWhere(q.EventQuery, true)
-
-	bucketExpr := fmt.Sprintf("toStartOfInterval(ts, INTERVAL %d second)", intervalSec)
-	selCols := bucketExpr + " AS bucket"
-	groupOrder := "bucket"
-	if groupBy != "" {
-		grpExpr := groupBy
-		if column, key, ok := usage.MapGroupKey(groupBy); ok {
-			grpExpr = column + "[?]"
-			// clickhouse-go substitutes ? placeholders in text order — the
-			// group key appears in the SELECT list, ahead of the WHERE args.
-			args = append([]any{key}, args...)
-		}
-		selCols = grpExpr + " AS grp, " + selCols
-		groupOrder = "grp, bucket"
-	}
-
-	sql := fmt.Sprintf(`
-SELECT
-    %s,
-    toInt64(count())                AS requests,
-    toInt64(countIf(status >= 400)) AS error_count,
-    toInt64(countIf(status >= 400 AND status < 500)) AS errors_4xx,
-    toInt64(countIf(status >= 500)) AS errors_5xx,
-    sumMap(tokens)                  AS tokens,
-    toInt64(avg(duration_ms))           AS avg_ms,
-    toInt64(quantile(0.5)(duration_ms)) AS p50,
-    toInt64(quantile(0.95)(duration_ms)) AS p95,
-    toInt64(quantile(0.99)(duration_ms)) AS p99,
-    max(duration_ms)                AS max_ms,
-    `+ttftSelectSQL+`,
-    `+costSelectSQL+`,
-    min(ts)                         AS first_seen,
-    max(ts)                         AS last_seen
-FROM %s%s
-GROUP BY %s
-ORDER BY %s`,
-		selCols, chTable, where, groupOrder, groupOrder)
-
-	rows, err := s.conn.Query(ctx, sql, args...)
-	if err != nil {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: timeseries query: %w", err)
-	}
-	defer rows.Close()
-
-	res := usage.TimeSeriesResult{Interval: q.Interval.String()}
-	byKey := map[string]int{} // series key -> index into res.Rows
-	totals := map[string]int64{}
-	for rows.Next() {
-		var (
-			grp                  string
-			bucket               time.Time
-			requests             int64
-			errCount             int64
-			errs4xx, errs5xx     int64
-			tokens               map[string]int64
-			avgMs                int64
-			p50, p95, p99, maxMs int64
-			ttft                 ttftCols
-			costNanos, unpriced  int64
-			first                time.Time
-			last                 time.Time
-		)
-		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx, &tokens,
-			&avgMs, &p50, &p95, &p99, &maxMs,
-			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
-			&costNanos, &unpriced,
-			&first, &last}
-		if groupBy != "" {
-			dest = append([]any{&grp}, dest...)
-		}
-		if err := rows.Scan(dest...); err != nil {
-			return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: scan timeseries: %w", err)
-		}
-		idx, ok := byKey[grp]
-		if !ok {
-			row := usage.TimeSeriesRow{}
-			if groupBy != "" {
-				row.Group = map[string]string{groupBy: grp}
-			}
-			res.Rows = append(res.Rows, row)
-			idx = len(res.Rows) - 1
-			byKey[grp] = idx
-		}
-		res.Rows[idx].Points = append(res.Rows[idx].Points, usage.TimeSeriesPoint{
-			Bucket:     bucket.UTC(),
-			Requests:   requests,
-			ErrorCount: errCount,
-			Errors4xx:  errs4xx,
-			Errors5xx:  errs5xx,
-			Tokens:     tokens,
-			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
-			TTFTMs:     ttft.stats(),
-			CostNanos:  costNanos,
-			Unpriced:   unpriced,
-		})
-		totals[grp] += requests
-		if res.From.IsZero() || first.Before(res.From) {
-			res.From = first
-		}
-		if last.After(res.To) {
-			res.To = last
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return usage.TimeSeriesResult{}, err
-	}
-
-	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
-	return res, nil
-}
-
-// ttftSelectSQL aggregates TTFT (upstream_response_start µs → ms) over rows
-// that have upstream timing (sentinel -1 = none). The quantile/avg columns
-// are NaN when no row qualifies — scanned as Float64 and gated on ttft_count
-// in ttftCols.stats rather than guarded in SQL.
-const ttftSelectSQL = `
-    toInt64(countIf(upstream_response_start >= 0))                                  AS ttft_count,
-    avgIf(upstream_response_start / 1000, upstream_response_start >= 0)             AS ttft_avg,
-    quantileIf(0.5)(upstream_response_start / 1000, upstream_response_start >= 0)   AS ttft_p50,
-    quantileIf(0.95)(upstream_response_start / 1000, upstream_response_start >= 0)  AS ttft_p95,
-    quantileIf(0.99)(upstream_response_start / 1000, upstream_response_start >= 0)  AS ttft_p99,
-    toInt64(maxIf(intDiv(upstream_response_start, 1000), upstream_response_start >= 0)) AS ttft_max`
-
-// costSelectSQL sums emit-time cost over priced rows only (sentinel -1 =
-// unpriced) and counts the unpriced ones — a cost total must say how
-// complete it is rather than fold unpriced rows in as silent zeros.
-// The sum's alias must NOT be `cost_nanos`: ClickHouse resolves identifiers
-// to SELECT aliases before columns, so an alias shadowing the column would
-// substitute the sumIf into countIf's argument — "aggregate function found
-// inside another aggregate function" (code 184). Scans are positional, so
-// the alias name is otherwise free.
-const costSelectSQL = `
-    toInt64(sumIf(cost_nanos, cost_nanos >= 0)) AS cost_nanos_sum,
-    toInt64(countIf(cost_nanos < 0))            AS unpriced`
-
-// ttftCols receives the ttftSelectSQL columns for one result row.
-type ttftCols struct {
-	count              int64
-	avg, p50, p95, p99 float64
-	max                int64
-}
-
-func (t ttftCols) stats() *usage.DurationStats {
-	if t.count == 0 {
-		return nil
-	}
-	return &usage.DurationStats{
-		Avg: int64(t.avg),
-		P50: int64(t.p50),
-		P95: int64(t.p95),
-		P99: int64(t.p99),
-		Max: t.max,
-	}
 }
 
 // buildWhere generates the WHERE clause and positional args for an EventQuery.
@@ -800,6 +535,10 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	if !q.To.IsZero() {
 		clauses = append(clauses, "ts <= ?")
 		args = append(args, q.To)
+	}
+	if !q.Before.IsZero() {
+		clauses = append(clauses, "ts < ?")
+		args = append(args, q.Before)
 	}
 	if !q.CursorTS.IsZero() {
 		clauses = append(clauses, "(ts, request_id) < (?, ?)")
@@ -867,6 +606,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	in("host", q.Host)
 	in("policy", q.Policy)
 	in("provider", q.Provider)
+	in("relay_key", q.RelayKey)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {

@@ -16,10 +16,10 @@ import (
 type auditListInput struct {
 	ActorID      string   `query:"actor_id" doc:"Match the acting user's id."`
 	ActorName    string   `query:"actor_name" doc:"Match the acting user's name."`
-	Action       []string `query:"action" doc:"Match any of the given action strings (e.g. \"policies.update\")."`
-	ResourceKind []string `query:"resource_kind" doc:"Match any of the given resource kinds (API singular, e.g. \"policy\")."`
+	Action       []string `query:"action,explode" doc:"Match any of the given action strings (e.g. \"policies.update\")."`
+	ResourceKind []string `query:"resource_kind,explode" doc:"Match any of the given resource kinds (API singular, e.g. \"policy\")."`
 	ResourceID   string   `query:"resource_id" doc:"Match a single resource id."`
-	Scope        []string `query:"scope" doc:"Match any of the given scopes, as \"project:<id>\" or \"team:<id>\"."`
+	Scope        []string `query:"scope,explode" doc:"Match any of the given scopes, as \"project:<id>\" or \"team:<id>\"."`
 	Status       string   `query:"status" enum:"allowed,denied,error" doc:"Match one outcome status."`
 	From         string   `query:"from" doc:"Absolute lower bound (RFC3339)."`
 	To           string   `query:"to" doc:"Absolute upper bound (RFC3339)."`

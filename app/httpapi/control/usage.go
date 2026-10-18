@@ -109,26 +109,27 @@ type UsageFilterInput struct {
 	From         string   `query:"from" doc:"Absolute lower bound (RFC3339). Overrides since."`
 	To           string   `query:"to" doc:"Absolute upper bound (RFC3339)."`
 	RequestID    string   `query:"request_id" doc:"Exact match on a single request id (deep-link one event)."`
-	RelayKeyHash []string `query:"relay_key_hash" doc:"Match any of the given sha256 hashes of the inbound bearer."`
-	PolicyID     []string `query:"policy_id" doc:"Match any of the given Policy.metadata.id values."`
-	ProjectID    []string `query:"project_id" doc:"Match any of the given Project.metadata.id values."`
-	TeamID       []string `query:"team_id" doc:"Match any of the given Team.metadata.id values."`
-	PrincipalID  []string `query:"principal_id" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
-	ModelID      []string `query:"model_id" doc:"Match any of the given Model.metadata.id values."`
-	HostID       []string `query:"host_id" doc:"Match any of the given Host.metadata.id values."`
-	Source       []string `query:"source" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
-	FinishReason []string `query:"finish_reason" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\" | \"other\"."`
-	ErrorKind    []string `query:"error_kind" doc:"Match any of the given error_kind values."`
+	RelayKeyHash []string `query:"relay_key_hash,explode" doc:"Match any of the given sha256 hashes of the inbound bearer."`
+	PolicyID     []string `query:"policy_id,explode" doc:"Match any of the given Policy.metadata.id values."`
+	ProjectID    []string `query:"project_id,explode" doc:"Match any of the given Project.metadata.id values."`
+	TeamID       []string `query:"team_id,explode" doc:"Match any of the given Team.metadata.id values."`
+	PrincipalID  []string `query:"principal_id,explode" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
+	ModelID      []string `query:"model_id,explode" doc:"Match any of the given Model.metadata.id values."`
+	HostID       []string `query:"host_id,explode" doc:"Match any of the given Host.metadata.id values."`
+	Source       []string `query:"source,explode" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
+	FinishReason []string `query:"finish_reason,explode" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\" | \"other\"."`
+	ErrorKind    []string `query:"error_kind,explode" doc:"Match any of the given error_kind values."`
 	StatusMin    int      `query:"status_min" doc:"Minimum HTTP status to include."`
 	StatusMax    int      `query:"status_max" doc:"Maximum HTTP status to include."`
 
-	HostKeyID      []string `query:"host_key_id" doc:"Match any of the given HostKey.metadata.id values."`
-	RequestedModel []string `query:"requested_model" doc:"Match any of the model strings as the caller sent them."`
-	Model          []string `query:"model" doc:"Match any of the given model slugs (event-time metadata.name, denormalized)."`
-	Host           []string `query:"host" doc:"Match any of the given host slugs (event-time metadata.name, denormalized)."`
-	Policy         []string `query:"policy" doc:"Match any of the given policy slugs (event-time metadata.name, denormalized)."`
-	Provider       []string `query:"provider" doc:"Match any of the given provider slugs (event-time, denormalized)."`
-	Status         []int    `query:"status" doc:"Match any of these exact HTTP status codes."`
+	HostKeyID      []string `query:"host_key_id,explode" doc:"Match any of the given HostKey.metadata.id values."`
+	RequestedModel []string `query:"requested_model,explode" doc:"Match any of the model strings as the caller sent them."`
+	Model          []string `query:"model,explode" doc:"Match any of the given model slugs (event-time metadata.name, denormalized)."`
+	Host           []string `query:"host,explode" doc:"Match any of the given host slugs (event-time metadata.name, denormalized)."`
+	Policy         []string `query:"policy,explode" doc:"Match any of the given policy slugs (event-time metadata.name, denormalized)."`
+	Provider       []string `query:"provider,explode" doc:"Match any of the given provider slugs (event-time, denormalized)."`
+	RelayKey       []string `query:"relay_key,explode" doc:"Match any of the given relay key slugs (event-time metadata.name, denormalized)."`
+	Status         []int    `query:"status,explode" doc:"Match any of these exact HTTP status codes."`
 	StatusClass    string   `query:"status_class" doc:"Convenience status band: \"2xx\" | \"4xx\" | \"5xx\". Sets status_min/max."`
 	Streamed       string   `query:"streamed" enum:"true,false" doc:"true = only streamed responses, false = only non-streamed."`
 	Error          string   `query:"error" enum:"true,false" doc:"true = only errors (status>=400 or error_kind set), false = only successes."`
@@ -138,7 +139,7 @@ type UsageFilterInput struct {
 	TTFTMsMin      int64    `query:"ttft_ms_min" doc:"Minimum upstream time-to-first-byte (ms); excludes requests with no upstream timing."`
 	TTFTMsMax      int64    `query:"ttft_ms_max" doc:"Maximum upstream time-to-first-byte (ms)."`
 	Q              string   `query:"q" doc:"Free-text substring across request_id, model_id, requested_model, source."`
-	Tag            []string `query:"tag" doc:"Caller-tag filter as \"key:value\" (repeatable). Same key repeated matches any of its values; different keys must all match."`
+	Tag            []string `query:"tag,explode" doc:"Caller-tag filter as \"key:value\" (repeatable). Same key repeated matches any of its values; different keys must all match."`
 }
 
 func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
@@ -210,6 +211,7 @@ func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		Host:           f.Host,
 		Policy:         f.Policy,
 		Provider:       f.Provider,
+		RelayKey:       f.RelayKey,
 		Streamed:       streamed,
 		ErrorsOnly:     errorsOnly,
 		AttemptsMin:    f.AttemptsMin,
@@ -307,7 +309,12 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	GroupBy     string `query:"group_by" doc:"\"source\" (default) | \"none\" (one row over the whole filtered set, group {}) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	Compare     string `query:"compare" doc:"\"previous\" (the only accepted value) adds each row's numbers over the window of equal length just before this one as previous, and that window's bounds as previous_from/previous_to (previous_to exclusive). Rows stay those of the requested window: a group without traffic in the previous window has no previous, and a group seen only there has no row. The window is resolved once (since counts back from the request time, an open to becomes that time); one with no start or a start after its end is a 400. Not combinable with compare_from/compare_to."`
+	CompareFrom string `query:"compare_from" doc:"Start (RFC3339, inclusive) of an explicit window to compare rows with, instead of compare=previous; needs compare_to. Rows gain previous exactly as with compare=previous, and previous_from/previous_to echo this window. Its length may differ from the requested window's and it may overlap it: the caller picks it."`
+	CompareTo   string `query:"compare_to" doc:"End (RFC3339, exclusive) of the explicit compare window; needs compare_from and must be after it."`
+
+	Distinct string `query:"distinct" doc:"Adds distinct to each row: the number of distinct non-empty values of this dimension among the row's events. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
 }
 
 type usageSummaryOutput struct {
@@ -319,7 +326,8 @@ type usageSummaryOutput struct {
 type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
-	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series; \"none\" returns that series with group {}."`
+	Distinct string `query:"distinct" doc:"Adds distinct to each point: the number of distinct non-empty values of this dimension among the bucket's events. Per-bucket values cannot be summed across buckets (a value seen in two buckets counts in each); use /usage/summary for a window total. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
 }
 
 type usageTimeSeriesOutput struct {
@@ -391,9 +399,13 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary:     "Aggregated usage rows grouped by a chosen dimension",
 		Description: "Filters the post-flight stream, groups by group_by, " +
 			"and returns per-group totals (requests, tokens, latency " +
-			"percentiles, TTFT percentiles when available, error count). " +
+			"percentiles, TTFT percentiles when available, error count " +
+			"with 4xx/5xx and throttled (429) counts). " +
 			"Rows sorted by request count " +
-			"descending. Requests rejected before reaching an upstream " +
+			"descending. With an id group_by, `labels` maps each group " +
+			"value to its latest slug in the window, else its current " +
+			"catalog name, else (user principals) the username. " +
+			"Requests rejected before reaching an upstream " +
 			"(status 0 with an error kind) are excluded — see " +
 			"/usage/events or /logs for those.",
 		Tags:        []string{"usage"},
@@ -404,24 +416,37 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
+		if in.GroupBy != "" && !usagelog.IsValidGroupBy(in.GroupBy) {
+			return nil, huma.Error400BadRequest("invalid group_by: " + in.GroupBy)
+		}
+		if err := checkDistinct(in.Distinct); err != nil {
+			return nil, err
+		}
+		compare, err := parseCompare(in.Compare, in.CompareFrom, in.CompareTo)
+		if err != nil {
+			return nil, err
+		}
 		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
 		from, to := requestedWindow(base)
 		if !scopeEventQuery(&base, sc) {
-			return &usageSummaryOutput{Body: usagelog.SummaryResult{
-				Rows: []usagelog.SummaryRow{}, From: from, To: to,
-			}}, nil
+			empty, err := emptySummary(base, compare)
+			if err != nil {
+				return nil, err
+			}
+			return &usageSummaryOutput{Body: empty}, nil
 		}
-		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy}
-		res, err := d.UsageReader.Summary(ctx, q)
+		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy, Distinct: in.Distinct}
+		res, err := readSummary(ctx, d.UsageReader, q, compare)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if res.Rows == nil {
 			res.Rows = []usagelog.SummaryRow{}
 		}
+		labelSummary(ctx, d.Catalog, userNames(d), in.GroupBy, &res)
 		if res.From.IsZero() {
 			res.From = from
 		}
@@ -437,12 +462,13 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Path:        "/usage/timeseries",
 		Summary:     "Time-bucketed usage aggregates for charting",
 		Description: "Buckets the filtered stream by `interval` (epoch-aligned) " +
-			"and returns per-bucket requests, error_count (with a 4xx/5xx " +
-			"split), token sums, duration_ms percentiles, and ttft_ms " +
+			"and returns per-bucket requests, error_count (with 4xx/5xx " +
+			"and throttled counts), token sums, duration_ms percentiles, and ttft_ms " +
 			"percentiles (omitted when no event in the bucket has upstream " +
 			"timing). " +
 			"With `group_by` set, returns one series per dimension value for " +
-			"stacked charts; empty returns a single series. Empty buckets are " +
+			"stacked charts; empty returns a single series. With an id " +
+			"group_by, `labels` names each series as /usage/summary does. Empty buckets are " +
 			"omitted — zero-fill against the returned from/to range.",
 		Tags:        []string{"usage"},
 		Middlewares: protect,
@@ -464,6 +490,9 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if in.GroupBy != "" && !usagelog.IsValidGroupBy(in.GroupBy) {
 			return nil, huma.Error400BadRequest("invalid group_by: " + in.GroupBy)
 		}
+		if err := checkDistinct(in.Distinct); err != nil {
+			return nil, err
+		}
 		// Guard against a tiny interval over a large window producing an
 		// unbounded number of buckets. The window is From..To when set,
 		// else the relative Since (defaults to 1h).
@@ -474,7 +503,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if scopedOut {
 			return &usageTimeSeriesOutput{Body: usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}}, nil
 		}
-		q := usagelog.TimeSeriesQuery{EventQuery: base, Interval: interval, GroupBy: in.GroupBy}
+		q := usagelog.TimeSeriesQuery{EventQuery: base, Interval: interval, GroupBy: in.GroupBy, Distinct: in.Distinct}
 		res, err := d.UsageReader.TimeSeries(ctx, q)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
@@ -482,6 +511,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if res.Rows == nil {
 			res.Rows = []usagelog.TimeSeriesRow{}
 		}
+		labelTimeSeries(ctx, d.Catalog, userNames(d), in.GroupBy, &res)
 		return &usageTimeSeriesOutput{Body: res}, nil
 	})
 }

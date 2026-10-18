@@ -90,13 +90,22 @@ func (sk *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, 
 	return usage.SortAndLimit(usage.FilterEvents(all, q), q.Limit), nil
 }
 
+// Count returns how many events Events would match, up to limit.
+func (sk *Sink) Count(ctx context.Context, q usage.EventQuery, limit int) (int64, error) {
+	all, err := sk.scan(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return usage.CountEvents(all, q, limit), nil
+}
+
 // Summary returns aggregated rows grouped by q.GroupBy.
 func (sk *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.SummaryResult, error) {
 	all, err := sk.scan(ctx)
 	if err != nil {
 		return usage.SummaryResult{}, err
 	}
-	return usage.Summarize(usage.FilterEvents(all, q.EventQuery), q.GroupBy)
+	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct)
 }
 
 // TimeSeries buckets the matching events into time series via
@@ -106,12 +115,21 @@ func (sk *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
-	res, err := usage.Bucketize(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy)
+	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
 	res.Interval = q.Interval.String()
 	return res, nil
+}
+
+// Facet counts q.Dim's values over the matching events via usage.TopValues.
+func (sk *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetValue, error) {
+	all, err := sk.scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit)
 }
 
 // scan fetches and decodes all events from the store, skipping malformed

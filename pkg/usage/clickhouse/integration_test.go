@@ -57,7 +57,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			Extras:   map[string]string{"client_ip": "1.2.3.4"},
 			Tags:     map[string]string{"session_id": "s1", "leg": "bytepass"},
 			Model:    "gpt-4o", Host: "openai", Policy: "default",
-			Provider: "openai", Pricing: "openai-gpt-4o",
+			Provider: "openai", Pricing: "openai-gpt-4o", RelayKey: "indexer-prod",
 			CostNanos:     costPtr(7_500_000),
 			CostBreakdown: map[string]int64{"tokens.input": 5_000_000, "tokens.output": 2_500_000},
 		},
@@ -120,6 +120,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if e1.Provider != "openai" || e1.Pricing != "openai-gpt-4o" {
 		t.Fatalf("provider/pricing round-trip mismatch: %+v", e1)
+	}
+	if e1.RelayKey != "indexer-prod" || got[0].RelayKey != "" {
+		t.Fatalf("relay_key round-trip mismatch: %q / %q", e1.RelayKey, got[0].RelayKey)
 	}
 	if e1.CostNanos == nil || *e1.CostNanos != 7_500_000 ||
 		e1.CostBreakdown["tokens.input"] != 5_000_000 || e1.CostBreakdown["tokens.output"] != 2_500_000 {
@@ -197,6 +200,22 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if err != nil || len(provFiltered) != 2 {
 		t.Fatalf("provider filter: err=%v rows=%+v", err, provFiltered)
 	}
+	// Relay key: one keyed event, one keyless; group + filter on the slug.
+	byKey, err := s.Summary(context.Background(), usage.SummaryQuery{
+		EventQuery: q, GroupBy: "relay_key",
+	})
+	if err != nil {
+		t.Fatalf("Summary by relay_key: %v", err)
+	}
+	if len(byKey.Rows) != 2 {
+		t.Fatalf("relay_key groups: want 2 (indexer-prod + \"\"), got %+v", byKey.Rows)
+	}
+	kq := q
+	kq.RelayKey = []string{"indexer-prod"}
+	keyFiltered, err := s.Events(context.Background(), kq)
+	if err != nil || len(keyFiltered) != 1 || keyFiltered[0].RequestID != marker+"-1" {
+		t.Fatalf("relay_key filter: err=%v rows=%+v", err, keyFiltered)
+	}
 	hq := q
 	hq.Host = []string{"azure"}
 	hostFiltered, err := s.Events(context.Background(), hq)
@@ -266,6 +285,13 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if len(tsg.Rows) != 1 || tsg.Rows[0].Group["model_id"] != marker {
 		t.Fatalf("grouped timeseries: %+v", tsg.Rows)
+	}
+	tsk, err := s.TimeSeries(context.Background(), usage.TimeSeriesQuery{EventQuery: q, Interval: time.Hour, GroupBy: "relay_key"})
+	if err != nil {
+		t.Fatalf("TimeSeries by relay_key: %v", err)
+	}
+	if len(tsk.Rows) != 2 {
+		t.Fatalf("relay_key timeseries: want 2 series, got %+v", tsk.Rows)
 	}
 
 	// Keyset pagination: page size 1 walks newest→oldest with no repeats.

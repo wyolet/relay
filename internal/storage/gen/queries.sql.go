@@ -1939,6 +1939,36 @@ func (q *Queries) ListUserTokenVersionsAndDisabled(ctx context.Context) ([]ListU
 	return items, nil
 }
 
+const listUsernamesIn = `-- name: ListUsernamesIn :many
+SELECT id, username FROM users WHERE id = ANY($1::text[])
+`
+
+type ListUsernamesInRow struct {
+	ID       string `db:"id" json:"id"`
+	Username string `db:"username" json:"username"`
+}
+
+// Names a whole id list in one round trip, for labelling usage rows by user.
+func (q *Queries) ListUsernamesIn(ctx context.Context, dollar_1 []string) ([]ListUsernamesInRow, error) {
+	rows, err := q.db.Query(ctx, listUsernamesIn, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsernamesInRow
+	for rows.Next() {
+		var i ListUsernamesInRow
+		if err := rows.Scan(&i.ID, &i.Username); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const maxSecretValueKeyVersion = `-- name: MaxSecretValueKeyVersion :one
 SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values
 `

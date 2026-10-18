@@ -71,6 +71,9 @@ func StampPrincipal(ctx context.Context, lc *lifecycle.Context) {
 func applyPrincipalIdentity(lc *lifecycle.Context, snap *appcatalog.Snapshot, p *Principal) {
 	lc.CredentialKind = p.CredentialKind
 	lc.CredentialID = p.CredentialID
+	if p.Key != nil {
+		lc.RelayKeyName = p.Key.Meta.Name
+	}
 	switch {
 	case p.ServiceAccountID != "":
 		lc.PrincipalKind = string(key.PrincipalServiceAccount)

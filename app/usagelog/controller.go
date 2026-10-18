@@ -214,6 +214,16 @@ func (r *reloadableReader) Events(ctx context.Context, q EventQuery) ([]Event, e
 	return cur.Events(ctx, q)
 }
 
+func (r *reloadableReader) Count(ctx context.Context, q EventQuery, limit int) (int64, error) {
+	r.mu.RLock()
+	cur := r.cur
+	r.mu.RUnlock()
+	if cur == nil {
+		return 0, nil
+	}
+	return cur.Count(ctx, q, limit)
+}
+
 func (r *reloadableReader) Summary(ctx context.Context, q SummaryQuery) (SummaryResult, error) {
 	r.mu.RLock()
 	cur := r.cur
@@ -232,4 +242,14 @@ func (r *reloadableReader) TimeSeries(ctx context.Context, q TimeSeriesQuery) (T
 		return TimeSeriesResult{}, nil
 	}
 	return cur.TimeSeries(ctx, q)
+}
+
+func (r *reloadableReader) Facet(ctx context.Context, q FacetQuery) ([]FacetValue, error) {
+	r.mu.RLock()
+	cur := r.cur
+	r.mu.RUnlock()
+	if cur == nil {
+		return nil, nil
+	}
+	return cur.Facet(ctx, q)
 }

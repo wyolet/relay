@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/wyolet/relay/app/usagelog"
 )
 
 func TestCursorRoundTrip(t *testing.T) {
@@ -89,5 +91,49 @@ func TestUsageSummaryReportsTheRequestedWindowWhenEmpty(t *testing.T) {
 	}
 	if span := out.To.Sub(out.From); span < 119*time.Minute || span > 121*time.Minute {
 		t.Fatalf("window = %v, want the requested 2h", span)
+	}
+}
+
+func TestUsageSummaryGroupByNoneReturnsOneRowWithAnEmptyGroup(t *testing.T) {
+	now := time.Now().UTC()
+	reader := &fakeUsageReader{events: []usagelog.Event{
+		{RequestID: "r-1", Source: "pipeline", Timestamp: now, Status: 200},
+		{RequestID: "r-2", Source: "proxy", Timestamp: now, Status: 429},
+		{RequestID: "r-3", Source: "proxy", Timestamp: now, Status: 503},
+		{RequestID: "r-4", Source: "pipeline", Timestamp: now, ErrorKind: "no_keys"},
+	}}
+	h := newUsageHarness(t, testRBAC(), reader)
+	w := scopeReq(t, h, "root", http.MethodGet, "/usage/summary?group_by=none", "")
+	if w.Code != 200 {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	var out struct {
+		Rows []map[string]json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1: %s", len(out.Rows), w.Body)
+	}
+	row := out.Rows[0]
+	for field, want := range map[string]string{
+		"group": "{}", "requests": "3", "error_count": "2", "errors_4xx": "1", "errors_5xx": "1", "throttled": "1",
+	} {
+		if got := string(row[field]); got != want {
+			t.Errorf("%s = %s, want %s", field, got, want)
+		}
+	}
+}
+
+func TestUsageSummaryRejectsAnUnknownGroupByBeforeTheStore(t *testing.T) {
+	reader := &fakeUsageReader{}
+	h := newUsageHarness(t, testRBAC(), reader)
+	w := scopeReq(t, h, "root", http.MethodGet, "/usage/summary?group_by=nonsense", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body)
+	}
+	if reader.calls != 0 {
+		t.Fatalf("reader called %d times, want 0", reader.calls)
 	}
 }

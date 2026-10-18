@@ -32,6 +32,11 @@ import (
 
 // Deps is the typed dependency bundle for the admin plane.
 type Deps struct {
+	// HealthChecks are the backends /healthz pings, keyed by the name it reports them under. Empty reports ok with no backends.
+	HealthChecks map[string]Pinger
+	// MasterKeyConfigured reports whether RELAY_MASTER_KEY is set, so stored host keys can be encrypted.
+	MasterKeyConfigured bool
+
 	// Identity is the YAML-backed user store used by /auth/login.
 	Identity *identity.Store
 
@@ -131,6 +136,11 @@ type Deps struct {
 	RuntimeConfig RuntimeConfig
 }
 
+// Pinger reports one backend's health for /healthz.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
 // HostHealthReader reads observed host reachability. Implemented by
 // app/hosthealth.Recorder.
 type HostHealthReader interface {
@@ -178,6 +188,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	protect := huma.Middlewares{httpapi.HumaAuth(RequireActor)}
 
 	registerVersion(api, d) // public (the license block only for authenticated callers)
+	registerHealth(api, d)  // public: /healthz, /livez
 	registerLicense(api, d, protect)
 	registerConfigJSON(api, d)    // public: GET /config.json for the embedded UI
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
@@ -198,6 +209,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerCatalogGraph(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
+	registerUsageFacets(api, d, protect)
 	registerLogs(api, d, protect)
 	registerLogsErase(api, d, protect)
 	registerAudit(api, d, protect)

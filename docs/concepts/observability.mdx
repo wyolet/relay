@@ -18,33 +18,38 @@ Read it back through the control plane:
 
 | Endpoint | Returns |
 | --- | --- |
-| `GET /logs` | The request log, newest first (paginated with `limit` + `cursor`). |
+| `GET /logs` | The request log, newest first (paginated with `limit` + `cursor`). With `count=true` the response adds `total` and `total_capped`. |
 | `GET /logs/{request_id}` | A single request, with captured bodies attached if payload logging was on. |
 | `GET /usage/events` | Raw usage events, filterable. |
 | `GET /usage/summary` | Aggregated totals (tokens, counts) over a window. |
 | `GET /usage/timeseries` | Bucketed usage over time. |
+| `GET /usage/facets` | The most frequent values of chosen dimensions, for filter dropdowns. |
 
-All three endpoints share the same filter parameters: `since` (default
+All the usage endpoints share the same filter parameters: `since` (default
 `1h`) or an absolute `from`/`to` window; `status_min`/`status_max` or the
 `status_class` shorthand (`2xx`/`4xx`/`5xx`); `model_id`, `host_id`,
 `policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`
 (repeatable, match-any); `model`, `host`, `policy`, `provider`,
-`requested_model` (slug/string match-any); `source` (`pipeline` / `proxy`
+`relay_key`, `requested_model` (slug/string match-any); `source` (`pipeline` / `proxy`
 / `ws` / `batch` / `otlp`); `finish_reason`, `error_kind`; `streamed` and `error`
 (`true`/`false`); `attempts_min`, `duration_ms_min`/`max`,
 `ttft_ms_min`/`max`; `tag` (`key:value`, repeatable); `q` (free-text
 substring); and `request_id` / `relay_key_hash` for a single event.
 
+`GET /logs?count=true` also returns how many records the filters match across all pages, ignoring `cursor` and `limit`: `total` counts up to 10,000, and `total_capped` is `true` when more match, in which case `total` is 10,000. Without `count=true` neither field is present.
+
 Every event also carries who made the request: `project_id` / `team_id` /
 `principal_id` (with the `project`, `team`, `principal` slugs as of the
 request) and the credential that authenticated it (`credential_kind`,
-`credential_id`). `summary` and `timeseries` take a `group_by` on top of
+`credential_id`, and for a relay key its slug as of the request in
+`relay_key`). `summary` and `timeseries` take a `group_by` on top of
 the filters — `source` (default) | `model` | `host` | `policy` |
-`provider` | `project` | `team` | `principal` (event-time slugs), or
+`provider` | `project` | `team` | `principal` | `relay_key` (event-time slugs), or
 `model_id` | `host_id` | `policy_id` | `project_id` | `team_id` |
 `principal_id` | `credential_id` | `relay_key_hash` | `host_key_id` |
 `finish_reason` | `error_kind`, or `tags.<key>` to group by one caller
-tag's value — so per-project or per-service-account spend is one query:
+tag's value, or `none` for one row (`group` is `{}`) over everything the
+filters match — so per-project or per-service-account spend is one query:
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
@@ -56,9 +61,72 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/usage/summary?model_id=<id>&since=24h"
 ```
 
+When `group_by` is an id (`model_id`, `host_id`, `policy_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`), the response carries `labels`, a map from each group value to a readable name: the latest non-empty slug recorded beside that id in the window, so a renamed entity shows its current name, else the entity's name in the current catalog, else, for a user principal, its username (the same fallback as [filter values](#filter-values)). A `credential_id` is named after its relay key; token credentials have no name. In `timeseries` the name is the latest across the whole window, not per bucket. Values without a name are left out, and `labels` is omitted for every other `group_by`.
+
+```json
+{
+  "rows": [
+    {"group": {"model_id": "0199…"}, "requests": 412, "...": "..."},
+    {"group": {"model_id": "0198…"}, "requests": 97, "...": "..."}
+  ],
+  "labels": {"0199…": "claude-sonnet-4-5", "0198…": "gpt-5"},
+  "from": "2026-10-17T09:00:00Z",
+  "to": "2026-10-18T09:00:00Z"
+}
+```
+
+`summary` also takes `compare=previous` (the only accepted value) to put each row next to the same group over the window of equal length just before the requested one. Each row gains a `previous` object with `requests`, `error_count`, `errors_4xx`, `errors_5xx`, `throttled`, `tokens`, `cost_nanos`, `unpriced`, `duration_ms` and `ttft_ms`, and the response gains `previous_from` and `previous_to`. The requested window is resolved once (`since` counts back from the time of the request, and an open `to` becomes that time); the previous window ends at its start, exclusive, so an event on that instant counts only in the requested window. Rows stay those of the requested window: a group with no traffic in the previous window has no `previous`, and a group seen only in the previous window has no row. A window without a start (`since=0s` and no `from`), or one that starts after it ends (`to` earlier than `since` reaches back), is rejected with `400`.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=model&since=7d&compare=previous"
+```
+
+To compare with a window of your choosing instead, such as this week so far against the same part of last week, pass `compare_from` (inclusive) and `compare_to` (exclusive) as RFC3339 times. The response has the same shape, and `previous_from`/`previous_to` echo the two bounds. Give both or neither, and `compare_to` must be after `compare_from`. They cannot be combined with `compare=previous`; any of these mistakes is rejected with `400`. The window may differ in length from the requested one and may overlap it. Relay does not check either, so an event in both windows counts in both.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=model&from=2026-03-02T00:00:00Z&to=2026-03-04T15:30:00Z&compare_from=2026-02-23T00:00:00Z&compare_to=2026-02-25T15:30:00Z"
+```
+
+`summary` and `timeseries` also take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `project_id`, `team_id`, `model_id` or `host_id`; any other value is rejected with `400`. Each summary row and each time-series point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values cannot be added up to a window total; read that from `summary` (with `group_by=none` for one number). When comparing (`compare=previous` or `compare_from`/`compare_to`), each row's `previous` carries the count over the compared window as its own `distinct`.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=none&distinct=relay_key_hash&since=24h"
+```
+
+### Filter values
+
+`GET /usage/facets` lists the values a filter can take. `dims` names up to 16 dimensions, repeated (`dims=model_id&dims=host_id`) or comma-separated, from the `group_by` vocabulary (`none` excluded, `tags.<key>` and `extras.<key>` allowed); `limit` caps the values per dimension (default 50, max 200). Each dimension is counted with every filter applied except its own, so `model_id` values honour `host_id=` but ignore `model_id=`, and a dropdown keeps showing the alternatives to what is selected. Values are ordered by request count, then by value; the empty value is listed like any other (traffic without a relay key, for example). Rows are counted as in summaries, so requests rejected before reaching a provider are left out.
+
+An id value carries a `label`: the latest non-empty slug recorded beside that id in the window, so a renamed model shows its current name. When the events carry none (rows recorded before the slug existed, host keys), the label comes from the current catalog: models, hosts, policies, projects, teams, service accounts, relay keys and host keys. A user principal, which events never name, is labelled with its username. `from`/`to` echo the requested window.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/facets?dims=model_id,host_id&host_id=<id>&since=24h"
+```
+
+```json
+{
+  "facets": {
+    "model_id": [
+      {"value": "0199…", "label": "claude-sonnet-4-5", "requests": 412},
+      {"value": "0198…", "label": "gpt-5", "requests": 97}
+    ],
+    "host_id": [
+      {"value": "0197…", "label": "anthropic", "requests": 509},
+      {"value": "0196…", "label": "openrouter", "requests": 33}
+    ]
+  },
+  "from": "2026-10-17T09:00:00Z",
+  "to": "2026-10-18T09:00:00Z"
+}
+```
+
 ### Failed requests
 
-`error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above; time series split it into `errors_4xx` and `errors_5xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.
+`error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above and is split into `errors_4xx` and `errors_5xx` (every status of 500 or above). `throttled` counts the 429s, which are also counted in `errors_4xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.
 
 When the provider answered with an error status, the event has that status and `error_kind` `upstream_error`, whether Relay passed the response to the caller or returned it after every key failed. That includes a 4xx the request itself caused, such as an invalid parameter or a prompt over the context window; `status` tells the two apart. `error_message` is `upstream returned <status>`, or, when every key failed, the start of the provider's error body. The full body is kept only by [payload logging](#payload-logging). Other provider-side kinds are `upstream_unreachable` (no connection to the host), `timeout` and `client_canceled`. In proxy mode a request that failed before the provider answered (a refused connection, a TLS error) is recorded as `upstream_error` with status `0`.
 

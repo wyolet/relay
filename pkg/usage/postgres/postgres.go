@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,6 +80,7 @@ var expectedColumns = []string{
 	"project_id", "project", "team_id", "team",
 	"principal_kind", "principal_id", "principal",
 	"credential_kind", "credential_id",
+	"relay_key",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -123,7 +123,8 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     principal_id             text         NOT NULL DEFAULT '',
     principal                text         NOT NULL DEFAULT '',
     credential_kind          text         NOT NULL DEFAULT '',
-    credential_id            text         NOT NULL DEFAULT ''
+    credential_id            text         NOT NULL DEFAULT '',
+    relay_key                text         NOT NULL DEFAULT ''
 )`
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -148,6 +149,7 @@ var alterTableSQL = []string{
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS principal text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_kind text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS relay_key text NOT NULL DEFAULT ''`,
 }
 
 const createIndexSQL = `
@@ -451,6 +453,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.Principal,
 			ev.CredentialKind,
 			ev.CredentialID,
+			ev.RelayKey,
 		})
 	}
 
@@ -487,7 +490,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        provider, cost_nanos, cost_breakdown, pricing,
 		        project_id, project, team_id, team,
 		        principal_kind, principal_id, principal,
-		        credential_kind, credential_id
+		        credential_kind, credential_id, relay_key
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -552,6 +555,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.Principal,
 			&ev.CredentialKind,
 			&ev.CredentialID,
+			&ev.RelayKey,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -597,373 +601,6 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	return events, rows.Err()
 }
 
-// Summary returns aggregated rows grouped by q.GroupBy. Token sums are
-// computed by unnesting the jsonb map in SQL; latency percentiles use
-// percentile_cont. Both queries share the same WHERE and are merged in Go.
-func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.SummaryResult, error) {
-	groupBy := q.GroupBy
-	if groupBy == "" {
-		groupBy = "source"
-	}
-	if !usage.IsValidGroupBy(groupBy) {
-		return usage.SummaryResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
-	}
-
-	where, args := buildWhere(q.EventQuery, true)
-	grpExpr, args := groupExpr(groupBy, args)
-
-	// Query 1: scalar aggregates + latency percentiles.
-	scalarSQL := fmt.Sprintf(`
-SELECT
-    %s                                                       AS grp,
-    count(*)::bigint                                         AS requests,
-    count(*) FILTER (WHERE status >= 400)::bigint            AS error_count,
-    avg(duration_ms)::bigint                                 AS avg_ms,
-    percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p50,
-    percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p95,
-    percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p99,
-    max(duration_ms)                                         AS max_ms,
-    `+ttftSelectSQL+`,
-    `+costSelectSQL+`,
-    min(ts)                                                  AS first_seen,
-    max(ts)                                                  AS last_seen
-FROM %s%s
-GROUP BY grp
-ORDER BY requests DESC`,
-		grpExpr, s.cfg.Table, where,
-	)
-
-	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
-	if err != nil {
-		return usage.SummaryResult{}, fmt.Errorf("usage/postgres: summary scalar query: %w", err)
-	}
-	defer scalarRows.Close()
-
-	type scalarRow struct {
-		grp        string
-		requests   int64
-		errCount   int64
-		avgMs      int64
-		p50, p95   int64
-		p99, maxMs int64
-		ttft       ttftCols
-		cost       int64
-		unpriced   int64
-		first      time.Time
-		last       time.Time
-	}
-	var scalars []scalarRow
-	for scalarRows.Next() {
-		var r scalarRow
-		if err := scalarRows.Scan(&r.grp, &r.requests, &r.errCount, &r.avgMs, &r.p50, &r.p95, &r.p99, &r.maxMs,
-			&r.ttft.avg, &r.ttft.p50, &r.ttft.p95, &r.ttft.p99, &r.ttft.max,
-			&r.cost, &r.unpriced,
-			&r.first, &r.last); err != nil {
-			return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan summary scalar: %w", err)
-		}
-		scalars = append(scalars, r)
-	}
-	if err := scalarRows.Err(); err != nil {
-		return usage.SummaryResult{}, err
-	}
-
-	groupIdx := make(map[string]int, len(scalars))
-	rows := make([]usage.SummaryRow, len(scalars))
-	for i, r := range scalars {
-		groupIdx[r.grp] = i
-		rows[i] = usage.SummaryRow{
-			Group:      map[string]string{groupBy: r.grp},
-			Requests:   r.requests,
-			ErrorCount: r.errCount,
-			Tokens:     map[string]int64{},
-			DurationMs: usage.DurationStats{Avg: r.avgMs, P50: r.p50, P95: r.p95, P99: r.p99, Max: r.maxMs},
-			TTFTMs:     r.ttft.stats(),
-			FirstSeen:  r.first,
-			LastSeen:   r.last,
-			CostNanos:  r.cost,
-			Unpriced:   r.unpriced,
-		}
-	}
-
-	// Query 2: token sums per group via jsonb_each_text. The filtered rows are
-	// wrapped in a subquery so WHERE precedes the CROSS JOIN LATERAL.
-	if len(scalars) > 0 {
-		tokenSQL := fmt.Sprintf(`
-SELECT sub.grp, kv.key, sum(kv.value::bigint)::bigint
-FROM (SELECT %s AS grp, tokens FROM %s%s) AS sub
-CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
-GROUP BY sub.grp, kv.key`,
-			grpExpr, s.cfg.Table, where,
-		)
-		tokenRows, err := s.pool.Query(ctx, tokenSQL, args...)
-		if err != nil {
-			return usage.SummaryResult{}, fmt.Errorf("usage/postgres: summary token query: %w", err)
-		}
-		defer tokenRows.Close()
-
-		for tokenRows.Next() {
-			var grp, key string
-			var val int64
-			if err := tokenRows.Scan(&grp, &key, &val); err != nil {
-				return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan token row: %w", err)
-			}
-			if idx, ok := groupIdx[grp]; ok {
-				rows[idx].Tokens[key] = val
-			}
-		}
-		if err := tokenRows.Err(); err != nil {
-			return usage.SummaryResult{}, err
-		}
-	}
-
-	var result usage.SummaryResult
-	result.Rows = rows
-	for _, r := range rows {
-		if result.From.IsZero() || r.FirstSeen.Before(result.From) {
-			result.From = r.FirstSeen
-		}
-		if r.LastSeen.After(result.To) {
-			result.To = r.LastSeen
-		}
-	}
-	return result, nil
-}
-
-// TimeSeries buckets matched events by q.Interval (date_bin, epoch-aligned),
-// optionally split into one series per q.GroupBy value. Like Summary, token
-// sums come from a second jsonb_each_text query merged in Go. Empty buckets
-// are not emitted; series are ordered by total requests desc, points
-// oldest-first.
-func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.TimeSeriesResult, error) {
-	if q.Interval <= 0 {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: interval must be > 0")
-	}
-	intervalSec := int64(q.Interval / time.Second)
-	if intervalSec <= 0 {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: interval must be >= 1s")
-	}
-	groupBy := q.GroupBy
-	if groupBy != "" && !usage.IsValidGroupBy(groupBy) {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
-	}
-
-	where, args := buildWhere(q.EventQuery, true)
-	bucketExpr := fmt.Sprintf("date_bin(interval '%d seconds', ts, TIMESTAMPTZ 'epoch')", intervalSec)
-
-	selPrefix, grpCols := "", ""
-	if groupBy != "" {
-		var grpExpr string
-		grpExpr, args = groupExpr(groupBy, args)
-		selPrefix = grpExpr + " AS grp, "
-		grpCols = "grp, "
-	}
-
-	scalarSQL := fmt.Sprintf(`
-SELECT
-    %s%s AS bucket,
-    count(*)::bigint                              AS requests,
-    count(*) FILTER (WHERE status >= 400)::bigint AS error_count,
-    count(*) FILTER (WHERE status >= 400 AND status < 500)::bigint AS errors_4xx,
-    count(*) FILTER (WHERE status >= 500)::bigint AS errors_5xx,
-    avg(duration_ms)::bigint                      AS avg_ms,
-    (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::bigint  AS p50,
-    (percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p95,
-    (percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p99,
-    max(duration_ms)                              AS max_ms,
-    `+ttftSelectSQL+`,
-    `+costSelectSQL+`,
-    min(ts)                                       AS first_seen,
-    max(ts)                                       AS last_seen
-FROM %s%s
-GROUP BY %sbucket
-ORDER BY %sbucket`,
-		selPrefix, bucketExpr, s.cfg.Table, where, grpCols, grpCols)
-
-	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
-	if err != nil {
-		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: timeseries scalar query: %w", err)
-	}
-	defer scalarRows.Close()
-
-	res := usage.TimeSeriesResult{Interval: q.Interval.String()}
-	rowIdx := map[string]int{}   // series key -> index into res.Rows
-	pointIdx := map[string]int{} // grp|bucketUnix -> index into row.Points
-	totals := map[string]int64{}
-	pkey := func(grp string, bu int64) string { return grp + "|" + strconv.FormatInt(bu, 10) }
-
-	for scalarRows.Next() {
-		var (
-			grp                  string
-			bucket               time.Time
-			requests             int64
-			errCount             int64
-			errs4xx, errs5xx     int64
-			avgMs                int64
-			p50, p95, p99, maxMs int64
-			ttft                 ttftCols
-			costNanos, unpriced  int64
-			first, last          time.Time
-		)
-		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx,
-			&avgMs, &p50, &p95, &p99, &maxMs,
-			&ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
-			&costNanos, &unpriced,
-			&first, &last}
-		if groupBy != "" {
-			dest = append([]any{&grp}, dest...)
-		}
-		if err := scalarRows.Scan(dest...); err != nil {
-			return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: scan timeseries scalar: %w", err)
-		}
-		ri, ok := rowIdx[grp]
-		if !ok {
-			row := usage.TimeSeriesRow{}
-			if groupBy != "" {
-				row.Group = map[string]string{groupBy: grp}
-			}
-			res.Rows = append(res.Rows, row)
-			ri = len(res.Rows) - 1
-			rowIdx[grp] = ri
-		}
-		res.Rows[ri].Points = append(res.Rows[ri].Points, usage.TimeSeriesPoint{
-			Bucket:     bucket.UTC(),
-			Requests:   requests,
-			ErrorCount: errCount,
-			Errors4xx:  errs4xx,
-			Errors5xx:  errs5xx,
-			Tokens:     map[string]int64{},
-			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
-			TTFTMs:     ttft.stats(),
-			CostNanos:  costNanos,
-			Unpriced:   unpriced,
-		})
-		pointIdx[pkey(grp, bucket.Unix())] = len(res.Rows[ri].Points) - 1
-		totals[grp] += requests
-		if res.From.IsZero() || first.Before(res.From) {
-			res.From = first
-		}
-		if last.After(res.To) {
-			res.To = last
-		}
-	}
-	if err := scalarRows.Err(); err != nil {
-		return usage.TimeSeriesResult{}, err
-	}
-
-	if len(res.Rows) > 0 {
-		tokenSQL := fmt.Sprintf(`
-SELECT %ssub.bucket, kv.key, sum(kv.value::bigint)::bigint
-FROM (SELECT %s%s AS bucket, tokens FROM %s%s) AS sub
-CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
-GROUP BY %ssub.bucket, kv.key`,
-			func() string {
-				if groupBy != "" {
-					return "sub.grp, "
-				}
-				return ""
-			}(),
-			selPrefix, bucketExpr, s.cfg.Table, where,
-			func() string {
-				if groupBy != "" {
-					return "sub.grp, "
-				}
-				return ""
-			}(),
-		)
-		tokenRows, err := s.pool.Query(ctx, tokenSQL, args...)
-		if err != nil {
-			return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: timeseries token query: %w", err)
-		}
-		defer tokenRows.Close()
-
-		for tokenRows.Next() {
-			var (
-				grp    string
-				bucket time.Time
-				key    string
-				val    int64
-			)
-			dest := []any{&bucket, &key, &val}
-			if groupBy != "" {
-				dest = append([]any{&grp}, dest...)
-			}
-			if err := tokenRows.Scan(dest...); err != nil {
-				return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: scan timeseries token: %w", err)
-			}
-			ri, ok := rowIdx[grp]
-			if !ok {
-				continue
-			}
-			pi, ok := pointIdx[pkey(grp, bucket.Unix())]
-			if !ok {
-				continue
-			}
-			res.Rows[ri].Points[pi].Tokens[key] = val
-		}
-		if err := tokenRows.Err(); err != nil {
-			return usage.TimeSeriesResult{}, err
-		}
-	}
-
-	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
-	return res, nil
-}
-
-// ttftSelectSQL aggregates TTFT (upstream_response_start µs → ms) over rows
-// that have upstream timing (column is NULL when the request never reached
-// upstream — aggregates skip NULLs; FILTER keeps percentile_cont consistent).
-// All columns are NULL when no row in the group qualifies.
-const ttftSelectSQL = `
-    (avg(upstream_response_start / 1000))::bigint AS ttft_avg,
-    (percentile_cont(0.5) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint  AS ttft_p50,
-    (percentile_cont(0.95) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint AS ttft_p95,
-    (percentile_cont(0.99) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint AS ttft_p99,
-    max(upstream_response_start / 1000)           AS ttft_max`
-
-// costSelectSQL sums emit-time cost over priced rows only (cost_nanos NULL
-// = unpriced) and counts the unpriced ones — a cost total must say how
-// complete it is rather than fold unpriced rows in as silent zeros.
-const costSelectSQL = `
-    COALESCE(sum(cost_nanos), 0)::bigint                  AS cost_nanos,
-    count(*) FILTER (WHERE cost_nanos IS NULL)::bigint    AS unpriced`
-
-// ttftCols receives the ttftSelectSQL columns; pointers carry SQL NULL for
-// the no-samples case.
-type ttftCols struct {
-	avg, p50, p95, p99, max *int64
-}
-
-func (t ttftCols) stats() *usage.DurationStats {
-	if t.avg == nil {
-		return nil
-	}
-	deref := func(p *int64) int64 {
-		if p == nil {
-			return 0
-		}
-		return *p
-	}
-	return &usage.DurationStats{
-		Avg: *t.avg,
-		P50: deref(t.p50),
-		P95: deref(t.p95),
-		P99: deref(t.p99),
-		Max: deref(t.max),
-	}
-}
-
-// groupExpr returns the SQL grouping expression for groupBy. Static
-// dimensions are column names; the dynamic "tags.<key>" / "extras.<key>"
-// dimensions bind the key as a positional arg (never spliced into SQL text)
-// and group on the map value, missing key folded to ”.
-func groupExpr(groupBy string, args []any) (string, []any) {
-	if column, key, ok := usage.MapGroupKey(groupBy); ok {
-		args = append(args, key)
-		return fmt.Sprintf("COALESCE(%s->>$%d, '')", column, len(args)), args
-	}
-	return groupBy, args
-}
-
 // buildWhere generates a WHERE clause and positional args ($1, $2, …) for an
 // EventQuery. The clause is empty string when no filters are set. With
 // aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
@@ -996,6 +633,9 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	if !q.To.IsZero() {
 		add("ts <= $%d", q.To)
+	}
+	if !q.Before.IsZero() {
+		add("ts < $%d", q.Before)
 	}
 	if !q.CursorTS.IsZero() {
 		n++
@@ -1055,6 +695,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	any("host", q.Host)
 	any("policy", q.Policy)
 	any("provider", q.Provider)
+	any("relay_key", q.RelayKey)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {

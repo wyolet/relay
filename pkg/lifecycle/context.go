@@ -90,6 +90,7 @@ type Context struct {
 	PrincipalName  string
 	CredentialKind string // "key" | "token"
 	CredentialID   string
+	RelayKeyName   string // the key's slug; empty for a token
 
 	// PricingID / PricingName identify the rate sheet billing this request,
 	// stamped at plan-fill from what routing already resolved. The post-

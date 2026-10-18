@@ -1,4 +1,4 @@
-// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the two reads it has no equivalent for (a batched existence check and the snapshot's token versions and disabled ids) stay on relay's sqlc queries. (nil, nil) on not-found.
+// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the reads it has no equivalent for (batched existence and username lookups, and the snapshot's token versions and disabled ids) stay on relay's sqlc queries. (nil, nil) on not-found.
 
 package user
 
@@ -89,6 +89,22 @@ func (s *Store) MissingIDs(ctx context.Context, ids []string) ([]string, error) 
 		}
 	}
 	return missing, nil
+}
+
+// Usernames maps each of ids that has a users row to its username, in one query. Ids without a row are absent.
+func (s *Store) Usernames(ctx context.Context, ids []string) (map[string]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.q.ListUsernamesIn(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("user.Usernames: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, r := range rows {
+		out[r.ID] = r.Username
+	}
+	return out, nil
 }
 
 // Upsert writes u. Caller is responsible for stamping ID.

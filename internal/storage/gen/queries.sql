@@ -439,6 +439,10 @@ DELETE FROM overlays WHERE kind = $1 AND resource_id = $2;
 -- Membership check for a whole id list in one round trip.
 SELECT id FROM users WHERE id = ANY($1::text[]);
 
+-- name: ListUsernamesIn :many
+-- Names a whole id list in one round trip, for labelling usage rows by user.
+SELECT id, username FROM users WHERE id = ANY($1::text[]);
+
 -- name: ListUserTokenVersionsAndDisabled :many
 -- One read feeds both snapshot views of users: enabled accounts' token versions and the ids of disabled ones.
 SELECT id, token_version, disabled FROM users;

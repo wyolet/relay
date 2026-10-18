@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -23,6 +24,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 func TestScopeOf(t *testing.T) {
@@ -104,28 +106,55 @@ func TestScopeEventQuery(t *testing.T) {
 
 // fakeUsageReader records the query it was handed; calls counts invocations
 // so tests can assert the scoped-out short-circuit never reaches the store.
+// The mutex covers /logs?count=true, which calls Events and Count concurrently, and /usage/facets, which runs one Facet per dimension concurrently.
 type fakeUsageReader struct {
-	calls  int
-	last   usagelog.EventQuery
-	events []usagelog.Event
+	mu         sync.Mutex
+	calls      int
+	last       usagelog.EventQuery
+	lastCount  usagelog.EventQuery
+	countLimit int
+	distinct   string
+	events     []usagelog.Event
 }
 
 func (f *fakeUsageReader) Events(_ context.Context, q usagelog.EventQuery) ([]usagelog.Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.last = q
 	return f.events, nil
 }
 
-func (f *fakeUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (usagelog.SummaryResult, error) {
+func (f *fakeUsageReader) Count(_ context.Context, q usagelog.EventQuery, limit int) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
-	f.last = q.EventQuery
-	return usagelog.SummaryResult{Rows: []usagelog.SummaryRow{}}, nil
+	f.lastCount, f.countLimit = q, limit
+	return usage.CountEvents(f.events, q, limit), nil
+}
+
+func (f *fakeUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (usagelog.SummaryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.last, f.distinct = q.EventQuery, q.Distinct
+	return usage.SummarizeWithDistinct(f.events, q.GroupBy, q.Distinct)
 }
 
 func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQuery) (usagelog.TimeSeriesResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.last, f.distinct = q.EventQuery, q.Distinct
+	return usage.BucketizeWithDistinct(usage.FilterEvents(f.events, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
+}
+
+func (f *fakeUsageReader) Facet(_ context.Context, q usagelog.FacetQuery) ([]usagelog.FacetValue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.last = q.EventQuery
-	return usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}, nil
+	return usage.TopValues(usage.FilterEvents(f.events, q.EventQuery), q.Dim, q.Limit)
 }
 
 // newUsageHarness mounts the usage + logs read endpoints behind the actor-
@@ -138,6 +167,7 @@ func newUsageHarness(t *testing.T, authzr authz.Authorizer, reader *fakeUsageRea
 	api := humachi.New(r, huma.DefaultConfig("usage-scope-test", "0"))
 	d := Deps{Authz: authzr, UsageReader: reader}
 	registerUsage(api, d, nil)
+	registerUsageFacets(api, d, nil)
 	registerLogs(api, d, nil)
 	return r
 }

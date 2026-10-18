@@ -2,7 +2,6 @@ package usage
 
 import (
 	"context"
-	"strings"
 	"time"
 )
 
@@ -36,6 +35,9 @@ type Reader interface {
 	// order (newest first), capped at q.Limit.
 	Events(ctx context.Context, q EventQuery) ([]Event, error)
 
+	// Count returns how many events Events would match without a page limit, LogOnly events included; q.Limit and the cursor are ignored. Counting stops past limit (<= 0 counts all), so a caller passes cap+1 and reads n > cap as "more than cap".
+	Count(ctx context.Context, q EventQuery, limit int) (int64, error)
+
 	// Summary returns aggregated rows grouped by q.GroupBy. Each row
 	// carries totals + latency percentiles over the events matching
 	// the filter. Rows are sorted by Requests descending. LogOnly
@@ -50,6 +52,9 @@ type Reader interface {
 	// Buckets are aligned to the Unix epoch by q.Interval and ordered
 	// oldest-first within each series.
 	TimeSeries(ctx context.Context, q TimeSeriesQuery) (TimeSeriesResult, error)
+
+	// Facet returns the most frequent values of q.Dim over the filtered set with their request counts, requests desc then value asc, capped at FacetLimit(q.Limit). It counts what Summary counts (LogOnly excluded) and nothing else; the empty value is a value like any other.
+	Facet(ctx context.Context, q FacetQuery) ([]FacetValue, error)
 }
 
 // EventQuery filters the raw event stream. All fields are optional;
@@ -61,6 +66,8 @@ type EventQuery struct {
 	Since time.Duration
 	From  time.Time
 	To    time.Time
+	// Before is an exclusive upper bound (ts < Before), ANDed with To. It lets two adjacent windows split on one instant without counting an event on it twice.
+	Before time.Time
 
 	// RequestID is an exact single-value lookup (deep-link one event).
 	RequestID string
@@ -92,11 +99,12 @@ type EventQuery struct {
 	RequestedModel []string
 
 	// Slug filters — match the denormalized entity names (Event.Model /
-	// Host / Policy / Provider) recorded at event time.
+	// Host / Policy / Provider / RelayKey) recorded at event time.
 	Model    []string
 	Host     []string
 	Policy   []string
 	Provider []string
+	RelayKey []string
 
 	// Tags filters on caller-supplied event tags: key → accepted values.
 	// AND across keys, OR within a key's values. An event with the key
@@ -158,11 +166,15 @@ type SummaryQuery struct {
 	// "relay_key_hash", "policy_id", "model_id", "host_id",
 	// "host_key_id", "source", "finish_reason", "error_kind",
 	// "model", "host", "policy", "provider", "project", "team",
-	// "principal" (event-time slugs), "project_id", "team_id",
+	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",
 	// or "tags.<key>" (dynamic, groups on a caller tag's value).
+	// GroupByNone → one row over the whole filtered slice, Group {}.
 	// Empty → "source".
 	GroupBy string
+
+	// Distinct, when set, is a ValidDistinct dimension whose distinct non-empty values each row counts in SummaryRow.Distinct.
+	Distinct string
 }
 
 // DefaultEventLimit caps an unbounded Events query so a misconfigured
@@ -179,8 +191,12 @@ type SummaryRow struct {
 	Group      map[string]string `json:"group"`
 	Requests   int64             `json:"requests"`
 	ErrorCount int64             `json:"error_count"`
-	Tokens     map[string]int64  `json:"tokens"`
-	DurationMs DurationStats     `json:"duration_ms"`
+	// ErrorCount counts status >= 400 and always equals Errors4xx + Errors5xx: every status >= 500 (600+ included) lands in Errors5xx. Throttled counts status 429 and is a subset of Errors4xx.
+	Errors4xx  int64            `json:"errors_4xx"`
+	Errors5xx  int64            `json:"errors_5xx"`
+	Throttled  int64            `json:"throttled"`
+	Tokens     map[string]int64 `json:"tokens"`
+	DurationMs DurationStats    `json:"duration_ms"`
 	// TTFTMs aggregates upstream time-to-first-byte (ms, derived from
 	// Upstream.ResponseStart) over the subset of events that carry upstream
 	// timing. Nil when no event in the group has it — a pointer so "no
@@ -194,6 +210,10 @@ type SummaryRow struct {
 	// cost total always says how complete it is.
 	CostNanos int64 `json:"cost_nanos"`
 	Unpriced  int64 `json:"unpriced"`
+	// Previous is the same group over the previous window, set only by SummaryWithPrevious. Nil when the group had no traffic there; a group seen only in the previous window has no row at all.
+	Previous *SummaryPrevious `json:"previous,omitempty"`
+
+	Distinct *int64 `json:"distinct,omitempty" doc:"Number of distinct non-empty values of the distinct dimension among this row's events (keyless traffic is not a key). Present only with distinct set."`
 }
 
 // DurationStats holds latency aggregates in milliseconds.
@@ -210,8 +230,13 @@ type DurationStats struct {
 // the query.
 type SummaryResult struct {
 	Rows []SummaryRow `json:"rows"`
-	From time.Time    `json:"from"`
-	To   time.Time    `json:"to"`
+	// Labels maps a group value to the latest non-empty event-time slug beside it when GroupBy is an id dimension (see LabelColumn); flat because the ids are UUIDs or hashes. Nil for any other grouping.
+	Labels map[string]string `json:"labels,omitempty"`
+	From   time.Time         `json:"from"`
+	To     time.Time         `json:"to"`
+	// PreviousFrom / PreviousTo bound the window rows' Previous covers: the one the caller gave, or the requested window's length ending where it starts. PreviousTo is exclusive. Zero unless SummaryWithPrevious built the result.
+	PreviousFrom time.Time `json:"previous_from,omitzero"`
+	PreviousTo   time.Time `json:"previous_to,omitzero"`
 }
 
 // TimeSeriesQuery is EventQuery + a bucket width + optional group
@@ -224,9 +249,11 @@ type TimeSeriesQuery struct {
 	// Interval is the bucket width. Must be > 0.
 	Interval time.Duration
 
-	// GroupBy splits the result into one series per dimension value.
-	// Empty means a single series. Valid values match ValidGroupBy.
+	// GroupBy splits the result into one series per dimension value. Empty means a single series with a nil Group; GroupByNone means the same single series with Group {}. Otherwise IsValidGroupBy applies.
 	GroupBy string
+
+	// Distinct — see SummaryQuery.Distinct; counted per point in TimeSeriesPoint.Distinct.
+	Distinct string
 }
 
 // TimeSeriesPoint is one time bucket's aggregates. Bucket is the bucket's
@@ -236,11 +263,10 @@ type TimeSeriesPoint struct {
 	Bucket     time.Time `json:"bucket"`
 	Requests   int64     `json:"requests"`
 	ErrorCount int64     `json:"error_count"`
-	// Errors4xx/Errors5xx split ErrorCount by status class for triage
-	// charts. They may sum below ErrorCount only if an out-of-band status
-	// >= 600 ever appears; in practice ErrorCount = Errors4xx + Errors5xx.
+	// Errors4xx / Errors5xx / Throttled — same invariant as SummaryRow: ErrorCount = Errors4xx + Errors5xx, Throttled (429) within Errors4xx.
 	Errors4xx  int64            `json:"errors_4xx"`
 	Errors5xx  int64            `json:"errors_5xx"`
+	Throttled  int64            `json:"throttled"`
 	Tokens     map[string]int64 `json:"tokens"`
 	DurationMs DurationStats    `json:"duration_ms"`
 	// TTFTMs — see SummaryRow.TTFTMs; nil when no event in the bucket
@@ -249,12 +275,13 @@ type TimeSeriesPoint struct {
 	// CostNanos / Unpriced — see SummaryRow.
 	CostNanos int64 `json:"cost_nanos"`
 	Unpriced  int64 `json:"unpriced"`
+
+	Distinct *int64 `json:"distinct,omitempty" doc:"Number of distinct non-empty values of the distinct dimension among this bucket's events. Per-bucket values cannot be summed across buckets; use /usage/summary for a window total. Present only with distinct set."`
 }
 
-// TimeSeriesRow is one series. Group is nil for the single-series case
-// and carries the grouping dimension keyed by column name otherwise.
+// TimeSeriesRow is one series. Group is nil for the single-series case, {} for GroupByNone, and carries the grouping dimension keyed by column name otherwise; omitzero drops only the nil case, so none still emits "group": {}.
 type TimeSeriesRow struct {
-	Group  map[string]string `json:"group,omitempty"`
+	Group  map[string]string `json:"group,omitzero"`
 	Points []TimeSeriesPoint `json:"points"`
 }
 
@@ -262,10 +289,12 @@ type TimeSeriesRow struct {
 // a string, e.g. "1h") and time range so the caller can zero-fill and
 // label the axis without re-deriving from the query.
 type TimeSeriesResult struct {
-	Rows     []TimeSeriesRow `json:"rows"`
-	Interval string          `json:"interval"`
-	From     time.Time       `json:"from"`
-	To       time.Time       `json:"to"`
+	Rows []TimeSeriesRow `json:"rows"`
+	// Labels — see SummaryResult.Labels; the slug is the latest across the whole window, not per bucket.
+	Labels   map[string]string `json:"labels,omitempty"`
+	Interval string            `json:"interval"`
+	From     time.Time         `json:"from"`
+	To       time.Time         `json:"to"`
 }
 
 // MaxBuckets caps the number of time buckets a single TimeSeries query may
@@ -273,66 +302,3 @@ type TimeSeriesResult struct {
 // range producing an unbounded result. The HTTP layer rejects with 400
 // before hitting a backend.
 const MaxBuckets = 5_000
-
-// ValidGroupBy lists the accepted static GroupBy values. Used by the HTTP
-// endpoint to reject typos with a clear 400 instead of silently
-// grouping on nothing. "tags.<key>" and "extras.<key>" are additionally
-// accepted as dynamic dimensions — see MapGroupKey.
-var ValidGroupBy = []string{
-	"relay_key_hash",
-	"policy_id",
-	"model_id",
-	"host_id",
-	"host_key_id",
-	"source",
-	"finish_reason",
-	"error_kind",
-	"model",
-	"host",
-	"policy",
-	"provider",
-	"project_id",
-	"team_id",
-	"principal_id",
-	"credential_id",
-	"project",
-	"team",
-	"principal",
-}
-
-// MaxTagKeyLen caps a single tag key. Enforced at write time
-// (app/usagelog tag validation) and reused by MapGroupKey so an
-// unwritable key can't become a group dimension.
-const MaxTagKeyLen = 64
-
-// MapGroupKey splits a dynamic map group dimension — "tags.<key>" (caller
-// tags) or "extras.<key>" (relay-stamped provenance: instance, client_ip,
-// resolved_via) — into the Event map column and the key within it. ok is
-// false when g isn't map-shaped or the key is empty / over MaxTagKeyLen.
-// Backends MUST bind the returned key as a query parameter, never splice
-// it into SQL text; column is one of the two fixed names and safe to embed.
-func MapGroupKey(g string) (column, key string, ok bool) {
-	for _, column = range []string{"tags", "extras"} {
-		key, found := strings.CutPrefix(g, column+".")
-		if !found {
-			continue
-		}
-		if key == "" || len(key) > MaxTagKeyLen {
-			return "", "", false
-		}
-		return column, key, true
-	}
-	return "", "", false
-}
-
-// IsValidGroupBy reports whether g is one of the supported group
-// dimensions (a ValidGroupBy entry or a dynamic map one).
-func IsValidGroupBy(g string) bool {
-	for _, v := range ValidGroupBy {
-		if g == v {
-			return true
-		}
-	}
-	_, _, ok := MapGroupKey(g)
-	return ok
-}
