@@ -92,3 +92,26 @@ func TestIntegration_PersonalKeyOnAProjectPolicy(t *testing.T) {
 		t.Fatalf("a personal key outside the project was accepted: %s", raw)
 	}
 }
+
+// Every catalog tier rate limit is host-owned; a project admin must be able
+// to put one on the project's own policy.
+func TestIntegration_ProjectPolicyOnACatalogRateLimit(t *testing.T) {
+	t.Parallel()
+	st := newStackAuthz(t, "rbac")
+	roles := seedBuiltinRoles(t, st)
+	teamA := st.mkTeam(t, "alpha")
+	projA := st.mkProject(t, "alpha-one", teamA)
+	adminID := st.seedLogin(t, "padmin", "pw-padmin")
+	st.bindRole(t, "alpha-admins", roles["project-admin"].Meta.ID, adminID, "project", projA)
+	_, rateLimitID, _ := seedHostTiers(t, st)
+	if err := st.cat.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	padmin := st.login(t, "padmin", "pw-padmin")
+	body := `{"metadata":{"name":"alpha-limited","owner":{"kind":"project","id":"` + projA + `"}},` +
+		`"spec":{"rateLimitId":"` + rateLimitID + `"}}`
+	if code, raw := padmin.do(http.MethodPost, "/api/policies", body); code != http.StatusCreated {
+		t.Fatalf("project policy on a host-owned rate limit = %d, want 201: %s", code, raw)
+	}
+}

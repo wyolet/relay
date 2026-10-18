@@ -138,6 +138,17 @@ func SharedOwner(kind, name string, owner, refOwner meta.Owner) error {
 	return badRequest("%s %q belongs to another scope (%s) and cannot be referenced from this project", kind, name, owner.Kind)
 }
 
+// catalogOwned reports a row the catalog tiers own. Its rate limits and
+// policies are shared configuration any scope may draw on; host keys stay
+// under SharedOwner because they are credentials.
+func catalogOwned(o meta.Owner) bool {
+	switch o.Kind {
+	case meta.OwnerSystem, meta.OwnerProvider, meta.OwnerHost:
+		return true
+	}
+	return false
+}
+
 // personalToProject refuses a personal row drawing on a project's row unless
 // the caller may create keys in that project — a member is inside the
 // project's attribution and limits, anyone else is not.
@@ -163,9 +174,13 @@ func (c Checker) PolicyRef(ctx context.Context, policyID string, refOwner meta.O
 	if !Visible(ctx, c.Authz, "policy", p.Meta.ID, p.Meta.Owner) {
 		return notVisible("policy", policyID)
 	}
-	// A host-owned policy is a tier menu with no host keys behind it.
+	// A host-owned policy is a menu of upstream limits for host keys, with no
+	// models or host keys behind it: as an inbound policy it grants nothing.
 	if p.Meta.Owner.Kind == meta.OwnerHost {
 		return badRequest("policy %q is a host tier policy and cannot be bound", p.Meta.Name)
+	}
+	if catalogOwned(p.Meta.Owner) {
+		return nil
 	}
 	if err := c.personalToProject(ctx, p.Meta.Owner, refOwner); err != nil {
 		return err
@@ -184,6 +199,9 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 	}
 	if !Visible(ctx, c.Authz, "rate-limit", rl.Meta.ID, rl.Meta.Owner) {
 		return notVisible("rate-limit", rateLimitID)
+	}
+	if catalogOwned(rl.Meta.Owner) {
+		return nil
 	}
 	if err := c.personalToProject(ctx, rl.Meta.Owner, refOwner); err != nil {
 		return err

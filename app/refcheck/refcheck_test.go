@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
@@ -100,5 +101,87 @@ func TestEditingABoundRoleCannotGrantMoreThanTheEditorHolds(t *testing.T) {
 	}
 	if err := c.Role(ctx, edit([]string{"*"}, []string{"*"})); !errors.Is(err, authz.ErrForbidden) {
 		t.Fatalf("widening a bound role = %v, want forbidden", err)
+	}
+}
+
+// Catalog-owned rate limits and policies carry no credentials, so any scope
+// may draw on them; another tenant's rows and host keys stay off limits.
+func TestCatalogOwnedLimitsAndPoliciesReferenceableFromAnyScope(t *testing.T) {
+	owner := func(kind meta.OwnerKind, id string) meta.Owner { return meta.Owner{Kind: kind, ID: id} }
+	rls := map[string]*ratelimit.RateLimit{}
+	pols := map[string]*policy.Policy{}
+	for id, o := range map[string]meta.Owner{
+		"system":        owner(meta.OwnerSystem, ""),
+		"provider":      owner(meta.OwnerProvider, "pv-1"),
+		"host":          owner(meta.OwnerHost, "h-1"),
+		"same-project":  owner(meta.OwnerProject, "p-1"),
+		"other-project": owner(meta.OwnerProject, "p-2"),
+		"team":          owner(meta.OwnerTeam, "t-1"),
+	} {
+		rls[id] = &ratelimit.RateLimit{Meta: meta.Metadata{ID: id, Name: id, Owner: o}}
+		pols[id] = &policy.Policy{Meta: meta.Metadata{ID: id, Name: id, Owner: o}}
+	}
+	c := Checker{Authz: scopingAuthz{}, Rows: Lookup{
+		RateLimit: func(_ context.Context, id string) *ratelimit.RateLimit { return rls[id] },
+		Policy:    func(_ context.Context, id string) *policy.Policy { return pols[id] },
+	}}
+	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
+	project := owner(meta.OwnerProject, "p-1")
+	scopes := map[string]meta.Owner{"user": owner(meta.OwnerUser, "u-1"), "team": owner(meta.OwnerTeam, "t-1"), "project": project}
+
+	for _, target := range []string{"system", "provider", "host"} {
+		for name, ref := range scopes {
+			if err := c.RateLimitRef(ctx, target, ref); err != nil {
+				t.Errorf("%s policy -> %s-owned rate limit: %v", name, target, err)
+			}
+		}
+	}
+	for _, target := range []string{"system", "provider"} {
+		for name, ref := range scopes {
+			if err := c.PolicyRef(ctx, target, ref); err != nil {
+				t.Errorf("%s row -> %s-owned policy: %v", name, target, err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		target string
+		ok     bool
+	}{
+		{"same-project", true},
+		{"other-project", false},
+		{"team", false},
+	} {
+		if err := c.RateLimitRef(ctx, tc.target, project); (err == nil) != tc.ok {
+			t.Errorf("project policy -> %s rate limit: err=%v, want ok=%v", tc.target, err, tc.ok)
+		}
+	}
+	for name, ref := range scopes {
+		if err := c.PolicyRef(ctx, "host", ref); err == nil {
+			t.Errorf("%s row bound a host tier policy", name)
+		}
+	}
+}
+
+// Host keys are credentials: the catalog allowance does not reach them.
+func TestProjectPolicyHostKeyScope(t *testing.T) {
+	keys := map[string]*hostkey.HostKey{
+		"own":      {Meta: meta.Metadata{ID: "own", Name: "own", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}}},
+		"other":    {Meta: meta.Metadata{ID: "other", Name: "other", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}}},
+		"personal": {Meta: meta.Metadata{ID: "personal", Name: "personal", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-2"}}},
+	}
+	c := Checker{Authz: scopingAuthz{}, Rows: Lookup{HostKey: func(_ context.Context, id string) *hostkey.HostKey { return keys[id] }}}
+	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
+	project := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
+	for _, tc := range []struct {
+		key string
+		ok  bool
+	}{
+		{"own", true},
+		{"other", false},
+		{"personal", false},
+	} {
+		if err := c.HostKeyRefs(ctx, []string{tc.key}, project); (err == nil) != tc.ok {
+			t.Errorf("project policy -> %s host key: err=%v, want ok=%v", tc.key, err, tc.ok)
+		}
 	}
 }
