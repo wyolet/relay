@@ -104,8 +104,8 @@ jobs:
       pull-requests: write
       issues: write
       actions: read
-    # The cluster pool runs Postgres and Valkey as pod sidecars on the same
-    # addresses and has no ClickHouse. An empty image skips a service.
+    # The cluster pool runs Postgres, Valkey and ClickHouse as pod sidecars on
+    # the same addresses. An empty image skips a service.
     services:
       postgres:
         image: ${{ vars.CI_POOL != 'cluster' && 'postgres:16-alpine' || '' }}
@@ -144,7 +144,7 @@ jobs:
     env:
       RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
       RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
-      RELAY_TEST_CH_DSN: ${{ vars.CI_POOL != 'cluster' && 'clickhouse://relay:relay@127.0.0.1:9000/default' || '' }}
+      RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
       SHORT: ${{ needs.guard.outputs.short }}
     steps:
       - uses: actions/checkout@v7
@@ -231,7 +231,7 @@ jobs:
 
           Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-$SHORT, created at the failing commit.
 
-          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres and Valkey are running (RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR); ClickHouse is available only when RELAY_TEST_CH_DSN is set.
+          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
           2. Bisect the range with that test only (\`git bisect start <bad> <good>\`, \`git bisect run ...\`) to find the culprit commit, then \`git bisect reset\` and \`git switch fix/dev-$SHORT\`.
           3. Take exactly one outcome.
 
