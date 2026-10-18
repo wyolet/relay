@@ -70,8 +70,9 @@ Configuration: the `DEV_FIXER_RELAY_KEY` secret (a relay key dedicated to the fi
 
 1. Work through the checklist in the release PR.
 2. Merge it with a merge commit. That creates a new commit on `main`.
-3. Wait for CI on that push to `main` to go green.
-4. Tag: `make release` (patch), `make release-minor` or `make release-major`. The target checks that CI passed for `origin/main`'s HEAD, then tags and pushes.
+3. Check that `dev` and `release/next` still exist (`git ls-remote origin dev release/next`). An admin merge bypasses the bypassable rulesets, and the repository deletes merged head branches; the no-bypass ruleset below is what keeps them.
+4. Wait for CI on that push to `main` to go green.
+5. Tag: `make release` (patch), `make release-minor` or `make release-major`. The target checks that CI passed for `origin/main`'s HEAD, then tags and pushes.
 
 Releasing without waiting for the next green run means opening a PR from `dev` into `main` by hand; it runs the full tier itself.
 
@@ -93,15 +94,16 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 
 ## Branch rules
 
-`dev` and `main` each have a repository ruleset; admins can bypass.
-
 | | `dev` | `main` |
 |---|---|---|
-| Deletion | blocked (auto-delete of merged branches would otherwise delete `dev` on release) | blocked |
 | Force push | blocked | blocked |
 | Changes by | PR only | PR only |
 | Merge methods | squash, merge commit | merge commit, squash |
 | Required checks | `changes`, `lint`, `test`, `integration`, `clickhouse`, `chart`, `boot` | the `dev` set plus `fuzz`, `bench`, `govulncheck`, `trivy`, `coverage` |
 | Branch must be up to date | no | no |
 
-`release/next` needs its own ruleset that blocks deletion (auto-delete would remove it when the release PR merges) and force pushes. It must not get the `dev` ruleset: `full.yml` moves it with a direct ref update, which a PR-only rule would reject.
+These come from the `dev` and `main` rulesets, which admins can bypass. An admin merge therefore skips them, including their deletion block.
+
+Deletion and force pushes of `dev`, `main` and `release/next` are blocked by the `long-lived-branches` ruleset, which has no bypass actors. Without it, the repository's automatic deletion of merged head branches removes `dev` when an admin merges the release PR. Removing that protection takes editing the ruleset itself.
+
+`release/next` gets no PR-only rule: `full.yml` moves it with a direct, fast-forward-only ref update, which such a rule would reject.
