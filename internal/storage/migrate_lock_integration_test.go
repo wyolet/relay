@@ -58,7 +58,7 @@ func schemaVersion(t *testing.T, dsn, table string) (int64, bool) {
 	return version, dirty
 }
 
-// migrateBlocked runs migrate while the lock is held and requires it to give up with a lock timeout, promptly.
+// migrateBlocked runs migrate while the lock is held and requires it to give up with a lock timeout, promptly, and without logging the full SQL body.
 func migrateBlocked(t *testing.T, migrate func() error) {
 	t.Helper()
 	start := time.Now()
@@ -68,6 +68,9 @@ func migrateBlocked(t *testing.T, migrate func() error) {
 	}
 	if took := time.Since(start); took > 10*time.Second {
 		t.Fatalf("the migration waited %s on a 1s lock timeout", took)
+	}
+	if msg := err.Error(); len(msg) > 512 {
+		t.Errorf("lock-timeout error message is %d bytes; the SQL body must not appear in it: %s", len(msg), msg)
 	}
 }
 

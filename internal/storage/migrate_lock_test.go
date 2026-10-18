@@ -3,10 +3,13 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4/database"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -49,6 +52,42 @@ func TestLockTimedOut(t *testing.T) {
 	} {
 		if got := lockTimedOut(tc.err); got != tc.want {
 			t.Errorf("%s: lockTimedOut = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The lock-timeout error is logged; the migration body golang-migrate's error carries must not be.
+func TestMigrationCauseDropsTheBody(t *testing.T) {
+	const body = "ALTER TABLE providers ADD COLUMN note text;"
+	cause := migrationCause(fmt.Errorf("wrapped: %w", &database.Error{Query: []byte(body), OrigErr: &pgconn.PgError{Code: lockNotAvailable}}))
+	if strings.Contains(cause.Error(), body) || !strings.Contains(cause.Error(), lockNotAvailable) {
+		t.Fatalf("cause = %q, want the SQLSTATE and no migration body", cause)
+	}
+	var pg *pgconn.PgError
+	if !errors.As(cause, &pg) {
+		t.Fatalf("cause %v does not unwrap to the postgres error", cause)
+	}
+}
+
+func TestMigrationFile(t *testing.T) {
+	src, err := iofs.New(fstest.MapFS{
+		"000032_add_note.up.sql":   {Data: []byte("SELECT 1;")},
+		"000032_add_note.down.sql": {Data: []byte("SELECT 1;")},
+	}, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		version uint
+		up      bool
+		want    string
+	}{
+		{32, true, "000032_add_note.up.sql"},
+		{32, false, "000032_add_note.down.sql"},
+		{33, true, "migration 33"},
+	} {
+		if got := migrationFile(src, tc.version, tc.up); got != tc.want {
+			t.Errorf("migrationFile(%d, up=%v) = %q, want %q", tc.version, tc.up, got, tc.want)
 		}
 	}
 }
