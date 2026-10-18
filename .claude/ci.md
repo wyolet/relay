@@ -55,7 +55,7 @@ A fix must not loosen a test to make it pass. If a test changes, the PR says why
 
 A red full run on `dev` also starts `.github/workflows/fix-dev.yml`, once per failing commit. Claude, reached through relay, reproduces the failure with the failing test only, bisects the range, and takes exactly one outcome:
 
-- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. It runs the failing test and `make check` before pushing. Its PR gets the full tier dispatched on its branch, since a PR opened with the workflow token starts no CI.
+- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. Before pushing it reruns the failing test or check and builds and vets the packages it touched; the full suite is left to the PR's CI. Its PR gets the full tier dispatched on its branch, since a PR opened with the workflow token starts no CI.
 - an issue labelled `needs-decision` with the failure, the culprit, the root cause and the options, when the fix isn't small or needs a design decision. Nothing else.
 
 It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its token has contents, pull-request and issue write only: no `actions` and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`.

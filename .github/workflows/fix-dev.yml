@@ -158,7 +158,7 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      # make check runs golangci-lint and helm lint; same pinned version as ci.yml.
+      # For a failing lint or chart check; same pinned version as ci.yml.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
@@ -235,7 +235,7 @@ jobs:
           2. Bisect the range with that test only (\`git bisect start <bad> <good>\`, \`git bisect run ...\`) to find the culprit commit, then \`git bisect reset\` and \`git switch fix/dev-$SHORT\`.
           3. Take exactly one outcome.
 
-          (a) The right fix is small and focused, or is a clean \`git revert <culprit>\`. Commit it on the branch. Run the failing test and \`make check\`; both must pass. Then \`git push origin fix/dev-$SHORT\` and open one PR: \`gh pr create --base $TARGET --label dev-fix\`, title \`<type>: <summary> (dev $SHORT)\` where type is fix or revert. The description names the culprit commit and the root cause and says what changed. Never loosen a test to make it pass: no skips, no raised tolerances, no deleted assertions. If you change a test file, the description explains why the test was wrong.
+          (a) The right fix is small and focused, or is a clean \`git revert <culprit>\`. Commit it on the branch. Rerun the failing test or check, and \`go build ./...\` and \`go vet\` on the packages you touched; all must pass. Don't run the whole suite: the PR gets the full CI. Then \`git push origin fix/dev-$SHORT\` and open one PR: \`gh pr create --base $TARGET --label dev-fix\`, title \`<type>: <summary> (dev $SHORT)\` where type is fix or revert. The description names the culprit commit and the root cause and says what changed. Never loosen a test to make it pass: no skips, no raised tolerances, no deleted assertions. If you change a test file, the description explains why the test was wrong.
 
           (b) The fix is not small, touches the architecture or a design decision, or you could not reproduce or bisect. Open one issue: \`gh issue create --label needs-decision\`, title \`dev $SHORT: <summary>\`, with the failure, the culprit commit, the root cause and the options you see. Then stop: push nothing, open no PR, write no draft code.
 
