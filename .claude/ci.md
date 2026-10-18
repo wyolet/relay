@@ -51,6 +51,19 @@ The summary of the `full.yml` run that follows the failure lists the commits sin
 
 A fix must not loosen a test to make it pass. If a test changes, the PR says why the test was wrong.
 
+### The fixer
+
+A red full run on `dev` also starts `.github/workflows/fix-dev.yml`, once per failing commit. Claude, reached through relay, reproduces the failure with the failing test only, bisects the range, and takes exactly one outcome:
+
+- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. It runs the failing test and `make check` before pushing. Its PR gets the full tier dispatched on its branch, since a PR opened with the workflow token starts no CI.
+- an issue labelled `needs-decision` with the failure, the culprit, the root cause and the options, when the fix isn't small or needs a design decision. Nothing else.
+
+It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its token has contents, pull-request and issue write only: no `actions` and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`. 30-minute timeout, 80 turns.
+
+Configuration: the `DEV_FIXER_RELAY_KEY` secret (a relay key dedicated to the fixer, on a policy with a tight token rate limit), the `DEV_FIXER_BASE_URL` variable (relay's Anthropic-shape base URL), and optionally `DEV_FIXER_MODEL`. Without the key, the run reports that and stops. Every outcome goes to the run summary, and to Telegram when `RELEASE_TELEGRAM_TOKEN` (secret) and `RELEASE_TELEGRAM_CHAT` (variable) are set at repository level.
+
+`full.yml` dispatches it on `dev` (`--ref dev`), so it runs in dev's context. A workflow file that isn't on `main` can't be dispatched by name; to try a change on another branch, register it there once (a push run whose jobs skip), then dispatch by id: `gh api -X POST repos/{owner}/{repo}/actions/workflows/<id>/dispatches -f ref=<branch> -f 'inputs[sha]=…' -f 'inputs[run_id]=…' -f 'inputs[base]=<branch>'`.
+
 ## Releasing
 
 `release/next` follows the last `dev` commit whose full run passed, and there is always one open PR `release/next` → `main`. After each green full run, `scripts/release-pr.sh` (from `full.yml`) fast-forwards the branch and rewrites that PR's description: the commits since the latest release grouped as draft release notes, a link to the green run, and a checklist of what needs coordinating (a `versions.env` change, new migrations, control API code changes that may need a UI release). The PR runs no CI of its own: its head already has a green full run, and the required checks match by commit. Nothing merges or tags automatically. `DRY_RUN=1 scripts/release-pr.sh <sha> <run-url>` prints the description without touching anything.
