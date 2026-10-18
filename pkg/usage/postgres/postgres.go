@@ -81,6 +81,7 @@ var expectedColumns = []string{
 	"project_id", "project", "team_id", "team",
 	"principal_kind", "principal_id", "principal",
 	"credential_kind", "credential_id",
+	"relay_key",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -123,7 +124,8 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     principal_id             text         NOT NULL DEFAULT '',
     principal                text         NOT NULL DEFAULT '',
     credential_kind          text         NOT NULL DEFAULT '',
-    credential_id            text         NOT NULL DEFAULT ''
+    credential_id            text         NOT NULL DEFAULT '',
+    relay_key                text         NOT NULL DEFAULT ''
 )`
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -148,6 +150,7 @@ var alterTableSQL = []string{
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS principal text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_kind text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS relay_key text NOT NULL DEFAULT ''`,
 }
 
 const createIndexSQL = `
@@ -451,6 +454,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.Principal,
 			ev.CredentialKind,
 			ev.CredentialID,
+			ev.RelayKey,
 		})
 	}
 
@@ -487,7 +491,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        provider, cost_nanos, cost_breakdown, pricing,
 		        project_id, project, team_id, team,
 		        principal_kind, principal_id, principal,
-		        credential_kind, credential_id
+		        credential_kind, credential_id, relay_key
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -552,6 +556,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.Principal,
 			&ev.CredentialKind,
 			&ev.CredentialID,
+			&ev.RelayKey,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -1055,6 +1060,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	any("host", q.Host)
 	any("policy", q.Policy)
 	any("provider", q.Provider)
+	any("relay_key", q.RelayKey)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {

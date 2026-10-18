@@ -404,8 +404,8 @@ func TestExportRecordsAPricedUsageEvent(t *testing.T) {
 	if ev.PrincipalKind != "serviceaccount" || ev.PrincipalID != fx.sa.Meta.ID || ev.Principal != "indexer" {
 		t.Errorf("principal = %q %q %q", ev.PrincipalKind, ev.PrincipalID, ev.Principal)
 	}
-	if ev.CredentialKind != "key" || ev.CredentialID != fx.keyRow.Meta.ID || ev.RelayKeyHash != fx.keyRow.Spec.KeyHash {
-		t.Errorf("credential = %q %q %q", ev.CredentialKind, ev.CredentialID, ev.RelayKeyHash)
+	if ev.CredentialKind != "key" || ev.CredentialID != fx.keyRow.Meta.ID || ev.RelayKeyHash != fx.keyRow.Spec.KeyHash || ev.RelayKey != "indexer-prod" {
+		t.Errorf("credential = %q %q %q %q", ev.CredentialKind, ev.CredentialID, ev.RelayKeyHash, ev.RelayKey)
 	}
 	// Relay routed nothing, so no policy, host or host key is named.
 	if ev.PolicyID != "" || ev.HostID != "" || ev.HostKeyID != "" {

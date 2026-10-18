@@ -28,7 +28,7 @@ func mintFor(t *testing.T, st *principalStack, plaintext string) (*Principal, *l
 		teamID: lc.TeamID, team: lc.TeamName,
 		principalKind: lc.PrincipalKind, principalID: lc.PrincipalID, principal: lc.PrincipalName,
 		credentialKind: lc.CredentialKind, credentialID: lc.CredentialID,
-		relayKeyHash: lc.RelayKeyHash,
+		relayKeyHash: lc.RelayKeyHash, relayKey: lc.RelayKeyName,
 	}
 }
 
@@ -38,7 +38,7 @@ type lifecycleFields struct {
 	principalKind, principalID   string
 	principal                    string
 	credentialKind, credentialID string
-	relayKeyHash                 string
+	relayKeyHash, relayKey       string
 }
 
 func TestMintLifecycle_ServiceAccountKeyCarriesFullAttribution(t *testing.T) {
@@ -61,8 +61,8 @@ func TestMintLifecycle_ServiceAccountKeyCarriesFullAttribution(t *testing.T) {
 	if got.credentialKind != "key" || got.credentialID != k.Meta.ID {
 		t.Fatalf("credential: %q / %q", got.credentialKind, got.credentialID)
 	}
-	if got.relayKeyHash != sha("sk-sa") {
-		t.Fatalf("relay_key_hash: %q", got.relayKeyHash)
+	if got.relayKeyHash != sha("sk-sa") || got.relayKey != "indexer-prod" {
+		t.Fatalf("relay key: %q / %q", got.relayKeyHash, got.relayKey)
 	}
 }
 
@@ -95,8 +95,8 @@ func TestMintLifecycle_PersonalKeyHasNoTenancy(t *testing.T) {
 	if got.credentialKind != "key" || got.credentialID != k.Meta.ID {
 		t.Fatalf("credential: %q / %q", got.credentialKind, got.credentialID)
 	}
-	if got.relayKeyHash != sha("sk-user") {
-		t.Fatalf("relay_key_hash: %q", got.relayKeyHash)
+	if got.relayKeyHash != sha("sk-user") || got.relayKey != "alice-laptop" {
+		t.Fatalf("relay key: %q / %q", got.relayKeyHash, got.relayKey)
 	}
 }
 
@@ -113,8 +113,8 @@ func TestMintLifecycle_TokenCredential(t *testing.T) {
 
 	_, got := mintFor(t, st, token)
 
-	if got.relayKeyHash != "" {
-		t.Fatalf("relay_key_hash = %q, want empty for a token", got.relayKeyHash)
+	if got.relayKeyHash != "" || got.relayKey != "" {
+		t.Fatalf("relay key = %q / %q, want both empty for a token", got.relayKeyHash, got.relayKey)
 	}
 	if got.credentialKind != CredentialToken || got.credentialID == "" {
 		t.Fatalf("credential: %q / %q, want the token kind and its jti",
@@ -137,14 +137,16 @@ func TestMintLifecycle_NamesAreEventTime(t *testing.T) {
 	_, before := mintFor(t, st, "sk-sa")
 
 	f.project.Meta.Name = "ml-search-v2"
-	renamed := f.stack(t, saKey(f, "sk-sa"))
+	renamedKey := saKey(f, "sk-sa")
+	renamedKey.Meta.Name = "indexer-prod-v2"
+	renamed := f.stack(t, renamedKey)
 	_, after := mintFor(t, renamed, "sk-sa")
 
-	if before.project != "ml-search" {
-		t.Fatalf("minted-before name changed: %q", before.project)
+	if before.project != "ml-search" || before.relayKey != "indexer-prod" {
+		t.Fatalf("minted-before names changed: %q / %q", before.project, before.relayKey)
 	}
-	if after.project != "ml-search-v2" {
-		t.Fatalf("minted-after name: want ml-search-v2, got %q", after.project)
+	if after.project != "ml-search-v2" || after.relayKey != "indexer-prod-v2" {
+		t.Fatalf("minted-after names: want ml-search-v2 / indexer-prod-v2, got %q / %q", after.project, after.relayKey)
 	}
 	if before.projectID != after.projectID {
 		t.Fatalf("project id must survive a rename: %q vs %q", before.projectID, after.projectID)

@@ -98,6 +98,11 @@ type Event struct {
 	// denormalization rationale as Model/Host/Policy above.
 	Provider string `json:"provider,omitempty"`
 
+	// RelayKey is the inbound key's slug at event time, beside RelayKeyHash
+	// and CredentialID — same denormalization rationale as Model/Host/Policy
+	// above. Empty when no key was presented (token, anonymous proxy).
+	RelayKey string `json:"relay_key,omitempty"`
+
 	// Cost, stamped once at emit time from the pricing then in effect.
 	// CostNanos is integer nano-USD (1 USD = 1e9) — integer so sums never
 	// drift; USD-only by decision, so no currency field. nil = unpriced

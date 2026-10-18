@@ -205,14 +205,14 @@ func TestSlugDimensions_FilterAndGroupBy(t *testing.T) {
 	now := time.Now().UTC()
 	events := []Event{
 		{RequestID: "a", Timestamp: now, Status: 200,
-			Model: "gpt-4o", Host: "openai", Policy: "default"},
+			Model: "gpt-4o", Host: "openai", Policy: "default", RelayKey: "indexer-prod"},
 		{RequestID: "b", Timestamp: now, Status: 200,
-			Model: "claude-sonnet", Host: "anthropic", Policy: "default"},
+			Model: "claude-sonnet", Host: "anthropic", Policy: "default", RelayKey: "indexer-prod"},
 		{RequestID: "c", Timestamp: now, Status: 500,
 			Model: "gpt-4o", Host: "azure", Policy: "premium"},
 	}
 
-	for _, g := range []string{"model", "host", "policy"} {
+	for _, g := range []string{"model", "host", "policy", "relay_key"} {
 		if !IsValidGroupBy(g) {
 			t.Fatalf("IsValidGroupBy(%q) = false", g)
 		}
@@ -245,6 +245,16 @@ func TestSlugDimensions_FilterAndGroupBy(t *testing.T) {
 		t.Fatalf("policy groups: %+v", byPolicy.Rows)
 	}
 
+	// A keyless request groups under the empty slug, not under another key.
+	byKey, err := Summarize(events, "relay_key")
+	if err != nil {
+		t.Fatalf("Summarize relay_key: %v", err)
+	}
+	if len(byKey.Rows) != 2 || byKey.Rows[0].Group["relay_key"] != "indexer-prod" ||
+		byKey.Rows[0].Requests != 2 || byKey.Rows[1].Group["relay_key"] != "" {
+		t.Fatalf("relay_key groups: %+v", byKey.Rows)
+	}
+
 	ts, err := Bucketize(events, time.Hour, "model")
 	if err != nil {
 		t.Fatalf("Bucketize model: %v", err)
@@ -264,6 +274,10 @@ func TestSlugDimensions_FilterAndGroupBy(t *testing.T) {
 	got = FilterEvents(events, EventQuery{Policy: []string{"premium"}})
 	if len(got) != 1 || got[0].RequestID != "c" {
 		t.Fatalf("policy filter: %+v", got)
+	}
+	got = FilterEvents(events, EventQuery{RelayKey: []string{"indexer-prod"}})
+	if len(got) != 2 {
+		t.Fatalf("relay_key filter: want 2, got %d", len(got))
 	}
 }
 

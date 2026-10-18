@@ -127,6 +127,7 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		Host:           lc.HostName,
 		Policy:         lc.PolicyName,
 		Provider:       lc.ProviderName,
+		RelayKey:       lc.RelayKeyName,
 		Pricing:        lc.PricingName,
 	}
 	if !lc.EventTime.IsZero() {

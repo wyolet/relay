@@ -29,7 +29,7 @@ All three endpoints share the same filter parameters: `since` (default
 `status_class` shorthand (`2xx`/`4xx`/`5xx`); `model_id`, `host_id`,
 `policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`
 (repeatable, match-any); `model`, `host`, `policy`, `provider`,
-`requested_model` (slug/string match-any); `source` (`pipeline` / `proxy`
+`relay_key`, `requested_model` (slug/string match-any); `source` (`pipeline` / `proxy`
 / `ws` / `batch` / `otlp`); `finish_reason`, `error_kind`; `streamed` and `error`
 (`true`/`false`); `attempts_min`, `duration_ms_min`/`max`,
 `ttft_ms_min`/`max`; `tag` (`key:value`, repeatable); `q` (free-text
@@ -38,9 +38,10 @@ substring); and `request_id` / `relay_key_hash` for a single event.
 Every event also carries who made the request: `project_id` / `team_id` /
 `principal_id` (with the `project`, `team`, `principal` slugs as of the
 request) and the credential that authenticated it (`credential_kind`,
-`credential_id`). `summary` and `timeseries` take a `group_by` on top of
+`credential_id`, and for a relay key its slug as of the request in
+`relay_key`). `summary` and `timeseries` take a `group_by` on top of
 the filters — `source` (default) | `model` | `host` | `policy` |
-`provider` | `project` | `team` | `principal` (event-time slugs), or
+`provider` | `project` | `team` | `principal` | `relay_key` (event-time slugs), or
 `model_id` | `host_id` | `policy_id` | `project_id` | `team_id` |
 `principal_id` | `credential_id` | `relay_key_hash` | `host_key_id` |
 `finish_reason` | `error_kind`, or `tags.<key>` to group by one caller
