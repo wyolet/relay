@@ -8,6 +8,8 @@
 // baseURL/path/auth wiring. OpenAI, Anthropic, and Gemini constructors remain
 // for explicit off-catalog targets.
 //
+// A relay client also reads what its credential can use: Models lists the model ids and Catalog the catalog document behind a model picker. Each result names its Origin: OriginRelay is relay's answer for the credential, OriginEmbedded the public catalog compiled into this SDK, served when relay is unreachable and no earlier copy is held. Stale marks an earlier relay copy served after a failed refresh.
+//
 // Configuration mirrors the OpenAI SDK: base URL, API key, auth header/scheme,
 // extra default headers, request path, and HTTP client are all settable.
 //
@@ -48,6 +50,7 @@ type Client struct {
 	syncTimeout time.Duration                          // WR_TIMEOUT; applies to Generate only, never streams
 	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
 	target      Target                                 // set by For(); zero for Relay/manual constructors
+	relay       *relayCache                            // set by newRelayClient; nil = not a relay client
 
 	telemetry     *telemetry.Emitter // nil = calls are not reported
 	ownsTelemetry bool               // Close closes the emitter (ForMode built it)
@@ -141,6 +144,7 @@ func newRelayClient(path, baseURL, relayKey string, opts ...Option) *Client {
 	// env-derived opts apply first so explicit opts override them.
 	envOpts, envErr := relayEnvOptions()
 	c := New(v1.IdentityTranslator{}, baseURL, path, relayKey, append(envOpts, opts...)...)
+	c.relay = &relayCache{}
 
 	if d := os.Getenv(EnvTimeout); d != "" {
 		dur, err := time.ParseDuration(d)
