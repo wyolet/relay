@@ -710,7 +710,7 @@ use live numbers for SLO conversations.
 ## Workflow conventions
 
 - One stage = one PR. Don't pile unrelated changes onto a single branch.
-- Branch off `dev` and open PRs against `dev` (see CONTRIBUTING.md, "Branches & CI tiers"); delete merged branches (locally + remote) immediately.
+- Branch off `dev` and open PRs against `dev` (branches, CI tiers, releases and branch rules: `.claude/ci.md`); delete merged branches (locally + remote) immediately.
 - Subagents handle mechanical / scoped work; spawn with `model: "sonnet"`
   for grunt-level tasks. Orchestration / design work stays on the parent.
 - Smoke tests run against `deploy/compose/docker-compose.test.yml` —
