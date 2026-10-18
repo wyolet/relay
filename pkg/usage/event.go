@@ -56,7 +56,10 @@ type Event struct {
 	ModelID        string `json:"model_id,omitempty"`
 	RequestedModel string `json:"requested_model,omitempty"` // model string as the caller sent it
 	HostID         string `json:"host_id,omitempty"`
-	HostKeyID      string `json:"host_key_id,omitempty"`
+	// HostKeyID is the hash of the upstream credential's value (the key the
+	// keypool breaker is keyed by), not the HostKey row id: a rotated key
+	// records a new value.
+	HostKeyID string `json:"host_key_id,omitempty"`
 
 	// Tenancy + principal attribution as resolved at request entry.
 	// Project/Team/Principal are the event-time slugs beside their ids —
