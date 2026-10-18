@@ -26,9 +26,9 @@ const (
 	// Channel is the catalog schema channel this SDK reads. "Latest" resolves within it, so a schema bump never hands this SDK a catalog it cannot parse.
 	Channel = "v1alpha2"
 	// DefaultIndexURL maps each schema channel to its newest catalog release.
-	DefaultIndexURL = "https://raw.githubusercontent.com/wyolet/relay-catalog/main/index.yaml"
+	DefaultIndexURL = "https://catalog.wyolet.com/index.yaml"
 	// DefaultDownloadURL is the release download base; assets live at <base>/<tag>/<asset>.
-	DefaultDownloadURL = "https://github.com/wyolet/relay-catalog/releases/download"
+	DefaultDownloadURL = "https://catalog.wyolet.com/releases"
 
 	assetName      = "catalog.json.gz"
 	maxAssetBytes  = 64 << 20

@@ -119,7 +119,7 @@ src := catalogsource.Latest(catalogsource.WithBaseURL("https://catalog.example.c
 ```
 
 `WithBaseURL` reads `<base>/index.yaml` and `<base>/releases`. Without it,
-`WR_CATALOG_URL` sets the base, and `WR_CATALOG_URL=off` uses the catalog
+`WR_CATALOG_URL` sets the base (default `https://catalog.wyolet.com`), and `WR_CATALOG_URL=off` uses the catalog
 embedded in the SDK with no request. The index is revalidated with
 `If-None-Match` at most once every 10 minutes (`WithRefreshInterval`). When the
 server can't be read, the last good catalog is served, and with
