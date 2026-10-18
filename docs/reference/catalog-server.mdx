@@ -132,6 +132,18 @@ go build -o catalog-server ./cmd/catalog-server
 catalog-server serve
 ```
 
+Or run the image, published with each relay release as
+`ghcr.io/wyolet/catalog-server:<relay version>` (also on Docker Hub as
+`wyolet/catalog-server`). It holds `catalog-server`, `catalog-validate` and git,
+runs as uid 65532, and defaults to `catalog-server serve`:
+
+```bash
+docker run -p 8080:8080 ghcr.io/wyolet/catalog-server:<version>
+```
+
+On Kubernetes, set `catalogServer.enabled: true` in relay's
+[Helm chart](https://github.com/wyolet/relay/tree/main/chart#catalog-server).
+
 It needs the `git` binary on `PATH`: the data tarball is `git archive` output,
 and Go's gzip writer produces different bytes, so a pure-Go build could never
 match the published sums. It needs outbound HTTPS to the repository (git fetch)
@@ -184,6 +196,14 @@ channel's latest files are verified.
 
 ```bash
 catalog-server build --repo ./relay-catalog --ref <commit> --version <tag> --out out
+```
+
+From a relay-catalog checkout, with the image (`--user` lets it write `out`
+into a checkout the container user doesn't own):
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src ghcr.io/wyolet/catalog-server:<version> \
+  catalog-server build --repo . --ref "$(git rev-parse <tag>^{commit})" --version <tag> --out out
 ```
 
 This writes `relay-catalog-data-<tag>.tar.gz`, `catalog.json.gz` and their

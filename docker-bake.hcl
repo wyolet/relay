@@ -3,6 +3,7 @@
 variable "REGISTRY"     { default = "ghcr.io/wyolet" }
 variable "DOCKERHUB"    { default = "docker.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
+variable "CATALOG_SERVER_IMAGE_NAME" { default = "catalog-server" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
 # UI_VERSION, UI_SHA256 + CATALOG_REF are pinned in versions.env (the release
@@ -78,6 +79,22 @@ target "standalone" {
   ])
 }
 
+// catalog-server (Dockerfile `catalog-server` stage), versioned with relay;
+// same tags as prod.
+target "catalog-server" {
+  inherits    = ["_common"]
+  description = "catalog-server image (catalog-server + catalog-validate + git); pushes :VERSION + :latest + :sha to ghcr + Docker Hub"
+  target      = "catalog-server"
+  tags = compact([
+    "${REGISTRY}/${CATALOG_SERVER_IMAGE_NAME}:${VERSION}",
+    "${REGISTRY}/${CATALOG_SERVER_IMAGE_NAME}:latest",
+    notequal("", GIT_REVISION) ? "${REGISTRY}/${CATALOG_SERVER_IMAGE_NAME}:${GIT_REVISION}" : "",
+    "${DOCKERHUB}/${CATALOG_SERVER_IMAGE_NAME}:${VERSION}",
+    "${DOCKERHUB}/${CATALOG_SERVER_IMAGE_NAME}:latest",
+    notequal("", GIT_REVISION) ? "${DOCKERHUB}/${CATALOG_SERVER_IMAGE_NAME}:${GIT_REVISION}" : "",
+  ])
+}
+
 // Local: load into the local docker daemon for smoke testing. Host-native
 // (no platforms list — the docker exporter can't do multi-arch). Repeats the
 // args + secret rather than inheriting _common's multi-platform build.
@@ -116,10 +133,20 @@ target "local-standalone" {
   }
 }
 
-group "all"     { targets = ["prod", "dev", "standalone"] }
-# release = the two PUBLISHED artifacts that must stay in lockstep every version:
-# the lean image (:VERSION/:latest) and the standalone image (:standalone).
-# Excludes the :dev moving label. `make release`/`image` bake this so :standalone
-# never goes stale behind a fresh :latest.
-group "release" { targets = ["prod", "standalone"] }
+// Local catalog-server, for smoke-testing serve/build/validate.
+target "local-catalog-server" {
+  description = "catalog-server image built host-native into the local docker daemon as catalog-server:dev"
+  context     = "."
+  dockerfile  = "Dockerfile"
+  target      = "catalog-server"
+  output      = ["type=docker"]
+  tags        = ["${CATALOG_SERVER_IMAGE_NAME}:dev"]
+}
+
+group "all"     { targets = ["prod", "dev", "standalone", "catalog-server"] }
+# release = the PUBLISHED artifacts that must stay in lockstep every version:
+# the lean image (:VERSION/:latest), the standalone image (:standalone) and the
+# catalog-server image. Excludes the :dev moving label. `make release`/`image`
+# bake this so :standalone never goes stale behind a fresh :latest.
+group "release" { targets = ["prod", "standalone", "catalog-server"] }
 group "default" { targets = ["prod"] }
