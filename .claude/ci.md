@@ -33,7 +33,7 @@ Locally, `make check` runs gofmt, the codebase-rule checks, golangci-lint, the u
 
 ## Full run on `dev`
 
-Every three hours `.github/workflows/full.yml` starts the full CI on `dev`'s HEAD, unless that commit already had a full run (green or red). A green run moves the `ci-full-passed` tag to it.
+Every three hours `.github/workflows/full.yml` starts the full CI on `dev`'s HEAD, unless that commit already had a full run (green or red). A green run moves the `ci-full-passed` tag to it and fast-forwards `release/next` there (see [Releasing](#releasing)).
 
 To run the full tier now, on any branch:
 
@@ -53,10 +53,14 @@ A fix must not loosen a test to make it pass. If a test changes, the PR says why
 
 ## Releasing
 
-1. Open a PR from `dev` into `main`. It runs the full tier.
-2. Merge it with a merge commit.
-3. Wait for CI on the push to `main` to go green.
+`release/next` follows the last `dev` commit whose full run passed, and there is always one open PR `release/next` → `main`. After each green full run, `scripts/release-pr.sh` (from `full.yml`) fast-forwards the branch and rewrites that PR's description: the commits since the latest release grouped as draft release notes, a link to the green run, and a checklist of what needs coordinating (a `versions.env` change, new migrations, control API code changes that may need a UI release). The PR runs no CI of its own: its head already has a green full run, and the required checks match by commit. Nothing merges or tags automatically. `DRY_RUN=1 scripts/release-pr.sh <sha> <run-url>` prints the description without touching anything.
+
+1. Work through the checklist in the release PR.
+2. Merge it with a merge commit. That creates a new commit on `main`.
+3. Wait for CI on that push to `main` to go green.
 4. Tag: `make release` (patch), `make release-minor` or `make release-major`. The target checks that CI passed for `origin/main`'s HEAD, then tags and pushes.
+
+Releasing without waiting for the next green run means opening a PR from `dev` into `main` by hand; it runs the full tier itself.
 
 The tag starts `.github/workflows/release.yml`. It doesn't re-run the tests: it refuses to publish unless CI passed for the push of the tagged commit to `main`. It builds the images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one), fails on fixable HIGH/CRITICAL vulnerabilities, pushes them to Docker Hub and GHCR with signed provenance and SBOM attestations, publishes the Helm chart to `oci://ghcr.io/wyolet/charts/relay` (chart version = image version), and creates the GitHub release with the SBOMs attached. [`SECURITY.md`](../SECURITY.md) shows how to verify the attestations.
 
@@ -76,7 +80,7 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 
 ## Branch rules
 
-Both branches have a repository ruleset; admins can bypass.
+`dev` and `main` each have a repository ruleset; admins can bypass.
 
 | | `dev` | `main` |
 |---|---|---|
@@ -86,3 +90,5 @@ Both branches have a repository ruleset; admins can bypass.
 | Merge methods | squash, merge commit | merge commit, squash |
 | Required checks | `changes`, `lint`, `test`, `integration`, `clickhouse`, `chart`, `boot` | the `dev` set plus `fuzz`, `bench`, `govulncheck`, `trivy`, `coverage` |
 | Branch must be up to date | no | no |
+
+`release/next` needs its own ruleset that blocks deletion (auto-delete would remove it when the release PR merges) and force pushes. It must not get the `dev` ruleset: `full.yml` moves it with a direct ref update, which a PR-only rule would reject.

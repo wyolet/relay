@@ -32,8 +32,10 @@ jobs:
   # integration jobs when they touch the paths those cover.
   # `cluster` picks the self-hosted pools: only when the CI_POOL variable says
   # so, and never for pull requests from forks (or deleted head repos).
+  # release/next only ever points at a dev commit whose full run passed, and
+  # required checks match by commit, so its pull request into main runs nothing.
   changes:
-    if: github.event.action != 'closed'
+    if: github.event.action != 'closed' && github.head_ref != 'release/next'
     runs-on: ubuntu-latest
     permissions:
       contents: read
