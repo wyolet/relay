@@ -34,6 +34,8 @@ import (
 type Deps struct {
 	// HealthChecks are the backends /healthz pings, keyed by the name it reports them under. Empty reports ok with no backends.
 	HealthChecks map[string]Pinger
+	// MasterKeyConfigured reports whether RELAY_MASTER_KEY is set, so stored host keys can be encrypted.
+	MasterKeyConfigured bool
 
 	// Identity is the YAML-backed user store used by /auth/login.
 	Identity *identity.Store
