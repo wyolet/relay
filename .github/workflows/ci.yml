@@ -64,11 +64,11 @@ jobs:
               - '!versions.env'
             chart:
               - 'chart/**'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             boot:
               - 'versions.env'
               - 'scripts/boot-smoke.sh'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             integration:
               - 'migrations/**'
               - 'internal/storage/**'
