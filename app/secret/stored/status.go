@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/secret/keyring"
 )
 
@@ -17,6 +18,8 @@ type KeyStatus struct {
 	HeldKEKs []string `json:"heldKeks"`
 	// LegacyRows are stored secrets still in the master-key shape.
 	LegacyRows int64 `json:"legacyRows"`
+	// UndecryptableRows are the ids of stored secrets the answering process cannot decrypt: legacy rows none of its master keys opens, and rows under a data key that is locked here, destroyed or unknown.
+	UndecryptableRows []string `json:"undecryptableRows"`
 }
 
 // DataKeyStatus is one data key and how many stored secrets it seals.
@@ -63,10 +66,43 @@ func (s *Backend) Status(ctx context.Context) (KeyStatus, error) {
 	for _, c := range counts {
 		rows[c.DekID.Bytes] = c.Rows
 	}
-	for _, k := range ring.Keys() {
+	keys := ring.Keys()
+	for _, k := range keys {
 		out.DataKeys = append(out.DataKeys, dataKeyStatus(k, rows[k.ID]))
 	}
-	return out, nil
+	out.UndecryptableRows, err = s.undecryptableRows(ctx, ring, keys)
+	return out, err
+}
+
+// undecryptableRows tries every legacy row against the held master keys; a sealed row is judged by its data key alone, without decrypting it.
+func (s *Backend) undecryptableRows(ctx context.Context, ring *keyring.Ring, keys []keyring.KeyInfo) ([]string, error) {
+	usable := make(map[[16]byte]bool, len(keys))
+	for _, k := range keys {
+		usable[k.ID] = !k.Locked && k.State != keyring.Destroyed
+	}
+	out := []string{}
+	after := ""
+	for {
+		page, err := s.q.ListSecretValues(ctx, gen.ListSecretValuesParams{After: after, MaxRows: rewriteBatch})
+		if err != nil {
+			return out, fmt.Errorf("secret: list stored secrets: %w", err)
+		}
+		if len(page) == 0 {
+			return out, nil
+		}
+		for _, r := range page {
+			after = r.ID
+			if r.DekID.Valid {
+				if !usable[r.DekID.Bytes] {
+					out = append(out, r.ID)
+				}
+				continue
+			}
+			if _, _, err := ring.DecryptLegacy(r.Ciphertext, r.Nonce); err != nil {
+				out = append(out, r.ID)
+			}
+		}
+	}
 }
 
 func dataKeyStatus(k keyring.KeyInfo, rows int64) DataKeyStatus {

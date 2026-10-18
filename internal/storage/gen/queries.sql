@@ -150,17 +150,11 @@ SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1;
 -- name: LockSecretValue :one
 SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1 FOR UPDATE;
 
--- GetSecretValueOwner returns a row's scope and the owner of the host key
--- with the same id, which decides the scope of a legacy row.
--- name: GetSecretValueOwner :one
-SELECT sv.scope,
-       sv.dek_id,
-       (s.id IS NOT NULL)::bool                          AS has_owner,
-       COALESCE(s.metadata->'owner'->>'kind', '')::text AS owner_kind,
-       COALESCE(s.metadata->'owner'->>'id', '')::text   AS owner_id
-FROM secret_values sv
-LEFT JOIN secrets s ON s.id = sv.id
-WHERE sv.id = $1;
+-- LockSecretOwner reads the owner of the host key with this id, which decides the scope of a legacy row, and holds the row until the transaction ends so an owner change waits for a write that used the old owner. Take it before the secret_values row: host key writes lock secrets first.
+-- name: LockSecretOwner :one
+SELECT COALESCE(metadata->'owner'->>'kind', '')::text AS owner_kind,
+       COALESCE(metadata->'owner'->>'id', '')::text   AS owner_id
+FROM secrets WHERE id = $1 FOR SHARE;
 
 -- name: UpsertSealedSecretValue :exec
 INSERT INTO secret_values (id, ciphertext, nonce, scope, dek_id, updated_at)
@@ -172,32 +166,23 @@ ON CONFLICT (id) DO UPDATE SET
     dek_id     = EXCLUDED.dek_id,
     updated_at = NOW();
 
--- ReplaceSecretValue rewrites a row only while it still holds previous, so a
--- concurrent edit wins over a background rewrite.
--- name: ReplaceSecretValue :execrows
-UPDATE secret_values
-SET ciphertext = $2, nonce = NULL, scope = $3, dek_id = $4, updated_at = NOW()
-WHERE id = $1 AND ciphertext = sqlc.arg('previous');
-
 -- name: DeleteSecretValue :exec
 DELETE FROM secret_values WHERE id = $1;
 
 -- ListStaleSecretValues pages through rows the rewriter should move: legacy
 -- rows and rows under a data key that is no longer Primary.
 -- name: ListStaleSecretValues :many
-SELECT sv.id,
-       sv.ciphertext,
-       sv.nonce,
-       sv.scope,
-       sv.dek_id,
-       (s.id IS NOT NULL)::bool                          AS has_owner,
-       COALESCE(s.metadata->'owner'->>'kind', '')::text AS owner_kind,
-       COALESCE(s.metadata->'owner'->>'id', '')::text   AS owner_id
+SELECT sv.id, sv.ciphertext
 FROM secret_values sv
 LEFT JOIN secret_data_keys k ON k.id = sv.dek_id
-LEFT JOIN secrets s ON s.id = sv.id
 WHERE sv.id > sqlc.arg('after')::text AND (sv.dek_id IS NULL OR k.state <> 'primary')
 ORDER BY sv.id
+LIMIT sqlc.arg('max_rows');
+
+-- name: ListSecretValues :many
+SELECT id, ciphertext, nonce, dek_id FROM secret_values
+WHERE id > sqlc.arg('after')::text
+ORDER BY id
 LIMIT sqlc.arg('max_rows');
 
 -- name: ListSealedSecretValues :many
@@ -219,8 +204,9 @@ WHERE id = $1 AND ciphertext = sqlc.arg('previous');
 -- name: CountLegacySecretValues :one
 SELECT count(*) FROM secret_values WHERE dek_id IS NULL;
 
+-- CountSealedSecretValues counts the rows migration 34's down refuses: sealed, or without the nonce a legacy row needs.
 -- name: CountSealedSecretValues :one
-SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL;
+SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL OR nonce IS NULL;
 
 -- name: CountSecretValuesByDataKey :many
 SELECT dek_id, count(*) AS rows FROM secret_values WHERE dek_id IS NOT NULL GROUP BY dek_id;

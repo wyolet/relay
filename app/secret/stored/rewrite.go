@@ -1,12 +1,13 @@
 package stored
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -101,25 +102,26 @@ func (s *Backend) rewritePass(ctx context.Context, ring *keyring.Ring) (RewriteR
 	}
 }
 
+// rewriteRow seals a listed row under its scope's Primary. The scope is derived under the locks an owner change takes, not from the listing, and a row whose bytes changed since the listing is left to the newer write.
 func (s *Backend) rewriteRow(ctx context.Context, ring *keyring.Ring, r gen.ListStaleSecretValuesRow) error {
-	scope, owned := rowScope(r.Scope, r.HasOwner, r.OwnerKind, r.OwnerID)
-	plain, _, err := openValue(ctx, ring, r.ID, scope, r.Ciphertext, r.Nonce)
-	if err != nil {
-		return err
-	}
-	if !owned {
-		slog.Info("secret: stored secret has no owning host key; sealing it under the system scope", "id", r.ID)
-	}
-	return ring.EncryptAndWrite(ctx, scope, plain, valueAAD(r.ID), func(sealed []byte, keyID [16]byte) error {
-		n, err := s.q.ReplaceSecretValue(ctx, gen.ReplaceSecretValueParams{
-			ID: r.ID, Ciphertext: sealed, Scope: pgtype.Text{String: scope, Valid: true}, DekID: uuid(keyID), Previous: r.Ciphertext,
-		})
-		if err != nil {
-			return writeError(err)
-		}
-		if n == 0 {
+	return s.inTx(ctx, func(b *Backend) error {
+		v, err := b.lockValue(ctx, r.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return errValueChanged
 		}
-		return nil
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(v.Ciphertext, r.Ciphertext) {
+			return errValueChanged
+		}
+		plain, _, err := openValue(ctx, ring, r.ID, v.scope, v.Ciphertext, v.Nonce)
+		if err != nil {
+			return err
+		}
+		if !v.owned {
+			slog.Info("secret: stored secret has no owning host key; sealing it under the system scope", "id", r.ID)
+		}
+		return b.seal(ctx, ring, v.scope, r.ID, plain)
 	})
 }

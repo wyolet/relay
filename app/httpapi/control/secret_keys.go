@@ -119,7 +119,7 @@ func registerSecretKeys(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/secret-keys",
 		Summary:     "List the data keys stored secrets are sealed under",
-		Description: "Data keys with their scope, state, wrapping KEK and row count; the target KEK; the KEKs this pod holds; and the stored secrets still in the legacy master-key shape. Never returns key bytes.",
+		Description: "Data keys with their scope, state, wrapping KEK and row count; the target KEK; the KEKs this pod holds; the stored secrets still in the legacy master-key shape; and the ids of the stored secrets this pod cannot decrypt. Never returns key bytes.",
 		Tags:        []string{"secret-keys"},
 		Middlewares: protect,
 		Errors:      []int{401, 403, 500, 503},

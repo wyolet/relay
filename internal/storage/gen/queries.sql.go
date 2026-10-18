@@ -34,9 +34,10 @@ func (q *Queries) CountLegacySecretValues(ctx context.Context) (int64, error) {
 }
 
 const countSealedSecretValues = `-- name: CountSealedSecretValues :one
-SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL
+SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL OR nonce IS NULL
 `
 
+// CountSealedSecretValues counts the rows migration 34's down refuses: sealed, or without the nonce a legacy row needs.
 func (q *Queries) CountSealedSecretValues(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countSealedSecretValues)
 	var count int64
@@ -866,40 +867,6 @@ func (q *Queries) GetSecretValue(ctx context.Context, id string) (GetSecretValue
 		&i.Nonce,
 		&i.Scope,
 		&i.DekID,
-	)
-	return i, err
-}
-
-const getSecretValueOwner = `-- name: GetSecretValueOwner :one
-SELECT sv.scope,
-       sv.dek_id,
-       (s.id IS NOT NULL)::bool                          AS has_owner,
-       COALESCE(s.metadata->'owner'->>'kind', '')::text AS owner_kind,
-       COALESCE(s.metadata->'owner'->>'id', '')::text   AS owner_id
-FROM secret_values sv
-LEFT JOIN secrets s ON s.id = sv.id
-WHERE sv.id = $1
-`
-
-type GetSecretValueOwnerRow struct {
-	Scope     pgtype.Text `db:"scope" json:"scope"`
-	DekID     pgtype.UUID `db:"dek_id" json:"dek_id"`
-	HasOwner  bool        `db:"has_owner" json:"has_owner"`
-	OwnerKind string      `db:"owner_kind" json:"owner_kind"`
-	OwnerID   string      `db:"owner_id" json:"owner_id"`
-}
-
-// GetSecretValueOwner returns a row's scope and the owner of the host key
-// with the same id, which decides the scope of a legacy row.
-func (q *Queries) GetSecretValueOwner(ctx context.Context, id string) (GetSecretValueOwnerRow, error) {
-	row := q.db.QueryRow(ctx, getSecretValueOwner, id)
-	var i GetSecretValueOwnerRow
-	err := row.Scan(
-		&i.Scope,
-		&i.DekID,
-		&i.HasOwner,
-		&i.OwnerKind,
-		&i.OwnerID,
 	)
 	return i, err
 }
@@ -2037,6 +2004,50 @@ func (q *Queries) ListSecretDataKeys(ctx context.Context) ([]ListSecretDataKeysR
 	return items, nil
 }
 
+const listSecretValues = `-- name: ListSecretValues :many
+SELECT id, ciphertext, nonce, dek_id FROM secret_values
+WHERE id > $1::text
+ORDER BY id
+LIMIT $2
+`
+
+type ListSecretValuesParams struct {
+	After   string `db:"after" json:"after"`
+	MaxRows int32  `db:"max_rows" json:"max_rows"`
+}
+
+type ListSecretValuesRow struct {
+	ID         string      `db:"id" json:"id"`
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte      `db:"nonce" json:"nonce"`
+	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
+}
+
+func (q *Queries) ListSecretValues(ctx context.Context, arg ListSecretValuesParams) ([]ListSecretValuesRow, error) {
+	rows, err := q.db.Query(ctx, listSecretValues, arg.After, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSecretValuesRow
+	for rows.Next() {
+		var i ListSecretValuesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ciphertext,
+			&i.Nonce,
+			&i.DekID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSecrets = `-- name: ListSecrets :many
 SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name
 `
@@ -2118,17 +2129,9 @@ func (q *Queries) ListSettings(ctx context.Context) ([]Setting, error) {
 }
 
 const listStaleSecretValues = `-- name: ListStaleSecretValues :many
-SELECT sv.id,
-       sv.ciphertext,
-       sv.nonce,
-       sv.scope,
-       sv.dek_id,
-       (s.id IS NOT NULL)::bool                          AS has_owner,
-       COALESCE(s.metadata->'owner'->>'kind', '')::text AS owner_kind,
-       COALESCE(s.metadata->'owner'->>'id', '')::text   AS owner_id
+SELECT sv.id, sv.ciphertext
 FROM secret_values sv
 LEFT JOIN secret_data_keys k ON k.id = sv.dek_id
-LEFT JOIN secrets s ON s.id = sv.id
 WHERE sv.id > $1::text AND (sv.dek_id IS NULL OR k.state <> 'primary')
 ORDER BY sv.id
 LIMIT $2
@@ -2140,14 +2143,8 @@ type ListStaleSecretValuesParams struct {
 }
 
 type ListStaleSecretValuesRow struct {
-	ID         string      `db:"id" json:"id"`
-	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
-	Nonce      []byte      `db:"nonce" json:"nonce"`
-	Scope      pgtype.Text `db:"scope" json:"scope"`
-	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
-	HasOwner   bool        `db:"has_owner" json:"has_owner"`
-	OwnerKind  string      `db:"owner_kind" json:"owner_kind"`
-	OwnerID    string      `db:"owner_id" json:"owner_id"`
+	ID         string `db:"id" json:"id"`
+	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
 }
 
 // ListStaleSecretValues pages through rows the rewriter should move: legacy
@@ -2161,16 +2158,7 @@ func (q *Queries) ListStaleSecretValues(ctx context.Context, arg ListStaleSecret
 	var items []ListStaleSecretValuesRow
 	for rows.Next() {
 		var i ListStaleSecretValuesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Ciphertext,
-			&i.Nonce,
-			&i.Scope,
-			&i.DekID,
-			&i.HasOwner,
-			&i.OwnerKind,
-			&i.OwnerID,
-		); err != nil {
+		if err := rows.Scan(&i.ID, &i.Ciphertext); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2339,6 +2327,25 @@ func (q *Queries) LockSecretDataKeyForDestroy(ctx context.Context, arg LockSecre
 	return i, err
 }
 
+const lockSecretOwner = `-- name: LockSecretOwner :one
+SELECT COALESCE(metadata->'owner'->>'kind', '')::text AS owner_kind,
+       COALESCE(metadata->'owner'->>'id', '')::text   AS owner_id
+FROM secrets WHERE id = $1 FOR SHARE
+`
+
+type LockSecretOwnerRow struct {
+	OwnerKind string `db:"owner_kind" json:"owner_kind"`
+	OwnerID   string `db:"owner_id" json:"owner_id"`
+}
+
+// LockSecretOwner reads the owner of the host key with this id, which decides the scope of a legacy row, and holds the row until the transaction ends so an owner change waits for a write that used the old owner. Take it before the secret_values row: host key writes lock secrets first.
+func (q *Queries) LockSecretOwner(ctx context.Context, id string) (LockSecretOwnerRow, error) {
+	row := q.db.QueryRow(ctx, lockSecretOwner, id)
+	var i LockSecretOwnerRow
+	err := row.Scan(&i.OwnerKind, &i.OwnerID)
+	return i, err
+}
+
 const lockSecretValue = `-- name: LockSecretValue :one
 SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1 FOR UPDATE
 `
@@ -2396,36 +2403,6 @@ func (q *Queries) RelayKeyHashTaken(ctx context.Context, arg RelayKeyHashTakenPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const replaceSecretValue = `-- name: ReplaceSecretValue :execrows
-UPDATE secret_values
-SET ciphertext = $2, nonce = NULL, scope = $3, dek_id = $4, updated_at = NOW()
-WHERE id = $1 AND ciphertext = $5
-`
-
-type ReplaceSecretValueParams struct {
-	ID         string      `db:"id" json:"id"`
-	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
-	Scope      pgtype.Text `db:"scope" json:"scope"`
-	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
-	Previous   []byte      `db:"previous" json:"previous"`
-}
-
-// ReplaceSecretValue rewrites a row only while it still holds previous, so a
-// concurrent edit wins over a background rewrite.
-func (q *Queries) ReplaceSecretValue(ctx context.Context, arg ReplaceSecretValueParams) (int64, error) {
-	result, err := q.db.Exec(ctx, replaceSecretValue,
-		arg.ID,
-		arg.Ciphertext,
-		arg.Scope,
-		arg.DekID,
-		arg.Previous,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const replaceSecretValueLegacy = `-- name: ReplaceSecretValueLegacy :execrows

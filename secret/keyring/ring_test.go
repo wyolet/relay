@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -148,7 +149,12 @@ func TestRun(t *testing.T) {
 	_, oldID := mustEncrypt(t, a, "s", "v", "")
 	cs := &counting{Store: ms}
 	errs := make(chan error, 16)
-	b, err := keyring.New(ctx, cs, newSet(t, k1), keyring.Options{Now: c.Now, RefreshInterval: 5 * time.Millisecond, ReloadError: func(err error) { errs <- err }})
+	var reloads atomic.Int64
+	b, err := keyring.New(ctx, cs, newSet(t, k1), keyring.Options{
+		Now: c.Now, RefreshInterval: 5 * time.Millisecond,
+		ReloadError: func(err error) { errs <- err },
+		OnReload:    func() { reloads.Add(1) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +174,12 @@ func TestRun(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	for reloads.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("OnReload never called")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	boom := errors.New("store down")
 	cs.listErr.Store(&boom)
 	select {
@@ -177,6 +189,12 @@ func TestRun(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ReloadError never called")
+	}
+	// A failed reload is not reported as one.
+	before := reloads.Load()
+	<-errs
+	if reloads.Load() != before {
+		t.Fatal("OnReload called after a failed reload")
 	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {

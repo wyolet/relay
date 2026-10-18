@@ -7,6 +7,7 @@ package stored_test
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -189,18 +190,54 @@ func TestIntegration_DestroyRefusals(t *testing.T) {
 	}
 }
 
-// The troubleshooting path for a lost master key: rewrap to the new one (every key skipped), rotate every scope, and new values can be stored again.
+// Status lists, by id, the rows the answering process cannot decrypt: legacy rows under a master key it lacks and rows under a data key locked here.
+func TestIntegration_StatusListsUndecryptableRows(t *testing.T) {
+	pool := storagetest.Pool(t)
+	if _, err := backend(t, pool, keyB).CreateScoped(ctx, "user:u1", "sealed-locked", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	insertLegacy(t, pool, "legacy-open", []byte("y"))
+	insertLegacyUnder(t, pool, keyBad, "legacy-lost", []byte("z"))
+	for _, tc := range []struct {
+		name string
+		keys [][]byte
+		want []string
+	}{
+		{"keyA only", [][]byte{keyA}, []string{"legacy-lost", "sealed-locked"}},
+		{"keyA and keyB", [][]byte{keyA, keyB}, []string{"legacy-lost"}},
+	} {
+		st, err := backend(t, pool, tc.keys...).Status(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(st.UndecryptableRows, tc.want) {
+			t.Errorf("%s: undecryptable %v, want %v", tc.name, st.UndecryptableRows, tc.want)
+		}
+	}
+}
+
+// The troubleshooting path for a lost master key: delete the legacy rows nobody can open (status lists them), rewrap to the new key (every key skipped), rotate every scope, and new values can be stored again.
 func TestIntegration_RecoverFromALostMasterKey(t *testing.T) {
 	pool := storagetest.Pool(t)
 	if _, err := backend(t, pool, keyA).CreateScoped(ctx, "user:u1", "v", []byte("gone")); err != nil {
 		t.Fatal(err)
 	}
+	insertLegacy(t, pool, "orphan", []byte("gone too"))
 	b := backend(t, pool, keyB)
 	if _, err := b.CreateScoped(ctx, "user:u1", "v", []byte("new")); !errors.Is(err, keyring.ErrKEKUnavailable) {
 		t.Fatalf("write under a locked Primary: %v", err)
 	}
 	st, err := b.Status(ctx)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(st.UndecryptableRows, []string{"orphan", "v"}) {
+		t.Fatalf("undecryptable rows: %v", st.UndecryptableRows)
+	}
+	if _, err := b.Rewrap(ctx, st.HeldKEKs[0]); !errors.Is(err, stored.ErrLegacyRows) {
+		t.Fatalf("rewrap with an undecryptable legacy row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "DELETE FROM secret_values WHERE id IN ('orphan')"); err != nil {
 		t.Fatal(err)
 	}
 	res, err := b.Rewrap(ctx, st.HeldKEKs[0])
