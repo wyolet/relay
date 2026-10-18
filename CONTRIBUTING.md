@@ -98,30 +98,43 @@ drop-on-full — never block the response.
 
 ## Pull request workflow
 
-- **Branch off `main`.** One logical change per PR — don't pile unrelated
-  changes onto one branch.
+- **Branch off `dev` and open the PR against `dev`.** One logical change per PR — don't pile unrelated changes onto one branch. PRs into `dev` are squash-merged.
 - **Write tests.** New behavior gets unit tests; PG/e2e changes get
   integration coverage. Keep `integration/` compiling — a red build there
   silently disables the whole integration path.
-- **Run `make test` + `make lint` + `go vet` + `gofmt`** before pushing. CI runs
-  build/test/race/vet, golangci-lint, and the codebase-rule grep checks.
+- **Run `make test` + `make lint` + `go vet` + `gofmt`** before pushing. CI on a PR into `dev` runs gofmt, golangci-lint, the codebase-rule grep checks, the build and the unit tests; see [CI tiers](#ci-tiers).
 - **Keep commits focused** with clear messages. Reference issues where
   relevant.
 - **Comments:** default to none. Write a comment only when the *why* is
   non-obvious — a hidden constraint, an invariant, or a workaround.
 
+## Branches & CI tiers
+
+`dev` collects the work for the next release; `main` holds released code and is what a `vX.Y.Z` tag points at.
+
+- A release is a PR from `dev` into `main`, merged with a **merge commit**. A squash would give `main` commits `dev` doesn't have, and every later release would conflict on them.
+- A hotfix is a PR into `main`. Once it's merged, merge `main` back into `dev` with a PR, also as a merge commit.
+
+### CI tiers
+
+A PR into `main`, a push to `main`, and the scheduled run on `dev` get the full CI: unit tests under `-race` with coverage, the Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate and the security scans. A PR into any other branch gets lint, the build and the unit tests without `-race`. It also gets the integration tests when it touches what they cover: `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks, or integration tests themselves.
+
+`.github/workflows/full.yml` runs the full CI on `dev`'s HEAD every three hours, when that commit hasn't had a run yet. It reports the result as the `ci/full` commit status, and a green run moves the `ci-full-passed` tag. To run it now (or on another branch): `gh workflow run full.yml -f ref=dev`.
+
+When the full run on `dev` fails, its summary links the commits since the last green run. Bisect those squash commits, then either fix forward with a PR into `dev` that names the culprit commit, or `git revert` that one commit.
+
+The ClickHouse tests run locally with `make test-clickhouse-run` against the server `RELAY_TEST_CH_DSN` names.
+
 ## Releases & images
 
-CI on pull requests and `main` runs tests, vet, gofmt, golangci-lint, the
-codebase-rule checks, and `helm lint` of the chart (`make check` runs the same gate locally).
+CI runs tests, vet, gofmt, golangci-lint, the codebase-rule checks, and `helm lint` of the chart (`make check` runs the lint and plain unit-test part locally).
 Security scans run alongside, and weekly on `main`: `make vulncheck` (govulncheck; fails on vulnerabilities the code calls) and a trivy scan of dependencies, the Dockerfile, the chart and committed secrets (fails on fixable HIGH/CRITICAL vulnerabilities and on secrets; everything else is reported to code scanning).
-A pull request runs only the jobs its paths need (the `changes` job in `.github/workflows/ci.yml` holds the mapping): docs and markdown run none, `chart/` runs `helm lint`, and a `versions.env` bump runs `scripts/boot-smoke.sh`, which boots relay with the pinned UI and catalog against an empty Postgres. Pushes to `main` run every job.
+A pull request runs only the jobs its tier and paths need (the `changes` job in `.github/workflows/ci.yml` holds the mapping): docs and markdown run none, `chart/` runs `helm lint`, and a `versions.env` bump runs `scripts/boot-smoke.sh`, which boots relay with the pinned UI and catalog against an empty Postgres. Pushes to `main` run every job.
 A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
 images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
 Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`
-with chart version = image version. Images are pushed only after the tests and
-the image build both pass; the build fails on fixable HIGH/CRITICAL vulnerabilities in either image, and each image's CycloneDX SBOM is attached to the GitHub release. Pushed images get signed provenance and SBOM attestations; [`SECURITY.md`](SECURITY.md) shows how to verify them. Maintainers cut releases with
-`make release` (or `release-minor` / `release-major`), which only tags and
+with chart version = image version. The release workflow doesn't re-run the tests: it refuses to publish unless CI passed for the push of the tagged commit to `main`, so tag only after that run is green. Images are pushed only after the image build passes; the build fails on fixable HIGH/CRITICAL vulnerabilities in either image, and each image's CycloneDX SBOM is attached to the GitHub release. Pushed images get signed provenance and SBOM attestations; [`SECURITY.md`](SECURITY.md) shows how to verify them. Maintainers cut releases with
+`make release` (or `release-minor` / `release-major`), which checks that CI passed on `origin/main`'s HEAD, then only tags and
 pushes. To exercise the release pipeline without publishing, run it manually:
 `gh workflow run release.yml --ref <branch>` (`dry_run` defaults to true). To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at
 the repo root (`docker buildx bake`), or `docker compose up --build`.

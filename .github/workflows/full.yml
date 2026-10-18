@@ -1,0 +1,127 @@
+name: Full CI on dev
+
+# Pull requests into dev run only the light CI tier; this runs the full one on
+# dev's HEAD every three hours, when that commit has no `ci/full` status yet.
+# The status goes on the commit (so the dev → main pull request shows it) and a
+# green run moves the ci-full-passed tag, the start of the range to bisect when
+# a later run fails. A manual run always runs, on any branch.
+#
+# Scheduled runs use main's copy of this file, so ci.yml checks out the
+# resolved commit rather than the run's.
+
+on:
+  schedule:
+    - cron: '41 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch to run the full CI on
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-${{ inputs.ref || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  BRANCH: ${{ inputs.ref || 'dev' }}
+  PASSED_TAG: ci-full-passed
+  STATUS_CONTEXT: ci/full
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+      passed: ${{ steps.r.outputs.passed }}
+      run: ${{ steps.r.outputs.run }}
+    steps:
+      - id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          repo="repos/$GITHUB_REPOSITORY"
+          if ! sha=$(gh api "$repo/commits/$BRANCH" --jq .sha 2>/dev/null); then
+            echo "::notice::branch $BRANCH does not exist; nothing to run"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          passed=$(gh api "$repo/git/ref/tags/$PASSED_TAG" --jq .object.sha 2>/dev/null || true)
+          run=true
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            seen=$(gh api "$repo/commits/$sha/statuses" --paginate \
+              --jq "[.[] | select(.context == \"$STATUS_CONTEXT\")] | length")
+            [ "$seen" = 0 ] || { echo "::notice::$BRANCH $sha already has a full run"; run=false; }
+          fi
+          if [ "$run" = true ]; then
+            gh api -X POST "$repo/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
+              -f target_url="$RUN_URL" -f description="Full CI running" >/dev/null
+          fi
+          {
+            echo "sha=$sha"
+            echo "passed=$passed"
+            echo "run=$run"
+          } >> "$GITHUB_OUTPUT"
+          echo "$BRANCH=$sha last-green=${passed:-none} run=$run"
+
+  ci:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true'
+    # The most any ci.yml job asks for; a called job cannot exceed its caller.
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  record:
+    needs: [resolve, ci]
+    if: always() && needs.resolve.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.ci.result }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          PASSED: ${{ needs.resolve.outputs.passed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          repo="repos/$GITHUB_REPOSITORY"
+          case "$RESULT" in
+            success)   state=success; desc="Full CI passed" ;;
+            failure)   state=failure; desc="Full CI failed" ;;
+            *)         state=error;   desc="Full CI $RESULT" ;;
+          esac
+          gh api -X POST "$repo/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" \
+            -f target_url="$RUN_URL" -f description="$desc" >/dev/null
+
+          if [ "$state" = success ]; then
+            [ "$BRANCH" = dev ] || exit 0
+            if [ -n "$PASSED" ]; then
+              gh api -X PATCH "$repo/git/refs/tags/$PASSED_TAG" -f sha="$SHA" -F force=true >/dev/null
+            else
+              gh api -X POST "$repo/git/refs" -f ref="refs/tags/$PASSED_TAG" -f sha="$SHA" >/dev/null
+            fi
+            echo "$PASSED_TAG -> $SHA" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## Full CI $RESULT on $BRANCH \`${SHA::12}\`"
+            if [ -n "$PASSED" ] && [ "$BRANCH" = dev ]; then
+              echo "Commits since the last green run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$PASSED...$SHA"
+              echo
+              echo "Bisect them, then fix forward with a pull request into dev naming the culprit, or \`git revert\` that one commit."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

@@ -251,7 +251,7 @@ version: ## show current version from git tags
 
 # A pushed v*.*.* tag on main is the release: CI (.github/workflows/release.yml)
 # builds and pushes the images and the chart. These targets only tag.
-#   SKIP_CHECK=1 make release   # skip the local test gate
+#   SKIP_CHECK=1 make release   # skip the CI check (the release workflow still requires it)
 # Tags are fetched first, then a sub-make re-reads them to compute the next tag.
 release: release-patch ## tag + push the next patch version
 
@@ -274,7 +274,8 @@ _release: _release-preflight
 	git push origin $(RELEASE_TAG)
 	@echo "✓ tagged $(RELEASE_TAG) (from $(LATEST_TAG)); CI builds and publishes it."
 
-# The tag must point at what's on origin/main, or CI builds something unreviewed.
+# The tag must point at what's on origin/main, or CI builds something unreviewed,
+# and main's CI must have passed on it, or the release workflow refuses to publish.
 _release-preflight:
 	@[ -n "$(RELEASE_TAG)" ] || { echo "✗ BUMP must be PATCH, MINOR or MAJOR"; exit 1; }
 	@! git rev-parse $(RELEASE_TAG) >/dev/null 2>&1 || { echo "✗ tag $(RELEASE_TAG) already exists"; exit 1; }
@@ -283,8 +284,9 @@ _release-preflight:
 	@git fetch -q origin main
 	@[ "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" ] \
 		|| { echo "✗ HEAD is not origin/main — release from a pushed main"; exit 1; }
-	@[ "$(SKIP_CHECK)" = "1" ] && echo "⚠ SKIP_CHECK=1 — skipping test gate" \
-		|| $(MAKE) --no-print-directory check
+	@[ "$(SKIP_CHECK)" = "1" ] && echo "⚠ SKIP_CHECK=1 — skipping the CI check" \
+		|| [ "$$(gh api "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?head_sha=$$(git rev-parse HEAD)&event=push&status=success&per_page=1" --jq .total_count)" -gt 0 ] \
+		|| { echo "✗ no successful CI run on main for $$(git rev-parse --short HEAD) yet — wait for it to go green"; exit 1; }
 
 # --- control plane ---
 
@@ -454,7 +456,7 @@ vulncheck: ## govulncheck every module; fails on vulnerabilities the code calls
 	done; exit $$status
 
 # golangci-lint runs govet with the integration tag, so there is no separate vet.
-check: ## the CI gate: gofmt, codebase rules, golangci-lint, tests, chart lint
+check: ## the light CI tier locally: gofmt, codebase rules, golangci-lint, unit tests, chart lint
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 		[ -z "$$unformatted" ] || { echo "These files need gofmt:"; echo "$$unformatted"; exit 1; }
 	$(MAKE) --no-print-directory lint-rules
@@ -503,6 +505,13 @@ test-integration-run: ## integration-tagged tests of every module against $$RELA
 		(cd auth && $(GO_TEST) -tags=integration -race -count=1 \
 			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/auth-integration.out ./...) || status=$$?; \
 		exit $$status
+
+# The tests drop the databases they create and delete the rows they write, so
+# the RELAY_TEST_CH_DSN server can be shared.
+CH_TEST_PKGS := ./pkg/chttl/... ./pkg/usage/clickhouse/... ./pkg/payload/clickhouse/...
+test-clickhouse-run: ## ClickHouse sink tests against $$RELAY_TEST_CH_DSN
+	@[ -n "$$RELAY_TEST_CH_DSN" ] || { echo "test-clickhouse-run: set RELAY_TEST_CH_DSN"; exit 1; }
+	$(GO_TEST) -tags=integration -race -count=1 $(CH_TEST_PKGS)
 
 # Smoke: relay → openai-mock.wyolet.dev (via Caddy on dev-stack, mock on Mac:5180).
 # Sister repo: ../../spec-mock-openai/ provides the mock binary + fixture corpus.

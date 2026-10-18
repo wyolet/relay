@@ -5,13 +5,14 @@ name: Release
 # chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
 # image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
 #
-# Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. The push job attests signed provenance and the SBOM for each pushed image (`gh attestation verify`, see SECURITY.md). Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
+# The tests are not re-run here: the guard requires a successful CI run (ci.yml, full tier) for the push of the tagged commit to main, and refuses to publish without one. Images build without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. The push job attests signed provenance and the SBOM for each pushed image (`gh attestation verify`, see SECURITY.md). Only after the build passes does the push job re-run the same bake with --push, which resolves from that cache.
 #
 # CI_POOL=cluster runs the jobs on the self-hosted pools, where the image build uses a shared remote BuildKit; otherwise they run GitHub-hosted with a local builder, and the push job rebuilds from scratch. Published bake targets skip the Dockerfile's Go cache mounts (GO_CACHE_MOUNTS=0), since other clients of a shared BuildKit can write them; the layer cache is still shared, so the BuildKit endpoint should accept only trusted clients.
 #
-# Manual runs (workflow_dispatch) default to dry_run: tests + the no-push build
-# + the cached re-bake, with every push/publish step skipped. dry_run=false is
-# only accepted on a v*.*.* tag ref on main. A dry run reads no release secrets.
+# Manual runs (workflow_dispatch) default to dry_run: the CI check (warning only)
+# + the no-push build + the cached re-bake, with every push/publish step skipped.
+# dry_run=false is only accepted on a v*.*.* tag ref on main. A dry run reads no
+# release secrets.
 #
 # Repo settings:
 #   Environment `release` (deployments from v*.*.* tags only) holds
@@ -46,6 +47,9 @@ env:
 jobs:
   guard:
     runs-on: ${{ vars.CI_POOL == 'cluster' && 'relay-ci' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      actions: read
     outputs:
       cluster: ${{ vars.CI_POOL == 'cluster' }}
       publish: ${{ steps.v.outputs.publish }}
@@ -88,44 +92,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "publish=$publish version=$version"
 
-  test:
-    needs: guard
-    runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
-    permissions:
-      contents: read
-      actions: write
-    # The cluster pool shares its Go cache with pull-request jobs; a release never reuses a cached test result.
-    env:
-      GOFLAGS: -count=1
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        if: runner.environment == 'github-hosted'
-        with:
-          go-version: '1.26'
-          cache: true
-
-      - uses: azure/setup-helm@v5
-        if: runner.environment == 'github-hosted'
-
-      # make check runs golangci-lint; same pinned version as ci.yml.
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
-        with:
-          version: v2.12.2
-          install-only: true
-          skip-cache: ${{ runner.environment == 'self-hosted' }}
-
-      - run: make check
-
-      # Stops the parallel build; GitHub has no per-job cancel. curl, not gh: the cluster runner image has no gh.
-      - name: Cancel run on test failure
-        if: failure()
+      # A push to main always runs the full CI tier, so its run on this exact
+      # commit is the test gate. curl, not gh: the cluster runner image has no gh.
+      - name: Require green CI on this commit
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ steps.v.outputs.publish }}
         run: |
-          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          runs=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" \
+            | jq .total_count)
+          [ "$runs" -gt 0 ] && { echo "CI passed on $GITHUB_SHA"; exit 0; }
+          msg="no successful CI run for the push of $GITHUB_SHA to main; once it is green, re-run this workflow"
+          [ "$PUBLISH" = true ] || { echo "::warning::$msg"; exit 0; }
+          echo "::error::$msg"; exit 1
 
   # An empty environment name means none: dry runs never enter `release`.
   build:
@@ -209,7 +189,7 @@ jobs:
           exit $status
 
   push:
-    needs: [guard, test, build]
+    needs: [guard, build]
     runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-release' || 'ubuntu-latest' }}
     environment: ${{ needs.guard.outputs.publish == 'true' && 'release' || '' }}
     permissions:
@@ -377,9 +357,8 @@ jobs:
               --data-binary "@$f" "$upload_url?name=$name" >/dev/null
           done
 
-  # A test failure cancels the run, so cancelled() counts as a failed release.
   notify:
-    needs: [guard, test, build, push, publish]
+    needs: [guard, build, push, publish]
     if: (failure() || cancelled()) && !inputs.dry_run
     runs-on: ubuntu-latest
     steps:
