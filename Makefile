@@ -1,7 +1,7 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local image-assets-check \
         version release release-patch release-minor release-major _release _release-preflight \
-        check chart-lint sqlc-generate test test-race test-fuzz test-cover test-race-cover cover-check \
+        check chart-lint sqlc-generate test test-race test-fuzz test-equivalence test-cover test-race-cover cover-check \
         bench-gate bench-baseline test-integration test-integration-run smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch ui-pin build clean schemas catalog-validate catalog-embed lint-rules lint vulncheck
@@ -383,6 +383,9 @@ FUZZ_TIME ?= 10s
 test-fuzz: ## fuzz the token parser and the bearer-to-principal resolver ($(FUZZ_TIME) each)
 	cd auth && $(GO_TEST) -run '^$$' -fuzz '^FuzzParse$$' -fuzztime $(FUZZ_TIME) ./token
 	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
+
+test-equivalence: ## exhaustive authz equivalence checks (skipped under -race)
+	$(GO_TEST) -count=1 -run 'TestEquivalence(WithLegacyEvaluator|OverGeneratedWorlds)$$' ./app/authz
 
 # Coverage. COVER_PKGS is shared by the unit and integration profiles so the
 # two are mergeable: store packages only get credit from integration runs.

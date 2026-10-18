@@ -238,6 +238,9 @@ func compareAuthorize(t *testing.T, f *eqFixture, snap func() authz.Snapshot) in
 }
 
 func TestEquivalenceWithLegacyEvaluator(t *testing.T) {
+	if raceEnabled {
+		t.Skip("single-goroutine exhaustive check; run without -race (make test-equivalence)")
+	}
 	total := 0
 	for _, everyone := range []bool{false, true} {
 		f := newEqFixture(t, everyone)
@@ -282,6 +285,9 @@ func TestEquivalenceUnderConcurrency(t *testing.T) {
 
 // The generated tenancy trees of rbac_property_test.go, through the same comparison.
 func TestEquivalenceOverGeneratedWorlds(t *testing.T) {
+	if raceEnabled {
+		t.Skip("single-goroutine exhaustive check; run without -race (make test-equivalence)")
+	}
 	total := 0
 	for _, seed := range propertySeeds {
 		w := generate(t, rand.New(rand.NewSource(seed)))
