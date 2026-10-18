@@ -17,7 +17,7 @@ if [ "${AFFECTED:-}" = 1 ]; then
   mapfile -t changed
   for f in "${changed[@]}"; do
     case "$f" in
-      migrations/*|*go.mod|*go.sum|go.work*|Makefile|.github/workflows/ci.yml|scripts/integration-pkgs.sh|scripts/ci-dev.sh)
+      migrations/*|*go.mod|*go.sum|go.work*|Makefile|.github/workflows/ci-dev.yml|scripts/integration-pkgs.sh|scripts/ci-dev.sh)
         AFFECTED=0; break ;;
     esac
   done
