@@ -144,8 +144,8 @@ func TestUnknownVersionFails(t *testing.T) {
 		if _, err := KeyID(sealed); !errors.Is(err, ErrUnsupportedVersion) {
 			t.Fatalf("version %#x: KeyID err = %v", v, err)
 		}
-		if IsSealed(sealed) {
-			t.Fatalf("version %#x: IsSealed = true", v)
+		if !IsSealed(sealed) {
+			t.Fatalf("version %#x: IsSealed = false", v)
 		}
 	}
 }
@@ -166,8 +166,6 @@ func TestIsSealed(t *testing.T) {
 		"json":         []byte(`{"access_token":"abc","refresh_token":"def","expiry":"2026-01-01T00:00:00Z"}`),
 		"api key":      []byte("sk-test-not-a-real-key-0123456789abcdefghijklmnopqrstuvwxyz"),
 		"magic only":   {0x00, 'W', 'S', 'K'},
-		"header only":  append([]byte{0x00, 'W', 'S', 'K', 0x01}, make([]byte, 16)...),
-		"one short":    append([]byte{0x00, 'W', 'S', 'K', 0x01}, make([]byte, overhead-6)...),
 		"wrong magic":  append([]byte{0x01, 'W', 'S', 'K', 0x01}, make([]byte, overhead)...),
 		"text 64 long": bytes.Repeat([]byte("a"), 64),
 	}
@@ -179,8 +177,8 @@ func TestIsSealed(t *testing.T) {
 	if !IsSealed(mustSeal(t, nil, nil)) {
 		t.Fatal("IsSealed(sealed empty plaintext) = false")
 	}
-	if !IsSealed(append([]byte{0x00, 'W', 'S', 'K', 0x01}, make([]byte, overhead-5)...)) {
-		t.Fatal("IsSealed(minimum length) = false")
+	if !IsSealed([]byte{0x00, 'W', 'S', 'K', 0x02}) {
+		t.Fatal("IsSealed(magic and a newer version) = false")
 	}
 }
 

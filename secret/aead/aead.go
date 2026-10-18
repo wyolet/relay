@@ -94,9 +94,9 @@ func KeyID(sealed []byte) ([16]byte, error) {
 	return id, nil
 }
 
-// IsSealed reports whether b has the sealed-format magic, a version this package can open, and at least the minimum sealed length.
+// IsSealed reports whether b claims the sealed format: the magic plus a version byte. Version and length are left to Open, so a value from a newer format version fails as ErrUnsupportedVersion instead of being taken for plaintext or the legacy shape.
 func IsSealed(b []byte) bool {
-	return checkHeader(b) == nil
+	return len(b) > len(magic) && bytes.Equal(b[:len(magic)], magic[:])
 }
 
 // OpenLegacy decrypts the legacy shape: AES-256-GCM with a separate 12-byte nonce and no associated data.
