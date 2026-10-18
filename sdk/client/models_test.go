@@ -241,16 +241,6 @@ func TestCatalog_NotServedByThisRelay(t *testing.T) {
 	}
 }
 
-func TestModelsAndCatalog_NeedARelayClient(t *testing.T) {
-	c := OpenAI("http://upstream.invalid", "sk")
-	if _, err := c.Models(context.Background()); err == nil {
-		t.Error("Models on a vendor client must error")
-	}
-	if _, err := c.Catalog(context.Background()); err == nil {
-		t.Error("Catalog on a vendor client must error")
-	}
-}
-
 // RelayWS accepts a ws:// base; the reads go over HTTP to the same relay.
 func TestModels_RelayWSUsesTheHTTPBase(t *testing.T) {
 	f := newFakeRelay(t)

@@ -111,6 +111,20 @@ Tag `""` resolves the SDK's channel through the index; a concrete tag skips the
 index. Files are fetched from `<download URL>/<tag>/catalog.json.gz` and checked
 against `catalog.json.gz.sha256` before they are used or cached.
 
+`catalogsource.Latest` follows the channel's latest tag, which is what
+`client.Models` and `client.Catalog` read outside proxy mode:
+
+```go
+src := catalogsource.Latest(catalogsource.WithBaseURL("https://catalog.example.com"))
+```
+
+`WithBaseURL` reads `<base>/index.yaml` and `<base>/releases`. Without it,
+`WR_CATALOG_URL` sets the base, and `WR_CATALOG_URL=off` uses the catalog
+embedded in the SDK with no request. The index is revalidated with
+`If-None-Match` at most once every 10 minutes (`WithRefreshInterval`). When the
+server can't be read, the last good catalog is served, and with
+`WithCacheDir` or `WR_CATALOG_CACHE_DIR` it survives a restart.
+
 ## Running catalog-server
 
 ```bash
