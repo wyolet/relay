@@ -104,8 +104,8 @@ type Store interface {
 	InsertPrimary(ctx context.Context, k DataKey, expectedPrimary *[16]byte) error
 	// UpdateWrapped replaces a key's wrapped bytes and KEK id only while it is still under fromKEK and not destroyed; otherwise ErrConflict.
 	UpdateWrapped(ctx context.Context, id, fromKEK, toKEK [16]byte, wrapped []byte) error
-	// Destroy checks that no stored value uses the key and destroys it in one transaction: State Destroyed, Wrapped nil. It returns ErrIsPrimary for a Primary, ErrInUse when values use it, ErrUnknownKey for an unknown id, and nil when already destroyed.
-	Destroy(ctx context.Context, id [16]byte) error
+	// Destroy checks that no stored value uses the key and destroys it in one transaction: State Destroyed, Wrapped nil. It returns ErrIsPrimary for a Primary, ErrInUse when values use it, ErrUnknownKey for an unknown id, and nil when already destroyed. A positive minAge also refuses a key demoted less than minAge ago by the store's own clock (ErrTooRecent), so a process whose clock runs ahead cannot shorten the wait.
+	Destroy(ctx context.Context, id [16]byte, minAge time.Duration) error
 }
 
 // Options tunes a Ring. Zero values take the defaults.

@@ -88,7 +88,7 @@ func TestDestroyAtomicWithWrites(t *testing.T) {
 			if k.State != keyring.DecryptOnly {
 				continue
 			}
-			switch err := s.Destroy(ctx, k.ID); {
+			switch err := s.Destroy(ctx, k.ID, 0); {
 			case err == nil:
 				destroyed++
 				// Writes under a non-Primary key are refused for good, so this holds from here on.

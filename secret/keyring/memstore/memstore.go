@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/wyolet/relay/secret/keyring"
 )
@@ -20,6 +21,7 @@ type Store struct {
 	keys   map[[16]byte]keyring.DataKey
 	target [16]byte
 	inUse  func(id [16]byte) bool
+	now    func() time.Time
 }
 
 var _ keyring.Store = (*Store)(nil)
@@ -32,9 +34,14 @@ func WithInUse(inUse func(id [16]byte) bool) Option {
 	return func(s *Store) { s.inUse = inUse }
 }
 
+// WithClock sets the clock Destroy measures a key's demotion age against. Default time.Now.
+func WithClock(now func() time.Time) Option {
+	return func(s *Store) { s.now = now }
+}
+
 // New returns an empty Store.
 func New(opts ...Option) *Store {
-	s := &Store{keys: map[[16]byte]keyring.DataKey{}}
+	s := &Store{keys: map[[16]byte]keyring.DataKey{}, now: time.Now}
 	for _, o := range opts {
 		o(s)
 	}
@@ -142,7 +149,7 @@ func (s *Store) UpdateWrapped(_ context.Context, id, fromKEK, toKEK [16]byte, wr
 }
 
 // Destroy consults the WithInUse check under the store's lock, so a RequirePrimary write cannot slip in between the check and the destroy.
-func (s *Store) Destroy(_ context.Context, id [16]byte) error {
+func (s *Store) Destroy(_ context.Context, id [16]byte, minAge time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k, ok := s.keys[id]
@@ -153,6 +160,8 @@ func (s *Store) Destroy(_ context.Context, id [16]byte) error {
 		return nil
 	case k.State == keyring.Primary:
 		return keyring.ErrIsPrimary
+	case minAge > 0 && (k.DemotedAt.IsZero() || s.now().Sub(k.DemotedAt) < minAge):
+		return keyring.ErrTooRecent
 	case s.inUse != nil && s.inUse(id):
 		return keyring.ErrInUse
 	}

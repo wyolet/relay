@@ -122,10 +122,13 @@ func (r *Ring) destroy(ctx context.Context, id [16]byte, force bool) error {
 		return fmt.Errorf("%w: key %s", ErrIsPrimary, FormatID(id))
 	}
 	// A key never becomes Primary again and DemotedAt is set once, so this check cannot go stale before the store's Destroy.
-	if !force && (k.DemotedAt.IsZero() || r.opts.Now().Sub(k.DemotedAt) < r.opts.DestroyAfter) {
+	minAge := r.opts.DestroyAfter
+	if force {
+		minAge = 0
+	} else if k.DemotedAt.IsZero() || r.opts.Now().Sub(k.DemotedAt) < minAge {
 		return fmt.Errorf("%w: key %s demoted at %s", ErrTooRecent, FormatID(id), k.DemotedAt)
 	}
-	if err := r.store.Destroy(ctx, id); err != nil {
+	if err := r.store.Destroy(ctx, id, minAge); err != nil {
 		return err
 	}
 	return r.Reload(ctx, id)

@@ -129,7 +129,7 @@ func TestUpdateWrappedCAS(t *testing.T) {
 	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Destroy(ctx, a.ID); err != nil {
+	if err := s.Destroy(ctx, a.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateWrapped(ctx, a.ID, to, from, []byte("w")); !errors.Is(err, keyring.ErrConflict) {
@@ -137,34 +137,54 @@ func TestUpdateWrappedCAS(t *testing.T) {
 	}
 }
 
+func TestDestroyMinAge(t *testing.T) {
+	now := t0
+	s := memstore.New(memstore.WithClock(func() time.Time { return now }))
+	a, b := primary(1, "s", t0), primary(2, "s", t0)
+	if err := s.InsertPrimary(ctx, a, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
+		t.Fatal(err)
+	}
+	now = t0.Add(time.Hour - time.Second)
+	if err := s.Destroy(ctx, a.ID, time.Hour); !errors.Is(err, keyring.ErrTooRecent) {
+		t.Fatalf("1s early: %v", err)
+	}
+	now = t0.Add(time.Hour)
+	if err := s.Destroy(ctx, a.ID, time.Hour); err != nil {
+		t.Fatalf("at minAge: %v", err)
+	}
+}
+
 func TestDestroy(t *testing.T) {
 	inUse := map[[16]byte]bool{}
 	s := memstore.New(memstore.WithInUse(func(id [16]byte) bool { return inUse[id] }))
 	a, b := primary(1, "s", t0), primary(2, "s", t0)
-	if err := s.Destroy(ctx, a.ID); !errors.Is(err, keyring.ErrUnknownKey) {
+	if err := s.Destroy(ctx, a.ID, 0); !errors.Is(err, keyring.ErrUnknownKey) {
 		t.Fatalf("unknown: %v", err)
 	}
 	if err := s.InsertPrimary(ctx, a, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Destroy(ctx, a.ID); !errors.Is(err, keyring.ErrIsPrimary) {
+	if err := s.Destroy(ctx, a.ID, 0); !errors.Is(err, keyring.ErrIsPrimary) {
 		t.Fatalf("Primary: %v", err)
 	}
 	if err := s.InsertPrimary(ctx, b, &a.ID); err != nil {
 		t.Fatal(err)
 	}
 	inUse[a.ID] = true
-	if err := s.Destroy(ctx, a.ID); !errors.Is(err, keyring.ErrInUse) {
+	if err := s.Destroy(ctx, a.ID, 0); !errors.Is(err, keyring.ErrInUse) {
 		t.Fatalf("in use: %v", err)
 	}
 	inUse[a.ID] = false
-	if err := s.Destroy(ctx, a.ID); err != nil {
+	if err := s.Destroy(ctx, a.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 	if k := mustGet(t, s, a.ID); k.State != keyring.Destroyed || k.Wrapped != nil || k.Scope != "s" || k.KEKID != a.KEKID {
 		t.Fatalf("tombstone = %+v", k)
 	}
-	if err := s.Destroy(ctx, a.ID); err != nil {
+	if err := s.Destroy(ctx, a.ID, 0); err != nil {
 		t.Fatalf("destroy again: %v", err)
 	}
 }
