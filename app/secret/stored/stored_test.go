@@ -145,6 +145,16 @@ func TestScopeContext(t *testing.T) {
 	}
 }
 
+func TestPeriodicReloadWakesTheRewriter(t *testing.T) {
+	k := &keys{wake: make(chan struct{}, 1)}
+	k.ringOptions().OnReload()
+	select {
+	case <-k.wake:
+	default:
+		t.Fatal("a periodic reload did not wake the rewriter")
+	}
+}
+
 func TestNewRefusesDuplicateMasterKeys(t *testing.T) {
 	if _, err := New(nil, [][]byte{testKey, testKey}); err == nil {
 		t.Fatal("the same master key twice was accepted")

@@ -101,7 +101,7 @@ func (s *Backend) Rewrap(ctx context.Context, to string) (RewrapResult, error) {
 		return RewrapResult{}, fmt.Errorf("secret: count legacy rows: %w", err)
 	}
 	if n > 0 {
-		return RewrapResult{}, fmt.Errorf("%w: %d rows; wait for the rewriter or run `relay secret migrate`, then rewrap", ErrLegacyRows, n)
+		return RewrapResult{}, fmt.Errorf("%w: %d rows; wait for the rewriter or run `relay secret migrate`, then rewrap (rows no configured master key opens are listed in undecryptableRows by `relay secret status`)", ErrLegacyRows, n)
 	}
 	ring, err := s.keys.load(ctx)
 	if err != nil {

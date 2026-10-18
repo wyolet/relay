@@ -18,10 +18,15 @@ import (
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
-// insertLegacy writes a row the way a relay from before the key ring did, past the trigger's refusal.
+// insertLegacy writes a row the way a relay from before the key ring did, under keyA, past the trigger's refusal.
 func insertLegacy(t *testing.T, pool *pgxpool.Pool, id string, plain []byte) {
 	t.Helper()
-	ct, nonce, err := crypto.Encrypt(keyA, plain)
+	insertLegacyUnder(t, pool, keyA, id, plain)
+}
+
+func insertLegacyUnder(t *testing.T, pool *pgxpool.Pool, masterKey []byte, id string, plain []byte) {
+	t.Helper()
+	ct, nonce, err := crypto.Encrypt(masterKey, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +64,19 @@ func TestIntegration_RunRewritesLegacyRows(t *testing.T) {
 	}
 	if got := resolve(t, ctx, b, "old"); got != "legacy" || rowOf(t, pool, "old").scope != stored.ScopeSystem {
 		t.Fatalf("rewritten row: %q in %q", got, rowOf(t, pool, "old").scope)
+	}
+}
+
+// A listener that reconnected reloads every key; a rotation among them leaves rows under a demoted key, so the rewriter is woken.
+func TestIntegration_ReloadKeysWakesTheRewriter(t *testing.T) {
+	b := backend(t, storagetest.Pool(t), keyA)
+	ringOf(t, b)
+	b.RewriterWoken()
+	if err := b.ReloadKeys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !b.RewriterWoken() {
+		t.Fatal("ReloadKeys did not wake the rewriter")
 	}
 }
 

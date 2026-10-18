@@ -120,6 +120,8 @@ type Options struct {
 	Now func() time.Time
 	// ReloadError receives errors from the periodic reload in Run. Default: ignored.
 	ReloadError func(error)
+	// OnReload is called after each successful periodic reload in Run, for a product that acts on key changes it may not have been told about (rewriting values under a key that lost Primary). Default: none.
+	OnReload func()
 }
 
 func (o Options) withDefaults() (Options, error) {

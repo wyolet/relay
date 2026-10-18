@@ -121,7 +121,13 @@ func (r *Ring) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			if err := r.ReloadAll(ctx); err != nil && ctx.Err() == nil && r.opts.ReloadError != nil {
+			err := r.ReloadAll(ctx)
+			switch {
+			case err == nil:
+				if r.opts.OnReload != nil {
+					r.opts.OnReload()
+				}
+			case ctx.Err() == nil && r.opts.ReloadError != nil:
 				r.opts.ReloadError(err)
 			}
 		}

@@ -114,17 +114,37 @@ fresh `docker run` without a volume starts clean.
 
 ## Stored host key won't decrypt after a restart
 
-`RELAY_MASTER_KEY` changed between runs. It must be **stable** — it unwraps
-the data keys stored secrets are encrypted under. `relay secret status` lists
-those data keys as `locked`. Restore the original master key, or keep the new
-one and add the original as `RELAY_MASTER_KEY_EXTRA`, then follow
-[Changing the master key](/concepts/secret-keys#changing-the-master-key) to
-move onto the new one. If the original is lost, the values under it are too:
-run `relay secret rewrap --to <new kek id>` (it lists every data key as
-skipped) and `relay secret rotate --all`, so new values can be written under
-the new key, then re-enter the host key values.
-The standalone image keeps the key stable automatically **as long as you
-mount a volume** (see above).
+`RELAY_MASTER_KEY` changed between runs. It must be **stable** — it unwraps the data keys stored secrets are encrypted under. `relay secret status` lists those data keys as `locked`, and lists the ids of the values the process cannot decrypt in `undecryptableRows`. Restore the original master key, or keep the new one and add the original as `RELAY_MASTER_KEY_EXTRA`, then follow [Changing the master key](/concepts/secret-keys#changing-the-master-key) to move onto the new one.
+
+The standalone image keeps the key stable automatically **as long as you mount a volume** (see above).
+
+### The original master key is lost
+
+The values encrypted under it are lost too. To store values again under the new key:
+
+1. Run `relay secret status` with only the new key configured and note `undecryptableRows`. A value's id is the id of the host key it belongs to.
+2. While any value in the format from before data keys cannot be decrypted, `relay secret rewrap` is refused, so delete the values in `undecryptableRows` by hand:
+
+   ```sql
+   BEGIN;
+   SELECT id, name FROM secrets WHERE id IN ('<id>', '<id>');  -- the host keys to re-enter
+   DELETE FROM secret_values WHERE id IN ('<id>', '<id>');
+   COMMIT;
+   ```
+
+   An id that starts with `payload-logging:` holds payload-logging credentials: write them again in the `payload-logging` settings section. Any other id with no host key is the inference-token signing key: clear `signingKey` in the `auth:tokens` settings section so the next boot generates a new one (tokens signed by the old key stop verifying).
+3. Run `relay secret rewrap --to <new kek id>`, where the new KEK id is the one in `heldKeks`. It lists every data key under the lost key as skipped, and new data keys are wrapped under the new key from then on.
+4. Run `relay secret rotate --all`, so every scope gets a primary data key the new key opens.
+5. Re-enter the values of the host keys from step 2 and of any other host key that loads unresolved, and re-authorize OAuth host keys.
+
+## Wrong master key at the upgrade to data keys
+
+When `RELAY_MASTER_KEY` held a different key than the one the stored values were encrypted under before the upgrade, those values stay in the old format: `legacyRows` stays above 0, `undecryptableRows` lists them, pods log `cannot rewrite stored secret`, and the host keys load unresolved. Values written since then (a host key value entered again, a refreshed OAuth token) were stored under data keys wrapped by the wrong key, and the first of them made it the target (`targetKek`).
+
+1. Set `RELAY_MASTER_KEY` to the correct key and `RELAY_MASTER_KEY_EXTRA` to the wrong one, and roll every pod. The pods convert the old-format values within seconds; wait until `legacyRows` is 0. New data keys are still wrapped under the wrong key until the next step.
+2. Run `relay secret rewrap --to <kek id of the correct key>` (the first entry in `heldKeks`). Every data key is wrapped under the correct key and it becomes the target. Skip this step if `targetKek` is empty or already the correct key.
+3. When `relay secret status` shows every data key under the correct KEK, remove `RELAY_MASTER_KEY_EXTRA` and roll every pod.
+4. If the wrong key may be known elsewhere (it belongs to another deployment, or came from an example), whoever has it and a copy of the database from that period can unwrap the data keys it wrapped. Rotate every scope (`relay secret rotate --all`), wait until the old data keys show 0 `rows`, and destroy them, as in [If the master key leaks](/concepts/secret-keys#if-the-master-key-leaks).
 
 ## Health checks
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -68,15 +69,28 @@ func (s *Backend) Create(ctx context.Context, id string, plaintext []byte) (secr
 	if id == "" {
 		return secret.Ref{}, errors.New("secret/stored: id is required")
 	}
-	row, err := s.q.GetSecretValueOwner(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return secret.Ref{}, fmt.Errorf("secret/stored: %q does not exist, and a new stored secret needs a scope", id)
-	}
+	ring, err := s.keys.load(ctx)
 	if err != nil {
-		return secret.Ref{}, fmt.Errorf("secret/stored: get %q: %w", id, err)
+		return secret.Ref{}, fmt.Errorf("secret/stored: %w", err)
 	}
-	scope, _ := rowScope(row.Scope, row.HasOwner, row.OwnerKind, row.OwnerID)
-	return s.CreateScoped(ctx, scope, id, plaintext)
+	// The scope is read under the locks an owner change takes, so the write cannot land in the scope the owner just left.
+	err = s.inTx(ctx, func(b *Backend) error {
+		v, err := b.lockValue(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("secret/stored: %q does not exist, and a new stored secret needs a scope", id)
+		}
+		if err != nil {
+			return fmt.Errorf("secret/stored: get %q: %w", id, err)
+		}
+		if err := b.seal(ctx, ring, v.scope, id, plaintext); err != nil {
+			return fmt.Errorf("secret/stored: write %q: %w", id, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return secret.Ref{}, err
+	}
+	return secret.Ref{Kind: secret.KindStored, ID: id}, nil
 }
 
 // CreateScoped seals plaintext under scope's data key and writes it at id, replacing any value there.
@@ -94,7 +108,7 @@ func (s *Backend) CreateScoped(ctx context.Context, scope, id string, plaintext 
 	return secret.Ref{Kind: secret.KindStored, ID: id}, nil
 }
 
-// Rescope moves a sealed value to scope, decrypting the stored bytes and sealing them again, so an OAuth blob keeps its refresh token. Run it in the transaction that changes the owner. A missing row, a legacy row (it takes its owner's scope when rewritten) and a row already in scope are left alone.
+// Rescope moves a value to scope, decrypting the stored bytes and sealing them again, so an OAuth blob keeps its refresh token. Run it in the transaction that changes the owner. A legacy row is sealed under scope too, which changes its bytes so a rewrite that read it under the old owner finds it changed; one this process cannot decrypt is left for the rewriter of a process that can. A missing row and a sealed row already in scope are left alone.
 func (s *Backend) Rescope(ctx context.Context, id, scope string) error {
 	row, err := s.q.LockSecretValue(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -103,15 +117,20 @@ func (s *Backend) Rescope(ctx context.Context, id, scope string) error {
 	if err != nil {
 		return fmt.Errorf("secret/stored: get %q: %w", id, err)
 	}
-	if !row.DekID.Valid || row.Scope.String == scope {
+	legacy := !row.DekID.Valid
+	if !legacy && row.Scope.String == scope {
 		return nil
 	}
 	ring, err := s.keys.load(ctx)
-	if err != nil {
-		return fmt.Errorf("secret/stored: %w", err)
+	var plain []byte
+	if err == nil {
+		plain, _, err = openValue(ctx, ring, id, row.Scope.String, row.Ciphertext, row.Nonce)
 	}
-	plain, _, err := openValue(ctx, ring, id, row.Scope.String, row.Ciphertext, row.Nonce)
 	if err != nil {
+		if legacy {
+			slog.Warn("secret: legacy stored secret left as it is on owner change; it cannot be decrypted here", "id", id, "err", err)
+			return nil
+		}
 		return fmt.Errorf("secret/stored: rescope %q: %w", id, err)
 	}
 	if err := s.seal(ctx, ring, scope, id, plain); err != nil {
@@ -141,6 +160,44 @@ func (s *Backend) seal(ctx context.Context, ring *keyring.Ring, scope, id string
 		}
 		return writeError(tx.Commit(ctx))
 	})
+}
+
+// lockedValue is a secret_values row read under its lock, with the scope its value belongs to.
+type lockedValue struct {
+	gen.LockSecretValueRow
+	scope string
+	owned bool
+}
+
+// lockValue locks the owning host key's row (shared) and then the value row, in the order host key writes take them, and derives the value's scope from what it read. It returns pgx.ErrNoRows when the value does not exist.
+func (s *Backend) lockValue(ctx context.Context, id string) (lockedValue, error) {
+	owner, err := s.q.LockSecretOwner(ctx, id)
+	hasOwner := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return lockedValue{}, err
+	}
+	row, err := s.q.LockSecretValue(ctx, id)
+	if err != nil {
+		return lockedValue{}, err
+	}
+	scope, owned := rowScope(row.Scope, hasOwner, owner.OwnerKind, owner.OwnerID)
+	return lockedValue{LockSecretValueRow: row, scope: scope, owned: owned}, nil
+}
+
+// inTx runs fn on a copy of s bound to a new transaction, a savepoint when s already runs in one, and commits when fn returns nil.
+func (s *Backend) inTx(ctx context.Context, fn func(b *Backend) error) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("secret/stored: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(s.WithDB(tx)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("secret/stored: commit: %w", err)
+	}
+	return nil
 }
 
 // openValue picks the row's shape from its bytes, not its columns, so a legacy value written behind a stale dek_id still opens as legacy.

@@ -65,15 +65,21 @@ func (k *keys) load(ctx context.Context) (*keyring.Ring, error) {
 	if r := k.ring.Load(); r != nil {
 		return r, nil
 	}
-	r, err := keyring.New(ctx, k.store, k.set, keyring.Options{
-		DestroyAfter: DestroyAfter,
-		ReloadError:  func(err error) { slog.Warn("secret: data key reload failed", "err", err) },
-	})
+	r, err := keyring.New(ctx, k.store, k.set, k.ringOptions())
 	if err != nil {
 		return nil, fmt.Errorf("load data keys: %w", err)
 	}
 	k.ring.Store(r)
 	return r, nil
+}
+
+// ringOptions wakes the rewriter after every periodic full reload: a rotation whose notification this process missed leaves rows under a demoted key.
+func (k *keys) ringOptions() keyring.Options {
+	return keyring.Options{
+		DestroyAfter: DestroyAfter,
+		ReloadError:  func(err error) { slog.Warn("secret: data key reload failed", "err", err) },
+		OnReload:     k.wakeRewriter,
+	}
 }
 
 func (k *keys) wakeRewriter() {
@@ -130,11 +136,16 @@ func (s *Backend) KeyChanged(ctx context.Context, id string) error {
 	return r.Reload(ctx, u.Bytes)
 }
 
-// ReloadKeys re-reads every data key, for a listener that reconnected and may have missed notifications.
+// ReloadKeys re-reads every data key, for a listener that reconnected and may have missed notifications, and wakes the rewriter for any rotation among them.
 func (s *Backend) ReloadKeys(ctx context.Context) error {
-	if r := s.keys.ring.Load(); r != nil {
-		return r.ReloadAll(ctx)
+	r := s.keys.ring.Load()
+	if r == nil {
+		return nil
 	}
+	if err := r.ReloadAll(ctx); err != nil {
+		return err
+	}
+	s.keys.wakeRewriter()
 	return nil
 }
 

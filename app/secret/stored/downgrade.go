@@ -58,7 +58,7 @@ func (s *Backend) Downgrade(ctx context.Context, masterKey []byte) (int, error) 
 	return done, nil
 }
 
-// SealedRows counts the stored secrets a relay from before the key ring cannot read; 0 on a schema that predates the key ring.
+// SealedRows counts the stored secrets a relay from before the key ring cannot read (sealed, or without a nonce), the same rows migration 34's down refuses; 0 on a schema that predates the key ring.
 func (s *Backend) SealedRows(ctx context.Context) (int64, error) {
 	n, err := s.q.CountSealedSecretValues(ctx)
 	var pgErr *pgconn.PgError
