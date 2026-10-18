@@ -110,6 +110,7 @@ var modelFilter = filter.Schema[model.Model]{
 			return m.Spec.Deprecation != nil || m.Spec.DeprecationDate != ""
 		}},
 		{Name: "family", Kind: filter.String, Repeat: true, Sortable: true, Get: func(m *model.Model) string { return m.Spec.Family }},
+		{Name: "product_line", Kind: filter.String, Repeat: true, Sortable: true, Get: func(m *model.Model) string { return m.Spec.ProductLine }},
 		{Name: "license", Kind: filter.String, Get: func(m *model.Model) string { return m.Spec.License }},
 		{Name: "provider_id", Kind: filter.String, Repeat: true, Get: func(m *model.Model) string { return m.Meta.Owner.ID }},
 		{Name: "tag", Kind: filter.String, Repeat: true, GetMulti: func(m *model.Model) []string { return m.Spec.Tags }},
@@ -126,7 +127,7 @@ var modelFilter = filter.Schema[model.Model]{
 		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(m *model.Model) time.Time { return m.Meta.UpdatedAt }},
 	},
 	Q: func(m *model.Model) []string {
-		return append([]string{m.Meta.Name, m.Meta.DisplayName, m.Spec.Family}, m.Spec.Tags...)
+		return append([]string{m.Meta.Name, m.Meta.DisplayName, m.Spec.Family, m.Spec.ProductLine}, m.Spec.Tags...)
 	},
 	Labels:      func(m *model.Model) map[string]string { return labelsOf(m.Meta) },
 	DefaultSort: "name",

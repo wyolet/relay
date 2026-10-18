@@ -48,9 +48,9 @@ func buildHost(p MDProvider, baseURL string) manifest.HostDTO {
 // displayName); members are all models.dev ids in the group, each becoming a
 // Snapshot (verbatim key → OriginalName when it isn't slug-clean; release_date
 // → releasedAt). This matches the hand-curated convention of one Model with
-// dated snapshots rather than one model per dated id. family is the resolved
-// allowlisted family, not models.dev's raw value.
-func buildFoldedModel(p MDProvider, pm MDModel, base string, members []string, version, family string) manifest.ModelDTO {
+// dated snapshots rather than one model per dated id. family and productLine
+// are the resolved allowlisted values, not models.dev's raw family.
+func buildFoldedModel(p MDProvider, pm MDModel, base string, members []string, version, family, productLine string) manifest.ModelDTO {
 	labels := map[string]string{"source": "models.dev"}
 	if version != "" {
 		labels["source_version"] = version
@@ -70,6 +70,7 @@ func buildFoldedModel(p MDProvider, pm MDModel, base string, members []string, v
 
 	spec := manifest.ModelSpec{
 		Family:          family,
+		ProductLine:     productLine,
 		Capabilities:    capabilities(pm),
 		Modalities:      model.Modalities{Input: pm.Modalities.Input, Output: pm.Modalities.Output},
 		KnowledgeCutoff: pm.Knowledge,

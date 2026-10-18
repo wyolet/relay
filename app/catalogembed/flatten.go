@@ -152,6 +152,7 @@ func modelInfoFrom(m *model.Model, sn *model.Snapshot, provSlug string) sdkcatal
 		DisplayName:          m.Meta.DisplayName,
 		Description:          m.Meta.Description,
 		Family:               m.Spec.Family,
+		ProductLine:          m.Spec.ProductLine,
 		Version:              m.Spec.Version,
 		Capabilities:         capsFrom(m.Spec.Capabilities),
 		Modalities:           sdkcatalog.Modalities{Input: m.Spec.Modalities.Input, Output: m.Spec.Modalities.Output},

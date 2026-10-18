@@ -34,7 +34,7 @@ const testCatalog = `{
     }
   ],
   "models": [
-    {"metadataName": "gpt-x", "provider": "acme", "displayName": "GPT-X", "family": "gpt",
+    {"metadataName": "gpt-x", "provider": "acme", "displayName": "GPT-X", "family": "gpt", "productLine": "sol",
      "capabilities": {"chat": true, "tools": true, "vision": true},
      "modalities": {"input": ["text", "image"], "output": ["text"]},
      "contextWindowTotal": 128000, "maxOutputTokens": 8192, "knowledgeCutoff": "2026-01"}
@@ -61,6 +61,9 @@ func TestResolveModel_AggregatesHostsAndAuthor(t *testing.T) {
 	}
 	if m.Name != "gpt-x-2026" || m.Slug != "gpt-x" || m.DisplayName != "GPT-X" {
 		t.Fatalf("identity wrong: name=%q slug=%q display=%q", m.Name, m.Slug, m.DisplayName)
+	}
+	if m.Family != "gpt" || m.ProductLine != "sol" {
+		t.Fatalf("lineage wrong: family=%q productLine=%q", m.Family, m.ProductLine)
 	}
 	if !m.Capabilities.Vision || !m.Capabilities.Tools || !m.Capabilities.Chat {
 		t.Fatalf("capabilities not carried: %+v", m.Capabilities)

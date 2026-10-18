@@ -234,6 +234,25 @@ func TestToModel_HappyPath(t *testing.T) {
 	}
 }
 
+func TestModelProductLineRoundTrip(t *testing.T) {
+	docs, err := manifest.Parse(strings.NewReader(modelYAML + `  family: claude
+  productLine: sonnet
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	m, err := manifest.ToModel(*docs[0].Model, testResolver)
+	if err != nil {
+		t.Fatalf("ToModel: %v", err)
+	}
+	if m.Spec.Family != "claude" || m.Spec.ProductLine != "sonnet" {
+		t.Fatalf("parsed family/productLine = %q/%q, want claude/sonnet", m.Spec.Family, m.Spec.ProductLine)
+	}
+	if got := manifest.FromModel(m, testRev).Spec.ProductLine; got != "sonnet" {
+		t.Errorf("rendered productLine = %q, want sonnet", got)
+	}
+}
+
 func TestModelDeprecationReplacementResolvesByName(t *testing.T) {
 	docs, err := manifest.Parse(strings.NewReader(modelYAML + `  deprecation:
     status: deprecated

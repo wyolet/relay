@@ -48,6 +48,7 @@ type ModelInfo struct {
 	DisplayName string `json:"displayName,omitempty"`
 	Description string `json:"description,omitempty"`
 	Family      string `json:"family,omitempty"`
+	ProductLine string `json:"productLine,omitempty"`
 	Version     string `json:"version,omitempty"`
 
 	Capabilities Capabilities `json:"capabilities,omitempty"`

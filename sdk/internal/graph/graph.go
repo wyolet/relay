@@ -56,6 +56,7 @@ func Build(ic *catalog.IndexedCatalog) *Graph {
 			DisplayName:     mi.DisplayName,
 			Description:     mi.Description,
 			Family:          mi.Family,
+			ProductLine:     mi.ProductLine,
 			Version:         mi.Version,
 			Capabilities:    Capabilities(mi.Capabilities),
 			Modalities:      Modalities(mi.Modalities),
