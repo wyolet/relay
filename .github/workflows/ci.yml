@@ -6,6 +6,8 @@ on:
   pull_request:
   schedule:
     - cron: '17 5 * * 1'
+  # The full tier on any branch; full.yml dispatches it on dev.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,8 +15,12 @@ permissions:
 jobs:
   # Decides which jobs a pull request needs. Gating jobs with `if:` rather than
   # workflow-level `paths` keeps every check reporting (skipped counts as
-  # success). Pushes to main run everything; the weekly schedule runs only the
-  # security scans, to surface new advisories. Paths not named below count as Go.
+  # success). Pushes to main and manual runs get every job; the weekly
+  # schedule runs only the security scans, to surface new advisories. Paths not
+  # named below count as Go.
+  # `full` is the release tier: every event but a pull request into a branch
+  # other than main. Those get lint, build and plain unit tests, plus the
+  # integration jobs when they touch the paths those cover.
   # `cluster` picks the self-hosted pools: only when the CI_POOL variable says
   # so, and never for pull requests from forks (or deleted head repos).
   changes:
@@ -24,9 +30,12 @@ jobs:
       pull-requests: read
     outputs:
       cluster: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_POOL == 'cluster' }}
-      go: ${{ github.event_name == 'push' || steps.filter.outputs.go == 'true' }}
-      chart: ${{ github.event_name == 'push' || steps.filter.outputs.chart == 'true' }}
-      boot: ${{ github.event_name == 'push' || steps.filter.outputs.boot == 'true' }}
+      full: ${{ github.event_name != 'pull_request' || github.base_ref == 'main' }}
+      go: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
+      chart: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.chart == 'true' }}
+      boot: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.boot == 'true' }}
+      integration: ${{ steps.filter.outputs.integration == 'true' }}
+      clickhouse: ${{ steps.filter.outputs.clickhouse == 'true' }}
       scan: ${{ github.event_name != 'pull_request' || steps.filter.outputs.go == 'true' || steps.filter.outputs.chart == 'true' }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -47,6 +56,22 @@ jobs:
             boot:
               - 'versions.env'
               - 'scripts/boot-smoke.sh'
+              - '.github/workflows/**'
+            integration:
+              - 'migrations/**'
+              - 'internal/storage/**'
+              - 'pkg/kv/**'
+              - 'app/pipeline/**'
+              - 'jobq/**'
+              - 'integration/**'
+              - '**/*integration_test.go'
+              - 'Makefile'
+              - '.github/workflows/**'
+            clickhouse:
+              - 'pkg/usage/clickhouse/**'
+              - 'pkg/payload/clickhouse/**'
+              - 'pkg/chttl/**'
+              - 'Makefile'
               - '.github/workflows/**'
 
   # golangci-lint runs govet (integration tag included), so there is no
@@ -93,8 +118,8 @@ jobs:
           (cd jobq && go build ./...)
           (cd auth && go build ./...)
 
-  # Every module's unit tests, once: under -race and writing the unit
-  # coverprofiles the coverage job merges.
+  # Every module's unit tests, once. The full tier runs them under -race and
+  # writes the unit coverprofiles the coverage job merges.
   test:
     needs: changes
     if: needs.changes.outputs.go == 'true'
@@ -109,9 +134,19 @@ jobs:
           cache: true
 
       - name: Test
+        if: needs.changes.outputs.full != 'true'
+        run: make test
+
+      # The full tier gates releases, and the cluster pool shares its Go cache
+      # with pull-request jobs: no result comes from that cache.
+      - name: Test (race, coverage)
+        if: needs.changes.outputs.full == 'true'
+        env:
+          GOFLAGS: -count=1
         run: make test-race-cover
 
       - uses: actions/upload-artifact@v7
+        if: needs.changes.outputs.full == 'true'
         with:
           name: unit-coverage
           path: .cover/*.out
@@ -120,7 +155,7 @@ jobs:
 
   fuzz:
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -139,7 +174,7 @@ jobs:
 
   bench:
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -155,7 +190,7 @@ jobs:
 
   govulncheck:
     needs: changes
-    if: needs.changes.outputs.go == 'true' || github.event_name == 'schedule'
+    if: needs.changes.outputs.full == 'true' && (needs.changes.outputs.go == 'true' || github.event_name == 'schedule')
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -175,7 +210,7 @@ jobs:
   # job, since misconfiguration checks need per-finding triage.
   trivy:
     needs: changes
-    if: needs.changes.outputs.scan == 'true'
+    if: needs.changes.outputs.scan == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -215,7 +250,7 @@ jobs:
   # gets a database of its own on both, so packages run in parallel.
   integration:
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.integration == 'true')
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci-integration' || 'ubuntu-latest' }}
     # The cluster pool runs Postgres and Valkey as pod sidecars on the same
     # addresses. An empty image skips a service ('' is falsy, hence the order).
@@ -269,7 +304,7 @@ jobs:
   coverage:
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     needs: [changes, test, integration]
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -281,6 +316,40 @@ jobs:
 
       - name: Coverage tiers
         run: make cover-check COVER_ENFORCE=1
+
+  # The ClickHouse sink tests. GitHub-hosted only: it needs a ClickHouse
+  # service container, which the cluster pool does not run.
+  clickhouse:
+    needs: changes
+    if: needs.changes.outputs.go == 'true' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.clickhouse == 'true')
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8-alpine
+        # No CLICKHOUSE_DB: creating it makes the image run a temporary server
+        # first, which can pass the health check before the real one listens.
+        env:
+          CLICKHOUSE_USER: relay
+          CLICKHOUSE_PASSWORD: relay
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user relay --password relay --query 'SELECT 1'"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: ClickHouse tests
+        run: make test-clickhouse-run
 
   chart:
     needs: changes
