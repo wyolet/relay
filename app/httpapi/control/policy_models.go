@@ -30,12 +30,17 @@ import (
 )
 
 func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
-	return func(ctx context.Context, action string, _, incoming *policy.Policy) error {
+	return func(ctx context.Context, action string, existing, incoming *policy.Policy) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
 		if err := refs(d).Policy(ctx, incoming); err != nil {
 			return refErr(err)
+		}
+		if action == "update" && existing.Meta.Owner != incoming.Meta.Owner {
+			if err := refusePolicyMove(ctx, d, incoming); err != nil {
+				return err
+			}
 		}
 		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {
 			return nil
