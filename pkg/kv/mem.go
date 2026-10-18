@@ -245,3 +245,5 @@ func (m *Mem) Close() error {
 	<-m.stopped
 	return nil
 }
+
+// probe
