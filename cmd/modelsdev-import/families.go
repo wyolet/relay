@@ -79,11 +79,7 @@ func (f *familyList) resolve(v string) (family, lineCandidate string) {
 		}
 	}
 	if best != "" {
-		rest := v[bestLen:]
-		if rest[0] == '-' || rest[0] == '.' {
-			rest = rest[1:]
-		}
-		return best, rest
+		return best, trimLeadingVersion(v[bestLen:])
 	}
 	for _, fam := range f.Families {
 		for _, a := range fam.Aliases {
@@ -134,9 +130,33 @@ func (fam familyEntry) lineFor(c string) string {
 	return ""
 }
 
-// isVersion reports whether a line candidate is only digits and dots, as in "qwen3.6" → "3.6": a version, not an unknown line.
-func isVersion(s string) bool {
-	return s != "" && strings.Trim(s, "0123456789.") == ""
+// trimLeadingVersion drops the separator and any version glued to the family name, so "3-coder" (from "qwen3-coder") yields "coder" and "3.6" yields "".
+func trimLeadingVersion(rest string) string {
+	rest = strings.TrimLeft(rest, "-.")
+	rest = strings.TrimLeft(rest, "0123456789.")
+	return strings.TrimLeft(rest, "-")
+}
+
+// lineMiss reports whether a line candidate that mapped to no line is worth a report: the family declares lines, and the candidate is not one of the family's own aliases (chatgpt, a family-only alias, names no line).
+func (f *familyList) lineMiss(family, candidate, line string) bool {
+	if f == nil || line != "" || candidate == "" {
+		return false
+	}
+	for _, fam := range f.Families {
+		if fam.Name != family {
+			continue
+		}
+		if len(fam.Lines) == 0 {
+			return false
+		}
+		for _, a := range fam.Aliases {
+			if a == candidate {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // extendsLineage reports whether v is prefix followed by "-", a digit or "."

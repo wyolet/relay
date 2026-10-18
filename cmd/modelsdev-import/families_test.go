@@ -31,6 +31,8 @@ const testFamiliesYAML = `families:
       - name: codestral
   - name: olmo
   - name: qwen
+    lines:
+      - name: coder
 `
 
 func testFamilies(t *testing.T) *familyList {
@@ -91,17 +93,19 @@ func TestResolveProductLine(t *testing.T) {
 		{"codestral-embed", "mistral", "codestral", "codestral", false}, // alias prefix: the alias is the candidate
 		{"o-mini", "gpt", "o-mini", "o", false},                         // line alias
 		{"o3-mini", "gpt", "o", "o", false},                             // alias + digit
-		{"qwen3.6", "qwen", "3.6", "", false},                           // version, not a line
-		{"glm.5", "glm", "5", "", false},                                // version after "."
+		{"qwen3.6", "qwen", "", "", false},                              // version, not a line
+		{"qwen3-coder", "qwen", "coder", "coder", false},                // version glued to the family dropped
+		{"qwen2.5-coder", "qwen", "coder", "coder", false},              // dotted version dropped
+		{"glm.5", "glm", "", "", false},                                 // version after "."
 		{"claude-haiku", "claude", "haiku", "", true},                   // no such line
 		{"gemini-ultra-x", "gemini", "ultra-x", "", true},               // no prefix matches either
-		{"chatgpt-4o", "gpt", "chatgpt", "", true},                      // alias that is not a line
-		{"command-r", "command", "r", "", true},                         // family without lines
+		{"chatgpt-4o", "gpt", "chatgpt", "", false},                     // family-only alias: no line, nothing to report
+		{"command-r", "command", "r", "", false},                        // family declares no lines
 		{"mystery", "", "", "", false},                                  // unmapped family, not a line miss
 	} {
 		family, candidate := f.resolve(tc.in)
 		line := f.line(family, candidate)
-		unmapped := line == "" && candidate != "" && !isVersion(candidate)
+		unmapped := f.lineMiss(family, candidate, line)
 		if family != tc.family || candidate != tc.candidate || line != tc.line || unmapped != tc.unmapped {
 			t.Errorf("%q: family=%q candidate=%q line=%q unmapped=%v, want %q %q %q %v",
 				tc.in, family, candidate, line, unmapped, tc.family, tc.candidate, tc.line, tc.unmapped)

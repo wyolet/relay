@@ -149,7 +149,7 @@ func Translate(providers []MDProvider, o Opts) (*TranslateResult, error) {
 				switch {
 				case family == "":
 					r.UnmappedFamilies = append(r.UnmappedFamilies, UnmappedFamily{Provider: p.ID, Model: base, Value: pm.Family})
-				case line == "" && lineCandidate != "" && !isVersion(lineCandidate):
+				case o.Families.lineMiss(family, lineCandidate, line):
 					r.UnmappedLines = append(r.UnmappedLines, UnmappedLine{Provider: p.ID, Model: base, Value: pm.Family})
 				}
 			}
