@@ -148,6 +148,8 @@ Re-seeding is layered so your changes survive:
   your overrides stay pinned.
 - Resources you created yourself are never touched.
 
+A catalog row the new release no longer ships, such as a retired tier policy and its rate limit or a removed model, is not deleted: host keys, relay keys and bindings that point at it keep working. The upgrade sets `metadata.catalogDetachedAt` on it, and from then on the row is governed as yours: you can edit or delete it without changing the `governance:*` settings. Look for the field on API reads to find these rows and decide whether to keep, repoint or delete them. If a later release ships a row with the same name again, the upgrade clears the field and updates the row, unless you edited it, in which case it stays yours. Only a `RELAY_CATALOG_VERSION` upgrade sets or clears the field; `POST /api/apply` and API edits leave it as it is.
+
 If the download fails and the database already has a catalog, Relay logs the
 failure and keeps serving the existing data — a registry outage never blocks
 boot. Use `RELAY_CATALOG_URL` to fetch from a mirror in airgapped
