@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // usageCapture is a lifecycle.Collector handing each finalized request's usage event to the test.
@@ -116,6 +117,58 @@ func TestRun_ExhaustedErrorStatusIsAnUpstreamError(t *testing.T) {
 		ev := events.next(t)
 		if ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream {
 			t.Errorf("status %d: event status=%d kind=%q", status, ev.Status, ev.ErrorKind)
+		}
+	}
+}
+
+// The usage event names the key the request used on every path: a stream
+// session builds its row before post-flight runs, and a failure never reaches it.
+func TestRun_UsageRecordsTheHostKeyOnEveryPath(t *testing.T) {
+	completed := string(v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r","usage":{"input":3,"output":2}}`)}.Bytes())
+	streamOK := func() *http.Response {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(completed))}
+	}
+	cases := []struct {
+		name    string
+		stream  bool
+		resp    func() *http.Response
+		retry   bool
+		wantErr bool
+	}{
+		{name: "streamed success", stream: true, resp: streamOK},
+		{name: "streamed upstream error", stream: true, resp: func() *http.Response { return errorResp(http.StatusBadRequest) }},
+		{name: "buffered upstream error", resp: func() *http.Response { return errorResp(http.StatusBadRequest) }},
+		{name: "keys exhausted", resp: func() *http.Response { return errorResp(http.StatusInternalServerError) }, retry: true, wantErr: true},
+	}
+	for _, tc := range cases {
+		reg, events := usageRegistry()
+		p := newPipeline()
+		p.Lifecycle = reg
+		adp := &fakeAdapter{callFn: func(context.Context, string, string, []byte, http.Header) (*http.Response, error) {
+			return tc.resp(), nil
+		}}
+		if tc.retry {
+			adp.retryFn = func(*http.Response) (bool, keypool.FailureKind, time.Duration) {
+				return true, keypool.FailureServerError, 0
+			}
+		}
+		lc := lifecycle.NewContext("req", "pipeline", time.Now())
+		lc.Translator = identityTranslator{}
+		res, err := p.Run(context.Background(), &pipeline.Request{
+			Adapter:   adp,
+			Keys:      []*hostkey.HostKey{makeKey("key-hash", "sk")},
+			Policy:    makePolicy(),
+			Stream:    tc.stream,
+			Lifecycle: lc,
+		})
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("%s: Run err = %v, want error %v", tc.name, err, tc.wantErr)
+		}
+		if res != nil {
+			drainResult(t, res)
+		}
+		if ev := events.next(t); ev.HostKeyID != "key-hash" {
+			t.Errorf("%s: host_key_id = %q, want key-hash", tc.name, ev.HostKeyID)
 		}
 	}
 }

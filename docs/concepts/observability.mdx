@@ -34,7 +34,7 @@ All the usage endpoints share the same filter parameters: `since` (default
 / `ws` / `batch` / `otlp`); `finish_reason`, `error_kind`; `streamed` and `error`
 (`true`/`false`); `attempts_min`, `duration_ms_min`/`max`,
 `ttft_ms_min`/`max`; `tag` (`key:value`, repeatable); `q` (free-text
-substring); and `request_id` / `relay_key_hash` for a single event.
+substring); and `request_id` / `relay_key_hash` for a single event. `host_key_id` is a hash of the upstream credential's value, not the host key's id, so a rotated key appears as a new value; it names the key the request last tried, also on failed and streamed requests.
 
 `GET /logs?count=true` also returns how many records the filters match across all pages, ignoring `cursor` and `limit`: `total` counts up to 10,000, and `total_capped` is `true` when more match, in which case `total` is 10,000. Without `count=true` neither field is present.
 

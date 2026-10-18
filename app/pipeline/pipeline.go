@@ -253,6 +253,9 @@ loop:
 		}
 		if req.Lifecycle != nil {
 			req.Lifecycle.Attempts = attempts
+			// Stamped before the call: a stream session builds its usage row at
+			// stream end, before post-flight runs, and a failure never reaches it.
+			req.Lifecycle.HostKeyID = acq.KeyHash()
 		}
 
 		// An OAuth-kind credential authenticates differently upstream (Bearer +
@@ -647,7 +650,6 @@ func (p *Pipeline) runPostFlight(
 	// Finalize before the commits: usage/payload hooks need the response body.
 	// lc carries persistent identity; the event carries this-request's outcome.
 	if p.Lifecycle != nil && req.Lifecycle != nil {
-		req.Lifecycle.HostKeyID = acq.KeyHash()
 		p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
 			Status:       status,
 			ResponseBody: body,
