@@ -153,4 +153,6 @@ A catalog row the new release no longer ships, such as a retired tier policy and
 If the download fails and the database already has a catalog, Relay logs the
 failure and keeps serving the existing data — a registry outage never blocks
 boot. Use `RELAY_CATALOG_URL` to fetch from a mirror in airgapped
-environments.
+environments. [Catalog server](/reference/catalog-server) describes the HTTP
+layout releases are served from, how to point relay and the Go SDK at a server
+that serves it, and how to run one.
