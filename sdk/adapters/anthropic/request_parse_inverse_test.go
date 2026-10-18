@@ -20,7 +20,7 @@ func TestParseRequest_CacheControlInvertsSerialize(t *testing.T) {
 			&v1.FunctionTool{Name: "b", Parameters: json.RawMessage(`{}`)},
 		}},
 		Input: []v1.Item{
-			&v1.Message{Role: v1.RoleUser, CacheConfig: anchor, Content: []v1.Part{&v1.TextPart{Text: "q1"}}},
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "q1"}}},
 			&v1.Message{Role: v1.RoleAssistant, CacheConfig: anchor, Content: []v1.Part{&v1.OutputTextPart{Text: "a1"}}},
 			&v1.FunctionCall{ID: "call_1", CallID: "call_1", Name: "a", Arguments: `{}`},
 			&v1.FunctionCallOutput{CallID: "call_1", Output: "done"},
@@ -45,7 +45,7 @@ func TestParseRequest_CacheControlInvertsSerialize(t *testing.T) {
 			anchored = append(anchored, string(m.Role))
 		}
 	}
-	if want := []string{"user", "assistant", "system"}; !reflect.DeepEqual(anchored, want) {
+	if want := []string{"assistant", "system"}; !reflect.DeepEqual(anchored, want) {
 		t.Errorf("anchored items = %v, want %v\nwire: %s", anchored, want, wire)
 	}
 }

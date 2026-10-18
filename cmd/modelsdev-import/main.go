@@ -12,6 +12,8 @@
 // allowlist (exact name, alias, or lineage prefix); models with no match are
 // left without a family and listed on stderr for hand curation.
 //
+// spec.productLine is the matched family alias, or the rest of the value after the family name, looked up in that family's lines; a value naming no listed line leaves it empty and is listed on stderr the same way.
+//
 // Usage:
 //
 //	modelsdev-import -out ../relay-catalog/data
@@ -142,6 +144,9 @@ func main() {
 	}
 	for _, u := range result.UnmappedFamilies {
 		fmt.Fprintf(os.Stderr, "  unmapped family: %s/%s (models.dev family %q) — set spec.family by hand\n", u.Provider, u.Model, u.Value)
+	}
+	for _, u := range result.UnmappedLines {
+		fmt.Fprintf(os.Stderr, "  unmapped product line: %s/%s (models.dev family %q) — set spec.productLine by hand\n", u.Provider, u.Model, u.Value)
 	}
 }
 

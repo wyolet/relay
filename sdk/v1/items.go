@@ -81,12 +81,13 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 // ProviderData carries vendor-specific opaque payloads for same-vendor
 // round-trip fidelity. Customers never construct it.
 type FunctionCall struct {
-	ID           string          `json:"id,omitempty"`
-	CallID       string          `json:"call_id"`
-	Name         string          `json:"name"`
-	Arguments    string          `json:"arguments"` // JSON string
-	Status       Status          `json:"status,omitempty"`
-	ProviderData json.RawMessage `json:"provider_data,omitempty"`
+	ID           string           `json:"id,omitempty"`
+	CallID       string           `json:"call_id"`
+	Name         string           `json:"name"`
+	Arguments    string           `json:"arguments"` // JSON string
+	Status       Status           `json:"status,omitempty"`
+	CacheConfig  *ItemCacheConfig `json:"cache_config,omitempty"`
+	ProviderData json.RawMessage  `json:"provider_data,omitempty"`
 }
 
 func (*FunctionCall) isItem()            {}
@@ -94,13 +95,14 @@ func (*FunctionCall) ItemType() ItemType { return ItemTypeFunctionCall }
 
 func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type         ItemType        `json:"type"`
-		ID           string          `json:"id,omitempty"`
-		CallID       string          `json:"call_id"`
-		Name         string          `json:"name"`
-		Arguments    string          `json:"arguments"`
-		Status       Status          `json:"status,omitempty"`
-		ProviderData json.RawMessage `json:"provider_data,omitempty"`
+		Type         ItemType         `json:"type"`
+		ID           string           `json:"id,omitempty"`
+		CallID       string           `json:"call_id"`
+		Name         string           `json:"name"`
+		Arguments    string           `json:"arguments"`
+		Status       Status           `json:"status,omitempty"`
+		CacheConfig  *ItemCacheConfig `json:"cache_config,omitempty"`
+		ProviderData json.RawMessage  `json:"provider_data,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:         ItemTypeFunctionCall,
@@ -109,6 +111,7 @@ func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 		Name:         f.Name,
 		Arguments:    f.Arguments,
 		Status:       f.Status,
+		CacheConfig:  f.CacheConfig,
 		ProviderData: f.ProviderData,
 	})
 }
@@ -116,9 +119,10 @@ func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 // FunctionCallOutput is an input item that delivers the result of a tool call.
 // Exactly one of Output (string) or Content ([]Part) is set on a valid item.
 type FunctionCallOutput struct {
-	CallID  string `json:"call_id"`
-	Output  string `json:"-"` // string form
-	Content []Part `json:"-"` // array form; mutually exclusive with Output
+	CallID      string           `json:"call_id"`
+	Output      string           `json:"-"` // string form
+	Content     []Part           `json:"-"` // array form; mutually exclusive with Output
+	CacheConfig *ItemCacheConfig `json:"cache_config,omitempty"`
 }
 
 func (*FunctionCallOutput) isItem()            {}
@@ -126,29 +130,33 @@ func (*FunctionCallOutput) ItemType() ItemType { return ItemTypeFunctionCallOutp
 
 func (f *FunctionCallOutput) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type    ItemType `json:"type"`
-		CallID  string   `json:"call_id"`
-		Output  string   `json:"output,omitempty"`
-		Content []Part   `json:"content,omitempty"`
+		Type        ItemType         `json:"type"`
+		CallID      string           `json:"call_id"`
+		Output      string           `json:"output,omitempty"`
+		Content     []Part           `json:"content,omitempty"`
+		CacheConfig *ItemCacheConfig `json:"cache_config,omitempty"`
 	}
 	return json.Marshal(wire{
-		Type:    ItemTypeFunctionCallOutput,
-		CallID:  f.CallID,
-		Output:  f.Output,
-		Content: f.Content,
+		Type:        ItemTypeFunctionCallOutput,
+		CallID:      f.CallID,
+		Output:      f.Output,
+		Content:     f.Content,
+		CacheConfig: f.CacheConfig,
 	})
 }
 
 func (f *FunctionCallOutput) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		CallID  string          `json:"call_id"`
-		Output  json.RawMessage `json:"output"`
-		Content json.RawMessage `json:"content"`
+		CallID      string           `json:"call_id"`
+		Output      json.RawMessage  `json:"output"`
+		Content     json.RawMessage  `json:"content"`
+		CacheConfig *ItemCacheConfig `json:"cache_config"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	f.CallID = raw.CallID
+	f.CacheConfig = raw.CacheConfig
 	if len(raw.Output) > 0 {
 		if err := json.Unmarshal(raw.Output, &f.Output); err != nil {
 			return fmt.Errorf("function_call_output.output: %w", err)
