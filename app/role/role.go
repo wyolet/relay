@@ -24,16 +24,16 @@ var Kinds = []string{
 	"*", "audit", "debug", "groups", "host-bindings", "host-keys", "hosts",
 	"keys", "license", "logs", "master-key", "models", "policies",
 	"policy-bindings", "pricings", "projects", "providers", "rate-limits",
-	"role-bindings", "roles", "scim-clients", "service-accounts", "settings", "system",
-	"teams", "tokens", "usage", "users",
+	"role-bindings", "roles", "scim-clients", "secret-keys", "service-accounts", "settings",
+	"system", "teams", "tokens", "usage", "users",
 }
 
 // Verbs is the closed set a rule may name. Wider than CRUD because the
 // special endpoints (rotate, health, mint, …) need names of their own.
 var Verbs = []string{
-	"*", "apply", "attach", "create", "delete", "detach", "generate", "get",
-	"health", "list", "mint", "read", "reload", "revoke", "rotate", "snapshot",
-	"update",
+	"*", "apply", "attach", "create", "delete", "destroy", "detach", "generate",
+	"get", "health", "list", "mint", "read", "reload", "revoke", "rewrap", "rotate",
+	"snapshot", "update",
 }
 
 func init() {

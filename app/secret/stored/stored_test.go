@@ -156,7 +156,7 @@ func TestNewRefusesDuplicateMasterKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Ring(context.Background()); !errors.Is(err, errNoMasterKey) {
+	if _, err := b.Ring(context.Background()); !errors.Is(err, ErrNoMasterKey) {
 		t.Fatalf("no master key: %v", err)
 	}
 }

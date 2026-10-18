@@ -63,6 +63,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		RotateTokenKey: func(ctx context.Context) error {
 			return rotateTokenSigningKey(ctx, st.Pool(), stores, cfg.MasterKey, tokenSigner, tokenVerifier)
 		},
+		SecretKeys:     stores.Stored,
 		Users:          usersStore,
 		Sessions:       sessMgr,
 		AdminToken:     cfg.AdminToken,

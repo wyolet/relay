@@ -112,6 +112,7 @@ func mountDeps(t *testing.T) Deps {
 		Sessions:      session.New(kvStore, false),
 		TokenSigner:   &TokenSigner{},
 		TokenDenylist: fakeDenylist{},
+		SecretKeys:    sec.Stored,
 		AdminToken:    "test-admin-token",
 		Authz:         audit.Authorizer{Inner: authz.AlwaysAllowAuthenticated{}, Snap: cat.Current},
 		Catalog:       cat,
