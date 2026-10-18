@@ -1,6 +1,6 @@
 // Package aws resolves secret.KindAWS refs by fetching from AWS Secrets
 // Manager. SigV4 signing uses only the Go standard library (no AWS SDK).
-// Fetch-only: plaintext is held in memory, never written to Postgres.
+// Fetch-only: plaintext is held in memory, never written back to any store.
 package aws
 
 import (
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/secret"
+	cloudaws "github.com/wyolet/relay/secret/cloud/aws"
 )
 
 const (
@@ -27,11 +28,7 @@ const (
 )
 
 // Credentials are static AWS API keys (no instance profile / SSO chain).
-type Credentials struct {
-	AccessKeyID     string
-	SecretAccessKey string
-	SessionToken    string
-}
+type Credentials = cloudaws.Credentials
 
 // Config holds region and credentials for Secrets Manager fetch-only resolution.
 type Config struct {
@@ -155,7 +152,7 @@ func (r *Resolver) getSecretValue(ctx context.Context, secretID string) ([]byte,
 		now = r.cfg.Now
 	}
 	req.Host = signHost
-	if err := signRequest(req, body, r.cfg.Credentials, r.cfg.Region, serviceName, now()); err != nil {
+	if err := cloudaws.SignRequest(req, body, r.cfg.Credentials, r.cfg.Region, serviceName, now()); err != nil {
 		return nil, err
 	}
 

@@ -1,7 +1,7 @@
 // Package azure resolves secret.KindAzure refs by fetching from Azure Key Vault.
 // Auth uses Entra ID client-credentials (or optional managed-identity IMDS) and
 // only the Go standard library. Fetch-only: plaintext is held in memory, never
-// written to Postgres.
+// written back to any store.
 package azure
 
 import (
@@ -13,14 +13,15 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/wyolet/relay/secret"
+	cloudazure "github.com/wyolet/relay/secret/cloud/azure"
 )
 
 const (
 	apiVersion    = "2025-07-01"
+	vaultResource = "https://vault.azure.net"
 	defaultClient = 30 * time.Second
 )
 
@@ -69,18 +70,26 @@ func ConfigFromEnv() (Config, error) {
 
 // Resolver fetches secrets from Azure Key Vault (KindAzure only).
 type Resolver struct {
-	cfg Config
-
-	tokenMu     sync.Mutex
-	cachedToken string
-	cachedExp   time.Time
+	cfg   Config
+	token *cloudazure.TokenSource
 }
 
 var _ secret.Resolver = (*Resolver)(nil)
 
 // New returns a Resolver for secret.KindAzure refs.
 func New(cfg Config) *Resolver {
-	return &Resolver{cfg: cfg}
+	ts := cloudazure.NewTokenSource(cloudazure.Config{
+		TenantID:           cfg.TenantID,
+		ClientID:           cfg.ClientID,
+		ClientSecret:       cfg.ClientSecret,
+		UseManagedIdentity: cfg.UseManagedIdentity,
+		Resource:           vaultResource,
+		HTTPClient:         cfg.HTTPClient,
+		TokenEndpoint:      cfg.TokenEndpoint,
+		IMDSEndpoint:       cfg.IMDSEndpoint,
+		Now:                cfg.Now,
+	})
+	return &Resolver{cfg: cfg, token: ts}
 }
 
 // Resolve returns the secret value for ref.Path = "<secretName>[/<version>]".
@@ -93,7 +102,7 @@ func (r *Resolver) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	token, err := r.accessToken(ctx)
+	token, err := r.token.AccessToken(ctx)
 	if err != nil {
 		return nil, err
 	}

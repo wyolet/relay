@@ -14,6 +14,13 @@ import (
 	"github.com/wyolet/relay/secret"
 )
 
+// tokenResponse is the token body the fake Entra and IMDS endpoints return.
+type tokenResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	TokenType   string `json:"token_type"`
+}
+
 func TestParsePath(t *testing.T) {
 	name, ver, err := parsePath("openai-key/abc123")
 	if err != nil || name != "openai-key" || ver != "abc123" {
@@ -73,7 +80,7 @@ func TestResolver_PlainSecret(t *testing.T) {
 		}
 		if err := r.ParseForm(); err != nil ||
 			r.Form.Get("grant_type") != "client_credentials" ||
-			r.Form.Get("scope") != vaultScope {
+			r.Form.Get("scope") != vaultResource+"/.default" {
 			http.Error(w, "bad form", http.StatusBadRequest)
 			return
 		}

@@ -1,3 +1,4 @@
+// Package gcp obtains Google Cloud OAuth access tokens (cloud-platform scope) from a service-account key or the metadata server, over the Go standard library (no Google SDK), for any Google API client in this module. Out of scope: external-account / workload identity federation and calling any Google service.
 package gcp
 
 import (
@@ -43,13 +44,37 @@ type tokenResponse struct {
 	ErrorDesc   string `json:"error_description"`
 }
 
-type tokenSource struct {
+// Config selects how a TokenSource authenticates. ServiceAccountJSON and UseMetadataServer are mutually exclusive; with neither set AccessToken errors.
+type Config struct {
+	ServiceAccountJSON []byte
+	UseMetadataServer  bool
+	// HTTPClient is optional; defaults to http.DefaultClient.
+	HTTPClient *http.Client
+	// TokenEndpoint and MetadataEndpoint override the Google URLs (tests).
+	TokenEndpoint    string
+	MetadataEndpoint string
+	Now              func() time.Time
+}
+
+// TokenSource returns a cached access token, fetching a new one a minute before the cached one expires. Safe for concurrent use.
+type TokenSource struct {
 	cfg Config
 	sa  *serviceAccount
 
 	mu     sync.Mutex
 	token  string
 	expiry time.Time
+}
+
+// NewTokenSource builds a TokenSource. A service-account JSON that does not parse is not an error here; AccessToken then reports the credentials as not configured.
+func NewTokenSource(cfg Config) *TokenSource {
+	ts := &TokenSource{cfg: cfg}
+	if len(cfg.ServiceAccountJSON) > 0 {
+		if sa, err := parseServiceAccountJSON(cfg.ServiceAccountJSON); err == nil {
+			ts.sa = &sa
+		}
+	}
+	return ts
 }
 
 func parseServiceAccountJSON(raw []byte) (serviceAccount, error) {
@@ -132,7 +157,8 @@ func buildJWTAssertion(sa serviceAccount, now time.Time) (string, error) {
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
-func (ts *tokenSource) accessToken(ctx context.Context) (string, error) {
+// AccessToken returns a bearer token for Google APIs.
+func (ts *TokenSource) AccessToken(ctx context.Context) (string, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -153,7 +179,7 @@ func (ts *tokenSource) accessToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func (ts *tokenSource) fetchToken(ctx context.Context, now time.Time) (string, time.Time, error) {
+func (ts *TokenSource) fetchToken(ctx context.Context, now time.Time) (string, time.Time, error) {
 	if ts.cfg.UseMetadataServer {
 		return ts.fetchMetadataToken(ctx)
 	}
@@ -167,7 +193,7 @@ func (ts *tokenSource) fetchToken(ctx context.Context, now time.Time) (string, t
 	return ts.exchangeAssertion(ctx, assertion)
 }
 
-func (ts *tokenSource) fetchMetadataToken(ctx context.Context) (string, time.Time, error) {
+func (ts *TokenSource) fetchMetadataToken(ctx context.Context) (string, time.Time, error) {
 	endpoint := defaultMetadataURL
 	if ts.cfg.MetadataEndpoint != "" {
 		endpoint = ts.cfg.MetadataEndpoint
@@ -211,7 +237,7 @@ func (ts *tokenSource) fetchMetadataToken(ctx context.Context) (string, time.Tim
 	return out.AccessToken, time.Now().Add(time.Duration(expiresIn) * time.Second), nil
 }
 
-func (ts *tokenSource) exchangeAssertion(ctx context.Context, assertion string) (string, time.Time, error) {
+func (ts *TokenSource) exchangeAssertion(ctx context.Context, assertion string) (string, time.Time, error) {
 	endpoint := defaultTokenURL
 	if ts.cfg.TokenEndpoint != "" {
 		endpoint = ts.cfg.TokenEndpoint

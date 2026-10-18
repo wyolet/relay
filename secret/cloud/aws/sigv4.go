@@ -1,3 +1,4 @@
+// Package aws holds AWS credentials and the SigV4 request signer, written over the Go standard library (no AWS SDK) so any AWS API client in this module can authenticate with them. Out of scope: the credential chain (instance profile, SSO, web identity) and calling any AWS service.
 package aws
 
 import (
@@ -13,9 +14,16 @@ import (
 
 const algorithm = "AWS4-HMAC-SHA256"
 
-// signRequest adds SigV4 Authorization and required AWS headers to req. body is
+// Credentials are static AWS API keys (no instance profile / SSO chain).
+type Credentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+// SignRequest adds SigV4 Authorization and required AWS headers to req. body is
 // the exact payload bytes used for the x-amz-content-sha256 hash.
-func signRequest(req *http.Request, body []byte, creds Credentials, region, service string, now time.Time) error {
+func SignRequest(req *http.Request, body []byte, creds Credentials, region, service string, now time.Time) error {
 	if req.URL == nil {
 		return fmt.Errorf("secret/aws: request URL is nil")
 	}

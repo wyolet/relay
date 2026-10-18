@@ -1,6 +1,6 @@
 // Package gcp resolves secret.KindGCP refs by fetching from GCP Secret
 // Manager. Service-account auth uses only the Go standard library (no Google
-// SDK). Fetch-only: plaintext is held in memory, never written to Postgres.
+// SDK). Fetch-only: plaintext is held in memory, never written back to any store.
 package gcp
 
 import (
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/secret"
+	cloudgcp "github.com/wyolet/relay/secret/cloud/gcp"
 )
 
 const (
@@ -93,19 +94,21 @@ func ConfigFromEnv() (Config, error) {
 // Resolver fetches secrets from GCP Secret Manager (KindGCP only).
 type Resolver struct {
 	cfg   Config
-	token *tokenSource
+	token *cloudgcp.TokenSource
 }
 
 var _ secret.Resolver = (*Resolver)(nil)
 
 // New returns a Resolver for secret.KindGCP refs.
 func New(cfg Config) *Resolver {
-	ts := &tokenSource{cfg: cfg}
-	if len(cfg.ServiceAccountJSON) > 0 {
-		if sa, err := parseServiceAccountJSON(cfg.ServiceAccountJSON); err == nil {
-			ts.sa = &sa
-		}
-	}
+	ts := cloudgcp.NewTokenSource(cloudgcp.Config{
+		ServiceAccountJSON: cfg.ServiceAccountJSON,
+		UseMetadataServer:  cfg.UseMetadataServer,
+		HTTPClient:         cfg.HTTPClient,
+		TokenEndpoint:      cfg.TokenEndpoint,
+		MetadataEndpoint:   cfg.MetadataEndpoint,
+		Now:                cfg.Now,
+	})
 	return &Resolver{cfg: cfg, token: ts}
 }
 
@@ -154,7 +157,7 @@ func (r *Resolver) accessSecret(ctx context.Context, secretName, version string)
 		return nil, fmt.Errorf("secret/gcp: project is not configured")
 	}
 
-	token, err := r.token.accessToken(ctx)
+	token, err := r.token.AccessToken(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -1,5 +1,7 @@
 // Package bitwarden resolves KindBitwarden secrets by fetching encrypted
 // vault data from Vaultwarden/Bitwarden and decrypting client-side.
+// Fetch-only: a background sync keeps decrypted items in memory; nothing is
+// written back to the vault or to any store.
 package bitwarden
 
 import (

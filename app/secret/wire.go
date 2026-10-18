@@ -8,11 +8,11 @@ import (
 
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
-	"github.com/wyolet/relay/pkg/secret/aws"
-	"github.com/wyolet/relay/pkg/secret/azure"
-	"github.com/wyolet/relay/pkg/secret/bitwarden"
-	"github.com/wyolet/relay/pkg/secret/gcp"
 	"github.com/wyolet/relay/secret"
+	"github.com/wyolet/relay/secret/backend/aws"
+	"github.com/wyolet/relay/secret/backend/azure"
+	"github.com/wyolet/relay/secret/backend/bitwarden"
+	"github.com/wyolet/relay/secret/backend/gcp"
 )
 
 // Wire builds the relay's secret-resolution stack over Postgres: the
@@ -75,5 +75,6 @@ func bitwardenConfigFromEnv() (bitwarden.Config, bool) {
 		ClientSecret:       os.Getenv("BW_CLIENT_SECRET"),
 		SyncInterval:       interval,
 		InsecureSkipVerify: os.Getenv("BW_INSECURE_SKIP_TLS_VERIFY") == "1",
+		DeviceName:         "relay-bitwarden",
 	}, true
 }

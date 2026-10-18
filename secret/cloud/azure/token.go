@@ -1,3 +1,4 @@
+// Package azure obtains Microsoft Entra ID access tokens for an Azure resource through client credentials or managed identity (IMDS), over the Go standard library (no Azure SDK), for any Azure API client in this module. Out of scope: workload identity federation, certificate credentials and calling any Azure service.
 package azure
 
 import (
@@ -8,16 +9,47 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	vaultScope       = "https://vault.azure.net/.default"
-	vaultResource    = "https://vault.azure.net"
 	tokenRefreshSkew = 60 * time.Second
 	imdsAPIVersion   = "2019-08-01"
 	defaultIMDS      = "http://169.254.169.254/metadata/identity/oauth2/token"
+	defaultClient    = 30 * time.Second
 )
+
+// Config selects how a TokenSource authenticates and for which resource. Secret fields come from the caller's configuration, never hard-coded.
+type Config struct {
+	TenantID           string
+	ClientID           string
+	ClientSecret       string
+	UseManagedIdentity bool
+	// Resource is the Azure resource the token is for, e.g. "https://vault.azure.net"; client credentials request the "<Resource>/.default" scope.
+	Resource string
+	// HTTPClient is optional; defaults to a 30s timeout client.
+	HTTPClient *http.Client
+	// TokenEndpoint overrides the Entra token URL (tests).
+	TokenEndpoint string
+	// IMDSEndpoint overrides the managed-identity token URL (tests).
+	IMDSEndpoint string
+	Now          func() time.Time
+}
+
+// TokenSource returns a cached access token, fetching a new one a minute before the cached one expires. Safe for concurrent use.
+type TokenSource struct {
+	cfg Config
+
+	mu          sync.Mutex
+	cachedToken string
+	cachedExp   time.Time
+}
+
+// NewTokenSource builds a TokenSource; nothing is fetched until AccessToken.
+func NewTokenSource(cfg Config) *TokenSource {
+	return &TokenSource{cfg: cfg}
+}
 
 type tokenResponse struct {
 	AccessToken string `json:"access_token"`
@@ -30,9 +62,10 @@ type tokenError struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-func (r *Resolver) accessToken(ctx context.Context) (string, error) {
-	r.tokenMu.Lock()
-	defer r.tokenMu.Unlock()
+// AccessToken returns a bearer token for the configured resource.
+func (r *TokenSource) AccessToken(ctx context.Context) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	now := time.Now
 	if r.cfg.Now != nil {
@@ -65,7 +98,7 @@ func (r *Resolver) accessToken(ctx context.Context) (string, error) {
 	return tok, nil
 }
 
-func (r *Resolver) fetchClientCredentialsToken(ctx context.Context) (string, int, error) {
+func (r *TokenSource) fetchClientCredentialsToken(ctx context.Context) (string, int, error) {
 	if strings.TrimSpace(r.cfg.TenantID) == "" {
 		return "", 0, fmt.Errorf("secret/azure: tenant is not configured")
 	}
@@ -82,13 +115,13 @@ func (r *Resolver) fetchClientCredentialsToken(ctx context.Context) (string, int
 		"grant_type":    {"client_credentials"},
 		"client_id":     {r.cfg.ClientID},
 		"client_secret": {r.cfg.ClientSecret},
-		"scope":         {vaultScope},
+		"scope":         {r.cfg.Resource + "/.default"},
 	}
 
 	return r.postToken(ctx, tokenURL, form.Encode(), "application/x-www-form-urlencoded", nil)
 }
 
-func (r *Resolver) fetchManagedIdentityToken(ctx context.Context) (string, int, error) {
+func (r *TokenSource) fetchManagedIdentityToken(ctx context.Context) (string, int, error) {
 	tokenURL := r.cfg.IMDSEndpoint
 	if tokenURL == "" {
 		u, err := url.Parse(defaultIMDS)
@@ -97,7 +130,7 @@ func (r *Resolver) fetchManagedIdentityToken(ctx context.Context) (string, int, 
 		}
 		q := u.Query()
 		q.Set("api-version", imdsAPIVersion)
-		q.Set("resource", vaultResource)
+		q.Set("resource", r.cfg.Resource)
 		u.RawQuery = q.Encode()
 		tokenURL = u.String()
 	}
@@ -105,11 +138,11 @@ func (r *Resolver) fetchManagedIdentityToken(ctx context.Context) (string, int, 
 	return r.requestToken(ctx, http.MethodGet, tokenURL, "", "", map[string]string{"Metadata": "true"})
 }
 
-func (r *Resolver) postToken(ctx context.Context, tokenURL, body, contentType string, extraHeaders map[string]string) (string, int, error) {
+func (r *TokenSource) postToken(ctx context.Context, tokenURL, body, contentType string, extraHeaders map[string]string) (string, int, error) {
 	return r.requestToken(ctx, http.MethodPost, tokenURL, body, contentType, extraHeaders)
 }
 
-func (r *Resolver) requestToken(ctx context.Context, method, tokenURL, body, contentType string, extraHeaders map[string]string) (string, int, error) {
+func (r *TokenSource) requestToken(ctx context.Context, method, tokenURL, body, contentType string, extraHeaders map[string]string) (string, int, error) {
 	var bodyReader io.Reader
 	if body != "" {
 		bodyReader = strings.NewReader(body)
@@ -150,6 +183,13 @@ func (r *Resolver) requestToken(ctx context.Context, method, tokenURL, body, con
 		return "", 0, fmt.Errorf("secret/azure: token response missing expires_in")
 	}
 	return out.AccessToken, out.ExpiresIn, nil
+}
+
+func (r *TokenSource) httpClient() *http.Client {
+	if r.cfg.HTTPClient != nil {
+		return r.cfg.HTTPClient
+	}
+	return &http.Client{Timeout: defaultClient}
 }
 
 func tokenErrorFromBody(status int, body []byte) error {
