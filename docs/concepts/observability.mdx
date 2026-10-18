@@ -58,6 +58,13 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/usage/summary?model_id=<id>&since=24h"
 ```
 
+`summary` also takes `compare=previous` (the only accepted value) to put each row next to the same group over the window of equal length just before the requested one. Each row gains a `previous` object with `requests`, `error_count`, `errors_4xx`, `errors_5xx`, `throttled`, `tokens`, `cost_nanos`, `unpriced`, `duration_ms` and `ttft_ms`, and the response gains `previous_from` and `previous_to`. The requested window is resolved once (`since` counts back from the time of the request, and an open `to` becomes that time); the previous window ends at its start, exclusive, so an event on that instant counts only in the requested window. Rows stay those of the requested window: a group with no traffic in the previous window has no `previous`, and a group seen only in the previous window has no row. A window without a start (`since=0s` and no `from`), or one that starts after it ends (`to` earlier than `since` reaches back), is rejected with `400`.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=model&since=7d&compare=previous"
+```
+
 ### Failed requests
 
 `error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above and is split into `errors_4xx` and `errors_5xx` (every status of 500 or above). `throttled` counts the 429s, which are also counted in `errors_4xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.

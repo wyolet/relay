@@ -634,6 +634,9 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	if !q.To.IsZero() {
 		add("ts <= $%d", q.To)
 	}
+	if !q.Before.IsZero() {
+		add("ts < $%d", q.Before)
+	}
 	if !q.CursorTS.IsZero() {
 		n++
 		c1 := n

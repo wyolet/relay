@@ -60,6 +60,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !q.To.IsZero() && ev.Timestamp.After(q.To) {
 		return false
 	}
+	if !q.Before.IsZero() && !ev.Timestamp.Before(q.Before) {
+		return false
+	}
 	// Keyset cursor: strictly older than (CursorTS, CursorID) under
 	// (ts DESC, request_id DESC).
 	if !q.CursorTS.IsZero() {

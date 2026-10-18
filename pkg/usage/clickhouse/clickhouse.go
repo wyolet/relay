@@ -536,6 +536,10 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		clauses = append(clauses, "ts <= ?")
 		args = append(args, q.To)
 	}
+	if !q.Before.IsZero() {
+		clauses = append(clauses, "ts < ?")
+		args = append(args, q.Before)
+	}
 	if !q.CursorTS.IsZero() {
 		clauses = append(clauses, "(ts, request_id) < (?, ?)")
 		args = append(args, q.CursorTS, q.CursorID)

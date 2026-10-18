@@ -45,6 +45,15 @@ var eventsCases = []eventsCase{
 		}(),
 		want: []string{"r03", "r02", "r01", "r00"},
 	},
+	{
+		name: "before is an exclusive upper bound",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.Before = at(45)
+			return q
+		}(),
+		want: []string{"r04", "r03", "r02", "r01", "r00"},
+	},
 }
 
 func runEvents(t *testing.T, r usage.Reader) {
