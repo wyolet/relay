@@ -248,6 +248,10 @@ jobs:
           jq -c 'select(.type == "system" and .subtype == "init") | {claude_code_version, model, tools, mcp_servers}' "$OUT"
           jq -s -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "no text"' "$OUT" | head -c 2000; echo
           jq -c 'select(.type == "result") | {subtype, is_error, num_turns, total_cost_usd}' "$OUT" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "permission denials:"
+          jq -c 'select(.type == "result") | .permission_denials[]? | {tool_name, tool_input}' "$OUT" | head -20 | cut -c1-300
+          echo "failed tool results:"
+          jq -c 'select(.type == "user") | .message.content[]? | select(.type == "tool_result" and .is_error == true) | .content' "$OUT" | head -10 | cut -c1-300
 
   # A PR opened with the workflow token starts no CI; the full tier dispatched
   # on its branch puts the required checks on its head commit.
