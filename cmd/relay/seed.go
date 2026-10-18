@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/wyolet/relay/app/manifest"
+	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
@@ -63,10 +64,14 @@ func runSeed(args []string) error {
 	}
 	defer st.Close()
 
+	sec, err := appsecret.Wire(st.Pool(), cfg.MasterKeys())
+	if err != nil {
+		return err
+	}
 	result, err := seed.Run(ctx, seed.Options{
 		Pool:       st.Pool(),
 		YAMLDir:    *from,
-		MasterKey:  cfg.MasterKey,
+		Secrets:    sec,
 		ClearDirty: *clearDirty,
 	})
 	if err != nil {

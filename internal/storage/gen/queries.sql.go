@@ -11,6 +11,79 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const allowLegacySecretWrite = `-- name: AllowLegacySecretWrite :exec
+SELECT set_config('relay.secret_legacy_write', 'on', true)
+`
+
+// AllowLegacySecretWrite lets the current transaction write legacy-shape
+// rows past the secret_values trigger; only the downgrade path calls it.
+func (q *Queries) AllowLegacySecretWrite(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, allowLegacySecretWrite)
+	return err
+}
+
+const countLegacySecretValues = `-- name: CountLegacySecretValues :one
+SELECT count(*) FROM secret_values WHERE dek_id IS NULL
+`
+
+func (q *Queries) CountLegacySecretValues(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLegacySecretValues)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSealedSecretValues = `-- name: CountSealedSecretValues :one
+SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL
+`
+
+func (q *Queries) CountSealedSecretValues(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSealedSecretValues)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSecretValuesByDataKey = `-- name: CountSecretValuesByDataKey :many
+SELECT dek_id, count(*) AS rows FROM secret_values WHERE dek_id IS NOT NULL GROUP BY dek_id
+`
+
+type CountSecretValuesByDataKeyRow struct {
+	DekID pgtype.UUID `db:"dek_id" json:"dek_id"`
+	Rows  int64       `db:"rows" json:"rows"`
+}
+
+func (q *Queries) CountSecretValuesByDataKey(ctx context.Context) ([]CountSecretValuesByDataKeyRow, error) {
+	rows, err := q.db.Query(ctx, countSecretValuesByDataKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountSecretValuesByDataKeyRow
+	for rows.Next() {
+		var i CountSecretValuesByDataKeyRow
+		if err := rows.Scan(&i.DekID, &i.Rows); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countSecretValuesUsingDataKey = `-- name: CountSecretValuesUsingDataKey :one
+SELECT count(*) FROM secret_values WHERE dek_id = $1
+`
+
+func (q *Queries) CountSecretValuesUsingDataKey(ctx context.Context, dekID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSecretValuesUsingDataKey, dekID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createBatch = `-- name: CreateBatch :exec
 
 INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items,
@@ -222,6 +295,24 @@ DELETE FROM settings WHERE section = $1
 
 func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 	_, err := q.db.Exec(ctx, deleteSetting, section)
+	return err
+}
+
+const demoteSecretDataKey = `-- name: DemoteSecretDataKey :exec
+UPDATE secret_data_keys SET state = 'decrypt', demoted_at = NOW(), updated_at = NOW() WHERE id = $1
+`
+
+func (q *Queries) DemoteSecretDataKey(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, demoteSecretDataKey, id)
+	return err
+}
+
+const destroySecretDataKey = `-- name: DestroySecretDataKey :exec
+UPDATE secret_data_keys SET state = 'destroyed', wrapped = NULL, updated_at = NOW() WHERE id = $1
+`
+
+func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, destroySecretDataKey, id)
 	return err
 }
 
@@ -539,6 +630,35 @@ func (q *Queries) GetPricingModels(ctx context.Context, pricingID string) ([]Pri
 	return items, nil
 }
 
+const getPrimarySecretDataKey = `-- name: GetPrimarySecretDataKey :one
+SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys WHERE scope = $1 AND state = 'primary'
+`
+
+type GetPrimarySecretDataKeyRow struct {
+	ID        pgtype.UUID        `db:"id" json:"id"`
+	Scope     string             `db:"scope" json:"scope"`
+	State     string             `db:"state" json:"state"`
+	KekID     []byte             `db:"kek_id" json:"kek_id"`
+	Wrapped   []byte             `db:"wrapped" json:"wrapped"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	DemotedAt pgtype.Timestamptz `db:"demoted_at" json:"demoted_at"`
+}
+
+func (q *Queries) GetPrimarySecretDataKey(ctx context.Context, scope string) (GetPrimarySecretDataKeyRow, error) {
+	row := q.db.QueryRow(ctx, getPrimarySecretDataKey, scope)
+	var i GetPrimarySecretDataKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.State,
+		&i.KekID,
+		&i.Wrapped,
+		&i.CreatedAt,
+		&i.DemotedAt,
+	)
+	return i, err
+}
+
 const getProvider = `-- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1
 `
@@ -683,22 +803,104 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 	return i, err
 }
 
+const getSecretDataKey = `-- name: GetSecretDataKey :one
+SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys WHERE id = $1
+`
+
+type GetSecretDataKeyRow struct {
+	ID        pgtype.UUID        `db:"id" json:"id"`
+	Scope     string             `db:"scope" json:"scope"`
+	State     string             `db:"state" json:"state"`
+	KekID     []byte             `db:"kek_id" json:"kek_id"`
+	Wrapped   []byte             `db:"wrapped" json:"wrapped"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	DemotedAt pgtype.Timestamptz `db:"demoted_at" json:"demoted_at"`
+}
+
+func (q *Queries) GetSecretDataKey(ctx context.Context, id pgtype.UUID) (GetSecretDataKeyRow, error) {
+	row := q.db.QueryRow(ctx, getSecretDataKey, id)
+	var i GetSecretDataKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.State,
+		&i.KekID,
+		&i.Wrapped,
+		&i.CreatedAt,
+		&i.DemotedAt,
+	)
+	return i, err
+}
+
+const getSecretKeyringTarget = `-- name: GetSecretKeyringTarget :one
+SELECT target_kek_id FROM secret_keyring WHERE singleton
+`
+
+func (q *Queries) GetSecretKeyringTarget(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getSecretKeyringTarget)
+	var target_kek_id []byte
+	err := row.Scan(&target_kek_id)
+	return target_kek_id, err
+}
+
 const getSecretValue = `-- name: GetSecretValue :one
 
-SELECT ciphertext, nonce, key_version FROM secret_values WHERE id = $1
+SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1
 `
 
 type GetSecretValueRow struct {
-	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
-	Nonce      []byte `db:"nonce" json:"nonce"`
-	KeyVersion int32  `db:"key_version" json:"key_version"`
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte      `db:"nonce" json:"nonce"`
+	Scope      pgtype.Text `db:"scope" json:"scope"`
+	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
 }
 
-// secret_values: generic stored-secret value store (pkg/secret "stored").
+// secret_values: generic stored-secret value store (app/secret). A sealed
+// row carries its scope and the data key that sealed it; a legacy row (dek_id
+// NULL) is AES-GCM under the master key with a separate nonce.
 func (q *Queries) GetSecretValue(ctx context.Context, id string) (GetSecretValueRow, error) {
 	row := q.db.QueryRow(ctx, getSecretValue, id)
 	var i GetSecretValueRow
-	err := row.Scan(&i.Ciphertext, &i.Nonce, &i.KeyVersion)
+	err := row.Scan(
+		&i.Ciphertext,
+		&i.Nonce,
+		&i.Scope,
+		&i.DekID,
+	)
+	return i, err
+}
+
+const getSecretValueOwner = `-- name: GetSecretValueOwner :one
+SELECT sv.scope,
+       sv.dek_id,
+       (s.id IS NOT NULL)::bool                          AS has_owner,
+       COALESCE(s.metadata->'owner'->>'kind', '')::text AS owner_kind,
+       COALESCE(s.metadata->'owner'->>'id', '')::text   AS owner_id
+FROM secret_values sv
+LEFT JOIN secrets s ON s.id = sv.id
+WHERE sv.id = $1
+`
+
+type GetSecretValueOwnerRow struct {
+	Scope     pgtype.Text `db:"scope" json:"scope"`
+	DekID     pgtype.UUID `db:"dek_id" json:"dek_id"`
+	HasOwner  bool        `db:"has_owner" json:"has_owner"`
+	OwnerKind string      `db:"owner_kind" json:"owner_kind"`
+	OwnerID   string      `db:"owner_id" json:"owner_id"`
+}
+
+// GetSecretValueOwner returns a row's scope and the owner of the host key
+// with the same id, which decides the scope of a legacy row.
+func (q *Queries) GetSecretValueOwner(ctx context.Context, id string) (GetSecretValueOwnerRow, error) {
+	row := q.db.QueryRow(ctx, getSecretValueOwner, id)
+	var i GetSecretValueOwnerRow
+	err := row.Scan(
+		&i.Scope,
+		&i.DekID,
+		&i.HasOwner,
+		&i.OwnerKind,
+		&i.OwnerID,
+	)
 	return i, err
 }
 
@@ -807,6 +1009,27 @@ type InsertPricingModelParams struct {
 
 func (q *Queries) InsertPricingModel(ctx context.Context, arg InsertPricingModelParams) error {
 	_, err := q.db.Exec(ctx, insertPricingModel, arg.PricingID, arg.ModelID, arg.Position)
+	return err
+}
+
+const insertSecretDataKey = `-- name: InsertSecretDataKey :exec
+INSERT INTO secret_data_keys (id, scope, state, kek_id, wrapped) VALUES ($1, $2, 'primary', $3, $4)
+`
+
+type InsertSecretDataKeyParams struct {
+	ID      pgtype.UUID `db:"id" json:"id"`
+	Scope   string      `db:"scope" json:"scope"`
+	KekID   []byte      `db:"kek_id" json:"kek_id"`
+	Wrapped []byte      `db:"wrapped" json:"wrapped"`
+}
+
+func (q *Queries) InsertSecretDataKey(ctx context.Context, arg InsertSecretDataKeyParams) error {
+	_, err := q.db.Exec(ctx, insertSecretDataKey,
+		arg.ID,
+		arg.Scope,
+		arg.KekID,
+		arg.Wrapped,
+	)
 	return err
 }
 
@@ -1731,31 +1954,78 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 	return items, nil
 }
 
-const listSecretValuesForRotation = `-- name: ListSecretValuesForRotation :many
-SELECT id, ciphertext, nonce, key_version FROM secret_values ORDER BY id
+const listSealedSecretValues = `-- name: ListSealedSecretValues :many
+SELECT id, ciphertext, scope FROM secret_values
+WHERE dek_id IS NOT NULL AND id > $1::text
+ORDER BY id
+LIMIT $2
 `
 
-type ListSecretValuesForRotationRow struct {
-	ID         string `db:"id" json:"id"`
-	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
-	Nonce      []byte `db:"nonce" json:"nonce"`
-	KeyVersion int32  `db:"key_version" json:"key_version"`
+type ListSealedSecretValuesParams struct {
+	After   string `db:"after" json:"after"`
+	MaxRows int32  `db:"max_rows" json:"max_rows"`
 }
 
-func (q *Queries) ListSecretValuesForRotation(ctx context.Context) ([]ListSecretValuesForRotationRow, error) {
-	rows, err := q.db.Query(ctx, listSecretValuesForRotation)
+type ListSealedSecretValuesRow struct {
+	ID         string      `db:"id" json:"id"`
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Scope      pgtype.Text `db:"scope" json:"scope"`
+}
+
+func (q *Queries) ListSealedSecretValues(ctx context.Context, arg ListSealedSecretValuesParams) ([]ListSealedSecretValuesRow, error) {
+	rows, err := q.db.Query(ctx, listSealedSecretValues, arg.After, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSecretValuesForRotationRow
+	var items []ListSealedSecretValuesRow
 	for rows.Next() {
-		var i ListSecretValuesForRotationRow
+		var i ListSealedSecretValuesRow
+		if err := rows.Scan(&i.ID, &i.Ciphertext, &i.Scope); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSecretDataKeys = `-- name: ListSecretDataKeys :many
+
+SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys ORDER BY created_at, id
+`
+
+type ListSecretDataKeysRow struct {
+	ID        pgtype.UUID        `db:"id" json:"id"`
+	Scope     string             `db:"scope" json:"scope"`
+	State     string             `db:"state" json:"state"`
+	KekID     []byte             `db:"kek_id" json:"kek_id"`
+	Wrapped   []byte             `db:"wrapped" json:"wrapped"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	DemotedAt pgtype.Timestamptz `db:"demoted_at" json:"demoted_at"`
+}
+
+// secret_data_keys / secret_keyring: the data keys and target KEK behind
+// app/secret's key ring.
+func (q *Queries) ListSecretDataKeys(ctx context.Context) ([]ListSecretDataKeysRow, error) {
+	rows, err := q.db.Query(ctx, listSecretDataKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSecretDataKeysRow
+	for rows.Next() {
+		var i ListSecretDataKeysRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Ciphertext,
-			&i.Nonce,
-			&i.KeyVersion,
+			&i.Scope,
+			&i.State,
+			&i.KekID,
+			&i.Wrapped,
+			&i.CreatedAt,
+			&i.DemotedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1837,6 +2107,70 @@ func (q *Queries) ListSettings(ctx context.Context) ([]Setting, error) {
 	for rows.Next() {
 		var i Setting
 		if err := rows.Scan(&i.Section, &i.Value, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleSecretValues = `-- name: ListStaleSecretValues :many
+SELECT sv.id,
+       sv.ciphertext,
+       sv.nonce,
+       sv.scope,
+       sv.dek_id,
+       (s.id IS NOT NULL)::bool                          AS has_owner,
+       COALESCE(s.metadata->'owner'->>'kind', '')::text AS owner_kind,
+       COALESCE(s.metadata->'owner'->>'id', '')::text   AS owner_id
+FROM secret_values sv
+LEFT JOIN secret_data_keys k ON k.id = sv.dek_id
+LEFT JOIN secrets s ON s.id = sv.id
+WHERE sv.id > $1::text AND (sv.dek_id IS NULL OR k.state <> 'primary')
+ORDER BY sv.id
+LIMIT $2
+`
+
+type ListStaleSecretValuesParams struct {
+	After   string `db:"after" json:"after"`
+	MaxRows int32  `db:"max_rows" json:"max_rows"`
+}
+
+type ListStaleSecretValuesRow struct {
+	ID         string      `db:"id" json:"id"`
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte      `db:"nonce" json:"nonce"`
+	Scope      pgtype.Text `db:"scope" json:"scope"`
+	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
+	HasOwner   bool        `db:"has_owner" json:"has_owner"`
+	OwnerKind  string      `db:"owner_kind" json:"owner_kind"`
+	OwnerID    string      `db:"owner_id" json:"owner_id"`
+}
+
+// ListStaleSecretValues pages through rows the rewriter should move: legacy
+// rows and rows under a data key that is no longer Primary.
+func (q *Queries) ListStaleSecretValues(ctx context.Context, arg ListStaleSecretValuesParams) ([]ListStaleSecretValuesRow, error) {
+	rows, err := q.db.Query(ctx, listStaleSecretValues, arg.After, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStaleSecretValuesRow
+	for rows.Next() {
+		var i ListStaleSecretValuesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ciphertext,
+			&i.Nonce,
+			&i.Scope,
+			&i.DekID,
+			&i.HasOwner,
+			&i.OwnerKind,
+			&i.OwnerID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1969,15 +2303,63 @@ func (q *Queries) ListUsernamesIn(ctx context.Context, dollar_1 []string) ([]Lis
 	return items, nil
 }
 
-const maxSecretValueKeyVersion = `-- name: MaxSecretValueKeyVersion :one
-SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values
+const lockPrimarySecretDataKey = `-- name: LockPrimarySecretDataKey :one
+SELECT id FROM secret_data_keys WHERE scope = $1 AND state = 'primary' FOR UPDATE
 `
 
-func (q *Queries) MaxSecretValueKeyVersion(ctx context.Context) (int32, error) {
-	row := q.db.QueryRow(ctx, maxSecretValueKeyVersion)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
+func (q *Queries) LockPrimarySecretDataKey(ctx context.Context, scope string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockPrimarySecretDataKey, scope)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lockSecretDataKeyForDestroy = `-- name: LockSecretDataKeyForDestroy :one
+SELECT state,
+       (demoted_at IS NOT NULL AND demoted_at <= NOW() - make_interval(secs => $2::float8))::bool AS old_enough
+FROM secret_data_keys WHERE id = $1 FOR UPDATE
+`
+
+type LockSecretDataKeyForDestroyParams struct {
+	ID            pgtype.UUID `db:"id" json:"id"`
+	MinAgeSeconds float64     `db:"min_age_seconds" json:"min_age_seconds"`
+}
+
+type LockSecretDataKeyForDestroyRow struct {
+	State     string `db:"state" json:"state"`
+	OldEnough bool   `db:"old_enough" json:"old_enough"`
+}
+
+// LockSecretDataKeyForDestroy reads a key's state under a row lock and
+// whether it was demoted at least min_age_seconds ago by the database clock.
+func (q *Queries) LockSecretDataKeyForDestroy(ctx context.Context, arg LockSecretDataKeyForDestroyParams) (LockSecretDataKeyForDestroyRow, error) {
+	row := q.db.QueryRow(ctx, lockSecretDataKeyForDestroy, arg.ID, arg.MinAgeSeconds)
+	var i LockSecretDataKeyForDestroyRow
+	err := row.Scan(&i.State, &i.OldEnough)
+	return i, err
+}
+
+const lockSecretValue = `-- name: LockSecretValue :one
+SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1 FOR UPDATE
+`
+
+type LockSecretValueRow struct {
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte      `db:"nonce" json:"nonce"`
+	Scope      pgtype.Text `db:"scope" json:"scope"`
+	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
+}
+
+func (q *Queries) LockSecretValue(ctx context.Context, id string) (LockSecretValueRow, error) {
+	row := q.db.QueryRow(ctx, lockSecretValue, id)
+	var i LockSecretValueRow
+	err := row.Scan(
+		&i.Ciphertext,
+		&i.Nonce,
+		&i.Scope,
+		&i.DekID,
+	)
+	return i, err
 }
 
 const pruneAuditEvents = `-- name: PruneAuditEvents :execrows
@@ -2014,6 +2396,62 @@ func (q *Queries) RelayKeyHashTaken(ctx context.Context, arg RelayKeyHashTakenPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const replaceSecretValue = `-- name: ReplaceSecretValue :execrows
+UPDATE secret_values
+SET ciphertext = $2, nonce = NULL, scope = $3, dek_id = $4, updated_at = NOW()
+WHERE id = $1 AND ciphertext = $5
+`
+
+type ReplaceSecretValueParams struct {
+	ID         string      `db:"id" json:"id"`
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Scope      pgtype.Text `db:"scope" json:"scope"`
+	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
+	Previous   []byte      `db:"previous" json:"previous"`
+}
+
+// ReplaceSecretValue rewrites a row only while it still holds previous, so a
+// concurrent edit wins over a background rewrite.
+func (q *Queries) ReplaceSecretValue(ctx context.Context, arg ReplaceSecretValueParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceSecretValue,
+		arg.ID,
+		arg.Ciphertext,
+		arg.Scope,
+		arg.DekID,
+		arg.Previous,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const replaceSecretValueLegacy = `-- name: ReplaceSecretValueLegacy :execrows
+UPDATE secret_values
+SET ciphertext = $2, nonce = $3, key_version = 1, scope = NULL, dek_id = NULL, updated_at = NOW()
+WHERE id = $1 AND ciphertext = $4
+`
+
+type ReplaceSecretValueLegacyParams struct {
+	ID         string `db:"id" json:"id"`
+	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte `db:"nonce" json:"nonce"`
+	Previous   []byte `db:"previous" json:"previous"`
+}
+
+func (q *Queries) ReplaceSecretValueLegacy(ctx context.Context, arg ReplaceSecretValueLegacyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceSecretValueLegacy,
+		arg.ID,
+		arg.Ciphertext,
+		arg.Nonce,
+		arg.Previous,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const rotateRelayKey = `-- name: RotateRelayKey :execrows
@@ -2111,6 +2549,24 @@ func (q *Queries) SetPolicyRateLimit(ctx context.Context, arg SetPolicyRateLimit
 	return err
 }
 
+const setSecretKeyringTarget = `-- name: SetSecretKeyringTarget :execrows
+UPDATE secret_keyring SET target_kek_id = $1
+WHERE singleton AND target_kek_id IS NOT DISTINCT FROM $2::bytea
+`
+
+type SetSecretKeyringTargetParams struct {
+	Target   []byte `db:"target" json:"target"`
+	Expected []byte `db:"expected" json:"expected"`
+}
+
+func (q *Queries) SetSecretKeyringTarget(ctx context.Context, arg SetSecretKeyringTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSecretKeyringTarget, arg.Target, arg.Expected)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateSecretCiphertext = `-- name: UpdateSecretCiphertext :exec
 UPDATE secrets
 SET value_ciphertext  = $2,
@@ -2135,6 +2591,32 @@ func (q *Queries) UpdateSecretCiphertext(ctx context.Context, arg UpdateSecretCi
 		arg.ValueKeyVersion,
 	)
 	return err
+}
+
+const updateSecretDataKeyWrapped = `-- name: UpdateSecretDataKeyWrapped :execrows
+UPDATE secret_data_keys
+SET kek_id = $3, wrapped = $2, updated_at = NOW()
+WHERE id = $1 AND kek_id = $4 AND state <> 'destroyed'
+`
+
+type UpdateSecretDataKeyWrappedParams struct {
+	ID      pgtype.UUID `db:"id" json:"id"`
+	Wrapped []byte      `db:"wrapped" json:"wrapped"`
+	ToKek   []byte      `db:"to_kek" json:"to_kek"`
+	FromKek []byte      `db:"from_kek" json:"from_kek"`
+}
+
+func (q *Queries) UpdateSecretDataKeyWrapped(ctx context.Context, arg UpdateSecretDataKeyWrappedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSecretDataKeyWrapped,
+		arg.ID,
+		arg.Wrapped,
+		arg.ToKek,
+		arg.FromKek,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSecretEnv = `-- name: UpdateSecretEnv :one
@@ -2637,6 +3119,34 @@ func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) 
 	return result.RowsAffected(), nil
 }
 
+const upsertSealedSecretValue = `-- name: UpsertSealedSecretValue :exec
+INSERT INTO secret_values (id, ciphertext, nonce, scope, dek_id, updated_at)
+VALUES ($1, $2, NULL, $3, $4, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    ciphertext = EXCLUDED.ciphertext,
+    nonce      = NULL,
+    scope      = EXCLUDED.scope,
+    dek_id     = EXCLUDED.dek_id,
+    updated_at = NOW()
+`
+
+type UpsertSealedSecretValueParams struct {
+	ID         string      `db:"id" json:"id"`
+	Ciphertext []byte      `db:"ciphertext" json:"ciphertext"`
+	Scope      pgtype.Text `db:"scope" json:"scope"`
+	DekID      pgtype.UUID `db:"dek_id" json:"dek_id"`
+}
+
+func (q *Queries) UpsertSealedSecretValue(ctx context.Context, arg UpsertSealedSecretValueParams) error {
+	_, err := q.db.Exec(ctx, upsertSealedSecretValue,
+		arg.ID,
+		arg.Ciphertext,
+		arg.Scope,
+		arg.DekID,
+	)
+	return err
+}
+
 const upsertSecret = `-- name: UpsertSecret :exec
 INSERT INTO secrets (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -2664,33 +3174,6 @@ func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) erro
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
-	)
-	return err
-}
-
-const upsertSecretValue = `-- name: UpsertSecretValue :exec
-INSERT INTO secret_values (id, ciphertext, nonce, key_version, updated_at)
-VALUES ($1, $2, $3, $4, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    ciphertext  = EXCLUDED.ciphertext,
-    nonce       = EXCLUDED.nonce,
-    key_version = EXCLUDED.key_version,
-    updated_at  = NOW()
-`
-
-type UpsertSecretValueParams struct {
-	ID         string `db:"id" json:"id"`
-	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
-	Nonce      []byte `db:"nonce" json:"nonce"`
-	KeyVersion int32  `db:"key_version" json:"key_version"`
-}
-
-func (q *Queries) UpsertSecretValue(ctx context.Context, arg UpsertSecretValueParams) error {
-	_, err := q.db.Exec(ctx, upsertSecretValue,
-		arg.ID,
-		arg.Ciphertext,
-		arg.Nonce,
-		arg.KeyVersion,
 	)
 	return err
 }

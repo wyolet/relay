@@ -85,9 +85,34 @@ func TestRotateConflict(t *testing.T) {
 	}
 }
 
+// A ring whose clock runs ahead cannot destroy early: the store measures the demotion age against its own clock.
+func TestDestroyAgeCheckedByStore(t *testing.T) {
+	ringClock, storeClock := newClock(), newClock()
+	rs := newRows(memstore.WithClock(storeClock.Now))
+	r := newRing(t, rs.ms, ringClock, newKEK(t, 1))
+	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
+		t.Fatal(err)
+	}
+	oldID := rs.get("x").keyID
+	if _, err := r.Rotate(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
+		t.Fatal(err)
+	}
+	ringClock.Advance(48 * time.Hour)
+	if err := r.Destroy(ctx, oldID); !errors.Is(err, keyring.ErrTooRecent) {
+		t.Fatalf("destroy with the ring's clock ahead: %v, want ErrTooRecent from the store", err)
+	}
+	storeClock.Advance(24 * time.Hour)
+	if err := r.Destroy(ctx, oldID); err != nil {
+		t.Fatalf("destroy once the store's clock agrees: %v", err)
+	}
+}
+
 func TestDestroy(t *testing.T) {
 	c := newClock()
-	rs := newRows()
+	rs := newRows(memstore.WithClock(c.Now))
 	r := newRing(t, rs.ms, c, newKEK(t, 1))
 	if err := r.EncryptAndWrite(ctx, "s", []byte("v"), []byte("x"), rs.writer("x", "s")); err != nil {
 		t.Fatal(err)

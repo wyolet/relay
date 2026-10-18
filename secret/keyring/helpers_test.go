@@ -68,9 +68,9 @@ type row struct {
 	keyID  [16]byte
 }
 
-func newRows() *rows {
+func newRows(opts ...memstore.Option) *rows {
 	r := &rows{byName: map[string]row{}}
-	r.ms = memstore.New(memstore.WithInUse(r.inUse))
+	r.ms = memstore.New(append([]memstore.Option{memstore.WithInUse(r.inUse)}, opts...)...)
 	return r
 }
 

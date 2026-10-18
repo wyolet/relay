@@ -75,12 +75,15 @@ func mountDeps(t *testing.T) Deps {
 	kvStore := kv.NewMem()
 	t.Cleanup(func() { _ = kvStore.Close() })
 
-	secReg, secStored := appsecret.Wire(q, pool, nil)
+	sec, err := appsecret.Wire(pool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stores := &appcatalog.Stores{
 		Provider:       provider.NewStore(q),
 		Host:           host.NewStore(q),
 		Model:          model.NewStore(q),
-		HostKey:        hostkey.NewStore(q, secReg, secStored),
+		HostKey:        hostkey.NewStore(pool, sec.Registry, sec.Stored),
 		RateLimit:      ratelimit.NewStore(q),
 		Policy:         policy.NewStore(pool),
 		Pricing:        pricing.NewStore(pool),
@@ -95,8 +98,8 @@ func mountDeps(t *testing.T) Deps {
 		Role:           role.NewStore(pool),
 		RoleBinding:    rolebinding.NewStore(pool),
 		PolicyBinding:  policybinding.NewStore(pool),
-		Secrets:        secReg,
-		Stored:         secStored,
+		Secrets:        sec.Registry,
+		Stored:         sec.Stored,
 		SCIMClients:    authpg.NewSCIMTokens(pool),
 	}
 	cat := appcatalog.New(stores.Provider, stores.Host, stores.Policy, stores.Model,

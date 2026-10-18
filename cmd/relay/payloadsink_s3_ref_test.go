@@ -14,42 +14,18 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/settings"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	"github.com/wyolet/relay/secret"
 )
 
-type memSecretRow struct {
-	ct, nonce []byte
-	ver       int32
-}
+// mapStored stands in for the stored backend: what matters here is which ids the settings let a section resolve.
+type mapStored map[string]string
 
-type memSecretStore struct {
-	mu sync.Mutex
-	m  map[string]memSecretRow
-}
-
-func (s *memSecretStore) Get(_ context.Context, id string) ([]byte, []byte, int32, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.m[id]
+func (m mapStored) Resolve(_ context.Context, ref secret.Ref) ([]byte, error) {
+	v, ok := m[ref.ID]
 	if !ok {
-		return nil, nil, 0, errors.New("not found")
+		return nil, errors.New("not found")
 	}
-	return r.ct, r.nonce, r.ver, nil
-}
-
-func (s *memSecretStore) Put(_ context.Context, id string, ct, nonce []byte, ver int32) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[id] = memSecretRow{ct: ct, nonce: nonce, ver: ver}
-	return nil
-}
-
-func (s *memSecretStore) Delete(_ context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m, id)
-	return nil
+	return []byte(v), nil
 }
 
 // authRecorder is a fake S3 endpoint recording each request's Authorization.
@@ -86,18 +62,13 @@ func TestPayloadS3RefOutsideScopeNeverReachesEndpoint(t *testing.T) {
 	defer srv.Close()
 	endpoint := strings.TrimPrefix(srv.URL, "http://")
 
-	masterKey := []byte("0123456789abcdef0123456789abcdef")
-	stored := pkgsecret.NewStoredResolver(&memSecretStore{m: map[string]memSecretRow{}}, masterKey, 1)
 	const hostKeyID = "0192f3a0-0000-7000-8000-0000000000aa"
-	if _, err := stored.Create(context.Background(), hostKeyID, []byte("DUMMYHOSTKEY0001")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := stored.Create(context.Background(), "payload-logging:access-key", []byte("DUMMYSCOPEDKEY02")); err != nil {
-		t.Fatal(err)
-	}
 	reg := secret.NewRegistry()
 	reg.Register(secret.KindEnv, secret.EnvResolver{})
-	reg.Register(secret.KindStored, stored)
+	reg.Register(secret.KindStored, mapStored{
+		hostKeyID:                    "DUMMYHOSTKEY0001",
+		"payload-logging:access-key": "DUMMYSCOPEDKEY02",
+	})
 	t.Setenv("RELAY_MASTER_KEY", "DUMMYMASTERKEY03")
 	t.Setenv("RELAY_PAYLOAD_S3_ACCESS_KEY", "DUMMYSCOPEDKEY04")
 	t.Setenv("RELAY_PAYLOAD_S3_SECRET_KEY", "dummy-secret")

@@ -4,6 +4,11 @@
 # -- Number of relay replicas (overridden by autoscaling if enabled).
 replicaCount: 2
 
+# -- Deployment update strategy. Empty keeps the Kubernetes default
+# (RollingUpdate); set `type: Recreate` for an upgrade whose release notes say
+# old and new pods must not run together (see README "Stop-and-start upgrades").
+updateStrategy: {}
+
 image:
   repository: ghcr.io/wyolet/relay
   # -- The LEAN image (external data stores). Pin to a released version in prod;

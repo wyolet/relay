@@ -1,9 +1,8 @@
 // Package oauth resolves OAuth credentials for the relay's secret layer. The
 // stored secret is an OAuth token blob (access + refresh + expiry, the
-// sdk/oauth.Token wire shape) held as AES-GCM ciphertext in the same
-// secret_values table as KindStored. Resolve returns the access token,
-// transparently refreshing via the refresh token when it has expired and
-// re-persisting the (often rotated) blob.
+// sdk/oauth.Token wire shape) kept by the same stored backend as KindStored.
+// Resolve returns the access token, transparently refreshing via the refresh
+// token when it has expired and re-persisting the (often rotated) blob.
 //
 // It is deliberately off the hot path: resolution happens at snapshot load and
 // during KeyAgent heal after an upstream 401, never per request. Concurrent
@@ -30,7 +29,8 @@ import (
 )
 
 // Vault is the encrypt/decrypt persistence the resolver delegates to — the
-// StoredResolver in practice. The OAuth blob round-trips as a KindStored value.
+// stored backend in practice. The OAuth blob round-trips as a KindStored
+// value; Create only replaces an existing blob, keeping where it is stored.
 type Vault interface {
 	Resolve(ctx context.Context, ref secret.Ref) ([]byte, error)
 	Create(ctx context.Context, id string, plaintext []byte) (secret.Ref, error)
@@ -51,8 +51,8 @@ type Resolver struct {
 
 var _ secret.Resolver = (*Resolver)(nil)
 
-// NewResolver builds an OAuth resolver. vault provides the AES-GCM persistence
-// (a *secret.StoredResolver); cfg looks up the provider's flow config.
+// NewResolver builds an OAuth resolver. vault provides the encrypted
+// persistence; cfg looks up the provider's flow config.
 func NewResolver(vault Vault, cfg ProviderConfigFunc) *Resolver {
 	return &Resolver{vault: vault, cfg: cfg, now: time.Now, skew: time.Minute}
 }
