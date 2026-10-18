@@ -28,8 +28,8 @@ jobs:
   # schedule runs only the security scans, to surface new advisories. Paths not
   # named below count as Go.
   # `full` is the release tier: every event but a pull request into a branch
-  # other than main. Those get lint, build and plain unit tests, plus the
-  # integration jobs when they touch the paths those cover.
+  # other than main. Those get the single `dev` job instead: lint, build and
+  # plain unit tests, plus integration when they touch the paths it covers.
   # `cluster` picks the self-hosted pools: only when the CI_POOL variable says
   # so, and never for pull requests from forks (or deleted head repos).
   # release/next only ever points at a dev commit whose full run passed, and
@@ -86,11 +86,99 @@ jobs:
               - 'Makefile'
               - '.github/workflows/ci.yml'
 
+  # The light tier in one job: lint, unit tests and, when the paths call for
+  # them, chart lint and the integration and ClickHouse tests, in parallel
+  # (scripts/ci-dev.sh). Integration runs only the packages the change can
+  # reach. On the cluster, pull requests into dev run on the warm pool when
+  # CI_WARM_POOL is on (its job hook admits nothing else); everything else, and
+  # dev while the switch is off, runs on the cold integration pool. A pool that
+  # cannot take the job would leave it queued, so the switch is explicit.
+  dev:
+    needs: changes
+    if: needs.changes.outputs.full != 'true' && (needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true')
+    runs-on: ${{ needs.changes.outputs.cluster == 'true' && (vars.CI_WARM_POOL == 'on' && github.base_ref == 'dev' && 'relay-ci-warm' || 'relay-ci-integration') || 'ubuntu-latest' }}
+    # Both cluster pools run Postgres, Valkey and ClickHouse as pod sidecars on
+    # the same addresses. An empty image skips a service.
+    services:
+      postgres:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_DB: relay_test
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      valkey:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'valkey/valkey:8-alpine' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      clickhouse:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'clickhouse/clickhouse-server:24.8-alpine' || '' }}
+        env:
+          CLICKHOUSE_USER: relay
+          CLICKHOUSE_PASSWORD: relay
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user relay --password relay --query 'SELECT 1'"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
+      RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
+      RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
+    steps:
+      # Depth 2: the pull request's merge commit and its base, for the diff.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-go@v7
+        if: runner.environment == 'github-hosted'
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
+          skip-cache: ${{ runner.environment == 'self-hosted' }}
+
+      - uses: azure/setup-helm@v5
+        if: runner.environment == 'github-hosted' && needs.changes.outputs.chart == 'true'
+
+      - name: Checks
+        env:
+          GO: ${{ needs.changes.outputs.go }}
+          CHART: ${{ needs.changes.outputs.chart }}
+          INTEGRATION: ${{ needs.changes.outputs.integration }}
+          CLICKHOUSE: ${{ needs.changes.outputs.clickhouse }}
+          CHANGED_FROM: HEAD^1
+        run: |
+          parts=()
+          [ "$GO" = true ] && parts+=(lint test)
+          [ "$CHART" = true ] && parts+=(chart)
+          [ "$GO" = true ] && [ "$INTEGRATION" = true ] && parts+=(integration)
+          [ "$GO" = true ] && [ "$CLICKHOUSE" = true ] && parts+=(clickhouse)
+          scripts/ci-dev.sh "${parts[@]}"
+
   # golangci-lint runs govet (integration tag included), so there is no
   # separate vet step.
   lint:
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -130,11 +218,11 @@ jobs:
           (cd jobq && go build ./...)
           (cd auth && go build ./...)
 
-  # Every module's unit tests, once. The full tier runs them under -race and
-  # writes the unit coverprofiles the coverage job merges.
+  # Every module's unit tests, once, under -race and writing the unit
+  # coverprofiles the coverage job merges.
   test:
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
@@ -145,20 +233,14 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Test
-        if: needs.changes.outputs.full != 'true'
-        run: make test
-
       # The full tier gates releases, and the cluster pool shares its Go cache
       # with pull-request jobs: no result comes from that cache.
       - name: Test (race, coverage)
-        if: needs.changes.outputs.full == 'true'
         env:
           GOFLAGS: -count=1
         run: make test-race-cover
 
       - uses: actions/upload-artifact@v7
-        if: needs.changes.outputs.full == 'true'
         with:
           name: unit-coverage
           path: .cover/*.out
@@ -262,7 +344,7 @@ jobs:
   # gets a database of its own on both, so packages run in parallel.
   integration:
     needs: changes
-    if: needs.changes.outputs.go == 'true' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.integration == 'true')
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci-integration' || 'ubuntu-latest' }}
     # The cluster pool runs Postgres and Valkey as pod sidecars on the same
     # addresses. An empty image skips a service ('' is falsy, hence the order).
@@ -333,7 +415,7 @@ jobs:
   # service container, which the cluster pool does not run.
   clickhouse:
     needs: changes
-    if: needs.changes.outputs.go == 'true' && (needs.changes.outputs.full == 'true' || needs.changes.outputs.clickhouse == 'true')
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     services:
       clickhouse:
@@ -365,7 +447,7 @@ jobs:
 
   chart:
     needs: changes
-    if: needs.changes.outputs.chart == 'true'
+    if: needs.changes.outputs.chart == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
