@@ -107,3 +107,5 @@ These come from the `dev` and `main` rulesets, which admins can bypass. An admin
 Deletion and force pushes of `dev`, `main` and `release/next` are blocked by the `long-lived-branches` ruleset, which has no bypass actors. Without it, the repository's automatic deletion of merged head branches removes `dev` when an admin merges the release PR. Removing that protection takes editing the ruleset itself.
 
 `release/next` gets no PR-only rule: `full.yml` moves it with a direct, fast-forward-only ref update, which such a rule would reject.
+
+Release tags (`v*.*.*`, and the module tags `sdk/`, `auth/`, `jobq/` and `secret/` + `v*.*.*`) are covered by the `release-tags` ruleset, which has no bypass actors. A tag can be created but never moved or deleted, so a published version always names the commit it was built from. A bad release gets a new patch version. `ci-full-passed` is not covered, because it has to move.
