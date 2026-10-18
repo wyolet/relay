@@ -171,6 +171,7 @@ jobs:
           wc -l "$RUNNER_TEMP/failed.log"
 
       - uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+        id: claude
         env:
           ANTHROPIC_BASE_URL: ${{ vars.DEV_FIXER_BASE_URL }}
         with:
@@ -195,6 +196,15 @@ jobs:
             (b) The fix is not small, touches the architecture or a design decision, or you could not reproduce or bisect. Open one issue: `gh issue create --label needs-decision`, title `dev ${{ needs.guard.outputs.short }}: <summary>`, with the failure, the culprit commit, the root cause and the options you see. Then stop: push nothing, open no PR, write no draft code.
 
             Change nothing under .github/ and never touch .env. Never merge anything.
+
+      # The action logs only is_error; the reason is the last message's text.
+      - name: Report why Claude stopped
+        if: failure() && steps.claude.outputs.execution_file != ''
+        env:
+          OUT: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          jq -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "no text"' "$OUT" | head -c 2000
+          jq -c '.[] | select(.type == "result") | {subtype, is_error, num_turns, total_cost_usd}' "$OUT"
 
   # A PR opened with the workflow token starts no CI; the full tier dispatched
   # on its branch puts the required checks on its head commit.
