@@ -65,6 +65,10 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: lean
+      args:
+        UI_VERSION: ${UI_VERSION:?UI_VERSION not set — run with versions.env loaded}
+        UI_SHA256: ${UI_SHA256:?UI_SHA256 not set — run with versions.env loaded}
+        CATALOG_REF: ${CATALOG_VERSION:-main}
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}
@@ -76,6 +80,10 @@ services:
       context: ../..
       dockerfile: Dockerfile
       target: lean
+      args:
+        UI_VERSION: ${UI_VERSION:?UI_VERSION not set — run with versions.env loaded}
+        UI_SHA256: ${UI_SHA256:?UI_SHA256 not set — run with versions.env loaded}
+        CATALOG_REF: ${CATALOG_VERSION:-main}
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}

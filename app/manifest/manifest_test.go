@@ -1,6 +1,7 @@
 package manifest_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,6 +231,40 @@ func TestToModel_HappyPath(t *testing.T) {
 	}
 	if len(m.Spec.Snapshots) != 1 || m.Spec.Snapshots[0].Name != "claude-3-5-sonnet" {
 		t.Errorf("snapshots: want 1 snapshot 'claude-3-5-sonnet', got %+v", m.Spec.Snapshots)
+	}
+}
+
+func TestModelDeprecationReplacementResolvesByName(t *testing.T) {
+	docs, err := manifest.Parse(strings.NewReader(modelYAML + `  deprecation:
+    status: deprecated
+    replacement: openai/gpt-4o
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	d := *docs[0].Model
+	m, err := manifest.ToModel(d, testResolver)
+	if err != nil {
+		t.Fatalf("ToModel: %v", err)
+	}
+	if got := m.Spec.Deprecation.Replacement; got != "model-eee" {
+		t.Errorf("parsed replacement = %q, want model-eee", got)
+	}
+	if got := d.Spec.Deprecation.Replacement; got != "openai/gpt-4o" {
+		t.Errorf("ToModel mutated the document: replacement = %q", got)
+	}
+	if got := manifest.FromModel(m, testRev).Spec.Deprecation.Replacement; got != "openai/gpt-4o" {
+		t.Errorf("rendered replacement = %q, want openai/gpt-4o", got)
+	}
+	if m.Spec.Deprecation.Replacement != "model-eee" {
+		t.Errorf("FromModel mutated the row")
+	}
+
+	d.Spec.Deprecation.Replacement = "no-such-model"
+	_, err = manifest.ToModel(d, testResolver)
+	var notFound *manifest.RefNotFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("unknown replacement: err = %v, want RefNotFoundError", err)
 	}
 }
 

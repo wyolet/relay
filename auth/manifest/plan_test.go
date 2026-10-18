@@ -53,13 +53,29 @@ func TestPlanSkipsDirtyRowsUnlessForced(t *testing.T) {
 	if err := teams.Upsert(ctx, rows[0]); err != nil {
 		t.Fatal(err)
 	}
-	if got := e.plan(t, e.parse(t, bundle), manifest.Options{}).Entries[0]; got.Action != manifest.ActionSkipDirty {
-		t.Errorf("team = %s, want skip-dirty", got.Action)
+	if got := e.plan(t, e.parse(t, bundle), manifest.Options{}).Entries[0]; got.Action != manifest.ActionSkipDirty || len(got.ChangedFields) == 0 {
+		t.Errorf("team = %s %v, want skip-dirty with the differing fields", got.Action, got.ChangedFields)
 	}
 	e.apply(t, bundle, manifest.Options{Force: true})
 	rows, _ = teams.List(ctx)
 	if rows[0].Meta.DisplayName != "Platform" || rows[0].Meta.Dirty {
 		t.Errorf("forced apply left %+v", rows[0].Meta)
+	}
+}
+
+// A hand-edited row the documents already match, such as an exported edit applied back, is not drift.
+func TestPlanReportsADirtyRowMatchingTheDocumentAsUnchanged(t *testing.T) {
+	e := newEnv(t)
+	e.apply(t, bundle, manifest.Options{})
+	ctx := context.Background()
+	teams := e.store.Stores().Teams
+	rows, _ := teams.List(ctx)
+	rows[0].Meta.Dirty = true
+	if err := teams.Upsert(ctx, rows[0]); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.plan(t, e.parse(t, bundle), manifest.Options{}).Entries[0]; got.Action != manifest.ActionUnchanged {
+		t.Errorf("team = %s %v, want unchanged", got.Action, got.ChangedFields)
 	}
 }
 

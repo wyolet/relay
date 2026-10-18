@@ -40,7 +40,7 @@ NEXT_MAJOR       := v$(shell echo $$(($(VERSION_MAJOR) + 1))).0.0
 # (standalone mode — bundles PG/CH/Jaeger).
 COMPOSE_BASE := deploy/compose/docker-compose.yml
 COMPOSE_DEV  := deploy/compose/docker-compose.dev.yml
-COMPOSE_DEV_ARGS := --env-file .env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
+COMPOSE_DEV_ARGS := --env-file .env --env-file versions.env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 
 # PG DSN for host-side migrate/seed (talks to dev-stack PG).
 PG_DSN := $(RELAY_PG_DSN)
@@ -111,7 +111,7 @@ help: ## Show this help
 	@echo '  make bench-baseline    regenerate $(BENCH_BASELINE)'
 	@echo '  make test-integration  integration tag, race, against ephemeral compose pg + valkey'
 	@echo '  make test-integration-run  the same against $$RELAY_TEST_PG_DSN + $$RELAY_TEST_REDIS_ADDR (no compose)'
-	@echo '  make smoke-mock        replay recorded fixtures through relay → openai-mock.wyolet.dev'
+	@echo '  make smoke-mock        replay recorded fixtures through relay → RELAY_MOCK_BASE_URL'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
 	@echo '  make ui-pin UI_VERSION=vX.Y.Z  pin a relay-ui release + its sha256 in versions.env'
 	@echo '  make build             ui-fetch + go build → ./relay'
@@ -469,7 +469,7 @@ schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha2/ (re
 	go run ./cmd/catalog-schemas schemas/v1alpha2
 	go run ./cmd/auth-schemas schemas/v1alpha1
 
-catalog-validate: ## graph-lint the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
+catalog-validate: ## graph-lint and seed-check the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
 	go run ./cmd/catalog-validate $${RELAY_CATALOG_DIR:-../relay-catalog/data}
 
 catalog-embed: ## generate sdk/catalog/catalog.json.gz from the public catalog, checked out at CATALOG_VERSION
@@ -504,17 +504,18 @@ test-integration-run: ## integration-tagged tests of every module against $$RELA
 			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/auth-integration.out ./...) || status=$$?; \
 		exit $$status
 
-# Smoke: relay → openai-mock.wyolet.dev (via Caddy on dev-stack, mock on Mac:5180).
+# Smoke: relay → RELAY_MOCK_BASE_URL (local spec-mock-openai on :5180 by default).
 # Sister repo: ../../spec-mock-openai/ provides the mock binary + fixture corpus.
 # Extracts two fixture bodies (sync + streaming+parallel-tool-calls) into /tmp,
 # starts the mock if not running, brings up test PG, runs the replay tests.
-# Idempotent — re-running uses cached artifacts.
-SPEC_MOCK_DIR ?= $(HOME)/projects/wyolet/spec-mock-openai
-MOCK_BIN      := /tmp/spec-mock-openai
-MOCK_FIXTURES := /tmp/mock-fixtures
-MOCK_CORPUS   := $(SPEC_MOCK_DIR)/fixtures-corpus/openai-mini-2026-05-19.tar.zst
+# Idempotent — re-running uses cached artifacts. RELAY_MOCK_BASE_URL must be set.
+SPEC_MOCK_DIR    ?= $(HOME)/projects/wyolet/spec-mock-openai
+MOCK_BIN         := /tmp/spec-mock-openai
+MOCK_FIXTURES    := /tmp/mock-fixtures
+MOCK_CORPUS      := $(SPEC_MOCK_DIR)/fixtures-corpus/openai-mini-2026-05-19.tar.zst
 
-smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-mock.wyolet.dev
+smoke-mock: ## replay recorded openai-mini fixtures through relay → $$RELAY_MOCK_BASE_URL
+	@test -n "$(RELAY_MOCK_BASE_URL)" || { echo "RELAY_MOCK_BASE_URL is not set — set it to the mock base URL (e.g. http://localhost:5180) and re-run"; exit 1; }
 	@command -v zstd >/dev/null || { echo "zstd required (brew install zstd)"; exit 1; }
 	@test -d $(SPEC_MOCK_DIR) || { echo "missing $(SPEC_MOCK_DIR) — clone wyolet/spec-mock-openai"; exit 1; }
 	@test -x $(MOCK_BIN) || (cd $(SPEC_MOCK_DIR) && go build -o $(MOCK_BIN) .)
@@ -532,7 +533,7 @@ smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-moc
 			-fixtures-dir $(MOCK_FIXTURES) >/tmp/spec-mock-openai.log 2>&1 & \
 		  sleep 2 && echo "mock started on :5180 (log: /tmp/spec-mock-openai.log)" )
 	docker compose -f $(COMPOSE_TEST) up -d --wait
-	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' $(GO_TEST) -tags=integration -race -run TestMockReplay -v ./integration/ ; \
+	RELAY_MOCK_BASE_URL='$(RELAY_MOCK_BASE_URL)' RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' $(GO_TEST) -tags=integration -race -run TestMockReplay -v ./integration/ ; \
 		status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status

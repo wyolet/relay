@@ -20,7 +20,7 @@ func TestPlanSkipsManagedGroupsUnlessForced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantLines(t, actions(e.apply(t, managedGroups, manifest.Options{})), []string{"skip-managed Group/ops"})
+	wantLines(t, actions(e.apply(t, managedGroups, manifest.Options{})), []string{"skip-managed Group/ops metadata.displayName"})
 	prune := manifest.Options{Prune: true, Selector: map[string]string{"owner": "gitops"}}
 	wantLines(t, actions(e.apply(t, "", prune)), []string{"skip-managed Group/ops"})
 

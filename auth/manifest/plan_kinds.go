@@ -134,10 +134,6 @@ func planKind[T any](p *planner, k kindOps[T]) error {
 			e.write = func(ctx context.Context, dir *directory.Directory, c *principal.Principal) error {
 				return k.create(ctx, dir, c, row)
 			}
-		case k.meta(prev).Dirty && !p.opts.Force:
-			e.Action = ActionSkipDirty
-		case k.isManaged(prev) && !p.opts.Force:
-			e.Action = ActionSkipManaged
 		default:
 			// The update applies only while the row is as this plan read it.
 			m.ResourceVersion = k.meta(prev).ResourceVersion
@@ -149,14 +145,21 @@ func planKind[T any](p *planner, k kindOps[T]) error {
 			if err != nil {
 				return docError(d, "", err)
 			}
-			if e.ChangedFields = ChangedFields(before, after); len(e.ChangedFields) == 0 {
+			e.ChangedFields = ChangedFields(before, after)
+			switch {
+			case len(e.ChangedFields) == 0:
+				// A hand-edited row the document already matches is not drift.
 				e.Action = ActionUnchanged
-				break
-			}
-			e.Action = ActionUpdate
-			managed := k.isManaged(prev)
-			e.write = func(ctx context.Context, dir *directory.Directory, c *principal.Principal) error {
-				return k.update(ctx, forced(dir, managed), c, row)
+			case k.meta(prev).Dirty && !p.opts.Force:
+				e.Action = ActionSkipDirty
+			case k.isManaged(prev) && !p.opts.Force:
+				e.Action = ActionSkipManaged
+			default:
+				e.Action = ActionUpdate
+				managed := k.isManaged(prev)
+				e.write = func(ctx context.Context, dir *directory.Directory, c *principal.Principal) error {
+					return k.update(ctx, forced(dir, managed), c, row)
+				}
 			}
 		}
 		p.entries = append(p.entries, e)
