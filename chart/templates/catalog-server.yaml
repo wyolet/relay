@@ -1,0 +1,213 @@
+{{- if .Values.catalogServer.enabled }}
+{{- $cs := .Values.catalogServer }}
+{{- $name := include "relay.catalogServer.fullname" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+  {{- with $cs.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+  {{- with $cs.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $cs.service.type }}
+  selector:
+    {{- include "relay.catalogServer.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $cs.service.port }}
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $cs.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "relay.catalogServer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "relay.catalogServer.selectorLabels" . | nindent 8 }}
+        {{- with $cs.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+      {{- with $cs.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: catalog-server
+          image: "{{ $cs.image.repository }}:{{ $cs.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $cs.image.pullPolicy }}
+          command: ["catalog-server", "serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          {{- with $cs.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Ready once the first sync has verified every channel's latest files.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            {{- toYaml $cs.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ $cs.tmpSizeLimit }}
+      {{- with $cs.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cs.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cs.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cs.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if $cs.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ $cs.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "relay.catalogServer.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- if $cs.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+  {{- with $cs.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $cs.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $cs.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ required "catalogServer.ingress.host is required when catalogServer.ingress.enabled" $cs.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ $cs.service.port }}
+{{- end }}
+{{- if $cs.httpRoute.enabled }}
+{{- if not $cs.httpRoute.parentRefs }}
+{{- fail "catalogServer.httpRoute.parentRefs is required when catalogServer.httpRoute.enabled (the Gateway listener to attach to)." }}
+{{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+spec:
+  hostnames:
+    - {{ required "catalogServer.httpRoute.host is required when catalogServer.httpRoute.enabled" $cs.httpRoute.host | quote }}
+  parentRefs:
+    {{- toYaml $cs.httpRoute.parentRefs | nindent 4 }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ $cs.service.port }}
+{{- end }}
+{{- if $cs.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "relay.catalogServer.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "relay.catalogServer.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: http
+          protocol: TCP
+      {{- with $cs.networkPolicy.from }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

@@ -37,6 +37,25 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: relay
 {{- end -}}
 
+{{/* catalog-server: own name, labels and selector, so no relay selector matches its pods */}}
+{{- define "relay.catalogServer.fullname" -}}
+{{- printf "%s-catalog-server" (include "relay.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "relay.catalogServer.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "relay.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: catalog-server
+{{- end -}}
+
+{{- define "relay.catalogServer.labels" -}}
+helm.sh/chart: {{ include "relay.chart" . }}
+{{ include "relay.catalogServer.selectorLabels" . }}
+app.kubernetes.io/version: {{ .Values.catalogServer.image.tag | default .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: relay
+{{- end -}}
+
 {{- define "relay.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "relay.fullname" .) .Values.serviceAccount.name -}}
