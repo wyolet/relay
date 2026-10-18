@@ -34,7 +34,7 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	bucketExpr := fmt.Sprintf("toStartOfInterval(ts, INTERVAL %d second)", intervalSec)
 	selCols := bucketExpr + " AS bucket"
 	groupOrder := "bucket"
-	grouped := usage.Grouped(groupBy)
+	grouped, labeled := usage.Grouped(groupBy), false
 	if grouped {
 		grpExpr := groupBy
 		if column, key, ok := usage.MapGroupKey(groupBy); ok {
@@ -43,7 +43,14 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 			// group key appears in the SELECT list, ahead of the WHERE args.
 			args = append([]any{key}, args...)
 		}
-		selCols = grpExpr + " AS grp, " + selCols
+		// Each bucket reports its latest slug and when it was seen; the newest across a series' buckets is the series label.
+		if labelExpr, labelTSExpr, ok := latestLabelSQL(groupBy); ok {
+			grpExpr += " AS grp, " + labelExpr + " AS lbl, " + labelTSExpr + " AS lbl_ts"
+			labeled = true
+		} else {
+			grpExpr += " AS grp"
+		}
+		selCols = grpExpr + ", " + selCols
 		groupOrder = "grp, bucket"
 	}
 
@@ -76,9 +83,11 @@ ORDER BY %s`,
 	res := usage.TimeSeriesResult{Interval: q.Interval.String()}
 	byKey := map[string]int{} // series key -> index into res.Rows
 	totals := map[string]int64{}
+	var labels usage.LatestLabels
 	for rows.Next() {
 		var (
-			grp                  string
+			grp, label           string
+			labelTS              time.Time
 			bucket               time.Time
 			requests             int64
 			errs                 errorCols
@@ -96,7 +105,10 @@ ORDER BY %s`,
 			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
 			&costNanos, &unpriced,
 			&first, &last}
-		if grouped {
+		switch {
+		case labeled:
+			dest = append([]any{&grp, &label, &labelTS}, dest...)
+		case grouped:
 			dest = append([]any{&grp}, dest...)
 		}
 		if selDistinct != "" {
@@ -105,6 +117,7 @@ ORDER BY %s`,
 		if err := rows.Scan(dest...); err != nil {
 			return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: scan timeseries: %w", err)
 		}
+		labels.Add(grp, label, labelTS)
 		idx, ok := byKey[grp]
 		if !ok {
 			res.Rows = append(res.Rows, usage.TimeSeriesRow{Group: usage.GroupLabel(groupBy, grp)})
@@ -138,5 +151,6 @@ ORDER BY %s`,
 	}
 
 	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
+	res.Labels = labels.Map()
 	return res, nil
 }

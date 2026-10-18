@@ -86,34 +86,19 @@ func TopValues(events []Event, dim string, limit int) ([]FacetValue, error) {
 	if !IsValidFacetDim(dim) {
 		return nil, fmt.Errorf("usage.TopValues: invalid dim %q", dim)
 	}
-	labelCol, labeled := LabelColumn(dim)
-	type tally struct {
-		count   int64
-		label   string
-		labelTS time.Time
-	}
-	byValue := map[string]*tally{}
+	var labels LatestLabels
+	counts := map[string]int64{}
 	for _, ev := range events {
 		if ev.LogOnly() {
 			continue
 		}
 		v := groupKey(ev, dim)
-		t, ok := byValue[v]
-		if !ok {
-			t = &tally{}
-			byValue[v] = t
-		}
-		t.count++
-		if !labeled {
-			continue
-		}
-		if l := groupKey(ev, labelCol); l != "" && (t.label == "" || !ev.Timestamp.Before(t.labelTS)) {
-			t.label, t.labelTS = l, ev.Timestamp
-		}
+		counts[v]++
+		labels.addEvent(dim, v, ev)
 	}
-	out := make([]FacetValue, 0, len(byValue))
-	for v, t := range byValue {
-		out = append(out, FacetValue{Value: v, Label: t.label, Requests: t.count})
+	out := make([]FacetValue, 0, len(counts))
+	for v, n := range counts {
+		out = append(out, FacetValue{Value: v, Label: labels.Get(v), Requests: n})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Requests != out[j].Requests {

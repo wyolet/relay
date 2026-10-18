@@ -43,10 +43,16 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 		grpCols = "grp, "
 		subGrp = "sub.grp, "
 	}
+	// Each bucket reports its latest slug and when it was seen; the newest across a series' buckets is the series label. Scalar query only: the label is an aggregate.
+	selLabel := ""
+	labelExpr, labelTSExpr, labeled := latestLabelSQL(groupBy)
+	if labeled {
+		selLabel = labelExpr + " AS lbl, " + labelTSExpr + " AS lbl_ts, "
+	}
 
 	scalarSQL := fmt.Sprintf(`
 SELECT
-    %s%s AS bucket,
+    %s%s%s AS bucket,
     count(*)::bigint                              AS requests,
     `+errorSelectSQL+`,
     trunc(avg(duration_ms))::bigint               AS avg_ms,
@@ -61,7 +67,7 @@ SELECT
 FROM %s%s
 GROUP BY %sbucket
 ORDER BY %sbucket`,
-		selPrefix, bucketExpr, selDistinct, s.cfg.Table, where, grpCols, grpCols)
+		selPrefix, selLabel, bucketExpr, selDistinct, s.cfg.Table, where, grpCols, grpCols)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
 	if err != nil {
@@ -74,10 +80,12 @@ ORDER BY %sbucket`,
 	pointIdx := map[string]int{} // grp|bucketUnix -> index into row.Points
 	totals := map[string]int64{}
 	pkey := func(grp string, bu int64) string { return grp + "|" + strconv.FormatInt(bu, 10) }
+	var labels usage.LatestLabels
 
 	for scalarRows.Next() {
 		var (
-			grp                  string
+			grp, label           string
+			labelTS              *time.Time
 			bucket               time.Time
 			requests             int64
 			errs                 errorCols
@@ -93,7 +101,10 @@ ORDER BY %sbucket`,
 			&ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
 			&costNanos, &unpriced,
 			&first, &last}
-		if grouped {
+		switch {
+		case labeled:
+			dest = append([]any{&grp, &label, &labelTS}, dest...)
+		case grouped:
 			dest = append([]any{&grp}, dest...)
 		}
 		if selDistinct != "" {
@@ -101,6 +112,9 @@ ORDER BY %sbucket`,
 		}
 		if err := scalarRows.Scan(dest...); err != nil {
 			return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: scan timeseries scalar: %w", err)
+		}
+		if labelTS != nil {
+			labels.Add(grp, label, *labelTS)
 		}
 		ri, ok := rowIdx[grp]
 		if !ok {
@@ -179,5 +193,6 @@ GROUP BY %ssub.bucket, kv.key`,
 	}
 
 	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
+	res.Labels = labels.Map()
 	return res, nil
 }

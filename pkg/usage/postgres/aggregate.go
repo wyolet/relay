@@ -65,6 +65,16 @@ func (t ttftCols) stats() *usage.DurationStats {
 	}
 }
 
+// latestLabelSQL selects the newest non-empty slug in dim's label column and that slug's timestamp; ok is false when dim has no label column. With no non-empty slug the label is empty and the timestamp NULL.
+func latestLabelSQL(dim string) (label, labelTS string, ok bool) {
+	col, ok := usage.LabelColumn(dim)
+	if !ok {
+		return "", "", false
+	}
+	return fmt.Sprintf("COALESCE((array_agg(%s ORDER BY ts DESC) FILTER (WHERE %s <> ''))[1], '')", col, col),
+		fmt.Sprintf("max(ts) FILTER (WHERE %s <> '')", col), true
+}
+
 // groupExpr returns the SQL grouping expression for groupBy. Static
 // dimensions are column names; the dynamic "tags.<key>" / "extras.<key>"
 // dimensions bind the key as a positional arg (never spliced into SQL text)

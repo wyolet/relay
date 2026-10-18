@@ -115,3 +115,58 @@ func fillFacetLabels(ctx context.Context, cat *appcatalog.Catalog, users usernam
 		}
 	}
 }
+
+// fillGroupLabels adds a label to labels for every group value of dim the store left unlabeled, from the catalog and then, for principal_id, the users table; the map is allocated only when a label is found.
+func fillGroupLabels(ctx context.Context, cat *appcatalog.Catalog, users usernameLookup, dim string, groups []map[string]string, labels map[string]string) map[string]string {
+	if !usage.Grouped(dim) {
+		return labels
+	}
+	set := func(v, l string) {
+		if l == "" {
+			return
+		}
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[v] = l
+	}
+	var missing []string
+	snap := currentSnapshot(cat)
+	for _, g := range groups {
+		v := g[dim]
+		if v == "" || labels[v] != "" {
+			continue
+		}
+		if snap != nil {
+			set(v, catalogLabel(snap, dim, v))
+		}
+		if labels[v] == "" {
+			missing = append(missing, v)
+		}
+	}
+	if dim == "principal_id" {
+		names := lookupUsernames(ctx, users, missing)
+		for _, v := range missing {
+			set(v, names[v])
+		}
+	}
+	return labels
+}
+
+// labelSummary completes res.Labels for an id grouping.
+func labelSummary(ctx context.Context, cat *appcatalog.Catalog, users usernameLookup, groupBy string, res *usage.SummaryResult) {
+	groups := make([]map[string]string, len(res.Rows))
+	for i, r := range res.Rows {
+		groups[i] = r.Group
+	}
+	res.Labels = fillGroupLabels(ctx, cat, users, groupBy, groups, res.Labels)
+}
+
+// labelTimeSeries completes res.Labels for an id grouping.
+func labelTimeSeries(ctx context.Context, cat *appcatalog.Catalog, users usernameLookup, groupBy string, res *usage.TimeSeriesResult) {
+	groups := make([]map[string]string, len(res.Rows))
+	for i, r := range res.Rows {
+		groups[i] = r.Group
+	}
+	res.Labels = fillGroupLabels(ctx, cat, users, groupBy, groups, res.Labels)
+}

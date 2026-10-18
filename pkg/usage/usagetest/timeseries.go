@@ -106,7 +106,7 @@ func runTimeSeries(t *testing.T, r usage.Reader, cases []timeSeriesCase) {
 
 // normalizeTimeSeries keeps row and point order: series order is part of the contract (usage.SortTimeSeriesRows), unlike summary row ties.
 func normalizeTimeSeries(res usage.TimeSeriesResult, percentiles bool) usage.TimeSeriesResult {
-	out := usage.TimeSeriesResult{Interval: res.Interval, From: normalizeTime(res.From), To: normalizeTime(res.To)}
+	out := usage.TimeSeriesResult{Labels: res.Labels, Interval: res.Interval, From: normalizeTime(res.From), To: normalizeTime(res.To)}
 	for _, row := range res.Rows {
 		points := make([]usage.TimeSeriesPoint, 0, len(row.Points))
 		for _, p := range row.Points {

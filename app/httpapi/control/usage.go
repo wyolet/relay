@@ -402,7 +402,10 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			"percentiles, TTFT percentiles when available, error count " +
 			"with 4xx/5xx and throttled (429) counts). " +
 			"Rows sorted by request count " +
-			"descending. Requests rejected before reaching an upstream " +
+			"descending. With an id group_by, `labels` maps each group " +
+			"value to its latest slug in the window, else its current " +
+			"catalog name, else (user principals) the username. " +
+			"Requests rejected before reaching an upstream " +
 			"(status 0 with an error kind) are excluded — see " +
 			"/usage/events or /logs for those.",
 		Tags:        []string{"usage"},
@@ -443,6 +446,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if res.Rows == nil {
 			res.Rows = []usagelog.SummaryRow{}
 		}
+		labelSummary(ctx, d.Catalog, userNames(d), in.GroupBy, &res)
 		if res.From.IsZero() {
 			res.From = from
 		}
@@ -463,7 +467,8 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			"percentiles (omitted when no event in the bucket has upstream " +
 			"timing). " +
 			"With `group_by` set, returns one series per dimension value for " +
-			"stacked charts; empty returns a single series. Empty buckets are " +
+			"stacked charts; empty returns a single series. With an id " +
+			"group_by, `labels` names each series as /usage/summary does. Empty buckets are " +
 			"omitted — zero-fill against the returned from/to range.",
 		Tags:        []string{"usage"},
 		Middlewares: protect,
@@ -506,6 +511,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if res.Rows == nil {
 			res.Rows = []usagelog.TimeSeriesRow{}
 		}
+		labelTimeSeries(ctx, d.Catalog, userNames(d), in.GroupBy, &res)
 		return &usageTimeSeriesOutput{Body: res}, nil
 	})
 }

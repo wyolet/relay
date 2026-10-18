@@ -170,7 +170,8 @@ func runSummary(t *testing.T, r usage.Reader, cases []summaryCase) {
 
 func normalizeSummary(res usage.SummaryResult, percentiles bool) usage.SummaryResult {
 	out := usage.SummaryResult{
-		From: normalizeTime(res.From), To: normalizeTime(res.To),
+		Labels: res.Labels,
+		From:   normalizeTime(res.From), To: normalizeTime(res.To),
 		PreviousFrom: normalizeTime(res.PreviousFrom), PreviousTo: normalizeTime(res.PreviousTo),
 	}
 	for _, row := range res.Rows {
