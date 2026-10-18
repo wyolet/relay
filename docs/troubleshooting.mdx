@@ -122,7 +122,7 @@ automatically **as long as you mount a volume** (see above).
 ## Health checks
 
 ```bash
-# Inference liveness + Postgres ping (public)
+# Inference readiness: Postgres ping + catalog loaded (public)
 curl http://localhost:8080/healthz
 
 # Control plane build version (public)
