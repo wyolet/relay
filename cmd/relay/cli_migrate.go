@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strconv"
 
+	"github.com/wyolet/relay/app/secret/stored"
 	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
@@ -62,12 +64,42 @@ func runMigrate(args []string) error {
 		slog.Info("migrate: schema version recorded", "version", version)
 		return nil
 	}
+	if version < keyRingVersion {
+		if err := refuseSealedSecrets(dsn, version); err != nil {
+			return err
+		}
+	}
 	slog.Warn("migrate: running down-migrations; rows the newer schema owns are dropped",
 		"target_version", version)
 	if err := storagemod.MigrateTo(dsn, uint(version)); err != nil {
 		return err
 	}
 	slog.Info("migrate: schema is at the requested version", "version", version)
+	return nil
+}
+
+// keyRingVersion is the schema version that seals stored secrets under data keys.
+const keyRingVersion = 34
+
+// refuseSealedSecrets stops a rollback below keyRingVersion while stored secrets are sealed under data keys. Migration 34's down refuses them too, but a refused migration leaves golang-migrate's version dirty.
+func refuseSealedSecrets(dsn string, target uint64) error {
+	ctx := context.Background()
+	st, err := storagemod.Open(ctx, dsn, storagemod.WithMigrateOnBoot(false))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	b, err := stored.New(st.Pool(), nil)
+	if err != nil {
+		return err
+	}
+	n, err := b.SealedRows(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate down: count sealed stored secrets: %w", err)
+	}
+	if n > 0 {
+		return fmt.Errorf("migrate down: %d stored secrets are sealed under data keys, which schema %d cannot read; run `relay secret downgrade` first", n, target)
+	}
 	return nil
 }
 
