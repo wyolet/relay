@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const MaxLen = 64
+const MaxLen = 63
 
 var validRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
