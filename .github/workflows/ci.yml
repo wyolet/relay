@@ -78,13 +78,13 @@ jobs:
               - 'integration/**'
               - '**/*integration_test.go'
               - 'Makefile'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             clickhouse:
               - 'pkg/usage/clickhouse/**'
               - 'pkg/payload/clickhouse/**'
               - 'pkg/chttl/**'
               - 'Makefile'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
 
   # golangci-lint runs govet (integration tag included), so there is no
   # separate vet step.
