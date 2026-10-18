@@ -55,6 +55,10 @@ secret/backend/gcp		66
 secret/cloud/aws		88
 secret/cloud/azure		80
 secret/cloud/gcp		73
+secret/kek			95
+secret/kek/local		95
+secret/keyring			84
+secret/keyring/memstore		95
 
 sdk/adapters/anthropic		75
 sdk/adapters/gemini		71
