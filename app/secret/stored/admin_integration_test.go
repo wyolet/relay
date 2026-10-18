@@ -188,3 +188,32 @@ func TestIntegration_DestroyRefusals(t *testing.T) {
 		t.Fatalf("force destroy of an emptied key: %v", err)
 	}
 }
+
+// The troubleshooting path for a lost master key: rewrap to the new one (every key skipped), rotate every scope, and new values can be stored again.
+func TestIntegration_RecoverFromALostMasterKey(t *testing.T) {
+	pool := storagetest.Pool(t)
+	if _, err := backend(t, pool, keyA).CreateScoped(ctx, "user:u1", "v", []byte("gone")); err != nil {
+		t.Fatal(err)
+	}
+	b := backend(t, pool, keyB)
+	if _, err := b.CreateScoped(ctx, "user:u1", "v", []byte("new")); !errors.Is(err, keyring.ErrKEKUnavailable) {
+		t.Fatalf("write under a locked Primary: %v", err)
+	}
+	st, err := b.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := b.Rewrap(ctx, st.HeldKEKs[0])
+	if err != nil || len(res.Skipped) != 1 {
+		t.Fatalf("rewrap with only the new key: %+v %v", res, err)
+	}
+	if _, err := b.RotateAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.CreateScoped(ctx, "user:u1", "v", []byte("new")); err != nil {
+		t.Fatalf("re-enter the value: %v", err)
+	}
+	if got := resolve(t, ctx, b, "v"); got != "new" {
+		t.Fatalf("re-entered value: %q", got)
+	}
+}
