@@ -27,6 +27,8 @@ The `changes` job in `.github/workflows/ci.yml` decides which jobs a run needs. 
 
 Docs and markdown changes run nothing beyond `changes`.
 
+A newer push to a PR cancels that PR's run in progress, and so does merging or closing it. Pushes to `main`, full runs on `dev` and release runs are never cancelled.
+
 Locally, `make check` runs gofmt, the codebase-rule checks, golangci-lint, the unit tests and `helm lint`; `make vulncheck` runs govulncheck. The ClickHouse tests run locally with `make test-clickhouse-run` against the server `RELAY_TEST_CH_DSN` names.
 
 ## Full run on `dev`

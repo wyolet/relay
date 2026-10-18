@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # `closed` only cancels the pull request's in-progress run; it runs no job.
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   schedule:
     - cron: '17 5 * * 1'
   # The full tier on any branch; full.yml dispatches it on dev.
@@ -11,6 +13,13 @@ on:
 
 permissions:
   contents: read
+
+# A newer push to a pull request, or its merge or close, cancels the run in
+# progress. Every other run gets a group of its own, so pushes to main and
+# dispatched full runs are never cancelled.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Decides which jobs a pull request needs. Gating jobs with `if:` rather than
@@ -24,6 +33,7 @@ jobs:
   # `cluster` picks the self-hosted pools: only when the CI_POOL variable says
   # so, and never for pull requests from forks (or deleted head repos).
   changes:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
