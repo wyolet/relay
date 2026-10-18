@@ -210,6 +210,9 @@ jobs:
           MODEL: ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
           ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ vars.DEV_FIXER_MAX_OUTPUT_TOKENS || '16000' }}
+          # An unreachable upstream fails in minutes, not after a long retry ladder.
+          CLAUDE_CODE_MAX_RETRIES: '3'
+          API_TIMEOUT_MS: '300000'
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
           DISABLE_TELEMETRY: '1'
           DISABLE_ERROR_REPORTING: '1'
