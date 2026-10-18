@@ -54,7 +54,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	warnSingleUserOpenRegistration(cfg.Authz, settings.EffectiveAuthOIDC(cat))
 	authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 	ctrlDeps := control.Deps{
-		Pinger:        st,
+		HealthChecks:  healthChecks(st, kvStore),
 		Identity:      idStore,
 		TokenSigner:   tokenSigner,
 		TokenDenylist: kvStore,

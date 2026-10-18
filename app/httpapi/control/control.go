@@ -32,9 +32,8 @@ import (
 
 // Deps is the typed dependency bundle for the admin plane.
 type Deps struct {
-	// Pinger reports backend health for /healthz. Storage satisfies
-	// this; tests can pass a stub. nil reports ok with no backends.
-	Pinger Pinger
+	// HealthChecks are the backends /healthz pings, keyed by the name it reports them under. Empty reports ok with no backends.
+	HealthChecks map[string]Pinger
 
 	// Identity is the YAML-backed user store used by /auth/login.
 	Identity *identity.Store
@@ -135,8 +134,7 @@ type Deps struct {
 	RuntimeConfig RuntimeConfig
 }
 
-// Pinger reports backend health for /healthz. Storage satisfies this
-// via its own Ping method; tests can supply a stub.
+// Pinger reports one backend's health for /healthz.
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
