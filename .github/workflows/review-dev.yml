@@ -210,7 +210,7 @@ jobs:
 
   report:
     needs: [plan, review, cross]
-    if: always() && needs.plan.outputs.run == 'true'
+    if: always() && needs.plan.outputs.run == 'true' && needs.plan.outputs.has_key == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
