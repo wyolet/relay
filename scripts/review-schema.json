@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": {"type": "string", "description": "What changed in the unit and why, in 2-4 sentences, for the cross-area pass."},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "lines", "kind", "severity", "confidence", "what", "failure_scenario", "needs_decision"],
+        "properties": {
+          "file": {"type": "string"},
+          "lines": {"type": "string", "description": "Line range at the reviewed commit, e.g. 12-30."},
+          "kind": {"enum": ["bug", "rule", "security", "test", "concurrency", "leak", "interaction"]},
+          "severity": {"enum": ["high", "medium", "low"]},
+          "confidence": {"enum": ["high", "medium", "low"]},
+          "what": {"type": "string"},
+          "failure_scenario": {"type": "string", "description": "Concrete inputs or state and the wrong outcome."},
+          "pr": {"type": "integer"},
+          "needs_decision": {"type": "boolean", "description": "True when the right fix is a design call."}
+        }
+      }
+    },
+    "approach": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["problem", "verdict", "reason", "alternatives"],
+      "properties": {
+        "problem": {"type": "string"},
+        "verdict": {"enum": ["fine", "better", "needs-decision"]},
+        "reason": {"type": "string", "description": "For better or needs-decision: the concrete criterion and what it would change."},
+        "alternatives": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

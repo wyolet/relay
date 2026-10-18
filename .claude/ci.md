@@ -17,11 +17,15 @@ Branch off `dev` and open the PR against `dev`. Keep branches short-lived: a PR 
 
 | Event | Runs |
 |---|---|
-| PR into `dev` (or any branch other than `main`) | gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
-| … that touches `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests |
+| PR into `dev` (or any branch other than `main`) | one `dev` job: gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
+| … that touches `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
 | … that touches `chart/` or `versions.env` | the above, plus `helm lint` or the boot smoke |
 | PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
 | weekly schedule on `main` | the security scans |
+
+The `dev` job runs its parts in parallel through `scripts/ci-dev.sh`, each part in its own log group, with a summary table at the end; it fails when any part fails. Its integration part runs only the integration-tagged packages (`scripts/integration-pkgs.sh`) whose test binary depends on a changed package, without coverage. A change to migrations, module files, the Makefile, `ci.yml` or those scripts runs all of them. The unit tests are a separate part, so integration doesn't rerun them. Locally: `scripts/ci-dev.sh lint test integration` (integration and ClickHouse need `RELAY_TEST_PG_DSN`, `RELAY_TEST_REDIS_ADDR` and `RELAY_TEST_CH_DSN`; `CHANGED_FROM=<commit>` limits integration to what changed since it).
+
+On the cluster, PRs into `dev` run the `dev` job on the warm pool `relay-ci-warm` (a node-local Go and lint cache shared by its pods, with Postgres, Valkey and ClickHouse sidecars) when the repository variable `CI_WARM_POOL` is `on`. Otherwise, and for PRs into any other branch (the warm pool's job hook admits only PRs into `dev`), it runs on the cold `relay-ci-integration` pool. Set the variable to anything else to move off the warm pool, for instance when its node is down. The full tier never uses the warm cache.
 
 The `changes` job in `.github/workflows/ci.yml` decides which jobs a run needs. Skipped jobs report as passed, so `changes` itself must stay a required check: if it fails, everything behind it is skipped.
 
@@ -55,14 +59,28 @@ A fix must not loosen a test to make it pass. If a test changes, the PR says why
 
 A red full run on `dev` also starts `.github/workflows/fix-dev.yml`, once per failing commit. Claude, reached through relay, reproduces the failure with the failing test only, bisects the range, and takes exactly one outcome:
 
-- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. It runs the failing test and `make check` before pushing. Its PR gets the full tier dispatched on its branch, since a PR opened with the workflow token starts no CI.
+- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. Before pushing it reruns the failing test or check and builds and vets the packages it touched; the full suite is left to the PR's CI. Its PR gets the full tier dispatched on its branch, since a PR opened with the workflow token starts no CI.
 - an issue labelled `needs-decision` with the failure, the culprit, the root cause and the options, when the fix isn't small or needs a design decision. Nothing else.
 
-It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its token has contents, pull-request and issue write only: no `actions` and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`. 30-minute timeout, 80 turns.
+It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its token has contents, pull-request and issue write only: no `actions` and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`.
 
-Configuration: the `DEV_FIXER_RELAY_KEY` secret (a relay key dedicated to the fixer, on a policy with a tight token rate limit), the `DEV_FIXER_BASE_URL` variable (relay's Anthropic-shape base URL), and optionally `DEV_FIXER_MODEL`. Without the key, the run reports that and stops. Every outcome goes to the run summary, and to Telegram when `RELEASE_TELEGRAM_TOKEN` (secret) and `RELEASE_TELEGRAM_CHAT` (variable) are set at repository level.
+Claude Code runs as a plain `claude -p --bare` at a pinned version (`CLAUDE_CODE_VERSION` in the workflow): only the Bash, Read and Edit tools, no MCP servers, hooks or plugins, no settings or `CLAUDE.md` picked up from the checked-out branch, and one model for every call. Bash is unrestricted, since the job runs on a throwaway GitHub-hosted runner and the token's scope is the boundary; the few denies (merging, starting workflows, force pushes, edits under `.github/` and `.claude/`) encode policy. Limits: 30 minutes, 80 turns, $5 per run, 16000 output tokens per request. With `CI_POOL=cluster` the fix job runs on the `relay-ci-integration` pool: Postgres, Valkey and ClickHouse come from the pod's sidecars, Node and `gh` are installed by the job, and the CI egress proxy allows the relay host in `DEV_FIXER_BASE_URL`.
+
+Configuration: the `DEV_FIXER_RELAY_KEY` secret (a relay key dedicated to the fixer, on a policy with a tight token rate limit), the `DEV_FIXER_BASE_URL` variable (relay's Anthropic-shape base URL), and optionally `DEV_FIXER_MODEL` and `DEV_FIXER_MAX_OUTPUT_TOKENS`. Without the key, the run reports that and stops. Every outcome goes to the run summary, and to Telegram when `RELEASE_TELEGRAM_TOKEN` (secret) and `RELEASE_TELEGRAM_CHAT` (variable) are set at repository level.
 
 `full.yml` dispatches it on `dev` (`--ref dev`), so it runs in dev's context. A workflow file that isn't on `main` can't be dispatched by name; to try a change on another branch, register it there once (a push run whose jobs skip), then dispatch by id: `gh api -X POST repos/{owner}/{repo}/actions/workflows/<id>/dispatches -f ref=<branch> -f 'inputs[sha]=…' -f 'inputs[run_id]=…' -f 'inputs[base]=<branch>'`.
+
+## AI review of `dev`
+
+Every day `.github/workflows/review-dev.yml` reviews the code that changed on `dev` since the `ai-reviewed` tag (or, before the first run, since the latest release). The schedule only dispatches the workflow on `dev`, so the review runs in dev's context.
+
+- `plan` splits the range into units with `scripts/review-units.sh`: one per area (a Go package; the `auth`, `sdk`, `jobq` and `secret` modules as one each; `migrations/`, `.github/` and `chart/`), large areas split by file, and one approach unit per PR that touched reviewed code.
+- `review` runs one unit per matrix job through `scripts/review-run.sh`: a bare `claude -p` with only Read and read-only Bash, no GitHub token, and a final answer validated against `scripts/review-schema.json`. Area units get the changed files, the area's diff and the PRs' descriptions; approach units judge one PR's approach (`fine` unless an alternative wins on a named, concrete criterion). Then `cross` makes one pass over the interactions between areas.
+- `report` (`scripts/review-report.sh`) files the issues. A high- or medium-severity finding with at least medium confidence, or one that needs a design call (`needs-decision`), gets an issue labelled `ai-review` plus `severity:<level>`. If an open `ai-review` issue already covers the same file and kind, it gets a comment instead. Everything else goes into one digest issue per run, along with the approach verdicts and the units that didn't complete. The tag moves only when every unit completed.
+
+To run a review now, or on another range: `gh workflow run review-dev.yml --ref dev [-f from=<sha>] [-f to=<sha>] [-f dry_run=true]`. A dry run prints the issues and the tag move instead of making them.
+
+Configuration: the `AI_REVIEW_RELAY_KEY` secret (a relay key of its own, so review spend shows separately) and the `AI_REVIEW_BASE_URL` variable. `AI_REVIEW_MODEL` (areas and approach) and `AI_REVIEW_CROSS_MODEL` both default to Opus. `AI_REVIEW_MAX_PARALLEL` (default 4) caps the concurrent reviews. Without the key the run plans, says so, and opens nothing.
 
 ## Releasing
 
@@ -70,8 +88,9 @@ Configuration: the `DEV_FIXER_RELAY_KEY` secret (a relay key dedicated to the fi
 
 1. Work through the checklist in the release PR.
 2. Merge it with a merge commit. That creates a new commit on `main`.
-3. Wait for CI on that push to `main` to go green.
-4. Tag: `make release` (patch), `make release-minor` or `make release-major`. The target checks that CI passed for `origin/main`'s HEAD, then tags and pushes.
+3. Check that `dev` and `release/next` still exist (`git ls-remote origin dev release/next`). An admin merge bypasses the bypassable rulesets, and the repository deletes merged head branches; the no-bypass ruleset below is what keeps them.
+4. Wait for CI on that push to `main` to go green.
+5. Tag: `make release` (patch), `make release-minor` or `make release-major`. The target checks that CI passed for `origin/main`'s HEAD, then tags and pushes.
 
 Releasing without waiting for the next green run means opening a PR from `dev` into `main` by hand; it runs the full tier itself.
 
@@ -93,15 +112,18 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 
 ## Branch rules
 
-`dev` and `main` each have a repository ruleset; admins can bypass.
-
 | | `dev` | `main` |
 |---|---|---|
-| Deletion | blocked (auto-delete of merged branches would otherwise delete `dev` on release) | blocked |
 | Force push | blocked | blocked |
 | Changes by | PR only | PR only |
 | Merge methods | squash, merge commit | merge commit, squash |
-| Required checks | `changes`, `lint`, `test`, `integration`, `clickhouse`, `chart`, `boot` | the `dev` set plus `fuzz`, `bench`, `govulncheck`, `trivy`, `coverage` |
+| Required checks | `changes`, `dev`, `boot` | `changes`, `lint`, `test`, `integration`, `clickhouse`, `chart`, `boot`, `fuzz`, `bench`, `govulncheck`, `trivy`, `coverage` |
 | Branch must be up to date | no | no |
 
-`release/next` needs its own ruleset that blocks deletion (auto-delete would remove it when the release PR merges) and force pushes. It must not get the `dev` ruleset: `full.yml` moves it with a direct ref update, which a PR-only rule would reject.
+These come from the `dev` and `main` rulesets, which admins can bypass. An admin merge therefore skips them, including their deletion block.
+
+Deletion and force pushes of `dev`, `main` and `release/next` are blocked by the `long-lived-branches` ruleset, which has no bypass actors. Without it, the repository's automatic deletion of merged head branches removes `dev` when an admin merges the release PR. Removing that protection takes editing the ruleset itself.
+
+`release/next` gets no PR-only rule: `full.yml` moves it with a direct, fast-forward-only ref update, which such a rule would reject.
+
+Release tags (`v*.*.*`, and the module tags `sdk/`, `auth/`, `jobq/` and `secret/` + `v*.*.*`) are covered by the `release-tags` ruleset, which has no bypass actors. A tag can be created but never moved or deleted, so a published version always names the commit it was built from. A bad release gets a new patch version. `ci-full-passed` is not covered, because it has to move.

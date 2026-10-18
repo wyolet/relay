@@ -61,7 +61,9 @@ type Context struct {
 	PolicyID     string
 	ModelID      string
 	HostID       string
-	HostKeyID    string
+	// HostKeyID is the value hash of the upstream credential last tried,
+	// not the HostKey row id.
+	HostKeyID string
 
 	// PolicyName / ModelName / HostName carry the entities' slugs
 	// (metadata.name) as resolved at request time — denormalized onto the

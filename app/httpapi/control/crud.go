@@ -86,6 +86,16 @@ func refuseTenantOwner(singular string, o meta.Owner) error {
 	return huma.Error400BadRequest(fmt.Sprintf("%s is shared catalog data and cannot be owned by a %s; omit metadata.owner", singular, o.Kind))
 }
 
+// refuseNonSystemScopeOwner answers 400 for a team or group owned by anything
+// but system: they only ever name a shared scope. Roles stay authorable as
+// personal rows (license-gated).
+func refuseNonSystemScopeOwner(singular string, o meta.Owner) error {
+	if (singular == "team" || singular == "group") && o.Kind != meta.OwnerSystem {
+		return huma.Error400BadRequest(singular + " owner.kind must be system; omit metadata.owner")
+	}
+	return nil
+}
+
 // registerKind installs the five CRUD operations for kind T on api and returns how they find a row. The metaOf, validate, defaultOwnerKind, and resolveSlug closures supply the kind-specific glue.
 //
 // defaultOwnerKind is stamped on Create when the caller omits
@@ -306,10 +316,8 @@ func registerKind[T any](
 			if err := refuseTenantOwner(singular, m.Owner); err != nil {
 				return nil, err
 			}
-			// Roles stay authorable as personal rows (license-gated); a team or
-			// group only ever names a shared scope.
-			if (singular == "team" || singular == "group") && m.Owner.Kind != meta.OwnerSystem {
-				return nil, huma.Error400BadRequest(singular + " owner.kind must be system; omit owner on create")
+			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
+				return nil, err
 			}
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
@@ -364,7 +372,7 @@ func registerKind[T any](
 		Method:      http.MethodPut,
 		Path:        base + "/by-id/{id}",
 		Summary:     "Update " + singular + " by id",
-		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional.",
+		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional. A metadata.owner different from the stored one moves the row to that scope: it needs create permission there, and fails with 409 resource_in_use while rows that reference it could not do so from the new scope. An omitted owner keeps the stored one; kinds whose owner follows a spec field (spec.projectId, spec.teamId, spec.scope) take it from that field.",
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 404, 409, 500},
@@ -397,8 +405,18 @@ func registerKind[T any](
 		if mergeUpdate != nil {
 			mergeUpdate(existing, v)
 		}
-		// Owner is server-controlled provenance; PUT cannot chown a row.
-		m.Owner = metaOf(existing).Owner
+		// An omitted owner, or the stored kind without an id, keeps the stored
+		// owner: a body echoing {kind: user} must not chown a row to its editor.
+		if stored := metaOf(existing).Owner; m.Owner == (meta.Owner{}) || (m.Owner.Kind == stored.Kind && (m.Owner.ID == "" || m.Owner.ID == stored.ID)) {
+			m.Owner = stored
+		} else {
+			if err := stampOwnerID(ctx, &m.Owner); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
+			if err := refuseNonSystemScopeOwner(singular, m.Owner); err != nil {
+				return nil, err
+			}
+		}
 		m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
 		if validate != nil {
 			if err := validate(v); err != nil {
@@ -410,9 +428,9 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
-		// Kinds whose owner mirrors a spec field re-derive it in validate or
-		// the guard. A row moved that way lands in a new scope, which takes
-		// the create grant there, as POST of the same body would.
+		// A row moved by metadata.owner, or by the spec field its owner mirrors
+		// (re-derived in validate or the guard), lands in a new scope, which
+		// takes the create grant there, as POST of the same body would.
 		if m.Owner != metaOf(existing).Owner {
 			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
 				return nil, mapAuthzErr(err)
