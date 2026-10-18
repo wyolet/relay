@@ -161,6 +161,7 @@ type SummaryQuery struct {
 	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",
 	// or "tags.<key>" (dynamic, groups on a caller tag's value).
+	// GroupByNone → one row over the whole filtered slice, Group {}.
 	// Empty → "source".
 	GroupBy string
 }
@@ -179,8 +180,12 @@ type SummaryRow struct {
 	Group      map[string]string `json:"group"`
 	Requests   int64             `json:"requests"`
 	ErrorCount int64             `json:"error_count"`
-	Tokens     map[string]int64  `json:"tokens"`
-	DurationMs DurationStats     `json:"duration_ms"`
+	// ErrorCount counts status >= 400 and always equals Errors4xx + Errors5xx: every status >= 500 (600+ included) lands in Errors5xx. Throttled counts status 429 and is a subset of Errors4xx.
+	Errors4xx  int64            `json:"errors_4xx"`
+	Errors5xx  int64            `json:"errors_5xx"`
+	Throttled  int64            `json:"throttled"`
+	Tokens     map[string]int64 `json:"tokens"`
+	DurationMs DurationStats    `json:"duration_ms"`
 	// TTFTMs aggregates upstream time-to-first-byte (ms, derived from
 	// Upstream.ResponseStart) over the subset of events that carry upstream
 	// timing. Nil when no event in the group has it — a pointer so "no
@@ -224,8 +229,7 @@ type TimeSeriesQuery struct {
 	// Interval is the bucket width. Must be > 0.
 	Interval time.Duration
 
-	// GroupBy splits the result into one series per dimension value.
-	// Empty means a single series. Valid values match ValidGroupBy.
+	// GroupBy splits the result into one series per dimension value. Empty means a single series with a nil Group; GroupByNone means the same single series with Group {}. Otherwise IsValidGroupBy applies.
 	GroupBy string
 }
 
@@ -236,11 +240,10 @@ type TimeSeriesPoint struct {
 	Bucket     time.Time `json:"bucket"`
 	Requests   int64     `json:"requests"`
 	ErrorCount int64     `json:"error_count"`
-	// Errors4xx/Errors5xx split ErrorCount by status class for triage
-	// charts. They may sum below ErrorCount only if an out-of-band status
-	// >= 600 ever appears; in practice ErrorCount = Errors4xx + Errors5xx.
+	// Errors4xx / Errors5xx / Throttled — same invariant as SummaryRow: ErrorCount = Errors4xx + Errors5xx, Throttled (429) within Errors4xx.
 	Errors4xx  int64            `json:"errors_4xx"`
 	Errors5xx  int64            `json:"errors_5xx"`
+	Throttled  int64            `json:"throttled"`
 	Tokens     map[string]int64 `json:"tokens"`
 	DurationMs DurationStats    `json:"duration_ms"`
 	// TTFTMs — see SummaryRow.TTFTMs; nil when no event in the bucket
@@ -251,10 +254,9 @@ type TimeSeriesPoint struct {
 	Unpriced  int64 `json:"unpriced"`
 }
 
-// TimeSeriesRow is one series. Group is nil for the single-series case
-// and carries the grouping dimension keyed by column name otherwise.
+// TimeSeriesRow is one series. Group is nil for the single-series case, {} for GroupByNone, and carries the grouping dimension keyed by column name otherwise; omitzero drops only the nil case, so none still emits "group": {}.
 type TimeSeriesRow struct {
-	Group  map[string]string `json:"group,omitempty"`
+	Group  map[string]string `json:"group,omitzero"`
 	Points []TimeSeriesPoint `json:"points"`
 }
 

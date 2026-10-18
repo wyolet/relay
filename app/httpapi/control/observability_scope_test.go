@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 func TestScopeOf(t *testing.T) {
@@ -119,7 +120,7 @@ func (f *fakeUsageReader) Events(_ context.Context, q usagelog.EventQuery) ([]us
 func (f *fakeUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (usagelog.SummaryResult, error) {
 	f.calls++
 	f.last = q.EventQuery
-	return usagelog.SummaryResult{Rows: []usagelog.SummaryRow{}}, nil
+	return usage.Summarize(f.events, q.GroupBy)
 }
 
 func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQuery) (usagelog.TimeSeriesResult, error) {

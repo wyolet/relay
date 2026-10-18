@@ -21,15 +21,21 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 	}
 
 	where, args := buildWhere(q.EventQuery, true)
-	grpExpr, args := groupExpr(groupBy, args)
+	grouped := usage.Grouped(groupBy)
+	selGroup, subGroup, groupClause := "", "", ungroupedHaving
+	if grouped {
+		var grpExpr string
+		grpExpr, args = groupExpr(groupBy, args)
+		selGroup, subGroup, groupClause = grpExpr+" AS grp,", "sub.grp, ", "GROUP BY grp"
+	}
 
 	// Query 1: scalar aggregates + latency percentiles.
 	scalarSQL := fmt.Sprintf(`
 SELECT
-    %s                                                       AS grp,
+    %s
     count(*)::bigint                                         AS requests,
-    count(*) FILTER (WHERE status >= 400)::bigint            AS error_count,
-    avg(duration_ms)::bigint                                 AS avg_ms,
+    `+errorSelectSQL+`,
+    trunc(avg(duration_ms))::bigint                          AS avg_ms,
     percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p50,
     percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p95,
     percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p99,
@@ -39,9 +45,9 @@ SELECT
     min(ts)                                                  AS first_seen,
     max(ts)                                                  AS last_seen
 FROM %s%s
-GROUP BY grp
+%s
 ORDER BY requests DESC`,
-		grpExpr, s.cfg.Table, where,
+		selGroup, s.cfg.Table, where, groupClause,
 	)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
@@ -53,7 +59,7 @@ ORDER BY requests DESC`,
 	type scalarRow struct {
 		grp        string
 		requests   int64
-		errCount   int64
+		errs       errorCols
 		avgMs      int64
 		p50, p95   int64
 		p99, maxMs int64
@@ -66,10 +72,15 @@ ORDER BY requests DESC`,
 	var scalars []scalarRow
 	for scalarRows.Next() {
 		var r scalarRow
-		if err := scalarRows.Scan(&r.grp, &r.requests, &r.errCount, &r.avgMs, &r.p50, &r.p95, &r.p99, &r.maxMs,
+		dest := []any{&r.requests, &r.errs.total, &r.errs.c4xx, &r.errs.c5xx, &r.errs.throttled,
+			&r.avgMs, &r.p50, &r.p95, &r.p99, &r.maxMs,
 			&r.ttft.avg, &r.ttft.p50, &r.ttft.p95, &r.ttft.p99, &r.ttft.max,
 			&r.cost, &r.unpriced,
-			&r.first, &r.last); err != nil {
+			&r.first, &r.last}
+		if grouped {
+			dest = append([]any{&r.grp}, dest...)
+		}
+		if err := scalarRows.Scan(dest...); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan summary scalar: %w", err)
 		}
 		scalars = append(scalars, r)
@@ -83,9 +94,12 @@ ORDER BY requests DESC`,
 	for i, r := range scalars {
 		groupIdx[r.grp] = i
 		rows[i] = usage.SummaryRow{
-			Group:      map[string]string{groupBy: r.grp},
+			Group:      usage.GroupLabel(groupBy, r.grp),
 			Requests:   r.requests,
-			ErrorCount: r.errCount,
+			ErrorCount: r.errs.total,
+			Errors4xx:  r.errs.c4xx,
+			Errors5xx:  r.errs.c5xx,
+			Throttled:  r.errs.throttled,
 			Tokens:     map[string]int64{},
 			DurationMs: usage.DurationStats{Avg: r.avgMs, P50: r.p50, P95: r.p95, P99: r.p99, Max: r.maxMs},
 			TTFTMs:     r.ttft.stats(),
@@ -100,11 +114,11 @@ ORDER BY requests DESC`,
 	// wrapped in a subquery so WHERE precedes the CROSS JOIN LATERAL.
 	if len(scalars) > 0 {
 		tokenSQL := fmt.Sprintf(`
-SELECT sub.grp, kv.key, sum(kv.value::bigint)::bigint
-FROM (SELECT %s AS grp, tokens FROM %s%s) AS sub
+SELECT %skv.key, sum(kv.value::bigint)::bigint
+FROM (SELECT %s tokens FROM %s%s) AS sub
 CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
-GROUP BY sub.grp, kv.key`,
-			grpExpr, s.cfg.Table, where,
+GROUP BY %skv.key`,
+			subGroup, selGroup, s.cfg.Table, where, subGroup,
 		)
 		tokenRows, err := s.pool.Query(ctx, tokenSQL, args...)
 		if err != nil {
@@ -115,7 +129,11 @@ GROUP BY sub.grp, kv.key`,
 		for tokenRows.Next() {
 			var grp, key string
 			var val int64
-			if err := tokenRows.Scan(&grp, &key, &val); err != nil {
+			dest := []any{&key, &val}
+			if grouped {
+				dest = append([]any{&grp}, dest...)
+			}
+			if err := tokenRows.Scan(dest...); err != nil {
 				return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan token row: %w", err)
 			}
 			if idx, ok := groupIdx[grp]; ok {

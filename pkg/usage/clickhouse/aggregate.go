@@ -2,6 +2,16 @@ package clickhouse
 
 import "github.com/wyolet/relay/pkg/usage"
 
+// errorSelectSQL counts errors and their status-class split, matching usage.SummaryRow's invariant (any status >= 500 is 5xx; 429 is throttled).
+const errorSelectSQL = `
+    toInt64(countIf(status >= 400))                  AS error_count,
+    toInt64(countIf(status >= 400 AND status < 500)) AS errors_4xx,
+    toInt64(countIf(status >= 500))                  AS errors_5xx,
+    toInt64(countIf(status = 429))                   AS throttled`
+
+// ungroupedHaving replaces GROUP BY when rows aren't split by a dimension: an aggregate without GROUP BY returns one all-default row over an empty set, and this drops it so no events means no rows.
+const ungroupedHaving = "HAVING count() > 0"
+
 // ttftSelectSQL aggregates TTFT (upstream_response_start µs → ms) over rows
 // that have upstream timing (sentinel -1 = none). The quantile/avg columns
 // are NaN when no row qualifies — scanned as Float64 and gated on ttft_count
@@ -25,6 +35,11 @@ const ttftSelectSQL = `
 const costSelectSQL = `
     toInt64(sumIf(cost_nanos, cost_nanos >= 0)) AS cost_nanos_sum,
     toInt64(countIf(cost_nanos < 0))            AS unpriced`
+
+// errorCols receives the errorSelectSQL columns for one result row.
+type errorCols struct {
+	total, c4xx, c5xx, throttled int64
+}
 
 // ttftCols receives the ttftSelectSQL columns for one result row.
 type ttftCols struct {

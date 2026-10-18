@@ -18,13 +18,18 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
 	}
 
-	grpExpr := groupBy // column name matches the GroupBy value in this schema
+	grouped := usage.Grouped(groupBy)
+	selGroup, groupClause := "", ungroupedHaving
 	var preArgs []any
-	if column, key, ok := usage.MapGroupKey(groupBy); ok {
-		// <map>[?] binds the key (never spliced into SQL text); a missing
-		// key yields '' (Map default), matching the other backends.
-		grpExpr = column + "[?]"
-		preArgs = []any{key}
+	if grouped {
+		grpExpr := groupBy // column name matches the GroupBy value in this schema
+		if column, key, ok := usage.MapGroupKey(groupBy); ok {
+			// <map>[?] binds the key (never spliced into SQL text); a missing
+			// key yields '' (Map default), matching the other backends.
+			grpExpr = column + "[?]"
+			preArgs = []any{key}
+		}
+		selGroup, groupClause = grpExpr+" AS grp,", "GROUP BY grp"
 	}
 
 	where, args := buildWhere(q.EventQuery, true)
@@ -34,9 +39,9 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 
 	sql := fmt.Sprintf(`
 SELECT
-    %s AS grp,
+    %s
     toInt64(count())                    AS requests,
-    toInt64(countIf(status >= 400))     AS error_count,
+    `+errorSelectSQL+`,
     sumMap(tokens)                      AS tokens,
     toInt64(avg(duration_ms))           AS avg_ms,
     toInt64(quantile(0.5)(duration_ms)) AS p50,
@@ -48,9 +53,9 @@ SELECT
     min(ts)                             AS first_seen,
     max(ts)                             AS last_seen
 FROM %s%s
-GROUP BY grp
+%s
 ORDER BY requests DESC`,
-		grpExpr, chTable, where)
+		selGroup, chTable, where, groupClause)
 
 	rows, err := s.conn.Query(ctx, sql, args...)
 	if err != nil {
@@ -63,7 +68,7 @@ ORDER BY requests DESC`,
 		var (
 			groupVal             string
 			requests             int64
-			errCount             int64
+			errs                 errorCols
 			tokens               map[string]int64
 			avgMs                int64
 			p50, p95, p99, maxMs int64
@@ -71,16 +76,24 @@ ORDER BY requests DESC`,
 			costNanos, unpriced  int64
 			firstSeen, lastSeen  time.Time
 		)
-		if err := rows.Scan(&groupVal, &requests, &errCount, &tokens, &avgMs, &p50, &p95, &p99, &maxMs,
+		dest := []any{&requests, &errs.total, &errs.c4xx, &errs.c5xx, &errs.throttled,
+			&tokens, &avgMs, &p50, &p95, &p99, &maxMs,
 			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
 			&costNanos, &unpriced,
-			&firstSeen, &lastSeen); err != nil {
+			&firstSeen, &lastSeen}
+		if grouped {
+			dest = append([]any{&groupVal}, dest...)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: scan summary: %w", err)
 		}
 		result.Rows = append(result.Rows, usage.SummaryRow{
-			Group:      map[string]string{groupBy: groupVal},
+			Group:      usage.GroupLabel(groupBy, groupVal),
 			Requests:   requests,
-			ErrorCount: errCount,
+			ErrorCount: errs.total,
+			Errors4xx:  errs.c4xx,
+			Errors5xx:  errs.c5xx,
+			Throttled:  errs.throttled,
 			Tokens:     tokens,
 			DurationMs: usage.DurationStats{
 				Avg: avgMs,

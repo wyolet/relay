@@ -2,23 +2,21 @@ package usage
 
 import "sort"
 
-// ttftMs derives upstream time-to-first-byte in ms. ok is false when the
-// event never reached upstream (no timing to aggregate).
-func ttftMs(ev Event) (int64, bool) {
+// ttftUs is the event's upstream time-to-first-byte in µs. ok is false when the event never reached upstream (no timing to aggregate).
+func ttftUs(ev Event) (int64, bool) {
 	if ev.Upstream == nil {
 		return 0, false
 	}
-	return ev.Upstream.ResponseStart / 1000, true // µs → ms
+	return ev.Upstream.ResponseStart, true
 }
 
-// optionalStats is durationStats for sample sets that may legitimately be
-// empty (TTFT): nil instead of an all-zero struct.
-func optionalStats(samples []int64) *DurationStats {
-	if len(samples) == 0 {
+// ttftStats aggregates µs samples and reports ms, nil when there are none. Averaging before converting matches the SQL backends (avg of µs / 1000, truncated) rather than averaging already-truncated milliseconds.
+func ttftStats(samplesUs []int64) *DurationStats {
+	if len(samplesUs) == 0 {
 		return nil
 	}
-	s := durationStats(samples)
-	return &s
+	s := durationStats(samplesUs)
+	return &DurationStats{Avg: s.Avg / 1000, P50: s.P50 / 1000, P95: s.P95 / 1000, P99: s.P99 / 1000, Max: s.Max / 1000}
 }
 
 // durationStats computes avg + percentiles + max from raw samples. For

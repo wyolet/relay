@@ -54,9 +54,14 @@ func MapGroupKey(g string) (column, key string, ok bool) {
 	return "", "", false
 }
 
-// IsValidGroupBy reports whether g is one of the supported group
-// dimensions (a ValidGroupBy entry or a dynamic map one).
+// GroupByNone aggregates the whole filtered slice into one row whose Group is an empty map. It is not a dimension, so ValidGroupBy leaves it out.
+const GroupByNone = "none"
+
+// IsValidGroupBy reports whether g is GroupByNone or one of the supported group dimensions (a ValidGroupBy entry or a dynamic map one).
 func IsValidGroupBy(g string) bool {
+	if g == GroupByNone {
+		return true
+	}
 	for _, v := range ValidGroupBy {
 		if g == v {
 			return true
@@ -66,7 +71,26 @@ func IsValidGroupBy(g string) bool {
 	return ok
 }
 
+// Grouped reports whether groupBy splits rows by a dimension; "" (one ungrouped series) and GroupByNone do not.
+func Grouped(groupBy string) bool {
+	return groupBy != "" && groupBy != GroupByNone
+}
+
+// GroupLabel is a row's Group map: nil for "", {} for GroupByNone, {groupBy: value} otherwise. Every backend builds labels through it so the shape cannot drift.
+func GroupLabel(groupBy, value string) map[string]string {
+	switch groupBy {
+	case "":
+		return nil
+	case GroupByNone:
+		return map[string]string{}
+	}
+	return map[string]string{groupBy: value}
+}
+
 func groupKey(ev Event, groupBy string) string {
+	if !Grouped(groupBy) {
+		return ""
+	}
 	if column, key, ok := MapGroupKey(groupBy); ok {
 		if column == "extras" {
 			return ev.Extras[key]

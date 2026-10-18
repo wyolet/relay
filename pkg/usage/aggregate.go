@@ -2,6 +2,7 @@ package usage
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"time"
 )
@@ -20,7 +21,8 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	}
 
 	type bucket struct {
-		count, errs    int64
+		count          int64
+		errs           errorCounts
 		tokens         map[string]int64
 		latencies      []int64
 		ttfts          []int64
@@ -41,14 +43,12 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 			groups[key] = b
 		}
 		b.count++
-		if ev.Status >= 400 {
-			b.errs++
-		}
+		b.errs.add(ev.Status)
 		for k, v := range ev.Tokens {
 			b.tokens[k] += v
 		}
 		b.latencies = append(b.latencies, ev.DurationMs)
-		if ttft, ok := ttftMs(ev); ok {
+		if ttft, ok := ttftUs(ev); ok {
 			b.ttfts = append(b.ttfts, ttft)
 		}
 		if ev.CostNanos != nil {
@@ -73,12 +73,15 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	rows := make([]SummaryRow, 0, len(groups))
 	for key, b := range groups {
 		rows = append(rows, SummaryRow{
-			Group:      map[string]string{groupBy: key},
+			Group:      GroupLabel(groupBy, key),
 			Requests:   b.count,
-			ErrorCount: b.errs,
+			ErrorCount: b.errs.total,
+			Errors4xx:  b.errs.c4xx,
+			Errors5xx:  b.errs.c5xx,
+			Throttled:  b.errs.throttled,
 			Tokens:     b.tokens,
 			DurationMs: durationStats(b.latencies),
-			TTFTMs:     optionalStats(b.ttfts),
+			TTFTMs:     ttftStats(b.ttfts),
 			FirstSeen:  b.first,
 			LastSeen:   b.last,
 			CostNanos:  b.cost,
@@ -110,12 +113,12 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 	}
 
 	type point struct {
-		requests, errs   int64
-		errs4xx, errs5xx int64
-		tokens           map[string]int64
-		latencies        []int64
-		ttfts            []int64
-		cost, unpriced   int64
+		requests       int64
+		errs           errorCounts
+		tokens         map[string]int64
+		latencies      []int64
+		ttfts          []int64
+		cost, unpriced int64
 	}
 	// seriesKey -> bucketUnix -> point
 	series := map[string]map[int64]*point{}
@@ -126,10 +129,7 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		if ev.LogOnly() {
 			continue
 		}
-		sk := ""
-		if groupBy != "" {
-			sk = groupKey(ev, groupBy)
-		}
+		sk := groupKey(ev, groupBy)
 		buckets, ok := series[sk]
 		if !ok {
 			buckets = map[int64]*point{}
@@ -143,19 +143,12 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		}
 		p.requests++
 		totals[sk]++
-		if ev.Status >= 400 {
-			p.errs++
-			if ev.Status < 500 {
-				p.errs4xx++
-			} else {
-				p.errs5xx++
-			}
-		}
+		p.errs.add(ev.Status)
 		for k, v := range ev.Tokens {
 			p.tokens[k] += v
 		}
 		p.latencies = append(p.latencies, ev.DurationMs)
-		if ttft, ok := ttftMs(ev); ok {
+		if ttft, ok := ttftUs(ev); ok {
 			p.ttfts = append(p.ttfts, ttft)
 		}
 		if ev.CostNanos != nil {
@@ -185,25 +178,42 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 			points = append(points, TimeSeriesPoint{
 				Bucket:     time.Unix(bu, 0).UTC(),
 				Requests:   p.requests,
-				ErrorCount: p.errs,
-				Errors4xx:  p.errs4xx,
-				Errors5xx:  p.errs5xx,
+				ErrorCount: p.errs.total,
+				Errors4xx:  p.errs.c4xx,
+				Errors5xx:  p.errs.c5xx,
+				Throttled:  p.errs.throttled,
 				Tokens:     p.tokens,
 				DurationMs: durationStats(p.latencies),
-				TTFTMs:     optionalStats(p.ttfts),
+				TTFTMs:     ttftStats(p.ttfts),
 				CostNanos:  p.cost,
 				Unpriced:   p.unpriced,
 			})
 		}
-		row := TimeSeriesRow{Points: points}
-		if groupBy != "" {
-			row.Group = map[string]string{groupBy: sk}
-		}
-		rows = append(rows, row)
+		rows = append(rows, TimeSeriesRow{Group: GroupLabel(groupBy, sk), Points: points})
 	}
 	SortTimeSeriesRows(rows, totals, groupBy)
 
 	return TimeSeriesResult{Rows: rows, From: from, To: to}, nil
+}
+
+// errorCounts tallies ErrorCount and its status-class split for one row (invariant on SummaryRow).
+type errorCounts struct {
+	total, c4xx, c5xx, throttled int64
+}
+
+func (c *errorCounts) add(status int) {
+	if status < 400 {
+		return
+	}
+	c.total++
+	if status < 500 {
+		c.c4xx++
+	} else {
+		c.c5xx++
+	}
+	if status == http.StatusTooManyRequests {
+		c.throttled++
+	}
 }
 
 // SortTimeSeriesRows orders series by total request count desc, with the
@@ -213,7 +223,7 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 // return series in the same order.
 func SortTimeSeriesRows(rows []TimeSeriesRow, totals map[string]int64, groupBy string) {
 	key := func(r TimeSeriesRow) string {
-		if groupBy != "" && r.Group != nil {
+		if Grouped(groupBy) && r.Group != nil {
 			return r.Group[groupBy]
 		}
 		return ""

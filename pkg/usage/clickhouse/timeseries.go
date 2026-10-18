@@ -30,7 +30,8 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	bucketExpr := fmt.Sprintf("toStartOfInterval(ts, INTERVAL %d second)", intervalSec)
 	selCols := bucketExpr + " AS bucket"
 	groupOrder := "bucket"
-	if groupBy != "" {
+	grouped := usage.Grouped(groupBy)
+	if grouped {
 		grpExpr := groupBy
 		if column, key, ok := usage.MapGroupKey(groupBy); ok {
 			grpExpr = column + "[?]"
@@ -46,9 +47,7 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 SELECT
     %s,
     toInt64(count())                AS requests,
-    toInt64(countIf(status >= 400)) AS error_count,
-    toInt64(countIf(status >= 400 AND status < 500)) AS errors_4xx,
-    toInt64(countIf(status >= 500)) AS errors_5xx,
+    `+errorSelectSQL+`,
     sumMap(tokens)                  AS tokens,
     toInt64(avg(duration_ms))           AS avg_ms,
     toInt64(quantile(0.5)(duration_ms)) AS p50,
@@ -78,8 +77,7 @@ ORDER BY %s`,
 			grp                  string
 			bucket               time.Time
 			requests             int64
-			errCount             int64
-			errs4xx, errs5xx     int64
+			errs                 errorCols
 			tokens               map[string]int64
 			avgMs                int64
 			p50, p95, p99, maxMs int64
@@ -88,12 +86,12 @@ ORDER BY %s`,
 			first                time.Time
 			last                 time.Time
 		)
-		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx, &tokens,
+		dest := []any{&bucket, &requests, &errs.total, &errs.c4xx, &errs.c5xx, &errs.throttled, &tokens,
 			&avgMs, &p50, &p95, &p99, &maxMs,
 			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
 			&costNanos, &unpriced,
 			&first, &last}
-		if groupBy != "" {
+		if grouped {
 			dest = append([]any{&grp}, dest...)
 		}
 		if err := rows.Scan(dest...); err != nil {
@@ -101,20 +99,17 @@ ORDER BY %s`,
 		}
 		idx, ok := byKey[grp]
 		if !ok {
-			row := usage.TimeSeriesRow{}
-			if groupBy != "" {
-				row.Group = map[string]string{groupBy: grp}
-			}
-			res.Rows = append(res.Rows, row)
+			res.Rows = append(res.Rows, usage.TimeSeriesRow{Group: usage.GroupLabel(groupBy, grp)})
 			idx = len(res.Rows) - 1
 			byKey[grp] = idx
 		}
 		res.Rows[idx].Points = append(res.Rows[idx].Points, usage.TimeSeriesPoint{
 			Bucket:     bucket.UTC(),
 			Requests:   requests,
-			ErrorCount: errCount,
-			Errors4xx:  errs4xx,
-			Errors5xx:  errs5xx,
+			ErrorCount: errs.total,
+			Errors4xx:  errs.c4xx,
+			Errors5xx:  errs.c5xx,
+			Throttled:  errs.throttled,
 			Tokens:     tokens,
 			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
 			TTFTMs:     ttft.stats(),

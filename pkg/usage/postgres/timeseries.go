@@ -30,22 +30,22 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	where, args := buildWhere(q.EventQuery, true)
 	bucketExpr := fmt.Sprintf("date_bin(interval '%d seconds', ts, TIMESTAMPTZ 'epoch')", intervalSec)
 
-	selPrefix, grpCols := "", ""
-	if groupBy != "" {
+	grouped := usage.Grouped(groupBy)
+	selPrefix, grpCols, subGrp := "", "", ""
+	if grouped {
 		var grpExpr string
 		grpExpr, args = groupExpr(groupBy, args)
 		selPrefix = grpExpr + " AS grp, "
 		grpCols = "grp, "
+		subGrp = "sub.grp, "
 	}
 
 	scalarSQL := fmt.Sprintf(`
 SELECT
     %s%s AS bucket,
     count(*)::bigint                              AS requests,
-    count(*) FILTER (WHERE status >= 400)::bigint AS error_count,
-    count(*) FILTER (WHERE status >= 400 AND status < 500)::bigint AS errors_4xx,
-    count(*) FILTER (WHERE status >= 500)::bigint AS errors_5xx,
-    avg(duration_ms)::bigint                      AS avg_ms,
+    `+errorSelectSQL+`,
+    trunc(avg(duration_ms))::bigint               AS avg_ms,
     (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::bigint  AS p50,
     (percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p95,
     (percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p99,
@@ -76,20 +76,19 @@ ORDER BY %sbucket`,
 			grp                  string
 			bucket               time.Time
 			requests             int64
-			errCount             int64
-			errs4xx, errs5xx     int64
+			errs                 errorCols
 			avgMs                int64
 			p50, p95, p99, maxMs int64
 			ttft                 ttftCols
 			costNanos, unpriced  int64
 			first, last          time.Time
 		)
-		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx,
+		dest := []any{&bucket, &requests, &errs.total, &errs.c4xx, &errs.c5xx, &errs.throttled,
 			&avgMs, &p50, &p95, &p99, &maxMs,
 			&ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
 			&costNanos, &unpriced,
 			&first, &last}
-		if groupBy != "" {
+		if grouped {
 			dest = append([]any{&grp}, dest...)
 		}
 		if err := scalarRows.Scan(dest...); err != nil {
@@ -97,20 +96,17 @@ ORDER BY %sbucket`,
 		}
 		ri, ok := rowIdx[grp]
 		if !ok {
-			row := usage.TimeSeriesRow{}
-			if groupBy != "" {
-				row.Group = map[string]string{groupBy: grp}
-			}
-			res.Rows = append(res.Rows, row)
+			res.Rows = append(res.Rows, usage.TimeSeriesRow{Group: usage.GroupLabel(groupBy, grp)})
 			ri = len(res.Rows) - 1
 			rowIdx[grp] = ri
 		}
 		res.Rows[ri].Points = append(res.Rows[ri].Points, usage.TimeSeriesPoint{
 			Bucket:     bucket.UTC(),
 			Requests:   requests,
-			ErrorCount: errCount,
-			Errors4xx:  errs4xx,
-			Errors5xx:  errs5xx,
+			ErrorCount: errs.total,
+			Errors4xx:  errs.c4xx,
+			Errors5xx:  errs.c5xx,
+			Throttled:  errs.throttled,
 			Tokens:     map[string]int64{},
 			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
 			TTFTMs:     ttft.stats(),
@@ -136,19 +132,7 @@ SELECT %ssub.bucket, kv.key, sum(kv.value::bigint)::bigint
 FROM (SELECT %s%s AS bucket, tokens FROM %s%s) AS sub
 CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
 GROUP BY %ssub.bucket, kv.key`,
-			func() string {
-				if groupBy != "" {
-					return "sub.grp, "
-				}
-				return ""
-			}(),
-			selPrefix, bucketExpr, s.cfg.Table, where,
-			func() string {
-				if groupBy != "" {
-					return "sub.grp, "
-				}
-				return ""
-			}(),
+			subGrp, selPrefix, bucketExpr, s.cfg.Table, where, subGrp,
 		)
 		tokenRows, err := s.pool.Query(ctx, tokenSQL, args...)
 		if err != nil {
@@ -164,7 +148,7 @@ GROUP BY %ssub.bucket, kv.key`,
 				val    int64
 			)
 			dest := []any{&bucket, &key, &val}
-			if groupBy != "" {
+			if grouped {
 				dest = append([]any{&grp}, dest...)
 			}
 			if err := tokenRows.Scan(dest...); err != nil {

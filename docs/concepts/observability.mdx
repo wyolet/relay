@@ -45,7 +45,8 @@ the filters — `source` (default) | `model` | `host` | `policy` |
 `model_id` | `host_id` | `policy_id` | `project_id` | `team_id` |
 `principal_id` | `credential_id` | `relay_key_hash` | `host_key_id` |
 `finish_reason` | `error_kind`, or `tags.<key>` to group by one caller
-tag's value — so per-project or per-service-account spend is one query:
+tag's value, or `none` for one row (`group` is `{}`) over everything the
+filters match — so per-project or per-service-account spend is one query:
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
@@ -59,7 +60,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ### Failed requests
 
-`error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above; time series split it into `errors_4xx` and `errors_5xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.
+`error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above and is split into `errors_4xx` and `errors_5xx` (every status of 500 or above). `throttled` counts the 429s, which are also counted in `errors_4xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.
 
 When the provider answered with an error status, the event has that status and `error_kind` `upstream_error`, whether Relay passed the response to the caller or returned it after every key failed. That includes a 4xx the request itself caused, such as an invalid parameter or a prompt over the context window; `status` tells the two apart. `error_message` is `upstream returned <status>`, or, when every key failed, the start of the provider's error body. The full body is kept only by [payload logging](#payload-logging). Other provider-side kinds are `upstream_unreachable` (no connection to the host), `timeout` and `client_canceled`. In proxy mode a request that failed before the provider answered (a refused connection, a TLS error) is recorded as `upstream_error` with status `0`.
 
