@@ -236,5 +236,6 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -o pipefail
           mkdir -p "$RUNNER_TEMP/review/results"
           scripts/review-report.sh "$RUNNER_TEMP/review" | tee -a "$GITHUB_STEP_SUMMARY"

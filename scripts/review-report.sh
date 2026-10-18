@@ -21,7 +21,10 @@ range="${from:0:7}..${to:0:7}"
 
 gh_do() { if [ "${DRY_RUN:-}" = 1 ]; then printf 'would run: gh'; printf ' %q' "$@"; echo; else gh "$@"; fi; }
 
-results=$(cat "$ctx"/results/*.json 2>/dev/null | jq -sc . || echo '[]')
+shopt -s nullglob
+result_files=("$ctx"/results/*.json)
+results='[]'
+[ "${#result_files[@]}" -eq 0 ] || results=$(jq -sc . "${result_files[@]}")
 expected=$(jq -c '[(.areas[] | {unit: .id, kind: "area"}), (.prs[] | {unit: .id, kind: "approach"})] + [{unit: "cross", kind: "cross"}]' "$ctx/units.json")
 skipped=$(jq -nc --argjson e "$expected" --argjson r "$results" '[$e[] | select(. as $u | any($r[]; .unit == $u.unit and .ok) | not) | .unit]')
 cost=$(jq -r '[.[].cost] | add // 0 | . * 100 | round / 100' <<<"$results")
