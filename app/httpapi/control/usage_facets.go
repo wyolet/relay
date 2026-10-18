@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -12,12 +13,21 @@ import (
 
 type usageFacetsInput struct {
 	UsageFilterInput
-	Dims  []string `query:"dims" doc:"Required. Comma-separated dimensions to list values for, at most 16, no duplicates: any group_by value except \"none\" (e.g. \"model_id,host_id,tags.env\")."`
+	Dims  []string `query:"dims,explode" doc:"Required. Dimensions to list values for, repeated (dims=model_id&dims=host_id) or comma-separated, at most 16, no duplicates: any group_by value except \"none\"."`
 	Limit int      `query:"limit" doc:"Values returned per dimension. Default 50, max 200."`
 }
 
 type usageFacetsOutput struct {
 	Body usage.FacetsResult
+}
+
+// splitFacetDims accepts each repeated dims value as a comma-separated list too; no dimension name contains a comma.
+func splitFacetDims(raw []string) []string {
+	var dims []string
+	for _, v := range raw {
+		dims = append(dims, strings.Split(v, ",")...)
+	}
+	return dims
 }
 
 // validateFacetDims rejects an empty, oversized, duplicated or unknown dimension list.
@@ -64,6 +74,7 @@ func registerUsageFacets(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
+		in.Dims = splitFacetDims(in.Dims)
 		if err := validateFacetDims(in.Dims); err != nil {
 			return nil, err
 		}

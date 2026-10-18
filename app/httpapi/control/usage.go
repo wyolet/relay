@@ -109,27 +109,27 @@ type UsageFilterInput struct {
 	From         string   `query:"from" doc:"Absolute lower bound (RFC3339). Overrides since."`
 	To           string   `query:"to" doc:"Absolute upper bound (RFC3339)."`
 	RequestID    string   `query:"request_id" doc:"Exact match on a single request id (deep-link one event)."`
-	RelayKeyHash []string `query:"relay_key_hash" doc:"Match any of the given sha256 hashes of the inbound bearer."`
-	PolicyID     []string `query:"policy_id" doc:"Match any of the given Policy.metadata.id values."`
-	ProjectID    []string `query:"project_id" doc:"Match any of the given Project.metadata.id values."`
-	TeamID       []string `query:"team_id" doc:"Match any of the given Team.metadata.id values."`
-	PrincipalID  []string `query:"principal_id" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
-	ModelID      []string `query:"model_id" doc:"Match any of the given Model.metadata.id values."`
-	HostID       []string `query:"host_id" doc:"Match any of the given Host.metadata.id values."`
-	Source       []string `query:"source" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
-	FinishReason []string `query:"finish_reason" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\" | \"other\"."`
-	ErrorKind    []string `query:"error_kind" doc:"Match any of the given error_kind values."`
+	RelayKeyHash []string `query:"relay_key_hash,explode" doc:"Match any of the given sha256 hashes of the inbound bearer."`
+	PolicyID     []string `query:"policy_id,explode" doc:"Match any of the given Policy.metadata.id values."`
+	ProjectID    []string `query:"project_id,explode" doc:"Match any of the given Project.metadata.id values."`
+	TeamID       []string `query:"team_id,explode" doc:"Match any of the given Team.metadata.id values."`
+	PrincipalID  []string `query:"principal_id,explode" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
+	ModelID      []string `query:"model_id,explode" doc:"Match any of the given Model.metadata.id values."`
+	HostID       []string `query:"host_id,explode" doc:"Match any of the given Host.metadata.id values."`
+	Source       []string `query:"source,explode" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
+	FinishReason []string `query:"finish_reason,explode" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\" | \"other\"."`
+	ErrorKind    []string `query:"error_kind,explode" doc:"Match any of the given error_kind values."`
 	StatusMin    int      `query:"status_min" doc:"Minimum HTTP status to include."`
 	StatusMax    int      `query:"status_max" doc:"Maximum HTTP status to include."`
 
-	HostKeyID      []string `query:"host_key_id" doc:"Match any of the given HostKey.metadata.id values."`
-	RequestedModel []string `query:"requested_model" doc:"Match any of the model strings as the caller sent them."`
-	Model          []string `query:"model" doc:"Match any of the given model slugs (event-time metadata.name, denormalized)."`
-	Host           []string `query:"host" doc:"Match any of the given host slugs (event-time metadata.name, denormalized)."`
-	Policy         []string `query:"policy" doc:"Match any of the given policy slugs (event-time metadata.name, denormalized)."`
-	Provider       []string `query:"provider" doc:"Match any of the given provider slugs (event-time, denormalized)."`
-	RelayKey       []string `query:"relay_key" doc:"Match any of the given relay key slugs (event-time metadata.name, denormalized)."`
-	Status         []int    `query:"status" doc:"Match any of these exact HTTP status codes."`
+	HostKeyID      []string `query:"host_key_id,explode" doc:"Match any of the given HostKey.metadata.id values."`
+	RequestedModel []string `query:"requested_model,explode" doc:"Match any of the model strings as the caller sent them."`
+	Model          []string `query:"model,explode" doc:"Match any of the given model slugs (event-time metadata.name, denormalized)."`
+	Host           []string `query:"host,explode" doc:"Match any of the given host slugs (event-time metadata.name, denormalized)."`
+	Policy         []string `query:"policy,explode" doc:"Match any of the given policy slugs (event-time metadata.name, denormalized)."`
+	Provider       []string `query:"provider,explode" doc:"Match any of the given provider slugs (event-time, denormalized)."`
+	RelayKey       []string `query:"relay_key,explode" doc:"Match any of the given relay key slugs (event-time metadata.name, denormalized)."`
+	Status         []int    `query:"status,explode" doc:"Match any of these exact HTTP status codes."`
 	StatusClass    string   `query:"status_class" doc:"Convenience status band: \"2xx\" | \"4xx\" | \"5xx\". Sets status_min/max."`
 	Streamed       string   `query:"streamed" enum:"true,false" doc:"true = only streamed responses, false = only non-streamed."`
 	Error          string   `query:"error" enum:"true,false" doc:"true = only errors (status>=400 or error_kind set), false = only successes."`
@@ -139,7 +139,7 @@ type UsageFilterInput struct {
 	TTFTMsMin      int64    `query:"ttft_ms_min" doc:"Minimum upstream time-to-first-byte (ms); excludes requests with no upstream timing."`
 	TTFTMsMax      int64    `query:"ttft_ms_max" doc:"Maximum upstream time-to-first-byte (ms)."`
 	Q              string   `query:"q" doc:"Free-text substring across request_id, model_id, requested_model, source."`
-	Tag            []string `query:"tag" doc:"Caller-tag filter as \"key:value\" (repeatable). Same key repeated matches any of its values; different keys must all match."`
+	Tag            []string `query:"tag,explode" doc:"Caller-tag filter as \"key:value\" (repeatable). Same key repeated matches any of its values; different keys must all match."`
 }
 
 func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
