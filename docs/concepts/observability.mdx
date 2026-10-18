@@ -86,7 +86,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 `GET /usage/facets` lists the values a filter can take. `dims` names up to 16 dimensions, comma-separated, from the `group_by` vocabulary (`none` excluded, `tags.<key>` and `extras.<key>` allowed); `limit` caps the values per dimension (default 50, max 200). Each dimension is counted with every filter applied except its own, so `model_id` values honour `host_id=` but ignore `model_id=`, and a dropdown keeps showing the alternatives to what is selected. Values are ordered by request count, then by value; the empty value is listed like any other (traffic without a relay key, for example). Rows are counted as in summaries, so requests rejected before reaching a provider are left out.
 
-An id value carries a `label`: the latest non-empty slug recorded beside that id in the window, so a renamed model shows its current name. When the events carry none (rows recorded before the slug existed, host keys), the label comes from the current catalog: models, hosts, policies, projects, teams, service accounts, relay keys and host keys. User principals have no label. `from`/`to` echo the requested window.
+An id value carries a `label`: the latest non-empty slug recorded beside that id in the window, so a renamed model shows its current name. When the events carry none (rows recorded before the slug existed, host keys), the label comes from the current catalog: models, hosts, policies, projects, teams, service accounts, relay keys and host keys. A user principal, which events never name, is labelled with its username. `from`/`to` echo the requested window.
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \

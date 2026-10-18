@@ -54,7 +54,7 @@ func registerUsageFacets(api huma.API, d Deps, protect huma.Middlewares) {
 			"stream with request counts, ordered by requests descending then value. Each dimension " +
 			"ignores its own filter and keeps every other one, so model_id values honour host_id= but not model_id=. " +
 			"Rows are counted like /usage/summary: requests rejected before reaching an upstream are excluded. " +
-			"An id value carries a `label`: its latest non-empty slug in the window, else its current catalog name. " +
+			"An id value carries a `label`: its latest non-empty slug in the window, else its current catalog name, else (user principals) the username. " +
 			"`from`/`to` echo the requested window.",
 		Tags:        []string{"usage"},
 		Middlewares: protect,
@@ -87,7 +87,7 @@ func registerUsageFacets(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
-		fillFacetLabels(d.Catalog, facets)
+		fillFacetLabels(ctx, d.Catalog, userNames(d), facets)
 		out.Body.Facets = facets
 		return out, nil
 	})

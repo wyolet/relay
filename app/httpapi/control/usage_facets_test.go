@@ -1,7 +1,9 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -129,5 +131,59 @@ func TestUsageFacetsFallsBackToCatalogLabels(t *testing.T) {
 	}
 	if strings.Contains(body, `"label":""`) {
 		t.Fatalf("an empty label must be omitted: %s", body)
+	}
+}
+
+// fakeUsernames answers from names and records each call's ids.
+type fakeUsernames struct {
+	names map[string]string
+	err   error
+	calls [][]string
+}
+
+func (f *fakeUsernames) Usernames(_ context.Context, ids []string) (map[string]string, error) {
+	f.calls = append(f.calls, ids)
+	return f.names, f.err
+}
+
+// User principals are named from the users table in one query, only for values the event slug left unlabeled.
+func TestFacetLabelsNameUserPrincipalsInOneLookup(t *testing.T) {
+	facets := func() map[string][]usage.FacetValue {
+		return map[string][]usage.FacetValue{
+			"principal_id": {
+				{Value: "u-alice", Requests: 3},
+				{Value: "sa-1", Label: "ci-bot", Requests: 2},
+				{Value: "u-gone", Requests: 1},
+				{Value: "", Requests: 1},
+			},
+			"model_id": {{Value: "u-alice", Requests: 1}},
+		}
+	}
+	users := &fakeUsernames{names: map[string]string{"u-alice": "alice"}}
+	got := facets()
+	fillFacetLabels(t.Context(), nil, users, got)
+	if want := [][]string{{"u-alice", "u-gone"}}; !reflect.DeepEqual(users.calls, want) {
+		t.Fatalf("lookups = %v, want one for the unlabeled principals %v", users.calls, want)
+	}
+	want := facets()
+	want["principal_id"][0].Label = "alice"
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("facets = %+v, want %+v", got, want)
+	}
+
+	failing := &fakeUsernames{err: errors.New("db down")}
+	got = facets()
+	fillFacetLabels(t.Context(), nil, failing, got)
+	if !reflect.DeepEqual(got, facets()) {
+		t.Fatalf("a failed lookup changed labels: %+v", got)
+	}
+
+	got = facets()
+	fillFacetLabels(t.Context(), nil, nil, got)
+	if !reflect.DeepEqual(got, facets()) {
+		t.Fatalf("no users store changed labels: %+v", got)
+	}
+	if userNames(Deps{}) != nil {
+		t.Fatal("a nil users store must give a nil lookup")
 	}
 }
