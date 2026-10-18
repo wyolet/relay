@@ -94,7 +94,7 @@ Configuration: the `AI_REVIEW_RELAY_KEY` secret (a relay key of its own, so revi
 
 Releasing without waiting for the next green run means opening a PR from `dev` into `main` by hand; it runs the full tier itself.
 
-The tag starts `.github/workflows/release.yml`. It doesn't re-run the tests: it refuses to publish unless CI passed for the push of the tagged commit to `main`. It builds the images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one, and `wyolet/catalog-server:<version>`), fails on fixable HIGH/CRITICAL vulnerabilities, pushes them to Docker Hub and GHCR with signed provenance and SBOM attestations, publishes the Helm chart to `oci://ghcr.io/wyolet/charts/relay` (chart version = image version), and creates the GitHub release with the SBOMs attached. [`SECURITY.md`](../SECURITY.md) shows how to verify the attestations.
+The tag starts `.github/workflows/release.yml`. It doesn't re-run the tests: it refuses to publish unless CI passed for the push of the tagged commit to `main`. It builds the images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one, and `wyolet/catalog-server:<version>`), fails on fixable HIGH/CRITICAL vulnerabilities, pushes them to Docker Hub and GHCR (catalog-server to GHCR only) with signed provenance and SBOM attestations, publishes the Helm chart to `oci://ghcr.io/wyolet/charts/relay` (chart version = image version), and creates the GitHub release with the SBOMs attached. [`SECURITY.md`](../SECURITY.md) shows how to verify the attestations.
 
 To exercise the pipeline without publishing: `gh workflow run release.yml --ref <branch>` (`dry_run` defaults to true).
 

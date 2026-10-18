@@ -66,4 +66,4 @@ gh attestation verify oci://ghcr.io/wyolet/relay:<version> --repo wyolet/relay \
 gh attestation verify relay-<version>-lean.cdx.json --repo wyolet/relay
 ```
 
-The standalone image is `ghcr.io/wyolet/relay:<version>-standalone`. The catalog-server image is `ghcr.io/wyolet/catalog-server:<version>` (`docker.io/wyolet/catalog-server`), with the same `--repo wyolet/relay` and its SBOM file named `relay-<version>-catalog-server.cdx.json`. Releases are built on self-hosted runners: an attestation proves which workflow and commit produced an image, not that the build ran isolated from other workloads on that infrastructure.
+The standalone image is `ghcr.io/wyolet/relay:<version>-standalone`. The catalog-server image is `ghcr.io/wyolet/catalog-server:<version>` (GHCR only), with the same `--repo wyolet/relay` and its SBOM file named `relay-<version>-catalog-server.cdx.json`. Releases are built on self-hosted runners: an attestation proves which workflow and commit produced an image, not that the build ran isolated from other workloads on that infrastructure.
