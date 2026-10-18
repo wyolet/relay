@@ -3,6 +3,7 @@ package keyring
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 
@@ -158,12 +159,20 @@ func (r *Ring) createPrimary(ctx context.Context, scope string, expected *[16]by
 		ids = append(ids, *expected)
 	}
 	r.mu.Lock()
-	err = r.reloadIDsLocked(ctx, nil, map[[16]byte][]byte{id: dek}, ids...)
-	r.mu.Unlock()
-	if err != nil {
+	defer r.mu.Unlock()
+	if err := r.reloadIDsLocked(ctx, nil, ids...); err != nil {
 		return nil, err
 	}
-	return &entry{key: dk, dek: dek}, nil
+	// The new key is used only as the store returns it, unwrapped from the stored bytes, so a store that saved or answered something else cannot leave this Ring writing values other processes cannot read. Any held KEK is accepted: a concurrent rewrap may already have moved the key.
+	e := r.view.Load().keys[id]
+	switch {
+	case e == nil || e.key.Scope != scope || e.dek == nil || subtle.ConstantTimeCompare(e.dek, dek) != 1:
+		return nil, fmt.Errorf("%w: data key %s of scope %q", ErrStoreMismatch, FormatID(id), scope)
+	case e.key.State != Primary:
+		// Demoted by another process between the insert and the read.
+		return nil, fmt.Errorf("%w: data key %s demoted after its insert", ErrConflict, FormatID(id))
+	}
+	return e, nil
 }
 
 // ensureTarget reads the target KEK, setting it to the first KEK passed to kek.NewSet when the store has none yet (the first data key ever).

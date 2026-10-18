@@ -84,6 +84,8 @@ var (
 	ErrInUse = errors.New("keyring: data key is in use")
 	// ErrTooRecent refuses destroying a key demoted less than Options.DestroyAfter ago.
 	ErrTooRecent = errors.New("keyring: data key demoted too recently")
+	// ErrStoreMismatch reports that the store's read of a data key just created does not match what was written: another scope, a KEK this Ring does not hold, or wrapped bytes that do not unwrap to the new key.
+	ErrStoreMismatch = errors.New("keyring: store returned a different data key than written")
 )
 
 // Store persists data keys and the target KEK. Every method must be safe for concurrent use; the conditional writes must be atomic.

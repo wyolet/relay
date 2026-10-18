@@ -145,6 +145,56 @@ func (c *counting) List(ctx context.Context) ([]keyring.DataKey, error) {
 	return c.Store.List(ctx)
 }
 
+// lying wraps a Store and alters what InsertPrimary saves or what Get returns, as a faulty store would.
+type lying struct {
+	keyring.Store
+	onInsert func(*keyring.DataKey)
+	onGet    func(*keyring.DataKey)
+}
+
+func (l *lying) InsertPrimary(ctx context.Context, k keyring.DataKey, expected *[16]byte) error {
+	if l.onInsert != nil {
+		k.Wrapped = bytes.Clone(k.Wrapped)
+		l.onInsert(&k)
+	}
+	return l.Store.InsertPrimary(ctx, k, expected)
+}
+
+func (l *lying) Get(ctx context.Context, id [16]byte) (keyring.DataKey, error) {
+	k, err := l.Store.Get(ctx, id)
+	if err == nil && l.onGet != nil {
+		l.onGet(&k)
+	}
+	return k, err
+}
+
+// gated wraps a Store; once armed, the next Get closes entered and blocks until release or until its ctx ends, then panics when panics is set.
+type gated struct {
+	keyring.Store
+	armed            atomic.Bool
+	panics           bool
+	entered, release chan struct{}
+}
+
+func newGated(st keyring.Store, panics bool) *gated {
+	return &gated{Store: st, panics: panics, entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *gated) Get(ctx context.Context, id [16]byte) (keyring.DataKey, error) {
+	if g.armed.CompareAndSwap(true, false) {
+		close(g.entered)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+			return keyring.DataKey{}, ctx.Err()
+		}
+		if g.panics {
+			panic("store failed")
+		}
+	}
+	return g.Store.Get(ctx, id)
+}
+
 func newRing(t testing.TB, st keyring.Store, c *clock, keks ...kek.KEK) *keyring.Ring {
 	t.Helper()
 	r, err := keyring.New(ctx, st, newSet(t, keks...), keyring.Options{Now: c.Now})
