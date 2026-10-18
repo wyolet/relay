@@ -9,12 +9,15 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/wyolet/relay/app/actor"
 )
 
 // ControlHealth is the /healthz body, the same on 200 and 503.
 type ControlHealth struct {
-	Status   string            `json:"status" enum:"ok,degraded" doc:"Overall health verdict."`
-	Backends map[string]string `json:"backends" doc:"Status per backend, keyed pg (the database) and redis (sessions and rate limits, absent when state is in memory). Each value is \"ok\" or \"error\"."`
+	Status              string            `json:"status" enum:"ok,degraded" doc:"Overall health verdict."`
+	Backends            map[string]string `json:"backends" doc:"Status per backend, keyed pg (the database) and redis (sessions and rate limits, absent when state is in memory). Each value is \"ok\" or \"error\"."`
+	MasterKeyConfigured *bool             `json:"master_key_configured,omitempty" doc:"Whether a master key is set, so stored host keys can be encrypted. Present for authenticated callers only."`
 }
 
 type healthzOutput struct {
@@ -58,6 +61,10 @@ func registerHealth(api huma.API, d Deps) {
 	}, func(ctx context.Context, _ *struct{}) (*healthzOutput, error) {
 		out := &healthzOutput{Status: http.StatusOK}
 		out.Body = pingBackends(ctx, d.HealthChecks)
+		// The endpoint is public; how secrets are held is for signed-in callers only, as with /version's license block.
+		if actor.From(ctx).IsAuthenticated() {
+			out.Body.MasterKeyConfigured = &d.MasterKeyConfigured
+		}
 		if out.Body.Status != "ok" {
 			out.Status = http.StatusServiceUnavailable
 		}

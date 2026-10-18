@@ -39,6 +39,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -96,6 +97,7 @@ func mountDeps(t *testing.T) Deps {
 		PolicyBinding:  policybinding.NewStore(pool),
 		Secrets:        secReg,
 		Stored:         secStored,
+		SCIMClients:    authpg.NewSCIMTokens(pool),
 	}
 	cat := appcatalog.New(stores.Provider, stores.Host, stores.Policy, stores.Model,
 		stores.HostKey, stores.RateLimit, stores.Key, stores.Pricing, stores.Binding)

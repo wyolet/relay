@@ -21,6 +21,31 @@ type healthBody struct {
 	Backends map[string]string `json:"backends"`
 }
 
+// Whether a master key is set is posture detail: a signed-in caller sees it, an anonymous one doesn't.
+func TestHealthzMasterKeyOnlyForAuthenticatedCallers(t *testing.T) {
+	d := mountDeps(t)
+	d.MasterKeyConfigured = true
+	r := chi.NewRouter()
+	Mount(r, d)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if strings.Contains(w.Body.String(), "master_key_configured") {
+		t.Fatalf("anonymous body carries master_key_configured: %s", w.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set("Authorization", "Bearer "+d.AdminToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var b struct {
+		MasterKeyConfigured *bool `json:"master_key_configured"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil || b.MasterKeyConfigured == nil || !*b.MasterKeyConfigured {
+		t.Fatalf("authenticated body = %s, want master_key_configured true", w.Body)
+	}
+}
+
 // getUnauthenticated serves path through the full Mount chain (session, authenticate, audit) with no credential.
 func getUnauthenticated(t *testing.T, checks map[string]Pinger, path string) *httptest.ResponseRecorder {
 	t.Helper()
