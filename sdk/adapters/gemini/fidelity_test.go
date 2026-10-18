@@ -34,6 +34,7 @@ func TestSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"Tools.Parallel":                        "no parallel function-call switch",
 			"CacheConfig.Instructions":              "implicit caching, no breakpoints",
 			"CacheConfig.Tools":                     "implicit caching, no breakpoints",
+			"CacheConfig.History":                   "implicit caching, no breakpoints",
 			"CacheConfig.Key":                       "implicit caching, no key",
 			"CacheConfig.TTL":                       "implicit caching, no retention knob",
 			"User":                                  "no end-user identifier",

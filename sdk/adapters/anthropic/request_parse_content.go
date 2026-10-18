@@ -26,7 +26,7 @@ func anthropicMessagesToCanonical(raws []json.RawMessage, breakpoints *cacheBrea
 				return nil, err
 			}
 			// tool_result blocks inside user messages become FunctionCallOutput items.
-			toolResults, textParts := splitToolResults(parts, msg.Content)
+			toolResults, textParts := splitToolResults(parts, msg.Content, breakpoints)
 			for _, tr := range toolResults {
 				items = append(items, tr)
 			}
@@ -52,7 +52,7 @@ func anthropicMessagesToCanonical(raws []json.RawMessage, breakpoints *cacheBrea
 			}
 
 		case "assistant":
-			msgItem, toolCalls, err := anthropicAssistantContentToItems(msg.Content)
+			msgItem, toolCalls, err := anthropicAssistantContentToItems(msg.Content, breakpoints)
 			if err != nil {
 				return nil, err
 			}
@@ -158,7 +158,7 @@ func anthropicDocumentBlockToPart(raw json.RawMessage) *v1.FilePart {
 
 // splitToolResults extracts tool_result blocks from raw content and returns them as
 // FunctionCallOutput items + remaining text/image parts.
-func splitToolResults(parts []v1.Part, raw json.RawMessage) ([]*v1.FunctionCallOutput, []v1.Part) {
+func splitToolResults(parts []v1.Part, raw json.RawMessage, breakpoints *cacheBreakpoints) ([]*v1.FunctionCallOutput, []v1.Part) {
 	if len(raw) == 0 || raw[0] != '[' {
 		return nil, parts
 	}
@@ -205,9 +205,10 @@ func splitToolResults(parts []v1.Part, raw json.RawMessage) ([]*v1.FunctionCallO
 				}
 			}
 			toolResults = append(toolResults, &v1.FunctionCallOutput{
-				CallID:  probe.ToolUseID,
-				Output:  output,
-				Content: mediaParts,
+				CallID:      probe.ToolUseID,
+				Output:      output,
+				Content:     mediaParts,
+				CacheConfig: breakpoints.blockAnchor(b),
 			})
 		} else if p := anthropicBlockToPart(b, probe.Type); p != nil {
 			textParts = append(textParts, p)
@@ -218,7 +219,7 @@ func splitToolResults(parts []v1.Part, raw json.RawMessage) ([]*v1.FunctionCallO
 
 // anthropicAssistantContentToItems converts an assistant message content to canonical items.
 // Returns a Message item (for text content) and FunctionCall items (for tool_use blocks).
-func anthropicAssistantContentToItems(raw json.RawMessage) (*v1.Message, []v1.Item, error) {
+func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBreakpoints) (*v1.Message, []v1.Item, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return &v1.Message{Role: v1.RoleAssistant}, nil, nil
 	}
@@ -262,10 +263,11 @@ func anthropicAssistantContentToItems(raw json.RawMessage) (*v1.Message, []v1.It
 				args = string(probe.Input)
 			}
 			toolItems = append(toolItems, &v1.FunctionCall{
-				ID:        probe.ID,
-				CallID:    probe.ID,
-				Name:      probe.Name,
-				Arguments: args,
+				ID:          probe.ID,
+				CallID:      probe.ID,
+				Name:        probe.Name,
+				Arguments:   args,
+				CacheConfig: breakpoints.blockAnchor(b),
 			})
 		case "thinking":
 			var pd json.RawMessage

@@ -78,12 +78,16 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 			} else {
 				inputObj = map[string]any{}
 			}
-			blocks = append(blocks, map[string]any{
+			block := map[string]any{
 				"type":  "tool_use",
 				"id":    fc.CallID,
 				"name":  fc.Name,
 				"input": inputObj,
-			})
+			}
+			if fc.CacheConfig != nil && fc.CacheConfig.Anchor {
+				block["cache_control"] = anthropicEphemeralCacheControl(cacheTTL)
+			}
+			blocks = append(blocks, block)
 		}
 		msgs = append(msgs, anthropicCanonMsg{Role: "assistant", Content: blocks})
 		runThinking = runThinking[:0]
@@ -145,11 +149,15 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 				}
 				content = text
 			}
-			blocks = append(blocks, map[string]any{
+			block := map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": fco.CallID,
 				"content":     content,
-			})
+			}
+			if fco.CacheConfig != nil && fco.CacheConfig.Anchor {
+				block["cache_control"] = anthropicEphemeralCacheControl(cacheTTL)
+			}
+			blocks = append(blocks, block)
 		}
 		msgs = append(msgs, anthropicCanonMsg{Role: "user", Content: blocks})
 		pendingToolResults = pendingToolResults[:0]

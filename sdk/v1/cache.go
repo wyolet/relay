@@ -27,14 +27,20 @@ import "time"
 // ["cache_creation"], which adapters already normalize across vendors.
 //
 // Breakpoint budget: vendors cap explicit breakpoints (Anthropic allows 4).
-// The flags here stay well within that bound; future per-Item history anchors
-// (the "system_and_N" pattern) will share the same budget and are an additive
-// extension, not a breaking change.
+// The request-level flags (Instructions, Tools, History) always fit; per-item
+// anchors share what is left, and when they overflow a supporting adapter
+// keeps the latest anchors and drops the oldest. Exceeding the budget never
+// fails a request.
 type CacheConfig struct {
 	// Instructions requests caching of the system/instructions prefix.
 	Instructions bool `json:"instructions,omitempty"`
 	// Tools requests caching of the tools block.
 	Tools bool `json:"tools,omitempty"`
+	// History requests caching of the whole input: everything up to and
+	// including the last input item, whatever its type, is stable. It is the
+	// rolling anchor of an agent loop without placing per-item anchors — the
+	// next turn reads this prefix back and writes only what it appended.
+	History bool `json:"history,omitempty"`
 	// Key is an optional stable cache identity for the request's prefix
 	// lineage — typically a conversation or session id, identical across
 	// turns. It declares "requests sharing this key share a cacheable
@@ -72,12 +78,14 @@ func (c *CacheConfig) TTLDuration() (time.Duration, bool) {
 }
 
 // ItemCacheConfig is the per-item analogue of CacheConfig, carried on an input
-// item (cache_config). It marks the item as a cache anchor: everything up to
-// and including this item is a stable prefix. Same neutrality contract —
-// supporting adapters emit a breakpoint at this item, others ignore it. Used
-// for the rolling "stable history up to here" anchor as a conversation grows
-// (the system_and_N pattern). Counts against the vendor breakpoint budget
-// alongside the request-level CacheConfig flags.
+// item (cache_config) — Message, FunctionCall or FunctionCallOutput. It marks
+// the item as a cache anchor: everything up to and including this item is a
+// stable prefix. Same neutrality contract — supporting adapters emit a
+// breakpoint at this item, others ignore it. Used for the rolling "stable
+// history up to here" anchor as a conversation grows (the system_and_N
+// pattern). Counts against the vendor breakpoint budget alongside the
+// request-level CacheConfig flags. Reasoning carries none: Anthropic rejects
+// cache_control on thinking blocks, which are cached as part of the turn.
 type ItemCacheConfig struct {
 	// Anchor marks this item as a cache breakpoint.
 	Anchor bool `json:"anchor,omitempty"`

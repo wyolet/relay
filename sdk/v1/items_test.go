@@ -292,3 +292,22 @@ func TestItemCompletedEventUnmarshal(t *testing.T) {
 		t.Error("expected error for unsupported item type, got nil")
 	}
 }
+
+func TestToolItemCacheConfigRoundTrip(t *testing.T) {
+	for _, wire := range []string{
+		`{"type":"function_call","call_id":"call_abc","name":"read","arguments":"{}","cache_config":{"anchor":true}}`,
+		`{"type":"function_call_output","call_id":"call_abc","output":"ok","cache_config":{"anchor":true}}`,
+	} {
+		item, err := UnmarshalItem([]byte(wire))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != wire {
+			t.Errorf("round trip:\n got %s\nwant %s", b, wire)
+		}
+	}
+}
