@@ -1,0 +1,86 @@
+name: Full CI on dev
+
+# Pull requests into dev run only the light CI tier. Every three hours this
+# dispatches ci.yml on dev, unless dev's HEAD already had a dispatched run; the
+# run executes in dev's context, so its checks land on that commit and its
+# caches stay scoped to dev. When a dispatched run on dev finishes, a green one
+# moves the ci-full-passed tag; a red one gets the range to bisect in this
+# run's summary. To run the full tier now: gh workflow run ci.yml --ref dev
+
+on:
+  schedule:
+    - cron: '41 */3 * * *'
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [dev]
+
+permissions:
+  contents: read
+
+env:
+  PASSED_TAG: ci-full-passed
+
+jobs:
+  dispatch:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo="repos/$GITHUB_REPOSITORY"
+          if ! sha=$(gh api "$repo/git/ref/heads/dev" --jq .object.sha 2>/dev/null); then
+            echo "::notice::no dev branch; nothing to run"; exit 0
+          fi
+          runs=$(gh api "$repo/actions/workflows/ci.yml/runs?head_sha=$sha&event=workflow_dispatch&per_page=1" --jq .total_count)
+          if [ "$runs" -gt 0 ]; then
+            echo "::notice::dev ${sha::12} already had a full run"; exit 0
+          fi
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref dev
+          echo "dispatched ci.yml on dev ${sha::12}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Reads only the finished run's metadata; nothing from dev is checked out.
+  record:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          repo="repos/$GITHUB_REPOSITORY"
+          # gh prints a 404's body to stdout, so a failed lookup must clear it.
+          passed=$(gh api "$repo/git/ref/tags/$PASSED_TAG" --jq .object.sha 2>/dev/null) || passed=""
+
+          if [ "$CONCLUSION" = success ]; then
+            if [ -z "$passed" ]; then
+              gh api -X POST "$repo/git/refs" -f ref="refs/tags/$PASSED_TAG" -f sha="$SHA" >/dev/null
+            else
+              # Runs can finish out of order; the tag only moves forward.
+              rel=$(gh api "$repo/compare/$passed...$SHA" --jq .status)
+              [ "$rel" = ahead ] || { echo "$PASSED_TAG stays at $passed ($SHA is $rel)"; exit 0; }
+              gh api -X PATCH "$repo/git/refs/tags/$PASSED_TAG" -f sha="$SHA" -F force=true >/dev/null
+            fi
+            echo "$PASSED_TAG -> $SHA" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## Full CI $CONCLUSION on dev \`${SHA::12}\`"
+            echo "Run: $RUN_URL"
+            echo
+            if [ -n "$passed" ]; then
+              echo "Commits since the last green run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$passed...$SHA"
+              echo
+            fi
+            echo "Bisect them, then fix forward with a pull request into dev naming the culprit, or \`git revert\` that one commit."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
