@@ -1,0 +1,250 @@
+name: Fix red dev
+
+# Started by full.yml when the full CI run on dev fails, with the failing
+# commit, the last commit whose full run passed, and the failed run. One
+# attempt per failing commit. Claude reproduces the failure with the failing
+# test only, bisects the range, and then either opens one small fix (or revert)
+# PR labelled dev-fix, or opens an issue labelled needs-decision and stops.
+# It never merges. A failure on a commit that came from a dev-fix PR goes to a
+# human instead.
+#
+# full.yml dispatches this on dev, so it runs in dev's context. The model is
+# reached through relay: DEV_FIXER_BASE_URL (variable) and a dedicated key in
+# DEV_FIXER_RELAY_KEY (secret); DEV_FIXER_MODEL picks the model. Without the
+# key, the run reports that and stops. Notifications go to Telegram when
+# RELEASE_TELEGRAM_TOKEN (secret) and RELEASE_TELEGRAM_CHAT (variable) are set.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Failing commit
+        required: true
+      good:
+        description: Last commit whose full run passed (empty if unknown)
+        required: false
+      run_id:
+        description: The failed CI run
+        required: true
+      base:
+        description: Branch the fix PR targets
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fix-dev-${{ inputs.sha }}
+  cancel-in-progress: false
+
+env:
+  SHA: ${{ inputs.sha }}
+  GOOD: ${{ inputs.good }}
+  RUN_ID: ${{ inputs.run_id }}
+  BASE: ${{ inputs.base }}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+      short: ${{ steps.g.outputs.short }}
+      outcome: ${{ steps.g.outputs.outcome }}
+    steps:
+      - id: g
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.DEV_FIXER_RELAY_KEY != '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ inputs.run_id }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          short=${SHA::12}
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          skip() { echo "run=false" >> "$GITHUB_OUTPUT"; echo "outcome=$1" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
+
+          for label in dev-fix:0e8a16 needs-decision:d93f0b; do
+            gh label create "${label%%:*}" --repo "$R" --color "${label##*:}" --force >/dev/null
+          done
+
+          gh api "repos/$R/git/ref/heads/fix/dev-$short" >/dev/null 2>&1 \
+            && skip "skipped: branch fix/dev-$short exists"
+          n=$(gh pr list --repo "$R" --state open --label dev-fix --search "$short in:title" --json number --jq length)
+          [ "$n" = 0 ] || skip "skipped: an open dev-fix PR names $short"
+          n=$(gh issue list --repo "$R" --state open --label needs-decision --search "$short in:title" --json number --jq length)
+          [ "$n" = 0 ] || skip "skipped: an open needs-decision issue names $short"
+
+          # A fix that broke dev again is not retried by the fixer.
+          labels=$(gh api "repos/$R/commits/$SHA/pulls" --jq '[.[].labels[].name] | join(",")')
+          if [[ ",$labels," == *",dev-fix,"* ]]; then
+            url=$(gh issue create --repo "$R" --label needs-decision \
+              --title "dev $short: full CI failed on a dev-fix commit" \
+              --body "The full CI run on \`$SHA\` failed ($RUN_URL), and that commit came from a dev-fix PR, so the fixer does not retry it. Last green: \`${GOOD:-unknown}\`.")
+            skip "escalated: the failing commit came from a dev-fix PR; $url"
+          fi
+
+          [ "$HAS_KEY" = true ] || skip "skipped: DEV_FIXER_RELAY_KEY is not set"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+  fix:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No actions or workflows permission: Claude cannot start runs or change
+    # .github/workflows, and the base branch's ruleset blocks direct pushes.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: relay_test
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8-alpine
+        env:
+          CLICKHOUSE_USER: relay
+          CLICKHOUSE_PASSWORD: relay
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user relay --password relay --query 'SELECT 1'"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
+      RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
+      RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
+      SHORT: ${{ needs.guard.outputs.short }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+
+      # make check runs golangci-lint and helm lint; same pinned version as ci.yml.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
+
+      - uses: azure/setup-helm@v5
+
+      - name: Collect the failed jobs' logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git switch -c "fix/dev-$SHORT"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed | tail -n 4000 > "$RUNNER_TEMP/failed.log"
+          wc -l "$RUNNER_TEMP/failed.log"
+
+      - uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+        env:
+          ANTHROPIC_BASE_URL: ${{ vars.DEV_FIXER_BASE_URL }}
+        with:
+          anthropic_api_key: ${{ secrets.DEV_FIXER_RELAY_KEY }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --model ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
+            --max-turns 80
+            --allowedTools Bash,Read,Edit,Write,Glob,Grep
+            --disallowedTools "Bash(gh pr merge:*)" "Bash(gh workflow:*)" "Bash(gh api:*)" "Bash(git push --force:*)"
+          prompt: |
+            The full CI run on `${{ inputs.base }}` failed at commit ${{ inputs.sha }}. The last commit whose full run passed is `${{ inputs.good }}` (empty means unknown: bisect from the commit before the failing one backwards, at most 20 commits). The failing jobs' logs are in ${{ runner.temp }}/failed.log.
+
+            Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-${{ needs.guard.outputs.short }}, created at the failing commit.
+
+            1. Reproduce. From the log, find the failing test or check and run only that, e.g. `go test ./<pkg> -run '^<Test>$'`; add `-tags=integration` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
+            2. Bisect the range with that test only (`git bisect start <bad> <good>`, `git bisect run ...`) to find the culprit commit, then `git bisect reset` and return to the branch.
+            3. Take exactly one outcome.
+
+            (a) The right fix is small and focused, or is a clean `git revert <culprit>`. Commit it on the branch. Run the failing test and `make check`; both must pass. Then `git push -u origin HEAD` and open one PR: `gh pr create --base ${{ inputs.base }} --label dev-fix`, title `<type>: <summary> (dev ${{ needs.guard.outputs.short }})` where type is fix or revert. The description names the culprit commit and the root cause and says what changed. Never loosen a test to make it pass: no skips, no raised tolerances, no deleted assertions. If you change a test file, the description explains why the test was wrong.
+
+            (b) The fix is not small, touches the architecture or a design decision, or you could not reproduce or bisect. Open one issue: `gh issue create --label needs-decision`, title `dev ${{ needs.guard.outputs.short }}: <summary>`, with the failure, the culprit commit, the root cause and the options you see. Then stop: push nothing, open no PR, write no draft code.
+
+            Change nothing under .github/ and never touch .env. Never merge anything.
+
+  # A PR opened with the workflow token starts no CI; the full tier dispatched
+  # on its branch puts the required checks on its head commit.
+  verify:
+    needs: [guard, fix]
+    if: always() && needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: fix/dev-${{ needs.guard.outputs.short }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" >/dev/null 2>&1 || { echo "no $BRANCH pushed"; exit 0; }
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "dispatched ci.yml on $BRANCH"
+
+  notify:
+    needs: [guard, fix, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GUARD_OUTCOME: ${{ needs.guard.outputs.outcome }}
+          SHORT: ${{ needs.guard.outputs.short }}
+          FIX_RESULT: ${{ needs.fix.result }}
+          TELEGRAM_TOKEN: ${{ secrets.RELEASE_TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ vars.RELEASE_TELEGRAM_CHAT }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          if [ -n "$GUARD_OUTCOME" ]; then
+            outcome=$GUARD_OUTCOME
+          elif pr=$(gh pr list --repo "$R" --state open --head "fix/dev-$SHORT" --json url --jq '.[0].url // empty') && [ -n "$pr" ]; then
+            outcome="fix PR opened: $pr"
+          elif issue=$(gh issue list --repo "$R" --state open --label needs-decision --search "$SHORT in:title" --json url --jq '.[0].url // empty') && [ -n "$issue" ]; then
+            outcome="needs-decision issue opened: $issue"
+          else
+            outcome="no PR or issue (fixer $FIX_RESULT)"
+          fi
+          echo "$outcome" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT" ] || exit 0
+          curl -fsS "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT}" \
+            --data-urlencode "text=relay dev ${SHORT:-${SHA::12}} red: ${outcome}
+          ${RUN_URL}" >/dev/null
