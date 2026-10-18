@@ -153,7 +153,7 @@ func (c *client) loginWithAPIKey(ctx context.Context) (*tokenResponse, error) {
 		"scope":            {"api"},
 		"deviceType":       {"14"},
 		"deviceIdentifier": {c.deviceID},
-		"deviceName":       {"relay-bitwarden"},
+		"deviceName":       {c.deviceName},
 	}
 	return c.doTokenRequest(ctx, data)
 }

@@ -22,6 +22,8 @@ type Config struct {
 	SyncInterval       time.Duration
 	InsecureSkipVerify bool
 	DeviceID           string
+	// DeviceName is shown in the server's device list; empty means "wyolet-secret".
+	DeviceName string
 }
 
 // Resolver syncs and decrypts vault items into an in-memory cache.

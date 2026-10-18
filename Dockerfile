@@ -54,13 +54,12 @@ WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
 # replaces ./sdk, ./jobq, ./auth and ./secret, so their manifests must exist for `go mod download`.
-# secret has no dependencies and so no go.sum.
 COPY go.work go.work.sum ./
 COPY go.mod go.sum ./
 COPY sdk/go.mod sdk/go.sum ./sdk/
 COPY jobq/go.mod jobq/go.sum ./jobq/
 COPY auth/go.mod auth/go.sum ./auth/
-COPY secret/go.mod ./secret/
+COPY secret/go.mod secret/go.sum ./secret/
 # GO_CACHE_MOUNTS=0 (published images, see docker-bake.hcl) skips the cache
 # mounts: on a shared BuildKit any client can write them, and Go trusts cached
 # modules and build objects without re-checking go.sum. Modules are then

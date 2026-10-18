@@ -48,6 +48,13 @@ auth/token			85
 
 secret				95
 secret/aead			86
+secret/backend/aws		71
+secret/backend/azure		76
+secret/backend/bitwarden	56
+secret/backend/gcp		66
+secret/cloud/aws		88
+secret/cloud/azure		80
+secret/cloud/gcp		73
 
 sdk/adapters/anthropic		75
 sdk/adapters/gemini		71

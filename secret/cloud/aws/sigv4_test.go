@@ -63,7 +63,7 @@ func TestSigV4_SignRequest_IAMListUsers(t *testing.T) {
 
 	fixed := time.Date(2015, 8, 30, 12, 36, 0, 0, time.UTC)
 	creds := Credentials{AccessKeyID: testAccessKey, SecretAccessKey: testSecretKey}
-	if err := signRequest(req, body, creds, "us-east-1", "iam", fixed); err != nil {
+	if err := SignRequest(req, body, creds, "us-east-1", "iam", fixed); err != nil {
 		t.Fatal(err)
 	}
 

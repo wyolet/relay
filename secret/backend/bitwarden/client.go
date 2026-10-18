@@ -20,6 +20,7 @@ type client struct {
 	clientSecret string
 	httpClient   *http.Client
 	deviceID     string
+	deviceName   string
 
 	mu           sync.RWMutex
 	accessToken  string
@@ -44,6 +45,10 @@ func newClient(cfg Config) *client {
 			deviceID = hex.EncodeToString(b[:])
 		}
 	}
+	deviceName := cfg.DeviceName
+	if deviceName == "" {
+		deviceName = "wyolet-secret"
+	}
 
 	return &client{
 		baseURL:      strings.TrimSuffix(cfg.BaseURL, "/"),
@@ -55,7 +60,8 @@ func newClient(cfg Config) *client {
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
-		deviceID: deviceID,
+		deviceID:   deviceID,
+		deviceName: deviceName,
 	}
 }
 

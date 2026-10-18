@@ -1,4 +1,4 @@
-// Package secret is relay's master-key stored-secret backend: StoredResolver encrypts values with RELAY_MASTER_KEY (pkg/crypto, AES-256-GCM) into a Store and resolves "stored" refs back to plaintext, with whole-table rotation to a new master key. Refs, kinds and the Registry live in the github.com/wyolet/relay/secret module; the external fetch-only backends are the subpackages.
+// Package secret is relay's master-key stored-secret backend: StoredResolver encrypts values with RELAY_MASTER_KEY (pkg/crypto, AES-256-GCM) into a Store and resolves "stored" refs back to plaintext, with whole-table rotation to a new master key. Refs, kinds, the Registry and the AWS, GCP, Azure and Bitwarden backends live in the github.com/wyolet/relay/secret module; the 1Password backend and the OAuth resolver are the subpackages.
 package secret
 
 import (
