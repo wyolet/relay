@@ -2,7 +2,6 @@ package usage
 
 import (
 	"context"
-	"strings"
 	"time"
 )
 
@@ -162,6 +161,7 @@ type SummaryQuery struct {
 	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",
 	// or "tags.<key>" (dynamic, groups on a caller tag's value).
+	// GroupByNone → one row over the whole filtered slice, Group {}.
 	// Empty → "source".
 	GroupBy string
 }
@@ -180,8 +180,12 @@ type SummaryRow struct {
 	Group      map[string]string `json:"group"`
 	Requests   int64             `json:"requests"`
 	ErrorCount int64             `json:"error_count"`
-	Tokens     map[string]int64  `json:"tokens"`
-	DurationMs DurationStats     `json:"duration_ms"`
+	// ErrorCount counts status >= 400 and always equals Errors4xx + Errors5xx: every status >= 500 (600+ included) lands in Errors5xx. Throttled counts status 429 and is a subset of Errors4xx.
+	Errors4xx  int64            `json:"errors_4xx"`
+	Errors5xx  int64            `json:"errors_5xx"`
+	Throttled  int64            `json:"throttled"`
+	Tokens     map[string]int64 `json:"tokens"`
+	DurationMs DurationStats    `json:"duration_ms"`
 	// TTFTMs aggregates upstream time-to-first-byte (ms, derived from
 	// Upstream.ResponseStart) over the subset of events that carry upstream
 	// timing. Nil when no event in the group has it — a pointer so "no
@@ -225,8 +229,7 @@ type TimeSeriesQuery struct {
 	// Interval is the bucket width. Must be > 0.
 	Interval time.Duration
 
-	// GroupBy splits the result into one series per dimension value.
-	// Empty means a single series. Valid values match ValidGroupBy.
+	// GroupBy splits the result into one series per dimension value. Empty means a single series with a nil Group; GroupByNone means the same single series with Group {}. Otherwise IsValidGroupBy applies.
 	GroupBy string
 }
 
@@ -237,11 +240,10 @@ type TimeSeriesPoint struct {
 	Bucket     time.Time `json:"bucket"`
 	Requests   int64     `json:"requests"`
 	ErrorCount int64     `json:"error_count"`
-	// Errors4xx/Errors5xx split ErrorCount by status class for triage
-	// charts. They may sum below ErrorCount only if an out-of-band status
-	// >= 600 ever appears; in practice ErrorCount = Errors4xx + Errors5xx.
+	// Errors4xx / Errors5xx / Throttled — same invariant as SummaryRow: ErrorCount = Errors4xx + Errors5xx, Throttled (429) within Errors4xx.
 	Errors4xx  int64            `json:"errors_4xx"`
 	Errors5xx  int64            `json:"errors_5xx"`
+	Throttled  int64            `json:"throttled"`
 	Tokens     map[string]int64 `json:"tokens"`
 	DurationMs DurationStats    `json:"duration_ms"`
 	// TTFTMs — see SummaryRow.TTFTMs; nil when no event in the bucket
@@ -252,10 +254,9 @@ type TimeSeriesPoint struct {
 	Unpriced  int64 `json:"unpriced"`
 }
 
-// TimeSeriesRow is one series. Group is nil for the single-series case
-// and carries the grouping dimension keyed by column name otherwise.
+// TimeSeriesRow is one series. Group is nil for the single-series case, {} for GroupByNone, and carries the grouping dimension keyed by column name otherwise; omitzero drops only the nil case, so none still emits "group": {}.
 type TimeSeriesRow struct {
-	Group  map[string]string `json:"group,omitempty"`
+	Group  map[string]string `json:"group,omitzero"`
 	Points []TimeSeriesPoint `json:"points"`
 }
 
@@ -274,67 +275,3 @@ type TimeSeriesResult struct {
 // range producing an unbounded result. The HTTP layer rejects with 400
 // before hitting a backend.
 const MaxBuckets = 5_000
-
-// ValidGroupBy lists the accepted static GroupBy values. Used by the HTTP
-// endpoint to reject typos with a clear 400 instead of silently
-// grouping on nothing. "tags.<key>" and "extras.<key>" are additionally
-// accepted as dynamic dimensions — see MapGroupKey.
-var ValidGroupBy = []string{
-	"relay_key_hash",
-	"policy_id",
-	"model_id",
-	"host_id",
-	"host_key_id",
-	"source",
-	"finish_reason",
-	"error_kind",
-	"model",
-	"host",
-	"policy",
-	"provider",
-	"project_id",
-	"team_id",
-	"principal_id",
-	"credential_id",
-	"project",
-	"team",
-	"principal",
-	"relay_key",
-}
-
-// MaxTagKeyLen caps a single tag key. Enforced at write time
-// (app/usagelog tag validation) and reused by MapGroupKey so an
-// unwritable key can't become a group dimension.
-const MaxTagKeyLen = 64
-
-// MapGroupKey splits a dynamic map group dimension — "tags.<key>" (caller
-// tags) or "extras.<key>" (relay-stamped provenance: instance, client_ip,
-// resolved_via) — into the Event map column and the key within it. ok is
-// false when g isn't map-shaped or the key is empty / over MaxTagKeyLen.
-// Backends MUST bind the returned key as a query parameter, never splice
-// it into SQL text; column is one of the two fixed names and safe to embed.
-func MapGroupKey(g string) (column, key string, ok bool) {
-	for _, column = range []string{"tags", "extras"} {
-		key, found := strings.CutPrefix(g, column+".")
-		if !found {
-			continue
-		}
-		if key == "" || len(key) > MaxTagKeyLen {
-			return "", "", false
-		}
-		return column, key, true
-	}
-	return "", "", false
-}
-
-// IsValidGroupBy reports whether g is one of the supported group
-// dimensions (a ValidGroupBy entry or a dynamic map one).
-func IsValidGroupBy(g string) bool {
-	for _, v := range ValidGroupBy {
-		if g == v {
-			return true
-		}
-	}
-	_, _, ok := MapGroupKey(g)
-	return ok
-}
