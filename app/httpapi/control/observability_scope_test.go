@@ -146,7 +146,7 @@ func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQue
 	defer f.mu.Unlock()
 	f.calls++
 	f.last, f.distinct = q.EventQuery, q.Distinct
-	return usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}, nil
+	return usage.BucketizeWithDistinct(usage.FilterEvents(f.events, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
 }
 
 func (f *fakeUsageReader) Facet(_ context.Context, q usagelog.FacetQuery) ([]usagelog.FacetValue, error) {

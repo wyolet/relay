@@ -26,30 +26,34 @@ func Fixture() []usage.Event {
 	modelA := func(id string, minute int, source string, status int) usage.Event {
 		return usage.Event{RequestID: id, Timestamp: at(minute), Source: source, Status: status,
 			DurationMs: 200, ModelID: "mid-a", Model: "model-a", Provider: "provider-a",
-			RelayKeyHash: "hash-b", RelayKey: "key-b"}
+			RelayKeyHash: "hash-b", CredentialID: "cred-b", RelayKey: "key-b"}
 	}
 	modelB := func(id string, minute int, source string, status int) usage.Event {
 		return usage.Event{RequestID: id, Timestamp: at(minute), Source: source, Status: status,
 			DurationMs: 100, ModelID: "mid-b", Model: "model-b", Provider: "provider-b",
-			RelayKeyHash: "hash-b", RelayKey: "key-b"}
+			RelayKeyHash: "hash-b", CredentialID: "cred-b", RelayKey: "key-b"}
 	}
+	keyA := func(ev *usage.Event) { ev.RelayKeyHash, ev.CredentialID, ev.RelayKey = "hash-a", "cred-a", "key-a" }
 
 	r01 := modelA("r01", 0, "pipeline", 200)
-	r01.Upstream, r01.CostNanos, r01.RelayKeyHash, r01.RelayKey = upstream(40_999), cost(1000), "hash-a", "key-a"
+	r01.Upstream, r01.CostNanos = upstream(40_999), cost(1000)
+	keyA(&r01)
 	r01.Tokens = sdkusage.Tokens{"input": 10, "output": 5}
 	r01.Tags = map[string]string{"env": "prod"}
 	r01.ProjectID = "project-a"
 	r01.HostID, r01.Host = "hid-1", "host-old"
 
 	r02 := modelA("r02", 10, "pipeline", 200)
-	r02.Upstream, r02.CostNanos, r02.RelayKeyHash, r02.RelayKey = upstream(40_999), cost(3000), "hash-a", "key-a"
+	r02.Upstream, r02.CostNanos = upstream(40_999), cost(3000)
+	keyA(&r02)
 	r02.Tokens = sdkusage.Tokens{"input": 20, "output": 10, "cache_read": 7}
 	r02.Tags = map[string]string{"env": "prod"}
 	r02.ProjectID = "project-a"
 	r02.HostID, r02.Host = "hid-1", "host-old"
 
 	r03 := modelB("r03", 20, "pipeline", 429)
-	r03.Upstream, r03.RelayKeyHash, r03.RelayKey = upstream(41_999), "hash-a", "key-a"
+	r03.Upstream = upstream(41_999)
+	keyA(&r03)
 	r03.HostID, r03.Host = "hid-2", "host-b"
 
 	// Priced at a true $0: counts as priced, never as unpriced.
@@ -58,7 +62,7 @@ func Fixture() []usage.Event {
 	r04.HostID, r04.Host = "hid-2", "host-b"
 
 	r05 := modelA("r05", 45, "proxy", 200)
-	r05.CostNanos, r05.RelayKeyHash, r05.RelayKey = cost(250), "", ""
+	r05.CostNanos, r05.RelayKeyHash, r05.CredentialID, r05.RelayKey = cost(250), "", "", ""
 	r05.Tokens = sdkusage.Tokens{"input": 1, "output": 2}
 	r05.HostID = "hid-3"
 
@@ -84,7 +88,8 @@ func Fixture() []usage.Event {
 	r10.HostID = "hid-1"
 
 	r00 := modelA("r00", -1, "pipeline", 0)
-	r00.DurationMs, r00.ErrorKind, r00.RelayKeyHash, r00.RelayKey = 0, "no_keys", "hash-a", "key-a"
+	r00.DurationMs, r00.ErrorKind = 0, "no_keys"
+	keyA(&r00)
 	r00.HostID, r00.Host = "hid-9", "host-z"
 	r11 := modelB("r11", 119, "proxy", 0)
 	r11.DurationMs, r11.ErrorKind, r11.PrincipalID = 0, "rate_limited", "principal-a"

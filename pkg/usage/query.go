@@ -230,8 +230,10 @@ type DurationStats struct {
 // the query.
 type SummaryResult struct {
 	Rows []SummaryRow `json:"rows"`
-	From time.Time    `json:"from"`
-	To   time.Time    `json:"to"`
+	// Labels maps a group value to the latest non-empty event-time slug beside it when GroupBy is an id dimension (see LabelColumn); flat because the ids are UUIDs or hashes. Nil for any other grouping.
+	Labels map[string]string `json:"labels,omitempty"`
+	From   time.Time         `json:"from"`
+	To     time.Time         `json:"to"`
 	// PreviousFrom / PreviousTo bound the window rows' Previous covers: the one the caller gave, or the requested window's length ending where it starts. PreviousTo is exclusive. Zero unless SummaryWithPrevious built the result.
 	PreviousFrom time.Time `json:"previous_from,omitzero"`
 	PreviousTo   time.Time `json:"previous_to,omitzero"`
@@ -287,10 +289,12 @@ type TimeSeriesRow struct {
 // a string, e.g. "1h") and time range so the caller can zero-fill and
 // label the axis without re-deriving from the query.
 type TimeSeriesResult struct {
-	Rows     []TimeSeriesRow `json:"rows"`
-	Interval string          `json:"interval"`
-	From     time.Time       `json:"from"`
-	To       time.Time       `json:"to"`
+	Rows []TimeSeriesRow `json:"rows"`
+	// Labels — see SummaryResult.Labels; the slug is the latest across the whole window, not per bucket.
+	Labels   map[string]string `json:"labels,omitempty"`
+	Interval string            `json:"interval"`
+	From     time.Time         `json:"from"`
+	To       time.Time         `json:"to"`
 }
 
 // MaxBuckets caps the number of time buckets a single TimeSeries query may

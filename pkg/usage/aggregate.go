@@ -39,6 +39,7 @@ func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryRes
 		distinct       distinctValues
 	}
 	groups := map[string]*bucket{}
+	var labels LatestLabels
 	from, to := time.Time{}, time.Time{}
 
 	for _, ev := range events {
@@ -46,6 +47,7 @@ func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryRes
 			continue
 		}
 		key := groupKey(ev, groupBy)
+		labels.addEvent(groupBy, key, ev)
 		b, ok := groups[key]
 		if !ok {
 			b = &bucket{tokens: map[string]int64{}, first: ev.Timestamp, last: ev.Timestamp, distinct: newDistinctValues(distinct)}
@@ -102,7 +104,7 @@ func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryRes
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].Requests > rows[j].Requests
 	})
-	return SummaryResult{Rows: rows, From: from, To: to}, nil
+	return SummaryResult{Rows: rows, Labels: labels.Map(), From: from, To: to}, nil
 }
 
 // Bucketize groups the (already-filtered) events into time buckets of
@@ -143,6 +145,7 @@ func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, dist
 	// seriesKey -> bucketUnix -> point
 	series := map[string]map[int64]*point{}
 	totals := map[string]int64{}
+	var labels LatestLabels
 	from, to := time.Time{}, time.Time{}
 
 	for _, ev := range events {
@@ -150,6 +153,7 @@ func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, dist
 			continue
 		}
 		sk := groupKey(ev, groupBy)
+		labels.addEvent(groupBy, sk, ev)
 		buckets, ok := series[sk]
 		if !ok {
 			buckets = map[int64]*point{}
@@ -215,7 +219,7 @@ func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, dist
 	}
 	SortTimeSeriesRows(rows, totals, groupBy)
 
-	return TimeSeriesResult{Rows: rows, From: from, To: to}, nil
+	return TimeSeriesResult{Rows: rows, Labels: labels.Map(), From: from, To: to}, nil
 }
 
 // errorCounts tallies ErrorCount and its status-class split for one row (invariant on SummaryRow).

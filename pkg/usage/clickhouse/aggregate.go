@@ -1,6 +1,19 @@
 package clickhouse
 
-import "github.com/wyolet/relay/pkg/usage"
+import (
+	"fmt"
+
+	"github.com/wyolet/relay/pkg/usage"
+)
+
+// latestLabelSQL selects the newest non-empty slug in dim's label column and that slug's timestamp; ok is false when dim has no label column. With no non-empty slug the label is empty and the timestamp the epoch.
+func latestLabelSQL(dim string) (label, labelTS string, ok bool) {
+	col, ok := usage.LabelColumn(dim)
+	if !ok {
+		return "", "", false
+	}
+	return fmt.Sprintf("argMaxIf(%s, ts, %s != '')", col, col), fmt.Sprintf("maxIf(ts, %s != '')", col), true
+}
 
 // errorSelectSQL counts errors and their status-class split, matching usage.SummaryRow's invariant (any status >= 500 is 5xx; 429 is throttled).
 const errorSelectSQL = `

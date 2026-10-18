@@ -32,11 +32,17 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		grpExpr, args = groupExpr(groupBy, args)
 		selGroup, subGroup, groupClause = grpExpr+" AS grp,", "sub.grp, ", "GROUP BY grp"
 	}
+	// The label is an aggregate, so it joins the scalar query only, never the token subquery's row list.
+	selLabel := ""
+	labelExpr, _, labeled := latestLabelSQL(groupBy)
+	if labeled {
+		selLabel = labelExpr + " AS lbl,"
+	}
 
 	// Query 1: scalar aggregates + latency percentiles.
 	scalarSQL := fmt.Sprintf(`
 SELECT
-    %s
+    %s%s
     count(*)::bigint                                         AS requests,
     `+errorSelectSQL+`,
     trunc(avg(duration_ms))::bigint                          AS avg_ms,
@@ -51,7 +57,7 @@ SELECT
 FROM %s%s
 %s
 ORDER BY requests DESC`,
-		selGroup, selDistinct, s.cfg.Table, where, groupClause,
+		selGroup, selLabel, selDistinct, s.cfg.Table, where, groupClause,
 	)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
@@ -61,7 +67,7 @@ ORDER BY requests DESC`,
 	defer scalarRows.Close()
 
 	type scalarRow struct {
-		grp        string
+		grp, label string
 		requests   int64
 		errs       errorCols
 		avgMs      int64
@@ -82,7 +88,10 @@ ORDER BY requests DESC`,
 			&r.ttft.avg, &r.ttft.p50, &r.ttft.p95, &r.ttft.p99, &r.ttft.max,
 			&r.cost, &r.unpriced,
 			&r.first, &r.last}
-		if grouped {
+		switch {
+		case labeled:
+			dest = append([]any{&r.grp, &r.label}, dest...)
+		case grouped:
 			dest = append([]any{&r.grp}, dest...)
 		}
 		if selDistinct != "" {
@@ -99,8 +108,10 @@ ORDER BY requests DESC`,
 
 	groupIdx := make(map[string]int, len(scalars))
 	rows := make([]usage.SummaryRow, len(scalars))
+	var labels usage.LatestLabels
 	for i, r := range scalars {
 		groupIdx[r.grp] = i
+		labels.Add(r.grp, r.label, r.last)
 		rows[i] = usage.SummaryRow{
 			Group:      usage.GroupLabel(groupBy, r.grp),
 			Requests:   r.requests,
@@ -156,6 +167,7 @@ GROUP BY %skv.key`,
 
 	var result usage.SummaryResult
 	result.Rows = rows
+	result.Labels = labels.Map()
 	for _, r := range rows {
 		if result.From.IsZero() || r.FirstSeen.Before(result.From) {
 			result.From = r.FirstSeen

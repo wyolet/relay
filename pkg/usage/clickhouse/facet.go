@@ -20,8 +20,8 @@ func (s *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetValu
 		args = append([]any{key}, args...)
 	}
 	labelExpr := "''"
-	if col, ok := usage.LabelColumn(q.Dim); ok {
-		labelExpr = fmt.Sprintf("argMaxIf(%s, ts, %s != '')", col, col)
+	if expr, _, ok := latestLabelSQL(q.Dim); ok {
+		labelExpr = expr
 	}
 
 	sql := fmt.Sprintf(`

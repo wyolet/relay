@@ -16,8 +16,8 @@ func (s *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetValu
 	var dimExpr string
 	dimExpr, args = groupExpr(q.Dim, args)
 	labelExpr := "''"
-	if col, ok := usage.LabelColumn(q.Dim); ok {
-		labelExpr = fmt.Sprintf("COALESCE((array_agg(%s ORDER BY ts DESC) FILTER (WHERE %s <> ''))[1], '')", col, col)
+	if expr, _, ok := latestLabelSQL(q.Dim); ok {
+		labelExpr = expr
 	}
 
 	sql := fmt.Sprintf(`

@@ -35,6 +35,10 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		}
 		selGroup, groupClause = grpExpr+" AS grp,", "GROUP BY grp"
 	}
+	labelExpr, _, labeled := latestLabelSQL(groupBy)
+	if labeled {
+		selGroup += " " + labelExpr + " AS lbl,"
+	}
 
 	where, args := buildWhere(q.EventQuery, true)
 	// clickhouse-go substitutes ? placeholders in text order — the group
@@ -68,9 +72,10 @@ ORDER BY requests DESC`,
 	defer rows.Close()
 
 	var result usage.SummaryResult
+	var labels usage.LatestLabels
 	for rows.Next() {
 		var (
-			groupVal             string
+			groupVal, label      string
 			requests             int64
 			errs                 errorCols
 			tokens               map[string]int64
@@ -86,7 +91,10 @@ ORDER BY requests DESC`,
 			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
 			&costNanos, &unpriced,
 			&firstSeen, &lastSeen}
-		if grouped {
+		switch {
+		case labeled:
+			dest = append([]any{&groupVal, &label}, dest...)
+		case grouped:
 			dest = append([]any{&groupVal}, dest...)
 		}
 		if selDistinct != "" {
@@ -95,6 +103,7 @@ ORDER BY requests DESC`,
 		if err := rows.Scan(dest...); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: scan summary: %w", err)
 		}
+		labels.Add(groupVal, label, lastSeen)
 		result.Rows = append(result.Rows, usage.SummaryRow{
 			Group:      usage.GroupLabel(groupBy, groupVal),
 			Requests:   requests,
@@ -124,5 +133,6 @@ ORDER BY requests DESC`,
 			result.To = lastSeen
 		}
 	}
+	result.Labels = labels.Map()
 	return result, rows.Err()
 }
