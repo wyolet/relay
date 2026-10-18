@@ -282,7 +282,34 @@ type Secret struct {
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
+type SecretDataKey struct {
+	ID        pgtype.UUID        `db:"id" json:"id"`
+	Scope     string             `db:"scope" json:"scope"`
+	State     string             `db:"state" json:"state"`
+	KekID     []byte             `db:"kek_id" json:"kek_id"`
+	Wrapped   []byte             `db:"wrapped" json:"wrapped"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	DemotedAt pgtype.Timestamptz `db:"demoted_at" json:"demoted_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type SecretKeyring struct {
+	Singleton   bool   `db:"singleton" json:"singleton"`
+	TargetKekID []byte `db:"target_kek_id" json:"target_kek_id"`
+}
+
 type SecretValue struct {
+	ID         string             `db:"id" json:"id"`
+	Ciphertext []byte             `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte             `db:"nonce" json:"nonce"`
+	KeyVersion int32              `db:"key_version" json:"key_version"`
+	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Scope      pgtype.Text        `db:"scope" json:"scope"`
+	DekID      pgtype.UUID        `db:"dek_id" json:"dek_id"`
+}
+
+type SecretValuesLegacy struct {
 	ID         string             `db:"id" json:"id"`
 	Ciphertext []byte             `db:"ciphertext" json:"ciphertext"`
 	Nonce      []byte             `db:"nonce" json:"nonce"`

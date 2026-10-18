@@ -14,6 +14,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
@@ -102,7 +103,7 @@ func generateSigningKey(ctx context.Context, pool *pgxpool.Pool, stores *appcata
 		if _, err := rand.Read(seed); err != nil {
 			return fmt.Errorf("generate signing key: %w", err)
 		}
-		ref, err := stores.Stored.Create(ctx, secretID, seed)
+		ref, err := stores.Stored.CreateScoped(ctx, stored.ScopeSystem, secretID, seed)
 		if err != nil {
 			return fmt.Errorf("store signing key: %w", err)
 		}

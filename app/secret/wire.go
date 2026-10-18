@@ -1,3 +1,4 @@
+// Package secret wires relay's secret resolution (the registry over env, stored and external backends) and holds the key agent that heals failed upstream keys out of band. The stored backend itself is the stored subpackage.
 package secret
 
 import (
@@ -6,8 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/internal/storage/gen"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/secret"
 	"github.com/wyolet/relay/secret/backend/aws"
 	"github.com/wyolet/relay/secret/backend/azure"
@@ -15,24 +15,21 @@ import (
 	"github.com/wyolet/relay/secret/backend/gcp"
 )
 
-// Wire builds the relay's secret-resolution stack over Postgres: the
-// secret_values store, a StoredResolver (AES-GCM, master-key holder), and a
-// Registry wiring the built-in env + stored backends. The returned
-// StoredResolver is the rotation/version authority; the Registry is the
-// resolve entry point. Both share one StoredResolver instance, so a rotation
-// swaps the live key for every consumer.
-//
-// masterKey may be nil for env-only deployments — stored resolution then
-// errors loudly, which is the intended behavior when no key is configured.
-// Optional external backends (Bitwarden, AWS SM, GCP SM, …) register here when their
-// env config is present.
-func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*secret.Registry, *pkgsecret.StoredResolver) {
-	store := NewStore(q, pool)
-	stored := pkgsecret.NewStoredResolver(store, masterKey, 1)
+// Secrets is the wired stack: Registry resolves every ref kind, Stored is the stored backend registered in it.
+type Secrets struct {
+	Registry *secret.Registry
+	Stored   *stored.Backend
+}
 
+// Wire builds the stack over pool. masterKeys are RELAY_MASTER_KEY followed by RELAY_MASTER_KEY_EXTRA; with none, stored refs fail loudly while env and external refs keep working. External backends (AWS, Azure, GCP, Bitwarden, 1Password) register when their environment is present.
+func Wire(pool *pgxpool.Pool, masterKeys [][]byte) (*Secrets, error) {
+	backend, err := stored.New(pool, masterKeys)
+	if err != nil {
+		return nil, err
+	}
 	reg := secret.NewRegistry()
 	reg.Register(secret.KindEnv, secret.EnvResolver{})
-	reg.Register(secret.KindStored, stored)
+	reg.Register(secret.KindStored, backend)
 
 	if cfg, err := aws.ConfigFromEnv(); err == nil {
 		reg.Register(secret.KindAWS, aws.New(cfg))
@@ -51,7 +48,7 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*secret.Registr
 	// CGO_ENABLED=0 build registers nothing here.
 	registerOnePassword(reg)
 
-	return reg, stored
+	return &Secrets{Registry: reg, Stored: backend}, nil
 }
 
 func bitwardenConfigFromEnv() (bitwarden.Config, bool) {

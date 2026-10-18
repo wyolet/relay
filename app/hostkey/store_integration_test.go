@@ -10,7 +10,6 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/secret"
 )
@@ -20,7 +19,7 @@ func TestIntegration_StoredReservedEnvRefDoesNotResolve(t *testing.T) {
 	ctx := context.Background()
 	reg := secret.NewRegistry()
 	reg.Register(secret.KindEnv, secret.EnvResolver{})
-	store := hostkey.NewStore(gen.New(storagetest.Pool(t)), reg, nil)
+	store := hostkey.NewStore(storagetest.Pool(t), reg, nil)
 
 	t.Setenv("RELAY_MASTER_KEY", "relay-config-value")
 	t.Setenv("ACME_API_KEY", "sk-acme")

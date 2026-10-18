@@ -58,16 +58,20 @@ type Stores struct {
 	User *user.Store
 }
 
-// NewStores wires every store against pool. masterKey enables stored-mode
-// HostKey rows; nil disables them.
-func NewStores(pool *pgxpool.Pool, masterKey []byte) *Stores {
+// NewStores wires every store against pool. sec writes stored-mode HostKey
+// values through the same secret stack the server uses; nil wires one with no
+// master key, so stored-mode rows fail loudly.
+func NewStores(pool *pgxpool.Pool, sec *appsecret.Secrets) *Stores {
 	q := gen.New(pool)
-	secReg, secStored := appsecret.Wire(q, pool, masterKey)
+	if sec == nil {
+		// Without master keys Wire has nothing to refuse.
+		sec, _ = appsecret.Wire(pool, nil)
+	}
 	return &Stores{
 		Provider:    provider.NewStore(q),
 		Host:        host.NewStore(q),
 		RateLimit:   ratelimit.NewStore(q),
-		HostKey:     hostkey.NewStore(q, secReg, secStored),
+		HostKey:     hostkey.NewStore(pool, sec.Registry, sec.Stored),
 		Model:       model.NewStore(q),
 		Policy:      policy.NewStore(pool),
 		Pricing:     pricing.NewStore(pool),

@@ -21,8 +21,9 @@ const catalogSeedLock int64 = 0x52454C41595F5345
 
 func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.BootstrapOptions {
 	bootOpts := appcatalog.BootstrapOptions{
-		Pool:      st.Pool(),
-		MasterKey: cfg.MasterKey,
+		Pool:           st.Pool(),
+		MasterKey:      cfg.MasterKey,
+		MasterKeyExtra: cfg.MasterKeyExtra,
 		SeedLock: func(ctx context.Context, fn func(context.Context) error) error {
 			return storagemod.WithAdvisoryLock(ctx, st.Pool(), catalogSeedLock, fn)
 		},
