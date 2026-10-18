@@ -17,11 +17,15 @@ Branch off `dev` and open the PR against `dev`. Keep branches short-lived: a PR 
 
 | Event | Runs |
 |---|---|
-| PR into `dev` (or any branch other than `main`) | gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
-| … that touches `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests |
+| PR into `dev` (or any branch other than `main`) | one `dev` job: gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
+| … that touches `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
 | … that touches `chart/` or `versions.env` | the above, plus `helm lint` or the boot smoke |
 | PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
 | weekly schedule on `main` | the security scans |
+
+The `dev` job runs its parts in parallel through `scripts/ci-dev.sh`, each part in its own log group, with a summary table at the end; it fails when any part fails. Its integration part runs only the integration-tagged packages (`scripts/integration-pkgs.sh`) whose test binary depends on a changed package, without coverage. A change to migrations, module files, the Makefile, `ci.yml` or those scripts runs all of them. The unit tests are a separate part, so integration doesn't rerun them. Locally: `scripts/ci-dev.sh lint test integration` (integration and ClickHouse need `RELAY_TEST_PG_DSN`, `RELAY_TEST_REDIS_ADDR` and `RELAY_TEST_CH_DSN`; `CHANGED_FROM=<commit>` limits integration to what changed since it).
+
+On the cluster, PRs into `dev` run the `dev` job on the warm pool `relay-ci-warm` (a node-local Go and lint cache shared by its pods, with Postgres, Valkey and ClickHouse sidecars) when the repository variable `CI_WARM_POOL` is `on`. Otherwise, and for PRs into any other branch (the warm pool's job hook admits only PRs into `dev`), it runs on the cold `relay-ci-integration` pool. Set the variable to anything else to move off the warm pool, for instance when its node is down. The full tier never uses the warm cache.
 
 The `changes` job in `.github/workflows/ci.yml` decides which jobs a run needs. Skipped jobs report as passed, so `changes` itself must stay a required check: if it fails, everything behind it is skipped.
 
@@ -101,7 +105,7 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 | Force push | blocked | blocked |
 | Changes by | PR only | PR only |
 | Merge methods | squash, merge commit | merge commit, squash |
-| Required checks | `changes`, `lint`, `test`, `integration`, `clickhouse`, `chart`, `boot` | the `dev` set plus `fuzz`, `bench`, `govulncheck`, `trivy`, `coverage` |
+| Required checks | `changes`, `dev`, `boot` | `changes`, `lint`, `test`, `integration`, `clickhouse`, `chart`, `boot`, `fuzz`, `bench`, `govulncheck`, `trivy`, `coverage` |
 | Branch must be up to date | no | no |
 
 These come from the `dev` and `main` rulesets, which admins can bypass. An admin merge therefore skips them, including their deletion block.
