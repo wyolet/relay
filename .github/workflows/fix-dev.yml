@@ -38,6 +38,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  CLAUDE_CODE_VERSION: 2.1.302
+  GH_VERSION: 2.102.0
   SHA: ${{ inputs.sha }}
   GOOD: ${{ inputs.good }}
   RUN_ID: ${{ inputs.run_id }}
@@ -92,8 +94,9 @@ jobs:
   fix:
     needs: guard
     if: needs.guard.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ vars.CI_POOL == 'cluster' && 'relay-ci-integration' || 'ubuntu-latest' }}
+    # Claude itself stops at 30 minutes, which leaves time to report the run.
+    timeout-minutes: 40
     # No actions or workflows permission: Claude cannot start runs or change
     # .github/workflows, and the base branch's ruleset blocks direct pushes.
     permissions:
@@ -101,9 +104,11 @@ jobs:
       pull-requests: write
       issues: write
       actions: read
+    # The cluster pool runs Postgres, Valkey and ClickHouse as pod sidecars on
+    # the same addresses. An empty image skips a service.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: ${{ vars.CI_POOL != 'cluster' && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: relay_test
           POSTGRES_USER: relay
@@ -116,7 +121,7 @@ jobs:
           --health-timeout 2s
           --health-retries 30
       valkey:
-        image: valkey/valkey:8-alpine
+        image: ${{ vars.CI_POOL != 'cluster' && 'valkey/valkey:8-alpine' || '' }}
         ports:
           - 6379:6379
         options: >-
@@ -125,7 +130,7 @@ jobs:
           --health-timeout 2s
           --health-retries 30
       clickhouse:
-        image: clickhouse/clickhouse-server:24.8-alpine
+        image: ${{ vars.CI_POOL != 'cluster' && 'clickhouse/clickhouse-server:24.8-alpine' || '' }}
         env:
           CLICKHOUSE_USER: relay
           CLICKHOUSE_PASSWORD: relay
@@ -148,17 +153,36 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-go@v7
+        if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
           cache: true
 
-      # make check runs golangci-lint and helm lint; same pinned version as ci.yml.
+      # For a failing lint or chart check; same pinned version as ci.yml.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           install-only: true
+          skip-cache: ${{ runner.environment == 'self-hosted' }}
 
       - uses: azure/setup-helm@v5
+        if: runner.environment == 'github-hosted'
+
+      # The cluster runner image has neither Node (for Claude Code) nor gh.
+      - uses: actions/setup-node@v5
+        if: runner.environment == 'self-hosted'
+        with:
+          node-version: '24'
+
+      - name: Install gh
+        if: runner.environment == 'self-hosted'
+        run: |
+          base="https://github.com/cli/cli/releases/download/v$GH_VERSION"
+          tgz="gh_${GH_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tgz" "$base/$tgz"
+          curl -fsSL "$base/gh_${GH_VERSION}_checksums.txt" | grep " $tgz\$" | (cd "$RUNNER_TEMP" && sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gh_${GH_VERSION}_linux_amd64/bin" >> "$GITHUB_PATH"
 
       - name: Collect the failed jobs' logs
         env:
@@ -170,43 +194,83 @@ jobs:
           gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed | tail -n 4000 > "$RUNNER_TEMP/failed.log"
           wc -l "$RUNNER_TEMP/failed.log"
 
-      - uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+      - name: Install Claude Code
+        run: npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+
+      # Plain `claude -p` in bare mode: no MCP servers, hooks, plugins, CLAUDE.md
+      # auto-discovery or settings from the checked-out branch, one model for
+      # every call. Bash is unrestricted on this throwaway runner; the job
+      # token's scope is the boundary, and the denies only encode policy.
+      - name: Claude
         id: claude
-        # Claude Code otherwise asks for up to 128k output tokens per request.
         env:
+          GH_TOKEN: ${{ github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.DEV_FIXER_BASE_URL }}
-          CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ vars.DEV_FIXER_MAX_OUTPUT_TOKENS || '32000' }}
-        with:
-          anthropic_api_key: ${{ secrets.DEV_FIXER_RELAY_KEY }}
-          github_token: ${{ github.token }}
-          claude_args: >-
-            --model ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
-            --max-turns 80
-            --allowedTools Bash,Read,Edit,Write,Glob,Grep
-            --disallowedTools "Bash(gh pr merge:*)" "Bash(gh workflow:*)" "Bash(gh api:*)" "Bash(git push --force:*)"
-          prompt: |
-            The full CI run on `${{ inputs.base }}` failed at commit ${{ inputs.sha }}. The last commit whose full run passed is `${{ inputs.good }}` (empty means unknown: bisect from the commit before the failing one backwards, at most 20 commits). The failing jobs' logs are in ${{ runner.temp }}/failed.log.
-
-            Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-${{ needs.guard.outputs.short }}, created at the failing commit.
-
-            1. Reproduce. From the log, find the failing test or check and run only that, e.g. `go test ./<pkg> -run '^<Test>$'`; add `-tags=integration` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
-            2. Bisect the range with that test only (`git bisect start <bad> <good>`, `git bisect run ...`) to find the culprit commit, then `git bisect reset` and return to the branch.
-            3. Take exactly one outcome.
-
-            (a) The right fix is small and focused, or is a clean `git revert <culprit>`. Commit it on the branch. Run the failing test and `make check`; both must pass. Then `git push -u origin HEAD` and open one PR: `gh pr create --base ${{ inputs.base }} --label dev-fix`, title `<type>: <summary> (dev ${{ needs.guard.outputs.short }})` where type is fix or revert. The description names the culprit commit and the root cause and says what changed. Never loosen a test to make it pass: no skips, no raised tolerances, no deleted assertions. If you change a test file, the description explains why the test was wrong.
-
-            (b) The fix is not small, touches the architecture or a design decision, or you could not reproduce or bisect. Open one issue: `gh issue create --label needs-decision`, title `dev ${{ needs.guard.outputs.short }}: <summary>`, with the failure, the culprit commit, the root cause and the options you see. Then stop: push nothing, open no PR, write no draft code.
-
-            Change nothing under .github/ and never touch .env. Never merge anything.
-
-      # The action logs only is_error; the reason is the last message's text.
-      - name: Report why Claude stopped
-        if: failure() && steps.claude.outputs.execution_file != ''
-        env:
-          OUT: ${{ steps.claude.outputs.execution_file }}
+          ANTHROPIC_API_KEY: ${{ secrets.DEV_FIXER_RELAY_KEY }}
+          MODEL: ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ vars.DEV_FIXER_MAX_OUTPUT_TOKENS || '16000' }}
+          # An unreachable upstream fails in minutes, not after a long retry ladder.
+          CLAUDE_CODE_MAX_RETRIES: '3'
+          API_TIMEOUT_MS: '300000'
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+          DISABLE_TELEMETRY: '1'
+          DISABLE_ERROR_REPORTING: '1'
+          CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1'
+          CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false'
+          CLAUDE_CODE_ENABLE_AWAY_SUMMARY: '0'
+          CLAUDE_CODE_DISABLE_1M_CONTEXT: '1'
+          CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: '1'
+          CLAUDE_CODE_EFFORT_LEVEL: medium
+          BASH_DEFAULT_TIMEOUT_MS: '600000'
+          BASH_MAX_TIMEOUT_MS: '1200000'
+          TARGET: ${{ inputs.base }}
+          GOOD_SHA: ${{ inputs.good }}
+          LOG: ${{ runner.temp }}/failed.log
+          OUT: ${{ runner.temp }}/claude.jsonl
         run: |
-          jq -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "no text"' "$OUT" | head -c 2000
-          jq -c '.[] | select(.type == "result") | {subtype, is_error, num_turns, total_cost_usd}' "$OUT"
+          cat > "$RUNNER_TEMP/prompt.md" <<EOF
+          The full CI run on \`$TARGET\` failed at commit $SHA. The last commit whose full run passed is \`$GOOD_SHA\` (empty means unknown: bisect from the commit before the failing one backwards, at most 20 commits). The failing jobs' logs are in $LOG.
+
+          Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-$SHORT, created at the failing commit.
+
+          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
+          2. Bisect the range with that test only (\`git bisect start <bad> <good>\`, \`git bisect run ...\`) to find the culprit commit, then \`git bisect reset\` and \`git switch fix/dev-$SHORT\`.
+          3. Take exactly one outcome.
+
+          (a) The right fix is small and focused, or is a clean \`git revert <culprit>\`. Commit it on the branch. Rerun the failing test or check, and \`go build ./...\` and \`go vet\` on the packages you touched; all must pass. Don't run the whole suite: the PR gets the full CI. Then \`git push origin fix/dev-$SHORT\` and open one PR: \`gh pr create --base $TARGET --label dev-fix\`, title \`<type>: <summary> (dev $SHORT)\` where type is fix or revert. The description names the culprit commit and the root cause and says what changed. Never loosen a test to make it pass: no skips, no raised tolerances, no deleted assertions. If you change a test file, the description explains why the test was wrong.
+
+          (b) The fix is not small, touches the architecture or a design decision, or you could not reproduce or bisect. Open one issue: \`gh issue create --label needs-decision\`, title \`dev $SHORT: <summary>\`, with the failure, the culprit commit, the root cause and the options you see. Then stop: push nothing, open no PR, write no draft code.
+
+          Change nothing under .github/ or .claude/ and never touch .env. Never merge anything.
+          EOF
+          timeout --signal=TERM 30m claude -p "$(cat "$RUNNER_TEMP/prompt.md")" \
+            --bare --setting-sources user \
+            --settings "{\"availableModels\":[\"$MODEL\"],\"enforceAvailableModels\":true}" \
+            --model "$MODEL" \
+            --tools "Bash,Read,Edit" \
+            --allowedTools Bash Read Edit \
+            --disallowedTools Agent TaskStop WebFetch WebSearch "mcp__*" \
+              "Edit(.github/**)" "Edit(.claude/**)" \
+              "Bash(gh pr merge *)" "Bash(gh workflow *)" "Bash(git push *--force*)" "Bash(git push * -f*)" \
+            --strict-mcp-config --permission-mode dontAsk --permission-prompts none \
+            --max-turns 80 --max-budget-usd 5 \
+            --output-format stream-json --verbose --no-session-persistence > "$OUT"
+          jq -e -s 'map(select(.type == "result")) | last | .is_error == false' "$OUT" >/dev/null
+
+      - name: Report the run
+        if: always() && steps.claude.outcome != 'skipped'
+        env:
+          OUT: ${{ runner.temp }}/claude.jsonl
+        run: |
+          [ -s "$OUT" ] || { echo "no output from claude"; exit 0; }
+          jq -c 'select(.type == "system" and .subtype == "init") | {claude_code_version, model, tools, mcp_servers}' "$OUT"
+          jq -s -r '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // "no text"' "$OUT" | head -c 2000; echo
+          jq -c 'select(.type == "result") | {subtype, is_error, num_turns, total_cost_usd}' "$OUT" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "permission denials:"
+          jq -c 'select(.type == "result") | .permission_denials[]? | {tool_name, tool_input}' "$OUT" | head -20 | cut -c1-300
+          echo "failed tool results:"
+          jq -c 'select(.type == "user") | .message.content[]? | select(.type == "tool_result" and .is_error == true) | .content' "$OUT" | head -10 | cut -c1-300
 
   # A PR opened with the workflow token starts no CI; the full tier dispatched
   # on its branch puts the required checks on its head commit.
