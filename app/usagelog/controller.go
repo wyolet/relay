@@ -243,3 +243,13 @@ func (r *reloadableReader) TimeSeries(ctx context.Context, q TimeSeriesQuery) (T
 	}
 	return cur.TimeSeries(ctx, q)
 }
+
+func (r *reloadableReader) Facet(ctx context.Context, q FacetQuery) ([]FacetValue, error) {
+	r.mu.RLock()
+	cur := r.cur
+	r.mu.RUnlock()
+	if cur == nil {
+		return nil, nil
+	}
+	return cur.Facet(ctx, q)
+}

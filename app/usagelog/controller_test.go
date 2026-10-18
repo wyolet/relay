@@ -35,6 +35,9 @@ func (f *fakeBackend) Summary(context.Context, SummaryQuery) (SummaryResult, err
 func (f *fakeBackend) TimeSeries(context.Context, TimeSeriesQuery) (TimeSeriesResult, error) {
 	return TimeSeriesResult{}, nil
 }
+func (f *fakeBackend) Facet(context.Context, FacetQuery) ([]FacetValue, error) {
+	return nil, nil
+}
 
 func TestController_ReconcileSwapsBackendAndClosesOld(t *testing.T) {
 	src := usageSettings(settings.UsageLogging{Backend: "file"})

@@ -52,6 +52,9 @@ type Reader interface {
 	// Buckets are aligned to the Unix epoch by q.Interval and ordered
 	// oldest-first within each series.
 	TimeSeries(ctx context.Context, q TimeSeriesQuery) (TimeSeriesResult, error)
+
+	// Facet returns the most frequent values of q.Dim over the filtered set with their request counts, requests desc then value asc, capped at FacetLimit(q.Limit). It counts what Summary counts (LogOnly excluded) and nothing else; the empty value is a value like any other.
+	Facet(ctx context.Context, q FacetQuery) ([]FacetValue, error)
 }
 
 // EventQuery filters the raw event stream. All fields are optional;

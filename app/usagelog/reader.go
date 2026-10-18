@@ -22,6 +22,8 @@ type (
 	TimeSeriesPoint  = usage.TimeSeriesPoint
 	TimeSeriesRow    = usage.TimeSeriesRow
 	TimeSeriesResult = usage.TimeSeriesResult
+	FacetQuery       = usage.FacetQuery
+	FacetValue       = usage.FacetValue
 )
 
 const (

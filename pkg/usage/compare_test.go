@@ -129,6 +129,8 @@ func (r *queryRecorder) TimeSeries(context.Context, TimeSeriesQuery) (TimeSeries
 	return TimeSeriesResult{}, nil
 }
 
+func (r *queryRecorder) Facet(context.Context, FacetQuery) ([]FacetValue, error) { return nil, nil }
+
 func (r *queryRecorder) Summary(_ context.Context, q SummaryQuery) (SummaryResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

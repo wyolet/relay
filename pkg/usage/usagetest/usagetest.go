@@ -15,7 +15,7 @@ import (
 // Open returns a Reader whose store holds exactly events, registering any teardown on t. Run calls it once and only reads from the result.
 type Open func(t *testing.T, events []usage.Event) usage.Reader
 
-// Run loads Fixture through open and checks Events, Count, Summary (alone and against a previous window) and TimeSeries against the expected results in this package's case tables.
+// Run loads Fixture through open and checks Events, Count, Summary (alone and against a previous window), TimeSeries and Facet against the expected results in this package's case tables.
 func Run(t *testing.T, open Open) {
 	t.Helper()
 	r := open(t, Fixture())
@@ -26,6 +26,7 @@ func Run(t *testing.T, open Open) {
 	t.Run("timeseries", func(t *testing.T) { runTimeSeries(t, r, timeSeriesCases) })
 	t.Run("summary distinct", func(t *testing.T) { runSummary(t, r, summaryDistinctCases) })
 	t.Run("timeseries distinct", func(t *testing.T) { runTimeSeries(t, r, timeSeriesDistinctCases) })
+	t.Run("facets", func(t *testing.T) { runFacets(t, r) })
 }
 
 func flat(ms int64) usage.DurationStats {
