@@ -15,6 +15,8 @@ name: Fix red dev
 # RELEASE_TELEGRAM_TOKEN (secret) and RELEASE_TELEGRAM_CHAT (variable) are set.
 
 on:
+  push:
+    branches: [scratch/fixer-cli]
   workflow_dispatch:
     inputs:
       sha:
@@ -47,6 +49,7 @@ env:
 
 jobs:
   guard:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -292,7 +295,7 @@ jobs:
 
   notify:
     needs: [guard, fix, verify]
-    if: always()
+    if: always() && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
