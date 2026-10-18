@@ -75,7 +75,7 @@ type graphOutput struct {
 
 type graphQuery struct {
 	IncludeDeprecated bool     `query:"includeDeprecated" doc:"Include deprecated models (still flagged via 'deprecated'). Default false drops them server-side."`
-	Label             []string `query:"label" doc:"Label selector key=value (repeatable, all must match). e.g. label=featured=true."`
+	Label             []string `query:"label,explode" doc:"Label selector key=value (repeatable, all must match). e.g. label=featured=true."`
 }
 
 // registerCatalogGraph installs GET /catalog/graph.
