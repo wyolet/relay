@@ -73,6 +73,10 @@ Set `migrations.job.enabled: false` to drop the Job and migrate on boot on every
 
 A migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` (10s) for a table lock. One queued behind a long transaction fails the Job with a lock timeout, applies nothing and leaves the schema clean, so run the upgrade again once the transaction ends.
 
+### Stop-and-start upgrades
+
+Some upgrades must not run old and new pods side by side. The upgrade to schema version 34 (stored secrets move from the master key to per-scope data keys) is one: the new pods rewrite every stored secret, and from migration 34 on the database refuses the old format, so old pods still serving would fail their secret writes and stop reading rewritten values. For that upgrade, either scale the Deployment to 0 first (`kubectl -n relay scale deploy/relay --replicas=0`, upgrade, then restore the replica count), or set `updateStrategy.type: Recreate` for the upgrade. With Recreate, the old pods keep serving while the migrate Job runs; secret writes made in that window are refused. `relay secret status` reports how many stored secrets are still in the old format; the count reaches 0 within seconds of the new pods starting.
+
 ### Recovering from a dirty schema version
 
 If a migration is interrupted, the schema is recorded as dirty at that version and every later migrate (the Job, or a pod migrating on boot) fails with `Dirty database version N`. To recover:
