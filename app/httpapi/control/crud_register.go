@@ -226,7 +226,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
-		nil,
+		guardRateLimitMove(d),
 		nil,
 		nil,
 		d.refuseInUse,

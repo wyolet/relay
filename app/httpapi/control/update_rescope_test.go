@@ -188,7 +188,8 @@ func TestUpdateRoleBindingIntoScopeWithCreateSucceeds(t *testing.T) {
 }
 
 // A service account's owner is checked against spec.projectId before the
-// guard re-derives it, so PUT cannot move one even with create at both ends.
+// guard re-derives it, so a PUT changing spec.projectId without naming the
+// new owner is refused even with create at both ends.
 func TestUpdateServiceAccountCannotChangeProject(t *testing.T) {
 	f := newRescopeFixture(t, "developer")
 	w := scopeReq(t, f.h, "caller", http.MethodPut, "/service-accounts/by-id/"+f.saAtP1.Meta.ID, f.serviceAccountAtP2())

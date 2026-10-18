@@ -34,7 +34,13 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 			(incoming.Spec.ValueFrom.Kind == hostkey.ValueKindStored || incoming.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth) {
 			return fmt.Errorf("value cannot be set on update — use POST /host-keys/by-id/{id}/rotate to rotate the credential")
 		}
-		return refErr(refs(d).HostKey(ctx, incoming))
+		if err := refs(d).HostKey(ctx, incoming); err != nil {
+			return refErr(err)
+		}
+		if action == "update" && existing.Meta.Owner != incoming.Meta.Owner {
+			return refuseHostKeyMove(ctx, d, incoming)
+		}
+		return nil
 	}
 }
 
@@ -54,11 +60,17 @@ func guardKeyPolicy(d Deps) mutationGuard[key.Key] {
 }
 
 func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
-	return func(ctx context.Context, action string, _, incoming *serviceaccount.ServiceAccount) error {
+	return func(ctx context.Context, action string, existing, incoming *serviceaccount.ServiceAccount) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refErr(refs(d).ServiceAccount(ctx, incoming))
+		if err := refs(d).ServiceAccount(ctx, incoming); err != nil {
+			return refErr(err)
+		}
+		if action == "update" && existing.Meta.Owner != incoming.Meta.Owner {
+			return refuseServiceAccountMove(ctx, d, incoming)
+		}
+		return nil
 	}
 }
 
