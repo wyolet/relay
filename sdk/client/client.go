@@ -8,6 +8,8 @@
 // baseURL/path/auth wiring. OpenAI, Anthropic, and Gemini constructors remain
 // for explicit off-catalog targets.
 //
+// Models lists the model ids a client can use and Catalog the catalog document behind a model picker. A relay client reads them from relay, scoped to its credential; any other client reads the latest public catalog through catalogsource.Latest, narrowed to its catalog host, and never contacts relay. Each result names its Origin: OriginRelay is relay's answer for the credential, OriginCatalog the catalog server's latest release, OriginEmbedded the public catalog compiled into this SDK, served when neither can be read. Stale marks an earlier copy served after a failed refresh.
+//
 // Configuration mirrors the OpenAI SDK: base URL, API key, auth header/scheme,
 // extra default headers, request path, and HTTP client are all settable.
 //
@@ -24,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/sdk/catalogsource"
 	"github.com/wyolet/relay/sdk/telemetry"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -48,6 +51,9 @@ type Client struct {
 	syncTimeout time.Duration                          // WR_TIMEOUT; applies to Generate only, never streams
 	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
 	target      Target                                 // set by For(); zero for Relay/manual constructors
+	relay       *relayCache                            // set by newRelayClient; nil = not a relay client
+	// catalogSource is where a non-relay client's Models and Catalog read; nil = the process-wide catalogsource.Latest().
+	catalogSource *catalogsource.LatestSource
 
 	telemetry     *telemetry.Emitter // nil = calls are not reported
 	ownsTelemetry bool               // Close closes the emitter (ForMode built it)
@@ -141,6 +147,7 @@ func newRelayClient(path, baseURL, relayKey string, opts ...Option) *Client {
 	// env-derived opts apply first so explicit opts override them.
 	envOpts, envErr := relayEnvOptions()
 	c := New(v1.IdentityTranslator{}, baseURL, path, relayKey, append(envOpts, opts...)...)
+	c.relay = &relayCache{}
 
 	if d := os.Getenv(EnvTimeout); d != "" {
 		dur, err := time.ParseDuration(d)

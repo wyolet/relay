@@ -50,6 +50,7 @@
               "reference/control-api",
               "reference/headers",
               "reference/metrics",
+              "reference/catalog-server",
               "troubleshooting"
             ]
           }

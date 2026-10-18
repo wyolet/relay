@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -82,12 +84,19 @@ func Release(tag, cacheDir string, opts ...ReleaseOption) Source {
 func (r *releaseSource) Catalog(ctx context.Context) (*catalog.IndexedCatalog, error) {
 	tag := r.tag
 	if tag == "" {
-		latest, err := r.latestTag(ctx)
+		body, err := r.get(ctx, r.indexURL, maxSmallBytes)
 		if err != nil {
 			return nil, fmt.Errorf("catalogsource: latest release: %w", err)
 		}
-		tag = latest
+		if tag, err = r.latestTag(body); err != nil {
+			return nil, fmt.Errorf("catalogsource: latest release: %w", err)
+		}
 	}
+	return r.catalogForTag(ctx, tag)
+}
+
+// catalogForTag serves tag from the embed, the disk cache, or a verified download that it then caches.
+func (r *releaseSource) catalogForTag(ctx context.Context, tag string) (*catalog.IndexedCatalog, error) {
 	if err := checkTag(tag); err != nil {
 		return nil, err
 	}
@@ -98,29 +107,49 @@ func (r *releaseSource) Catalog(ctx context.Context) (*catalog.IndexedCatalog, e
 		}
 		return ic, nil
 	}
-	cached := ""
-	if r.cacheDir != "" {
-		cached = filepath.Join(r.cacheDir, tag, assetName)
-		if _, err := os.Stat(cached); err == nil {
-			ic, err := catalog.LoadFile(cached)
-			if err != nil {
-				return nil, fmt.Errorf("catalogsource: cached release %s: %w", tag, err)
-			}
-			ic.Catalog.Version = tag
-			return ic, nil
-		}
+	ic, err := r.loadCached(tag)
+	if err == nil {
+		return ic, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
 	}
 	ic, asset, err := r.download(ctx, tag)
 	if err != nil {
 		return nil, fmt.Errorf("catalogsource: release %s: %w", tag, err)
 	}
-	if cached != "" {
+	if cached := r.cachePath(tag); cached != "" {
 		if err := os.MkdirAll(filepath.Dir(cached), 0o755); err != nil {
 			return nil, fmt.Errorf("catalogsource: cache: %w", err)
 		}
 		if err := atomicfile.Write(cached, asset, 0o644); err != nil {
 			return nil, fmt.Errorf("catalogsource: cache: %w", err)
 		}
+	}
+	ic.Catalog.Version = tag
+	return ic, nil
+}
+
+// cachePath is where tag's asset is cached, or "" with no cache dir.
+func (r *releaseSource) cachePath(tag string) string {
+	if r.cacheDir == "" {
+		return ""
+	}
+	return filepath.Join(r.cacheDir, tag, assetName)
+}
+
+// loadCached reads tag from the disk cache. fs.ErrNotExist means it isn't there to read, and the caller downloads it.
+func (r *releaseSource) loadCached(tag string) (*catalog.IndexedCatalog, error) {
+	cached := r.cachePath(tag)
+	if cached == "" {
+		return nil, fs.ErrNotExist
+	}
+	if _, err := os.Stat(cached); err != nil {
+		return nil, fs.ErrNotExist
+	}
+	ic, err := catalog.LoadFile(cached)
+	if err != nil {
+		return nil, fmt.Errorf("catalogsource: cached release %s: %w", tag, err)
 	}
 	ic.Catalog.Version = tag
 	return ic, nil
@@ -166,11 +195,8 @@ type channelIndex struct {
 	} `yaml:"channels"`
 }
 
-func (r *releaseSource) latestTag(ctx context.Context) (string, error) {
-	body, err := r.get(ctx, r.indexURL, maxSmallBytes)
-	if err != nil {
-		return "", err
-	}
+// latestTag reads Channel's latest tag from an index body.
+func (r *releaseSource) latestTag(body []byte) (string, error) {
 	var idx channelIndex
 	if err := yaml.Unmarshal(body, &idx); err != nil {
 		return "", fmt.Errorf("%s: %w", r.indexURL, err)
@@ -183,26 +209,38 @@ func (r *releaseSource) latestTag(ctx context.Context) (string, error) {
 }
 
 func (r *releaseSource) get(ctx context.Context, url string, limit int64) ([]byte, error) {
+	body, _, _, err := r.getIfNoneMatch(ctx, url, limit, "")
+	return body, err
+}
+
+// getIfNoneMatch is get revalidating against etag. notModified reports a 304, which is an error when etag is "".
+func (r *releaseSource) getIfNoneMatch(ctx context.Context, url string, limit int64, etag string) (body []byte, respETag string, notModified bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", false, err
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", false, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+	if resp.StatusCode == http.StatusNotModified && etag != "" {
+		return nil, etag, true, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", false, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", url, err)
+		return nil, "", false, fmt.Errorf("%s: %w", url, err)
 	}
 	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("%s: larger than %d bytes", url, limit)
+		return nil, "", false, fmt.Errorf("%s: larger than %d bytes", url, limit)
 	}
-	return body, nil
+	return body, resp.Header.Get("ETag"), false, nil
 }
 
 // checkTag keeps a tag, which may come from the fetched index, a single path segment in URLs and the cache.

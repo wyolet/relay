@@ -21,6 +21,7 @@ single self-migrating binary serving the **inference (data) plane** and the
 | ServiceMonitor | monitoring.coreos.com | scrape `/metrics` on control port | `serviceMonitor.enabled` |
 | Ingress | networking.k8s.io | TLS edges for both planes | `ingress.enabled` |
 | NetworkPolicy | — | lock data stores to relay pods | `networkPolicy.enabled` |
+| catalog-server | Deployment + Service + PDB | serves catalog releases over HTTP | `catalogServer.enabled` |
 
 ## Architecture facts the chart encodes
 
@@ -116,6 +117,31 @@ previous behaviour.
 Use the **lean** image (`ghcr.io/wyolet/relay:<version>`) — external data stores.
 Do **not** use `:standalone` here; that variant bakes a single-node embedded
 Postgres for `docker run` demos and will fight the bundled PG.
+
+## catalog-server
+
+`catalogServer.enabled: true` deploys [catalog-server](../docs/reference/catalog-server.mdx),
+which serves relay-catalog releases to relays and SDKs over HTTP. It runs
+`ghcr.io/wyolet/catalog-server`, tagged like relay with the chart's `appVersion`,
+under its own ServiceAccount with no token. It reads no relay Secret or
+ConfigMap and needs none of the data stores, and relay's resources render the
+same with it on or off.
+
+- **Config.** Every setting has a default; override with
+  `RELAY_CATALOG_SERVER_*` variables in `catalogServer.env`. The listen address
+  stays `:8080`.
+- **State.** The git mirror and build scratch live on an emptyDir at `/tmp`
+  (`catalogServer.tmpSizeLimit`), so the root filesystem stays read-only. A
+  restarted pod clones again (about a second).
+- **Readiness.** `/readyz` turns 200 once the first sync has verified the latest
+  release of every channel; each replica syncs on its own.
+- **Egress.** HTTPS to the repository host and its release downloads (for GitHub,
+  `github.com` and the host its release downloads redirect to).
+- **Exposure.** `catalogServer.ingress` or `catalogServer.httpRoute` (attached to
+  a Gateway you name in `parentRefs`). The proxy must not compress `/releases/*`:
+  clients check the sha256 of the stored `.gz` bytes.
+- **NetworkPolicy.** `catalogServer.networkPolicy` admits only the `from` peers
+  (typically the ingress controller) to the server port.
 
 ## Validate before applying
 

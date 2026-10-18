@@ -2,9 +2,11 @@
 //
 // Usage:
 //
-//	catalog-embed [-o path] [-version tag] [dir]
+//	catalog-embed [-o path] [-version tag] [-generated-at RFC3339] [dir]
 //
-// dir defaults to $RELAY_CATALOG_DIR or ../relay-catalog/data.
+// dir defaults to $RELAY_CATALOG_DIR or ../relay-catalog/data. With
+// -generated-at the output is byte-reproducible: the timestamp replaces the
+// clock and the gzip header carries no name or mtime.
 
 // Command catalog-embed generates the SDK's embedded default catalog from the public catalog tree.
 package main
@@ -24,15 +26,26 @@ import (
 )
 
 func main() {
-	var out, version string
+	var out, version, generatedAt string
 	flag.StringVar(&out, "o", filepath.Join("sdk", "catalog", "catalog.json"), "output path")
 	// sdk/catalogsource serves a pinned tag from the embed instead of fetching it when this matches, so it must be the tag dir is checked out at.
 	flag.StringVar(&version, "version", "", "relay-catalog release tag of dir, recorded as the catalog version (default: the schema label)")
+	flag.StringVar(&generatedAt, "generated-at", "", "generatedAt timestamp, RFC3339, kept with its offset (default: now, UTC)")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: catalog-embed [-o path] [-version tag] [dir]")
+		fmt.Fprintln(os.Stderr, "usage: catalog-embed [-o path] [-version tag] [-generated-at RFC3339] [dir]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	at := time.Now().UTC()
+	if generatedAt != "" {
+		t, err := time.Parse(time.RFC3339, generatedAt)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "-generated-at: %v\n", err)
+			os.Exit(2)
+		}
+		at = t
+	}
 
 	dir := flag.Arg(0)
 	if dir == "" {
@@ -48,7 +61,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	cat, err := catalogembed.Compose(docs, time.Now().UTC())
+	cat, err := catalogembed.Compose(docs, at)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compose: %v\n", err)
 		os.Exit(2)

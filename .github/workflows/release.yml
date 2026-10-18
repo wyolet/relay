@@ -1,9 +1,10 @@
 name: Release
 
 # A v*.*.* tag on main is the release: pushes the relay images (lean +
-# standalone) to BOTH ghcr.io/wyolet/relay and docker.io/wyolet/relay, the Helm
-# chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
-# image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
+# standalone) to BOTH ghcr.io/wyolet/relay and docker.io/wyolet/relay, the
+# catalog-server image to ghcr.io/wyolet/catalog-server only, the Helm chart to
+# oci://ghcr.io/wyolet/charts, and creates the GitHub release. The relay images bake in the pinned admin UI +
+# catalog from versions.env (see Dockerfile).
 #
 # The tests are not re-run here: the guard requires a successful CI run (ci.yml, full tier) for the push of the tagged commit to main, and refuses to publish without one. Images build without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. The push job attests signed provenance and the SBOM for each pushed image (`gh attestation verify`, see SECURITY.md). Only after the build passes does the push job re-run the same bake with --push, which resolves from that cache.
 #
@@ -144,7 +145,7 @@ jobs:
 
       # Exports OCI layouts for the scan; the result also stays in the builder's
       # cache for the push job, so the env must match the push job's bake exactly.
-      - name: Build lean + standalone (no push)
+      - name: Build lean + standalone + catalog-server (no push)
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
@@ -154,7 +155,8 @@ jobs:
         run: |
           docker buildx bake -f docker-bake.hcl --allow "fs.write=$RUNNER_TEMP" --set '*.platform=linux/amd64' \
             --set "prod.output=type=oci,tar=false,dest=$RUNNER_TEMP/image/lean" \
-            --set "standalone.output=type=oci,tar=false,dest=$RUNNER_TEMP/image/standalone" release
+            --set "standalone.output=type=oci,tar=false,dest=$RUNNER_TEMP/image/standalone" \
+            --set "catalog-server.output=type=oci,tar=false,dest=$RUNNER_TEMP/image/catalog-server" release
 
       - name: Install trivy
         run: |
@@ -166,7 +168,7 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
           mkdir -p "$RUNNER_TEMP/sbom"
-          for img in lean standalone; do
+          for img in lean standalone catalog-server; do
             trivy image --input "$RUNNER_TEMP/image/$img" --scanners vuln
             trivy image --input "$RUNNER_TEMP/image/$img" --skip-db-update --format cyclonedx \
               --output "$RUNNER_TEMP/sbom/relay-$VERSION-$img.cdx.json"
@@ -182,7 +184,7 @@ jobs:
       - name: Fail on fixable HIGH/CRITICAL vulnerabilities
         run: |
           status=0
-          for img in lean standalone; do
+          for img in lean standalone catalog-server; do
             trivy image --input "$RUNNER_TEMP/image/$img" --scanners vuln --severity HIGH,CRITICAL \
               --ignore-unfixed --skip-db-update --exit-code 1 || status=1
           done
@@ -225,7 +227,7 @@ jobs:
 
       # Same bake as the build job, so every step but the always-refetched
       # assets stage resolves from cache and this only exports + uploads.
-      - name: Push lean + standalone (both registries)
+      - name: Push lean + standalone (both registries) + catalog-server (GHCR)
         id: bake
         if: needs.guard.outputs.publish == 'true'
         env:
@@ -238,8 +240,11 @@ jobs:
           meta="$RUNNER_TEMP/bake-metadata.json"
           docker buildx bake -f docker-bake.hcl --push --provenance=mode=max --metadata-file "$meta" \
             --set '*.platform=linux/amd64' release
-          echo "lean=$(jq -r '.prod."containerimage.digest"' "$meta")" >> "$GITHUB_OUTPUT"
-          echo "standalone=$(jq -r '.standalone."containerimage.digest"' "$meta")" >> "$GITHUB_OUTPUT"
+          {
+            echo "lean=$(jq -r '.prod."containerimage.digest"' "$meta")"
+            echo "standalone=$(jq -r '.standalone."containerimage.digest"' "$meta")"
+            echo "catalog_server=$(jq -r '."catalog-server"."containerimage.digest"' "$meta")"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v8
         if: needs.guard.outputs.publish == 'true'
@@ -267,6 +272,15 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
+      - name: Attest catalog-server provenance
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/wyolet/catalog-server
+          subject-digest: ${{ steps.bake.outputs.catalog_server }}
+          push-to-registry: true
+          create-storage-record: false
+
       - name: Attest lean SBOM
         if: needs.guard.outputs.publish == 'true'
         uses: actions/attest@v4
@@ -284,6 +298,16 @@ jobs:
           subject-name: ghcr.io/wyolet/relay
           subject-digest: ${{ steps.bake.outputs.standalone }}
           sbom-path: ${{ runner.temp }}/sbom/relay-${{ needs.guard.outputs.version }}-standalone.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest catalog-server SBOM
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/wyolet/catalog-server
+          subject-digest: ${{ steps.bake.outputs.catalog_server }}
+          sbom-path: ${{ runner.temp }}/sbom/relay-${{ needs.guard.outputs.version }}-catalog-server.cdx.json
           push-to-registry: true
           create-storage-record: false
 

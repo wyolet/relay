@@ -45,8 +45,46 @@ In `proxy` mode the client sends every call to `WR_BASE_URL` with `WR_API_KEY`, 
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` | telemetry | Export to another OTLP/HTTP backend instead. When the endpoint comes from here, `WR_API_KEY` is not sent; put credentials in the headers variable. |
 | `OTEL_SERVICE_NAME` | telemetry | The `service.name` of the reports. |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | telemetry | `true` (or `span_only`, `event_only`, `span_and_event`) opts in to sending message content. |
+| `WR_CATALOG_URL` | telemetry, direct | Base URL of the [catalog server](/reference/catalog-server) that `Models` and `Catalog` read. `off` uses the catalog embedded in the SDK and makes no request. |
+| `WR_CATALOG_CACHE_DIR` | telemetry, direct | Directory for the catalog disk cache. Without it nothing is written to disk. |
 
 Missing configuration does not panic: it is returned by the first `Generate` or `GenerateStream`.
+
+## Listing models
+
+`c.Models(ctx)` returns model ids and `c.Catalog(ctx)` the catalog behind a model picker, with hosts, models, providers and prices. Where they read depends on the mode:
+
+| Mode | Reads | Contains |
+| --- | --- | --- |
+| `proxy` | Relay's `GET /v1/models` and `GET /v1/catalog`, with your relay key | what the key's policy can route to |
+| `telemetry`, `direct` | the latest public catalog, through `catalogsource.Latest` | the host the model reference resolved to |
+
+In `telemetry` and `direct` mode nothing is sent to Relay or to the provider; the relay key authenticates reports only. `Models` lists the model slugs the host serves. What the catalog lists is what the host serves, not what your provider key can call; a model the key can't use fails on the call. A client built with `client.OpenAI`, `client.Anthropic`, `client.Gemini` or `client.New` has no catalog host and gets the whole catalog.
+
+Each result carries:
+
+- `Origin`: `relay`, `catalog` (the catalog server's latest release) or `embedded` (the catalog compiled into the SDK).
+- `Stale`: an earlier copy, served because a refresh failed.
+- `Err`: the error behind `Stale` or an `embedded` fallback; `nil` when the result is current.
+
+The returned error is non-nil only when there is nothing to show, such as a relay that refuses the key (`401`, `403`).
+
+`catalogsource.Latest` reads the release index at most once every 10 minutes and downloads a release only when the index names a new one, checking its sha256. When the server can't be read it serves, in order, the copy held in memory, the last release in `WR_CATALOG_CACHE_DIR`, and the embedded catalog. A release older than the embedded catalog is never used. By default releases are read from GitHub; set `WR_CATALOG_URL` to use a catalog server, or share one source between clients:
+
+```go
+src := catalogsource.Latest(
+	catalogsource.WithBaseURL("https://catalog.example.com"),
+	catalogsource.WithCacheDir(cacheDir),
+)
+c, err := client.ForMode("gpt-4o", client.WithClientOptions(client.WithCatalogSource(src)))
+```
+
+`client.For` and `ForMode` resolve the model reference against the embedded catalog and make no request. To resolve against the latest release, pass it to `client.ForFrom`:
+
+```go
+ic, err := catalogsource.Latest().Catalog(ctx)
+c, err := client.ForFrom(ic, "gpt-4o", os.Getenv("OPENAI_API_KEY"))
+```
 
 ## Telemetry mode
 

@@ -1,29 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/wyolet/relay/app/families"
 )
 
-// familyList is the catalog's families.yaml allowlist of Model spec.family values, each with the spec.productLine values valid under it.
-type familyList struct {
-	Families []familyEntry `yaml:"families"`
-}
-
-type familyEntry struct {
-	Name    string        `yaml:"name"`
-	Aliases []string      `yaml:"aliases"`
-	Lines   []productLine `yaml:"lines"`
-}
-
-// productLine is one allowed spec.productLine. Aliases only map models.dev values onto the line; they are never valid spec values themselves.
-type productLine struct {
-	Name    string   `yaml:"name"`
-	Aliases []string `yaml:"aliases"`
-}
+// familyList is the catalog's families.yaml allowlist, with the importer's mapping of models.dev family values onto it.
+type familyList families.File
 
 // UnmappedFamily is a model whose models.dev family matched no allowlisted family.
 type UnmappedFamily struct {
@@ -36,18 +23,18 @@ type UnmappedLine struct {
 }
 
 func loadFamilies(path string) (*familyList, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
+	f, err := families.Load(path)
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
 		return nil, fmt.Errorf("families allowlist: %w (point -families at the catalog's families.yaml)", err)
 	}
-	var f familyList
-	if err := yaml.Unmarshal(b, &f); err != nil {
-		return nil, fmt.Errorf("families allowlist %s: %w", path, err)
+	if err != nil {
+		return nil, fmt.Errorf("families allowlist %w", err)
 	}
 	if len(f.Families) == 0 {
 		return nil, fmt.Errorf("families allowlist %s: no families", path)
 	}
-	return &f, nil
+	return (*familyList)(f), nil
 }
 
 // resolve maps a models.dev family onto an allowlisted family: exact name,
@@ -101,7 +88,7 @@ func (f *familyList) line(family, candidate string) string {
 			continue
 		}
 		for c := candidate; ; {
-			if l := fam.lineFor(c); l != "" {
+			if l := lineFor(fam, c); l != "" {
 				return l
 			}
 			i := strings.LastIndexByte(c, '-')
@@ -114,7 +101,7 @@ func (f *familyList) line(family, candidate string) string {
 	return ""
 }
 
-func (fam familyEntry) lineFor(c string) string {
+func lineFor(fam families.Family, c string) string {
 	for _, l := range fam.Lines {
 		if l.Name == c {
 			return l.Name
