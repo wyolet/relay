@@ -84,13 +84,18 @@ func authorizeSecretKeys(ctx context.Context, a authz.Authorizer, action string,
 	return nil
 }
 
-func secretKeyRow(action string, k stored.DataKeyStatus, fields ...string) audit.Row {
+// SecretKeyAuditRow is the audit row of a secret-keys action on data key id ("" for none), named by its scope, a KEK id, or "*" for every scope. The relay secret CLI records the same rows.
+func SecretKeyAuditRow(action, id, name string, fields ...string) audit.Row {
 	owner := meta.Owner{Kind: meta.OwnerSystem}
 	return audit.Row{
 		Action:   action,
-		Resource: audit.Resource{Kind: "secret-key", ID: k.ID, Name: k.Scope, Owner: &owner},
+		Resource: audit.Resource{Kind: "secret-key", ID: id, Name: name, Owner: &owner},
 		Fields:   fields,
 	}
+}
+
+func secretKeyRow(action string, k stored.DataKeyStatus, fields ...string) audit.Row {
+	return SecretKeyAuditRow(action, k.ID, k.Scope, fields...)
 }
 
 // recordPartialRotation audits the keys a failed rotate-all did make, as succeeded, beside the request's own row with the error status, so the audit log matches the key ring.
@@ -98,14 +103,13 @@ func recordPartialRotation(ctx context.Context, rotated []stored.DataKeyStatus, 
 	if len(rotated) == 0 {
 		return
 	}
-	owner := meta.Owner{Kind: meta.OwnerSystem}
 	rows := make([]audit.Row, 0, len(rotated)+1)
 	for _, k := range rotated {
 		row := secretKeyRow("secret-keys.rotate", k)
 		row.Code = http.StatusOK
 		rows = append(rows, row)
 	}
-	rows = append(rows, audit.Row{Action: "secret-keys.rotate", Resource: audit.Resource{Kind: "secret-key", Name: name, Owner: &owner}})
+	rows = append(rows, SecretKeyAuditRow("secret-keys.rotate", "", name))
 	audit.RecordEach(ctx, rows)
 }
 
@@ -231,20 +235,23 @@ func registerSecretKeys(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 }
 
-// secretKeyError maps the key ring's refusals onto HTTP: a refusal the operator can act on is a 409 that says why.
-func secretKeyError(err error) error {
-	msg := err.Error()
+// SecretKeyErrorStatus is the HTTP status of a key ring error: a refusal the operator can act on is a 409.
+func SecretKeyErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, stored.ErrBadKeyID):
-		return huma.Error400BadRequest(msg)
+		return http.StatusBadRequest
 	case errors.Is(err, keyring.ErrUnknownKey), errors.Is(err, stored.ErrNoScopeKey):
-		return huma.Error404NotFound(msg)
+		return http.StatusNotFound
 	case errors.Is(err, stored.ErrNoMasterKey):
-		return huma.Error503ServiceUnavailable(msg)
+		return http.StatusServiceUnavailable
 	case errors.Is(err, keyring.ErrIsPrimary), errors.Is(err, keyring.ErrInUse), errors.Is(err, keyring.ErrTooRecent),
 		errors.Is(err, keyring.ErrTargetKEKUnavailable), errors.Is(err, keyring.ErrKEKUnavailable),
 		errors.Is(err, keyring.ErrConflict), errors.Is(err, stored.ErrLegacyRows):
-		return huma.Error409Conflict(msg)
+		return http.StatusConflict
 	}
-	return huma.Error500InternalServerError(msg)
+	return http.StatusInternalServerError
+}
+
+func secretKeyError(err error) error {
+	return huma.NewError(SecretKeyErrorStatus(err), err.Error())
 }

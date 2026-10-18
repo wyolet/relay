@@ -16,6 +16,9 @@
 //     JSON paths a write touched; Record covers handlers (login, logout)
 //     that never call Authorize.
 //
+// WriteRows is the one path outside an HTTP request: the offline relay
+// secret commands write their rows synchronously under a cli actor.
+//
 // Values are never recorded — only field paths, and a path naming a secret
 // is dropped outright. Writes go through a bounded, drop-on-full Emitter so
 // no handler ever waits on the audit store. Reading rows back is the
