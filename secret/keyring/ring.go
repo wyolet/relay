@@ -76,7 +76,7 @@ func (r *Ring) Reload(ctx context.Context, id [16]byte) error {
 	r.flightMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.reloadIDsLocked(ctx, nil, nil, id)
+	return r.reloadIDsLocked(ctx, nil, id)
 }
 
 // ReloadTarget re-reads the target KEK.
@@ -106,7 +106,7 @@ func (r *Ring) ReloadAll(ctx context.Context) error {
 	old := r.view.Load()
 	nv := &view{keys: make(map[[16]byte]*entry, len(all)), primary: map[string][16]byte{}, target: t}
 	for _, k := range all {
-		r.apply(ctx, nv, old.keys[k.ID], k, nil)
+		r.apply(ctx, nv, old.keys[k.ID], k)
 	}
 	r.view.Store(nv)
 	return nil
@@ -128,8 +128,8 @@ func (r *Ring) Run(ctx context.Context) error {
 	}
 }
 
-// reloadIDsLocked reads ids (after any keys already in pre) and publishes them in read order, together with any Primary they displace. known supplies DEKs the caller already holds. Caller holds r.mu.
-func (r *Ring) reloadIDsLocked(ctx context.Context, pre []DataKey, known map[[16]byte][]byte, ids ...[16]byte) error {
+// reloadIDsLocked reads ids (after any keys already in pre) and publishes them in read order, together with any Primary they displace. Caller holds r.mu.
+func (r *Ring) reloadIDsLocked(ctx context.Context, pre []DataKey, ids ...[16]byte) error {
 	cur := r.view.Load()
 	reads := pre
 	seen := map[[16]byte]bool{}
@@ -169,7 +169,7 @@ func (r *Ring) reloadIDsLocked(ctx context.Context, pre []DataKey, known map[[16
 			}
 		}
 		for _, k := range reads {
-			r.apply(ctx, v, v.keys[k.ID], k, known[k.ID])
+			r.apply(ctx, v, v.keys[k.ID], k)
 		}
 	})
 	return nil
@@ -201,7 +201,7 @@ func (r *Ring) reloadScope(ctx context.Context, scope string, extra ...[16]byte)
 	case !errors.Is(err, ErrUnknownKey):
 		return err
 	}
-	return r.reloadIDsLocked(ctx, pre, nil, extra...)
+	return r.reloadIDsLocked(ctx, pre, extra...)
 }
 
 // update publishes a modified copy of the view. Caller holds r.mu.
@@ -213,7 +213,7 @@ func (r *Ring) update(fn func(*view)) {
 }
 
 // apply puts a freshly read key into v. A DEK already unwrapped is kept as is, together with the scope its unwrap verified; only metadata changes.
-func (r *Ring) apply(ctx context.Context, v *view, old *entry, k DataKey, dek []byte) {
+func (r *Ring) apply(ctx context.Context, v *view, old *entry, k DataKey) {
 	if old != nil && v.primary[old.key.Scope] == k.ID {
 		delete(v.primary, old.key.Scope)
 	}
@@ -224,8 +224,6 @@ func (r *Ring) apply(ctx context.Context, v *view, old *entry, k DataKey, dek []
 	case old != nil && old.dek != nil:
 		e.dek = old.dek
 		e.key.Scope = old.key.Scope
-	case dek != nil:
-		e.dek = dek
 	default:
 		e.dek = r.unwrap(ctx, k)
 	}

@@ -156,6 +156,109 @@ func TestCreateConflictUsesWinner(t *testing.T) {
 	mustDecrypt(t, a, "s", sealed, "", "w")
 }
 
+// wrapAADOf repeats the package's id||scope binding of a wrapped DEK.
+func wrapAADOf(k *keyring.DataKey) []byte {
+	return append(append([]byte{}, k.ID[:]...), k.Scope...)
+}
+
+func TestCreateRejectsStoreMismatch(t *testing.T) {
+	k1, k2, unheld := newKEK(t, 1), newKEK(t, 2), newKEK(t, 3)
+	for name, st := range map[string]*lying{
+		"other scope on read":  {onGet: func(k *keyring.DataKey) { k.Scope = "b" }},
+		"KEK not held on read": {onGet: func(k *keyring.DataKey) { k.KEKID = unheld.ID() }},
+		"truncated wrapped":    {onInsert: func(k *keyring.DataKey) { k.Wrapped = k.Wrapped[:len(k.Wrapped)-1] }},
+		"altered wrapped":      {onInsert: func(k *keyring.DataKey) { k.Wrapped[len(k.Wrapped)-1] ^= 1 }},
+		"wrapped other DEK":    {onInsert: func(k *keyring.DataKey) { k.Wrapped, _ = k1.Wrap(ctx, make([]byte, aead.KeySize), wrapAADOf(k)) }},
+		"other DEK under held KEK": {onGet: func(k *keyring.DataKey) {
+			k.KEKID = k2.ID()
+			k.Wrapped, _ = k2.Wrap(ctx, make([]byte, aead.KeySize), wrapAADOf(k))
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rs := newRows()
+			st.Store = rs.ms
+			r := newRing(t, st, newClock(), k1, k2)
+			calls := 0
+			err := r.EncryptAndWrite(ctx, "a", []byte("v"), nil, func(sealed []byte, id [16]byte) error {
+				calls++
+				return rs.writer("x", "a")(sealed, id)
+			})
+			if !errors.Is(err, keyring.ErrStoreMismatch) || calls != 0 || len(rs.snapshot()) != 0 {
+				t.Fatalf("err = %v after %d writes, want ErrStoreMismatch and none", err, calls)
+			}
+		})
+	}
+}
+
+func TestCreateAcceptsConcurrentRewrap(t *testing.T) {
+	c := newClock()
+	ms := memstore.New()
+	k1, k2 := newKEK(t, 1), newKEK(t, 2)
+	// The re-read sees the new key already moved under k2, as after a rewrap between the insert and the read.
+	st := &lying{Store: ms, onGet: func(k *keyring.DataKey) {
+		if k.KEKID != k1.ID() {
+			return
+		}
+		dek, err := k1.Unwrap(ctx, k.Wrapped, wrapAADOf(k))
+		if err != nil {
+			panic(err)
+		}
+		if k.Wrapped, err = k2.Wrap(ctx, dek, wrapAADOf(k)); err != nil {
+			panic(err)
+		}
+		k.KEKID = k2.ID()
+	}}
+	r := newRing(t, st, c, k1, k2)
+	sealed, id := mustEncrypt(t, r, "a", "v", "")
+	if info, _ := keyInfo(r, id); info.KEKID != k2.ID() || info.Locked {
+		t.Fatalf("key = %+v, want unlocked under k2", info)
+	}
+	mustDecrypt(t, r, "a", sealed, "", "v")
+	mustDecrypt(t, newRing(t, ms, c, k1), "a", sealed, "", "v")
+}
+
+func TestCreateForOtherScopeDoesNotLendKey(t *testing.T) {
+	c := newClock()
+	ms := memstore.New()
+	k1 := newKEK(t, 1)
+	st := &lying{Store: ms, onGet: func(k *keyring.DataKey) {
+		if k.Scope == "a" {
+			k.Scope = "b"
+		}
+	}}
+	r := newRing(t, st, c, k1)
+	if _, _, err := r.Encrypt(ctx, "a", []byte("v"), nil); !errors.Is(err, keyring.ErrStoreMismatch) {
+		t.Fatalf("Encrypt: err = %v, want ErrStoreMismatch", err)
+	}
+	// A ring reading the store honestly encrypts under the key that was created.
+	sealed, id := mustEncrypt(t, newRing(t, ms, c, k1), "a", "v", "")
+	if ks := keysOfScope(t, ms, "a"); len(ks) != 1 || ks[0].ID != id {
+		t.Fatalf("scope a keys = %+v, want only %s", ks, keyring.FormatID(id))
+	}
+	if info, ok := keyInfo(r, id); !ok || !info.Locked {
+		t.Fatalf("key on the misled ring = %+v, want locked", info)
+	}
+	if _, _, err := r.Decrypt(ctx, "b", sealed, nil); !errors.Is(err, keyring.ErrKEKUnavailable) {
+		t.Fatalf("Decrypt under the scope the store claimed: err = %v, want ErrKEKUnavailable", err)
+	}
+}
+
+func TestCreateDemotedBeforeReadIsConflict(t *testing.T) {
+	c := newClock()
+	ms := memstore.New()
+	k1 := newKEK(t, 1)
+	r := newRing(t, ms, c, k1)
+	_, oldID := mustEncrypt(t, r, "a", "v", "")
+	st := &lying{Store: ms, onGet: func(k *keyring.DataKey) {
+		if k.ID != oldID {
+			k.State = keyring.DecryptOnly
+		}
+	}}
+	if _, err := newRing(t, st, c, k1).Rotate(ctx, "a"); !errors.Is(err, keyring.ErrConflict) {
+		t.Fatalf("Rotate: err = %v, want ErrConflict", err)
+	}
+}
+
 func TestMissedRotateWriteRetries(t *testing.T) {
 	c := newClock()
 	rs := newRows()

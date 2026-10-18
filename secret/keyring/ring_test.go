@@ -265,3 +265,74 @@ func TestConcurrentUse(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// flightSetup returns a ring on a gated store that has not seen a key another ring just created, and a value under that key.
+func flightSetup(t *testing.T, panics bool) (*keyring.Ring, *gated, []byte) {
+	t.Helper()
+	c := newClock()
+	ms := memstore.New()
+	k1 := newKEK(t, 1)
+	g := newGated(ms, panics)
+	r := newRing(t, g, c, k1)
+	sealed, _ := mustEncrypt(t, newRing(t, ms, c, k1), "s", "v", "")
+	g.armed.Store(true)
+	return r, g, sealed
+}
+
+// joinFlight starts a Decrypt with a live context once the leader's read is under way and gives it time to join the flight.
+func joinFlight(r *keyring.Ring, g *gated, sealed []byte) chan error {
+	<-g.entered
+	waiter := make(chan error, 1)
+	go func() {
+		_, _, err := r.Decrypt(ctx, "s", sealed, nil)
+		waiter <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	return waiter
+}
+
+func TestFlightOutlivesCancelledLeader(t *testing.T) {
+	r, g, sealed := flightSetup(t, false)
+	leaderCtx, cancel := context.WithCancel(ctx)
+	leader := make(chan error, 1)
+	go func() {
+		_, _, err := r.Decrypt(leaderCtx, "s", sealed, nil)
+		leader <- err
+	}()
+	waiter := joinFlight(r, g, sealed)
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+	close(g.release)
+	select {
+	case err := <-waiter:
+		if err != nil {
+			t.Fatalf("waiter: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter hung")
+	}
+	<-leader
+}
+
+func TestFlightReleasedOnPanic(t *testing.T) {
+	r, g, sealed := flightSetup(t, true)
+	leader := make(chan any, 1)
+	go func() {
+		defer func() { leader <- recover() }()
+		_, _, _ = r.Decrypt(ctx, "s", sealed, nil)
+	}()
+	waiter := joinFlight(r, g, sealed)
+	close(g.release)
+	if p := <-leader; p == nil {
+		t.Fatal("leader did not panic")
+	}
+	select {
+	case err := <-waiter:
+		if err == nil {
+			t.Fatal("waiter got no error from a panicked read")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter hung")
+	}
+	mustDecrypt(t, r, "s", sealed, "", "v")
+}

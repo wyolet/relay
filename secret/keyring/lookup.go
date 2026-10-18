@@ -2,8 +2,11 @@ package keyring
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
+
+var errReadPanicked = errors.New("keyring: data key read panicked")
 
 type flight struct {
 	done chan struct{}
@@ -34,16 +37,7 @@ func (r *Ring) lookup(ctx context.Context, id [16]byte) (*view, *entry, error) {
 		f = &flight{done: make(chan struct{})}
 		r.flights[id] = f
 		r.flightMu.Unlock()
-		r.mu.Lock()
-		f.err = r.reloadIDsLocked(ctx, nil, nil, id)
-		r.mu.Unlock()
-		r.flightMu.Lock()
-		if f.err == nil && !ready(r.view.Load().keys[id]) {
-			r.rememberMissLocked(id)
-		}
-		delete(r.flights, id)
-		close(f.done)
-		r.flightMu.Unlock()
+		r.lead(ctx, id, f)
 	} else {
 		r.flightMu.Unlock()
 		select {
@@ -56,6 +50,23 @@ func (r *Ring) lookup(ctx context.Context, id [16]byte) (*view, *entry, error) {
 		return nil, nil, f.err
 	}
 	return found(r.view.Load(), id)
+}
+
+// lead reads id for flight f. The read ignores the leader's cancellation because waiters with live contexts share its result, and the deferred close releases them even when the read panics.
+func (r *Ring) lead(ctx context.Context, id [16]byte, f *flight) {
+	f.err = errReadPanicked
+	defer func() {
+		r.flightMu.Lock()
+		if f.err == nil && !ready(r.view.Load().keys[id]) {
+			r.rememberMissLocked(id)
+		}
+		delete(r.flights, id)
+		close(f.done)
+		r.flightMu.Unlock()
+	}()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	f.err = r.reloadIDsLocked(context.WithoutCancel(ctx), nil, id)
 }
 
 // found returns id's entry from v, locked ones included; the caller reports those.
