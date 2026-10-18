@@ -152,6 +152,19 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		// else: already an id or caller's responsibility
 	}
 
+	var deprecation *model.Deprecation
+	if d.Spec.Deprecation != nil {
+		dep := *d.Spec.Deprecation
+		if dep.Replacement != "" {
+			id, ok := idx.ModelID(dep.Replacement)
+			if !ok {
+				return nil, refNotFound("model %q: deprecation.replacement: model %q not found", d.Metadata.Name, dep.Replacement)
+			}
+			dep.Replacement = id
+		}
+		deprecation = &dep
+	}
+
 	m.Spec = model.Spec{
 		Family:               d.Spec.Family,
 		Version:              d.Spec.Version,
@@ -164,7 +177,7 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		KnowledgeCutoff:      d.Spec.KnowledgeCutoff,
 		ReleaseDate:          d.Spec.ReleaseDate,
 		DeprecationDate:      d.Spec.DeprecationDate,
-		Deprecation:          d.Spec.Deprecation,
+		Deprecation:          deprecation,
 		Tags:                 d.Spec.Tags,
 		Documentation:        d.Spec.Documentation,
 		License:              d.Spec.License,
@@ -185,6 +198,14 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 			wm.Owner.Name = pname
 		}
 	}
+	deprecation := m.Spec.Deprecation
+	if deprecation != nil && deprecation.Replacement != "" {
+		if name, ok := rev.ModelName(deprecation.Replacement); ok {
+			dep := *deprecation
+			dep.Replacement = name
+			deprecation = &dep
+		}
+	}
 
 	return ModelDTO{
 		APIVersion: APIVersion,
@@ -202,7 +223,7 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 			KnowledgeCutoff:      m.Spec.KnowledgeCutoff,
 			ReleaseDate:          m.Spec.ReleaseDate,
 			DeprecationDate:      m.Spec.DeprecationDate,
-			Deprecation:          m.Spec.Deprecation,
+			Deprecation:          deprecation,
 			Tags:                 m.Spec.Tags,
 			Documentation:        m.Spec.Documentation,
 			License:              m.Spec.License,
