@@ -23,6 +23,7 @@ type SummaryPrevious struct {
 	Unpriced   int64            `json:"unpriced"`
 	DurationMs DurationStats    `json:"duration_ms"`
 	TTFTMs     *DurationStats   `json:"ttft_ms,omitempty"`
+	Distinct   *int64           `json:"distinct,omitempty"`
 }
 
 // ErrNoPreviousWindow rejects a comparison whose window has no lower bound or ends before it starts: neither has a previous window of equal length.
@@ -108,6 +109,7 @@ func attachPrevious(rows, prevRows []SummaryRow) []SummaryRow {
 			Unpriced:   p.Unpriced,
 			DurationMs: p.DurationMs,
 			TTFTMs:     p.TTFTMs,
+			Distinct:   p.Distinct,
 		}
 	}
 	return rows

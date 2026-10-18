@@ -19,6 +19,10 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 	if !usage.IsValidGroupBy(groupBy) {
 		return usage.SummaryResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
 	}
+	selDistinct, err := distinctSelect(q.Distinct)
+	if err != nil {
+		return usage.SummaryResult{}, err
+	}
 
 	where, args := buildWhere(q.EventQuery, true)
 	grouped := usage.Grouped(groupBy)
@@ -43,11 +47,11 @@ SELECT
     `+ttftSelectSQL+`,
     `+costSelectSQL+`,
     min(ts)                                                  AS first_seen,
-    max(ts)                                                  AS last_seen
+    max(ts)                                                  AS last_seen%s
 FROM %s%s
 %s
 ORDER BY requests DESC`,
-		selGroup, s.cfg.Table, where, groupClause,
+		selGroup, selDistinct, s.cfg.Table, where, groupClause,
 	)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
@@ -68,6 +72,7 @@ ORDER BY requests DESC`,
 		unpriced   int64
 		first      time.Time
 		last       time.Time
+		distinct   int64
 	}
 	var scalars []scalarRow
 	for scalarRows.Next() {
@@ -79,6 +84,9 @@ ORDER BY requests DESC`,
 			&r.first, &r.last}
 		if grouped {
 			dest = append([]any{&r.grp}, dest...)
+		}
+		if selDistinct != "" {
+			dest = append(dest, &r.distinct)
 		}
 		if err := scalarRows.Scan(dest...); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan summary scalar: %w", err)
@@ -107,6 +115,7 @@ ORDER BY requests DESC`,
 			LastSeen:   r.last,
 			CostNanos:  r.cost,
 			Unpriced:   r.unpriced,
+			Distinct:   distinctCount(q.Distinct, r.distinct),
 		}
 	}
 

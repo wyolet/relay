@@ -21,9 +21,11 @@ func Run(t *testing.T, open Open) {
 	r := open(t, Fixture())
 	t.Run("events", func(t *testing.T) { runEvents(t, r) })
 	t.Run("count", func(t *testing.T) { runCount(t, r) })
-	t.Run("summary", func(t *testing.T) { runSummary(t, r) })
+	t.Run("summary", func(t *testing.T) { runSummary(t, r, summaryCases) })
 	t.Run("summary with previous", func(t *testing.T) { runSummaryWithPrevious(t, r) })
-	t.Run("timeseries", func(t *testing.T) { runTimeSeries(t, r) })
+	t.Run("timeseries", func(t *testing.T) { runTimeSeries(t, r, timeSeriesCases) })
+	t.Run("summary distinct", func(t *testing.T) { runSummary(t, r, summaryDistinctCases) })
+	t.Run("timeseries distinct", func(t *testing.T) { runTimeSeries(t, r, timeSeriesDistinctCases) })
 }
 
 func flat(ms int64) usage.DurationStats {

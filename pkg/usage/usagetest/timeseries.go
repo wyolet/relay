@@ -54,42 +54,46 @@ var timeSeriesCases = []timeSeriesCase{
 		name:        "group by model orders series by total requests",
 		q:           timeSeriesQuery("model"),
 		percentiles: true,
-		want: usage.TimeSeriesResult{
-			Rows: []usage.TimeSeriesRow{
-				{Group: map[string]string{"model": "model-a"}, Points: []usage.TimeSeriesPoint{
-					{
-						Bucket: at(0), Requests: 3,
-						Tokens:     map[string]int64{"input": 31, "output": 17, "cache_read": 7},
-						DurationMs: flat(200), TTFTMs: ptr(flat(40)), CostNanos: 4250,
-					},
-					{
-						Bucket: at(60), Requests: 3,
-						ErrorCount: 2, Errors4xx: 1, Errors5xx: 1, Throttled: 1,
-						Tokens:     map[string]int64{"input": 5, "output": 5},
-						DurationMs: flat(200), TTFTMs: ptr(flat(40)), CostNanos: 500, Unpriced: 2,
-					},
-				}},
-				{Group: map[string]string{"model": "model-b"}, Points: []usage.TimeSeriesPoint{
-					{
-						Bucket: at(0), Requests: 2,
-						ErrorCount: 2, Errors4xx: 2, Throttled: 1,
-						DurationMs: flat(100), TTFTMs: ptr(flat(41)), Unpriced: 1,
-					},
-					{
-						Bucket: at(60), Requests: 2,
-						ErrorCount: 1, Errors5xx: 1,
-						Tokens:     map[string]int64{"input": 30, "output": 15},
-						DurationMs: flat(100), CostNanos: 2000, Unpriced: 1,
-					},
-				}},
-			},
-			Interval: "1h0m0s", From: at(0), To: at(110),
-		},
+		want:        hourlyByModel(),
 	},
 }
 
-func runTimeSeries(t *testing.T, r usage.Reader) {
-	for _, tc := range timeSeriesCases {
+func hourlyByModel() usage.TimeSeriesResult {
+	return usage.TimeSeriesResult{
+		Rows: []usage.TimeSeriesRow{
+			{Group: map[string]string{"model": "model-a"}, Points: []usage.TimeSeriesPoint{
+				{
+					Bucket: at(0), Requests: 3,
+					Tokens:     map[string]int64{"input": 31, "output": 17, "cache_read": 7},
+					DurationMs: flat(200), TTFTMs: ptr(flat(40)), CostNanos: 4250,
+				},
+				{
+					Bucket: at(60), Requests: 3,
+					ErrorCount: 2, Errors4xx: 1, Errors5xx: 1, Throttled: 1,
+					Tokens:     map[string]int64{"input": 5, "output": 5},
+					DurationMs: flat(200), TTFTMs: ptr(flat(40)), CostNanos: 500, Unpriced: 2,
+				},
+			}},
+			{Group: map[string]string{"model": "model-b"}, Points: []usage.TimeSeriesPoint{
+				{
+					Bucket: at(0), Requests: 2,
+					ErrorCount: 2, Errors4xx: 2, Throttled: 1,
+					DurationMs: flat(100), TTFTMs: ptr(flat(41)), Unpriced: 1,
+				},
+				{
+					Bucket: at(60), Requests: 2,
+					ErrorCount: 1, Errors5xx: 1,
+					Tokens:     map[string]int64{"input": 30, "output": 15},
+					DurationMs: flat(100), CostNanos: 2000, Unpriced: 1,
+				},
+			}},
+		},
+		Interval: "1h0m0s", From: at(0), To: at(110),
+	}
+}
+
+func runTimeSeries(t *testing.T, r usage.Reader, cases []timeSeriesCase) {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := r.TimeSeries(t.Context(), tc.q)
 			if err != nil {

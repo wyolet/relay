@@ -52,7 +52,7 @@ func (r *Reader) Summary(_ context.Context, q usage.SummaryQuery) (usage.Summary
 	if err != nil {
 		return usage.SummaryResult{}, err
 	}
-	return usage.Summarize(usage.FilterEvents(all, q.EventQuery), q.GroupBy)
+	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct)
 }
 
 // TimeSeries streams the file, applies filters, and buckets the matching
@@ -62,7 +62,7 @@ func (r *Reader) TimeSeries(_ context.Context, q usage.TimeSeriesQuery) (usage.T
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
-	res, err := usage.Bucketize(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy)
+	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}

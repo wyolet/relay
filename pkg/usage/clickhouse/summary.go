@@ -17,6 +17,10 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 	if !usage.IsValidGroupBy(groupBy) {
 		return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
 	}
+	selDistinct, err := distinctSelect(q.Distinct)
+	if err != nil {
+		return usage.SummaryResult{}, err
+	}
 
 	grouped := usage.Grouped(groupBy)
 	selGroup, groupClause := "", ungroupedHaving
@@ -51,11 +55,11 @@ SELECT
     `+ttftSelectSQL+`,
     `+costSelectSQL+`,
     min(ts)                             AS first_seen,
-    max(ts)                             AS last_seen
+    max(ts)                             AS last_seen%s
 FROM %s%s
 %s
 ORDER BY requests DESC`,
-		selGroup, chTable, where, groupClause)
+		selGroup, selDistinct, chTable, where, groupClause)
 
 	rows, err := s.conn.Query(ctx, sql, args...)
 	if err != nil {
@@ -75,6 +79,7 @@ ORDER BY requests DESC`,
 			ttft                 ttftCols
 			costNanos, unpriced  int64
 			firstSeen, lastSeen  time.Time
+			distinct             int64
 		)
 		dest := []any{&requests, &errs.total, &errs.c4xx, &errs.c5xx, &errs.throttled,
 			&tokens, &avgMs, &p50, &p95, &p99, &maxMs,
@@ -83,6 +88,9 @@ ORDER BY requests DESC`,
 			&firstSeen, &lastSeen}
 		if grouped {
 			dest = append([]any{&groupVal}, dest...)
+		}
+		if selDistinct != "" {
+			dest = append(dest, &distinct)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: scan summary: %w", err)
@@ -107,6 +115,7 @@ ORDER BY requests DESC`,
 			LastSeen:  lastSeen,
 			CostNanos: costNanos,
 			Unpriced:  unpriced,
+			Distinct:  distinctCount(q.Distinct, distinct),
 		})
 		if result.From.IsZero() || firstSeen.Before(result.From) {
 			result.From = firstSeen
