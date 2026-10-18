@@ -4,8 +4,10 @@ name: Full CI on dev
 # dispatches ci.yml on dev, unless dev's HEAD already had a dispatched run; the
 # run executes in dev's context, so its checks land on that commit and its
 # caches stay scoped to dev. When a dispatched run on dev finishes, a green one
-# moves the ci-full-passed tag; a red one gets the range to bisect in this
-# run's summary. To run the full tier now: gh workflow run ci.yml --ref dev
+# moves the ci-full-passed tag and release/next (scripts/release-pr.sh keeps
+# the one release pull request into main up to date); a red one gets the range
+# to bisect in this run's summary. To run the full tier now:
+# gh workflow run ci.yml --ref dev
 
 on:
   schedule:
@@ -43,14 +45,17 @@ jobs:
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref dev
           echo "dispatched ci.yml on dev ${sha::12}" >> "$GITHUB_STEP_SUMMARY"
 
-  # Reads only the finished run's metadata; nothing from dev is checked out.
+  # Runs nothing from dev: the checkout is main's, and dev's history is only
+  # read as git objects for the release notes.
   record:
     if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
-      - env:
+      - id: tag
+        env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
@@ -70,6 +75,7 @@ jobs:
               gh api -X PATCH "$repo/git/refs/tags/$PASSED_TAG" -f sha="$SHA" -F force=true >/dev/null
             fi
             echo "$PASSED_TAG -> $SHA" >> "$GITHUB_STEP_SUMMARY"
+            echo "moved=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -84,3 +90,16 @@ jobs:
             echo "Bisect them, then fix forward with a pull request into dev naming the culprit, or \`git revert\` that one commit."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      - uses: actions/checkout@v7
+        if: steps.tag.outputs.moved == 'true'
+        with:
+          fetch-depth: 0
+
+      - name: Release pull request
+        if: steps.tag.outputs.moved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: ./scripts/release-pr.sh "$SHA" "$RUN_URL"
