@@ -51,23 +51,26 @@ func PreviousWindow(from, to time.Time) (time.Time, time.Time) {
 	return from.Add(-to.Sub(from)), from
 }
 
-// SummaryWithPrevious runs q and the same query over the previous window concurrently, and attaches each current row's previous numbers by group. The window is resolved once, so a relative Since cannot drift between the two queries.
-func SummaryWithPrevious(ctx context.Context, r Reader, q SummaryQuery) (SummaryResult, error) {
+// SummaryWithPrecedingWindow is SummaryWithPrevious over the window of equal length right before q's. q's window is resolved once and both queries use it, so a relative Since cannot drift between them.
+func SummaryWithPrecedingWindow(ctx context.Context, r Reader, q SummaryQuery) (SummaryResult, error) {
 	from, to, err := ResolveWindow(q.EventQuery, time.Now())
 	if err != nil {
 		return SummaryResult{}, err
 	}
+	q.Since, q.From, q.To = 0, from, to
 	prevFrom, prevTo := PreviousWindow(from, to)
+	return SummaryWithPrevious(ctx, r, q, prevFrom, prevTo)
+}
 
-	cur := q
-	cur.Since, cur.From, cur.To = 0, from, to
+// SummaryWithPrevious runs q, and q's filters over [prevFrom, prevTo) concurrently, and attaches each current row's previous numbers by group. The previous window may have any length and may overlap q's: the caller picks it.
+func SummaryWithPrevious(ctx context.Context, r Reader, q SummaryQuery, prevFrom, prevTo time.Time) (SummaryResult, error) {
 	prev := q
 	prev.Since, prev.From, prev.To, prev.Before = 0, prevFrom, time.Time{}, prevTo
 
 	var res, prevRes SummaryResult
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		res, err = r.Summary(gctx, cur)
+		res, err = r.Summary(gctx, q)
 		return err
 	})
 	g.Go(func() (err error) {

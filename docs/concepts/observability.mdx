@@ -65,6 +65,13 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/usage/summary?group_by=model&since=7d&compare=previous"
 ```
 
+To compare with a window of your choosing instead, such as this week so far against the same part of last week, pass `compare_from` (inclusive) and `compare_to` (exclusive) as RFC3339 times. The response has the same shape, and `previous_from`/`previous_to` echo the two bounds. Give both or neither, and `compare_to` must be after `compare_from`. They cannot be combined with `compare=previous`; any of these mistakes is rejected with `400`. The window may differ in length from the requested one and may overlap it. Relay does not check either, so an event in both windows counts in both.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=model&from=2026-03-02T00:00:00Z&to=2026-03-04T15:30:00Z&compare_from=2026-02-23T00:00:00Z&compare_to=2026-02-25T15:30:00Z"
+```
+
 ### Failed requests
 
 `error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above and is split into `errors_4xx` and `errors_5xx` (every status of 500 or above). `throttled` counts the 429s, which are also counted in `errors_4xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.
