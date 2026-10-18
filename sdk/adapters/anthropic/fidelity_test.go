@@ -24,6 +24,7 @@ func TestSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"CacheConfig.Instructions":           `"system":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"fidelity-instructions"`,
 			"CacheConfig.Tools":                  `"fidelity_param":{"type":"string"}}},"cache_control"`,
 			"CacheConfig.TTL":                    `"ttl":"1h"`,
+			"CacheConfig.History":                `"content":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"hello"`,
 			"OutputMode":                         `"stream":true`,
 			"User":                               `"user_id":"fidelity-user"`,
 		},

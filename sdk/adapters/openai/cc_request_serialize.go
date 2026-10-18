@@ -23,8 +23,8 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if req.CacheConfig != nil {
 		out.PromptCacheKey = req.CacheConfig.Key
 		out.PromptCacheRetention = openaiCacheRetention(req.CacheConfig)
-		// canonical: CacheConfig.Instructions/Tools dropped — OpenAI caches
-		// prefixes automatically; the breakpoint flags have no wire form.
+		// canonical: CacheConfig.Instructions/Tools/History dropped — OpenAI
+		// caches prefixes automatically; the breakpoint flags have no wire form.
 	}
 	// canonical: Extensions keys outside the "openai." prefix dropped — rule 7:
 	// an adapter ignores keys it does not own.
@@ -157,6 +157,7 @@ func canonicalItemsToCC(instructions string, items []v1.Item) ([]ChatMessage, er
 
 		case *v1.FunctionCall:
 			// canonical: FunctionCall.ID/Status/ProviderData dropped — a CC tool call carries only its call id, which ParseRequest reuses as the item id.
+			// canonical: ItemCacheConfig.Anchor dropped — OpenAI caches prefixes automatically; a per-item breakpoint has no wire form.
 			// Attach to the last assistant message if possible; otherwise synthesize.
 			tc := ToolCall{
 				ID:   v.CallID,
@@ -178,6 +179,7 @@ func canonicalItemsToCC(instructions string, items []v1.Item) ([]ChatMessage, er
 			}
 
 		case *v1.FunctionCallOutput:
+			// canonical: ItemCacheConfig.Anchor dropped — OpenAI caches prefixes automatically; a per-item breakpoint has no wire form.
 			content := ccSerializeFunctionCallOutput(v)
 			msgs = append(msgs, ChatMessage{
 				Role:       "tool",

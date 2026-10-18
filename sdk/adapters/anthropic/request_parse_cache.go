@@ -59,7 +59,8 @@ func (c *cacheBreakpoints) contentAnchor(content json.RawMessage) *v1.ItemCacheC
 	}
 	var anchor *v1.ItemCacheConfig
 	for _, b := range blocks {
-		// canonical: cache_control on tool_result, tool_use and thinking blocks dropped — those blocks parse to items other than Message, and only Message carries an ItemCacheConfig anchor.
+		// tool_result and tool_use breakpoints ride on their own items (blockAnchor).
+		// canonical: cache_control on thinking blocks dropped — Anthropic rejects it there, and Reasoning carries no anchor.
 		switch b.Type {
 		case "text", "image", "document":
 			if c.note(b) {
@@ -68,6 +69,14 @@ func (c *cacheBreakpoints) contentAnchor(content json.RawMessage) *v1.ItemCacheC
 		}
 	}
 	return anchor
+}
+
+// blockAnchor returns the item anchor for one block (tool_use, tool_result) that carries a breakpoint.
+func (c *cacheBreakpoints) blockAnchor(raw json.RawMessage) *v1.ItemCacheConfig {
+	if c == nil || !c.blockMarked(raw) {
+		return nil
+	}
+	return &v1.ItemCacheConfig{Anchor: true}
 }
 
 // config returns the request-level CacheConfig, nil when no breakpoint maps to one.

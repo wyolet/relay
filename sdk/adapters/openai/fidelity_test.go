@@ -34,6 +34,7 @@ func TestCCSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"Tools.Definitions.ProviderData":     "Responses-only tool definition",
 			"CacheConfig.Instructions":           "automatic prefix caching, no breakpoints",
 			"CacheConfig.Tools":                  "automatic prefix caching, no breakpoints",
+			"CacheConfig.History":                "automatic prefix caching, no breakpoints",
 			"Extensions":                         "only openai.* keys are owned (rule 7)",
 		},
 	)
@@ -68,6 +69,7 @@ func TestResponsesSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"Tools.Definitions.ProviderData":        "only a custom-tool definition is re-emitted",
 			"CacheConfig.Instructions":              "automatic prefix caching, no breakpoints",
 			"CacheConfig.Tools":                     "automatic prefix caching, no breakpoints",
+			"CacheConfig.History":                   "automatic prefix caching, no breakpoints",
 			"Extensions":                            "only openai.service_tier is owned here (rule 7)",
 		},
 	)

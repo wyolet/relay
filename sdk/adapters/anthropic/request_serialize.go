@@ -207,13 +207,24 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 	// cache_config.instructions → breakpoint on the system prefix. Coerces the
 	// system string to a single text block so cache_control can ride on it.
+	fixedBreakpoints := 0
+	if req.CacheConfig != nil && req.CacheConfig.Tools && len(out.Tools) > 0 {
+		fixedBreakpoints++
+	}
 	if systemText != "" {
 		if req.CacheConfig != nil && req.CacheConfig.Instructions {
 			out.System = withCacheBreakpoint(systemText, cacheTTL)
+			fixedBreakpoints++
 		} else {
 			out.System = systemText
 		}
 	}
+
+	// cache_config.history → breakpoint on the last input block.
+	if req.CacheConfig != nil && req.CacheConfig.History {
+		markHistoryBreakpoint(out.Messages, cacheTTL)
+	}
+	trimMessageBreakpoints(out.Messages, fixedBreakpoints)
 
 	return json.Marshal(out)
 }
