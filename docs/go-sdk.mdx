@@ -45,7 +45,7 @@ In `proxy` mode the client sends every call to `WR_BASE_URL` with `WR_API_KEY`, 
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` | telemetry | Export to another OTLP/HTTP backend instead. When the endpoint comes from here, `WR_API_KEY` is not sent; put credentials in the headers variable. |
 | `OTEL_SERVICE_NAME` | telemetry | The `service.name` of the reports. |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | telemetry | `true` (or `span_only`, `event_only`, `span_and_event`) opts in to sending message content. |
-| `WR_CATALOG_URL` | telemetry, direct | Base URL of the [catalog server](/reference/catalog-server) that `Models` and `Catalog` read. `off` uses the catalog embedded in the SDK and makes no request. |
+| `WR_CATALOG_URL` | telemetry, direct | Base URL of the [catalog server](/reference/catalog-server) that `Models` and `Catalog` read; default `https://catalog.wyolet.com`. `off` uses the catalog embedded in the SDK and makes no request. |
 | `WR_CATALOG_CACHE_DIR` | telemetry, direct | Directory for the catalog disk cache. Without it nothing is written to disk. |
 
 Missing configuration does not panic: it is returned by the first `Generate` or `GenerateStream`.
@@ -69,7 +69,7 @@ Each result carries:
 
 The returned error is non-nil only when there is nothing to show, such as a relay that refuses the key (`401`, `403`).
 
-`catalogsource.Latest` reads the release index at most once every 10 minutes and downloads a release only when the index names a new one, checking its sha256. When the server can't be read it serves, in order, the copy held in memory, the last release in `WR_CATALOG_CACHE_DIR`, and the embedded catalog. A release older than the embedded catalog is never used. By default releases are read from GitHub; set `WR_CATALOG_URL` to use a catalog server, or share one source between clients:
+`catalogsource.Latest` reads the release index at most once every 10 minutes and downloads a release only when the index names a new one, checking its sha256. When the server can't be read it serves, in order, the copy held in memory, the last release in `WR_CATALOG_CACHE_DIR`, and the embedded catalog. A release older than the embedded catalog is never used. By default releases are read from `https://catalog.wyolet.com`; set `WR_CATALOG_URL` to use another catalog server, or share one source between clients:
 
 ```go
 src := catalogsource.Latest(
