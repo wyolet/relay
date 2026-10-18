@@ -102,9 +102,11 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)`
 
-// expectedColumns is the column set insertBatch writes, in any order. Used
-// by ensureSchema to detect a pre-existing incompatible table.
-var expectedColumns = []string{
+// insertColumns is the column list insertBatch writes, in insertValues
+// order. Naming the columns lets a writer one version behind keep inserting
+// into a table a newer relay has added defaulted columns to. ensureSchema
+// also uses it to detect a pre-existing incompatible table.
+var insertColumns = []string{
 	"request_id", "source", "ts", "status", "duration_ms", "streamed",
 	"finish_reason", "attempts", "error_kind", "error_message",
 	"upstream_start", "upstream_response_start", "upstream_response_end",
@@ -117,6 +119,8 @@ var expectedColumns = []string{
 	"credential_kind", "credential_id",
 	"relay_key",
 }
+
+var insertSQL = "INSERT INTO " + chTable + " (" + strings.Join(insertColumns, ", ") + ")"
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
 // get an idempotent ALTER instead of the fail-fast "drop or rename" error.
@@ -131,9 +135,6 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_nanos Int64 DEFAULT -1`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_breakdown Map(LowCardinality(String), Int64)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pricing LowCardinality(String)`,
-	// Attribution columns append at the end so a table upgraded by these
-	// ALTERs keeps the same column order as a freshly created one — the
-	// insert batch is positional.
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS project_id String`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS project LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS team_id String`,
@@ -188,7 +189,7 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	}
 
 	var missing []string
-	for _, c := range expectedColumns {
+	for _, c := range insertColumns {
 		if !have[c] {
 			missing = append(missing, c)
 		}
@@ -306,95 +307,99 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	batch, err := s.conn.PrepareBatch(ctx, "INSERT INTO "+chTable)
+	batch, err := s.conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
 		return fmt.Errorf("prepare batch: %w", err)
 	}
 
 	for _, ev := range events {
-		// Sentinel -1 means "no upstream timing available" in Int64 columns.
-		var upStart, upRespStart, upRespEnd int64 = -1, -1, -1
-		if ev.Upstream != nil {
-			upStart = ev.Upstream.Start
-			upRespStart = ev.Upstream.ResponseStart
-			upRespEnd = ev.Upstream.ResponseEnd
-		}
-
-		tokens := map[string]int64(ev.Tokens)
-		if tokens == nil {
-			tokens = map[string]int64{}
-		}
-		extras := ev.Extras
-		if extras == nil {
-			extras = map[string]string{}
-		}
-		tags := ev.Tags
-		if tags == nil {
-			tags = map[string]string{}
-		}
-
-		streamed := uint8(0)
-		if ev.Streamed {
-			streamed = 1
-		}
-
-		// Sentinel -1 = unpriced (cost is never negative; a priced $0 stays 0).
-		costNanos := int64(-1)
-		if ev.CostNanos != nil {
-			costNanos = *ev.CostNanos
-		}
-		costBreakdown := ev.CostBreakdown
-		if costBreakdown == nil {
-			costBreakdown = map[string]int64{}
-		}
-
-		err := batch.Append(
-			ev.RequestID,
-			ev.Source,
-			ev.Timestamp,
-			uint16(ev.Status),
-			ev.DurationMs,
-			streamed,
-			ev.FinishReason,
-			uint16(ev.Attempts),
-			ev.ErrorKind,
-			ev.ErrorMessage,
-			upStart,
-			upRespStart,
-			upRespEnd,
-			ev.RelayKeyHash,
-			ev.PolicyID,
-			ev.ModelID,
-			ev.RequestedModel,
-			ev.HostID,
-			ev.HostKeyID,
-			tokens,
-			extras,
-			tags,
-			ev.Model,
-			ev.Host,
-			ev.Policy,
-			ev.Provider,
-			costNanos,
-			costBreakdown,
-			ev.Pricing,
-			ev.ProjectID,
-			ev.Project,
-			ev.TeamID,
-			ev.Team,
-			ev.PrincipalKind,
-			ev.PrincipalID,
-			ev.Principal,
-			ev.CredentialKind,
-			ev.CredentialID,
-			ev.RelayKey,
-		)
-		if err != nil {
+		if err := batch.Append(insertValues(ev)...); err != nil {
 			return fmt.Errorf("append row: %w", err)
 		}
 	}
 
 	return batch.Send()
+}
+
+// insertValues returns ev's column values in insertColumns order.
+func insertValues(ev usage.Event) []any {
+	// Sentinel -1 means "no upstream timing available" in Int64 columns.
+	var upStart, upRespStart, upRespEnd int64 = -1, -1, -1
+	if ev.Upstream != nil {
+		upStart = ev.Upstream.Start
+		upRespStart = ev.Upstream.ResponseStart
+		upRespEnd = ev.Upstream.ResponseEnd
+	}
+
+	tokens := map[string]int64(ev.Tokens)
+	if tokens == nil {
+		tokens = map[string]int64{}
+	}
+	extras := ev.Extras
+	if extras == nil {
+		extras = map[string]string{}
+	}
+	tags := ev.Tags
+	if tags == nil {
+		tags = map[string]string{}
+	}
+
+	streamed := uint8(0)
+	if ev.Streamed {
+		streamed = 1
+	}
+
+	// Sentinel -1 = unpriced (cost is never negative; a priced $0 stays 0).
+	costNanos := int64(-1)
+	if ev.CostNanos != nil {
+		costNanos = *ev.CostNanos
+	}
+	costBreakdown := ev.CostBreakdown
+	if costBreakdown == nil {
+		costBreakdown = map[string]int64{}
+	}
+
+	return []any{
+		ev.RequestID,
+		ev.Source,
+		ev.Timestamp,
+		uint16(ev.Status),
+		ev.DurationMs,
+		streamed,
+		ev.FinishReason,
+		uint16(ev.Attempts),
+		ev.ErrorKind,
+		ev.ErrorMessage,
+		upStart,
+		upRespStart,
+		upRespEnd,
+		ev.RelayKeyHash,
+		ev.PolicyID,
+		ev.ModelID,
+		ev.RequestedModel,
+		ev.HostID,
+		ev.HostKeyID,
+		tokens,
+		extras,
+		tags,
+		ev.Model,
+		ev.Host,
+		ev.Policy,
+		ev.Provider,
+		costNanos,
+		costBreakdown,
+		ev.Pricing,
+		ev.ProjectID,
+		ev.Project,
+		ev.TeamID,
+		ev.Team,
+		ev.PrincipalKind,
+		ev.PrincipalID,
+		ev.Principal,
+		ev.CredentialKind,
+		ev.CredentialID,
+		ev.RelayKey,
+	}
 }
 
 // Events returns raw usage events matching q, newest-first.
