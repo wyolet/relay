@@ -92,11 +92,12 @@ type EventQuery struct {
 	RequestedModel []string
 
 	// Slug filters — match the denormalized entity names (Event.Model /
-	// Host / Policy / Provider) recorded at event time.
+	// Host / Policy / Provider / RelayKey) recorded at event time.
 	Model    []string
 	Host     []string
 	Policy   []string
 	Provider []string
+	RelayKey []string
 
 	// Tags filters on caller-supplied event tags: key → accepted values.
 	// AND across keys, OR within a key's values. An event with the key
@@ -158,7 +159,7 @@ type SummaryQuery struct {
 	// "relay_key_hash", "policy_id", "model_id", "host_id",
 	// "host_key_id", "source", "finish_reason", "error_kind",
 	// "model", "host", "policy", "provider", "project", "team",
-	// "principal" (event-time slugs), "project_id", "team_id",
+	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",
 	// or "tags.<key>" (dynamic, groups on a caller tag's value).
 	// Empty → "source".
@@ -298,6 +299,7 @@ var ValidGroupBy = []string{
 	"project",
 	"team",
 	"principal",
+	"relay_key",
 }
 
 // MaxTagKeyLen caps a single tag key. Enforced at write time

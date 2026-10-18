@@ -76,26 +76,32 @@ ORDER BY (ts, model_id, policy_id)`
 	}
 
 	rows, err := conn.Query(ctx,
-		"SELECT name FROM system.columns WHERE database = ? AND table = ?", db, chTable)
+		"SELECT name FROM system.columns WHERE database = ? AND table = ? ORDER BY position", db, chTable)
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
 	defer rows.Close()
 	have := map[string]bool{}
+	var order []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			t.Fatalf("scan column: %v", err)
 		}
 		have[name] = true
+		order = append(order, name)
 	}
 	for _, c := range []string{
 		"project_id", "project", "team_id", "team",
 		"principal_kind", "principal_id", "principal",
-		"credential_kind", "credential_id",
+		"credential_kind", "credential_id", "relay_key",
 	} {
 		if !have[c] {
 			t.Fatalf("column %q missing after ensureSchema", c)
 		}
+	}
+	// The insert batch is positional, so an upgraded table must order its columns as a fresh one does.
+	if strings.Join(order, ",") != strings.Join(expectedColumns, ",") {
+		t.Fatalf("column order after ensureSchema:\n got %v\nwant %v", order, expectedColumns)
 	}
 }

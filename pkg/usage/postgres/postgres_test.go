@@ -13,9 +13,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wyolet/relay/pkg/usage"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -60,7 +62,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			Extras:   map[string]string{"client_ip": "1.2.3.4"},
 			Tags:     map[string]string{"session_id": "s1", "leg": "bytepass"},
 			Model:    "gpt-4o", Host: "openai", Policy: "default",
-			Provider: "openai", Pricing: "openai-gpt-4o",
+			Provider: "openai", Pricing: "openai-gpt-4o", RelayKey: "indexer-prod",
 			CostNanos:     costPtr(7_500_000),
 			CostBreakdown: map[string]int64{"tokens.input": 5_000_000, "tokens.output": 2_500_000},
 		},
@@ -123,6 +125,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if e1.Provider != "openai" || e1.Pricing != "openai-gpt-4o" {
 		t.Fatalf("provider/pricing round-trip mismatch: %+v", e1)
+	}
+	if e1.RelayKey != "indexer-prod" || got[0].RelayKey != "" {
+		t.Fatalf("relay_key round-trip mismatch: %q / %q", e1.RelayKey, got[0].RelayKey)
 	}
 	if e1.CostNanos == nil || *e1.CostNanos != 7_500_000 ||
 		e1.CostBreakdown["tokens.input"] != 5_000_000 || e1.CostBreakdown["tokens.output"] != 2_500_000 {
@@ -197,6 +202,20 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if err != nil || len(provFiltered) != 2 {
 		t.Fatalf("provider filter: err=%v rows=%+v", err, provFiltered)
 	}
+	// Relay key: one keyed event, one keyless; group + filter on the slug.
+	byKey, err := s.Summary(ctx, usage.SummaryQuery{EventQuery: q, GroupBy: "relay_key"})
+	if err != nil {
+		t.Fatalf("Summary by relay_key: %v", err)
+	}
+	if len(byKey.Rows) != 2 {
+		t.Fatalf("relay_key groups: want 2 (indexer-prod + \"\"), got %+v", byKey.Rows)
+	}
+	kq := q
+	kq.RelayKey = []string{"indexer-prod"}
+	keyFiltered, err := s.Events(ctx, kq)
+	if err != nil || len(keyFiltered) != 1 || keyFiltered[0].RequestID != marker+"-1" {
+		t.Fatalf("relay_key filter: err=%v rows=%+v", err, keyFiltered)
+	}
 	hq := q
 	hq.Host = []string{"azure"}
 	hostFiltered, err := s.Events(ctx, hq)
@@ -266,6 +285,13 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if len(tsg.Rows) != 1 || tsg.Rows[0].Group["model_id"] != marker {
 		t.Fatalf("grouped timeseries: %+v", tsg.Rows)
 	}
+	tsk, err := s.TimeSeries(ctx, usage.TimeSeriesQuery{EventQuery: q, Interval: time.Hour, GroupBy: "relay_key"})
+	if err != nil {
+		t.Fatalf("TimeSeries by relay_key: %v", err)
+	}
+	if len(tsk.Rows) != 2 {
+		t.Fatalf("relay_key timeseries: want 2 series, got %+v", tsk.Rows)
+	}
 
 	// Keyset pagination: page size 1 walks newest→oldest with no repeats.
 	pq := usage.EventQuery{Since: time.Hour, ModelID: []string{marker}, Limit: 1}
@@ -281,5 +307,46 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	pq.CursorTS, pq.CursorID = p2[0].Timestamp, p2[0].RequestID
 	if p3, err := s.Events(ctx, pq); err != nil || len(p3) != 0 {
 		t.Fatalf("page3 should be empty: err=%v rows=%+v", err, p3)
+	}
+}
+
+// A table from before the relay_key column is upgraded in place by New, and its rows read back keyless.
+func TestIntegration_EnsureSchemaAddsRelayKey(t *testing.T) {
+	dsn := os.Getenv("RELAY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_TEST_PG_DSN unset; skipping live PostgreSQL schema check")
+	}
+	ctx := context.Background()
+	table := fmt.Sprintf("usage_events_upgrade_%d", time.Now().UnixNano())
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	defer func() { _, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS "+table) }()
+
+	// The older schema is this file's DDL cut before the new column, so the fixture can't drift from the current one.
+	withoutKey := strings.SplitN(fmt.Sprintf(createTableSQL, table), ",\n    relay_key ", 2)[0] + "\n)"
+	if _, err := pool.Exec(ctx, withoutKey); err != nil {
+		t.Fatalf("create table without relay_key: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (request_id, ts, credential_id) VALUES ('old-1', $1, 'k1')`, table), now); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	s, err := New(ctx, Config{DSN: dsn, FlushInterval: 200 * time.Millisecond, Table: table})
+	if err != nil {
+		t.Fatalf("New on a table without relay_key: %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.Events(ctx, usage.EventQuery{RequestID: "old-1"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Events: err=%v rows=%+v", err, got)
+	}
+	if got[0].CredentialID != "k1" || got[0].RelayKey != "" {
+		t.Fatalf("old row: credential_id=%q relay_key=%q, want k1 and empty", got[0].CredentialID, got[0].RelayKey)
 	}
 }

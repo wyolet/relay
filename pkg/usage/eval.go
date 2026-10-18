@@ -355,6 +355,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.Provider, ev.Provider) {
 		return false
 	}
+	if !inList(q.RelayKey, ev.RelayKey) {
+		return false
+	}
 	for k, vals := range q.Tags {
 		if !inList(vals, ev.Tags[k]) {
 			return false
@@ -474,6 +477,8 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.Team
 	case "principal":
 		return ev.Principal
+	case "relay_key":
+		return ev.RelayKey
 	default: // "source"
 		return ev.Source
 	}

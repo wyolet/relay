@@ -140,6 +140,11 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 			lc.PrincipalName = sa.Meta.Name
 		}
 	}
+	if attr.CredentialKind == inference.CredentialKey {
+		if k, ok := snap.Key(attr.CredentialID); ok {
+			lc.RelayKeyName = k.Meta.Name
+		}
+	}
 	if plan.Policy != nil {
 		lc.PolicyID = plan.Policy.Meta.ID
 		lc.PolicyName = plan.Policy.Meta.Name

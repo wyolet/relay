@@ -16,7 +16,7 @@ func TestAttributionCopiedFromContext(t *testing.T) {
 	lc.ProjectID, lc.ProjectName = "p1", "ml-search"
 	lc.TeamID, lc.TeamName = "t1", "platform"
 	lc.PrincipalKind, lc.PrincipalID, lc.PrincipalName = "serviceaccount", "sa1", "indexer"
-	lc.CredentialKind, lc.CredentialID = "key", "k1"
+	lc.CredentialKind, lc.CredentialID, lc.RelayKeyName = "key", "k1", "indexer-prod"
 
 	hooked, _ := NewUsageHook(nil, "").Fill(lc, &lifecycle.PostFlightEvent{Status: 200})
 	streamed, _ := NewStreamUsageFactory(nil, "").NewObserver(lc).Result()
@@ -31,8 +31,8 @@ func TestAttributionCopiedFromContext(t *testing.T) {
 		if got.PrincipalKind != "serviceaccount" || got.PrincipalID != "sa1" || got.Principal != "indexer" {
 			t.Fatalf("%s principal: %q / %q / %q", name, got.PrincipalKind, got.PrincipalID, got.Principal)
 		}
-		if got.CredentialKind != "key" || got.CredentialID != "k1" {
-			t.Fatalf("%s credential: %q / %q", name, got.CredentialKind, got.CredentialID)
+		if got.CredentialKind != "key" || got.CredentialID != "k1" || got.RelayKey != "indexer-prod" {
+			t.Fatalf("%s credential: %q / %q / %q", name, got.CredentialKind, got.CredentialID, got.RelayKey)
 		}
 		if got.RelayKeyHash != "hash" {
 			t.Fatalf("%s relay_key_hash: %q", name, got.RelayKeyHash)
