@@ -22,10 +22,10 @@ type healthBody struct {
 }
 
 // getUnauthenticated serves path through the full Mount chain (session, authenticate, audit) with no credential.
-func getUnauthenticated(t *testing.T, p Pinger, path string) *httptest.ResponseRecorder {
+func getUnauthenticated(t *testing.T, checks map[string]Pinger, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	d := mountDeps(t)
-	d.Pinger = p
+	d.HealthChecks = checks
 	r := chi.NewRouter()
 	Mount(r, d)
 	w := httptest.NewRecorder()
@@ -43,7 +43,7 @@ func decodeHealth(t *testing.T, w *httptest.ResponseRecorder) healthBody {
 }
 
 func TestHealthzBackendOK(t *testing.T) {
-	w := getUnauthenticated(t, stubPinger{}, "/healthz")
+	w := getUnauthenticated(t, map[string]Pinger{"pg": stubPinger{}}, "/healthz")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
 	}
@@ -55,20 +55,20 @@ func TestHealthzBackendOK(t *testing.T) {
 
 // A failing backend degrades readiness to 503 without leaking the cause to an unauthenticated caller.
 func TestHealthzBackendFailureIs503(t *testing.T) {
-	w := getUnauthenticated(t, stubPinger{err: errors.New("dial tcp 10.0.0.5:5432: refused")}, "/healthz")
+	w := getUnauthenticated(t, map[string]Pinger{"pg": stubPinger{err: errors.New("dial tcp 10.0.0.5:5432: refused")}, "redis": stubPinger{}}, "/healthz")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", w.Code, w.Body)
 	}
 	b := decodeHealth(t, w)
-	if b.Status != "degraded" || b.Backends["pg"] != "error" {
-		t.Fatalf("body = %+v, want degraded with pg error", b)
+	if b.Status != "degraded" || b.Backends["pg"] != "error" || b.Backends["redis"] != "ok" {
+		t.Fatalf("body = %+v, want degraded with pg error and redis ok", b)
 	}
 	if strings.Contains(w.Body.String(), "10.0.0.5") {
 		t.Fatalf("body leaks the backend error: %s", w.Body)
 	}
 }
 
-func TestHealthzNilPinger(t *testing.T) {
+func TestHealthzNoChecks(t *testing.T) {
 	w := getUnauthenticated(t, nil, "/healthz")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
@@ -80,8 +80,33 @@ func TestHealthzNilPinger(t *testing.T) {
 }
 
 func TestLivezIgnoresBackend(t *testing.T) {
-	w := getUnauthenticated(t, stubPinger{err: errors.New("pg down")}, "/livez")
+	w := getUnauthenticated(t, map[string]Pinger{"pg": stubPinger{err: errors.New("pg down")}}, "/livez")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
+	}
+}
+
+// The UI generates its client from the spec, so the 503 must carry the same body schema as the 200.
+func TestHealthzSpecDeclaresBothBodies(t *testing.T) {
+	w := getUnauthenticated(t, nil, "/openapi.json")
+	var spec struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Schema struct {
+						Ref string `json:"$ref"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("decode spec: %v", err)
+	}
+	responses := spec.Paths["/healthz"]["get"].Responses
+	for _, code := range []string{"200", "503"} {
+		if ref := responses[code].Content["application/json"].Schema.Ref; ref != "#/components/schemas/ControlHealth" {
+			t.Errorf("%s schema = %q, want ControlHealth", code, ref)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/kv"
@@ -92,4 +93,13 @@ func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, st
 	}
 	go secretoauth.NewRefresher(oauthRefs, stores.OAuthResolver, kvStore, oauthHooks, slog.Default()).
 		Run(listenerCtx)
+}
+
+// healthChecks names the backends the control plane's /healthz pings; the in-memory kv has nothing to ping.
+func healthChecks(st *storagemod.Storage, kvStore kv.Store) map[string]control.Pinger {
+	checks := map[string]control.Pinger{"pg": st}
+	if p, ok := kvStore.(control.Pinger); ok {
+		checks["redis"] = p
+	}
+	return checks
 }

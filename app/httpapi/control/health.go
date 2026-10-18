@@ -4,17 +4,22 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"reflect"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 )
 
+// ControlHealth is the /healthz body, the same on 200 and 503.
+type ControlHealth struct {
+	Status   string            `json:"status" enum:"ok,degraded" doc:"Overall health verdict."`
+	Backends map[string]string `json:"backends" doc:"Status per backend, keyed pg (the database) and redis (sessions and rate limits, absent when state is in memory). Each value is \"ok\" or \"error\"."`
+}
+
 type healthzOutput struct {
 	Status int
-	Body   struct {
-		Status   string            `json:"status" enum:"ok,degraded" doc:"Overall health verdict."`
-		Backends map[string]string `json:"backends" doc:"Per-backend status: \"ok\" or \"error\"."`
-	}
+	Body   ControlHealth
 }
 
 type livezOutput struct {
@@ -37,30 +42,54 @@ func registerHealth(api huma.API, d Deps) {
 		return out, nil
 	})
 
+	healthSchema := api.OpenAPI().Components.Schemas.Schema(reflect.TypeOf(ControlHealth{}), true, "")
 	huma.Register(api, huma.Operation{
 		OperationID: "control_healthz",
 		Method:      "GET",
 		Path:        "/healthz",
 		Summary:     "Readiness: process + backend health",
 		Tags:        []string{"system"},
+		Responses: map[string]*huma.Response{
+			"503": {
+				Description: "A backend is unreachable",
+				Content:     map[string]*huma.MediaType{"application/json": {Schema: healthSchema}},
+			},
+		},
 	}, func(ctx context.Context, _ *struct{}) (*healthzOutput, error) {
-		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
 		out := &healthzOutput{Status: http.StatusOK}
-		out.Body.Status = "ok"
-		out.Body.Backends = map[string]string{}
-		if d.Pinger != nil {
-			// The endpoint is public, so the cause goes to the log rather than the body.
-			if err := d.Pinger.Ping(pingCtx); err != nil {
-				slog.Error("control healthz: backend ping failed", "backend", "pg", "err", err)
-				out.Body.Backends["pg"] = "error"
-				out.Body.Status = "degraded"
-				out.Status = http.StatusServiceUnavailable
-			} else {
-				out.Body.Backends["pg"] = "ok"
-			}
+		out.Body = pingBackends(ctx, d.HealthChecks)
+		if out.Body.Status != "ok" {
+			out.Status = http.StatusServiceUnavailable
 		}
 		return out, nil
 	})
+}
+
+// pingBackends pings every backend concurrently so one hung backend can't use up another's timeout.
+func pingBackends(ctx context.Context, checks map[string]Pinger) ControlHealth {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	h := ControlHealth{Status: "ok", Backends: make(map[string]string, len(checks))}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, p := range checks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := p.Ping(ctx)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				// The endpoint is public, so the cause goes to the log rather than the body.
+				slog.Error("control healthz: backend ping failed", "backend", name, "err", err)
+				h.Backends[name] = "error"
+				h.Status = "degraded"
+				return
+			}
+			h.Backends[name] = "ok"
+		}()
+	}
+	wg.Wait()
+	return h
 }
