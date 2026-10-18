@@ -409,11 +409,12 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 }
 
 // seedAndMark runs the seed from dataDir and records version in the
-// catalog-source marker.
+// catalog-source marker. Rows the release no longer ships are detached; a
+// failed seed writes no marker, so the next boot retries.
 func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
 	res, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
-		CatalogKindsOnly: true,
+		CatalogKindsOnly: true, DetachDropped: true,
 	})
 	if err != nil {
 		return fmt.Errorf("seed catalog %s: %w", version, err)
@@ -428,7 +429,7 @@ func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dat
 	slog.Info("catalog: seeded version",
 		"version", version, "previous", prev, "source", source,
 		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
-		"skipped_dirty", res.Skipped)
+		"skipped_dirty", res.Skipped, "detached", res.Detached, "reattached", res.Reattached)
 	return nil
 }
 

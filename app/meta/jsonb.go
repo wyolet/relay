@@ -3,6 +3,7 @@ package meta
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // MarshalJSONB renders the JSONB-stored portion of a Metadata. ID, Name, and
@@ -15,6 +16,8 @@ func MarshalJSONB(m Metadata) ([]byte, error) {
 		Labels:      m.Labels,
 		Annotations: m.Annotations,
 		Dirty:       m.Dirty,
+
+		CatalogDetachedAt: m.CatalogDetachedAt,
 	})
 }
 
@@ -34,6 +37,7 @@ func UnmarshalJSONB(id, name, displayName string, raw []byte) (Metadata, error) 
 	m.Labels = d.Labels
 	m.Annotations = d.Annotations
 	m.Dirty = d.Dirty
+	m.CatalogDetachedAt = d.CatalogDetachedAt
 	return m, nil
 }
 
@@ -45,4 +49,6 @@ type jsonbDoc struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Dirty       bool              `json:"dirty,omitempty"`
+
+	CatalogDetachedAt *time.Time `json:"catalogDetachedAt,omitempty"`
 }

@@ -129,7 +129,7 @@ func (e rowEdit[T]) apply(ctx context.Context, d Deps, it referenceItem) (*relea
 	if err := d.Authz.Authorize(ctx, e.plural+".update", authz.Resource{Kind: it.Kind, ID: it.ID, Owner: &m.Owner}); err != nil {
 		return nil, failOrKeep(mapAuthzErr(err))
 	}
-	if !editAllowed(d.Catalog, it.Kind, m.Owner.Kind, authz.IsAdmin(ctx)) {
+	if !editAllowed(d.Catalog, it.Kind, m.GovernedOwnerKind(), authz.IsAdmin(ctx)) {
 		return nil, nil // left in place: reported as a remaining blocker
 	}
 	// A second copy to edit, so existing stays the before-image for the audit diff.

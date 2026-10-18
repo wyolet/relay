@@ -5,12 +5,15 @@
 // authorizer (boot has no actor) and no prune (a catalog tree is additive).
 // ClearDirty maps to apply's Force. Everything else — bucket order, id
 // minting, the dirty-row skip, the change vocabulary — lives in app/apply.
+// The one step of its own is DetachDropped: it marks the catalog rows a new
+// catalog release no longer ships instead of deleting them.
 package seed
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -35,6 +38,12 @@ type Options struct {
 	// way in. Those kinds reach Postgres through `relay seed --apply`,
 	// `relay apply` or the control API, all of which have an actor to authorize.
 	CatalogKindsOnly bool
+
+	// DetachDropped marks the catalog rows the tree no longer declares with
+	// CatalogDetachedAt, and clears the mark on clean rows it declares again.
+	// Only the versioned catalog reseed sets it: there the tree is the whole
+	// catalog release, so a row it omits is one the release dropped.
+	DetachDropped bool
 }
 
 // nonCatalogKinds are the kinds a catalog tree may not carry: they name
@@ -69,6 +78,8 @@ type Result struct {
 	Overlays        int
 	Users           int
 	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
+	Detached        int // catalog rows the tree no longer declares, marked this run
+	Reattached      int // detached rows the tree declares again, unmarked this run
 }
 
 // Run executes the seed pipeline end-to-end.
@@ -96,8 +107,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			"dir", opts.YAMLDir, "count", len(refused), "documents", refused)
 	}
 
+	stores := apply.NewStores(opts.Pool, opts.MasterKey)
 	plan, err := apply.Plan(ctx, docs, apply.Options{
-		Stores: apply.NewStores(opts.Pool, opts.MasterKey),
+		Stores: stores,
 		Force:  opts.ClearDirty,
 		// The seed runs as the deployment's operator, whose environment it is.
 		EnvPasswords: true,
@@ -116,7 +128,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 				"kind", e.Kind, "name", e.Name)
 		}
 	}
-	return tally(plan), nil
+	res := tally(plan)
+	if opts.DetachDropped {
+		if err := detachDropped(ctx, stores, plan, time.Now().UTC(), res); err != nil {
+			return nil, fmt.Errorf("seed: detach dropped rows: %w", err)
+		}
+	}
+	return res, nil
 }
 
 // splitSeedDocs separates what apply takes from what this path leaves out:

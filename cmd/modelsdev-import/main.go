@@ -8,10 +8,14 @@
 // binding UpstreamName (the exact wire string). Providers whose wire shape
 // has no relay adapter yet (Cohere, Bedrock) are written under drafts/.
 //
+// spec.family is models.dev's family mapped onto the catalog's families.yaml
+// allowlist (exact name, alias, or lineage prefix); models with no match are
+// left without a family and listed on stderr for hand curation.
+//
 // Usage:
 //
 //	modelsdev-import -out ../relay-catalog/data
-//	modelsdev-import -source-file /tmp/md.json -hosts anthropic,openai -out -
+//	modelsdev-import -source-file /tmp/md.json -hosts anthropic,openai -families ../relay-catalog/families.yaml -out -
 
 // Command modelsdev-import converts the models.dev dataset into relay-catalog YAML.
 package main
@@ -51,8 +55,22 @@ func main() {
 	draft := fs.Bool("draft", true, "Route all output under drafts/ for human review before promotion.")
 	additive := fs.Bool("additive", true, "Skip models whose name already exists in the target catalog (never touch curated/imported entries).")
 	draftAllProviders := fs.Bool("draft-all", false, "Draft EVERY models.dev provider (not just -hosts). -hosts then only defines the supported-hosts manifest.")
+	familiesPath := fs.String("families", "", `Catalog families.yaml allowlist (default <out>/../families.yaml; required with -out -).`)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
+	}
+
+	if *familiesPath == "" {
+		if *out == "-" {
+			fmt.Fprintln(os.Stderr, "modelsdev-import: -families is required with -out -")
+			os.Exit(2)
+		}
+		*familiesPath = filepath.Join(*out, "..", "families.yaml")
+	}
+	families, err := loadFamilies(*familiesPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "modelsdev-import:", err)
+		os.Exit(1)
 	}
 
 	providers, err := Fetch(context.Background(), *sourceURL, *sourceFile)
@@ -79,6 +97,7 @@ func main() {
 		DraftAll:   *draft || *draftAllProviders,
 		ProcessAll: *draftAllProviders,
 		Existing:   existing,
+		Families:   families,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "modelsdev-import: translate:", err)
@@ -120,6 +139,9 @@ func main() {
 		for _, k := range keys {
 			fmt.Fprintf(os.Stderr, "  → drafts/ (no adapter for %s): %d provider(s)\n", k, result.UnsupportedNPM[k])
 		}
+	}
+	for _, u := range result.UnmappedFamilies {
+		fmt.Fprintf(os.Stderr, "  unmapped family: %s/%s (models.dev family %q) — set spec.family by hand\n", u.Provider, u.Model, u.Value)
 	}
 }
 

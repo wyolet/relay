@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // A table without the attribution columns must be upgraded in place by
@@ -76,20 +77,18 @@ ORDER BY (ts, model_id, policy_id)`
 	}
 
 	rows, err := conn.Query(ctx,
-		"SELECT name FROM system.columns WHERE database = ? AND table = ? ORDER BY position", db, chTable)
+		"SELECT name FROM system.columns WHERE database = ? AND table = ?", db, chTable)
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
 	defer rows.Close()
 	have := map[string]bool{}
-	var order []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			t.Fatalf("scan column: %v", err)
 		}
 		have[name] = true
-		order = append(order, name)
 	}
 	for _, c := range []string{
 		"project_id", "project", "team_id", "team",
@@ -100,8 +99,42 @@ ORDER BY (ts, model_id, policy_id)`
 			t.Fatalf("column %q missing after ensureSchema", c)
 		}
 	}
-	// The insert batch is positional, so an upgraded table must order its columns as a fresh one does.
-	if strings.Join(order, ",") != strings.Join(expectedColumns, ",") {
-		t.Fatalf("column order after ensureSchema:\n got %v\nwant %v", order, expectedColumns)
+}
+
+// A writer one version behind names only the columns it knows, so a column a
+// newer relay added (with a default, anywhere in the table) must not fail its
+// batch.
+func TestIntegration_InsertIntoTableWithNewerColumn(t *testing.T) {
+	dsn := os.Getenv("RELAY_TEST_CH_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_TEST_CH_DSN unset; skipping live ClickHouse insert check")
+	}
+	s, err := New(Config{DSN: scratchDatabase(t, dsn), WALDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+
+	if err := s.conn.Exec(ctx,
+		"ALTER TABLE "+chTable+" ADD COLUMN newer_col LowCardinality(String) DEFAULT 'unset' AFTER source"); err != nil {
+		t.Fatalf("add newer column: %v", err)
+	}
+
+	ev := usage.Event{
+		RequestID: "req-newer-col", Source: "pipeline", Timestamp: time.Now().UTC(),
+		Status: 200, ModelID: "m1", PolicyID: "p1", RelayKey: "k1",
+	}
+	if err := s.insertBatch([]usage.Event{ev}); err != nil {
+		t.Fatalf("insertBatch into a table with a newer column: %v", err)
+	}
+
+	var newer, relayKey string
+	if err := s.conn.QueryRow(ctx,
+		"SELECT newer_col, relay_key FROM "+chTable+" WHERE request_id = ?", ev.RequestID).Scan(&newer, &relayKey); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if newer != "unset" || relayKey != "k1" {
+		t.Fatalf("got newer_col=%q relay_key=%q, want \"unset\" and \"k1\"", newer, relayKey)
 	}
 }
