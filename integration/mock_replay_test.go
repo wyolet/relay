@@ -26,9 +26,8 @@ import (
 
 // TestMockReplay_OpenAIChatCompletions verifies the relay's byte-pass path
 // for CC inbound → OpenAI upstream against spec-mock-openai's fixture
-// replay. Skipped unless RELAY_MOCK_BASE_URL is set (defaults to
-// https://openai-mock.wyolet.dev) AND a fixture body is available at
-// RELAY_MOCK_FIXTURE (default /tmp/fixbody.json).
+// replay. Skipped when RELAY_MOCK_BASE_URL is unset; fails when set but
+// unreachable. RELAY_MOCK_FIXTURE names the fixture body (default /tmp/fixbody.json).
 //
 // The body sent to relay is the exact recorded request body from one
 // fixture in the spec-mock-openai corpus. Relay parses it, looks up
@@ -43,7 +42,7 @@ func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
 	t.Parallel()
 	mockURL := os.Getenv("RELAY_MOCK_BASE_URL")
 	if mockURL == "" {
-		mockURL = "https://openai-mock.wyolet.dev"
+		t.Skip("set RELAY_MOCK_BASE_URL to run smoke-mock tests")
 	}
 	fixturePath := os.Getenv("RELAY_MOCK_FIXTURE")
 	if fixturePath == "" {
@@ -73,12 +72,12 @@ func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
 	checkReq.Header.Set("Content-Type", "application/json")
 	checkResp, err := http.DefaultClient.Do(checkReq)
 	if err != nil {
-		t.Skipf("mock at %s not reachable: %v", mockURL, err)
+		t.Fatalf("mock at %s not reachable: %v", mockURL, err)
 	}
 	directBody, _ := io.ReadAll(checkResp.Body)
 	checkResp.Body.Close()
 	if checkResp.StatusCode != http.StatusOK {
-		t.Skipf("mock returned %d for fixture; need 200 for this test to be meaningful (body=%q)", checkResp.StatusCode, string(directBody[:min(200, len(directBody))]))
+		t.Fatalf("mock returned %d for fixture; need 200 for this test to be meaningful (body=%q)", checkResp.StatusCode, string(directBody[:min(200, len(directBody))]))
 	}
 
 	st := newStack(t)
@@ -142,7 +141,7 @@ func TestMockReplay_StreamingWithParallelTools(t *testing.T) {
 	t.Parallel()
 	mockURL := os.Getenv("RELAY_MOCK_BASE_URL")
 	if mockURL == "" {
-		mockURL = "https://openai-mock.wyolet.dev"
+		t.Skip("set RELAY_MOCK_BASE_URL to run smoke-mock tests")
 	}
 	fixturePath := os.Getenv("RELAY_MOCK_STREAM_FIXTURE")
 	if fixturePath == "" {
@@ -174,12 +173,12 @@ func TestMockReplay_StreamingWithParallelTools(t *testing.T) {
 	checkReq.Header.Set("Content-Type", "application/json")
 	checkResp, err := http.DefaultClient.Do(checkReq)
 	if err != nil {
-		t.Skipf("mock at %s not reachable: %v", mockURL, err)
+		t.Fatalf("mock at %s not reachable: %v", mockURL, err)
 	}
 	directBody, _ := io.ReadAll(checkResp.Body)
 	checkResp.Body.Close()
 	if checkResp.StatusCode != http.StatusOK {
-		t.Skipf("mock returned %d for fixture body (need 200; body=%q)", checkResp.StatusCode, string(directBody[:min(300, len(directBody))]))
+		t.Fatalf("mock returned %d for fixture body (need 200; body=%q)", checkResp.StatusCode, string(directBody[:min(300, len(directBody))]))
 	}
 
 	st := newStack(t)

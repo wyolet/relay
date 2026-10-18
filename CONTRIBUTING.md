@@ -46,6 +46,8 @@ databases 1–15 on the Valkey server (a lease key on database 0) and flushes it
 afterwards, so that server must not hold data you want to keep.
 The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test targets drop the deployment DSNs `.env` exports (`RELAY_PG_DSN`, `RELAY_CH_DSN`, `RELAY_REDIS_ADDR`, `RELAY_OTLP_ENDPOINT`), so tests never reach a deployment's databases.
 
+`make smoke-mock` replays recorded OpenAI fixtures through relay against a local spec-mock-openai server; `RELAY_MOCK_BASE_URL` (e.g. `http://localhost:5180`) must be set or the target exits immediately with an error.
+
 The repo is a **multi-module monorepo**: the server module (`github.com/wyolet/relay`) plus three standalone modules it depends on — the public, vendorable SDK (`github.com/wyolet/relay/sdk`), the job engine (`github.com/wyolet/relay/jobq`), and the general-purpose auth primitives (`github.com/wyolet/relay/auth`). A repo-root `go.work` wires them for local dev. The dependency direction is **server → module, never the reverse**: the standalone modules import nothing from the server module.
 
 ## Repository layout
