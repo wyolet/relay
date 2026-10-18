@@ -177,8 +177,8 @@ jobs:
 
       # Plain `claude -p` in bare mode: no MCP servers, hooks, plugins, CLAUDE.md
       # auto-discovery or settings from the checked-out branch, one model for
-      # every call. Allow rules are not a boundary (go test and make run
-      # arbitrary code); the job token's scope is.
+      # every call. Bash is unrestricted on this throwaway runner; the job
+      # token's scope is the boundary, and the denies only encode policy.
       - name: Claude
         id: claude
         env:
@@ -209,8 +209,6 @@ jobs:
 
           Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-$SHORT, created at the failing commit.
 
-          Bash runs only allowlisted commands: go test/vet/build, make, read-only ones (cat, grep, rg, find, ls, head, tail, sed -n), git without force pushes, and gh pr create / gh issue create / gh issue list. Run one command per call, without chaining. A denied command means that command is not allowed, not that Bash is unavailable: use the Read tool for files or an allowed command instead.
-
           1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
           2. Bisect the range with that test only (\`git bisect start <bad> <good>\`, \`git bisect run ...\`) to find the culprit commit, then \`git bisect reset\` and \`git switch fix/dev-$SHORT\`.
           3. Take exactly one outcome.
@@ -226,17 +224,10 @@ jobs:
             --settings "{\"availableModels\":[\"$MODEL\"],\"enforceAvailableModels\":true}" \
             --model "$MODEL" \
             --tools "Bash,Read,Edit" \
-            --allowedTools Read Edit \
-              "Bash(go test *)" "Bash(go vet *)" "Bash(go build *)" "Bash(make *)" \
-              "Bash(cd *)" "Bash(pwd)" "Bash(cat *)" "Bash(sed -n *)" "Bash(grep *)" "Bash(rg *)" "Bash(find *)" \
-              "Bash(ls *)" "Bash(head *)" "Bash(tail *)" "Bash(wc *)" "Bash(git rev-parse *)" "Bash(git branch *)" \
-              "Bash(git status *)" "Bash(git diff *)" "Bash(git log *)" "Bash(git show *)" "Bash(git checkout *)" \
-              "Bash(git switch *)" "Bash(git bisect *)" "Bash(git revert *)" "Bash(git add *)" "Bash(git commit *)" \
-              "Bash(git push origin fix/dev-*)" "Bash(gh pr create *)" "Bash(gh issue create *)" "Bash(gh issue list *)" \
+            --allowedTools Bash Read Edit \
             --disallowedTools Agent TaskStop WebFetch WebSearch "mcp__*" \
               "Edit(.github/**)" "Edit(.claude/**)" \
-              "Bash(git push *--force*)" "Bash(git push * -f*)" "Bash(gh api *)" "Bash(gh auth *)" \
-              "Bash(gh secret *)" "Bash(gh pr merge *)" "Bash(gh workflow *)" \
+              "Bash(gh pr merge *)" "Bash(gh workflow *)" "Bash(git push *--force*)" "Bash(git push * -f*)" \
             --strict-mcp-config --permission-mode dontAsk --permission-prompts none \
             --max-turns 80 --max-budget-usd 5 \
             --output-format stream-json --verbose --no-session-persistence > "$OUT"
