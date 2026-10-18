@@ -26,7 +26,7 @@ type FeaturedProvider struct {
 }
 
 const featuredDescription = "Featured models — generated index of Model metadata.labels.featured. " +
-	"Regenerate: go run ./cmd/validate -write-featured ./data. Not a seeded catalog kind; validate fails on drift."
+	"Regenerate: catalog-validate --write-featured ./data. Not a seeded catalog kind; validate fails on drift."
 
 // GenerateFeatured builds the index from docs, sorted on both levels so the
 // file is stable.
