@@ -2,7 +2,6 @@ package stored
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -38,7 +37,7 @@ func (s *Backend) Status(ctx context.Context) (KeyStatus, error) {
 	var out KeyStatus
 	if s.keys.set != nil {
 		for _, id := range s.keys.set.IDs() {
-			out.HeldKEKs = append(out.HeldKEKs, hex.EncodeToString(id[:]))
+			out.HeldKEKs = append(out.HeldKEKs, FormatKEKID(id))
 		}
 	}
 	n, err := s.q.CountLegacySecretValues(ctx)
@@ -54,7 +53,7 @@ func (s *Backend) Status(ctx context.Context) (KeyStatus, error) {
 		return out, err
 	}
 	if t := ring.Target(); t != ([16]byte{}) {
-		out.TargetKEK = hex.EncodeToString(t[:])
+		out.TargetKEK = FormatKEKID(t)
 	}
 	counts, err := s.q.CountSecretValuesByDataKey(ctx)
 	if err != nil {
@@ -65,16 +64,20 @@ func (s *Backend) Status(ctx context.Context) (KeyStatus, error) {
 		rows[c.DekID.Bytes] = c.Rows
 	}
 	for _, k := range ring.Keys() {
-		out.DataKeys = append(out.DataKeys, DataKeyStatus{
-			ID:        keyring.FormatID(k.ID),
-			Scope:     k.Scope,
-			State:     string(k.State),
-			KEK:       hex.EncodeToString(k.KEKID[:]),
-			CreatedAt: k.CreatedAt,
-			DemotedAt: k.DemotedAt,
-			Rows:      rows[k.ID],
-			Locked:    k.Locked,
-		})
+		out.DataKeys = append(out.DataKeys, dataKeyStatus(k, rows[k.ID]))
 	}
 	return out, nil
+}
+
+func dataKeyStatus(k keyring.KeyInfo, rows int64) DataKeyStatus {
+	return DataKeyStatus{
+		ID:        keyring.FormatID(k.ID),
+		Scope:     k.Scope,
+		State:     string(k.State),
+		KEK:       FormatKEKID(k.KEKID),
+		CreatedAt: k.CreatedAt,
+		DemotedAt: k.DemotedAt,
+		Rows:      rows,
+		Locked:    k.Locked,
+	}
 }

@@ -8,16 +8,16 @@ import (
 	"os"
 
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
 )
 
-const secretUsage = "usage: relay secret status | migrate | downgrade"
-
-// runSecret implements `relay secret status | migrate | downgrade`. They talk to Postgres directly with the deployment's RELAY_PG_DSN and master keys, so they work with every relay server stopped, which migrate and downgrade expect.
+// runSecret implements `relay secret <command>` (see secretUsage). The commands talk to Postgres directly with the deployment's RELAY_PG_DSN and master keys, so they work with every relay server stopped, which migrate and downgrade expect; rotate, rewrap and destroy also run against a live fleet, which learns of the change through the database.
 func runSecret(args []string) error {
-	if len(args) != 1 {
-		return errors.New(secretUsage)
+	cmd, err := parseSecretArgs(args)
+	if err != nil {
+		return err
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -37,7 +37,7 @@ func runSecret(args []string) error {
 	if err != nil {
 		return err
 	}
-	switch args[0] {
+	switch cmd.name {
 	case "status":
 		status, err := sec.Stored.Status(ctx)
 		if err != nil {
@@ -70,6 +70,53 @@ func runSecret(args []string) error {
 		}
 		fmt.Println("schema 34 can now be rolled back: relay migrate down 33")
 		return nil
+	}
+	return runSecretKeys(ctx, sec.Stored, cmd)
+}
+
+// runSecretKeys runs the key ring commands through the same backend methods as the control API's /secret-keys.
+func runSecretKeys(ctx context.Context, b *stored.Backend, cmd secretCommand) error {
+	switch cmd.name {
+	case "rotate":
+		var keys []stored.DataKeyStatus
+		if cmd.all {
+			var err error
+			if keys, err = b.RotateAll(ctx); err != nil {
+				if len(keys) > 0 {
+					_ = printJSON(keys)
+				}
+				return err
+			}
+		} else {
+			k, err := b.Rotate(ctx, cmd.scope)
+			if err != nil {
+				return err
+			}
+			keys = []stored.DataKeyStatus{k}
+		}
+		if err := printJSON(keys); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, "running servers rewrite the stored secrets under the new keys; with none running, run `relay secret migrate`")
+		return nil
+	case "rewrap":
+		res, err := b.Rewrap(ctx, cmd.to)
+		if err != nil {
+			return err
+		}
+		if err := printJSON(res); err != nil {
+			return err
+		}
+		if len(res.Skipped) > 0 {
+			return fmt.Errorf("%d data keys were left under another master key, which this process does not hold; rerun with both that key and the target configured", len(res.Skipped))
+		}
+		return nil
+	case "destroy":
+		k, err := b.Destroy(ctx, cmd.id, cmd.force)
+		if err != nil {
+			return err
+		}
+		return printJSON(k)
 	}
 	return errors.New(secretUsage)
 }

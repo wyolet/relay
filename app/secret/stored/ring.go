@@ -18,7 +18,8 @@ import (
 	"github.com/wyolet/relay/secret/keyring"
 )
 
-var errNoMasterKey = errors.New("no master key configured (RELAY_MASTER_KEY)")
+// ErrNoMasterKey reports a process configured without RELAY_MASTER_KEY: stored secrets can be neither read nor written, and the key ring cannot be managed.
+var ErrNoMasterKey = errors.New("no master key configured (RELAY_MASTER_KEY)")
 
 // keys is what every copy of a Backend shares: the KEK set, the key ring (loaded on first use, so wiring the stores needs no database round trip) and the rewriter's wake-up.
 type keys struct {
@@ -57,7 +58,7 @@ func (k *keys) load(ctx context.Context) (*keyring.Ring, error) {
 		return r, nil
 	}
 	if k.set == nil {
-		return nil, errNoMasterKey
+		return nil, ErrNoMasterKey
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -65,7 +66,8 @@ func (k *keys) load(ctx context.Context) (*keyring.Ring, error) {
 		return r, nil
 	}
 	r, err := keyring.New(ctx, k.store, k.set, keyring.Options{
-		ReloadError: func(err error) { slog.Warn("secret: data key reload failed", "err", err) },
+		DestroyAfter: DestroyAfter,
+		ReloadError:  func(err error) { slog.Warn("secret: data key reload failed", "err", err) },
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load data keys: %w", err)

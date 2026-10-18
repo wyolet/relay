@@ -65,6 +65,7 @@ var plurals = map[string]string{
 	"user":            "users",
 	"token":           "tokens",
 	"scim-client":     "scim-clients",
+	"secret-key":      "secret-keys",
 }
 
 // plural renders kind as the API plural a Role rule names.

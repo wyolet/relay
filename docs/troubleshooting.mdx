@@ -114,10 +114,17 @@ fresh `docker run` without a volume starts clean.
 
 ## Stored host key won't decrypt after a restart
 
-`RELAY_MASTER_KEY` changed between runs. It must be **stable** — it's the key
-that decrypts stored secrets. Restore the original master key, or re-enter
-the host key values under the new one. The standalone image keeps it stable
-automatically **as long as you mount a volume** (see above).
+`RELAY_MASTER_KEY` changed between runs. It must be **stable** — it unwraps
+the data keys stored secrets are encrypted under. `relay secret status` lists
+those data keys as `locked`. Restore the original master key, or keep the new
+one and add the original as `RELAY_MASTER_KEY_EXTRA`, then follow
+[Changing the master key](/concepts/secret-keys#changing-the-master-key) to
+move onto the new one. If the original is lost, the values under it are too:
+run `relay secret rewrap --to <new kek id>` (it lists every data key as
+skipped) and `relay secret rotate --all`, so new values can be written under
+the new key, then re-enter the host key values.
+The standalone image keeps the key stable automatically **as long as you
+mount a volume** (see above).
 
 ## Health checks
 

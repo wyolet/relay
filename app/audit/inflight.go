@@ -13,7 +13,7 @@ import (
 var mutatingVerbs = map[string]bool{
 	"create": true, "update": true, "delete": true, "rotate": true,
 	"attach": true, "detach": true, "generate": true, "reload": true,
-	"apply": true, "mint": true,
+	"apply": true, "mint": true, "rewrap": true, "destroy": true,
 }
 
 // decision is one Authorize call's contribution to the in-flight event.
@@ -74,9 +74,13 @@ func (f *inflight) rowEvents(rows []Row, code int) []Event {
 		if status == "" {
 			status = StatusAllowed
 		}
+		rowCode := code
+		if r.Code != 0 {
+			rowCode = r.Code
+		}
 		out = append(out, Event{
 			Actor: f.actor, Action: r.Action, Resource: r.Resource,
-			Outcome: Outcome{Status: status, Code: code}, Request: f.request,
+			Outcome: Outcome{Status: status, Code: rowCode}, Request: f.request,
 			Change: changeOf(r.Fields),
 		})
 	}

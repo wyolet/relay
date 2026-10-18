@@ -80,6 +80,7 @@
                     "role-bindings",
                     "roles",
                     "scim-clients",
+                    "secret-keys",
                     "service-accounts",
                     "settings",
                     "system",
@@ -101,6 +102,7 @@
                     "attach",
                     "create",
                     "delete",
+                    "destroy",
                     "detach",
                     "generate",
                     "get",
@@ -110,6 +112,7 @@
                     "read",
                     "reload",
                     "revoke",
+                    "rewrap",
                     "rotate",
                     "snapshot",
                     "update"
