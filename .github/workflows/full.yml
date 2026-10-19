@@ -22,6 +22,10 @@ permissions:
 
 env:
   PASSED_TAG: ci-full-passed
+  # GitHub fires no workflow_run for a run started with the workflow token, and
+  # starts no workflows for a pull request it opens or pushes; the CI app's
+  # token does both.
+  HAS_APP: ${{ vars.RELAY_CI_APP_ID != '' && secrets.RELAY_CI_APP_KEY != '' }}
 
 jobs:
   dispatch:
@@ -31,8 +35,20 @@ jobs:
       contents: read
       actions: write
     steps:
+      - id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELAY_CI_APP_ID }}
+          private-key: ${{ secrets.RELAY_CI_APP_KEY }}
+          permission-contents: read
+          permission-actions: write
+
+      - if: env.HAS_APP != 'true'
+        run: echo "::warning::RELAY_CI_APP_ID or RELAY_CI_APP_KEY is not set; the dispatched run's result won't be recorded"
+
       - env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
         run: |
           repo="repos/$GITHUB_REPOSITORY"
           if ! sha=$(gh api "$repo/git/ref/heads/dev" --jq .object.sha 2>/dev/null); then
@@ -103,10 +119,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The release pull request's checks report only when its own events
+      # start workflows.
+      - id: app
+        if: steps.tag.outputs.moved == 'true' && env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELAY_CI_APP_ID }}
+          private-key: ${{ secrets.RELAY_CI_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - if: steps.tag.outputs.moved == 'true' && env.HAS_APP != 'true'
+        run: echo "::warning::RELAY_CI_APP_ID or RELAY_CI_APP_KEY is not set; the release pull request's workflows won't start on their own"
+
       - name: Release pull request
         if: steps.tag.outputs.moved == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: ./scripts/release-pr.sh "$SHA" "$RUN_URL"
