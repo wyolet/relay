@@ -68,7 +68,8 @@ services:
       args:
         UI_VERSION: ${UI_VERSION:?UI_VERSION not set — run with versions.env loaded}
         UI_SHA256: ${UI_SHA256:?UI_SHA256 not set — run with versions.env loaded}
-        CATALOG_REF: ${CATALOG_VERSION:-main}
+        CATALOG_REF: ${CATALOG_VERSION:?CATALOG_VERSION not set — run with versions.env loaded}
+        CATALOG_SHA256: ${CATALOG_SHA256:?CATALOG_SHA256 not set — run with versions.env loaded}
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}
@@ -83,7 +84,8 @@ services:
       args:
         UI_VERSION: ${UI_VERSION:?UI_VERSION not set — run with versions.env loaded}
         UI_SHA256: ${UI_SHA256:?UI_SHA256 not set — run with versions.env loaded}
-        CATALOG_REF: ${CATALOG_VERSION:-main}
+        CATALOG_REF: ${CATALOG_VERSION:?CATALOG_VERSION not set — run with versions.env loaded}
+        CATALOG_SHA256: ${CATALOG_SHA256:?CATALOG_SHA256 not set — run with versions.env loaded}
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}

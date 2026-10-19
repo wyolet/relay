@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // SectionPayloadLogging is the section key for the request/response body

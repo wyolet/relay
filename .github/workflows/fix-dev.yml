@@ -272,8 +272,9 @@ jobs:
           echo "failed tool results:"
           jq -c 'select(.type == "user") | .message.content[]? | select(.type == "tool_result" and .is_error == true) | .content' "$OUT" | head -10 | cut -c1-300
 
-  # A PR opened with the workflow token starts no CI; the full tier dispatched
-  # on its branch puts the required checks on its head commit.
+  # A PR opened with the workflow token starts no CI. The full tier dispatched
+  # on its branch tests the fix; ci-dev.yml puts dev's required checks on its
+  # head commit. A workflow not yet on main is dispatched by id, not by name.
   verify:
     needs: [guard, fix]
     if: always() && needs.guard.outputs.run == 'true'
@@ -289,6 +290,10 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" >/dev/null 2>&1 || { echo "no $BRANCH pushed"; exit 0; }
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
           echo "dispatched ci.yml on $BRANCH"
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows" \
+            --jq '.workflows[] | select(.path == ".github/workflows/ci-dev.yml") | .id')
+          gh workflow run "$id" --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "dispatched ci-dev.yml on $BRANCH"
 
   notify:
     needs: [guard, fix, verify]

@@ -7,10 +7,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/settings"
@@ -125,14 +128,15 @@ func TestIntegration_SeedVersioned_LatestResolvesToLocal(t *testing.T) {
 	}
 }
 
-// archiveServer serves one catalog archive whose data tree holds files.
+// archiveServer serves one catalog release tarball whose data tree holds
+// files, with its sha256sum file at the same URL plus ".sha256".
 func archiveServer(t *testing.T, files map[string]string) *httptest.Server {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	for name, body := range files {
-		if err := tw.WriteHeader(&tar.Header{Name: "relay-catalog/data/" + name, Mode: 0o644, Size: int64(len(body))}); err != nil {
+		if err := tw.WriteHeader(&tar.Header{Name: "data/" + name, Mode: 0o644, Size: int64(len(body))}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := tw.Write([]byte(body)); err != nil {
@@ -145,7 +149,12 @@ func archiveServer(t *testing.T, files map[string]string) *httptest.Server {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	sum := fmt.Sprintf("%x  relay-catalog-data.tar.gz\n", sha256.Sum256(buf.Bytes()))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte(sum))
+			return
+		}
 		_, _ = w.Write(buf.Bytes())
 	}))
 	t.Cleanup(srv.Close)

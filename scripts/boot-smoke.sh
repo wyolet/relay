@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds relay with the UI pinned in versions.env embedded, boots it against an
-# empty Postgres (RELAY_PG_DSN) with the pinned catalog version, and checks both
-# planes answer, the UI is served, and the catalog seeded at that version.
+# Builds relay with the UI pinned in versions.env embedded, checks the pinned
+# catalog tarball against its hash, boots relay against an empty Postgres
+# (RELAY_PG_DSN) with the pinned catalog version, and checks both planes
+# answer, the UI is served, and the catalog seeded at that version.
 # A versions.env bump naming a missing or broken release fails here instead of
 # at release time. Overwrites cmd/relay/web/dist, as `make ui-fetch` does.
 set -euo pipefail
@@ -44,6 +45,13 @@ dist=cmd/relay/web/dist
 find "$dist" -mindepth 1 ! -name .gitkeep -delete
 tar -xz -C "$dist" --strip-components=1 -f "$work/$tarball"
 [ -f "$dist/index.html" ] || fail "UI $tarball has no index.html at its root"
+
+# The image bakes this tarball; relay below fetches the release from its default URL.
+catalog="relay-catalog-data-${CATALOG_VERSION}.tar.gz"
+[ -n "${CATALOG_SHA256:-}" ] || fail "versions.env has no CATALOG_SHA256; pin it with 'make catalog-pin CATALOG_VERSION=$CATALOG_VERSION'"
+curl -fsSL -o "$work/$catalog" "https://github.com/wyolet/relay-catalog/releases/download/${CATALOG_VERSION}/$catalog" \
+  || fail "catalog release $CATALOG_VERSION has no $catalog"
+(cd "$work" && echo "$CATALOG_SHA256  $catalog" | shasum -a 256 -c -) || fail "catalog $catalog does not match CATALOG_SHA256 in versions.env"
 
 CGO_ENABLED=0 go build -trimpath -o "$work/relay" ./cmd/relay
 

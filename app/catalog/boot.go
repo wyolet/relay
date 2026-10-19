@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
@@ -34,18 +35,19 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/scim"
-	"github.com/wyolet/relay/internal/storage/gen"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
-// BootstrapOptions configures the one-call Bootstrap helper. Pool and
-// MasterKey are required; MasterKey may be nil if stored-mode HostKeys
-// aren't in use.
+// BootstrapOptions configures the one-call Bootstrap helper. Pool is
+// required; MasterKey may be nil if stored-mode HostKeys aren't in use.
 type BootstrapOptions struct {
 	Pool      *pgxpool.Pool
 	MasterKey []byte
+	// MasterKeyExtra are further KEKs (RELAY_MASTER_KEY_EXTRA), held during a
+	// KEK change; which KEK wraps new data keys is recorded in the database.
+	MasterKeyExtra [][]byte
 
 	// AutoSeedDir, when non-empty AND the catalog is empty in PG, triggers
 	// a YAML import from this directory before the initial Reload. The
@@ -73,8 +75,9 @@ type BootstrapOptions struct {
 
 	// CatalogURL overrides the archive URL template used by
 	// CatalogVersion fetches ("{version}" substituted). Empty uses
-	// seed.DefaultCatalogURLTemplate (the wyolet/relay-catalog GitHub
-	// archive). Point it at a mirror for airgapped deployments.
+	// seed.DefaultCatalogURLTemplate. The archive must have its sha256sum
+	// file at the same URL plus ".sha256". Point it at a mirror for
+	// airgapped deployments.
 	CatalogURL string
 
 	// CatalogIndexURL overrides where "latest"/"auto" resolves the
@@ -130,12 +133,12 @@ type Stores struct {
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
 	// controller resolving S3 credentials) resolve through the same seam.
-	Secrets *pkgsecret.Registry
+	Secrets *secret.Registry
 
-	// Stored is the AES-GCM stored-secret backend registered in Secrets,
-	// exposed so the composition root can write a secret (the generated
-	// token signing key) through the same master-key path.
-	Stored *pkgsecret.StoredResolver
+	// Stored is the stored-secret backend registered in Secrets, exposed so
+	// the composition root can write a secret (the generated token signing
+	// key) and run the key ring's background work.
+	Stored *stored.Backend
 
 	// OAuthResolver is the KindOAuth resolver registered in Secrets,
 	// exposed so the composition root can drive the proactive
@@ -151,13 +154,16 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	if opts.Pool == nil {
 		return nil, nil, fmt.Errorf("catalog.BootstrapStores: Pool is required")
 	}
-	q := gen.New(opts.Pool)
-	secReg, secStored := appsecret.Wire(q, opts.Pool, opts.MasterKey)
+	sec, err := appsecret.Wire(opts.Pool, opts.masterKeys())
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog.BootstrapStores: %w", err)
+	}
+	secReg := sec.Registry
 	stores := rowStores(opts.Pool)
 	stores.pool = opts.Pool
-	stores.HostKey = hostkey.NewStore(q, secReg, secStored)
+	stores.HostKey = hostkey.NewStore(opts.Pool, secReg, sec.Stored)
 	stores.Secrets = secReg
-	stores.Stored = secStored
+	stores.Stored = sec.Stored
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
 		stores.HostKey, stores.RateLimit, stores.Key, stores.Pricing,
@@ -175,7 +181,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	// which only exists once cat is built. Refresh is off the hot path (load /
 	// post-401 heal), so the cache (populated by Hydrate before any resolve) is
 	// always ready by the time a token actually needs refreshing.
-	oauthResolver := pkgoauth.NewResolver(secStored,
+	oauthResolver := pkgoauth.NewResolver(sec.Stored,
 		func(provider string) (sdkoauth.ProviderConfig, bool) {
 			v, ok := cat.Setting(settings.OAuthSection(provider))
 			if !ok {
@@ -187,23 +193,33 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 			}
 			return pc.ProviderConfig, true
 		})
-	secReg.Register(pkgsecret.KindOAuth, oauthResolver)
+	secReg.Register(secret.KindOAuth, oauthResolver)
 	stores.OAuthResolver = oauthResolver
 
 	return cat, stores, nil
 }
 
-// Hydrate is the expensive half of bootstrap: reload settings, load the
-// hostkey master-key version, optionally auto-seed from YAML, run the
-// first catalog Reload, and construct a NOTIFY listener primed for Run.
+// masterKeys is the KEK set in configuration order, RELAY_MASTER_KEY first.
+func (o BootstrapOptions) masterKeys() [][]byte {
+	if len(o.MasterKey) == 0 {
+		return nil
+	}
+	return append([][]byte{o.MasterKey}, o.MasterKeyExtra...)
+}
+
+// secrets is the secret stack seeding writes stored values through.
+func (s *Stores) secrets() *appsecret.Secrets {
+	return &appsecret.Secrets{Registry: s.Secrets, Stored: s.Stored}
+}
+
+// Hydrate is the expensive half of bootstrap: reload settings, optionally
+// auto-seed from YAML, run the first catalog Reload, and construct a NOTIFY
+// listener primed for Run.
 // On any error the Catalog's IsReady stays false and the caller can
 // retry — handlers gate on it and return 503 in the meantime.
 func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOptions) (*Listener, error) {
 	if err := c.settings.reload(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: settings reload: %w", err)
-	}
-	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
-		return nil, fmt.Errorf("catalog.Hydrate: load key version: %w", err)
 	}
 	if opts.CatalogVersion != "" || opts.AutoSeedDir != "" || len(opts.SystemRateLimits) > 0 {
 		run := func(ctx context.Context) error { return seedRows(ctx, stores, opts) }
@@ -220,7 +236,7 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 	if err := c.Reload(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: initial reload: %w", err)
 	}
-	listener := NewListener(c, opts.Pool, listenerStores{
+	ls := listenerStores{
 		provider:  stores.Provider,
 		host:      stores.Host,
 		model:     stores.Model,
@@ -239,8 +255,11 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		role:           stores.Role,
 		roleBinding:    stores.RoleBinding,
 		policyBinding:  stores.PolicyBinding,
-	})
-	return listener, nil
+	}
+	if stores.Stored != nil {
+		ls.secretKeys = stores.Stored
+	}
+	return NewListener(c, opts.Pool, ls), nil
 }
 
 // Bootstrap is the legacy one-shot: stores + Hydrate in a single call.
@@ -291,7 +310,7 @@ func seedCatalog(ctx context.Context, stores *Stores, opts BootstrapOptions) err
 	if _, err := seed.Run(ctx, seed.Options{
 		Pool:             opts.Pool,
 		YAMLDir:          opts.AutoSeedDir,
-		MasterKey:        opts.MasterKey,
+		Secrets:          stores.secrets(),
 		CatalogKindsOnly: true,
 	}); err != nil {
 		return fmt.Errorf("auto-seed: %w", err)
@@ -397,7 +416,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 	slog.Error("catalog: versioned fetch failed on empty catalog; seeding local dir instead",
 		"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", cause)
 	if _, err := seed.Run(ctx, seed.Options{
-		Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
+		Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, Secrets: stores.secrets(),
 		CatalogKindsOnly: true,
 	}); err != nil {
 		return fmt.Errorf("fallback seed: %w", err)
@@ -413,7 +432,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 // failed seed writes no marker, so the next boot retries.
 func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
 	res, err := seed.Run(ctx, seed.Options{
-		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
+		Pool: opts.Pool, YAMLDir: dataDir, Secrets: stores.secrets(),
 		CatalogKindsOnly: true, DetachDropped: true,
 	})
 	if err != nil {

@@ -44,6 +44,9 @@ func runSubcommand() bool {
 		case "auth":
 			runCLI("auth", runAuth, os.Args[2:])
 			return true
+		case "secret":
+			runCLI("secret", runSecret, os.Args[2:])
+			return true
 		}
 	}
 	return false

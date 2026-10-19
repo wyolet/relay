@@ -48,7 +48,7 @@ The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test
 
 `make smoke-mock` replays recorded OpenAI fixtures through relay against a local spec-mock-openai server; `RELAY_MOCK_BASE_URL` (e.g. `http://localhost:5180`) must be set or the target exits immediately with an error.
 
-The repo is a **multi-module monorepo**: the server module (`github.com/wyolet/relay`) plus three standalone modules it depends on — the public, vendorable SDK (`github.com/wyolet/relay/sdk`), the job engine (`github.com/wyolet/relay/jobq`), and the general-purpose auth primitives (`github.com/wyolet/relay/auth`). A repo-root `go.work` wires them for local dev. The dependency direction is **server → module, never the reverse**: the standalone modules import nothing from the server module.
+The repo is a **multi-module monorepo**: the server module (`github.com/wyolet/relay`) plus four standalone modules it depends on — the public, vendorable SDK (`github.com/wyolet/relay/sdk`), the job engine (`github.com/wyolet/relay/jobq`), the general-purpose auth primitives (`github.com/wyolet/relay/auth`), and the secret references and encryption primitives (`github.com/wyolet/relay/secret`). A repo-root `go.work` wires them for local dev. The dependency direction is **server → module, never the reverse**: the standalone modules import nothing from the server module.
 
 ## Repository layout
 

@@ -141,6 +141,26 @@ func WithAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64, fn fun
 	return tx.Commit(ctx)
 }
 
+// TryAdvisoryLock runs fn only when the transaction-scoped advisory lock named by key is free, and reports whether it ran. Background work that one pod at a time should do uses it: the others skip the round instead of queueing behind the holder.
+func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64, fn func(context.Context) error) (bool, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("storage: advisory lock: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var held bool
+	if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock($1)", key).Scan(&held); err != nil {
+		return false, fmt.Errorf("storage: advisory lock: %w", err)
+	}
+	if !held {
+		return false, nil
+	}
+	if err := fn(ctx); err != nil {
+		return true, err
+	}
+	return true, tx.Commit(ctx)
+}
+
 // WrapPool wraps an existing *pgxpool.Pool into a *Storage without
 // opening a new pool or running migrations. Intended for tests that
 // supply their own pool. The returned Storage must NOT be closed —

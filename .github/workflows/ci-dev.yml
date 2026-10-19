@@ -1,0 +1,199 @@
+name: CI dev
+
+# The light tier for pull requests into dev and collector branches; ci.yml runs
+# the full tier everywhere else.
+on:
+  # `closed` only cancels the pull request's in-progress run; it runs no job.
+  pull_request:
+    branches-ignore: [main]
+    types: [opened, synchronize, reopened, closed]
+  # Every part on any branch. fix-dev.yml dispatches it on a fix branch, whose
+  # pull request starts no CI of its own, to report the checks dev requires.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request, or its merge or close, cancels the run in
+# progress. A dispatched run gets a group of its own and is never cancelled.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-dev-pr-{0}', github.event.pull_request.number) || format('ci-dev-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Decides which parts a pull request needs. Gating jobs with `if:` rather than
+  # workflow-level `paths` keeps every check reporting (skipped counts as
+  # success). A dispatched run gets every part. Paths not named below count as
+  # Go. `cluster` picks the self-hosted pools: only when the CI_POOL variable
+  # says so, and never for pull requests from forks (or deleted head repos).
+  changes:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      cluster: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_POOL == 'cluster' }}
+      go: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
+      chart: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.chart == 'true' }}
+      boot: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.boot == 'true' }}
+      integration: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.integration == 'true' }}
+      clickhouse: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.clickhouse == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            go:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!chart/**'
+              - '!versions.env'
+            chart:
+              - 'chart/**'
+              - '.github/workflows/ci-dev.yml'
+            boot:
+              - 'versions.env'
+              - 'scripts/boot-smoke.sh'
+              - '.github/workflows/ci-dev.yml'
+            integration:
+              - 'migrations/**'
+              - 'internal/storage/**'
+              - 'pkg/kv/**'
+              - 'app/pipeline/**'
+              - 'jobq/**'
+              - 'integration/**'
+              - '**/*integration_test.go'
+              - 'Makefile'
+              - '.github/workflows/ci-dev.yml'
+            clickhouse:
+              - 'pkg/usage/clickhouse/**'
+              - 'pkg/payload/clickhouse/**'
+              - 'pkg/chttl/**'
+              - 'Makefile'
+              - '.github/workflows/ci-dev.yml'
+
+  # The light tier in one job: lint, unit tests and, when the paths call for
+  # them, chart lint and the integration and ClickHouse tests, in parallel
+  # (scripts/ci-dev.sh). Integration runs only the packages the change can
+  # reach. On the cluster, pull requests into dev run on the warm pool when
+  # CI_WARM_POOL is on (its job hook admits nothing else); everything else, and
+  # dev while the switch is off, runs on the cold integration pool. A pool that
+  # cannot take the job would leave it queued, so the switch is explicit.
+  dev:
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
+    runs-on: ${{ needs.changes.outputs.cluster == 'true' && (vars.CI_WARM_POOL == 'on' && github.base_ref == 'dev' && 'relay-ci-warm' || 'relay-ci-integration') || 'ubuntu-latest' }}
+    # Both cluster pools run Postgres, Valkey and ClickHouse as pod sidecars on
+    # the same addresses. An empty image skips a service.
+    services:
+      postgres:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_DB: relay_test
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      valkey:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'valkey/valkey:8-alpine' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+      clickhouse:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'clickhouse/clickhouse-server:24.8-alpine' || '' }}
+        env:
+          CLICKHOUSE_USER: relay
+          CLICKHOUSE_PASSWORD: relay
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user relay --password relay --query 'SELECT 1'"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
+      RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
+      RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
+    steps:
+      # Depth 2: the pull request's merge commit and its base, for the diff.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-go@v7
+        if: runner.environment == 'github-hosted'
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
+          skip-cache: ${{ runner.environment == 'self-hosted' }}
+
+      - uses: azure/setup-helm@v5
+        if: runner.environment == 'github-hosted' && needs.changes.outputs.chart == 'true'
+
+      - name: Checks
+        env:
+          GO: ${{ needs.changes.outputs.go }}
+          CHART: ${{ needs.changes.outputs.chart }}
+          INTEGRATION: ${{ needs.changes.outputs.integration }}
+          CLICKHOUSE: ${{ needs.changes.outputs.clickhouse }}
+          CHANGED_FROM: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+        run: |
+          parts=()
+          [ "$GO" = true ] && parts+=(lint test)
+          [ "$CHART" = true ] && parts+=(chart)
+          [ "$GO" = true ] && [ "$INTEGRATION" = true ] && parts+=(integration)
+          [ "$GO" = true ] && [ "$CLICKHOUSE" = true ] && parts+=(clickhouse)
+          scripts/ci-dev.sh "${parts[@]}"
+
+  # Builds and boots relay with the UI and catalog versions.env pins, against
+  # an empty Postgres: a bump naming a missing or broken release fails here.
+  # GitHub-hosted only: it needs a Postgres service container.
+  boot:
+    needs: changes
+    if: needs.changes.outputs.boot == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: relay
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Boot smoke
+        run: ./scripts/boot-smoke.sh

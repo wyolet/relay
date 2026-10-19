@@ -6,16 +6,18 @@
 # comes up with a populated catalog and a working UI.
 #
 # Build args:
-#   UI_VERSION   relay-ui release tag to embed
-#   UI_SHA256    sha256 of that release's tarball
-#   CATALOG_REF  relay-catalog git ref (tag/branch/sha) to seed (default below)
+#   UI_VERSION      relay-ui release tag to embed
+#   UI_SHA256       sha256 of that release's tarball
+#   CATALOG_REF     relay-catalog release tag to seed (v0.1.15 or later)
+#   CATALOG_SHA256  sha256 of that release's data tarball
 
-# UI_VERSION and UI_SHA256 have no literal default: versions.env pins both and
-# docker-bake.hcl threads them through. A bare `docker build` must pass both as
-# --build-arg or the UI fetch fails loudly.
+# None of these has a literal default: versions.env pins them and
+# docker-bake.hcl threads them through. A bare `docker build` must pass all
+# four as --build-arg or the asset fetch fails loudly.
 ARG UI_VERSION
 ARG UI_SHA256
-ARG CATALOG_REF=main
+ARG CATALOG_REF
+ARG CATALOG_SHA256
 
 # --- assets: fetch pinned UI dist + catalog data; no toolchain reaches final ---
 FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS assets
@@ -23,6 +25,7 @@ RUN apk add --no-cache curl tar jq ca-certificates
 ARG UI_VERSION
 ARG UI_SHA256
 ARG CATALOG_REF
+ARG CATALOG_SHA256
 WORKDIR /assets
 
 # UI dist (relay-ui release tarball, public repo). A miss is a real error —
@@ -37,28 +40,31 @@ RUN set -eu; \
   tar -xz -C /assets/ui --strip-components=1 -f /tmp/ui/ui.tar.gz; \
   echo "fetched UI ${UI_VERSION}"
 
-# Catalog data (public repo). No release tarballs yet, so fetch the source
-# archive at the pinned ref and keep only the live data tree (drafts/ are
-# skipped by the seed loader anyway — dropped here to keep the image minimal).
+# Catalog data: the release's data tarball (data/ at its root, drafts left
+# out), checked against the pinned hash for the same reason as the UI.
 RUN set -eu; \
-  curl -fsSL "https://github.com/wyolet/relay-catalog/archive/${CATALOG_REF}.tar.gz" \
-    | tar -xz -C /tmp; \
-  mkdir -p /assets/catalog; \
-  mv /tmp/relay-catalog-*/data/* /assets/catalog/; \
-  rm -rf /assets/catalog/drafts; \
-  printf '%s\n' "${CATALOG_REF}" > /assets/catalog/.version
+  [ -n "${CATALOG_REF}" ] || { echo "CATALOG_REF is not set; pin it in versions.env" >&2; exit 1; }; \
+  [ -n "${CATALOG_SHA256}" ] || { echo "CATALOG_SHA256 is not set; pin it in versions.env" >&2; exit 1; }; \
+  mkdir -p /tmp/catalog /assets/catalog; \
+  curl -fsSL -o /tmp/catalog/catalog.tar.gz "https://github.com/wyolet/relay-catalog/releases/download/${CATALOG_REF}/relay-catalog-data-${CATALOG_REF}.tar.gz" \
+    || { echo "relay-catalog release ${CATALOG_REF} has no relay-catalog-data-${CATALOG_REF}.tar.gz (CATALOG_REF must be a release tag, v0.1.15 or later)" >&2; exit 1; }; \
+  echo "${CATALOG_SHA256}  /tmp/catalog/catalog.tar.gz" | sha256sum -c -; \
+  tar -xz -C /assets/catalog --strip-components=1 -f /tmp/catalog/catalog.tar.gz data; \
+  printf '%s\n' "${CATALOG_REF}" > /assets/catalog/.version; \
+  echo "fetched catalog ${CATALOG_REF}"
 
 # --- source: module cache + source tree, shared by the binary builds below ---
 FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS source
 WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
-# replaces ./sdk, ./jobq and ./auth, so their manifests must exist for `go mod download`.
+# replaces ./sdk, ./jobq, ./auth and ./secret, so their manifests must exist for `go mod download`.
 COPY go.work go.work.sum ./
 COPY go.mod go.sum ./
 COPY sdk/go.mod sdk/go.sum ./sdk/
 COPY jobq/go.mod jobq/go.sum ./jobq/
 COPY auth/go.mod auth/go.sum ./auth/
+COPY secret/go.mod secret/go.sum ./secret/
 # GO_CACHE_MOUNTS=0 (published images, see docker-bake.hcl) skips the cache
 # mounts: on a shared BuildKit any client can write them, and Go trusts cached
 # modules and build objects without re-checking go.sum. Modules are then

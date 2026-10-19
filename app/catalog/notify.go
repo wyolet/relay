@@ -54,7 +54,7 @@ var validKinds = map[string]struct{}{
 	"team": {}, "project": {},
 	"serviceaccount": {}, "group": {},
 	"role": {}, "rolebinding": {}, "policybinding": {},
-	"user": {},
+	"user": {}, "secretkey": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -132,6 +132,14 @@ type listenerStores struct {
 		Get(ctx context.Context, id string) (*project.Project, error)
 	}
 	settings SettingsLister
+	// secretKeys reloads the secret key ring; nil when stored secrets are not wired.
+	secretKeys secretKeyEvents
+}
+
+// secretKeyEvents applies data-key changes to the secret key ring. Secret_values writes are checked against key state in the database, so these only shorten convergence.
+type secretKeyEvents interface {
+	KeyChanged(ctx context.Context, id string) error
+	ReloadKeys(ctx context.Context) error
 }
 
 // ── Listener ──────────────────────────────────────────────────────────────────
@@ -222,8 +230,13 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 	}
 }
 
-// reloadAll rebuilds the catalog snapshot and the settings cache from PG.
+// reloadAll rebuilds the catalog snapshot, the secret key ring and the settings cache from PG.
 func (l *Listener) reloadAll(ctx context.Context) error {
+	if l.stores.secretKeys != nil {
+		if err := l.stores.secretKeys.ReloadKeys(ctx); err != nil {
+			return err
+		}
+	}
 	if err := l.cat.Reload(ctx); err != nil {
 		return err
 	}
@@ -286,15 +299,16 @@ func (l *Listener) applyDrained(ctx context.Context) {
 }
 
 // reloadAndApplySettings rebuilds the snapshot from PG and applies the
-// settings events among events. Reload rebuilds catalog rows only — the
-// settings cache is loaded separately, so its events must be applied here or
-// they never land. Anything that still fails is retried on the next flush.
+// settings and secretkey events among events. Reload rebuilds catalog rows
+// only — the settings cache and the key ring are loaded separately, so their
+// events must be applied here or they never land. Anything that still fails
+// is retried on the next flush.
 func (l *Listener) reloadAndApplySettings(ctx context.Context, events []drainedEvent) {
 	if err := l.cat.Reload(ctx); err != nil {
 		slog.Error("catalog notify: reload failed, retrying next flush", "events", len(events), "err", err)
 		l.reloadPending = true
 		for _, e := range events {
-			if e.Kind == "settings" {
+			if outsideSnapshot(e.Kind) {
 				l.deb.requeue(e)
 			}
 		}
@@ -302,7 +316,7 @@ func (l *Listener) reloadAndApplySettings(ctx context.Context, events []drainedE
 	}
 	l.reloadPending = false
 	for _, e := range events {
-		if e.Kind != "settings" {
+		if !outsideSnapshot(e.Kind) {
 			continue
 		}
 		if err := l.applyEvent(ctx, e); err != nil {
@@ -314,11 +328,16 @@ func (l *Listener) reloadAndApplySettings(ctx context.Context, events []drainedE
 	slog.Info("catalog notify: catalog reloaded", "events", len(events))
 }
 
+// outsideSnapshot reports the kinds a snapshot Reload does not rebuild.
+func outsideSnapshot(kind string) bool { return kind == "settings" || kind == "secretkey" }
+
 // reloadBatchThreshold is the drained-event count past which a full rebuild
 // replaces the per-event incremental applies.
 const reloadBatchThreshold = 64
 
 var kindOrder = map[string]int{
+	// data keys first, so host keys reloaded in the same flush find them.
+	"secretkey": -1,
 	"team":      0,
 	"project":   1,
 	"provider":  2,

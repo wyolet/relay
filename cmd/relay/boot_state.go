@@ -12,8 +12,8 @@ import (
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/kv"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	secretoauth "github.com/wyolet/relay/pkg/secret/oauth"
+	"github.com/wyolet/relay/secret"
 )
 
 func openKV(bootCtx context.Context, cfg *config.Config) kv.Store {
@@ -47,12 +47,12 @@ func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, st
 	// lock; outcomes persist on the hostkey status (UI-visible on the same
 	// key) and broadcast through the catalog hostkey NOTIFY so every pod
 	// reloads the credential (secret_values has no trigger of its own).
-	oauthRefs := func(ctx context.Context) ([]pkgsecret.Ref, error) {
+	oauthRefs := func(ctx context.Context) ([]secret.Ref, error) {
 		keys, err := stores.HostKey.List(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var refs []pkgsecret.Ref
+		var refs []secret.Ref
 		for _, k := range keys {
 			if k.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
 				continue
@@ -62,8 +62,8 @@ func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, st
 			if c := k.Status.Credential; c != nil && c.State == hostkey.CredentialRevoked {
 				continue
 			}
-			refs = append(refs, pkgsecret.Ref{
-				Kind: pkgsecret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
+			refs = append(refs, secret.Ref{
+				Kind: secret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
 			})
 		}
 		return refs, nil

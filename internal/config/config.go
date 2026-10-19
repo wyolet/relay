@@ -61,6 +61,9 @@ type Config struct {
 	// Auth
 	AdminToken string
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
+	// MasterKeyExtra are further key-encryption keys (RELAY_MASTER_KEY_EXTRA,
+	// comma-separated), held while changing the master key.
+	MasterKeyExtra [][]byte
 
 	// Authz selects the control-plane authorizer. "single" (the default)
 	// grants every authenticated caller every action; "rbac" evaluates the
@@ -162,6 +165,14 @@ type RuntimeConfig struct {
 	SupportURL      string // RELAY_UI_SUPPORT_URL
 }
 
+// MasterKeys is the key-encryption key set, RELAY_MASTER_KEY first; nil without a master key.
+func (c *Config) MasterKeys() [][]byte {
+	if c.MasterKey == nil {
+		return nil
+	}
+	return append([][]byte{c.MasterKey}, c.MasterKeyExtra...)
+}
+
 // Load reads every RELAY_* environment variable, validates them, and returns
 // a fully-populated *Config. Returns a descriptive error on the first
 // validation failure.
@@ -185,6 +196,18 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("RELAY_MASTER_KEY: %w", err)
 		}
 		cfg.MasterKey = mk
+	}
+	if raw := os.Getenv("RELAY_MASTER_KEY_EXTRA"); raw != "" {
+		if cfg.MasterKey == nil {
+			return nil, fmt.Errorf("RELAY_MASTER_KEY_EXTRA needs RELAY_MASTER_KEY")
+		}
+		for i, part := range strings.Split(raw, ",") {
+			mk, err := crypto.ParseMasterKey(strings.TrimSpace(part))
+			if err != nil {
+				return nil, fmt.Errorf("RELAY_MASTER_KEY_EXTRA key %d: %w", i+1, err)
+			}
+			cfg.MasterKeyExtra = append(cfg.MasterKeyExtra, mk)
+		}
 	}
 
 	// --- Backends ---
@@ -306,7 +329,7 @@ func Load() (*Config, error) {
 	// against the concrete version; on mismatch the tree is seeded — from
 	// the local CatalogDir when its .version stamp matches (baked image
 	// or self-stamped custom catalog, no network), else fetched from
-	// CatalogURL (default the wyolet/relay-catalog GitHub archive) — no
+	// CatalogURL (default seed.DefaultCatalogURLTemplate) — no
 	// image rebuild to move catalog versions. Re-seeds skip
 	// operator-edited (dirty) rows and overlays re-merge at snapshot load,
 	// so user changes survive. Unset = DefaultCatalogVersion when CatalogDir

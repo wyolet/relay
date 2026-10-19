@@ -10,6 +10,8 @@ replace github.com/wyolet/relay/jobq => ./jobq
 
 replace github.com/wyolet/relay/auth => ./auth
 
+replace github.com/wyolet/relay/secret => ./secret
+
 require (
 	github.com/1password/onepassword-sdk-go v0.4.1
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
@@ -31,6 +33,7 @@ require (
 	github.com/wyolet/relay/auth v0.3.0
 	github.com/wyolet/relay/jobq v0.1.1
 	github.com/wyolet/relay/sdk v0.7.23
+	github.com/wyolet/relay/secret v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/proto/otlp v1.9.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0

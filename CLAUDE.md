@@ -41,8 +41,8 @@ suggestions.
 
 ## Repository layout
 
-Four Go modules wired by a root `go.work` (`use .`, `use ./sdk`,
-`use ./jobq`, `use ./auth`). The codebase is organised by responsibility.
+Five Go modules wired by a root `go.work` (`use .`, `use ./sdk`,
+`use ./jobq`, `use ./auth`, `use ./secret`). The codebase is organised by responsibility.
 
 ```
 app/                       — the application: domain + composition + handlers
@@ -53,6 +53,9 @@ app/                       — the application: domain + composition + handlers
                              endpoints (NOT the hot-path snapshot)
   catalogembed/            — composes manifest YAML → SDK catalog embed schema
   catalogvalidate/         — cross-entity graph linter for the catalog
+  catalogserver/           — serves catalog releases from a git mirror of the
+                             catalog repo (cmd/catalog-server)
+  families/                — families.yaml loader shared by curation + import
   {provider,host,model,
    hostkey,ratelimit,
    policy,pricing,binding,
@@ -94,7 +97,8 @@ app/                       — the application: domain + composition + handlers
                              (state at `secret_health:*` in kv)
   hosthealth/              — per-host runtime reachability (kv-backed)
   ratelimit/               — RateLimit entity + Resolve(policy, rl) → Rules
-  secret/                  — secret Store + KeyAgent (out-of-band heal/failover)
+  secret/                  — KeyAgent (out-of-band heal/failover) + wiring;
+                             stored/ = the key-ring-backed PG secret store
   httpapi/                 — the HTTP layer
     inference/             — data plane: Spec-registry routes (/openai/v1/*,
                              /anthropic/v1/*, /{profile}/v1/*), canonical
@@ -134,13 +138,10 @@ pkg/                       — server-internal shared libs (NOT the SDK)
                              endpoints (typed-accessor SOT). .tmp/design/filtering.md.
   otlp/                    — OTLP/HTTP trace decoding + SpanMapper contract;
                              one subpackage per telemetry convention (genai)
-  crypto/                  — AES-GCM helpers (master-key)
-  secret/                  — unified secret resolution: Ref{Kind,Env,ID,Path}
-                             + Resolver/Registry/Writer. Built-in env + stored
-                             (AES-GCM in PG). External FETCH-ONLY backends as
-                             subpackages (in-memory, never persisted): aws,
-                             azure, gcp, bitwarden, onepassword (//go:build cgo;
-                             excluded from default CGO_ENABLED=0 builds).
+  crypto/                  — legacy AES-GCM helpers (pre-key-ring format)
+  secret/                  — relay-only secret kinds: oauth (subscription
+                             credentials) and onepassword (//go:build cgo;
+                             excluded from default CGO_ENABLED=0 builds)
   transport/               — shared transport helpers
   httpmw/, httpheader/     — net/http middleware + header helpers
   ids/, slug/              — UUIDv7, slug minting + collision suffixes
@@ -178,6 +179,14 @@ auth/                      — SEPARATE Go module: general-purpose
                              authentication + authorization primitives. No
                              product vocabulary; imports nothing from relay.
 
+secret/                    — SEPARATE Go module: secret refs + resolvers
+                             (Ref{Kind,Env,ID,Path}, Registry), sealed format
+                             (aead, XAES-256-GCM), KEKs (kek), per-scope data-
+                             key ring (keyring), cloud credentials (cloud) and
+                             FETCH-ONLY external backends (backend: aws, gcp,
+                             azure, bitwarden). Imports nothing from relay;
+                             auth/sdk/jobq import nothing from it.
+
 internal/                  — composition root / boundary
   config/                  — RELAY_* env parsing
   identity/                — YAML-loaded users (Verify with bcrypt-or-plain)
@@ -186,6 +195,8 @@ internal/                  — composition root / boundary
 cmd/relay/                 — the binary entrypoint AND the ONLY place
                              where vendor names appear in code form
 cmd/catalog-validate/      — schema-validates the catalog repo's data tree
+                             (--curation: families, featured, product lines)
+cmd/catalog-server/        — catalog release server (own image, chart toggle)
 cmd/catalog-schemas/       — regenerates JSON Schemas for catalog kinds
 cmd/catalog-embed/         — composes the public catalog → sdk/catalog/catalog.json
 cmd/modelsdev-import/      — fetches models.dev data → manifest YAMLs (catalog source)
@@ -217,8 +228,9 @@ What this repo owns:
 - `config/ratelimits/system.yaml` — relay-internal admission rules.
 - `config/users/` — deployment-specific admin credentials.
 - The seed *loader* code (`app/seed`), the manifest DTOs (`app/manifest`),
-  the schema validator (`*.Validate()`), and the `cmd/catalog-validate`
-  binary the catalog repo's CI invokes.
+  the schema validator (`*.Validate()`), and every catalog tool: the catalog
+  repo holds data only, and its CI runs `catalog-validate` and
+  `catalog-server build` from the pinned catalog-server image.
 
 What `wyolet/relay-catalog` owns (under its `data/` root):
 
@@ -252,7 +264,8 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
 - `RELAY_CATALOG_VERSION` — pins the seeded catalog to a relay-catalog
   release tag. At hydrate the stored `catalog-source` settings marker is
   compared; on mismatch (or empty PG) the archive is fetched
-  (`RELAY_CATALOG_URL` template overrides the GitHub default) and
+  from the catalog server and checked against its `.sha256`
+  (`RELAY_CATALOG_URL` template overrides the default) and
   re-seeded, then the marker updated. Layering-safe: dirty rows skipped,
   overlays re-merge. Fetch failure on a non-empty catalog logs and boots
   with existing rows. This is the production catalog-upgrade path.
@@ -481,8 +494,9 @@ pointer query params).
 
 HostKey supports two value modes:
 - `valueFrom: {kind: env, env: VAR_NAME}` — env-ref, no creds in PG
-- `valueFrom: {kind: stored}` + `value: sk-...` — AES-GCM-256 encrypted
-  with `RELAY_MASTER_KEY`, ciphertext stored in PG
+- `valueFrom: {kind: stored}` + `value: sk-...` — sealed (XAES-256-GCM)
+  under the owner scope's data key; data keys are wrapped by
+  `RELAY_MASTER_KEY` (rotation: `/api/secret-keys`, `relay secret`)
 
 Every write triggers a PG NOTIFY; the listener fans out to all pods within
 ~1s. **No manual `/reload` needed** for CRUD — `/reload` is a manual
@@ -695,7 +709,7 @@ use live numbers for SLO conversations.
 
 ## Code style (Go)
 
-- Go 1.26+. Module: `github.com/wyolet/relay` (sdk + jobq are separate
+- Go 1.26+. Module: `github.com/wyolet/relay` (sdk, jobq, auth, secret are separate
   modules under the root `go.work`).
 - Hot-path code must be allocation-conscious. Use `sync.Pool` for buffers;
   avoid string conversions; reuse header maps.

@@ -21,7 +21,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // RefSource enumerates the OAuth credentials to keep fresh. Injected by

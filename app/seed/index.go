@@ -20,7 +20,7 @@ import (
 // RELAY_CATALOG_INDEX_URL is unset. The index maps schema channels to the
 // newest catalog release published for them, so a relay only ever
 // resolves "latest" within the apiVersion it can parse.
-const DefaultCatalogIndexURL = "https://raw.githubusercontent.com/wyolet/relay-catalog/main/index.yaml"
+const DefaultCatalogIndexURL = "https://catalog.wyolet.com/index.yaml"
 
 // versionFile is the stamp catalog-embedding images write next to the
 // bundled data tree (Dockerfile writes CATALOG_REF into it). Its presence

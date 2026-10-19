@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-modules=(. jobq auth)
+modules=(. jobq auth secret)
 root=github.com/wyolet/relay
 
 changed=()
@@ -17,7 +17,7 @@ if [ "${AFFECTED:-}" = 1 ]; then
   mapfile -t changed
   for f in "${changed[@]}"; do
     case "$f" in
-      migrations/*|*go.mod|*go.sum|go.work*|Makefile|.github/workflows/ci.yml|scripts/integration-pkgs.sh|scripts/ci-dev.sh)
+      migrations/*|*go.mod|*go.sum|go.work*|Makefile|.github/workflows/ci-dev.yml|scripts/integration-pkgs.sh|scripts/ci-dev.sh)
         AFFECTED=0; break ;;
     esac
   done
@@ -33,7 +33,7 @@ done
 for m in "${modules[@]}"; do
   # The root module's tree also holds the other modules; they are listed on their own.
   mapfile -t dirs < <(cd "$m" && grep -rl --include='*_test.go' '^//go:build integration' . | sed 's#/[^/]*$##' \
-    | { if [ "$m" = . ]; then grep -vE '^\./(jobq|auth|sdk)(/|$)'; else cat; fi; } | sort -u)
+    | { if [ "$m" = . ]; then grep -vE '^\./(jobq|auth|sdk|secret)(/|$)'; else cat; fi; } | sort -u)
   [ "${#dirs[@]}" -gt 0 ] || continue
   # One line per test binary: "<package>.test <deps...>".
   (cd "$m" && go list -tags=integration -test -f '{{.ImportPath}} {{join .Deps " "}}' "${dirs[@]}") \

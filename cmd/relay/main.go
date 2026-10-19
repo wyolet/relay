@@ -61,6 +61,8 @@ func main() {
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
+	// Loads the secret key ring, keeps it fresh and rewrites stale stored secrets.
+	go stores.Stored.Run(listenerCtx)
 	// hydrateLoop launches below, after settings-change subscribers are
 	// registered — its first Hydrate runs settings.reload, which notifies
 	// subscribers with the stored values. Registering after it would race

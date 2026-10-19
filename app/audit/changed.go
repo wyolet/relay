@@ -64,6 +64,8 @@ type Row struct {
 	Resource Resource
 	Status   string // empty = StatusAllowed
 	Fields   []string
+	// Code is the HTTP status the row records; 0 takes the request's. A request that failed part-way sets it on the changes that did happen.
+	Code int
 }
 
 // RecordEach replaces the request's single row with one per change: a bulk

@@ -140,28 +140,122 @@ ON CONFLICT (id) DO UPDATE
     WHERE sqlc.narg('expected_version')::bigint IS NULL OR secrets.resource_version = sqlc.narg('expected_version')::bigint
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
--- secret_values: generic stored-secret value store (pkg/secret "stored").
+-- secret_values: generic stored-secret value store (app/secret). A sealed
+-- row carries its scope and the data key that sealed it; a legacy row (dek_id
+-- NULL) is AES-GCM under the master key with a separate nonce.
 
 -- name: GetSecretValue :one
-SELECT ciphertext, nonce, key_version FROM secret_values WHERE id = $1;
+SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1;
 
--- name: UpsertSecretValue :exec
-INSERT INTO secret_values (id, ciphertext, nonce, key_version, updated_at)
-VALUES ($1, $2, $3, $4, NOW())
+-- name: LockSecretValue :one
+SELECT ciphertext, nonce, scope, dek_id FROM secret_values WHERE id = $1 FOR UPDATE;
+
+-- LockSecretOwner reads the owner of the host key with this id, which decides the scope of a legacy row, and holds the row until the transaction ends so an owner change waits for a write that used the old owner. Take it before the secret_values row: host key writes lock secrets first.
+-- name: LockSecretOwner :one
+SELECT COALESCE(metadata->'owner'->>'kind', '')::text AS owner_kind,
+       COALESCE(metadata->'owner'->>'id', '')::text   AS owner_id
+FROM secrets WHERE id = $1 FOR SHARE;
+
+-- name: UpsertSealedSecretValue :exec
+INSERT INTO secret_values (id, ciphertext, nonce, scope, dek_id, updated_at)
+VALUES ($1, $2, NULL, $3, $4, NOW())
 ON CONFLICT (id) DO UPDATE SET
-    ciphertext  = EXCLUDED.ciphertext,
-    nonce       = EXCLUDED.nonce,
-    key_version = EXCLUDED.key_version,
-    updated_at  = NOW();
-
--- name: ListSecretValuesForRotation :many
-SELECT id, ciphertext, nonce, key_version FROM secret_values ORDER BY id;
+    ciphertext = EXCLUDED.ciphertext,
+    nonce      = NULL,
+    scope      = EXCLUDED.scope,
+    dek_id     = EXCLUDED.dek_id,
+    updated_at = NOW();
 
 -- name: DeleteSecretValue :exec
 DELETE FROM secret_values WHERE id = $1;
 
--- name: MaxSecretValueKeyVersion :one
-SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values;
+-- ListStaleSecretValues pages through rows the rewriter should move: legacy
+-- rows and rows under a data key that is no longer Primary.
+-- name: ListStaleSecretValues :many
+SELECT sv.id, sv.ciphertext
+FROM secret_values sv
+LEFT JOIN secret_data_keys k ON k.id = sv.dek_id
+WHERE sv.id > sqlc.arg('after')::text AND (sv.dek_id IS NULL OR k.state <> 'primary')
+ORDER BY sv.id
+LIMIT sqlc.arg('max_rows');
+
+-- name: ListSecretValues :many
+SELECT id, ciphertext, nonce, dek_id FROM secret_values
+WHERE id > sqlc.arg('after')::text
+ORDER BY id
+LIMIT sqlc.arg('max_rows');
+
+-- name: ListSealedSecretValues :many
+SELECT id, ciphertext, scope FROM secret_values
+WHERE dek_id IS NOT NULL AND id > sqlc.arg('after')::text
+ORDER BY id
+LIMIT sqlc.arg('max_rows');
+
+-- AllowLegacySecretWrite lets the current transaction write legacy-shape
+-- rows past the secret_values trigger; only the downgrade path calls it.
+-- name: AllowLegacySecretWrite :exec
+SELECT set_config('relay.secret_legacy_write', 'on', true);
+
+-- name: ReplaceSecretValueLegacy :execrows
+UPDATE secret_values
+SET ciphertext = $2, nonce = $3, key_version = 1, scope = NULL, dek_id = NULL, updated_at = NOW()
+WHERE id = $1 AND ciphertext = sqlc.arg('previous');
+
+-- name: CountLegacySecretValues :one
+SELECT count(*) FROM secret_values WHERE dek_id IS NULL;
+
+-- CountSealedSecretValues counts the rows migration 34's down refuses: sealed, or without the nonce a legacy row needs.
+-- name: CountSealedSecretValues :one
+SELECT count(*) FROM secret_values WHERE dek_id IS NOT NULL OR nonce IS NULL;
+
+-- name: CountSecretValuesByDataKey :many
+SELECT dek_id, count(*) AS rows FROM secret_values WHERE dek_id IS NOT NULL GROUP BY dek_id;
+
+-- secret_data_keys / secret_keyring: the data keys and target KEK behind
+-- app/secret's key ring.
+
+-- name: ListSecretDataKeys :many
+SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys ORDER BY created_at, id;
+
+-- name: GetSecretDataKey :one
+SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys WHERE id = $1;
+
+-- name: GetPrimarySecretDataKey :one
+SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys WHERE scope = $1 AND state = 'primary';
+
+-- name: LockPrimarySecretDataKey :one
+SELECT id FROM secret_data_keys WHERE scope = $1 AND state = 'primary' FOR UPDATE;
+
+-- name: DemoteSecretDataKey :exec
+UPDATE secret_data_keys SET state = 'decrypt', demoted_at = NOW(), updated_at = NOW() WHERE id = $1;
+
+-- name: InsertSecretDataKey :exec
+INSERT INTO secret_data_keys (id, scope, state, kek_id, wrapped) VALUES ($1, $2, 'primary', $3, $4);
+
+-- name: UpdateSecretDataKeyWrapped :execrows
+UPDATE secret_data_keys
+SET kek_id = sqlc.arg('to_kek'), wrapped = $2, updated_at = NOW()
+WHERE id = $1 AND kek_id = sqlc.arg('from_kek') AND state <> 'destroyed';
+
+-- LockSecretDataKeyForDestroy reads a key's state under a row lock and
+-- whether it was demoted at least min_age_seconds ago by the database clock.
+-- name: LockSecretDataKeyForDestroy :one
+SELECT state,
+       (demoted_at IS NOT NULL AND demoted_at <= NOW() - make_interval(secs => sqlc.arg('min_age_seconds')::float8))::bool AS old_enough
+FROM secret_data_keys WHERE id = $1 FOR UPDATE;
+
+-- name: CountSecretValuesUsingDataKey :one
+SELECT count(*) FROM secret_values WHERE dek_id = $1;
+
+-- name: DestroySecretDataKey :exec
+UPDATE secret_data_keys SET state = 'destroyed', wrapped = NULL, updated_at = NOW() WHERE id = $1;
+
+-- name: GetSecretKeyringTarget :one
+SELECT target_kek_id FROM secret_keyring WHERE singleton;
+
+-- name: SetSecretKeyringTarget :execrows
+UPDATE secret_keyring SET target_kek_id = sqlc.arg('target')
+WHERE singleton AND target_kek_id IS NOT DISTINCT FROM sqlc.narg('expected')::bytea;
 
 -- name: UpsertModel :execrows
 INSERT INTO models (id, name, display_name, metadata, spec, updated_at)

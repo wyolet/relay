@@ -15,6 +15,8 @@ Branch off `dev` and open the PR against `dev`. Keep branches short-lived: a PR 
 
 ## CI tiers
 
+Two workflows, so a run lists only the jobs its tier has: `.github/workflows/ci-dev.yml` (`CI dev`) runs the light tier on PRs into any branch other than `main`; `.github/workflows/ci.yml` (`CI`) runs the full tier on everything else.
+
 | Event | Runs |
 |---|---|
 | PR into `dev` (or any branch other than `main`) | one `dev` job: gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
@@ -23,11 +25,11 @@ Branch off `dev` and open the PR against `dev`. Keep branches short-lived: a PR 
 | PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
 | weekly schedule on `main` | the security scans |
 
-The `dev` job runs its parts in parallel through `scripts/ci-dev.sh`, each part in its own log group, with a summary table at the end; it fails when any part fails. Its integration part runs only the integration-tagged packages (`scripts/integration-pkgs.sh`) whose test binary depends on a changed package, without coverage. A change to migrations, module files, the Makefile, `ci.yml` or those scripts runs all of them. The unit tests are a separate part, so integration doesn't rerun them. Locally: `scripts/ci-dev.sh lint test integration` (integration and ClickHouse need `RELAY_TEST_PG_DSN`, `RELAY_TEST_REDIS_ADDR` and `RELAY_TEST_CH_DSN`; `CHANGED_FROM=<commit>` limits integration to what changed since it).
+The `dev` job runs its parts in parallel through `scripts/ci-dev.sh`, each part in its own log group, with a summary table at the end; it fails when any part fails. Its integration part runs only the integration-tagged packages (`scripts/integration-pkgs.sh`) whose test binary depends on a changed package, without coverage. A change to migrations, module files, the Makefile, `ci-dev.yml` or those scripts runs all of them. The unit tests are a separate part, so integration doesn't rerun them. Locally: `scripts/ci-dev.sh lint test integration` (integration and ClickHouse need `RELAY_TEST_PG_DSN`, `RELAY_TEST_REDIS_ADDR` and `RELAY_TEST_CH_DSN`; `CHANGED_FROM=<commit>` limits integration to what changed since it).
 
-On the cluster, PRs into `dev` run the `dev` job on the warm pool `relay-ci-warm` (a node-local Go and lint cache shared by its pods, with Postgres, Valkey and ClickHouse sidecars) when the repository variable `CI_WARM_POOL` is `on`. Otherwise, and for PRs into any other branch (the warm pool's job hook admits only PRs into `dev`), it runs on the cold `relay-ci-integration` pool. Set the variable to anything else to move off the warm pool, for instance when its node is down. The full tier never uses the warm cache.
+On the cluster, PRs into `dev` run the `dev` job on the warm pool `relay-ci-warm` (a node-local Go and lint cache shared by its pods, with Postgres, Valkey and ClickHouse sidecars) when the repository variable `CI_WARM_POOL` is `on`. Otherwise, and for PRs into any other branch or a dispatched run (the warm pool's job hook admits only PRs into `dev`), it runs on the cold `relay-ci-integration` pool. Set the variable to anything else to move off the warm pool, for instance when its node is down. The full tier never uses the warm cache.
 
-The `changes` job in `.github/workflows/ci.yml` decides which jobs a run needs. Skipped jobs report as passed, so `changes` itself must stay a required check: if it fails, everything behind it is skipped.
+The `changes` job in each workflow decides which of its jobs a run needs. Jobs are gated with `if:` rather than workflow-level `paths`, so every required check reports on every PR; skipped jobs report as passed, so `changes` itself must stay a required check: if it fails, everything behind it is skipped. Both workflows keep the job names the rulesets require (`changes`, `dev`, `boot` in `ci-dev.yml`; the `main` list in `ci.yml`).
 
 Docs and markdown changes run nothing beyond `changes`.
 
@@ -59,7 +61,7 @@ A fix must not loosen a test to make it pass. If a test changes, the PR says why
 
 A red full run on `dev` also starts `.github/workflows/fix-dev.yml`, once per failing commit. Claude, reached through relay, reproduces the failure with the failing test only, bisects the range, and takes exactly one outcome:
 
-- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. Before pushing it reruns the failing test or check and builds and vets the packages it touched; the full suite is left to the PR's CI. Its PR gets the full tier dispatched on its branch, since a PR opened with the workflow token starts no CI.
+- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. Before pushing it reruns the failing test or check and builds and vets the packages it touched; the full suite is left to the PR's CI. A PR opened with the workflow token starts no CI, so the fixer dispatches both workflows on its branch: `ci.yml` tests the fix, and `ci-dev.yml`, with every part on, reports the checks `dev` requires. `ci-dev.yml` is dispatched by id, since a workflow not yet on `main` can't be dispatched by name.
 - an issue labelled `needs-decision` with the failure, the culprit, the root cause and the options, when the fix isn't small or needs a design decision. Nothing else.
 
 It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its token has contents, pull-request and issue write only: no `actions` and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`.
@@ -107,7 +109,7 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 `versions.env` pins the admin UI and the catalog the image bundles.
 
 - `make ui-pin UI_VERSION=vX.Y.Z` downloads the relay-ui release tarball, verifies its signed attestation with `gh attestation verify`, and writes the version and the tarball's sha256. The image build, `make ui-fetch` and the boot smoke refuse a tarball that doesn't match the hash; a bare `docker build` needs both `UI_VERSION` and `UI_SHA256` as build args. `make image-assets-check` shows the check failing on a wrong or empty hash.
-- `CATALOG_VERSION` is bumped by hand. The catalog source archive is not hash-checked.
+- `make catalog-pin CATALOG_VERSION=vX.Y.Z` downloads the relay-catalog release's data tarball, verifies its signed attestation and its published `.sha256`, and writes the version and the tarball's sha256. The image build and the boot smoke refuse a tarball that doesn't match `CATALOG_SHA256`; a bare `docker build` needs both `CATALOG_REF` and `CATALOG_SHA256` as build args. Only release tags from v0.1.15 publish a data tarball.
 - Base images in the `Dockerfile` are pinned as `tag@sha256:digest`; Renovate updates the digests and opens its PRs against `dev`.
 
 ## Branch rules

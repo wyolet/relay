@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/secret"
 )
 
 // Every secret.Ref a registered section holds must come back from

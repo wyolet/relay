@@ -33,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/secret/aead"
 )
 
 const flushPad = 1500 * time.Millisecond // 1s debounce + safety margin
@@ -242,42 +243,14 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 		t.Errorf("hostkey resolved value mismatch: got %q", got.Resolved)
 	}
 
-	if v := stores.HostKey.KeyVersion(); v != 1 {
-		t.Errorf("expected key version 1 pre-rotate, got %d", v)
-	}
-	newKey := []byte(strings.Repeat("n", 32))
-	res, err := stores.HostKey.Rotate(ctx, newKey)
+	// The value lives in secret_values keyed by the HostKey id, sealed under
+	// the owner's data key.
+	row, err := gen.New(pool).GetSecretValue(ctx, k.Meta.ID)
 	if err != nil {
-		t.Fatalf("rotate: %v", err)
+		t.Fatalf("read secret value: %v", err)
 	}
-	if res.Rotated != 1 || res.NewVersion != 2 {
-		t.Errorf("rotate result: got %+v want {1, 2}", res)
-	}
-	if v := stores.HostKey.KeyVersion(); v != 2 {
-		t.Errorf("expected key version 2 post-rotate, got %d", v)
-	}
-
-	// After rotation the in-process key is the new one — Get must still
-	// resolve the same cleartext.
-	got2, err := stores.HostKey.Get(ctx, k.Meta.ID)
-	if err != nil {
-		t.Fatalf("get hostkey post-rotate: %v", err)
-	}
-	if got2.Resolved != "sk-test-secret" {
-		t.Errorf("post-rotate resolved mismatch: got %q", got2.Resolved)
-	}
-
-	// Stored ciphertext now lives in secret_values (pkg/secret), keyed by
-	// the HostKey id; rotation stamps the new key_version there.
-	rows, err := gen.New(pool).ListSecretValuesForRotation(ctx)
-	if err != nil {
-		t.Fatalf("list rotated: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 stored secret value, got %d", len(rows))
-	}
-	if rows[0].KeyVersion != 2 {
-		t.Errorf("secret_values key_version: got %d want 2", rows[0].KeyVersion)
+	if !aead.IsSealed(row.Ciphertext) || !row.DekID.Valid || row.Scope.String != hostkey.SecretScope(k.Meta.Owner) {
+		t.Errorf("secret_values row: sealed=%v dek=%v scope=%q", aead.IsSealed(row.Ciphertext), row.DekID.Valid, row.Scope.String)
 	}
 }
 

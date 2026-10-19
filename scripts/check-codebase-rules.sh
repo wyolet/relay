@@ -43,6 +43,14 @@ echo "auth purity — the auth module imports nothing from relay's root module, 
 hits=$(grep -rnE '"github\.com/wyolet/relay[/"]' auth/ --include='*.go' | grep -vE '"github\.com/wyolet/relay/auth[/"]' || true)
 if [ -n "$hits" ]; then note "auth imports relay code (must stay standalone):"; echo "$hits"; else ok "clean"; fi
 
+echo "secret purity — the secret module imports nothing from relay's root module, app/, internal/, pkg/, sdk/, jobq/, or auth/:"
+hits=$(grep -rnE '"github\.com/wyolet/relay[/"]' secret/ --include='*.go' | grep -vE '"github\.com/wyolet/relay/secret[/"]' || true)
+if [ -n "$hits" ]; then note "secret imports relay code (must stay standalone):"; echo "$hits"; else ok "clean"; fi
+
+echo "secret consumers — auth/, sdk/ and jobq/ import nothing from the secret module:"
+hits=$(grep -rnE '"github\.com/wyolet/relay/secret[/"]' auth/ sdk/ jobq/ --include='*.go' || true)
+if [ -n "$hits" ]; then note "a standalone module imports the secret module (only relay depends on it):"; echo "$hits"; else ok "clean"; fi
+
 echo "license boundary — app/ never imports the verifier (it receives app/license.Checker):"
 hits=$(grep -rn 'wyolet/relay/internal/license' app/ --include='*.go' || true)
 if [ -n "$hits" ]; then note "app/ imports internal/license (the gate seam is app/license):"; echo "$hits"; else ok "clean"; fi
