@@ -9,7 +9,8 @@ its `.sha256`. No git, GitHub API, or credentials are involved, so any host
 that serves this layout works. `catalog-server` serves it from a git mirror of
 [`wyolet/relay-catalog`](https://github.com/wyolet/relay-catalog).
 
-The examples use `https://catalog.example.com` for the server's address.
+Relay defaults to the public server at `https://catalog.wyolet.com`.
+The examples use `https://catalog.example.com` for a server you host yourself.
 
 ## Paths
 
@@ -95,8 +96,10 @@ RELAY_CATALOG_URL=https://catalog.example.com/releases/{version}/relay-catalog-d
 
 `RELAY_CATALOG_INDEX_URL` is read only when `RELAY_CATALOG_VERSION` is `latest`;
 a pinned tag goes straight to `RELAY_CATALOG_URL`, with `{version}` replaced by
-the tag. Tags before v0.1.15 have no data tarball, so a relay pinned to one
-needs `RELAY_CATALOG_URL` pointing at a source archive instead.
+the tag. Relay fetches `<url>.sha256` first and extracts the tarball only when
+its sha256 matches; a missing or mismatching sum fails the download. Tags
+before v0.1.15 have no data tarball, so a relay pinned to one can't download
+it: seed it from a checkout of the tag with `RELAY_CATALOG_DIR` instead.
 
 ### Go SDK
 

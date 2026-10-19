@@ -104,7 +104,8 @@ relay:
   # keeps the image-baked seed-if-empty behavior only.
   catalogVersion: ""
   # -- Override the catalog archive URL template ("{version}" substituted).
-  # For airgapped mirrors; empty uses the wyolet/relay-catalog GitHub archive.
+  # For airgapped mirrors; empty uses https://catalog.wyolet.com. The archive
+  # must have its sha256sum file at the same URL plus ".sha256".
   catalogUrl: ""
   # -- Extra raw env vars (name/value) appended to the relay container and the migration Job.
   extraEnv: []

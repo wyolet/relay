@@ -109,7 +109,7 @@ A hotfix is a PR into `main`, released like any other `main` commit. Afterwards,
 `versions.env` pins the admin UI and the catalog the image bundles.
 
 - `make ui-pin UI_VERSION=vX.Y.Z` downloads the relay-ui release tarball, verifies its signed attestation with `gh attestation verify`, and writes the version and the tarball's sha256. The image build, `make ui-fetch` and the boot smoke refuse a tarball that doesn't match the hash; a bare `docker build` needs both `UI_VERSION` and `UI_SHA256` as build args. `make image-assets-check` shows the check failing on a wrong or empty hash.
-- `CATALOG_VERSION` is bumped by hand. The catalog source archive is not hash-checked.
+- `make catalog-pin CATALOG_VERSION=vX.Y.Z` downloads the relay-catalog release's data tarball, verifies its signed attestation and its published `.sha256`, and writes the version and the tarball's sha256. The image build and the boot smoke refuse a tarball that doesn't match `CATALOG_SHA256`; a bare `docker build` needs both `CATALOG_REF` and `CATALOG_SHA256` as build args. Only release tags from v0.1.15 publish a data tarball.
 - Base images in the `Dockerfile` are pinned as `tag@sha256:digest`; Renovate updates the digests and opens its PRs against `dev`.
 
 ## Branch rules

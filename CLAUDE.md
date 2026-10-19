@@ -264,7 +264,8 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
 - `RELAY_CATALOG_VERSION` — pins the seeded catalog to a relay-catalog
   release tag. At hydrate the stored `catalog-source` settings marker is
   compared; on mismatch (or empty PG) the archive is fetched
-  (`RELAY_CATALOG_URL` template overrides the GitHub default) and
+  from the catalog server and checked against its `.sha256`
+  (`RELAY_CATALOG_URL` template overrides the default) and
   re-seeded, then the marker updated. Layering-safe: dirty rows skipped,
   overlays re-merge. Fetch failure on a non-empty catalog logs and boots
   with existing rows. This is the production catalog-upgrade path.

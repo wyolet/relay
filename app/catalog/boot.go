@@ -75,8 +75,9 @@ type BootstrapOptions struct {
 
 	// CatalogURL overrides the archive URL template used by
 	// CatalogVersion fetches ("{version}" substituted). Empty uses
-	// seed.DefaultCatalogURLTemplate (the wyolet/relay-catalog GitHub
-	// archive). Point it at a mirror for airgapped deployments.
+	// seed.DefaultCatalogURLTemplate. The archive must have its sha256sum
+	// file at the same URL plus ".sha256". Point it at a mirror for
+	// airgapped deployments.
 	CatalogURL string
 
 	// CatalogIndexURL overrides where "latest"/"auto" resolves the
