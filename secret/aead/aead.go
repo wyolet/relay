@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 )
 
 // KeySize is the key length in bytes for Seal, Open, OpenLegacy and ParseKey.
@@ -55,6 +56,9 @@ func Seal(key []byte, keyID [16]byte, plaintext, aad []byte) ([]byte, error) {
 	x, err := newSealCipher(key)
 	if err != nil {
 		return nil, err
+	}
+	if len(plaintext) > math.MaxInt-overhead {
+		return nil, errors.New("aead: plaintext too large")
 	}
 	out := make([]byte, headerSize+nonceSize, overhead+len(plaintext))
 	copy(out, magic[:])
