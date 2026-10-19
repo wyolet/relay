@@ -44,6 +44,9 @@ env:
   GOOD: ${{ inputs.good }}
   RUN_ID: ${{ inputs.run_id }}
   BASE: ${{ inputs.base }}
+  # A pull request opened with the CI app's token starts its own CI; one opened
+  # with the workflow token starts none.
+  HAS_APP: ${{ vars.RELAY_CI_APP_ID != '' && secrets.RELAY_CI_APP_KEY != '' }}
 
 jobs:
   guard:
@@ -197,6 +200,22 @@ jobs:
       - name: Install Claude Code
         run: npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
 
+      # Only for gh; the push goes through the checkout's credentials. No
+      # actions write, so Claude still cannot start runs.
+      - id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELAY_CI_APP_ID }}
+          private-key: ${{ secrets.RELAY_CI_APP_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: write
+          permission-actions: read
+
+      - if: env.HAS_APP != 'true'
+        run: echo "::warning::RELAY_CI_APP_ID or RELAY_CI_APP_KEY is not set; a fix pull request won't start CI on its own"
+
       # Plain `claude -p` in bare mode: no MCP servers, hooks, plugins, CLAUDE.md
       # auto-discovery or settings from the checked-out branch, one model for
       # every call. Bash is unrestricted on this throwaway runner; the job
@@ -204,7 +223,7 @@ jobs:
       - name: Claude
         id: claude
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
           ANTHROPIC_BASE_URL: ${{ vars.DEV_FIXER_BASE_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.DEV_FIXER_RELAY_KEY }}
           MODEL: ${{ vars.DEV_FIXER_MODEL || 'claude-sonnet-5-5' }}
@@ -272,9 +291,10 @@ jobs:
           echo "failed tool results:"
           jq -c 'select(.type == "user") | .message.content[]? | select(.type == "tool_result" and .is_error == true) | .content' "$OUT" | head -10 | cut -c1-300
 
-  # A PR opened with the workflow token starts no CI. The full tier dispatched
-  # on its branch tests the fix; ci-dev.yml puts dev's required checks on its
-  # head commit. A workflow not yet on main is dispatched by id, not by name.
+  # Without the CI app, the PR is opened with the workflow token and starts no
+  # CI. The full tier dispatched on its branch tests the fix; ci-dev.yml puts
+  # dev's required checks on its head commit. A workflow not yet on main is
+  # dispatched by id, not by name.
   verify:
     needs: [guard, fix]
     if: always() && needs.guard.outputs.run == 'true'
