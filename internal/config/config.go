@@ -134,6 +134,9 @@ type Config struct {
 	// ControlListenHost is the address the control listener binds (RELAY_CONTROL_LISTEN_HOST, default ListenHost), so the admin plane can stay private while inference is reachable.
 	ControlListenHost string
 
+	// PprofAddr is the host:port the runtime profiling listener binds (RELAY_PPROF_ADDR). Empty disables it.
+	PprofAddr string
+
 	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
 	// separated list of exact origin strings (no wildcards — credentialed
 	// CORS forbids them). Empty disables CORS entirely.
@@ -428,6 +431,9 @@ func Load() (*Config, error) {
 		cfg.ControlPort = "8081"
 	}
 	if err := loadListenHosts(cfg); err != nil {
+		return nil, err
+	}
+	if err := loadPprofAddr(cfg); err != nil {
 		return nil, err
 	}
 

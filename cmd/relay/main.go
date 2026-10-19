@@ -150,8 +150,10 @@ func main() {
 			selector, hostHealth)
 	}
 
-	exitCode = waitForStop(inferErr, ctrlErr)
-	shutdown(cfg, ctrlSrv, inferSrv, cancelListener, batchQueue)
+	pprofSrv, pprofErr := startPprof(cfg)
+
+	exitCode = waitForStop(inferErr, ctrlErr, pprofErr)
+	shutdown(cfg, ctrlSrv, inferSrv, pprofSrv, cancelListener, batchQueue)
 }
 
 func buildAdapterSpecs() []*adapter.Spec {

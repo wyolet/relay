@@ -81,7 +81,7 @@ func openStorage(bootCtx context.Context, cfg *config.Config) *storagemod.Storag
 	return st
 }
 
-func waitForStop(inferErr, ctrlErr <-chan error) int {
+func waitForStop(inferErr, ctrlErr, pprofErr <-chan error) int {
 	exitCode := 0
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
@@ -98,11 +98,16 @@ func waitForStop(inferErr, ctrlErr <-chan error) int {
 			exitCode = 1
 			slog.Error("relay control: server error", "err", err)
 		}
+	case err := <-pprofErr:
+		if err != nil && err != http.ErrServerClosed {
+			exitCode = 1
+			slog.Error("relay pprof: server error", "err", err)
+		}
 	}
 	return exitCode
 }
 
-func shutdown(cfg *config.Config, ctrlSrv, inferSrv *http.Server, cancelListener context.CancelFunc, batchQueue *jobq.Queue) {
+func shutdown(cfg *config.Config, ctrlSrv, inferSrv, pprofSrv *http.Server, cancelListener context.CancelFunc, batchQueue *jobq.Queue) {
 	deadline := time.Duration(cfg.ShutdownDeadlineS) * time.Second
 	if deadline == 0 {
 		deadline = 15 * time.Second
@@ -113,6 +118,9 @@ func shutdown(cfg *config.Config, ctrlSrv, inferSrv *http.Server, cancelListener
 		_ = ctrlSrv.Shutdown(shutCtx)
 	}
 	_ = inferSrv.Shutdown(shutCtx)
+	if pprofSrv != nil {
+		_ = pprofSrv.Shutdown(shutCtx)
+	}
 	cancelListener()
 	// Drain in-flight batch jobs so the graceful-requeue path can run;
 	// without this the process exits mid-handler and interrupted jobs sit

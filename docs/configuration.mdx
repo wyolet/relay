@@ -74,6 +74,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RELAY_OTLP_ENDPOINT` | _(empty)_ | OpenTelemetry collector endpoint for traces. |
+| `RELAY_PPROF_ADDR` | _(empty: off)_ | `host:port` of a separate listener serving the Go runtime profiling endpoints under `/debug/pprof/`. They have no authentication, so the address must not be reachable from outside the cluster: bind `127.0.0.1` and use `kubectl port-forward`, for example. On the Helm chart, set it through `relay.extraEnv`. |
 
 ### SSO / OIDC login
 
