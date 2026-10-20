@@ -226,9 +226,7 @@ func (d Deps) fireUsageFailure(ctx context.Context, kind, msg string) {
 	}
 	go func() {
 		lc.MarkEnd()
-		fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		d.Lifecycle.Finalize(fctx, lc, &lifecycle.PostFlightEvent{
+		d.Lifecycle.Finalize(context.Background(), lc, &lifecycle.PostFlightEvent{
 			ErrorKind:    kind,
 			ErrorMessage: msg,
 		})
