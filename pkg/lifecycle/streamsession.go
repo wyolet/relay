@@ -122,13 +122,14 @@ func (s *StreamSession) Frames() int {
 	return s.frames
 }
 
-// Finish closes the session: any buffered partial frame is flushed, each
-// observer's Result is attached to the Context under its name (the Registry
-// is still the sole writer), the summarizer's Summary (set before observers'
-// Result runs, so they read it) and rate-limit tokens are stashed on the
-// Context, and the request is marked filled so the post-flight Finalize
-// reuses the same collection instead of re-producing it. Idempotent — the echo response-writer Finishes early to splice usage,
-// then the runner's post-flight Finishes again (a no-op). Nil-safe.
+// Finish closes the session: any buffered partial frame is flushed, the
+// summarizer's Summary is stashed on the Context (before observers' Result
+// runs, so they read it) along with the rate-limit tokens, each observer's
+// Result is attached under its name (the Registry is still the sole writer),
+// and the request is marked filled so the post-flight Finalize reuses the
+// same collection instead of re-producing it. Idempotent — the echo
+// response-writer Finishes early to splice usage, then the runner's
+// post-flight Finishes again (a no-op). Nil-safe.
 func (s *StreamSession) Finish() {
 	if s == nil || s.lc == nil || s.finished {
 		return
