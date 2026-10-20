@@ -50,6 +50,7 @@ type Adapter interface {
 
 // Request is the pre-resolved input. Built by the handler/router.
 type Request struct {
+	// Body is the upstream wire body. Run sets it to nil once an upstream response is accepted: no retry can follow, and a long stream must not pin it.
 	Body    []byte
 	Headers http.Header
 
@@ -523,6 +524,8 @@ func (p *Pipeline) makeResult(
 	call *upstreamCall,
 ) *Result {
 	status := resp.StatusCode
+	requestBytes := len(req.Body)
+	req.Body = nil
 	if req.Lifecycle != nil {
 		req.Lifecycle.Streamed = req.Stream
 		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
@@ -581,7 +584,7 @@ func (p *Pipeline) makeResult(
 				req.Lifecycle.MarkEnd()
 				if read.done {
 					body, frames := finish()
-					go p.runPostFlight(req, inbound, acq, body, frames, status, read.eof)
+					go p.runPostFlight(req, inbound, acq, body, frames, requestBytes, status, read.eof)
 					err = resp.Body.Close()
 					call.release()
 					return
@@ -593,7 +596,7 @@ func (p *Pipeline) makeResult(
 					body, frames := finish()
 					_ = resp.Body.Close()
 					call.release()
-					p.runPostFlight(req, inbound, acq, body, frames, status, complete)
+					p.runPostFlight(req, inbound, acq, body, frames, requestBytes, status, complete)
 				}()
 			})
 			return err
@@ -614,6 +617,7 @@ func (p *Pipeline) runPostFlight(
 	acq *policy.Acquisition,
 	body []byte,
 	sessFrames int,
+	requestBytes int,
 	status int,
 	complete bool,
 ) {
@@ -644,7 +648,7 @@ func (p *Pipeline) runPostFlight(
 		if body != nil {
 			frames = countSSEFrames(body)
 		}
-		limitTokens = withUnreportedFloor(tokens, len(req.Body), frames)
+		limitTokens = withUnreportedFloor(tokens, requestBytes, frames)
 	}
 
 	// Finalize before the commits: usage/payload hooks need the response body.

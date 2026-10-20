@@ -109,7 +109,7 @@ func extractModelStream(body []byte) (model string, stream bool, err error) {
 // body, performs a minimal JSON parse to extract model and stream, and calls
 // Dispatch with the spec's Name as the inbound shape.
 func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := readRequestBody(r, d.MaxRequestBytes)
 	if err != nil {
 		if httpmw.IsBodyTooLargeError(err) {
 			WriteAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large", err.Error())
@@ -141,4 +141,30 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		ModelName: modelName,
 		Stream:    stream,
 	})
+}
+
+// readRequestBody reads r.Body into one allocation when its declared Content-Length is within limit; io.ReadAll's growth would peak at about twice the body. An unknown or larger length goes through io.ReadAll, where the listener's MaxBytesReader rejects an oversized body.
+func readRequestBody(r *http.Request, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		limit = httpmw.DefaultMaxRequestBytes
+	}
+	cl := r.ContentLength
+	if cl <= 0 || cl > limit {
+		return io.ReadAll(r.Body)
+	}
+	body := make([]byte, cl)
+	if _, err := io.ReadFull(r.Body, body); err != nil {
+		return nil, err
+	}
+	var next [1]byte
+	n, err := io.ReadFull(r.Body, next[:])
+	if n == 0 {
+		if err == io.EOF {
+			return body, nil
+		}
+		return nil, err
+	}
+	// More bytes than declared: keep them, as io.ReadAll would.
+	rest, err := io.ReadAll(r.Body)
+	return append(append(body, next[0]), rest...), err
 }

@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/reqbody"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -94,11 +95,10 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	applyProfile(lc, profile, r.Header)
-	// Retain the inbound body for the payloadlog observer (a reference, not
-	// a copy — in.Body is already the fully-buffered request). The capture
-	// gate (lc.PayloadLog) is set below from the principal: before the proxy
-	// hand-off, or once routing succeeds, so a routing rejection is not captured.
-	lc.RequestBody = in.Body
+	// The body itself is retained on lc only once payload capture is decided
+	// on below (proxy hand-off, or routing success): otherwise nothing past
+	// the upstream call needs more than its length.
+	lc.RequestBytes = len(in.Body)
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
@@ -118,7 +118,10 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// Set before handleProxy: its host resolution reads it to decide
 		// whether to tee the whole streamed body.
 		lc.PayloadLog = PrincipalFrom(ctx).CapturesPayload()
-		r.Body = io.NopCloser(bytes.NewReader(in.Body))
+		if lc.PayloadLog {
+			lc.RequestBody = in.Body
+		}
+		r.Body = reqbody.NewReader(in.Body)
 		handleProxy(d, w, r, in.Inbound, in.ModelName)
 		return
 	}
@@ -150,6 +153,9 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 	lc.PayloadLog = principal.CapturesPayload()
+	if lc.PayloadLog {
+		lc.RequestBody = in.Body
+	}
 
 	inboundSpec := d.Specs.Spec(in.Inbound)
 	if inboundSpec == nil {
