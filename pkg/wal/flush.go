@@ -30,9 +30,14 @@ func (q *Queue[T]) FlushPending() {
 	if q.cfg.MaxSegments > 0 && len(segments) > q.cfg.MaxSegments {
 		excess := segments[:len(segments)-q.cfg.MaxSegments]
 		for _, s := range excess {
+			lines, cerr := CountLines(s)
+			if cerr != nil {
+				q.log.Warn("wal: count lines of dropped segment", "file", filepath.Base(s), "err", cerr)
+			}
 			if rerr := os.Remove(s); rerr == nil {
-				q.log.Warn("wal: dropped oldest segment (maxSegments exceeded)", "file", filepath.Base(s))
+				q.log.Warn("wal: dropped oldest segment (maxSegments exceeded)", "file", filepath.Base(s), "records", lines)
 				q.dropped.Add(1)
+				metrics.AddRecordsLost(q.cfg.Kind, lines)
 			}
 		}
 		segments = segments[len(segments)-q.cfg.MaxSegments:]

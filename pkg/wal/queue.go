@@ -26,6 +26,9 @@ import (
 	"time"
 )
 
+// writeBufferSize bounds how much of a batch reaches the OS per write call.
+const writeBufferSize = 64 << 10
+
 // Config holds the queue's tunables. Dir, FlushInterval, MaxLines and Logger
 // are required; MaxBytes and MaxSegments may be left at zero to disable the
 // byte cap and the disk cap respectively.
@@ -45,8 +48,8 @@ type Config struct {
 	FlushInterval time.Duration
 
 	// MaxSegments caps how many pending segments may accumulate on disk.
-	// When exceeded the oldest are dropped and counted in Dropped(). 0
-	// disables the cap.
+	// When exceeded the oldest are dropped, counted in Dropped(), and their
+	// records in relay_records_lost_total{kind=Kind}. 0 disables the cap.
 	MaxSegments int
 
 	// Kind labels the flush-lag metric and this queue's log lines
@@ -67,6 +70,8 @@ type Queue[T any] struct {
 	writer *bufio.Writer
 	lines  int
 	bytes  int
+
+	lastSegmentNano int64
 
 	// flushMu serializes FlushPending so the boot-time Recover() and the
 	// background ticker can't process (and double-insert) the same segment.
@@ -125,7 +130,11 @@ func (q *Queue[T]) openActive() error {
 	}
 
 	q.active = f
-	q.writer = bufio.NewWriter(f)
+	if q.writer == nil {
+		q.writer = bufio.NewWriterSize(f, writeBufferSize)
+	} else {
+		q.writer.Reset(f)
+	}
 	q.lines = n
 	q.bytes = int(info.Size())
 	return nil
@@ -142,6 +151,55 @@ func (q *Queue[T]) Write(rec T) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	if err := q.appendLocked(b); err != nil {
+		return err
+	}
+	return q.writer.Flush()
+}
+
+// WriteBatch appends recs in order under one lock and flushes once, rotating
+// mid-batch wherever Write would have. A record that fails to marshal is
+// skipped and reported in the returned error; the rest are still written.
+func (q *Queue[T]) WriteBatch(recs []T) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	var marshalErr error
+	skipped := 0
+	for i := range recs {
+		b, err := json.Marshal(recs[i])
+		if err != nil {
+			skipped++
+			if marshalErr == nil {
+				marshalErr = err
+			}
+			continue
+		}
+		if err := q.appendLocked(b); err != nil {
+			return err
+		}
+	}
+	if err := q.writer.Flush(); err != nil {
+		return err
+	}
+	if marshalErr != nil {
+		return fmt.Errorf("wal/%s: marshal: skipped %d of %d records: %w", q.cfg.Kind, skipped, len(recs), marshalErr)
+	}
+	return nil
+}
+
+// appendLocked buffers one record line and rotates once the segment is full.
+// Records count as accepted only after the caller's Flush returns: no fsync,
+// so a process crash loses nothing accepted, a power cut may lose the last
+// OS-buffered window. Must be called with mu held.
+func (q *Queue[T]) appendLocked(b []byte) error {
+	// Hand the OS whole lines, so a crash mid-batch tears at most the record
+	// being written instead of one that straddles two writes.
+	if q.writer.Buffered() > 0 && q.writer.Available() < len(b)+1 {
+		if err := q.writer.Flush(); err != nil {
+			return err
+		}
+	}
 	if _, err := q.writer.Write(b); err != nil {
 		return err
 	}
@@ -150,14 +208,6 @@ func (q *Queue[T]) Write(rec T) error {
 	}
 	q.lines++
 	q.bytes += len(b) + 1
-
-	// Flush to the OS on every write so a process crash / SIGKILL loses
-	// nothing already accepted. (No fsync — power-off may lose the last
-	// OS-buffered window; that's the accepted best-effort bound, recovered
-	// only if the bytes reached disk.)
-	if err := q.writer.Flush(); err != nil {
-		return err
-	}
 
 	if q.lines >= q.cfg.MaxLines || (q.cfg.MaxBytes > 0 && q.bytes >= q.cfg.MaxBytes) {
 		if err := q.rotateLocked(); err != nil {
@@ -182,7 +232,11 @@ func (q *Queue[T]) rotateLocked() error {
 	}
 
 	src := filepath.Join(q.cfg.Dir, ActiveName)
-	dst := filepath.Join(q.cfg.Dir, fmt.Sprintf("%s%d.jsonl", segmentPrefix, time.Now().UnixNano()))
+	// Rotations inside one batch can land on the same clock reading; a
+	// repeated name would rename over the previous segment.
+	nano := max(time.Now().UnixNano(), q.lastSegmentNano+1)
+	q.lastSegmentNano = nano
+	dst := filepath.Join(q.cfg.Dir, fmt.Sprintf("%s%d.jsonl", segmentPrefix, nano))
 	if err := os.Rename(src, dst); err != nil {
 		return err
 	}
