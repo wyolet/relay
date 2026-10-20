@@ -529,9 +529,15 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 		sess = lc.StreamSession()
 	}
 
+	// keepAliveWriter only hands over an enabled KeepAlive, which flushes on every Write; a second Flush would be an empty one per frame.
+	if _, ok := w.(*sse.KeepAlive); ok {
+		flusher = nil
+	}
+	// One Write per frame, separator included: each Write through the keepalive wrapper is its own flush, i.e. a chunk and a syscall. The writer copies the bytes before returning, so buf is reused across frames.
+	var buf []byte
 	writeFrame := func(f []byte) {
-		_, _ = w.Write(f)
-		_, _ = w.Write([]byte("\n\n"))
+		buf = append(append(buf[:0], f...), '\n', '\n')
+		_, _ = w.Write(buf)
 		if flusher != nil {
 			flusher.Flush()
 		}
