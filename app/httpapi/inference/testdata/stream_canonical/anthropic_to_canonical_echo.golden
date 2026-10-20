@@ -1,0 +1,21 @@
+event: generation.created
+data: {"id":"msg_1","model":"test-model"}
+
+event: item.started
+data: {"item_id":"t_0","item_type":"message","index":0}
+
+event: item.delta
+data: {"item_id":"t_0","index":0,"kind":"text","delta":"Hel"}
+
+event: item.delta
+data: {"item_id":"t_0","index":0,"kind":"text","delta":"lo"}
+
+event: item.delta
+data: {"item_id":"t_0","index":0,"kind":"text","delta":" world"}
+
+event: item.completed
+data: {"item_id":"t_0","index":0,"item":{"type":"message","id":"t_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello world"}]}}
+
+event: generation.completed
+data: {"id":"msg_1","status":"completed","finish_reason":"stop","usage":{"input":3,"output":3},"relay_usage":{"request_id":"req-1","timing":{"upstream":{"start":0,"response_start":0,"response_end":0},"end":0}}}
+
