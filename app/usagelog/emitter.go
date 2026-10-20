@@ -9,10 +9,14 @@ import (
 )
 
 // DefaultQueueSize is the default bounded-channel capacity if
-// EmitterOptions.QueueSize is zero. 1024 events comfortably absorbs a
-// brief drain stall (sink slow / disk flush / pipe back-pressure)
-// without blocking the post-flight goroutine.
-const DefaultQueueSize = 1024
+// EmitterOptions.QueueSize is zero: about a second of arrivals at high load,
+// so a drain stall (slow disk, sink swap) doesn't turn into dropped events.
+// The channel holds events by value (about 0.5 KiB each), so this
+// preallocates about 8 MiB.
+const DefaultQueueSize = 16_384
+
+// drainBatchMax caps how many queued events one sink call carries.
+const drainBatchMax = 512
 
 // EmitterOptions tunes Emitter behavior. Zero values are sensible
 // defaults for typical deployments.
@@ -25,7 +29,8 @@ type EmitterOptions struct {
 }
 
 // Emitter is the fan-out point: hooks Emit() events; a single
-// background goroutine drains the queue and writes to each Sink.
+// background goroutine drains the queue in batches and writes each batch
+// to every Sink (WriteBatch when the Sink implements BatchWriter).
 //
 // Drop-on-full preserves the "post-flight never blocks" invariant.
 // Drop counter is exposed via Dropped() for /metrics or assertions.
@@ -135,31 +140,59 @@ func (e *Emitter) Close() {
 
 func (e *Emitter) drain() {
 	defer e.wg.Done()
+	batch := make([]Event, 0, drainBatchMax)
 	for {
 		select {
 		case ev := <-e.queue:
-			e.write(ev)
+			batch = e.fillBatch(append(batch[:0], ev))
+			e.write(batch)
 		case <-e.stop:
 			// Flush what was queued before Close; later racing Emits are lost.
 			for {
-				select {
-				case ev := <-e.queue:
-					e.write(ev)
-				default:
+				batch = e.fillBatch(batch[:0])
+				if len(batch) == 0 {
 					return
 				}
+				e.write(batch)
 			}
 		}
 	}
 }
 
-func (e *Emitter) write(ev Event) {
-	for _, sink := range e.sinks {
-		if err := sink.Write(ev); err != nil {
-			e.log.Warn("usagelog: sink write failed",
-				"err", err,
-				"request_id", ev.RequestID,
-			)
+// fillBatch appends whatever is already queued, up to the batch capacity,
+// without waiting for more.
+func (e *Emitter) fillBatch(batch []Event) []Event {
+	for len(batch) < cap(batch) {
+		select {
+		case ev := <-e.queue:
+			batch = append(batch, ev)
+		default:
+			return batch
 		}
 	}
+	return batch
+}
+
+func (e *Emitter) write(batch []Event) {
+	for _, sink := range e.sinks {
+		if bw, ok := sink.(BatchWriter); ok {
+			if err := bw.WriteBatch(batch); err != nil {
+				e.log.Warn("usagelog: sink batch write failed",
+					"err", err,
+					"events", len(batch),
+				)
+			}
+			continue
+		}
+		for i := range batch {
+			if err := sink.Write(batch[i]); err != nil {
+				e.log.Warn("usagelog: sink write failed",
+					"err", err,
+					"request_id", batch[i].RequestID,
+				)
+			}
+		}
+	}
+	// Release the events' maps and strings; the slice is reused.
+	clear(batch)
 }

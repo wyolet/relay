@@ -46,7 +46,7 @@ func buildUsageLog(listenerCtx context.Context, cfg *config.Config, cat *appcata
 		KV:         kvStore,
 		FilePath:   usagePath,
 		WALDir:     usageWALDir,
-	}), slog.Default())
+	}), cfg.UsageQueueSize, slog.Default())
 	usageReader := usageCtl.Reader()
 	// Emit-time cost: the usage producer prices each event's tokens against
 	// the pricing the plan resolved (id stamped on the lifecycle Context),
