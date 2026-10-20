@@ -4,5 +4,5 @@
     "output": 4
   },
   "finish_reason": "stop",
-  "service_tier": ""
+  "service_tier": "standard"
 }
