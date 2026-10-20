@@ -73,14 +73,14 @@ func TestEmitPruneAndCloseTogether(t *testing.T) {
 			e.Prune()
 		}
 	}()
-	// Retention flipping under the prune loop. Values cycle 1→2→3 so days
-	// is always positive: the test asserts that prune reaches the sink, which
-	// requires days > 0 to pass the guard in Prune().
+	// Retention flipping under the prune loop, through the disabled value 0.
+	// Starting at 1 keeps the first value positive: a flipper that sets 0 before
+	// the direct prune loop runs could otherwise starve every prune.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 500; i++ {
-			e.SetRetentionDays((i % 3) + 1)
+		for i := 1; i <= 500; i++ {
+			e.SetRetentionDays(i % 3)
 		}
 	}()
 
