@@ -14,7 +14,7 @@ What to expect:
 
 ## Supported versions
 
-Security fixes go into the latest minor release line (currently `0.10.x`) and `main`. Older lines are not patched; upgrade to receive fixes. See [upgrading](docs/concepts/upgrade.mdx).
+Security fixes go into the latest minor release line and `main`. Older lines are not patched; upgrade to receive fixes. See [upgrading](docs/concepts/upgrade.mdx).
 
 ## Scope
 
