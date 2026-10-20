@@ -38,6 +38,9 @@ jobs:
       - id: app
         if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        env:
+          # Runners set a proxy; the action refuses to start unless Node is told to use it.
+          NODE_USE_ENV_PROXY: "1"
         with:
           client-id: ${{ vars.RELAY_CI_APP_ID }}
           private-key: ${{ secrets.RELAY_CI_APP_KEY }}
@@ -124,6 +127,9 @@ jobs:
       - id: app
         if: steps.tag.outputs.moved == 'true' && env.HAS_APP == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        env:
+          # Runners set a proxy; the action refuses to start unless Node is told to use it.
+          NODE_USE_ENV_PROXY: "1"
         with:
           client-id: ${{ vars.RELAY_CI_APP_ID }}
           private-key: ${{ secrets.RELAY_CI_APP_KEY }}
