@@ -157,6 +157,12 @@ type Context struct {
 	streamTokens    map[string]int64
 	streamTokensSet bool
 
+	// streamSummary is the session summarizer's result, set by Finish before
+	// stream observers' Result runs so they reuse it instead of translating
+	// every frame a second time.
+	streamSummary    v1.Summary
+	streamSummarySet bool
+
 	// ResponseStatus is the upstream HTTP status the runner stamps at
 	// post-flight, so an observer that runs when the post-flight Hook fan-out
 	// is skipped (a streamed request pre-fills the collected set) can still
@@ -246,4 +252,23 @@ func (c *Context) setStreamTokens(t map[string]int64) {
 	}
 	c.streamTokens = t
 	c.streamTokensSet = true
+}
+
+// StreamSummary returns the usage Summary the StreamSession harvested from
+// the upstream stream, and whether the session has finished. Nil-safe.
+func (c *Context) StreamSummary() (v1.Summary, bool) {
+	if c == nil {
+		return v1.Summary{}, false
+	}
+	return c.streamSummary, c.streamSummarySet
+}
+
+// setStreamSummary records the session's Summary. Package-private: only
+// StreamSession.Finish writes it.
+func (c *Context) setStreamSummary(s v1.Summary) {
+	if c == nil {
+		return
+	}
+	c.streamSummary = s
+	c.streamSummarySet = true
 }
