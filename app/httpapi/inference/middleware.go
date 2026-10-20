@@ -77,8 +77,10 @@ func PrincipalFrom(ctx context.Context) *Principal {
 //   - ModeNormal       — credential is required; lookup must succeed.
 //   - ModeProxyAuthed  — credential is required; lookup must succeed and the
 //     principal must be allowed to bring its own upstream key.
-//   - ModeProxyAnonymous — no credential; this middleware is a no-op and
-//     neither a *Key nor a *Principal is stashed on ctx.
+//   - ModeProxyAnonymous — no credential; neither a *Key nor a *Principal is
+//     stashed on ctx.
+//
+// Both proxy modes are also refused here when the proxy-mode setting does not admit them, so a refused request never has its body read, takes an admission slot or leaves a usage record.
 //
 // The bearer is either a key or a relay-minted token, told apart by shape
 // (looksLikeToken); both resolve to the same Principal and only the lookup
@@ -89,10 +91,9 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cls := ClassificationFrom(r.Context())
 			if cls.Mode == ModeProxyAnonymous {
-				// Gate (Settings.ProxyMode.AllowUnauthenticated) is checked
-				// downstream in the handler; this middleware just doesn't
-				// require a key.
-				next.ServeHTTP(w, r)
+				if authorizeProxyMode(w, cat, cls.Mode) {
+					next.ServeHTTP(w, r)
+				}
 				return
 			}
 			if cls.Key == "" {
@@ -105,6 +106,9 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 				return
 			}
 			if !authorizePrincipal(w, snap, p, cls.Mode) {
+				return
+			}
+			if !authorizeProxyMode(w, cat, cls.Mode) {
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), snap, p, k)))

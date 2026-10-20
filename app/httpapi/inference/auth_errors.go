@@ -6,6 +6,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
@@ -44,6 +46,33 @@ func writeAuthErr(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"` + code + `","message":"` + msg + `"}}`))
+}
+
+// authorizeProxyMode refuses a proxy-mode request the proxy-mode setting does not admit. Reports false after writing the response.
+func authorizeProxyMode(w http.ResponseWriter, cat *appcatalog.Catalog, mode Mode) bool {
+	if mode != ModeProxyAuthed && mode != ModeProxyAnonymous {
+		return true
+	}
+	pm, _ := proxyModeSettings(cat)
+	status, code, msg := proxyModeRefusal(pm, mode)
+	if status == 0 {
+		return true
+	}
+	authRejectedTotal.WithLabelValues(code).Inc()
+	slog.Debug("inference: auth rejected", "status", status, "code", code, "msg", msg)
+	writeErrorEnvelope(w, status, "invalid_request_error", code, msg)
+	return false
+}
+
+// proxyModeRefusal is the response pm requires for a proxy-mode request in mode; status 0 admits it. A nil pm (no setting) counts as disabled.
+func proxyModeRefusal(pm *settings.ProxyMode, mode Mode) (status int, code, msg string) {
+	switch {
+	case pm == nil || !pm.Enabled:
+		return http.StatusForbidden, "proxy_disabled", "proxy mode is not enabled on this relay"
+	case mode == ModeProxyAnonymous && !pm.AllowUnauthenticated:
+		return http.StatusUnauthorized, "unauthenticated", "anonymous proxy traffic is not enabled on this relay"
+	}
+	return 0, "", ""
 }
 
 // msgTokenRevoked is the message the token-version check answers with; the
