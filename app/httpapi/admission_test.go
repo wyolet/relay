@@ -141,7 +141,7 @@ func TestAdmission_FullTracksSlots(t *testing.T) {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
 	}
-	if !a.Full() || !a.Full() {
+	if !a.Full() {
 		t.Fatal("not full with every slot held")
 	}
 	a.Collect(held[0])
