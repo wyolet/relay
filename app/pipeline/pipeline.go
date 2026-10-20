@@ -701,9 +701,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 	}
 	kind, status := classifyFailure(runErr)
 	req.Lifecycle.MarkEnd()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, &lifecycle.PostFlightEvent{
 		Status:       status,
 		ErrorKind:    kind,
 		ErrorMessage: runErr.Error(),

@@ -18,9 +18,10 @@
 //
 // Scope rules:
 //
-//   - Synchronous fan-out from a runner's detached post-flight
-//     goroutine. Hooks must be non-blocking (enqueue + return). The
-//     registry does not own queuing; that's a hook's internal concern.
+//   - Synchronous, sequential fan-out on a runner's detached post-flight
+//     goroutine. Hooks and collectors must be non-blocking (enqueue +
+//     return). The registry does not own queuing; that's a hook's
+//     internal concern.
 //   - Typed event + typed hook signatures. No interface{} events, no
 //     stringly-typed topics. If a new event kind appears, it gets a
 //     new typed registration method (RegisterX / FireX) — the registry
