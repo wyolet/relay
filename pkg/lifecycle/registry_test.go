@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -153,20 +155,44 @@ func TestFinalizeNilResultNotAttached(t *testing.T) {
 	}
 }
 
-func TestFinalizeCollectorsParallel(t *testing.T) {
-	// Collectors run in parallel: 5 sleepers should finish in ≈sleep, not
-	// 5*sleep. Generous margin to avoid CI flake.
+func TestFinalizeCollectorsInOrderOnCallingGoroutine(t *testing.T) {
 	r := New()
-	const n = 5
-	const sleep = 50 * time.Millisecond
-	for i := 0; i < n; i++ {
-		r.RegisterCollector(collectorFn(func(_ *Context) { time.Sleep(sleep) }))
+	caller := goroutineID()
+	var order []string
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		r.RegisterCollector(collectorFn(func(_ *Context) {
+			if id := goroutineID(); id != caller {
+				t.Errorf("collector %q ran on goroutine %d, want caller %d", name, id, caller)
+			}
+			order = append(order, name)
+		}))
 	}
-	start := time.Now()
 	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if elapsed := time.Since(start); elapsed > 3*sleep {
-		t.Fatalf("collectors not parallel: elapsed=%v, sequential≈%v", elapsed, n*sleep)
+	if want := []string{"a", "b", "c", "d", "e"}; !equalStrings(order, want) {
+		t.Fatalf("order: got %v want %v", order, want)
 	}
+}
+
+func TestFinalizePanickingCollectorDoesNotStopLaterOnes(t *testing.T) {
+	r := New()
+	var order []string
+	r.RegisterCollector(collectorFn(func(_ *Context) { order = append(order, "a") }))
+	r.RegisterCollector(collectorFn(func(_ *Context) { panic("intentional in test") }))
+	r.RegisterCollector(collectorFn(func(_ *Context) { order = append(order, "c") }))
+	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+	if want := []string{"a", "c"}; !equalStrings(order, want) {
+		t.Fatalf("order: got %v want %v", order, want)
+	}
+}
+
+// goroutineID parses the current goroutine's id from its stack header
+// ("goroutine N [running]:").
+func goroutineID() uint64 {
+	buf := make([]byte, 64)
+	buf = buf[:runtime.Stack(buf, false)]
+	buf = bytes.TrimPrefix(buf, []byte("goroutine "))
+	id, _ := strconv.ParseUint(string(buf[:bytes.IndexByte(buf, ' ')]), 10, 64)
+	return id
 }
 
 func TestFinalizePanicIsolated(t *testing.T) {
@@ -246,6 +272,20 @@ func TestFinalizeObserverSeesFanOutDuration(t *testing.T) {
 	}
 	if got < 2*time.Millisecond {
 		t.Fatalf("observer duration = %v, want >= 2ms (the fan-out time)", got)
+	}
+}
+
+func BenchmarkFinalizeFiveCollectors(b *testing.B) {
+	r := New()
+	for range 5 {
+		r.RegisterCollector(collectorFn(func(_ *Context) {}))
+	}
+	lc := NewContext("r", "test", time.Now())
+	ev := &PostFlightEvent{}
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		r.Finalize(ctx, lc, ev)
 	}
 }
 

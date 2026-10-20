@@ -4,18 +4,16 @@ import (
 	"net/http"
 
 	"github.com/wyolet/relay/pkg/lifecycle"
-	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // StreamUsageFactory is the streaming counterpart to UsageHook: a
-// lifecycle.StreamObserverFactory whose observer harvests the usage Summary
-// incrementally as upstream SSE frames arrive (via v1.StreamSummarizer),
-// then builds the same usage Event via the shared buildEventWithSummary at
-// end-of-stream. Streamed requests therefore collect usage exactly like
-// buffered ones — same Event, same Namespace — so echo and the sink both see
-// one shape, WITHOUT the observer ever retaining the whole stream. The
-// post-flight Hook is too late for a streamed body (it runs after the stream
-// is already written); this fills during the stream.
+// lifecycle.StreamObserverFactory whose observer builds the same usage Event
+// via the shared buildEventWithSummary at end-of-stream, from the Summary the
+// StreamSession harvested frame-by-frame. Streamed requests therefore collect
+// usage exactly like buffered ones — same Event, same Namespace — so echo and
+// the sink both see one shape, without retaining the stream. The post-flight
+// Hook is too late for a streamed body (it runs after the stream is already
+// written); this fills during the stream.
 type StreamUsageFactory struct {
 	pricer   *Pricer
 	instance string
@@ -30,28 +28,21 @@ func NewStreamUsageFactory(pricer *Pricer, instanceID string) *StreamUsageFactor
 func (*StreamUsageFactory) Name() string { return Namespace }
 
 func (f *StreamUsageFactory) NewObserver(lc *lifecycle.Context) lifecycle.StreamObserver {
-	return &streamUsageObserver{lc: lc, pricer: f.pricer, instance: f.instance, summ: v1.NewStreamSummarizer(lc.Translator)}
+	return &streamUsageObserver{lc: lc, pricer: f.pricer, instance: f.instance}
 }
 
-// streamUsageObserver harvests usage for one streamed request incrementally:
-// it retains only the running canonical stream state + last usage-bearing
-// Summary (in summ), never the frames themselves.
 type streamUsageObserver struct {
 	lc       *lifecycle.Context
 	pricer   *Pricer
 	instance string
-	summ     *v1.StreamSummarizer
 }
 
-// Observe feeds the raw upstream frame to the incremental summarizer. The
-// frame is one SSE event with the blank-line separator already stripped by
-// the dispatch scanner / session framer; StreamSummarizer re-appends it.
-func (o *streamUsageObserver) Observe(frame []byte) {
-	o.summ.Observe(frame)
-}
+// Observe is a no-op: the session's own summarizer already translates every
+// frame, and running a second one doubled the per-frame cost.
+func (*streamUsageObserver) Observe([]byte) {}
 
 func (o *streamUsageObserver) Result() (any, error) {
-	s := o.summ.Summary()
+	s, _ := o.lc.StreamSummary()
 	// The post-flight event never reaches a stream observer, so the status comes from what the runner stamped on the Context.
 	status := o.lc.ResponseStatus
 	if status == 0 {

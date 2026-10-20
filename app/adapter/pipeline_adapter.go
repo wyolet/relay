@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"net/url"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/pkg/reqbody"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
@@ -47,13 +47,14 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 		path = *hostPath
 	}
 	callCtx, cancel := a.callContext(ctx, stream)
-	req, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
+	req, releaseBody, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 
 	resp, err := a.spec.client.Do(req)
+	releaseBody()
 	if err != nil {
 		cancel()
 		return nil, err
@@ -70,12 +71,13 @@ func pathSegment(model string) string {
 	return url.PathEscape(model)
 }
 
-// newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type.
-func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body []byte, hdr http.Header, oauth bool) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+// newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type. releaseBody must be called once Do returns, so the transport stops pinning body while the response streams.
+func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body []byte, hdr http.Header, oauth bool) (req *http.Request, releaseBody func(), err error) {
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	releaseBody = reqbody.Attach(req, body)
 
 	for k, vs := range hdr {
 		for _, v := range vs {
@@ -103,7 +105,7 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 			req.Header.Set(k, v)
 		}
 	}
-	return req, nil
+	return req, releaseBody, nil
 }
 
 // ExtractTokens delegates to the spec's extractor, or returns nil if unset.

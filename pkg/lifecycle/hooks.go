@@ -71,9 +71,10 @@ type StreamObserverFactory interface {
 // Context.Collected) and routes them to sinks — the "store" half of the
 // produce → attach → store flow.
 //
-// Collectors run in parallel and treat the Context as read-only. Storing
-// must be non-blocking (push onto a bounded channel); a Collector must
-// never block the post-flight goroutine.
+// Collectors run sequentially in registration order on the post-flight
+// goroutine and treat the Context as read-only. Storing must be
+// non-blocking (push onto a bounded channel): a slow Collector delays every
+// Collector registered after it.
 type Collector interface {
 	Collect(lc *Context)
 }

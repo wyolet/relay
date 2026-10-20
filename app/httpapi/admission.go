@@ -15,6 +15,12 @@ package httpapi
 //     stamps Timing.End. Releasing on handler return would free the slot while
 //     the stream is still open.
 //
+// Sheds happen at two stages. The inference routes check Full before reading
+// the body and refuse there (early), so a flood costs no body read, parse or
+// lifecycle work; Full takes no slot, so PreFlight stays the one place a slot
+// is acquired, and a request that passed the early check can still be shed
+// there when the last slot went in between (late).
+//
 // A request that acquired a slot is marked in lc.Metadata; the Collector
 // releases only when that mark is present, so a shed request (which never
 // acquired) can't drive the semaphore negative, and Finalize's once-per-
@@ -23,6 +29,9 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -54,6 +63,12 @@ const RetryAfterShed = "1"
 // pre-flight error stays a 500.
 var ErrShed = errors.New("in-flight capacity reached")
 
+// Shed stages, the values of requests_shed_total's stage label.
+const (
+	ShedStageEarly = "early" // refused at the route, before the body is read
+	ShedStageLate  = "late"  // refused by PreFlight, after the body was read
+)
+
 // admittedKey marks (in lc.Metadata, the documented pre-flight-write /
 // post-flight-read channel) that THIS request holds a semaphore slot. The
 // Collector's release is gated on it so a shed request never releases a slot
@@ -63,13 +78,48 @@ const admittedKey = "httpapi.admission.held"
 // requestsShedTotal answers the operator's fear "am I turning customers away
 // because I'm overloaded" (metrics fear-naming rule) — not "is the semaphore
 // full". It is the one signal admission control adds.
-var requestsShedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+var requestsShedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Name:      "requests_shed_total",
-	Help:      "Inference requests refused at admission because the in-flight cap was reached (load shedding).",
-})
+	Help:      "Inference requests refused at admission because the in-flight cap was reached (load shedding), by stage: early (before the body is read) or late (after).",
+}, []string{"stage"})
+
+var (
+	shedEarlyTotal = requestsShedTotal.WithLabelValues(ShedStageEarly)
+	shedLateTotal  = requestsShedTotal.WithLabelValues(ShedStageLate)
+)
 
 func init() { metrics.Register(requestsShedTotal) }
+
+// shedLogInterval spaces the shed WARN: a flood sheds thousands of requests a
+// second and a line for each would cost more than the refusal itself.
+const shedLogInterval = time.Second
+
+var (
+	shedEarlySinceLog atomic.Int64
+	shedLateSinceLog  atomic.Int64
+	shedLastLogNanos  atomic.Int64
+)
+
+// RecordShed counts one shed request at stage (ShedStageEarly or
+// ShedStageLate) and logs at most one WARN per shedLogInterval process-wide,
+// carrying the sheds since the previous line.
+func RecordShed(stage string) {
+	if stage == ShedStageEarly {
+		shedEarlyTotal.Inc()
+		shedEarlySinceLog.Add(1)
+	} else {
+		shedLateTotal.Inc()
+		shedLateSinceLog.Add(1)
+	}
+	now := time.Now().UnixNano()
+	last := shedLastLogNanos.Load()
+	if now-last < int64(shedLogInterval) || !shedLastLogNanos.CompareAndSwap(last, now) {
+		return
+	}
+	early, late := shedEarlySinceLog.Swap(0), shedLateSinceLog.Swap(0)
+	slog.Warn("inference: shedding load", "shed", early+late, "early", early, "late", late)
+}
 
 // Admission bounds concurrent in-flight inference requests via a buffered
 // channel used as a counting semaphore.
@@ -93,6 +143,13 @@ func NewAdmission(max int) *Admission {
 // Cap reports the configured in-flight ceiling.
 func (a *Admission) Cap() int { return cap(a.sem) }
 
+// Full reports whether every slot is held. A lock-free snapshot that takes no
+// slot: a request it lets through can still be shed by PreFlight. Nil-safe
+// (never full).
+func (a *Admission) Full() bool {
+	return a != nil && len(a.sem) >= cap(a.sem)
+}
+
 // PreFlight is a lifecycle.PreFlightMiddleware: it acquires a slot without
 // blocking. On success it marks lc so the Collector knows to release; when the
 // cap is reached it counts the shed and returns ErrShed for the dispatch to
@@ -107,7 +164,7 @@ func (a *Admission) PreFlight(_ context.Context, lc *lifecycle.Context, _ *lifec
 		lc.Metadata[admittedKey] = struct{}{}
 		return nil
 	default:
-		requestsShedTotal.Inc()
+		RecordShed(ShedStageLate)
 		return ErrShed
 	}
 }

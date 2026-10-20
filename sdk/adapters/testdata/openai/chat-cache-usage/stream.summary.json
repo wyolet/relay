@@ -1,0 +1,9 @@
+{
+  "tokens": {
+    "cache_read": 1920,
+    "input": 128,
+    "output": 6
+  },
+  "finish_reason": "stop",
+  "service_tier": ""
+}

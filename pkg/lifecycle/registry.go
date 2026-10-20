@@ -126,14 +126,15 @@ func (r *Registry) Fill(lc *Context, ev *PostFlightEvent) {
 	lc.filled = true
 }
 
-// Finalize runs the end-of-lifecycle sweep: Fill (if not already done
-// pre-send) then every Collector stores the collected results to its sink
-// (parallel, read-only). Panics in a hook or collector are recovered and
-// logged; siblings proceed.
+// Finalize runs the end-of-lifecycle pass: Fill (if not already done
+// pre-send) then every Collector stores the collected results to its sink,
+// sequentially in registration order on the calling goroutine. Panics in a
+// hook or collector are recovered and logged; the rest proceed.
 //
-// Called from the runner's detached post-flight goroutine. Blocks only
-// that goroutine, never the caller — the wait gives accurate post-flight
-// latency and lets graceful shutdown drain in-flight collectors.
+// Called from the runner's detached post-flight goroutine, never the
+// caller's. Collectors run inline rather than one goroutine each: they are
+// non-blocking by contract, and per-request fan-out goroutines pile up
+// under CPU saturation.
 func (r *Registry) Finalize(ctx context.Context, lc *Context, ev *PostFlightEvent) {
 	r.mu.RLock()
 	obs := r.finalizeObserver
@@ -149,20 +150,16 @@ func (r *Registry) Finalize(ctx context.Context, lc *Context, ev *PostFlightEven
 	collectors := r.collectors
 	r.mu.RUnlock()
 
-	// Store. Parallel, read-only on the collected set.
-	if len(collectors) == 0 {
-		return
-	}
-	var wg sync.WaitGroup
 	for _, c := range collectors {
-		wg.Add(1)
-		go func(col Collector) {
-			defer wg.Done()
-			defer recoverLifecycle(lc, "collector")
-			col.Collect(lc)
-		}(c)
+		safeCollect(c, lc)
 	}
-	wg.Wait()
+}
+
+// safeCollect runs one collector with panic recovery so a panicking
+// collector doesn't skip the ones after it.
+func safeCollect(c Collector, lc *Context) {
+	defer recoverLifecycle(lc, "collector")
+	c.Collect(lc)
 }
 
 // safeFill runs one hook's Fill with panic recovery. A panicking or
@@ -184,7 +181,7 @@ func safeFill(h Hook, lc *Context, ev *PostFlightEvent) (out any) {
 	return v
 }
 
-// recoverLifecycle isolates panics inside one collector from siblings and
+// recoverLifecycle isolates panics inside one collector from the others and
 // the post-flight goroutine. A panicking collector is a bug; we log and
 // continue. Never propagated — observers must not crash the runner.
 func recoverLifecycle(lc *Context, kind string) {

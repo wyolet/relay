@@ -28,7 +28,7 @@ func (s *ccToCanonicalStream) handleReasoningDelta(text, field string) ([]v1.SSE
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemStarted, Data: startData})
 	}
 
-	s.reasoningItem.textBuf += text
+	s.reasoningItem.textBuf.WriteString(text)
 	deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 		ItemID: s.reasoningItem.itemID,
 		Index:  s.reasoningItem.outputIndex,
@@ -65,7 +65,7 @@ func (s *ccToCanonicalStream) handleTextDelta(text string) ([]v1.SSEFrame, error
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemStarted, Data: startData})
 	}
 
-	s.msgItem.textBuf += text
+	s.msgItem.textBuf.WriteString(text)
 	deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 		ItemID: s.msgItem.itemID,
 		Index:  s.msgItem.outputIndex,
@@ -127,7 +127,7 @@ func (s *ccToCanonicalStream) handleToolCallDelta(tc ToolCallChunk) ([]v1.SSEFra
 		ti.name = tc.Function.Name
 	}
 	if tc.Function != nil && tc.Function.Arguments != "" {
-		ti.argsBuf += tc.Function.Arguments
+		ti.argsBuf = append(ti.argsBuf, tc.Function.Arguments...)
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 			ItemID: ti.itemID,
 			Index:  ti.outputIndex,
@@ -146,8 +146,8 @@ func (s *ccToCanonicalStream) closeMsgItem(ti *ccStreamItem) []v1.SSEFrame {
 		Role:   v1.RoleAssistant,
 		Status: v1.StatusCompleted,
 	}
-	if ti.textBuf != "" {
-		finalMsg.Content = []v1.Part{&v1.OutputTextPart{Text: ti.textBuf}}
+	if text := ti.textBuf.String(); text != "" {
+		finalMsg.Content = []v1.Part{&v1.OutputTextPart{Text: text}}
 	}
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 		ItemID: ti.itemID,
@@ -158,14 +158,15 @@ func (s *ccToCanonicalStream) closeMsgItem(ti *ccStreamItem) []v1.SSEFrame {
 }
 
 func (s *ccToCanonicalStream) closeReasoningItem(ti *ccStreamItem) []v1.SSEFrame {
+	text := ti.textBuf.String()
 	finalItem := &v1.Reasoning{
 		ID:           ti.itemID,
-		Content:      ti.textBuf,
+		Content:      text,
 		Status:       v1.StatusCompleted,
 		ProviderData: ccReasoningProviderDataJSON(ti.reasoningField),
 	}
-	if ti.textBuf != "" {
-		finalItem.Summary = []v1.SummaryText{{Text: ti.textBuf}}
+	if text != "" {
+		finalItem.Summary = []v1.SummaryText{{Text: text}}
 	}
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 		ItemID: ti.itemID,
@@ -181,14 +182,14 @@ func (s *ccToCanonicalStream) closeToolItem(ti *ccStreamItem) []v1.SSEFrame {
 	// hand the caller a runnable-looking call. Empty args stay completed
 	// (no-arg tools may stream zero argument fragments).
 	status := v1.StatusCompleted
-	if ti.argsBuf != "" && !json.Valid([]byte(ti.argsBuf)) {
+	if len(ti.argsBuf) > 0 && !json.Valid(ti.argsBuf) {
 		status = v1.StatusIncomplete
 	}
 	finalItem := &v1.FunctionCall{
 		ID:        ti.itemID,
 		CallID:    ti.callID,
 		Name:      ti.name,
-		Arguments: ti.argsBuf,
+		Arguments: string(ti.argsBuf),
 		Status:    status,
 	}
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{

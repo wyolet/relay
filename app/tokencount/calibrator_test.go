@@ -2,6 +2,7 @@ package tokencount
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -79,6 +80,136 @@ func runCalibratorSuite(t *testing.T, s kv.Store) {
 			t.Fatal("a zero body or zero token count must not be stored as a ratio")
 		}
 	})
+
+	t.Run("a steady ratio is written once", func(t *testing.T) {
+		cs := &countingStore{store: s}
+		c := &Calibrator{state: cs}
+		ctx := t.Context()
+		c.Observe(ctx, "", "model-g", 4000, 1000)
+		c.Observe(ctx, "", "model-g", 4000, 1020) // 2% move
+
+		if n := cs.count(modelKey("model-g")); n != 1 {
+			t.Fatalf("writes = %d, want 1", n)
+		}
+		if got, _ := c.Ratio(ctx, "", "model-g"); got != 0.25 {
+			t.Fatalf("ratio = %v, want the first write's 0.25", got)
+		}
+	})
+
+	t.Run("a move past the threshold is written", func(t *testing.T) {
+		cs := &countingStore{store: s}
+		c := &Calibrator{state: cs}
+		ctx := t.Context()
+		c.Observe(ctx, "", "model-h", 4000, 1000)
+		c.Observe(ctx, "", "model-h", 4000, 1100) // 10% move
+
+		if n := cs.count(modelKey("model-h")); n != 2 {
+			t.Fatalf("writes = %d, want 2", n)
+		}
+		if got, _ := c.Ratio(ctx, "", "model-h"); got != 0.275 {
+			t.Fatalf("ratio = %v, want 0.275", got)
+		}
+	})
+
+	t.Run("a slow drift is measured from the last write", func(t *testing.T) {
+		cs := &countingStore{store: s}
+		c := &Calibrator{state: cs}
+		ctx := t.Context()
+		c.Observe(ctx, "", "model-i", 4000, 1000)
+		c.Observe(ctx, "", "model-i", 4000, 1030) // 3% from the write: skipped
+		c.Observe(ctx, "", "model-i", 4000, 1060) // 3% from the last sample, 6% from the write
+
+		if n := cs.count(modelKey("model-i")); n != 2 {
+			t.Fatalf("writes = %d, want 2", n)
+		}
+		if got, _ := c.Ratio(ctx, "", "model-i"); got != 0.265 {
+			t.Fatalf("ratio = %v, want 0.265", got)
+		}
+	})
+
+	t.Run("an aged write is refreshed", func(t *testing.T) {
+		cs := &countingStore{store: s}
+		now := time.Now()
+		c := &Calibrator{state: cs, now: func() time.Time { return now }}
+		ctx := t.Context()
+		c.Observe(ctx, "sess-j", "model-j", 4000, 1000)
+		now = now.Add(rewriteInterval - time.Second)
+		c.Observe(ctx, "sess-j", "model-j", 4000, 1000)
+		if n := cs.count(sessionKey("sess-j")); n != 1 {
+			t.Fatalf("session writes before the interval = %d, want 1", n)
+		}
+		now = now.Add(time.Second)
+		c.Observe(ctx, "sess-j", "model-j", 4000, 1000)
+
+		if n := cs.count(sessionKey("sess-j")); n != 2 {
+			t.Errorf("session writes = %d, want 2", n)
+		}
+		if n := cs.count(modelKey("model-j")); n != 2 {
+			t.Errorf("model writes = %d, want 2", n)
+		}
+	})
+
+	t.Run("concurrent samples of one key write once", func(t *testing.T) {
+		cs := &countingStore{store: s}
+		c := &Calibrator{state: cs}
+		ctx := t.Context()
+		var wg sync.WaitGroup
+		for range 50 {
+			wg.Go(func() { c.Observe(ctx, "", "model-k", 4000, 1000) })
+		}
+		wg.Wait()
+
+		if n := cs.count(modelKey("model-k")); n != 1 {
+			t.Fatalf("writes = %d, want 1", n)
+		}
+	})
+}
+
+// countingStore counts writes per key and passes everything through to store.
+type countingStore struct {
+	store
+	mu   sync.Mutex
+	sets map[string]int
+}
+
+func (c *countingStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	c.mu.Lock()
+	if c.sets == nil {
+		c.sets = map[string]int{}
+	}
+	c.sets[key]++
+	c.mu.Unlock()
+	return c.store.Set(ctx, key, value, ttl)
+}
+
+func (c *countingStore) count(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sets[key]
+}
+
+// Session ids accrue without limit, so the record of written ratios must not.
+func TestCalibrator_WrittenRecordIsBounded(t *testing.T) {
+	now := time.Now()
+	c := &Calibrator{state: newRecordingStore(), now: func() time.Time { return now }}
+	ctx := t.Context()
+
+	for i := range maxWrittenEntries + 100 {
+		c.Observe(ctx, "s"+strconv.Itoa(i), "", 4000, 1000)
+	}
+	if n := len(c.written); n > maxWrittenEntries {
+		t.Fatalf("record holds %d entries, want at most %d", n, maxWrittenEntries)
+	}
+
+	// Once every entry is past the refresh interval, a new key evicts them all rather than an arbitrary share.
+	for i := len(c.written); i < maxWrittenEntries; i++ {
+		c.Observe(ctx, "fill"+strconv.Itoa(i), "", 4000, 1000)
+	}
+	now = now.Add(rewriteInterval)
+	c.Observe(ctx, "fresh", "", 4000, 1000)
+	if n := len(c.written); n != 1 {
+		t.Fatalf("record holds %d entries after the stale ones expired, want 1", n)
+	}
 }
 
 func TestCalibrator_Mem(t *testing.T) {

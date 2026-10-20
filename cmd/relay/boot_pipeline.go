@@ -43,8 +43,9 @@ func buildPipeline(cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *
 	return pl, lifecycleReg
 }
 
-func buildProxy(cfg *config.Config, limiter *pkgratelimit.Limiter, lifecycleReg *lifecycle.Registry) *proxy.Pipeline {
+func buildProxy(cfg *config.Config, limiter *pkgratelimit.Limiter, policySvc *policy.Service, lifecycleReg *lifecycle.Registry) *proxy.Pipeline {
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
+	proxyPipeline.Policy = policySvc
 
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.

@@ -20,12 +20,13 @@ const (
 	ModeNormal
 	// ModeProxyAuthed — X-WR-Proxy-Mode: Proxy + relay key in X-WR-API-Key
 	// + caller-supplied upstream key in Authorization. Logged against the
-	// relay key; subject to the inference-api-proxy system rate limit.
+	// relay key; metered by its policy's rate limit as in ModeNormal, with
+	// the inference-api-proxy system rate limit as a further ceiling.
 	ModeProxyAuthed
 	// ModeProxyAnonymous — X-WR-Proxy-Mode: Proxy + caller-supplied
 	// upstream key in Authorization, no relay key. Subject to the
 	// inference-api-proxy-anonymous per-IP rate limit. Gated by
-	// Settings.ProxyMode.AllowUnauthenticated.
+	// Settings.ProxyMode.AllowUnauthenticated in PrincipalMiddleware.
 	ModeProxyAnonymous
 )
 
@@ -133,8 +134,8 @@ func ClassificationFrom(ctx context.Context) Classification {
 // ClassifyMiddleware runs Classify once per request and stashes the
 // result on ctx. Shape-invalid requests get a 400 envelope; everything
 // else falls through to the next handler. Gating (Settings.ProxyMode
-// flags, unknown-slug rejection) lives downstream so this middleware
-// stays snapshot-free.
+// flags in PrincipalMiddleware, unknown-slug rejection in the proxy
+// handler) lives downstream so this middleware stays snapshot-free.
 func ClassifyMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

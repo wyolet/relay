@@ -12,21 +12,33 @@ package v1
 // Not safe for concurrent use: one stream, one summarizer, one goroutine
 // (the translator closure it holds carries per-stream state).
 type StreamSummarizer struct {
-	toCanon       func([]byte) ([]byte, error)
-	hasTranslator bool
-	found         Summary
+	toCanon        func([]byte) ([]byte, error)
+	affectsSummary func([]byte) bool
+	hasTranslator  bool
+	found          Summary
 }
 
 // NewStreamSummarizer builds a summarizer bound to tr's to-canonical stream
-// transform. A nil translator yields a no-op summarizer (Summary stays zero),
-// matching ExtractSummary(nil, …).
+// transform, skipping the frames its SummaryStream predicate rejects when tr
+// implements one. A nil translator yields a no-op summarizer (Summary stays
+// zero), matching ExtractSummary(nil, …).
 func NewStreamSummarizer(tr Translator) *StreamSummarizer {
 	if tr == nil {
 		return &StreamSummarizer{}
 	}
 	// toCanon may be nil: the translator declares no stream transform, i.e.
 	// the wire IS canonical SSE and frames are harvested directly.
-	return &StreamSummarizer{toCanon: tr.NewToCanonicalStream(), hasTranslator: true}
+	toCanon, affects := summaryStream(tr)
+	return &StreamSummarizer{toCanon: toCanon, affectsSummary: affects, hasTranslator: true}
+}
+
+// summaryStream returns tr's to-canonical transform and, when tr implements
+// SummaryStream, the predicate naming the frames worth translating.
+func summaryStream(tr Translator) (func([]byte) ([]byte, error), func([]byte) bool) {
+	if ss, ok := tr.(SummaryStream); ok {
+		return ss.NewSummaryStream()
+	}
+	return tr.NewToCanonicalStream(), nil
 }
 
 // Observe feeds one vendor SSE frame — a single event, WITHOUT the trailing
@@ -37,6 +49,9 @@ func NewStreamSummarizer(tr Translator) *StreamSummarizer {
 // ExtractSummary does.
 func (s *StreamSummarizer) Observe(frame []byte) {
 	if s == nil || !s.hasTranslator || len(frame) == 0 {
+		return
+	}
+	if s.affectsSummary != nil && !s.affectsSummary(frame) {
 		return
 	}
 	input := make([]byte, 0, len(frame)+2)

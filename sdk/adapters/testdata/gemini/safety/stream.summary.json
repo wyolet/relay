@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "input": 10,
+    "output": 5
+  },
+  "finish_reason": "content_filter",
+  "service_tier": ""
+}

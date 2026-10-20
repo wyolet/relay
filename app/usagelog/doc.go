@@ -15,9 +15,9 @@
 //     under Namespace; the hook never touches the Context.
 //   - SinkCollector: the lifecycle.Collector (janitor / store). Reads the
 //     attached Event back off the Context and pushes it onto the Emitter.
-//   - Emitter: bounded-queue dispatcher. One drain goroutine writes to
-//     each Sink. Drop-on-full with counter — never blocks the
-//     post-flight goroutine.
+//   - Emitter: bounded-queue dispatcher. One drain goroutine writes
+//     batches of queued events to each Sink. Drop-on-full with counter —
+//     never blocks the post-flight goroutine.
 //
 // The split is what lets a pre-send reader (usage echo) and the sink
 // share one collection: the hook produces once, the Registry attaches,

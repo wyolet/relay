@@ -6,6 +6,7 @@
 package file
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,17 +17,24 @@ import (
 )
 
 var _ usage.Sink = (*Sink)(nil)
+var _ usage.BatchWriter = (*Sink)(nil)
+
+// batchWriteBytes bounds how much of a batch is encoded before it is handed
+// to the writer.
+const batchWriteBytes = 64 << 10
 
 // Sink appends one JSONL line per event to an io.Writer. Safe for
 // concurrent Write; uses an internal mutex around the encoder.
 //
-// Buffering is the OS's job — we don't add a userland buffer because
-// power-loss durability matters more than write throughput for usage
-// events. Callers that want batched writes wrap with a buffered writer.
+// Nothing is buffered across calls: every Write and WriteBatch has reached
+// the writer when it returns, so a process crash loses nothing accepted.
 type Sink struct {
 	mu  sync.Mutex
 	w   io.Writer
 	enc *json.Encoder
+
+	batch    bytes.Buffer
+	batchEnc *json.Encoder
 }
 
 // NewSink opens (creating, append-mode) the given path for the Sink.
@@ -44,7 +52,10 @@ func NewSink(path string) (*Sink, error) {
 func NewSinkFromWriter(w io.Writer) *Sink {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	return &Sink{w: w, enc: enc}
+	s := &Sink{w: w, enc: enc}
+	s.batchEnc = json.NewEncoder(&s.batch)
+	s.batchEnc.SetEscapeHTML(false)
+	return s
 }
 
 // Write encodes ev as one JSON line. The json.Encoder appends '\n' after
@@ -54,6 +65,49 @@ func (s *Sink) Write(ev usage.Event) error {
 	defer s.mu.Unlock()
 	if err := s.enc.Encode(ev); err != nil {
 		return fmt.Errorf("usage/file.Sink.Write: %w", err)
+	}
+	return nil
+}
+
+// WriteBatch encodes evs as JSON lines and hands them to the writer in
+// whole-line chunks of about batchWriteBytes. An event that fails to encode
+// is skipped and reported in the returned error.
+func (s *Sink) WriteBatch(evs []usage.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var encErr error
+	skipped := 0
+	for i := range evs {
+		if err := s.batchEnc.Encode(evs[i]); err != nil {
+			skipped++
+			if encErr == nil {
+				encErr = err
+			}
+			continue
+		}
+		if s.batch.Len() >= batchWriteBytes {
+			if err := s.writeBatchLocked(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.writeBatchLocked(); err != nil {
+		return err
+	}
+	if encErr != nil {
+		return fmt.Errorf("usage/file.Sink.WriteBatch: skipped %d of %d events: %w", skipped, len(evs), encErr)
+	}
+	return nil
+}
+
+func (s *Sink) writeBatchLocked() error {
+	if s.batch.Len() == 0 {
+		return nil
+	}
+	_, err := s.w.Write(s.batch.Bytes())
+	s.batch.Reset()
+	if err != nil {
+		return fmt.Errorf("usage/file.Sink.WriteBatch: %w", err)
 	}
 	return nil
 }
