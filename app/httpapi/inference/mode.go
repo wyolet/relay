@@ -20,7 +20,8 @@ const (
 	ModeNormal
 	// ModeProxyAuthed — X-WR-Proxy-Mode: Proxy + relay key in X-WR-API-Key
 	// + caller-supplied upstream key in Authorization. Logged against the
-	// relay key; subject to the inference-api-proxy system rate limit.
+	// relay key; metered by its policy's rate limit as in ModeNormal, with
+	// the inference-api-proxy system rate limit as a further ceiling.
 	ModeProxyAuthed
 	// ModeProxyAnonymous — X-WR-Proxy-Mode: Proxy + caller-supplied
 	// upstream key in Authorization, no relay key. Subject to the

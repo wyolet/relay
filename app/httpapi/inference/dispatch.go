@@ -119,7 +119,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// whether to tee the whole streamed body.
 		lc.PayloadLog = PrincipalFrom(ctx).CapturesPayload()
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
-		handleProxy(d, w, r, in.Inbound)
+		handleProxy(d, w, r, in.Inbound, in.ModelName)
 		return
 	}
 

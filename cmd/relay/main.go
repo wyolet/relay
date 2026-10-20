@@ -96,7 +96,7 @@ func main() {
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	hostHealth := hosthealth.New(kvStore, nil)
 	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, hostHealth)
-	proxyPipeline := buildProxy(cfg, limiter, lifecycleReg)
+	proxyPipeline := buildProxy(cfg, limiter, pl.Policy, lifecycleReg)
 
 	specs := buildAdapterSpecs()
 	profiles := buildClientProfiles()
