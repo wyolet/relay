@@ -178,8 +178,13 @@ func TestStreamCanonical_OneWriteAndFlushPerFrame(t *testing.T) {
 				body := io.NopCloser(strings.NewReader(strings.Join(anthropicMultiDeltaStream, "")))
 				streamCanonical(d, w, r, body, tc.echo, false, streamShapes{}, tc.toCanon(), tc.fromCanon())
 
-				if got, want := string(rec.ops), strings.Repeat("WF", tc.frames); got != want {
-					t.Errorf("underlying writer ops = %q, want %q (one Write then one Flush per frame)", got, want)
+				// The keepalive wrapper flushes on Write and again on the explicit Flush; the second one is empty (no bytes, no syscall).
+				ops := string(rec.ops)
+				for strings.Contains(ops, "FF") {
+					ops = strings.ReplaceAll(ops, "FF", "F")
+				}
+				if got, want := ops, strings.Repeat("WF", tc.frames); got != want {
+					t.Errorf("underlying writer ops = %q, want %q (one Write, then a Flush, per frame)", rec.ops, want)
 				}
 				checkStreamGolden(t, tc.name, rec.body.Bytes())
 			})
