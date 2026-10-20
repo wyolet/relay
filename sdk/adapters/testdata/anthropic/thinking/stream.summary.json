@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "input": 512,
+    "output": 96
+  },
+  "finish_reason": "stop",
+  "service_tier": ""
+}

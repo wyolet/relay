@@ -18,6 +18,7 @@ import (
 //	              → response.wire.json      (SerializeResponse, echoing the case request)
 //	stream.sse    → stream.canonical.json   (NewToCanonicalStream, frame by frame)
 //	              → stream.wire.json        (NewFromCanonicalStream over those frames)
+//	              → stream.summary.json     (ExtractSummary, and StreamSummarizer frame by frame)
 //
 // The second golden of each pair is the X → canonical → X round trip. On top
 // of the goldens, canonical → X → canonical must reproduce the canonical
@@ -100,6 +101,7 @@ func runCase(t *testing.T, s shape, dir string) {
 	}
 	if body, ok := readInput(t, dir, streamInput, known); ok {
 		runStream(t, s, dir, body, req, known)
+		runStreamSummary(t, s, dir, body, known)
 	}
 	if len(known) == 0 {
 		t.Fatalf("%s has none of %s, %s, %s", dir, requestInput, responseInput, streamInput)

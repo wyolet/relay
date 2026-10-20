@@ -1,7 +1,6 @@
 package v1
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -91,18 +90,19 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 	// Split vendor body on blank-line boundaries; each frame is one SSE
 	// event. Feed frames one at a time to the closure so its per-stream
 	// state (chunk reassembly, item accounting) stays consistent.
-	sc := bufio.NewScanner(bytes.NewReader(body))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	sc.Split(SplitSSEFrames)
-
 	var found Summary
-	for sc.Scan() {
-		frame := NormalizeSSELineEnds(sc.Bytes())
+	for rest := body; len(rest) > 0; {
+		n, raw, _ := SplitSSEFrames(rest, true)
+		if n == 0 {
+			break
+		}
+		rest = rest[n:]
+		frame := NormalizeSSELineEnds(raw)
 		if len(frame) == 0 {
 			continue
 		}
 		// The closure expects each chunk terminated by the SSE blank-line
-		// separator. Re-append because the scanner stripped it.
+		// separator. Re-append because the split stripped it.
 		input := make([]byte, 0, len(frame)+2)
 		input = append(input, frame...)
 		input = append(input, '\n', '\n')
@@ -123,13 +123,14 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 // Used both for translator-emitted canonical chunks and for bodies
 // whose translator declares identity stream (wire IS canonical).
 func harvestSummaryFromCanonicalSSE(canon []byte) Summary {
-	sc := bufio.NewScanner(bytes.NewReader(canon))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	sc.Split(SplitSSEFrames)
-
 	var found Summary
-	for sc.Scan() {
-		frame := NormalizeSSELineEnds(sc.Bytes())
+	for rest := canon; len(rest) > 0; {
+		n, raw, _ := SplitSSEFrames(rest, true)
+		if n == 0 {
+			break
+		}
+		rest = rest[n:]
+		frame := NormalizeSSELineEnds(raw)
 		if len(frame) == 0 {
 			continue
 		}

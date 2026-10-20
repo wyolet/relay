@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/sdk/usage"
@@ -29,6 +30,14 @@ func (fakeTranslator) ParseResponse(body []byte) (*Response, error) {
 		return nil, err
 	}
 	return &Response{Usage: r.Usage, FinishReason: r.FinishReason}, nil
+}
+
+// passTranslator declares a to-canonical stream that returns each chunk as
+// is, so the translated branch runs over an already-canonical stream.
+type passTranslator struct{ fakeTranslator }
+
+func (passTranslator) NewToCanonicalStream() func([]byte) ([]byte, error) {
+	return func(b []byte) ([]byte, error) { return b, nil }
 }
 
 func TestExtractSummary_SyncJSON(t *testing.T) {
@@ -130,6 +139,24 @@ func TestExtractUsage_NilTranslator(t *testing.T) {
 	}
 	if u != nil {
 		t.Fatalf("expected nil, got %+v", u)
+	}
+}
+
+// A frame of any size must not stop the walk before the usage frame after it.
+func TestExtractSummary_LargeFrameBeforeUsage(t *testing.T) {
+	big := `{"item_id":"i1","index":0,"kind":"text","delta":"` + strings.Repeat("x", 5<<20) + `"}`
+	body := bytes.Join([][]byte{
+		SSEFrame{Event: EventItemDelta, Data: []byte(big)}.Bytes(),
+		SSEFrame{Event: EventGenerationCompleted, Data: []byte(`{"usage":{"input":3,"output":4},"finish_reason":"stop"}`)}.Bytes(),
+	}, nil)
+	for _, tr := range []Translator{fakeTranslator{}, passTranslator{}} {
+		s, err := ExtractSummary(tr, body)
+		if err != nil {
+			t.Fatalf("%T: err: %v", tr, err)
+		}
+		if s.Tokens["output"] != 4 || s.FinishReason != FinishReasonStop {
+			t.Fatalf("%T: summary after a large frame = %+v", tr, s)
+		}
 	}
 }
 
