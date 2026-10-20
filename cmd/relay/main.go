@@ -116,7 +116,7 @@ func main() {
 	defer payloadCtl.Close()
 
 	tokenCalibrator := buildTokenCalibrator(kvStore, lifecycleReg)
-	registerAdmission(cfg, lifecycleReg)
+	admission := registerAdmission(cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
@@ -138,7 +138,7 @@ func main() {
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
-		specRegistry, profiles, tokenCalibrator, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
+		specRegistry, profiles, tokenCalibrator, admission, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
 	// RELAY_CONTROL_PORT. Disabled when empty or "off".

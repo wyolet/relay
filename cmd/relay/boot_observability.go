@@ -89,10 +89,11 @@ func buildTokenCalibrator(kvStore kv.Store, lifecycleReg *lifecycle.Registry) *t
 	return tokenCalibrator
 }
 
-func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) {
+func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) *httpapi.Admission {
 	// Admission control: a per-pod in-flight cap on inference requests. Rides
-	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
-	// pre-flight so a shed request is never counted as in-flight, Collect
+	// the lifecycle spine — PreFlight (acquire) registered FIRST, before the
+	// metrics pre-flight, so a shed request has marked nothing and needs no
+	// Finalize (the inference dispatch skips it), Collect
 	// (release) fires from Finalize at response-body close so a streamed request
 	// holds its slot for the whole stream. Scope is Dispatch only (inference +
 	// each WS frame), never /healthz or the control plane. RELAY_MAX_INFLIGHT
@@ -101,6 +102,7 @@ func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) {
 	lifecycleReg.RegisterPreFlight(admission.PreFlight)
 	lifecycleReg.RegisterCollector(admission)
 	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
+	return admission
 }
 
 func registerMetrics(lifecycleReg *lifecycle.Registry, usageCtl *usagelog.Controller, payloadCtl *payloadlog.Controller) {

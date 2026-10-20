@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/otlpreceiver"
 	"github.com/wyolet/relay/app/pipeline"
@@ -27,7 +28,7 @@ import (
 func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Catalog, tokenVerifier *inference.TokenVerifier,
 	routingOpts []routing.Option, pl *pipeline.Pipeline, proxyPipeline *proxy.Pipeline, lifecycleReg *lifecycle.Registry,
 	specRegistry *adapter.Registry, profiles *clientprofile.Registry, tokenCalibrator *tokencount.Calibrator,
-	batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
+	admission *httpapi.Admission, batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
@@ -48,6 +49,7 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		Specs:              specRegistry,
 		Profiles:           profiles,
 		RouteMounters:      []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		Admission:          admission,
 		PublicURL:          cfg.Runtime.InferenceAPIURL,
 		TokenCalibrator:    tokenCalibrator,
 		StreamKeepAlive:    cfg.StreamKeepAlive,

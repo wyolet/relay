@@ -39,7 +39,7 @@ the upstream's counter).
 | `relay_admission_seconds` | histogram | `source` | Time from request accept to upstream handoff — auth + rate-limit reserve + key selection. |
 | `relay_inflight_requests` | gauge | `source` | Currently-open requests. A streamed request counts until its body closes. |
 | `relay_inflight_limit` | gauge | _(none)_ | The configured per-pod admission cap (`RELAY_MAX_INFLIGHT`). Plot `inflight_requests / inflight_limit` as shed headroom. |
-| `relay_requests_shed_total` | counter | _(none)_ | Requests refused at admission (429 + `Retry-After`) because the in-flight cap was reached — load shedding. Distinguishes "pod at capacity" from quota 429s. |
+| `relay_requests_shed_total` | counter | `stage` | Requests refused at admission (429 + `Retry-After`) because the in-flight cap was reached — load shedding. Distinguishes "pod at capacity" from quota 429s. `stage` is `early` (refused at the route, before the body is read) or `late` (the last slot was taken after the body was read). Shed requests are counted only here, not in `relay_requests_total`, and write no usage record. |
 | `relay_post_flight_seconds` | histogram | _(none)_ | Duration of the post-flight observer fan-out per request. |
 
 <Info>
