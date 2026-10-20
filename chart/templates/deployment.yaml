@@ -90,7 +90,7 @@ spec:
             httpGet:
               path: /healthz
               port: http
-            periodSeconds: 10
+            periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
           # Liveness is process-only (/livez has NO backend dependency). A PG/DNS
