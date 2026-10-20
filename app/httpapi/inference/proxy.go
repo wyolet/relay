@@ -35,6 +35,8 @@ const (
 // handleProxy is the shared proxy-mode flow called by /openai/v1/chat/completions
 // and /anthropic/v1/messages. adapterKind pins the token extractor (and is used in
 // future per-host adapter-mismatch checks).
+//
+// The proxy-mode setting is enforced before this runs: by PrincipalMiddleware, and per frame on /v1/ws.
 func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
@@ -44,20 +46,6 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"mode", cls.Mode,
 		"upstream_host_hdr", cls.UpstreamHost,
 	)
-
-	pm, ok := proxyModeSettings(d.Catalog)
-	if !ok || !pm.Enabled {
-		d.fireUsageFailure(ctx, "proxy_disabled", "proxy mode is not enabled on this relay")
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "proxy_disabled",
-			"proxy mode is not enabled on this relay")
-		return
-	}
-	if cls.Mode == ModeProxyAnonymous && !pm.AllowUnauthenticated {
-		d.fireUsageFailure(ctx, "unauthenticated", "anonymous proxy traffic is not enabled on this relay")
-		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated",
-			"anonymous proxy traffic is not enabled on this relay")
-		return
-	}
 
 	// Resolve upstream host. Two paths:
 	//   1. Caller pinned a host via X-WR-Upstream-Host → direct lookup.

@@ -64,6 +64,10 @@ func wsHandler(d Deps) http.HandlerFunc {
 				}
 				fr = fr.WithContext(context.WithValue(fr.Context(), ctxPrincipalT{}, frame))
 			}
+			// The upgrade was admitted under the proxy-mode setting of its time; a change since must reach the live connection too.
+			if !authorizeProxyMode(fw, d.Catalog, ClassificationFrom(fr.Context()).Mode) {
+				return
+			}
 			handleShape(spec, d, fw, fr)
 		}
 

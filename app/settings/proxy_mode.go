@@ -7,8 +7,8 @@ const SectionProxyMode = "proxy-mode"
 
 // ProxyMode controls whether the relay accepts inference requests where
 // the caller brings their own upstream provider key instead of a relay
-// key. The flow lives in app/proxy (not yet built); this section gates
-// the dispatch at the inference handler.
+// key. The flow lives in app/proxy; the inference credential middleware
+// enforces this section before the request body is read.
 type ProxyMode struct {
 	// Enabled turns the proxy flow on. When false, requests without a
 	// valid relay key get 401, regardless of any other field below.
