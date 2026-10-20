@@ -8,11 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	apphost "github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/proxy"
 	apprl "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
@@ -34,10 +36,11 @@ const (
 
 // handleProxy is the shared proxy-mode flow called by /openai/v1/chat/completions
 // and /anthropic/v1/messages. adapterKind pins the token extractor (and is used in
-// future per-host adapter-mismatch checks).
+// future per-host adapter-mismatch checks). modelName is the body's model,
+// already parsed by the shape route.
 //
 // The proxy-mode setting is enforced before this runs: by PrincipalMiddleware, and per frame on /v1/ws.
-func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
+func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name, modelName string) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
 	slog.Debug("proxy: handle entry",
@@ -78,6 +81,9 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 			return
 		}
 		host = h
+		if cls.Mode == ModeProxyAuthed {
+			resolvedPlan = resolvePinnedProxyPlan(d.Resolver, PrincipalFrom(ctx), snap, modelName, h)
+		}
 	} else {
 		if cls.Mode != ModeProxyAuthed {
 			d.fireUsageFailure(ctx, "missing_upstream_host", "anonymous proxy traffic requires an upstream-host header")
@@ -109,6 +115,13 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		subject = cls.ClientIP
 	}
 	rules := resolveSystemRules(snap, bucketName, subject)
+	// With no policy there is no rule to select nor a policy slug to anchor
+	// the hash tag on, so a policy-less key keeps the system bucket alone.
+	var inbound *policy.InboundInput
+	if p := PrincipalFrom(ctx); cls.Mode == ModeProxyAuthed && p != nil && p.Policy != nil {
+		inbound = proxyInbound(ctx, p.Policy, resolvedPlan, host, rules)
+		subject, rules = "", nil
+	}
 
 	// Strip relay-internal headers before forward — Authorization, X-WR-*,
 	// hop-by-hop. Proxy.Run re-attaches the caller's UpstreamAuth.
@@ -144,6 +157,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		Headers:       forwardHdr,
 		HostBaseURL:   host.Spec.BaseURL,
 		UpstreamAuth:  cls.UpstreamAuth,
+		Inbound:       inbound,
 		RateScope:     subject,
 		Rules:         rules,
 		Extractor:     extractorFor(d, adapterKind),
@@ -230,6 +244,55 @@ func resolveSystemRules(snap *appcatalog.Snapshot, bucketName, subject string) [
 	return apprl.ResolveWithScope("proxy", subject, rl)
 }
 
+// proxyInbound is an authed proxy request's inbound reservation: pol's rate
+// limit, selected from the routed plan as normal mode selects it (or from the
+// pinned host alone when nothing routed), with ceiling reserved in the same
+// call. ceiling's keys carry the key-hash subject, so sharing the policy's
+// hash tag keeps them per key.
+func proxyInbound(ctx context.Context, pol *policy.Policy, plan *routing.Plan, host *apphost.Host, ceiling []pkgratelimit.Rule) *policy.InboundInput {
+	teamID, tokenJTI := reserveIdentity(ctx)
+	in := &policy.InboundInput{Policy: pol, TeamID: teamID, TokenJTI: tokenJTI, ExtraRules: ceiling}
+	switch {
+	case plan != nil:
+		in.ProviderSlug = plan.Provider
+		if plan.Model != nil {
+			in.ModelSlug, in.ModelID = plan.Model.Meta.Name, plan.Model.Meta.ID
+		}
+		if plan.Host != nil {
+			in.HostSlug = plan.Host.Meta.Name
+		}
+	case host != nil:
+		in.HostSlug = host.Meta.Name
+	}
+	return in
+}
+
+// resolvePinnedProxyPlan routes modelName at the pinned host, as normal mode
+// folds the header pin, so a pinned request is metered and priced like a
+// routed one. A miss is nil, not a refusal. A ref whose own "@" names another
+// host is a miss too: the bytes still go to h.
+func resolvePinnedProxyPlan(resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot, modelName string, h *apphost.Host) *routing.Plan {
+	if resolver == nil || p == nil || modelName == "" {
+		return nil
+	}
+	ref := modelName
+	if !strings.Contains(ref, "@") {
+		ref += "@" + h.Meta.Name
+	}
+	plan, err := resolver.Resolve(routing.Request{
+		ModelName:    ref,
+		RawModelName: modelName,
+		Policy:       p.Policy,
+		UserID:       p.UserID,
+		SkipKeyCheck: true,
+		Snapshot:     snap,
+	})
+	if err != nil || plan.Host == nil || plan.Host.Meta.ID != h.Meta.ID {
+		return nil
+	}
+	return plan
+}
+
 // relayKeyHashSubject returns the SHA-256 hash of the key token
 // from ctx, suitable as a per-key rate-limit subject. Empty when no
 // relay key is on ctx (proxy-anonymous path).
@@ -256,6 +319,11 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, proxy.ErrNoUpstreamAuth):
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_upstream_auth",
 			"proxy mode requires Authorization: Bearer <upstream-key>")
+	case errors.Is(err, pkgratelimit.ErrRevoked):
+		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked",
+			"this token has been revoked")
+	case errors.Is(err, proxy.ErrPolicyMissing):
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "policy_missing", "proxy mode is not wired to a policy service")
 	default:
 		// Limiter exceeded → 429 with Retry-After from the limiter's
 		// bucket-refill timing, so SDK clients back off correctly instead of
