@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/sdk/internal/sse"
@@ -27,14 +28,16 @@ const (
 	ccStreamKindReasoning
 )
 
+// ccStreamItem is only ever held by pointer: a strings.Builder panics when
+// written to after being copied.
 type ccStreamItem struct {
 	kind        ccStreamItemKind
 	outputIndex int
 	itemID      string
 	callID      string
 	name        string
-	textBuf     string
-	argsBuf     string
+	textBuf     strings.Builder
+	argsBuf     []byte
 	// reasoningField records the wire field name (reasoning|reasoning_content)
 	// for reasoning items, preserved into the canonical item's provider_data.
 	reasoningField string

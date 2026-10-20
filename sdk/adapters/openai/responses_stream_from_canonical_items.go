@@ -43,12 +43,13 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 
 	switch st.itemType {
 	case v1.ItemTypeMessage:
-		finalPart := &ResponsesOutputTextPart{Text: st.textBuf}
+		text := string(st.textBuf)
+		finalPart := &ResponsesOutputTextPart{Text: text}
 		textDoneData, _ := json.Marshal(ResponsesOutputTextDoneEvent{
 			ItemID:       itemID,
 			OutputIndex:  st.outputIndex,
 			ContentIndex: 0,
-			Text:         st.textBuf,
+			Text:         text,
 		})
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventOutputTextDone, Data: textDoneData})
 		partDoneData, _ := json.Marshal(ResponsesContentPartDoneEvent{
@@ -76,6 +77,7 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		// falling back to per-stream state populated from item.started.
 		callID := st.callID
 		name := st.name
+		args := string(st.argsBuf)
 		var fcProbe struct {
 			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
@@ -90,12 +92,12 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 					name = fcProbe.Name
 				}
 				if fcProbe.Arguments != "" {
-					st.argsBuf = fcProbe.Arguments
+					args = fcProbe.Arguments
 				}
 			}
 		}
 		if st.custom {
-			input := responsesCustomToolInput(st.argsBuf)
+			input := responsesCustomToolInput(args)
 			deltaData, _ := json.Marshal(ResponsesCustomToolCallInputDeltaEvent{
 				ItemID:      itemID,
 				OutputIndex: st.outputIndex,
@@ -127,14 +129,14 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 			ItemID:      itemID,
 			OutputIndex: st.outputIndex,
 			CallID:      callID,
-			Arguments:   st.argsBuf,
+			Arguments:   args,
 		})
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventFunctionCallArgumentsDone, Data: argsDoneData})
 		finalFC := &ResponsesFunctionCall{
 			ID:        itemID,
 			CallID:    callID,
 			Name:      name,
-			Arguments: st.argsBuf,
+			Arguments: args,
 			Status:    done.Status,
 		}
 		itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
@@ -145,17 +147,18 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		s.closedItems = append(s.closedItems, finalFC)
 
 	case v1.ItemTypeReasoning:
+		text := string(st.textBuf)
 		textDoneData, _ := json.Marshal(ResponsesReasoningTextDoneEvent{
 			ItemID:       itemID,
 			OutputIndex:  st.outputIndex,
 			ContentIndex: 0,
-			Text:         st.textBuf,
+			Text:         text,
 		})
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventReasoningTextDone, Data: textDoneData})
 		finalR := &ResponsesReasoning{
 			ID:      itemID,
 			Status:  done.Status,
-			Summary: []ResponsesSummaryText{{Text: st.textBuf}},
+			Summary: []ResponsesSummaryText{{Text: text}},
 		}
 		if done.Content != "" {
 			finalR.Content = []ResponsesReasoningText{{Text: done.Content}}

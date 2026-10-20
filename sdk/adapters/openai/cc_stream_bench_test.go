@@ -38,12 +38,56 @@ func BenchmarkCCToCanonicalDelta(b *testing.B) {
 			b.Fatal(err)
 		}
 		// Keep the accumulated text from growing across iterations.
-		s.msgItem.textBuf = ""
+		s.msgItem.textBuf.Reset()
 	}
 }
 
 func BenchmarkCCToCanonicalStream(b *testing.B) {
-	frames := benchCCStream()
+	benchCCToCanonical(b, benchCCStream())
+}
+
+// benchLongDeltas is how many ~8-token deltas make a ~4,000-token stream.
+const benchLongDeltas = 500
+
+// benchLongDeltaText is the i-th ~8-token delta of a long stream.
+func benchLongDeltaText(i int) string {
+	return " word" + strconv.Itoa(i) + " alpha beta gamma delta epsilon zeta eta"
+}
+
+// benchCCLongStream is a ~4,000-token Chat Completions stream whose deltas
+// each carry the JSON-encoded body built by delta.
+func benchCCLongStream(first string, delta func(i int) string, finish string) [][]byte {
+	frames := [][]byte{[]byte(benchCCChunkPrefix + `{"index":0,"delta":` + first + `,"logprobs":null,"finish_reason":null}]}` + "\n\n")}
+	for i := range benchLongDeltas {
+		frames = append(frames, []byte(benchCCChunkPrefix+`{"index":0,"delta":`+delta(i)+`,"logprobs":null,"finish_reason":null}]}`+"\n\n"))
+	}
+	return append(frames,
+		[]byte(benchCCChunkPrefix+`{"index":0,"delta":{},"logprobs":null,"finish_reason":"`+finish+`"}]}`+"\n\n"),
+		[]byte(benchCCChunkPrefix+`],"usage":{"prompt_tokens":19,"completion_tokens":4000,"total_tokens":4019}}`+"\n\n"),
+		[]byte("data: [DONE]\n\n"),
+	)
+}
+
+func BenchmarkCCToCanonicalLongStream(b *testing.B) {
+	b.Run("text", func(b *testing.B) {
+		benchCCToCanonical(b, benchCCLongStream(`{"role":"assistant","content":""}`, func(i int) string {
+			return `{"content":` + strconv.Quote(benchLongDeltaText(i)) + `}`
+		}, "stop"))
+	})
+	b.Run("reasoning", func(b *testing.B) {
+		benchCCToCanonical(b, benchCCLongStream(`{"role":"assistant","content":""}`, func(i int) string {
+			return `{"reasoning_content":` + strconv.Quote(benchLongDeltaText(i)) + `}`
+		}, "stop"))
+	})
+	b.Run("tool_args", func(b *testing.B) {
+		first := `{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"write","arguments":"{\"text\":\""}}]}`
+		benchCCToCanonical(b, benchCCLongStream(first, func(i int) string {
+			return `{"tool_calls":[{"index":0,"function":{"arguments":` + strconv.Quote(benchLongDeltaText(i)) + `}}]}`
+		}, "tool_calls"))
+	})
+}
+
+func benchCCToCanonical(b *testing.B, frames [][]byte) {
 	b.ReportAllocs()
 	for b.Loop() {
 		tc := CCTranslator{}.NewToCanonicalStream()
