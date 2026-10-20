@@ -8,9 +8,12 @@
 //     handler hands us the resolved BaseURL.
 //   - No keypool, no per-key circuit breaker, no retry/failover. The
 //     caller's Authorization is the upstream credential; one attempt.
-//   - System-owned rate limits only (inference-api-proxy for authed,
-//     inference-api-proxy-anonymous for anonymous), keyed by key
-//     hash or client IP respectively.
+//   - An authed request reserves its governing policy's rate limit as
+//     normal mode does, with the inference-api-proxy system bucket as a
+//     further ceiling in the same Reserve: bringing an upstream key
+//     must not lift the operator's limits. A policy-less key reserves
+//     that system bucket alone; anonymous requests reserve only
+//     inference-api-proxy-anonymous, keyed by client IP.
 //   - Same tee + detached post-flight pattern as app/pipeline: the
 //     post-flight goroutine commits the reservation and extracts
 //     tokens for usage logging. Never blocks the response.
@@ -33,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/contentcoding"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
@@ -59,8 +63,9 @@ type Request struct {
 	// Body is the inbound request body. Streamed through to upstream
 	// verbatim; the proxy does not buffer it. Transport-layer code that
 	// wants to inspect the body (for usage stamping, deep validation,
-	// etc.) should ReadAll first and pass a *bytes.Reader here — proxy
-	// stays shape-blind either way.
+	// etc.) should ReadAll first and pass a reqbody.NewReader here — a
+	// *bytes.Reader stays reachable from the transport for the whole
+	// response. Run sets Body to nil once the upstream answers.
 	Body io.Reader
 
 	// ContentLength is the inbound request's Content-Length, applied to
@@ -82,11 +87,15 @@ type Request struct {
 	// supplied (typically "Bearer …"). Forwarded as-is.
 	UpstreamAuth string
 
-	// RateScope is the limiter bucket subject — the key hash for
-	// authed, the client IP for anonymous. Empty disables limiting.
+	// Inbound, when set, is reserved through Pipeline.Policy and replaces
+	// RateScope/Rules: the authed path, metered by the caller's policy.
+	Inbound *policy.InboundInput
+
+	// RateScope and Rules reserve system-owned rules directly when Inbound
+	// is nil: anonymous (scoped by client IP) and policy-less keys (by key
+	// hash). Empty disables limiting.
 	RateScope string
-	// Rules is the resolved rule set (system-owned for proxy mode).
-	Rules []pkgratelimit.Rule
+	Rules     []pkgratelimit.Rule
 
 	// Extractor parses the upstream response body for usage logging.
 	// nil disables extraction (post-flight still commits the reservation).
@@ -114,7 +123,9 @@ type Result struct {
 // Pipeline is the orchestrator. Constructed once at boot; Run() is
 // goroutine-safe.
 type Pipeline struct {
-	Limiter   *pkgratelimit.Limiter
+	Limiter *pkgratelimit.Limiter
+	// Policy reserves Request.Inbound; required for authed requests.
+	Policy    *policy.Service
 	Lifecycle *lifecycle.Registry
 	Client    *http.Client
 	Logger    *slog.Logger
@@ -138,14 +149,23 @@ func New(limiter *pkgratelimit.Limiter, registry *lifecycle.Registry, logger *sl
 // ErrNoUpstreamAuth signals the handler forgot to populate UpstreamAuth.
 var ErrNoUpstreamAuth = errors.New("proxy: upstream authorization required")
 
+// ErrPolicyMissing signals an authed request reached a Pipeline with no
+// policy service; refused rather than forwarded unmetered.
+var ErrPolicyMissing = errors.New("proxy: policy service not configured")
+
 // Run forwards one proxy-mode request. The returned Body MUST be Closed.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	// Failure telemetry: any error return (missing auth, rate-limit
 	// rejection, upstream network failure) fires a post-flight observer
 	// event so failed proxy requests aren't invisible to usage tracking.
 	// Success returns nil err here and fires post-flight on Body.Close.
+	// A reservation taken before the failure is refunded.
+	var reservation *pkgratelimit.Reservation
 	defer func() {
 		if err != nil {
+			if reservation != nil {
+				_ = p.commit(context.WithoutCancel(ctx), req, reservation, pkgratelimit.Observations{Cancelled: true})
+			}
 			go p.fireFailure(req, err)
 		}
 	}()
@@ -154,11 +174,18 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		return nil, ErrNoUpstreamAuth
 	}
 
-	var reservation *pkgratelimit.Reservation
-	if p.Limiter != nil && len(req.Rules) > 0 && req.RateScope != "" {
-		reservation, err = p.Limiter.Reserve(ctx, req.RateScope, req.Rules)
-		if err != nil {
-			return nil, err // 429 envelope handled by caller
+	switch {
+	case req.Inbound != nil:
+		if p.Policy == nil {
+			return nil, ErrPolicyMissing
+		}
+		// 429 / revoked mapping is the caller's.
+		if reservation, err = p.Policy.ReserveInbound(ctx, *req.Inbound); err != nil {
+			return nil, err
+		}
+	case p.Limiter != nil && len(req.Rules) > 0 && req.RateScope != "":
+		if reservation, err = p.Limiter.Reserve(ctx, req.RateScope, req.Rules); err != nil {
+			return nil, err
 		}
 	}
 
@@ -182,11 +209,8 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 
 	req.Lifecycle.MarkUpstreamStart()
 	resp, err := p.Client.Do(upstream)
+	req.Body = nil
 	if err != nil {
-		if reservation != nil && p.Limiter != nil {
-			detached := context.WithoutCancel(ctx)
-			_ = p.Limiter.Commit(detached, reservation, pkgratelimit.Observations{Cancelled: true})
-		}
 		return nil, fmt.Errorf("proxy: upstream call: %w", err)
 	}
 
@@ -280,13 +304,27 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 	// post-flight is off the client path, so ordering it last is safe.
 	body = nil
 
-	if res != nil && p.Limiter != nil {
+	if res != nil {
 		obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
-		if err := p.Limiter.Commit(ctx, res, obs); err != nil && p.Logger != nil {
+		if err := p.commit(ctx, req, res, obs); err != nil && p.Logger != nil {
 			p.Logger.Warn("proxy: limiter commit failed",
 				"err", err, "scope", req.RateScope)
 		}
 	}
+}
+
+// commit returns res through whichever side reserved it.
+func (p *Pipeline) commit(ctx context.Context, req *Request, res *pkgratelimit.Reservation, obs pkgratelimit.Observations) error {
+	if req.Inbound != nil {
+		if p.Policy == nil {
+			return nil
+		}
+		return p.Policy.CommitInbound(ctx, res, obs)
+	}
+	if p.Limiter == nil {
+		return nil
+	}
+	return p.Limiter.Commit(ctx, res, obs)
 }
 
 // fireFailure emits a post-flight observer event for a proxy request
@@ -298,9 +336,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 	}
 	kind, status := classifyFailure(runErr)
 	req.Lifecycle.MarkEnd()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, &lifecycle.PostFlightEvent{
 		Status:       status,
 		ErrorKind:    kind,
 		ErrorMessage: runErr.Error(),
@@ -318,6 +354,10 @@ func classifyFailure(err error) (kind string, status int) {
 	case errors.As(err, &exceeded):
 		// Reservation rejected before the upstream call → status 0.
 		return "rate_limited", 0
+	case errors.Is(err, pkgratelimit.ErrRevoked):
+		return "token_revoked", 0
+	case errors.Is(err, ErrPolicyMissing):
+		return "policy_missing", 0
 	case errors.Is(err, context.Canceled):
 		return "client_canceled", 0
 	case errors.Is(err, context.DeadlineExceeded):

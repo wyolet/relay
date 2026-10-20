@@ -36,3 +36,8 @@ type Translator interface {
 type RequestAwareStream interface {
 	NewFromCanonicalStreamFor(req *Request) func(chunk []byte) ([]byte, error)
 }
+
+// SummaryStream is an optional companion to Translator for callers that read only a stream's Summary (StreamSummarizer, ExtractSummary). NewSummaryStream returns the same to-canonical transform as NewToCanonicalStream plus a cheap predicate over each raw vendor frame (one event, separator stripped), called before the frame is translated: false means translating it cannot change the Summary, so the caller skips it. The predicate may read the transform's per-stream state, which is why one call returns both; the Translator value stays stateless.
+type SummaryStream interface {
+	NewSummaryStream() (toCanon func(chunk []byte) ([]byte, error), affectsSummary func(frame []byte) bool)
+}

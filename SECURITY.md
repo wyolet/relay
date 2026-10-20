@@ -4,7 +4,7 @@
 
 Do not report security vulnerabilities through public issues, discussions, or pull requests.
 
-Use GitHub's private vulnerability reporting: the repository's **Security** tab → **Report a vulnerability**. Include a description, reproduction steps, affected versions, and the impact you observed.
+Use GitHub's private vulnerability reporting (the repository's **Security** tab → **Report a vulnerability**) or email security@wyolet.com. Include a description, reproduction steps, affected versions, and the impact you observed.
 
 What to expect:
 
@@ -14,7 +14,7 @@ What to expect:
 
 ## Supported versions
 
-Security fixes go into the latest minor release line (currently `0.10.x`) and `main`. Older lines are not patched; upgrade to receive fixes. See [upgrading](docs/concepts/upgrade.mdx).
+Security fixes go into the latest minor release line and `main`. Older lines are not patched; upgrade to receive fixes. See [upgrading](docs/concepts/upgrade.mdx).
 
 ## Scope
 

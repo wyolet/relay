@@ -209,7 +209,7 @@ func TestProxyForward_PayloadTeeCapture(t *testing.T) {
 		wantTrunc  bool
 	}{
 		{"logging on captures full body", 3 << 20, true, -1, false},
-		{"logging off keeps prefix only", 3 << 20, false, proxyMaxBodyPeek + 1, true},
+		{"logging off retains nothing", 3 << 20, false, 0, false},
 		{"capture cap exceeded", proxyMaxBodyBuffer, true, proxyMaxBodyBuffer, true},
 	}
 	for _, tc := range cases {

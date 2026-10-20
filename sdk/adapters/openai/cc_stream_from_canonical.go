@@ -20,8 +20,6 @@ func (CCTranslator) NewFromCanonicalStream() func(chunk []byte) ([]byte, error) 
 
 // --- helpers ---
 
-// marshalCanonicalFrames serializes a slice of v1.SSEFrame values to wire bytes.
-// Returns all frames concatenated.
 // canonicalToCCStream converts canonical SSE frames to OpenAI chat.completion.chunk
 // SSE frames. Used by NewFromCanonicalStream when a CC inbound caller is served by
 // a non-CC upstream (e.g. Anthropic → canonical → CC).
@@ -301,10 +299,26 @@ func ccMarshalReasoningChunk(id, model string, created int64, delta string) ([]b
 	})
 }
 
+// marshalCanonicalFrames writes each frame as v1.SSEFrame.Bytes does, into
+// one buffer sized up front; no frames gives nil.
 func marshalCanonicalFrames(frames []v1.SSEFrame) []byte {
-	var buf []byte
+	if len(frames) == 0 {
+		return nil
+	}
+	n := 0
 	for _, f := range frames {
-		buf = append(buf, f.Bytes()...)
+		n += len("event: \ndata: \n\n") + len(f.Event) + len(f.Data)
+	}
+	buf := make([]byte, 0, n)
+	for _, f := range frames {
+		if f.Event != "" {
+			buf = append(buf, "event: "...)
+			buf = append(buf, f.Event...)
+			buf = append(buf, '\n')
+		}
+		buf = append(buf, "data: "...)
+		buf = append(buf, f.Data...)
+		buf = append(buf, "\n\n"...)
 	}
 	return buf
 }

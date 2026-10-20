@@ -8,14 +8,15 @@ import "github.com/prometheus/client_golang/prometheus"
 // moment; nothing here reaches back into them.
 var (
 	// RecordsLost counts background records dropped because a bounded
-	// emitter queue was full (usage rows, payload captures). The async
-	// contract mandates this counter: a drop you can't see is a billing
-	// or audit hole. `kind` is the emitter: "usage" | "payload".
+	// emitter queue was full or a WAL dropped segments over its disk cap
+	// (usage rows, payload captures). The async contract mandates this
+	// counter: a drop you can't see is a billing or audit hole. `kind` is
+	// the emitter: "usage" | "payload".
 	RecordsLost = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: Namespace,
 			Name:      "records_lost_total",
-			Help:      "Background records dropped due to a full emitter queue, by kind (usage/payload).",
+			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage/payload).",
 		},
 		[]string{"kind"},
 	)
@@ -60,6 +61,14 @@ func init() {
 
 // RecordLost is the one-liner an emitter calls at its drop site.
 func RecordLost(kind string) { RecordsLost.WithLabelValues(SafeLabel(kind)).Inc() }
+
+// AddRecordsLost counts n records lost at once, e.g. a WAL segment dropped
+// over its disk cap.
+func AddRecordsLost(kind string, n int) {
+	if n > 0 {
+		RecordsLost.WithLabelValues(SafeLabel(kind)).Add(float64(n))
+	}
+}
 
 // ReportFlushLag is the one-liner a WAL queue calls after each flush pass
 // with the age of its oldest remaining segment (0 when drained).

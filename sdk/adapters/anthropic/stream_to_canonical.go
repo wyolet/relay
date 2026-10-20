@@ -33,6 +33,7 @@ type anthropicToCanonicalStream struct {
 	cachedTokens        int
 	cacheCreationTokens int
 	cacheCreation1h     int
+	serviceTier         string
 	stopReason          string
 	// structuredOutputSeen is set when a __relay_structured_output tool block
 	// is completed. It prevents handleMessageDelta from overwriting the
@@ -95,6 +96,7 @@ func (s *anthropicToCanonicalStream) handleMessageStart(data []byte) ([]byte, er
 				CacheCreationByTTL struct {
 					Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
 				} `json:"cache_creation"`
+				ServiceTier string `json:"service_tier"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -108,6 +110,7 @@ func (s *anthropicToCanonicalStream) handleMessageStart(data []byte) ([]byte, er
 	s.cachedTokens = ms.Message.Usage.CacheRead
 	s.cacheCreationTokens = ms.Message.Usage.CacheCreation
 	s.cacheCreation1h = ms.Message.Usage.CacheCreationByTTL.Ephemeral1h
+	s.serviceTier = ms.Message.Usage.ServiceTier
 
 	if s.responseID == "" {
 		s.responseID = fmt.Sprintf("resp_%d", s.created)
@@ -134,6 +137,7 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 			CacheCreationByTTL struct {
 				Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
 			} `json:"cache_creation"`
+			ServiceTier string `json:"service_tier"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &md); err != nil {
@@ -150,6 +154,9 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 	s.cachedTokens = max(s.cachedTokens, md.Usage.CacheRead)
 	s.cacheCreationTokens = max(s.cacheCreationTokens, md.Usage.CacheCreation)
 	s.cacheCreation1h = max(s.cacheCreation1h, md.Usage.CacheCreationByTTL.Ephemeral1h)
+	if md.Usage.ServiceTier != "" {
+		s.serviceTier = md.Usage.ServiceTier
+	}
 	return nil, nil
 }
 
@@ -162,6 +169,7 @@ func (s *anthropicToCanonicalStream) handleMessageStop() ([]byte, error) {
 		FinishReason:      finish,
 		Usage:             anthropicTokens(s.inputTokens, s.outputTokens, s.cachedTokens, s.cacheCreationTokens, s.cacheCreation1h),
 		IncompleteDetails: incomplete,
+		ServiceTier:       s.serviceTier,
 	}
 
 	completedData, _ := json.Marshal(gen)

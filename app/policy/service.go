@@ -77,25 +77,37 @@ type InboundInput struct {
 	// TokenJTI, when set, adds the revocation check to this Reserve — the
 	// one kv call the request already makes.
 	TokenJTI string
+
+	// ExtraRules are metered in the same Reserve as the policy's rules, under
+	// the same hash tag, so a further ceiling costs no extra kv call. Their
+	// keys must already carry their own subject.
+	ExtraRules []pkgratelimit.Rule
 }
 
 // ReserveInbound reserves the inbound policy's RL bucket for this request.
-// Returns (nil, nil) when there is nothing to check: no applicable RL and no
-// token to check for revocation.
+// Returns (nil, nil) when there is nothing to check: no applicable RL, no
+// extra rule and no token to check for revocation.
 func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgratelimit.Reservation, error) {
 	metered := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug, in.ModelID)
+	nMetered := len(metered) + len(in.ExtraRules)
 	rules := metered
-	if in.TokenJTI != "" {
-		// First in the slice: a revoked token must answer 401, not the 429 an
-		// over-limit rule evaluated ahead of it would produce. Pre-sized so
-		// the metered rules don't force a regrow.
-		rules = make([]pkgratelimit.Rule, 0, len(metered)+1)
-		rules = append(rules, pkgratelimit.Rule{
-			Key:   revokedRuleKey(in.TokenJTI),
-			Name:  "token revocation",
-			Meter: pkgratelimit.MeterRevoked,
-		})
+	switch {
+	case in.TokenJTI != "" || (len(metered) > 0 && len(in.ExtraRules) > 0):
+		// The revocation rule goes first: a revoked token must answer 401, not
+		// the 429 an over-limit rule evaluated ahead of it would produce.
+		// Pre-sized so the rest don't force a regrow.
+		rules = make([]pkgratelimit.Rule, 0, nMetered+1)
+		if in.TokenJTI != "" {
+			rules = append(rules, pkgratelimit.Rule{
+				Key:   revokedRuleKey(in.TokenJTI),
+				Name:  "token revocation",
+				Meter: pkgratelimit.MeterRevoked,
+			})
+		}
 		rules = append(rules, metered...)
+		rules = append(rules, in.ExtraRules...)
+	case len(metered) == 0:
+		rules = in.ExtraRules
 	}
 	if len(rules) == 0 || s.limiter == nil {
 		return nil, nil
@@ -108,7 +120,7 @@ func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgrate
 	if err != nil {
 		return nil, err
 	}
-	if len(metered) == 0 {
+	if nMetered == 0 {
 		// Revocation check only: nothing was metered, so the post-flight
 		// commit would be a second script call for no state.
 		res.SetNoCommit()

@@ -18,6 +18,7 @@ import (
 //	              → response.wire.json      (SerializeResponse, echoing the case request)
 //	stream.sse    → stream.canonical.json   (NewToCanonicalStream, frame by frame)
 //	              → stream.wire.json        (NewFromCanonicalStream over those frames)
+//	              → stream.summary.json     (ExtractSummary, and StreamSummarizer frame by frame)
 //
 // The second golden of each pair is the X → canonical → X round trip. On top
 // of the goldens, canonical → X → canonical must reproduce the canonical
@@ -42,6 +43,7 @@ var lossyRoundTrips = func() map[string]lossyRoundTrip {
 	m := map[string]lossyRoundTrip{
 		"testdata/openai/chat-refusal stream.sse":           {why: "a CC stream writes a refusal as text deltas plus finish_reason content_filter — message.refusal would need the finish reason before the first delta"},
 		"testdata/openai/responses-tool-calls request.json": {why: "input items carry no status on Responses (annotated drop)"},
+		"testdata/anthropic/text stream.sse":                {why: "NewFromCanonicalStream drops service_tier (annotated), for the same reason as SerializeResponse"},
 	}
 	for _, c := range []string{"service-tier", "text"} {
 		m["testdata/anthropic/"+c+" "+responseInput] = lossyRoundTrip{why: "SerializeResponse drops service_tier (annotated): the canonical tier is the serving upstream's lane name, which usage.service_tier would mislabel when another vendor served it"}
@@ -100,6 +102,7 @@ func runCase(t *testing.T, s shape, dir string) {
 	}
 	if body, ok := readInput(t, dir, streamInput, known); ok {
 		runStream(t, s, dir, body, req, known)
+		runStreamSummary(t, s, dir, body, known)
 	}
 	if len(known) == 0 {
 		t.Fatalf("%s has none of %s, %s, %s", dir, requestInput, responseInput, streamInput)

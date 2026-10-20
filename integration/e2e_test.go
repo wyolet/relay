@@ -158,6 +158,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	lifecycleReg := lifecycle.New()
 	pl := &pipeline.Pipeline{Policy: policySvc, Lifecycle: lifecycleReg, Logger: slog.Default()}
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
+	proxyPipeline.Policy = policySvc
 
 	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
 	anthropicAuth := adapter.AuthStrategy{

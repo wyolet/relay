@@ -26,7 +26,9 @@ func endsFrame(b []byte) bool {
 
 // KeepAlive wraps a streaming ResponseWriter and writes frame whenever nothing else has been written for the configured interval. It is an io.Writer + http.Flusher, so the copy loops can write through it unchanged.
 //
-// Safety of the splice rests on two gates, both required: the ticker only fires when no Write landed in the last interval (so it can never interleave with an in-progress write), and only when the last write ended on an SSE frame boundary (so a copy loop that hands over a half frame — streamCopy reads in 32 KiB blocks, not frames — is never cut in two).
+// Safety of the splice rests on two gates, both required: a frame is only written when no Write landed in the last interval (so it can never interleave with an in-progress write), and only when the last write ended on an SSE frame boundary (so a copy loop that hands over a half frame — streamCopy reads in 32 KiB blocks, not frames — is never cut in two).
+//
+// It runs on a timer callback rather than a goroutine per stream, so an idle open stream holds no goroutine stack for the GC to scan.
 type KeepAlive struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
@@ -36,11 +38,13 @@ type KeepAlive struct {
 	mu         sync.Mutex
 	last       time.Time
 	atBoundary bool
-
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
+	stopped    bool
+	timer      *time.Timer
+	stopCtx    func() bool
 }
+
+// minRearm bounds how soon tick re-arms, so a tick landing just before the silence window closes cannot schedule a near-zero timer.
+const minRearm = time.Millisecond
 
 // NewKeepAlive returns a KeepAlive writing frame to w every interval of silence. every <= 0 disables it entirely: Write is a plain pass-through and Start/Stop are no-ops.
 func NewKeepAlive(w http.ResponseWriter, frame []byte, every time.Duration) *KeepAlive {
@@ -53,7 +57,6 @@ func NewKeepAlive(w http.ResponseWriter, frame []byte, every time.Duration) *Kee
 		// Response headers are already written by the time a copy loop starts, so the stream is at a frame boundary from the first tick on and needs no "wait for the first real write" flag.
 		last:       time.Now(),
 		atBoundary: true,
-		stop:       make(chan struct{}),
 	}
 }
 
@@ -89,42 +92,51 @@ func (k *KeepAlive) flush() {
 	}
 }
 
-// Start launches the keepalive goroutine. It exits on ctx cancellation (client gone) or Stop. Call at most once, before the copy loop.
+// Start arms the keepalive timer. It ends on ctx cancellation (client gone) or Stop. Call at most once, before the copy loop.
 func (k *KeepAlive) Start(ctx context.Context) {
 	if k.every <= 0 || len(k.frame) == 0 {
 		return
 	}
-	k.done = make(chan struct{})
-	go k.loop(ctx)
+	// Held so tick (which may fire at once for a tiny interval) and Stop see timer and stopCtx assigned.
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.stopped {
+		return
+	}
+	k.timer = time.AfterFunc(k.every, k.tick)
+	k.stopCtx = context.AfterFunc(ctx, k.Stop)
 }
 
-func (k *KeepAlive) loop(ctx context.Context) {
-	defer close(k.done)
-	t := time.NewTicker(k.every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-k.stop:
-			return
-		case now := <-t.C:
-			k.mu.Lock()
-			if k.atBoundary && now.Sub(k.last) >= k.every {
-				if _, err := k.w.Write(k.frame); err == nil {
-					k.last = now
-					k.flush()
-				}
-			}
-			k.mu.Unlock()
+// tick runs on the timer goroutine. Writes do not reset the timer (a timer-heap op per SSE event); instead tick re-arms for whatever is left of the current silence window.
+func (k *KeepAlive) tick() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.stopped {
+		return
+	}
+	now := time.Now()
+	next := k.every
+	if idle := now.Sub(k.last); idle < k.every {
+		next = max(k.every-idle, minRearm)
+	} else if k.atBoundary {
+		if _, err := k.w.Write(k.frame); err == nil {
+			k.last = now
+			k.flush()
 		}
 	}
+	k.timer.Reset(next)
 }
 
-// Stop ends the keepalive and waits for its goroutine, so no frame can land after the real stream finished. Idempotent; safe when Start was never called.
+// Stop ends the keepalive so no frame can land after the real stream finished: a tick either completed before Stop took the lock or sees stopped. Idempotent; safe when Start was never called.
 func (k *KeepAlive) Stop() {
-	k.stopOnce.Do(func() { close(k.stop) })
-	if k.done != nil {
-		<-k.done
+	k.mu.Lock()
+	k.stopped = true
+	timer, stopCtx := k.timer, k.stopCtx
+	k.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+	if stopCtx != nil {
+		stopCtx()
 	}
 }
