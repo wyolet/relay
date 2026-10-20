@@ -236,7 +236,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
 }
 
-// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. On false the response is written.
+// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. A shed is the one false return with no Finalize. On false the response is written.
 func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifecycle.Context) bool {
 	if d.Lifecycle == nil {
 		return true
@@ -246,13 +246,13 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 		return true
 	}
 	// In-flight cap reached → shed with a retriable 429 + Retry-After so
-	// clients back off instead of hammering a saturated pod. The slot was
-	// never acquired, so no release is owed. Any other abort stays a 500.
+	// clients back off instead of hammering a saturated pod. No Finalize is
+	// owed: admission is the first pre-flight middleware, so a shed aborts
+	// before any other one marks lc, and the slot was never acquired. Skipping
+	// it keeps a flood from turning into one usage event per refusal. Any
+	// other abort stays a 500.
 	if errors.Is(err, httpapi.ErrShed) {
-		d.fireUsageFailure(ctx, "shed", err.Error())
-		w.Header().Set("Retry-After", httpapi.RetryAfterShed)
-		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
-			"relay is at capacity; retry shortly")
+		writeShed(w)
 		return false
 	}
 	d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
