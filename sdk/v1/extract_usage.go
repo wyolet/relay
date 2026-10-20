@@ -79,7 +79,7 @@ func ExtractSummary(tr Translator, body []byte) (Summary, error) {
 // generation.completed event. Errors per-frame are skipped (one bad
 // chunk shouldn't lose the whole stream's usage).
 func extractSummaryFromSSE(tr Translator, body []byte) Summary {
-	toCanon := tr.NewToCanonicalStream()
+	toCanon, affectsSummary := summaryStream(tr)
 	if toCanon == nil {
 		// Translator declares no stream transform — the wire IS canonical.
 		// In that case the body itself is already canonical SSE; parse it
@@ -98,7 +98,7 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 		}
 		rest = rest[n:]
 		frame := NormalizeSSELineEnds(raw)
-		if len(frame) == 0 {
+		if len(frame) == 0 || (affectsSummary != nil && !affectsSummary(frame)) {
 			continue
 		}
 		// The closure expects each chunk terminated by the SSE blank-line
