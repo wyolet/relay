@@ -21,9 +21,9 @@ func finalized(t *testing.T, o *Observer, lc *lifecycle.Context, ev *usagelog.Ev
 	reg.Finalize(t.Context(), lc, &lifecycle.PostFlightEvent{Status: 200})
 }
 
-func newLC(body []byte, modelID, session string) *lifecycle.Context {
+func newLC(requestBytes int, modelID, session string) *lifecycle.Context {
 	lc := lifecycle.NewContext("req-1", "pipeline", time.Now())
-	lc.RequestBody = body
+	lc.RequestBytes = requestBytes
 	lc.ModelID = modelID
 	if session != "" {
 		lc.Metadata[MetadataKeySession] = session
@@ -36,8 +36,7 @@ func TestObserver_RecordsTheRatio(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	cal := NewCalibrator(s)
 
-	body := make([]byte, 4000)
-	finalized(t, NewObserver(cal), newLC(body, "model-x", "sess-x"),
+	finalized(t, NewObserver(cal), newLC(4000, "model-x", "sess-x"),
 		&usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000, "output": 20}})
 
 	got, ok := cal.Ratio(t.Context(), "sess-x", "model-x")
@@ -52,8 +51,7 @@ func TestObserver_CountsCachedPromptTokens(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	cal := NewCalibrator(s)
 
-	body := make([]byte, 4000)
-	finalized(t, NewObserver(cal), newLC(body, "model-x", "sess-x"),
+	finalized(t, NewObserver(cal), newLC(4000, "model-x", "sess-x"),
 		&usagelog.Event{Tokens: sdkusage.Tokens{"input": 100, "cache_read": 600, "cache_creation": 300, "output": 20}})
 
 	got, ok := cal.Ratio(t.Context(), "sess-x", "model-x")
@@ -62,17 +60,16 @@ func TestObserver_CountsCachedPromptTokens(t *testing.T) {
 	}
 }
 
-// A request whose body was only partly captured, or which never resolved to a model, or which reported no input tokens, measures nothing.
+// A request with no body, or which never resolved to a model, or which reported no input tokens, measures nothing.
 func TestObserver_SkipsUnmeasurableRequests(t *testing.T) {
-	body := make([]byte, 4000)
 	cases := []struct {
 		name string
 		lc   *lifecycle.Context
 		ev   *usagelog.Event
 	}{
-		{"no model", newLC(body, "", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}}},
-		{"no body", newLC(nil, "m", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}}},
-		{"no input tokens", newLC(body, "m", "s"), &usagelog.Event{}},
+		{"no model", newLC(4000, "", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}}},
+		{"no body", newLC(0, "m", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}}},
+		{"no input tokens", newLC(4000, "m", "s"), &usagelog.Event{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,16 +82,4 @@ func TestObserver_SkipsUnmeasurableRequests(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("truncated body", func(t *testing.T) {
-		s := kv.NewMem()
-		t.Cleanup(func() { _ = s.Close() })
-		cal := NewCalibrator(s)
-		lc := newLC(body, "m", "s")
-		lc.RequestBodyTruncated = true
-		finalized(t, NewObserver(cal), lc, &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}})
-		if _, ok := cal.Ratio(t.Context(), "s", "m"); ok {
-			t.Fatal("a prefix of the body would read as a denser prompt than it was")
-		}
-	})
 }

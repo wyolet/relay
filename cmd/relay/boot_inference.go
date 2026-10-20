@@ -54,6 +54,7 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		TokenCalibrator:    tokenCalibrator,
 		StreamKeepAlive:    cfg.StreamKeepAlive,
 		RequestStreamUsage: cfg.StreamUsage,
+		MaxRequestBytes:    maxBody,
 		TrustEventTime:     cfg.DevTrustEventTime,
 	})
 

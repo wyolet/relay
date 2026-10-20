@@ -63,8 +63,9 @@ type Request struct {
 	// Body is the inbound request body. Streamed through to upstream
 	// verbatim; the proxy does not buffer it. Transport-layer code that
 	// wants to inspect the body (for usage stamping, deep validation,
-	// etc.) should ReadAll first and pass a *bytes.Reader here — proxy
-	// stays shape-blind either way.
+	// etc.) should ReadAll first and pass a reqbody.NewReader here — a
+	// *bytes.Reader stays reachable from the transport for the whole
+	// response. Run sets Body to nil once the upstream answers.
 	Body io.Reader
 
 	// ContentLength is the inbound request's Content-Length, applied to
@@ -208,6 +209,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 
 	req.Lifecycle.MarkUpstreamStart()
 	resp, err := p.Client.Do(upstream)
+	req.Body = nil
 	if err != nil {
 		return nil, fmt.Errorf("proxy: upstream call: %w", err)
 	}

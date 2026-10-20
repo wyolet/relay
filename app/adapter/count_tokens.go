@@ -42,12 +42,13 @@ type countCallAdapter struct {
 
 func (a *countCallAdapter) Call(ctx context.Context, baseURL string, _ *string, apiKey string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
 	callCtx, cancel := a.callContext(ctx, false)
-	req, err := a.newRequest(callCtx, baseURL+a.spec.CountPath, apiKey, body, hdr, oauth)
+	req, releaseBody, err := a.newRequest(callCtx, baseURL+a.spec.CountPath, apiKey, body, hdr, oauth)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	resp, err := a.spec.client.Do(req)
+	releaseBody()
 	if err != nil {
 		cancel()
 		return nil, err

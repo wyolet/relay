@@ -107,6 +107,10 @@ type Context struct {
 	// observer skips the request and its stream observer does not buffer.
 	PayloadLog bool
 
+	// RequestBytes is the length of the whole inbound request body, set at
+	// the inference entry whether or not the body itself is retained.
+	RequestBytes int
+
 	// RequestBody is the raw inbound request bytes, retained for the
 	// payloadlog observer. Set at the inference entry (pipeline: the
 	// dispatched body; proxy: a capped tee of the request stream). Nil
@@ -116,8 +120,8 @@ type Context struct {
 
 	// RequestBodyTruncated marks RequestBody as an incomplete prefix of a
 	// larger streamed body — set on the proxy peek-then-stream path when
-	// the remainder wasn't captured (payload logging off, the tee capture
-	// hit its cap, or upstream answered before draining the request) — so
+	// the remainder wasn't captured (the tee capture hit its cap, or
+	// upstream answered before draining the request) — so
 	// payload records never pretend the stored bytes were the whole
 	// request. False whenever RequestBody holds the complete body.
 	RequestBodyTruncated bool

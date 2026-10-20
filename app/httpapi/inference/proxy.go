@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	"github.com/wyolet/relay/pkg/reqbody"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -394,9 +395,9 @@ type proxyBody struct {
 // payload-capture fallback. When a Capture is armed, finalize overwrites
 // both fields with the assembled full body; until then (and on any
 // failure path that never closes the response) the prefix + truncated
-// flag stand. Nil-safe on lc.
+// flag stand. Nil-safe on lc; a no-op unless payload capture is on.
 func (pb proxyBody) seedLifecycle(lc *lifecycle.Context) {
-	if lc == nil {
+	if lc == nil || !lc.PayloadLog {
 		return
 	}
 	lc.RequestBody = pb.Prefix
@@ -440,7 +441,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
-		return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(prefix)), Prefix: prefix}, nil
+		return plan, proxyBody{Reader: reqbody.NewReader(prefix), Prefix: prefix}, nil
 	}
 
 	if model, ok := scanTopLevelModel(prefix); ok {
@@ -473,7 +474,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 	if err != nil {
 		return nil, proxyBody{}, err
 	}
-	return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(full)), Prefix: full}, nil
+	return plan, proxyBody{Reader: reqbody.NewReader(full), Prefix: full}, nil
 }
 
 func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
