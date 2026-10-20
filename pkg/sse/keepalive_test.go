@@ -59,7 +59,7 @@ func TestKeepAlive_PartialFrameBlocksKeepAlive(t *testing.T) {
 	}
 }
 
-// Stop joins the goroutine, so nothing can be written after the real stream ended.
+// Nothing can be written after Stop, i.e. after the real stream ended.
 func TestKeepAlive_StopIsFinalAndIdempotent(t *testing.T) {
 	w := httptest.NewRecorder()
 	k := NewKeepAlive(w, testFrame, 20*time.Millisecond)
