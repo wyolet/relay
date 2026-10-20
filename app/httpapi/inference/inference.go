@@ -101,7 +101,7 @@ type Deps struct {
 	// RequestStreamUsage makes byte-pass ask a streamed upstream for its token usage when the wire shape reports it only on request and the caller did not ask (RELAY_STREAM_USAGE). The extra usage frame is removed before the caller sees it. Without it such streams leave token budgets and usage records at zero.
 	RequestStreamUsage bool
 
-	// MaxRequestBytes is the inference body limit the listener enforces (RELAY_MAX_REQUEST_BYTES); a declared Content-Length within it is read into one allocation. 0 means httpmw.DefaultMaxRequestBytes.
+	// MaxRequestBytes is the inference body limit the listener enforces (RELAY_MAX_REQUEST_BYTES); a declared Content-Length within it sizes the read buffer (see readRequestBody). 0 means httpmw.DefaultMaxRequestBytes.
 	MaxRequestBytes int64
 
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as

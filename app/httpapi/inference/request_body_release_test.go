@@ -4,6 +4,7 @@ package inference
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -180,6 +181,32 @@ func TestReadRequestBody(t *testing.T) {
 				t.Fatalf("read %q, %v", got, err)
 			}
 		})
+	}
+}
+
+func TestReadRequestBody_AllocatesUpFrontOnlyToTheCap(t *testing.T) {
+	read := func(body string, declared int64) ([]byte, error) {
+		r := httptest.NewRequest(http.MethodPost, "/v1/generate", strings.NewReader(body))
+		r.ContentLength = declared
+		return readRequestBody(r, httpmw.DefaultMaxRequestBytes)
+	}
+
+	got, err := read("0123456789", httpmw.DefaultMaxRequestBytes)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("short body err = %v, want io.ErrUnexpectedEOF", err)
+	}
+	if cap(got) > maxUpfrontBodyBytes {
+		t.Fatalf("declared 32 MiB, sent 10 bytes: allocated %d, want <= %d", cap(got), maxUpfrontBodyBytes)
+	}
+
+	small := strings.Repeat("s", 4096)
+	if got, err := read(small, int64(len(small))); err != nil || string(got) != small || cap(got) != len(small) {
+		t.Fatalf("small body: len %d cap %d err %v, want one exact allocation", len(got), cap(got), err)
+	}
+
+	large := strings.Repeat("l", 3<<20+7)
+	if got, err := read(large, int64(len(large))); err != nil || string(got) != large {
+		t.Fatalf("large body: read %d bytes, err %v", len(got), err)
 	}
 }
 

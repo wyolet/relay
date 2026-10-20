@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -143,18 +144,34 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// readRequestBody reads r.Body into one allocation when its declared Content-Length is within limit; io.ReadAll's growth would peak at about twice the body. An unknown or larger length goes through io.ReadAll, where the listener's MaxBytesReader rejects an oversized body.
+// maxUpfrontBodyBytes caps what a declared Content-Length allocates before the bytes arrive, so a caller cannot reserve memory it never sends.
+const maxUpfrontBodyBytes = 1 << 20
+
+// readRequestBody sizes the buffer from the declared Content-Length when it is within limit: one exact allocation up to maxUpfrontBodyBytes, then growth capped at the declared length as bytes arrive, instead of io.ReadAll's growth to about twice the body. An unknown or larger length goes through io.ReadAll, where the listener's MaxBytesReader rejects an oversized body. On error the bytes read so far are returned with it.
 func readRequestBody(r *http.Request, limit int64) ([]byte, error) {
 	if limit <= 0 {
 		limit = httpmw.DefaultMaxRequestBytes
 	}
-	cl := r.ContentLength
-	if cl <= 0 || cl > limit {
+	declared := r.ContentLength
+	if declared <= 0 || declared > limit {
 		return io.ReadAll(r.Body)
 	}
-	body := make([]byte, cl)
-	if _, err := io.ReadFull(r.Body, body); err != nil {
-		return nil, err
+	body := make([]byte, 0, min(declared, maxUpfrontBodyBytes))
+	for int64(len(body)) < declared {
+		if len(body) == cap(body) {
+			body = slices.Grow(body, int(min(declared, 2*int64(cap(body))))-len(body))
+		}
+		n, err := r.Body.Read(body[len(body):cap(body)])
+		body = body[:len(body)+n]
+		if err == io.EOF {
+			if int64(len(body)) < declared {
+				return body, io.ErrUnexpectedEOF
+			}
+			return body, nil
+		}
+		if err != nil {
+			return body, err
+		}
 	}
 	var next [1]byte
 	n, err := io.ReadFull(r.Body, next[:])
@@ -162,7 +179,7 @@ func readRequestBody(r *http.Request, limit int64) ([]byte, error) {
 		if err == io.EOF {
 			return body, nil
 		}
-		return nil, err
+		return body, err
 	}
 	// More bytes than declared: keep them, as io.ReadAll would.
 	rest, err := io.ReadAll(r.Body)
