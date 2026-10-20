@@ -64,14 +64,69 @@ type ccToCanonicalStream struct {
 	finishSeen bool
 }
 
-func ccStreamErrorFrame(data []byte) (v1.SSEFrame, bool) {
+// ccStreamChunk is everything translateEvent reads from a chunk: the
+// ChatStreamChunk fields, a top-level error and the delta's reasoning text.
+// Choices and Delta shadow the embedded ones, so every ChatStreamChunk field
+// still decodes and a chunk that decodes here decodes as ChatStreamChunk too.
+type ccStreamChunk struct {
+	ChatStreamChunk
+	Choices []ccStreamChoice `json:"choices"`
+	Error   json.RawMessage  `json:"error"`
+}
+
+type ccStreamChoice struct {
+	StreamChoice
+	Delta ccStreamDelta `json:"delta"`
+}
+
+// ccStreamDelta carries reasoning under both names it streams as:
+// reasoning_content (OpenAI-compatible) and reasoning (Ollama).
+type ccStreamDelta struct {
+	StreamDelta
+	ReasoningContent string `json:"reasoning_content"`
+	Reasoning        string `json:"reasoning"`
+}
+
+// reasoningText returns the reasoning text and the field that carried it,
+// preferring reasoning_content.
+func (d *ccStreamDelta) reasoningText() (text, field string) {
+	if d.ReasoningContent != "" {
+		return d.ReasoningContent, ccReasoningFieldStd
+	}
+	if d.Reasoning != "" {
+		return d.Reasoning, ccReasoningFieldOllama
+	}
+	return "", ""
+}
+
+// decodeCCStreamChunk decodes data in one pass. When that fails it decodes the
+// parts on their own: the error field alone, so an error frame survives faults
+// elsewhere, then ChatStreamChunk, whose error is the one returned. Reasoning
+// stays empty then: a mistyped reasoning field is the only fault
+// ChatStreamChunk tolerates, and it voids the reasoning of every choice.
+func decodeCCStreamChunk(data []byte) (ccStreamChunk, error) {
+	var c ccStreamChunk
+	if json.Unmarshal(data, &c) == nil {
+		return c, nil
+	}
+	c = ccStreamChunk{}
 	var probe struct {
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return v1.SSEFrame{}, false
+	if json.Unmarshal(data, &probe) == nil {
+		c.Error = probe.Error
 	}
-	errRaw := bytes.TrimSpace(probe.Error)
+	if err := json.Unmarshal(data, &c.ChatStreamChunk); err != nil {
+		return c, err
+	}
+	for _, ch := range c.ChatStreamChunk.Choices {
+		c.Choices = append(c.Choices, ccStreamChoice{StreamChoice: ch, Delta: ccStreamDelta{StreamDelta: ch.Delta}})
+	}
+	return c, nil
+}
+
+func ccStreamErrorFrame(errField json.RawMessage, data []byte) (v1.SSEFrame, bool) {
+	errRaw := bytes.TrimSpace(errField)
 	if len(errRaw) == 0 || bytes.Equal(errRaw, []byte("null")) {
 		return v1.SSEFrame{}, false
 	}
@@ -129,13 +184,12 @@ func (s *ccToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 		return s.handleDone()
 	}
 
-	if errFrame, ok := ccStreamErrorFrame(data); ok {
+	ccChunk, err := decodeCCStreamChunk(data)
+	if errFrame, ok := ccStreamErrorFrame(ccChunk.Error, data); ok {
 		s.errorEmitted = true
 		return marshalCanonicalFrames([]v1.SSEFrame{errFrame}), nil
 	}
-
-	var ccChunk ChatStreamChunk
-	if err := json.Unmarshal(data, &ccChunk); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("cc stream: parse chunk: %w", err)
 	}
 
@@ -187,7 +241,7 @@ func (s *ccToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
 	}
 
 	// Reasoning text (Ollama "reasoning" or o-series "reasoning_content").
-	if rc, field := ccExtractReasoningContent(data); rc != "" {
+	if rc, field := delta.reasoningText(); rc != "" {
 		rf, err := s.handleReasoningDelta(rc, field)
 		if err != nil {
 			return nil, err
