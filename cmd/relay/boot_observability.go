@@ -99,6 +99,7 @@ func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) {
 	// tunes the cap; 0 = httpapi.DefaultMaxInflight.
 	admission := httpapi.NewAdmission(cfg.MaxInflight)
 	lifecycleReg.RegisterPreFlight(admission.PreFlight)
+	// Must stay registered after the usage, payload and tokencount collectors: collectors run in order, so a request holds its slot until their post-flight work is done and the in-flight cap also bounds the post-flight backlog.
 	lifecycleReg.RegisterCollector(admission)
 	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
 }
