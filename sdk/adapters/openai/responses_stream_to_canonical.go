@@ -25,7 +25,7 @@ type responsesToCanonicalStream struct {
 	// reasoningSummary accumulates streamed reasoning-summary text per reasoning
 	// item id, so the item's terminal output_item.done (which arrives with an
 	// empty summary on gpt-5.5) can be backfilled with what was streamed.
-	reasoningSummary map[string]string
+	reasoningSummary map[string][]byte
 }
 
 func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -166,9 +166,9 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 			return nil, fmt.Errorf("responses stream: reasoning_summary_text.delta: %w", err)
 		}
 		if s.reasoningSummary == nil {
-			s.reasoningSummary = map[string]string{}
+			s.reasoningSummary = map[string][]byte{}
 		}
-		s.reasoningSummary[ev.ItemID] += ev.Delta
+		s.reasoningSummary[ev.ItemID] = append(s.reasoningSummary[ev.ItemID], ev.Delta...)
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 			ItemID: ev.ItemID,
 			Index:  ev.OutputIndex,
