@@ -4,7 +4,7 @@
 
 Do not report security vulnerabilities through public issues, discussions, or pull requests.
 
-Use GitHub's private vulnerability reporting: the repository's **Security** tab → **Report a vulnerability**. Include a description, reproduction steps, affected versions, and the impact you observed.
+Use GitHub's private vulnerability reporting (the repository's **Security** tab → **Report a vulnerability**) or email security@wyolet.com. Include a description, reproduction steps, affected versions, and the impact you observed.
 
 What to expect:
 
