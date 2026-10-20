@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "input": 120,
+    "output": 40
+  },
+  "finish_reason": "tool_calls",
+  "service_tier": ""
+}

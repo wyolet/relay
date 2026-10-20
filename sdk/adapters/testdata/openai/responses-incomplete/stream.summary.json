@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "input": 20,
+    "output": 16
+  },
+  "finish_reason": "length",
+  "service_tier": ""
+}
