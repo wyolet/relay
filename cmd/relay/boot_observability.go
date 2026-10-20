@@ -83,7 +83,7 @@ func buildPayloadLog(listenerCtx context.Context, cat *appcatalog.Catalog, store
 }
 
 func buildTokenCalibrator(kvStore kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
-	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; one kv write per completed request, post-flight only.
+	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; kv writes only when a ratio moves or is due for a refresh, post-flight only.
 	tokenCalibrator := tokencount.NewCalibrator(kvStore)
 	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
 	return tokenCalibrator
