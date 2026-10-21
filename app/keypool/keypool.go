@@ -9,6 +9,17 @@
 //   - "round-robin" — distribute traffic evenly using a counter.
 //   - "least-recently-used" — pick the key with the oldest last-used timestamp.
 //
+// Expected kv ops per request:
+//   - Pick: one kv.Batch round trip with a GET of each candidate's breaker
+//     record and, for round-robin, the counter's INCR and EXPIRE NX.
+//     Prioritized reads only the first candidate in the batch; the ones
+//     behind it cost a GET each, and only while the keys ahead are open.
+//     Promoting an expired open key to half-open adds a SET;
+//     least-recently-used adds a GET per healthy candidate and a SET.
+//     PreparePick queues the same reads on a caller's batch (policy admission
+//     sends them with the rate-limit reserve).
+//   - RecordSuccess: one script. RecordFailure: a GET and a SET.
+//
 // The KeySelection enum lives in this package (not policy) so policy can
 // import keypool without creating a cycle when its Service composes
 // Selector + Limiter at runtime.

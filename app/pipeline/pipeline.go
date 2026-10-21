@@ -200,7 +200,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		hostSlug = req.Host.Meta.Name
 	}
 
-	inbound, err = p.Policy.ReserveInbound(ctx, policy.InboundInput{
+	// The inbound reserve and the first key pick share one kv round trip; a
+	// failover re-picks with Acquire.
+	adm, err := p.Policy.Admit(ctx, policy.InboundInput{
 		Policy:       req.Policy,
 		ProviderSlug: req.Provider,
 		ModelSlug:    modelSlug,
@@ -208,10 +210,18 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		HostSlug:     hostSlug,
 		TeamID:       req.TeamID,
 		TokenJTI:     req.TokenJTI,
+	}, policy.AcquireInput{
+		Policy:   req.Policy,
+		Keys:     req.Keys,
+		Model:    req.Model,
+		Host:     req.Host,
+		Provider: req.Provider,
 	})
 	if err != nil {
 		return nil, err // handler maps ExceededError → 429, ErrRevoked → 401
 	}
+	inbound = adm.Inbound
+	firstAttempt := true
 
 	var (
 		excluded     []*hostkey.HostKey
@@ -230,14 +240,19 @@ loop:
 			if attempts >= maxAttempts {
 				break loop
 			}
-			acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
-				Policy:   req.Policy,
-				Keys:     req.Keys,
-				Excluded: excluded,
-				Model:    req.Model,
-				Host:     req.Host,
-				Provider: req.Provider,
-			})
+			if firstAttempt {
+				acq, err = adm.Acq, adm.AcqErr
+				firstAttempt = false
+			} else {
+				acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
+					Policy:   req.Policy,
+					Keys:     req.Keys,
+					Excluded: excluded,
+					Model:    req.Model,
+					Host:     req.Host,
+					Provider: req.Provider,
+				})
+			}
 			if errors.Is(err, policy.ErrSaturated) {
 				if acq != nil && acq.Key != nil {
 					excluded = append(excluded, acq.Key)

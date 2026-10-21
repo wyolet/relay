@@ -116,6 +116,11 @@ func (c *countingStore) Expire(ctx context.Context, k string, ttl time.Duration)
 	return c.Mem.Expire(ctx, k, ttl)
 }
 
+func (c *countingStore) ExpireNX(ctx context.Context, k string, ttl time.Duration) (bool, error) {
+	c.record("")
+	return c.Mem.ExpireNX(ctx, k, ttl)
+}
+
 func (c *countingStore) Range(ctx context.Context, prefix string) ([]kv.Entry, error) {
 	c.record("")
 	return c.Mem.Range(ctx, prefix)

@@ -48,7 +48,12 @@ var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
 var authCooldowns = [5]time.Duration{30 * time.Second, time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord {
-	b, err := s.state.Get(ctx, circuitKey(keyHash))
+	return recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
+}
+
+// recordFrom decodes a breaker read. A missing, failed or undecodable read is
+// a closed record, so a store outage never empties the pool.
+func recordFrom(b []byte, err error) CircuitRecord {
 	if err != nil || len(b) == 0 {
 		return CircuitRecord{State: CircuitClosed}
 	}
