@@ -266,6 +266,45 @@ func TestRedisPoolWaitBoundedByPoolTimeout(t *testing.T) {
 	<-held
 }
 
+// A batch that never gets a connection fails every result with ErrUnavailable; without retries go-redis reports the pool wait on the pipeline alone.
+func TestRedisBatchPoolTimeoutFailsEveryResult(t *testing.T) {
+	f := newFakeRedis(t, func(string, int) string { return noReply })
+	s := connectFake(t, kv.RedisConfig{
+		Addr: f.addr, PoolSize: 1,
+		ReadTimeout: time.Second, PoolTimeout: 50 * time.Millisecond,
+	})
+
+	held := make(chan struct{})
+	go func() {
+		defer close(held)
+		_ = s.Set(context.Background(), "a", []byte("v"), time.Minute)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for f.count("SET") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("first call never reached the server")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	b := kv.NewBatch(s)
+	results := []*kv.BatchResult{
+		b.Script(kv.ScriptCall{Name: "test.count", Script: `return 1`, Keys: []string{"{t}:n"}}),
+		b.Get("{a}:k"), b.Incr("{c}:n", 1), b.ExpireNX("{c}:n", time.Minute),
+	}
+	b.Exec(context.Background())
+	// Errorf, not Fatalf: closing the store while the held call is pending hangs the cleanup.
+	for i, r := range results {
+		if !errors.Is(r.Err, kv.ErrUnavailable) {
+			t.Errorf("result %d: err = %v, want ErrUnavailable", i, r.Err)
+		}
+	}
+	if n, m := f.count("EVALSHA"), f.count("EVAL"); n != 0 || m != 0 {
+		t.Errorf("EVALSHA sent %d times and EVAL %d, want 0 and 0", n, m)
+	}
+	<-held
+}
+
 // A stalled batch costs one read timeout, not one per command; every result is unavailable and the script inside it is sent once.
 func TestRedisBatchGivesUpOnceAtReadTimeout(t *testing.T) {
 	f := newFakeRedis(t, func(string, int) string { return noReply })
