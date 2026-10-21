@@ -87,15 +87,15 @@ The `agent` block pins any agent to its own `provider/model`, so one relay serve
 
 ## What you get
 
-- **Usage** — every turn appears in `GET /logs` and the `/usage/*` endpoints, attributed to your relay key, with token counts and timing.
-- **Payloads** — with payload logging enabled, the full request and response bodies are readable at `GET /logs/{request_id}`.
-- **Attribution** — the client's `x-session-id` header is recorded on the usage event as `extras`, alongside `client=opencode`. That is what lets you cost one session; OpenCode sends no agent or turn marker, so below the session the only distinction is the model.
+- **Usage**: every turn appears in `GET /api/logs` and the `/api/usage/*` endpoints of the control API, attributed to your relay key, with token counts, cost and timing.
+- **Payloads**: with payload logging enabled, the full request and response bodies are readable at `GET /api/logs/{request_id}`.
+- **Attribution**: the client's `x-session-id` header is recorded on the usage event as `extras`, alongside `client=opencode`. That is what lets you cost one session; OpenCode sends no agent or turn marker, so below the session the only distinction is the model.
 
-See [Usage & Logging](/concepts/observability) for reading it back.
+See [Usage](/concepts/usage) for reading it back and [Payload logging](/concepts/payload-logging) for capture.
 
 ## Known limits
 
-- **Prompt-cache breakpoints do not cross from a Chat Completions body.** OpenCode injects `cache_control` markers whenever the model id contains `claude` or `anthropic` — including on the openai-compatible path, where they land as a non-standard key on each message. Relay forwards them untouched to an upstream that speaks that shape, but does not yet map them into its canonical cache intent, so on a cross-shape route they are dropped and the turn is billed uncached.
+- **Prompt-cache breakpoints do not cross from a Chat Completions body.** OpenCode injects `cache_control` markers whenever the model id contains `claude` or `anthropic` — including on the openai-compatible path, where they land as a non-standard key on each message. Relay forwards them untouched to an upstream that speaks that shape, but does not read them into its canonical cache intent, so on a cross-shape route they are dropped and the turn is billed uncached. See [Prompt caching](/reference/inference-api#prompt-caching).
 - **Reasoning comes back as text unless the model declares where to find it.** On the openai-compatible path OpenCode reads reasoning from whatever field `models.<id>.interleaved` names (`reasoning_content` on most upstreams that emit it at all) and re-sends it there on the next turn. Upstreams differ; set `interleaved` to match yours, and expect no separate thinking block from one that returns none.
 - **Attribution stops at the session.** Unlike Claude Code and Codex, OpenCode sends no per-agent or per-turn header, so a sub-agent's spend is separable only by the model it was pinned to.
 - **Model ids must not contain `/`.** OpenCode reads the first segment as the provider id; Relay's ids are slugs and never do, but an alias you invent should not either.

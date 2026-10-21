@@ -1,0 +1,210 @@
+---
+title: "Settings"
+description: "Every runtime settings section, its fields and defaults, who may change it, and how to seed it from files"
+---
+
+Settings are configuration that changes while relay runs. Each section is a typed JSON value stored as one row in Postgres. A write is validated against the section's type, stored, and reaches every replica through Postgres `LISTEN`/`NOTIFY`, usually within about a second, with no restart. A section with no stored value reads as its defaults.
+
+Bootstrap configuration that needs a restart (ports, DSNs, the master key) is in [Configuration](/configuration) instead.
+
+## Reading and writing
+
+| Method and path | Does |
+| --- | --- |
+| `GET /api/settings` | Every section with its current value (defaults for sections never written). |
+| `GET /api/settings/sections` | Every section name with its description and the name of its schema in `/api/openapi.json`. |
+| `GET /api/settings/{section}` | One section: `{"section": "...", "value": {...}}`. |
+| `PUT /api/settings/{section}` | Replace one section. The body is the section value. |
+
+```bash
+curl -X PUT https://admin.relay.example.com/api/settings/proxy-mode \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "allowUnauthenticated": false}'
+```
+
+`PUT` replaces the whole value, and the body must carry every field the section's schema marks required: `PUT /api/settings/parsing` with `{}` is refused with `422`. Read the section first and send its `value` back with your change.
+
+**Who may change a section.** Writing needs the `update` verb on `settings`. Under `RELAY_AUTHZ=single` every signed-in user holds it; under `rbac` only the built-in `admin` role (or a custom role that grants it) does. Sections marked *admin only* below additionally require an admin (a user with the `admin` role, or the admin token) under either mode, because they resolve secrets, delete history, or let an identity provider create accounts. Every write is recorded in the [audit log](/concepts/audit).
+
+A stored section that a later release can no longer accept (for example one naming a secret variable outside its prefix) reads as its defaults, with a warning in the log, rather than stopping relay from starting.
+
+## Seeding settings from files
+
+At boot, relay reads `kind: Setting` files from `RELAY_SETTINGS_DIR` (default `<RELAY_CONFIG_DIR>/settings`, read recursively) and writes each section that has **no stored value yet**. A section already in the database is left alone, so a file sets the starting value and the control API stays authoritative afterwards. A file naming an unknown section, failing validation, or holding another kind stops relay at boot.
+
+```yaml settings/proxy-mode.yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Setting
+metadata:
+  name: proxy-mode
+spec:
+  enabled: true
+  allowUnauthenticated: false
+```
+
+A field a file leaves out takes its zero value (`false`, `0`, empty), not its default. A file may hold several `---`-separated documents. The Helm chart seeds `payload-logging` and `usage-logging` this way from its values ([Kubernetes](/deploy/kubernetes#settings-the-chart-seeds)). `relay apply` and the catalog seed do not write settings.
+
+## Sections
+
+| Section | Controls | Admin only |
+| --- | --- | --- |
+| [`inference`](#inference) | Policy-less relay keys, key rotation grace | |
+| [`parsing`](#parsing) | How much of each request body relay parses | |
+| [`proxy-mode`](#proxy-mode) | Callers forwarding their own upstream keys | |
+| [`usage-logging`](#usage-logging) | Usage event backend and retention | yes |
+| [`payload-logging`](#payload-logging) | Request and response body capture | yes |
+| [`otlp-receiver`](#otlp-receiver) | OTLP ingest of usage reported by clients | |
+| [`audit`](#audit) | Audit log retention | yes |
+| [`auth:oidc`](#authoidc) | Single sign-on | yes |
+| [`auth:scim`](#authscim) | SCIM provisioning | yes |
+| [`auth:tokens`](#authtokens) | Inference tokens | no API |
+| [`catalog-source`](#catalog-source) | Which catalog release was seeded | |
+| [`license`](#license) | License installed at runtime | `/api/license` |
+| [`governance:provider`, `governance:host`, `governance:model`, `governance:policy`](#governance) | Editing and deleting catalog rows | |
+
+### inference
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `allowMissingPolicy` | `false` | Lets a relay key with no governing policy reach inference over the relay's shared host keys, with no policy grant or policy rate limit. Read only under `RELAY_AUTHZ=single`; under `rbac` such a key is always refused (`403 policyless_disabled`). See [Policies](/concepts/policies). |
+| `keyRotateMaxGrace` | `86400` | Most seconds a rotated relay key's previous value keeps working. `0` means the default; a rotation asking for more is refused. |
+
+### parsing
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `richParsing` | `true` | Parses metadata and messages out of each request body for usage attribution and the request log. `false` reads only the fields routing needs (`model`, `stream`), which costs less CPU and records less. |
+
+### proxy-mode
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Accepts requests that carry the caller's own upstream key. While off, such requests get `403 proxy_disabled`. |
+| `allowUnauthenticated` | `false` | Also accepts proxy requests with no relay key, limited per client IP. |
+
+See [Proxy mode](/concepts/proxy-mode).
+
+### usage-logging
+
+Admin only.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `backend` | _(empty)_ | `file`, `clickhouse`, `postgres` or `valkey`. Empty falls back to `RELAY_EVENTLOG_BACKEND`, then `file`. Changing it switches where new events go; existing events are not moved. |
+| `retentionDays` | `0` | Days events are kept by the `clickhouse` and `postgres` backends. `0` keeps them forever. Applied to existing data, so shortening it deletes older events. |
+| `file.path` | _(empty: `RELAY_USAGE_LOG`)_ | File the `file` backend writes. |
+| `clickhouse.walDir` | _(empty: `RELAY_EVENTLOG_DIR`)_ | Directory for write-ahead segments. |
+
+The ClickHouse and Postgres connections come from `RELAY_CH_DSN` and `RELAY_PG_DSN`. See [Usage](/concepts/usage).
+
+### payload-logging
+
+Admin only.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch. A request is captured only when this is on and the request also opts in through its policy (`payloadLoggingEnabled`); see [Payload logging](/concepts/payload-logging) for which flag applies. |
+| `backend` | `file` | `file`, `s3` or `clickhouse`. |
+| `maxBytes` | `4194304` (4 MiB) | Cap per stored body, measured after decompression. `0` is unlimited. |
+| `retentionDays` | `30` | Days bodies are kept by the `clickhouse` backend; `0` keeps them forever. Unlike other fields, leaving it out of a seed file keeps 30. |
+| `file.path` | `relay-payloads.jsonl` | File the `file` backend writes. |
+| `s3.endpoint`, `s3.bucket`, `s3.region`, `s3.prefix`, `s3.useSSL` | | Object store for the `s3` backend. `bucket` is required. `useSSL` must be `true` unless `RELAY_COOKIE_SECURE=false`. |
+| `s3.accessKey`, `s3.secretKey` | _(empty: ambient credentials)_ | Secret references: `{"kind": "env", "env": "RELAY_PAYLOAD_S3_..."}`, or a stored secret whose id starts with `payload-logging:`. |
+| `clickhouse.walDir` | _(empty: `relay-payload-wal`)_ | Directory for write-ahead segments. |
+| `clickhouse.dedup` | `false` | Stores each distinct message, tool list and system prompt once, and request bodies as references to them. Pair it with `maxBytes: 0`. |
+
+See [Payload logging](/concepts/payload-logging).
+
+### otlp-receiver
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Accepts OTLP/HTTP exports at `/otlp/v1/traces` and `/otlp/v1/logs` on the inference listener and records the model calls they describe as usage events with source `otlp`. |
+| `captureContent` | `false` | Also stores the message content clients report, in the payload store, while payload logging is enabled and the reporting credential's policy allows it. |
+
+See [OTLP receiver](/concepts/otlp-receiver).
+
+### audit
+
+Admin only.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `retentionDays` | `365` | Days audit rows are kept. `0` keeps them forever. The hourly prune uses the current value. |
+
+See [Audit log](/concepts/audit).
+
+### auth:oidc
+
+Admin only. Ignored while `WYOLET_AUTH_MODE=oidc` configures sign-in from the environment.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Turns OpenID Connect sign-in on. `issuer`, `clientId` and `redirectUrl` are then required. |
+| `issuer` | | The provider's issuer URL. Must be `https` unless `RELAY_COOKIE_SECURE=false`. |
+| `clientId` | | OIDC client id. |
+| `clientSecretEnv` | | Name of the environment variable holding the client secret. Must start with `RELAY_OIDC_` or `WYOLET_OIDC_`. |
+| `redirectUrl` | | Callback registered with the provider: `https://<control host>/auth/callback`. |
+| `scopes` | `["openid", "profile", "email"]` | Scopes requested. |
+| `authParams` | | Extra query parameters for the authorization URL, for providers that need them. |
+| `groupsClaim` | `groups` | ID token claim read as the user's groups. `""` reads none. |
+| `registration` | `closed` | `open` creates an account on a first sign-in; `closed` refuses identities with no account. |
+| `postLoginUrl` | `/` | Where the browser goes after sign-in. Set it to the admin UI's origin when the UI is served elsewhere. |
+
+See [SSO](/concepts/sso).
+
+### auth:scim
+
+Admin only.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Serves SCIM 2.0 at `/scim/v2` on the control listener; `404` while off. |
+| `deleteDisables` | `false` | A SCIM `DELETE` of a user disables the account instead of deleting it. |
+| `linkClaim` | `sub` | ID token claim a first OIDC sign-in is matched on against a provisioned account's `externalId`: `sub` or `oid`. |
+
+See [SCIM provisioning](/concepts/scim).
+
+### auth:tokens
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `true` | Allows minting [inference tokens](/concepts/auth#inference-tokens). Without `RELAY_MASTER_KEY` there is nowhere to keep the signing key, and tokens stay off. |
+| `defaultTTL` | `3600000000000` (1 h) | Lifetime of a token whose mint request names none, in nanoseconds. |
+| `maxTTL` | `86400000000000` (24 h) | Longest lifetime a mint request may ask for, in nanoseconds. |
+| `verifyCacheSize` | `10000` | Verified tokens each process remembers, so a repeat request skips signature verification. Negative disables the cache. |
+| `signingKey`, `previousSigningKey` | _(filled in by relay)_ | References to the stored signing keys. Relay generates the first on boot and moves it to `previousSigningKey` on rotation (`POST /api/auth/token/keys/rotate`), so tokens signed before a rotation keep verifying. |
+
+This section has no `PUT` endpoint. Relay writes it on the first boot with a master key, when it generates the signing key, so set different TTLs with a seed file before that boot (with `enabled: true`, since a field the file leaves out is `false`).
+
+### catalog-source
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `version` | _(empty)_ | Catalog release the database was last seeded from. Relay compares it with `RELAY_CATALOG_VERSION` at boot and re-seeds on a mismatch. Blank it to force a re-seed on the next boot. |
+| `seededAt` | _(empty)_ | When that seed finished (RFC 3339). |
+
+Relay writes this section itself. See [Pinning a catalog version](/concepts/catalog#pinning-a-catalog-version).
+
+### license
+
+Holds a license installed at runtime. Write it with `PUT /api/license`, which verifies the license first, not through `/api/settings`. `RELAY_LICENSE_FILE` and `RELAY_LICENSE` win over it. See [License](/concepts/license).
+
+### governance
+
+The four sections `governance:provider`, `governance:host`, `governance:model` and `governance:policy` share one shape:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `allowEdit` | `true` | Allows updating catalog-managed rows of that kind. |
+| `allowDelete` | `false` | Allows deleting catalog-managed rows of that kind. |
+
+They guard against accidental changes to rows the catalog owns; they are not access control. Every update and delete through the control API, the admin UI and `relay apply` is judged by the row's owner:
+
+- **System-owned rows** (for example catalog providers and hosts) can be edited or deleted by an admin only, whatever the governance sections say. Teams, groups and roles are system-owned but follow the tenant rule below.
+- **Tenant-owned rows** (owned by a user, team or project) are always allowed; access control decides who may touch them.
+- **Catalog-managed rows** (owned by a provider or a host, such as catalog models and host tier policies) consult the governance section of their kind. A kind with no section, such as host-owned pricing, uses the defaults: edit allowed, delete refused. Admins are bound by these sections too.
+- A row the catalog no longer ships (detached) counts as tenant-owned.
+
+A refused operation answers `403` with a message naming the section to change. A delete is also refused while other rows reference the row.
