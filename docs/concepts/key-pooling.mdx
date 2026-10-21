@@ -1,13 +1,9 @@
 ---
 title: "Key Pooling"
-description: "How Relay multiplies your rate limits and routes around dead keys"
+description: "How Relay spreads traffic over several host keys and routes around failing ones"
 ---
 
-A single provider API key has one rate limit and one failure mode: when it's
-throttled or revoked, your traffic stops. Relay pools many keys behind one
-relay key, spreads load across them, and breaks the circuit on any that fail —
-so your effective limit is the *sum* of your keys, and one bad key doesn't
-take you down.
+A provider API key has one rate limit and fails on its own. Relay lets a policy list several host keys for the same host, picks one per request, and takes a failing key out of rotation with a per-key circuit breaker, so one throttled or revoked key does not stop your traffic.
 
 <Frame caption="One relay key draws from a pool of host keys; unhealthy keys are skipped automatically.">
   <img className="block dark:hidden" src="/images/architecture/key-pooling.svg" alt="Key pooling and failover" />
@@ -16,83 +12,81 @@ take you down.
 
 ## The pool
 
-A **host key** is one real upstream credential. Every host key bound to the
-same **host** forms that host's pool. When a request routes to a host, Relay
-picks a healthy key from its pool — your callers never see which one.
+A **host key** is one upstream credential, and it belongs to one host. The pool for a request is the set of host keys the governing [policy](/concepts/policies) lists in `hostKeyIds` that belong to the host routing chose, minus disabled keys and keys whose tier policy does not serve the requested model. Your callers never see which key served them.
 
-Pooling is **per-tenant**: Relay never mixes keys across tenants. The pool is
-the set of keys *you* configured for *your* host.
+Two consequences:
+
+- A policy has to list host keys. A host key that no policy lists is never used by policy-governed traffic.
+- Policies that list the same host key share it, along with its circuit breaker and its tier limit.
+
+A host marked `noAuth` (a self-hosted Ollama, for example) needs no host key: Relay uses a built-in anonymous credential that sends no auth header and is never taken out by a breaker.
+
+Requests with no governing policy draw from the host's system-owned keys plus the caller's own. Only a personal key with no project can make them, only when the `inference` setting `allowMissingPolicy` is on, and never under `RELAY_AUTHZ=rbac`. See [Policies](/concepts/policies#requests-without-a-policy).
 
 ## Picking a key
 
-The selection strategy is set on the policy. Three algorithms ship today:
+The policy's `keySelection` sets the algorithm:
 
 | Strategy | Behavior |
 | --- | --- |
-| `prioritized` | Cost-tiered: always use the cheapest healthy key first, fall through on failure. |
-| `round-robin` | Even spread across all healthy keys. |
-| `least-recently-used` | Pick the key idle longest — smooths bursty load. |
+| `prioritized` (default) | The first healthy key in the order the policy lists them. Later keys take traffic only when earlier ones are unhealthy or saturated. |
+| `round-robin` | Rotates across healthy keys using a shared counter in the state backend. |
+| `least-recently-used` | Picks the healthy key whose last use is oldest. |
 
-Selection across all candidate keys is **atomic** — a single Redis Lua script
-evaluates health and reserves in one round-trip, so concurrent requests don't
-stampede the same key.
+Breaker state is shared across pods through the state backend (Valkey when `RELAY_STATE_BACKEND=redis`). Selection reads each candidate's breaker record; it is not a single atomic operation, so two concurrent requests can both probe a key that just came out of cooldown. The outcome of either probe settles the key's state.
+
+After picking a key, Relay reserves the key's tier rate limit if its tier policy has one. A key over its tier limit is skipped for this request without touching its breaker, and the next key is tried. See [Rate limits](/concepts/rate-limits#upstream-limits-per-host-key).
 
 ## Circuit breakers
 
-Each key has its own circuit breaker, so one failing key never drags the
-others down. Failures are classified, because they don't all mean the same
-thing:
+Each key has its own breaker, keyed by a hash of the key's value. The upstream response decides what happens:
 
-| Class | Trigger |
-| --- | --- |
-| `FailureAuth` | Upstream `401` — key wrong, revoked, or disabled. |
-| `FailureForbidden` | Upstream `403` — key accepted, request refused (e.g. a model or feature the account lacks). |
-| `FailureRateLimitShort` | Short-window upstream throttle. |
-| `FailureRateLimitLong` | Sustained upstream throttle. |
-| `FailureServerError` | Upstream `5xx`. |
-| `FailureNetwork` | Connection failed / timed out. |
+| Upstream result | Breaker | Cooldown |
+| --- | --- | --- |
+| `401` | Opens | 1 min, then 5 min, 15 min, and 1 h for every further failure |
+| `403` | Opens | 2 s, doubling per repeated failure up to 60 s |
+| `5xx`, or a network error after the connection was made | Opens | 2 s, doubling per repeated failure up to 60 s |
+| `429` with `Retry-After` of 5 s or less | Stays closed | None; the request moves to the next key |
+| `429` with `Retry-After` over 5 s | Opens | The `Retry-After` duration |
+| Connection could not be established (refused, DNS, TLS) | Unchanged | None; this is a host problem, see below |
 
-When a key's breaker is open, it's skipped during selection and heals
-automatically after its cooldown: the next request after the cooldown probes
-the key, and a success closes the breaker. Repeated failures lengthen the
-cooldown — up to 60 seconds for `5xx`, network and `403` failures, and from 1
-minute up to 1 hour for `401`. No failure takes a key out indefinitely, since
-the request that provoked it may have been the caller's doing.
+An open key is skipped during selection. When its cooldown ends, the next request probes it; a success closes the breaker and resets the backoff, and another failure moves it one step up. The step counter is shared by all failure classes. No failure takes a key out for good, since the request that caused a `401` or `403` may have been the caller's doing.
 
 <Info>
-Breakers are keyed by the key's **value hash**, not its id. Rotate a key to a
-new value and it gets a fresh, closed breaker automatically — the old hash's
-record simply expires. No manual reset needed after a rotation.
+Because breakers are keyed by value hash, rotating a key to a new value gives it a fresh, closed breaker. The old record expires on its own.
 </Info>
+
+When the host cannot be reached at all, the key is not blamed: Relay re-dials the same host up to three times with a short backoff, then returns `502 upstream_unreachable`. Every key on that host shares the same base URL, so switching keys would not help.
 
 ## Failover happens before the first byte
 
-Relay only fails over **pre-first-byte**. If a key fails during selection or
-on the initial upstream call, Relay moves to the next healthy candidate. Once
-response bytes start flowing back to your caller, the request is committed —
-there is no mid-stream failover.
+A request tries at most three host keys. If the upstream answers with a retryable failure (`401`, `403`, `429`, `5xx`, or a network error) before any response bytes reach the caller, Relay records the failure and moves to the next healthy key in the pool. Once bytes start flowing back, the request is committed and there is no mid-stream failover.
 
-## Self-healing on auth failure
+Failover stays within the chosen host. Routing picks one binding per request, and Relay does not switch to another host or provider when that host's keys fail. When the attempts run out, the caller gets the last upstream response with its status and body; when no healthy key is left to try, the caller gets a `502` with `no healthy keys in pool`.
 
-A `FailureAuth` is special: the credential itself may just be stale (rotated
-in your secret store but not yet refreshed in Relay). Instead of giving up,
-Relay re-resolves the key out of band:
+## Recovery after a `401`
 
-- **Other healthy keys exist** → fail over now, and heal the stale key in the
-  background so it rejoins the pool.
-- **It's the last key** → park briefly on a single re-resolve and retry with
-  the fresh value.
-- **Genuinely revoked** (value unchanged) → return a clean error; the key is
-  probed again after each cooldown.
+A `401` can mean the value Relay holds is stale, for example after a stored key was rotated on another pod. Relay re-reads the key's value from its source (the encrypted value in Postgres, or the environment variable) before giving up:
 
-This is why pairing Relay with an external secret backend (AWS / Azure / GCP
-Secret Manager, Bitwarden, 1Password) makes rotation invisible to your
-callers — see [Configuration](/configuration) for backends.
+- **Other healthy keys remain:** the request fails over at once, and the re-read runs in the background so the key rejoins the pool if its value changed.
+- **It was the last candidate:** the request waits for one re-read and retries the same key if the value changed.
+- **The value is unchanged:** the key is treated as revoked, the caller gets the upstream error, and the key is probed again after each cooldown.
 
-## Recovering a drained pool
+## Inspecting and recovering keys
 
-If *every* key for a route has tripped, requests return "no healthy keys in
-pool". That almost always means a real upstream problem (bad credentials,
-sustained throttling). Fix the cause, then — in dev — clear breaker state with
-`make breakers-reset`; in production breakers heal on their own once the
-cooldown passes. See [Troubleshooting](/troubleshooting).
+Read a key's breaker state:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/host-keys/by-id/<id>/health
+```
+
+The response gives `state` (`closed`, `open`, `half_open`, or `unknown` when the key's value cannot be resolved), `reason` (`upstream_auth_failed`, `upstream_forbidden`, `upstream_rate_limited`, `upstream_server_error`, `upstream_network_error`), `open_until` and `cooldown_remaining_seconds`. The `relay_provider_keys_down_total` metric counts breaker openings by reason.
+
+If every key in the pool is open, requests fail with `502` and the message `no healthy keys in pool`. That almost always points at a real upstream problem: a revoked credential, an exhausted quota, an outage. To recover:
+
+1. Fix the cause, for example by giving the key a new value or adding another key to the policy. A stored key is rotated with `POST /api/host-keys/by-id/<id>/rotate` and body `{"value": "<new value>"}`; an env-ref key takes the new value from its environment variable after a restart. Either way the new value gets a closed breaker.
+2. Otherwise wait out the cooldown: at most 60 s for `403`, `5xx` and network failures, at most 1 h for `401`.
+3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with Valkey, delete the `secret_health:*` keys.
+
+See [Troubleshooting](/troubleshooting) for related errors.
