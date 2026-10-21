@@ -16,10 +16,10 @@ type PreparedCommit struct {
 }
 
 // PrepareCommit queues the commit script for res on b, built exactly as
-// Commit builds it. It returns nil when there is nothing to commit (res is
-// nil or metered nothing).
+// Commit builds it. It returns nil when there is nothing to commit, as Commit
+// would make no call.
 func (l *Limiter) PrepareCommit(b *kv.Batch, res *Reservation, obs Observations) (*PreparedCommit, error) {
-	if res == nil || res.noCommit {
+	if !res.needsCommit(obs) {
 		return nil, nil
 	}
 	call, err := l.buildCommitCall(res, obs, l.clock())

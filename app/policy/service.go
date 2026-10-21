@@ -5,8 +5,9 @@
 // kv round trips per request: Admit sends the inbound reserve and the first
 // pick's reads in one batch; a tier policy with rules adds its reserve after
 // the pick, and each failover is an Acquire (a pick batch, plus the tier
-// reserve). The success post-flight (Settle) is one batch: both commits and,
-// only for a half-open probe or a backoff to reset, the key's success write.
+// reserve). The success post-flight (Settle) is one batch: the commits that
+// settle something (concurrency or token meters) and, only for a half-open
+// probe or a backoff to reset, the key's success write; often it is empty.
 
 package policy
 

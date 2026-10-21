@@ -185,10 +185,10 @@ func TestAcquire_WithoutASelectorIsAnError(t *testing.T) {
 }
 
 // Release rolls the upstream reservation back with zero usage and records the
-// failure against the key, so a failed request neither spends budget nor
+// failure against the key, so a failed request neither holds a slot nor
 // leaves the key looking healthy.
 func TestRelease_RefundsAndRecordsTheFailure(t *testing.T) {
-	f := newAcquireFixture(t, requestsRule())
+	f := newAcquireFixture(t, concurrencyRule())
 	ctx := context.Background()
 	acq, err := f.svc.Acquire(ctx, f.in)
 	if err != nil {
