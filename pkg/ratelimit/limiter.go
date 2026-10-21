@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -92,7 +93,7 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 	}
 	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	if err != nil {
-		return nil, fmt.Errorf("limit: reserve script: %w", err)
+		return nil, reserveFailed(err)
 	}
 	return l.decodeReserve(ctx, scope, rules, token, raw)
 }
@@ -192,6 +193,7 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 
 	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	if err != nil {
+		metrics.KVError("limit_commit", metrics.KVDropped)
 		return fmt.Errorf("limit: commit script: %w", err)
 	}
 	l.logCommit(res, obs, raw)
@@ -244,6 +246,7 @@ func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observa
 	var errs []error
 	for i, r := range results {
 		if r.Err != nil {
+			metrics.KVError("limit_commit", metrics.KVDropped)
 			errs = append(errs, fmt.Errorf("limit: commit script: %w", r.Err))
 			continue
 		}

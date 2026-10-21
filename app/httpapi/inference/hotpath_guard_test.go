@@ -60,6 +60,9 @@ type countingStore struct {
 	mu      sync.Mutex
 	scripts []string
 	ops     int
+
+	// reserveErr, when set, fails every limit.reserve call with it.
+	reserveErr error
 }
 
 func newCountingStore(t testing.TB) *countingStore {
@@ -81,6 +84,9 @@ func (c *countingStore) record(name string) {
 
 func (c *countingStore) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	c.record(name)
+	if c.reserveErr != nil && name == "limit.reserve" {
+		return nil, c.reserveErr
+	}
 	return c.Mem.RunScript(ctx, name, script, keys, args...)
 }
 

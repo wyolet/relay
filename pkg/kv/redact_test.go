@@ -42,11 +42,14 @@ func TestSlowRedisOpLogOmitsKey(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	r := &Redis{client: client}
 
+	// Each call opens a fresh log interval, so both are logged.
+	slowLastLogNanos.Store(0)
 	r.trackSlow("get", "sess:"+secretTail, time.Now().Add(-2*slowOpThreshold), nil)
+	slowLastLogNanos.Store(0)
 	r.trackSlow("set", "{sess}:"+secretTail, time.Now().Add(-2*slowOpThreshold), nil)
 
 	out := buf.String()
-	if strings.Count(out, "slow redis op") != 2 {
+	if strings.Count(out, "slow or failed redis ops") != 2 {
 		t.Fatalf("slow path not taken, log: %q", out)
 	}
 	if strings.Contains(out, secretTail) {

@@ -2,12 +2,14 @@ package tokencount
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 const (
@@ -77,6 +79,7 @@ func (c *Calibrator) write(ctx context.Context, key string, r float64, ttl time.
 	}
 	if err := c.state.Set(ctx, key, formatRatio(r), ttl); err != nil {
 		ratioWrites.WithLabelValues(outcomeFailed).Inc()
+		metrics.KVError("token_ratio", metrics.KVDropped)
 		return
 	}
 	ratioWrites.WithLabelValues(outcomeWritten).Inc()
@@ -144,6 +147,9 @@ func (c *Calibrator) Ratio(ctx context.Context, sessionID, modelID string) (floa
 // read returns the stored ratio at key. A missing, unreadable or non-positive record reads as "unknown" — the caller then estimates, which is never worse than the fallback it replaces.
 func (c *Calibrator) read(ctx context.Context, key string) (float64, bool) {
 	raw, err := c.state.Get(ctx, key)
+	if err != nil && !errors.Is(err, kv.ErrNotFound) {
+		metrics.KVError("token_ratio", metrics.KVFallback)
+	}
 	if err != nil || len(raw) == 0 {
 		return 0, false
 	}

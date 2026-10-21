@@ -2,6 +2,7 @@ package keypool
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
@@ -56,6 +57,9 @@ func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord
 // missing, failed or undecodable read is a closed record, so a store outage
 // never empties the pool.
 func recordFrom(b []byte, err error) (CircuitRecord, bool) {
+	if err != nil && !errors.Is(err, kv.ErrNotFound) {
+		metrics.KVError("breaker_read", metrics.KVFallback)
+	}
 	if err != nil || len(b) == 0 {
 		return CircuitRecord{State: CircuitClosed}, false
 	}
@@ -88,6 +92,7 @@ func (s *Selector) writeRecord(ctx context.Context, keyHash string, r CircuitRec
 		ttl = 0 // no expiry
 	}
 	if err := s.state.Set(ctx, circuitKey(keyHash), b, ttl); err != nil {
+		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: write record failed", "key_hash", keyHash, "err", err)
 	}
 }
@@ -146,6 +151,7 @@ func (s *Selector) successCall(keyHash string) (kv.ScriptCall, error) {
 // finishSuccess logs the outcome of a success script; raw is the prior record.
 func (s *Selector) finishSuccess(ctx context.Context, keyHash string, raw []byte, err error) {
 	if err != nil {
+		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", err)
 		return
 	}
