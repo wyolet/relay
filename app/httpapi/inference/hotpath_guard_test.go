@@ -213,9 +213,23 @@ type hotPathFixture struct {
 	upstreamCalls         atomic.Int64
 
 	postFlight chan struct{}
+	settled    settledSignal
 	armed      *atomic.Bool
 	mint       func(testing.TB, func(*crypto.TokenClaims)) string
 }
+
+// settledSignal is the pipeline's host-health recorder: Reachable is
+// post-flight's last step, after the kv settle.
+type settledSignal chan struct{}
+
+func (s settledSignal) Reachable(context.Context, string) {
+	select {
+	case s <- struct{}{}:
+	default:
+	}
+}
+
+func (settledSignal) Unreachable(context.Context, string, string) {}
 
 // newHotPathFixture wires the catalog, the policy service and a live
 // upstream. metered says whether the inbound policy carries a rate-limit
@@ -223,7 +237,7 @@ type hotPathFixture struct {
 func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
 	t.Helper()
 
-	fx := &hotPathFixture{postFlight: make(chan struct{}, 8), armed: &atomic.Bool{}}
+	fx := &hotPathFixture{postFlight: make(chan struct{}, 8), settled: make(settledSignal, 8), armed: &atomic.Bool{}}
 	fx.store = newCountingStore(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -349,7 +363,7 @@ func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
 		Catalog:   cat,
 		Tokens:    fx.tokens,
 		Resolver:  routing.New(cat),
-		Pipeline:  &pipeline.Pipeline{Policy: svc, Lifecycle: reg},
+		Pipeline:  &pipeline.Pipeline{Policy: svc, Lifecycle: reg, HostHealth: fx.settled},
 		Lifecycle: reg,
 		Specs:     hotPathRegistry(),
 	}
@@ -407,27 +421,20 @@ func (f *hotPathFixture) do(t testing.TB, bearer string) *httptest.ResponseRecor
 	return w
 }
 
-// waitPostFlight blocks until the detached post-flight goroutine is done.
-// Its last kv call is the key pool's success record, which lands after the
-// rate-limit commit — so once that is visible the metering count is final.
+// waitPostFlight blocks until the detached post-flight goroutine is done:
+// host reachability is recorded after the rate-limit settle, so once it fires
+// the metering count is final.
 func (f *hotPathFixture) waitPostFlight(t testing.TB) {
 	t.Helper()
-	select {
-	case <-f.postFlight:
-	case <-time.After(5 * time.Second):
-		t.Fatal("post-flight never fired")
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		for _, name := range f.store.scriptNames() {
-			if strings.HasPrefix(name, "keypool.") {
-				return
-			}
+	for _, step := range []struct {
+		name string
+		ch   <-chan struct{}
+	}{{"observers", f.postFlight}, {"settle", f.settled}} {
+		select {
+		case <-step.ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("post-flight never reached its %s", step.name)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("post-flight never reached its last kv call: %v", f.store.scriptNames())
-		}
-		time.Sleep(2 * time.Millisecond)
 	}
 }
 

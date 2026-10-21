@@ -15,10 +15,10 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// admitSnap serves the caller and tier policies by id and one rate limit.
+// admitSnap serves the caller and tier policies and their rate limits by id.
 type admitSnap struct {
 	pols map[string]*Policy
-	rl   *appratelimit.RateLimit
+	rls  map[string]*appratelimit.RateLimit
 }
 
 func (s admitSnap) Policy(_ context.Context, id string) (*Policy, bool) {
@@ -27,10 +27,8 @@ func (s admitSnap) Policy(_ context.Context, id string) (*Policy, bool) {
 }
 
 func (s admitSnap) RateLimit(_ context.Context, id string) (*appratelimit.RateLimit, bool) {
-	if s.rl == nil || s.rl.Meta.ID != id {
-		return nil, false
-	}
-	return s.rl, true
+	rl, ok := s.rls[id]
+	return rl, ok
 }
 
 type admitFixture struct {
@@ -42,10 +40,17 @@ type admitFixture struct {
 }
 
 // newAdmitFixture: a caller policy metering requests (limit inboundAmount)
-// over two keys whose tier policy has no rules, on store.
-func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySelection, inboundAmount int64) admitFixture {
+// over two keys whose tier policy meters tierRules (none: unmetered), on
+// store.
+func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySelection, inboundAmount int64, tierRules ...appratelimit.Rule) admitFixture {
 	t.Helper()
+	rls := map[string]*appratelimit.RateLimit{}
 	tier := &Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "upstream-tier", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if len(tierRules) > 0 {
+		tierRL := testRateLimit("tier-rl", tierRules...)
+		tier.Spec.RateLimitID = tierRL.Meta.ID
+		rls[tierRL.Meta.ID] = tierRL
+	}
 	var keys []*hostkey.HostKey
 	for _, name := range []string{"key-a", "key-b"} {
 		k := &hostkey.HostKey{Meta: meta.Metadata{ID: meta.NewID(), Name: name}, Spec: hostkey.Spec{PolicyID: tier.Meta.ID}}
@@ -55,6 +60,7 @@ func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySel
 	rule := requestsRule()
 	rule.Amount = inboundAmount
 	rl := testRateLimit("caller-rl", rule)
+	rls[rl.Meta.ID] = rl
 	caller := fix("caller")
 	caller.Meta.ID = meta.NewID()
 	caller.Spec.RateLimitID = rl.Meta.ID
@@ -62,7 +68,7 @@ func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySel
 
 	rec := kvtest.NewRecording(store)
 	svc := NewService(
-		admitSnap{pols: map[string]*Policy{tier.Meta.ID: tier, caller.Meta.ID: caller}, rl: rl},
+		admitSnap{pols: map[string]*Policy{tier.Meta.ID: tier, caller.Meta.ID: caller}, rls: rls},
 		keypool.New(rec, discardLogger(), nil, nil),
 		pkgratelimit.New(rec, discardLogger(), nil),
 	)

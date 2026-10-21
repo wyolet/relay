@@ -682,13 +682,12 @@ func (p *Pipeline) runPostFlight(
 	body = nil
 
 	obs := pkgratelimit.Observations{Tokens: map[string]int64(limitTokens)}
-	// Both reservations commit in one batched round trip (they live under
-	// different hash tags, so this is a pipeline, not one script — see
-	// Limiter.CommitBoth).
-	if err := p.Policy.CommitBoth(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: post-flight commit failed", "err", err)
+	// The commits and, when the key's record needs it, its success write go
+	// out in one batched round trip (different hash tags, so a pipeline, not
+	// one script — see policy.Service.Settle).
+	if err := p.Policy.Settle(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
+		p.Logger.Warn("pipeline: post-flight settle failed", "err", err)
 	}
-	p.Policy.RecordSuccess(ctx, acq)
 
 	// The host answered — record reachability (off the latency path).
 	if p.HostHealth != nil && req.Host != nil {

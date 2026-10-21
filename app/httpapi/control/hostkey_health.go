@@ -28,8 +28,8 @@ type hostKeyHealth struct {
 	OpenUntil                *time.Time `json:"open_until,omitempty" doc:"When a timed cooldown expires; absent when closed or indefinite."`
 	CooldownRemainingSeconds *int       `json:"cooldown_remaining_seconds,omitempty" doc:"Seconds until a timed cooldown expires; absent when closed, indefinite, or already elapsed."`
 	BackoffStep              int        `json:"backoff_step" doc:"Position on the server-error backoff ladder (0 = healthy)."`
-	LastTransition           *time.Time `json:"last_transition,omitempty" doc:"Last state change; doubles as last-success time when state is closed."`
-	HasRecord                bool       `json:"has_record" doc:"False when no breaker record exists yet — the key has never failed (assumed healthy)."`
+	LastTransition           *time.Time `json:"last_transition,omitempty" doc:"Last state change; when state is closed, when the key recovered from its last failure."`
+	HasRecord                bool       `json:"has_record" doc:"False when no breaker record exists — the key has not failed within the record's 24 h lifetime (assumed healthy)."`
 }
 
 type hostKeyHealthResponse struct {

@@ -18,7 +18,10 @@
 //     least-recently-used adds a GET per healthy candidate and a SET.
 //     PreparePick queues the same reads on a caller's batch (policy admission
 //     sends them with the rate-limit reserve).
-//   - RecordSuccess: one script. RecordFailure: a GET and a SET.
+//   - RecordSuccess: one script; PrepareRecordSuccess queues it on a caller's
+//     batch. A key's record exists only once it has failed: post-flight
+//     writes a success only for a half-open probe or a record with a backoff
+//     step (Candidate.SuccessNeedsWrite). RecordFailure: a GET and a SET.
 //
 // The KeySelection enum lives in this package (not policy) so policy can
 // import keypool without creating a cycle when its Service composes

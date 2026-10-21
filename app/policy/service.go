@@ -5,8 +5,8 @@
 // kv round trips per request: Admit sends the inbound reserve and the first
 // pick's reads in one batch; a tier policy with rules adds its reserve after
 // the pick, and each failover is an Acquire (a pick batch, plus the tier
-// reserve). The success post-flight commits both reservations in one batch,
-// then records the key's success (one script).
+// reserve). The success post-flight (Settle) is one batch: both commits and,
+// only for a half-open probe or a backoff to reset, the key's success write.
 
 package policy
 
@@ -58,6 +58,10 @@ type AcquireInput struct {
 type Acquisition struct {
 	Key         *hostkey.HostKey
 	Reservation *pkgratelimit.Reservation
+
+	// writeSuccess: the record the key was picked on changes on a success
+	// (keypool.Candidate.SuccessNeedsWrite), so Settle writes it.
+	writeSuccess bool
 }
 
 // ErrSaturated: chosen key is over its upstream cap. Service has
@@ -163,11 +167,11 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 	}
 
 	scope, algo := pickScope(in.Policy)
-	key, err := s.selector.PickWithExclude(ctx, scope, algo, in.Keys, in.Excluded)
+	picked, err := s.selector.PickCandidate(ctx, scope, algo, in.Keys, in.Excluded)
 	if err != nil {
 		return nil, err
 	}
-	return s.reserveTier(ctx, key, in)
+	return s.reserveTier(ctx, picked, in)
 }
 
 // pickScope is the key-selection scope and strategy pol sets.
@@ -181,7 +185,8 @@ func pickScope(pol *Policy) (string, keypool.KeySelection) {
 // reserveTier reserves the picked key's upstream bucket when its tier policy
 // has rules for this request. On KeyQuotaExhausted it records
 // FailureRateLimitShort and returns ErrSaturated with the key set.
-func (s *Service) reserveTier(ctx context.Context, key *hostkey.HostKey, in AcquireInput) (*Acquisition, error) {
+func (s *Service) reserveTier(ctx context.Context, picked keypool.Candidate, in AcquireInput) (*Acquisition, error) {
+	key, writeSuccess := picked.Key, picked.SuccessNeedsWrite()
 	modelSlug, modelID, hostSlug := "", "", ""
 	if in.Model != nil {
 		modelSlug = in.Model.Meta.Name
@@ -196,7 +201,7 @@ func (s *Service) reserveTier(ctx context.Context, key *hostkey.HostKey, in Acqu
 	tier, _ := s.snap.Policy(ctx, key.Spec.PolicyID)
 	rules := s.rulesFor(ctx, tier, in.Provider, modelSlug, hostSlug, modelID)
 	if len(rules) == 0 || s.limiter == nil {
-		return &Acquisition{Key: key}, nil
+		return &Acquisition{Key: key, writeSuccess: writeSuccess}, nil
 	}
 
 	res, err := s.limiter.Reserve(ctx, "hostkey:"+key.Meta.ID, rules)
@@ -208,7 +213,7 @@ func (s *Service) reserveTier(ctx context.Context, key *hostkey.HostKey, in Acqu
 		}
 		return nil, fmt.Errorf("policy.Service.Acquire: reserve: %w", err)
 	}
-	return &Acquisition{Key: key, Reservation: res}, nil
+	return &Acquisition{Key: key, Reservation: res, writeSuccess: writeSuccess}, nil
 }
 
 // Commit returns the upstream reservation to the bucket.
@@ -217,23 +222,6 @@ func (s *Service) Commit(ctx context.Context, acq *Acquisition, obs pkgratelimit
 		return nil
 	}
 	return s.limiter.Commit(ctx, acq.Reservation, obs)
-}
-
-// CommitBoth returns the inbound and upstream reservations to their buckets in
-// a single round trip when both exist, falling back to a single commit when
-// only one is present (and a no-op when neither is). Both reservations receive
-// the same observed usage, exactly as the two separate CommitInbound + Commit
-// calls did. Prefer this over calling CommitInbound and Commit in sequence on
-// the success post-flight path: it collapses two Valkey round trips into one.
-func (s *Service) CommitBoth(ctx context.Context, inbound *pkgratelimit.Reservation, acq *Acquisition, obs pkgratelimit.Observations) error {
-	if s.limiter == nil {
-		return nil
-	}
-	var upstream *pkgratelimit.Reservation
-	if acq != nil {
-		upstream = acq.Reservation
-	}
-	return s.limiter.CommitBoth(ctx, inbound, upstream, obs)
 }
 
 // Release rolls back the upstream reservation (zero observations) and
@@ -248,13 +236,6 @@ func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.Fa
 	if s.selector != nil && acq.Key != nil {
 		s.selector.RecordFailure(ctx, acq.Key.KeyHash, kind, retryAfter)
 	}
-}
-
-func (s *Service) RecordSuccess(ctx context.Context, acq *Acquisition) {
-	if s.selector == nil || acq == nil || acq.Key == nil {
-		return
-	}
-	s.selector.RecordSuccess(ctx, acq.KeyHash())
 }
 
 func (a *Acquisition) KeyHash() string {

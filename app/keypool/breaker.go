@@ -48,29 +48,14 @@ var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
 var authCooldowns = [5]time.Duration{30 * time.Second, time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord {
-	return recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
-}
-
-// recordFrom decodes a breaker read. A missing, failed or undecodable read is
-// a closed record, so a store outage never empties the pool.
-func recordFrom(b []byte, err error) CircuitRecord {
-	if err != nil || len(b) == 0 {
-		return CircuitRecord{State: CircuitClosed}
-	}
-	r, err := decodeRecord(b)
-	if err != nil {
-		return CircuitRecord{State: CircuitClosed}
-	}
+	r, _ := recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
 	return r
 }
 
-// ReadCircuit returns the stored circuit-breaker record for a key and whether
-// a record actually exists in the state store. A missing or undecodable record
-// yields a default-closed record with found=false — i.e. the key has never
-// failed and is assumed healthy. This is a read-only accessor for the admin
-// plane; it does not auto-transition expired-open records the way Pick does.
-func (s *Selector) ReadCircuit(ctx context.Context, keyHash string) (CircuitRecord, bool) {
-	b, err := s.state.Get(ctx, circuitKey(keyHash))
+// recordFrom decodes a breaker read and reports whether it held a record. A
+// missing, failed or undecodable read is a closed record, so a store outage
+// never empties the pool.
+func recordFrom(b []byte, err error) (CircuitRecord, bool) {
 	if err != nil || len(b) == 0 {
 		return CircuitRecord{State: CircuitClosed}, false
 	}
@@ -79,6 +64,17 @@ func (s *Selector) ReadCircuit(ctx context.Context, keyHash string) (CircuitReco
 		return CircuitRecord{State: CircuitClosed}, false
 	}
 	return r, true
+}
+
+// ReadCircuit returns the stored circuit-breaker record for a key and whether
+// a record actually exists in the state store. A missing or undecodable record
+// yields a default-closed record with found=false — the key has not failed
+// within the record's TTL and is assumed healthy (a success writes a record
+// only to close a half-open probe or reset a backoff). This is a read-only
+// accessor for the admin plane; it does not auto-transition expired-open
+// records the way Pick does.
+func (s *Selector) ReadCircuit(ctx context.Context, keyHash string) (CircuitRecord, bool) {
+	return recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
 }
 
 func (s *Selector) writeRecord(ctx context.Context, keyHash string, r CircuitRecord) {
@@ -113,45 +109,63 @@ func ClearCircuit(ctx context.Context, store kv.Store, keyHash string) error {
 // lost between our GET and SET. Falls back to the non-atomic Go-side GET+SET
 // only when the store has no script runner (custom test doubles).
 func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
-	now := s.clock()
-	rec := CircuitRecord{
-		State:          CircuitClosed,
-		BackoffStep:    0,
-		LastTransition: now,
-		Reason:         "", // clear: key is healthy, prior reason no longer relevant
+	if s.runner == nil {
+		prior := s.readRecord(ctx, keyHash).State
+		s.writeRecord(ctx, keyHash, successRecord(s.clock()))
+		s.logSuccess(ctx, keyHash, prior)
+		return
 	}
+	call, err := s.successCall(keyHash)
+	if err != nil {
+		s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
+		return
+	}
+	raw, err := s.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
+	s.finishSuccess(ctx, keyHash, raw, err)
+}
 
+func successRecord(now time.Time) CircuitRecord {
+	// Reason cleared: the key is healthy, the prior reason no longer applies.
+	return CircuitRecord{State: CircuitClosed, LastTransition: now}
+}
+
+// successCall is RecordSuccess's script call for keyHash.
+func (s *Selector) successCall(keyHash string) (kv.ScriptCall, error) {
+	b, err := encodeRecord(successRecord(s.clock()))
+	if err != nil {
+		return kv.ScriptCall{}, err
+	}
+	return kv.ScriptCall{
+		Name:   scriptRecordSuccess,
+		Script: recordSuccessScript,
+		Keys:   []string{circuitKey(keyHash)},
+		Args:   []any{string(b), ttlFlat.Milliseconds()},
+	}, nil
+}
+
+// finishSuccess logs the outcome of a success script; raw is the prior record.
+func (s *Selector) finishSuccess(ctx context.Context, keyHash string, raw []byte, err error) {
+	if err != nil {
+		s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", err)
+		return
+	}
 	prior := CircuitState(CircuitClosed)
-	if s.runner != nil {
-		b, err := encodeRecord(rec)
-		if err != nil {
-			s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
-			return
+	if len(raw) > 0 {
+		if old, derr := decodeRecord(raw); derr == nil {
+			prior = old.State
 		}
-		ttlMs := ttlFlat.Milliseconds()
-		raw, rerr := s.runner.RunScript(ctx, scriptRecordSuccess, recordSuccessScript,
-			[]string{circuitKey(keyHash)}, string(b), ttlMs)
-		if rerr != nil {
-			s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", rerr)
-			return
-		}
-		if len(raw) > 0 {
-			if old, derr := decodeRecord(raw); derr == nil {
-				prior = old.State
-			}
-		}
-	} else {
-		prior = s.readRecord(ctx, keyHash).State
-		s.writeRecord(ctx, keyHash, rec)
 	}
+	s.logSuccess(ctx, keyHash, prior)
+}
 
+func (s *Selector) logSuccess(ctx context.Context, keyHash string, prior CircuitState) {
 	s.log.Debug("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,
 		"from_state", stateName(prior),
-		"to_state", stateName(rec.State),
+		"to_state", stateName(CircuitClosed),
 		"reason", "success",
-		"backoff_step", rec.BackoffStep,
+		"backoff_step", 0,
 		"open_for_seconds", 0,
 	)
 }
