@@ -482,7 +482,8 @@ func quietLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 // --- the guards ----------------------------------------------------------
 
 // TestKeyRequestCostsOneScript pins the metering budget for a key: one
-// Reserve on the way in, one Commit in post-flight, and no store read at all.
+// Reserve on the way in and no store read at all. The fixture's rule meters
+// requests only, which the Reserve settles, so post-flight commits nothing.
 func TestKeyRequestCostsOneScript(t *testing.T) {
 	f := newHotPathFixture(t, true)
 	f.arm()
@@ -495,8 +496,8 @@ func TestKeyRequestCostsOneScript(t *testing.T) {
 		t.Fatalf("request path ran %d metering scripts, want exactly 1 (%v)", got, f.store.scriptNames())
 	}
 	f.waitPostFlight(t)
-	if got := f.store.meteringScripts(); got != 2 {
-		t.Fatalf("reserve + commit = %d scripts, want 2 (%v)", got, f.store.scriptNames())
+	if got := f.store.meteringScripts(); got != 1 {
+		t.Fatalf("request ran %d metering scripts, want the reserve alone (%v)", got, f.store.scriptNames())
 	}
 }
 
@@ -514,8 +515,8 @@ func TestTokenRequestCostsOneScript(t *testing.T) {
 		t.Fatalf("request path ran %d metering scripts, want exactly 1 (%v)", got, f.store.scriptNames())
 	}
 	f.waitPostFlight(t)
-	if got := f.store.meteringScripts(); got != 2 {
-		t.Fatalf("reserve + commit = %d scripts, want 2 (%v)", got, f.store.scriptNames())
+	if got := f.store.meteringScripts(); got != 1 {
+		t.Fatalf("request ran %d metering scripts, want the reserve alone (%v)", got, f.store.scriptNames())
 	}
 }
 

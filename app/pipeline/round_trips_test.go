@@ -26,11 +26,25 @@ type hostReached chan struct{}
 func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
 func (hostReached) Unreachable(context.Context, string, string) {}
 
-// A metered round-robin request on a healthy key costs two kv round trips:
-// before the upstream call the inbound reserve, the breaker reads and the
-// rotation counter go out together; post-flight commits in one batch and
-// writes no success for a key that never failed.
-func TestRunIsTwoRoundTrips(t *testing.T) {
+// A metered round-robin request on a healthy key: before the upstream call
+// the inbound reserve, the breaker reads and the rotation counter go out in
+// one round trip. Post-flight writes no success for a key that never failed,
+// and commits in one more round trip only when a rule has something to
+// settle (a requests-only reservation was settled by the reserve).
+func TestRunRoundTrips(t *testing.T) {
+	requests := appratelimit.Rule{
+		Meter: appratelimit.MeterRequests, Amount: 100,
+		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow,
+	}
+	tokens := appratelimit.Rule{
+		Meter: appratelimit.MeterTokens, Amount: 1 << 20,
+		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategySlidingWindow,
+	}
+	t.Run("requests_only", func(t *testing.T) { runRoundTrips(t, 1, requests) })
+	t.Run("with_tokens", func(t *testing.T) { runRoundTrips(t, 2, requests, tokens) })
+}
+
+func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
 	pkgratelimit.RegisterScripts(mem)
@@ -39,10 +53,7 @@ func TestRunIsTwoRoundTrips(t *testing.T) {
 
 	rl := &appratelimit.RateLimit{
 		Meta: meta.Metadata{ID: "rl-inbound", Name: "inbound"},
-		Spec: appratelimit.Spec{Rules: []appratelimit.Rule{{
-			Meter: appratelimit.MeterRequests, Amount: 100,
-			Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow,
-		}}},
+		Spec: appratelimit.Spec{Rules: rules},
 	}
 	tier := &policy.Policy{Meta: meta.Metadata{ID: "pol-tier", Name: "tier"}}
 	caller := &policy.Policy{
@@ -89,8 +100,8 @@ func TestRunIsTwoRoundTrips(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("post-flight never finished")
 	}
-	if trips := store.RoundTrips(); trips != 2 {
-		t.Fatalf("kv round trips for the request = %d, want 2 (%d scripts: %v)", trips, len(store.Scripts()), store.Batches())
+	if trips := store.RoundTrips(); trips != want {
+		t.Fatalf("kv round trips for the request = %d, want %d (%d scripts: %v)", trips, want, len(store.Scripts()), store.Batches())
 	}
 	if n := len(store.Named("keypool.record_success")); n != 0 {
 		t.Fatalf("success writes = %d, want none for a key that never failed", n)

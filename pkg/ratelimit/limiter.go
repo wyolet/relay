@@ -70,6 +70,17 @@ func (r *Reservation) SetNoCommit() {
 	}
 }
 
+// needsCommit reports whether committing r with obs changes any state. An
+// uncancelled commit of a reservation holding no concurrency slot and no token
+// meter would only write its idempotency guard; skipping it is safe because no
+// caller commits a reservation cancelled after committing it uncancelled.
+func (r *Reservation) needsCommit(obs Observations) bool {
+	if r == nil || r.noCommit {
+		return false
+	}
+	return obs.Cancelled || len(r.conKeys) > 0 || len(r.tokRules) > 0
+}
+
 // Reserve checks all rules and increments counters atomically via one RunScript call.
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
 // scope is the Redis Cluster hash-tag anchor (e.g. "policy:prod-policy").
@@ -162,6 +173,8 @@ func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule,
 
 // Commit finalizes a Reservation via one RunScript call. Tokens are incremented
 // post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
+// An uncancelled commit of a reservation with no concurrency or token-meter
+// rule settles nothing and makes no call.
 //
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
 //   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]
@@ -169,7 +182,7 @@ func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule,
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
 //   - meter "concurrency":   decremented (not incremented)
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
-	if res != nil && res.noCommit {
+	if !res.needsCommit(obs) {
 		return nil
 	}
 	call, err := l.buildCommitCall(res, obs, l.clock())
@@ -199,10 +212,10 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 // per-reservation script and args are produced by the same builder.
 func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observations) error {
 	present := make([]*Reservation, 0, 2)
-	if a != nil && !a.noCommit {
+	if a.needsCommit(obs) {
 		present = append(present, a)
 	}
-	if b != nil && !b.noCommit {
+	if b.needsCommit(obs) {
 		present = append(present, b)
 	}
 	switch len(present) {

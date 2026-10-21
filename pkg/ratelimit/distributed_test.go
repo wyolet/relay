@@ -91,6 +91,10 @@ func TestContractLimit_RedisStore(t *testing.T) {
 	runLimiterContractSuite(t, "RedisStore", factory)
 }
 
+func TestCommitSkipRedis(t *testing.T) {
+	runCommitSkipSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
+}
+
 // TestDistributed_CommitBoth_Parity: against real Redis, committing an inbound
 // (policy-scoped) and upstream (hostkey-scoped) reservation via CommitBoth must
 // leave the same bucket state as two sequential Commit calls. The two scopes

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
@@ -31,6 +32,13 @@ func (s admitSnap) RateLimit(_ context.Context, id string) (*appratelimit.RateLi
 	return rl, ok
 }
 
+func concurrencyRule() appratelimit.Rule {
+	return appratelimit.Rule{
+		Meter: appratelimit.MeterConcurrency, Amount: 100,
+		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategySlidingWindow,
+	}
+}
+
 type admitFixture struct {
 	svc   *Service
 	store *kvtest.Recording
@@ -40,8 +48,8 @@ type admitFixture struct {
 }
 
 // newAdmitFixture: a caller policy metering requests (limit inboundAmount)
-// over two keys whose tier policy meters tierRules (none: unmetered), on
-// store.
+// and concurrency over two keys whose tier policy meters tierRules (none:
+// unmetered), on store.
 func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySelection, inboundAmount int64, tierRules ...appratelimit.Rule) admitFixture {
 	t.Helper()
 	rls := map[string]*appratelimit.RateLimit{}
@@ -59,7 +67,8 @@ func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySel
 	}
 	rule := requestsRule()
 	rule.Amount = inboundAmount
-	rl := testRateLimit("caller-rl", rule)
+	// The concurrency slot gives the inbound reservation something to commit.
+	rl := testRateLimit("caller-rl", rule, concurrencyRule())
 	rls[rl.Meta.ID] = rl
 	caller := fix("caller")
 	caller.Meta.ID = meta.NewID()

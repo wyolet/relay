@@ -15,7 +15,7 @@ func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore
 	obs := pkgratelimit.Observations{}
 
 	t.Run("clean_key_commits_only", func(t *testing.T) {
-		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10, requestsRule())
+		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10, concurrencyRule())
 		ctx := context.Background()
 		adm, err := f.svc.Admit(ctx, f.in, f.acq)
 		if err != nil || adm.AcqErr != nil || adm.Acq.Reservation == nil {
@@ -49,7 +49,7 @@ func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore
 	})
 
 	t.Run("half_open_probe_writes_success", func(t *testing.T) {
-		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10, requestsRule())
+		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10, concurrencyRule())
 		ctx := context.Background()
 		sel := keypool.New(f.store, discardLogger(), nil, nil)
 		// Open with a cooldown that has already run out: the next pick probes.

@@ -29,20 +29,26 @@ func (s policySnap) RateLimit(_ context.Context, id string) (*appratelimit.RateL
 	return s.rl, s.rl.Meta.ID == id
 }
 
-// authedPipeline is a Pipeline whose policy service meters one request per
-// hour on a token bucket, which a cancelled reservation refunds.
-func authedPipeline(t *testing.T) (*Pipeline, *kvtest.Recording, *policy.InboundInput) {
+// oneRequestPerHour is a token bucket a cancelled reservation refunds.
+var oneRequestPerHour = appratelimit.Rule{
+	Meter: appratelimit.MeterRequests, Amount: 1, Window: appratelimit.Window(time.Hour),
+	Strategy: appratelimit.StrategyTokenBucket,
+}
+
+// authedPipeline is a Pipeline whose policy service meters rules (default:
+// oneRequestPerHour).
+func authedPipeline(t *testing.T, rules ...appratelimit.Rule) (*Pipeline, *kvtest.Recording, *policy.InboundInput) {
 	t.Helper()
 	mem := kv.NewMem()
 	pkgratelimit.RegisterScripts(mem)
 	t.Cleanup(func() { _ = mem.Close() })
 	store := kvtest.NewRecording(mem)
 
+	if len(rules) == 0 {
+		rules = []appratelimit.Rule{oneRequestPerHour}
+	}
 	rl := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-1", Name: "one-per-hour"}}
-	rl.Spec.Rules = []appratelimit.Rule{{
-		Meter: appratelimit.MeterRequests, Amount: 1, Window: appratelimit.Window(time.Hour),
-		Strategy: appratelimit.StrategyTokenBucket,
-	}}
+	rl.Spec.Rules = rules
 	pol := &policy.Policy{Meta: meta.Metadata{ID: "pol-1", Name: "p"}, Spec: policy.Spec{RateLimitID: rl.Meta.ID}}
 	limiter := pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)
 
@@ -80,7 +86,11 @@ func TestRunCommitsInboundReservationOnBodyClose(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer upstream.Close()
-	p, store, in := authedPipeline(t)
+	// The concurrency slot is what the commit has to release.
+	p, store, in := authedPipeline(t, oneRequestPerHour, appratelimit.Rule{
+		Meter: appratelimit.MeterConcurrency, Amount: 10, Window: appratelimit.Window(time.Minute),
+		Strategy: appratelimit.StrategySlidingWindow,
+	})
 
 	res, err := p.Run(context.Background(), authedRequest(upstream.URL, in))
 	if err != nil {
@@ -101,6 +111,34 @@ func TestRunCommitsInboundReservationOnBodyClose(t *testing.T) {
 	var exceeded *pkgratelimit.KeyQuotaExhausted
 	if !errors.As(err, &exceeded) {
 		t.Fatalf("second Run: err = %v, want KeyQuotaExhausted", err)
+	}
+}
+
+// A requests-only reservation was settled by the reserve: a successful
+// request keeps its charge and post-flight sends no commit.
+func TestRunRequestOnlyReservationSendsNoCommit(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	p, store, in := authedPipeline(t)
+
+	res, err := p.Run(context.Background(), authedRequest(upstream.URL, in))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+	_, err = p.Run(context.Background(), authedRequest(upstream.URL, in))
+	var exceeded *pkgratelimit.KeyQuotaExhausted
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("second Run: err = %v, want KeyQuotaExhausted", err)
+	}
+	// Post-flight is detached; a commit it was going to send would land well
+	// inside this wait.
+	time.Sleep(100 * time.Millisecond)
+	if got := len(store.Named("limit.commit")); got != 0 {
+		t.Fatalf("commit scripts = %d, want none for a requests-only reservation", got)
 	}
 }
 
