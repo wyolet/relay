@@ -10,10 +10,7 @@ import (
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-// runCommitSkipSuite pins which commits reach the store: an uncancelled
-// commit of request-only rules settles nothing and makes no call (no guard
-// key either); concurrency and token rules, and a cancelled request's refund,
-// still commit.
+// runCommitSkipSuite pins which commits reach the store: an uncancelled commit of request-only rules settles nothing and makes no call (no guard key either); concurrency and token rules, and a cancelled request's refund, still commit.
 func runCommitSkipSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore) {
 	newLimiter := func(t *testing.T) (*Limiter, *kvtest.Recording) {
 		rec := kvtest.NewRecording(newStore(t))

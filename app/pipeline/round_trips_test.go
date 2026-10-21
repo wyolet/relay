@@ -26,11 +26,7 @@ type hostReached chan struct{}
 func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
 func (hostReached) Unreachable(context.Context, string, string) {}
 
-// A metered round-robin request on a healthy key: before the upstream call
-// the inbound reserve, the breaker reads and the rotation counter go out in
-// one round trip. Post-flight writes no success for a key that never failed,
-// and commits in one more round trip only when a rule has something to
-// settle (a requests-only reservation was settled by the reserve).
+// A metered round-robin request on a healthy key: before the upstream call the inbound reserve, the breaker reads and the rotation counter go out in one round trip. Post-flight writes no success for a key that never failed, and commits in one more round trip only when a rule has something to settle (a requests-only reservation was settled by the reserve).
 func TestRunRoundTrips(t *testing.T) {
 	requests := appratelimit.Rule{
 		Meter: appratelimit.MeterRequests, Amount: 100,

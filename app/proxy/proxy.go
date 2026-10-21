@@ -356,6 +356,8 @@ func classifyFailure(err error) (kind string, status int) {
 		return "rate_limited", 0
 	case errors.Is(err, pkgratelimit.ErrRevoked):
 		return "token_revoked", 0
+	case errors.Is(err, pkgratelimit.ErrUnavailable):
+		return "kv_unavailable", 0
 	case errors.Is(err, ErrPolicyMissing):
 		return "policy_missing", 0
 	case errors.Is(err, context.Canceled):

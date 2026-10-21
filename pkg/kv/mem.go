@@ -166,8 +166,7 @@ func (m *Mem) Expire(_ context.Context, key string, ttl time.Duration) error {
 	return nil
 }
 
-// ExpireNX is Redis EXPIRE NX: it sets ttl only on a live key with no expiry
-// and reports whether it did.
+// ExpireNX is Redis EXPIRE NX: it sets ttl only on a live key with no expiry and reports whether it did.
 func (m *Mem) ExpireNX(_ context.Context, key string, ttl time.Duration) (bool, error) {
 	mu := m.keyMu(&m.incrMu, key)
 	mu.Lock()

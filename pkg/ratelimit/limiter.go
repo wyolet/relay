@@ -71,10 +71,7 @@ func (r *Reservation) SetNoCommit() {
 	}
 }
 
-// needsCommit reports whether committing r with obs changes any state. An
-// uncancelled commit of a reservation holding no concurrency slot and no token
-// meter would only write its idempotency guard; skipping it is safe because no
-// caller commits a reservation cancelled after committing it uncancelled.
+// needsCommit reports whether committing r with obs changes any state. An uncancelled commit of a reservation holding no concurrency slot and no token meter would only write its idempotency guard; skipping it is safe because no caller commits a reservation cancelled after committing it uncancelled.
 func (r *Reservation) needsCommit(obs Observations) bool {
 	if r == nil || r.noCommit {
 		return false
@@ -172,10 +169,7 @@ func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule,
 	return reservation, nil
 }
 
-// Commit finalizes a Reservation via one RunScript call. Tokens are incremented
-// post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
-// An uncancelled commit of a reservation with no concurrency or token-meter
-// rule settles nothing and makes no call.
+// Commit finalizes a Reservation via one RunScript call. Tokens are incremented post-hoc; concurrency is always decremented. A repeated Commit is a no-op only when the first one wrote the idempotency guard: an uncancelled commit of a reservation with no concurrency or token-meter rule settles nothing, makes no call and writes no guard, so a later cancelled Commit still refunds it.
 //
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
 //   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]

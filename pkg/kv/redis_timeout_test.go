@@ -1,8 +1,6 @@
 package kv_test
 
-// redis_timeout_test.go drives kv.Redis against a scripted RESP server that
-// can leave a command unanswered, to pin how long a call may wait and that a
-// command which may have run is never sent a second time.
+// redis_timeout_test.go drives kv.Redis against a scripted RESP server that can leave a command unanswered, to pin how long a call may wait and that a command which may have run is never sent a second time.
 
 import (
 	"bufio"
@@ -268,8 +266,7 @@ func TestRedisPoolWaitBoundedByPoolTimeout(t *testing.T) {
 	<-held
 }
 
-// A stalled batch costs one read timeout, not one per command; every result
-// is unavailable and the script inside it is sent once.
+// A stalled batch costs one read timeout, not one per command; every result is unavailable and the script inside it is sent once.
 func TestRedisBatchGivesUpOnceAtReadTimeout(t *testing.T) {
 	f := newFakeRedis(t, func(string, int) string { return noReply })
 	s := connectFake(t, kv.RedisConfig{Addr: f.addr, ReadTimeout: 100 * time.Millisecond})

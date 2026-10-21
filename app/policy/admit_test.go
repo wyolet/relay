@@ -47,9 +47,7 @@ type admitFixture struct {
 	keys  []*hostkey.HostKey
 }
 
-// newAdmitFixture: a caller policy metering requests (limit inboundAmount)
-// and concurrency over two keys whose tier policy meters tierRules (none:
-// unmetered), on store.
+// newAdmitFixture: a caller policy metering requests (limit inboundAmount) and concurrency over two keys whose tier policy meters tierRules (none: unmetered), on store.
 func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySelection, inboundAmount int64, tierRules ...appratelimit.Rule) admitFixture {
 	t.Helper()
 	rls := map[string]*appratelimit.RateLimit{}
@@ -88,9 +86,7 @@ func newAdmitFixture(t *testing.T, store kvtest.ScriptStore, algo keypool.KeySel
 	}
 }
 
-// runAdmitSuite pins Admit on one backend: the inbound reserve and the first
-// pick cost one round trip together, and the outcome is what ReserveInbound
-// followed by Acquire would have returned.
+// runAdmitSuite pins Admit on one backend: the inbound reserve and the first pick cost one round trip together, and the outcome is what ReserveInbound followed by Acquire would have returned.
 func runAdmitSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore) {
 	t.Run("one_round_trip", func(t *testing.T) {
 		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionRoundRobin, 10)
@@ -170,8 +166,7 @@ func admitMem(t *testing.T) *kv.Mem {
 	return m
 }
 
-// faultyMem fails the breaker reads and, when failReserve is set, the
-// reserve script.
+// faultyMem fails the breaker reads and, when failReserve is set, the reserve script.
 type faultyMem struct {
 	*kv.Mem
 	failReserve bool
@@ -193,8 +188,7 @@ func (f *faultyMem) RunScript(ctx context.Context, name, script string, keys []s
 	return f.Mem.RunScript(ctx, name, script, keys, args...)
 }
 
-// A breaker read that fails counts as a closed record, as a single read does;
-// a reserve that fails fails the admission.
+// A breaker read that fails counts as a closed record, as a single read does; a reserve that fails fails the admission.
 func TestAdmit_PartialFailure(t *testing.T) {
 	ctx := context.Background()
 	t.Run("breaker_read", func(t *testing.T) {

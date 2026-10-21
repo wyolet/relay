@@ -7,8 +7,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 )
 
-// A success changes a record only for a half-open probe or a backoff to
-// reset; a clean closed record, or none, is left alone.
+// A success changes a record only for a half-open probe or a backoff to reset; a clean closed record, or none, is left alone.
 func TestCandidate_SuccessNeedsWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -26,9 +25,7 @@ func TestCandidate_SuccessNeedsWrite(t *testing.T) {
 	}
 }
 
-// PickCandidate reports the record a key was picked on: none for a key that
-// never failed or the anonymous key, the promoted half-open record for a key
-// whose cooldown ran out.
+// PickCandidate reports the record a key was picked on: none for a key that never failed or the anonymous key, the promoted half-open record for a key whose cooldown ran out.
 func TestPickCandidate_ReportsTheRecord(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()

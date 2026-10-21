@@ -224,8 +224,7 @@ type hotPathFixture struct {
 	mint       func(testing.TB, func(*crypto.TokenClaims)) string
 }
 
-// settledSignal is the pipeline's host-health recorder: Reachable is
-// post-flight's last step, after the kv settle.
+// settledSignal is the pipeline's host-health recorder: Reachable is post-flight's last step, after the kv settle.
 type settledSignal chan struct{}
 
 func (s settledSignal) Reachable(context.Context, string) {
@@ -427,9 +426,7 @@ func (f *hotPathFixture) do(t testing.TB, bearer string) *httptest.ResponseRecor
 	return w
 }
 
-// waitPostFlight blocks until the detached post-flight goroutine is done:
-// host reachability is recorded after the rate-limit settle, so once it fires
-// the metering count is final.
+// waitPostFlight blocks until the detached post-flight goroutine is done: host reachability is recorded after the rate-limit settle, so once it fires the metering count is final.
 func (f *hotPathFixture) waitPostFlight(t testing.TB) {
 	t.Helper()
 	for _, step := range []struct {
@@ -487,9 +484,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // --- the guards ----------------------------------------------------------
 
-// TestKeyRequestCostsOneScript pins the metering budget for a key: one
-// Reserve on the way in and no store read at all. The fixture's rule meters
-// requests only, which the Reserve settles, so post-flight commits nothing.
+// TestKeyRequestCostsOneScript pins the metering budget for a key: one Reserve on the way in and no store read at all. The fixture's rule meters requests only, which the Reserve settles, so post-flight commits nothing.
 func TestKeyRequestCostsOneScript(t *testing.T) {
 	f := newHotPathFixture(t, true)
 	f.arm()

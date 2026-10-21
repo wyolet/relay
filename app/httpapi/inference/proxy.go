@@ -326,7 +326,7 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, proxy.ErrPolicyMissing):
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "policy_missing", "proxy mode is not wired to a policy service")
 	case errors.Is(err, pkgratelimit.ErrUnavailable):
-		writeStoreUnavailable(w, err)
+		writeStoreUnavailable(w)
 	default:
 		// Limiter exceeded → 429 with Retry-After from the limiter's
 		// bucket-refill timing, so SDK clients back off correctly instead of

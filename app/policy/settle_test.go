@@ -9,8 +9,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// runSettleSuite pins Settle on one backend: the commits and, only when the
-// picked key's record needs it, the success write go out in one round trip.
+// runSettleSuite pins Settle on one backend: the commits and, only when the picked key's record needs it, the success write go out in one round trip.
 func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore) {
 	obs := pkgratelimit.Observations{}
 

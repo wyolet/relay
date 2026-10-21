@@ -217,8 +217,7 @@ func TestRelease_RefundsAndRecordsTheFailure(t *testing.T) {
 	}
 }
 
-// A success on a half-open probe closes the breaker, so a key that failed and
-// then worked is back in the pool with its backoff reset.
+// A success on a half-open probe closes the breaker, so a key that failed and then worked is back in the pool with its backoff reset.
 func TestSettle_ClosesAHalfOpenProbe(t *testing.T) {
 	f := newAcquireFixture(t)
 	ctx := context.Background()

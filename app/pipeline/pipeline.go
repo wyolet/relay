@@ -200,8 +200,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		hostSlug = req.Host.Meta.Name
 	}
 
-	// The inbound reserve and the first key pick share one kv round trip; a
-	// failover re-picks with Acquire.
+	// The inbound reserve and the first key pick share one kv round trip; a failover re-picks with Acquire.
 	adm, err := p.Policy.Admit(ctx, policy.InboundInput{
 		Policy:       req.Policy,
 		ProviderSlug: req.Provider,
@@ -682,9 +681,7 @@ func (p *Pipeline) runPostFlight(
 	body = nil
 
 	obs := pkgratelimit.Observations{Tokens: map[string]int64(limitTokens)}
-	// The commits and, when the key's record needs it, its success write go
-	// out in one batched round trip (different hash tags, so a pipeline, not
-	// one script — see policy.Service.Settle).
+	// The commits and, when the key's record needs it, its success write go out in one batched round trip (different hash tags, so a pipeline, not one script — see policy.Service.Settle).
 	if err := p.Policy.Settle(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
 		p.Logger.Warn("pipeline: post-flight settle failed", "err", err)
 	}

@@ -53,10 +53,7 @@ func TestReserveInbound_ExtraRulesShareTheOneScript(t *testing.T) {
 	}
 }
 
-// Extra rules alone are metered state: the reservation exists and its commit
-// is a real script call, not skipped as a check-only reservation. (A
-// cancelled commit, since an uncancelled one of request-only rules settles
-// nothing either way.)
+// Extra rules alone are metered state: the reservation exists and its commit is a real script call, not skipped as a check-only reservation. (A cancelled commit, since an uncancelled one of request-only rules settles nothing either way.)
 func TestReserveInbound_ExtraRulesAloneAreCommitted(t *testing.T) {
 	svc, store, pol := reserveFixture(t)
 

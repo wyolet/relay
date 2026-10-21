@@ -10,28 +10,23 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
-// NewBatch returns a kv batch on the selector's store, so a caller can send
-// PreparePick's reads in the same round trip as its own commands.
+// NewBatch returns a kv batch on the selector's store, so a caller can send PreparePick's reads in the same round trip as its own commands.
 func (s *Selector) NewBatch() *kv.Batch { return kv.NewBatch(s.state) }
 
-// PreparedPick is a Pick whose reads are queued on a kv batch; Finish chooses
-// the key once the batch has run.
+// PreparedPick is a Pick whose reads are queued on a kv batch; Finish chooses the key once the batch has run.
 type PreparedPick struct {
 	s     *Selector
 	scope string
 	algo  KeySelection
 	keys  []*hostkey.HostKey
 	skip  map[string]struct{}
-	// reads has one entry per key; nil where the batch read nothing (an
-	// excluded or anonymous key, or a prioritized key behind the first).
+	// reads has one entry per key; nil where the batch read nothing (an excluded or anonymous key, or a prioritized key behind the first).
 	reads       []*kv.BatchResult
 	rotation    *kv.BatchResult
 	rotationTTL *kv.BatchResult
 }
 
-// PreparePick queues Pick's reads for keys on b: each candidate's breaker
-// record (prioritized: the first candidate's only) and, for round-robin, the
-// rotation counter. The caller runs b, then calls Finish.
+// PreparePick queues Pick's reads for keys on b: each candidate's breaker record (prioritized: the first candidate's only) and, for round-robin, the rotation counter. The caller runs b, then calls Finish.
 func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, keys, exclude []*hostkey.HostKey) *PreparedPick {
 	if algo != KeySelectionRoundRobin && algo != KeySelectionLeastRecentlyUsed {
 		algo = KeySelectionPrioritized
@@ -50,23 +45,20 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 		if !isAnonymous(k.KeyHash) {
 			p.reads[i] = b.Get(circuitKey(k.KeyHash))
 		}
-		// Prioritized takes the first fit key in order; the ones behind it
-		// are read by Finish only while it is open.
+		// Prioritized takes the first fit key in order; the ones behind it are read by Finish only while it is open.
 		if algo == KeySelectionPrioritized {
 			break
 		}
 	}
 	if algo == KeySelectionRoundRobin {
 		p.rotation = b.Incr(roundRobinKey(scope), 1)
-		// NX leaves a live counter's deadline alone and gives one that lost
-		// its TTL a new one, without a round trip of its own.
+		// NX leaves a live counter's deadline alone and gives one that lost its TTL a new one, without a round trip of its own.
 		p.rotationTTL = b.ExpireNX(roundRobinKey(scope), ttlRoundRobin)
 	}
 	return p
 }
 
-// Finish chooses the key from the batch's results, reading on its own only
-// the prioritized candidates the batch skipped.
+// Finish chooses the key from the batch's results, reading on its own only the prioritized candidates the batch skipped.
 func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	s := p.s
 	now := s.clock()
@@ -78,9 +70,7 @@ func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 		if _, skip := p.skip[k.KeyHash]; skip {
 			continue
 		}
-		// The synthetic no-auth key has no credential to fail over to and
-		// nothing to heal — a breaker would only strand the host's sole
-		// candidate. Always treat it as healthy.
+		// The synthetic no-auth key has no credential to fail over to and nothing to heal — a breaker would only strand the host's sole candidate. Always treat it as healthy.
 		if isAnonymous(k.KeyHash) {
 			healthy = append(healthy, Candidate{Key: k, Record: CircuitRecord{State: CircuitClosed}})
 		} else {
@@ -114,8 +104,7 @@ func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	}
 }
 
-// eligible reports whether c may take traffic. An open key past its
-// OpenUntil is promoted to half-open (written back) and is eligible.
+// eligible reports whether c may take traffic. An open key past its OpenUntil is promoted to half-open (written back) and is eligible.
 func (s *Selector) eligible(ctx context.Context, c Candidate, now time.Time) (Candidate, bool) {
 	k, rec := c.Key, c.Record
 	switch rec.State {
