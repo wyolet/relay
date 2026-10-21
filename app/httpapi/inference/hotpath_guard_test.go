@@ -219,6 +219,7 @@ type hotPathFixture struct {
 	upstreamCalls         atomic.Int64
 
 	postFlight chan struct{}
+	errorKind  atomic.Value // string: the last post-flight event's ErrorKind
 	settled    settledSignal
 	armed      *atomic.Bool
 	mint       func(testing.TB, func(*crypto.TokenClaims)) string
@@ -240,6 +241,12 @@ func (settledSignal) Unreachable(context.Context, string, string) {}
 // upstream. metered says whether the inbound policy carries a rate-limit
 // rule; without one a key request has nothing to reserve.
 func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
+	t.Helper()
+	return newHotPathFixtureOn(t, metered, nil)
+}
+
+// newHotPathFixtureOn meters on metering instead of the counting Mem when it is non-nil.
+func newHotPathFixtureOn(t testing.TB, metered bool, metering kv.Store) *hotPathFixture {
 	t.Helper()
 
 	fx := &hotPathFixture{postFlight: make(chan struct{}, 8), settled: make(settledSignal, 8), armed: &atomic.Bool{}}
@@ -349,14 +356,18 @@ func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
 	fx.cat, fx.team, fx.project, fx.sa, fx.user, fx.keyRow = cat, tm, proj, sa, user, keyRow
 	fx.tokens, fx.mint = hotPathTokens(t, proj.Meta.ID, user)
 
+	if metering == nil {
+		metering = fx.store
+	}
 	svc := policy.NewService(
 		hotPathSnapReader{cat: cat},
-		keypool.New(fx.store, quietLogger(), nil, nil),
-		pkgratelimit.New(fx.store, quietLogger(), nil),
+		keypool.New(metering, quietLogger(), nil, nil),
+		pkgratelimit.New(metering, quietLogger(), nil),
 	)
 
 	reg := lifecycle.New()
-	reg.RegisterHook(lifecycle.HookFunc{HookName: "hotpath-guard", Fn: func(*lifecycle.Context, *lifecycle.PostFlightEvent) (any, error) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "hotpath-guard", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+		fx.errorKind.Store(ev.ErrorKind)
 		select {
 		case fx.postFlight <- struct{}{}:
 		default:

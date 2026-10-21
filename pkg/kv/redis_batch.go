@@ -62,6 +62,9 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 	if errors.As(err, &reply) && !serverCannotServe(err) {
 		err = nil
 	}
+	if err != nil && !errors.As(err, &reply) {
+		failUnsent(cmds, err)
+	}
 	r.trackSlow("batch", "", start, err)
 
 	for i, op := range ops {
@@ -99,5 +102,17 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 			}
 			res.Value, res.Err = redisResultToBytes(v)
 		}
+	}
+}
+
+// failUnsent gives err to every command of a pipeline that was never sent. go-redis sets a transport error on each command it sent and left unanswered, but when it got no connection (pool wait, dial) it returns the error alone, so no command failing means none went out.
+func failUnsent(cmds []redis.Cmder, err error) {
+	for _, c := range cmds {
+		if c.Err() != nil {
+			return
+		}
+	}
+	for _, c := range cmds {
+		c.SetErr(err)
 	}
 }
