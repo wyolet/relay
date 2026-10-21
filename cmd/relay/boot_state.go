@@ -29,6 +29,11 @@ func openKV(bootCtx context.Context, cfg *config.Config) kv.Store {
 			Password:     cfg.RedisPassword,
 			PoolSize:     cfg.RedisPoolSize,
 			MinIdleConns: cfg.RedisMinIdleConns,
+			DialTimeout:  cfg.RedisDialTimeout,
+			ReadTimeout:  cfg.RedisReadTimeout,
+			WriteTimeout: cfg.RedisWriteTimeout,
+			PoolTimeout:  cfg.RedisPoolTimeout,
+			MaxRetries:   cfg.RedisMaxRetries,
 		})
 		if err != nil {
 			slog.Error("state(redis) init failed", "err", err)

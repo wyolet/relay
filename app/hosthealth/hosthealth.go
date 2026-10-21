@@ -22,6 +22,7 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // defaultTTL bounds how long a health observation survives without refresh.
@@ -182,5 +183,7 @@ func (r *Recorder) write(ctx context.Context, hostID string, st host.Status) {
 	if err != nil {
 		return
 	}
-	_ = r.state.Set(ctx, healthKey(hostID), b, r.ttl)
+	if err := r.state.Set(ctx, healthKey(hostID), b, r.ttl); err != nil {
+		metrics.KVError("host_health", metrics.KVDropped)
+	}
 }

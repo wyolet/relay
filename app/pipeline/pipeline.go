@@ -200,7 +200,8 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		hostSlug = req.Host.Meta.Name
 	}
 
-	inbound, err = p.Policy.ReserveInbound(ctx, policy.InboundInput{
+	// The inbound reserve and the first key pick share one kv round trip; a failover re-picks with Acquire.
+	adm, err := p.Policy.Admit(ctx, policy.InboundInput{
 		Policy:       req.Policy,
 		ProviderSlug: req.Provider,
 		ModelSlug:    modelSlug,
@@ -208,10 +209,18 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		HostSlug:     hostSlug,
 		TeamID:       req.TeamID,
 		TokenJTI:     req.TokenJTI,
+	}, policy.AcquireInput{
+		Policy:   req.Policy,
+		Keys:     req.Keys,
+		Model:    req.Model,
+		Host:     req.Host,
+		Provider: req.Provider,
 	})
 	if err != nil {
 		return nil, err // handler maps ExceededError → 429, ErrRevoked → 401
 	}
+	inbound = adm.Inbound
+	firstAttempt := true
 
 	var (
 		excluded     []*hostkey.HostKey
@@ -230,14 +239,19 @@ loop:
 			if attempts >= maxAttempts {
 				break loop
 			}
-			acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
-				Policy:   req.Policy,
-				Keys:     req.Keys,
-				Excluded: excluded,
-				Model:    req.Model,
-				Host:     req.Host,
-				Provider: req.Provider,
-			})
+			if firstAttempt {
+				acq, err = adm.Acq, adm.AcqErr
+				firstAttempt = false
+			} else {
+				acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
+					Policy:   req.Policy,
+					Keys:     req.Keys,
+					Excluded: excluded,
+					Model:    req.Model,
+					Host:     req.Host,
+					Provider: req.Provider,
+				})
+			}
 			if errors.Is(err, policy.ErrSaturated) {
 				if acq != nil && acq.Key != nil {
 					excluded = append(excluded, acq.Key)
@@ -667,13 +681,10 @@ func (p *Pipeline) runPostFlight(
 	body = nil
 
 	obs := pkgratelimit.Observations{Tokens: map[string]int64(limitTokens)}
-	// Both reservations commit in one batched round trip (they live under
-	// different hash tags, so this is a pipeline, not one script — see
-	// Limiter.CommitBoth).
-	if err := p.Policy.CommitBoth(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: post-flight commit failed", "err", err)
+	// The commits and, when the key's record needs it, its success write go out in one batched round trip (different hash tags, so a pipeline, not one script — see policy.Service.Settle).
+	if err := p.Policy.Settle(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
+		p.Logger.Warn("pipeline: post-flight settle failed", "err", err)
 	}
-	p.Policy.RecordSuccess(ctx, acq)
 
 	// The host answered — record reachability (off the latency path).
 	if p.HostHealth != nil && req.Host != nil {
@@ -728,6 +739,8 @@ func classifyFailure(err error) (kind string, status int) {
 		// Reservation rejected before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).
 		return "rate_limited", 0
+	case errors.Is(err, pkgratelimit.ErrUnavailable):
+		return "kv_unavailable", 0
 	case errors.Is(err, ErrNoKeys):
 		return "no_keys", 0
 	case errors.Is(err, ErrAllKeysExhausted):

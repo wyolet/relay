@@ -292,10 +292,6 @@ func ForwardUpstreamHeaders(dst, src http.Header) {
 	dst.Set(HeaderOrigin, "upstream")
 }
 
-// MapPipelineErr is the exported form for adapter-side cross-shape handlers
-// that drive pipeline.Pipeline.Run directly.
-func MapPipelineErr(w http.ResponseWriter, err error) { mapPipelineErr(w, err) }
-
 // SplitSSEChunks is exported so adapter packages can use the same SSE
 // chunking logic in their cross-shape stream handlers.
 func SplitSSEChunks(data []byte, atEOF bool) (advance int, token []byte, err error) {

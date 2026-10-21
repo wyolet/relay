@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -25,6 +26,50 @@ type RedisConfig struct {
 	Password     string
 	PoolSize     int
 	MinIdleConns int
+
+	// Zero durations take the Default* values below.
+	DialTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	PoolTimeout  time.Duration
+	// MaxRetries is how many times a failed command is resent; 0 sends it once.
+	MaxRetries int
+}
+
+// Client defaults: short enough that a stalled server costs a request well under a second instead of the library's multi-second defaults.
+const (
+	DefaultDialTimeout  = 2 * time.Second
+	DefaultReadTimeout  = 500 * time.Millisecond
+	DefaultWriteTimeout = 500 * time.Millisecond
+	DefaultPoolTimeout  = 250 * time.Millisecond
+)
+
+// ErrUnavailable marks a call the store could not serve: no reply in time or at all (timeout, exhausted pool, refused or dropped connection), or a reply that the server cannot serve right now (LOADING, READONLY, BUSY, ...). Other error replies are the command's own failure and stay unwrapped. Whether the command ran on the server is unknown.
+var ErrUnavailable = errors.New("state: store unavailable")
+
+func (c *RedisConfig) withDefaults() RedisConfig {
+	out := *c
+	if out.DialTimeout <= 0 {
+		out.DialTimeout = DefaultDialTimeout
+	}
+	if out.ReadTimeout <= 0 {
+		out.ReadTimeout = DefaultReadTimeout
+	}
+	if out.WriteTimeout <= 0 {
+		out.WriteTimeout = DefaultWriteTimeout
+	}
+	if out.PoolTimeout <= 0 {
+		out.PoolTimeout = DefaultPoolTimeout
+	}
+	return out
+}
+
+// goRedisRetries maps a retry count to go-redis, where 0 means its default of 3 and -1 means none.
+func goRedisRetries(n int) int {
+	if n <= 0 {
+		return -1
+	}
+	return n
 }
 
 // SentinelConfig configures Sentinel-mode failover.
@@ -43,32 +88,57 @@ type Redis struct {
 
 // NewRedis constructs a Redis and pings the server.
 // Precedence: ClusterAddrs > Sentinel > Addr (single-node).
+//
+// Each command sent is bounded by PoolTimeout + WriteTimeout + ReadTimeout, plus one DialTimeout on a pool miss: the caller waits on the dial itself, which PoolTimeout does not cover, so dial retries are off. A script call sends one EVALSHA when its SHA is cached, but a SCRIPT LOAD on a cold cache and the NOSCRIPT reload (SCRIPT LOAD, EVALSHA, then EVAL) add commands, up to five bounds in all. The cluster client also resends through its redirect loop (MaxRedirects), which MaxRetries does not govern, so there a script can run twice.
 func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
+	cfg = cfg.withDefaults()
+	retries := goRedisRetries(cfg.MaxRetries)
 	var client redis.UniversalClient
 	if len(cfg.ClusterAddrs) > 0 {
 		client = redis.NewClusterClient(&redis.ClusterOptions{
-			Addrs:        cfg.ClusterAddrs,
-			Password:     cfg.Password,
-			PoolSize:     cfg.PoolSize,
-			MinIdleConns: cfg.MinIdleConns,
+			Addrs:                 cfg.ClusterAddrs,
+			Password:              cfg.Password,
+			PoolSize:              cfg.PoolSize,
+			MinIdleConns:          cfg.MinIdleConns,
+			DialTimeout:           cfg.DialTimeout,
+			DialerRetries:         1,
+			ReadTimeout:           cfg.ReadTimeout,
+			WriteTimeout:          cfg.WriteTimeout,
+			PoolTimeout:           cfg.PoolTimeout,
+			MaxRetries:            retries,
+			ContextTimeoutEnabled: true,
 		})
 	} else if cfg.Sentinel != nil {
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
-			MasterName:       cfg.Sentinel.MasterName,
-			SentinelAddrs:    cfg.Sentinel.SentinelAddrs,
-			SentinelPassword: cfg.Sentinel.SentinelPassword,
-			Password:         cfg.Password,
-			DB:               cfg.DB,
-			PoolSize:         cfg.PoolSize,
-			MinIdleConns:     cfg.MinIdleConns,
+			MasterName:            cfg.Sentinel.MasterName,
+			SentinelAddrs:         cfg.Sentinel.SentinelAddrs,
+			SentinelPassword:      cfg.Sentinel.SentinelPassword,
+			Password:              cfg.Password,
+			DB:                    cfg.DB,
+			PoolSize:              cfg.PoolSize,
+			MinIdleConns:          cfg.MinIdleConns,
+			DialTimeout:           cfg.DialTimeout,
+			DialerRetries:         1,
+			ReadTimeout:           cfg.ReadTimeout,
+			WriteTimeout:          cfg.WriteTimeout,
+			PoolTimeout:           cfg.PoolTimeout,
+			MaxRetries:            retries,
+			ContextTimeoutEnabled: true,
 		})
 	} else {
 		client = redis.NewClient(&redis.Options{
-			Addr:         cfg.Addr,
-			Password:     cfg.Password,
-			DB:           cfg.DB,
-			PoolSize:     cfg.PoolSize,
-			MinIdleConns: cfg.MinIdleConns,
+			Addr:                  cfg.Addr,
+			Password:              cfg.Password,
+			DB:                    cfg.DB,
+			PoolSize:              cfg.PoolSize,
+			MinIdleConns:          cfg.MinIdleConns,
+			DialTimeout:           cfg.DialTimeout,
+			DialerRetries:         1,
+			ReadTimeout:           cfg.ReadTimeout,
+			WriteTimeout:          cfg.WriteTimeout,
+			PoolTimeout:           cfg.PoolTimeout,
+			MaxRetries:            retries,
+			ContextTimeoutEnabled: true,
 		})
 	}
 	if err := client.Ping(ctx).Err(); err != nil {
@@ -78,9 +148,31 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 	return &Redis{client: client}, nil
 }
 
+// isUnavailable reports whether err is an ErrUnavailable case. A cancelled caller is not: that is the caller leaving, not the store failing.
+func isUnavailable(err error) bool {
+	if err == nil || errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var reply redis.Error
+	return !errors.As(err, &reply) || serverCannotServe(err)
+}
+
+func markUnavailable(err error) error {
+	if !isUnavailable(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrUnavailable, err)
+}
+
+func serverCannotServe(err error) bool {
+	return redis.IsLoadingError(err) || redis.IsReadOnlyError(err) || redis.IsMasterDownError(err) ||
+		redis.IsClusterDownError(err) || redis.IsTryAgainError(err) || redis.IsMaxClientsError(err) ||
+		redis.IsOOMError(err) || redis.HasErrorPrefix(err, "BUSY")
+}
+
 // Ping checks the connection.
 func (r *Redis) Ping(ctx context.Context) error {
-	return r.client.Ping(ctx).Err()
+	return markUnavailable(r.client.Ping(ctx).Err())
 }
 
 // slowOpThreshold is the duration past which a single redis op is logged
@@ -91,13 +183,29 @@ func (r *Redis) Ping(ctx context.Context) error {
 // (server latency or a network-level retransmit stall).
 const slowOpThreshold = 500 * time.Millisecond
 
+// slowLogInterval spaces the slow-op WARN process-wide: during an outage every call times out, and a synchronous line per call would cost a saturated pod more than the call.
+const slowLogInterval = time.Second
+
+var (
+	slowSinceLog     atomic.Int64
+	slowLastLogNanos atomic.Int64
+)
+
+// trackSlow counts an op that was slow or failed for want of the store, and logs at most one line per slowLogInterval carrying the count since the previous line and the latest op.
 func (r *Redis) trackSlow(op, key string, start time.Time, err error) {
 	d := time.Since(start)
-	if d < slowOpThreshold {
+	if d < slowOpThreshold && !isUnavailable(err) {
+		return
+	}
+	slowSinceLog.Add(1)
+	now := time.Now().UnixNano()
+	last := slowLastLogNanos.Load()
+	if now-last < int64(slowLogInterval) || !slowLastLogNanos.CompareAndSwap(last, now) {
 		return
 	}
 	st := r.client.PoolStats()
-	slog.Warn("kv: slow redis op",
+	slog.Warn("kv: slow or failed redis ops",
+		"ops", slowSinceLog.Swap(0),
 		"op", op, "key", redactKey(key), "dur_ms", d.Milliseconds(), "err", err,
 		"pool_hits", st.Hits, "pool_misses", st.Misses, "pool_timeouts", st.Timeouts,
 		"pool_total", st.TotalConns, "pool_idle", st.IdleConns)
@@ -110,28 +218,28 @@ func (r *Redis) Get(ctx context.Context, key string) ([]byte, error) {
 	if errors.Is(err, redis.Nil) {
 		return nil, ErrNotFound
 	}
-	return v, err
+	return v, markUnavailable(err)
 }
 
 func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	start := time.Now()
 	err := r.client.Set(ctx, key, value, ttl).Err()
 	r.trackSlow("set", key, start, err)
-	return err
+	return markUnavailable(err)
 }
 
 func (r *Redis) Del(ctx context.Context, key string) error {
 	start := time.Now()
 	err := r.client.Del(ctx, key).Err()
 	r.trackSlow("del", key, start, err)
-	return err
+	return markUnavailable(err)
 }
 
 func (r *Redis) Incr(ctx context.Context, key string, delta int64) (int64, error) {
 	start := time.Now()
 	n, err := r.client.IncrBy(ctx, key, delta).Result()
 	r.trackSlow("incr", key, start, err)
-	return n, err
+	return n, markUnavailable(err)
 }
 
 func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error {
@@ -139,7 +247,7 @@ func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error
 	ok, err := r.client.Expire(ctx, key, ttl).Result()
 	r.trackSlow("expire", key, start, err)
 	if err != nil {
-		return err
+		return markUnavailable(err)
 	}
 	if !ok {
 		return ErrNotFound
@@ -157,7 +265,7 @@ func (r *Redis) Range(ctx context.Context, prefix string) ([]Entry, error) {
 		var err error
 		batch, cursor, err = r.client.Scan(ctx, cursor, pattern, 100).Result()
 		if err != nil {
-			return nil, err
+			return nil, markUnavailable(err)
 		}
 		keys = append(keys, batch...)
 		if cursor == 0 {
@@ -178,7 +286,7 @@ func (r *Redis) Range(ctx context.Context, prefix string) ([]Entry, error) {
 		batch := keys[i:end]
 		vals, err := r.client.MGet(ctx, batch...).Result()
 		if err != nil {
-			return nil, err
+			return nil, markUnavailable(err)
 		}
 		for j, v := range vals {
 			if v == nil {

@@ -311,7 +311,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 
 	result, err := d.Pipeline.Run(ctx, preq)
 	if err != nil {
-		mapPipelineErr(w, err)
+		mapRunErr(w, err)
 		return
 	}
 	defer result.Body.Close()
@@ -445,7 +445,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 
 	result, pErr := d.Pipeline.Run(ctx, preq)
 	if pErr != nil {
-		mapPipelineErr(w, pErr)
+		mapRunErr(w, pErr)
 		return
 	}
 	defer result.Body.Close()
