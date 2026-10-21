@@ -1,112 +1,92 @@
 ---
 title: "Catalog & Ownership"
-description: "Where the providers, hosts, and models come from — and what you can edit"
+description: "Where providers, hosts, and models come from, how a request names a model, and what you can edit"
 ---
 
-When you start Relay, it already knows about the major providers, their
-hosts, and hundreds of models. That knowledge is the **catalog** — the
-seeded set of providers, hosts, models, pricing, and policies Relay routes
-against. You add your own keys and policies on top of it.
+The **catalog** is the set of providers, hosts, models, host bindings, pricing and host tier policies Relay routes against. A fresh Relay seeds it on first boot. You add host keys, relay keys, policies and rate limits on top, and edit catalog rows where you need to.
 
 ## The catalog repo
 
-The catalog is maintained as open data in its own repository,
-[`wyolet/relay-catalog`](https://github.com/wyolet/relay-catalog), separate
-from the relay engine. It's a tree of YAML under `data/`:
+The catalog is open data in its own repository, [`wyolet/relay-catalog`](https://github.com/wyolet/relay-catalog), separate from the engine. It is a tree of YAML under `data/`:
 
 ```
 data/
   providers/<provider>/provider.yaml
                        models/<model>.yaml
   hosts/<host>/host.yaml
+               bindings/<model>.yaml
                pricing/<model>.yaml
                policies/<policy>.yaml
 ```
 
-Ownership drives placement: providers own their models; hosts own their
-pricing and tier policies. Each release is published as a versioned tarball,
-and the Docker images bundle a default release at `/catalog` — so a fresh
-container boots with a populated catalog and **no external fetch required**.
+Providers own their models; hosts own their bindings, pricing and tier policies. Each release is published as a versioned archive, and the Docker images bundle one release at `/catalog`, so a fresh container boots with a populated catalog and no network fetch.
 
-<Info>
-Pin a specific catalog release with `RELAY_CATALOG_VERSION`. Unset, the image
-seeds from its bundled `/catalog`. A binary built with `make build` fetches
-the catalog release it was built against when neither `RELAY_CATALOG_DIR` nor
-`RELAY_CATALOG_VERSION` is set (`RELAY_CATALOG_VERSION=off` disables this). A
-plain `go build` binary needs one of them to seed a catalog.
-</Info>
+Because the data lives in its own repo, provider, model and pricing updates ship on their own schedule: you can move to a newer catalog without upgrading Relay.
 
-Keeping the catalog in its own repo means provider, model, and pricing
-updates ship on their own cadence — you can pull a newer catalog without
-upgrading the engine, and the data is reviewable and versioned in the open.
+## Naming a model in a request
 
-## System-owned vs user-owned
+The `model` field of an inference request resolves against the catalog. These forms are accepted:
 
-Every resource carries an **owner**, and the owner decides whether you can
-edit it. There are two that matter day to day:
-
-| Owner | What it is | Editable? |
+| Form | Example | Resolves to |
 | --- | --- | --- |
-| **System** | Seeded from the catalog — providers, hosts, models, their pricing — plus rows the admin token creates | Admins may edit via the API (catalog updates then skip the row) and delete a row nothing references |
-| **User** | Things you create — host keys, relay keys, your policies and rate limits | Fully editable |
+| `model` | `gpt-4o-mini` | The model, on whichever of its hosts routing picks |
+| `provider/model` | `openai/gpt-4o-mini` | Same, disambiguated by provider |
+| `model@host` | `gpt-4o-mini@openai` | The model, only on that host |
+| `provider/model@host` | `openai/gpt-4o-mini@openai` | The model, only on that host |
 
-This keeps the curated catalog stable: a catalog update can refresh a
-provider's models or pricing without clobbering edits, because the things
-*you* own live alongside the system data rather than on top of it.
+Names are normalized before lookup, so dotted and hyphenated forms match (`gpt-5.5` and `gpt-5-5` are the same name). A dated snapshot name the model lists (for example `gpt-4o-2024-08-06`) selects that snapshot.
 
-To customize a *system-owned* row — pin a context window, add your own alias —
-without losing the change on the next catalog update, use an
-[**overlay**](/concepts/overlays): a sparse, user-owned patch merged over the
-catalog template at load time.
+When a model has bindings on several hosts and you don't pin one, Relay uses the first binding it finds that your policy grants and whose host has a usable host key in the policy. The order between hosts is not configurable, so pin a host when it matters, or grant only the host you want. Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policy doesn't give. See [Policies](/concepts/policies) for how grants are written.
+
+`GET /v1/models` lists the models your credential can reach. `GET /api/catalog/resolve?ref=<ref>` on the control API shows what a [policy grant](/concepts/policies#granting-models) such as `anthropic@anthropic` or `@ollama-self` expands to.
 
 ## Model aliases
 
-Models can carry **aliases** — alternate names that resolve to the same model.
-An alias is matched last (after exact name and slug), supports a single `*`
-wildcard, and routes to the model's real upstream wire name verbatim. This is
-how a client can address, say, `claude-fable-5[1m]` and have it resolve to the
-underlying model the catalog actually serves. Aliases are a resolution
-convenience only — they never invent a new model or change what's billed.
+A model can declare **aliases** in `spec.aliases`: extra names that resolve to it. Aliases are checked last, after every catalog name and its provider- and host-qualified forms miss, so they never shadow a real model. An alias may contain one `*` after a literal prefix (`claude-fable-5[*]`). When a request matches an alias, Relay routes to the model and sends the name from the request upstream unchanged; this is how a client can send `claude-fable-5[1m]` to a provider that understands that suffix.
 
-### What's system-owned today
+Aliases are lookup keys only: they are not valid in policy grants, and usage records the model's catalog name. To add an alias to a catalog model without losing it on the next catalog update, use an [overlay](/concepts/overlays).
 
-Right now the catalog ships providers, hosts, and models as **system-owned** —
-the hosted, commercial providers (OpenAI, Anthropic, and the gateways in
-front of them). You point at them by adding your **own host keys** (which are
-user-owned) and granting models through **your policies**.
+## Ownership
 
-A handful of **system-owned rate limits** ship with Relay itself, not with the
-catalog: `inference-api-proxy`, `inference-api-proxy-anonymous` (see
-[proxy mode](/concepts/proxy-mode)), `otlp-export` (see
-[observability](/concepts/observability)), `control-api`, and `inference-api`.
-Every boot creates the ones that do not exist yet and leaves an existing row
-exactly as it is, so edit or disable them through `/api/rate-limits` and the
-change survives restarts, upgrades, and catalog re-seeds. A deleted one comes
-back as shipped on the next boot; to switch one off, set `enabled: false`.
-To change what they start as on a new database, put a file defining them
-(same names, `owner.kind: system`) under `<RELAY_CONFIG_DIR>/ratelimits/`.
+Every row has an **owner**, and the owner decides who may change it.
 
-### Self-hosted upstreams
+| Owner kind | Rows | Who may edit or delete |
+| --- | --- | --- |
+| `system` | Providers, hosts and host bindings from the catalog, the shipped system rate limits, and rows the admin token creates | Admins only. A delete is refused while anything references the row |
+| `provider`, `host` | Catalog data: models are provider-owned; pricing, tier policies and their rate limits are host-owned | Edits are allowed and deletes refused by default. `governance:model` and `governance:policy` change that for models and tier policies (`allowEdit`, `allowDelete`); see [Settings](/reference/settings) |
+| `user`, `team`, `project` | Tenant rows: host keys, relay keys, policies and rate limits created by people, owned by a user or a project; projects are owned by their team. Team and project owners are what RBAC scopes on | The owner, subject to [RBAC](/concepts/auth#authorization) |
 
-Self-hosted and local upstreams — Ollama and the like — are added through the
-control plane like any other catalog entry: define the host (its base URL),
-add the models you run, and bind them. Hosts, models, and host bindings are
-**shared catalog data**: no user, team, or project owns one, and under
-`RELAY_AUTHZ=rbac` creating or editing one takes the `admin` or
-`catalog-editor` role.
+Providers, hosts, models, host bindings and pricing are shared catalog data: no user, team or project owns one. Under `RELAY_AUTHZ=rbac`, writing them takes the `admin` or `catalog-editor` role, and system-owned rows stay admin-only. Host keys, relay keys, policies and rate limits can belong to a tenant.
 
-<Note>
-Rule of thumb: providers, hosts, models, host bindings, and pricing are the
-deployment's shared catalog, maintained by admins and catalog editors. Host
-keys, relay keys, policies, and rate limits can be your own.
-</Note>
+An API edit to a catalog row marks it dirty (`metadata.dirty`), and catalog upgrades skip dirty rows from then on. To change a catalog model and keep receiving upstream updates to the fields you did not touch, use an [overlay](/concepts/overlays) instead.
+
+## Self-hosted upstreams (Ollama)
+
+The catalog ships an `ollama-self` host for an Ollama server you run, with `noAuth: true` and bindings for the models Ollama serves, but no base URL, so it is unroutable until you set one. As an admin, read the host and send it back with `spec.baseURL` set:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/hosts/ollama-self > host.json
+# set "spec.baseURL" to e.g. "http://ollama:11434" in host.json, then:
+curl -X PUT http://localhost:8081/api/hosts/by-id/<id> \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @host.json
+```
+
+The base URL is the server root; the binding's shape adds the path (`/v1/chat/completions` for `openai`). A host whose endpoint differs from the shape's default path can set `spec.path`; an explicit empty `path` means the base URL is the full endpoint.
+
+A `noAuth` host needs no host key, and Relay sends no auth header to it. Because no host key gates it, a policy reaches it only through an explicit grant such as `@ollama-self` or `<provider>/<model>@ollama-self`; a policy with an empty model list does not cover it.
+
+For any other OpenAI-compatible server, create your own `Host` with its `baseURL` (and `noAuth: true` if it takes no key), the `Model` rows, and a `HostBinding` per model with `adapter: openai`, through the control API or [`relay apply`](/concepts/gitops).
+
+## System rate limits
+
+A few rate limits ship with Relay itself, not with the catalog: `inference-api-proxy` and `inference-api-proxy-anonymous` for [proxy mode](/concepts/proxy-mode), and `otlp-export` for the [OTLP receiver](/concepts/otlp-receiver). See [Rate limits](/concepts/rate-limits#system-rate-limits) for what each does and how to change it.
 
 ## Editing the catalog locally
 
-You can also point Relay at a local clone of the catalog data instead of the
-embedded default — useful for adding a provider or model the published
-catalog doesn't have yet. Clone the catalog, then mount it into the container
-and enable auto-seed:
+You can point Relay at a local clone of the catalog data instead of the bundled release, for example to add a provider or model the published catalog doesn't have:
 
 ```bash
 git clone https://github.com/wyolet/relay-catalog
@@ -118,45 +98,26 @@ docker run -p 8080:8080 -p 8081:8081 \
   wyolet/relay:standalone
 ```
 
-On first boot against an empty database, Relay walks the mounted tree and
-seeds it. See [Configuration](/configuration) for the full set of seed
-variables.
+On first boot against an empty database, Relay walks the mounted tree and seeds it. See [Configuration](/configuration) for the seed variables.
 
 ## Pinning a catalog version
 
-To track published catalog releases without rebuilding or remounting
-anything, set `RELAY_CATALOG_VERSION` to a
-[relay-catalog release tag](https://github.com/wyolet/relay-catalog/releases):
+To move between published catalog releases without rebuilding or remounting anything, set `RELAY_CATALOG_VERSION` to a [relay-catalog release tag](https://github.com/wyolet/relay-catalog/releases), or to `latest` to track the newest release compatible with your Relay version:
 
 ```bash
 docker run -p 8080:8080 -p 8081:8081 \
-  -e RELAY_CATALOG_VERSION=v0.1.0 \
+  -e RELAY_CATALOG_VERSION=v0.1.19 \
   wyolet/relay:standalone
 ```
 
-On boot, Relay compares the tag against the version it last seeded (recorded
-in the `catalog-source` settings section). If they differ — including on a
-fresh database — it downloads that release archive, seeds it, and updates the
-marker. Bumping the env var and restarting is a catalog upgrade.
+On boot, Relay compares the requested version with the one it last seeded (recorded in the `catalog-source` settings section). If they differ, including on a fresh database, it seeds that release and updates the marker. The bundled tree is used when its version matches; otherwise the release is downloaded. Changing the variable and restarting is a catalog upgrade. `latest` is resolved again on every boot. Unset, the images seed their bundled `/catalog` once into an empty database; `RELAY_CATALOG_VERSION=off` disables version pinning.
 
-Re-seeding is layered so your changes survive:
+Re-seeding preserves your changes:
 
-- Resources you've edited through the admin API are marked dirty and are
-  **skipped** by re-seeds.
-- [Overlays](/concepts/overlays) patch pristine catalog rows and re-apply
-  after every re-seed — the catalog can ship new fields underneath while
-  your overrides stay pinned.
-- Resources you created yourself are never touched.
+- Rows you edited through the control API are marked dirty and **skipped**.
+- [Overlays](/concepts/overlays) are merged over the new catalog rows when the snapshot is rebuilt, so fields you did not override pick up the new release.
+- Rows you created yourself are never touched.
 
 A catalog row the new release no longer ships, such as a retired tier policy and its rate limit or a removed model, is not deleted: host keys, relay keys and bindings that point at it keep working. The upgrade sets `metadata.catalogDetachedAt` on it, and from then on the row is governed as yours: you can edit or delete it without changing the `governance:*` settings. Look for the field on API reads to find these rows and decide whether to keep, repoint or delete them. If a later release ships a row with the same name again, the upgrade clears the field and updates the row, unless you edited it, in which case it stays yours. Only a `RELAY_CATALOG_VERSION` upgrade sets or clears the field; `POST /api/apply` and API edits leave it as it is.
 
-Releases are downloaded from `https://catalog.wyolet.com` by default and
-extracted only when they match the release's published sha256; a mismatch or
-a missing sum counts as a failed download.
-
-If the download fails and the database already has a catalog, Relay logs the
-failure and keeps serving the existing data — a registry outage never blocks
-boot. Use `RELAY_CATALOG_URL` to fetch from a mirror in airgapped
-environments. [Catalog server](/reference/catalog-server) describes the HTTP
-layout releases are served from, how to point relay and the Go SDK at a server
-that serves it, and how to run one.
+Releases are downloaded from `https://catalog.wyolet.com` by default and extracted only when they match the release's published sha256; a mismatch or a missing checksum counts as a failed download. If the download fails and the database already has a catalog, Relay logs the failure and keeps serving the existing data, so an unreachable catalog server never blocks boot. Use `RELAY_CATALOG_URL` to fetch from a mirror in airgapped environments. [Catalog server](/reference/catalog-server) describes the HTTP layout releases are served from, how to point Relay and the Go SDK at another server, and how to run one.

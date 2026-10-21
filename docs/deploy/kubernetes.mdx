@@ -1,0 +1,151 @@
+---
+title: "Kubernetes"
+description: "Install Relay with the Helm chart: required values, data stores, exposure, migrations, scaling and monitoring"
+---
+
+The Helm chart deploys the lean image as a Deployment with two Services (inference and control), plus, by default, its own PostgreSQL, ClickHouse and Valkey. Each release publishes the chart to `oci://ghcr.io/wyolet/charts/relay`. The chart version equals the relay version without the leading `v`, and the image tag defaults to it, so the chart version you install pins the relay release. The images are built for `linux/amd64` only.
+
+This page covers what to decide and why. Every value, with its default, is in the [chart README](https://github.com/wyolet/relay/blob/main/chart/README.md).
+
+## Install
+
+1. Generate the master key and the admin token:
+
+   ```bash
+   openssl rand -base64 32                               # secrets.masterKey
+   echo "sk-wr-$(openssl rand -hex 32)"                  # secrets.adminToken
+   ```
+
+2. Write a values file. The chart ships [`values-prod.example.yaml`](https://github.com/wyolet/relay/blob/main/chart/values-prod.example.yaml) as a starting point. A minimal one:
+
+   ```yaml values-prod.yaml
+   secrets:
+     existingSecret: relay-secrets      # or inline values; see Required values below
+   ingress:
+     enabled: true
+     className: nginx
+     annotations:
+       nginx.ingress.kubernetes.io/proxy-buffering: "off"
+     inference: { host: api.relay.example.com }
+     control:   { host: admin.relay.example.com }
+     tls:
+       - secretName: relay-tls
+         hosts: [api.relay.example.com, admin.relay.example.com]
+   ```
+
+3. Install:
+
+   ```bash
+   helm upgrade --install relay oci://ghcr.io/wyolet/charts/relay --version 0.11.6 \
+     -n relay --create-namespace -f values-prod.yaml
+   ```
+
+4. Check it:
+
+   ```bash
+   kubectl -n relay rollout status deploy/relay
+   kubectl -n relay port-forward svc/relay 8080:80
+   curl localhost:8080/healthz
+   ```
+
+To check a values file before applying it: `helm template relay oci://ghcr.io/wyolet/charts/relay --version 0.11.6 -f values-prod.yaml | kubectl apply --dry-run=client -f -`.
+
+## Required values
+
+The chart refuses to render without them:
+
+| Value | Why |
+| --- | --- |
+| `secrets.masterKey` | Wraps the keys stored secrets are encrypted under. Generate it once and keep it; replacing it makes stored host keys unreadable unless you follow [Changing the master key](/concepts/secret-keys#changing-the-master-key). |
+| `secrets.adminToken` | Bearer token for the control API. |
+| `postgresql.auth.password` | When the bundled Postgres is on (the default). |
+| `clickhouse.auth.password` | When the bundled ClickHouse is on (the default). |
+
+Instead of inlining secrets, create a Secret yourself and set `secrets.existingSecret` to its name. It must hold `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN` and `RELAY_CH_DSN`; `postgres-password` and `clickhouse-password` when those stores are bundled; `RELAY_ADMIN_PASSWORD` when `auth.adminUser.enabled`; and optionally `RELAY_REDIS_PASSWORD` for Valkey. The chart then creates no Secret.
+
+The admin token always works. For username and password sign-in to the admin UI, set `auth.adminUser.enabled: true` and `auth.adminUser.password`; the chart mounts a `kind: User` file that reads the password from the Secret. For single sign-on, see [SSO](/concepts/sso).
+
+## Data stores
+
+Relay keeps its configuration in Postgres, hot state (sessions, rate-limit counters, breaker state) in Valkey, and usage events and captured request bodies in ClickHouse. The chart bundles one single-node StatefulSet with a PersistentVolumeClaim for each, which suits a first production install. For high availability, point relay at managed stores:
+
+| Store | Bundled toggle | External value |
+| --- | --- | --- |
+| Postgres | `postgresql.enabled` | `external.pgDsn` (required when the bundled one is off) |
+| ClickHouse | `clickhouse.enabled` | `external.chDsn` |
+| Valkey | `valkey.enabled` | `external.redisAddr`, `external.redisPassword` |
+
+Give relay stores of its own rather than a shared database.
+
+ClickHouse is optional, but two values default to it: `relay.eventlogBackend` (the usage backend) and `relay.payloadLogging.backend`. Without ClickHouse, set `relay.eventlogBackend: postgres` and either `relay.payloadLogging.enabled: false` or another payload backend. The usage backends are described in [Usage](/concepts/usage), the payload backends in [Payload logging](/concepts/payload-logging).
+
+The bundled Valkey requires a password by default (`valkey.auth.enabled`). Leave `valkey.auth.password` empty and the chart derives a stable one from the master key. With `secrets.existingSecret`, add `RELAY_REDIS_PASSWORD` to that Secret; without it Valkey runs without a password.
+
+`networkPolicy.enabled` (on by default) lets only relay pods connect to the bundled stores. Anything else that reads them, such as a Grafana reading ClickHouse or a backup job, needs an entry in `networkPolicy.extraIngress.<store>`. It has no effect on a CNI that does not enforce NetworkPolicy.
+
+## Exposing the two planes
+
+The chart creates two ClusterIP Services, named after the release: `relay` on port 80 for the inference API and `relay-control` on port 8081 for the admin UI, the control API and `/metrics` (for a release named `relay`; otherwise `<release>-relay` and `<release>-relay-control`). Expose them on separate hostnames, so the control plane can be restricted on its own:
+
+- `ingress.*` renders one Ingress with a rule per host (`ingress.inference.host`, `ingress.control.host`).
+- `gateway.*` renders a Gateway API Gateway with an HTTPS listener per host, plus an HTTPRoute for each. `gateway.className` is required; `gateway.certClusterIssuer` asks cert-manager for one certificate covering both hosts. Leave `ingress.enabled` off when you use it.
+
+Inference responses stream, so turn off response buffering in your ingress controller (for ingress-nginx, `nginx.ingress.kubernetes.io/proxy-buffering: "off"`). Relay sets `Secure` session cookies (`relay.cookieSecure`), so serve the control host over TLS.
+
+When `relay.inferenceApiUrl` is empty, the chart sets it to `https://<inference host>` from the ingress or gateway values; the admin UI calls the inference API there. If the UI is served from another origin than the control API, list that origin in `relay.controlAllowOrigins`.
+
+## Migrations
+
+On `helm upgrade`, a pre-upgrade hook Job (`relay-migrate` for a release named `relay`) runs `relay migrate up` with the relay image, environment and Secret, after waiting for the bundled Postgres. The pods roll only once it succeeds, and they start with `RELAY_MIGRATE_ON_BOOT=off`. If the Job fails, the upgrade fails and the old pods keep serving; the failed Job is kept for `kubectl logs job/relay-migrate` and replaced by the next upgrade. The Job reads the Secret and ConfigMap as they were before the upgrade, so change the Postgres DSN or password in an upgrade of its own.
+
+A fresh `helm install` runs no Job, because neither the Secret nor the bundled Postgres exists when pre-install hooks run; the pods migrate on boot under a Postgres advisory lock instead. Set `migrations.job.enabled: false` to migrate on boot on every install and upgrade. `helm upgrade --no-hooks` skips the Job while the pods still start with migrations off, so don't use it for a release that adds migrations.
+
+A migration waits at most 10 seconds for a table lock (`RELAY_MIGRATE_LOCK_TIMEOUT_S`). One queued behind a long transaction fails the Job with a lock timeout, applies nothing and leaves the schema clean; run the upgrade again once the transaction has ended.
+
+Argo CD runs the hook Job as a PreSync hook on every sync, the first one included. With the bundled Postgres, sync the first time with `migrations.job.enabled: false`, since Postgres does not exist yet when PreSync runs, then turn it back on.
+
+Procedures for upgrades that need every old pod stopped, for rolling the schema back and for recovering a dirty schema version are in [Upgrading](/concepts/upgrade).
+
+## Health probes
+
+| Probe | Path (inference port) | Settings |
+| --- | --- | --- |
+| Startup | `/healthz` | Every 5 s, up to 30 failures, to cover first-boot migrations and catalog seeding. |
+| Readiness | `/healthz` | Every 5 s. `503` while Postgres does not answer or the catalog has not loaded, which takes the pod out of the Service. |
+| Liveness | `/livez` | Every 20 s, 5 failures. Checks only that the process serves, so a Postgres or DNS outage never restarts healthy pods. |
+
+## Scaling
+
+- The chart enables a HorizontalPodAutoscaler by default (`autoscaling`: 2 to 10 replicas at 70% CPU) and a PodDisruptionBudget (`minAvailable: 1`). `replicaCount` applies only with autoscaling off. A topology spread constraint spreads replicas across nodes.
+- `goMemLimit` (default `900MiB`) sets `GOMEMLIMIT`; keep it below the container memory limit (`resources.limits.memory`, default `1Gi`).
+- Each pod caps in-flight inference requests at 2048 and answers the excess with `429` and `Retry-After: 1`. To change the cap, set `RELAY_MAX_INFLIGHT` through `relay.extraEnv`.
+- Keep `relay.pgMaxConns` (default 10 per pod) times the replica count below the Postgres `max_connections` (100 on the bundled Postgres).
+- Catalog and settings changes made through any pod reach every other pod through Postgres `LISTEN`/`NOTIFY`, usually within about a second. No configuration is needed for this.
+
+## Monitoring
+
+Relay serves Prometheus metrics at `/metrics` on the control port; see [Metrics](/reference/metrics).
+
+- `serviceMonitor.enabled` renders a ServiceMonitor for the Prometheus Operator.
+- `vmPodScrape.enabled` renders a VMPodScrape for the VictoriaMetrics Operator.
+- `grafanaDashboards.enabled` renders the chart's two dashboards as ConfigMaps labeled `grafana_dashboard: "1"`, for a Grafana dashboard sidecar to discover:
+  - **Relay — Service** (Prometheus data source): request rate, latency and relay overhead percentiles, admission, in-flight requests, emit queues, records lost, provider keys down, restarts, CPU, memory, goroutines.
+  - **Relay — Usage (ClickHouse)** (the `grafana-clickhouse-datasource` plugin, reading relay's usage table): requests by model and status, latency and overhead by model, tokens, error kinds, top relay keys, failover rate, cost by provider per day. Grafana needs network access to ClickHouse; with the bundled ClickHouse, add a `networkPolicy.extraIngress.clickhouse` entry for it.
+
+Relay logs JSON to stdout at `relay.logLevel`.
+
+## Settings the chart seeds
+
+The chart mounts two settings files into `relay.settingsDir` from its values:
+
+- `payload-logging`, from `relay.payloadLogging` (on by default here, ClickHouse backend, 1 MiB per body, 30-day retention). A request is captured only when its policy also opts in; see [Payload logging](/concepts/payload-logging).
+- `usage-logging`, from `relay.usageLogging.retentionDays` (0: keep forever).
+
+Relay writes a settings file into the database only when that section has no stored value yet. After the first boot, changing these values in the chart changes nothing; change the section through the control API instead. See [Settings](/reference/settings).
+
+## Known limits
+
+- The bundled Postgres and ClickHouse are single-node.
+- The relay container runs with a read-only root filesystem. ClickHouse write-ahead segments, batch payloads and temporary files live on an `emptyDir` per pod, so segments not yet written to ClickHouse when a pod is deleted are lost.
+- Batch inputs and results are files in `relay.batchPayloadDir`, on that per-pod `emptyDir`, while any pod may run a batch item or serve its results. With more than one replica, a batch item enqueued through one pod can fail on another. The chart has no value to mount shared storage there.
+- Relay emits no traces. Use metrics, logs and the request log (`/api/logs`).
