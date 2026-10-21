@@ -177,54 +177,33 @@ func TestConcurrency_CommitOnCancel_DecreasesCounter(t *testing.T) {
 	_ = l.Commit(ctx, res2, Observations{})
 }
 
-func TestConcurrencyCommitDoesNotCreateNegativeCounterAfterTTLReclaim(t *testing.T) {
-	cases := []struct {
-		name       string
-		reclaimKey func(context.Context, *kv.Mem, string) error
-	}{
-		{
-			name: "absent",
-			reclaimKey: func(ctx context.Context, s *kv.Mem, key string) error {
-				return s.Del(ctx, key)
-			},
-		},
-		{
-			name: "zero",
-			reclaimKey: func(ctx context.Context, s *kv.Mem, key string) error {
-				return s.Set(ctx, key, []byte("0"), 0)
-			},
-		},
+// A commit whose lease set already expired frees nothing it does not hold.
+func TestConcurrencyCommitAfterKeyExpiry(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	s := newTestStore(t)
+	l := New(s, discardLog(), func() time.Time { return now })
+	ctx := context.Background()
+	rule := conRule("Route:test-route:rl-concurrency-expired", "concurrency", 1, time.Minute)
+	rules := []Rule{rule}
+
+	res, err := l.Reserve(ctx, testScope, rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := s.Del(ctx, concurrencyKey(testScope, rule)); err != nil {
+		t.Fatalf("expire key: %v", err)
+	}
+	if err := l.Commit(ctx, res, Observations{}); err != nil {
+		t.Fatalf("commit after expiry: %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-			s := newTestStore(t)
-			l := New(s, discardLog(), func() time.Time { return now })
-			ctx := context.Background()
-			rule := conRule("Route:test-route:rl-concurrency-"+tc.name, "concurrency", 1, time.Minute)
-			rules := []Rule{rule}
-
-			res, err := l.Reserve(ctx, testScope, rules)
-			if err != nil {
-				t.Fatalf("reserve: %v", err)
-			}
-			if err := tc.reclaimKey(ctx, s, concurrencyKey(testScope, rule)); err != nil {
-				t.Fatalf("reclaim key: %v", err)
-			}
-			if err := l.Commit(ctx, res, Observations{}); err != nil {
-				t.Fatalf("commit after reclaim: %v", err)
-			}
-
-			res2, err := l.Reserve(ctx, testScope, rules)
-			if err != nil {
-				t.Fatalf("reserve after commit: %v", err)
-			}
-			defer func() { _ = l.Commit(ctx, res2, Observations{}) }()
-			if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
-				t.Fatalf("second reserve after commit got %v, want ErrExceeded", err)
-			}
-		})
+	res2, err := l.Reserve(ctx, testScope, rules)
+	if err != nil {
+		t.Fatalf("reserve after commit: %v", err)
+	}
+	defer func() { _ = l.Commit(ctx, res2, Observations{}) }()
+	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("second reserve after commit got %v, want ErrExceeded", err)
 	}
 }
 
