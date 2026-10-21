@@ -228,8 +228,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		}
 	})
 
-	// A reserve queued on a kv batch grants, refuses and revokes exactly as
-	// Reserve does, and a commit queued on one releases what it held.
+	// A reserve queued on a kv batch grants, refuses and revokes exactly as Reserve does, and a commit queued on one releases what it held.
 	t.Run(name+"/PrepareReserve_MatchesReserve", func(t *testing.T) {
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 		l := factory(t, &now)

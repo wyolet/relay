@@ -6,21 +6,15 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// Admission is a request's first attempt as Admit decided it: the inbound
-// reservation, and what Acquire would have returned for the first key.
+// Admission is a request's first attempt as Admit decided it: the inbound reservation, and what Acquire would have returned for the first key.
 type Admission struct {
 	Inbound *pkgratelimit.Reservation
-	// Acq and AcqErr are the first key's acquisition. The inbound reservation
-	// stands whether or not it succeeded; the caller settles it.
+	// Acq and AcqErr are the first key's acquisition. The inbound reservation stands whether or not it succeeded; the caller settles it.
 	Acq    *Acquisition
 	AcqErr error
 }
 
-// Admit is ReserveInbound followed by Acquire for a request's first attempt,
-// with the inbound reserve script and the key pick's reads sent in one kv
-// batch (one round trip). The selector and limiter must share a store, as
-// every composition does. A refused or failed reserve returns its error alone,
-// exactly as ReserveInbound would. A failover re-picks with Acquire.
+// Admit is ReserveInbound followed by Acquire for a request's first attempt, with the inbound reserve script and the key pick's reads sent in one kv batch (one round trip). The selector and limiter must share a store, as every composition does. A refused or failed reserve returns its error alone, exactly as ReserveInbound would. A failover re-picks with Acquire.
 func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) (Admission, error) {
 	if s.selector == nil || s.limiter == nil {
 		inbound, err := s.ReserveInbound(ctx, in)

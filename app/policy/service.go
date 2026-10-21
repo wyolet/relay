@@ -2,12 +2,7 @@
 // RL per (provider, model, host), reserves inbound + upstream buckets,
 // and rolls them back on failure. One Service per process.
 //
-// kv round trips per request: Admit sends the inbound reserve and the first
-// pick's reads in one batch; a tier policy with rules adds its reserve after
-// the pick, and each failover is an Acquire (a pick batch, plus the tier
-// reserve). The success post-flight (Settle) is one batch: the commits that
-// settle something (concurrency or token meters) and, only for a half-open
-// probe or a backoff to reset, the key's success write; often it is empty.
+// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty.
 
 package policy
 
@@ -60,8 +55,7 @@ type Acquisition struct {
 	Key         *hostkey.HostKey
 	Reservation *pkgratelimit.Reservation
 
-	// writeSuccess: the record the key was picked on changes on a success
-	// (keypool.Candidate.SuccessNeedsWrite), so Settle writes it.
+	// writeSuccess: the record the key was picked on changes on a success (keypool.Candidate.SuccessNeedsWrite), so Settle writes it.
 	writeSuccess bool
 }
 
@@ -108,15 +102,13 @@ func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgrate
 		return nil, err
 	}
 	if !metered {
-		// Revocation check only: nothing was metered, so the post-flight
-		// commit would be a second script call for no state.
+		// Revocation check only: nothing was metered, so the post-flight commit would be a second script call for no state.
 		res.SetNoCommit()
 	}
 	return res, nil
 }
 
-// inboundRules returns the rules one inbound Reserve checks for in, and
-// whether any of them meters (anything but the revocation check).
+// inboundRules returns the rules one inbound Reserve checks for in, and whether any of them meters (anything but the revocation check).
 func (s *Service) inboundRules(ctx context.Context, in InboundInput) (rules []pkgratelimit.Rule, metered bool) {
 	policyRules := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug, in.ModelID)
 	nMetered := len(policyRules) + len(in.ExtraRules)
@@ -183,9 +175,7 @@ func pickScope(pol *Policy) (string, keypool.KeySelection) {
 	return pol.Meta.Name, pol.EffectiveKeySelection()
 }
 
-// reserveTier reserves the picked key's upstream bucket when its tier policy
-// has rules for this request. On KeyQuotaExhausted it records
-// FailureRateLimitShort and returns ErrSaturated with the key set.
+// reserveTier reserves the picked key's upstream bucket when its tier policy has rules for this request. On KeyQuotaExhausted it records FailureRateLimitShort and returns ErrSaturated with the key set.
 func (s *Service) reserveTier(ctx context.Context, picked keypool.Candidate, in AcquireInput) (*Acquisition, error) {
 	key, writeSuccess := picked.Key, picked.SuccessNeedsWrite()
 	modelSlug, modelID, hostSlug := "", "", ""

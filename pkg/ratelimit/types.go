@@ -9,12 +9,8 @@
 //
 // Expected kv ops per request:
 //   - Reserve:    1 RunScript call (all counter checks + increments atomic).
-//   - PrepareReserve: the same script queued on the caller's kv.Batch, so it
-//     costs no round trip of its own.
-//   - Commit:     1 RunScript call (concurrency decrement + token post-increment),
-//     or none when it settles nothing: an uncancelled request whose rules
-//     meter neither concurrency nor tokens. PrepareCommit queues the same
-//     script on a caller's kv.Batch.
+//   - PrepareReserve: the same script queued on the caller's kv.Batch, so it costs no round trip of its own.
+//   - Commit:     1 RunScript call (concurrency decrement + token post-increment), or none when it settles nothing: an uncancelled request whose rules meter neither concurrency nor tokens. PrepareCommit queues the same script on a caller's kv.Batch.
 //   - CommitBoth: 1 batched round trip committing two reservations that live
 //     under different hash tags (inbound policy scope + upstream hostkey scope),
 //     replacing two sequential Commit calls. Each reservation's script is

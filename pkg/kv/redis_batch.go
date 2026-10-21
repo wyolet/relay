@@ -9,8 +9,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ExpireNX sets ttl on key only when it has no expiry (EXPIRE NX, Redis 7.0+
-// and every Valkey) and reports whether it did.
+// ExpireNX sets ttl on key only when it has no expiry (EXPIRE NX, Redis 7.0+ and every Valkey) and reports whether it did.
 func (r *Redis) ExpireNX(ctx context.Context, key string, ttl time.Duration) (bool, error) {
 	start := time.Now()
 	ok, err := r.client.ExpireNX(ctx, key, ttl).Result()
@@ -18,8 +17,7 @@ func (r *Redis) ExpireNX(ctx context.Context, key string, ttl time.Duration) (bo
 	return ok, markUnavailable(err)
 }
 
-// ExecBatch implements Batcher with one pipeline: one round trip on a single
-// node, one per involved node on Cluster (go-redis sends those concurrently).
+// ExecBatch implements Batcher with one pipeline: one round trip on a single node, one per involved node on Cluster (go-redis sends those concurrently).
 func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 	if len(ops) == 0 {
 		return
@@ -59,8 +57,7 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 		}
 		return nil
 	})
-	// Pipelined returns the first command's error; a command's own error
-	// reply says nothing about the batch.
+	// Pipelined returns the first command's error; a command's own error reply says nothing about the batch.
 	var reply redis.Error
 	if errors.As(err, &reply) && !serverCannotServe(err) {
 		err = nil
@@ -89,8 +86,7 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 		case *redis.Cmd:
 			v, err := c.Result()
 			if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
-				// Evicted between preload and exec: rerun this script alone,
-				// with runLua's reload and EVAL fallback.
+				// Evicted between preload and exec: rerun this script alone, with runLua's reload and EVAL fallback.
 				r.shas.Delete(op.Script.Name)
 				s := op.Script
 				b, err := r.runLua(ctx, s.Name, s.Script, s.Keys, s.Args...)

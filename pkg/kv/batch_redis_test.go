@@ -17,8 +17,7 @@ func TestBatchRedis(t *testing.T) {
 	runBatchSuite(t, func(t *testing.T) kv.Store { return kvtest.Connect(t, cfg) })
 }
 
-// A script evicted between the SHA preload and the pipeline answers NOSCRIPT
-// inside the batch; that one script reruns alone and the batch still succeeds.
+// A script evicted between the SHA preload and the pipeline answers NOSCRIPT inside the batch; that one script reruns alone and the batch still succeeds.
 func TestBatchRedis_NoScriptRerunsAlone(t *testing.T) {
 	cfg := kvtest.Config(t)
 	s := kvtest.Connect(t, cfg)

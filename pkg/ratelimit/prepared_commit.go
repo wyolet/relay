@@ -7,8 +7,7 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
-// PreparedCommit is a Commit queued on a kv batch; Finish reads its outcome
-// once the batch has run.
+// PreparedCommit is a Commit queued on a kv batch; Finish reads its outcome once the batch has run.
 type PreparedCommit struct {
 	l      *Limiter
 	res    *Reservation
@@ -16,9 +15,7 @@ type PreparedCommit struct {
 	result *kv.BatchResult
 }
 
-// PrepareCommit queues the commit script for res on b, built exactly as
-// Commit builds it. It returns nil when there is nothing to commit, as Commit
-// would make no call.
+// PrepareCommit queues the commit script for res on b, built exactly as Commit builds it. It returns nil when there is nothing to commit, as Commit would make no call.
 func (l *Limiter) PrepareCommit(b *kv.Batch, res *Reservation, obs Observations) (*PreparedCommit, error) {
 	if !res.needsCommit(obs) {
 		return nil, nil

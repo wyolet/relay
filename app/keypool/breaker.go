@@ -53,9 +53,7 @@ func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord
 	return r
 }
 
-// recordFrom decodes a breaker read and reports whether it held a record. A
-// missing, failed or undecodable read is a closed record, so a store outage
-// never empties the pool.
+// recordFrom decodes a breaker read and reports whether it held a record. A missing, failed or undecodable read is a closed record, so a store outage never empties the pool.
 func recordFrom(b []byte, err error) (CircuitRecord, bool) {
 	if err != nil && !errors.Is(err, kv.ErrNotFound) {
 		metrics.KVError("breaker_read", metrics.KVFallback)
@@ -70,13 +68,7 @@ func recordFrom(b []byte, err error) (CircuitRecord, bool) {
 	return r, true
 }
 
-// ReadCircuit returns the stored circuit-breaker record for a key and whether
-// a record actually exists in the state store. A missing or undecodable record
-// yields a default-closed record with found=false — the key has not failed
-// within the record's TTL and is assumed healthy (a success writes a record
-// only to close a half-open probe or reset a backoff). This is a read-only
-// accessor for the admin plane; it does not auto-transition expired-open
-// records the way Pick does.
+// ReadCircuit returns the stored circuit-breaker record for a key and whether a record actually exists in the state store. A missing or undecodable record yields a default-closed record with found=false — the key has not failed within the record's TTL and is assumed healthy (a success writes a record only to close a half-open probe or reset a backoff). This is a read-only accessor for the admin plane; it does not auto-transition expired-open records the way Pick does.
 func (s *Selector) ReadCircuit(ctx context.Context, keyHash string) (CircuitRecord, bool) {
 	return recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
 }

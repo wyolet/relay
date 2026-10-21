@@ -242,7 +242,7 @@ valkey:
 external:
   pgDsn: ""        # postgres://user:pw@host:5432/relay?sslmode=require
   chDsn: ""        # clickhouse://user:pw@host:9000/relay
-  redisAddr: ""    # host:6379
+  redisAddr: ""    # host:6379 — Redis 7.0 or later, or any Valkey version
   redisPassword: "" # AUTH password for redisAddr, if it requires one
 
 # ----------------------------------------------------------------------------

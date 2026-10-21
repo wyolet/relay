@@ -2,9 +2,7 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// KVErrors counts kv calls on the inference path that failed, by call site
-// and by what relay did instead. A store that stalls or drops connections
-// shows up here before it shows up as refused traffic.
+// KVErrors counts kv calls on the inference path that failed, by call site and by what relay did instead. A store that stalls or drops connections shows up here before it shows up as refused traffic.
 var KVErrors = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: Namespace,

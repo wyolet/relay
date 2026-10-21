@@ -23,10 +23,7 @@ func registerEcho(s kv.Store) {
 	}
 }
 
-// runBatchSuite pins kv.Batch on one backend: results match the single
-// commands, EXPIRE NX never moves an existing deadline, a script returns what
-// RunScript would, and Exec empties the batch. Subtests may share a keyspace,
-// so each writes keys of its own.
+// runBatchSuite pins kv.Batch on one backend: results match the single commands, EXPIRE NX never moves an existing deadline, a script returns what RunScript would, and Exec empties the batch. Subtests may share a keyspace, so each writes keys of its own.
 func runBatchSuite(t *testing.T, factory storeFactory) {
 	t.Run("get_incr", func(t *testing.T) {
 		ctx := context.Background()

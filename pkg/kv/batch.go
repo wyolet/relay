@@ -9,13 +9,9 @@ import (
 // ErrNoScripter reports a batched script on a store that runs no scripts.
 var ErrNoScripter = errors.New("state: store does not run scripts")
 
-// Batch queues independent commands and runs them together: one round trip on
-// Redis (a pipeline; on Cluster one per node holding a key, sent concurrently),
-// one call at a time on any other store.
+// Batch queues independent commands and runs them together: one round trip on Redis (a pipeline; on Cluster one per node holding a key, sent concurrently), one call at a time on any other store.
 //
-// It is not a transaction: each command is atomic on its own, a failed command
-// does not undo the others, and no command sees another's result. Each
-// script's keys must share a hash tag; keys of different commands need not.
+// It is not a transaction: each command is atomic on its own, a failed command does not undo the others, and no command sees another's result. Each script's keys must share a hash tag; keys of different commands need not.
 type Batch struct {
 	store Store
 	ops   []BatchOp
@@ -34,8 +30,7 @@ const (
 	OpScript
 )
 
-// BatchOp is one queued command, exported so a store can run a batch its own
-// way (see Batcher).
+// BatchOp is one queued command, exported so a store can run a batch its own way (see Batcher).
 type BatchOp struct {
 	Kind   BatchOpKind
 	Key    string        // Get, Incr, ExpireNX
@@ -45,19 +40,14 @@ type BatchOp struct {
 	Result *BatchResult
 }
 
-// BatchResult is one command's outcome, filled by Exec. Get reports a missing
-// key as ErrNotFound; Incr fills Int; ExpireNX sets Int to 1 when it set the
-// TTL; Script fills Value as RunScript would. A transport failure lands in
-// every result's Err.
+// BatchResult is one command's outcome, filled by Exec. Get reports a missing key as ErrNotFound; Incr fills Int; ExpireNX sets Int to 1 when it set the TTL; Script fills Value as RunScript would. A transport failure lands in every result's Err.
 type BatchResult struct {
 	Value []byte
 	Int   int64
 	Err   error
 }
 
-// Batcher is implemented by a store that runs a batch in fewer round trips
-// than one per command. ExecBatch fills every op's Result and keeps no
-// reference to ops.
+// Batcher is implemented by a store that runs a batch in fewer round trips than one per command. ExecBatch fills every op's Result and keeps no reference to ops.
 type Batcher interface {
 	ExecBatch(ctx context.Context, ops []BatchOp)
 }
@@ -72,8 +62,7 @@ func (b *Batch) Incr(key string, delta int64) *BatchResult {
 	return b.add(BatchOp{Kind: OpIncr, Key: key, Delta: delta})
 }
 
-// ExpireNX queues an EXPIRE NX: key gets ttl only when it has none, so a
-// key's existing deadline is never pushed out.
+// ExpireNX queues an EXPIRE NX: key gets ttl only when it has none, so a key's existing deadline is never pushed out.
 func (b *Batch) ExpireNX(key string, ttl time.Duration) *BatchResult {
 	return b.add(BatchOp{Kind: OpExpireNX, Key: key, TTL: ttl})
 }
@@ -89,8 +78,7 @@ func (b *Batch) add(op BatchOp) *BatchResult {
 	return op.Result
 }
 
-// Exec runs the queued commands and empties the batch. Each result carries
-// its own outcome; there is no batch-level error.
+// Exec runs the queued commands and empties the batch. Each result carries its own outcome; there is no batch-level error.
 func (b *Batch) Exec(ctx context.Context) {
 	ops := b.ops
 	b.ops = nil
@@ -104,9 +92,7 @@ func (b *Batch) Exec(ctx context.Context) {
 	ExecInOrder(ctx, b.store, ops)
 }
 
-// ExecInOrder runs ops one at a time through s, which is how a batch runs on
-// a store that is not a Batcher. kv.Mem is deliberately not one, so a test
-// double wrapping it still sees every command.
+// ExecInOrder runs ops one at a time through s, which is how a batch runs on a store that is not a Batcher. kv.Mem is deliberately not one, so a test double wrapping it still sees every command.
 func ExecInOrder(ctx context.Context, s Store, ops []BatchOp) {
 	for _, op := range ops {
 		r := op.Result

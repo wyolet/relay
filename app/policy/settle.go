@@ -8,11 +8,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// Settle is the success post-flight's kv work in one round trip: the inbound
-// and upstream commits (both with obs) and, only when the record the key was
-// picked on needs it, the key's success write. A key picked on a clean closed
-// record, or none, gets no write, so most requests settle with the commits
-// alone. Safe with nil reservations or acquisition.
+// Settle is the success post-flight's kv work in one round trip: the inbound and upstream commits (both with obs) and, only when the record the key was picked on needs it, the key's success write. A key picked on a clean closed record, or none, gets no write, so most requests settle with the commits alone. Safe with nil reservations or acquisition.
 func (s *Service) Settle(ctx context.Context, inbound *pkgratelimit.Reservation, acq *Acquisition, obs pkgratelimit.Observations) error {
 	var upstream *pkgratelimit.Reservation
 	if acq != nil {

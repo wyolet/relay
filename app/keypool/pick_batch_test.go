@@ -12,15 +12,12 @@ import (
 
 type pickStoreFactory func(t *testing.T) kvtest.ScriptStore
 
-// expireNX is what both backends offer beyond kv.Store; the suite uses it to
-// tell whether the rotation counter carries a TTL.
+// expireNX is what both backends offer beyond kv.Store; the suite uses it to tell whether the rotation counter carries a TTL.
 type expireNX interface {
 	ExpireNX(ctx context.Context, key string, ttl time.Duration) (bool, error)
 }
 
-// runPickBatchSuite pins what one Pick costs: a single round trip carrying
-// the breaker reads (one for prioritized while the first key is fit) and, for
-// round-robin, the counter's INCR and EXPIRE NX.
+// runPickBatchSuite pins what one Pick costs: a single round trip carrying the breaker reads (one for prioritized while the first key is fit) and, for round-robin, the counter's INCR and EXPIRE NX.
 func runPickBatchSuite(t *testing.T, factory pickStoreFactory) {
 	keys := func() []*hostkey.HostKey {
 		return []*hostkey.HostKey{key("a", "hA"), key("b", "hB"), key("c", "hC"), key("d", "hD")}
@@ -97,8 +94,7 @@ func runPickBatchSuite(t *testing.T, factory pickStoreFactory) {
 		if set, err := nx.ExpireNX(ctx, counter, time.Minute); err != nil || set {
 			t.Fatalf("counter had no TTL after its first pick (set=%v, err=%v)", set, err)
 		}
-		// A counter that lost its TTL (a SET without one) gets one back on
-		// the next pick.
+		// A counter that lost its TTL (a SET without one) gets one back on the next pick.
 		if err := raw.Set(ctx, counter, []byte("7"), 0); err != nil {
 			t.Fatal(err)
 		}

@@ -28,7 +28,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_LICENSE` | _(empty)_ | The [license](/concepts/license) value inline. Used when `RELAY_LICENSE_FILE` is unset; both win over the stored `license` setting installed via `PUT /api/license`. |
 | `RELAY_INFERENCE_API_URL` | _(standalone: `http://localhost:8080`)_ | Data-plane origin the admin UI calls (served via `/config.json`). Set to your public API URL in production. |
 | `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Use `redis` for multi-pod deployments. |
-| `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
+| `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. The server must be Redis 7.0 or later, or any Valkey version. |
 | `RELAY_REDIS_PASSWORD` | _(empty)_ | Password sent with `AUTH` to `RELAY_REDIS_ADDR`. Empty sends none. Valkey holds control-plane sessions, so give any Valkey reachable beyond the relay pods a password. |
 | `RELAY_REDIS_POOL_SIZE` | `10` × CPUs | Valkey connections per pod. |
 | `RELAY_REDIS_MIN_IDLE_CONNS` | `0` | Valkey connections kept open while idle, so a burst doesn't pay for new connections inside its requests. |

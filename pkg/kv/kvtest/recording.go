@@ -16,10 +16,7 @@ type ScriptStore interface {
 	kv.BatchScripter
 }
 
-// Recording runs every call on the store it wraps and records each script,
-// batched or not, and each round trip, so a test can pin what a request sent
-// and what it cost. A store that only counted RunScript would read a batched
-// commit as free.
+// Recording runs every call on the store it wraps and records each script, batched or not, and each round trip, so a test can pin what a request sent and what it cost. A store that only counted RunScript would read a batched commit as free.
 type Recording struct {
 	ScriptStore
 
@@ -48,8 +45,7 @@ func (r *Recording) RunScriptBatch(ctx context.Context, calls []kv.ScriptCall) [
 	return r.ScriptStore.RunScriptBatch(ctx, calls)
 }
 
-// ExecBatch implements kv.Batcher: one round trip, run by the wrapped store's
-// own pipeline when it has one.
+// ExecBatch implements kv.Batcher: one round trip, run by the wrapped store's own pipeline when it has one.
 func (r *Recording) ExecBatch(ctx context.Context, ops []kv.BatchOp) {
 	r.batch(len(ops))
 	for _, op := range ops {
@@ -137,16 +133,14 @@ func (r *Recording) Named(name string) []kv.ScriptCall {
 	return out
 }
 
-// Batches returns the number of commands each batch carried (RunScriptBatch
-// or kv.Batch), one entry per batched round trip.
+// Batches returns the number of commands each batch carried (RunScriptBatch or kv.Batch), one entry per batched round trip.
 func (r *Recording) Batches() []int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]int(nil), r.batches...)
 }
 
-// RoundTrips counts the store calls so far: one per command outside a batch
-// and one per batch. Calls a script makes inside the store are not counted.
+// RoundTrips counts the store calls so far: one per command outside a batch and one per batch. Calls a script makes inside the store are not counted.
 func (r *Recording) RoundTrips() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

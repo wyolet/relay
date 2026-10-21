@@ -32,15 +32,11 @@ var ErrNoHealthyKeys = errors.New("keypool: no healthy keys in pool")
 type Candidate struct {
 	Key    *hostkey.HostKey
 	Record CircuitRecord
-	// Stored is false when the store held no record for the key (or the read
-	// failed) and Record is the closed default.
+	// Stored is false when the store held no record for the key (or the read failed) and Record is the closed default.
 	Stored bool
 }
 
-// SuccessNeedsWrite reports whether a success on c changes its record: a
-// half-open probe or a record carrying a backoff step. A clean closed record,
-// or none, already reads as healthy, and writing over it could erase a
-// failure another pod recorded since the pick.
+// SuccessNeedsWrite reports whether a success on c changes its record: a half-open probe or a record carrying a backoff step. A clean closed record, or none, already reads as healthy, and writing over it could erase a failure another pod recorded since the pick.
 func (c Candidate) SuccessNeedsWrite() bool {
 	return c.Stored && (c.Record.State != CircuitClosed || c.Record.BackoffStep != 0)
 }
@@ -67,8 +63,7 @@ func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, ke
 	return c.Key, err
 }
 
-// PickCandidate is Pick returning the record the key was picked on, so the
-// caller can tell whether its success needs writing.
+// PickCandidate is Pick returning the record the key was picked on, so the caller can tell whether its success needs writing.
 func (s *Selector) PickCandidate(ctx context.Context, scope string, algo KeySelection, keys, exclude []*hostkey.HostKey) (Candidate, error) {
 	b := s.NewBatch()
 	p := s.PreparePick(b, scope, algo, keys, exclude)
@@ -83,11 +78,7 @@ func (s *Selector) PickWithExclude(ctx context.Context, scope string, algo KeySe
 	return s.Pick(ctx, scope, algo, keys, exclude)
 }
 
-// pickRoundRobin selects a candidate by the rotation counter's INCR result.
-// Incr is atomic on every backend, so the index derives directly from the
-// counter value — no distributed lock, which under contention on the
-// non-blocking Redis lock would collapse rotation to healthy[0]. A failed
-// INCR falls back to healthy[0].
+// pickRoundRobin selects a candidate by the rotation counter's INCR result. Incr is atomic on every backend, so the index derives directly from the counter value — no distributed lock, which under contention on the non-blocking Redis lock would collapse rotation to healthy[0]. A failed INCR falls back to healthy[0].
 func pickRoundRobin(rotation *kv.BatchResult, healthy []Candidate) Candidate {
 	idx := int64(1)
 	switch {
