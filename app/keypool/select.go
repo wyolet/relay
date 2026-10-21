@@ -7,6 +7,7 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // KeySelection is the algorithm a Selector uses to pick from healthy
@@ -89,7 +90,11 @@ func (s *Selector) PickWithExclude(ctx context.Context, scope string, algo KeySe
 // INCR falls back to healthy[0].
 func pickRoundRobin(rotation *kv.BatchResult, healthy []Candidate) Candidate {
 	idx := int64(1)
-	if rotation != nil && rotation.Err == nil {
+	switch {
+	case rotation == nil:
+	case rotation.Err != nil:
+		metrics.KVError("key_rotation", metrics.KVFallback)
+	default:
 		idx = rotation.Int
 	}
 	i := (idx - 1) % int64(len(healthy))
@@ -111,6 +116,9 @@ func (s *Selector) pickLRU(ctx context.Context, scope string, healthy []Candidat
 	for i, c := range healthy {
 		k := lruKey(scope, c.Key.KeyHash)
 		raw, err := s.state.Get(ctx, k)
+		if err != nil && !errors.Is(err, kv.ErrNotFound) {
+			metrics.KVError("key_rotation", metrics.KVFallback)
+		}
 		if err != nil || len(raw) == 0 {
 			// Never used — immediately preferred.
 			if neverUsed < 0 {
@@ -142,7 +150,9 @@ func (s *Selector) pickLRU(ctx context.Context, scope string, healthy []Candidat
 	// Stamp last-use timestamp.
 	now := s.clock().UnixMilli()
 	k := lruKey(scope, healthy[chosen].Key.KeyHash)
-	_ = s.state.Set(ctx, k, []byte(strconv.FormatInt(now, 10)), ttlLRU)
+	if err := s.state.Set(ctx, k, []byte(strconv.FormatInt(now, 10)), ttlLRU); err != nil {
+		metrics.KVError("key_rotation", metrics.KVDropped)
+	}
 
 	return healthy[chosen]
 }

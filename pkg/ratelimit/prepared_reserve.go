@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/reqid"
@@ -33,7 +32,7 @@ func (l *Limiter) PrepareReserve(b *kv.Batch, scope string, rules []Rule) (*Prep
 // ErrRevoked, or the script's failure.
 func (p *PreparedReserve) Finish(ctx context.Context) (*Reservation, error) {
 	if p.result.Err != nil {
-		return nil, fmt.Errorf("limit: reserve script: %w", p.result.Err)
+		return nil, reserveFailed(p.result.Err)
 	}
 	return p.l.decodeReserve(ctx, p.scope, p.rules, p.token, p.result.Value)
 }

@@ -60,7 +60,7 @@ func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Con
 	for {
 		acquired, err := r.runLua(ctx, "state.withlock.acquire", luaAcquire, deduped, token, ttlMs)
 		if err != nil {
-			return err
+			return markUnavailable(err)
 		}
 		if strings.TrimSpace(string(acquired)) != "0" {
 			break

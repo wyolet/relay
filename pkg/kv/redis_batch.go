@@ -15,7 +15,7 @@ func (r *Redis) ExpireNX(ctx context.Context, key string, ttl time.Duration) (bo
 	start := time.Now()
 	ok, err := r.client.ExpireNX(ctx, key, ttl).Result()
 	r.trackSlow("expire_nx", key, start, err)
-	return ok, err
+	return ok, markUnavailable(err)
 }
 
 // ExecBatch implements Batcher with one pipeline: one round trip on a single
@@ -59,10 +59,10 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 		}
 		return nil
 	})
-	// Pipelined returns the first command's error; only a transport failure
-	// says anything about the batch.
+	// Pipelined returns the first command's error; a command's own error
+	// reply says nothing about the batch.
 	var reply redis.Error
-	if errors.As(err, &reply) {
+	if errors.As(err, &reply) && !serverCannotServe(err) {
 		err = nil
 	}
 	r.trackSlow("batch", "", start, err)
@@ -73,17 +73,19 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 		case *redis.StringCmd:
 			v, err := c.Bytes()
 			if errors.Is(err, redis.Nil) {
-				v, err = nil, ErrNotFound
+				res.Err = ErrNotFound
+				continue
 			}
-			res.Value, res.Err = v, err
+			res.Value, res.Err = v, markUnavailable(err)
 		case *redis.IntCmd:
-			res.Int, res.Err = c.Result()
+			n, err := c.Result()
+			res.Int, res.Err = n, markUnavailable(err)
 		case *redis.BoolCmd:
 			set, err := c.Result()
 			if set {
 				res.Int = 1
 			}
-			res.Err = err
+			res.Err = markUnavailable(err)
 		case *redis.Cmd:
 			v, err := c.Result()
 			if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
@@ -91,11 +93,12 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 				// with runLua's reload and EVAL fallback.
 				r.shas.Delete(op.Script.Name)
 				s := op.Script
-				res.Value, res.Err = r.runLua(ctx, s.Name, s.Script, s.Keys, s.Args...)
+				b, err := r.runLua(ctx, s.Name, s.Script, s.Keys, s.Args...)
+				res.Value, res.Err = b, markUnavailable(err)
 				continue
 			}
 			if err != nil {
-				res.Err = err
+				res.Err = markUnavailable(err)
 				continue
 			}
 			res.Value, res.Err = redisResultToBytes(v)

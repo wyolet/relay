@@ -30,6 +30,13 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Use `redis` for multi-pod deployments. |
 | `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
 | `RELAY_REDIS_PASSWORD` | _(empty)_ | Password sent with `AUTH` to `RELAY_REDIS_ADDR`. Empty sends none. Valkey holds control-plane sessions, so give any Valkey reachable beyond the relay pods a password. |
+| `RELAY_REDIS_POOL_SIZE` | `10` × CPUs | Valkey connections per pod. |
+| `RELAY_REDIS_MIN_IDLE_CONNS` | `0` | Valkey connections kept open while idle, so a burst doesn't pay for new connections inside its requests. |
+| `RELAY_REDIS_READ_TIMEOUT_MS` | `500` | Milliseconds to wait for a Valkey reply. When a rate-limit check gets no reply in time, the request is refused: `429` with `Retry-After: 1`, as when the pod is at capacity. |
+| `RELAY_REDIS_WRITE_TIMEOUT_MS` | `500` | Milliseconds to wait to send a command to Valkey. |
+| `RELAY_REDIS_POOL_TIMEOUT_MS` | `250` | Milliseconds to wait for a free connection when every pooled Valkey connection is busy. |
+| `RELAY_REDIS_DIAL_TIMEOUT_MS` | `2000` | Milliseconds to wait to open a Valkey connection. A request that needs a new connection waits for it, so this adds to the three bounds above. |
+| `RELAY_REDIS_MAX_RETRIES` | `0` | How many times a failed Valkey command is resent. A command whose reply timed out or whose connection dropped after it was sent may already have run, so a resent rate-limit check can count one request twice; raise it only if that is acceptable. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
 | `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML: users, settings, and under `ratelimits/` the starting values of the built-in rate limits (applied only when a row does not exist yet). |
 | `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. Like a fetched release, it seeds catalog kinds only: host keys, relay keys, teams, projects, service accounts, groups, roles and bindings in it are skipped with a warning — load those with `relay seed --apply` or `relay apply`. |

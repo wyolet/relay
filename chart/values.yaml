@@ -71,6 +71,16 @@ relay:
   # pgMinConns.
   redisPoolSize: ""
   redisMinIdleConns: ""
+  # -- Valkey client bounds in milliseconds (RELAY_REDIS_*_TIMEOUT_MS); empty =
+  # relay defaults: dial 2000, read 500, write 500, pool 250. A rate-limit
+  # check that gets no reply in time refuses the request with 429.
+  redisDialTimeoutMs: ""
+  redisReadTimeoutMs: ""
+  redisWriteTimeoutMs: ""
+  redisPoolTimeoutMs: ""
+  # -- Resends of a failed Valkey command (RELAY_REDIS_MAX_RETRIES); empty = 0.
+  # A resent rate-limit check can count one request twice.
+  redisMaxRetries: ""
   # -- Request/response body capture (the /logs UI), seeded into the
   # payload-logging settings section. backend "clickhouse" reuses RELAY_CH_DSN
   # (the bundled CH) — no extra store, no credentials in the settings row.

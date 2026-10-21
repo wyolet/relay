@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // runLua is an internal helper; it is NOT the exported RunScript.
@@ -24,8 +25,8 @@ func (r *Redis) runLua(ctx context.Context, name, script string, keys []string, 
 			return nil, err
 		}
 		result, err = r.client.EvalSha(ctx, sha, keys, args...).Result()
-		if err != nil {
-			// Final fallback: plain EVAL.
+		// Only a second NOSCRIPT proves the script never ran; after any other error, EVAL could run it twice.
+		if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
 			result, err = r.client.Eval(ctx, script, keys, args...).Result()
 		}
 	}
@@ -51,7 +52,17 @@ func (r *Redis) loadSHA(ctx context.Context, name, script string) (string, error
 func (r *Redis) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	r.inflight.Add(1)
 	defer r.inflight.Done()
-	return r.runLua(ctx, name, script, keys, args...)
+	start := time.Now()
+	b, err := r.runLua(ctx, name, script, keys, args...)
+	r.trackSlow(name, firstKey(keys), start, err)
+	return b, markUnavailable(err)
+}
+
+func firstKey(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 // RunScriptBatch implements BatchScripter: it issues every call in a single

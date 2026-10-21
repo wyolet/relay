@@ -50,6 +50,12 @@ type Config struct {
 	// same rationale as the PG warm floor above.
 	RedisPoolSize     int // RELAY_REDIS_POOL_SIZE
 	RedisMinIdleConns int // RELAY_REDIS_MIN_IDLE_CONNS
+	// RELAY_REDIS_{DIAL,READ,WRITE,POOL}_TIMEOUT_MS and RELAY_REDIS_MAX_RETRIES. Defaults are kv.Default*; retries default to 0 because a resent reserve script can count one request twice.
+	RedisDialTimeout  time.Duration
+	RedisReadTimeout  time.Duration
+	RedisWriteTimeout time.Duration
+	RedisPoolTimeout  time.Duration
+	RedisMaxRetries   int
 	CHDSN             string
 	OTLPEndpoint      string
 
@@ -261,6 +267,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_REDIS_MIN_IDLE_CONNS must be >= 1")
 	} else {
 		cfg.RedisMinIdleConns = v
+	}
+	if err := loadRedisClient(cfg); err != nil {
+		return nil, err
 	}
 	cfg.CHDSN = os.Getenv("RELAY_CH_DSN")
 	cfg.OTLPEndpoint = os.Getenv("RELAY_OTLP_ENDPOINT")

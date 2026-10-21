@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -23,8 +24,9 @@ type PreparedPick struct {
 	skip  map[string]struct{}
 	// reads has one entry per key; nil where the batch read nothing (an
 	// excluded or anonymous key, or a prioritized key behind the first).
-	reads    []*kv.BatchResult
-	rotation *kv.BatchResult
+	reads       []*kv.BatchResult
+	rotation    *kv.BatchResult
+	rotationTTL *kv.BatchResult
 }
 
 // PreparePick queues Pick's reads for keys on b: each candidate's breaker
@@ -58,7 +60,7 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 		p.rotation = b.Incr(roundRobinKey(scope), 1)
 		// NX leaves a live counter's deadline alone and gives one that lost
 		// its TTL a new one, without a round trip of its own.
-		b.ExpireNX(roundRobinKey(scope), ttlRoundRobin)
+		p.rotationTTL = b.ExpireNX(roundRobinKey(scope), ttlRoundRobin)
 	}
 	return p
 }
@@ -68,6 +70,9 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	s := p.s
 	now := s.clock()
+	if p.rotationTTL != nil && p.rotationTTL.Err != nil {
+		metrics.KVError("key_rotation", metrics.KVDropped)
+	}
 	var healthy []Candidate
 	for i, k := range p.keys {
 		if _, skip := p.skip[k.KeyHash]; skip {

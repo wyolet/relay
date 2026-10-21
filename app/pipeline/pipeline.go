@@ -742,6 +742,8 @@ func classifyFailure(err error) (kind string, status int) {
 		// Reservation rejected before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).
 		return "rate_limited", 0
+	case errors.Is(err, pkgratelimit.ErrUnavailable):
+		return "kv_unavailable", 0
 	case errors.Is(err, ErrNoKeys):
 		return "no_keys", 0
 	case errors.Is(err, ErrAllKeysExhausted):
