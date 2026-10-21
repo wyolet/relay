@@ -47,7 +47,7 @@ type Reservation struct {
 	ID    string
 	scope string // Redis Cluster hash-tag anchor; all keys share {<scope>}
 	rules []Rule
-	// conKeys holds the concurrency state keys incremented at Reserve time.
+	// conKeys holds the concurrency lease sets this reservation joined at Reserve time.
 	conKeys []string
 	// tokRules holds token-meter rules (for post-hoc Commit increment).
 	tokRules []Rule
@@ -169,13 +169,13 @@ func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule,
 	return reservation, nil
 }
 
-// Commit finalizes a Reservation via one RunScript call. Tokens are incremented post-hoc; concurrency is always decremented. A repeated Commit is a no-op only when the first one wrote the idempotency guard: an uncancelled commit of a reservation with no concurrency or token-meter rule settles nothing, makes no call and writes no guard, so a later cancelled Commit still refunds it.
+// Commit finalizes a Reservation via one RunScript call. Tokens are incremented post-hoc; concurrency leases are always released. A repeated Commit is a no-op only when the first one wrote the idempotency guard: an uncancelled commit of a reservation with no concurrency or token-meter rule settles nothing, makes no call and writes no guard, so a later cancelled Commit still refunds it.
 //
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
 //   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]
 //   - meter "tokens.<key>":  obs.Tokens["<key>"]
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
-//   - meter "concurrency":   decremented (not incremented)
+//   - meter "concurrency":   the reservation's lease released
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
 	if !res.needsCommit(obs) {
 		return nil

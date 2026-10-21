@@ -94,6 +94,10 @@ func TestContractLimit_RedisStore(t *testing.T) {
 	runLimiterContractSuite(t, "RedisStore", factory)
 }
 
+func TestConcurrencyLease_RedisStore(t *testing.T) {
+	runConcurrencyLeaseSuite(t, "RedisStore", redisLimiterFactory(kvtest.Config(t)))
+}
+
 func TestCommitSkipRedis(t *testing.T) {
 	runCommitSkipSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
 }
