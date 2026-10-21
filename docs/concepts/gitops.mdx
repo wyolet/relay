@@ -3,10 +3,7 @@ title: "GitOps"
 description: "Declare teams, projects, and policy as manifests and apply them from CI"
 ---
 
-Everything under the control API can also be declared as YAML and applied
-from a git repository. `POST /api/apply` runs the same loader
-(`app/apply`) that boots the server from `RELAY_CATALOG_DIR` — a seed and
-an apply of the same manifest tree converge on the same rows.
+Everything under the control API can also be declared as YAML and applied from a git repository with `relay apply` (`POST /api/apply`). Apply and the catalog seed share one loader: for the catalog kinds, a seed and an apply of the same manifest tree produce the same rows and the same plan. The boot seed and a fetched catalog release load catalog kinds only; host keys, relay keys, teams, projects, service accounts, groups, roles, bindings and users reach the database through `relay apply`, `relay seed --apply` or the control API.
 
 ## Apply
 
@@ -15,28 +12,25 @@ relay apply -f manifests/ --dry-run
 relay apply -f manifests/
 ```
 
-A file or a directory of `.yaml` documents is parsed, diffed against the
-stored rows, and — unless `--dry-run` — written. Every entry in the plan
-gets one of seven actions:
+A file or a directory of `.yaml` documents is parsed locally, sent to the server, diffed against the stored rows and, unless `--dry-run` is given, written. Every entry in the plan gets one of seven actions:
 
 | Action | Meaning |
 | --- | --- |
 | `create` | No row with this name exists yet. |
 | `update` | The row exists and at least one field differs. `changedFields` lists the JSON paths. |
-| `unchanged` | The row matches the manifest exactly, whether or not it was hand-edited. Nothing is written. |
-| `skip-dirty` | The row was hand-edited through the control API (`meta.Dirty`), differs from the manifest, and the run is not forcing. `changedFields` lists the paths that differ. Reported as drift; left alone. |
+| `unchanged` | The row matches the manifest exactly, whether or not it was edited by hand. Nothing is written. |
+| `skip-dirty` | The row was edited through the control API (`metadata.dirty` is `true`), differs from the manifest, and the run is not forced. `changedFields` lists the paths that differ. Reported as drift and left alone. |
 | `delete` | Pruning removed a row absent from the bundle. Only appears with `--prune`. |
 | `conflict` | Another writer changed the row between the plan and the write. Nothing is written for it; re-running picks up the change. |
 | `forbidden` | The caller may not see the row the document names. Nothing is written for it, and the run reports it by the name the bundle used. |
 
-`--force` overwrites a dirty row with the manifest's version and clears the
-dirty flag — apply owns the row again from that point on.
+`--force` overwrites a dirty row with the manifest's version and clears its dirty flag, so apply manages the row again from then on. It also lets the apply write a group a [SCIM](/concepts/scim) client manages; without it, a bundle that changes such a group is refused with `409` before anything is written.
 
 A dirty row the manifest matches is `unchanged` and nothing is written, so it stays dirty: exporting a hand-edited row and applying the export back reports no drift, and a later change to that document reports `skip-dirty` until `--force` is given.
 
 ## Account, tenancy and RBAC documents
 
-`Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha2`. Both write the same rows, and one file may mix them with the other kinds. Under `auth.wyolet.dev/v1alpha1` they are parsed strictly: an unknown field, a rule kind or verb that is not in the [role vocabulary](/concepts/auth), `metadata.owner` (every owner of these kinds is derived), or a plain-text password fails the apply with the document's index and the field's path. Under `relay.wyolet.dev/v1alpha2` unknown fields and `metadata.owner` are ignored.
+`Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha2`. Both write the same rows, and one file may mix them with the other kinds. Under `auth.wyolet.dev/v1alpha1` they are parsed strictly: an unknown field, a rule kind or verb outside the [role vocabulary](/concepts/auth#writing-bindings), `metadata.owner` (every owner of these kinds is derived), or a plain-text password fails the apply with the document's index and the field's path. Under `relay.wyolet.dev/v1alpha2` unknown fields and `metadata.owner` are ignored.
 
 `User` documents are accepted under `auth.wyolet.dev/v1alpha1` only; `metadata.name` is the username:
 
@@ -52,37 +46,30 @@ spec:
   roles: [viewer]
 ```
 
-A password is a bcrypt hash (`password.hash`); plain text is refused. `relay seed --apply` also accepts `password.valueFrom.env`, the name of an environment variable of the seeding process whose value is hashed; `POST /api/apply` refuses it, so the API never reads the server's environment. `email`, `roles` and `disabled` are declarative: one left out is cleared. `password` and `identity` (the identity provider's `issuer` and `subject`) left out keep the stored value; `null`, `""` or `{}` clears it. Changing an account's roles requires an admin, and so does setting, changing or clearing its password or identity, or creating an account that carries one; the bundle is refused before anything is written. A changed password or identity ends the account's sessions and revokes its tokens. A bundle that would leave no enabled admin is refused. `relay seed --apply` writes accounts without ending their sessions, though a changed password or identity still revokes their tokens; the boot seed takes no `User` documents.
+A password is a bcrypt hash (`password.hash`); plain text is refused. `relay seed --apply` also accepts `password.valueFrom.env`, the name of an environment variable of the seeding process whose value is hashed; `POST /api/apply` refuses it, so the API never reads the server's environment. `email`, `roles` and `disabled` are declarative: one left out is cleared. `password` and `identity` (the identity provider's `issuer` and `subject`) left out keep the stored value; `null`, `""` or `{}` clears it. Changing an account's roles requires an admin, and so does setting, changing or clearing its password or identity, or creating an account that carries one; the bundle is refused before anything is written. A changed password or identity ends the account's sessions and revokes its tokens. A bundle that would leave no enabled admin is refused. `relay seed --apply` writes accounts without ending their sessions, though a changed password or identity still revokes their tokens.
 
 ## Running it from CI
 
-Run the dry run first so a pipeline can gate on drift before writing
-anything:
+Run the dry run first so a pipeline can gate on drift before writing anything:
 
 ```bash
 relay apply -f manifests/ --dry-run || exit_code=$?
 if [ "$exit_code" = "1" ]; then
-  echo "drift detected — see plan above"
+  echo "drift detected; see the plan above"
   exit 1
 fi
 relay apply -f manifests/
 ```
 
-Exit codes:
-
-| Code | Meaning |
+| Exit code | Meaning |
 | --- | --- |
-| `0` | Clean — every entry was `create`, `update`, `unchanged`, or `delete`. |
-| `1` | Drift — at least one `skip-dirty` entry and the run did not pass `--force`, at least one `conflict` entry, or at least one `forbidden` entry. |
-| `2` | The server rejected the request (4xx/5xx). |
+| `0` | Clean: every entry was `create`, `update`, `unchanged` or `delete`. |
+| `1` | Drift: at least one `skip-dirty` entry without `--force`, at least one `conflict`, or at least one `forbidden`. Also returned when the command line or a manifest fails to parse locally. |
+| `2` | The server refused the request (4xx/5xx) or could not be reached. |
 
-`$RELAY_URL` (default `http://localhost:8081`) names the server;
-`$RELAY_ADMIN_TOKEN` or `--token` authenticates. Both can be overridden
-per invocation with `--url`.
+`$RELAY_URL` (default `http://localhost:8081`) or `--url` names the server; `$RELAY_ADMIN_TOKEN` or `--token` authenticates.
 
-A `conflict` entry means the row is not applied, so the run exits `1` even
-under `--force`: `--force` overrides an operator's edit, not a write that
-landed mid-apply. Re-run to converge on the row as it now stands.
+A `conflict` entry means the row was not applied, so the run exits `1` even under `--force`: `--force` overrides an operator's edit, not a write that landed mid-apply. Re-run to converge on the row as it now stands.
 
 ## Prune
 
@@ -90,39 +77,19 @@ landed mid-apply. Re-run to converge on the row as it now stands.
 relay apply -f manifests/ --prune --selector env=prod,team=platform
 ```
 
-`--prune` deletes rows that are absent from the bundle, but only rows that
-carry **every** label in `--selector` — an unfiltered prune would delete
-every user row the manifest happens to omit, so the selector is required.
+`--prune` deletes rows that are absent from the bundle, but only rows that carry every label in `--selector` (equality only). An unfiltered prune would delete every row the manifest happens to omit, so the selector is required.
 
-Pruning draws the same membership line as export (below): teams, groups,
-roles, and role-bindings are always prunable (minus built-in roles);
-every other kind is prunable only when it's user-, team-, or
-project-owned. System-, provider-, and host-owned rows — the catalog's
-own data — are never candidates, no matter what labels they carry: a
-manifest that omits a catalog-managed provider or host is not asking for
-its removal. Accounts carry no labels, so prune never deletes a user.
+Pruning draws the same membership line as export (below): teams, groups, roles and role bindings are always prunable, except built-in roles; every other kind is prunable only when it is owned by a user, team or project. System-, provider- and host-owned rows, the catalog's own data, are never candidates, whatever labels they carry: a manifest that omits a catalog provider or host is not asking for its removal. Accounts carry no labels, so prune never deletes a user.
 
-A prune never takes rows along unannounced. Pruning a team, project or service account is refused while rows under it stay out of the prune; for a service account those are its keys and the role and policy bindings that name it as a subject. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
+A prune never removes rows silently. Pruning a team, project or service account is refused while rows under it stay out of the prune; for a service account those are its keys and the role and policy bindings that name it as a subject. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
 
 ## Authorization and partial failure
 
-Every row in the plan is authorized before anything is written. A denied
-write fails the whole apply with `403` (or `401` if the caller isn't
-authenticated) and nothing is written — authorization is all-or-nothing,
-checked up front.
+Every row in the plan is authorized before anything is written: each write needs `apply` on `system` at the row's scope plus the row's own verb, and a dry run is checked the same way. A denied write fails the whole apply with `403` (`401` if the caller is not authenticated), and nothing is written. A change the governance settings or the [license](/concepts/license) refuse also fails the whole apply with `403` before anything is written.
 
-A row the caller may not *see* is different: it is not a write they were
-refused, it is a document about a row outside their scope. Those entries come
-back as `forbidden`, named as the bundle named them, and the rest of the
-bundle still applies. `relay apply` exits `1` on them, so a pipeline applying
-a bundle wider than its own scope learns which documents were ignored instead
-of reading a clean run.
+A row the caller may not see is different: it is not a refused write but a document about a row outside their scope. Those entries come back as `forbidden`, named as the bundle named them, and the rest of the bundle still applies. `relay apply` exits `1` on them, so a pipeline applying a bundle wider than its own scope learns which documents were ignored.
 
-Writes then run sequentially, one kind at a time, each kind in its own
-store transaction. There is no cross-kind transaction: if a write fails
-part-way through, the apply returns `500` with the list of entries that
-already landed. Re-applying the same bundle converges — the rows that
-landed diff as `unchanged`, and the run picks up from where it stopped.
+Writes then run one kind at a time, each kind in its own transaction. There is no transaction across kinds: if a write fails part-way, the apply returns `500` with the list of entries that already landed. Re-applying the same bundle converges: the rows that landed plan as `unchanged`, and the run continues from where it stopped.
 
 ## Export
 
@@ -132,10 +99,7 @@ relay export --scope project:<id> --kinds policies,keys
 relay export --include-system -o backup/relay.yaml
 ```
 
-`GET /api/export` renders the tenant-owned rows as a manifest bundle in
-the same shape `apply` accepts — round-trip the deployment's state without
-hand-authoring YAML. Kinds emit in dependency order, each sorted by name for
-a stable diff:
+`GET /api/export` renders the tenant-owned rows as a manifest bundle in the shape `apply` accepts, so a deployment's state can round-trip without hand-written YAML. Kinds are emitted in dependency order, each sorted by name for a stable diff:
 
 ```
 teams, projects, groups, roles, rate-limits, policies,
@@ -143,43 +107,15 @@ host-keys, service-accounts, keys, role-bindings,
 policy-bindings, overlays
 ```
 
-Teams, groups, roles, and role-bindings are exported by **kind**,
-regardless of who owns the row — a scope or a grant isn't its author's
-property, so provenance can't decide membership for these four (built-in
-roles are excluded by name). Every other kind is exported by **owner**:
-only rows owned by a user, a team, or a project. Catalog template rows
-(system-, provider-, and host-owned — providers, hosts, models, pricing)
-are never exported; they come from the catalog, not from a git repo.
-Overlays layered on top of those catalog rows *are* exported, since the
-overlay itself is user-owned.
+Teams, groups, roles and role bindings are exported by kind, whoever owns the row: a scope or a grant is not its author's property, so ownership can't decide membership for these four (built-in roles are left out by name). Every other kind is exported by owner: only rows owned by a user, a team or a project. Catalog rows (system-, provider- and host-owned providers, hosts, models and pricing) are never exported; they come from the catalog, not from a git repository. [Overlays](/concepts/overlays) on those catalog rows are exported, since the overlay itself is user-owned. Accounts are not exported.
 
-`--include-system` (`?includeSystem=true`) widens the owner rule for a
-backup: it adds every system-owned row of the exported kinds (what the admin
-token creates through the API or `apply`, and the relay's own system rate
-limits), and every host- or provider-owned catalog row an operator has edited
-through the API (a dirty row). Catalog rows nobody edited stay out, and so
-does every added row in a scoped export, since none of them has a team or
-project. Applied back to the deployment it came from, the bundle's dirty rows
-match what is stored and plan as `unchanged`; on a freshly seeded deployment
-they apply as updates. An edit made through `apply` does not mark a
-row dirty, so a catalog row changed that way is not included.
+`--include-system` (`?includeSystem=true`) widens the owner rule for a backup: it adds every system-owned row of the exported kinds (what the admin bearer creates through the API or `apply`, and the relay's own system rate limits), and every host- or provider-owned catalog row an operator edited through the API (a dirty row). Catalog rows nobody edited stay out, and so does every added row in a scoped export, since none of them has a team or project. Applied back to the deployment it came from, the bundle's dirty rows match what is stored and plan as `unchanged`; on a newly seeded deployment they apply as updates. An edit made through `apply` does not mark a row dirty, so a catalog row changed that way is not included.
 
-A role-binding at global scope (`{kind: system}`) has no team or project
-to scope it into, so it only survives an **unscoped** export — `--scope
-team:<id>` or `--scope project:<id>` drops it along with every other
-row outside that subtree.
+A role binding at global scope (`{kind: system}`) has no team or project to scope it into, so it appears only in an unscoped export.
 
-Secrets never leave: a `HostKey`'s `value` is always omitted from the
-export, regardless of `valueFrom.kind`. A `Key` exports only `keyHash`,
-`prefix`, and `expiresAt` — never `previousKeyHash` or `graceUntil` (a
-`Key` document also carries `revokedAt`, `enabled`, and the passthrough/
-payload-logging flags, none of which are secret).
+Secrets never leave: a `HostKey`'s `value` is always omitted, whatever its `valueFrom.kind`. A `Key` exports `keyHash`, `prefix` and `expiresAt`, never `previousKeyHash` or `graceUntil`; a `Key` document also carries `revokedAt`, `enabled`, and the passthrough and payload-logging flags, none of which are secret.
 
-`--scope team:<id>` or `--scope project:<id>` restricts the export to one
-subtree (overlays are skipped in a scoped export — they're keyed by their
-target catalog row, not by tenant, so scoping them would mean guessing).
-`--kinds` takes a comma-separated list of API plurals. `--format` is
-`yaml` (default) or `json`.
+`--scope team:<id>` or `--scope project:<id>` restricts the export to one subtree. Overlays are skipped in a scoped export: they are keyed by their target catalog row, not by tenant. `--kinds` takes a comma-separated list of API plurals. `--format` is `yaml` (default) or `json`.
 
 ## The `$schema` directive
 
@@ -191,52 +127,14 @@ apiVersion: relay.wyolet.dev/v1alpha2
 kind: Policy
 ```
 
-The base is `RELAY_PUBLIC_URL` when the deployment sets one, otherwise the
-path is relative (same-origin). `GET /api/schemas/{version}` lists the
-kinds available at a schema version; `GET /api/schemas/{version}/{kind}`
-serves one. Both are public — an editor resolving the directive has no
-session, and a schema describes shape, never data.
+The base is `RELAY_PUBLIC_URL` when the deployment sets one; otherwise the path is relative (`/api/schemas/...`). `GET /api/schemas/{version}` lists the kinds available at a schema version, and `GET /api/schemas/{version}/{kind}` serves one. Both are public: an editor resolving the directive has no session, and a schema describes shape, never data.
 
-## Minting a token
+## Keys in manifests
 
-A **token** is a short-lived, project-scoped credential for the inference
-API, minted for the session holder — the admin token identifies no user
-and cannot mint one. Session auth only:
+A `Key` document carries only `keyHash`. Generate the key locally with `relay keygen`, which prints the plaintext, the hash and the display prefix, and commit only the hash:
 
 ```bash
-curl -X POST http://localhost:8081/api/auth/token \
-  -H "Cookie: relay_session=<session from POST /api/auth/login>" \
-  -H "Content-Type: application/json" \
-  -d '{"project": "my-project", "ttl": "1h"}'
+relay keygen
 ```
 
-```json
-{
-  "token": "eyJhbGciOi...",
-  "jti": "...",
-  "expiresAt": "2027-01-01T01:00:00Z",
-  "project": "my-project",
-  "teamId": "..."
-}
-```
-
-Or via the CLI, which logs in and mints in one step:
-
-```bash
-export RELAY_PASSWORD=...   # never pass a password on argv
-relay token mint --project my-project --ttl 1h --user alice
-```
-
-`relay token` reads the password from `$RELAY_PASSWORD`, or prompts on an
-interactive terminal — there is no `--password` flag, since argv is
-world-readable through the process table and lands in shell history. It
-prints the token to stdout on success.
-
-## Other commands
-
-```bash
-relay keygen [--prefix]
-```
-
-`keygen` mints a key locally, so the plaintext never has to pass through
-the server and only the hash goes in a manifest.
+See the [CLI reference](/reference/cli) for every command and flag, and [Inference tokens](/concepts/auth#inference-tokens) for minting short-lived credentials instead of keys.

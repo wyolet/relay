@@ -17,12 +17,10 @@ obey.
 git clone https://github.com/wyolet/relay
 cd relay
 cp .env.example .env          # then set RELAY_MASTER_KEY (openssl rand -base64 32)
-docker compose up             # bundled Postgres / ClickHouse / Valkey / Jaeger
+docker compose up             # bundled Postgres / ClickHouse / Valkey
 ```
 
-The data plane listens on `:5100`, the control plane on `:5103`. See the
-configuration docs in [`docs/`](docs/) (published at docs.wyolet.com) for
-configuration details.
+The data plane listens on `:8080` and the control plane on `:8081`, the binary's defaults. The multi-pod dev stack under `deploy/compose/` (`make dev-compose`) differs: its nginx load balancer serves the data plane on `:5100`, and the first pod's control plane is on `:5103`. See the configuration docs in [`docs/`](docs/) (published at docs.wyolet.com) for configuration details.
 
 ## Build & test
 
@@ -92,11 +90,7 @@ on every commit.
 
 ## Hot-path discipline
 
-The request path is performance-critical. In particular: no Postgres
-calls on the request path (reads come from the in-memory snapshot); token
-counts come from the provider response, not relay-side tokenization;
-all emits (usage, traces, payloads) are async via bounded channels with
-drop-on-full — never block the response.
+The request path is performance-critical. In particular: no Postgres calls on the request path (reads come from the in-memory snapshot); token counts come from the provider response, not relay-side tokenization; usage and payload emits are async via bounded channels with drop-on-full — never block the response.
 
 ## Schema changes
 

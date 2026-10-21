@@ -3,96 +3,91 @@ title: "Introduction"
 description: "What Relay is, and the mental model for the rest of these docs"
 ---
 
-Relay is a high-throughput router that puts **one endpoint in front of
-every LLM provider**. You point your app at Relay, send OpenAI- or
-Anthropic-shaped requests, and Relay handles provider selection, key
-pooling, failover, and rate limits behind a single bearer token.
-
-The result: your code talks to one stable API, while the messy parts —
-juggling provider keys, surviving a dead key, staying under rate limits —
-move out of your app and into Relay.
+Relay is a self-hosted gateway that puts one endpoint in front of your LLM providers. Your app sends OpenAI-shaped (Chat Completions, Responses, Embeddings) or Anthropic-shaped (Messages) requests, or Relay's own canonical shape at `/v1/generate`, with a relay key. Relay checks what that key may use, picks an upstream credential from a pool, enforces rate limits, forwards the call, and records usage and cost.
 
 ## Why it exists
 
-A single provider API key has a fixed rate limit and a single point of
-failure. The moment you run real traffic you end up writing the same glue
-every time: rotate between keys, retry on `429`, fall back when one
-provider degrades, keep per-model limits straight. Relay is that glue,
-extracted into a service and made operable.
+A provider API key has one rate limit and fails on its own. Running real traffic means writing the same code in every app: spread load over several keys, retry on `429`, skip a revoked key, keep per-model limits, attribute spend to a team. Relay moves that into one service you run next to your apps.
 
 <CardGroup cols={2}>
-  <Card title="Higher effective throughput" icon="gauge-high">
-    Pool many provider keys behind one relay key. Limits add up instead of
-    capping you at a single key's ceiling.
+  <Card title="Key pooling" icon="layer-group" href="/concepts/key-pooling">
+    Several host keys serve one relay key. A failing key is skipped by its circuit breaker before the first byte reaches your app.
   </Card>
-  <Card title="Failover by default" icon="shield-halved">
-    Per-key circuit breakers route around dead or throttled keys without
-    your app noticing.
+  <Card title="Cross-shape routing" icon="plug" href="/reference/inference-api">
+    Keep your existing SDK and change the base URL. A request in one shape can be served by an upstream that speaks another.
   </Card>
-  <Card title="One wire shape" icon="plug">
-    OpenAI- and Anthropic-compatible endpoints. Keep your existing SDK;
-    just change the base URL.
+  <Card title="Policies and rate limits" icon="scale-balanced" href="/concepts/policies">
+    A policy decides which models a caller reaches, which host keys it spends, and which limits apply.
   </Card>
-  <Card title="Operable" icon="sliders">
-    An admin UI and Control API for hosts, keys, and policies — not a config
-    file you redeploy to change.
+  <Card title="Admin UI and control API" icon="sliders" href="/reference/control-api">
+    Hosts, keys, policies and tenancy are rows you change at runtime. Changes reach every pod in about a second.
   </Card>
 </CardGroup>
 
 ## The mental model
 
-A handful of catalog nouns carry the whole system. Once these click, the
-reference pages read straight through.
+The catalog describes what can be called. Credentials and policies describe who may call it and with what.
 
 <AccordionGroup>
   <Accordion title="Hosts" icon="server">
-    The upstream endpoints Relay routes to — a provider's API surface, like
-    OpenAI or Anthropic. A host defines the wire shape Relay speaks to it.
+    An upstream endpoint Relay sends requests to: a provider's API (`openai`, `anthropic`, `google`) or your own server, such as a self-hosted Ollama. A host has a base URL. See [Catalog](/concepts/catalog).
   </Accordion>
   <Accordion title="Models" icon="cube">
-    Catalog entries bound to a host. The `model` field in a request resolves
-    against the catalog; a model is reachable only when it has an enabled
-    host binding behind it.
+    A catalog entry, owned by the provider that makes it. The `model` field of a request resolves against the catalog by name, optionally pinned to a host as `model@host`.
+  </Accordion>
+  <Accordion title="Host bindings" icon="link">
+    The join of one model and one host. A binding carries the wire shape Relay speaks to that host for that model (`openai`, `openai_responses`, `anthropic` or `gemini`), the upstream model name, and the pricing. A model is reachable only through an enabled binding, and one model can have bindings on several hosts.
   </Accordion>
   <Accordion title="Host keys" icon="key">
-    Your real upstream provider credentials, held by Relay. Many host keys
-    for the same **host** form a **pool**; Relay spreads traffic across them
-    and breaks the circuit on any that fail.
+    Your provider credentials, stored by Relay as an environment-variable reference or as a value encrypted under the master key. Each host key belongs to one host. See [Authentication](/concepts/auth#host-keys).
   </Accordion>
-  <Accordion title="Relay keys" icon="ticket">
-    The bearer tokens *your* apps use. A relay key never exposes the
-    underlying host keys — it's an indirection you can scope, rate-limit,
-    and revoke on its own.
+  <Accordion title="Relay keys and inference tokens" icon="ticket">
+    The credentials your apps send. A relay key (`sk-wr-…`) is long-lived and belongs to a service account or a user. An inference token is short-lived, minted for a signed-in user, and scoped to one project. Neither exposes a host key. See [Authentication](/concepts/auth).
   </Accordion>
-  <Accordion title="Policies" icon="scale-balanced">
-    Rules that decide which models a relay key may reach. Policies are how
-    you grant one key just `gpt-4o` and another the whole catalog.
+  <Accordion title="Policies and policy bindings" icon="scale-balanced">
+    A policy grants models, lists the host keys requests may spend, and names a rate limit. A relay key can point at a policy directly; otherwise a service account's policy or a project's policy bindings decide. See [Policies](/concepts/policies).
   </Accordion>
   <Accordion title="Rate limits" icon="timer">
-    Limits you attach to keys and policies, enforced by Relay before a
-    request ever leaves for the upstream.
+    Named rule sets (requests, tokens, concurrency per window). A policy's rate limit caps everyone it governs; a host key's tier limit caps that one upstream credential. See [Rate limits](/concepts/rate-limits).
+  </Accordion>
+  <Accordion title="Teams, projects, service accounts, users" icon="users">
+    The tenancy layer. Teams contain projects; projects contain service accounts; users join through groups and role bindings. Keys, policies and usage are attributed to this hierarchy, and RBAC scopes on it. See [Authentication](/concepts/auth#authorization).
   </Accordion>
 </AccordionGroup>
 
-A request, end to end: your app sends an OpenAI- or Anthropic-shaped call
-with a **relay key** → the key's **policy** confirms it grants the requested
-**model** → Relay resolves the model to its **host** binding and draws a
-healthy **host key** from the pool → it applies any **rate limits** and
-forwards the request → the response streams back in the same shape you sent.
+## A request, end to end
+
+<Steps>
+  <Step title="Authenticate">
+    The app sends a request with a relay key or an inference token. Relay resolves it to a principal: a service account or a user, plus its project and team.
+  </Step>
+  <Step title="Resolve the policy">
+    Relay finds the governing policy: the key's own, else the service account's, else the first matching policy binding in the project.
+  </Step>
+  <Step title="Route">
+    The `model` is resolved against the catalog. Relay walks the model's enabled bindings, keeps those the policy grants, and picks the first whose host has a usable host key in the policy.
+  </Step>
+  <Step title="Reserve and pick a key">
+    The policy's rate limit is reserved. A healthy host key is picked from the policy's keys for that host, and its tier limit is reserved. If the key fails before any response bytes are sent, Relay tries the next key.
+  </Step>
+  <Step title="Forward and settle">
+    The request goes upstream, translated if the binding speaks a different shape, and the response streams back in the shape you sent. When the response ends, Relay commits the token counts to the rate limits and records the usage event.
+  </Step>
+</Steps>
 
 ## Where to go next
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/quickstart">
-    First request through Relay in about two minutes.
+    Run Relay and send a first request.
   </Card>
-  <Card title="Configuration" icon="gear" href="/configuration">
-    Every `RELAY_*` environment variable and runtime setting.
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    The two listeners, the in-memory snapshot, and where state lives.
   </Card>
   <Card title="Inference API" icon="bolt" href="/reference/inference-api">
     Endpoints, wire shapes, streaming, and error codes.
   </Card>
   <Card title="Control API" icon="sliders" href="/reference/control-api">
-    Manage hosts, keys, policies, and relay keys.
+    Manage hosts, keys, policies, and tenancy.
   </Card>
 </CardGroup>

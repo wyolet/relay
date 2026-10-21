@@ -17,31 +17,66 @@
             "group": "Get Started",
             "pages": [
               "introduction",
-              "quickstart",
-              "clients",
-              "go-sdk",
-              "claude-code",
-              "codex",
-              "opencode",
-              "configuration"
+              "quickstart"
             ]
           },
           {
-            "group": "Concepts",
+            "group": "Build with Relay",
+            "pages": [
+              "clients",
+              "go-sdk",
+              "batch",
+              {
+                "group": "Coding agents",
+                "pages": [
+                  "claude-code",
+                  "codex",
+                  "opencode"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "How It Works",
             "pages": [
               "concepts/architecture",
               "concepts/catalog",
               "concepts/overlays",
-              "concepts/gitops",
+              "concepts/policies",
+              "concepts/rate-limits",
               "concepts/key-pooling",
-              "concepts/proxy-mode",
-              "concepts/observability",
-              "concepts/auth",
-              "concepts/secret-keys",
-              "concepts/scim",
-              "concepts/audit",
-              "concepts/license",
+              "concepts/proxy-mode"
+            ]
+          },
+          {
+            "group": "Deploy and Operate",
+            "pages": [
+              "deploy/docker",
+              "deploy/kubernetes",
+              "configuration",
+              "reference/settings",
+              "concepts/gitops",
               "concepts/upgrade"
+            ]
+          },
+          {
+            "group": "Observability",
+            "pages": [
+              "concepts/usage",
+              "concepts/payload-logging",
+              "concepts/otlp-receiver",
+              "reference/metrics"
+            ]
+          },
+          {
+            "group": "Security and Access",
+            "pages": [
+              "concepts/auth",
+              "concepts/sso",
+              "concepts/scim",
+              "concepts/secret-keys",
+              "concepts/audit",
+              "concepts/license"
             ]
           },
           {
@@ -50,7 +85,7 @@
               "reference/inference-api",
               "reference/control-api",
               "reference/headers",
-              "reference/metrics",
+              "reference/cli",
               "reference/catalog-server",
               "troubleshooting"
             ]
@@ -72,5 +107,11 @@
       "bluesky": "https://bsky.app/profile/wyolet.bsky.social",
       "reddit": "https://www.reddit.com/r/wyolet"
     }
-  }
+  },
+  "redirects": [
+    {
+      "source": "/concepts/observability",
+      "destination": "/concepts/usage"
+    }
+  ]
 }
