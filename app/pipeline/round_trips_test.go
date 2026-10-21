@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
@@ -19,10 +20,17 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// A metered round-robin request reaches the upstream after one kv round
-// trip: the inbound reserve, the breaker reads and the rotation counter go
-// out together.
-func TestRunAdmissionIsOneRoundTrip(t *testing.T) {
+// hostReached signals post-flight's last step, which runs after the settle.
+type hostReached chan struct{}
+
+func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
+func (hostReached) Unreachable(context.Context, string, string) {}
+
+// A metered round-robin request on a healthy key costs two kv round trips:
+// before the upstream call the inbound reserve, the breaker reads and the
+// rotation counter go out together; post-flight commits in one batch and
+// writes no success for a key that never failed.
+func TestRunIsTwoRoundTrips(t *testing.T) {
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
 	pkgratelimit.RegisterScripts(mem)
@@ -52,9 +60,11 @@ func TestRunAdmissionIsOneRoundTrip(t *testing.T) {
 			Resolved: "sk-" + id, KeyHash: "hash-" + id,
 		})
 	}
+	reached := make(hostReached, 1)
 	p := &Pipeline{
-		Policy: policy.NewService(snap, keypool.New(store, slog.Default(), nil, nil), pkgratelimit.New(store, slog.Default(), nil)),
-		Logger: slog.Default(),
+		Policy:     policy.NewService(snap, keypool.New(store, slog.Default(), nil, nil), pkgratelimit.New(store, slog.Default(), nil)),
+		Logger:     slog.Default(),
+		HostHealth: reached,
 	}
 
 	var tripsAtCall int
@@ -65,12 +75,24 @@ func TestRunAdmissionIsOneRoundTrip(t *testing.T) {
 		}},
 		Keys:   keys,
 		Policy: caller,
+		Host:   &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	_ = res.Body.Close()
 	if tripsAtCall != 1 {
 		t.Fatalf("kv round trips before the upstream call = %d, want 1", tripsAtCall)
+	}
+	_ = res.Body.Close()
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-flight never finished")
+	}
+	if trips := store.RoundTrips(); trips != 2 {
+		t.Fatalf("kv round trips for the request = %d, want 2 (%d scripts: %v)", trips, len(store.Scripts()), store.Batches())
+	}
+	if n := len(store.Named("keypool.record_success")); n != 0 {
+		t.Fatalf("success writes = %d, want none for a key that never failed", n)
 	}
 }

@@ -229,7 +229,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 	})
 
 	// A reserve queued on a kv batch grants, refuses and revokes exactly as
-	// Reserve does, and its reservation commits like one Reserve returned.
+	// Reserve does, and a commit queued on one releases what it held.
 	t.Run(name+"/PrepareReserve_MatchesReserve", func(t *testing.T) {
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 		l := factory(t, &now)
@@ -255,11 +255,20 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if _, err := reserve(rules); !errors.Is(err, ErrExceeded) {
 			t.Fatalf("second while the slot is held: err = %v, want ErrExceeded", err)
 		}
-		if err := l.Commit(ctx, res, Observations{}); err != nil {
-			t.Fatalf("commit: %v", err)
+		b := kv.NewBatch(l.store)
+		pc, err := l.PrepareCommit(b, res, Observations{})
+		if err != nil || pc == nil {
+			t.Fatalf("PrepareCommit = %v, %v", pc, err)
+		}
+		b.Exec(ctx)
+		if err := pc.Finish(); err != nil {
+			t.Fatalf("batched commit: %v", err)
 		}
 		if _, err := reserve(rules); err != nil {
 			t.Fatalf("after the slot was released: %v", err)
+		}
+		if pc, _ := l.PrepareCommit(b, nil, Observations{}); pc != nil {
+			t.Fatal("PrepareCommit queued a commit for no reservation")
 		}
 
 		revoked := Rule{Key: "jti:prepared-jti", Name: "token revocation", Meter: MeterRevoked}

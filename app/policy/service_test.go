@@ -206,29 +206,38 @@ func TestRelease_RefundsAndRecordsTheFailure(t *testing.T) {
 	// Every nil shape is a no-op rather than a panic on the failure path.
 	f.svc.Release(ctx, nil, keypool.FailureAuth, 0)
 	f.svc.Release(ctx, &Acquisition{}, keypool.FailureAuth, 0)
-	f.svc.RecordSuccess(ctx, nil)
-	f.svc.RecordSuccess(ctx, &Acquisition{})
+	if err := f.svc.Settle(ctx, nil, nil, pkgratelimit.Observations{}); err != nil {
+		t.Fatalf("Settle(nil, nil): %v", err)
+	}
+	if err := f.svc.Settle(ctx, nil, &Acquisition{}, pkgratelimit.Observations{}); err != nil {
+		t.Fatalf("Settle with an empty acquisition: %v", err)
+	}
 	if got := (*Acquisition)(nil).KeyHash(); got != "" {
 		t.Errorf("nil acquisition KeyHash = %q, want empty", got)
 	}
 }
 
-// RecordSuccess closes the breaker again, so a key that failed once and then
-// worked is back in the pool without waiting out a backoff.
-func TestRecordSuccess_ReturnsTheKeyToThePool(t *testing.T) {
+// A success on a half-open probe closes the breaker, so a key that failed and
+// then worked is back in the pool with its backoff reset.
+func TestSettle_ClosesAHalfOpenProbe(t *testing.T) {
 	f := newAcquireFixture(t)
 	ctx := context.Background()
 	acq, err := f.svc.Acquire(ctx, f.in)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	f.svc.Release(ctx, acq, keypool.FailureAuth, 0)
-	if _, err := f.svc.Acquire(ctx, f.in); err == nil {
-		t.Fatal("the key is selectable while its breaker is open")
+	// Open with a cooldown that has already run out: the next pick probes.
+	f.svc.Release(ctx, acq, keypool.FailureRateLimitLong, 0)
+	probe, err := f.svc.Acquire(ctx, f.in)
+	if err != nil {
+		t.Fatalf("Acquire after the cooldown: %v", err)
 	}
-	f.svc.RecordSuccess(ctx, acq)
-	if _, err := f.svc.Acquire(ctx, f.in); err != nil {
-		t.Fatalf("Acquire after a recorded success: %v", err)
+	if err := f.svc.Settle(ctx, nil, probe, pkgratelimit.Observations{}); err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	sel := keypool.New(f.store, discardLogger(), nil, nil)
+	if rec, found := sel.ReadCircuit(ctx, f.key.KeyHash); !found || rec.State != keypool.CircuitClosed || rec.Reason != "" {
+		t.Fatalf("record after the probe's success = %+v (found %v), want closed", rec, found)
 	}
 }
 
@@ -351,8 +360,8 @@ func TestReserveInbound_NilLimiterAndCommitPath(t *testing.T) {
 	if err := svc.CommitInbound(ctx, res, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitInbound(nil): %v", err)
 	}
-	if err := svc.CommitBoth(ctx, res, nil, pkgratelimit.Observations{}); err != nil {
-		t.Fatalf("CommitBoth: %v", err)
+	if err := svc.Settle(ctx, res, nil, pkgratelimit.Observations{}); err != nil {
+		t.Fatalf("Settle: %v", err)
 	}
 	svc.Release(ctx, &Acquisition{Key: &hostkey.HostKey{}}, keypool.FailureNetwork, 0)
 
@@ -369,69 +378,5 @@ func TestReserveInbound_NilLimiterAndCommitPath(t *testing.T) {
 	}
 	if after := len(store.Scripts()); after != before {
 		t.Fatalf("script calls %d → %d, want none from a limiterless commit", before, after)
-	}
-}
-
-// CommitBoth returns the inbound and upstream reservations together — the
-// single round trip the success path is built on — and stays correct when
-// only one of them exists.
-func TestCommitBoth_ReturnsBothReservationsInOneCall(t *testing.T) {
-	f := newAcquireFixture(t, requestsRule())
-	ctx := context.Background()
-	caller := f.in.Policy
-	caller.Spec.RateLimitID = "tier-rl"
-
-	inbound, err := f.svc.ReserveInbound(ctx, InboundInput{Policy: caller, TeamID: "team-1"})
-	if err != nil {
-		t.Fatalf("ReserveInbound: %v", err)
-	}
-	if inbound == nil {
-		t.Fatal("no inbound reservation to commit")
-	}
-	acq, err := f.svc.Acquire(ctx, f.in)
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	pickBatches, _ := batchStats(f.store)
-	if err := f.svc.CommitBoth(ctx, inbound, acq, pkgratelimit.Observations{}); err != nil {
-		t.Fatalf("CommitBoth: %v", err)
-	}
-	// The two reservations live under different hash tags, so they commit as
-	// two individually-atomic scripts — batched, not merged. Counting the
-	// scripts alone cannot tell that apart from two sequential commits, which
-	// is the round trip this method exists to save, so the batch is what the
-	// assertion is on.
-	batches, size := batchStats(f.store)
-	if batches-pickBatches != 1 {
-		t.Fatalf("batched round trips = %d, want exactly 1", batches-pickBatches)
-	}
-	if size != 2 {
-		t.Fatalf("the batch carried %d scripts, want one per reservation", size)
-	}
-	if got := len(f.store.Named("limit.commit")); got != 2 {
-		t.Fatalf("commit scripts = %d, want one per reservation", got)
-	}
-
-	// Neither present is a no-op; one present falls back to a single commit,
-	// which must not open a batch at all.
-	if err := f.svc.CommitBoth(ctx, nil, nil, pkgratelimit.Observations{}); err != nil {
-		t.Fatalf("CommitBoth(nil, nil): %v", err)
-	}
-	if got, _ := batchStats(f.store); got != batches {
-		t.Fatalf("batched round trips = %d after a no-op CommitBoth, want %d", got, batches)
-	}
-	single, err := f.svc.ReserveInbound(ctx, InboundInput{Policy: caller, TeamID: "team-2"})
-	if err != nil {
-		t.Fatalf("second ReserveInbound: %v", err)
-	}
-	before := len(f.store.Named("limit.commit"))
-	if err := f.svc.CommitBoth(ctx, single, nil, pkgratelimit.Observations{}); err != nil {
-		t.Fatalf("CommitBoth with only an inbound reservation: %v", err)
-	}
-	if got := len(f.store.Named("limit.commit")) - before; got != 1 {
-		t.Fatalf("commit scripts = %d, want exactly 1", got)
-	}
-	if got, _ := batchStats(f.store); got != batches {
-		t.Fatalf("batched round trips = %d for a single reservation, want %d", got, batches)
 	}
 }

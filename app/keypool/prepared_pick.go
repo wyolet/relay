@@ -65,10 +65,10 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 
 // Finish chooses the key from the batch's results, reading on its own only
 // the prioritized candidates the batch skipped.
-func (p *PreparedPick) Finish(ctx context.Context) (*hostkey.HostKey, error) {
+func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	s := p.s
 	now := s.clock()
-	var healthy []candidate
+	var healthy []Candidate
 	for i, k := range p.keys {
 		if _, skip := p.skip[k.KeyHash]; skip {
 			continue
@@ -77,15 +77,16 @@ func (p *PreparedPick) Finish(ctx context.Context) (*hostkey.HostKey, error) {
 		// nothing to heal — a breaker would only strand the host's sole
 		// candidate. Always treat it as healthy.
 		if isAnonymous(k.KeyHash) {
-			healthy = append(healthy, candidate{key: k, rec: CircuitRecord{State: CircuitClosed}})
+			healthy = append(healthy, Candidate{Key: k, Record: CircuitRecord{State: CircuitClosed}})
 		} else {
-			var rec CircuitRecord
+			var c Candidate
 			if r := p.reads[i]; r != nil {
-				rec = recordFrom(r.Value, r.Err)
+				c.Record, c.Stored = recordFrom(r.Value, r.Err)
 			} else {
-				rec = s.readRecord(ctx, k.KeyHash)
+				c.Record, c.Stored = recordFrom(s.state.Get(ctx, circuitKey(k.KeyHash)))
 			}
-			c, ok := s.eligible(ctx, k, rec, now)
+			c.Key = k
+			c, ok := s.eligible(ctx, c, now)
 			if !ok {
 				continue
 			}
@@ -96,21 +97,22 @@ func (p *PreparedPick) Finish(ctx context.Context) (*hostkey.HostKey, error) {
 		}
 	}
 	if len(healthy) == 0 {
-		return nil, ErrNoHealthyKeys
+		return Candidate{}, ErrNoHealthyKeys
 	}
 	switch p.algo {
 	case KeySelectionRoundRobin:
 		return pickRoundRobin(p.rotation, healthy), nil
 	case KeySelectionLeastRecentlyUsed:
-		return s.pickLRU(ctx, p.scope, healthy)
+		return s.pickLRU(ctx, p.scope, healthy), nil
 	default:
-		return healthy[0].key, nil
+		return healthy[0], nil
 	}
 }
 
-// eligible reports whether a key on record rec may take traffic. An open key
-// past its OpenUntil is promoted to half-open (written back) and is eligible.
-func (s *Selector) eligible(ctx context.Context, k *hostkey.HostKey, rec CircuitRecord, now time.Time) (candidate, bool) {
+// eligible reports whether c may take traffic. An open key past its
+// OpenUntil is promoted to half-open (written back) and is eligible.
+func (s *Selector) eligible(ctx context.Context, c Candidate, now time.Time) (Candidate, bool) {
+	k, rec := c.Key, c.Record
 	switch rec.State {
 	case CircuitOpen:
 		if rec.Indefinite { // written before auth cooldowns were bounded
@@ -118,7 +120,7 @@ func (s *Selector) eligible(ctx context.Context, k *hostkey.HostKey, rec Circuit
 			rec.OpenUntil = rec.LastTransition.Add(authCooldowns[len(authCooldowns)-1])
 		}
 		if now.Before(rec.OpenUntil) {
-			return candidate{}, false
+			return Candidate{}, false
 		}
 		prior := rec.State
 		rec.State = CircuitHalfOpen
@@ -133,10 +135,10 @@ func (s *Selector) eligible(ctx context.Context, k *hostkey.HostKey, rec Circuit
 			"backoff_step", rec.BackoffStep,
 			"open_for_seconds", 0,
 		)
-		return candidate{key: k, rec: rec, promote: true}, true
+		return Candidate{Key: k, Record: rec, Stored: true}, true
 	case CircuitHalfOpen, CircuitClosed:
-		return candidate{key: k, rec: rec}, true
+		return c, true
 	default:
-		return candidate{}, false
+		return Candidate{}, false
 	}
 }

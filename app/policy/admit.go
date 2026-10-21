@@ -56,10 +56,10 @@ func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) 
 		}
 		adm.Inbound = res
 	}
-	if key, err := pick.Finish(ctx); err != nil {
+	if picked, err := pick.Finish(ctx); err != nil {
 		adm.AcqErr = err
 	} else {
-		adm.Acq, adm.AcqErr = s.reserveTier(ctx, key, acq)
+		adm.Acq, adm.AcqErr = s.reserveTier(ctx, picked, acq)
 	}
 	return adm, nil
 }
