@@ -392,6 +392,7 @@ func TestCommitBoth_ReturnsBothReservationsInOneCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
+	pickBatches, _ := batchStats(f.store)
 	if err := f.svc.CommitBoth(ctx, inbound, acq, pkgratelimit.Observations{}); err != nil {
 		t.Fatalf("CommitBoth: %v", err)
 	}
@@ -401,8 +402,8 @@ func TestCommitBoth_ReturnsBothReservationsInOneCall(t *testing.T) {
 	// is the round trip this method exists to save, so the batch is what the
 	// assertion is on.
 	batches, size := batchStats(f.store)
-	if batches != 1 {
-		t.Fatalf("batched round trips = %d, want exactly 1", batches)
+	if batches-pickBatches != 1 {
+		t.Fatalf("batched round trips = %d, want exactly 1", batches-pickBatches)
 	}
 	if size != 2 {
 		t.Fatalf("the batch carried %d scripts, want one per reservation", size)

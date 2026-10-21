@@ -74,25 +74,37 @@ func (r *Reservation) SetNoCommit() {
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
 // scope is the Redis Cluster hash-tag anchor (e.g. "policy:prod-policy").
 func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Reservation, error) {
-	now := l.clock()
 	token := reqid.Generate()
-
-	keys, ruleArgs, err := buildReserveArgs(scope, rules, now)
+	call, err := l.buildReserveCall(scope, rules, token)
 	if err != nil {
 		return nil, err
 	}
-
-	rulesJSON, err := json.Marshal(ruleArgs)
-	if err != nil {
-		return nil, fmt.Errorf("limit: marshal rules: %w", err)
-	}
-
-	raw, err := l.runner.RunScript(ctx, "limit.reserve", reserveLuaScript, keys,
-		now.UnixMilli(), string(rulesJSON), token)
+	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("limit: reserve script: %w", err)
 	}
+	return l.decodeReserve(ctx, scope, rules, token, raw)
+}
 
+func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string) (kv.ScriptCall, error) {
+	now := l.clock()
+	keys, ruleArgs, err := buildReserveArgs(scope, rules, now)
+	if err != nil {
+		return kv.ScriptCall{}, err
+	}
+	rulesJSON, err := json.Marshal(ruleArgs)
+	if err != nil {
+		return kv.ScriptCall{}, fmt.Errorf("limit: marshal rules: %w", err)
+	}
+	return kv.ScriptCall{
+		Name:   "limit.reserve",
+		Script: reserveLuaScript,
+		Keys:   keys,
+		Args:   []any{now.UnixMilli(), string(rulesJSON), token},
+	}, nil
+}
+
+func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule, token string, raw []byte) (*Reservation, error) {
 	var res reserveResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("limit: decode reserve result: %w", err)

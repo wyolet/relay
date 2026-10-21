@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // KeySelection is the algorithm a Selector uses to pick from healthy
@@ -45,83 +45,17 @@ type candidate struct {
 // Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
 // eligible. Concurrent Picks may both pick the same half-open key; the
 // caller's RecordSuccess/RecordFailure resolves the outcome (acceptable).
+//
+// The reads go out in one kv batch; see PreparePick to share it.
 func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, keys []*hostkey.HostKey, exclude ...[]*hostkey.HostKey) (*hostkey.HostKey, error) {
-	now := s.clock()
-
-	// Build exclude set for O(1) lookup.
-	var excludeSet map[string]struct{}
-	if len(exclude) > 0 && len(exclude[0]) > 0 {
-		excludeSet = make(map[string]struct{}, len(exclude[0]))
-		for _, k := range exclude[0] {
-			excludeSet[k.KeyHash] = struct{}{}
-		}
+	var excluded []*hostkey.HostKey
+	if len(exclude) > 0 {
+		excluded = exclude[0]
 	}
-
-	var healthy []candidate
-	for _, k := range keys {
-		if excludeSet != nil {
-			if _, skip := excludeSet[k.KeyHash]; skip {
-				continue
-			}
-		}
-		// The synthetic no-auth key has no credential to fail over to and
-		// nothing to heal — a breaker would only strand the host's sole
-		// candidate. Always treat it as healthy.
-		if isAnonymous(k.KeyHash) {
-			healthy = append(healthy, candidate{key: k, rec: CircuitRecord{State: CircuitClosed}})
-			continue
-		}
-		rec := s.readRecord(ctx, k.KeyHash)
-
-		switch rec.State {
-		case CircuitOpen:
-			if rec.Indefinite { // written before auth cooldowns were bounded
-				rec.Indefinite = false
-				rec.OpenUntil = rec.LastTransition.Add(authCooldowns[len(authCooldowns)-1])
-			}
-			if now.Before(rec.OpenUntil) {
-				continue
-			}
-			prior := rec.State
-			rec.State = CircuitHalfOpen
-			rec.LastTransition = now
-			s.writeRecord(ctx, k.KeyHash, rec)
-			s.log.Debug("keypool transition",
-				"request_id", reqid.From(ctx),
-				"key_hash", k.KeyHash,
-				"from_state", stateName(prior),
-				"to_state", stateName(rec.State),
-				"reason", "open_expired",
-				"backoff_step", rec.BackoffStep,
-				"open_for_seconds", 0,
-			)
-			healthy = append(healthy, candidate{key: k, rec: rec, promote: true})
-		case CircuitHalfOpen:
-			healthy = append(healthy, candidate{key: k, rec: rec})
-		case CircuitClosed:
-			healthy = append(healthy, candidate{key: k, rec: rec})
-		}
-	}
-
-	if len(healthy) == 0 {
-		return nil, ErrNoHealthyKeys
-	}
-
-	strategy := algo
-	if strategy == "" {
-		strategy = KeySelectionPrioritized
-	}
-
-	switch strategy {
-	case KeySelectionRoundRobin:
-		return s.pickRoundRobin(ctx, scope, healthy)
-
-	case KeySelectionLeastRecentlyUsed:
-		return s.pickLRU(ctx, scope, healthy)
-
-	default: // "prioritized" or empty — first healthy in declaration order.
-		return healthy[0].key, nil
-	}
+	b := s.NewBatch()
+	p := s.PreparePick(b, scope, algo, keys, excluded)
+	b.Exec(ctx)
+	return p.Finish(ctx)
 }
 
 // PickWithExclude is a convenience wrapper around Pick that accepts an explicit
@@ -131,25 +65,21 @@ func (s *Selector) PickWithExclude(ctx context.Context, scope string, algo KeySe
 	return s.Pick(ctx, scope, algo, keys, exclude)
 }
 
-// pickRoundRobin selects a candidate using a modular counter stored in Redis.
+// pickRoundRobin selects a candidate by the rotation counter's INCR result.
 // Incr is atomic on every backend, so the index derives directly from the
 // counter value — no distributed lock, which under contention on the
-// non-blocking Redis lock would collapse rotation to healthy[0].
-func (s *Selector) pickRoundRobin(ctx context.Context, scope string, healthy []candidate) (*hostkey.HostKey, error) {
-	idx, err := s.state.Incr(ctx, roundRobinKey(scope), 1)
-	if err != nil {
-		idx = 1
-	} else {
-		// Refresh 30-day TTL on every increment. Redis reclaims counters for
-		// deleted pools; a counter that expires merely restarts the rotation
-		// at healthy[0], which is harmless.
-		_ = s.state.Expire(ctx, roundRobinKey(scope), ttlRoundRobin)
+// non-blocking Redis lock would collapse rotation to healthy[0]. A failed
+// INCR falls back to healthy[0].
+func pickRoundRobin(rotation *kv.BatchResult, healthy []candidate) *hostkey.HostKey {
+	idx := int64(1)
+	if rotation != nil && rotation.Err == nil {
+		idx = rotation.Int
 	}
 	i := (idx - 1) % int64(len(healthy))
 	if i < 0 { // negative counter (int64 wraparound or external edit)
 		i += int64(len(healthy))
 	}
-	return healthy[i].key, nil
+	return healthy[i].key
 }
 
 // pickLRU selects the healthy candidate with the oldest last-use timestamp
