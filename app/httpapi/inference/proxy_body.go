@@ -2,11 +2,13 @@ package inference
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wyolet/relay/app/proxy"
@@ -21,13 +23,14 @@ const proxyHoldBytes = 32 << 10
 const maxHeldTail = 1 << 10
 
 var (
-	errProxyBodyTooLarge = &bodyError{http.StatusRequestEntityTooLarge, "request_too_large", "request body has no top-level 'model' in its first 32 MiB"}
+	errProxyBodyTooLarge = &bodyError{http.StatusRequestEntityTooLarge, "request_too_large", fmt.Sprintf("request body has no top-level 'model' in its first %d MiB", proxyMaxBodyBuffer>>20)}
 	errTrailingBytes     = jsonSyntaxError("more than %d bytes after the top-level value", maxHeldTail)
+	errForwardStopped    = &bodyError{http.StatusBadGateway, "upstream_error", "the upstream answered before the request body was sent and stopped reading it"}
 )
 
 // scannedBody forwards a proxy request body upstream while a modelScanner checks it. Each chunk read from the client is scanned before it is released, and the bytes from the top-level object's closing brace on are held until the client's body ends, so the upstream receives a complete JSON body only once all of it passed the scan. A rejected body fails the read, which makes the transport abort the upstream request with the body incomplete.
 //
-// Read runs on the transport's goroutine; the fields under mu are what other goroutines read.
+// Read runs on the transport's goroutine; the atomics and the fields under mu are what other goroutines read.
 type scannedBody struct {
 	scan    *modelScanner
 	src     io.Reader
@@ -35,9 +38,12 @@ type scannedBody struct {
 	held    []byte // from the top-level close on, released at the end of the body
 	srcDone bool
 	readErr error
-	total   int64 // bytes read from the client so far
-	whole   bool  // the client's body ended before the forward started
+	whole   bool // the client's body ended before the forward started
 	capture *bodyCapture
+
+	total   atomic.Int64 // bytes read from the client so far
+	drained atomic.Bool  // the client's body was read to its end
+	stopped atomic.Bool  // the handler gave up on the forward: no more reads
 
 	mu       sync.Mutex
 	refusal  *proxy.BodyError
@@ -112,7 +118,8 @@ func scannedWhole(body []byte) (*scannedBody, *bodyError) {
 
 // newScannedBody continues scan over src after prefix, which scan has already been fed; closeAt is what that feed returned.
 func newScannedBody(scan *modelScanner, prefix []byte, closeAt int, src io.Reader) *scannedBody {
-	b := &scannedBody{scan: scan, src: src, pending: prefix, total: int64(len(prefix)), model: scan.model}
+	b := &scannedBody{scan: scan, src: src, pending: prefix, model: scan.model}
+	b.total.Store(int64(len(prefix)))
 	if closeAt >= 0 {
 		b.pending = prefix[:closeAt]
 		b.held = prefix[closeAt:len(prefix):len(prefix)]
@@ -125,7 +132,8 @@ func newScannedBody(scan *modelScanner, prefix []byte, closeAt int, src io.Reade
 
 func (b *scannedBody) markWhole() {
 	b.srcDone, b.whole = true, true
-	b.complete, b.size = true, b.total
+	b.drained.Store(true)
+	b.complete, b.size = true, b.total.Load()
 }
 
 // captureRest tees the part of the body still to come into a payload capture seeded with prefix, the part already held.
@@ -157,10 +165,14 @@ func (b *scannedBody) Read(p []byte) (int, error) {
 		if len(p) == 0 {
 			return 0, nil
 		}
+		if b.stopped.Load() {
+			b.reject(errForwardStopped)
+			continue
+		}
 		n, err := b.src.Read(p)
 		release := n
 		if n > 0 {
-			b.total += int64(n)
+			b.total.Add(int64(n))
 			wasClosed, hadModel := b.scan.state == scanDone, b.scan.modelDone
 			closeAt := b.scan.feed(p[:n])
 			if b.scan.err != nil {
@@ -185,6 +197,7 @@ func (b *scannedBody) Read(p []byte) (int, error) {
 		switch {
 		case err == io.EOF:
 			b.srcDone = true
+			b.drained.Store(true)
 			if ferr := b.scan.finish(); ferr != nil {
 				b.reject(ferr)
 			} else {
@@ -206,7 +219,7 @@ func (b *scannedBody) publish(complete bool) {
 	b.mu.Lock()
 	b.model = b.scan.model
 	if complete {
-		b.complete, b.size = true, b.total
+		b.complete, b.size = true, b.total.Load()
 	}
 	b.mu.Unlock()
 }
@@ -275,9 +288,16 @@ type idleDeadlineBody struct {
 	rc   *http.ResponseController
 	idle time.Duration
 	off  bool // the body ended or failed, or the connection takes no deadline
+	// done is set when the handler returns: the connection may be serving its next request by then, so no deadline may be set on it.
+	done atomic.Bool
 }
 
+var errHandlerReturned = errors.New("request body read after its handler returned")
+
 func (b *idleDeadlineBody) Read(p []byte) (int, error) {
+	if b.done.Load() {
+		return 0, errHandlerReturned
+	}
 	if !b.off && b.rc.SetReadDeadline(time.Now().Add(b.idle)) != nil {
 		b.off = true
 	}

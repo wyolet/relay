@@ -19,6 +19,14 @@ type bodyError struct {
 
 func (e *bodyError) Error() string { return e.msg }
 
+func writeBodyError(w http.ResponseWriter, e *bodyError) {
+	errType := "invalid_request_error"
+	if e.status >= http.StatusInternalServerError {
+		errType = "upstream_error"
+	}
+	writeAPIError(w, e.status, errType, e.code, e.msg)
+}
+
 var (
 	errDuplicateModel   = &bodyError{http.StatusBadRequest, "duplicate_model", "request body has more than one top-level 'model' field"}
 	errMissingModel     = &bodyError{http.StatusBadRequest, "missing_model", "field 'model' is required"}

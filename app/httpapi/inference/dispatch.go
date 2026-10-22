@@ -125,7 +125,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 			var rej *bodyError
 			if reqBody, rej = scannedWhole(in.Body); rej != nil {
 				d.fireUsageFailure(ctx, rej.code, rej.msg)
-				writeAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
+				writeBodyError(w, rej)
 				return
 			}
 		}

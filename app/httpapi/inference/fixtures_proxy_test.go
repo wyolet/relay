@@ -35,11 +35,17 @@ import (
 // proxyStreamDeps wires proxy mode over a catalog with "test-model" on host "anthropic" at upstreamURL, a policy with a generous request limit, and a passthrough key under it. Scripts run on a recording kv.Mem.
 func proxyStreamDeps(tb testing.TB, upstreamURL string) (Deps, *Principal, *kvtest.Recording) {
 	tb.Helper()
+	return proxyStreamDepsLimited(tb, upstreamURL, 1<<40)
+}
+
+// proxyStreamDepsLimited is proxyStreamDeps with the policy allowing perHour requests.
+func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64) (Deps, *Principal, *kvtest.Recording) {
+	tb.Helper()
 	provID, hostID, hkID, modID, polID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
 	sys := meta.Owner{Kind: meta.OwnerSystem}
 	rl := &ratelimit.RateLimit{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "stream-limit", Owner: sys},
-		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 1 << 40, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow}}},
+		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: perHour, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow}}},
 	}
 	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: sys}, Spec: key.Spec{PolicyID: polID, KeyHash: "streamhash", PassthroughAllowed: true}}
 	cat := catalogtest.Catalog{
