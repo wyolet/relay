@@ -76,6 +76,14 @@ func TestRedisPostFlightDefaults(t *testing.T) {
 	}
 }
 
+// A post-flight command waits at most pool + write + read and one dial; on the defaults that fits the 5 s deadline a served request's post-flight runs under, which also keeps a commit's repeats well inside the limiter's idempotency guard.
+func TestRedisPostFlightCommandFitsPostFlightDeadline(t *testing.T) {
+	command := DefaultRedisPostFlightPoolTimeout + kv.DefaultWriteTimeout + DefaultRedisPostFlightReadTimeout + kv.DefaultDialTimeout
+	if command > 5*time.Second {
+		t.Fatalf("post-flight command bound = %s, over the 5s post-flight deadline", command)
+	}
+}
+
 func TestRedisPostFlightFromEnv(t *testing.T) {
 	t.Setenv("RELAY_REDIS_POSTFLIGHT_POOL_SIZE", "4")
 	t.Setenv("RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS", "1500")
