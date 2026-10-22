@@ -392,13 +392,18 @@ test-race: ## unit tests under -race (all modules)
 	cd secret && $(GO_TEST) -race ./...
 
 # One target at a time: `go test -fuzz` fuzzes a single function per run. Only
-# the parsers of untrusted bearers and of stored ciphertext are fuzzed; every
-# fuzz target's seeds and testdata/fuzz corpus also run as ordinary tests.
+# the parsers of untrusted bearers, of request bodies' model and of stored
+# ciphertext, and the stream summary filters run on upstream bytes, are fuzzed;
+# every fuzz target's seeds and testdata/fuzz corpus also run as ordinary tests.
 FUZZ_TIME ?= 10s
-test-fuzz: ## fuzz the token parser, the bearer-to-principal resolver and the sealed-value opener ($(FUZZ_TIME) each)
+test-fuzz: ## fuzz the token parser, the bearer-to-principal resolver, the request model scanner, the sealed-value opener, the stream summary filters and the narrow summary decoders ($(FUZZ_TIME) each)
 	cd auth && $(GO_TEST) -run '^$$' -fuzz '^FuzzParse$$' -fuzztime $(FUZZ_TIME) ./token
 	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
+	$(GO_TEST) -run '^$$' -fuzz '^FuzzModelScanner$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
+	$(GO_TEST) -run '^$$' -fuzz '^FuzzModelScanner_ValidObjects$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 	cd secret && $(GO_TEST) -run '^$$' -fuzz '^FuzzOpen$$' -fuzztime $(FUZZ_TIME) ./aead
+	cd sdk && $(GO_TEST) -run '^$$' -fuzz '^FuzzSummaryFilter$$' -fuzztime $(FUZZ_TIME) ./adapters
+	cd sdk && $(GO_TEST) -run '^$$' -fuzz '^FuzzSummaryDecode$$' -fuzztime $(FUZZ_TIME) ./adapters
 
 test-equivalence: ## exhaustive authz equivalence checks (skipped under -race)
 	$(GO_TEST) -count=1 -run 'TestEquivalence(WithLegacyEvaluator|OverGeneratedWorlds)$$' ./app/authz

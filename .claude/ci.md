@@ -20,7 +20,7 @@ Two workflows, so a run lists only the jobs its tier has: `.github/workflows/ci-
 | Event | Runs |
 |---|---|
 | PR into `dev` (or any branch other than `main`) | one `dev` job: gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
-| … that touches `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
+| … that touches `migrations/`, `internal/storage/`, `pkg/kv/` or a kv consumer with Valkey tests, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
 | … that touches `chart/` or `versions.env` | the above, plus `helm lint` or the boot smoke |
 | PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
 | weekly schedule on `main` | the security scans |
@@ -39,7 +39,17 @@ Locally, `make check` runs gofmt, the codebase-rule checks, golangci-lint, the u
 
 ## Full run on `dev`
 
-Every three hours `.github/workflows/full.yml` starts the full CI on `dev`'s HEAD, unless that commit already had a full run (green or red). A green run moves the `ci-full-passed` tag to it and fast-forwards `release/next` there (see [Releasing](#releasing)).
+Every three hours `.github/workflows/full.yml` starts the full CI on `dev`'s HEAD, unless that commit already had a full run (green or red). A green run moves the `ci-full-passed` tag to it and fast-forwards `release/next` there (see [Releasing](#releasing)). Both depend on the [CI app](#ci-app): the scheduled run is recorded only when it was dispatched with the app's token.
+
+### CI app
+
+GitHub fires no `workflow_run` event for a run started with a workflow's `GITHUB_TOKEN`, and starts no workflows for a pull request opened or pushed with it. So the actions whose follow-ups matter use an installation token of a GitHub App (Actions, Contents, Pull requests and Issues read and write, installed on this repository only), minted per job with only the permissions that job needs:
+
+- `full.yml` dispatches `ci.yml` with it, so the finished run triggers `full.yml`'s `record` job.
+- `scripts/release-pr.sh` moves `release/next` and creates or edits the release PR with it, so the PR's checks report without a manual "approve and run".
+- the fixer's `gh` calls use it, so a fix PR gets `ci-dev.yml`'s checks on its own.
+
+The `ci-full-passed` tag, the `fix-dev.yml` dispatch and the fixer's `git push` keep the workflow token: a dispatch starts its run with either token, and nothing reacts to the tag, the fixer's run finishing, or the push. Configuration: the `RELAY_CI_APP_ID` variable (the app's ID or client ID) and the `RELAY_CI_APP_KEY` secret (its private key). Without them every step falls back to the workflow token with a warning, and none of the follow-ups above fire.
 
 To run the full tier now, on any branch:
 
@@ -61,10 +71,10 @@ A fix must not loosen a test to make it pass. If a test changes, the PR says why
 
 A red full run on `dev` also starts `.github/workflows/fix-dev.yml`, once per failing commit. Claude, reached through relay, reproduces the failure with the failing test only, bisects the range, and takes exactly one outcome:
 
-- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. Before pushing it reruns the failing test or check and builds and vets the packages it touched; the full suite is left to the PR's CI. A PR opened with the workflow token starts no CI, so the fixer dispatches both workflows on its branch: `ci.yml` tests the fix, and `ci-dev.yml`, with every part on, reports the checks `dev` requires. `ci-dev.yml` is dispatched by id, since a workflow not yet on `main` can't be dispatched by name.
+- a small fix or a `git revert` of the culprit, as a PR into `dev` labelled `dev-fix` that names the culprit and the root cause. Before pushing it reruns the failing test or check and builds and vets the packages it touched; the full suite is left to the PR's CI. The PR is opened with the [CI app](#ci-app)'s token, so `ci-dev.yml` runs on it; as a fallback for when the app isn't configured, the fixer also dispatches both workflows on its branch: `ci.yml` tests the fix, and `ci-dev.yml`, with every part on, reports the checks `dev` requires. `ci-dev.yml` is dispatched by id, since a workflow not yet on `main` can't be dispatched by name.
 - an issue labelled `needs-decision` with the failure, the culprit, the root cause and the options, when the fix isn't small or needs a design decision. Nothing else.
 
-It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its token has contents, pull-request and issue write only: no `actions` and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`.
+It never merges. A failure on a commit that came from a `dev-fix` PR is not retried; the guard opens a `needs-decision` issue for a human instead. A run is skipped when `fix/dev-<sha>`, an open `dev-fix` PR or an open `needs-decision` issue already names the commit. Its tokens have contents, pull-request and issue write and at most `actions` read: no `actions` write and no `workflows` permission, so it can neither start runs nor change `.github/workflows/`.
 
 Claude Code runs as a plain `claude -p --bare` at a pinned version (`CLAUDE_CODE_VERSION` in the workflow): only the Bash, Read and Edit tools, no MCP servers, hooks or plugins, no settings or `CLAUDE.md` picked up from the checked-out branch, and one model for every call. Bash is unrestricted, since the job runs on a throwaway GitHub-hosted runner and the token's scope is the boundary; the few denies (merging, starting workflows, force pushes, edits under `.github/` and `.claude/`) encode policy. Limits: 30 minutes, 80 turns, $5 per run, 16000 output tokens per request. With `CI_POOL=cluster` the fix job runs on the `relay-ci-integration` pool: Postgres, Valkey and ClickHouse come from the pod's sidecars, Node and `gh` are installed by the job, and the CI egress proxy allows the relay host in `DEV_FIXER_BASE_URL`.
 

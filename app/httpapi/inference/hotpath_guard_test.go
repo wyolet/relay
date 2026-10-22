@@ -60,6 +60,9 @@ type countingStore struct {
 	mu      sync.Mutex
 	scripts []string
 	ops     int
+
+	// reserveErr, when set, fails every limit.reserve call with it.
+	reserveErr error
 }
 
 func newCountingStore(t testing.TB) *countingStore {
@@ -81,6 +84,9 @@ func (c *countingStore) record(name string) {
 
 func (c *countingStore) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	c.record(name)
+	if c.reserveErr != nil && name == "limit.reserve" {
+		return nil, c.reserveErr
+	}
 	return c.Mem.RunScript(ctx, name, script, keys, args...)
 }
 
@@ -114,6 +120,11 @@ func (c *countingStore) Incr(ctx context.Context, k string, delta int64) (int64,
 func (c *countingStore) Expire(ctx context.Context, k string, ttl time.Duration) error {
 	c.record("")
 	return c.Mem.Expire(ctx, k, ttl)
+}
+
+func (c *countingStore) ExpireNX(ctx context.Context, k string, ttl time.Duration) (bool, error) {
+	c.record("")
+	return c.Mem.ExpireNX(ctx, k, ttl)
 }
 
 func (c *countingStore) Range(ctx context.Context, prefix string) ([]kv.Entry, error) {
@@ -208,17 +219,37 @@ type hotPathFixture struct {
 	upstreamCalls         atomic.Int64
 
 	postFlight chan struct{}
+	errorKind  atomic.Value // string: the last post-flight event's ErrorKind
+	settled    settledSignal
 	armed      *atomic.Bool
 	mint       func(testing.TB, func(*crypto.TokenClaims)) string
 }
+
+// settledSignal is the pipeline's host-health recorder: Reachable is post-flight's last step, after the kv settle.
+type settledSignal chan struct{}
+
+func (s settledSignal) Reachable(context.Context, string) {
+	select {
+	case s <- struct{}{}:
+	default:
+	}
+}
+
+func (settledSignal) Unreachable(context.Context, string, string) {}
 
 // newHotPathFixture wires the catalog, the policy service and a live
 // upstream. metered says whether the inbound policy carries a rate-limit
 // rule; without one a key request has nothing to reserve.
 func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
 	t.Helper()
+	return newHotPathFixtureOn(t, metered, nil)
+}
 
-	fx := &hotPathFixture{postFlight: make(chan struct{}, 8), armed: &atomic.Bool{}}
+// newHotPathFixtureOn meters on metering instead of the counting Mem when it is non-nil.
+func newHotPathFixtureOn(t testing.TB, metered bool, metering kv.Store) *hotPathFixture {
+	t.Helper()
+
+	fx := &hotPathFixture{postFlight: make(chan struct{}, 8), settled: make(settledSignal, 8), armed: &atomic.Bool{}}
 	fx.store = newCountingStore(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -325,14 +356,18 @@ func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
 	fx.cat, fx.team, fx.project, fx.sa, fx.user, fx.keyRow = cat, tm, proj, sa, user, keyRow
 	fx.tokens, fx.mint = hotPathTokens(t, proj.Meta.ID, user)
 
+	if metering == nil {
+		metering = fx.store
+	}
 	svc := policy.NewService(
 		hotPathSnapReader{cat: cat},
-		keypool.New(fx.store, quietLogger(), nil, nil),
-		pkgratelimit.New(fx.store, quietLogger(), nil),
+		keypool.New(metering, quietLogger(), nil, nil),
+		pkgratelimit.New(metering, quietLogger(), nil),
 	)
 
 	reg := lifecycle.New()
-	reg.RegisterHook(lifecycle.HookFunc{HookName: "hotpath-guard", Fn: func(*lifecycle.Context, *lifecycle.PostFlightEvent) (any, error) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "hotpath-guard", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+		fx.errorKind.Store(ev.ErrorKind)
 		select {
 		case fx.postFlight <- struct{}{}:
 		default:
@@ -344,7 +379,7 @@ func newHotPathFixture(t testing.TB, metered bool) *hotPathFixture {
 		Catalog:   cat,
 		Tokens:    fx.tokens,
 		Resolver:  routing.New(cat),
-		Pipeline:  &pipeline.Pipeline{Policy: svc, Lifecycle: reg},
+		Pipeline:  &pipeline.Pipeline{Policy: svc, Lifecycle: reg, HostHealth: fx.settled},
 		Lifecycle: reg,
 		Specs:     hotPathRegistry(),
 	}
@@ -402,27 +437,18 @@ func (f *hotPathFixture) do(t testing.TB, bearer string) *httptest.ResponseRecor
 	return w
 }
 
-// waitPostFlight blocks until the detached post-flight goroutine is done.
-// Its last kv call is the key pool's success record, which lands after the
-// rate-limit commit — so once that is visible the metering count is final.
+// waitPostFlight blocks until the detached post-flight goroutine is done: host reachability is recorded after the rate-limit settle, so once it fires the metering count is final.
 func (f *hotPathFixture) waitPostFlight(t testing.TB) {
 	t.Helper()
-	select {
-	case <-f.postFlight:
-	case <-time.After(5 * time.Second):
-		t.Fatal("post-flight never fired")
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		for _, name := range f.store.scriptNames() {
-			if strings.HasPrefix(name, "keypool.") {
-				return
-			}
+	for _, step := range []struct {
+		name string
+		ch   <-chan struct{}
+	}{{"observers", f.postFlight}, {"settle", f.settled}} {
+		select {
+		case <-step.ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("post-flight never reached its %s", step.name)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("post-flight never reached its last kv call: %v", f.store.scriptNames())
-		}
-		time.Sleep(2 * time.Millisecond)
 	}
 }
 
@@ -469,8 +495,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // --- the guards ----------------------------------------------------------
 
-// TestKeyRequestCostsOneScript pins the metering budget for a key: one
-// Reserve on the way in, one Commit in post-flight, and no store read at all.
+// TestKeyRequestCostsOneScript pins the metering budget for a key: one Reserve on the way in and no store read at all. The fixture's rule meters requests only, which the Reserve settles, so post-flight commits nothing.
 func TestKeyRequestCostsOneScript(t *testing.T) {
 	f := newHotPathFixture(t, true)
 	f.arm()
@@ -483,8 +508,8 @@ func TestKeyRequestCostsOneScript(t *testing.T) {
 		t.Fatalf("request path ran %d metering scripts, want exactly 1 (%v)", got, f.store.scriptNames())
 	}
 	f.waitPostFlight(t)
-	if got := f.store.meteringScripts(); got != 2 {
-		t.Fatalf("reserve + commit = %d scripts, want 2 (%v)", got, f.store.scriptNames())
+	if got := f.store.meteringScripts(); got != 1 {
+		t.Fatalf("request ran %d metering scripts, want the reserve alone (%v)", got, f.store.scriptNames())
 	}
 }
 
@@ -502,8 +527,8 @@ func TestTokenRequestCostsOneScript(t *testing.T) {
 		t.Fatalf("request path ran %d metering scripts, want exactly 1 (%v)", got, f.store.scriptNames())
 	}
 	f.waitPostFlight(t)
-	if got := f.store.meteringScripts(); got != 2 {
-		t.Fatalf("reserve + commit = %d scripts, want 2 (%v)", got, f.store.scriptNames())
+	if got := f.store.meteringScripts(); got != 1 {
+		t.Fatalf("request ran %d metering scripts, want the reserve alone (%v)", got, f.store.scriptNames())
 	}
 }
 

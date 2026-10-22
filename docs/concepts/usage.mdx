@@ -1,0 +1,213 @@
+---
+title: "Usage tracking"
+description: "What Relay records for every request, how cost is computed, where events are stored, and how to query them"
+---
+
+Relay records one usage event for every inference request, with no opt-in. The event carries who made the request, how it was routed, what happened, the token counts the provider reported and the cost. It is written after the response, in the background, so recording never delays a response. Request and response bodies are not part of the event; capturing them is [payload logging](/concepts/payload-logging).
+
+Events wait in a bounded in-memory queue for the store (`RELAY_USAGE_QUEUE_SIZE`, 16,384 by default). When the queue is full, new events are dropped and counted in `relay_records_lost_total{kind="usage"}`; `relay_emit_queue_depth{kind="usage"}` shows the queue filling before that happens. See [Metrics](/reference/metrics#health-and-saturation).
+
+## What an event records
+
+| Field | Meaning |
+| --- | --- |
+| `request_id` | Relay's request id, also returned as `X-Relay-Request-ID`. A caller's own `X-Request-ID` is kept in `extras.client_request_id`. |
+| `source` | The runner that handled the request: `pipeline` (normal mode), `proxy` ([proxy mode](/concepts/proxy-mode)), `ws` (WebSocket frame), `batch`, `count` (a count-tokens request) or `otlp` ([reported usage](/concepts/otlp-receiver)). |
+| `ts`, `duration_ms` | Request start, and total time until the response body closed. |
+| `status`, `error_kind`, `error_message` | The provider's HTTP status, or `0` when no provider answered. See [Failed requests](#failed-requests). |
+| `streamed`, `finish_reason`, `attempts` | Whether the response streamed, why generation stopped (`stop`, `length`, `tool_calls`, `content_filter`, `refusal`, `other`), and how many upstream tries the request took. |
+| `upstream` | `start`, `response_start`, `response_end`: microseconds from request start to the upstream handoff, the first response byte, and the end of the upstream response. Absent when the request never reached a provider. |
+| `reasoning` | `start`, `end`: microseconds from request start to the first and last reasoning frame, on streams that carried reasoning. |
+| `model`, `model_id`, `requested_model`, `provider` | The catalog model the request resolved to, its provider, and the model string as the caller sent it. |
+| `host`, `host_id`, `host_key_id` | The host that served it, and a hash of the host key's value (not the host key's id), so a rotated key appears as a new value. It names the key the request last tried, also on failed and streamed requests. |
+| `policy`, `policy_id` | The [policy](/concepts/policies) that governed the request. |
+| `project`, `team`, `principal` and their `_id` fields, `principal_kind` | Who made the request. `principal` is empty for a user; the read API labels users by username. |
+| `credential_kind`, `credential_id`, `relay_key`, `relay_key_hash` | The credential that authenticated: a relay key (its slug and the SHA-256 of its value) or an inference token. |
+| `tokens` | Token counts the provider reported. See [Token counts and cost](#token-counts-and-cost). |
+| `cost_nanos`, `cost_breakdown`, `pricing` | Cost in nano-USD (1 USD = 10⁹), the charge per meter, and the rate sheet used. |
+| `extras` | Values Relay adds: `instance` (`RELAY_INSTANCE_ID`), `client_ip`, `client_request_id`, `client` (the client profile, such as `claude-code` or `codex`), `session_id`, `resolved_via` (`alias:<name>` when a model alias matched), `service_tier`, and the attribution headers a client profile records. |
+| `tags` | The caller's own tags from the `X-WR-Request-Tags` header. |
+
+Slugs (`model`, `host`, `policy`, `project`, `relay_key`, …) are copied as of the request, so an event stays readable after the entity is renamed or deleted; the `_id` fields are the stable keys.
+
+### Request tags
+
+A caller attaches its own dimensions with `X-WR-Request-Tags`, a flat JSON object of string values: at most 16 keys, keys up to 64 characters, values up to 256, and 2,048 bytes in total. A header that breaks any of these rules is dropped whole and never fails the request. The header is not forwarded upstream.
+
+```bash
+curl http://localhost:8080/openai/v1/chat/completions \
+  -H "Authorization: Bearer $RELAY_KEY" \
+  -H 'X-WR-Request-Tags: {"feature":"summarize","customer":"acme"}' \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+Filter with `tag=feature:summarize` and group with `group_by=tags.feature`.
+
+## Reading usage
+
+The control API serves the events and aggregates over them. All paths are on the control listener under `/api`.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/usage/events` | Raw events, newest first. `limit` (default 100, max 10,000) and `cursor` (the previous page's `next_cursor`) page through them. |
+| `GET /api/usage/summary` | One row per group with request and error counts, token sums, cost, and `duration_ms` / `ttft_ms` percentiles. |
+| `GET /api/usage/timeseries` | The same aggregates per time bucket. `interval` (`5m`, `1h`, `1d`, …) is required; buckets are epoch-aligned, empty buckets are omitted, and a query that would produce more than 5,000 buckets is rejected with `400`. |
+| `GET /api/usage/facets` | The values a filter can take, for dropdowns. See [Filter values](#filter-values). |
+| `GET /api/logs` | The request log: full events, newest first, with the same filters and paging. `count=true` adds `total` (capped at 10,000) and `total_capped`. |
+| `GET /api/logs/{request_id}` | One event, with its captured bodies when [payload logging](/concepts/payload-logging#reading-captured-payloads) recorded them. |
+
+A caller whose role grants `usage.read` (or `logs.read`) at the global scope reads every event. Under `RELAY_AUTHZ=rbac`, anyone else reads only the events of projects they can see, plus their own requests. A request id outside that set answers `404`.
+
+### Filters
+
+Every endpoint above takes these query parameters. List parameters are repeatable and match any of their values.
+
+| Parameter | Matches |
+| --- | --- |
+| `since` (default `1h`), `from`, `to` | The window: a relative duration, or RFC3339 bounds. `from` overrides `since`. |
+| `model_id`, `host_id`, `policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`, `relay_key_hash` | Ids. |
+| `model`, `host`, `policy`, `provider`, `relay_key`, `requested_model` | Slugs as recorded on the event, or the requested model string. |
+| `source`, `finish_reason`, `error_kind` | The field's values. |
+| `status`, `status_min`, `status_max`, `status_class` | Exact statuses, a range, or a band (`2xx`, `4xx`, `5xx`). |
+| `streamed`, `error` | `true` or `false`. `error=true` matches a status of 400 or above, or any `error_kind`. |
+| `attempts_min`, `duration_ms_min`, `duration_ms_max`, `ttft_ms_min`, `ttft_ms_max` | Retried and slow requests. The TTFT filters skip events with no upstream timing. |
+| `tag` | `key:value`. The same key repeated matches any of its values; different keys must all match. |
+| `q` | Substring of `request_id`, `model_id`, `requested_model` or `source`. |
+| `request_id` | One event. |
+
+### Grouping
+
+`summary` and `timeseries` take `group_by`:
+
+- `source` (the `summary` default), `finish_reason`, `error_kind`
+- slugs as recorded: `model`, `host`, `policy`, `provider`, `project`, `team`, `principal`, `relay_key`
+- ids: `model_id`, `host_id`, `policy_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`
+- `tags.<key>` (a caller tag) or `extras.<key>` (a Relay-added value such as `extras.instance`)
+- `none`: one row over everything the filters match, with `group` set to `{}`
+
+Without `group_by`, `timeseries` returns a single series. Per-project spend over a week is one call:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=project&since=7d"
+```
+
+With an id `group_by`, the response carries `labels`, a map from each group value to a readable name: the latest non-empty slug recorded beside that id in the window, else the entity's name in the current catalog, else, for a user, the username. A `credential_id` is named after its relay key; inference tokens have no name. In `timeseries` the name is the latest across the whole window. Values without a name are left out.
+
+```json
+{
+  "rows": [
+    {"group": {"model_id": "0199…"}, "requests": 412, "...": "..."},
+    {"group": {"model_id": "0198…"}, "requests": 97, "...": "..."}
+  ],
+  "labels": {"0199…": "claude-sonnet-4-5", "0198…": "gpt-5"},
+  "from": "2026-10-17T09:00:00Z",
+  "to": "2026-10-18T09:00:00Z"
+}
+```
+
+### Comparing windows
+
+`summary` can put each row next to the same group over another window.
+
+| Parameter | Effect |
+| --- | --- |
+| `compare=previous` | Compares with the window of equal length just before the requested one. The requested window is resolved once (`since` counts back from the time of the request; an open `to` becomes that time), and the previous window ends at its start, exclusive. |
+| `compare_from`, `compare_to` | Compares with a window you choose (RFC3339, `compare_to` exclusive). Give both or neither; `compare_to` must be after `compare_from`. The window may differ in length and may overlap the requested one, and an event in both counts in both. |
+
+The two forms cannot be combined. Each row gains `previous` with `requests`, `error_count`, `errors_4xx`, `errors_5xx`, `throttled`, `tokens`, `cost_nanos`, `unpriced`, `duration_ms` and `ttft_ms`, and the response gains `previous_from` and `previous_to`. Rows stay those of the requested window: a group with no traffic in the compared window has no `previous`, and a group seen only there has no row. A window with no start (`since=0s` and no `from`) or a start after its end is rejected with `400`, as are the parameter mistakes above.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=model&since=7d&compare=previous"
+```
+
+### Distinct counts
+
+`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=none&distinct=relay_key_hash&since=24h"
+```
+
+### Filter values
+
+`GET /api/usage/facets` lists the values a filter can take. `dims` names up to 16 dimensions from the `group_by` vocabulary (`none` excluded), repeated or comma-separated; `limit` caps the values per dimension (default 50, max 200). Each dimension is counted with every filter applied except its own, so `model_id` values honour `host_id=` but ignore `model_id=`, and a dropdown keeps showing the alternatives to what is selected. Values are ordered by request count, then by value, and the empty value is listed like any other. Requests rejected before reaching a provider are left out, as in summaries.
+
+An id value carries a `label`, resolved as for [`labels`](#grouping). `from` and `to` echo the requested window.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/facets?dims=model_id,host_id&host_id=<id>&since=24h"
+```
+
+```json
+{
+  "facets": {
+    "model_id": [
+      {"value": "0199…", "label": "claude-sonnet-4-5", "requests": 412},
+      {"value": "0198…", "label": "gpt-5", "requests": 97}
+    ],
+    "host_id": [
+      {"value": "0197…", "label": "anthropic", "requests": 509},
+      {"value": "0196…", "label": "openrouter", "requests": 33}
+    ]
+  },
+  "from": "2026-10-17T09:00:00Z",
+  "to": "2026-10-18T09:00:00Z"
+}
+```
+
+## Failed requests
+
+`error_count` in summaries and time series counts events with a status of 400 or above, split into `errors_4xx` and `errors_5xx`. `throttled` counts the 429s, which are also in `errors_4xx`.
+
+A request Relay refused before calling a provider has status `0` and an `error_kind` naming why: `rate_limited`, `no_keys`, `keys_exhausted`, `model_not_found`, `model_not_allowed`, `no_host_binding`, and so on. It is listed by `/api/usage/events` and `/api/logs` and left out of `summary`, `timeseries` and `facets`, since it carries no usage.
+
+When the provider answered with an error status, the event has that status and `error_kind` `upstream_error`, whether Relay passed the response to the caller or returned it after every key failed. That includes a 4xx the request itself caused, such as an invalid parameter or a prompt over the context window; `status` tells them apart. `error_message` is `upstream returned <status>`, or, when every key failed, the start of the provider's error body. Only [payload logging](/concepts/payload-logging) keeps the full body. Other provider-side kinds are `upstream_unreachable` (no connection to the host), `timeout` and `client_canceled`. In proxy mode a request that failed before the provider answered (a refused connection, a TLS error) is recorded as `upstream_error` with status `0`.
+
+## Token counts and cost
+
+Token counts come from the provider's response; Relay does not tokenize. `tokens` uses the same keys for every provider:
+
+- `input`: prompt tokens not read from or written to a prompt cache. `cache_read` and `cache_creation` count those separately.
+- `output`: every generated token, reasoning included.
+- Some keys are parts of another key, not additions to it: `reasoning`, `audio_output`, `accepted_prediction` and `rejected_prediction` are inside `output`; `audio_input` is inside `input`; `cache_creation_1h` (prompt tokens written to a 1-hour cache, which Anthropic bills at a higher rate than its 5-minute writes) is inside `cache_creation`.
+
+A request's total is `input + cache_read + cache_creation + output`.
+
+`cost_nanos` is computed once, when the event is recorded, from the rate sheet of the host binding that served the request. Changing a rate sheet does not reprice past events. When no rate sheet applies (the binding has none, it is disabled, or no reported token matches a priced meter), the event is unpriced: `cost_nanos` is absent, which is not a cost of zero. Summaries count such events in `unpriced`, so a total cost next to a non-zero `unpriced` is a lower bound.
+
+Each token is charged once. A part whose meter has a rate on the sheet is charged at that rate and left out of its whole's charge; a part without a rate is charged inside its whole. With an output rate of 1.2 and a reasoning rate of 4 (USD per million), a response with `output: 3000` and `reasoning: 2500` charges 500 tokens on `tokens.output` and 2,500 on `tokens.reasoning`. `cost_breakdown` lists the charge per meter, which for `tokens.input` and `tokens.output` can therefore be less than the rate times the stored count.
+
+The context-length tier is chosen by the prompt length, `input + cache_read + cache_creation`: a request whose prompt reaches a rate's `aboveTokens` pays that tier's rate on every meter, even when most of the prompt is a cache hit.
+
+When the provider reports the service tier that served the request (OpenAI's `service_tier`, such as `priority` or `flex`), the event records it as `extras.service_tier` and is priced with the rate-sheet rows whose `serviceTier` matches. A meter with no row for the tier is charged at its base rate, so a tier lists only the meters it prices differently. A tier row that applies at the prompt length wins over every base row for that meter, so a tier with context-length pricing needs its own `aboveTokens` rows.
+
+Cost is a record of what the request would cost at the sheet's rates. Relay does not cap spend on it.
+
+## Where usage is stored
+
+The `usage-logging` settings section selects the store. A change applies without a restart; switching backends starts writing to the new store and does not move existing events.
+
+| Backend | Use | Connection |
+| --- | --- | --- |
+| `file` (default) | JSONL on local disk, for a single node and trying Relay out. Never rotated or pruned, and each pod reads only its own file. | Path from `file.path`, else `RELAY_USAGE_LOG` (default `relay-usage.jsonl`). |
+| `clickhouse` | High-volume history shared by every pod, with fast aggregates. Events are buffered in a local write-ahead log before they are sent. | `RELAY_CH_DSN`. WAL directory from `clickhouse.walDir`, else `RELAY_EVENTLOG_DIR` (default `relay-usage-wal`). |
+| `postgres` | History in the Postgres database Relay already uses, shared by every pod. | `RELAY_PG_DSN`. |
+| `valkey` | The last 24 hours, in the state store. | The state store: shared across pods with `RELAY_STATE_BACKEND=redis`; with the default `memory` backend, per process and lost on restart. |
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/usage-logging \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"backend": "clickhouse", "retentionDays": 90, "file": {}, "clickhouse": {}}'
+```
+
+The write replaces the whole section; `backend`, `retentionDays`, `file` and `clickhouse` are required. When the section names no backend, `RELAY_EVENTLOG_BACKEND` decides, then `file`. Only an admin may change this section. Connection strings stay in the environment because Relay needs them before it can read settings. For a deployment with more than one pod, use `clickhouse` or `postgres`, so every pod reads the same history. See [Settings](/reference/settings) for the section format.
+
+### Retention
+
+`retentionDays` sets how long the `clickhouse` and `postgres` backends keep events; `0` (the default) keeps them forever. On ClickHouse the value becomes the table's TTL and is applied to the existing table whenever the section changes, so shortening it deletes older events in the background, and they cannot be recovered. Postgres deletes expired rows once a day. The `file` backend keeps everything, and `valkey` keeps 24 hours.

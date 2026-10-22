@@ -3,18 +3,13 @@ title: "Audit Log"
 description: "Who changed what on the control plane, and what is deliberately never recorded"
 ---
 
-Relay keeps an append-only record of administrative activity: every change
-made through the control API, every request that was refused, and every
-login. It answers "who changed this, when, and from where" without you
-wiring up an external tool.
+Relay keeps an append-only record of administrative activity: every change made through the control API, every request that was refused, and every login. It answers "who changed this, when, and from where" without an external tool.
 
-The data plane is not audited here — `/v1/*` traffic is already covered by
-[usage and logging](/concepts/observability).
+Inference traffic is not audited here; every inference request already produces a [usage event](/concepts/usage).
 
 ## What is recorded
 
-One row per HTTP request against the control API, and only when the request
-is worth a row:
+One row per HTTP request against the control API, when the request earns one:
 
 | Situation | Recorded |
 | --- | --- |
@@ -23,24 +18,15 @@ is worth a row:
 | Login (successful or failed) and logout | Yes |
 | A read that succeeded | No |
 
-Each row carries the actor (user id and name, session id, client IP — or
-`anonymous` with the attempted username for a failed login), the action, the
-target resource with its owner and project/team scope, the outcome
-(allow/deny plus the HTTP status), and the request's method, path and id.
+Each row carries the actor (user id and name, session id, client IP, or `anonymous` with the attempted username for a failed login), the action, the target resource with its owner and project or team scope, the outcome (`allowed`, `denied` or `error`, plus the HTTP status), and the request's method, path and id. An apply records one row per change it made.
 
-The `relay secret` commands, which change the [secret key ring](/concepts/secret-keys) directly in Postgres, write their rows too: the actor kind is `cli`, its name the operating-system user, the status the one the control API would have answered, and the path the command (`relay secret rotate`). They write synchronously and fail the command when the write fails.
+The `relay secret` commands, which change the [secret key ring](/concepts/secret-keys) directly in Postgres, write rows too: the actor kind is `cli`, its name the operating-system user, the status the one the control API would have answered, and the path the command (`relay secret rotate`). They write synchronously and fail the command when the write fails. Writes made by a [SCIM](/concepts/scim) client carry the actor kind `scim-client` and the client's name.
 
 ## What is never recorded
 
-Values. A write records only the **JSON paths** it touched — for example
-`metadata.displayName` and `spec.enabled` — never the before or after
-content of those fields. Creates and deletes record `*` rather than
-enumerate a whole row.
+Values. A write records only the JSON paths it touched, such as `metadata.displayName` and `spec.enabled`, never the content of those fields before or after. Creates and deletes record `*` rather than list every field.
 
-Paths that name a credential are dropped entirely, not just emptied:
-`value`, `keyHash`, `previousKeyHash`, `password`, `passwordHash`, `token`
-and `secret`. A rotation is therefore visible as an event, but the audit log
-never becomes a map of where credentials live.
+Paths that name a credential are dropped entirely: `value`, `keyHash`, `previousKeyHash`, `password`, `passwordHash`, `token` and `secret`. A rotation is visible as an event, but the audit log never becomes a map of where credentials live.
 
 ## Reading it back
 
@@ -49,21 +35,23 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/audit?resource_kind=policy&status=denied&limit=50"
 ```
 
-Filter by `actor_id`, `actor_name`, `action`, `resource_kind`,
-`resource_id`, `scope` (`project:<id>` or `team:<id>`), `status`, and a
-`from`/`to` time window. Results are newest-first; page with the
-`next_cursor` a response returns, passed back as `cursor`.
+| Parameter | Matches |
+| --- | --- |
+| `actor_id`, `actor_name` | The acting user |
+| `action` | Any of the given actions, such as `policies.update` (repeat the parameter for more than one) |
+| `resource_kind` | Any of the given kinds, in the singular form (`policy`, `host-key`) |
+| `resource_id` | One resource |
+| `scope` | Any of the given scopes, `project:<id>` or `team:<id>` |
+| `status` | `allowed`, `denied` or `error` |
+| `from`, `to` | An RFC 3339 time window |
+| `limit` | Page size; default 100, maximum 10,000 |
+| `cursor` | The `next_cursor` of the previous response |
 
-Reading the audit log needs a grant on `audit`: an administrator has it,
-and so does the built-in `auditor` role.
+Results are newest first. Reading the audit log needs `read` on `audit`: an admin has it, and so does the built-in `auditor` role.
 
 ## Retention
 
-The `audit` settings section holds `retentionDays` (default `365`). Rows
-older than the window are removed by an hourly pass; changing the setting
-takes effect on the next pass, without a restart. Set it to `0` to keep rows
-forever — appropriate when you archive the `audit_events` table yourself.
-Only an admin may change this section.
+The `audit` settings section holds `retentionDays` (default `365`). Rows older than the window are removed by an hourly pass; a change takes effect on the next pass, without a restart. Set it to `0` to keep rows forever, for example when you archive the `audit_events` table yourself. Only an admin may change this section.
 
 ```bash
 curl -X PUT -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
@@ -74,8 +62,4 @@ curl -X PUT -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ## Delivery guarantees
 
-Audit writes are asynchronous and bounded, like every other background
-emit: an admin request never waits on the audit store, and a sustained
-write stall drops events rather than blocking the control plane. Drops are
-counted at `relay_audit_dropped_total` — alert on it if the audit trail has
-to be complete for you.
+Audit writes from the control API are asynchronous and bounded: an admin request never waits on the audit store. When the queue is full, or a batch write fails twice, the rows are dropped rather than blocking the control plane. Drops are counted in `relay_audit_dropped_total`; alert on it if you need a complete audit trail.

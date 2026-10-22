@@ -27,6 +27,30 @@ data:
   {{- with .Values.relay.redisMinIdleConns }}
   RELAY_REDIS_MIN_IDLE_CONNS: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.redisDialTimeoutMs }}
+  RELAY_REDIS_DIAL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisReadTimeoutMs }}
+  RELAY_REDIS_READ_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisWriteTimeoutMs }}
+  RELAY_REDIS_WRITE_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPoolTimeoutMs }}
+  RELAY_REDIS_POOL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisMaxRetries }}
+  RELAY_REDIS_MAX_RETRIES: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightPoolSize }}
+  RELAY_REDIS_POSTFLIGHT_POOL_SIZE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightPoolTimeoutMs }}
+  RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightReadTimeoutMs }}
+  RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
   RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
   RELAY_COOKIE_SECURE: {{ .Values.relay.cookieSecure | quote }}
   RELAY_HEALTHZ_DEADLINE_MS: {{ .Values.relay.healthzDeadlineMs | quote }}

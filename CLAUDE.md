@@ -636,6 +636,8 @@ is gated. Full guide: `.tmp/design/cluster.md`.
   `least-recently-used`. Quota-aware weighted-random is roadmap.
 - **Breaker keyed by value-hash** — a rotated key gets a new hash → a fresh
   (closed) breaker automatically; the old hash's record orphans + TTLs out.
+- A key's health record exists only once it has failed: a success writes it
+  only to close a half-open probe or reset a backoff.
 - **Dial-vs-key failure split**: an unreachable host re-dials the same host
   (not a key failure); only 401/403 breaks a key. Anon keys are breaker-exempt.
   See `app/hosthealth`.

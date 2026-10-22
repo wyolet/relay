@@ -1,61 +1,86 @@
 ---
 title: "Inference API"
-description: "The data plane — send LLM requests through Relay"
+description: "Every route on the data plane, how requests authenticate, and the errors Relay returns"
 ---
 
-The inference plane is the customer-facing data plane. It listens on
-`RELAY_PORT` (default `8080`) and speaks OpenAI- and Anthropic-shape wire
-protocols, plus Relay's own provider-neutral canonical shape.
+The inference plane listens on `RELAY_PORT` (default `8080`). It accepts the OpenAI and Anthropic wire shapes, Relay's provider-neutral canonical shape, and a few Relay endpoints for models, batches and telemetry.
 
 ## Authentication
 
-Every inference request authenticates with a bearer credential — either a
-**relay key** or a relay-minted **token**:
+Every inference request authenticates with a **relay key** or an **inference token**:
 
 ```
 Authorization: Bearer <relay-key-or-token>
 ```
 
-Relay tells the two apart by shape: a token looks like a JWT (starts
-`ey`, two `.` separators); a key never does. Keys are minted in the admin
-UI or via the control plane (`POST /api/keys`). The plaintext is shown
-exactly once on creation — Relay stores only `sha256(plaintext)`. Tokens
-are minted per session via `POST /api/auth/token`, scoped to one project,
-and expire on their own — see
-[Authentication concepts](/concepts/auth#inference-tokens).
+Relay also reads the credential from `X-WR-API-Key` (checked first) and `x-api-key` (checked last), so stock OpenAI and Anthropic SDKs work with their own auth settings. See [Headers](/reference/headers#how-relay-finds-your-relay-key).
 
-Rotating a key (`POST /api/keys/by-id/{id}/rotate`) accepts
-`{"graceSeconds": N}`: the previous plaintext keeps authenticating for that
-long, so callers can be redeployed without a window of 401s. `0` cuts over
-immediately; the ceiling is the `keyRotateMaxGrace` setting (24h default).
+Relay tells the two credentials apart by shape: an inference token looks like a JWT (starts `ey`, two `.` separators), a relay key never does. Both are accepted on every inference route. Relay keys are minted in the admin UI or with `POST /api/keys`; the plaintext is returned once and Relay stores only its SHA-256. Inference tokens are minted with `POST /api/auth/token`, are scoped to one project, and expire on their own. See [Authentication](/concepts/auth#inference-tokens).
 
-## Namespacing
-
-Each vendor wire shape is served under its own path prefix. The bare `/v1`
-namespace belongs to Relay's canonical shape.
-
-| Prefix | Wire shape |
-| --- | --- |
-| `/openai/...` | OpenAI Chat Completions, Responses, Embeddings |
-| `/anthropic/...` | Anthropic Messages |
-| `/v1/...` | Relay canonical (provider-neutral) |
+Rotating a relay key (`POST /api/keys/by-id/{id}/rotate`) accepts `{"graceSeconds": N}`: the previous plaintext keeps authenticating for that long, so callers can be redeployed without a window of `401`s. `0` cuts over immediately; the ceiling is the `keyRotateMaxGrace` setting (24 hours by default).
 
 ## Endpoints
+
+Each vendor wire shape has its own path prefix. The bare `/v1` namespace belongs to Relay.
+
+### Wire shapes
 
 | Method | Path | Shape |
 | --- | --- | --- |
 | `POST` | `/openai/v1/chat/completions` | OpenAI Chat Completions |
-| `POST` | `/openai/v1/responses` | OpenAI Responses API |
-| `POST` | `/openai/v1/embeddings` | OpenAI Embeddings (byte-pass) |
+| `POST` | `/openai/v1/responses` | OpenAI Responses |
+| `POST` | `/openai/v1/embeddings` | OpenAI Embeddings. Forwarded unchanged, so the model needs a binding with `adapter: openai`. |
 | `POST` | `/anthropic/v1/messages` | Anthropic Messages |
-| `POST` | `/v1/generate` | Relay canonical request/response |
-| `GET` | `/v1/models` | Models accessible to the relay key |
-| `GET` | `/v1/catalog` | Catalog document (models, hosts, prices) scoped to the relay key; see [Catalog](#catalog) |
-| `POST` | `/otlp/v1/traces` | OpenTelemetry trace export (OTLP/HTTP); see [Reported usage](/concepts/observability#reported-usage-opentelemetry). 404 unless the `otlp-receiver` setting is enabled |
-| `POST` | `/otlp/v1/logs` | OpenTelemetry logs export (OTLP/HTTP) for model calls reported as events; same rules as the trace export |
-| `GET` | `/healthz` | Readiness: Postgres ping and a loaded catalog; 503 until both hold (public) |
-| `GET` | `/livez` | Liveness: the process is serving, no dependency checks (public) |
-| `GET` | `/openapi.json` | Generated typed OpenAPI spec |
+| `POST` | `/v1/generate` | Relay canonical. See [Canonical shape](#canonical-shape). |
+| `GET` | `/v1/ws` | WebSocket carrying canonical requests. See [WebSocket](#websocket). |
+
+Gemini is an upstream shape only: bindings with `adapter: gemini` are reachable from any inbound shape above, but there is no inbound Gemini route.
+
+### Coding-agent clients
+
+Each client gets a path prefix that mirrors its wire shape and adds what the client probes for. The routes authenticate like the shape routes, except the Claude Code startup probe.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/claude-code/v1/messages` | Anthropic Messages. See [Claude Code](/claude-code). |
+| `GET` | `/claude-code/v1/models` | Model list in the Anthropic shape, for Claude Code's model picker |
+| `POST` | `/claude-code/v1/messages/count_tokens` | Input-token count for a Messages body. `X-WR-Token-Count` says how it was obtained. |
+| `HEAD`, `GET` | `/claude-code/api/hello` | Startup probe; answers `200` with no credential |
+| `POST` | `/codex/v1/responses` | OpenAI Responses. See [Codex CLI](/codex). |
+| `GET` | `/codex/v1/models` | Model catalog file in Codex's own format |
+| `POST` | `/opencode/v1/chat/completions` | OpenAI Chat Completions. See [OpenCode](/opencode). |
+| `POST` | `/opencode/v1/messages` | Anthropic Messages |
+| `GET` | `/opencode/api.json` | Model catalog in the models.dev format OpenCode reads |
+
+The prefix also tells Relay which client is calling, which attributes the usage event to it. A request without the prefix is matched by its `User-Agent`, or by an `X-WR-Client` header naming the client.
+
+### Relay endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/models` | Models the credential can route to, in the OpenAI list shape |
+| `GET` | `/openai/v1/models` | The same list, limited to models with an enabled `adapter: openai` binding |
+| `GET` | `/v1/catalog` | Catalog document scoped to the credential. See [Catalog](#catalog). |
+| `POST` | `/v1/batches` | Submit a batch. See [Batch](/batch). |
+| `GET` | `/v1/batches/{id}` | Batch status and per-item states |
+| `GET` | `/v1/batches/{id}/results` | Per-item results |
+| `POST` | `/v1/batches/{id}/cancel` | Cancel the items that have not run |
+| `GET` | `/v1/proxy/hosts` | Host slugs accepted in `X-WR-Upstream-Host`. See [Proxy mode](/concepts/proxy-mode). |
+| `POST` | `/otlp/v1/traces` | OTLP/HTTP trace export. `404` unless the `otlp-receiver` setting is enabled. See [OTLP receiver](/concepts/otlp-receiver). |
+| `POST` | `/otlp/v1/logs` | OTLP/HTTP logs export, same rules as traces |
+
+### System endpoints
+
+These need no credential.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/healthz` | Readiness: Postgres ping and a loaded catalog. `503` until both hold. |
+| `GET` | `/livez` | Liveness: the process is serving. No dependency checks. |
+| `GET` | `/openapi.json` | Generated OpenAPI document for the data plane |
+| `GET` | `/docs` | API reference UI rendered from `/openapi.json` |
+
+Until the catalog has loaded, every authenticated route answers `503 catalog_unavailable` with `Retry-After: 5`.
 
 ## Examples
 
@@ -82,6 +107,20 @@ curl http://localhost:8080/anthropic/v1/messages \
   }'
 ```
 
+```bash OpenAI Responses
+curl http://localhost:8080/openai/v1/responses \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o", "input": "hello"}'
+```
+
+```bash OpenAI Embeddings
+curl http://localhost:8080/openai/v1/embeddings \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "<embedding-model>", "input": "hello"}'
+```
+
 ```bash Streaming (SSE)
 curl http://localhost:8080/openai/v1/chat/completions \
   -H "Authorization: Bearer <relay-key>" \
@@ -96,60 +135,138 @@ curl http://localhost:8080/openai/v1/chat/completions \
 </CodeGroup>
 
 <Info>
-Responses stream byte-for-byte from the upstream when the inbound shape
-matches the upstream shape. Cross-shape requests (e.g. OpenAI in,
-Anthropic upstream) are translated per chunk through Relay's canonical
-protocol.
+When the inbound shape matches the upstream's, the response streams from the upstream byte for byte. Otherwise (OpenAI in, Anthropic upstream, for example) the request and every stream event are translated through Relay's canonical shape.
 </Info>
-
-## System messages
-
-Start-of-conversation system instructions map to the upstream's native
-form: the top-level `system` field (Anthropic), `systemInstruction`
-(Gemini), or a leading `system` message (OpenAI-compatible).
-
-System messages that appear **mid-conversation** keep their position —
-they are never merged into the start-of-conversation system prompt, so
-the upstream's prompt-cache prefix is not invalidated by a late
-instruction. Relay's canonical semantics follow the OpenAI shape here:
-on OpenAI-compatible upstreams the message is sent as a real `system`
-turn in place. Anthropic and Gemini upstreams cannot express that on
-every model, so there the message is delivered in place as a user turn
-wholly wrapped in `<system>` markers:
-
-```json
-{"role": "user", "content": "<system>\nFrom now on, answer in French.\n</system>"}
-```
-
-The marker round-trips: a user turn that is exactly this form is restored
-to a system message when Relay parses the conversation back. A `<system>`
-tag embedded inside longer user text is never promoted. Inbound Anthropic
-requests may also carry `role: "system"` messages (supported by recent
-Claude models); Relay accepts them and keeps them positional.
-
-A canonical system message can instead opt into full system authority
-with `"hoist": true`: at serialization it merges into the upstream's
-start-of-conversation system form on every shape. Hoisting changes the
-very beginning of the prompt, so it invalidates the upstream's cached
-prefix for that conversation — use it for instructions that must
-override user content, not for routine mid-session notes.
 
 ## Models
 
-The `model` field is resolved against your catalog. A model is reachable
-only if a policy grants it to your relay key **and** the model has an
-enabled host binding with a healthy host key. List what your key can reach:
+The `model` field is resolved against your catalog. A model is reachable only if the policy that governs your credential grants it **and** the model has an enabled host binding with a usable host key. List what your credential can reach:
 
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer <relay-key>"
 ```
 
+When several hosts serve a model, append `@<host>` to pin one (`"model": "claude-sonnet-4-6@anthropic"`), or send `X-WR-Upstream-Host: <host>`. An `@host` already in the model wins over the header.
+
+## Canonical shape
+
+`POST /v1/generate` takes Relay's own provider-neutral request and returns a canonical response, whatever shape the upstream speaks. It is the shape the [Go SDK](/go-sdk) and the [WebSocket](#websocket) transport use.
+
+```bash
+curl http://localhost:8080/v1/generate \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "instructions": "Answer in one sentence.",
+    "input": [{"type": "message", "role": "user", "content": "What is a relay?"}],
+    "model_config": {"gpt-4o": {"sampling": {"max_tokens": 200}}}
+  }'
+```
+
+| Field | Meaning |
+| --- | --- |
+| `model` | Model reference, same rules as the vendor shapes. A single string. |
+| `input` | A string (one user message) or an array of items: `message`, `function_call`, `function_call_output`, `reasoning`. Message `content` is a string or an array of parts (`input_text`, `input_image`, `input_file`). |
+| `instructions` | Start-of-conversation system instructions |
+| `model_config` | Per-model options keyed by model reference: `sampling` (`temperature`, `top_p`, `top_k`, `max_tokens`, `stop`, `seed`, ...), `reasoning`, `output` |
+| `tools` | Tool definitions, tool choice and parallel calls |
+| `cache_config` | Prompt-cache intent. See [Prompt caching](#prompt-caching). |
+| `output_mode` | `sync` (default) or `stream` |
+| `metadata`, `user`, `extensions` | Caller metadata, end-user id, and vendor-specific fields that have no canonical form |
+
+The response carries `id`, `model`, `status`, `finish_reason`, `output` (items in the same form as `input`, so they can be appended to the next request) and `usage`, a map of token counts (`input`, `output`, `cache_read`, `cache_creation`, `reasoning`, ...). A refusal comes back as a normal `message` item with `finish_reason: "refusal"`.
+
+With `output_mode: "stream"` the response is an SSE stream of six event types: `generation.created`, `item.started`, `item.delta`, `item.completed`, `generation.completed` and `error`.
+
+Send `X-WR-Usage: full` to get a `relay_usage` block on the response (on the final event when streaming) with the request id, token counts, upstream attempts and timing. It is added to canonical responses only.
+
+## WebSocket
+
+`GET /v1/ws` upgrades to a WebSocket that carries many canonical requests over one connection, so a client that sends many requests in a row pays the TLS and authentication handshake once.
+
+The upgrade request authenticates with the same headers as any inference request. Every frame you send is one request:
+
+```json
+{"id": "turn-1", "payload": {"model": "gpt-4o", "input": "hello", "output_mode": "stream"}}
+```
+
+`id` is yours to choose and correlates the response; `payload` is a `/v1/generate` body. Relay answers each request with frames tagged with that `id`, always in this order:
+
+```json
+{"id": "turn-1", "event": "start", "status": 200, "headers": {"content-type": "text/event-stream"}}
+{"id": "turn-1", "event": "chunk", "data": "event: generation.created\ndata: {...}\n\n"}
+{"id": "turn-1", "event": "end", "status": 200}
+```
+
+- `start` carries the HTTP status and content type the same request would get over HTTP.
+- `chunk` frames carry the response body as a byte stream. Concatenate `data` across a request's chunks: for a streamed request the result is the canonical SSE stream, otherwise the JSON response body. A chunk boundary is not an event boundary.
+- `end` closes the request. Frames for different ids interleave.
+
+Errors use the same frames: `start` carries the error status and the chunks carry the usual error envelope.
+
+| Limit | Value | When exceeded |
+| --- | --- | --- |
+| Requests in flight per connection | 64 | The new request gets `start` with `429`, a chunk with code `connection_saturated`, and `end`. |
+| Inbound frame size | 1 MiB | Relay closes the connection with status 1009 (message too big). |
+
+A text frame that is not JSON or has no `id` is dropped without a reply; binary frames are ignored. Each frame is checked again when it arrives: a revoked or expired credential, a changed or disabled policy, catalog edits and a change to the proxy-mode setting all apply to the next frame on an open connection. Each frame is its own request for rate limits, the in-flight cap and usage.
+
+The Go SDK's `client.RelayWS` speaks this protocol. See [Go SDK](/go-sdk#websocket).
+
+## Prompt caching
+
+Same-shape requests are forwarded with their cache fields untouched: Anthropic `cache_control` markers reach an Anthropic upstream, OpenAI `prompt_cache_key` and `prompt_cache_retention` reach an OpenAI upstream.
+
+When a request crosses shapes, Relay carries cache intent through the canonical `cache_config`:
+
+| Canonical field | Meaning |
+| --- | --- |
+| `cache_config.instructions`, `.tools`, `.history` | Cache the prefix up to the end of the instructions, the tools, or the whole input |
+| `cache_config.key` | Stable id for requests that share a prefix, such as a conversation id |
+| `cache_config.ttl` | How long the prefix should stay reusable, as a duration (`5m`, `1h`) |
+| `cache_config: {"anchor": true}` on a `message`, `function_call` or `function_call_output` item | Cache the prefix up to and including this item |
+
+Each upstream applies what it can express:
+
+- **Anthropic**: each flag and anchor becomes a `cache_control` breakpoint. A `ttl` over 5 minutes selects the 1-hour tier. Anthropic allows 4 breakpoints; when anchors exceed that, the oldest anchors are dropped. `key` is ignored.
+- **OpenAI**: caching is automatic, so the flags and anchors are ignored. `key` becomes `prompt_cache_key`; a `ttl` over 10 minutes becomes `prompt_cache_retention: "24h"`, otherwise `"in_memory"`.
+- **Gemini**: `cache_config` is ignored.
+
+Inbound Anthropic `cache_control` markers and inbound OpenAI `prompt_cache_key` / `prompt_cache_retention` are read into `cache_config`. `cache_control` keys inside an OpenAI Chat Completions body are not read, so they are lost on a cross-shape route.
+
+Cache hits show up as `cache_read` and cache writes as `cache_creation` in the response usage and in [usage events](/concepts/usage).
+
+## Unsupported parameters
+
+When the catalog marks `temperature`, `top_p` or `top_k` as unsupported for the routed model, Relay removes it from the request instead of letting the upstream reject it, and reports the change on the response:
+
+```
+X-WR-Warnings: dropped_params=temperature,top_p; reason=unsupported_by_model
+```
+
+The request still succeeds. Each drop is also counted in the `relay_dropped_params_total` metric.
+
+## System messages
+
+Start-of-conversation system instructions map to the upstream's native form: the top-level `system` field (Anthropic), `systemInstruction` (Gemini), or a leading `system` message (OpenAI-compatible).
+
+System messages that appear **mid-conversation** keep their position. They are never merged into the start-of-conversation system prompt, so a late instruction does not invalidate the upstream's prompt-cache prefix. Relay's canonical semantics follow the OpenAI shape here: on OpenAI-compatible upstreams the message is sent as a real `system` turn in place. Anthropic and Gemini upstreams cannot express that on every model, so there the message is delivered in place as a user turn wholly wrapped in `<system>` markers:
+
+```json
+{"role": "user", "content": "<system>\nFrom now on, answer in French.\n</system>"}
+```
+
+The marker round-trips: a user turn that is exactly this form is restored to a system message when Relay parses the conversation back. A `<system>` tag inside longer user text is never promoted. Inbound Anthropic requests may also carry `role: "system"` messages (supported by recent Claude models); Relay accepts them and keeps them positional.
+
+A canonical system message can instead opt into full system authority with `"hoist": true`: it is merged into the upstream's start-of-conversation system form on every shape. Hoisting changes the beginning of the prompt, so it invalidates the upstream's cached prefix for that conversation. Use it for instructions that must override user content, not for routine mid-session notes.
+
 ## Catalog
 
-`GET /v1/catalog` returns the catalog document the Go SDK embeds (`sdk/catalog`: hosts with their model bindings and pricing, plus the `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential without a policy gets the same `403` when policy-less traffic is off.
+`GET /v1/catalog` returns the catalog document the Go SDK reads (hosts with their model bindings and pricing, plus `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential without a policy gets the same `403` when policy-less traffic is off.
 
-The document omits each host's `baseURL`, `path` and `consoleURL`: calls go through Relay, not to the upstream. `version` is `deployment@<tag>` when the catalog was seeded from a release tag, else `deployment`; `generatedAt` is when the document was rendered.
+The document omits each host's `baseURL`, `path` and `consoleURL`, since calls go through Relay rather than to the upstream. `version` is `deployment@<tag>` when the catalog was seeded from a release tag, else `deployment`; `generatedAt` is when the document was rendered.
 
 The response carries a weak `ETag` and `Cache-Control: private, no-cache`. Send the tag back in `If-None-Match` to get `304 Not Modified` while the catalog is unchanged. With `Accept-Encoding: gzip` the body is gzip-compressed.
 
@@ -162,16 +279,43 @@ In Go, `client.Relay(...).Catalog(ctx)` fetches and revalidates it, and `Models(
 
 ## Errors
 
-| Status | Meaning |
-| --- | --- |
-| `401` | Missing or invalid relay key. |
-| `403` | Relay key's policy does not grant the requested model. |
-| `404` | Unknown model, or no enabled binding for it. |
-| `429` | Rate limit reached (relay-side or upstream). |
-| `502` / `503` | No healthy key in the pool, or upstream unreachable. See [Troubleshooting](/troubleshooting). |
+Relay writes errors in one envelope:
+
+```json
+{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed by this policy"}}
+```
+
+| Status | `code` | Cause |
+| --- | --- | --- |
+| `400` | `parse_error`, `missing_model`, `read_body` | The body is not JSON or has no `model`. |
+| `400` | `duplicate_model` | The body has more than one top-level `model` key, matched case-insensitively. |
+| `400` | `invalid_model_key` | Proxy mode: the top-level `model` key is spelled with other letter case or escapes. Proxy mode forwards the body as sent, so the key must be exactly `model`. |
+| `400` | `translate_request` | The request could not be translated to the upstream's shape. |
+| `400` | `embeddings_unsupported_host` | An embeddings request routed to a binding that is not `adapter: openai`. |
+| `400` | `bad_request` | `X-WR-Proxy-Mode` has an unknown value, or proxy mode was asked for without an `Authorization` header. |
+| `400` | `missing_upstream_host`, `unknown_upstream_host` | Proxy mode: an anonymous request without `X-WR-Upstream-Host`, or a pinned host that does not exist or that the caller may not use. |
+| `401` | `unauthenticated` | Missing, unknown, disabled, expired, revoked or rotated-out relay key or inference token. |
+| `401` | `token_revoked` | The inference token was revoked. |
+| `403` | `no_policy`, `policy_not_found`, `policy_disabled` | No policy governs the credential, or the governing policy is missing or disabled. |
+| `403` | `policyless_disabled` | The relay key has no policy and policy-less traffic is off. |
+| `403` | `model_not_allowed`, `model_disabled` | The policy does not grant the model, or the model is disabled. |
+| `403` | `project_unavailable` | The inference token's project no longer exists. |
+| `403` | `passthrough_forbidden`, `proxy_disabled` | Proxy mode: the relay key lacks `passthroughAllowed`, or proxy mode is off. |
+| `404` | `model_not_found` | No model matches the reference. |
+| `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB). |
+| `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent. `Retry-After` says when it refills. |
+| `429` | `overloaded` | The pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`). `Retry-After: 1`. |
+| `502` | `upstream_unreachable` | The upstream host could not be dialled. |
+| `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
+| `503` | `no_host_binding` | The model has no enabled host binding. |
+| `503` | `no_keys` | No usable host key for the chosen host. |
+| `503` | `catalog_unavailable` | The catalog is still loading. `Retry-After: 5`. |
+| upstream's | upstream's | The upstream rejected the request on every key. Relay returns the last upstream status and body unchanged. |
+
+When an upstream failure is forwarded, Relay keeps only `Retry-After` (rewritten to whole seconds), `X-Should-Retry`, `X-Request-Id`, `Content-Type` and the upstream's rate-limit headers (`Anthropic-Ratelimit-*`, `X-Ratelimit-*`), and adds `X-WR-Upstream-Status` with the upstream's status.
+
+`X-WR-Origin` says who produced a response: `relay` when Relay wrote it, `upstream` when the status and body came from the provider. A `401` from Relay therefore means your relay key, while a `401` with `X-WR-Origin: upstream` means the provider rejected the host key or your own upstream key. Relay also sets `X-Should-Retry: true|false` on the errors it writes (`true` for `408`, `429` and `5xx`) unless the upstream already sent one. The `401` and `403` responses from the credential check carry neither header.
 
 <Warning>
-Relay does not fail over mid-stream. Failover across keys and hosts
-happens **before the first byte** reaches you. Once bytes flow, an
-upstream error is returned as-is.
+Relay does not fail over mid-stream. Failover across the keys of the chosen host happens **before the first byte** reaches you. Once bytes flow, an upstream error reaches you as the upstream sent it.
 </Warning>

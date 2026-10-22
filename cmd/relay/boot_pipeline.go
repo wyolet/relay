@@ -18,13 +18,30 @@ import (
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/pkg/clientprofile"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
+// postFlightWriters write after the response, on the post-flight kv store. They hold no state the request path's limiter and selector need, so separate instances are safe.
+type postFlightWriters struct {
+	limiter    *pkgratelimit.Limiter
+	selector   *keypool.Selector
+	hostHealth *hosthealth.Recorder
+}
+
+func newPostFlightWriters(s kv.Store) postFlightWriters {
+	return postFlightWriters{
+		limiter:    pkgratelimit.New(s, slog.Default(), nil),
+		selector:   keypool.New(s, slog.Default(), nil, nil),
+		hostHealth: hosthealth.New(s, nil),
+	}
+}
+
 func buildPipeline(cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *pkgratelimit.Limiter, selector *keypool.Selector,
-	hostHealth *hosthealth.Recorder) (*pipeline.Pipeline, *lifecycle.Registry) {
-	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
+	postFlight postFlightWriters) (*pipeline.Pipeline, *lifecycle.Registry) {
+	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter).
+		WithPostFlight(postFlight.selector, postFlight.limiter)
 
 	// Lifecycle registry — the single point where observer/middleware hooks
 	// attach. Hooks register below before pipeline+proxy start serving.
@@ -38,13 +55,15 @@ func buildPipeline(cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *
 		// out-of-band (rotation), failing over without blocking when other
 		// candidates exist and parking only when this key is the last resort.
 		KeyAgent:   appsecret.NewAgent(keyRefresher{store: stores.HostKey, cat: cat}, 0, slog.Default()),
-		HostHealth: hostHealth,
+		HostHealth: postFlight.hostHealth,
 	}
 	return pl, lifecycleReg
 }
 
-func buildProxy(cfg *config.Config, limiter *pkgratelimit.Limiter, lifecycleReg *lifecycle.Registry) *proxy.Pipeline {
+func buildProxy(cfg *config.Config, limiter, postFlightLimiter *pkgratelimit.Limiter, policySvc *policy.Service, lifecycleReg *lifecycle.Registry) *proxy.Pipeline {
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
+	proxyPipeline.PostFlightLimiter = postFlightLimiter
+	proxyPipeline.Policy = policySvc
 
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.

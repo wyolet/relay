@@ -50,8 +50,18 @@ type Config struct {
 	// same rationale as the PG warm floor above.
 	RedisPoolSize     int // RELAY_REDIS_POOL_SIZE
 	RedisMinIdleConns int // RELAY_REDIS_MIN_IDLE_CONNS
-	CHDSN             string
-	OTLPEndpoint      string
+	// RELAY_REDIS_{DIAL,READ,WRITE,POOL}_TIMEOUT_MS and RELAY_REDIS_MAX_RETRIES. Defaults are kv.Default*; retries default to 0 because a resent reserve script can count one request twice.
+	RedisDialTimeout  time.Duration
+	RedisReadTimeout  time.Duration
+	RedisWriteTimeout time.Duration
+	RedisPoolTimeout  time.Duration
+	RedisMaxRetries   int
+	// RELAY_REDIS_POSTFLIGHT_{POOL_SIZE,POOL_TIMEOUT_MS,READ_TIMEOUT_MS}: the second client that settles served requests after the response; dial and write bounds and retries are the shared ones.
+	RedisPostFlightPoolSize    int
+	RedisPostFlightPoolTimeout time.Duration
+	RedisPostFlightReadTimeout time.Duration
+	CHDSN                      string
+	OTLPEndpoint               string
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema
@@ -87,6 +97,8 @@ type Config struct {
 	CatalogIndexURL string
 	InstanceID      string
 	EventlogDir     string
+	// UsageQueueSize is how many usage events wait in memory for the sink before new ones are dropped (RELAY_USAGE_QUEUE_SIZE); 0 = usagelog.DefaultQueueSize.
+	UsageQueueSize  int
 	MaxRequestBytes int64 // 0 = use httpmw.DefaultMaxRequestBytes
 	MaxInflight     int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
 
@@ -133,6 +145,9 @@ type Config struct {
 
 	// ControlListenHost is the address the control listener binds (RELAY_CONTROL_LISTEN_HOST, default ListenHost), so the admin plane can stay private while inference is reachable.
 	ControlListenHost string
+
+	// PprofAddr is the host:port the runtime profiling listener binds (RELAY_PPROF_ADDR). Empty disables it.
+	PprofAddr string
 
 	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
 	// separated list of exact origin strings (no wildcards — credentialed
@@ -257,6 +272,9 @@ func Load() (*Config, error) {
 	} else {
 		cfg.RedisMinIdleConns = v
 	}
+	if err := loadRedisClient(cfg); err != nil {
+		return nil, err
+	}
 	cfg.CHDSN = os.Getenv("RELAY_CH_DSN")
 	cfg.OTLPEndpoint = os.Getenv("RELAY_OTLP_ENDPOINT")
 
@@ -346,6 +364,11 @@ func Load() (*Config, error) {
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")
+	if v, err := envPositiveInt("RELAY_USAGE_QUEUE_SIZE", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_USAGE_QUEUE_SIZE must be >= 1")
+	} else {
+		cfg.UsageQueueSize = v
+	}
 
 	if v := envInt64("RELAY_MAX_REQUEST_BYTES", 0); v > 0 {
 		cfg.MaxRequestBytes = v
@@ -428,6 +451,9 @@ func Load() (*Config, error) {
 		cfg.ControlPort = "8081"
 	}
 	if err := loadListenHosts(cfg); err != nil {
+		return nil, err
+	}
+	if err := loadPprofAddr(cfg); err != nil {
 		return nil, err
 	}
 

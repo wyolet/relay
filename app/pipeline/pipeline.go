@@ -30,6 +30,7 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
@@ -50,6 +51,7 @@ type Adapter interface {
 
 // Request is the pre-resolved input. Built by the handler/router.
 type Request struct {
+	// Body is the upstream wire body. Run sets it to nil once an upstream response is accepted: no retry can follow, and a long stream must not pin it.
 	Body    []byte
 	Headers http.Header
 
@@ -199,7 +201,8 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		hostSlug = req.Host.Meta.Name
 	}
 
-	inbound, err = p.Policy.ReserveInbound(ctx, policy.InboundInput{
+	// The inbound reserve and the first key pick share one kv round trip; a failover re-picks with Acquire.
+	adm, err := p.Policy.Admit(ctx, policy.InboundInput{
 		Policy:       req.Policy,
 		ProviderSlug: req.Provider,
 		ModelSlug:    modelSlug,
@@ -207,10 +210,18 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		HostSlug:     hostSlug,
 		TeamID:       req.TeamID,
 		TokenJTI:     req.TokenJTI,
+	}, policy.AcquireInput{
+		Policy:   req.Policy,
+		Keys:     req.Keys,
+		Model:    req.Model,
+		Host:     req.Host,
+		Provider: req.Provider,
 	})
 	if err != nil {
 		return nil, err // handler maps ExceededError → 429, ErrRevoked → 401
 	}
+	inbound = adm.Inbound
+	firstAttempt := true
 
 	var (
 		excluded     []*hostkey.HostKey
@@ -229,14 +240,19 @@ loop:
 			if attempts >= maxAttempts {
 				break loop
 			}
-			acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
-				Policy:   req.Policy,
-				Keys:     req.Keys,
-				Excluded: excluded,
-				Model:    req.Model,
-				Host:     req.Host,
-				Provider: req.Provider,
-			})
+			if firstAttempt {
+				acq, err = adm.Acq, adm.AcqErr
+				firstAttempt = false
+			} else {
+				acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
+					Policy:   req.Policy,
+					Keys:     req.Keys,
+					Excluded: excluded,
+					Model:    req.Model,
+					Host:     req.Host,
+					Provider: req.Provider,
+				})
+			}
 			if errors.Is(err, policy.ErrSaturated) {
 				if acq != nil && acq.Key != nil {
 					excluded = append(excluded, acq.Key)
@@ -523,6 +539,8 @@ func (p *Pipeline) makeResult(
 	call *upstreamCall,
 ) *Result {
 	status := resp.StatusCode
+	requestBytes := len(req.Body)
+	req.Body = nil
 	if req.Lifecycle != nil {
 		req.Lifecycle.Streamed = req.Stream
 		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
@@ -581,7 +599,7 @@ func (p *Pipeline) makeResult(
 				req.Lifecycle.MarkEnd()
 				if read.done {
 					body, frames := finish()
-					go p.runPostFlight(req, inbound, acq, body, frames, status, read.eof)
+					go p.runPostFlight(req, inbound, acq, body, frames, requestBytes, status, read.eof)
 					err = resp.Body.Close()
 					call.release()
 					return
@@ -593,7 +611,7 @@ func (p *Pipeline) makeResult(
 					body, frames := finish()
 					_ = resp.Body.Close()
 					call.release()
-					p.runPostFlight(req, inbound, acq, body, frames, status, complete)
+					p.runPostFlight(req, inbound, acq, body, frames, requestBytes, status, complete)
 				}()
 			})
 			return err
@@ -614,6 +632,7 @@ func (p *Pipeline) runPostFlight(
 	acq *policy.Acquisition,
 	body []byte,
 	sessFrames int,
+	requestBytes int,
 	status int,
 	complete bool,
 ) {
@@ -625,16 +644,7 @@ func (p *Pipeline) runPostFlight(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Rate-limit tokens: for streamed requests the StreamSession already
-	// extracted them incrementally (no buffered body to parse); the buffered
-	// path re-parses the full body via the adapter. body is nil in the stream
-	// case, so ExtractTokens is never handed an empty buffer.
-	var tokens sdkusage.Tokens
-	if t, ok := req.Lifecycle.StreamTokens(); ok {
-		tokens = sdkusage.Tokens(t)
-	} else {
-		tokens = req.Adapter.ExtractTokens(body)
-	}
+	tokens := chargedTokens(req.Lifecycle, req.Adapter, body)
 	// A response cut short before its end may never have reported usage;
 	// the upstream still did the work, so the budgets are charged a floor
 	// rather than nothing. Usage records keep only what was reported.
@@ -644,7 +654,7 @@ func (p *Pipeline) runPostFlight(
 		if body != nil {
 			frames = countSSEFrames(body)
 		}
-		limitTokens = withUnreportedFloor(tokens, len(req.Body), frames)
+		limitTokens = withUnreportedFloor(tokens, requestBytes, frames)
 	}
 
 	// Finalize before the commits: usage/payload hooks need the response body.
@@ -663,18 +673,50 @@ func (p *Pipeline) runPostFlight(
 	body = nil
 
 	obs := pkgratelimit.Observations{Tokens: map[string]int64(limitTokens)}
-	// Both reservations commit in one batched round trip (they live under
-	// different hash tags, so this is a pipeline, not one script — see
-	// Limiter.CommitBoth).
-	if err := p.Policy.CommitBoth(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: post-flight commit failed", "err", err)
+	// The commits and, when the key's record needs it, its success write go out in one batched round trip (different hash tags, so a pipeline, not one script — see policy.Service.Settle).
+	if err := p.Policy.Settle(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
+		p.Logger.Warn("pipeline: post-flight settle failed", "err", err)
 	}
-	p.Policy.RecordSuccess(ctx, acq)
 
 	// The host answered — record reachability (off the latency path).
 	if p.HostHealth != nil && req.Host != nil {
 		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
 	}
+}
+
+// ResponseSummarizer is the optional capability of an Adapter that reads the canonical Summary of a buffered response, so post-flight decodes the body once for the rate-limit commit and usage alike. false means it has no translator for the body; the caller then uses ExtractTokens.
+type ResponseSummarizer interface {
+	SummarizeResponse(body []byte) (v1.Summary, bool)
+}
+
+// chargedTokens returns the tokens the rate-limit commit charges: the ones the stream session extracted incrementally, else the buffered body's Summary's, decoded once and shared with the usage hook. A Summary without tokens (a stream that ended on an error event or before its terminal frame) can sit beside usage the upstream did report; those tokens were served, so ExtractTokens is asked for them.
+func chargedTokens(lc *lifecycle.Context, a Adapter, body []byte) sdkusage.Tokens {
+	var tokens sdkusage.Tokens
+	if t, ok := lc.StreamTokens(); ok {
+		tokens = sdkusage.Tokens(t)
+	} else if sum, ok := responseSummary(lc, a, body); ok {
+		tokens = sum.Tokens
+	}
+	if len(tokens) == 0 && len(body) > 0 {
+		tokens = a.ExtractTokens(body)
+	}
+	return tokens
+}
+
+// responseSummary returns the buffered response's Summary: the one the handler recorded while translating it, else the one a decodes now, which is recorded on lc so the usage hook reuses it.
+func responseSummary(lc *lifecycle.Context, a Adapter, body []byte) (v1.Summary, bool) {
+	if s, ok := lc.ResponseSummary(); ok {
+		return s, true
+	}
+	rs, ok := a.(ResponseSummarizer)
+	if !ok {
+		return v1.Summary{}, false
+	}
+	s, ok := rs.SummarizeResponse(body)
+	if ok {
+		lc.SetResponseSummary(s)
+	}
+	return s, ok
 }
 
 // fireFailure emits a post-flight observer event for a request that
@@ -701,9 +743,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 	}
 	kind, status := classifyFailure(runErr)
 	req.Lifecycle.MarkEnd()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, &lifecycle.PostFlightEvent{
 		Status:       status,
 		ErrorKind:    kind,
 		ErrorMessage: runErr.Error(),
@@ -726,6 +766,8 @@ func classifyFailure(err error) (kind string, status int) {
 		// Reservation rejected before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).
 		return "rate_limited", 0
+	case errors.Is(err, pkgratelimit.ErrUnavailable):
+		return "kv_unavailable", 0
 	case errors.Is(err, ErrNoKeys):
 		return "no_keys", 0
 	case errors.Is(err, ErrAllKeysExhausted):

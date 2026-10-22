@@ -1,0 +1,111 @@
+---
+title: "SSO"
+description: "Sign in to the admin UI and control API with an OpenID Connect identity provider"
+---
+
+Relay signs users in to the control plane with any OpenID Connect provider that publishes a discovery document (`<issuer>/.well-known/openid-configuration`). It runs the authorization-code flow, verifies the ID token, finds or creates the account, and starts the same session a password sign-in starts, so everything after sign-in (roles, bindings, inference tokens) works as for local accounts. SSO is not license-gated.
+
+## How a sign-in runs
+
+1. The admin UI sends the browser to `GET /api/auth/oidc/start`, which redirects to the provider.
+2. The provider redirects back to `https://<control host>/auth/callback`, the redirect URL you register with it. (`/api/auth/oidc/callback` is served too, for providers registered with that path.)
+3. Relay exchanges the code, verifies the ID token, and matches the identity (issuer and subject) to an account: one that already has it, else a [SCIM-provisioned account to link](/concepts/scim#signing-in), else a new account when registration is open.
+4. Relay sets the `relay_session` cookie and redirects to the post-login URL.
+
+## Configure it
+
+Use either the `auth:oidc` settings section or environment variables. The environment wins when `WYOLET_AUTH_MODE=oidc` is set.
+
+### With the settings section
+
+Put the client secret in an environment variable whose name starts with `RELAY_OIDC_` (or `WYOLET_OIDC_`) and restart relay with it, then enable the section. Only an admin may write it.
+
+```bash
+curl -X PUT https://admin.relay.example.com/api/settings/auth:oidc \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "issuer": "https://idp.example.com",
+    "clientId": "relay",
+    "clientSecretEnv": "RELAY_OIDC_CLIENT_SECRET",
+    "redirectUrl": "https://admin.relay.example.com/auth/callback",
+    "registration": "closed"
+  }'
+```
+
+The section names the variable, never the secret, because every operator who can read settings can read the section. Every field and its default is in [Settings](/reference/settings#authoidc). The change applies without a restart. The issuer must be `https` unless `RELAY_COOKIE_SECURE=false`. A stored section that breaks these rules is read as disabled and logged at startup; fix it and write the section again.
+
+### With environment variables
+
+`WYOLET_AUTH_MODE=oidc` turns sign-in on from the environment alone, without a database write. Relay refuses to start if a required variable is missing or invalid.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `WYOLET_AUTH_MODE` | _(empty)_ | `oidc` enables sign-in from these variables and ignores the `auth:oidc` section. |
+| `WYOLET_OIDC_ISSUER` | _(required)_ | The provider's issuer URL. |
+| `WYOLET_OIDC_CLIENT_ID` | _(required)_ | OIDC client id. |
+| `WYOLET_OIDC_CLIENT_SECRET` | _(required)_ | OIDC client secret. |
+| `WYOLET_OIDC_REDIRECT_URL` | _(required)_ | Redirect URL registered with the provider, `https://<control host>/auth/callback`. |
+| `WYOLET_OIDC_REGISTRATION` | `open` | `open` creates an account on a first sign-in; `closed` refuses identities with no account. Note the default differs from the settings section's `closed`. |
+| `WYOLET_OIDC_POST_LOGIN_URL` | `/` | Where the browser goes after sign-in. |
+
+Scopes (`openid profile email`) and the groups claim (`groups`) take their defaults in this mode.
+
+### The issuer
+
+Set the issuer to the `issuer` value of the provider's discovery document. A configured issuer that differs from it only by a trailing slash is accepted, and accounts are matched with or without the slash; ID tokens must carry the document's `issuer` exactly.
+
+## Registration
+
+With `registration: "open"`, a first sign-in by an unknown identity creates an account. Its username comes from `preferred_username`, else the part of the email before `@`, else `user`, with a numeric suffix when taken. The account gets no role. If another account already has the sign-in's email, the sign-in is refused (`email_in_use`): linking a sign-in to an existing account is an administrator's decision, never an email match.
+
+With `registration: "closed"`, only identities that already have an account, or that link to a SCIM-provisioned one, can sign in.
+
+<Warning>
+Under `RELAY_AUTHZ=single`, every signed-in user may perform every action. Combined with open registration, anyone your identity provider lets sign in to the application becomes an administrator of the relay. Relay logs a warning at startup when it sees this combination. Use `RELAY_AUTHZ=rbac`, or keep registration closed. See [Authorization](/concepts/auth#authorization).
+</Warning>
+
+## Groups
+
+Relay reads the user's groups from the ID token claim named by `groupsClaim` (default `groups`; it must be an array of strings) at every sign-in. Each group becomes a subject the user acts under, so a RoleBinding that names the group by name applies to them, as it does for a local `Group` of the same name; see [Groups](/concepts/auth#groups). Names starting with `system:` are ignored, because relay reserves them. Set `groupsClaim` to `""` when the provider asserts none.
+
+The groups live in the session, not on the account: they change at the next sign-in, and an inference token minted in that session carries them until it expires. Under `RELAY_AUTHZ=single`, groups have no effect.
+
+## SCIM
+
+To have the identity provider create and deactivate accounts ahead of sign-in, enable [SCIM provisioning](/concepts/scim). A provisioned account has no sign-in identity until its user's first OIDC sign-in links it, matched on the `auth:scim` section's `linkClaim`.
+
+## Returning to an application
+
+`GET /api/auth/oidc/start` takes an optional `return_to`: an absolute `http` or `https` URL the browser goes to after sign-in instead of the post-login URL. Its origin (scheme, host and port) must be one of: the origin of the redirect URL, the origin of the post-login URL when that is absolute, an entry of `RELAY_CONTROL_ALLOW_ORIGINS`, or the origin the start request reached. That last origin is `https` only over TLS, or when the peer is in `RELAY_TRUSTED_PROXIES` and sends `X-Forwarded-Proto: https`. Any other `return_to` is refused with `400` and code `invalid_return_to`.
+
+## Errors
+
+When sign-in fails after a `return_to` was accepted, the browser is redirected there with `error=<code>` added to its query. Without one, the callback answers `{"error":{"type":"authentication_error","code":"<code>","message":"..."}}` with the status below. Refused sign-ins are recorded in the [audit log](/concepts/audit) as denied `auth.login` events.
+
+| Code | Status | Cause |
+| --- | --- | --- |
+| `flow_expired` | `400` | The sign-in flow cookie is missing or expired; start again. |
+| `state_mismatch` | `400` | The callback's `state` does not match the sign-in flow. |
+| `missing_code` | `400` | The callback carries no authorization code. |
+| `invalid_return_to` | `400` | `return_to` is not allowed (start only). |
+| `idp_error` | `502` | The provider returned an error, for example because the user cancelled. |
+| `exchange_failed` | `502` | The authorization code could not be exchanged. |
+| `invalid_identity` | `502` | The ID token is invalid or names no user. |
+| `idp_unavailable` | `502` | The provider's discovery document could not be fetched. |
+| `account_disabled` | `401` | The account is disabled. |
+| `registration_closed` | `403` | No account has this identity and registration is closed. |
+| `email_in_use` | `403` | An account with this email exists; an administrator must link it to this sign-in. |
+| `account_ambiguous` | `409` | The sign-in matches more than one provisioned account. |
+| `identity_conflict` | `409` | The provisioned account is linked to another sign-in. |
+| `login_failed` | `500` | Looking up, provisioning or linking the account, or creating the session, failed. |
+
+## Provider notes
+
+**Zitadel**
+
+- Turn on **User Info inside ID Token** (`idTokenUserinfoAssertion`) for the application. Without it the ID token carries no email or username, and new accounts get generic usernames (`user`, `user-2`, …).
+- Zitadel has no flat `groups` claim. Add an Action that collects the role keys of the user's grants (`ctx.v1.user.grants`) and sets them as a `groups` claim, and attach it to the **Complement Token** flow on both the **Pre Userinfo creation** and **Pre access token creation** triggers.
+
+**Providers that need extra authorization parameters.** Put them in `authParams`; they are added to the authorization URL as query parameters.

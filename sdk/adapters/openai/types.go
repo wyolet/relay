@@ -165,7 +165,7 @@ type ChatResponseMessage struct {
 	// Reasoning text — a non-standard CC extension. OLLAMA DIVERGES FROM
 	// OPENAI HERE: Ollama emits "reasoning" where OpenAI-compatible o-series /
 	// DeepSeek upstreams emit "reasoning_content". Both are read; canonical
-	// normalizes them to one Reasoning item. See ccExtractReasoningContent.
+	// normalizes them to one Reasoning item. See ccStreamDelta.
 	ReasoningContent string       `json:"reasoning_content,omitempty"`
 	Reasoning        string       `json:"reasoning,omitempty"`
 	ToolCalls        []ToolCall   `json:"tool_calls,omitempty"`

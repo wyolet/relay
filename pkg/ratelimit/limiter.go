@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
-const (
-	commitGuardTTL = 5 * time.Minute
-)
+// commitGuardTTL outlasts the longest gap between two commits of one reservation: a commit script resent within one call, or a failed-over key's release and then the error-path commits, at most a few kv command bounds (about 45 s on the client defaults).
+const commitGuardTTL = time.Minute
 
 // Limiter enforces rate-limit rules using pkg/kv for counters.
 // One Limiter is shared across the process; concurrent calls are safe.
@@ -46,7 +46,7 @@ type Reservation struct {
 	ID    string
 	scope string // Redis Cluster hash-tag anchor; all keys share {<scope>}
 	rules []Rule
-	// conKeys holds the concurrency state keys incremented at Reserve time.
+	// conKeys holds the concurrency lease sets this reservation joined at Reserve time.
 	conKeys []string
 	// tokRules holds token-meter rules (for post-hoc Commit increment).
 	tokRules []Rule
@@ -70,29 +70,49 @@ func (r *Reservation) SetNoCommit() {
 	}
 }
 
+// needsCommit reports whether committing r with obs changes any state. An uncancelled commit of a reservation holding no concurrency slot and no token meter would only write its idempotency guard; skipping it is safe because no caller commits a reservation cancelled after committing it uncancelled.
+func (r *Reservation) needsCommit(obs Observations) bool {
+	if r == nil || r.noCommit {
+		return false
+	}
+	return obs.Cancelled || len(r.conKeys) > 0 || len(r.tokRules) > 0
+}
+
 // Reserve checks all rules and increments counters atomically via one RunScript call.
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
 // scope is the Redis Cluster hash-tag anchor (e.g. "policy:prod-policy").
 func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Reservation, error) {
-	now := l.clock()
 	token := reqid.Generate()
-
-	keys, ruleArgs, err := buildReserveArgs(scope, rules, now)
+	call, err := l.buildReserveCall(scope, rules, token)
 	if err != nil {
 		return nil, err
 	}
+	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
+	if err != nil {
+		return nil, reserveFailed(err)
+	}
+	return l.decodeReserve(ctx, scope, rules, token, raw)
+}
 
+func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string) (kv.ScriptCall, error) {
+	now := l.clock()
+	keys, ruleArgs, err := buildReserveArgs(scope, rules, now)
+	if err != nil {
+		return kv.ScriptCall{}, err
+	}
 	rulesJSON, err := json.Marshal(ruleArgs)
 	if err != nil {
-		return nil, fmt.Errorf("limit: marshal rules: %w", err)
+		return kv.ScriptCall{}, fmt.Errorf("limit: marshal rules: %w", err)
 	}
+	return kv.ScriptCall{
+		Name:   "limit.reserve",
+		Script: reserveLuaScript,
+		Keys:   keys,
+		Args:   []any{now.UnixMilli(), string(rulesJSON), token},
+	}, nil
+}
 
-	raw, err := l.runner.RunScript(ctx, "limit.reserve", reserveLuaScript, keys,
-		now.UnixMilli(), string(rulesJSON), token)
-	if err != nil {
-		return nil, fmt.Errorf("limit: reserve script: %w", err)
-	}
-
+func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule, token string, raw []byte) (*Reservation, error) {
 	var res reserveResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("limit: decode reserve result: %w", err)
@@ -148,16 +168,15 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 	return reservation, nil
 }
 
-// Commit finalizes a Reservation via one RunScript call. Tokens are incremented
-// post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
+// Commit finalizes a Reservation via one RunScript call. Tokens are incremented post-hoc; concurrency leases are always released. A repeated Commit is a no-op only when the first one wrote the idempotency guard: an uncancelled commit of a reservation with no concurrency or token-meter rule settles nothing, makes no call and writes no guard, so a later cancelled Commit still refunds it.
 //
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
 //   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]
 //   - meter "tokens.<key>":  obs.Tokens["<key>"]
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
-//   - meter "concurrency":   decremented (not incremented)
+//   - meter "concurrency":   the reservation's lease released
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
-	if res != nil && res.noCommit {
+	if !res.needsCommit(obs) {
 		return nil
 	}
 	call, err := l.buildCommitCall(res, obs, l.clock())
@@ -167,6 +186,7 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 
 	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	if err != nil {
+		metrics.KVError("limit_commit", metrics.KVDropped)
 		return fmt.Errorf("limit: commit script: %w", err)
 	}
 	l.logCommit(res, obs, raw)
@@ -187,10 +207,10 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 // per-reservation script and args are produced by the same builder.
 func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observations) error {
 	present := make([]*Reservation, 0, 2)
-	if a != nil && !a.noCommit {
+	if a.needsCommit(obs) {
 		present = append(present, a)
 	}
-	if b != nil && !b.noCommit {
+	if b.needsCommit(obs) {
 		present = append(present, b)
 	}
 	switch len(present) {
@@ -219,6 +239,7 @@ func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observa
 	var errs []error
 	for i, r := range results {
 		if r.Err != nil {
+			metrics.KVError("limit_commit", metrics.KVDropped)
 			errs = append(errs, fmt.Errorf("limit: commit script: %w", r.Err))
 			continue
 		}

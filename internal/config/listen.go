@@ -35,6 +35,19 @@ func listenHost(key string) (string, error) {
 	return v, nil
 }
 
+// loadPprofAddr reads RELAY_PPROF_ADDR. Unlike the other listeners it takes host and port together: it has no default port to fall back on.
+func loadPprofAddr(cfg *Config) error {
+	v := strings.TrimSpace(os.Getenv("RELAY_PPROF_ADDR"))
+	if v == "" {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(v); err != nil {
+		return fmt.Errorf("RELAY_PPROF_ADDR must be host:port (e.g. 127.0.0.1:6060), got %q", v)
+	}
+	cfg.PprofAddr = v
+	return nil
+}
+
 // InferenceAddr is the address the inference listener binds.
 func (c *Config) InferenceAddr() string { return net.JoinHostPort(c.ListenHost, c.Port) }
 

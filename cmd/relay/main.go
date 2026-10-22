@@ -81,8 +81,11 @@ func main() {
 
 	seedBuiltinRoles(bootCtx, st, stores)
 
-	kvStore := openKV(bootCtx, cfg)
+	kvStore, postFlightKV := openKV(bootCtx, cfg)
 	defer kvStore.Close()
+	if postFlightKV != kvStore {
+		defer postFlightKV.Close()
+	}
 
 	startOAuthRefresher(listenerCtx, st, stores, kvStore)
 
@@ -94,9 +97,11 @@ func main() {
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
-	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, hostHealth)
-	proxyPipeline := buildProxy(cfg, limiter, lifecycleReg)
+	postFlight := newPostFlightWriters(postFlightKV)
+	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, postFlight)
+	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
 
 	specs := buildAdapterSpecs()
 	profiles := buildClientProfiles()
@@ -115,8 +120,8 @@ func main() {
 	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg)
 	defer payloadCtl.Close()
 
-	tokenCalibrator := buildTokenCalibrator(kvStore, lifecycleReg)
-	registerAdmission(cfg, lifecycleReg)
+	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
+	admission := registerAdmission(cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
@@ -138,7 +143,7 @@ func main() {
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
-		specRegistry, profiles, tokenCalibrator, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
+		specRegistry, profiles, tokenCalibrator, admission, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
 	// RELAY_CONTROL_PORT. Disabled when empty or "off".
@@ -150,8 +155,10 @@ func main() {
 			selector, hostHealth)
 	}
 
-	exitCode = waitForStop(inferErr, ctrlErr)
-	shutdown(cfg, ctrlSrv, inferSrv, cancelListener, batchQueue)
+	pprofSrv, pprofErr := startPprof(cfg)
+
+	exitCode = waitForStop(inferErr, ctrlErr, pprofErr)
+	shutdown(cfg, ctrlSrv, inferSrv, pprofSrv, cancelListener, batchQueue)
 }
 
 func buildAdapterSpecs() []*adapter.Spec {

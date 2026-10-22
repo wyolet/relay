@@ -31,7 +31,7 @@ import (
 //	"token-bucket"    — lazy-refill hash {tokens, last_ms}; refund on cancel
 //	"leaky-bucket"    — lazy-drain hash {level, last_ms}; refund on cancel
 //	"session-window"  — anchored hash {count, anchor_ms}; refund on cancel
-//	"" (concurrency)  — gauge counter, ignores strategy
+//	"" (concurrency)  — sorted set of leases {token → expiry_ms}; ignores strategy
 //	"" (revoked)      — existence check on a denylist key; no budget, no write
 //
 // Comparator invariant: every strategy uses `>` (strictly greater than amount).
@@ -68,19 +68,20 @@ for i, r in ipairs(rules) do
       return cjson.encode({revoked=true, rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
 
-  -- ── concurrency: gauge counter, strategy ignored ─────────────────────────
+  -- ── concurrency: one lease per reservation, strategy ignored ─────────────
   elseif meter == "concurrency" then
     local con_key = KEYS[r.con_key_idx]
-    local ttl_ms  = win_ms * 5
+    local held = redis.call('ZCOUNT', con_key, '(' .. ARGV[1], '+inf')
 
-    local cur = tonumber(redis.call('GET', con_key) or "0") or 0
-    local new_val = cur + 1
-
-    if new_val > amount then
-      return cjson.encode({exceeded=true, retry_after_ms=win_ms,
+    if held + 1 > amount then
+      local retry_ms = win_ms
+      local first = redis.call('ZRANGEBYSCORE', con_key, '(' .. ARGV[1], '+inf', 'WITHSCORES', 'LIMIT', 0, 1)
+      if first[2] then retry_ms = tonumber(first[2]) - now_ms end
+      return cjson.encode({exceeded=true, retry_after_ms=retry_ms,
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
-    table.insert(pending, {kind="con", key=con_key, ttl_ms=ttl_ms})
+    -- The lease frees a slot whose commit is lost; a request outliving its window stops counting early.
+    table.insert(pending, {kind="con", key=con_key, expiry_ms=now_ms + win_ms, ttl_ms=win_ms + 1000})
 
   -- ── tokens / tokens.X: peek only at Reserve; Commit increments ───────────
   -- buildReserveArgs always sends sliding-window for token meters.
@@ -243,7 +244,11 @@ end
 -- Only reached when every rule passed. Write all stashed state now.
 
 for _, p in ipairs(pending) do
-  if p.kind == "con" or p.kind == "sw_req" or p.kind == "fw" then
+  if p.kind == "con" then
+    redis.call('ZREMRANGEBYSCORE', p.key, '-inf', ARGV[1])
+    redis.call('ZADD', p.key, p.expiry_ms, tok)
+    redis.call('PEXPIRE', p.key, p.ttl_ms)
+  elseif p.kind == "sw_req" or p.kind == "fw" then
     redis.call('INCRBY', p.key, 1)
     redis.call('PEXPIRE', p.key, p.ttl_ms)
   elseif p.kind == "tb" then
@@ -266,7 +271,7 @@ return cjson.encode({exceeded=false, token=tok})
 // Wire format:
 //
 //	KEYS[1]             = guard key (idempotency)
-//	KEYS[2..1+n_con]    = concurrency keys to decrement
+//	KEYS[2..1+n_con]    = concurrency lease sets to release the token from
 //	KEYS[...]           = token bucket cur keys (post-hoc increment for tokens meter)
 //	KEYS[...]           = token-bucket state hash keys (refund on cancel)
 //	KEYS[...]           = leaky-bucket state hash keys (refund on cancel)
@@ -283,7 +288,7 @@ return cjson.encode({exceeded=false, token=tok})
 //
 // Returns "ok" or "noop" (duplicate).
 const commitLuaScript = `
--- Commit: decrement concurrency, post-hoc token increment, refund on cancel.
+-- Commit: release concurrency leases, post-hoc token increment, refund on cancel.
 local guard_key   = KEYS[1]
 local tok         = ARGV[1]
 local guard_ttl   = tonumber(ARGV[2])
@@ -300,12 +305,9 @@ if redis.call('EXISTS', guard_key) == 1 then
   return "noop"
 end
 
--- decrement concurrency counters (always, even on cancel), but never below zero
+-- release concurrency leases (always, even on cancel)
 for i = 2, 1 + n_con do
-  local cur = tonumber(redis.call('GET', KEYS[i]) or "0") or 0
-  if cur > 0 then
-    redis.call('INCRBY', KEYS[i], -1)
-  end
+  redis.call('ZREM', KEYS[i], tok)
 end
 
 -- post-hoc token increment (only when not cancelled)
@@ -475,7 +477,7 @@ type pendingEntry struct {
 	kind string // "con", "sw_req", "fw", "tb", "lb", "sw"
 	key  string
 	ttl  time.Duration
-	// token-bucket
+	// token-bucket, concurrency
 	newTokens int64
 	nowMs     int64
 	// leaky-bucket
@@ -483,6 +485,8 @@ type pendingEntry struct {
 	// session-window
 	newCount int64
 	anchorMs int64
+	// concurrency
+	expiryMs int64
 }
 
 // memReserveImpl is the Go emulator for reserveLuaScript.
@@ -537,22 +541,29 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 
 			case "concurrency":
 				conKey := keys[r.ConKeyIdx-1]
-				conTTL := time.Duration(winMs*5) * time.Millisecond
-
-				cur, _ := memReadCounter(ctx, store, conKey)
-				newVal := cur + 1
-
-				if newVal > amount {
+				leases, err := memReadLeases(ctx, store, conKey)
+				if err != nil {
+					return err
+				}
+				held, earliest := leases.live(nowMs)
+				if held+1 > amount {
+					retryMs := winMs
+					if held > 0 {
+						retryMs = earliest - nowMs
+					}
 					result = reserveResult{
 						Exceeded:     true,
-						RetryAfterMs: winMs,
+						RetryAfterMs: retryMs,
 						RuleKey:      r.RuleKey,
 						RuleName:     r.RuleName,
 						Meter:        r.Meter,
 					}
 					return nil
 				}
-				pending = append(pending, pendingEntry{kind: "con", key: conKey, ttl: conTTL})
+				pending = append(pending, pendingEntry{
+					kind: "con", key: conKey, ttl: time.Duration(winMs+leaseGraceMs) * time.Millisecond,
+					nowMs: nowMs, expiryMs: nowMs + winMs,
+				})
 
 			default:
 				// tokens / tokens.X — post-hoc; peek the sliding-window buckets
@@ -757,7 +768,17 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 		// Only reached when every rule passed.
 		for _, p := range pending {
 			switch p.kind {
-			case "con", "sw_req", "fw":
+			case "con":
+				leases, err := memReadLeases(ctx, store, p.key)
+				if err != nil {
+					return err
+				}
+				leases.prune(p.nowMs)
+				leases.Tokens[token] = p.expiryMs
+				if err := memWriteLeases(ctx, store, p.key, leases, p.ttl); err != nil {
+					return err
+				}
+			case "sw_req", "fw":
 				_, _ = store.Incr(ctx, p.key, 1)
 				_ = store.Expire(ctx, p.key, p.ttl)
 			case "tb":
@@ -899,8 +920,16 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 		}
 
 		for i := int64(1); i <= nCon; i++ {
-			if cur, err := memReadCounter(ctx, store, keys[i]); err == nil && cur > 0 {
-				_, _ = store.Incr(ctx, keys[i], -1)
+			leases, err := memReadLeases(ctx, store, keys[i])
+			if err != nil {
+				return err
+			}
+			if _, held := leases.Tokens[tok]; !held {
+				continue
+			}
+			delete(leases.Tokens, tok)
+			if err := memWriteLeases(ctx, store, keys[i], leases, time.Until(leases.Deadline)); err != nil {
+				return err
 			}
 		}
 

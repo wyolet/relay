@@ -1,18 +1,18 @@
 package inference
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	apphost "github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/proxy"
 	apprl "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	"github.com/wyolet/relay/pkg/reqbody"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -34,8 +35,11 @@ const (
 
 // handleProxy is the shared proxy-mode flow called by /openai/v1/chat/completions
 // and /anthropic/v1/messages. adapterKind pins the token extractor (and is used in
-// future per-host adapter-mismatch checks).
-func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
+// future per-host adapter-mismatch checks). modelName is the body's model,
+// already parsed by the shape route.
+//
+// The proxy-mode setting is enforced before this runs: by PrincipalMiddleware, and per frame on /v1/ws.
+func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name, modelName string) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
 	slog.Debug("proxy: handle entry",
@@ -44,20 +48,6 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"mode", cls.Mode,
 		"upstream_host_hdr", cls.UpstreamHost,
 	)
-
-	pm, ok := proxyModeSettings(d.Catalog)
-	if !ok || !pm.Enabled {
-		d.fireUsageFailure(ctx, "proxy_disabled", "proxy mode is not enabled on this relay")
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "proxy_disabled",
-			"proxy mode is not enabled on this relay")
-		return
-	}
-	if cls.Mode == ModeProxyAnonymous && !pm.AllowUnauthenticated {
-		d.fireUsageFailure(ctx, "unauthenticated", "anonymous proxy traffic is not enabled on this relay")
-		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated",
-			"anonymous proxy traffic is not enabled on this relay")
-		return
-	}
 
 	// Resolve upstream host. Two paths:
 	//   1. Caller pinned a host via X-WR-Upstream-Host → direct lookup.
@@ -90,6 +80,9 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 			return
 		}
 		host = h
+		if cls.Mode == ModeProxyAuthed {
+			resolvedPlan = resolvePinnedProxyPlan(d.Resolver, PrincipalFrom(ctx), snap, modelName, h)
+		}
 	} else {
 		if cls.Mode != ModeProxyAuthed {
 			d.fireUsageFailure(ctx, "missing_upstream_host", "anonymous proxy traffic requires an upstream-host header")
@@ -121,6 +114,13 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		subject = cls.ClientIP
 	}
 	rules := resolveSystemRules(snap, bucketName, subject)
+	// With no policy there is no rule to select nor a policy slug to anchor
+	// the hash tag on, so a policy-less key keeps the system bucket alone.
+	var inbound *policy.InboundInput
+	if p := PrincipalFrom(ctx); cls.Mode == ModeProxyAuthed && p != nil && p.Policy != nil {
+		inbound = proxyInbound(ctx, p.Policy, resolvedPlan, host, rules)
+		subject, rules = "", nil
+	}
 
 	// Strip relay-internal headers before forward — Authorization, X-WR-*,
 	// hop-by-hop. Proxy.Run re-attaches the caller's UpstreamAuth.
@@ -156,6 +156,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		Headers:       forwardHdr,
 		HostBaseURL:   host.Spec.BaseURL,
 		UpstreamAuth:  cls.UpstreamAuth,
+		Inbound:       inbound,
 		RateScope:     subject,
 		Rules:         rules,
 		Extractor:     extractorFor(d, adapterKind),
@@ -181,6 +182,11 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	)
 	body := pb.wrapResult(result.Body, lc)
 	defer body.Close()
+	// An upstream that answers before reading the whole body answered an incomplete one; the refusal is the caller's answer.
+	if rej := pb.Scanned.rejection(); rej != nil {
+		writeAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
+		return
+	}
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
@@ -242,6 +248,55 @@ func resolveSystemRules(snap *appcatalog.Snapshot, bucketName, subject string) [
 	return apprl.ResolveWithScope("proxy", subject, rl)
 }
 
+// proxyInbound is an authed proxy request's inbound reservation: pol's rate
+// limit, selected from the routed plan as normal mode selects it (or from the
+// pinned host alone when nothing routed), with ceiling reserved in the same
+// call. ceiling's keys carry the key-hash subject, so sharing the policy's
+// hash tag keeps them per key.
+func proxyInbound(ctx context.Context, pol *policy.Policy, plan *routing.Plan, host *apphost.Host, ceiling []pkgratelimit.Rule) *policy.InboundInput {
+	teamID, tokenJTI := reserveIdentity(ctx)
+	in := &policy.InboundInput{Policy: pol, TeamID: teamID, TokenJTI: tokenJTI, ExtraRules: ceiling}
+	switch {
+	case plan != nil:
+		in.ProviderSlug = plan.Provider
+		if plan.Model != nil {
+			in.ModelSlug, in.ModelID = plan.Model.Meta.Name, plan.Model.Meta.ID
+		}
+		if plan.Host != nil {
+			in.HostSlug = plan.Host.Meta.Name
+		}
+	case host != nil:
+		in.HostSlug = host.Meta.Name
+	}
+	return in
+}
+
+// resolvePinnedProxyPlan routes modelName at the pinned host, as normal mode
+// folds the header pin, so a pinned request is metered and priced like a
+// routed one. A miss is nil, not a refusal. A ref whose own "@" names another
+// host is a miss too: the bytes still go to h.
+func resolvePinnedProxyPlan(resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot, modelName string, h *apphost.Host) *routing.Plan {
+	if resolver == nil || p == nil || modelName == "" {
+		return nil
+	}
+	ref := modelName
+	if !strings.Contains(ref, "@") {
+		ref += "@" + h.Meta.Name
+	}
+	plan, err := resolver.Resolve(routing.Request{
+		ModelName:    ref,
+		RawModelName: modelName,
+		Policy:       p.Policy,
+		UserID:       p.UserID,
+		SkipKeyCheck: true,
+		Snapshot:     snap,
+	})
+	if err != nil || plan.Host == nil || plan.Host.Meta.ID != h.Meta.ID {
+		return nil
+	}
+	return plan
+}
+
 // relayKeyHashSubject returns the SHA-256 hash of the key token
 // from ctx, suitable as a per-key rate-limit subject. Empty when no
 // relay key is on ctx (proxy-anonymous path).
@@ -264,10 +319,20 @@ func relayKeyHashSubject(ctx context.Context) string {
 }
 
 func mapProxyErr(w http.ResponseWriter, err error) {
+	var rej *bodyError
 	switch {
+	case errors.As(err, &rej):
+		writeAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
 	case errors.Is(err, proxy.ErrNoUpstreamAuth):
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_upstream_auth",
 			"proxy mode requires Authorization: Bearer <upstream-key>")
+	case errors.Is(err, pkgratelimit.ErrRevoked):
+		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked",
+			"this token has been revoked")
+	case errors.Is(err, proxy.ErrPolicyMissing):
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "policy_missing", "proxy mode is not wired to a policy service")
+	case errors.Is(err, pkgratelimit.ErrUnavailable):
+		writeStoreUnavailable(w)
 	default:
 		// Limiter exceeded → 429 with Retry-After from the limiter's
 		// bucket-refill timing, so SDK clients back off correctly instead of
@@ -332,15 +397,17 @@ type proxyBody struct {
 	// wrapResult finalizes it into the lifecycle context on response
 	// close. Nil when the body was fully buffered or logging is off.
 	Capture *bodyCapture
+	// Scanned is the streamed remainder's reader, which can still refuse the body after the upstream call started. Nil when the body was fully buffered.
+	Scanned *scannedBody
 }
 
 // seedLifecycle retains the resolver's buffered bytes on lc as the
 // payload-capture fallback. When a Capture is armed, finalize overwrites
 // both fields with the assembled full body; until then (and on any
 // failure path that never closes the response) the prefix + truncated
-// flag stand. Nil-safe on lc.
+// flag stand. Nil-safe on lc; a no-op unless payload capture is on.
 func (pb proxyBody) seedLifecycle(lc *lifecycle.Context) {
-	if lc == nil {
+	if lc == nil || !lc.PayloadLog {
 		return
 	}
 	lc.RequestBody = pb.Prefix
@@ -384,11 +451,19 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
-		return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(prefix)), Prefix: prefix}, nil
+		return plan, proxyBody{Reader: reqbody.NewReader(prefix), Prefix: prefix}, nil
 	}
 
-	if model, ok := scanTopLevelModel(prefix); ok {
-		plan, err := resolveProxyPlan(model, resolver, p, snap)
+	scan := &modelScanner{exactKey: true}
+	closeAt := scan.feed(prefix)
+	if scan.err != nil {
+		return nil, proxyBody{}, proxyBodyResolveErr(scan.err)
+	}
+	if scan.modelDone {
+		if scan.model == "" {
+			return nil, proxyBody{}, proxyBodyResolveErr(errMissingModel)
+		}
+		plan, err := resolveProxyPlan(scan.model, resolver, p, snap)
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
@@ -398,10 +473,8 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 			pb.Capture = newBodyCapture(prefix, proxyMaxBodyBuffer)
 			rest = pb.Capture.tee(r.Body)
 		}
-		pb.Reader = struct {
-			io.Reader
-			io.Closer
-		}{io.MultiReader(bytes.NewReader(prefix), rest), r.Body}
+		pb.Scanned = newScannedBody(scan, prefix, closeAt, rest, r.Body)
+		pb.Reader = pb.Scanned
 		return plan, pb, nil
 	}
 
@@ -413,24 +486,35 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 	if len(full) > proxyMaxBodyBuffer {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_too_large", Detail: "request body exceeds proxy buffer limit"}
 	}
-	plan, err := resolveProxyModelJSON(full, resolver, p, snap)
+	scan.feed(rest)
+	if err := scan.finish(); err != nil {
+		return nil, proxyBody{}, proxyBodyResolveErr(err)
+	}
+	plan, err := resolveProxyPlan(scan.model, resolver, p, snap)
 	if err != nil {
 		return nil, proxyBody{}, err
 	}
-	return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(full)), Prefix: full}, nil
+	return plan, proxyBody{Reader: reqbody.NewReader(full), Prefix: full}, nil
 }
 
 func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
-	var peek struct {
-		Model string `json:"model"`
+	model, err := scanModel(body, true)
+	if err != nil {
+		return nil, proxyBodyResolveErr(err)
 	}
-	if err := json.Unmarshal(body, &peek); err != nil {
-		return nil, &errProxyHostResolve{Reason: "body_not_json", Detail: "proxy mode without X-WR-Upstream-Host requires a JSON body carrying a 'model' field", Inner: err}
+	return resolveProxyPlan(model, resolver, p, snap)
+}
+
+func proxyBodyResolveErr(e *bodyError) error {
+	switch e {
+	case errDuplicateModel:
+		return &errProxyHostResolve{Reason: "duplicate_model", Detail: e.msg}
+	case errModelKeySpelling:
+		return &errProxyHostResolve{Reason: "invalid_model_key", Detail: e.msg}
+	case errMissingModel:
+		return &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
 	}
-	if peek.Model == "" {
-		return nil, &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
-	}
-	return resolveProxyPlan(peek.Model, resolver, p, snap)
+	return &errProxyHostResolve{Reason: "body_not_json", Detail: "proxy mode without X-WR-Upstream-Host requires a JSON body carrying a 'model' field", Inner: e}
 }
 
 func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
@@ -447,57 +531,6 @@ func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, sn
 	return plan, nil
 }
 
-// scanTopLevelModel extracts the top-level "model" string from possibly
-// truncated JSON. It token-walks the object and returns as soon as the
-// value is decoded, so a decoder error past that point (the cut-off tail)
-// never matters. Nested containers are consumed whole, which is what keeps
-// a "model" key inside messages from matching.
-func scanTopLevelModel(b []byte) (string, bool) {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	tok, err := dec.Token()
-	if err != nil {
-		return "", false
-	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return "", false
-	}
-	for {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return "", false
-		}
-		if d, ok := keyTok.(json.Delim); ok && d == '}' {
-			return "", false
-		}
-		key, _ := keyTok.(string)
-		valTok, err := dec.Token()
-		if err != nil {
-			return "", false
-		}
-		if key == "model" {
-			s, ok := valTok.(string)
-			return s, ok && s != ""
-		}
-		if d, ok := valTok.(json.Delim); ok && (d == '{' || d == '[') {
-			depth := 1
-			for depth > 0 {
-				t, err := dec.Token()
-				if err != nil {
-					return "", false
-				}
-				if dd, ok := t.(json.Delim); ok {
-					switch dd {
-					case '{', '[':
-						depth++
-					case '}', ']':
-						depth--
-					}
-				}
-			}
-		}
-	}
-}
-
 func mapProxyResolveErr(w http.ResponseWriter, err error) {
 	e, ok := err.(*errProxyHostResolve)
 	if !ok {
@@ -511,7 +544,7 @@ func mapProxyResolveErr(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "body_read", e.Error())
 	case "body_too_large":
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "body_too_large", e.Detail)
-	case "body_not_json", "missing_model":
+	case "body_not_json", "missing_model", "duplicate_model", "invalid_model_key":
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", e.Reason, e.Detail)
 	case "routing":
 		// Re-map the inner routing sentinel to the same envelope the

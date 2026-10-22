@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/reqbody"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -94,11 +95,10 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	applyProfile(lc, profile, r.Header)
-	// Retain the inbound body for the payloadlog observer (a reference, not
-	// a copy — in.Body is already the fully-buffered request). The capture
-	// gate (lc.PayloadLog) is set below from the principal: before the proxy
-	// hand-off, or once routing succeeds, so a routing rejection is not captured.
-	lc.RequestBody = in.Body
+	// The body itself is retained on lc only once payload capture is decided
+	// on below (proxy hand-off, or routing success): otherwise nothing past
+	// the upstream call needs more than its length.
+	lc.RequestBytes = len(in.Body)
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
@@ -118,8 +118,11 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// Set before handleProxy: its host resolution reads it to decide
 		// whether to tee the whole streamed body.
 		lc.PayloadLog = PrincipalFrom(ctx).CapturesPayload()
-		r.Body = io.NopCloser(bytes.NewReader(in.Body))
-		handleProxy(d, w, r, in.Inbound)
+		if lc.PayloadLog {
+			lc.RequestBody = in.Body
+		}
+		r.Body = reqbody.NewReader(in.Body)
+		handleProxy(d, w, r, in.Inbound, in.ModelName)
 		return
 	}
 
@@ -150,6 +153,9 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 	lc.PayloadLog = principal.CapturesPayload()
+	if lc.PayloadLog {
+		lc.RequestBody = in.Body
+	}
 
 	inboundSpec := d.Specs.Spec(in.Inbound)
 	if inboundSpec == nil {
@@ -236,7 +242,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
 }
 
-// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. On false the response is written.
+// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. A shed is the one false return with no Finalize. On false the response is written.
 func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifecycle.Context) bool {
 	if d.Lifecycle == nil {
 		return true
@@ -246,13 +252,13 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 		return true
 	}
 	// In-flight cap reached → shed with a retriable 429 + Retry-After so
-	// clients back off instead of hammering a saturated pod. The slot was
-	// never acquired, so no release is owed. Any other abort stays a 500.
+	// clients back off instead of hammering a saturated pod. No Finalize is
+	// owed: admission is the first pre-flight middleware, so a shed aborts
+	// before any other one marks lc, and the slot was never acquired. Skipping
+	// it keeps a flood from turning into one usage event per refusal. Any
+	// other abort stays a 500.
 	if errors.Is(err, httpapi.ErrShed) {
-		d.fireUsageFailure(ctx, "shed", err.Error())
-		w.Header().Set("Retry-After", httpapi.RetryAfterShed)
-		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
-			"relay is at capacity; retry shortly")
+		writeShed(w)
 		return false
 	}
 	d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
@@ -305,7 +311,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 
 	result, err := d.Pipeline.Run(ctx, preq)
 	if err != nil {
-		mapPipelineErr(w, err)
+		mapRunErr(w, err)
 		return
 	}
 	defer result.Body.Close()
@@ -439,7 +445,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 
 	result, pErr := d.Pipeline.Run(ctx, preq)
 	if pErr != nil {
-		mapPipelineErr(w, pErr)
+		mapRunErr(w, pErr)
 		return
 	}
 	defer result.Body.Close()
@@ -529,9 +535,11 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 		sess = lc.StreamSession()
 	}
 
+	// One Write per frame, separator included: each Write through the keepalive wrapper is its own flush, i.e. a chunk and a syscall. The writer copies the bytes before returning, so buf is reused across frames.
+	var buf []byte
 	writeFrame := func(f []byte) {
-		_, _ = w.Write(f)
-		_, _ = w.Write([]byte("\n\n"))
+		buf = append(append(buf[:0], f...), '\n', '\n')
+		_, _ = w.Write(buf)
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -680,6 +688,8 @@ func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 		writeAPIError(w, http.StatusBadGateway, "upstream_error", "translate_response", perr.Error())
 		return
 	}
+	// The translation already decoded raw in full; post-flight reuses its Summary instead of reading the tee'd copy again.
+	lifecycle.FromContext(ctx).SetResponseSummary(v1.Summary{Tokens: canResp.Usage, FinishReason: canResp.FinishReason, ServiceTier: canResp.ServiceTier})
 	if echo {
 		setRelayUsage(d, r, status, raw, canResp)
 	}

@@ -50,6 +50,11 @@ func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string,
 	slog.Warn("inference: error response",
 		append([]any{"status", status, "type", errType, "code", code, "msg", msg}, attrs...)...,
 	)
+	writeErrorEnvelope(w, status, errType, code, msg)
+}
+
+// writeErrorEnvelope writes relay's error envelope without logging it, for refusals a flood could repeat and that are counted instead.
+func writeErrorEnvelope(w http.ResponseWriter, status int, errType, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(HeaderOrigin, "relay")
 	setShouldRetry(w, status)
@@ -286,10 +291,6 @@ func ForwardUpstreamHeaders(dst, src http.Header) {
 	}
 	dst.Set(HeaderOrigin, "upstream")
 }
-
-// MapPipelineErr is the exported form for adapter-side cross-shape handlers
-// that drive pipeline.Pipeline.Run directly.
-func MapPipelineErr(w http.ResponseWriter, err error) { mapPipelineErr(w, err) }
 
 // SplitSSEChunks is exported so adapter packages can use the same SSE
 // chunking logic in their cross-shape stream handlers.

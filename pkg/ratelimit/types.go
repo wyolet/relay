@@ -1,7 +1,8 @@
 // Package ratelimit implements a sliding-window-counter rate limiter with a
 // two-phase Reserve/Commit API. Five strategies are supported: sliding-window,
 // fixed-window, token-bucket, leaky-bucket, session-window. Concurrency is a
-// special gauge meter that works with any strategy.
+// special meter that works with any strategy: each reservation holds a lease
+// that Commit releases and that otherwise expires after the rule's window.
 //
 // This package is pure — it has no imports from github.com/wyolet/relay/internal.
 // Relay-specific translation (catalog.ResolvedRule → Rule) lives in
@@ -9,7 +10,8 @@
 //
 // Expected kv ops per request:
 //   - Reserve:    1 RunScript call (all counter checks + increments atomic).
-//   - Commit:     1 RunScript call (concurrency decrement + token post-increment).
+//   - PrepareReserve: the same script queued on the caller's kv.Batch, so it costs no round trip of its own.
+//   - Commit:     1 RunScript call (concurrency lease release + token post-increment), or none when it settles nothing: an uncancelled request whose rules meter neither concurrency nor tokens. PrepareCommit queues the same script on a caller's kv.Batch.
 //   - CommitBoth: 1 batched round trip committing two reservations that live
 //     under different hash tags (inbound policy scope + upstream hostkey scope),
 //     replacing two sequential Commit calls. Each reservation's script is
@@ -67,8 +69,9 @@ type Rule struct {
 	// Amount is the budget (requests, tokens, or concurrency slots).
 	Amount int64
 
-	// Window is the measurement period. For concurrency rules the window is
-	// used only to set key TTLs.
+	// Window is the measurement period. For concurrency rules it is the lease
+	// length: a slot whose Commit never arrives frees after it, and a request
+	// running longer stops counting.
 	Window time.Duration
 }
 

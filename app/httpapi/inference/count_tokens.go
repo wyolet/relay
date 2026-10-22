@@ -66,7 +66,7 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 
 	modelName, _, err := extractModelStream(body)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "parse_error", err.Error())
+		writeModelParseErr(w, err)
 		return
 	}
 	if modelName == "" {
@@ -162,7 +162,7 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 		Lifecycle:     lc,
 	})
 	if err != nil {
-		mapPipelineErr(w, err)
+		mapRunErr(w, err)
 		return 0, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(result.Body, adapter.MaxCountBody))
@@ -184,7 +184,7 @@ func refuseRevokedToken(ctx context.Context, d Deps, w http.ResponseWriter) bool
 		return true
 	}
 	if _, err := d.Pipeline.Policy.ReserveInbound(ctx, policy.InboundInput{TeamID: teamID, TokenJTI: jti}); err != nil {
-		mapPipelineErr(w, err)
+		mapRunErr(w, err)
 		return false
 	}
 	return true

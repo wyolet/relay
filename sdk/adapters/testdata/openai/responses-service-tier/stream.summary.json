@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "input": 10,
+    "output": 2
+  },
+  "finish_reason": "stop",
+  "service_tier": "flex"
+}

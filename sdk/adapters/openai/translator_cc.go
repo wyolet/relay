@@ -61,28 +61,3 @@ func ccReasoningField(pd json.RawMessage) string {
 	}
 	return ccReasoningFieldStd
 }
-
-// ccExtractReasoningContent extracts the reasoning text from a raw CC chunk,
-// probing both the OpenAI ("reasoning_content") and Ollama ("reasoning") field
-// names. Returns the text and which field carried it (empty when neither).
-func ccExtractReasoningContent(raw []byte) (text, field string) {
-	var probe struct {
-		Choices []struct {
-			Delta struct {
-				ReasoningContent string `json:"reasoning_content"`
-				Reasoning        string `json:"reasoning"`
-			} `json:"delta"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &probe); err != nil || len(probe.Choices) == 0 {
-		return "", ""
-	}
-	d := probe.Choices[0].Delta
-	if d.ReasoningContent != "" {
-		return d.ReasoningContent, ccReasoningFieldStd
-	}
-	if d.Reasoning != "" {
-		return d.Reasoning, ccReasoningFieldOllama
-	}
-	return "", ""
-}

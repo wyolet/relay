@@ -1,17 +1,13 @@
 ---
 title: "Metrics"
-description: "Prometheus metrics exposed by Relay, and what each one answers"
+description: "Prometheus metrics Relay exposes, their labels, and how to read them"
 ---
 
-Relay exports Prometheus metrics for traffic, latency, its own overhead, and a
-few saturation signals. Everything is in the `relay` namespace, plus the
-standard Go runtime and process collectors.
+Relay exposes Prometheus metrics for traffic, its own added latency, load shedding, background record loss and key health. Every Relay metric is in the `relay` namespace; the standard Go runtime (`go_*`) and process (`process_*`) collectors are registered too.
 
 ## Scrape endpoint
 
-Metrics are served at `/metrics` on the **control listener**
-(`RELAY_CONTROL_PORT`, default `8081`) — at the listener root, *not* under the
-`/api` prefix.
+Metrics are served at `/metrics` on the control listener (`RELAY_CONTROL_PORT`, default `8081`), at the listener root, not under `/api`. Each pod reports its own counters, so scrape every pod.
 
 ```bash
 curl http://localhost:8081/metrics
@@ -24,69 +20,77 @@ scrape_configs:
       - targets: ["relay:8081"]
 ```
 
+`/metrics` needs no credentials. Keep the control port off the public network, or put the scrape path behind your own access control.
+
+On Kubernetes, the Helm chart can create the scrape config (`serviceMonitor.enabled` for the Prometheus Operator, `vmPodScrape.enabled` for the VictoriaMetrics operator) and ship two Grafana dashboards as ConfigMaps labelled `grafana_dashboard` (`grafanaDashboards.enabled`): **Relay — Service**, built on these metrics (traffic, latency, overhead, admission, in-flight requests, queue depth, records lost, keys down, per-pod runtime), and **Relay — Usage (ClickHouse)**, which reads the ClickHouse [usage store](/concepts/usage#where-usage-is-stored) through the Grafana ClickHouse data source. See [Kubernetes](/deploy/kubernetes).
+
+## Measuring Relay overhead
+
+`relay_overhead_seconds` is the time Relay adds to a request: total time minus the upstream leg, where the upstream leg runs from handing the request to the upstream until the upstream finished sending its response. What remains is routing, rate-limit reservation, key selection, request and response translation, and any failed upstream attempts before the one that succeeded. The clock starts after the credential check and the request body read, so neither is counted.
+
+It is observed only for requests whose upstream response was read to the end; a request refused before reaching an upstream, or cut off mid-response, adds no sample. `relay_admission_seconds` is the part before the handoff.
+
+Read it per source, as a quantile over the histogram:
+
+```promql
+histogram_quantile(0.99, sum by (le, source) (rate(relay_overhead_seconds_bucket[5m])))
+```
+
+Buckets run from 100 µs to 500 ms. The value depends on your deployment: the round-trip time to the state store (Valkey/Redis), whether the request is translated between shapes, and how often keys fail over. Compare it with `relay_request_seconds` to see what share of end-to-end latency is Relay's. Proxy-mode requests (`source="proxy"`) forward the body without translation, so they show the floor for your setup.
+
 ## Request flow
 
-The core RED-style metrics (Rate, Errors, Duration), plus the Relay-vs-upstream
-time split. All are labelled by `source` — the runner that handled the request:
-`pipeline`, `proxy`, `ws`, `batch`, or `count` (a count-tokens request answered by
-the upstream's counter).
+All are labelled by `source`, the runner that handled the request: `pipeline` (normal mode), `proxy`, `ws` (a WebSocket frame), `batch` or `count` (a count-tokens request).
 
 | Metric | Type | Labels | What it answers |
 | --- | --- | --- | --- |
-| `relay_requests_total` | counter | `source`, `status` | How much traffic and how many errors. `status` is a bounded **class** (`2xx`/`3xx`/`4xx`/`5xx`/`other`), never the raw code. |
-| `relay_request_seconds` | histogram | `source` | End-to-end latency, from handler entry to response body closed. |
-| `relay_overhead_seconds` | histogram | `source` | **Relay's own time** = total handler time minus the upstream call. |
-| `relay_admission_seconds` | histogram | `source` | Time from request accept to upstream handoff — auth + rate-limit reserve + key selection. |
-| `relay_inflight_requests` | gauge | `source` | Currently-open requests. A streamed request counts until its body closes. |
-| `relay_inflight_limit` | gauge | _(none)_ | The configured per-pod admission cap (`RELAY_MAX_INFLIGHT`). Plot `inflight_requests / inflight_limit` as shed headroom. |
-| `relay_requests_shed_total` | counter | _(none)_ | Requests refused at admission (429 + `Retry-After`) because the in-flight cap was reached — load shedding. Distinguishes "pod at capacity" from quota 429s. |
-| `relay_post_flight_seconds` | histogram | _(none)_ | Duration of the post-flight observer fan-out per request. |
+| `relay_requests_total` | counter | `source`, `status` | How much traffic and how many errors. `status` is the class of the upstream's response status: `2xx`, `3xx`, `4xx`, `5xx`, or `other` when no upstream answered (refused by routing, a rate limit or an empty key pool; upstream unreachable; client canceled). Requests refused for their credential are counted in `relay_inference_auth_rejected_total` instead, and shed requests in `relay_requests_shed_total`. |
+| `relay_request_seconds` | histogram | `source` | End-to-end latency, from the start of dispatch to the response body closing. Buckets 1 ms to 120 s. |
+| `relay_overhead_seconds` | histogram | `source` | Relay's own time; see [above](#measuring-relay-overhead). Buckets 100 µs to 500 ms. |
+| `relay_admission_seconds` | histogram | `source` | Time from the start of dispatch to the upstream handoff of the attempt that succeeded: routing, rate-limit reservation, key selection, and earlier failed attempts. Observed only when an upstream was reached. Buckets 100 µs to 250 ms. |
+| `relay_post_flight_seconds` | histogram | _(none)_ | Duration of the background work after each response: token extraction, usage, payload and metric recording, rate-limit and host-health commits. It never delays the response. |
+| `relay_inflight_requests` | gauge | `source` | Requests currently open. A streamed request counts until its body closes. Batch items are not counted. |
+| `relay_inflight_limit` | gauge | _(none)_ | The per-pod in-flight cap, `RELAY_MAX_INFLIGHT` (default 2048). |
+| `relay_requests_shed_total` | counter | `stage` | Inference requests refused with `429` and `Retry-After: 1` because the in-flight cap was reached. `stage` is `early` (refused before the body is read) or `late` (the last slot was taken after the body was read). Shed requests write no usage event. |
+| `relay_inference_auth_rejected_total` | counter | `reason` | Inference and OTLP requests refused by the credential check. See [Auth rejection reasons](#auth-rejection-reasons). |
 
-<Info>
-`relay_overhead_seconds` is **the** metric to watch — it isolates the latency
-Relay itself adds. The performance SLO lives here: p99 overhead under 10 ms in a
-live distributed deployment. Its buckets are tuned tight (100 µs → 500 ms) for
-exactly this question.
-</Info>
+`relay_inflight_requests / relay_inflight_limit` is a pod's headroom before it starts shedding. A non-zero shed rate means the pod is at capacity, which a quota `429` (`error_kind` `rate_limited` in [usage](/concepts/usage#failed-requests)) is not.
 
-<Note>
-`relay_overhead_seconds` and `relay_admission_seconds` are only observed when the
-request actually **reached upstream**. A request rejected before handoff (auth
-failure, rate-limited, no healthy key) is counted in `relay_requests_total` but
-contributes no overhead/admission sample — there's no meaningful split to record.
-</Note>
+### Auth rejection reasons
 
-## Health & saturation
+`reason` is the message of a `401` or the error code of a `403`, exactly as emitted:
 
-Leading indicators for the two failures that hurt silently: dropped background
-records, and provider keys dying off.
+| Status | `reason` values |
+| --- | --- |
+| `401` | `missing relay key`, `invalid api key`, `api key disabled`, `api key revoked`, `api key expired`, `api key rotated` (an old value past its rotation grace), `invalid token`, `token expired`, `token revoked`, `project unavailable` (a WebSocket frame whose token's project is gone), `unauthenticated` (anonymous proxy traffic while it is not allowed) |
+| `403` | `passthrough_forbidden`, `proxy_disabled`, `no_policy`, `policy_disabled`, `project_unavailable` |
+
+## Health and saturation
 
 | Metric | Type | Labels | What it answers |
 | --- | --- | --- | --- |
-| `relay_records_lost_total` | counter | `kind` | Background records (`usage` / `payload`) dropped because a bounded emitter queue was full. A drop you can't see is a billing or audit hole — so it's counted. |
-| `relay_emit_queue_depth` | gauge | `kind` | Events waiting in a bounded emitter queue (`usage` / `payload`) — the leading signal for the drops above, before they happen. |
-| `relay_provider_keys_down_total` | counter | `reason` | Times a pooled provider key was put into cooldown by a failure. `reason` is the failure class, e.g. `auth`, `rate_limit`, `server_error`, `network`, `local_rl`. |
-| `relay_flush_lag_seconds` | gauge | `kind` | Age of the oldest un-flushed WAL segment (`usage` / `payload`). 0 = drained. Rising = the sink (ClickHouse) is not accepting data — your usage/billing view is going stale even while nothing is being *lost*. |
-| `relay_upstream_connections_total` | counter | `kind` | Upstream connections per attempt: `new` (dialed) vs `reused` (keep-alive pool). A `new` rate approaching the request rate means connection churn — the failure mode connection pooling exists to prevent. |
-| `relay_dropped_params_total` | counter | `param`, `model` | A request field the target model/adapter doesn't support, stripped instead of failing the request. Watch it to catch a client sending parameters a model silently ignores. |
-| `relay_stream_events_dropped_total` | counter | `adapter`, `direction`, `reason` | Streamed events skipped on a cross-shape stream because a translator could not convert them. `direction` is `to_canonical` (an upstream event `adapter` sent) or `from_canonical` (rendering into the caller's `adapter` shape); `reason` is `syntax`, `type`, or `invalid`. The rest of the stream still flows; if the dropped event was the terminal one, the stream ends with an error event instead. |
-| `relay_audit_dropped_total` | counter | _(none)_ | Admin audit events dropped because the emitter queue was full. A drop here is a gap in the audit trail — alert on it if completeness matters for your deployment. |
-| `relay_catalog_apply_errors_total` | counter | `kind` | Catalog change events that failed to apply incrementally. Each failure falls back to a full catalog reload, so a sustained rate means a flaky Postgres and repeated rebuilds. |
-| `relay_otlp_exports_total` | counter | `signal`, `result` | OpenTelemetry exports received by the [receiver](/concepts/observability#reported-usage-opentelemetry), per `signal` (`traces`, `logs`): `accepted`, `disabled`, `bad_request`, `too_large`, `too_many_records` (more than 10,000 model calls), `unsupported_media`, `policy_disabled` (the credential's governing policy is disabled, 403; also counted in `relay_inference_auth_rejected_total`), `rate_limited` (over the export rate limit, 429), `backpressure` (the usage queue is half full or lacks room for the export, 503; the exporter resends). Exports refused for a missing or invalid credential are counted in `relay_inference_auth_rejected_total`. |
-| `relay_otlp_spans_total` | counter | `outcome` | Spans in trace exports: `recorded` as a usage event, `duplicate` (a model call already recorded, skipped), `ignored` (not a model call), or `rejected` (a model call without a trace id or span id, starting more than 5 minutes in the future, or older than the usage retention). `ignored` and `rejected` are counted for accepted exports only. A high `ignored` share is normal for clients that export whole traces. |
-| `relay_otlp_log_records_total` | counter | `outcome` | Log records in logs exports: `recorded` as a usage event, `duplicate` (a model call already recorded, as an event or as its span), `ignored` (not the `gen_ai.client.inference.operation.details` event), or `rejected` (a model call with neither span ids nor a response id, starting more than 5 minutes in the future, or older than the usage retention). `ignored` and `rejected` are counted for accepted exports only. |
-| `relay_otlp_content_total` | counter | `outcome` | Reported model calls that carried message content while content capture was on: `stored` (queued for the payload store), `duplicate` (content already stored for the call), `dropped` (the payload queue was half full or lacked room; the usage row is unaffected, and a later report of the call can still store the content), `policy` (the policy governing the reporting credential does not have `payloadLoggingEnabled`; the usage row is unaffected, and the client is told in the export response), or `expired` (the call started before the payload retention window, so the store would delete its content on arrival; the usage row is unaffected, and the client is told). A steady `policy` rate means clients are uploading content that is never kept. |
-| `relay_otlp_marker_errors_total` | counter | `op` | Failed kv operations of the receiver's duplicate check, for usage and for content. `mark`: the export's calls were stored without the check, so a resend may store them again. `unmark`: calls stayed marked although a queue refused them, so a resend skips them — those records are lost. |
+| `relay_records_lost_total` | counter | `kind` (`usage`, `payload`) | Background records dropped: the in-memory queue was full, or a ClickHouse write-ahead log went over its segment cap and its oldest segments were deleted unsent (every record in them counts). A usage drop is a gap in usage and cost. |
+| `relay_emit_queue_depth` | gauge | `kind` (`usage`, `payload`) | Records waiting in the in-memory queue, the leading signal for the drops above. The usage queue holds `RELAY_USAGE_QUEUE_SIZE` (default 16,384), the payload queue 256. |
+| `relay_flush_lag_seconds` | gauge | `kind` (`usage`, `payload`) | Age of the oldest unsent write-ahead-log segment of a ClickHouse store. `0` means drained; a rising value means ClickHouse is not accepting writes and the stored view is going stale, before anything is lost. |
+| `relay_audit_dropped_total` | counter | _(none)_ | Admin [audit](/concepts/audit) events dropped because the audit queue was full. Each one is a gap in the audit trail. |
+| `relay_provider_keys_down_total` | counter | `reason` | Times a pooled host key was put into cooldown. `reason`: `upstream_auth_failed` (401), `upstream_forbidden` (403), `upstream_rate_limited` (429 with a `Retry-After` over 5 seconds; a shorter one leaves the key in rotation), `upstream_server_error` (5xx), `upstream_network_error` (a failure after the connection was made; a failed dial never cools a key down). See [Key pooling](/concepts/key-pooling). |
+| `relay_kv_errors_total` | counter | `op`, `outcome` | Valkey calls on the inference path that failed or timed out. `op` is the call site: `limit_reserve`, `limit_commit`, `breaker_read`, `breaker_write`, `key_rotation`, `host_health`, `token_ratio`. `outcome` is what Relay did instead: `refused` (the request was rejected), `fallback` (decided without the stored value, e.g. a key's breaker read as healthy), or `dropped` (the write was abandoned). Any rate means Valkey is stalling or unreachable. |
+| `relay_upstream_connections_total` | counter | `kind` (`new`, `reused`) | Upstream connections per attempt: dialed or taken from the keep-alive pool. A `new` rate close to the request rate means connection churn. |
+| `relay_catalog_apply_errors_total` | counter | `kind` | Catalog change notifications that failed to apply incrementally, by entity kind (`provider`, `host`, `model`, `hostkey`, `policy`, …). Each failure falls back to a full catalog reload, so a sustained rate means repeated rebuilds. |
+| `relay_dropped_params_total` | counter | `param`, `model` | Request parameters removed before the upstream call because the routed model's catalog entry declares them unsupported. The response carries an `X-WR-Warnings` header naming them. |
+| `relay_stream_events_dropped_total` | counter | `adapter`, `direction`, `reason` | Stream events skipped on a translated stream because a translator could not convert them. `direction` is `to_canonical` (an event from the upstream, `adapter` is the upstream shape) or `from_canonical` (rendering into the caller's shape); `reason` is `syntax`, `type` or `invalid`. The stream continues; if the dropped event was the last one, the stream ends with an error event. |
+| `relay_tokencount_ratio_writes_total` | counter | `outcome` | Token-count calibration samples: `written` to the state store, `skipped` (within 5% of the ratio this pod last wrote, less than 5 minutes ago), or `failed` (the write errored). |
 
-<Note>
-`relay_provider_keys_down_total` is a counter of cooldown **transitions**, not a
-gauge of "keys down right now." Breaker state lives in shared kv, so a per-pod
-gauge would be inconsistent across the fleet; trip counts, by contrast, sum
-cleanly. Watch its rate, not its absolute value.
-</Note>
+`relay_provider_keys_down_total` counts transitions into cooldown, not keys down right now: breaker state is shared across pods, so a per-pod gauge would disagree between pods, while transition counts add up. Alert on its rate.
 
-## Standard collectors
+## OTLP receiver
 
-The default Go and process collectors are registered too, so you also get the
-usual `go_*` (goroutines, GC, memory) and `process_*` (CPU, FDs, resident
-memory) series without any extra configuration.
+Counted only for exports to the [OTLP receiver](/concepts/otlp-receiver).
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `relay_otlp_exports_total` | counter | `signal` (`traces`, `logs`), `result` | Export requests by result: `accepted`, `disabled` (receiver off, 404), `bad_request`, `too_large`, `too_many_records` (more than 10,000 model calls), `unsupported_media`, `policy_disabled` (403), `rate_limited` (429), `backpressure` (the usage queue is half full or lacks room, 503). Exports refused for a missing or invalid credential are counted in `relay_inference_auth_rejected_total`. |
+| `relay_otlp_spans_total` | counter | `outcome` | Spans in trace exports: `recorded`, `duplicate` (already recorded), `ignored` (not a model call), `rejected` (no trace and span id, starting more than 5 minutes in the future, or older than the usage retention). A high `ignored` share is normal for clients that export whole traces. |
+| `relay_otlp_log_records_total` | counter | `outcome` | Log records in logs exports, with the same outcomes. `ignored` is any record other than the `gen_ai.client.inference.operation.details` event. |
+| `relay_otlp_content_total` | counter | `outcome` | Reported calls that carried message content while content capture was on: `stored`, `duplicate`, `dropped` (the payload queue was half full or lacked room), `policy` (the governing policy does not capture payloads), `expired` (older than the payload retention). The usage event is recorded in every case. |
+| `relay_otlp_marker_errors_total` | counter | `op` | Failed state-store operations of the duplicate check. `mark`: calls were stored without the check, so a resend may store them again. `unmark`: calls stayed marked although a queue refused them, so a resend skips them and those records are lost. |

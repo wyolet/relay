@@ -46,7 +46,7 @@ func buildUsageLog(listenerCtx context.Context, cfg *config.Config, cat *appcata
 		KV:         kvStore,
 		FilePath:   usagePath,
 		WALDir:     usageWALDir,
-	}), slog.Default())
+	}), cfg.UsageQueueSize, slog.Default())
 	usageReader := usageCtl.Reader()
 	// Emit-time cost: the usage producer prices each event's tokens against
 	// the pricing the plan resolved (id stamped on the lifecycle Context),
@@ -82,25 +82,28 @@ func buildPayloadLog(listenerCtx context.Context, cat *appcatalog.Catalog, store
 	return payloadCtl
 }
 
-func buildTokenCalibrator(kvStore kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
-	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; one kv write per completed request, post-flight only.
-	tokenCalibrator := tokencount.NewCalibrator(kvStore)
-	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
-	return tokenCalibrator
+func buildTokenCalibrator(kvStore, postFlightKV kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
+	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; kv writes only when a ratio moves or is due for a refresh, post-flight only.
+	// The writes go through the post-flight store; the returned Calibrator serves the count-tokens reads on the shared one. Only the writer keeps state (what it last wrote), so two instances are safe.
+	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokencount.NewCalibrator(postFlightKV)))
+	return tokencount.NewCalibrator(kvStore)
 }
 
-func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) {
+func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) *httpapi.Admission {
 	// Admission control: a per-pod in-flight cap on inference requests. Rides
-	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
-	// pre-flight so a shed request is never counted as in-flight, Collect
+	// the lifecycle spine — PreFlight (acquire) registered FIRST, before the
+	// metrics pre-flight, so a shed request has marked nothing and needs no
+	// Finalize (the inference dispatch skips it), Collect
 	// (release) fires from Finalize at response-body close so a streamed request
 	// holds its slot for the whole stream. Scope is Dispatch only (inference +
 	// each WS frame), never /healthz or the control plane. RELAY_MAX_INFLIGHT
 	// tunes the cap; 0 = httpapi.DefaultMaxInflight.
 	admission := httpapi.NewAdmission(cfg.MaxInflight)
 	lifecycleReg.RegisterPreFlight(admission.PreFlight)
+	// Must stay registered after the usage, payload and tokencount collectors: collectors run in order, so a request holds its slot until their post-flight work is done and the in-flight cap also bounds the post-flight backlog.
 	lifecycleReg.RegisterCollector(admission)
 	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
+	return admission
 }
 
 func registerMetrics(lifecycleReg *lifecycle.Registry, usageCtl *usagelog.Controller, payloadCtl *payloadlog.Controller) {

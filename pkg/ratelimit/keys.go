@@ -14,10 +14,10 @@ func bucketKey(scope string, r Rule, bucketTS time.Time) string {
 	)
 }
 
-// concurrencyKey returns the state key for a concurrency counter.
-// format: limit:{<scope>}:<rule.Key>:<meter>
+// concurrencyKey returns the sorted-set key holding a concurrency rule's leases. The lease segment keeps it apart from the string counter older releases write under the bare name, so a rolling deploy never meets WRONGTYPE.
+// format: limit:{<scope>}:lease:<rule.Key>:<meter>
 func concurrencyKey(scope string, r Rule) string {
-	return fmt.Sprintf("limit:{%s}:%s:%s", scope, r.Key, r.Meter)
+	return fmt.Sprintf("limit:{%s}:lease:%s:%s", scope, r.Key, r.Meter)
 }
 
 // fixedWindowKey returns the state key for a fixed-window bucket.

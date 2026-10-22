@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/redis/go-redis/v9"
+	"time"
 )
 
 // runLua is an internal helper; it is NOT the exported RunScript.
@@ -26,8 +25,8 @@ func (r *Redis) runLua(ctx context.Context, name, script string, keys []string, 
 			return nil, err
 		}
 		result, err = r.client.EvalSha(ctx, sha, keys, args...).Result()
-		if err != nil {
-			// Final fallback: plain EVAL.
+		// Only a second NOSCRIPT proves the script never ran; after any other error, EVAL could run it twice.
+		if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
 			result, err = r.client.Eval(ctx, script, keys, args...).Result()
 		}
 	}
@@ -53,7 +52,17 @@ func (r *Redis) loadSHA(ctx context.Context, name, script string) (string, error
 func (r *Redis) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	r.inflight.Add(1)
 	defer r.inflight.Done()
-	return r.runLua(ctx, name, script, keys, args...)
+	start := time.Now()
+	b, err := r.runLua(ctx, name, script, keys, args...)
+	r.trackSlow(name, firstKey(keys), start, err)
+	return b, markUnavailable(err)
+}
+
+func firstKey(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 // RunScriptBatch implements BatchScripter: it issues every call in a single
@@ -64,52 +73,15 @@ func (r *Redis) RunScript(ctx context.Context, name, script string, keys []strin
 // differ (that is the point — it batches away sequential round trips for
 // operations that cannot share a CROSSSLOT-safe script).
 func (r *Redis) RunScriptBatch(ctx context.Context, calls []ScriptCall) []ScriptResult {
-	r.inflight.Add(1)
-	defer r.inflight.Done()
-
-	results := make([]ScriptResult, len(calls))
-	if len(calls) == 0 {
-		return results
-	}
-
-	// Best-effort preload; an empty sha falls back to plain EVAL in-pipeline.
-	shas := make([]string, len(calls))
+	ops := make([]BatchOp, len(calls))
+	outs := make([]BatchResult, len(calls))
 	for i, c := range calls {
-		if sha, err := r.loadSHA(ctx, c.Name, c.Script); err == nil {
-			shas[i] = sha
-		}
+		ops[i] = BatchOp{Kind: OpScript, Script: c, Result: &outs[i]}
 	}
-
-	cmds := make([]*redis.Cmd, len(calls))
-	// Pipelined returns the first command error; individual results are read
-	// from each Cmder below regardless, so the aggregate error is ignored.
-	_, _ = r.client.Pipelined(ctx, func(p redis.Pipeliner) error {
-		for i, c := range calls {
-			if shas[i] != "" {
-				cmds[i] = p.EvalSha(ctx, shas[i], c.Keys, c.Args...)
-			} else {
-				cmds[i] = p.Eval(ctx, c.Script, c.Keys, c.Args...)
-			}
-		}
-		return nil
-	})
-
-	for i, cmd := range cmds {
-		v, err := cmd.Result()
-		if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
-			// Script evicted between preload and exec; re-run this one directly
-			// (runLua reloads the SHA and falls back to EVAL).
-			r.shas.Delete(calls[i].Name)
-			b, rerr := r.runLua(ctx, calls[i].Name, calls[i].Script, calls[i].Keys, calls[i].Args...)
-			results[i] = ScriptResult{Value: b, Err: rerr}
-			continue
-		}
-		if err != nil {
-			results[i] = ScriptResult{Err: err}
-			continue
-		}
-		b, cerr := redisResultToBytes(v)
-		results[i] = ScriptResult{Value: b, Err: cerr}
+	r.ExecBatch(ctx, ops)
+	results := make([]ScriptResult, len(calls))
+	for i, o := range outs {
+		results[i] = ScriptResult{Value: o.Value, Err: o.Err}
 	}
 	return results
 }

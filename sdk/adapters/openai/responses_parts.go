@@ -198,6 +198,15 @@ func responsesUnmarshalContent(raw json.RawMessage) ([]ResponsesPart, error) {
 	return parts, nil
 }
 
+// responsesPartTypeDecodes reports whether responsesUnmarshalPart decodes a part of type t rather than failing on it.
+func responsesPartTypeDecodes(t ResponsesPartType) bool {
+	switch t {
+	case ResponsesPartTypeInputText, ResponsesPartTypeInputImage, ResponsesPartTypeInputFile, ResponsesPartTypeOutputText, ResponsesPartTypeRefusal:
+		return true
+	}
+	return false
+}
+
 // responsesUnmarshalPart dispatches to the correct ResponsesPart concrete type.
 func responsesUnmarshalPart(data []byte) (ResponsesPart, error) {
 	var probe struct {

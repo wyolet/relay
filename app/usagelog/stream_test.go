@@ -60,13 +60,16 @@ func TestStreamUsageObserver_ParityWithAccumulate(t *testing.T) {
 	pricer := testPricer(map[string]*pricing.Pricing{"pr-1": testSheet()})
 
 	newLC := newParityLC()
-	obs := (&StreamUsageFactory{pricer: pricer}).NewObserver(newLC)
+	reg := lifecycle.New()
+	reg.RegisterStreamObserver(NewStreamUsageFactory(pricer, ""))
+	sess := reg.NewStreamSession(newLC)
 	for _, f := range frames {
-		obs.Observe(f)
+		sess.Observe(f)
 	}
-	got, err := obs.Result()
-	if err != nil {
-		t.Fatalf("Result: %v", err)
+	sess.Finish()
+	got, ok := newLC.Collected(Namespace)
+	if !ok {
+		t.Fatal("no usage event collected")
 	}
 	newEv := got.(*Event)
 

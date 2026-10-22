@@ -28,7 +28,7 @@ require (
 	github.com/minio/minio-go/v7 v7.1.0
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/wyolet/relay/auth v0.3.0
 	github.com/wyolet/relay/jobq v0.1.1
@@ -40,7 +40,7 @@ require (
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 

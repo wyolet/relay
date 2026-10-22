@@ -18,6 +18,15 @@ type Sink interface {
 	Write(ev Event) error
 }
 
+// BatchWriter is the optional bulk path of a Sink: the Emitter hands each
+// drained batch to WriteBatch in one call, and falls back to one Write per
+// event for a Sink without it. The slice is reused once the call returns.
+type BatchWriter interface {
+	// WriteBatch delivers evs in order. An error may leave a prefix of the
+	// batch written; the Emitter logs it and moves on, as for Write.
+	WriteBatch(evs []Event) error
+}
+
 // Closer is the optional shutdown contract for a Sink. The Emitter
 // type-asserts each sink for it on Close and, when present, calls Close
 // after the queue drains — giving buffered/remote backends (ClickHouse,

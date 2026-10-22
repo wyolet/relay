@@ -1,56 +1,41 @@
 ---
-title: "Upgrading to teams, projects, and RBAC"
-description: "Restart requirements, behaviour changes, and rollback when upgrading to the release that adds teams and projects"
+title: "Upgrading"
+description: "How schema migrations run, how to roll back and recover, and the releases that need extra steps"
 ---
 
-The release that adds Teams, Projects, Roles, and relay-signed inference tokens changes the Postgres schema and how keys are stored. Plan a short downtime window: a fleet mixing the old and new binary is only partly functional (see [Rolling upgrades](#rolling-upgrades)).
+A release can add Postgres migrations. Relay applies pending ones at boot (`RELAY_MIGRATE_ON_BOOT`, on by default) under a Postgres advisory lock, so several replicas can start together. `relay migrate up` applies them as a step of its own, and the Helm chart runs it in a pre-upgrade Job before any pod rolls (see [Migrations](/deploy/kubernetes#migrations)).
 
-## Before you upgrade
-
-Run the latest 0.9.x patch release first. It boots against a schema newer than its own migrations — it logs a warning and skips migrating — instead of failing at startup. That is what lets an older pod restart while the upgrade is in progress, and what lets you start the previous image during a rollback. Earlier 0.9.x releases refuse to boot once the new migrations have run.
-
-## What changed on disk
-
-Migrations `000025`–`000030` add:
-
-| Migration | Adds |
-| --- | --- |
-| `000025_teams_projects` | `teams`, `projects` tables — the tenancy scope every project-owned row hangs off. Host keys, policies, rate limits, hosts, host bindings, and models created with the admin token (a `user` owner with no id) become system-owned: nobody owns them, and the new code treats a user-owned row as personal. |
-| `000026_subjects_keys` | `service_accounts`, `groups`, `group_members`; `relay_keys` gains `principal_sa_id` / `principal_user_id`, so a key is a credential of a principal (a service account or a user) instead of being its own identity. A key owned by a known user keeps that user as its principal; every other key is moved onto a generated service account in a system `legacy` project. |
-| `000027_rbac_kinds` | `roles`, `role_bindings`, `policy_bindings` (plus their subject tables) — evaluated when `RELAY_AUTHZ=rbac`. |
-| `000028_audit_events` | `audit_events` — the append-only admin audit log. |
-| `000029_token_version` | `users.token_version` — bumped to invalidate every inference token a user holds. |
-| `000030_batch_attribution` | Attribution columns on `batches` (project, team, principal, credential). |
+Most releases upgrade in place: deploy the new image, or run `helm upgrade` with the new chart version. The releases under [Release notes](#release-notes) need extra steps; read the note for every release between your version and the target.
 
 ## Upgrade procedure
 
-1. Take a Postgres backup. The migrations add tables and columns and rewrite existing key and owner rows; rollback is a real down-migration, not a config flip.
-2. Stop every pod running the old image — scale the deployment to 0, or use a `Recreate` deployment strategy. The bundled chart's Deployment uses the default rolling update, so scale it down first.
-3. Deploy the new image. It runs the migrations on boot and starts serving.
+1. Back up Postgres. A rollback is a down-migration that drops what the up-migration added, not a configuration switch.
+2. Read the [release notes](#release-notes) for every release you cross.
+3. Deploy the new version. When a note calls for it, stop every old pod first, as in [Stop-and-start upgrades](#stop-and-start-upgrades).
 
-### Rolling upgrades
+## Stop-and-start upgrades
 
-If you roll pods one at a time, the first new pod migrates the schema while old pods are still serving. Until the last old pod is replaced, creating a key on an old pod fails: the old binary writes a key with no principal, which the new schema rejects. Stopping every old pod first avoids the window.
+Some upgrades must not run old and new pods side by side. For those, scaling to 0 is the supported way to stop the old pods:
 
-## What behaves differently afterwards
+1. `kubectl -n relay scale deploy/relay --replicas=0`, and wait until `kubectl -n relay get pods` lists no relay pod. With Argo CD self-heal, pause automated sync first, or it restores the replica count. With Docker, stop every relay container.
+2. Upgrade. The chart's migrate Job applies the migrations while no pod is running.
+3. Once the upgrade has finished, check that the Deployment is back at its replica count, and scale it up if not.
 
-**Keys without a policy.** A key that had no policy before the upgrade lands in the `legacy` project with no policy bound, and keeps resolving as it did: through the policy-less flow, which the `allowMissingPolicy` field of the `inference` settings section governs under `RELAY_AUTHZ=single` and which `RELAY_AUTHZ=rbac` refuses. Once you add a policy binding to the `legacy` project, its keys follow the same rule as every other project: they resolve a policy through their service account or a binding, or are refused.
+The chart's `updateStrategy.type: Recreate` is not enough: the old pods keep serving while the pre-upgrade migrate Job runs.
 
-**Rate limits.** Rate-limit counters are keyed differently, so every bucket starts empty at the cutover. A bare `tokens` meter now counts input plus output tokens; before the upgrade it summed every token sub-meter, including cache reads, cache writes, and reasoning tokens. To cap those, add rules on the specific meter (`tokens.cache_read`, `tokens.reasoning`, …).
+## Lock timeout
 
-**Multi-user deployments.** `RELAY_MULTI_USER` is read as `RELAY_AUTHZ=rbac`. Under multi-user, any signed-in user could read the usage and request logs of their own keys; under rbac those reads need a RoleBinding that grants them — for example the built-in `developer` role (usage and logs) or `viewer` (usage) on the user's project. Bind those roles before switching users over, or non-admin users see no usage.
+Each migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` seconds (default `10`) for a table lock. An `ALTER TABLE` queued behind a long transaction would otherwise hold every later query on that table behind it, sign-ins on `users` included, for as long as the transaction runs. A migration that gives up fails with `canceling statement due to lock timeout`, applies nothing, and leaves the schema version clean, so boot, `relay migrate up`, or the chart's migration Job can be run again once the blocking transaction has ended. The timeout applies to the migration connections only, not to the pool that serves requests; `0` waits indefinitely, and a `lock_timeout` set in `RELAY_PG_DSN` takes precedence.
 
 ## Rolling back
 
-If the new version needs to be backed out:
+1. Stop every pod: scale the deployment to 0, or set `RELAY_MIGRATE_ON_BOOT=off` on it first. Every relay runs the pending up-migrations at boot, so a pod that restarts mid-rollback re-applies what you just undid.
+2. With the new binary and `RELAY_PG_DSN` set, run `relay migrate down <target-version>`, where the target is the schema version of the release you return to (each release note names it). This runs the bundled down-migrations in reverse order down to, not including, the target; `relay migrate down 0` unwinds all of them. A target above the current schema version is refused rather than run as an upgrade.
+3. Deploy the previous image and drop `RELAY_MIGRATE_ON_BOOT` again, so the next upgrade migrates on boot.
 
-1. Stop every pod — scale the deployment to 0, or set `RELAY_MIGRATE_ON_BOOT=off` on it first. Every relay runs the pending up-migrations at boot, so a pod that restarts mid-rollback re-applies what you just undid.
-2. Run `relay migrate down <target-version>` against the same database, with `RELAY_PG_DSN` set — for example `relay migrate down 24` to return to the schema before this release's migrations. This runs the bundled down-migrations in reverse order down to (not including) the target version; `relay migrate down 0` unwinds all of them. A target above the current schema version is refused rather than run as an upgrade. A key that resolved its policy through its service account or a policy binding gets that policy written onto the key, the only place the older binary reads it from.
-3. Deploy the previous image — the 0.9.x patch release from [Before you upgrade](#before-you-upgrade) — and drop `RELAY_MIGRATE_ON_BOOT` again, so the next upgrade migrates on boot.
-
-`migrate down` is for rollback, not a round trip. Upgrading again after a rollback runs the backfill afresh: keys that had no user are moved onto newly generated service accounts, and anything created against the newer schema — teams, projects, roles, bindings, service accounts — is gone.
-
-If a migration fails part-way, the schema is left marked dirty and every later migrate refuses it. Repair the schema by hand (or restore the backup), then record the version it is now at with `relay migrate force <version>`; this clears the flag without running any migration.
+<Warning>
+`relay migrate down` is destructive: it drops the tables and columns its down-migrations remove, with the rows in them. Take the backup before the upgrade, not after.
+</Warning>
 
 `relay migrate down` and `relay migrate force` read and write relay's version table, `schema_migrations`. The auth module's migrations, which boot and `relay migrate up` run after relay's, record their version in `auth_schema_migrations`. `relay migrate force` never changes it; `relay migrate down` to a version below 26 first steps the auth module back to its version 1, because relay's down-migrations below 26 drop tables the module's later migrations extend. The next upgrade reapplies them: accounts keep their primary sign-in identity, and further identities and external ids are gone.
 
@@ -64,10 +49,57 @@ relay migrate auth down <version>
 
 It runs the module's down-migrations to (not including) `<version>`, with `RELAY_PG_DSN` set, and leaves relay's own version alone; a target at or above the module's current version does nothing. The lowest target is `1`, the module's first migration, whose tables are relay's own; `relay migrate down` removes those. Stop the pods or set `RELAY_MIGRATE_ON_BOOT=off` first, as above, since boot reapplies the module's migrations.
 
-## Lock timeout
+## Recovering from a dirty schema version
 
-Each migration waits at most `RELAY_MIGRATE_LOCK_TIMEOUT_S` seconds (default `10`) for a table lock. An `ALTER TABLE` queued behind a long transaction would otherwise hold every later query on that table behind it, sign-ins on `users` included, for as long as the transaction runs. A migration that gives up fails with `canceling statement due to lock timeout`, applies nothing, and leaves the schema version clean, so boot, `relay migrate up`, or the chart's migration Job can simply be run again once the blocking transaction has ended. The timeout applies to the migration connections only, not to the pool that serves requests; `0` waits indefinitely, and a `lock_timeout` set in `RELAY_PG_DSN` takes precedence.
+If a migration is interrupted, the schema is recorded as dirty at that version and every later migrate (the chart's Job, or a pod migrating on boot) fails with `Dirty database version N`. To recover:
 
-<Warning>
-`relay migrate down` is destructive — it drops the tables and columns its down-migrations remove, including any teams, projects, roles, bindings, and service accounts created since the upgrade. Take the backup in step 1 before you need this, not after.
-</Warning>
+1. Read the state: `SELECT version, dirty FROM schema_migrations`. With the chart's bundled Postgres: `kubectl -n relay exec -it sts/relay-postgresql -- psql -U relay relay -c 'SELECT version, dirty FROM schema_migrations'`.
+2. Open `migrations/postgres/<N>_*.up.sql` at the tag of the release you are upgrading to and check that every object it creates or alters (tables, columns, indexes, constraints, functions, triggers) is present in the database. Each file runs in a single transaction, so it is normally all there or none of it.
+3. All present: record N as applied with `relay migrate force N`. None present: record the previous version with `relay migrate force <N-1>`. Partly present: repair by hand or restore the backup before forcing anything. `relay migrate force` clears the flag without running any migration.
+4. Run the upgrade again; whatever is still pending is applied.
+
+`relay migrate force` needs only `RELAY_PG_DSN`. With the chart's bundled Postgres, forward it and run the release image locally:
+
+```bash
+kubectl -n relay port-forward svc/relay-postgresql 5432:5432 &
+docker run --rm --network host \
+  -e RELAY_PG_DSN='postgres://relay:<password>@127.0.0.1:5432/relay?sslmode=disable' \
+  wyolet/relay:<version> migrate force <N>
+```
+
+## Release notes
+
+### 0.11.6: data keys for stored secrets (schema 34)
+
+Stored secrets move from the master key to per-scope data keys wrapped by it. The new pods rewrite every stored value, and from migration 34 on the database refuses the old format, so old pods still serving would fail their secret writes and stop reading rewritten values. This is a [stop-and-start upgrade](#stop-and-start-upgrades).
+
+The backup, the conversion check (`relay secret status` reports `legacyRows` reaching 0, usually within seconds of the new pods starting) and the rollback (`relay secret downgrade`, then `relay migrate down 33`, then the 0.11.5 image) are in [Upgrading to data keys](/concepts/secret-keys#upgrading-to-data-keys).
+
+If `RELAY_MASTER_KEY` held the wrong key at this upgrade, see [Wrong master key at the upgrade to data keys](/troubleshooting#wrong-master-key-at-the-upgrade-to-data-keys).
+
+### 0.10.0: teams, projects and RBAC (schema 25 to 30)
+
+This release adds teams, projects, roles and relay-signed inference tokens, and changes how relay keys are stored. A fleet mixing the old and new binary is only partly functional, so stop every old pod before deploying it.
+
+**Before you upgrade.** Run 0.9.25 first. It boots against a schema newer than its own migrations (it logs a warning and skips migrating) instead of failing at startup. That lets an older pod restart while the upgrade runs, and lets you start the previous image during a rollback. Earlier 0.9.x releases refuse to boot once the new migrations have run.
+
+**What changes on disk.** Migrations `000025` to `000030` add:
+
+| Migration | Adds |
+| --- | --- |
+| `000025_teams_projects` | `teams`, `projects` tables: the tenancy scope every project-owned row hangs off. Host keys, policies, rate limits, hosts, host bindings, and models created with the admin token (a `user` owner with no id) become system-owned: nobody owns them, and the new code treats a user-owned row as personal. |
+| `000026_subjects_keys` | `service_accounts`, `groups`, `group_members`; `relay_keys` gains `principal_sa_id` / `principal_user_id`, so a key is a credential of a principal (a service account or a user) instead of being its own identity. A key owned by a known user keeps that user as its principal; every other key is moved onto a generated service account in a system `legacy` project. |
+| `000027_rbac_kinds` | `roles`, `role_bindings`, `policy_bindings` (plus their subject tables), evaluated when `RELAY_AUTHZ=rbac`. |
+| `000028_audit_events` | `audit_events`, the append-only admin audit log. |
+| `000029_token_version` | `users.token_version`, bumped to invalidate every inference token a user holds. |
+| `000030_batch_attribution` | Attribution columns on `batches` (project, team, principal, credential). |
+
+**Rolling upgrades.** If you roll pods one at a time, the first new pod migrates the schema while old pods are still serving. Until the last old pod is replaced, creating a key on an old pod fails: the old binary writes a key with no principal, which the new schema rejects.
+
+**What behaves differently afterwards.**
+
+- *Keys without a policy.* A key that had no policy before the upgrade lands in the `legacy` project with no policy bound, and keeps resolving as it did: through the policy-less flow, which the `allowMissingPolicy` field of the [`inference` settings section](/reference/settings#inference) governs under `RELAY_AUTHZ=single` and which `RELAY_AUTHZ=rbac` refuses. Once you add a policy binding to the `legacy` project, its keys follow the same rule as every other project: they resolve a policy through their service account or a binding, or are refused.
+- *Rate limits.* Rate-limit counters are keyed differently, so every bucket starts empty at the cutover. A bare `tokens` meter now counts input plus output tokens; before the upgrade it summed every token sub-meter, including cache reads, cache writes, and reasoning tokens. To cap those, add rules on the specific meter (`tokens.cache_read`, `tokens.reasoning`, …).
+- *Multi-user deployments.* `RELAY_MULTI_USER` is read as `RELAY_AUTHZ=rbac`. Under multi-user, any signed-in user could read the usage and request logs of their own keys; under rbac those reads need a RoleBinding that grants them, for example the built-in `developer` role (usage and logs) or `viewer` (usage) on the user's project. Bind those roles before switching users over, or non-admin users see no usage.
+
+**Rolling back.** Follow [Rolling back](#rolling-back) with `relay migrate down 24`, then deploy 0.9.25. A key that resolved its policy through its service account or a policy binding gets that policy written onto the key, the only place the older binary reads it from. `migrate down` is for rollback, not a round trip: upgrading again runs the backfill afresh, keys that had no user are moved onto newly generated service accounts, and anything created against the newer schema (teams, projects, roles, bindings, service accounts) is gone.

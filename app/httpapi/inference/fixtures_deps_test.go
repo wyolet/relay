@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
@@ -127,10 +128,16 @@ func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateL
 // over kv.Mem) so tests can complete a real upstream round-trip.
 func buildRunnableDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	t.Helper()
+	return buildRunnableDepsAt(t, cat, nil)
+}
+
+// buildRunnableDepsAt is buildRunnableDeps with the limiter reading clock (nil reads time.Now).
+func buildRunnableDepsAt(t *testing.T, cat *catalog.Catalog, clock func() time.Time) Deps {
+	t.Helper()
 	d := buildDeps(t, cat)
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
-	svc := policy.NewService(catSnapReader{cat: cat}, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), nil))
+	svc := policy.NewService(catSnapReader{cat: cat}, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), clock))
 	d.Pipeline = &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}
 	return d
 }

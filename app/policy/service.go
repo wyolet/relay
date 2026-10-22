@@ -1,6 +1,8 @@
 // service.go: runtime orchestrator. Picks a key, resolves the applicable
 // RL per (provider, model, host), reserves inbound + upstream buckets,
 // and rolls them back on failure. One Service per process.
+//
+// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty.
 
 package policy
 
@@ -32,10 +34,19 @@ type Service struct {
 	snap     SnapshotReader
 	selector *keypool.Selector
 	limiter  *pkgratelimit.Limiter
+	// postSelector and postLimiter run Settle.
+	postSelector *keypool.Selector
+	postLimiter  *pkgratelimit.Limiter
 }
 
 func NewService(snap SnapshotReader, sel *keypool.Selector, lim *pkgratelimit.Limiter) *Service {
-	return &Service{snap: snap, selector: sel, limiter: lim}
+	return &Service{snap: snap, selector: sel, limiter: lim, postSelector: sel, postLimiter: lim}
+}
+
+// WithPostFlight runs Settle on sel and lim instead, built on a kv store of their own: a served request's commit carries its token counts, so it must not be dropped when admission has taken every connection of the shared pool. Call before serving.
+func (s *Service) WithPostFlight(sel *keypool.Selector, lim *pkgratelimit.Limiter) *Service {
+	s.postSelector, s.postLimiter = sel, lim
+	return s
 }
 
 type AcquireInput struct {
@@ -52,6 +63,9 @@ type AcquireInput struct {
 type Acquisition struct {
 	Key         *hostkey.HostKey
 	Reservation *pkgratelimit.Reservation
+
+	// writeSuccess: the record the key was picked on changes on a success (keypool.Candidate.SuccessNeedsWrite), so Settle writes it.
+	writeSuccess bool
 }
 
 // ErrSaturated: chosen key is over its upstream cap. Service has
@@ -77,43 +91,64 @@ type InboundInput struct {
 	// TokenJTI, when set, adds the revocation check to this Reserve — the
 	// one kv call the request already makes.
 	TokenJTI string
+
+	// ExtraRules are metered in the same Reserve as the policy's rules, under
+	// the same hash tag, so a further ceiling costs no extra kv call. Their
+	// keys must already carry their own subject.
+	ExtraRules []pkgratelimit.Rule
 }
 
 // ReserveInbound reserves the inbound policy's RL bucket for this request.
-// Returns (nil, nil) when there is nothing to check: no applicable RL and no
-// token to check for revocation.
+// Returns (nil, nil) when there is nothing to check: no applicable RL, no
+// extra rule and no token to check for revocation.
 func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgratelimit.Reservation, error) {
-	metered := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug, in.ModelID)
-	rules := metered
-	if in.TokenJTI != "" {
-		// First in the slice: a revoked token must answer 401, not the 429 an
-		// over-limit rule evaluated ahead of it would produce. Pre-sized so
-		// the metered rules don't force a regrow.
-		rules = make([]pkgratelimit.Rule, 0, len(metered)+1)
-		rules = append(rules, pkgratelimit.Rule{
-			Key:   revokedRuleKey(in.TokenJTI),
-			Name:  "token revocation",
-			Meter: pkgratelimit.MeterRevoked,
-		})
-		rules = append(rules, metered...)
-	}
+	rules, metered := s.inboundRules(ctx, in)
 	if len(rules) == 0 || s.limiter == nil {
 		return nil, nil
 	}
+	res, err := s.limiter.Reserve(ctx, inboundScope(in), rules)
+	if err != nil {
+		return nil, err
+	}
+	if !metered {
+		// Revocation check only: nothing was metered, so the post-flight commit would be a second script call for no state.
+		res.SetNoCommit()
+	}
+	return res, nil
+}
+
+// inboundRules returns the rules one inbound Reserve checks for in, and whether any of them meters (anything but the revocation check).
+func (s *Service) inboundRules(ctx context.Context, in InboundInput) (rules []pkgratelimit.Rule, metered bool) {
+	policyRules := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug, in.ModelID)
+	nMetered := len(policyRules) + len(in.ExtraRules)
+	rules = policyRules
+	switch {
+	case in.TokenJTI != "" || (len(policyRules) > 0 && len(in.ExtraRules) > 0):
+		// The revocation rule goes first: a revoked token must answer 401, not
+		// the 429 an over-limit rule evaluated ahead of it would produce.
+		// Pre-sized so the rest don't force a regrow.
+		rules = make([]pkgratelimit.Rule, 0, nMetered+1)
+		if in.TokenJTI != "" {
+			rules = append(rules, pkgratelimit.Rule{
+				Key:   revokedRuleKey(in.TokenJTI),
+				Name:  "token revocation",
+				Meter: pkgratelimit.MeterRevoked,
+			})
+		}
+		rules = append(rules, policyRules...)
+		rules = append(rules, in.ExtraRules...)
+	case len(policyRules) == 0:
+		rules = in.ExtraRules
+	}
+	return rules, nMetered > 0
+}
+
+func inboundScope(in InboundInput) string {
 	policySlug := ""
 	if in.Policy != nil {
 		policySlug = in.Policy.Meta.Name
 	}
-	res, err := s.limiter.Reserve(ctx, reserveScope(in.TeamID, policySlug), rules)
-	if err != nil {
-		return nil, err
-	}
-	if len(metered) == 0 {
-		// Revocation check only: nothing was metered, so the post-flight
-		// commit would be a second script call for no state.
-		res.SetNoCommit()
-	}
-	return res, nil
+	return reserveScope(in.TeamID, policySlug)
 }
 
 // CommitInbound returns the inbound reservation to the bucket with the
@@ -133,16 +168,25 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 		return nil, fmt.Errorf("policy.Service.Acquire: selector not configured")
 	}
 
-	scope, algo := "", keypool.KeySelectionPrioritized
-	if in.Policy != nil {
-		scope = in.Policy.Meta.Name
-		algo = in.Policy.EffectiveKeySelection()
-	}
-	key, err := s.selector.PickWithExclude(ctx, scope, algo, in.Keys, in.Excluded)
+	scope, algo := pickScope(in.Policy)
+	picked, err := s.selector.PickCandidate(ctx, scope, algo, in.Keys, in.Excluded)
 	if err != nil {
 		return nil, err
 	}
+	return s.reserveTier(ctx, picked, in)
+}
 
+// pickScope is the key-selection scope and strategy pol sets.
+func pickScope(pol *Policy) (string, keypool.KeySelection) {
+	if pol == nil {
+		return "", keypool.KeySelectionPrioritized
+	}
+	return pol.Meta.Name, pol.EffectiveKeySelection()
+}
+
+// reserveTier reserves the picked key's upstream bucket when its tier policy has rules for this request. On KeyQuotaExhausted it records FailureRateLimitShort and returns ErrSaturated with the key set.
+func (s *Service) reserveTier(ctx context.Context, picked keypool.Candidate, in AcquireInput) (*Acquisition, error) {
+	key, writeSuccess := picked.Key, picked.SuccessNeedsWrite()
 	modelSlug, modelID, hostSlug := "", "", ""
 	if in.Model != nil {
 		modelSlug = in.Model.Meta.Name
@@ -157,7 +201,7 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 	tier, _ := s.snap.Policy(ctx, key.Spec.PolicyID)
 	rules := s.rulesFor(ctx, tier, in.Provider, modelSlug, hostSlug, modelID)
 	if len(rules) == 0 || s.limiter == nil {
-		return &Acquisition{Key: key}, nil
+		return &Acquisition{Key: key, writeSuccess: writeSuccess}, nil
 	}
 
 	res, err := s.limiter.Reserve(ctx, "hostkey:"+key.Meta.ID, rules)
@@ -169,7 +213,7 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 		}
 		return nil, fmt.Errorf("policy.Service.Acquire: reserve: %w", err)
 	}
-	return &Acquisition{Key: key, Reservation: res}, nil
+	return &Acquisition{Key: key, Reservation: res, writeSuccess: writeSuccess}, nil
 }
 
 // Commit returns the upstream reservation to the bucket.
@@ -178,23 +222,6 @@ func (s *Service) Commit(ctx context.Context, acq *Acquisition, obs pkgratelimit
 		return nil
 	}
 	return s.limiter.Commit(ctx, acq.Reservation, obs)
-}
-
-// CommitBoth returns the inbound and upstream reservations to their buckets in
-// a single round trip when both exist, falling back to a single commit when
-// only one is present (and a no-op when neither is). Both reservations receive
-// the same observed usage, exactly as the two separate CommitInbound + Commit
-// calls did. Prefer this over calling CommitInbound and Commit in sequence on
-// the success post-flight path: it collapses two Valkey round trips into one.
-func (s *Service) CommitBoth(ctx context.Context, inbound *pkgratelimit.Reservation, acq *Acquisition, obs pkgratelimit.Observations) error {
-	if s.limiter == nil {
-		return nil
-	}
-	var upstream *pkgratelimit.Reservation
-	if acq != nil {
-		upstream = acq.Reservation
-	}
-	return s.limiter.CommitBoth(ctx, inbound, upstream, obs)
 }
 
 // Release rolls back the upstream reservation (zero observations) and
@@ -209,13 +236,6 @@ func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.Fa
 	if s.selector != nil && acq.Key != nil {
 		s.selector.RecordFailure(ctx, acq.Key.KeyHash, kind, retryAfter)
 	}
-}
-
-func (s *Service) RecordSuccess(ctx context.Context, acq *Acquisition) {
-	if s.selector == nil || acq == nil || acq.Key == nil {
-		return
-	}
-	s.selector.RecordSuccess(ctx, acq.KeyHash())
 }
 
 func (a *Acquisition) KeyHash() string {

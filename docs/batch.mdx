@@ -1,0 +1,137 @@
+---
+title: "Batch"
+description: "Submit many inference requests in one call, let Relay run them in the background, and collect the results"
+---
+
+`/v1/batches` takes a list of requests, returns at once, and runs the requests in the background on Relay's own worker pool. Each item goes through the same routing, policy, rate limits and host-key pool as a live request, and is recorded as a usage event with `source=batch`.
+
+Relay runs every item itself; it does not use a provider's batch API, so batch items are billed at the provider's normal rates.
+
+## Submit a batch
+
+```bash
+curl http://localhost:8080/v1/batches \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shape": "openai",
+    "requests": [
+      {"model": "gpt-4o", "messages": [{"role": "user", "content": "Summarize: ..."}]},
+      {"model": "gpt-4o", "messages": [{"role": "user", "content": "Translate: ..."}]}
+    ]
+  }'
+```
+
+```json
+{"id": "019a3c1e-5d2b-7c41-9a77-2f0e8b1c4d6a", "status": "queued", "total_items": 2}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `shape` | The wire shape every item is written in: `openai` (Chat Completions), `openai_responses` or `anthropic`. |
+| `requests` | One request body per item, exactly as you would `POST` it to that shape's endpoint. Each item names its own `model`. |
+
+The answer is `202 Accepted` with the batch id. Leave `stream` unset in the items: the response is stored whole, not streamed.
+
+### Items must match the upstream's shape
+
+Relay does not translate batch items. An item runs only when the routed model's host binding uses the same adapter as `shape`: `openai` items need an `adapter: openai` binding, `anthropic` items an `adapter: anthropic` binding, `openai_responses` items an `adapter: openai_responses` binding.
+
+An item routed to a binding of another shape fails with a `cross-shape dispatch` error. One exception fails differently: an `openai_responses` item routed to an `adapter: openai` binding on the `openai` host is sent to the Chat Completions endpoint and fails with the upstream's status. Canonical (`/v1/generate`) bodies and embeddings requests cannot be batched. To mix providers, submit one batch per shape.
+
+## Check progress
+
+```bash
+curl http://localhost:8080/v1/batches/<id> \
+  -H "Authorization: Bearer <relay-key>"
+```
+
+```json
+{
+  "ID": "019a3c1e-5d2b-7c41-9a77-2f0e8b1c4d6a",
+  "InboundShape": "openai",
+  "Status": "queued",
+  "TotalItems": 2,
+  "CreatedAt": "2026-10-21T09:14:03.512Z",
+  "CompletedAt": null,
+  "counts": {"completed": 1, "running": 1},
+  "items": [{"idx": 0, "state": "completed"}, {"idx": 1, "state": "running"}]
+}
+```
+
+The response also carries the owner it is matched against (`RelayKeyHash`) and the submitter's attribution (`PolicyID`, `ProjectID`, `TeamID`, `PrincipalKind`, `PrincipalID`, `CredentialKind`, `CredentialID`).
+
+Track progress with `counts` and `items`: `Status` is `queued` from submit until the batch is cancelled, when it becomes `cancelled`. It does not change as items run. A batch is finished when every item is in a final state (`completed`, `discarded` or `cancelled`).
+
+| Item state | Meaning |
+| --- | --- |
+| `available` | Waiting for a worker. |
+| `running` | Being sent upstream. |
+| `completed` | The upstream answered with a `2xx`; the response is stored. |
+| `discarded` | The item failed. Failed items are not retried. |
+| `cancelled` | Cancelled before it finished. |
+
+## Collect results
+
+```bash
+curl http://localhost:8080/v1/batches/<id>/results \
+  -H "Authorization: Bearer <relay-key>"
+```
+
+```json
+{
+  "results": [
+    {"idx": 0, "state": "completed", "response": {"id": "chatcmpl-...", "choices": [...], "usage": {...}}},
+    {"idx": 1, "state": "discarded", "error": "batch item: upstream status 400"}
+  ]
+}
+```
+
+`idx` is the item's position in `requests`. A completed item carries the upstream's response body in the item's own shape. A failed item carries the error text only; the upstream's error body is not kept.
+
+An item fails when:
+
+- the upstream answers with a non-`2xx` status, or every key of the chosen host fails;
+- routing rejects it (unknown model, model not granted by the policy, no binding), or its shape does not match the binding;
+- the policy's rate limit is spent when it runs. Items do not wait for the limit to refill;
+- the submitting credential stopped working: the relay key was disabled, revoked, expired or rotated out, or the inference token expired or was revoked;
+- the policy the batch was submitted under was deleted or disabled;
+- it runs longer than 5 minutes.
+
+## Cancel
+
+```bash
+curl -X POST http://localhost:8080/v1/batches/<id>/cancel \
+  -H "Authorization: Bearer <relay-key>"
+```
+
+```json
+{"status": "cancelled"}
+```
+
+Items that have not started become `cancelled`. An item running on the replica that receives the cancel is stopped; an item already running on another replica finishes.
+
+## Access, policy and limits
+
+A batch authenticates like any inference request, with a relay key or an inference token. The policy that governs the credential at submit time is recorded on the batch and applies to every item: its model grants, its rate limits, and its host-key pool, key selection and circuit breakers. The credential itself is checked again when each item runs.
+
+Only the submitter can read or cancel a batch: the same relay key, or, for an inference token, any token of the same user. Anyone else gets `404`. Because access follows the relay key itself, a rotated key cannot read the batches its previous value submitted.
+
+| Limit | Value |
+| --- | --- |
+| Items per batch | `RELAY_BATCH_MAX_ITEMS`, default 50,000. More gets `400`. |
+| Submission body | `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), and never more than 64 MiB. A larger body gets `400`. |
+| Items running at once | 8 per replica, shared by all batches |
+| Time per item | 5 minutes |
+
+## Usage and logging
+
+Every item produces a usage event with `source=batch`, attributed to the submitting credential, its project and team, and the batch's policy, and priced at the binding's normal rates. Filter with `source=batch` in the [usage API](/concepts/usage). Item request and response bodies are not captured by [payload logging](/concepts/payload-logging); the results endpoint is where a batch's responses live.
+
+## Running batches on more than one replica
+
+Relay keeps batch state in Postgres but stores each item's request and response as files under `RELAY_BATCH_PAYLOAD_DIR` (default `relay-batch-payloads`, relative to the working directory). Any replica may pick up any item, so **every replica must see the same directory**. Mount it from a volume all replicas share, such as a `ReadWriteMany` volume on Kubernetes.
+
+When the directory is not shared, an item picked up by a replica other than the one that received the submission fails with a `load input` error, and a result written by one replica comes back without `response` when another replica serves the results request. The Helm chart's default puts the directory on storage local to each pod, so with more than one replica, give it a shared volume or run a single replica for batch traffic.
+
+Files are not removed when a batch finishes; size the volume for the batches you keep.
