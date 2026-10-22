@@ -14,21 +14,22 @@ func (s *Service) Settle(ctx context.Context, inbound *pkgratelimit.Reservation,
 	if acq != nil {
 		upstream = acq.Reservation
 	}
-	if s.selector == nil {
-		if s.limiter == nil {
+	sel, lim := s.postSelector, s.postLimiter
+	if sel == nil {
+		if lim == nil {
 			return nil
 		}
-		return s.limiter.CommitBoth(ctx, inbound, upstream, obs)
+		return lim.CommitBoth(ctx, inbound, upstream, obs)
 	}
 
-	b := s.selector.NewBatch()
+	b := sel.NewBatch()
 	var (
 		errs    []error
 		commits [2]*pkgratelimit.PreparedCommit
 	)
-	if s.limiter != nil {
+	if lim != nil {
 		for i, res := range [2]*pkgratelimit.Reservation{inbound, upstream} {
-			pc, err := s.limiter.PrepareCommit(b, res, obs)
+			pc, err := lim.PrepareCommit(b, res, obs)
 			if err != nil {
 				errs = append(errs, err)
 			}
@@ -38,7 +39,7 @@ func (s *Service) Settle(ctx context.Context, inbound *pkgratelimit.Reservation,
 	writeSuccess := acq != nil && acq.Key != nil && acq.writeSuccess
 	var success *keypool.PreparedSuccess
 	if writeSuccess {
-		success = s.selector.PrepareRecordSuccess(b, acq.Key.KeyHash)
+		success = sel.PrepareRecordSuccess(b, acq.Key.KeyHash)
 	}
 	b.Exec(ctx)
 
@@ -53,7 +54,7 @@ func (s *Service) Settle(ctx context.Context, inbound *pkgratelimit.Reservation,
 	case success != nil:
 		success.Finish(ctx)
 	case writeSuccess:
-		s.selector.RecordSuccess(ctx, acq.Key.KeyHash)
+		sel.RecordSuccess(ctx, acq.Key.KeyHash)
 	}
 	return errors.Join(errs...)
 }

@@ -42,6 +42,15 @@ data:
   {{- with .Values.relay.redisMaxRetries }}
   RELAY_REDIS_MAX_RETRIES: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.redisPostFlightPoolSize }}
+  RELAY_REDIS_POSTFLIGHT_POOL_SIZE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightPoolTimeoutMs }}
+  RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightReadTimeoutMs }}
+  RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
   RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
   RELAY_COOKIE_SECURE: {{ .Values.relay.cookieSecure | quote }}
   RELAY_HEALTHZ_DEADLINE_MS: {{ .Values.relay.healthzDeadlineMs | quote }}

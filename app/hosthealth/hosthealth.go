@@ -49,8 +49,8 @@ type store interface {
 	Range(ctx context.Context, prefix string) ([]kv.Entry, error)
 }
 
-// Recorder persists host reachability to kv. Construct once at boot and share
-// between the data plane (writes) and the control plane (Read).
+// Recorder persists host reachability to kv. The data plane's writes need one
+// Recorder per process (it holds the debounce); a reader may use its own.
 type Recorder struct {
 	state    store
 	clock    func() time.Time

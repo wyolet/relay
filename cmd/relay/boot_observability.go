@@ -82,11 +82,11 @@ func buildPayloadLog(listenerCtx context.Context, cat *appcatalog.Catalog, store
 	return payloadCtl
 }
 
-func buildTokenCalibrator(kvStore kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
+func buildTokenCalibrator(kvStore, postFlightKV kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
 	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; kv writes only when a ratio moves or is due for a refresh, post-flight only.
-	tokenCalibrator := tokencount.NewCalibrator(kvStore)
-	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
-	return tokenCalibrator
+	// The writes go through the post-flight store; the returned Calibrator serves the count-tokens reads on the shared one. Only the writer keeps state (what it last wrote), so two instances are safe.
+	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokencount.NewCalibrator(postFlightKV)))
+	return tokencount.NewCalibrator(kvStore)
 }
 
 func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) *httpapi.Admission {

@@ -42,6 +42,9 @@ Behaviour that can change while relay runs (proxy mode, payload logging, usage s
 | `RELAY_REDIS_POOL_TIMEOUT_MS` | `250` | Milliseconds to wait for a free connection when every pooled Valkey connection is busy. |
 | `RELAY_REDIS_DIAL_TIMEOUT_MS` | `2000` | Milliseconds to wait to open a Valkey connection. A request that needs a new connection waits for it, so this adds to the three bounds above. |
 | `RELAY_REDIS_MAX_RETRIES` | `0` | How many times a failed Valkey command is resent. A command whose reply timed out or whose connection dropped after it was sent may already have run, so a resent rate-limit check can count one request twice; raise it only if that is acceptable. |
+| `RELAY_REDIS_POSTFLIGHT_POOL_SIZE` | `10` | Most connections in the second Valkey client, which settles a request after its response: the rate-limit commit (token counts included), the key's success record, host reachability and the token-count ratio. Its own pool, so a pool full of rate-limit checks under load doesn't make these writes give up. |
+| `RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS` | `1000` | Milliseconds a post-flight write waits for a free connection on that client. A write that still gets none is dropped and counted in `relay_kv_errors_total`. |
+| `RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS` | `1000` | Milliseconds a post-flight write waits for the Valkey reply. Dial and write bounds and retries are the `RELAY_REDIS_*` ones above. |
 | `RELAY_CLUSTER_MODE` | `off` | Accepts `on` or `off` and has no other effect: every relay process listens for catalog and settings changes on Postgres, so replicas stay in sync without it. |
 
 ## Secrets and authentication

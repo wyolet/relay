@@ -34,6 +34,9 @@ type RedisConfig struct {
 	PoolTimeout  time.Duration
 	// MaxRetries is how many times a failed command is resent; 0 sends it once.
 	MaxRetries int
+
+	// Pool names this client in the slow-op log, so a process with more than one pool shows which one ran out.
+	Pool string
 }
 
 // Client defaults: short enough that a stalled server costs a request well under a second instead of the library's multi-second defaults.
@@ -82,6 +85,7 @@ type SentinelConfig struct {
 // Redis implements Store (and Scripter) backed by Redis/Valkey.
 type Redis struct {
 	client   redis.UniversalClient
+	pool     string
 	shas     sync.Map // name -> sha string
 	inflight sync.WaitGroup
 }
@@ -145,7 +149,7 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 		_ = client.Close()
 		return nil, fmt.Errorf("state: redis ping: %w", err)
 	}
-	return &Redis{client: client}, nil
+	return &Redis{client: client, pool: cfg.Pool}, nil
 }
 
 // isUnavailable reports whether err is an ErrUnavailable case. A cancelled caller is not: that is the caller leaving, not the store failing.
@@ -205,7 +209,7 @@ func (r *Redis) trackSlow(op, key string, start time.Time, err error) {
 	}
 	st := r.client.PoolStats()
 	slog.Warn("kv: slow or failed redis ops",
-		"ops", slowSinceLog.Swap(0),
+		"ops", slowSinceLog.Swap(0), "pool", r.pool,
 		"op", op, "key", redactKey(key), "dur_ms", d.Milliseconds(), "err", err,
 		"pool_hits", st.Hits, "pool_misses", st.Misses, "pool_timeouts", st.Timeouts,
 		"pool_total", st.TotalConns, "pool_idle", st.IdleConns)
