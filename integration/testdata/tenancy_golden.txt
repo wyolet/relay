@@ -46,7 +46,7 @@ row roles role:team-admin team-admin Team Administrator {"owner": {"kind": "syst
 row roles role:viewer viewer Viewer {"owner": {"kind": "system"}, "description": "Read-only on the scoped resources, plus usage."} {"rules": [{"kinds": ["policies", "keys", "service-accounts", "policy-bindings", "host-keys", "rate-limits", "role-bindings", "projects", "teams"], "verbs": ["get", "list"]}, {"kinds": ["usage"], "verbs": ["get", "read"]}]} v1
 row service_accounts serviceaccount:sandbox-bot sandbox-bot Sandbox Bot project:sandbox {"dirty": true, "owner": {"id": "project:sandbox", "kind": "project"}} {"enabled": true, "projectId": "project:sandbox"} v2
 row service_accounts serviceaccount:search-indexer search-indexer Search Indexer project:ml-search {"owner": {"id": "project:ml-search", "kind": "project"}} {"policyId": "policy:ml-search-default", "projectId": "project:ml-search"} v1
-row teams team:platform platform Platform {"owner": {"kind": "system"}, "labels": {"managed": "gitops"}} {"budget": {"amount": "100", "period": "month", "onExceed": "block"}} v1
+row teams team:platform platform Platform {"owner": {"kind": "system"}, "labels": {"managed": "gitops"}} {"budget": {"amount": "100", "period": "month"}} v1
 row teams team:research research Research Lab {"dirty": true, "owner": {"kind": "system"}} {"budget": {"amount": "40", "period": "day"}, "enabled": true} v2
 row users user:alice alice alice@example.com - https://idp.example.com|alice {admin,auditor} false 1
 row users user:bob bob - - - {} true 2

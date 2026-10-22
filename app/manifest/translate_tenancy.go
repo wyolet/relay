@@ -42,7 +42,7 @@ func toBudget(b *BudgetDTO) *team.Budget {
 	if b == nil {
 		return nil
 	}
-	out := &team.Budget{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+	out := &team.Budget{Amount: b.Amount, Period: b.Period}
 	out.Default()
 	return out
 }
@@ -51,7 +51,7 @@ func fromBudget(b *team.Budget) *BudgetDTO {
 	if b == nil {
 		return nil
 	}
-	return &BudgetDTO{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+	return &BudgetDTO{Amount: b.Amount, Period: b.Period}
 }
 
 // ToTeam translates through the auth module, which makes every team system-owned: a user-owned one would let its author inherit every binding made at its scope.

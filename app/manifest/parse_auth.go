@@ -28,11 +28,15 @@ func decodeRelayAuthKind(env *rawEnvelope) (doc Document, ok bool, err error) {
 	switch env.Kind {
 	case "Team":
 		var spec TeamSpec
-		err = env.Spec.Decode(&spec)
+		if err = refuseOnExceed(&env.Spec); err == nil {
+			err = env.Spec.Decode(&spec)
+		}
 		doc = Document{Team: &TeamDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
 	case "Project":
 		var spec ProjectSpec
-		err = env.Spec.Decode(&spec)
+		if err = refuseOnExceed(&env.Spec); err == nil {
+			err = env.Spec.Decode(&spec)
+		}
 		doc = Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
 	case "ServiceAccount":
 		var spec ServiceAccountSpec
@@ -57,4 +61,18 @@ func decodeRelayAuthKind(env *rawEnvelope) (doc Document, ok bool, err error) {
 		return Document{}, true, err
 	}
 	return doc, true, nil
+}
+
+// refuseOnExceed fails a spec that sets budget.onExceed, which the lenient decode would otherwise drop unnoticed.
+func refuseOnExceed(spec *yaml.Node) error {
+	var probe struct {
+		Budget map[string]any `yaml:"budget"`
+	}
+	if spec.Decode(&probe) != nil {
+		return nil
+	}
+	if _, ok := probe.Budget["onExceed"]; ok {
+		return errOnExceed
+	}
+	return nil
 }

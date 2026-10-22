@@ -1,9 +1,11 @@
 package manifest
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/meta"
+	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
 // A manifest may not choose who owns a Team, Group or Role: those rows name a
@@ -124,5 +126,32 @@ func TestBudgetPeriodDefaultsToMonth(t *testing.T) {
 	}
 	if tm.Spec.Budget.Period != "week" {
 		t.Errorf("period = %q, want the declared week", tm.Spec.Budget.Period)
+	}
+}
+
+// Nothing enforces a budget, so a manifest may not ask for an action on exceeding one.
+func TestBudgetOnExceedRefused(t *testing.T) {
+	for _, doc := range []string{
+		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\", onExceed: block}}\n",
+		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Project\nmetadata: {name: search}\nspec: {budget: {amount: \"100\", onExceed: warn}}\n",
+		"apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\", onExceed: block}}\n",
+	} {
+		if _, err := Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "onExceed is not supported") {
+			t.Errorf("Parse(%q) err = %v, want the onExceed refusal", doc, err)
+		}
+	}
+	if _, err := budgetField.ToAttribute([]byte(`{"amount": "100", "onExceed": "warn"}`), nil); err == nil || !strings.Contains(err.Error(), "onExceed is not supported") {
+		t.Fatalf("ToAttribute err = %v, want the onExceed refusal", err)
+	}
+}
+
+// A row stored while onExceed was accepted still exports, without it.
+func TestBudgetStoredOnExceedIgnored(t *testing.T) {
+	out, err := budgetField.FromAttribute([]byte(`{"amount": "100", "period": "week", "onExceed": "block"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), `{"amount":"100","period":"week"}`; got != want {
+		t.Errorf("FromAttribute = %s, want %s", got, want)
 	}
 }
