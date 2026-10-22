@@ -34,10 +34,19 @@ type Service struct {
 	snap     SnapshotReader
 	selector *keypool.Selector
 	limiter  *pkgratelimit.Limiter
+	// postSelector and postLimiter run Settle.
+	postSelector *keypool.Selector
+	postLimiter  *pkgratelimit.Limiter
 }
 
 func NewService(snap SnapshotReader, sel *keypool.Selector, lim *pkgratelimit.Limiter) *Service {
-	return &Service{snap: snap, selector: sel, limiter: lim}
+	return &Service{snap: snap, selector: sel, limiter: lim, postSelector: sel, postLimiter: lim}
+}
+
+// WithPostFlight runs Settle on sel and lim instead, built on a kv store of their own: a served request's commit carries its token counts, so it must not be dropped when admission has taken every connection of the shared pool. Call before serving.
+func (s *Service) WithPostFlight(sel *keypool.Selector, lim *pkgratelimit.Limiter) *Service {
+	s.postSelector, s.postLimiter = sel, lim
+	return s
 }
 
 type AcquireInput struct {

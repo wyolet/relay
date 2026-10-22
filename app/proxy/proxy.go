@@ -124,6 +124,8 @@ type Result struct {
 // goroutine-safe.
 type Pipeline struct {
 	Limiter *pkgratelimit.Limiter
+	// PostFlightLimiter commits a RateScope reservation after the response, on a kv pool of its own; nil uses Limiter.
+	PostFlightLimiter *pkgratelimit.Limiter
 	// Policy reserves Request.Inbound; required for authed requests.
 	Policy    *policy.Service
 	Lifecycle *lifecycle.Registry
@@ -306,7 +308,7 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 
 	if res != nil {
 		obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
-		if err := p.commit(ctx, req, res, obs); err != nil && p.Logger != nil {
+		if err := p.settle(ctx, req, res, obs); err != nil && p.Logger != nil {
 			p.Logger.Warn("proxy: limiter commit failed",
 				"err", err, "scope", req.RateScope)
 		}
@@ -325,6 +327,24 @@ func (p *Pipeline) commit(ctx context.Context, req *Request, res *pkgratelimit.R
 		return nil
 	}
 	return p.Limiter.Commit(ctx, res, obs)
+}
+
+// settle is commit for a served request, through the post-flight side.
+func (p *Pipeline) settle(ctx context.Context, req *Request, res *pkgratelimit.Reservation, obs pkgratelimit.Observations) error {
+	if req.Inbound != nil {
+		if p.Policy == nil {
+			return nil
+		}
+		return p.Policy.Settle(ctx, res, nil, obs)
+	}
+	lim := p.PostFlightLimiter
+	if lim == nil {
+		lim = p.Limiter
+	}
+	if lim == nil {
+		return nil
+	}
+	return lim.Commit(ctx, res, obs)
 }
 
 // fireFailure emits a post-flight observer event for a proxy request

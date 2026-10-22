@@ -81,8 +81,11 @@ func main() {
 
 	seedBuiltinRoles(bootCtx, st, stores)
 
-	kvStore := openKV(bootCtx, cfg)
+	kvStore, postFlightKV := openKV(bootCtx, cfg)
 	defer kvStore.Close()
+	if postFlightKV != kvStore {
+		defer postFlightKV.Close()
+	}
 
 	startOAuthRefresher(listenerCtx, st, stores, kvStore)
 
@@ -94,9 +97,11 @@ func main() {
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
-	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, hostHealth)
-	proxyPipeline := buildProxy(cfg, limiter, pl.Policy, lifecycleReg)
+	postFlight := newPostFlightWriters(postFlightKV)
+	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, postFlight)
+	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
 
 	specs := buildAdapterSpecs()
 	profiles := buildClientProfiles()
@@ -115,7 +120,7 @@ func main() {
 	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg)
 	defer payloadCtl.Close()
 
-	tokenCalibrator := buildTokenCalibrator(kvStore, lifecycleReg)
+	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
 	admission := registerAdmission(cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
 

@@ -117,6 +117,58 @@ func TestRunCommitsInboundReservationOnBodyClose(t *testing.T) {
 	}
 }
 
+// A served request's commit goes through the post-flight limiter, on both the authed and the RateScope path; the reserve stays on the shared one.
+func TestRunCommitsOnThePostFlightStore(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	concurrency := appratelimit.Rule{
+		Meter: appratelimit.MeterConcurrency, Amount: 10, Window: appratelimit.Window(time.Minute),
+		Strategy: appratelimit.StrategySlidingWindow,
+	}
+
+	for _, tc := range []struct {
+		name   string
+		authed bool
+	}{{"inbound", true}, {"rate_scope", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, shared, in := authedPipeline(t, oneRequestPerHour, concurrency)
+			mem, ok := shared.ScriptStore.(*kv.Mem)
+			if !ok {
+				t.Fatal("authedPipeline store is not a *kv.Mem")
+			}
+			post := kvtest.NewRecording(mem)
+			postLim := pkgratelimit.New(post, slog.New(slog.DiscardHandler), nil)
+			p.PostFlightLimiter = postLim
+			p.Policy.WithPostFlight(nil, postLim)
+
+			req := authedRequest(upstream.URL, in)
+			if !tc.authed {
+				req.Inbound = nil
+				req.RateScope = "ip:203.0.113.7"
+				req.Rules = []pkgratelimit.Rule{{
+					Key: "ip-con", Name: "concurrency", Meter: "concurrency",
+					Strategy: pkgratelimit.StrategySlidingWindow, Amount: 10, Window: time.Minute,
+				}}
+			}
+			res, err := p.Run(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			_, _ = io.Copy(io.Discard, res.Body)
+			_ = res.Body.Close()
+			awaitCommits(t, post, 1)
+			if n := len(shared.Named("limit.reserve")); n != 1 {
+				t.Fatalf("shared reserves = %d, want 1", n)
+			}
+			if n := len(shared.Named("limit.commit")); n != 0 {
+				t.Fatalf("shared commits = %d, want none", n)
+			}
+		})
+	}
+}
+
 // postFlightsFinished counts finished post-flight goroutines: the runner records post_flight_seconds as its last act, after any commit.
 func postFlightsFinished(t *testing.T) uint64 {
 	t.Helper()

@@ -16,34 +16,44 @@ import (
 	"github.com/wyolet/relay/secret"
 )
 
-func openKV(bootCtx context.Context, cfg *config.Config) kv.Store {
-	// kv backend — sessions, rate-limits, key-pool all share this.
-	var kvStore kv.Store
-	if cfg.StateBackend == "redis" {
-		if cfg.RedisAddr == "" {
-			slog.Error("RELAY_REDIS_ADDR required when RELAY_STATE_BACKEND=redis")
-			os.Exit(1)
-		}
-		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{
-			Addr:         cfg.RedisAddr,
-			Password:     cfg.RedisPassword,
-			PoolSize:     cfg.RedisPoolSize,
-			MinIdleConns: cfg.RedisMinIdleConns,
-			DialTimeout:  cfg.RedisDialTimeout,
-			ReadTimeout:  cfg.RedisReadTimeout,
-			WriteTimeout: cfg.RedisWriteTimeout,
-			PoolTimeout:  cfg.RedisPoolTimeout,
-			MaxRetries:   cfg.RedisMaxRetries,
-		})
-		if err != nil {
-			slog.Error("state(redis) init failed", "err", err)
-			os.Exit(1)
-		}
-		kvStore = rs
-	} else {
-		kvStore = kv.NewMem()
+// openKV opens the shared kv store (sessions, admission, key pool and the rest) and the post-flight store that settles served requests. On Redis the post-flight store is a second client with its own pool and longer waits, so admission saturating the shared pool cannot drop a served request's commit; in memory both are one store.
+func openKV(bootCtx context.Context, cfg *config.Config) (shared, postFlight kv.Store) {
+	if cfg.StateBackend != "redis" {
+		mem := kv.NewMem()
+		return mem, mem
 	}
-	return kvStore
+	if cfg.RedisAddr == "" {
+		slog.Error("RELAY_REDIS_ADDR required when RELAY_STATE_BACKEND=redis")
+		os.Exit(1)
+	}
+	base := kv.RedisConfig{
+		Addr:         cfg.RedisAddr,
+		Password:     cfg.RedisPassword,
+		DialTimeout:  cfg.RedisDialTimeout,
+		WriteTimeout: cfg.RedisWriteTimeout,
+		MaxRetries:   cfg.RedisMaxRetries,
+	}
+	sharedCfg := base
+	sharedCfg.Pool = "shared"
+	sharedCfg.PoolSize, sharedCfg.MinIdleConns = cfg.RedisPoolSize, cfg.RedisMinIdleConns
+	sharedCfg.ReadTimeout, sharedCfg.PoolTimeout = cfg.RedisReadTimeout, cfg.RedisPoolTimeout
+	postCfg := base
+	postCfg.Pool = "post-flight"
+	postCfg.PoolSize = cfg.RedisPostFlightPoolSize
+	postCfg.ReadTimeout, postCfg.PoolTimeout = cfg.RedisPostFlightReadTimeout, cfg.RedisPostFlightPoolTimeout
+
+	rs, err := kv.NewRedis(bootCtx, sharedCfg)
+	if err != nil {
+		slog.Error("state(redis) init failed", "err", err)
+		os.Exit(1)
+	}
+	post, err := kv.NewRedis(bootCtx, postCfg)
+	if err != nil {
+		_ = rs.Close()
+		slog.Error("state(redis) post-flight client init failed", "err", err)
+		os.Exit(1)
+	}
+	return rs, post
 }
 
 func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, stores *appcatalog.Stores, kvStore kv.Store) {

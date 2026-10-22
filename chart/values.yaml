@@ -81,6 +81,13 @@ relay:
   # -- Resends of a failed Valkey command (RELAY_REDIS_MAX_RETRIES); empty = 0.
   # A resent rate-limit check can count one request twice.
   redisMaxRetries: ""
+  # -- The second Valkey client that settles a request after its response
+  # (RELAY_REDIS_POSTFLIGHT_*); empty = relay defaults: pool 10, pool wait 1000,
+  # read 1000. Its own pool keeps rate-limit commits from being dropped while
+  # admission holds every connection of the shared one.
+  redisPostFlightPoolSize: ""
+  redisPostFlightPoolTimeoutMs: ""
+  redisPostFlightReadTimeoutMs: ""
   # -- Request/response body capture (the /logs UI), seeded into the
   # payload-logging settings section. backend "clickhouse" reuses RELAY_CH_DSN
   # (the bundled CH) — no extra store, no credentials in the settings row.

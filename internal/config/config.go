@@ -56,8 +56,12 @@ type Config struct {
 	RedisWriteTimeout time.Duration
 	RedisPoolTimeout  time.Duration
 	RedisMaxRetries   int
-	CHDSN             string
-	OTLPEndpoint      string
+	// RELAY_REDIS_POSTFLIGHT_{POOL_SIZE,POOL_TIMEOUT_MS,READ_TIMEOUT_MS}: the second client that settles served requests after the response; dial and write bounds and retries are the shared ones.
+	RedisPostFlightPoolSize    int
+	RedisPostFlightPoolTimeout time.Duration
+	RedisPostFlightReadTimeout time.Duration
+	CHDSN                      string
+	OTLPEndpoint               string
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema

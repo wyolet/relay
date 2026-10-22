@@ -80,6 +80,33 @@ func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore
 			t.Fatalf("batches +%d of %d after recovery, want 1 of 2", batches-beforeBatches, size)
 		}
 	})
+
+	t.Run("post_flight_store_settles", func(t *testing.T) {
+		store := newStore(t)
+		f := newAdmitFixture(t, store, keypool.KeySelectionPrioritized, 10, concurrencyRule())
+		post := kvtest.NewRecording(store)
+		f.svc.WithPostFlight(keypool.New(post, discardLogger(), nil, nil), pkgratelimit.New(post, discardLogger(), nil))
+		ctx := context.Background()
+		// A half-open probe, so the settle carries the success write too.
+		keypool.New(f.store, discardLogger(), nil, nil).RecordFailure(ctx, f.keys[0].KeyHash, keypool.FailureRateLimitLong, 0)
+		adm, err := f.svc.Admit(ctx, f.in, f.acq)
+		if err != nil || adm.Acq == nil || adm.Acq.Reservation == nil {
+			t.Fatalf("Admit = %+v, %v; want an inbound and an upstream reservation", adm, err)
+		}
+		before := f.store.RoundTrips()
+		if err := f.svc.Settle(ctx, adm.Inbound, adm.Acq, obs); err != nil {
+			t.Fatalf("Settle: %v", err)
+		}
+		if trips := f.store.RoundTrips() - before; trips != 0 {
+			t.Fatalf("shared store round trips = %d during Settle, want none", trips)
+		}
+		if b := post.Batches(); len(b) != 1 || b[0] != 3 {
+			t.Fatalf("post-flight batches = %v, want one of 3 (two commits and the success write)", b)
+		}
+		if n, s := len(post.Named("limit.commit")), len(post.Named("keypool.record_success")); n != 2 || s != 1 {
+			t.Fatalf("post-flight scripts = %d commits, %d success writes; want 2, 1", n, s)
+		}
+	})
 }
 
 func TestSettleMem(t *testing.T) {
