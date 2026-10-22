@@ -68,9 +68,8 @@ func refuseOnExceed(spec *yaml.Node) error {
 	var probe struct {
 		Budget map[string]any `yaml:"budget"`
 	}
-	if spec.Decode(&probe) != nil {
-		return nil
-	}
+	// A spec that fails to decode is reported by the decode that follows.
+	_ = spec.Decode(&probe)
 	if _, ok := probe.Budget["onExceed"]; ok {
 		return errOnExceed
 	}
