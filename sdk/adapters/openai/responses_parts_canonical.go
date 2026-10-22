@@ -35,6 +35,9 @@ func responsesPartToCanonical(p ResponsesPart) (v1.Part, error) {
 		// Canonical rule 9: refusal text lives in normal message content.
 		// Map refusal part → OutputTextPart carrying the refusal text.
 		return &v1.OutputTextPart{Text: v.Refusal}, nil
+	case *ResponsesRawPart:
+		// canonical: unmodeled content part (output_audio, future types) dropped — no canonical part type carries it; the rest of the message, the usage and the finish reason are kept. Request input never gets here: responsesRequestToCanonical refuses it.
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported part type %T", p)
 	}

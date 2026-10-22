@@ -2,7 +2,7 @@ package openai
 
 import (
 	"encoding/json"
-	"fmt"
+	"slices"
 
 	"github.com/wyolet/relay/sdk/internal/jsonscan"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -82,7 +82,7 @@ func responsesItemMembers(item []byte) (typ ResponsesItemType, content []byte, o
 	return typ, content, !m.Err()
 }
 
-// responsesContentRefuses reports whether message content holds a refusal part, failing where responsesUnmarshalContent does: string or absent content has no parts, and every part must be of a type it decodes.
+// responsesContentRefuses reports whether message content holds a refusal part, failing where responsesUnmarshalContent does: string or absent content has no parts, and a part of any type decodes (an unmodeled one as a ResponsesRawPart).
 func responsesContentRefuses(content []byte) (bool, error) {
 	if len(content) == 0 || content[0] == '"' {
 		return false, nil
@@ -100,14 +100,7 @@ func responsesContentRefuses(content []byte) (bool, error) {
 			types = append(types, p.Type)
 		}
 	}
-	refusal := false
-	for _, t := range types {
-		if !responsesPartTypeDecodes(t) {
-			return false, fmt.Errorf("unsupported part type %q", t)
-		}
-		refusal = refusal || t == ResponsesPartTypeRefusal
-	}
-	return refusal, nil
+	return slices.Contains(types, ResponsesPartTypeRefusal), nil
 }
 
 // responsesPartTypes scans a content array for each part's last type; false when the scan cannot settle them.

@@ -32,6 +32,10 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 	// Build canonical input from Responses items.
 	input := make([]v1.Item, 0, len(req.Input))
 	for _, item := range req.Input {
+		// An unmodeled part is the caller's input: dropping it would answer a different request.
+		if t, ok := responsesUnmodeledPart(item); ok {
+			return nil, fmt.Errorf("input item: unsupported part type %q", t)
+		}
 		ci, err := responsesItemToCanonical(item)
 		if err != nil {
 			return nil, fmt.Errorf("input item: %w", err)
@@ -326,4 +330,21 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	}
 
 	return rreq, nil
+}
+
+// responsesUnmodeledPart returns the type of the first part in item's content that is carried as a ResponsesRawPart.
+func responsesUnmodeledPart(item ResponsesItem) (ResponsesPartType, bool) {
+	var parts []ResponsesPart
+	switch v := item.(type) {
+	case *ResponsesMessage:
+		parts = v.Content
+	case *ResponsesFunctionCallOutput:
+		parts = v.Content
+	}
+	for _, p := range parts {
+		if raw, ok := p.(*ResponsesRawPart); ok {
+			return raw.Type, true
+		}
+	}
+	return "", false
 }
