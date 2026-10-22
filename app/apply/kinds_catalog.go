@@ -52,7 +52,7 @@ func (b *builder) planCatalog(ctx context.Context, provDocs []*manifest.Provider
 		Kind: "HostKey", Docs: hkDocs, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
 		Upsert: s.HostKey.Upsert, Delete: detachRefsThenDelete(s.Policy, policy.DetachHostKey, s.HostKey.Delete),
-		Check: checkHostKeyPolicy(b.opts.Authz, pols), Keep: keepHostKeySecret,
+		Check: checkHostKeyPolicy(b.opts.Authz, pols), Keep: func(prev, next *hostkey.HostKey) error { keepHostKeySecret(prev, next); return nil },
 	}); err != nil {
 		return err
 	}

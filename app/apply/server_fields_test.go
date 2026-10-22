@@ -2,10 +2,13 @@ package apply
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -141,8 +144,73 @@ func TestApplyLeavesKeyRotationStateAlone(t *testing.T) {
 	}
 
 	next := &key.Key{Spec: key.Spec{KeyHash: k.Spec.KeyHash}}
-	keepKeyServerFields(k, next)
+	if err := keepKeyServerFields(k, next); err != nil {
+		t.Fatalf("keep: %v", err)
+	}
 	if next.Spec.PreviousKeyHash != k.Spec.PreviousKeyHash || next.Spec.GraceUntil != k.Spec.GraceUntil {
 		t.Fatalf("update dropped the rotation state: %+v", next.Spec)
+	}
+}
+
+// A key's hash, prefix and principal change only through the control API: a document declaring another value is refused, one omitting them keeps the stored row's.
+func TestApplyRefusesChangingKeyIdentity(t *testing.T) {
+	rows, k := rotatedKeyRows()
+	k.Spec.Prefix = "rk_aaaa"
+	other := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "crawler"}, Spec: serviceaccount.Spec{ProjectID: rows.Projects[0].Meta.ID}}
+	other.StampOwner()
+	rows.ServiceAccounts = append(rows.ServiceAccounts, other)
+
+	cases := map[string]func(*manifest.KeyDTO){
+		"keyHash":   func(d *manifest.KeyDTO) { d.Spec.KeyHash = strings.Repeat("c", 64) },
+		"prefix":    func(d *manifest.KeyDTO) { d.Spec.Prefix = "rk_cccc" },
+		"principal": func(d *manifest.KeyDTO) { d.Spec.Principal.Name = "crawler" },
+	}
+	for field, edit := range cases {
+		t.Run(field, func(t *testing.T) {
+			doc := keyDoc(k)
+			edit(doc)
+			b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows), admin: true}
+			err := b.run(context.Background(), []manifest.Document{{Key: doc}})
+			var ie *InvalidError
+			if !errors.As(err, &ie) || !strings.Contains(err.Error(), "spec."+field) {
+				t.Fatalf("plan: %v, want an InvalidError naming spec.%s", err, field)
+			}
+		})
+	}
+
+	doc := keyDoc(k)
+	doc.Spec.KeyHash = ""
+	doc.Spec.Enabled = new(false)
+	b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows)}
+	if err := b.run(context.Background(), []manifest.Document{{Key: doc}}); err != nil {
+		t.Fatalf("plan without keyHash: %v", err)
+	}
+	if e := entryFor(t, b, "Key", k.Meta.Name); e.Action != ActionUpdate || slices.Contains(e.ChangedFields, "spec.keyHash") {
+		t.Fatalf("action = %s (fields %v), want an update that leaves the hash", e.Action, e.ChangedFields)
+	}
+	if got := b.declared[k.Meta.ID].(*key.Key).Spec; got.KeyHash != k.Spec.KeyHash || got.Prefix != k.Spec.Prefix || got.Principal != k.Spec.Principal {
+		t.Fatalf("update wrote %+v, want the stored hash, prefix and principal", got)
+	}
+}
+
+// Whoever picks a key's hash knows its plaintext, so creating a key from a document is an admin's: the control API's create never takes a hash.
+func TestApplyKeyCreateFromHashIsAdminOnly(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		rows, k := rotatedKeyRows()
+		rows.Keys = nil
+		b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows), admin: admin}
+		err := b.run(context.Background(), []manifest.Document{{Key: keyDoc(k)}})
+		if !admin {
+			if !errors.Is(err, authz.ErrForbidden) {
+				t.Fatalf("non-admin create: %v, want forbidden", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("admin create: %v", err)
+		}
+		if e := entryFor(t, b, "Key", k.Meta.Name); e.Action != ActionCreate {
+			t.Fatalf("admin create: action = %s", e.Action)
+		}
 	}
 }
