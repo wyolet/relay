@@ -21,9 +21,9 @@ import (
 // partial prefix flagged truncated, never a torn buffer.
 type bodyCapture struct {
 	mu sync.Mutex
-	// buf is seeded with the peeked prefix via bytes.NewBuffer — zero
+	// buf is seeded with the held prefix via bytes.NewBuffer — zero
 	// copy. Appends land beyond len(prefix), so the prefix slice that
-	// seedLifecycle published as the pre-finalize fallback is never
+	// Dispatch published as the pre-finalize fallback is never
 	// overwritten even when growth happens in place.
 	buf       *bytes.Buffer
 	limit     int
@@ -97,12 +97,12 @@ func (t *captureTee) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// finalizeReadCloser orders the capture handoff: Close publishes the
-// capture into lc first, then closes inner — whose closer is what
-// spawns the post-flight goroutine.
+// finalizeReadCloser orders the request-body handoff: Close publishes
+// what sb learned into lc first, then closes inner — whose closer is
+// what spawns the post-flight goroutine.
 type finalizeReadCloser struct {
 	inner io.ReadCloser
-	c     *bodyCapture
+	sb    *scannedBody
 	lc    *lifecycle.Context
 	once  sync.Once
 }
@@ -110,6 +110,6 @@ type finalizeReadCloser struct {
 func (f *finalizeReadCloser) Read(p []byte) (int, error) { return f.inner.Read(p) }
 
 func (f *finalizeReadCloser) Close() error {
-	f.once.Do(func() { f.c.finalizeInto(f.lc) })
+	f.once.Do(func() { f.sb.finalizeInto(f.lc) })
 	return f.inner.Close()
 }

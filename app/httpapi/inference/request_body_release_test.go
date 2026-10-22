@@ -16,7 +16,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqbody"
 )
@@ -131,14 +130,12 @@ func TestDispatch_RequestBodyCollectableMidStream(t *testing.T) {
 	}
 }
 
-// The proxy forward, as handleProxy wires it: the dispatched body behind a self-releasing reader, re-read by the policy resolver (buffered prefix copy, or streamed remainder past the peek window).
+// The proxy forward, as handleProxy wires it: the bytes held until the model was known, then the rest streamed from the client.
 func TestProxyRun_RequestBodyCollectableMidStream(t *testing.T) {
 	for _, pad := range []int{512 << 10, 2 << 20} {
 		up := heldStreamUpstream(t, "data: {}\n\n")
-		cat, prin := buildDispatchCatalog(t, "test-host", adapters.OpenAI)
-		resolver := routing.New(cat)
 
-		res, collected := startProxyStream(t, resolver, prin, up.URL, pad)
+		res, collected := startProxyStream(t, up.URL, pad)
 		if _, err := io.ReadFull(res.Body, make([]byte, len("data: {}\n\n"))); err != nil {
 			t.Fatalf("pad %d: read: %v", pad, err)
 		}
@@ -210,22 +207,19 @@ func TestReadRequestBody_AllocatesUpFrontOnlyToTheCap(t *testing.T) {
 	}
 }
 
-func startProxyStream(t *testing.T, resolver *routing.Resolver, prin *Principal, upstreamURL string, pad int) (*proxy.Result, []<-chan struct{}) {
+func startProxyStream(t *testing.T, upstreamURL string, pad int) (*proxy.Result, []<-chan struct{}) {
 	t.Helper()
 	body, bodyGone := trackCollection(proxyTestBody("test-model", pad, false))
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r.Body = reqbody.NewReader(body)
-	r.ContentLength = int64(len(body))
-	_, pb, err := resolveProxyHostByPolicy(r, resolver, prin, false)
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
+	sb, held, rej := holdProxyBody(reqbody.NewReader(body), int64(len(body)), true)
+	if rej != nil {
+		t.Fatalf("hold: %v", rej)
 	}
-	_, prefixGone := trackCollection(pb.Prefix)
+	_, heldGone := trackCollection(held)
 	res, err := proxy.New(nil, nil, nil).Run(context.Background(), &proxy.Request{
 		Method:        http.MethodPost,
 		Path:          "/v1/chat/completions",
-		Body:          pb.Reader,
-		ContentLength: r.ContentLength,
+		Body:          sb,
+		ContentLength: int64(len(body)),
 		Headers:       http.Header{},
 		HostBaseURL:   upstreamURL,
 		UpstreamAuth:  "Bearer upstream-key",
@@ -233,5 +227,5 @@ func startProxyStream(t *testing.T, resolver *routing.Resolver, prin *Principal,
 	if err != nil {
 		t.Fatalf("proxy run: %v", err)
 	}
-	return res, []<-chan struct{}{bodyGone, prefixGone}
+	return res, []<-chan struct{}{bodyGone, heldGone}
 }

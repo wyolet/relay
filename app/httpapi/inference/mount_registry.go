@@ -94,11 +94,6 @@ func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapte
 // errDuplicateModel: encoding/json keeps the last, and the bytes a byte-pass
 // forwards may be read differently upstream.
 func extractModelStream(body []byte) (model string, stream bool, err error) {
-	return parseModelStream(body, false)
-}
-
-// parseModelStream is extractModelStream; exactKey refuses a model key spelled other than `model`, for proxy mode, which forwards the body unchanged.
-func parseModelStream(body []byte, exactKey bool) (model string, stream bool, err error) {
 	var probe struct {
 		Model      string `json:"model"`
 		Stream     *bool  `json:"stream"`
@@ -107,9 +102,9 @@ func parseModelStream(body []byte, exactKey bool) (model string, stream bool, er
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return "", false, fmt.Errorf("invalid JSON: %w", err)
 	}
-	scan := modelScanner{exactKey: exactKey}
-	if scan.feed(body); scan.err == errDuplicateModel || scan.err == errModelKeySpelling {
-		return "", false, scan.err
+	var scan modelScanner
+	if scan.feed(body); scan.err == errDuplicateModel {
+		return "", false, errDuplicateModel
 	}
 	s := probe.OutputMode == "stream"
 	if probe.Stream != nil {
@@ -122,6 +117,10 @@ func parseModelStream(body []byte, exactKey bool) (model string, stream bool, er
 // body, performs a minimal JSON parse to extract model and stream, and calls
 // Dispatch with the spec's Name as the inbound shape.
 func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
+	if m := ClassificationFrom(r.Context()).Mode; m == ModeProxyAuthed || m == ModeProxyAnonymous {
+		handleProxyShape(spec, d, w, r)
+		return
+	}
 	body, err := readRequestBody(r, d.MaxRequestBytes)
 	if err != nil {
 		if httpmw.IsBodyTooLargeError(err) {
@@ -132,8 +131,7 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	mode := ClassificationFrom(r.Context()).Mode
-	modelName, stream, err := parseModelStream(body, mode == ModeProxyAuthed || mode == ModeProxyAnonymous)
+	modelName, stream, err := extractModelStream(body)
 	if err != nil {
 		writeModelParseErr(w, err)
 		return
@@ -155,6 +153,19 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		ModelName: modelName,
 		Stream:    stream,
 	})
+}
+
+// handleProxyShape is handleShape for proxy mode: the body is read only until its model is known, and the rest streams upstream as it arrives, checked on the way (scannedBody). The stream flag is not needed: the proxy path takes it from the response's Content-Type.
+func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
+	cls := ClassificationFrom(r.Context())
+	// An anonymous pinned request is routed and metered without its model, so nothing waits for it.
+	needModel := cls.Mode == ModeProxyAuthed || cls.UpstreamHost == ""
+	body, held, rej := holdProxyBody(r.Body, r.ContentLength, needModel)
+	if rej != nil {
+		WriteAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
+		return
+	}
+	Dispatch(d, w, r, DispatchInput{Inbound: spec.Name, Body: held, ModelName: body.scan.model, ProxyBody: body})
 }
 
 // writeModelParseErr answers an extractModelStream error.

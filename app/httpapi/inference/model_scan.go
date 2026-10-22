@@ -534,13 +534,3 @@ func (s *modelScanner) stepNumber(c byte) bool {
 	}
 	return true
 }
-
-// scanModel scans a whole body and returns its single top-level model.
-func scanModel(body []byte, exactKey bool) (string, *bodyError) {
-	s := modelScanner{exactKey: exactKey}
-	s.feed(body)
-	if err := s.finish(); err != nil {
-		return "", err
-	}
-	return s.model, nil
-}

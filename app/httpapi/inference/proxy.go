@@ -21,7 +21,6 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	"github.com/wyolet/relay/pkg/reqbody"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -35,8 +34,8 @@ const (
 
 // handleProxy is the shared proxy-mode flow called by /openai/v1/chat/completions
 // and /anthropic/v1/messages. adapterKind pins the token extractor (and is used in
-// future per-host adapter-mismatch checks). modelName is the body's model,
-// already parsed by the shape route.
+// future per-host adapter-mismatch checks). modelName is the body's model, as
+// the shape route held it; r.Body is the scannedBody streaming the rest.
 //
 // The proxy-mode setting is enforced before this runs: by PrincipalMiddleware, and per frame on /v1/ws.
 func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name, modelName string) {
@@ -48,12 +47,22 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"mode", cls.Mode,
 		"upstream_host_hdr", cls.UpstreamHost,
 	)
+	reqBody, ok := r.Body.(*scannedBody)
+	if !ok {
+		// A caller that read the body itself: nothing reaches the upstream unscanned.
+		var rej *bodyError
+		if reqBody, rej = scanReadBody(r.Body); rej != nil {
+			d.fireUsageFailure(ctx, rej.code, rej.msg)
+			writeAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
+			return
+		}
+	}
 
 	// Resolve upstream host. Two paths:
 	//   1. Caller pinned a host via X-WR-Upstream-Host → direct lookup.
-	//   2. Header omitted → peek `model` from the body, resolve via
-	//      Policy + HostBinding (proxy-authed only — anonymous traffic
-	//      has no policy and must still pin a host).
+	//   2. Header omitted → resolve the body's model via Policy +
+	//      HostBinding (proxy-authed only — anonymous traffic has no
+	//      policy and must still pin a host).
 	snap := SnapshotFrom(ctx)
 	if snap == nil {
 		// Anonymous proxy: no credential middleware ran, so nothing pinned
@@ -64,7 +73,6 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	var (
 		host         *apphost.Host
 		resolvedPlan *routing.Plan
-		pb           proxyBody
 	)
 	if cls.UpstreamHost != "" {
 		h, ok := snap.HostByName(cls.UpstreamHost)
@@ -90,7 +98,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
-		plan, b, err := resolveProxyHostByPolicy(r, d.Resolver, PrincipalFrom(ctx), lc != nil && lc.PayloadLog)
+		plan, err := resolveProxyHostByPolicy(d.Resolver, PrincipalFrom(ctx), snap, modelName)
 		if err != nil {
 			d.fireUsageFailure(ctx, "proxy_resolve_error", err.Error())
 			mapProxyResolveErr(w, err)
@@ -98,12 +106,6 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 		host = plan.Host
 		resolvedPlan = plan
-		pb = b
-		// Re-attach what the resolver consumed — the full buffered body
-		// when it fit, or the peeked prefix chained onto the live stream —
-		// so the forwarder sends exactly the bytes the customer sent.
-		r.Body = pb.Reader
-		pb.seedLifecycle(lc)
 	}
 
 	// Resolve system rate-limit bucket + subject for this mode.
@@ -151,7 +153,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	preq := &proxy.Request{
 		Method:        r.Method,
 		Path:          upstreamPath,
-		Body:          r.Body,
+		Body:          reqBody,
 		ContentLength: r.ContentLength,
 		Headers:       forwardHdr,
 		HostBaseURL:   host.Spec.BaseURL,
@@ -180,10 +182,10 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"request_id", reqid.From(ctx),
 		"status", result.Status,
 	)
-	body := pb.wrapResult(result.Body, lc)
+	body := reqBody.wrapResult(result.Body, lc)
 	defer body.Close()
 	// An upstream that answers before reading the whole body answered an incomplete one; the refusal is the caller's answer.
-	if rej := pb.Scanned.rejection(); rej != nil {
+	if rej := reqBody.rejection(); rej != nil {
 		writeAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
 		return
 	}
@@ -354,17 +356,11 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 // error messages.
 func strconvQuote(s string) string { return "\"" + s + "\"" }
 
-// proxyMaxBodyPeek is the prefix window resolveProxyHostByPolicy buffers
-// when peeking the inbound JSON body for its `model` field. It is a peek,
-// not a size gate: bodies that fit are parsed in full, larger ones are
-// scanned for the top-level `model` and streamed upstream. Long-context
-// requests routinely run several MiB.
-const proxyMaxBodyPeek = 1 << 20
-
-// proxyMaxBodyBuffer caps full buffering when `model` is not within the
-// peek window (pathological key order forces a complete parse). 32 MiB
+// proxyMaxBodyBuffer caps what proxy mode holds of a body while waiting
+// for its model, and what payload capture keeps of a streamed one. 32 MiB
 // matches the Caddy front-proxy request cap and the upstream providers'
-// own request limits; anything larger is rejected.
+// own request limits; a larger body without its model in the first 32 MiB
+// is rejected.
 const proxyMaxBodyBuffer = 32 << 20
 
 // errProxyHostResolve is the typed envelope returned by
@@ -384,137 +380,23 @@ func (e *errProxyHostResolve) Error() string {
 	return e.Reason + ": " + e.Detail
 }
 
-// proxyBody is the body handoff from resolveProxyHostByPolicy: the reader
-// to forward upstream, the buffered prefix retained for payload capture
-// (a reference, never mutated), and whether that prefix is incomplete —
-// i.e. the remainder streams from the live request body.
-type proxyBody struct {
-	Reader    io.ReadCloser
-	Prefix    []byte
-	Truncated bool
-	// Capture is armed on the streamed path when payload logging wants
-	// the full body: the remainder tees into it as it flows upstream.
-	// wrapResult finalizes it into the lifecycle context on response
-	// close. Nil when the body was fully buffered or logging is off.
-	Capture *bodyCapture
-	// Scanned is the streamed remainder's reader, which can still refuse the body after the upstream call started. Nil when the body was fully buffered.
-	Scanned *scannedBody
-}
-
-// seedLifecycle retains the resolver's buffered bytes on lc as the
-// payload-capture fallback. When a Capture is armed, finalize overwrites
-// both fields with the assembled full body; until then (and on any
-// failure path that never closes the response) the prefix + truncated
-// flag stand. Nil-safe on lc; a no-op unless payload capture is on.
-func (pb proxyBody) seedLifecycle(lc *lifecycle.Context) {
-	if lc == nil || !lc.PayloadLog {
-		return
-	}
-	lc.RequestBody = pb.Prefix
-	lc.RequestBodyTruncated = pb.Truncated
-}
-
-// wrapResult arms the capture handoff: the returned body's Close
-// publishes the assembled capture into lc before the inner Close spawns
-// the detached post-flight goroutine, so observers never see a torn
-// buffer. Pass-through when no capture is armed.
-func (pb proxyBody) wrapResult(body io.ReadCloser, lc *lifecycle.Context) io.ReadCloser {
-	if pb.Capture == nil || lc == nil {
-		return body
-	}
-	return &finalizeReadCloser{inner: body, c: pb.Capture, lc: lc}
-}
-
-// resolveProxyHostByPolicy reads enough of r.Body to learn the top-level
-// `model` field and runs the catalog routing resolver with SkipKeyCheck so
-// proxy mode can reuse the same policy + binding logic as normal mode
-// without requiring keypool coverage. Bodies within proxyMaxBodyPeek come
-// back fully buffered; larger bodies whose model appears in the peek window
-// are streamed (prefix + remaining r.Body) without further buffering; only
-// when the model sits beyond the window does buffering continue, up to
-// proxyMaxBodyBuffer.
-//
-// captureFull arms a tee on the streamed path so payload logging stores
-// the whole body (capped at proxyMaxBodyBuffer) instead of the bare
-// prefix — without serializing client upload and upstream send.
-func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Principal, captureFull bool) (*routing.Plan, proxyBody, error) {
+// resolveProxyHostByPolicy routes model through the catalog resolver with
+// SkipKeyCheck, so proxy mode reuses normal mode's policy + binding logic
+// without requiring keypool coverage.
+func resolveProxyHostByPolicy(resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot, model string) (*routing.Plan, error) {
 	if p == nil {
-		return nil, proxyBody{}, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
-	}
-	snap := SnapshotFrom(r.Context())
-	prefix, err := io.ReadAll(io.LimitReader(r.Body, proxyMaxBodyPeek+1))
-	if err != nil {
-		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
-	}
-	if len(prefix) <= proxyMaxBodyPeek {
-		plan, err := resolveProxyModelJSON(prefix, resolver, p, snap)
-		if err != nil {
-			return nil, proxyBody{}, err
-		}
-		return plan, proxyBody{Reader: reqbody.NewReader(prefix), Prefix: prefix}, nil
-	}
-
-	scan := &modelScanner{exactKey: true}
-	closeAt := scan.feed(prefix)
-	if scan.err != nil {
-		return nil, proxyBody{}, proxyBodyResolveErr(scan.err)
-	}
-	if scan.modelDone {
-		if scan.model == "" {
-			return nil, proxyBody{}, proxyBodyResolveErr(errMissingModel)
-		}
-		plan, err := resolveProxyPlan(scan.model, resolver, p, snap)
-		if err != nil {
-			return nil, proxyBody{}, err
-		}
-		pb := proxyBody{Prefix: prefix, Truncated: true}
-		rest := io.Reader(r.Body)
-		if captureFull {
-			pb.Capture = newBodyCapture(prefix, proxyMaxBodyBuffer)
-			rest = pb.Capture.tee(r.Body)
-		}
-		pb.Scanned = newScannedBody(scan, prefix, closeAt, rest, r.Body)
-		pb.Reader = pb.Scanned
-		return plan, pb, nil
-	}
-
-	rest, err := io.ReadAll(io.LimitReader(r.Body, int64(proxyMaxBodyBuffer-len(prefix))+1))
-	if err != nil {
-		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
-	}
-	full := append(prefix, rest...)
-	if len(full) > proxyMaxBodyBuffer {
-		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_too_large", Detail: "request body exceeds proxy buffer limit"}
-	}
-	scan.feed(rest)
-	if err := scan.finish(); err != nil {
-		return nil, proxyBody{}, proxyBodyResolveErr(err)
-	}
-	plan, err := resolveProxyPlan(scan.model, resolver, p, snap)
-	if err != nil {
-		return nil, proxyBody{}, err
-	}
-	return plan, proxyBody{Reader: reqbody.NewReader(full), Prefix: full}, nil
-}
-
-func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
-	model, err := scanModel(body, true)
-	if err != nil {
-		return nil, proxyBodyResolveErr(err)
+		return nil, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
 	return resolveProxyPlan(model, resolver, p, snap)
 }
 
-func proxyBodyResolveErr(e *bodyError) error {
-	switch e {
-	case errDuplicateModel:
-		return &errProxyHostResolve{Reason: "duplicate_model", Detail: e.msg}
-	case errModelKeySpelling:
-		return &errProxyHostResolve{Reason: "invalid_model_key", Detail: e.msg}
-	case errMissingModel:
-		return &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
+// scanReadBody reads body whole and scans it.
+func scanReadBody(body io.Reader) (*scannedBody, *bodyError) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, sourceBodyError(err)
 	}
-	return &errProxyHostResolve{Reason: "body_not_json", Detail: "proxy mode without X-WR-Upstream-Host requires a JSON body carrying a 'model' field", Inner: e}
+	return scannedWhole(raw)
 }
 
 func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
@@ -540,12 +422,6 @@ func mapProxyResolveErr(w http.ResponseWriter, err error) {
 	switch e.Reason {
 	case "relay_key_required":
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_relay_key", e.Detail)
-	case "body_read":
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "body_read", e.Error())
-	case "body_too_large":
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "body_too_large", e.Detail)
-	case "body_not_json", "missing_model", "duplicate_model", "invalid_model_key":
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", e.Reason, e.Detail)
 	case "routing":
 		// Re-map the inner routing sentinel to the same envelope the
 		// normal-mode handler uses, so callers see consistent error codes.

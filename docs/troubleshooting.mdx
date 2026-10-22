@@ -78,7 +78,9 @@ To recover:
 
 ## `413`: request too large
 
-`request_too_large` (`body_too_large` in proxy mode): the body is over `RELAY_MAX_REQUEST_BYTES` (32 MiB by default); see [Configuration](/configuration#request-handling).
+`request_too_large`: the body is over `RELAY_MAX_REQUEST_BYTES` (32 MiB by default); see [Configuration](/configuration#request-handling).
+
+`body_too_large` (proxy mode): the first 32 MiB of the body hold no top-level `model`. Relay keeps the body until it reads the model, so send `model` before `messages` in large bodies.
 
 ## Wrong wire format from the upstream
 
