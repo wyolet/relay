@@ -54,7 +54,7 @@ RUN set -eu; \
   echo "fetched catalog ${CATALOG_REF}"
 
 # --- source: module cache + source tree, shared by the binary builds below ---
-FROM golang:1.26-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS source
+FROM golang:1.26-alpine@sha256:5cb67f19c5e7994dcb80c074f7cfca8aeeada45bbdca035f73df269cefdcce61 AS source
 WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
