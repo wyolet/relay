@@ -110,8 +110,8 @@ Procedures for upgrades that need every old pod stopped, for rolling the schema 
 
 | Probe | Path (inference port) | Settings |
 | --- | --- | --- |
-| Startup | `/healthz` | Every 5 s, up to 30 failures, to cover first-boot migrations and catalog seeding. |
-| Readiness | `/healthz` | Every 5 s. `503` while Postgres does not answer or the catalog has not loaded, which takes the pod out of the Service. |
+| Startup | `/healthz` | Every 5 s, up to 30 failures, to cover first-boot migrations and catalog seeding. `503` until Postgres answers and the catalog has loaded. |
+| Readiness | `/healthz` | Every 5 s. Once a pod has been ready, Postgres no longer counts: the data plane serves from the in-memory catalog, so a Postgres outage leaves every pod in the Service. Postgres health stays on the control port's `/api/healthz`. |
 | Liveness | `/livez` | Every 20 s, 5 failures. Checks only that the process serves, so a Postgres or DNS outage never restarts healthy pods. |
 
 ## Scaling

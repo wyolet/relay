@@ -75,7 +75,7 @@ These need no credential.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/healthz` | Readiness: Postgres ping and a loaded catalog. `503` until both hold. |
+| `GET` | `/healthz` | Readiness: a loaded catalog, and a Postgres ping until the pod is first ready. `503` until both hold; after that Postgres no longer counts. |
 | `GET` | `/livez` | Liveness: the process is serving. No dependency checks. |
 | `GET` | `/openapi.json` | Generated OpenAPI document for the data plane |
 | `GET` | `/docs` | API reference UI rendered from `/openapi.json` |
