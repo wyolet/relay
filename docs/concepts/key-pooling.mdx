@@ -33,7 +33,7 @@ The policy's `keySelection` sets the algorithm:
 | `round-robin` | Rotates across healthy keys using a shared counter in the state backend. |
 | `least-recently-used` | Picks the healthy key whose last use is oldest. |
 
-Breaker state is shared across pods through the state backend (Valkey when `RELAY_STATE_BACKEND=redis`). Selection reads each candidate's breaker record; it is not a single atomic operation, so two concurrent requests can both probe a key that just came out of cooldown. The outcome of either probe settles the key's state.
+Breaker state is shared across pods through the state backend (Valkey when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
 
 After picking a key, Relay reserves the key's tier rate limit if its tier policy has one. A key over its tier limit is skipped for this request without touching its breaker, and the next key is tried. See [Rate limits](/concepts/rate-limits#upstream-limits-per-host-key).
 
@@ -43,14 +43,16 @@ Each key has its own breaker, keyed by a hash of the key's value. The upstream r
 
 | Upstream result | Breaker | Cooldown |
 | --- | --- | --- |
-| `401` | Opens | 1 min, then 5 min, 15 min, and 1 h for every further failure |
-| `403` | Opens | 2 s, doubling per repeated failure up to 60 s |
-| `5xx`, or a network error after the connection was made | Opens | 2 s, doubling per repeated failure up to 60 s |
+| `401` | Opens | 30 s, then 1 min, 5 min, 15 min, and 1 h for every further failure |
+| `403` | Opens | 1 s, doubling per repeated failure up to 60 s |
+| `5xx`, or a network error after the connection was made | Opens after 5 such errors within 30 s with no success between them | 1 s, doubling per repeated failure up to 60 s |
 | `429` with `Retry-After` of 5 s or less | Stays closed | None; the request moves to the next key |
 | `429` with `Retry-After` over 5 s | Opens | The `Retry-After` duration |
 | Connection could not be established (refused, DNS, TLS) | Unchanged | None; this is a host problem, see below |
 
-An open key is skipped during selection. When its cooldown ends, the next request probes it; a success closes the breaker and resets the backoff, and another failure moves it one step up. The step counter is shared by all failure classes. No failure takes a key out for good, since the request that caused a `401` or `403` may have been the caller's doing.
+A single `5xx` does not take a key out: providers return a few percent of them on healthy keys, and the request already moves to the next key. `RELAY_KEY_BREAKER_THRESHOLD` and `RELAY_KEY_BREAKER_WINDOW_S` set the count and the window. Failures of requests that were already in flight when the key opened do not move it further up the ladder.
+
+An open key is skipped during selection. When its cooldown ends, one request probes it while the others keep skipping it; if the probe's outcome has not come back within 10 seconds (a long stream, say), the next request probes too. A successful probe closes the breaker one backoff step down, and each further success takes another step off; a failed probe moves it one step up. The step counter is shared by all failure classes. No failure takes a key out for good, since the request that caused a `401` or `403` may have been the caller's doing.
 
 <Info>
 Because breakers are keyed by value hash, rotating a key to a new value gives it a fresh, closed breaker. The old record expires on its own.

@@ -100,7 +100,7 @@ func main() {
 
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
-	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	selector := keypool.New(kvStore, slog.Default(), nil, nil).WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow)
 	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)

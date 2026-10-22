@@ -40,13 +40,13 @@ const (
 	CircuitHalfOpen                     // single probe allowed
 )
 
-// backoffSchedule is seconds per step, capped at 60.
-var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
+// backoffSchedule is the open time per step after server errors, network errors and 403s.
+var backoffSchedule = [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute}
 
 // authCooldowns is the open time per step after a rejected credential. It is
 // bounded so a rejection the caller provoked cannot take a shared key out for
 // good; a key that is really revoked is probed at most once per final step.
-var authCooldowns = [5]time.Duration{30 * time.Second, time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
+var authCooldowns = [...]time.Duration{30 * time.Second, time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord {
 	r, _ := recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
@@ -73,22 +73,6 @@ func (s *Selector) ReadCircuit(ctx context.Context, keyHash string) (CircuitReco
 	return recordFrom(s.state.Get(ctx, circuitKey(keyHash)))
 }
 
-func (s *Selector) writeRecord(ctx context.Context, keyHash string, r CircuitRecord) {
-	b, err := encodeRecord(r)
-	if err != nil {
-		s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
-		return
-	}
-	ttl := ttlFlat
-	if r.Indefinite {
-		ttl = 0 // no expiry
-	}
-	if err := s.state.Set(ctx, circuitKey(keyHash), b, ttl); err != nil {
-		metrics.KVError("breaker_write", metrics.KVDropped)
-		s.log.Error("keypool: write record failed", "key_hash", keyHash, "err", err)
-	}
-}
-
 // ClearCircuit deletes the circuit-breaker record for a key from the KV
 // store. This is best-effort: if the DEL fails the error is returned to the
 // caller, who should log a warning but not fail the outer operation.
@@ -99,212 +83,128 @@ func ClearCircuit(ctx context.Context, store kv.Store, keyHash string) error {
 	return store.Del(ctx, circuitKey(keyHash))
 }
 
-// RecordSuccess transitions a key to CircuitClosed and resets backoff.
-//
-// The read (prior state, for logging) and the write happen atomically in a
-// single Lua round trip so a concurrent RecordFailure on another pod cannot be
-// lost between our GET and SET. Falls back to the non-atomic Go-side GET+SET
-// only when the store has no script runner (custom test doubles).
+// RecordSuccess closes a closed or half-open key one backoff step down and clears its failure count, in one script. An open key is left alone.
 func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
-	if s.runner == nil {
-		prior := s.readRecord(ctx, keyHash).State
-		s.writeRecord(ctx, keyHash, successRecord(s.clock()))
-		s.logSuccess(ctx, keyHash, prior)
-		return
-	}
-	call, err := s.successCall(keyHash)
-	if err != nil {
-		s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
-		return
-	}
-	raw, err := s.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
+	now := s.clock()
+	raw, err := s.runRecordScript(ctx, successCall(keyHash, now), func(rec CircuitRecord, found bool) (CircuitRecord, bool) {
+		if !found {
+			return rec, false
+		}
+		return applySuccess(rec, now)
+	})
 	s.finishSuccess(ctx, keyHash, raw, err)
 }
 
-func successRecord(now time.Time) CircuitRecord {
-	// Reason cleared: the key is healthy, the prior reason no longer applies.
-	return CircuitRecord{State: CircuitClosed, LastTransition: now}
-}
-
-// successCall is RecordSuccess's script call for keyHash.
-func (s *Selector) successCall(keyHash string) (kv.ScriptCall, error) {
-	b, err := encodeRecord(successRecord(s.clock()))
-	if err != nil {
-		return kv.ScriptCall{}, err
+// runRecordScript runs a breaker script. With no script runner it applies the same transition from Go, without the atomicity.
+func (s *Selector) runRecordScript(ctx context.Context, call kv.ScriptCall, apply recordTransition) ([]byte, error) {
+	if s.runner != nil {
+		return s.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	}
-	return kv.ScriptCall{
-		Name:   scriptRecordSuccess,
-		Script: recordSuccessScript,
-		Keys:   []string{circuitKey(keyHash)},
-		Args:   []any{string(b), ttlFlat.Milliseconds()},
-	}, nil
+	return applyRecord(ctx, s.state, call.Keys[0], apply, ttlFlat)
 }
 
-// finishSuccess logs the outcome of a success script; raw is the prior record.
+// finishSuccess logs the outcome of a success script.
 func (s *Selector) finishSuccess(ctx context.Context, keyHash string, raw []byte, err error) {
+	var out recordOutcome
+	if err == nil {
+		out, err = decodeOutcome(raw)
+	}
 	if err != nil {
 		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", err)
 		return
 	}
-	prior := CircuitState(CircuitClosed)
-	if len(raw) > 0 {
-		if old, derr := decodeRecord(raw); derr == nil {
-			prior = old.State
-		}
+	if !out.changed {
+		return
 	}
-	s.logSuccess(ctx, keyHash, prior)
-}
-
-func (s *Selector) logSuccess(ctx context.Context, keyHash string, prior CircuitState) {
 	s.log.Debug("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,
-		"from_state", stateName(prior),
-		"to_state", stateName(CircuitClosed),
+		"from_state", stateName(out.prior),
+		"to_state", stateName(out.rec.State),
 		"reason", "success",
-		"backoff_step", 0,
+		"backoff_step", out.rec.BackoffStep,
 		"open_for_seconds", 0,
 	)
 }
 
-// RecordFailure transitions according to kind. retryAfter is honoured only
-// for RateLimit kinds.
+// RecordFailure transitions according to kind, in one script. Server and network errors open a closed key only once the threshold is reached within the window; 401 and 403 open it at once. retryAfter is honoured only for FailureRateLimitLong.
 func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind FailureKind, retryAfter time.Duration) {
 	if isAnonymous(keyHash) {
 		return
 	}
-	now := s.clock()
-	rec := s.readRecord(ctx, keyHash)
-	prior := rec.State
-
+	op := failureOp{now: s.clock()}
+	var logReason string
 	switch kind {
 	case FailureUpstreamUnreachable:
 		// Host unreachable (dial failure) — not the key's fault. Never cool the
 		// key down; the pipeline retries the same host with backoff instead.
 		return
-
-	case FailureAuth:
-		step := min(rec.BackoffStep+1, len(authCooldowns)-1)
-		dur := authCooldowns[step]
-		rec.BackoffStep = step
-		rec.State = CircuitOpen
-		rec.Indefinite = false
-		rec.OpenUntil = now.Add(dur)
-		rec.LastTransition = now
-		rec.Reason = ReasonUpstreamAuthFailed
-		s.writeRecord(ctx, keyHash, rec)
-		metrics.ProviderKeyDown(string(rec.Reason))
-		s.log.Debug("keypool transition",
-			"request_id", reqid.From(ctx),
-			"key_hash", keyHash,
-			"from_state", stateName(prior),
-			"to_state", stateName(rec.State),
-			"reason", "401",
-			"cooldown_reason", rec.Reason,
-			"backoff_step", rec.BackoffStep,
-			"open_for_seconds", int(dur.Seconds()),
-		)
-
 	case FailureRateLimitShort:
 		// Stay closed; no state change.
 		s.log.Debug("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
-			"from_state", stateName(prior),
-			"to_state", stateName(prior),
 			"reason", "rate_limit_short",
-			"backoff_step", rec.BackoffStep,
 			"open_for_seconds", 0,
 		)
 		return
-
+	case FailureAuth:
+		op.reason, op.ladder, logReason = ReasonUpstreamAuthFailed, authCooldowns[:], "401"
+	case FailureForbidden:
+		op.reason, op.ladder, logReason = ReasonUpstreamForbidden, backoffSchedule[:], "403"
 	case FailureRateLimitLong:
-		rec.State = CircuitOpen
-		rec.Indefinite = false
-		rec.OpenUntil = now.Add(retryAfter)
-		rec.LastTransition = now
-		rec.Reason = ReasonUpstreamRateLimited
-		s.writeRecord(ctx, keyHash, rec)
-		metrics.ProviderKeyDown(string(rec.Reason))
-		s.log.Debug("keypool transition",
-			"request_id", reqid.From(ctx),
-			"key_hash", keyHash,
-			"from_state", stateName(prior),
-			"to_state", stateName(rec.State),
-			"reason", "rate_limit_long",
-			"cooldown_reason", rec.Reason,
-			"backoff_step", rec.BackoffStep,
-			"open_for_seconds", int(retryAfter.Seconds()),
-		)
-
-	case FailureServerError, FailureNetwork, FailureForbidden:
-		logReason := "5xx"
-		cooldownReason := ReasonUpstreamServerError
-		switch kind {
-		case FailureNetwork:
-			logReason = "network"
-			cooldownReason = ReasonUpstreamNetworkError
-		case FailureForbidden:
-			logReason = "403"
-			cooldownReason = ReasonUpstreamForbidden
+		op.reason, op.openFor, logReason = ReasonUpstreamRateLimited, retryAfter, "rate_limit_long"
+	case FailureServerError, FailureNetwork:
+		op.reason, logReason = ReasonUpstreamServerError, "5xx"
+		if kind == FailureNetwork {
+			op.reason, logReason = ReasonUpstreamNetworkError, "network"
 		}
-		step := rec.BackoffStep + 1
-		if step >= len(backoffSchedule) {
-			step = len(backoffSchedule) - 1
-		}
-		rec.BackoffStep = step
-		dur := time.Duration(backoffSchedule[step]) * time.Second
-		rec.State = CircuitOpen
-		rec.Indefinite = false
-		rec.OpenUntil = now.Add(dur)
-		rec.LastTransition = now
-		rec.Reason = cooldownReason
-		s.writeRecord(ctx, keyHash, rec)
-		metrics.ProviderKeyDown(string(rec.Reason))
-		s.log.Debug("keypool transition",
-			"request_id", reqid.From(ctx),
-			"key_hash", keyHash,
-			"from_state", stateName(prior),
-			"to_state", stateName(rec.State),
-			"reason", logReason,
-			"cooldown_reason", rec.Reason,
-			"backoff_step", rec.BackoffStep,
-			"open_for_seconds", int(dur.Seconds()),
-		)
+		op.ladder, op.threshold, op.window = backoffSchedule[:], s.failureThreshold, s.failureWindow
+	default:
+		return
 	}
+	s.recordFailure(ctx, keyHash, op, logReason)
 }
 
 // RecordLocalRateLimit cools down a key because our own rate-limit rule
 // fired (KeyQuotaExhausted from pkg/ratelimit). Distinct from upstream-driven
-// cooldowns: no backoff escalation, no half-open probe — the duration is
-// deterministic from Retry-After.
-//
-// Used by the pipeline's post-Pick Reserve path (issue #89, future PR).
+// cooldowns: no backoff escalation — the duration is deterministic from
+// Retry-After.
 func (s *Selector) RecordLocalRateLimit(ctx context.Context, keyHash string, retryAfter time.Duration) {
 	if isAnonymous(keyHash) {
 		return
 	}
-	now := s.clock()
-	rec := s.readRecord(ctx, keyHash)
-	prior := rec.State
-	// Preserve existing BackoffStep — local RL is deterministic, not a sign
-	// of key health degradation; don't escalate the backoff ladder.
-	rec.State = CircuitOpen
-	rec.OpenUntil = now.Add(retryAfter)
-	rec.Indefinite = false
-	rec.LastTransition = now
-	rec.Reason = ReasonLocalRateLimited
-	s.writeRecord(ctx, keyHash, rec)
-	metrics.ProviderKeyDown(string(rec.Reason))
+	s.recordFailure(ctx, keyHash, failureOp{now: s.clock(), reason: ReasonLocalRateLimited, openFor: retryAfter}, "local_rl_exhausted")
+}
+
+func (s *Selector) recordFailure(ctx context.Context, keyHash string, op failureOp, logReason string) {
+	raw, err := s.runRecordScript(ctx, failureCall(keyHash, op), func(rec CircuitRecord, _ bool) (CircuitRecord, bool) {
+		return applyFailure(rec, op)
+	})
+	var out recordOutcome
+	if err == nil {
+		out, err = decodeOutcome(raw)
+	}
+	if err != nil {
+		metrics.KVError("breaker_write", metrics.KVDropped)
+		s.log.Error("keypool: record failure script failed", "key_hash", keyHash, "err", err)
+		return
+	}
+	openFor := 0
+	if out.changed && out.rec.State == CircuitOpen {
+		metrics.ProviderKeyDown(string(out.rec.Reason))
+		openFor = int(out.rec.OpenUntil.Sub(op.now).Seconds())
+	}
 	s.log.Debug("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,
-		"from_state", stateName(prior),
-		"to_state", stateName(rec.State),
-		"reason", "local_rl_exhausted",
-		"cooldown_reason", rec.Reason,
-		"backoff_step", rec.BackoffStep,
-		"open_for_seconds", int(retryAfter.Seconds()),
+		"from_state", stateName(out.prior),
+		"to_state", stateName(out.rec.State),
+		"reason", logReason,
+		"cooldown_reason", out.rec.Reason,
+		"backoff_step", out.rec.BackoffStep,
+		"failures", out.rec.Failures,
+		"open_for_seconds", openFor,
 	)
 }

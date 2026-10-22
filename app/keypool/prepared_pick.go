@@ -104,35 +104,58 @@ func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	}
 }
 
-// eligible reports whether c may take traffic. An open key past its OpenUntil is promoted to half-open (written back) and is eligible.
+// eligible reports whether c may take traffic. A key whose cooldown has ended (open past OpenUntil, or half-open with a lapsed probe lease) is eligible only to the pick that claims its probe; the rest skip it until the probe's outcome lands or the lease lapses.
 func (s *Selector) eligible(ctx context.Context, c Candidate, now time.Time) (Candidate, bool) {
-	k, rec := c.Key, c.Record
-	switch rec.State {
+	switch c.Record.State {
+	case CircuitClosed:
+		return c, true
 	case CircuitOpen:
-		if rec.Indefinite { // written before auth cooldowns were bounded
-			rec.Indefinite = false
-			rec.OpenUntil = rec.LastTransition.Add(authCooldowns[len(authCooldowns)-1])
-		}
-		if now.Before(rec.OpenUntil) {
+		if now.Before(c.Record.OpenUntil) {
 			return Candidate{}, false
 		}
-		prior := rec.State
-		rec.State = CircuitHalfOpen
-		rec.LastTransition = now
-		s.writeRecord(ctx, k.KeyHash, rec)
-		s.log.Debug("keypool transition",
-			"request_id", reqid.From(ctx),
-			"key_hash", k.KeyHash,
-			"from_state", stateName(prior),
-			"to_state", stateName(rec.State),
-			"reason", "open_expired",
-			"backoff_step", rec.BackoffStep,
-			"open_for_seconds", 0,
-		)
-		return Candidate{Key: k, Record: rec, Stored: true}, true
-	case CircuitHalfOpen, CircuitClosed:
-		return c, true
+	case CircuitHalfOpen:
+		if now.Before(c.Record.ProbeUntil) {
+			return Candidate{}, false
+		}
 	default:
 		return Candidate{}, false
 	}
+	rec, ok := s.claimProbe(ctx, c.Key.KeyHash, c.Record, now)
+	if !ok {
+		return Candidate{}, false
+	}
+	return Candidate{Key: c.Key, Record: rec, Stored: true}, true
+}
+
+// claimProbe takes the key's probe lease. A failed script admits the pick on the record it read, as a failed read would.
+func (s *Selector) claimProbe(ctx context.Context, keyHash string, read CircuitRecord, now time.Time) (CircuitRecord, bool) {
+	raw, err := s.runRecordScript(ctx, claimCall(keyHash, now), func(rec CircuitRecord, found bool) (CircuitRecord, bool) {
+		if !found {
+			return rec, false
+		}
+		return claimProbe(rec, now, probeLease)
+	})
+	var out recordOutcome
+	if err == nil {
+		out, err = decodeOutcome(raw)
+	}
+	if err != nil {
+		metrics.KVError("breaker_write", metrics.KVFallback)
+		s.log.Error("keypool: claim probe script failed", "key_hash", keyHash, "err", err)
+		read.State = CircuitHalfOpen
+		return read, true
+	}
+	if !out.changed {
+		return CircuitRecord{}, false
+	}
+	s.log.Debug("keypool transition",
+		"request_id", reqid.From(ctx),
+		"key_hash", keyHash,
+		"from_state", stateName(out.prior),
+		"to_state", stateName(out.rec.State),
+		"reason", "probe",
+		"backoff_step", out.rec.BackoffStep,
+		"open_for_seconds", 0,
+	)
+	return out.rec, true
 }

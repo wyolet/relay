@@ -114,6 +114,7 @@ func TestPickBatchMem(t *testing.T) {
 	runPickBatchSuite(t, func(t *testing.T) kvtest.ScriptStore {
 		m := kv.NewMem()
 		t.Cleanup(func() { _ = m.Close() })
+		RegisterScripts(m) // the suite wraps the store, so New does not see a *kv.Mem
 		return m
 	})
 }
