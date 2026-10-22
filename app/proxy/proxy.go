@@ -149,6 +149,8 @@ type Result struct {
 	// Body MUST be Closed by the caller. Closing triggers the post-
 	// flight goroutine (if it hasn't run already).
 	Body io.ReadCloser
+	// Abort closes the upstream response under a Body still being read, from any goroutine: the read fails, and post-flight still waits for Body's own Close, which the reader makes.
+	Abort func()
 }
 
 // Pipeline is the orchestrator. Constructed once at boot; Run() is
@@ -301,6 +303,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		Status:  resp.StatusCode,
 		Headers: resp.Header,
 		Body:    body,
+		Abort:   func() { _ = resp.Body.Close() },
 	}, nil
 }
 

@@ -44,6 +44,8 @@ type scannedBody struct {
 	total   atomic.Int64 // bytes read from the client so far
 	drained atomic.Bool  // the client's body was read to its end
 	stopped atomic.Bool  // the body was refused: no more reads of the client
+	// readingSince is when the pending read of the client began (UnixNano), 0 while none is pending.
+	readingSince atomic.Int64
 
 	mu       sync.Mutex
 	refusal  *proxy.BodyError
@@ -169,47 +171,56 @@ func (b *scannedBody) Read(p []byte) (int, error) {
 			b.reject(errForwardStalled)
 			continue
 		}
+		b.readingSince.Store(time.Now().UnixNano())
 		n, err := b.src.Read(p)
-		release := n
-		if n > 0 {
-			b.total.Add(int64(n))
-			wasClosed, hadModel := b.scan.state == scanDone, b.scan.modelDone
-			closeAt := b.scan.feed(p[:n])
-			if b.scan.err != nil {
-				b.reject(b.scan.err)
-				continue
-			}
-			if !hadModel && b.scan.modelDone {
-				b.publish(false)
-			}
-			switch {
-			case wasClosed:
-				release = 0
-			case closeAt >= 0:
-				release = closeAt
-			}
-			b.held = append(b.held, p[release:n]...)
-			if len(b.held) > maxHeldTail {
-				b.reject(errTrailingBytes)
-				continue
-			}
-		}
-		switch {
-		case err == io.EOF:
-			b.srcDone = true
-			b.drained.Store(true)
-			if ferr := b.scan.finish(); ferr != nil {
-				b.reject(ferr)
-			} else {
-				b.publish(true)
-			}
-		case err != nil:
-			b.reject(sourceBodyError(err))
-		}
+		release := b.take(p, n, err)
+		// Cleared once the read's outcome is recorded: the watch must see the refusal or the body's end, never a gap that looks like a stall.
+		b.readingSince.Store(0)
 		if b.readErr == nil && release > 0 {
 			return release, nil
 		}
 	}
+}
+
+// take scans what a read of the client returned in p[:n] and records how the read ended. It returns how many of those bytes may be released now; the rest are held from the top-level close on.
+func (b *scannedBody) take(p []byte, n int, err error) (release int) {
+	release = n
+	if n > 0 {
+		b.total.Add(int64(n))
+		wasClosed, hadModel := b.scan.state == scanDone, b.scan.modelDone
+		closeAt := b.scan.feed(p[:n])
+		if b.scan.err != nil {
+			b.reject(b.scan.err)
+			return 0
+		}
+		if !hadModel && b.scan.modelDone {
+			b.publish(false)
+		}
+		switch {
+		case wasClosed:
+			release = 0
+		case closeAt >= 0:
+			release = closeAt
+		}
+		b.held = append(b.held, p[release:n]...)
+		if len(b.held) > maxHeldTail {
+			b.reject(errTrailingBytes)
+			return 0
+		}
+	}
+	switch {
+	case err == io.EOF:
+		b.srcDone = true
+		b.drained.Store(true)
+		if ferr := b.scan.finish(); ferr != nil {
+			b.reject(ferr)
+		} else {
+			b.publish(true)
+		}
+	case err != nil:
+		b.reject(sourceBodyError(err))
+	}
+	return release
 }
 
 // Close leaves the client's body alone: the server closes it after the handler, and closing it here would drain a stalled client's remainder on the transport's goroutine, which Run waits for.

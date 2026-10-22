@@ -191,8 +191,10 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	)
 	body := reqBody.wrapResult(result.Body, lc)
 	defer body.Close()
+	// Deferred after Close, so it runs before it: the watch has stopped, and recorded any stall, before post-flight reads the refusal.
+	defer watch.stop()
 	// A refusal found by now, a stall included, replaces the upstream's answer; one found later ends the stream. Post-flight records either and settles the reservation as cancelled (proxy.RefusingBody).
-	if !watch.track(body) || reqBody.rejection() != nil {
+	if !watch.track(result.Abort) || reqBody.rejection() != nil {
 		writeBodyError(w, reqBody.rejection())
 		return
 	}
@@ -205,6 +207,11 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"bytes", n,
 		"copy_err", copyErr,
 	)
+	watch.stop()
+	// The status is out, so a refusal can only reach the caller as a broken response, never as a clean success.
+	if reqBody.Refusal() != nil {
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // proxyPinAllowed reports whether p may name h in the upstream-host header. A keyless host ignores the forwarded credential, so the caller's own key authorizes nothing there; as in normal routing, reaching one takes an explicit policy grant on that host.

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -65,6 +66,32 @@ func blockingUpstream(t *testing.T, answer bool, serve func(*testing.T, http.Han
 			w.(http.Flusher).Flush()
 		}
 		<-release
+	})
+	t.Cleanup(func() { close(release) })
+	return srv.URL
+}
+
+// streamingUpstream starts, through serve, an upstream that answers 200 at once and sends an event every 20 ms until the test ends or the request goes away, never reading the request body.
+func streamingUpstream(t *testing.T, serve func(*testing.T, http.HandlerFunc) *httptest.Server) string {
+	t.Helper()
+	release := make(chan struct{})
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = http.NewResponseController(w).EnableFullDuplex()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for {
+			if _, err := w.Write([]byte("data: {}\n\n")); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			select {
+			case <-release:
+				return
+			case <-r.Context().Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
 	})
 	t.Cleanup(func() { close(release) })
 	return srv.URL
@@ -156,21 +183,86 @@ func TestProxyEdge_StalledForwardsEnd(t *testing.T) {
 				t.Fatalf("no answer: %v", err)
 			}
 
-			select {
-			case <-e.returned:
-				if took := time.Since(start); took > 4*idle+time.Second {
-					t.Fatalf("the handler took %v", took)
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatalf("the handler never returned:\n%s", forwardGoroutines())
-			}
-			deadline := time.Now().Add(3 * time.Second)
-			for left := forwardGoroutines(); len(left) > 0; left = forwardGoroutines() {
-				if time.Now().After(deadline) {
-					t.Fatalf("forward goroutines left behind:\n%s", left)
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
+			assertForwardEnded(t, e, start, idle)
 		})
+	}
+}
+
+// assertForwardEnded wants the handler back within a few idle periods of start and no forward goroutine left behind.
+func assertForwardEnded(t *testing.T, e edge, start time.Time, idle time.Duration) {
+	t.Helper()
+	select {
+	case <-e.returned:
+		if took := time.Since(start); took > 4*idle+time.Second {
+			t.Fatalf("the handler took %v", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the handler never returned:\n%s", forwardGoroutines())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for left := forwardGoroutines(); len(left) > 0; left = forwardGoroutines() {
+		if time.Now().After(deadline) {
+			t.Fatalf("forward goroutines left behind:\n%s", left)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// An upstream that answers 200 and keeps streaming while it stops reading the body: the stall ends the stream from the watch's goroutine while the handler still copies it, the caller sees a broken response rather than a clean 200, and the request is recorded as the stall. Meaningful under -race.
+func TestProxyEdge_StallMidStream(t *testing.T) {
+	const idle = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name     string
+		upstream func(t *testing.T) (string, http.RoundTripper)
+	}{
+		{"h1", func(t *testing.T) (string, http.RoundTripper) {
+			return streamingUpstream(t, h1Upstream), &http.Transport{}
+		}},
+		{"h2", func(t *testing.T) (string, http.RoundTripper) {
+			var armed atomic.Bool
+			return streamingUpstream(t, h2cUpstream), h2cTransport(&armed)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			url, tr := tc.upstream(t)
+			e := proxyEdge(t, url, edgeOptions{idle: idle, transport: tr})
+			body := proxyTestBody("test-model", 24<<20, false)
+			conn, br := rawPost(t, e.addr, len(body))
+			start := time.Now()
+			go func() { _, _ = conn.Write(body) }()
+			res, err := http.ReadResponse(br, nil)
+			if err != nil || res.StatusCode != http.StatusOK {
+				t.Fatalf("answer: %v %v", res, err)
+			}
+			if _, err := io.ReadAll(res.Body); err == nil {
+				t.Fatal("a stream the stall cut read as a complete response")
+			}
+			if s := awaitPostFlight(t, e.seen); s.errorKind != "upstream_stalled" {
+				t.Fatalf("recorded as %q, want upstream_stalled", s.errorKind)
+			}
+			assertCancelledSettle(t, e.store)
+			assertForwardEnded(t, e, start, idle)
+		})
+	}
+}
+
+// A client that stops sending is the read deadline's to answer, 408, and never reported as an upstream stall, however the watch's ticks fall against the deadline.
+func TestProxyEdge_ClientStallIsATimeout(t *testing.T) {
+	up, got := recordingUpstream(t)
+	go func() {
+		for range got {
+		}
+	}()
+	e := proxyEdge(t, up.URL, edgeOptions{idle: 100 * time.Millisecond})
+	head := `{"model":"test-model","messages":[{"role":"user","content":"`
+	for i := range 10 {
+		conn, br := rawChunked(t, e.addr)
+		fmt.Fprintf(conn, "%x\r\n%s\r\n", len(head), head)
+		res, msg := readStatus(t, br)
+		if res.StatusCode != http.StatusRequestTimeout {
+			t.Fatalf("run %d: status %d %s, want 408", i, res.StatusCode, msg)
+		}
+		<-e.returned
+		awaitPostFlight(t, e.seen)
 	}
 }
