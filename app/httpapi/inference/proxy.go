@@ -90,7 +90,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 		host = h
 		if cls.Mode == ModeProxyAuthed {
-			resolvedPlan = resolvePinnedProxyPlan(d.Resolver, PrincipalFrom(ctx), snap, modelName, h)
+			plan, err := resolvePinnedProxyPlan(d.Resolver, PrincipalFrom(ctx), snap, modelName, h)
+			if err != nil {
+				writePinnedRoutingErr(d, w, r, err, modelName)
+				return
+			}
+			resolvedPlan = plan
 		}
 	} else {
 		if cls.Mode != ModeProxyAuthed {
@@ -287,13 +292,17 @@ func proxyInbound(ctx context.Context, pol *policy.Policy, plan *routing.Plan, h
 	return in
 }
 
+// errPinnedHostConflict refuses a model ref whose own "@host" names a host other than the upstream-host header: the bytes go to the header's host.
+var errPinnedHostConflict = errors.New("model names a host other than the upstream-host header")
+
 // resolvePinnedProxyPlan routes modelName at the pinned host, as normal mode
-// folds the header pin, so a pinned request is metered and priced like a
-// routed one. A miss is nil, not a refusal. A ref whose own "@" names another
-// host is a miss too: the bytes still go to h.
-func resolvePinnedProxyPlan(resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot, modelName string, h *apphost.Host) *routing.Plan {
-	if resolver == nil || p == nil || modelName == "" {
-		return nil
+// folds the header pin, so a pinned request reaches only a model its policy
+// grants there and is metered and priced like a routed one. A key with no
+// policy has no grant to hold it to: its miss is a nil plan, and the request
+// goes through unrouted.
+func resolvePinnedProxyPlan(resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot, modelName string, h *apphost.Host) (*routing.Plan, error) {
+	if resolver == nil || p == nil {
+		return nil, nil
 	}
 	ref := modelName
 	if !strings.Contains(ref, "@") {
@@ -307,10 +316,28 @@ func resolvePinnedProxyPlan(resolver *routing.Resolver, p *Principal, snap *appc
 		SkipKeyCheck: true,
 		Snapshot:     snap,
 	})
-	if err != nil || plan.Host == nil || plan.Host.Meta.ID != h.Meta.ID {
-		return nil
+	if err == nil && (plan.Host == nil || plan.Host.Meta.ID != h.Meta.ID) {
+		err = errPinnedHostConflict
 	}
-	return plan
+	if err != nil {
+		if p.Policy == nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return plan, nil
+}
+
+func writePinnedRoutingErr(d Deps, w http.ResponseWriter, r *http.Request, err error, modelName string) {
+	ctx := r.Context()
+	if errors.Is(err, errPinnedHostConflict) {
+		d.fireUsageFailure(ctx, "upstream_host_conflict", err.Error())
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "upstream_host_conflict",
+			"model "+strconvQuote(modelName)+" names a host other than "+httpheader.HeaderUpstreamHost)
+		return
+	}
+	d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
+	mapRoutingErr(w, err, modelName, PrincipalFrom(ctx).PolicyID())
 }
 
 // relayKeyHashSubject returns the SHA-256 hash of the key token
