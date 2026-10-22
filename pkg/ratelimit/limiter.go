@@ -14,9 +14,8 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
-const (
-	commitGuardTTL = 5 * time.Minute
-)
+// commitGuardTTL outlasts the longest gap between two commits of one reservation: a commit script resent within one call, or a failed-over key's release and then the error-path commits, at most a few kv command bounds (about 45 s on the client defaults).
+const commitGuardTTL = time.Minute
 
 // Limiter enforces rate-limit rules using pkg/kv for counters.
 // One Limiter is shared across the process; concurrent calls are safe.
