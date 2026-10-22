@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,7 +90,9 @@ func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapte
 // "output_mode":"stream". The model field is read as a JSON string (the
 // single-model case); canonical's array form is rejected upstream as multiplex
 // and isn't used by streaming clients. Model may be absent (empty string
-// returned); callers check.
+// returned); callers check. A body with more than one top-level model key is
+// errDuplicateModel: encoding/json keeps the last, and the bytes a byte-pass
+// forwards may be read differently upstream.
 func extractModelStream(body []byte) (model string, stream bool, err error) {
 	var probe struct {
 		Model      string `json:"model"`
@@ -98,6 +101,10 @@ func extractModelStream(body []byte) (model string, stream bool, err error) {
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return "", false, fmt.Errorf("invalid JSON: %w", err)
+	}
+	var scan modelScanner
+	if scan.feed(body); scan.err == errDuplicateModel {
+		return "", false, errDuplicateModel
 	}
 	s := probe.OutputMode == "stream"
 	if probe.Stream != nil {
@@ -122,7 +129,7 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 
 	modelName, stream, err := extractModelStream(body)
 	if err != nil {
-		WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "parse_error", err.Error())
+		writeModelParseErr(w, err)
 		return
 	}
 	if modelName == "" {
@@ -142,6 +149,15 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		ModelName: modelName,
 		Stream:    stream,
 	})
+}
+
+// writeModelParseErr answers an extractModelStream error.
+func writeModelParseErr(w http.ResponseWriter, err error) {
+	code := "parse_error"
+	if errors.Is(err, errDuplicateModel) {
+		code = errDuplicateModel.code
+	}
+	WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", code, err.Error())
 }
 
 // maxUpfrontBodyBytes caps what a declared Content-Length allocates before the bytes arrive, so a caller cannot reserve memory it never sends.

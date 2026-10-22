@@ -288,6 +288,7 @@ Relay writes errors in one envelope:
 | Status | `code` | Cause |
 | --- | --- | --- |
 | `400` | `parse_error`, `missing_model`, `read_body` | The body is not JSON or has no `model`. |
+| `400` | `duplicate_model` | The body has more than one top-level `model` key, matched case-insensitively. |
 | `400` | `translate_request` | The request could not be translated to the upstream's shape. |
 | `400` | `embeddings_unsupported_host` | An embeddings request routed to a binding that is not `adapter: openai`. |
 | `400` | `bad_request` | `X-WR-Proxy-Mode` has an unknown value, or proxy mode was asked for without an `Authorization` header. |

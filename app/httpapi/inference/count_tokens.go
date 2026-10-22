@@ -66,7 +66,7 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 
 	modelName, _, err := extractModelStream(body)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "parse_error", err.Error())
+		writeModelParseErr(w, err)
 		return
 	}
 	if modelName == "" {
