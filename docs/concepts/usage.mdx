@@ -5,7 +5,7 @@ description: "What Relay records for every request, how cost is computed, where 
 
 Relay records one usage event for every inference request, with no opt-in. The event carries who made the request, how it was routed, what happened, the token counts the provider reported and the cost. It is written after the response, in the background, so recording never delays a response. Request and response bodies are not part of the event; capturing them is [payload logging](/concepts/payload-logging).
 
-Events wait in a bounded in-memory queue for the store (`RELAY_USAGE_QUEUE_SIZE`, 16,384 by default). When the queue is full, new events are dropped and counted in `relay_records_lost_total{kind="usage"}`; `relay_emit_queue_depth{kind="usage"}` shows the queue filling before that happens. See [Metrics](/reference/metrics#health-and-saturation).
+Events wait in a bounded in-memory queue for the store (`RELAY_USAGE_QUEUE_SIZE`, 16,384 by default). When the queue is full, new events are dropped and counted in `relay_records_lost_total{kind="usage"}`; `relay_emit_queue_depth{kind="usage"}` shows the queue filling before that happens. Events of requests refused before reaching an upstream wait in a smaller queue of their own (`RELAY_USAGE_REFUSED_QUEUE_SIZE`, 4,096 by default), written after the main one; their drops count as `kind="usage_refused"`, so `kind="usage"` counts only lost records of requests that reached an upstream. See [Metrics](/reference/metrics#health-and-saturation).
 
 ## What an event records
 
