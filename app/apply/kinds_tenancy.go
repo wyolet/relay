@@ -3,7 +3,9 @@ package apply
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
@@ -49,8 +51,9 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
 		Upsert: s.Key.Upsert, Delete: s.Key.Delete,
-		Check: refsFor(b, refcheck.Checker.Key),
-		Keep:  keepKeyServerFields,
+		Check:       refsFor(b, refcheck.Checker.Key),
+		Keep:        keepKeyServerFields,
+		CheckCreate: b.checkKeyCreate,
 	}); err != nil {
 		return err
 	}
@@ -59,10 +62,36 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 
 // keepKeyServerFields carries the rotation state a manifest cannot author
 // (the fields are yaml:"-") onto the declared key, so the diff ignores it and
-// an update keeps it.
-func keepKeyServerFields(prev, next *key.Key) {
+// an update keeps it. The hash, prefix and principal are immutable, as the
+// control API's update keeps them: a document may omit them or repeat the
+// stored value, and is refused if it declares another.
+func keepKeyServerFields(prev, next *key.Key) error {
 	next.Spec.PreviousKeyHash = prev.Spec.PreviousKeyHash
 	next.Spec.GraceUntil = prev.Spec.GraceUntil
+	switch {
+	case next.Spec.KeyHash != "" && next.Spec.KeyHash != prev.Spec.KeyHash:
+		return immutableKeyField("keyHash")
+	case next.Spec.Prefix != "" && next.Spec.Prefix != prev.Spec.Prefix:
+		return immutableKeyField("prefix")
+	case next.Spec.Principal != (key.Principal{}) && next.Spec.Principal != prev.Spec.Principal:
+		return immutableKeyField("principal")
+	}
+	next.Spec.KeyHash = prev.Spec.KeyHash
+	next.Spec.Prefix = prev.Spec.Prefix
+	next.Spec.Principal = prev.Spec.Principal
+	return nil
+}
+
+func immutableKeyField(field string) error {
+	return fmt.Errorf("spec.%s cannot change on an existing key; rotate it with POST /api/keys/by-id/{id}/rotate, or create a new key", field)
+}
+
+// checkKeyCreate lets only an admin create a key from a document's keyHash: whoever picks the hash knows the plaintext, and the control API's create never accepts one.
+func (b *builder) checkKeyCreate(*key.Key) error {
+	if b.admin {
+		return nil
+	}
+	return fmt.Errorf("%w: only an admin may create a key from a document's keyHash; create it with POST /api/keys", authz.ErrForbidden)
 }
 
 // checkPrunedTenancy refuses pruning a team, project or service account with rows still under it, as the control API's delete does. Rows this run prunes too are deleted explicitly, children first, so they are not in the way.

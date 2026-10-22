@@ -30,8 +30,11 @@ type kindWiring[D any, T any] struct {
 	// CheckDelete refuses a prune of a stored row before anything is written, as Check does a write.
 	CheckDelete func(*T) error
 	// Keep copies server-managed state from the stored row onto the declared
-	// one before the diff, so neither the diff nor an update touches it.
-	Keep func(prev, next *T)
+	// one before the diff, so neither the diff nor an update touches it. An
+	// error refuses a document that tries to change such state.
+	Keep func(prev, next *T) error
+	// CheckCreate refuses a create the control API would not let this caller make.
+	CheckCreate func(*T) error
 }
 
 func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T]) error {
@@ -88,6 +91,11 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		}
 		if !found {
 			e.Action = ActionCreate
+			if k.CheckCreate != nil {
+				if err := k.CheckCreate(obj); err != nil {
+					return &InvalidError{Kind: k.Kind, Name: name, Err: err}
+				}
+			}
 		} else {
 			// The stored owner wins: a document must not move a row into
 			// another tenant's scope. An operator may still re-parent.
@@ -96,7 +104,9 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 			}
 			e.owner = m.Owner
 			if k.Keep != nil {
-				k.Keep(prev, obj)
+				if err := k.Keep(prev, obj); err != nil {
+					return &InvalidError{Kind: k.Kind, Name: name, Err: err}
+				}
 			}
 			fields := changedFields(viewOf(k.Kind, prev, k.Meta(prev)), viewOf(k.Kind, obj, m))
 			switch {

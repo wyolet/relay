@@ -137,4 +137,6 @@ A `Key` document carries only `keyHash`. Generate the key locally with `relay ke
 relay keygen
 ```
 
+Only an admin can create a key from a document, since whoever chooses the hash knows the plaintext; other callers create keys with `POST /api/keys`. Once a key exists, its `keyHash`, `prefix` and `principal` are fixed: a document may omit them or repeat the stored values, and an apply that declares different ones is refused. Rotate a key with `POST /api/keys/by-id/{id}/rotate`.
+
 See the [CLI reference](/reference/cli) for every command and flag, and [Inference tokens](/concepts/auth#inference-tokens) for minting short-lived credentials instead of keys.
