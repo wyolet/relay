@@ -3,7 +3,7 @@ title: "Configuration"
 description: "Every environment variable the relay binary reads"
 ---
 
-Relay takes its bootstrap configuration from `RELAY_*` environment variables, read once at startup; changing one needs a restart. At startup it also reads a `.env` file from its working directory, if there is one, and applies each variable that is not already set.
+Relay takes its bootstrap configuration from `RELAY_*` environment variables, read once at startup; changing one needs a restart. At startup the server also reads a `.env` file from its working directory, if there is one, and applies each variable that is not already set; `RELAY_ENV_FILE` names a different file. The operator commands read a file only through `RELAY_ENV_FILE` ([CLI reference](/reference/cli#configuration)).
 
 Behaviour that can change while relay runs (proxy mode, payload logging, usage storage, SSO, governance and the rest) lives in settings sections instead, changed through the control API without a restart: see [Settings](/reference/settings). The images set some variables themselves; see [Docker](/deploy/docker) and [Kubernetes](/deploy/kubernetes).
 
