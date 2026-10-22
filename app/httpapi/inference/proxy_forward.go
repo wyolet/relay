@@ -1,64 +1,75 @@
 package inference
 
 import (
+	"io"
 	"net/http"
-	"net/http/httptrace"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// bodyForward follows the upstream transport's use of a streamed request body through httptrace, so the handler neither answers nor returns while the transport may still read the client's body. An answer written meanwhile lets the HTTP/1 server handle the unread body under the transport's reads, and a read after the handler returns runs into the connection's next request.
-type bodyForward struct {
-	started atomic.Bool
-	sent    chan struct{}
-	once    sync.Once
+// forwardWatch gives up on a forward whose request body stops moving before its end: an upstream that neither answers nor reads holds the transport's write (and, over HTTP/2, a writer parked on flow control) for good, and a client that leaves mid-upload goes unnoticed while nothing reads its connection. Once the body is read to its end the server's own read of the connection notices a departing client, so the watch ends there.
+type forwardWatch struct {
+	body *scannedBody
+	done chan struct{}
+
+	mu     sync.Mutex
+	result io.Closer // the upstream response body, once the call returned
+	gone   bool
 }
 
-func newBodyForward() *bodyForward { return &bodyForward{sent: make(chan struct{})} }
-
-func (f *bodyForward) trace() *httptrace.ClientTrace {
-	return &httptrace.ClientTrace{
-		WroteHeaders: func() { f.started.Store(true) },
-		WroteRequest: func(httptrace.WroteRequestInfo) { f.once.Do(func() { close(f.sent) }) },
-	}
-}
-
-// wait reports whether the transport is done with the body, once the call to it has returned. An upstream that answers before the body is sent leaves the transport sending it; wait gives up when the body makes no progress for idle (0 waits as long as the client keeps it open).
-func (f *bodyForward) wait(body *scannedBody, idle time.Duration) bool {
-	if !f.started.Load() {
-		return true
-	}
+// watchForward checks every idle that the body moved; on a stall it refuses the body (so the call reports the stall, and post-flight records it), cancels the forward and closes a response already in hand. idle <= 0 watches nothing.
+func watchForward(body *scannedBody, idle time.Duration, cancel func()) *forwardWatch {
+	fw := &forwardWatch{body: body, done: make(chan struct{})}
 	if idle <= 0 {
-		<-f.sent
-		return true
+		return fw
 	}
-	tick := time.NewTicker(idle)
-	defer tick.Stop()
-	last := body.total.Load()
-	for {
-		select {
-		case <-f.sent:
-			return true
-		case <-tick.C:
-			n := body.total.Load()
-			if n == last {
-				return false
+	go func() {
+		tick := time.NewTicker(idle)
+		defer tick.Stop()
+		last := body.total.Load()
+		for {
+			select {
+			case <-fw.done:
+				return
+			case <-tick.C:
 			}
-			last = n
+			if body.drained.Load() || body.Refusal() != nil {
+				return
+			}
+			if n := body.total.Load(); n != last {
+				last = n
+				continue
+			}
+			_ = body.refuse(errForwardStalled)
+			cancel()
+			fw.mu.Lock()
+			fw.gone = true
+			result := fw.result
+			fw.mu.Unlock()
+			if result != nil {
+				_ = result.Close()
+			}
+			return
 		}
+	}()
+	return fw
+}
+
+// track hands the watch the upstream response body to close on a stall; it reports false when the stall came first, and then closes it itself.
+func (fw *forwardWatch) track(result io.Closer) bool {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if fw.gone {
+		_ = result.Close()
+		return false
 	}
+	fw.result = result
+	return true
 }
 
-// stop ends a forward wait gave up on and waits for the transport to let go of the body: no further reads, a pending read of the client cut short, and the upstream request cancelled so a blocked write fails.
-func (f *bodyForward) stop(w http.ResponseWriter, body *scannedBody, cancel func()) {
-	body.stopped.Store(true)
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
-	cancel()
-	<-f.sent
-}
+func (fw *forwardWatch) stop() { close(fw.done) }
 
-// markConnection closes the client's connection after the response unless its request body was read to the end: a remainder left on the wire would be parsed as the next request.
+// markConnection closes the client's connection after the response unless its request body was read to the end: a remainder left on the wire would be parsed as the next request. It also keeps the HTTP/1 server from draining the body under the transport's own reads when the answer is written first; after the handler returns the server cuts any such read short.
 func markConnection(w http.ResponseWriter, body *scannedBody) {
 	if body != nil && body.drained.Load() {
 		w.Header().Del("Connection")

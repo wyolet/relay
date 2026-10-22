@@ -4,12 +4,15 @@ package inference
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,19 +26,47 @@ import (
 )
 
 type edgeOptions struct {
-	limit   int64         // listener body limit; 0 = 32 MiB
-	idle    time.Duration // RELAY_PROXY_BODY_IDLE_S
-	perHour int64         // policy requests per hour; 0 = unlimited
+	limit     int64             // listener body limit; 0 = 32 MiB
+	idle      time.Duration     // RELAY_PROXY_BODY_IDLE_S
+	perHour   int64             // policy requests per hour; 0 = unlimited
+	transport http.RoundTripper // upstream transport; nil = the proxy's default
 }
 
 type edge struct {
-	addr  string
-	seen  <-chan postFlightSeen
-	adm   *httpapi.Admission
-	store *kvtest.Recording
+	addr     string
+	seen     <-chan postFlightSeen
+	adm      *httpapi.Admission
+	store    *kvtest.Recording
+	returned <-chan struct{} // one value per proxy handler that returned
 }
 
-// proxyEdge serves an authed proxy route behind a chi router with the listener's body limit, as boot wires it, plus /healthz (answering 200 only on a live request context) and /smuggled (which must never be reached). One lifecycle registry holds a one-slot admission and a post-flight watcher.
+// halfDuplexOnly fails the test if the handler turns on full duplex: it stops the HTTP/1 server from handling an unread body itself (and golang/go#68560), which the proxy relies on. Other ResponseController calls reach the server's writer through Unwrap.
+type halfDuplexOnly struct {
+	http.ResponseWriter
+	t *testing.T
+}
+
+func (w halfDuplexOnly) EnableFullDuplex() error {
+	w.t.Error("proxy mode enabled full duplex on the inbound response")
+	return nil
+}
+
+func (w halfDuplexOnly) Flush()                      { w.ResponseWriter.(http.Flusher).Flush() }
+func (w halfDuplexOnly) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// serverLog fails the test when the server logged a panic it recovered (net/http keeps serving, so nothing else shows it).
+type serverLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *serverLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// proxyEdge serves an authed proxy route behind a chi router with the listener's body limit, as boot wires it, plus /healthz (answering 200 only on a live request context) and /smuggled (which must never be reached). One lifecycle registry holds a one-slot admission and a post-flight watcher. A panic the server recovers fails the test.
 func proxyEdge(t *testing.T, upstreamURL string, o edgeOptions) edge {
 	t.Helper()
 	if o.limit == 0 {
@@ -56,13 +87,18 @@ func proxyEdge(t *testing.T, upstreamURL string, o edgeOptions) edge {
 	}})
 	d.Lifecycle, d.Proxy.Lifecycle = reg, reg
 	d.MaxRequestBytes, d.ProxyBodyIdle = o.limit, o.idle
+	if o.transport != nil {
+		d.Proxy.Client = &http.Client{Transport: o.transport}
+	}
 	spec := d.Specs.Spec(adapters.Anthropic)
+	returned := make(chan struct{}, 16)
 
 	rt := chi.NewRouter()
 	rt.Use(httpmw.LimitBody(o.limit))
 	rt.Post("/anthropic/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		defer func() { returned <- struct{}{} }()
 		ctx := WithClassification(r.Context(), Classification{Mode: ModeProxyAuthed, Key: "relay-key", UpstreamAuth: "Bearer upstream-key", ClientIP: "203.0.113.9"})
-		handleShape(spec, d, w, r.WithContext(withPrincipal(ctx, d.Catalog.Current(), pr, pr.Key)))
+		handleShape(spec, d, halfDuplexOnly{w, t}, r.WithContext(withPrincipal(ctx, d.Catalog.Current(), pr, pr.Key)))
 	})
 	rt.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Route", "healthz")
@@ -73,9 +109,19 @@ func proxyEdge(t *testing.T, upstreamURL string, o edgeOptions) edge {
 	rt.HandleFunc("/smuggled", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Route", "smuggled")
 	})
-	srv := httptest.NewServer(rt)
+	logs := &serverLog{}
+	t.Cleanup(func() {
+		logs.mu.Lock()
+		defer logs.mu.Unlock()
+		if strings.Contains(logs.buf.String(), "panic") {
+			t.Errorf("the server recovered a panic:\n%s", logs.buf.String())
+		}
+	})
+	srv := httptest.NewUnstartedServer(rt)
+	srv.Config.ErrorLog = log.New(logs, "", 0)
+	srv.Start()
 	t.Cleanup(srv.Close)
-	return edge{srv.Listener.Addr().String(), ch, adm, store}
+	return edge{srv.Listener.Addr().String(), ch, adm, store, returned}
 }
 
 // rawPost opens a connection and sends the head of a POST declaring a body of length bytes; the caller writes the body.
@@ -165,10 +211,11 @@ func TestProxyEdge_NextRequestAfterARefusal(t *testing.T) {
 	const idle = 300 * time.Millisecond
 	modelFirst := proxyTestBody("test-model", 64<<10, false)
 	cases := []struct {
-		name   string
-		early  bool        // the upstream answers before reading the body
-		opts   edgeOptions // idle is always set
-		status int
+		name      string
+		early     bool        // the upstream answers before reading the body
+		keepAlive bool        // the body was read to its end, so the connection may stay open
+		opts      edgeOptions // idle is always set
+		status    int
 		// send writes the first request and returns what the client still owes of its body.
 		send func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string)
 	}{
@@ -201,8 +248,9 @@ func TestProxyEdge_NextRequestAfterARefusal(t *testing.T) {
 			go func() { _, _ = conn.Write(modelFirst) }()
 			return conn, br, smuggled
 		}},
+		// A remainder under the server's 256 KiB drain allowance: with full duplex on, the handler returning with it unread panics in net/http (golang/go#68560).
 		{name: "model not found after the hold", status: http.StatusNotFound, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
-			body := proxyTestBody("no-such-model", 64<<10, false)
+			body := proxyTestBody("no-such-model", 128<<10, false)
 			conn, br := rawPost(t, addr, len(body)+len(smuggled))
 			_, _ = conn.Write(body)
 			return conn, br, smuggled
@@ -217,12 +265,13 @@ func TestProxyEdge_NextRequestAfterARefusal(t *testing.T) {
 			_, _ = conn.Write(modelFirst)
 			return conn, br, smuggled
 		}},
-		{name: "early answer, body unfinished", early: true, status: http.StatusRequestTimeout, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
+		// The early answer goes out while the body is unfinished, on a connection that then closes.
+		{name: "early answer, body unfinished", early: true, status: http.StatusOK, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
 			conn, br := rawPost(t, addr, len(modelFirst)+len(smuggled))
 			_, _ = conn.Write(modelFirst)
 			return conn, br, smuggled
 		}},
-		{name: "early answer, body complete", early: true, status: http.StatusOK, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
+		{name: "early answer, body complete", early: true, keepAlive: true, status: http.StatusOK, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
 			conn, br := rawPost(t, addr, len(modelFirst))
 			_, _ = conn.Write(modelFirst)
 			return conn, br, ""
@@ -244,8 +293,8 @@ func TestProxyEdge_NextRequestAfterARefusal(t *testing.T) {
 			if res.StatusCode != tc.status {
 				t.Fatalf("first response %d %s, want %d", res.StatusCode, msg, tc.status)
 			}
-			if tc.status != http.StatusOK && !res.Close {
-				t.Fatalf("a refusal with the body unread left the connection open (%d %s)", res.StatusCode, msg)
+			if !tc.keepAlive && !res.Close {
+				t.Fatalf("an answer with the body unread left the connection open (%d %s)", res.StatusCode, msg)
 			}
 			assertNextExchangeClean(t, conn, br, rest)
 		})
@@ -303,8 +352,8 @@ func TestProxyEdge_OverTheBodyLimit(t *testing.T) {
 	}
 }
 
-// An upstream that answers before the body is sent is not forwarded until the body is: a refusal found meanwhile is the caller's answer, recorded as the refusal with its reservation settled as cancelled.
-func TestProxyEdge_EarlyAnswerWaitsForTheBody(t *testing.T) {
+// A body refused after an early upstream answer: the caller gets the refusal if it came before the answer was forwarded, else the answer on a connection that then closes. Either way the request is recorded as the refusal with its reservation settled as cancelled.
+func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		limit  int64
@@ -320,8 +369,8 @@ func TestProxyEdge_EarlyAnswerWaitsForTheBody(t *testing.T) {
 			conn, br := rawPost(t, e.addr, len(tc.body))
 			go func() { _, _ = conn.Write(tc.body) }()
 			res, msg := readStatus(t, br)
-			if res.StatusCode != tc.status || !res.Close {
-				t.Fatalf("status %d (close %v) %s, want %d with the connection closed", res.StatusCode, res.Close, msg, tc.status)
+			if (res.StatusCode != tc.status && res.StatusCode != http.StatusOK) || !res.Close {
+				t.Fatalf("status %d (close %v) %s, want %d or the early 200, with the connection closed", res.StatusCode, res.Close, msg, tc.status)
 			}
 			if s := awaitPostFlight(t, e.seen); s.errorKind != tc.kind {
 				t.Fatalf("recorded as %q, want %s", s.errorKind, tc.kind)

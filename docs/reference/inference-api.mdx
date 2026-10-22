@@ -307,6 +307,7 @@ Relay writes errors in one envelope:
 | `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent. `Retry-After` says when it refills. |
 | `429` | `overloaded` | The pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`). `Retry-After: 1`. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
+| `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |
 | `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
 | `503` | `no_host_binding` | The model has no enabled host binding. |
 | `503` | `no_keys` | No usable host key for the chosen host. |

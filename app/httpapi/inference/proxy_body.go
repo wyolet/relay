@@ -25,7 +25,7 @@ const maxHeldTail = 1 << 10
 var (
 	errProxyBodyTooLarge = &bodyError{http.StatusRequestEntityTooLarge, "request_too_large", fmt.Sprintf("request body has no top-level 'model' in its first %d MiB", proxyMaxBodyBuffer>>20)}
 	errTrailingBytes     = jsonSyntaxError("more than %d bytes after the top-level value", maxHeldTail)
-	errForwardStopped    = &bodyError{http.StatusBadGateway, "upstream_error", "the upstream answered before the request body was sent and stopped reading it"}
+	errForwardStalled    = &bodyError{http.StatusBadGateway, "upstream_stalled", "the request body stopped moving: the upstream stopped reading it, or the client stopped sending"}
 )
 
 // scannedBody forwards a proxy request body upstream while a modelScanner checks it. Each chunk read from the client is scanned before it is released, and the bytes from the top-level object's closing brace on are held until the client's body ends, so the upstream receives a complete JSON body only once all of it passed the scan. A rejected body fails the read, which makes the transport abort the upstream request with the body incomplete.
@@ -43,7 +43,7 @@ type scannedBody struct {
 
 	total   atomic.Int64 // bytes read from the client so far
 	drained atomic.Bool  // the client's body was read to its end
-	stopped atomic.Bool  // the handler gave up on the forward: no more reads
+	stopped atomic.Bool  // the body was refused: no more reads of the client
 
 	mu       sync.Mutex
 	refusal  *proxy.BodyError
@@ -166,7 +166,7 @@ func (b *scannedBody) Read(p []byte) (int, error) {
 			return 0, nil
 		}
 		if b.stopped.Load() {
-			b.reject(errForwardStopped)
+			b.reject(errForwardStalled)
 			continue
 		}
 		n, err := b.src.Read(p)
@@ -224,13 +224,21 @@ func (b *scannedBody) publish(complete bool) {
 	b.mu.Unlock()
 }
 
+// reject refuses the body on the reading goroutine; the first refusal is the one reported.
 func (b *scannedBody) reject(e *bodyError) {
-	refusal := &proxy.BodyError{Kind: e.code, Err: e}
 	b.pending, b.held = nil, nil
-	b.readErr = refusal
+	b.readErr = b.refuse(e)
+}
+
+// refuse records e as the body's refusal unless one is already recorded, and stops further reads; any goroutine may call it. It returns the refusal in force.
+func (b *scannedBody) refuse(e *bodyError) *proxy.BodyError {
+	b.stopped.Store(true)
 	b.mu.Lock()
-	b.refusal = refusal
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	if b.refusal == nil {
+		b.refusal = &proxy.BodyError{Kind: e.code, Err: e}
+	}
+	return b.refusal
 }
 
 // rejection is the reason the body was refused, or nil while it has not been.

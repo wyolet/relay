@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptrace"
 	"strings"
 
 	"github.com/wyolet/relay/app/adapter"
@@ -174,15 +173,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"inbound_path", r.URL.Path,
 		"upstream_path", upstreamPath,
 	)
-	fwd := newBodyForward()
-	fwdCtx, cancelFwd := context.WithCancel(httptrace.WithClientTrace(ctx, fwd.trace()))
+	fwdCtx, cancelFwd := context.WithCancel(ctx)
 	defer cancelFwd()
+	watch := watchForward(reqBody, d.ProxyBodyIdle, cancelFwd)
+	defer watch.stop()
 	result, err := d.Proxy.Run(fwdCtx, preq)
-	// Nothing is written until the transport is done with the body, even when the upstream answered first.
-	stalled := !fwd.wait(reqBody, d.ProxyBodyIdle)
-	if stalled {
-		fwd.stop(w, reqBody, cancelFwd)
-	}
+	// The body may still be streaming upstream when this answer goes out (an upstream that answers early); unless it was read to its end the connection closes after the answer.
 	markConnection(w, reqBody)
 	if err != nil {
 		slog.Warn("proxy: upstream call returned error", "request_id", reqid.From(ctx), "err", err)
@@ -195,12 +191,9 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	)
 	body := reqBody.wrapResult(result.Body, lc)
 	defer body.Close()
-	// A refusal, or a forward given up on, replaces the upstream's answer; post-flight records it and settles the reservation as cancelled (proxy.RefusingBody).
-	if rej := reqBody.rejection(); rej != nil || stalled {
-		if rej == nil {
-			rej = errForwardStopped
-		}
-		writeBodyError(w, rej)
+	// A refusal found by now, a stall included, replaces the upstream's answer; one found later ends the stream. Post-flight records either and settles the reservation as cancelled (proxy.RefusingBody).
+	if !watch.track(body) || reqBody.rejection() != nil {
+		writeBodyError(w, reqBody.rejection())
 		return
 	}
 
