@@ -20,7 +20,7 @@ Two workflows, so a run lists only the jobs its tier has: `.github/workflows/ci-
 | Event | Runs |
 |---|---|
 | PR into `dev` (or any branch other than `main`) | one `dev` job: gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
-| … that touches `migrations/`, `internal/storage/`, `pkg/kv/`, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
+| … that touches `migrations/`, `internal/storage/`, `pkg/kv/` or a kv consumer with Valkey tests, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
 | … that touches `chart/` or `versions.env` | the above, plus `helm lint` or the boot smoke |
 | PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
 | weekly schedule on `main` | the security scans |
