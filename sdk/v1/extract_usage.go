@@ -64,6 +64,12 @@ func ExtractSummary(tr Translator, body []byte) (Summary, error) {
 	}
 
 	if !looksLikeSSE(body) {
+		if d, ok := tr.(SummaryDecoder); ok {
+			if s, err := d.DecodeSummary(body); err == nil {
+				return s, nil
+			}
+			return Summary{}, nil
+		}
 		resp, err := tr.ParseResponse(body)
 		if err != nil || resp == nil {
 			return Summary{}, nil
@@ -72,6 +78,11 @@ func ExtractSummary(tr Translator, body []byte) (Summary, error) {
 	}
 
 	return extractSummaryFromSSE(tr, body), nil
+}
+
+// SummaryDecoder is an optional companion to Translator for ExtractSummary on sync JSON bodies: DecodeSummary decodes only the members a response's Summary is built from, returning what ParseResponse would yield for them, or an error wherever ParseResponse fails on a member it reads. A body ParseResponse rejects only for a member the Summary does not read still yields its Summary.
+type SummaryDecoder interface {
+	DecodeSummary(body []byte) (Summary, error)
 }
 
 // extractSummaryFromSSE walks a vendor SSE body through the translator's

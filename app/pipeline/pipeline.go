@@ -30,6 +30,7 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
@@ -643,16 +644,7 @@ func (p *Pipeline) runPostFlight(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Rate-limit tokens: for streamed requests the StreamSession already
-	// extracted them incrementally (no buffered body to parse); the buffered
-	// path re-parses the full body via the adapter. body is nil in the stream
-	// case, so ExtractTokens is never handed an empty buffer.
-	var tokens sdkusage.Tokens
-	if t, ok := req.Lifecycle.StreamTokens(); ok {
-		tokens = sdkusage.Tokens(t)
-	} else {
-		tokens = req.Adapter.ExtractTokens(body)
-	}
+	tokens := chargedTokens(req.Lifecycle, req.Adapter, body)
 	// A response cut short before its end may never have reported usage;
 	// the upstream still did the work, so the budgets are charged a floor
 	// rather than nothing. Usage records keep only what was reported.
@@ -690,6 +682,41 @@ func (p *Pipeline) runPostFlight(
 	if p.HostHealth != nil && req.Host != nil {
 		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
 	}
+}
+
+// ResponseSummarizer is the optional capability of an Adapter that reads the canonical Summary of a buffered response, so post-flight decodes the body once for the rate-limit commit and usage alike. false means it has no translator for the body; the caller then uses ExtractTokens.
+type ResponseSummarizer interface {
+	SummarizeResponse(body []byte) (v1.Summary, bool)
+}
+
+// chargedTokens returns the tokens the rate-limit commit charges: the ones the stream session extracted incrementally, else the buffered body's Summary's, decoded once and shared with the usage hook. A Summary without tokens (a stream that ended on an error event or before its terminal frame) can sit beside usage the upstream did report; those tokens were served, so ExtractTokens is asked for them.
+func chargedTokens(lc *lifecycle.Context, a Adapter, body []byte) sdkusage.Tokens {
+	var tokens sdkusage.Tokens
+	if t, ok := lc.StreamTokens(); ok {
+		tokens = sdkusage.Tokens(t)
+	} else if sum, ok := responseSummary(lc, a, body); ok {
+		tokens = sum.Tokens
+	}
+	if len(tokens) == 0 && len(body) > 0 {
+		tokens = a.ExtractTokens(body)
+	}
+	return tokens
+}
+
+// responseSummary returns the buffered response's Summary: the one the handler recorded while translating it, else the one a decodes now, which is recorded on lc so the usage hook reuses it.
+func responseSummary(lc *lifecycle.Context, a Adapter, body []byte) (v1.Summary, bool) {
+	if s, ok := lc.ResponseSummary(); ok {
+		return s, true
+	}
+	rs, ok := a.(ResponseSummarizer)
+	if !ok {
+		return v1.Summary{}, false
+	}
+	s, ok := rs.SummarizeResponse(body)
+	if ok {
+		lc.SetResponseSummary(s)
+	}
+	return s, ok
 }
 
 // fireFailure emits a post-flight observer event for a request that

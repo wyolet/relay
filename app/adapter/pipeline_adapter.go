@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/pkg/reqbody"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // PipelineAdapter returns a pipeline.Adapter backed by this spec's upstream
@@ -30,7 +32,10 @@ type specAdapter struct {
 	spec *Spec
 }
 
-var _ pipeline.Adapter = (*specAdapter)(nil)
+var (
+	_ pipeline.Adapter            = (*specAdapter)(nil)
+	_ pipeline.ResponseSummarizer = (*specAdapter)(nil)
+)
 
 // Call issues POST {baseURL}{path}: the host's own path when set (hostPath
 // non-nil, verbatim — an explicit "" appends nothing), else the shape default
@@ -114,6 +119,25 @@ func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {
 		return nil
 	}
 	return a.spec.ExtractTokens(body)
+}
+
+// SummarizeResponse decodes a buffered upstream body's Summary with the spec's translator. false means the spec has no translator to read it with, or the translator panicked on the body: post-flight runs on its own goroutine, so a panic there would take the process down for one malformed response.
+func (a *specAdapter) SummarizeResponse(body []byte) (sum v1.Summary, ok bool) {
+	if a.spec.Translator == nil {
+		return v1.Summary{}, false
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			slog.Error("adapter: response summary panic recovered", "adapter", a.spec.Name, "panic", v)
+			sum, ok = v1.Summary{}, false
+		}
+	}()
+	sum, err := v1.ExtractSummary(a.spec.Translator, body)
+	if err != nil {
+		// The body did not decompress: no decoder can read it, so it summarizes as empty, as the usage hook would find it.
+		return v1.Summary{}, true
+	}
+	return sum, true
 }
 
 // Retryable classifies upstream HTTP responses for the pipeline retry loop.

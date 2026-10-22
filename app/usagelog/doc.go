@@ -9,8 +9,9 @@
 //     this struct directly. No cost, no pricing — those are downstream
 //     consumer concerns. The event answers "who called what model on
 //     which host and how many tokens." Cost layers on at query time.
-//   - UsageHook: the lifecycle.Hook (producer). Parses tokens + finish
-//     reason out of the response body via v1.ExtractSummary, builds the
+//   - UsageHook: the lifecycle.Hook (producer). Takes tokens + finish
+//     reason from the response Summary the runner decoded (or decodes
+//     the body via v1.ExtractSummary when it did not), builds the
 //     Event, returns it. Pure — the Registry attaches it to the Context
 //     under Namespace; the hook never touches the Context.
 //   - SinkCollector: the lifecycle.Collector (janitor / store). Reads the

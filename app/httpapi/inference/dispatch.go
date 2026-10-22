@@ -688,6 +688,8 @@ func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 		writeAPIError(w, http.StatusBadGateway, "upstream_error", "translate_response", perr.Error())
 		return
 	}
+	// The translation already decoded raw in full; post-flight reuses its Summary instead of reading the tee'd copy again.
+	lifecycle.FromContext(ctx).SetResponseSummary(v1.Summary{Tokens: canResp.Usage, FinishReason: canResp.FinishReason, ServiceTier: canResp.ServiceTier})
 	if echo {
 		setRelayUsage(d, r, status, raw, canResp)
 	}

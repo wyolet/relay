@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/app/pipeline"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // TokenCounter is the optional capability of a pipeline.Adapter whose upstream counts a request's input tokens exactly. Callers type-assert for it and fall back to their own estimate when the assertion fails — so it stays off pipeline.Adapter itself, which every shape must implement.
@@ -59,6 +60,9 @@ func (a *countCallAdapter) Call(ctx context.Context, baseURL string, _ *string, 
 
 // ExtractTokens reports nothing: counting consumes no tokens, so the caller's token meters are not charged for it.
 func (*countCallAdapter) ExtractTokens([]byte) pkgusage.Tokens { return nil }
+
+// SummarizeResponse reads no Summary from a count reply, so the runner falls back to ExtractTokens and charges nothing.
+func (*countCallAdapter) SummarizeResponse([]byte) (v1.Summary, bool) { return v1.Summary{}, false }
 
 // ParseTokenCount reads the counting endpoint's reply. A non-200 status or a reply without a positive count is an error — never a number the caller would take for a measurement.
 func ParseTokenCount(status int, raw []byte) (int, error) {
