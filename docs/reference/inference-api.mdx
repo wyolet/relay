@@ -209,7 +209,7 @@ Errors use the same frames: `start` carries the error status and the chunks carr
 | Limit | Value | When exceeded |
 | --- | --- | --- |
 | Requests in flight per connection | 64 | The new request gets `start` with `429`, a chunk with code `connection_saturated`, and `end`. |
-| Inbound frame size | 1 MiB | Relay closes the connection with status 1009 (message too big). |
+| Inbound frame size | `RELAY_MAX_REQUEST_BYTES` (default 32 MiB) plus 4 KiB for the frame envelope | Relay closes the connection with status 1009 (message too big). |
 
 A text frame that is not JSON or has no `id` is dropped without a reply; binary frames are ignored. Each frame is checked again when it arrives: a revoked or expired credential, a changed or disabled policy, catalog edits and a change to the proxy-mode setting all apply to the next frame on an open connection. Each frame is its own request for rate limits, the in-flight cap and usage.
 
