@@ -164,6 +164,7 @@ In Go, `client.Relay(...).Catalog(ctx)` fetches and revalidates it, and `Models(
 
 | Status | Meaning |
 | --- | --- |
+| `400` | Malformed body. `duplicate_model`: more than one top-level `model` key, matched case-insensitively. `invalid_model_key` (proxy mode, which forwards the body as sent): the top-level `model` key is spelled with other letter case or escapes. |
 | `401` | Missing or invalid relay key. |
 | `403` | Relay key's policy does not grant the requested model. |
 | `404` | Unknown model, or no enabled binding for it. |
