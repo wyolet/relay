@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -453,45 +451,21 @@ func BenchmarkModelScanner(b *testing.B) {
 		name string
 		body []byte
 	}{
-		{"source-files", claudeCodeSizedBody(b, 350<<10)},
+		{"source-files", claudeCodeSizedBody(b, 350<<10, true)},
 		{"quote-every-17-bytes", denseQuoteBody(350 << 10)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.SetBytes(int64(len(tc.body)))
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := scanModel(tc.body, false); err != nil {
+				var s modelScanner
+				s.feed(tc.body)
+				if err := s.finish(); err != nil {
 					b.Fatal(err)
 				}
 			}
 		})
 	}
-}
-
-// claudeCodeSizedBody is a coding-agent-like chat body of about size bytes: this package's Go sources as tool results between short turns, the model last.
-func claudeCodeSizedBody(tb testing.TB, size int) []byte {
-	tb.Helper()
-	files, err := filepath.Glob("*.go")
-	if err != nil || len(files) == 0 {
-		tb.Fatalf("no source files: %v", err)
-	}
-	var msgs []any
-	for i, n := 0, 0; n < size; i++ {
-		src, err := os.ReadFile(files[i%len(files)])
-		if err != nil {
-			tb.Fatal(err)
-		}
-		msgs = append(msgs,
-			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprintf("t%d", i), "name": "Read", "input": map[string]any{"file_path": files[i%len(files)]}}}},
-			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": fmt.Sprintf("t%d", i), "content": string(src)}}},
-		)
-		n += len(src)
-	}
-	b, err := json.Marshal(map[string]any{"max_tokens": 4096, "stream": true, "system": "You are a coding agent.", "messages": msgs})
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return append(b[:len(b)-1], `,"model":"test-model"}`...)
 }
 
 // denseQuoteBody is a body of about size bytes whose strings hold an escaped quote about every 17 bytes, the worst case for a scan that stops at each quote.

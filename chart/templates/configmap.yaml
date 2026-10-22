@@ -63,6 +63,9 @@ data:
   {{- with .Values.relay.upstreamDialTimeoutS }}
   RELAY_UPSTREAM_DIAL_TIMEOUT_S: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.proxyBodyIdleS }}
+  RELAY_PROXY_BODY_IDLE_S: {{ . | quote }}
+  {{- end }}
   {{- with .Values.relay.controlAllowOrigins }}
   RELAY_CONTROL_ALLOW_ORIGINS: {{ . | quote }}
   {{- end }}

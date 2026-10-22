@@ -32,7 +32,6 @@ import (
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
-	"github.com/wyolet/relay/pkg/reqbody"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -64,7 +63,13 @@ type DispatchInput struct {
 	Inbound adapters.Name
 
 	// Body is the raw inbound request body, already consumed from r.Body.
+	// In proxy mode with ProxyBody set it is only the part held before the
+	// forward starts.
 	Body []byte
+
+	// ProxyBody forwards a proxy-mode body: Body, then the rest as it
+	// streams from the client. Nil means Body is the whole body.
+	ProxyBody *scannedBody
 
 	// ModelName is the caller-supplied model identifier extracted by the
 	// per-shape minimal parse. Routing resolution uses this.
@@ -115,13 +120,27 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		"body_bytes", len(in.Body),
 	)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
-		// Set before handleProxy: its host resolution reads it to decide
-		// whether to tee the whole streamed body.
+		reqBody := in.ProxyBody
+		if reqBody == nil {
+			var rej *bodyError
+			if reqBody, rej = scannedWhole(in.Body); rej != nil {
+				d.fireUsageFailure(ctx, rej.code, rej.msg)
+				writeBodyError(w, rej)
+				return
+			}
+		}
+		if !reqBody.whole {
+			// Exact once the body has been read; until then, what the client declared.
+			lc.RequestBytes = max(int(r.ContentLength), 0)
+		}
 		lc.PayloadLog = PrincipalFrom(ctx).CapturesPayload()
 		if lc.PayloadLog {
-			lc.RequestBody = in.Body
+			lc.RequestBody, lc.RequestBodyTruncated = in.Body, !reqBody.whole
+			if !reqBody.whole {
+				reqBody.captureRest(in.Body, proxyMaxBodyBuffer)
+			}
 		}
-		r.Body = reqbody.NewReader(in.Body)
+		r.Body = reqBody
 		handleProxy(d, w, r, in.Inbound, in.ModelName)
 		return
 	}

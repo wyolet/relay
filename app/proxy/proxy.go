@@ -149,6 +149,8 @@ type Result struct {
 	// Body MUST be Closed by the caller. Closing triggers the post-
 	// flight goroutine (if it hasn't run already).
 	Body io.ReadCloser
+	// Abort closes the upstream response under a Body still being read, from any goroutine: the read fails, and post-flight still waits for Body's own Close, which the reader makes.
+	Abort func()
 }
 
 // Pipeline is the orchestrator. Constructed once at boot; Run() is
@@ -195,6 +197,11 @@ type BodyError struct {
 func (e *BodyError) Error() string { return e.Err.Error() }
 func (e *BodyError) Unwrap() error { return e.Err }
 
+// RefusingBody is a Request.Body that can refuse the inbound body after the upstream has answered, when Run has already returned. Post-flight asks it: a refused request is recorded under the refusal's kind and its reservation settled as cancelled, not as a success.
+type RefusingBody interface {
+	Refusal() *BodyError
+}
+
 // Run forwards one proxy-mode request. The returned Body MUST be Closed.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	// Failure telemetry: any error return (missing auth, rate-limit
@@ -203,8 +210,15 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	// Success returns nil err here and fires post-flight on Body.Close.
 	// A reservation taken before the failure is refunded.
 	var reservation *pkgratelimit.Reservation
+	refusing, _ := req.Body.(RefusingBody)
 	defer func() {
 		if err != nil {
+			// A refused body is the cause even when the transport reports what it led to: a read timeout also cancels the request's context.
+			if refusing != nil {
+				if refused := refusing.Refusal(); refused != nil {
+					err = refused
+				}
+			}
 			if reservation != nil {
 				_ = p.commit(context.WithoutCancel(ctx), req, reservation, pkgratelimit.Observations{Cancelled: true})
 			}
@@ -279,7 +293,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 				// End = response closed. Stamped here, not in the post-flight
 				// goroutine — see pipeline.makeResult for the rationale.
 				req.Lifecycle.MarkEnd()
-				go p.runPostFlight(req, reservation, collected.Bytes(), status, respEncoding)
+				go p.runPostFlight(req, reservation, collected.Bytes(), status, respEncoding, refusing)
 			})
 			return resp.Body.Close()
 		},
@@ -289,10 +303,11 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		Status:  resp.StatusCode,
 		Headers: resp.Header,
 		Body:    body,
+		Abort:   func() { _ = resp.Body.Close() },
 	}, nil
 }
 
-func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int, encoding string) {
+func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int, encoding string, refusing RefusingBody) {
 	// post_flight_seconds spans this whole goroutine — extraction, observer
 	// fan-out, and the commit RTT below — not just the Finalize fan-out.
 	pfStart := time.Now()
@@ -331,11 +346,16 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 
 	// Finalize before the commit: usage/payload hooks need the response body.
 	// lc carries persistent identity; the event carries this-request's outcome.
+	ev := &lifecycle.PostFlightEvent{Status: status, ResponseBody: body}
+	var refused *BodyError
+	if refusing != nil {
+		refused = refusing.Refusal()
+	}
+	if refused != nil {
+		ev.ErrorKind, ev.ErrorMessage = refused.Kind, refused.Error()
+	}
 	if p.Lifecycle != nil && req.Lifecycle != nil {
-		p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
-			Status:       status,
-			ResponseBody: body,
-		})
+		p.Lifecycle.Finalize(ctx, req.Lifecycle, ev)
 	}
 
 	// Body consumed. Drop the reference so the buffered response is GC-eligible
@@ -345,6 +365,9 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 
 	if res != nil {
 		obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
+		if refused != nil {
+			obs = pkgratelimit.Observations{Cancelled: true}
+		}
 		if err := p.settle(ctx, req, res, obs); err != nil && p.Logger != nil {
 			p.Logger.Warn("proxy: limiter commit failed",
 				"err", err, "scope", req.RateScope)

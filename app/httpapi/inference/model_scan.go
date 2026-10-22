@@ -19,6 +19,14 @@ type bodyError struct {
 
 func (e *bodyError) Error() string { return e.msg }
 
+func writeBodyError(w http.ResponseWriter, e *bodyError) {
+	errType := "invalid_request_error"
+	if e.status >= http.StatusInternalServerError {
+		errType = "upstream_error"
+	}
+	writeAPIError(w, e.status, errType, e.code, e.msg)
+}
+
 var (
 	errDuplicateModel   = &bodyError{http.StatusBadRequest, "duplicate_model", "request body has more than one top-level 'model' field"}
 	errMissingModel     = &bodyError{http.StatusBadRequest, "missing_model", "field 'model' is required"}
@@ -533,14 +541,4 @@ func (s *modelScanner) stepNumber(c byte) bool {
 		return digit
 	}
 	return true
-}
-
-// scanModel scans a whole body and returns its single top-level model.
-func scanModel(body []byte, exactKey bool) (string, *bodyError) {
-	s := modelScanner{exactKey: exactKey}
-	s.feed(body)
-	if err := s.finish(); err != nil {
-		return "", err
-	}
-	return s.model, nil
 }
