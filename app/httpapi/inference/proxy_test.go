@@ -48,34 +48,6 @@ func TestProxyUpstreamPath_HostPathWins(t *testing.T) {
 	}
 }
 
-func TestScanTopLevelModel(t *testing.T) {
-	pad := strings.Repeat("x", 4096)
-	cases := []struct {
-		name  string
-		body  string
-		want  string
-		found bool
-	}{
-		{"model first, truncated tail", `{"model":"test-model","messages":[{"role":"user","content":"` + pad, "test-model", true},
-		{"model after truncated array", `{"messages":[{"role":"user","content":"` + pad, "", false},
-		{"nested model must not match", `{"messages":[{"model":"nested"}],"max_tokens":5}`, "", false},
-		{"nested model then top-level", `{"messages":[{"model":"nested"}],"model":"test-model"}`, "test-model", true},
-		{"no model", `{"messages":[],"stream":true}`, "", false},
-		{"not an object", `[1,2,3]`, "", false},
-		{"model not a string", `{"model":42,"messages":[]}`, "", false},
-		{"model cut mid-string", `{"model":"test-mo`, "", false},
-		{"empty input", ``, "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, found := scanTopLevelModel([]byte(tc.body))
-			if found != tc.found || got != tc.want {
-				t.Fatalf("scan: got (%q, %v), want (%q, %v)", got, found, tc.want, tc.found)
-			}
-		})
-	}
-}
-
 // proxyTestBody builds a JSON chat body around the given model with a
 // padding payload, placing model first or last among the top-level keys.
 func proxyTestBody(model string, padding int, modelLast bool) []byte {
@@ -102,6 +74,11 @@ func TestResolveProxyHostByPolicy_BodyLadder(t *testing.T) {
 		{"beyond buffer cap", proxyTestBody("test-model", proxyMaxBodyBuffer, true), "body_too_large", false},
 		{"not json", []byte("not-json"), "body_not_json", false},
 		{"missing model", []byte(`{"messages":[]}`), "missing_model", false},
+		{"small duplicate", []byte(`{"model":"test-model","model":"other"}`), "duplicate_model", false},
+		{"model key in other case", []byte(`{"Model":"test-model"}`), "invalid_model_key", false},
+		{"large model key in other case", []byte(`{"MODEL":"test-model","messages":[{"role":"user","content":"` + strings.Repeat("a", 2<<20) + `"}]}`), "invalid_model_key", false},
+		{"large duplicate in the window", append([]byte(`{"model":"test-model","model":"other",`), proxyTestBody("x", 2<<20, false)[1:]...), "duplicate_model", false},
+		{"large model last, duplicate", []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("a", 2<<20) + `"}],"model":"test-model","model":"b"}`), "duplicate_model", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
