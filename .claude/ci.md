@@ -39,7 +39,9 @@ Locally, `make check` runs gofmt, the codebase-rule checks, golangci-lint, the u
 
 ## Full run on `dev`
 
-Every three hours `.github/workflows/full.yml` starts the full CI on `dev`'s HEAD, unless that commit already had a full run (green or red). A green run moves the `ci-full-passed` tag to it and fast-forwards `release/next` there (see [Releasing](#releasing)). Both depend on the [CI app](#ci-app): the scheduled run is recorded only when it was dispatched with the app's token.
+`.github/workflows/full.yml` starts the full CI on `dev`'s HEAD after every push to `dev`, unless that commit already had a full run (green or red). It waits two minutes first, and a newer push cancels the waiting dispatcher, so a burst of merges starts one run, on the newest HEAD; a full run already started is never cancelled. Every three hours the schedule does the same as a backstop: GitHub drops or delays cron slots, and a push made with a workflow's own token starts no workflows. A green run moves the `ci-full-passed` tag to it and fast-forwards `release/next` there (see [Releasing](#releasing)). Both depend on the [CI app](#ci-app): a run is recorded only when it was dispatched with the app's token.
+
+The `push` trigger runs `dev`'s copy of `full.yml`, while `schedule` and `workflow_run` run `main`'s. A change to the dispatcher's push handling therefore takes effect as soon as it lands on `dev`; the schedule and the `record` job change only when `main` next gets `dev`.
 
 ### CI app
 
