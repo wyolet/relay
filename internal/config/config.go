@@ -114,6 +114,10 @@ type Config struct {
 	// MaxConns caps the open connections the inference listener accepts (RELAY_MAX_CONNS); 0 = derived from the memory limit at boot.
 	MaxConns int
 
+	// KeyBreakerThreshold and KeyBreakerWindow set how many upstream server or network errors within the window open a host key's breaker (RELAY_KEY_BREAKER_THRESHOLD, RELAY_KEY_BREAKER_WINDOW_S); 0 = keypool defaults. 401 and 403 open it at once.
+	KeyBreakerThreshold int
+	KeyBreakerWindow    time.Duration
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -406,6 +410,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_MAX_CONNS must be >= 1")
 	} else {
 		cfg.MaxConns = v
+	}
+	if v := envInt("RELAY_KEY_BREAKER_THRESHOLD", 0); v < 0 {
+		return nil, fmt.Errorf("RELAY_KEY_BREAKER_THRESHOLD must be >= 0")
+	} else {
+		cfg.KeyBreakerThreshold = v
+	}
+	if v := envInt("RELAY_KEY_BREAKER_WINDOW_S", 0); v < 0 {
+		return nil, fmt.Errorf("RELAY_KEY_BREAKER_WINDOW_S must be >= 0")
+	} else {
+		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.

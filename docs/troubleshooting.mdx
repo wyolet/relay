@@ -49,7 +49,7 @@ curl http://localhost:8080/v1/models \
 
 ## `502`: every key fails or is cooling down
 
-Each host key has a circuit breaker. A key that the upstream rejects with `401` cools down for 30 seconds, then 1, 5 and 15 minutes, then an hour per further failure; `403`, `5xx` and network errors back off from 1 to 60 seconds; a `429` with a `Retry-After` above 5 seconds cools it down for that long. A rotated key value starts with a fresh breaker. See [Key pooling](/concepts/key-pooling).
+Each host key has a circuit breaker. A key that the upstream rejects with `401` cools down for 30 seconds, then 1, 5 and 15 minutes, then an hour per further failure; `403` backs off from 1 to 60 seconds, and so do `5xx` and network errors once 5 of them land within 30 seconds; a `429` with a `Retry-After` above 5 seconds cools it down for that long. A rotated key value starts with a fresh breaker. See [Key pooling](/concepts/key-pooling).
 
 | What you see | Cause |
 | --- | --- |

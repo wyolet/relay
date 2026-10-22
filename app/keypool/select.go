@@ -36,9 +36,9 @@ type Candidate struct {
 	Stored bool
 }
 
-// SuccessNeedsWrite reports whether a success on c changes its record: a half-open probe or a record carrying a backoff step. A clean closed record, or none, already reads as healthy, and writing over it could erase a failure another pod recorded since the pick.
+// SuccessNeedsWrite reports whether a success on c changes its record: a half-open probe, a backoff step to decay, or a failure count to clear. A clean closed record, or none, already reads as healthy and gets no write.
 func (c Candidate) SuccessNeedsWrite() bool {
-	return c.Stored && (c.Record.State != CircuitClosed || c.Record.BackoffStep != 0)
+	return c.Stored && (c.Record.State != CircuitClosed || c.Record.BackoffStep != 0 || c.Record.Failures != 0)
 }
 
 // Pick returns a healthy HostKey from the candidate set. scope is the
@@ -49,9 +49,9 @@ func (c Candidate) SuccessNeedsWrite() bool {
 // exclude is an optional list of keys to skip even if healthy (e.g. for
 // retry-with-exclusion in future callers). Pass nil to skip the check.
 //
-// Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
-// eligible. Concurrent Picks may both pick the same half-open key; the
-// caller's RecordSuccess/RecordFailure resolves the outcome (acceptable).
+// An open key past its OpenUntil goes half-open and serves one probe at a
+// time: the pick that claims the probe lease gets it, concurrent picks skip
+// it, and the probe's RecordSuccess/RecordFailure settles the key.
 //
 // The reads go out in one kv batch; see PreparePick to share it.
 func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, keys []*hostkey.HostKey, exclude ...[]*hostkey.HostKey) (*hostkey.HostKey, error) {

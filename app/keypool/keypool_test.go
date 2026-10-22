@@ -121,7 +121,7 @@ func TestAuthFailureOpensForBoundedCooldown(t *testing.T) {
 	if rec.State != CircuitOpen || rec.Indefinite {
 		t.Fatalf("want open with an expiry, got state=%v indefinite=%v", rec.State, rec.Indefinite)
 	}
-	first := authCooldowns[1]
+	first := authCooldowns[0]
 	if want := t0.Add(first); !rec.OpenUntil.Equal(want) {
 		t.Fatalf("OpenUntil = %v, want %v", rec.OpenUntil, want)
 	}
@@ -134,10 +134,15 @@ func TestAuthFailureOpensForBoundedCooldown(t *testing.T) {
 		t.Fatalf("after the cooldown: want the key as a half-open probe, got %v, %v", got, err)
 	}
 
-	// A failed probe escalates, capped at the last step.
+	// Each failed probe escalates, capped at the last step.
 	for range len(authCooldowns) + 2 {
 		sel.RecordFailure(ctx, k, FailureAuth, 0)
+		sel.clock = frozenClock(sel.clock().Add(2 * time.Hour))
+		if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
+			t.Fatalf("after the cooldown: want the key as a probe, got %v, %v", got, err)
+		}
 	}
+	sel.RecordFailure(ctx, k, FailureAuth, 0)
 	rec = sel.readRecord(ctx, k)
 	if want := sel.clock().Add(authCooldowns[len(authCooldowns)-1]); !rec.OpenUntil.Equal(want) {
 		t.Fatalf("capped OpenUntil = %v, want %v", rec.OpenUntil, want)
@@ -156,31 +161,28 @@ func TestForbiddenUsesShortBackoff(t *testing.T) {
 	if rec.State != CircuitOpen || rec.Indefinite || rec.Reason != ReasonUpstreamForbidden {
 		t.Fatalf("want open/bounded/%q, got %v/%v/%q", ReasonUpstreamForbidden, rec.State, rec.Indefinite, rec.Reason)
 	}
-	if want := t0.Add(time.Duration(backoffSchedule[1]) * time.Second); !rec.OpenUntil.Equal(want) {
+	if want := t0.Add(backoffSchedule[0]); !rec.OpenUntil.Equal(want) {
 		t.Fatalf("OpenUntil = %v, want %v", rec.OpenUntil, want)
 	}
 }
 
-// Records written as indefinite before cooldowns were bounded expire after
-// the longest auth cooldown instead of staying open forever.
-func TestLegacyIndefiniteRecordExpires(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
+// A record in the stored form used before times were milliseconds, including
+// one written as indefinite before cooldowns were bounded, reads as an expired
+// open record: the next pick probes the key and keeps its backoff step.
+func TestLegacyRecordIsProbed(t *testing.T) {
+	sel, ms := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	k := "hash-legacy"
-	sel.writeRecord(ctx, k, CircuitRecord{State: CircuitOpen, Indefinite: true, LastTransition: t0, Reason: ReasonUpstreamAuthFailed})
-	keys := []*hostkey.HostKey{key("s", k)}
+	legacy := `{"state":1,"open_until":"2026-01-01T01:00:00Z","backoff_step":2,"last_transition":"2026-01-01T00:00:00Z","indefinite":true,"reason":"upstream_auth_failed"}`
+	if err := ms.Set(ctx, circuitKey(k), []byte(legacy), 0); err != nil {
+		t.Fatal(err)
+	}
 	p := pool("p")
-
-	sel.clock = frozenClock(t0.Add(time.Minute))
-	if _, err := sel.Pick(ctx, p.scope, p.algo, keys); err != ErrNoHealthyKeys {
-		t.Fatalf("shortly after: want ErrNoHealthyKeys, got %v", err)
+	if got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)}); err != nil || got.KeyHash != k {
+		t.Fatalf("want the key as a probe, got %v, %v", got, err)
 	}
-	sel.clock = frozenClock(t0.Add(authCooldowns[len(authCooldowns)-1] + time.Second))
-	if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
-		t.Fatalf("after the longest auth cooldown: want the key, got %v, %v", got, err)
-	}
-	if rec := sel.readRecord(ctx, k); rec.Indefinite || rec.State != CircuitHalfOpen {
-		t.Fatalf("want half-open without the indefinite flag, got %+v", rec)
+	if rec := sel.readRecord(ctx, k); rec.Indefinite || rec.State != CircuitHalfOpen || rec.BackoffStep != 2 {
+		t.Fatalf("want half-open at step 2 without the indefinite flag, got %+v", rec)
 	}
 }
 
@@ -235,53 +237,58 @@ func TestRateLimitLongOpensForDuration(t *testing.T) {
 	}
 }
 
-// TestServerErrorBackoffEscalates — three consecutive 5xx → BackoffStep grows 1→2→3.
+// Server errors open a closed key only at the threshold; after that each
+// failed probe climbs the ladder and a successful probe steps it back down.
 func TestServerErrorBackoffEscalates(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	k := "hash-5xx"
+	keys := []*hostkey.HostKey{key("s", k)}
+	p := pool("p4")
 
-	for i, wantStep := range []int{1, 2, 3} {
+	for i := 1; i < DefaultFailureThreshold; i++ {
 		sel.RecordFailure(ctx, k, FailureServerError, 0)
-		rec := sel.readRecord(ctx, k)
-		if rec.BackoffStep != wantStep {
-			t.Fatalf("iter %d: want BackoffStep=%d, got %d", i, wantStep, rec.BackoffStep)
+		if rec := sel.readRecord(ctx, k); rec.State != CircuitClosed || rec.Failures != i {
+			t.Fatalf("failure %d: want closed with %d failures, got %+v", i, i, rec)
 		}
 	}
-	// Duration at step 3 = 8s.
-	rec := sel.readRecord(ctx, k)
-	wantUntil := t0.Add(8 * time.Second)
-	if rec.OpenUntil != wantUntil {
-		t.Fatalf("want OpenUntil=%v, got %v", wantUntil, rec.OpenUntil)
-	}
-
-	// Past OpenUntil → half-open probe; record success → BackoffStep=0.
-	sel.clock = frozenClock(t0.Add(9 * time.Second))
-	p := pool("p4")
-	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
-	if err != nil || got.KeyHash != k {
-		t.Fatal("expected half-open pick")
+	sel.RecordFailure(ctx, k, FailureServerError, 0)
+	for step := 1; step <= 3; step++ {
+		rec := sel.readRecord(ctx, k)
+		if rec.State != CircuitOpen || rec.BackoffStep != step {
+			t.Fatalf("step %d: want open, got %+v", step, rec)
+		}
+		if want := sel.clock().Add(backoffSchedule[step-1]); !rec.OpenUntil.Equal(want) {
+			t.Fatalf("step %d: OpenUntil = %v, want %v", step, rec.OpenUntil, want)
+		}
+		sel.clock = frozenClock(rec.OpenUntil)
+		if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
+			t.Fatalf("step %d: want the key as a probe, got %v, %v", step, got, err)
+		}
+		if step < 3 {
+			sel.RecordFailure(ctx, k, FailureServerError, 0)
+		}
 	}
 	sel.RecordSuccess(ctx, k)
-	rec = sel.readRecord(ctx, k)
-	if rec.BackoffStep != 0 || rec.State != CircuitClosed {
-		t.Fatalf("after success: want closed/step=0, got state=%v step=%d", rec.State, rec.BackoffStep)
+	if rec := sel.readRecord(ctx, k); rec.State != CircuitClosed || rec.BackoffStep != 2 {
+		t.Fatalf("after the probe's success: want closed at step 2, got %+v", rec)
 	}
 }
 
-// TestNetworkBehavesLike5xx — network failure follows same backoff schedule.
+// TestNetworkBehavesLike5xx — network errors count toward the same threshold and ladder.
 func TestNetworkBehavesLike5xx(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	k := "hash-net"
-	sel.RecordFailure(ctx, k, FailureNetwork, 0)
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitOpen || rec.BackoffStep != 1 {
-		t.Fatalf("want open/step=1, got %v/%d", rec.State, rec.BackoffStep)
+	for range DefaultFailureThreshold {
+		sel.RecordFailure(ctx, k, FailureNetwork, 0)
 	}
-	wantUntil := t0.Add(time.Duration(backoffSchedule[1]) * time.Second)
-	if rec.OpenUntil != wantUntil {
-		t.Fatalf("want OpenUntil=%v, got %v", wantUntil, rec.OpenUntil)
+	rec := sel.readRecord(ctx, k)
+	if rec.State != CircuitOpen || rec.BackoffStep != 1 || rec.Reason != ReasonUpstreamNetworkError {
+		t.Fatalf("want open/step=1/network, got %+v", rec)
+	}
+	if want := t0.Add(backoffSchedule[0]); !rec.OpenUntil.Equal(want) {
+		t.Fatalf("want OpenUntil=%v, got %v", want, rec.OpenUntil)
 	}
 }
 
@@ -350,8 +357,8 @@ func TestPick_NoHealthy(t *testing.T) {
 	}
 }
 
-// TestPick_HalfOpenOnceVisible — open key past OpenUntil → Pick returns it; no panic on second Pick.
-func TestPick_HalfOpenOnceVisible(t *testing.T) {
+// TestPick_HalfOpenServesOneProbe — open key past OpenUntil → the first Pick probes it; the next skips it while the probe is out.
+func TestPick_HalfOpenServesOneProbe(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	k := "hash-ho"
@@ -364,9 +371,9 @@ func TestPick_HalfOpenOnceVisible(t *testing.T) {
 	if err != nil || got.KeyHash != k {
 		t.Fatalf("first pick: want key, got err=%v", err)
 	}
-	// Second pick without recording outcome — should not panic.
-	_, err2 := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{sec})
-	_ = err2 // half-open may be returned or not; just no panic
+	if _, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{sec}); err != ErrNoHealthyKeys {
+		t.Fatalf("second pick during the probe: want ErrNoHealthyKeys, got %v", err)
+	}
 }
 
 // TestPickConcurrent — 100 goroutines pick from a 3-key healthy pool; all 3 get hits.
@@ -410,22 +417,20 @@ func TestPickConcurrent(t *testing.T) {
 	}
 }
 
-// TestRecordSuccessClearsBackoff — after a 5xx series, RecordSuccess resets BackoffStep to 0.
-func TestRecordSuccessClearsBackoff(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
+// TestRecordSuccessDecaysBackoff — each success takes the backoff step down by one rather than to zero.
+func TestRecordSuccessDecaysBackoff(t *testing.T) {
+	sel, ms := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	k := "hash-clr"
-	for i := 0; i < 4; i++ {
-		sel.RecordFailure(ctx, k, FailureServerError, 0)
+	b, _ := encodeRecord(CircuitRecord{State: CircuitClosed, BackoffStep: 3})
+	if err := ms.Set(ctx, circuitKey(k), b, ttlFlat); err != nil {
+		t.Fatal(err)
 	}
-	rec := sel.readRecord(ctx, k)
-	if rec.BackoffStep == 0 {
-		t.Fatal("expected non-zero backoff after failures")
-	}
-	sel.RecordSuccess(ctx, k)
-	rec = sel.readRecord(ctx, k)
-	if rec.BackoffStep != 0 || rec.State != CircuitClosed {
-		t.Fatalf("after RecordSuccess: want closed/0, got %v/%d", rec.State, rec.BackoffStep)
+	for _, want := range []int{2, 1, 0, 0} {
+		sel.RecordSuccess(ctx, k)
+		if rec := sel.readRecord(ctx, k); rec.BackoffStep != want || rec.State != CircuitClosed {
+			t.Fatalf("after RecordSuccess: want closed/%d, got %v/%d", want, rec.State, rec.BackoffStep)
+		}
 	}
 }
 
@@ -583,20 +588,24 @@ func TestCooldownReasons(t *testing.T) {
 		name     string
 		kind     FailureKind
 		retry    time.Duration
+		times    int
 		wantRsn  CooldownReason
 		wantOpen bool
 	}{
-		{"auth", FailureAuth, 0, ReasonUpstreamAuthFailed, true},
-		{"rl_long", FailureRateLimitLong, 30 * time.Second, ReasonUpstreamRateLimited, true},
-		{"server_error", FailureServerError, 0, ReasonUpstreamServerError, true},
-		{"network", FailureNetwork, 0, ReasonUpstreamNetworkError, true},
+		{"auth", FailureAuth, 0, 1, ReasonUpstreamAuthFailed, true},
+		{"forbidden", FailureForbidden, 0, 1, ReasonUpstreamForbidden, true},
+		{"rl_long", FailureRateLimitLong, 30 * time.Second, 1, ReasonUpstreamRateLimited, true},
+		{"server_error", FailureServerError, 0, DefaultFailureThreshold, ReasonUpstreamServerError, true},
+		{"network", FailureNetwork, 0, DefaultFailureThreshold, ReasonUpstreamNetworkError, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sel, _ := newSel(t, frozenClock(t0))
 			ctx := context.Background()
 			h := "hash-" + tc.name
-			sel.RecordFailure(ctx, h, tc.kind, tc.retry)
+			for range tc.times {
+				sel.RecordFailure(ctx, h, tc.kind, tc.retry)
+			}
 			rec := sel.readRecord(ctx, h)
 			if rec.Reason != tc.wantRsn {
 				t.Fatalf("want reason %q, got %q", tc.wantRsn, rec.Reason)
@@ -627,7 +636,7 @@ func TestRecordLocalRateLimit(t *testing.T) {
 	ctx := context.Background()
 	k := "reason-local-rl"
 	// Pre-warm a backoff step so we can assert it is preserved.
-	sel.RecordFailure(ctx, k, FailureServerError, 0)
+	sel.RecordFailure(ctx, k, FailureForbidden, 0)
 	before := sel.readRecord(ctx, k)
 	wantStep := before.BackoffStep
 
@@ -660,6 +669,10 @@ func TestRecordSuccessClearsReason(t *testing.T) {
 	rec := sel.readRecord(ctx, k)
 	if rec.Reason == "" {
 		t.Fatal("expected non-empty reason after auth failure")
+	}
+	sel.clock = frozenClock(rec.OpenUntil)
+	if _, err := sel.Pick(ctx, "p", KeySelectionPrioritized, []*hostkey.HostKey{key("s", k)}); err != nil {
+		t.Fatal(err)
 	}
 	sel.RecordSuccess(ctx, k)
 	rec = sel.readRecord(ctx, k)

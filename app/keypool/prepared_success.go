@@ -18,12 +18,7 @@ func (s *Selector) PrepareRecordSuccess(b *kv.Batch, keyHash string) *PreparedSu
 	if s.runner == nil {
 		return nil
 	}
-	call, err := s.successCall(keyHash)
-	if err != nil {
-		s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
-		return nil
-	}
-	return &PreparedSuccess{s: s, keyHash: keyHash, result: b.Script(call)}
+	return &PreparedSuccess{s: s, keyHash: keyHash, result: b.Script(successCall(keyHash, s.clock()))}
 }
 
 // Finish logs the success write's outcome.
