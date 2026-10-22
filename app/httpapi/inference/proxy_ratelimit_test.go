@@ -89,14 +89,14 @@ func proxyLimitCatalog(t *testing.T, upstreamURL string, noAuth bool, policyPerH
 
 // proxyLimitDeps wires deps whose proxy runner reserves through a policy
 // service over a recording kv.Mem, so a test can count the scripts each
-// request costs.
-func proxyLimitDeps(t *testing.T, cat *catalog.Catalog) (Deps, *kvtest.Recording) {
+// request costs. The limiter reads clock (nil reads time.Now).
+func proxyLimitDeps(t *testing.T, cat *catalog.Catalog, clock func() time.Time) (Deps, *kvtest.Recording) {
 	t.Helper()
 	mem := kv.NewMem()
 	pkgratelimit.RegisterScripts(mem)
 	t.Cleanup(func() { _ = mem.Close() })
 	store := kvtest.NewRecording(mem)
-	limiter := pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)
+	limiter := pkgratelimit.New(store, slog.New(slog.DiscardHandler), clock)
 
 	d := buildDeps(t, cat)
 	d.Proxy = proxy.New(limiter, nil, nil)
@@ -145,11 +145,12 @@ func assertSameRateLimitResponse(t *testing.T, got, want *httptest.ResponseRecor
 }
 
 // normalModeRateLimited exhausts the same one-per-hour policy in normal mode
-// and returns its refusal.
-func normalModeRateLimited(t *testing.T, upstreamURL string) *httptest.ResponseRecorder {
+// and returns its refusal. Its limiter reads clock, so a Retry-After compared
+// with proxy mode's cannot straddle a second boundary.
+func normalModeRateLimited(t *testing.T, upstreamURL string, clock func() time.Time) *httptest.ResponseRecorder {
 	t.Helper()
 	cat, pr := proxyLimitCatalog(t, upstreamURL, true, 1, nil)
-	d := buildRunnableDeps(t, cat)
+	d := buildRunnableDepsAt(t, cat, clock)
 	send := func() *httptest.ResponseRecorder {
 		r := withNormalContext(httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", nil), pr)
 		w := httptest.NewRecorder()
@@ -168,7 +169,9 @@ func TestProxyAuthed_PolicyRateLimit_PolicyResolvedHost(t *testing.T) {
 	var countHits, genHits atomic.Int32
 	up := countUpstreamServer(t, &countHits, &genHits)
 	cat, pr := proxyLimitCatalog(t, up.URL, true, 1, nil)
-	d, _ := proxyLimitDeps(t, cat)
+	now := time.Now()
+	clock := func() time.Time { return now }
+	d, _ := proxyLimitDeps(t, cat, clock)
 
 	if w, _ := sendProxy(d, pr, "", "test-model"); w.Code != http.StatusOK {
 		t.Fatalf("first: status %d body %s", w.Code, w.Body)
@@ -177,7 +180,7 @@ func TestProxyAuthed_PolicyRateLimit_PolicyResolvedHost(t *testing.T) {
 	if genHits.Load() != 1 {
 		t.Fatalf("upstream hits = %d, want 1", genHits.Load())
 	}
-	assertSameRateLimitResponse(t, w, normalModeRateLimited(t, up.URL))
+	assertSameRateLimitResponse(t, w, normalModeRateLimited(t, up.URL, clock))
 }
 
 // A pinned host is metered by the policy whether or not the model routes
@@ -196,7 +199,7 @@ func TestProxyAuthed_PolicyRateLimit_PinnedHost(t *testing.T) {
 			var countHits, genHits atomic.Int32
 			up := countUpstreamServer(t, &countHits, &genHits)
 			cat, pr := proxyLimitCatalog(t, up.URL, true, 1, nil)
-			d, _ := proxyLimitDeps(t, cat)
+			d, _ := proxyLimitDeps(t, cat, nil)
 
 			w, lc := sendProxy(d, pr, "anthropic", tc.model)
 			if w.Code != http.StatusOK {
@@ -225,7 +228,7 @@ func TestProxyAuthed_SystemCeilingInTheSameReserve(t *testing.T) {
 	var countHits, genHits atomic.Int32
 	up := countUpstreamServer(t, &countHits, &genHits)
 	cat, pr := proxyLimitCatalog(t, up.URL, true, 100, map[string]int64{systemRLProxyAuthed: 1})
-	d, store := proxyLimitDeps(t, cat)
+	d, store := proxyLimitDeps(t, cat, nil)
 
 	if w, _ := sendProxy(d, pr, "", "test-model"); w.Code != http.StatusOK {
 		t.Fatalf("first: status %d body %s", w.Code, w.Body)
@@ -265,7 +268,7 @@ func TestProxyAuthed_RevokedTokenRefused(t *testing.T) {
 	var countHits, genHits atomic.Int32
 	up := countUpstreamServer(t, &countHits, &genHits)
 	cat, base := proxyLimitCatalog(t, up.URL, true, 100, nil)
-	d, store := proxyLimitDeps(t, cat)
+	d, store := proxyLimitDeps(t, cat, nil)
 	pr := &Principal{CredentialKind: CredentialToken, CredentialID: "jti-1", TeamID: "team-1", Policy: base.Policy, PassthroughAllowed: true}
 
 	if err := store.Set(context.Background(), policy.RevokedKey("team-1", "jti-1"), []byte("1"), time.Hour); err != nil {
@@ -288,7 +291,7 @@ func TestProxyAnonymous_SystemBucketOnly(t *testing.T) {
 	var countHits, genHits atomic.Int32
 	up := countUpstreamServer(t, &countHits, &genHits)
 	cat, _ := proxyLimitCatalog(t, up.URL, false, 100, map[string]int64{systemRLProxyAnon: 1})
-	d, store := proxyLimitDeps(t, cat)
+	d, store := proxyLimitDeps(t, cat, nil)
 
 	if w, _ := sendProxy(d, nil, "anthropic", "test-model"); w.Code != http.StatusOK {
 		t.Fatalf("first: status %d body %s", w.Code, w.Body)
