@@ -87,7 +87,8 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		// mid-flight. Header/idle limits plus the in-flight admission cap bound
 		// resource use instead of a response-duration cap.
 	}
-	slog.Info("relay inference listening", "addr", inferSrv.Addr)
-	_, inferErr := serve(inferSrv)
+	maxConns := inferenceMaxConns(cfg.MaxConns)
+	slog.Info("relay inference listening", "addr", inferSrv.Addr, "max_conns", maxConns)
+	_, inferErr := serve(inferSrv, maxConns)
 	return inferSrv, inferErr
 }

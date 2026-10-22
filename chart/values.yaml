@@ -47,6 +47,10 @@ relay:
   # -- Cookies are Secure (set false only for plain-HTTP testing).
   cookieSecure: "true"
   maxRequestBytes: ""        # empty = relay default
+  # -- Open connections the inference listener accepts (RELAY_MAX_CONNS); empty = one per 64 KiB of goMemLimit.
+  maxConns: ""
+  # -- Upstream TCP connect timeout in seconds (RELAY_UPSTREAM_DIAL_TIMEOUT_S); empty = 10.
+  upstreamDialTimeoutS: ""
   healthzDeadlineMs: "500"
   # -- Writable dir for the ClickHouse WAL segments (emptyDir-backed).
   eventlogDir: /var/lib/relay/eventlog

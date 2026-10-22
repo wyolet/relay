@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"time"
@@ -25,6 +26,10 @@ const (
 	// cap so several hot hosts can each keep a full keep-alive pool.
 	maxIdleConnsScale = 8
 
+	// defaultDialTimeout bounds the TCP connect, which otherwise waits out the OS's own timeout (about two minutes on Linux) on a black-holed host before failover can try another.
+	defaultDialTimeout = 10 * time.Second
+	tcpKeepAlive       = 30 * time.Second
+
 	idleConnTimeout       = 90 * time.Second
 	tlsHandshakeTimeout   = 10 * time.Second
 	expectContinueTimeout = 1 * time.Second
@@ -33,6 +38,16 @@ const (
 // maxIdleConnsPerHost is the per-host idle-connection ceiling applied to
 // every upstream transport built after it is set. Read at Build time.
 var maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
+
+// dialTimeout bounds the TCP connect of every upstream transport built after it is set. Read at Build time.
+var dialTimeout = defaultDialTimeout
+
+// SetUpstreamDialTimeout overrides the upstream connect timeout for every transport built afterwards (the composition root wires RELAY_UPSTREAM_DIAL_TIMEOUT_S here). Values <= 0 are ignored. Not safe to call concurrently with Build — invoke once at boot, before specs are constructed.
+func SetUpstreamDialTimeout(d time.Duration) {
+	if d > 0 {
+		dialTimeout = d
+	}
+}
 
 // streamIdleTimeout is the silence budget applied to every streamed upstream body read by specs built after it is set. Read at Build time.
 var streamIdleTimeout = defaultStreamIdleTimeout
@@ -67,6 +82,7 @@ func SetUpstreamMaxIdleConnsPerHost(n int) {
 func NewUpstreamTransport(http1 bool) http.RoundTripper {
 	perHost := maxIdleConnsPerHost
 	tr := &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: dialTimeout, KeepAlive: tcpKeepAlive}).DialContext,
 		MaxIdleConns:        perHost * maxIdleConnsScale,
 		MaxIdleConnsPerHost: perHost,
 		IdleConnTimeout:     idleConnTimeout,

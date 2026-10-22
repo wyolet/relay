@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -147,5 +148,27 @@ func TestUpstreamTransport_CountsConnectionReuse(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.UpstreamConnections.WithLabelValues("reused")) - reusedBefore; got != 1 {
 		t.Errorf("reused connections = %v, want 1", got)
+	}
+}
+
+// A black-holed upstream must fail the connect within the dial timeout, not the OS's own (about two minutes), so failover can move on.
+func TestUpstreamTransport_DialTimeout(t *testing.T) {
+	prev := dialTimeout
+	t.Cleanup(func() { dialTimeout = prev })
+	SetUpstreamDialTimeout(200 * time.Millisecond)
+
+	tr := baseTransport(t, NewUpstreamTransport(false))
+	if tr.DialContext == nil {
+		t.Fatal("DialContext unset: the connect waits out the OS timeout")
+	}
+	start := time.Now()
+	// 192.0.2.0/24 is reserved for documentation: packets to it are dropped or refused, never answered.
+	conn, err := tr.DialContext(context.Background(), "tcp", "192.0.2.1:443")
+	if err == nil {
+		conn.Close()
+		t.Skip("192.0.2.1 accepted a connection on this network")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("dial to a black-holed host took %v, want about the 200ms timeout", elapsed)
 	}
 }

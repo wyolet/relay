@@ -68,6 +68,7 @@ func buildProxy(cfg *config.Config, limiter, postFlightLimiter *pkgratelimit.Lim
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.
 	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
+	adapter.SetUpstreamDialTimeout(cfg.UpstreamDialTimeout)
 	adapter.SetUpstreamStreamIdleTimeout(cfg.StreamIdleTimeout)
 	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
 	return proxyPipeline
