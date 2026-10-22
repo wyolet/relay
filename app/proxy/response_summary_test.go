@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -18,18 +19,42 @@ import (
 // summarizingExtractor reads a Summary and counts how often post-flight asks for tokens the old way.
 type summarizingExtractor struct {
 	sum       v1.Summary
+	tokens    sdkusage.Tokens
 	summaries int
 	extracts  int
 }
 
 func (s *summarizingExtractor) ExtractTokens([]byte) sdkusage.Tokens {
 	s.extracts++
-	return nil
+	return s.tokens
 }
 
 func (s *summarizingExtractor) SummarizeResponse([]byte) (v1.Summary, bool) {
 	s.summaries++
 	return s.sum, true
+}
+
+// The commit charges the Summary's tokens, and asks ExtractTokens only when the Summary has none, as for a stream that ended on an error event after reporting usage.
+func TestChargedTokens(t *testing.T) {
+	reported := sdkusage.Tokens{"input": 12, "output": 7}
+	for _, tc := range []struct {
+		name         string
+		sum          v1.Summary
+		want         sdkusage.Tokens
+		wantExtracts int
+	}{
+		{"summary tokens", v1.Summary{Tokens: sdkusage.Tokens{"input": 3}}, sdkusage.Tokens{"input": 3}, 0},
+		{"summary without tokens", v1.Summary{FinishReason: v1.FinishReasonStop}, reported, 1},
+	} {
+		ex := &summarizingExtractor{sum: tc.sum, tokens: reported}
+		got := chargedTokens(lifecycle.NewContext("req", "proxy", time.Now()), ex, []byte("event: error\ndata: {}\n\n"))
+		if !maps.Equal(got, tc.want) || ex.extracts != tc.wantExtracts {
+			t.Errorf("%s: charged %v with %d extractions, want %v with %d", tc.name, got, ex.extracts, tc.want, tc.wantExtracts)
+		}
+	}
+	if got := chargedTokens(lifecycle.NewContext("req", "proxy", time.Now()), nil, []byte("{}")); len(got) != 0 {
+		t.Errorf("no extractor: charged %v, want nothing", got)
+	}
 }
 
 // A summarizing extractor's one read serves the commit and every post-flight hook: ExtractTokens is never called, and the hooks see the Summary on the Context.

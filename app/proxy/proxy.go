@@ -58,6 +58,18 @@ type ResponseSummarizer interface {
 	SummarizeResponse(body []byte) (v1.Summary, bool)
 }
 
+// chargedTokens returns the tokens the commit charges: the Summary's, decoded once and shared with the usage hook. A Summary without tokens (a stream that ended on an error event or before its terminal frame) can sit beside usage the upstream did report; those tokens were served, so ExtractTokens is asked for them.
+func chargedTokens(lc *lifecycle.Context, e TokenExtractor, body []byte) sdkusage.Tokens {
+	var tokens sdkusage.Tokens
+	if sum, ok := responseSummary(lc, e, body); ok {
+		tokens = sum.Tokens
+	}
+	if len(tokens) == 0 && e != nil {
+		tokens = e.ExtractTokens(body)
+	}
+	return tokens
+}
+
 // responseSummary returns the Summary e reads from body, recorded on lc so the usage hook does not decode the body again.
 func responseSummary(lc *lifecycle.Context, e TokenExtractor, body []byte) (v1.Summary, bool) {
 	rs, ok := e.(ResponseSummarizer)
@@ -306,13 +318,7 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 		)
 	}
 
-	// One decode of the body serves the commit below and the usage hook.
-	var tokens sdkusage.Tokens
-	if sum, ok := responseSummary(req.Lifecycle, req.Extractor, body); ok {
-		tokens = sum.Tokens
-	} else if req.Extractor != nil {
-		tokens = req.Extractor.ExtractTokens(body)
-	}
+	tokens := chargedTokens(req.Lifecycle, req.Extractor, body)
 
 	// Finalize before the commit: usage/payload hooks need the response body.
 	// lc carries persistent identity; the event carries this-request's outcome.

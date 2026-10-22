@@ -10,7 +10,14 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// BenchmarkResponseUsage compares, per buffered response, the two full decodes post-flight ran before (ExtractTokens for the rate-limit commit, ExtractSummary for usage) with the one ends-first read that now serves both, on each shape's recorded text case and on the same case grown to about 200 KB.
+// parseOnlyTranslator hides a shape's narrow decoder but keeps its stream predicate: ExtractSummary as it ran before the decoder.
+type parseOnlyTranslator struct{ v1.Translator }
+
+func (p parseOnlyTranslator) NewSummaryStream() (func([]byte) ([]byte, error), func([]byte) bool) {
+	return p.Translator.(v1.SummaryStream).NewSummaryStream()
+}
+
+// BenchmarkResponseUsage compares, per buffered response, the two decodes post-flight ran before (ExtractTokens for the rate-limit commit, ExtractSummary by ParseResponse for usage) with the one ExtractSummary, by the shape's narrow decoder, that now serves both, on each shape's recorded text case and on the same case grown to about 200 KB.
 func BenchmarkResponseUsage(b *testing.B) {
 	cases := []struct{ shape, dir string }{
 		{"openai-chat", "testdata/openai/chat-text"},
@@ -49,14 +56,14 @@ func BenchmarkResponseUsage(b *testing.B) {
 				b.SetBytes(int64(len(in.body)))
 				for b.Loop() {
 					_ = extractTokens[c.shape](in.body)
-					_, _ = v1.ExtractSummary(s.tr, in.body)
+					_, _ = v1.ExtractSummary(parseOnlyTranslator{s.tr}, in.body)
 				}
 			})
 			b.Run(c.shape+"/"+in.name+"/after", func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(in.body)))
 				for b.Loop() {
-					_, _, _ = v1.ExtractSummaryEndsFirst(s.tr, in.body)
+					_, _ = v1.ExtractSummary(s.tr, in.body)
 				}
 			})
 		}

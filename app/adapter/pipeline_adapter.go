@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqbody"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -121,16 +121,20 @@ func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {
 	return a.spec.ExtractTokens(body)
 }
 
-// SummarizeResponse reads a buffered upstream body's Summary with the spec's translator, from where the shape keeps it when it can, counting the bodies that needed the full decode. false means the spec has no translator to read it with.
-func (a *specAdapter) SummarizeResponse(body []byte) (v1.Summary, bool) {
+// SummarizeResponse decodes a buffered upstream body's Summary with the spec's translator. false means the spec has no translator to read it with, or the translator panicked on the body: post-flight runs on its own goroutine, so a panic there would take the process down for one malformed response.
+func (a *specAdapter) SummarizeResponse(body []byte) (sum v1.Summary, ok bool) {
 	if a.spec.Translator == nil {
 		return v1.Summary{}, false
 	}
-	sum, fellBack, err := v1.ExtractSummaryEndsFirst(a.spec.Translator, body)
-	if fellBack {
-		metrics.UsageExtractFallback(string(a.spec.Name))
-	}
+	defer func() {
+		if v := recover(); v != nil {
+			slog.Error("adapter: response summary panic recovered", "adapter", a.spec.Name, "panic", v)
+			sum, ok = v1.Summary{}, false
+		}
+	}()
+	sum, err := v1.ExtractSummary(a.spec.Translator, body)
 	if err != nil {
+		// The body did not decompress: no decoder can read it, so it summarizes as empty, as the usage hook would find it.
 		return v1.Summary{}, true
 	}
 	return sum, true

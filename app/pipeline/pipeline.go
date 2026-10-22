@@ -644,17 +644,7 @@ func (p *Pipeline) runPostFlight(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Rate-limit tokens: for streamed requests the StreamSession already
-	// extracted them incrementally (no buffered body to parse); a buffered
-	// body is summarized once, and the usage hook reuses that Summary.
-	var tokens sdkusage.Tokens
-	if t, ok := req.Lifecycle.StreamTokens(); ok {
-		tokens = sdkusage.Tokens(t)
-	} else if sum, ok := responseSummary(req.Lifecycle, req.Adapter, body); ok {
-		tokens = sum.Tokens
-	} else {
-		tokens = req.Adapter.ExtractTokens(body)
-	}
+	tokens := chargedTokens(req.Lifecycle, req.Adapter, body)
 	// A response cut short before its end may never have reported usage;
 	// the upstream still did the work, so the budgets are charged a floor
 	// rather than nothing. Usage records keep only what was reported.
@@ -699,7 +689,21 @@ type ResponseSummarizer interface {
 	SummarizeResponse(body []byte) (v1.Summary, bool)
 }
 
-// responseSummary returns the buffered response's Summary: the one the handler already decoded, else the one a reads, recorded on lc for the usage hook.
+// chargedTokens returns the tokens the rate-limit commit charges: the ones the stream session extracted incrementally, else the buffered body's Summary's, decoded once and shared with the usage hook. A Summary without tokens (a stream that ended on an error event or before its terminal frame) can sit beside usage the upstream did report; those tokens were served, so ExtractTokens is asked for them.
+func chargedTokens(lc *lifecycle.Context, a Adapter, body []byte) sdkusage.Tokens {
+	var tokens sdkusage.Tokens
+	if t, ok := lc.StreamTokens(); ok {
+		tokens = sdkusage.Tokens(t)
+	} else if sum, ok := responseSummary(lc, a, body); ok {
+		tokens = sum.Tokens
+	}
+	if len(tokens) == 0 && len(body) > 0 {
+		tokens = a.ExtractTokens(body)
+	}
+	return tokens
+}
+
+// responseSummary returns the buffered response's Summary: the one the handler recorded while translating it, else the one a decodes now, which is recorded on lc so the usage hook reuses it.
 func responseSummary(lc *lifecycle.Context, a Adapter, body []byte) (v1.Summary, bool) {
 	if s, ok := lc.ResponseSummary(); ok {
 		return s, true

@@ -133,20 +133,28 @@ func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 // wire finish_reason always yielded "" → defaulted to stop, so truncation and
 // content-filter cutoffs masqueraded as clean stops (canonical rule 11).
 func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
-	switch resp.Status {
+	calls, refused := false, false
+	for _, it := range resp.Output {
+		if it == nil {
+			continue
+		}
+		switch it.ResponsesItemType() {
+		case ResponsesItemTypeFunctionCall, ResponsesItemTypeCustomToolCall:
+			calls = true
+		}
+		if m, ok := it.(*ResponsesMessage); ok && responsesHasRefusalPart(m) {
+			refused = true
+		}
+	}
+	return responsesFinishReason(resp.Status, resp.IncompleteDetails, calls, refused)
+}
+
+// responsesFinishReason is the finish reason of a response with this status and incomplete_details whose output holds a tool call (calls) or a message with a refusal part (refused).
+func responsesFinishReason(status ResponsesStatus, incomplete *ResponsesIncompleteDetails, calls, refused bool) v1.FinishReason {
+	switch status {
 	case ResponsesStatusCompleted:
-		refused := false
-		for _, it := range resp.Output {
-			if it == nil {
-				continue
-			}
-			switch it.ResponsesItemType() {
-			case ResponsesItemTypeFunctionCall, ResponsesItemTypeCustomToolCall:
-				return v1.FinishReasonToolCalls
-			}
-			if m, ok := it.(*ResponsesMessage); ok && responsesHasRefusalPart(m) {
-				refused = true
-			}
+		if calls {
+			return v1.FinishReasonToolCalls
 		}
 		// The refusal part's text maps to plain output text, so the
 		// finish_reason is the only place the refusal survives (rule 9).
@@ -156,8 +164,8 @@ func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
 		return v1.FinishReasonStop
 	case ResponsesStatusIncomplete:
 		var reason string
-		if resp.IncompleteDetails != nil {
-			reason = resp.IncompleteDetails.Reason
+		if incomplete != nil {
+			reason = incomplete.Reason
 		}
 		switch reason {
 		case "content_filter":
