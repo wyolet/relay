@@ -1,0 +1,28 @@
+{
+  "id": "resp_audio",
+  "object": "response",
+  "created_at": 1741476542,
+  "status": "completed",
+  "model": "gpt-5-2025-08-07",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_audio",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "text": "Here it is.", "annotations": [], "logprobs": []},
+        {"type": "output_audio", "data": "UklGRg==", "transcript": "Here it is."}
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_audio",
+      "call_id": "call_audio",
+      "name": "save_clip",
+      "arguments": "{\"name\":\"clip\"}",
+      "status": "completed"
+    }
+  ],
+  "usage": {"input_tokens": 40, "output_tokens": 12, "total_tokens": 52}
+}

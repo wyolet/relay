@@ -168,6 +168,16 @@ func (p *ResponsesRefusalPart) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire{Type: ResponsesPartTypeRefusal, Refusal: p.Refusal})
 }
 
+// ResponsesRawPart carries a content part whose `type` the adapter does not model (output_audio, any future type), captured on parse and re-emitted byte-for-byte on marshal, so one such part does not fail the parse of the whole response and lose its usage and finish reason. It has no canonical representation: the response path drops it at responsesPartToCanonical (annotated) and the request path refuses it.
+type ResponsesRawPart struct {
+	Type ResponsesPartType
+	Raw  json.RawMessage
+}
+
+func (*ResponsesRawPart) isResponsesPart()                       {}
+func (r *ResponsesRawPart) ResponsesPartType() ResponsesPartType { return r.Type }
+func (r *ResponsesRawPart) MarshalJSON() ([]byte, error)         { return r.Raw, nil }
+
 // responsesUnmarshalContent normalizes a content field (string or []ResponsesPart) into []ResponsesPart.
 // Wire string "hello" → []ResponsesPart{&ResponsesTextPart{Text:"hello"}}.
 func responsesUnmarshalContent(raw json.RawMessage) ([]ResponsesPart, error) {
@@ -196,15 +206,6 @@ func responsesUnmarshalContent(raw json.RawMessage) ([]ResponsesPart, error) {
 		parts = append(parts, p)
 	}
 	return parts, nil
-}
-
-// responsesPartTypeDecodes reports whether responsesUnmarshalPart decodes a part of type t rather than failing on it.
-func responsesPartTypeDecodes(t ResponsesPartType) bool {
-	switch t {
-	case ResponsesPartTypeInputText, ResponsesPartTypeInputImage, ResponsesPartTypeInputFile, ResponsesPartTypeOutputText, ResponsesPartTypeRefusal:
-		return true
-	}
-	return false
 }
 
 // responsesUnmarshalPart dispatches to the correct ResponsesPart concrete type.
@@ -247,6 +248,7 @@ func responsesUnmarshalPart(data []byte) (ResponsesPart, error) {
 		}
 		return &v, nil
 	default:
-		return nil, fmt.Errorf("unsupported part type %q", probe.Type)
+		// Copy the bytes: the source slice may alias a larger buffer that the caller reuses.
+		return &ResponsesRawPart{Type: probe.Type, Raw: append(json.RawMessage(nil), data...)}, nil
 	}
 }
