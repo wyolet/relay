@@ -19,8 +19,13 @@ type scanResult struct {
 }
 
 // scanChunks feeds b to a fresh scanner in the chunks given by cuts (ascending offsets).
-func scanChunks(b []byte, cuts []int) scanResult {
-	var s modelScanner
+func scanChunks(b []byte, cuts []int) scanResult { return scanChunksMode(b, cuts, false) }
+
+// scanChunksExact is scanChunks as proxy mode scans, with exactKey.
+func scanChunksExact(b []byte, cuts []int) scanResult { return scanChunksMode(b, cuts, true) }
+
+func scanChunksMode(b []byte, cuts []int, exactKey bool) scanResult {
+	s := modelScanner{exactKey: exactKey}
 	res := scanResult{closeAt: -1}
 	start := 0
 	for _, end := range append(cuts, len(b)) {
@@ -59,11 +64,14 @@ func TestModelScanner(t *testing.T) {
 		{"string ending in escaped backslash", `{"a":"\\\\","model":"m"}`, "m", ""},
 		{"escaped quote then backslash", `{"a":"\\\"\\","model":"m"}`, "m", ""},
 		{"key holding model", `{"model_x":"a","xmodel":"b","model":"m"}`, "m", ""},
-		{"unicode escaped key", `{"model":"m"}`, "m", ""},
-		{"unicode escaped duplicate", `{"model":"a","model":"b"}`, "", "duplicate_model"},
+		{"unicode escaped key", `{"` + uEscape("006d") + `odel":"m"}`, "m", ""},
+		{"unicode escaped duplicate", `{"model":"a","` + uEscape("006D") + `od` + uEscape("0065") + `l":"b"}`, "", "duplicate_model"},
+		{"escaped other case", `{"` + uEscape("004d") + `ODEL":"m"}`, "m", ""},
 		{"case-insensitive key", `{"Model":"m"}`, "m", ""},
 		{"case-insensitive duplicate", `{"model":"a","MODEL":"b"}`, "", "duplicate_model"},
-		{"unicode escapes in value", `{"model":"gpt-4\/o"}`, "gpt-4/o", ""},
+		{"other case first, then exact", `{"Model":"a","model":"b"}`, "", "duplicate_model"},
+		{"unicode escapes in value", `{"model":"gpt` + uEscape("002d") + `4\/o"}`, "gpt-4/o", ""},
+		{"escaped non-ascii value", `{"model":"mod` + uEscape("00e8") + `l"}`, "modèl", ""},
 		{"non-ascii value", `{"model":"modèl"}`, "modèl", ""},
 		{"duplicate at depth 1", `{"model":"a","x":{"y":[1]},"model":"b"}`, "", "duplicate_model"},
 		{"null then string", `{"model":null,"model":"x"}`, "", "duplicate_model"},
@@ -120,9 +128,28 @@ func TestModelScanner(t *testing.T) {
 			if got := scanChunks(b, bytewise); got != whole {
 				t.Fatalf("byte by byte: %+v, whole: %+v", got, whole)
 			}
+
+			wantExact := tc.code
+			if c, ok := exactKeyCodes[tc.name]; ok {
+				wantExact = c
+			}
+			if got := scanChunksExact(b, nil); got.code != wantExact {
+				t.Fatalf("exact key: code %q, want %q", got.code, wantExact)
+			}
 		})
 	}
 }
+
+// exactKeyCodes are the TestModelScanner cases proxy mode's exact-key scan answers differently.
+var exactKeyCodes = map[string]string{
+	"unicode escaped key":          "invalid_model_key",
+	"escaped other case":           "invalid_model_key",
+	"case-insensitive key":         "invalid_model_key",
+	"other case first, then exact": "invalid_model_key",
+}
+
+// uEscape is the JSON \u escape of the code point hex, assembled at run time so no editor or tool turns it into the character it names.
+func uEscape(hex string) string { return `\` + "u" + hex }
 
 func TestModelScanner_DeepNesting(t *testing.T) {
 	for _, depth := range []int{63, 64, 65, 200} {
@@ -212,7 +239,7 @@ func FuzzModelScanner(f *testing.F) {
 	for _, seed := range []string{
 		`{"model":"m"}`,
 		`{"messages":[{"role":"user","content":"a \"model\": {x}"}],"model":"m"}`,
-		`{"model":"a","model":"b"}`,
+		`{"model":"a","` + uEscape("006d") + `odel":"b"}`,
 		`{"Model":"a","x":{"model":"b"}}`,
 		`{"a":"\\\\\"","model":"m","n":[1,-2.5e3,true,null]}`,
 		`{"model":null}`,
@@ -222,6 +249,10 @@ func FuzzModelScanner(f *testing.F) {
 		f.Add([]byte(seed), uint64(1))
 	}
 	f.Fuzz(func(t *testing.T, b []byte, seed uint64) {
+		// Larger inputs add no states, and minimizing one stalls the fuzzer.
+		if len(b) > 1<<10 {
+			return
+		}
 		whole := scanChunks(b, nil)
 
 		rng := rand.New(rand.NewPCG(seed, seed>>1|1))
@@ -232,6 +263,10 @@ func FuzzModelScanner(f *testing.F) {
 		}
 		if got := scanChunks(b, cuts); got != whole {
 			t.Fatalf("chunked %v: %+v, whole: %+v", cuts, got, whole)
+		}
+		// Proxy mode's scan answers the same, or refuses a model key spelled other than `model`.
+		if exact := scanChunksExact(b, cuts); exact != whole && exact.code != errModelKeySpelling.code {
+			t.Fatalf("exact key: %+v, plain: %+v on %q", exact, whole, b)
 		}
 
 		model, code, ok := referenceScan(b)
@@ -274,6 +309,9 @@ func FuzzModelScanner_ValidObjects(f *testing.F) {
 		if got := scanChunks(b, cuts); got != whole {
 			t.Fatalf("chunked %v: %+v, whole: %+v on %q", cuts, got, whole, b)
 		}
+		if got, want := scanChunksExact(b, cuts).code, g.exactKeyCode(code); got != want {
+			t.Fatalf("exact key: %q, want %q on %q", got, want, b)
+		}
 	})
 }
 
@@ -289,18 +327,48 @@ func TestModelScanner_AgreesOnGeneratedObjects(t *testing.T) {
 		if got := scanChunks(b, nil); got.code != code || got.model != model && code == "" {
 			t.Fatalf("seed %d: scanner (%q, %q: %s), encoding/json (%q, %q) on %q", seed, got.model, got.code, got.msg, model, code, b)
 		}
+		if got, want := scanChunksExact(b, nil).code, g.exactKeyCode(code); got != want {
+			t.Fatalf("seed %d: exact key: %q, want %q on %q", seed, got, want, b)
+		}
 	}
 }
 
 // jsonGen writes random valid JSON whose top-level keys are biased towards spellings of "model".
 type jsonGen struct {
-	rng *rand.Rand
-	out bytes.Buffer
+	rng     *rand.Rand
+	out     bytes.Buffer
+	topKeys []string // the top-level keys written, as JSON string literals
 }
 
-var genKeys = []string{`"model"`, `"Model"`, `"MODEL"`, `"model"`, `"model"`, `"messages"`, `"x"`, `"modelx"`, `"m\"odel"`, `"mod"`, `"\\model"`}
+// exactKeyCode is what proxy mode's exact-key scan answers for the generated object, given the plain scan's code: refused when a model key is spelled other than `model` and nothing refused it earlier.
+func (g *jsonGen) exactKeyCode(plain string) string {
+	seen := 0
+	for _, k := range g.topKeys {
+		var name string
+		if err := json.Unmarshal([]byte(k), &name); err != nil || !strings.EqualFold(name, "model") {
+			continue
+		}
+		if seen++; seen > 1 {
+			return plain
+		}
+		if k != `"model"` {
+			return "invalid_model_key"
+		}
+	}
+	return plain
+}
 
-var genStrings = []string{`""`, `"m"`, `"gpt-4o"`, `"a \"model\": {\"x\"}"`, `"\\"`, `"\\\\\""`, `"{[,:]}"`, `"café"`, `"😀"`, `"tab\there\nnewline"`, `"modèl"`, `"\/"`}
+var genKeys = []string{
+	`"model"`, `"model"`, `"Model"`, `"MODEL"`,
+	`"` + uEscape("006d") + `odel"`, `"mod` + uEscape("0065") + `l"`, `"` + uEscape("004D") + `ODEL"`,
+	`"messages"`, `"x"`, `"modelx"`, `"m\"odel"`, `"mod"`, `"\\model"`, `"` + uEscape("006d") + `odelx"`,
+}
+
+var genStrings = []string{
+	`""`, `"m"`, `"gpt-4o"`, `"a \"model\": {\"x\"}"`, `"\\"`, `"\\\\\""`, `"{[,:]}"`,
+	`"caf` + uEscape("00e9") + `"`, `"` + uEscape("d83d") + uEscape("de00") + `"`, `"café"`, `"modèl"`,
+	`"tab\there\nnewline"`, `"\/"`, `"` + uEscape("0022") + `model` + uEscape("0022") + `"`,
+}
 
 func (g *jsonGen) ws() {
 	for range g.rng.IntN(3) {
@@ -320,7 +388,11 @@ func (g *jsonGen) object(depth int, top bool) {
 			g.out.WriteByte(',')
 		}
 		g.ws()
-		g.out.WriteString(genKeys[g.rng.IntN(len(genKeys))])
+		key := genKeys[g.rng.IntN(len(genKeys))]
+		if top {
+			g.topKeys = append(g.topKeys, key)
+		}
+		g.out.WriteString(key)
 		g.ws()
 		g.out.WriteByte(':')
 		g.value(depth + 1)
@@ -388,7 +460,7 @@ func BenchmarkModelScanner(b *testing.B) {
 			b.SetBytes(int64(len(tc.body)))
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := scanModel(tc.body); err != nil {
+				if _, err := scanModel(tc.body, false); err != nil {
 					b.Fatal(err)
 				}
 			}

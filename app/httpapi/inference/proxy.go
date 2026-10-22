@@ -454,7 +454,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 		return plan, proxyBody{Reader: reqbody.NewReader(prefix), Prefix: prefix}, nil
 	}
 
-	scan := &modelScanner{}
+	scan := &modelScanner{exactKey: true}
 	closeAt := scan.feed(prefix)
 	if scan.err != nil {
 		return nil, proxyBody{}, proxyBodyResolveErr(scan.err)
@@ -498,7 +498,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 }
 
 func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
-	model, err := scanModel(body)
+	model, err := scanModel(body, true)
 	if err != nil {
 		return nil, proxyBodyResolveErr(err)
 	}
@@ -509,6 +509,8 @@ func proxyBodyResolveErr(e *bodyError) error {
 	switch e {
 	case errDuplicateModel:
 		return &errProxyHostResolve{Reason: "duplicate_model", Detail: e.msg}
+	case errModelKeySpelling:
+		return &errProxyHostResolve{Reason: "invalid_model_key", Detail: e.msg}
 	case errMissingModel:
 		return &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
 	}
@@ -542,7 +544,7 @@ func mapProxyResolveErr(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "body_read", e.Error())
 	case "body_too_large":
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "body_too_large", e.Detail)
-	case "body_not_json", "missing_model", "duplicate_model":
+	case "body_not_json", "missing_model", "duplicate_model", "invalid_model_key":
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", e.Reason, e.Detail)
 	case "routing":
 		// Re-map the inner routing sentinel to the same envelope the

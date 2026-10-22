@@ -66,6 +66,25 @@ func TestHandleShape_ProxyMode_DuplicateModel(t *testing.T) {
 	}
 }
 
+// Proxy mode forwards the body as sent, so a model key a case-sensitive upstream would not read is refused; normal mode rewrites the key and routes it.
+func TestHandleShape_ModelKeySpelling(t *testing.T) {
+	cat, _ := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	d := buildDeps(t, cat)
+	for _, body := range []string{`{"Model":"test-model","messages":[]}`, `{"` + uEscape("006d") + `odel":"test-model","messages":[]}`} {
+		r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(body))
+		r = r.WithContext(WithClassification(r.Context(), Classification{Mode: ModeProxyAnonymous, UpstreamAuth: "Bearer k", UpstreamHost: "openai"}))
+		w := httptest.NewRecorder()
+		handleShape(d.Specs.Spec(adapters.OpenAI), d, w, r)
+		if w.Code != http.StatusBadRequest || parseDispatchErr(t, w.Body.Bytes()).Error.Code != "invalid_model_key" {
+			t.Fatalf("proxy mode, %s: status %d %s, want 400 invalid_model_key", body, w.Code, w.Body)
+		}
+
+		if m, _, err := extractModelStream([]byte(body)); err != nil || m != "test-model" {
+			t.Fatalf("normal mode, %s: (%q, %v), want the model", body, m, err)
+		}
+	}
+}
+
 // Past the peek window the body streams upstream while it is checked: a second model there aborts the forward with the body incomplete, refunds the reservation and records the refusal, not a success.
 func TestHandleProxy_DuplicateModelPastThePeekWindow(t *testing.T) {
 	type upstreamSaw struct {

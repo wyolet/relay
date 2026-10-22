@@ -75,6 +75,8 @@ func TestResolveProxyHostByPolicy_BodyLadder(t *testing.T) {
 		{"not json", []byte("not-json"), "body_not_json", false},
 		{"missing model", []byte(`{"messages":[]}`), "missing_model", false},
 		{"small duplicate", []byte(`{"model":"test-model","model":"other"}`), "duplicate_model", false},
+		{"model key in other case", []byte(`{"Model":"test-model"}`), "invalid_model_key", false},
+		{"large model key in other case", []byte(`{"MODEL":"test-model","messages":[{"role":"user","content":"` + strings.Repeat("a", 2<<20) + `"}]}`), "invalid_model_key", false},
 		{"large duplicate in the window", append([]byte(`{"model":"test-model","model":"other",`), proxyTestBody("x", 2<<20, false)[1:]...), "duplicate_model", false},
 		{"large model last, duplicate", []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("a", 2<<20) + `"}],"model":"test-model","model":"b"}`), "duplicate_model", false},
 	}

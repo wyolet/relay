@@ -94,6 +94,11 @@ func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapte
 // errDuplicateModel: encoding/json keeps the last, and the bytes a byte-pass
 // forwards may be read differently upstream.
 func extractModelStream(body []byte) (model string, stream bool, err error) {
+	return parseModelStream(body, false)
+}
+
+// parseModelStream is extractModelStream; exactKey refuses a model key spelled other than `model`, for proxy mode, which forwards the body unchanged.
+func parseModelStream(body []byte, exactKey bool) (model string, stream bool, err error) {
 	var probe struct {
 		Model      string `json:"model"`
 		Stream     *bool  `json:"stream"`
@@ -102,9 +107,9 @@ func extractModelStream(body []byte) (model string, stream bool, err error) {
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return "", false, fmt.Errorf("invalid JSON: %w", err)
 	}
-	var scan modelScanner
-	if scan.feed(body); scan.err == errDuplicateModel {
-		return "", false, errDuplicateModel
+	scan := modelScanner{exactKey: exactKey}
+	if scan.feed(body); scan.err == errDuplicateModel || scan.err == errModelKeySpelling {
+		return "", false, scan.err
 	}
 	s := probe.OutputMode == "stream"
 	if probe.Stream != nil {
@@ -127,7 +132,8 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	modelName, stream, err := extractModelStream(body)
+	mode := ClassificationFrom(r.Context()).Mode
+	modelName, stream, err := parseModelStream(body, mode == ModeProxyAuthed || mode == ModeProxyAnonymous)
 	if err != nil {
 		writeModelParseErr(w, err)
 		return
@@ -154,8 +160,8 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 // writeModelParseErr answers an extractModelStream error.
 func writeModelParseErr(w http.ResponseWriter, err error) {
 	code := "parse_error"
-	if errors.Is(err, errDuplicateModel) {
-		code = errDuplicateModel.code
+	if be := (*bodyError)(nil); errors.As(err, &be) {
+		code = be.code
 	}
 	WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", code, err.Error())
 }

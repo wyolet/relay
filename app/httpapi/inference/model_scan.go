@@ -20,9 +20,10 @@ type bodyError struct {
 func (e *bodyError) Error() string { return e.msg }
 
 var (
-	errDuplicateModel = &bodyError{http.StatusBadRequest, "duplicate_model", "request body has more than one top-level 'model' field"}
-	errMissingModel   = &bodyError{http.StatusBadRequest, "missing_model", "field 'model' is required"}
-	errModelNotString = &bodyError{http.StatusBadRequest, "parse_error", "invalid JSON: field 'model' must be a string"}
+	errDuplicateModel   = &bodyError{http.StatusBadRequest, "duplicate_model", "request body has more than one top-level 'model' field"}
+	errMissingModel     = &bodyError{http.StatusBadRequest, "missing_model", "field 'model' is required"}
+	errModelNotString   = &bodyError{http.StatusBadRequest, "parse_error", "invalid JSON: field 'model' must be a string"}
+	errModelKeySpelling = &bodyError{http.StatusBadRequest, "invalid_model_key", "proxy mode forwards the body as sent: its top-level 'model' key must be spelled exactly \"model\", without escapes or other letter case"}
 )
 
 func jsonSyntaxError(format string, args ...any) *bodyError {
@@ -71,6 +72,9 @@ const (
 //
 // A second top-level model key is rejected: relay routes, meters and prices on one value while the upstream may honour the other. Keys match "model" case-insensitively, as encoding/json does. Strings are not checked for control characters or escape validity outside the keys and model value it decodes; an upstream rejects those bodies itself.
 type modelScanner struct {
+	// exactKey refuses a model key spelled other than the bytes `model`, for bodies forwarded as sent: a case-sensitive upstream would not see a model there and could serve its default.
+	exactKey bool
+
 	state    uint8
 	strKind  uint8
 	numState uint8
@@ -369,6 +373,10 @@ func (s *modelScanner) endString() {
 					s.err = errDuplicateModel
 					return
 				}
+				if s.exactKey && string(s.keyRaw) != "model" {
+					s.err = errModelKeySpelling
+					return
+				}
 				s.modelNext = true
 			}
 		}
@@ -528,8 +536,8 @@ func (s *modelScanner) stepNumber(c byte) bool {
 }
 
 // scanModel scans a whole body and returns its single top-level model.
-func scanModel(body []byte) (string, *bodyError) {
-	var s modelScanner
+func scanModel(body []byte, exactKey bool) (string, *bodyError) {
+	s := modelScanner{exactKey: exactKey}
 	s.feed(body)
 	if err := s.finish(); err != nil {
 		return "", err
