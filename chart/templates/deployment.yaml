@@ -95,11 +95,23 @@ spec:
             failureThreshold: 3
           # Liveness is process-only (/livez has NO backend dependency): a PG/DNS
           # blip must NOT kill a healthy process — that cascades restarts
-          # exactly when the backend is stressed. Requires relay >= 0.9.4.
+          # exactly when the backend is stressed. It probes the control port so
+          # a pod whose inference listener is at RELAY_MAX_CONNS is not restarted
+          # for being busy; a RELAY_CONTROL_LISTEN_HOST override may keep that
+          # port off the pod IP, so it falls back to the inference port then.
+          {{- $controlHostSet := false }}
+          {{- range .Values.relay.extraEnv }}
+          {{- if and (eq .name "RELAY_CONTROL_LISTEN_HOST") .value }}{{ $controlHostSet = true }}{{ end }}
+          {{- end }}
           livenessProbe:
             httpGet:
+              {{- if $controlHostSet }}
               path: /livez
               port: http
+              {{- else }}
+              path: /api/livez
+              port: control
+              {{- end }}
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 5

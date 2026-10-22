@@ -108,17 +108,17 @@ Procedures for upgrades that need every old pod stopped, for rolling the schema 
 
 ## Health probes
 
-| Probe | Path (inference port) | Settings |
+| Probe | Path | Settings |
 | --- | --- | --- |
-| Startup | `/healthz` | Every 5 s, up to 30 failures, to cover first-boot migrations and catalog seeding. `503` until Postgres answers and the catalog has loaded. |
-| Readiness | `/healthz` | Every 5 s. Once a pod has been ready, Postgres no longer counts: the data plane serves from the in-memory catalog, so a Postgres outage leaves every pod in the Service. Postgres health stays on the control port's `/api/healthz`. |
-| Liveness | `/livez` | Every 20 s, 5 failures. Checks only that the process serves, so a Postgres or DNS outage never restarts healthy pods. |
+| Startup | `/healthz` (inference port) | Every 5 s, up to 30 failures, to cover first-boot migrations and catalog seeding. `503` until Postgres answers and the catalog has loaded. |
+| Readiness | `/healthz` (inference port) | Every 5 s. Once a pod has been ready, Postgres no longer counts: the data plane serves from the in-memory catalog, so a Postgres outage leaves every pod in the Service. Postgres health stays on the control port's `/api/healthz`. |
+| Liveness | `/api/livez` (control port) | Every 20 s, 5 failures. Checks only that the process serves, so a Postgres or DNS outage never restarts healthy pods, and a pod whose inference listener is at its connection cap is not restarted for being busy. When `relay.extraEnv` sets `RELAY_CONTROL_LISTEN_HOST`, the probe uses `/livez` on the inference port instead, since the control port may not be reachable on the pod IP. |
 
 ## Scaling
 
 - The chart enables a HorizontalPodAutoscaler by default (`autoscaling`: 2 to 10 replicas at 70% CPU) and a PodDisruptionBudget (`minAvailable: 1`). `replicaCount` applies only with autoscaling off. A topology spread constraint spreads replicas across nodes.
 - `goMemLimit` (default `900MiB`) sets `GOMEMLIMIT`; keep it below the container memory limit (`resources.limits.memory`, default `1Gi`).
-- Each pod caps open inference connections at one per 64 KiB of `goMemLimit` (14400 at the default); set `relay.maxConns` to change it. Past the cap, new connections wait until one closes, health probes included.
+- Each pod caps open inference connections at one per 64 KiB of `goMemLimit` (14400 at the default); set `relay.maxConns` to change it. Past the cap, new connections wait until one closes. The startup and readiness probes wait too, so a pod held at the cap leaves the Service; liveness probes the control port and does not restart it.
 - Each pod caps in-flight inference requests at 2048 and answers the excess with `429` and `Retry-After: 1`. To change the cap, set `RELAY_MAX_INFLIGHT` through `relay.extraEnv`.
 - Keep `relay.pgMaxConns` (default 10 per pod) times the replica count below the Postgres `max_connections` (100 on the bundled Postgres).
 - Catalog and settings changes made through any pod reach every other pod through Postgres `LISTEN`/`NOTIFY`, usually within about a second. No configuration is needed for this.
