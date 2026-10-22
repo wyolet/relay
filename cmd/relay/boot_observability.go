@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"os"
+	"runtime/debug"
 
 	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -71,8 +73,8 @@ func payloadCHBootConfig(cfg *config.Config) payloadCHBoot {
 }
 
 func buildPayloadLog(listenerCtx context.Context, cat *appcatalog.Catalog, stores *appcatalog.Stores, lifecycleReg *lifecycle.Registry,
-	payloadCHBootCfg payloadCHBoot) *payloadlog.Controller {
-	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets, payloadCHBootCfg), slog.Default())
+	payloadCHBootCfg payloadCHBoot, queue payloadlog.EmitterOptions) *payloadlog.Controller {
+	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets, payloadCHBootCfg), queue, slog.Default())
 	lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(payloadCtl))
 	lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadCtl.Emitter()))
 	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
@@ -121,6 +123,7 @@ func registerMetrics(lifecycleReg *lifecycle.Registry, usageCtl *usagelog.Contro
 	metrics.RegisterQueueDepth("usage", func() float64 { return float64(usageCtl.Emitter().QueueDepth()) })
 	metrics.RegisterQueueDepth("usage_refused", func() float64 { return float64(usageCtl.Emitter().RefusedQueueDepth()) })
 	metrics.RegisterQueueDepth("payload", func() float64 { return float64(payloadCtl.Emitter().QueueDepth()) })
+	metrics.RegisterQueueDepth("payload_refused", func() float64 { return float64(payloadCtl.Emitter().RefusedQueueDepth()) })
 	slog.Debug("metricslog: observer wired (/metrics on control plane)")
 }
 
@@ -134,4 +137,30 @@ func buildAudit(st *storagemod.Storage, cat *appcatalog.Catalog) (*audit.Store, 
 		auditEmitter.SetRetentionDays(a.RetentionDays)
 	}, slog.Default()).Start()
 	return auditStore, auditEmitter
+}
+
+// payloadSlotBytes is the memory assumed per queued payload record: a request with some conversation history plus its response. A record can hold up to twice the payload-logging per-body cap, so this is an average, not a bound.
+const payloadSlotBytes = 64 << 10
+
+const (
+	minDerivedPayloadQueue = 256
+	// noMemLimitPayloadQueue applies when no memory limit is set, so the budget has nothing to divide.
+	noMemLimitPayloadQueue = 1024
+)
+
+// payloadQueueOptions sizes the payload emitter's queues from RELAY_PAYLOAD_QUEUE_SIZE and RELAY_PAYLOAD_REFUSED_QUEUE_SIZE.
+func payloadQueueOptions(cfg *config.Config) payloadlog.EmitterOptions {
+	return payloadlog.EmitterOptions{QueueSize: payloadQueueSize(cfg.PayloadQueueSize), RefusedQueueSize: cfg.PayloadRefusedQueueSize}
+}
+
+// payloadQueueSize is RELAY_PAYLOAD_QUEUE_SIZE when set, else as many records as fit in 1/16 of the Go memory limit (GOMEMLIMIT) at payloadSlotBytes each, and at least 256.
+func payloadQueueSize(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 {
+		return noMemLimitPayloadQueue
+	}
+	return max(minDerivedPayloadQueue, int(limit/16/payloadSlotBytes))
 }

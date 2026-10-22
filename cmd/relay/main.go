@@ -121,7 +121,8 @@ func main() {
 	// opt-in resolved at the inference entry. S3 credentials resolve through
 	// the shared secret registry.
 	payloadCHBootCfg := payloadCHBootConfig(cfg)
-	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg)
+	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg,
+		payloadQueueOptions(cfg))
 	defer payloadCtl.Close()
 
 	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
