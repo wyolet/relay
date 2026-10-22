@@ -123,10 +123,12 @@ Run the control plane on its own port (`RELAY_CONTROL_PORT`) behind your network
 
 | Value | Behaviour |
 | --- | --- |
-| `single` (default) | Every authenticated caller may perform every action. Access is controlled at your network boundary. |
+| `single` (default) | Every authenticated caller may perform every action, including binding the `admin` role to themselves. Access is controlled at your network boundary. For installs with one operator. |
 | `rbac` | Each action is checked against the caller's role bindings. Anything not granted is denied. |
 
 The admin bearer and any user holding the `admin` role pass every check in both modes, so a new `rbac` deployment cannot lock itself out.
+
+Use `rbac` as soon as more than one person signs in.
 
 <Note>
 `RELAY_MULTI_USER` is deprecated. When `RELAY_AUTHZ` is unset, a truthy `RELAY_MULTI_USER` is read as `RELAY_AUTHZ=rbac` with a startup warning. Set `RELAY_AUTHZ` explicitly.
