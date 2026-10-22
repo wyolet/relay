@@ -81,7 +81,13 @@ for _ in $(seq "$BOOT_TIMEOUT_S"); do
 done
 [ "$seeded" = "$CATALOG_VERSION" ] || fail "catalog $CATALOG_VERSION not seeded within ${BOOT_TIMEOUT_S}s (marker: '${seeded}')"
 
-curl -fsS "$data/healthz" >/dev/null || fail "GET /healthz failed"
+# /healthz turns ready only once the seeded catalog's snapshot is installed, a moment after the marker.
+ready=
+for _ in $(seq "$BOOT_TIMEOUT_S"); do
+  curl -fsS "$data/healthz" >/dev/null 2>&1 && ready=1 && break
+  sleep 1
+done
+[ -n "$ready" ] || fail "GET /healthz not ready within ${BOOT_TIMEOUT_S}s"
 curl -fsS "$control/api/openapi.json" | jq -e '.paths | length > 0' >/dev/null || fail "GET /api/openapi.json has no paths"
 curl -fsS "$control/" | grep -qi '<html' || fail "control / does not serve the UI"
 models=$(curl -fsS -H "$auth" "$control/api/models" | jq '.total') || fail "GET /api/models failed"

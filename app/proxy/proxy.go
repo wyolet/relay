@@ -138,6 +138,15 @@ func New(limiter *pkgratelimit.Limiter, registry *lifecycle.Registry, logger *sl
 // ErrNoUpstreamAuth signals the handler forgot to populate UpstreamAuth.
 var ErrNoUpstreamAuth = errors.New("proxy: upstream authorization required")
 
+// BodyError is returned by a Request.Body reader that refuses the inbound body while it streams upstream, so the upstream received it incomplete. The failure is the caller's request, not the upstream; Kind names it in telemetry.
+type BodyError struct {
+	Kind string
+	Err  error
+}
+
+func (e *BodyError) Error() string { return e.Err.Error() }
+func (e *BodyError) Unwrap() error { return e.Err }
+
 // Run forwards one proxy-mode request. The returned Body MUST be Closed.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	// Failure telemetry: any error return (missing auth, rate-limit
@@ -312,7 +321,10 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 // the failure set is narrower than the pipeline's.
 func classifyFailure(err error) (kind string, status int) {
 	var exceeded *pkgratelimit.KeyQuotaExhausted
+	var body *BodyError
 	switch {
+	case errors.As(err, &body):
+		return body.Kind, 0
 	case errors.Is(err, ErrNoUpstreamAuth):
 		return "no_upstream_auth", 0
 	case errors.As(err, &exceeded):
