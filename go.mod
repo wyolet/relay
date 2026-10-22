@@ -2,7 +2,7 @@ module github.com/wyolet/relay
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 replace github.com/wyolet/relay/sdk => ./sdk
 
