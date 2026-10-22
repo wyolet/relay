@@ -20,8 +20,9 @@ const Namespace = "usage"
 // Registry attaches the returned *Event under Namespace. Storing happens
 // later, in SinkCollector.
 //
-// Canonical-first: token counts + finish reason come from
-// v1.ExtractSummary on the buffered body using the per-request
+// Canonical-first: token counts + finish reason come from the response
+// Summary the runner decoded once (lifecycle.Context.ResponseSummary), or
+// from v1.ExtractSummary on the buffered body using the per-request
 // Translator — no vendor-specific JSON/SSE branching at this layer.
 type UsageHook struct {
 	pricer   *Pricer
@@ -72,13 +73,14 @@ func stampInstance(ev *Event, instance string) {
 
 // buildEvent assembles the canonical usage Event from the per-request
 // Context plus this-request outcome (status/error/body). Used by the
-// post-flight UsageHook (buffered path): it re-parses the whole body via
-// v1.ExtractSummary. The streaming observer instead harvests the Summary
+// post-flight UsageHook (buffered path): it takes the Summary the runner
+// recorded on the Context, decoding the body via v1.ExtractSummary only
+// when none was. The streaming observer instead harvests the Summary
 // incrementally and calls buildEventWithSummary — same Event, same
 // Namespace, no retained body.
 func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body []byte, pricer *Pricer) *Event {
-	var sum v1.Summary
-	if lc.Translator != nil && len(body) > 0 {
+	sum, ok := lc.ResponseSummary()
+	if !ok && lc.Translator != nil && len(body) > 0 {
 		if s, err := v1.ExtractSummary(lc.Translator, body); err == nil {
 			sum = s
 		}

@@ -9,8 +9,10 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqbody"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // PipelineAdapter returns a pipeline.Adapter backed by this spec's upstream
@@ -30,7 +32,10 @@ type specAdapter struct {
 	spec *Spec
 }
 
-var _ pipeline.Adapter = (*specAdapter)(nil)
+var (
+	_ pipeline.Adapter            = (*specAdapter)(nil)
+	_ pipeline.ResponseSummarizer = (*specAdapter)(nil)
+)
 
 // Call issues POST {baseURL}{path}: the host's own path when set (hostPath
 // non-nil, verbatim — an explicit "" appends nothing), else the shape default
@@ -114,6 +119,21 @@ func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {
 		return nil
 	}
 	return a.spec.ExtractTokens(body)
+}
+
+// SummarizeResponse reads a buffered upstream body's Summary with the spec's translator, from where the shape keeps it when it can, counting the bodies that needed the full decode. false means the spec has no translator to read it with.
+func (a *specAdapter) SummarizeResponse(body []byte) (v1.Summary, bool) {
+	if a.spec.Translator == nil {
+		return v1.Summary{}, false
+	}
+	sum, fellBack, err := v1.ExtractSummaryEndsFirst(a.spec.Translator, body)
+	if fellBack {
+		metrics.UsageExtractFallback(string(a.spec.Name))
+	}
+	if err != nil {
+		return v1.Summary{}, true
+	}
+	return sum, true
 }
 
 // Retryable classifies upstream HTTP responses for the pipeline retry loop.

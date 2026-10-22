@@ -42,6 +42,7 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // TokenExtractor extracts upstream usage from a response body. The
@@ -50,6 +51,24 @@ import (
 // /v1/messages) and passes it in.
 type TokenExtractor interface {
 	ExtractTokens(body []byte) sdkusage.Tokens
+}
+
+// ResponseSummarizer is the optional capability of a TokenExtractor that reads a response's canonical Summary, which then serves both the commit and the usage hook. false means it has no translator for the body.
+type ResponseSummarizer interface {
+	SummarizeResponse(body []byte) (v1.Summary, bool)
+}
+
+// responseSummary returns the Summary e reads from body, recorded on lc so the usage hook does not decode the body again.
+func responseSummary(lc *lifecycle.Context, e TokenExtractor, body []byte) (v1.Summary, bool) {
+	rs, ok := e.(ResponseSummarizer)
+	if !ok {
+		return v1.Summary{}, false
+	}
+	s, ok := rs.SummarizeResponse(body)
+	if ok {
+		lc.SetResponseSummary(s)
+	}
+	return s, ok
 }
 
 // Request is the pre-resolved input to Run.
@@ -287,8 +306,11 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 		)
 	}
 
+	// One decode of the body serves the commit below and the usage hook.
 	var tokens sdkusage.Tokens
-	if req.Extractor != nil {
+	if sum, ok := responseSummary(req.Lifecycle, req.Extractor, body); ok {
+		tokens = sum.Tokens
+	} else if req.Extractor != nil {
 		tokens = req.Extractor.ExtractTokens(body)
 	}
 

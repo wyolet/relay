@@ -517,6 +517,21 @@ func TestBufferCanonical_FlatUsage(t *testing.T) {
 	}
 }
 
+// The cross-shape handler decodes the upstream body to translate it; its Summary is recorded so post-flight does not decode the tee'd copy again.
+func TestBufferCanonical_RecordsResponseSummary(t *testing.T) {
+	lc := lifecycle.NewContext("req", "pipeline", time.Now())
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	r = r.WithContext(lifecycle.ContextWith(r.Context(), lc))
+
+	bufferCanonical(Deps{}, httptest.NewRecorder(), r, io.NopCloser(strings.NewReader(rawUpstreamBody)), http.StatusOK, false, nil,
+		okUpstreamTranslator{}, pkgrelay.IdentityTranslator{})
+
+	sum, ok := lc.ResponseSummary()
+	if !ok || sum.Tokens["input"] != 10 || sum.Tokens["output"] != 5 {
+		t.Fatalf("response Summary %+v recorded=%v, want the translated usage", sum, ok)
+	}
+}
+
 // TestForwardUpstreamError_ForwardsBodyVerbatim guards the swallowed-error fix:
 // on an upstream 4xx the cross-shape path must relay the provider's error body
 // (and status) verbatim, not run success-shaped translation that discards the

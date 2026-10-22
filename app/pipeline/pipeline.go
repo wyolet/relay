@@ -30,6 +30,7 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
@@ -644,12 +645,13 @@ func (p *Pipeline) runPostFlight(
 	defer cancel()
 
 	// Rate-limit tokens: for streamed requests the StreamSession already
-	// extracted them incrementally (no buffered body to parse); the buffered
-	// path re-parses the full body via the adapter. body is nil in the stream
-	// case, so ExtractTokens is never handed an empty buffer.
+	// extracted them incrementally (no buffered body to parse); a buffered
+	// body is summarized once, and the usage hook reuses that Summary.
 	var tokens sdkusage.Tokens
 	if t, ok := req.Lifecycle.StreamTokens(); ok {
 		tokens = sdkusage.Tokens(t)
+	} else if sum, ok := responseSummary(req.Lifecycle, req.Adapter, body); ok {
+		tokens = sum.Tokens
 	} else {
 		tokens = req.Adapter.ExtractTokens(body)
 	}
@@ -690,6 +692,27 @@ func (p *Pipeline) runPostFlight(
 	if p.HostHealth != nil && req.Host != nil {
 		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
 	}
+}
+
+// ResponseSummarizer is the optional capability of an Adapter that reads the canonical Summary of a buffered response, so post-flight decodes the body once for the rate-limit commit and usage alike. false means it has no translator for the body; the caller then uses ExtractTokens.
+type ResponseSummarizer interface {
+	SummarizeResponse(body []byte) (v1.Summary, bool)
+}
+
+// responseSummary returns the buffered response's Summary: the one the handler already decoded, else the one a reads, recorded on lc for the usage hook.
+func responseSummary(lc *lifecycle.Context, a Adapter, body []byte) (v1.Summary, bool) {
+	if s, ok := lc.ResponseSummary(); ok {
+		return s, true
+	}
+	rs, ok := a.(ResponseSummarizer)
+	if !ok {
+		return v1.Summary{}, false
+	}
+	s, ok := rs.SummarizeResponse(body)
+	if ok {
+		lc.SetResponseSummary(s)
+	}
+	return s, ok
 }
 
 // fireFailure emits a post-flight observer event for a request that

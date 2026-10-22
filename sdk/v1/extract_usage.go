@@ -62,16 +62,19 @@ func ExtractSummary(tr Translator, body []byte) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	return summarizeDecoded(tr, body), nil
+}
 
+// summarizeDecoded is ExtractSummary's full decode of an already decompressed body.
+func summarizeDecoded(tr Translator, body []byte) Summary {
 	if !looksLikeSSE(body) {
 		resp, err := tr.ParseResponse(body)
 		if err != nil || resp == nil {
-			return Summary{}, nil
+			return Summary{}
 		}
-		return Summary{Tokens: resp.Usage, FinishReason: resp.FinishReason, ServiceTier: resp.ServiceTier}, nil
+		return Summary{Tokens: resp.Usage, FinishReason: resp.FinishReason, ServiceTier: resp.ServiceTier}
 	}
-
-	return extractSummaryFromSSE(tr, body), nil
+	return extractSummaryFromSSE(tr, body)
 }
 
 // extractSummaryFromSSE walks a vendor SSE body through the translator's

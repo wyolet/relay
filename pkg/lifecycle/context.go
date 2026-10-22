@@ -167,6 +167,10 @@ type Context struct {
 	streamSummary    v1.Summary
 	streamSummarySet bool
 
+	// responseSummary is a buffered response's Summary, decoded once by whichever reaches the body first (the handler translating it, or the runner's post-flight) and reused by the rate-limit commit and the usage hook.
+	responseSummary    v1.Summary
+	responseSummarySet bool
+
 	// ResponseStatus is the upstream HTTP status the runner stamps at
 	// post-flight, so an observer that runs when the post-flight Hook fan-out
 	// is skipped (a streamed request pre-fills the collected set) can still
@@ -265,6 +269,23 @@ func (c *Context) StreamSummary() (v1.Summary, bool) {
 		return v1.Summary{}, false
 	}
 	return c.streamSummary, c.streamSummarySet
+}
+
+// ResponseSummary returns the buffered response's Summary, and whether one was recorded. Nil-safe.
+func (c *Context) ResponseSummary() (v1.Summary, bool) {
+	if c == nil {
+		return v1.Summary{}, false
+	}
+	return c.responseSummary, c.responseSummarySet
+}
+
+// SetResponseSummary records the buffered response's Summary. It is not locked: set it on the post-flight goroutine, or before that goroutine starts. Nil-safe.
+func (c *Context) SetResponseSummary(s v1.Summary) {
+	if c == nil {
+		return
+	}
+	c.responseSummary = s
+	c.responseSummarySet = true
 }
 
 // setStreamSummary records the session's Summary. Package-private: only

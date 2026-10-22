@@ -2,9 +2,10 @@
 // event-stream rules, for the vendor adapters' to-canonical stream parsers and
 // usage walkers: events end at a blank line, an event's data is its data lines
 // joined with "\n", lines end in LF, CRLF or CR, and comments and unknown
-// fields are ignored. It is vendor-neutral and keeps no state across inputs;
-// reconnection (id, retry) and splitting a byte stream into chunks are out of
-// scope.
+// fields are ignored. EventFrames finds named events in a whole buffered
+// stream without splitting the rest. It is vendor-neutral and keeps no state
+// across inputs; reconnection (id, retry) and splitting a byte stream into
+// chunks are out of scope.
 package sse
 
 import "bytes"

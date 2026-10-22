@@ -396,11 +396,12 @@ test-race: ## unit tests under -race (all modules)
 # summary filters run on upstream bytes, are fuzzed; every fuzz target's seeds
 # and testdata/fuzz corpus also run as ordinary tests.
 FUZZ_TIME ?= 10s
-test-fuzz: ## fuzz the token parser, the bearer-to-principal resolver, the sealed-value opener and the stream summary filters ($(FUZZ_TIME) each)
+test-fuzz: ## fuzz the token parser, the bearer-to-principal resolver, the sealed-value opener, the stream summary filters and the usage ends readers ($(FUZZ_TIME) each)
 	cd auth && $(GO_TEST) -run '^$$' -fuzz '^FuzzParse$$' -fuzztime $(FUZZ_TIME) ./token
 	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 	cd secret && $(GO_TEST) -run '^$$' -fuzz '^FuzzOpen$$' -fuzztime $(FUZZ_TIME) ./aead
 	cd sdk && $(GO_TEST) -run '^$$' -fuzz '^FuzzSummaryFilter$$' -fuzztime $(FUZZ_TIME) ./adapters
+	cd sdk && $(GO_TEST) -run '^$$' -fuzz '^FuzzSummaryEnds$$' -fuzztime $(FUZZ_TIME) ./adapters
 
 test-equivalence: ## exhaustive authz equivalence checks (skipped under -race)
 	$(GO_TEST) -count=1 -run 'TestEquivalence(WithLegacyEvaluator|OverGeneratedWorlds)$$' ./app/authz

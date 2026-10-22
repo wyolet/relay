@@ -96,6 +96,9 @@ func (m *Members) Value() []byte { return m.value }
 // Err reports whether the iteration stopped on input it could not read.
 func (m *Members) Err() bool { return m.bad }
 
+// Rest returns the bytes after the last member returned (all of the input before any is).
+func (m *Members) Rest() []byte { return m.rest }
+
 // Elements iterates the elements of one JSON array.
 type Elements struct{ m Members }
 
