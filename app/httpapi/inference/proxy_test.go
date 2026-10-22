@@ -71,7 +71,7 @@ func TestHoldProxyBody(t *testing.T) {
 		{name: "model first streams the rest", body: proxyTestBody("test-model", 2<<20, false), heldAtMost: proxyHoldBytes},
 		{name: "model first, one byte per read", body: proxyTestBody("test-model", 64<<10, false), src: func(b []byte) io.Reader { return iotest.OneByteReader(bytes.NewReader(b)) }, heldAtMost: 32},
 		{name: "model last holds the body", body: proxyTestBody("test-model", 2<<20, true), heldAll: true},
-		{name: "model past the buffer cap", body: proxyTestBody("test-model", proxyMaxBodyBuffer, true), code: "body_too_large"},
+		{name: "model past the buffer cap", body: proxyTestBody("test-model", proxyMaxBodyBuffer, true), code: "request_too_large"},
 		{name: "not json", body: []byte("not-json"), code: "parse_error"},
 		{name: "model not a string", body: []byte(`{"model":42}`), code: "parse_error"},
 		{name: "missing model", body: []byte(`{"messages":[]}`), code: "missing_model"},

@@ -86,6 +86,24 @@ func TestLimitBodyExactLimit(t *testing.T) {
 	}
 }
 
+// headerTrap fails the test on any use: the limit must not touch the response, whose headers the handler may be writing on another goroutine.
+type headerTrap struct{ t *testing.T }
+
+func (h headerTrap) Header() http.Header       { h.t.Fatal("limit touched the response headers"); return nil }
+func (h headerTrap) Write([]byte) (int, error) { h.t.Fatal("limit wrote the response"); return 0, nil }
+func (h headerTrap) WriteHeader(int)           { h.t.Fatal("limit wrote a status") }
+
+func TestLimitBody_OverLimitLeavesTheResponseAlone(t *testing.T) {
+	var got []byte
+	var err error
+	httpmw.LimitBody(10)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, err = io.ReadAll(r.Body)
+	})).ServeHTTP(headerTrap{t}, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bytes.Repeat([]byte("a"), 11))))
+	if !httpmw.IsBodyTooLargeError(err) || len(got) != 10 {
+		t.Fatalf("read %d bytes, err %v; want the 10 within the limit, then *http.MaxBytesError", len(got), err)
+	}
+}
+
 func TestIsBodyTooLargeError(t *testing.T) {
 	if httpmw.IsBodyTooLargeError(nil) {
 		t.Fatal("expected false for nil")

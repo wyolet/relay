@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,6 +130,28 @@ func TestProxyShape_DuplicateModel(t *testing.T) {
 	commits := store.Named("limit.commit")
 	if len(commits) != 1 || len(commits[0].Args) < 7 || commits[0].Args[6] != int64(1) {
 		t.Fatalf("reservation settlement: %+v, want one cancelled commit", commits)
+	}
+}
+
+// Proxy mode forwards the body as sent, so a model key spelled in another case or with escapes, which a case-sensitive upstream would not read, is refused, whether the forward waited for the model or not.
+func TestProxyShape_ModelKeySpelling(t *testing.T) {
+	up, got := recordingUpstream(t)
+	d, pr, _ := proxyStreamDeps(t, up.URL)
+	for _, body := range []string{`{"Model":"test-model","messages":[]}`, `{"` + uEscape("006d") + `odel":"test-model","messages":[]}`} {
+		for _, req := range []proxyShapeCall{{principal: pr}, {pin: "anthropic"}} {
+			req.body, req.length = strings.NewReader(body), int64(len(body))
+			w := serveProxyShape(d, req)
+			if w.Code != http.StatusBadRequest || parseDispatchErr(t, w.Body.Bytes()).Error.Code != "invalid_model_key" {
+				t.Fatalf("%s (pin %q): status %d %s, want 400 invalid_model_key", body, req.pin, w.Code, w.Body)
+			}
+		}
+	}
+	select {
+	case g := <-got:
+		if g.readErr == nil {
+			t.Fatalf("upstream read a complete body: %s", g.body)
+		}
+	default:
 	}
 }
 

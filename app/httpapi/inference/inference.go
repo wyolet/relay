@@ -104,6 +104,9 @@ type Deps struct {
 	// MaxRequestBytes is the inference body limit the listener enforces (RELAY_MAX_REQUEST_BYTES); a declared Content-Length within it sizes the read buffer (see readRequestBody). 0 means httpmw.DefaultMaxRequestBytes.
 	MaxRequestBytes int64
 
+	// ProxyBodyIdle bounds the wait for each read of a proxy-mode request body (RELAY_PROXY_BODY_IDLE_S); a client silent that long gets 408. 0 disables it.
+	ProxyBodyIdle time.Duration
+
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
 	// tooling only; off by default.

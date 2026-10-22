@@ -184,7 +184,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	)
 	body := reqBody.wrapResult(result.Body, lc)
 	defer body.Close()
-	// An upstream that answers before reading the whole body answered an incomplete one; the refusal is the caller's answer.
+	// An upstream can answer before it has read the whole body. A refusal found by now is the caller's answer; one found while the response streams is recorded and settled as cancelled in post-flight (proxy.RefusingBody).
 	if rej := reqBody.rejection(); rej != nil {
 		writeAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
 		return

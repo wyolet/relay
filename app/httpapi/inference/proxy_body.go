@@ -1,10 +1,13 @@
 package inference
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -14,7 +17,13 @@ import (
 // proxyHoldBytes sizes the first read of a proxy body; a typical chat body arrives whole in it.
 const proxyHoldBytes = 32 << 10
 
-var errProxyBodyTooLarge = &bodyError{http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds proxy buffer limit"}
+// maxHeldTail caps the bytes held from the top-level close on: whitespace a client may send after the object, held until its body ends.
+const maxHeldTail = 1 << 10
+
+var (
+	errProxyBodyTooLarge = &bodyError{http.StatusRequestEntityTooLarge, "request_too_large", "request body has no top-level 'model' in its first 32 MiB"}
+	errTrailingBytes     = jsonSyntaxError("more than %d bytes after the top-level value", maxHeldTail)
+)
 
 // scannedBody forwards a proxy request body upstream while a modelScanner checks it. Each chunk read from the client is scanned before it is released, and the bytes from the top-level object's closing brace on are held until the client's body ends, so the upstream receives a complete JSON body only once all of it passed the scan. A rejected body fails the read, which makes the transport abort the upstream request with the body incomplete.
 //
@@ -22,7 +31,6 @@ var errProxyBodyTooLarge = &bodyError{http.StatusRequestEntityTooLarge, "body_to
 type scannedBody struct {
 	scan    *modelScanner
 	src     io.Reader
-	closer  io.Closer
 	pending []byte // scanned, not yet released
 	held    []byte // from the top-level close on, released at the end of the body
 	srcDone bool
@@ -32,17 +40,17 @@ type scannedBody struct {
 	capture *bodyCapture
 
 	mu       sync.Mutex
-	rejected *bodyError
+	refusal  *proxy.BodyError
 	model    string // the body's model once scanned
 	complete bool   // the body was read to its end and passed the scan
 	size     int64  // the body's length, once complete
 }
 
 // holdProxyBody reads body until its top-level model is known and returns the bytes read with the scannedBody that forwards them and then the rest. A model after the messages makes it hold the whole body, up to proxyMaxBodyBuffer. With needModel false nothing is read here; the scan runs as the body streams.
-func holdProxyBody(body io.ReadCloser, contentLength int64, needModel bool) (*scannedBody, []byte, *bodyError) {
+func holdProxyBody(body io.Reader, contentLength int64, needModel bool) (*scannedBody, []byte, *bodyError) {
 	scan := &modelScanner{exactKey: true}
 	if !needModel {
-		return newScannedBody(scan, nil, -1, body, body), nil, nil
+		return newScannedBody(scan, nil, -1, body), nil, nil
 	}
 	size := proxyHoldBytes
 	if contentLength > 0 && contentLength < proxyHoldBytes {
@@ -68,7 +76,7 @@ func holdProxyBody(body io.ReadCloser, contentLength int64, needModel bool) (*sc
 			if ferr := scan.finish(); ferr != nil {
 				return nil, nil, ferr
 			}
-			sb := newScannedBody(scan, buf, closeAt, nil, body)
+			sb := newScannedBody(scan, buf, closeAt, nil)
 			sb.markWhole()
 			return sb, buf, nil
 		case err != nil:
@@ -76,7 +84,7 @@ func holdProxyBody(body io.ReadCloser, contentLength int64, needModel bool) (*sc
 		case scan.modelDone && scan.model == "":
 			return nil, nil, errMissingModel
 		case scan.modelDone:
-			return newScannedBody(scan, buf, closeAt, body, body), buf, nil
+			return newScannedBody(scan, buf, closeAt, body), buf, nil
 		}
 	}
 }
@@ -97,17 +105,20 @@ func scannedWhole(body []byte) (*scannedBody, *bodyError) {
 	if err := scan.finish(); err != nil {
 		return nil, err
 	}
-	sb := newScannedBody(scan, body, closeAt, nil, nil)
+	sb := newScannedBody(scan, body, closeAt, nil)
 	sb.markWhole()
 	return sb, nil
 }
 
 // newScannedBody continues scan over src after prefix, which scan has already been fed; closeAt is what that feed returned.
-func newScannedBody(scan *modelScanner, prefix []byte, closeAt int, src io.Reader, closer io.Closer) *scannedBody {
-	b := &scannedBody{scan: scan, src: src, closer: closer, pending: prefix, total: int64(len(prefix)), model: scan.model}
+func newScannedBody(scan *modelScanner, prefix []byte, closeAt int, src io.Reader) *scannedBody {
+	b := &scannedBody{scan: scan, src: src, pending: prefix, total: int64(len(prefix)), model: scan.model}
 	if closeAt >= 0 {
 		b.pending = prefix[:closeAt]
 		b.held = prefix[closeAt:len(prefix):len(prefix)]
+		if len(b.held) > maxHeldTail {
+			b.reject(errTrailingBytes)
+		}
 	}
 	return b
 }
@@ -166,6 +177,10 @@ func (b *scannedBody) Read(p []byte) (int, error) {
 				release = closeAt
 			}
 			b.held = append(b.held, p[release:n]...)
+			if len(b.held) > maxHeldTail {
+				b.reject(errTrailingBytes)
+				continue
+			}
 		}
 		switch {
 		case err == io.EOF:
@@ -184,12 +199,8 @@ func (b *scannedBody) Read(p []byte) (int, error) {
 	}
 }
 
-func (b *scannedBody) Close() error {
-	if b.closer == nil {
-		return nil
-	}
-	return b.closer.Close()
-}
+// Close leaves the client's body alone: the server closes it after the handler, and closing it here would drain a stalled client's remainder on the transport's goroutine, which Run waits for.
+func (b *scannedBody) Close() error { return nil }
 
 func (b *scannedBody) publish(complete bool) {
 	b.mu.Lock()
@@ -201,18 +212,27 @@ func (b *scannedBody) publish(complete bool) {
 }
 
 func (b *scannedBody) reject(e *bodyError) {
+	refusal := &proxy.BodyError{Kind: e.code, Err: e}
 	b.pending, b.held = nil, nil
-	b.readErr = &proxy.BodyError{Kind: e.code, Err: e}
+	b.readErr = refusal
 	b.mu.Lock()
-	b.rejected = e
+	b.refusal = refusal
 	b.mu.Unlock()
 }
 
 // rejection is the reason the body was refused, or nil while it has not been.
 func (b *scannedBody) rejection() *bodyError {
+	if r := b.Refusal(); r != nil {
+		return r.Err.(*bodyError)
+	}
+	return nil
+}
+
+// Refusal implements proxy.RefusingBody, for a refusal that comes after the upstream answered.
+func (b *scannedBody) Refusal() *proxy.BodyError {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.rejected
+	return b.refusal
 }
 
 // wrapResult returns the response body whose Close first records on lc what the forward learned of the request body: the payload capture, the body's length when Content-Length did not give it, and the model when the forward did not wait for it. Close is ordered before the post-flight goroutine starts.
@@ -238,10 +258,36 @@ func (b *scannedBody) finalizeInto(lc *lifecycle.Context) {
 	}
 }
 
-// sourceBodyError answers a failed read of the client's body as handleShape does.
+// sourceBodyError answers a failed read of the client's body as handleShape does, and a read that hit the idle deadline with 408.
 func sourceBodyError(err error) *bodyError {
-	if httpmw.IsBodyTooLargeError(err) {
+	switch {
+	case httpmw.IsBodyTooLargeError(err):
 		return &bodyError{http.StatusRequestEntityTooLarge, "request_too_large", err.Error()}
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return &bodyError{http.StatusRequestTimeout, "request_timeout", "the request body stalled: no bytes arrived within the idle timeout"}
 	}
 	return &bodyError{http.StatusBadRequest, "read_body", err.Error()}
+}
+
+// idleDeadlineBody bounds each read of a request body through the connection's read deadline, so a client that stops sending mid-body is cut off instead of holding an in-flight slot, a rate-limit lease and an upstream connection. At the body's end the deadline is cleared, so the server's own later reads of the connection do not inherit it; after a failed read it stays, so the server's drain of the rest fails fast too.
+type idleDeadlineBody struct {
+	body io.Reader
+	rc   *http.ResponseController
+	idle time.Duration
+	off  bool // the body ended or failed, or the connection takes no deadline
+}
+
+func (b *idleDeadlineBody) Read(p []byte) (int, error) {
+	if !b.off && b.rc.SetReadDeadline(time.Now().Add(b.idle)) != nil {
+		b.off = true
+	}
+	n, err := b.body.Read(p)
+	switch {
+	case err == io.EOF && !b.off:
+		_ = b.rc.SetReadDeadline(time.Time{})
+		fallthrough
+	case err != nil:
+		b.off = true
+	}
+	return n, err
 }

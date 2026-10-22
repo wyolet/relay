@@ -77,6 +77,7 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.maxRequestBytes` | `""` | `RELAY_MAX_REQUEST_BYTES`; empty keeps relay's 32 MiB. |
 | `relay.maxConns` | `""` | `RELAY_MAX_CONNS`; empty sizes the inference listener's connection cap from `goMemLimit` (14400 at the default `900MiB`). |
 | `relay.upstreamDialTimeoutS` | `""` | `RELAY_UPSTREAM_DIAL_TIMEOUT_S`; empty keeps relay's 10 s. |
+| `relay.proxyBodyIdleS` | `""` | `RELAY_PROXY_BODY_IDLE_S`; empty keeps relay's 30 seconds, `"0"` disables. |
 | `relay.healthzDeadlineMs` | `"500"` | Sets `RELAY_HEALTHZ_DEADLINE_MS`, which has no effect. |
 | `relay.eventlogDir` | `/var/lib/relay/eventlog` | ClickHouse usage write-ahead directory (`RELAY_EVENTLOG_DIR`), on the pod's `emptyDir`. |
 | `relay.batchPayloadDir` | `/var/lib/relay/batch-payloads` | Batch payload directory (`RELAY_BATCH_PAYLOAD_DIR`), on the pod's `emptyDir`. See the caveats below. |

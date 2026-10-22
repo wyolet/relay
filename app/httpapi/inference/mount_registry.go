@@ -160,7 +160,14 @@ func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http
 	cls := ClassificationFrom(r.Context())
 	// An anonymous pinned request is routed and metered without its model, so nothing waits for it.
 	needModel := cls.Mode == ModeProxyAuthed || cls.UpstreamHost == ""
-	body, held, rej := holdProxyBody(r.Body, r.ContentLength, needModel)
+	rc := http.NewResponseController(w)
+	// The body can still be streaming upstream when an early upstream answer is forwarded; without full duplex the HTTP/1 server would drain it from under the forward.
+	_ = rc.EnableFullDuplex()
+	src := io.Reader(r.Body)
+	if d.ProxyBodyIdle > 0 {
+		src = &idleDeadlineBody{body: r.Body, rc: rc, idle: d.ProxyBodyIdle}
+	}
+	body, held, rej := holdProxyBody(src, r.ContentLength, needModel)
 	if rej != nil {
 		WriteAPIError(w, rej.status, "invalid_request_error", rej.code, rej.msg)
 		return

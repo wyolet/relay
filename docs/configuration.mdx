@@ -92,6 +92,7 @@ Payload logging has no environment variables; it is configured in the [`payload-
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RELAY_MAX_REQUEST_BYTES` | `33554432` (32 MiB) | Largest inference request body accepted; larger ones get `413`. |
+| `RELAY_PROXY_BODY_IDLE_S` | `30` | Seconds a proxy-mode request body may go without a byte before Relay answers `408` and aborts the upstream request. Proxy mode streams the body upstream as it arrives, so a stalled upload would otherwise hold an in-flight slot and an upstream connection. `0` disables it. |
 | `RELAY_MAX_INFLIGHT` | `2048` | Most inference requests one process handles at once. A streamed request holds its slot until the stream ends. Over the cap, generation requests get `429` with `Retry-After: 1` before their body is read; `/healthz` and model listings are never refused. |
 | `RELAY_MAX_CONNS` | one per 64 KiB of `GOMEMLIMIT`, at least `1024`; `16384` without a memory limit | Most connections the inference listener holds open at once, idle keep-alive ones included (each costs about 20 KiB). Past the cap, new connections wait in the kernel's accept queue until one closes. |
 | `RELAY_UPSTREAM_DIAL_TIMEOUT_S` | `10` | Seconds to wait for a TCP connection to an upstream before trying the next candidate. |

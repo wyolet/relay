@@ -80,7 +80,11 @@ To recover:
 
 `request_too_large`: the body is over `RELAY_MAX_REQUEST_BYTES` (32 MiB by default); see [Configuration](/configuration#request-handling).
 
-`body_too_large` (proxy mode): the first 32 MiB of the body hold no top-level `model`. Relay keeps the body until it reads the model, so send `model` before `messages` in large bodies.
+In proxy mode `request_too_large` also means the first 32 MiB of the body hold no top-level `model`: Relay keeps the body until it reads the model, so send `model` before `messages` in large bodies.
+
+## `408`: request timeout
+
+`request_timeout` (proxy mode): the client sent no request body bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (30 by default) while the body streamed upstream; see [Configuration](/configuration#request-handling).
 
 ## Wrong wire format from the upstream
 
