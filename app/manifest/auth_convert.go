@@ -45,8 +45,8 @@ func budgetOf(d *authmanifest.Document) (*BudgetDTO, error) {
 	if !ok {
 		return nil, nil
 	}
-	var b *BudgetDTO
-	if err := strictJSON(raw, &b); err != nil {
+	b, err := decodeBudget(raw)
+	if err != nil {
 		return nil, fmt.Errorf("spec.budget: %w", err)
 	}
 	return b, nil

@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -103,5 +104,14 @@ func TestGroupCreateNeedsAnAdminNotAPersonalRow(t *testing.T) {
 	}
 	if created.Meta.Owner.Kind != meta.OwnerSystem {
 		t.Fatalf("created owner.kind = %q, want %q", created.Meta.Owner.Kind, meta.OwnerSystem)
+	}
+}
+
+// A team budget takes no onExceed: nothing enforces budgets, so the field would promise an action that never happens.
+func TestTeamCreateRefusesOnExceed(t *testing.T) {
+	h := newTeamsHarness(t, testRBAC())
+	w := scopeReq(t, h, "root", http.MethodPost, "/teams", `{"metadata":{"name":"eng","displayName":"Eng"},"spec":{"budget":{"amount":"100","onExceed":"block"}}}`)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "onExceed") {
+		t.Fatalf("create with budget.onExceed = %d, want 422 naming the field: %s", w.Code, w.Body)
 	}
 }

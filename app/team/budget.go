@@ -8,11 +8,11 @@ package team
 const DefaultPeriod = "month"
 
 // Budget is a recurring spend cap in USD. Amount is a decimal string so
-// money never round-trips through a float.
+// money never round-trips through a float. Nothing enforces it; a stored
+// onExceed from an earlier release is ignored on read and dropped on write.
 type Budget struct {
-	Amount   string `json:"amount"             yaml:"amount"             validate:"required,budgetamount"`
-	Period   string `json:"period,omitempty"   yaml:"period,omitempty"   validate:"omitempty,oneof=month week day"`
-	OnExceed string `json:"onExceed,omitempty" yaml:"onExceed,omitempty" validate:"omitempty,oneof=block warn"`
+	Amount string `json:"amount"           yaml:"amount"           validate:"required,budgetamount"`
+	Period string `json:"period,omitempty" yaml:"period,omitempty" validate:"omitempty,oneof=month week day"`
 }
 
 // Default fills the fields a wire form may omit, so a stored row and the

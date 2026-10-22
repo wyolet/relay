@@ -31,14 +31,13 @@ var budgetField = authmanifest.Field{
 	Schema: map[string]any{
 		"type": "object", "additionalProperties": false, "required": []string{"amount"},
 		"properties": map[string]any{
-			"amount":   map[string]any{"type": "string"},
-			"period":   map[string]any{"enum": []string{"month", "week", "day"}},
-			"onExceed": map[string]any{"enum": []string{"block", "warn"}},
+			"amount": map[string]any{"type": "string"},
+			"period": map[string]any{"enum": []string{"month", "week", "day"}},
 		},
 	},
 	ToAttribute: func(value json.RawMessage, _ authmanifest.Resolver) (json.RawMessage, error) {
-		var b *BudgetDTO
-		if err := strictJSON(value, &b); err != nil {
+		b, err := decodeBudget(value)
+		if err != nil {
 			return nil, err
 		}
 		if b == nil {
@@ -90,6 +89,24 @@ var policyField = authmanifest.Field{
 		}
 		return json.Marshal(id)
 	},
+}
+
+// errOnExceed refuses budget.onExceed: earlier releases accepted it, though nothing acted on it.
+var errOnExceed = errors.New("budget.onExceed is not supported: budgets are not enforced; remove the field")
+
+// decodeBudget reads a budget strictly. onExceed gets its own error.
+func decodeBudget(raw json.RawMessage) (*BudgetDTO, error) {
+	var b *BudgetDTO
+	if err := strictJSON(raw, &b); err != nil {
+		var old struct {
+			OnExceed json.RawMessage `json:"onExceed"`
+		}
+		if json.Unmarshal(raw, &old) == nil && old.OnExceed != nil {
+			return nil, errOnExceed
+		}
+		return nil, err
+	}
+	return b, nil
 }
 
 func strictJSON(raw json.RawMessage, dst any) error {

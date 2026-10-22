@@ -20,7 +20,6 @@ spec:
   budget:
     amount: "2500.00"
     period: month
-    onExceed: block
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Project
@@ -31,7 +30,7 @@ metadata:
     wyolet.com/cost-center: "1042"
 spec:
   team: platform
-  budget: {amount: "500.00", period: month, onExceed: block}
+  budget: {amount: "500.00", period: month}
 `
 
 const teamUUID = "0195f8a0-0000-7000-8000-000000000001"
@@ -55,7 +54,7 @@ func TestRoundTrip_TeamAndProject(t *testing.T) {
 	if tm.Meta.Annotations["wyolet.com/owner-email"] != "platform@example.com" {
 		t.Errorf("team annotations = %v", tm.Meta.Annotations)
 	}
-	if tm.Spec.Budget == nil || tm.Spec.Budget.Amount != "2500.00" || tm.Spec.Budget.Period != "month" || tm.Spec.Budget.OnExceed != "block" {
+	if tm.Spec.Budget == nil || tm.Spec.Budget.Amount != "2500.00" || tm.Spec.Budget.Period != "month" {
 		t.Errorf("team budget = %+v", tm.Spec.Budget)
 	}
 	if err := tm.Validate(); err != nil {

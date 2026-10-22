@@ -320,9 +320,8 @@ type PricingRateDTO struct {
 
 // BudgetDTO is the wire form of a spend cap, shared by Team and Project.
 type BudgetDTO struct {
-	Amount   string `json:"amount"             yaml:"amount"`
-	Period   string `json:"period,omitempty"   yaml:"period,omitempty"   enum:"month,week,day"`
-	OnExceed string `json:"onExceed,omitempty" yaml:"onExceed,omitempty" enum:"block,warn"`
+	Amount string `json:"amount"           yaml:"amount"`
+	Period string `json:"period,omitempty" yaml:"period,omitempty" enum:"month,week,day"`
 }
 
 // TeamDTO is the wire form of a Team. No cross-refs.
