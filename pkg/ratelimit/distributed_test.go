@@ -102,6 +102,10 @@ func TestCommitSkipRedis(t *testing.T) {
 	runCommitSkipSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
 }
 
+func TestCommitGuardRedis(t *testing.T) {
+	runCommitGuardSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
+}
+
 // A reserve queued on a batch that never got a pooled connection is refused as unavailable and counted, not failed as an undecodable reply.
 func TestDistributed_BatchedReservePoolTimeoutRefused(t *testing.T) {
 	s := kvtest.ExhaustedPool(t, kvtest.Config(t))
