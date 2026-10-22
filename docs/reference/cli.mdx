@@ -19,7 +19,7 @@ The `relay` binary is both the server and its operator commands. With no argumen
 
 ## Configuration
 
-Every `relay` invocation first reads `.env` from the working directory, if present, and sets each variable that is not already set in the environment.
+The server (`relay` with no command) first reads `.env` from the working directory, if present, and sets each variable that is not already set in the environment. The commands below do not read `.env`, so they never pick up a target or credentials from the directory they run in. To load a file for any invocation, name it in `RELAY_ENV_FILE`; the command then fails if the file can't be read.
 
 **Control API commands** (`apply`, `export`, `auth can-i`, `token mint`) call the control API over HTTP:
 
@@ -64,6 +64,8 @@ relay apply -f manifests/ --dry-run
 ```
 
 Parses a manifest file, or every `.yaml` and `.yml` file under a directory, sends the bundle to `POST /api/apply`, and prints the plan as a table with a count per action. See [GitOps](/concepts/gitops) for the plan actions, dirty rows and pruning.
+
+Before sending, it prints the control URL it targets and where that came from to stderr. When `RELAY_ADMIN_TOKEN` was set by the `RELAY_ENV_FILE` file rather than the environment or `--token`, it refuses to run without an explicit `--url`.
 
 | Flag | Description |
 | --- | --- |

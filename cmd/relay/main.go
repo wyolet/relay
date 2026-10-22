@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,7 +35,10 @@ import (
 )
 
 func main() {
-	loadDotEnv(".env")
+	if err := loadEnvFile(os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, "relay:", err)
+		os.Exit(1)
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
 	exitCode := 0
 	defer func() {

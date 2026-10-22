@@ -14,42 +14,38 @@ import (
 	"github.com/wyolet/relay/jobq"
 )
 
-func runSubcommand() bool {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "migrate":
-			if err := runMigrate(os.Args[2:]); err != nil {
-				slog.Error("migrate failed", "err", err)
-				os.Exit(1)
-			}
-			return true
-		case "seed":
-			if err := runSeed(os.Args[2:]); err != nil {
-				slog.Error("seed failed", "err", err)
-				os.Exit(1)
-			}
-			return true
-		case "apply":
-			runCLI("apply", runApply, os.Args[2:])
-			return true
-		case "export":
-			runCLI("export", runExport, os.Args[2:])
-			return true
-		case "keygen":
-			runCLI("keygen", runKeygen, os.Args[2:])
-			return true
-		case "token":
-			runCLI("token", runToken, os.Args[2:])
-			return true
-		case "auth":
-			runCLI("auth", runAuth, os.Args[2:])
-			return true
-		case "secret":
-			runCLI("secret", runSecret, os.Args[2:])
-			return true
+// subcommands maps each operator command to its runner; any other first argument starts the server.
+var subcommands = map[string]func(args []string){
+	"migrate": func(args []string) {
+		if err := runMigrate(args); err != nil {
+			slog.Error("migrate failed", "err", err)
+			os.Exit(1)
 		}
+	},
+	"seed": func(args []string) {
+		if err := runSeed(args); err != nil {
+			slog.Error("seed failed", "err", err)
+			os.Exit(1)
+		}
+	},
+	"apply":  func(args []string) { runCLI("apply", runApply, args) },
+	"export": func(args []string) { runCLI("export", runExport, args) },
+	"keygen": func(args []string) { runCLI("keygen", runKeygen, args) },
+	"token":  func(args []string) { runCLI("token", runToken, args) },
+	"auth":   func(args []string) { runCLI("auth", runAuth, args) },
+	"secret": func(args []string) { runCLI("secret", runSecret, args) },
+}
+
+func runSubcommand() bool {
+	if len(os.Args) < 2 {
+		return false
 	}
-	return false
+	run := subcommands[os.Args[1]]
+	if run == nil {
+		return false
+	}
+	run(os.Args[2:])
+	return true
 }
 
 func loadConfig() *config.Config {
