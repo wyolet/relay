@@ -57,6 +57,12 @@ data:
   {{- with .Values.relay.maxRequestBytes }}
   RELAY_MAX_REQUEST_BYTES: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.maxConns }}
+  RELAY_MAX_CONNS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.upstreamDialTimeoutS }}
+  RELAY_UPSTREAM_DIAL_TIMEOUT_S: {{ . | quote }}
+  {{- end }}
   {{- with .Values.relay.controlAllowOrigins }}
   RELAY_CONTROL_ALLOW_ORIGINS: {{ . | quote }}
   {{- end }}

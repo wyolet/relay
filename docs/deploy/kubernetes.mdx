@@ -118,6 +118,7 @@ Procedures for upgrades that need every old pod stopped, for rolling the schema 
 
 - The chart enables a HorizontalPodAutoscaler by default (`autoscaling`: 2 to 10 replicas at 70% CPU) and a PodDisruptionBudget (`minAvailable: 1`). `replicaCount` applies only with autoscaling off. A topology spread constraint spreads replicas across nodes.
 - `goMemLimit` (default `900MiB`) sets `GOMEMLIMIT`; keep it below the container memory limit (`resources.limits.memory`, default `1Gi`).
+- Each pod caps open inference connections at one per 64 KiB of `goMemLimit` (14400 at the default); set `relay.maxConns` to change it. Past the cap, new connections wait until one closes, health probes included.
 - Each pod caps in-flight inference requests at 2048 and answers the excess with `429` and `Retry-After: 1`. To change the cap, set `RELAY_MAX_INFLIGHT` through `relay.extraEnv`.
 - Keep `relay.pgMaxConns` (default 10 per pod) times the replica count below the Postgres `max_connections` (100 on the bundled Postgres).
 - Catalog and settings changes made through any pod reach every other pod through Postgres `LISTEN`/`NOTIFY`, usually within about a second. No configuration is needed for this.

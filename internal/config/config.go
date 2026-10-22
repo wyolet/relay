@@ -108,6 +108,12 @@ type Config struct {
 	// high per-host RPS; a higher ceiling keeps hot upstream connections warm.
 	UpstreamMaxIdlePerHost int
 
+	// UpstreamDialTimeout bounds the TCP connect to an upstream (RELAY_UPSTREAM_DIAL_TIMEOUT_S, default 10s).
+	UpstreamDialTimeout time.Duration
+
+	// MaxConns caps the open connections the inference listener accepts (RELAY_MAX_CONNS); 0 = derived from the memory limit at boot.
+	MaxConns int
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -389,6 +395,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
 	} else {
 		cfg.UpstreamMaxIdlePerHost = v
+	}
+
+	if v, err := envPositiveInt("RELAY_UPSTREAM_DIAL_TIMEOUT_S", 10); err != nil {
+		return nil, fmt.Errorf("RELAY_UPSTREAM_DIAL_TIMEOUT_S must be >= 1")
+	} else {
+		cfg.UpstreamDialTimeout = time.Duration(v) * time.Second
+	}
+	if v, err := envPositiveInt("RELAY_MAX_CONNS", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_MAX_CONNS must be >= 1")
+	} else {
+		cfg.MaxConns = v
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
