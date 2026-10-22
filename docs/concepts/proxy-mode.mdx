@@ -76,7 +76,7 @@ Relay removes its own headers (`X-WR-*`) and hop-by-hop headers, sets `Authoriza
 With a relay key:
 
 - **Host.** If `X-WR-Upstream-Host` is set, Relay forwards to that host. If it is absent, Relay reads `model` from the body and picks the host through the governing policy's grants and the model's bindings, as normal routing does, without requiring a host key.
-- **Grants.** A pinned host is not checked against the policy's model grants, because the caller pays with its own credential. The exception is a keyless (`noAuth`) host such as a self-hosted Ollama: pinning one needs a policy that explicitly grants that host.
+- **Grants.** A pinned request reaches only a model the governing policy grants on the pinned host, as normal routing does, and its usage is priced from that binding. The caller's own credential does not widen the grant. A model that does not route there is refused with the same errors as normal mode (`model_not_found`, `model_not_allowed`), and an `@host` in the model that names a different host than `X-WR-Upstream-Host` gets `400 upstream_host_conflict`. A keyless (`noAuth`) host such as a self-hosted Ollama additionally needs a policy that explicitly grants that host. A key with no governing policy has no grant to check: a model that does not route at the pin is forwarded unpriced.
 - **Rate limits.** The governing policy's rate limit is reserved and committed as in normal mode. The `inference-api-proxy` rate limit is applied on top as a per-credential ceiling. It ships disabled with no rules; add rules and enable it to cap every relay key's proxy traffic. A key with no governing policy gets only that ceiling.
 - **Attribution.** The request is recorded against the relay key, its principal, project and policy.
 
@@ -104,6 +104,8 @@ Keyless hosts appear only when the caller's policy grants them.
 | `400` | `bad_request` | `X-WR-Proxy-Mode` has a value other than `Proxy` or `No-Proxy`, or `Authorization` is missing. |
 | `400` | `unknown_upstream_host` | `X-WR-Upstream-Host` names no host, or a keyless host the policy does not grant. |
 | `400` | `missing_upstream_host` | Anonymous request without `X-WR-Upstream-Host`. |
+| `400` | `upstream_host_conflict` | The model's `@host` names a different host than `X-WR-Upstream-Host`. |
+| `403`, `404` | `model_not_allowed`, `model_not_found` | A pinned request for a model the policy does not grant on that host, or that is not in the catalog. |
 | `401` | `unauthenticated` | Anonymous request while `allowUnauthenticated` is off, or an unknown relay key. |
 | `403` | `proxy_disabled` | Proxy mode is off. |
 | `403` | `passthrough_forbidden` | The relay key lacks `passthroughAllowed`, or the credential is an inference token. |

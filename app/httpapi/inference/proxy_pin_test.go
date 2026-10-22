@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
@@ -91,5 +92,39 @@ func TestProxyHostsFor_HidesUngrantedKeylessHosts(t *testing.T) {
 	}
 	if got := slugs(passthroughPrincipal(t, cat, "local")); len(got) != 2 {
 		t.Errorf("granted key sees %v, want both hosts", got)
+	}
+}
+
+// A pinned host reaches only a model the key's policy grants there, as normal routing does; the caller's own credential does not widen the grant.
+func TestProxyAuthed_PinnedHostHoldsPolicyGrants(t *testing.T) {
+	cat, _, _ := proxyPinCatalog(t)
+	d := buildDeps(t, cat)
+	for _, tc := range []struct {
+		name, policy, model, wantCode string
+		wantStatus                    int
+	}{
+		{"model granted only on another host", "local", "test-model", "model_not_allowed", http.StatusForbidden},
+		{"model not in the catalog", "keyed-only", "unknown-model", "model_not_found", http.StatusNotFound},
+		{"model ref names another host", "local", "test-model@local-llm", "upstream_host_conflict", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, _ := sendProxy(d, passthroughPrincipal(t, cat, tc.policy), "acme", tc.model)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status %d, want %d; body %s", w.Code, tc.wantStatus, w.Body)
+			}
+			if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != tc.wantCode {
+				t.Fatalf("code %q, want %q", e.Error.Code, tc.wantCode)
+			}
+		})
+	}
+}
+
+// A key with no policy has no grant to hold a pinned request to: a model that does not route at the pin goes through unrouted.
+func TestResolvePinnedProxyPlan_PolicylessMissForwards(t *testing.T) {
+	cat, keyed, _ := proxyPinCatalog(t)
+	d := buildDeps(t, cat)
+	plan, err := resolvePinnedProxyPlan(d.Resolver, &Principal{CredentialKind: CredentialKey, Key: &key.Key{}, PassthroughAllowed: true}, cat.Current(), "unknown-model", keyed)
+	if plan != nil || err != nil {
+		t.Fatalf("plan %v, err %v; want neither", plan, err)
 	}
 }

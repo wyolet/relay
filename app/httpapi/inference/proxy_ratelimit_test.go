@@ -183,42 +183,30 @@ func TestProxyAuthed_PolicyRateLimit_PolicyResolvedHost(t *testing.T) {
 	assertSameRateLimitResponse(t, w, normalModeRateLimited(t, up.URL, clock))
 }
 
-// A pinned host is metered by the policy whether or not the model routes
-// there: a routed model selects the rate limit and stamps model identity, an
-// unrouted one falls back to the policy's flat limit.
+// A pinned host is metered by the policy, with the rate limit selected and the
+// model identity stamped by routing the model at the pin.
 func TestProxyAuthed_PolicyRateLimit_PinnedHost(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		model     string
-		wantModel bool
-	}{
-		{name: "model resolves at the pin", model: "test-model", wantModel: true},
-		{name: "model does not resolve", model: "unknown-model"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var countHits, genHits atomic.Int32
-			up := countUpstreamServer(t, &countHits, &genHits)
-			cat, pr := proxyLimitCatalog(t, up.URL, true, 1, nil)
-			d, _ := proxyLimitDeps(t, cat, nil)
+	var countHits, genHits atomic.Int32
+	up := countUpstreamServer(t, &countHits, &genHits)
+	cat, pr := proxyLimitCatalog(t, up.URL, true, 1, nil)
+	d, _ := proxyLimitDeps(t, cat, nil)
 
-			w, lc := sendProxy(d, pr, "anthropic", tc.model)
-			if w.Code != http.StatusOK {
-				t.Fatalf("first: status %d body %s", w.Code, w.Body)
-			}
-			if got := lc.ModelID != ""; got != tc.wantModel {
-				t.Fatalf("model identity stamped = %v (%q), want %v", got, lc.ModelName, tc.wantModel)
-			}
-			w, _ = sendProxy(d, pr, "anthropic", tc.model)
-			if w.Code != http.StatusTooManyRequests {
-				t.Fatalf("second: status %d, want 429; body %s", w.Code, w.Body)
-			}
-			if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "rate_limit_exceeded" || w.Header().Get("Retry-After") == "" {
-				t.Fatalf("second: code %q retry-after %q", e.Error.Code, w.Header().Get("Retry-After"))
-			}
-			if genHits.Load() != 1 {
-				t.Fatalf("upstream hits = %d, want 1", genHits.Load())
-			}
-		})
+	w, lc := sendProxy(d, pr, "anthropic", "test-model")
+	if w.Code != http.StatusOK {
+		t.Fatalf("first: status %d body %s", w.Code, w.Body)
+	}
+	if lc.ModelID == "" {
+		t.Fatal("model identity not stamped")
+	}
+	w, _ = sendProxy(d, pr, "anthropic", "test-model")
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second: status %d, want 429; body %s", w.Code, w.Body)
+	}
+	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "rate_limit_exceeded" || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("second: code %q retry-after %q", e.Error.Code, w.Header().Get("Retry-After"))
+	}
+	if genHits.Load() != 1 {
+		t.Fatalf("upstream hits = %d, want 1", genHits.Load())
 	}
 }
 
