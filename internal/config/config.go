@@ -101,8 +101,12 @@ type Config struct {
 	UsageQueueSize int
 	// UsageRefusedQueueSize is the same for events of requests that never reached an upstream (RELAY_USAGE_REFUSED_QUEUE_SIZE); 0 = usagelog.DefaultRefusedQueueSize.
 	UsageRefusedQueueSize int
-	MaxRequestBytes       int64 // 0 = use httpmw.DefaultMaxRequestBytes
-	MaxInflight           int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
+	// PayloadQueueSize is how many captured payload records wait in memory for the sink (RELAY_PAYLOAD_QUEUE_SIZE); 0 = sized from the memory limit.
+	PayloadQueueSize int
+	// PayloadRefusedQueueSize is the same for records of requests that never reached an upstream (RELAY_PAYLOAD_REFUSED_QUEUE_SIZE); 0 = payloadlog.DefaultRefusedQueueSize.
+	PayloadRefusedQueueSize int
+	MaxRequestBytes         int64 // 0 = use httpmw.DefaultMaxRequestBytes
+	MaxInflight             int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
 
 	// UpstreamMaxIdlePerHost caps idle keep-alive connections the upstream
 	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST, default 128).
@@ -388,6 +392,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_USAGE_REFUSED_QUEUE_SIZE must be >= 1")
 	} else {
 		cfg.UsageRefusedQueueSize = v
+	}
+	if v, err := envPositiveInt("RELAY_PAYLOAD_QUEUE_SIZE", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_PAYLOAD_QUEUE_SIZE must be >= 1")
+	} else {
+		cfg.PayloadQueueSize = v
+	}
+	if v, err := envPositiveInt("RELAY_PAYLOAD_REFUSED_QUEUE_SIZE", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_PAYLOAD_REFUSED_QUEUE_SIZE must be >= 1")
+	} else {
+		cfg.PayloadRefusedQueueSize = v
 	}
 
 	if v := envInt64("RELAY_MAX_REQUEST_BYTES", 0); v > 0 {
