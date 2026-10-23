@@ -78,6 +78,9 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.maxConns` | `""` | `RELAY_MAX_CONNS`; empty sizes the inference listener's connection cap from `goMemLimit` (14400 at the default `900MiB`). |
 | `relay.upstreamDialTimeoutS` | `""` | `RELAY_UPSTREAM_DIAL_TIMEOUT_S`; empty keeps relay's 10 s. |
 | `relay.proxyBodyIdleS` | `""` | `RELAY_PROXY_BODY_IDLE_S`; empty keeps relay's 30 seconds, `"0"` disables. |
+| `relay.preStopSleepS` | `5` | Seconds a deleted pod keeps serving before relay gets SIGTERM, so the ingress drops the endpoint before the listener closes. Uses the `preStop` sleep action, which needs Kubernetes 1.30+; `0` removes the hook. |
+| `relay.shutdownDeadlineS` | `""` | `RELAY_SHUTDOWN_DEADLINE_S`; empty keeps relay's 15 s for in-flight requests after SIGTERM. |
+| `relay.terminationGracePeriodSeconds` | `""` | The pod's grace period; empty is `preStopSleepS` + the shutdown deadline + 10 (30 by default). |
 | `relay.healthzDeadlineMs` | `"500"` | Sets `RELAY_HEALTHZ_DEADLINE_MS`, which has no effect. |
 | `relay.eventlogDir` | `/var/lib/relay/eventlog` | ClickHouse usage write-ahead directory (`RELAY_EVENTLOG_DIR`), on the pod's `emptyDir`. |
 | `relay.batchPayloadDir` | `/var/lib/relay/batch-payloads` | Batch payload directory (`RELAY_BATCH_PAYLOAD_DIR`), on the pod's `emptyDir`. See the caveats below. |
