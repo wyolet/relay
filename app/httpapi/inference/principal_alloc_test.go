@@ -83,7 +83,7 @@ func TestTokenPathAllocations(t *testing.T) {
 // TestTokenPathAllocationsColdCache pins what a first-sight token costs: the
 // Ed25519 verification and the claims decode the cache exists to avoid.
 func TestTokenPathAllocationsColdCache(t *testing.T) {
-	const want = 15
+	const want = pinTokenColdCache
 
 	f := benchFixture(8)
 	f.tokens.SetCacheSize(-1)
