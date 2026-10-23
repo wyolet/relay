@@ -322,9 +322,7 @@ func TestProxyEdge_StalledBodyIsCutOff(t *testing.T) {
 	if s := awaitPostFlight(t, e.seen); s.errorKind != "request_timeout" {
 		t.Fatalf("recorded as %q", s.errorKind)
 	}
-	if e.adm.Full() {
-		t.Fatal("the in-flight slot is still held")
-	}
+	waitForFreeSlot(t, e.adm)
 	assertCancelledSettle(t, e.store)
 	if g := <-got; g.readErr == nil {
 		t.Fatal("upstream read a complete body")
