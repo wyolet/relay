@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -43,11 +44,11 @@ type Config struct {
 	PGMinConns    int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
 	RedisAddr     string
 	RedisPassword string // RELAY_REDIS_PASSWORD; empty = no AUTH
-	// RedisPoolSize / RedisMinIdleConns tune the go-redis client pool.
-	// 0 = library defaults (pool 10×GOMAXPROCS, NO idle floor). A warm
-	// floor keeps connections pre-dialed so request bursts never pay
-	// cold-dial (TCP + uncached DNS) latency inside a request budget —
-	// same rationale as the PG warm floor above.
+	// RedisPoolSize / RedisMinIdleConns tune the shared go-redis client pool.
+	// Pool defaults to DefaultRedisPoolSizePerCPU × GOMAXPROCS; idle floor 0
+	// = none. A warm floor keeps connections pre-dialed so request bursts
+	// never pay cold-dial (TCP + uncached DNS) latency inside a request
+	// budget — same rationale as the PG warm floor above.
 	RedisPoolSize     int // RELAY_REDIS_POOL_SIZE
 	RedisMinIdleConns int // RELAY_REDIS_MIN_IDLE_CONNS
 	// RELAY_REDIS_{DIAL,READ,WRITE,POOL}_TIMEOUT_MS and RELAY_REDIS_MAX_RETRIES. Defaults are kv.Default*; retries default to 0 because a resent reserve script can count one request twice.
@@ -281,7 +282,7 @@ func Load() (*Config, error) {
 	}
 	cfg.RedisAddr = os.Getenv("RELAY_REDIS_ADDR")
 	cfg.RedisPassword = os.Getenv("RELAY_REDIS_PASSWORD")
-	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", 0); err != nil {
+	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", DefaultRedisPoolSizePerCPU*runtime.GOMAXPROCS(0)); err != nil {
 		return nil, fmt.Errorf("RELAY_REDIS_POOL_SIZE must be >= 1")
 	} else {
 		cfg.RedisPoolSize = v
