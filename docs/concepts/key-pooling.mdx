@@ -49,6 +49,7 @@ Each key has its own breaker, keyed by a hash of the key's value. The upstream r
 | `429` with `Retry-After` of 5 s or less | Stays closed | None; the request moves to the next key |
 | `429` with `Retry-After` over 5 s | Opens | The `Retry-After` duration |
 | Connection could not be established (refused, DNS, TLS) | Unchanged | None; this is a host problem, see below |
+| The caller disconnected or cancelled during the call | Unchanged | None; the request stops without trying another key |
 
 A single `5xx` does not take a key out: providers return a few percent of them on healthy keys, and the request already moves to the next key. `RELAY_KEY_BREAKER_THRESHOLD` and `RELAY_KEY_BREAKER_WINDOW_S` set the count and the window. Failures of requests that were already in flight when the key opened do not move it further up the ladder.
 

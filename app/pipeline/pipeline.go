@@ -240,6 +240,10 @@ loop:
 			if attempts >= maxAttempts {
 				break loop
 			}
+			if cerr := ctx.Err(); cerr != nil {
+				err = cerr
+				break loop
+			}
 			if firstAttempt {
 				acq, err = adm.Acq, adm.AcqErr
 				firstAttempt = false
@@ -288,6 +292,10 @@ loop:
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
 			return p.makeResult(req, inbound, acq, resp, call), nil
+		}
+		// A caller leaving mid-call can surface as a broken pipe or a reset instead of the context error; either way the key did nothing wrong.
+		if cerr := ctx.Err(); err != nil && cerr != nil && !errors.Is(err, cerr) {
+			err = fmt.Errorf("%w: %w", cerr, err)
 		}
 
 		retry, kind, retryAfter := classify(req.Adapter, resp, err)

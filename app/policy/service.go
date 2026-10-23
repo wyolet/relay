@@ -262,12 +262,18 @@ func (s *Service) Commit(ctx context.Context, acq *Acquisition, obs pkgratelimit
 	return s.limiter.Commit(ctx, acq.Reservation, obs)
 }
 
+// releaseTimeout bounds Release's writes, which run detached from the request.
+const releaseTimeout = 2 * time.Second
+
 // Release rolls back the upstream reservation (zero observations) and
 // records the key failure.
 func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.FailureKind, retryAfter time.Duration) {
 	if acq == nil {
 		return
 	}
+	// The refund must land even when the caller has gone, or the slot stays held until its lease expires.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
 	if acq.Reservation != nil && s.limiter != nil {
 		_ = s.limiter.Commit(ctx, acq.Reservation, pkgratelimit.Observations{})
 	}

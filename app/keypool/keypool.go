@@ -48,6 +48,9 @@ const (
 
 	// probeLease bounds how long one half-open probe keeps other picks off a key. A probe's outcome lands only when its response ends, so a long stream lets one more probe through per lease rather than holding the key out for the stream's length.
 	probeLease = 10 * time.Second
+
+	// recordTimeout bounds a failure write, which runs detached from the request that saw the failure.
+	recordTimeout = 2 * time.Second
 )
 
 // Selector picks HostKeys from Pools and tracks per-key circuit-breaker state.

@@ -168,6 +168,9 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 }
 
 func (s *Selector) recordFailure(ctx context.Context, keyHash string, op failureOp, logReason string) {
+	// The failure happened whether or not the caller is still there, so its cancellation must not drop the write.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
 	raw, err := s.runRecordScript(ctx, failureCall(keyHash, op), func(rec CircuitRecord, _ bool) (CircuitRecord, bool) {
 		return applyFailure(rec, op)
 	})
