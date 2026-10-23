@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 
+	"github.com/wyolet/relay/app/keypool"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -34,8 +35,12 @@ func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) 
 			return Admission{}, err
 		}
 	}
-	scope, algo := pickScope(acq.Policy)
-	pick := s.selector.PreparePick(b, scope, algo, acq.Keys, acq.Excluded)
+	excluded, full := s.full.exclude(acq.Keys, acq.Excluded, modelIDOf(acq), s.clock())
+	var pick *keypool.PreparedPick
+	if full == nil || !allExcluded(acq.Keys, excluded) {
+		scope, algo := pickScope(acq.Policy)
+		pick = s.selector.PreparePick(b, scope, algo, acq.Keys, excluded)
+	}
 	b.Exec(ctx)
 
 	var adm Admission
@@ -50,8 +55,10 @@ func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) 
 		}
 		adm.Inbound = res
 	}
-	if picked, err := pick.Finish(ctx); err != nil {
-		adm.AcqErr = err
+	if pick == nil {
+		adm.AcqErr = keyTiersFullError(full)
+	} else if picked, err := pick.Finish(ctx); err != nil {
+		adm.AcqErr = pickError(err, full)
 	} else {
 		adm.Acq, adm.AcqErr = s.reserveTier(ctx, picked, acq)
 	}

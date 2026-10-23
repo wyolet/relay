@@ -630,36 +630,6 @@ func TestRateLimitShortPreservesReason(t *testing.T) {
 	}
 }
 
-// TestRecordLocalRateLimit — writes CircuitOpen with correct reason; BackoffStep unchanged.
-func TestRecordLocalRateLimit(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "reason-local-rl"
-	// Pre-warm a backoff step so we can assert it is preserved.
-	sel.RecordFailure(ctx, k, FailureForbidden, 0)
-	before := sel.readRecord(ctx, k)
-	wantStep := before.BackoffStep
-
-	sel.RecordLocalRateLimit(ctx, k, 15*time.Second)
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitOpen {
-		t.Fatalf("want CircuitOpen, got %v", rec.State)
-	}
-	if rec.Reason != ReasonLocalRateLimited {
-		t.Fatalf("want reason=%q, got %q", ReasonLocalRateLimited, rec.Reason)
-	}
-	wantUntil := t0.Add(15 * time.Second)
-	if rec.OpenUntil != wantUntil {
-		t.Fatalf("want OpenUntil=%v, got %v", wantUntil, rec.OpenUntil)
-	}
-	if rec.BackoffStep != wantStep {
-		t.Fatalf("BackoffStep must not change: want %d, got %d", wantStep, rec.BackoffStep)
-	}
-	if rec.Indefinite {
-		t.Fatal("want Indefinite=false")
-	}
-}
-
 // TestRecordSuccessClearsReason — after a failure, RecordSuccess resets Reason to "".
 func TestRecordSuccessClearsReason(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))

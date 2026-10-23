@@ -2,7 +2,7 @@
 # Prints the packages that hold integration-tagged tests, one "<module dir> <import path>" per line.
 # With a list of changed files on stdin (and AFFECTED=1), prints only those whose test binary
 # depends on a changed package; changes that can reach every test (migrations, module files,
-# the Makefile, CI definitions) select all of them.
+# the Makefile, build.env, CI definitions) select all of them.
 #
 #   scripts/integration-pkgs.sh                                  # every integration package
 #   git diff --name-only A B | AFFECTED=1 scripts/integration-pkgs.sh
@@ -17,7 +17,7 @@ if [ "${AFFECTED:-}" = 1 ]; then
   mapfile -t changed
   for f in "${changed[@]}"; do
     case "$f" in
-      migrations/*|*go.mod|*go.sum|go.work*|Makefile|.github/workflows/ci-dev.yml|scripts/integration-pkgs.sh|scripts/ci-dev.sh)
+      migrations/*|*go.mod|*go.sum|go.work*|Makefile|build.env|.github/workflows/ci-dev.yml|scripts/integration-pkgs.sh|scripts/ci-dev.sh)
         AFFECTED=0; break ;;
     esac
   done

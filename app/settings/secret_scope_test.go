@@ -97,7 +97,7 @@ func TestOutOfScopeRowDegradesToDefaults(t *testing.T) {
 }
 
 func TestSecretSectionsAreAdminOnly(t *testing.T) {
-	for _, s := range []string{AuthOIDCSection, SectionPayloadLogging} {
+	for _, s := range []string{AuthOIDCSection, SectionPayloadLogging, AuthTokensSection} {
 		if !AdminOnly(s) {
 			t.Errorf("%s must be admin-only", s)
 		}

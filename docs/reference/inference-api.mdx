@@ -306,7 +306,7 @@ Relay writes errors in one envelope:
 | `404` | `model_not_found` | No model matches the reference. |
 | `408` | `request_timeout` | Proxy mode: the request body sent no bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (default 30). |
 | `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), or in proxy mode has no top-level `model` in its first 32 MiB. |
-| `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent. `Retry-After` says when it refills. |
+| `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent, or every host key for the model is over its tier limit. `Retry-After` says when it refills. |
 | `429` | `overloaded` | The pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`). `Retry-After: 1`. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
 | `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |

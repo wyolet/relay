@@ -80,6 +80,30 @@ func (a *AuthTokens) Validate() error {
 	return nil
 }
 
+// KeepSigningKeys carries current's signing-key refs onto a for an API write. Only rotation repoints them: a writer who chose the secret could sign tokens with it. A ref a leaves empty keeps current's; one naming a different secret is refused.
+func (a *AuthTokens) KeepSigningKeys(current *AuthTokens) error {
+	var cur AuthTokens
+	if current != nil {
+		cur = *current
+	}
+	for _, f := range []struct {
+		name      string
+		next      *secret.Ref
+		installed secret.Ref
+	}{
+		{"signingKey", &a.SigningKey, cur.SigningKey},
+		{"previousSigningKey", &a.PreviousSigningKey, cur.PreviousSigningKey},
+	} {
+		switch {
+		case *f.next == secret.Ref{}:
+			*f.next = f.installed
+		case *f.next != f.installed:
+			return fmt.Errorf("auth:tokens: %s is set by relay; rotate the key with POST /api/auth/token/keys/rotate", f.name)
+		}
+	}
+	return nil
+}
+
 // AuthTokensSection is the section name.
 const AuthTokensSection = "auth:tokens"
 

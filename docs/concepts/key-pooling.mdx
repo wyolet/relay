@@ -35,7 +35,7 @@ The policy's `keySelection` sets the algorithm:
 
 Breaker state is shared across pods through the state backend (Valkey when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
 
-After picking a key, Relay reserves the key's tier rate limit if its tier policy has one. A key over its tier limit is skipped for this request without touching its breaker, and the next key is tried. See [Rate limits](/concepts/rate-limits#upstream-limits-per-host-key).
+After picking a key, Relay reserves the key's tier rate limit if its tier policy has one. A key over its tier limit is skipped without touching its breaker, and the next key is tried. Each pod then skips that key for the requested model until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-limits-per-host-key).
 
 ## Circuit breakers
 

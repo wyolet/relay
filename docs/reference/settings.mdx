@@ -58,7 +58,7 @@ A field a file leaves out takes its zero value (`false`, `0`, empty), not its de
 | [`audit`](#audit) | Audit log retention | yes |
 | [`auth:oidc`](#authoidc) | Single sign-on | yes |
 | [`auth:scim`](#authscim) | SCIM provisioning | yes |
-| [`auth:tokens`](#authtokens) | Inference tokens | no API |
+| [`auth:tokens`](#authtokens) | Inference tokens | yes |
 | [`catalog-source`](#catalog-source) | Which catalog release was seeded | |
 | [`license`](#license) | License installed at runtime | `/api/license` |
 | [`governance:provider`, `governance:host`, `governance:model`, `governance:policy`](#governance) | Editing and deleting catalog rows | |
@@ -176,7 +176,7 @@ See [SCIM provisioning](/concepts/scim).
 | `verifyCacheSize` | `10000` | Verified tokens each process remembers, so a repeat request skips signature verification. Negative disables the cache. |
 | `signingKey`, `previousSigningKey` | _(filled in by relay)_ | References to the stored signing keys. Relay generates the first on boot and moves it to `previousSigningKey` on rotation (`POST /api/auth/token/keys/rotate`), so tokens signed before a rotation keep verifying. |
 
-This section has no `PUT` endpoint. Relay writes it on the first boot with a master key, when it generates the signing key, so set different TTLs with a seed file before that boot (with `enabled: true`, since a field the file leaves out is `false`).
+Only rotation changes the signing-key references. A `PUT` that leaves them out keeps the installed ones, and a `PUT` naming another secret is refused with `400`. TTL changes apply to tokens minted afterwards; tokens already minted keep their `exp`.
 
 ### catalog-source
 

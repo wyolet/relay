@@ -54,17 +54,18 @@ type Controller struct {
 }
 
 // NewController wires the emitter → reloadable-sink chain and the reloadable
-// reader. The sink/reader start empty until the first reconcile. queueSize
-// is the emitter's capacity; <= 0 means DefaultQueueSize.
-func NewController(src SettingsSource, build BackendBuilder, queueSize int, log *slog.Logger) *Controller {
+// reader. The sink/reader start empty until the first reconcile. queue sizes
+// the emitter's queues; its Logger is replaced by log.
+func NewController(src SettingsSource, build BackendBuilder, queue EmitterOptions, log *slog.Logger) *Controller {
 	if log == nil {
 		log = slog.Default()
 	}
+	queue.Logger = log
 	rsink := &reloadableSink{}
 	return &Controller{
 		src:     src,
 		build:   build,
-		emitter: NewEmitter(EmitterOptions{QueueSize: queueSize, Logger: log}, rsink),
+		emitter: NewEmitter(queue, rsink),
 		rsink:   rsink,
 		reader:  &reloadableReader{},
 		log:     log,

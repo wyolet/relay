@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 set -a
 # shellcheck source=/dev/null
 . ./versions.env
+# shellcheck source=/dev/null
+. ./build.env
 set +a
 
 DATA_PORT=${DATA_PORT:-18080}

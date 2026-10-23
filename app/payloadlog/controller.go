@@ -45,16 +45,18 @@ type Controller struct {
 
 // NewController wires the emitter → reloadable-sink chain. The sink starts
 // empty (nothing written) until the first reconcile applies the live
-// config. reader provides the live settings; build constructs sinks.
-func NewController(src SettingsSource, build SinkBuilder, log *slog.Logger) *Controller {
+// config. reader provides the live settings; build constructs sinks; queue
+// sizes the emitter's queues, its Logger replaced by log.
+func NewController(src SettingsSource, build SinkBuilder, queue EmitterOptions, log *slog.Logger) *Controller {
 	if log == nil {
 		log = slog.Default()
 	}
+	queue.Logger = log
 	rsink := &reloadableSink{}
 	return &Controller{
 		src:     src,
 		build:   build,
-		emitter: NewEmitter(EmitterOptions{Logger: log}, rsink),
+		emitter: NewEmitter(queue, rsink),
 		rsink:   rsink,
 		log:     log,
 		kick:    make(chan struct{}, 1),

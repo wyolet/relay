@@ -4,9 +4,9 @@ import "github.com/wyolet/relay/pkg/lifecycle"
 
 // SinkCollector is the payload janitor: a lifecycle.Collector that reads
 // the *Record attached under Namespace and pushes it onto the bounded
-// Emitter. Read-only on the Context; the Emit is a non-blocking channel
-// send. No-op when no Record was attached (capture disabled for the
-// request).
+// Emitter, on the refused queue when the request never reached an upstream.
+// Read-only on the Context; the Emit is a non-blocking channel send. No-op
+// when no Record was attached (capture disabled for the request).
 type SinkCollector struct {
 	emitter *Emitter
 }
@@ -24,6 +24,11 @@ func (c *SinkCollector) Collect(lc *lifecycle.Context) {
 	}
 	r, ok := v.(*Record)
 	if !ok || r == nil {
+		return
+	}
+	// No upstream start mark: the request was refused before reaching one.
+	if lc.Timing.Upstream.Start == 0 {
+		c.emitter.EmitRefused(*r)
 		return
 	}
 	c.emitter.Emit(*r)
