@@ -51,10 +51,14 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 	var admitted atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
+	// Capped below the kv pool size: 1000 calls at once can outwait the pool on a loaded runner and fail as store-unavailable.
+	inFlight := make(chan struct{}, 100)
 
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
+			inFlight <- struct{}{}
+			defer func() { <-inFlight }()
 			l := l1
 			if i%2 == 0 {
 				l = l2
