@@ -1,7 +1,11 @@
 package control
 
 import (
+	"errors"
+	"net/http"
 	"testing"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
@@ -129,6 +133,17 @@ func TestNormalizePolicyRefs_RejectsDisabled(t *testing.T) {
 	for _, raw := range []string{"openai/gpt-3-5", "acme/old", "@dead-host"} {
 		if _, err := normalizePolicyRefs(idx, []string{raw}, "p", "models"); err == nil {
 			t.Errorf("expected rejection for %q, got nil", raw)
+		}
+	}
+}
+
+func TestNormalizePolicyRefs_RejectsStarPatterns(t *testing.T) {
+	idx := testIndex()
+	for _, raw := range []string{"openai/gpt-*", "openai/gpt-4o@openai-*"} {
+		_, err := normalizePolicyRefs(idx, []string{raw}, "p", "models")
+		var se huma.StatusError
+		if !errors.As(err, &se) || se.GetStatus() != http.StatusBadRequest {
+			t.Errorf("normalizePolicyRefs(%q) = %v, want a 400", raw, err)
 		}
 	}
 }

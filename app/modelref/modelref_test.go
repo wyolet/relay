@@ -74,6 +74,13 @@ func TestParse_Errors(t *testing.T) {
 		{"anthropic/*@bedrock", nil, "slug-compatible"},
 		{"anthropic/claude@*", nil, "slug-compatible"},
 		{"@*", nil, "slug-compatible"},
+		// A * beside other characters is not a pattern; normalizing it away
+		// would leave a prefix that grants nothing.
+		{"stress-mock/stress-*", nil, "contains *"},
+		{"anthropic/claude-*@bedrock", nil, "contains *"},
+		{"anthropic/claude@aws-*", nil, "contains *"},
+		{"open*", nil, "contains *"},
+		{"@bed*rock", nil, "contains *"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
