@@ -24,8 +24,14 @@ func serve(srv *http.Server, maxConns int) (net.Addr, <-chan error) {
 	return ln.Addr(), errs
 }
 
-// connBudgetBytes is the memory budgeted per allowed connection: an idle keep-alive connection holds about 20 KiB, and the rest leaves room for the requests in flight.
+// connBudgetBytes is the memory budgeted per open connection: one stopped mid-request holds about 31 KiB live (23 KiB heap, 8 KiB stack; an idle keep-alive one about 19 KiB), doubled for the garbage the heap carries between collections.
 const connBudgetBytes = 64 << 10
+
+// Open connections may take connMemoryShareNum/connMemoryShareDen (40 %) of the memory limit; the rest is for the requests in flight, the record queues and the runtime.
+const (
+	connMemoryShareNum = 2
+	connMemoryShareDen = 5
+)
 
 const (
 	minDerivedMaxConns = 1024
@@ -33,7 +39,7 @@ const (
 	noMemLimitMaxConns = 16384
 )
 
-// inferenceMaxConns is RELAY_MAX_CONNS when set, else one connection per connBudgetBytes of the Go memory limit (GOMEMLIMIT), so an idle-connection flood can't run the pod out of memory.
+// inferenceMaxConns is RELAY_MAX_CONNS when set, else as many connections as fit in 40 % of the Go memory limit (GOMEMLIMIT) at connBudgetBytes each, so a connection flood can't run the pod out of memory.
 func inferenceMaxConns(configured int) int {
 	if configured > 0 {
 		return configured
@@ -42,5 +48,5 @@ func inferenceMaxConns(configured int) int {
 	if limit == math.MaxInt64 {
 		return noMemLimitMaxConns
 	}
-	return max(minDerivedMaxConns, int(limit/connBudgetBytes))
+	return max(minDerivedMaxConns, int(limit/connMemoryShareDen*connMemoryShareNum/connBudgetBytes))
 }

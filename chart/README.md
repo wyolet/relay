@@ -75,7 +75,7 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.logLevel` | `info` | `RELAY_LOG_LEVEL`. |
 | `relay.cookieSecure` | `"true"` | `RELAY_COOKIE_SECURE`. `false` only for plain-HTTP testing. |
 | `relay.maxRequestBytes` | `""` | `RELAY_MAX_REQUEST_BYTES`; empty keeps relay's 32 MiB. |
-| `relay.maxConns` | `""` | `RELAY_MAX_CONNS`; empty sizes the inference listener's connection cap from `goMemLimit` (14400 at the default `900MiB`). |
+| `relay.maxConns` | `""` | `RELAY_MAX_CONNS`; empty sizes the inference listener's connection cap from `goMemLimit` (5760 at the default `900MiB`). |
 | `relay.upstreamDialTimeoutS` | `""` | `RELAY_UPSTREAM_DIAL_TIMEOUT_S`; empty keeps relay's 10 s. |
 | `relay.proxyBodyIdleS` | `""` | `RELAY_PROXY_BODY_IDLE_S`; empty keeps relay's 30 seconds, `"0"` disables. |
 | `relay.preStopSleepS` | `5` | Seconds a deleted pod keeps serving before relay gets SIGTERM, so the ingress drops the endpoint before the listener closes. Uses the `preStop` sleep action, which needs Kubernetes 1.30+; `0` removes the hook. |
