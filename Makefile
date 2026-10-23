@@ -18,6 +18,10 @@ GO_TEST := /usr/bin/env -u RELAY_PG_DSN -u RELAY_CH_DSN -u RELAY_REDIS_ADDR -u R
 # Release BOM: pinned companion-artifact versions (UI_VERSION, CATALOG_VERSION).
 include versions.env
 
+# Go build settings (GOEXPERIMENT), exported to every go, golangci-lint and
+# govulncheck call below.
+include build.env
+
 # Registry + image
 REGISTRY    ?= ghcr.io/wyolet
 IMAGE_NAME  ?= relay

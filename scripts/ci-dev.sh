@@ -11,6 +11,11 @@
 # shellcheck disable=SC2329
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit
+# The Go build settings the Makefile also includes, for the go calls made here directly.
+set -a
+# shellcheck source=/dev/null
+. ./build.env
+set +a
 
 logs=$(mktemp -d)
 # Test runs never reach a deployment's databases (as GO_TEST in the Makefile).

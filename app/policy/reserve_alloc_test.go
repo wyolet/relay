@@ -109,8 +109,8 @@ func TestReserveInbound_Allocations(t *testing.T) {
 		jti  string
 		want int
 	}{
-		{name: "key", want: 54},
-		{name: "token", jti: "jti-1", want: 59},
+		{name: "key", want: 53},
+		{name: "token", jti: "jti-1", want: 58},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, pol := allocFixture(t, allocGateRules()...)
@@ -126,7 +126,7 @@ func TestReserveInbound_Allocations(t *testing.T) {
 // A token whose policy caps nothing still pays for the one script call the
 // revocation check rides on, and nothing more.
 func TestReserveInbound_AllocationsWithNoRules(t *testing.T) {
-	const want = 21
+	const want = 20
 
 	svc, pol := allocFixture(t)
 	in := InboundInput{Policy: pol, TeamID: "team-1", TokenJTI: "jti-1"}
@@ -145,7 +145,7 @@ func TestReserveInbound_AllocationsWithNothingToDo(t *testing.T) {
 // The commit half of the budget: returning a reservation must not allocate
 // more than the script call it makes.
 func TestCommitInbound_Allocations(t *testing.T) {
-	const want = 38
+	const want = 42
 
 	svc, pol := allocFixture(t, allocGateRules()...)
 	ctx := context.Background()

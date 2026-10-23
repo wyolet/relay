@@ -33,6 +33,8 @@ make lint                     # golangci-lint over every module
 go vet ./...
 ```
 
+Relay builds and tests with `GOEXPERIMENT=jsonv2`: `encoding/json` keeps its v1 API and results but runs on the faster v2 engine. `build.env` sets it for the Makefile, CI and the Dockerfile; a bare `go build` or `go test` outside `make` needs it in the environment to match what ships.
+
 `make lint` needs [golangci-lint](https://golangci-lint.run/) v2 on `PATH` (CI pins the version in `.github/workflows/ci.yml`); the enabled linters live in `.golangci.yml`.
 
 `make test-integration` brings up the compose test Postgres and Valkey; `make

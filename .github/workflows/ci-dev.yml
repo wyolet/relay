@@ -57,6 +57,7 @@ jobs:
               - '.github/workflows/ci-dev.yml'
             boot:
               - 'versions.env'
+              - 'build.env'
               - 'scripts/boot-smoke.sh'
               - '.github/workflows/ci-dev.yml'
             integration:
@@ -74,12 +75,14 @@ jobs:
               - 'integration/**'
               - '**/*integration_test.go'
               - 'Makefile'
+              - 'build.env'
               - '.github/workflows/ci-dev.yml'
             clickhouse:
               - 'pkg/usage/clickhouse/**'
               - 'pkg/payload/clickhouse/**'
               - 'pkg/chttl/**'
               - 'Makefile'
+              - 'build.env'
               - '.github/workflows/ci-dev.yml'
 
   # The light tier in one job: lint, unit tests and, when the paths call for
