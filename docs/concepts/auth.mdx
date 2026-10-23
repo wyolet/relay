@@ -63,7 +63,7 @@ curl -X POST http://localhost:8081/api/auth/token \
 
 `relay token mint --project my-project --user alice` logs in and mints in one step; see the [CLI reference](/reference/cli#relay-token-mint).
 
-The `auth:tokens` settings section controls tokens: `enabled` (default `true`), `defaultTTL` (default 1 hour, used when a mint names no `ttl`) and `maxTTL` (default 24 hours), both in nanoseconds. Tokens need `RELAY_MASTER_KEY`: the signing key is generated on first boot and stored encrypted under it, and a deployment without a master key mints no tokens. One user may mint 30 tokens per minute. `POST /api/auth/token/keys/rotate` replaces the signing key and takes the right to update settings; tokens signed by the previous key keep verifying until they expire.
+The `auth:tokens` settings section controls tokens: `enabled` (default `true`), `defaultTTL` (default 1 hour, used when a mint names no `ttl`) and `maxTTL` (default 24 hours), both in nanoseconds. An admin changes it with `PUT /api/settings/auth:tokens`. Tokens need `RELAY_MASTER_KEY`: the signing key is generated on first boot and stored encrypted under it, and a deployment without a master key mints no tokens. One user may mint 30 tokens per minute. `POST /api/auth/token/keys/rotate` replaces the signing key and takes the right to update settings; tokens signed by the previous key keep verifying until they expire.
 
 ### Revoking a token
 

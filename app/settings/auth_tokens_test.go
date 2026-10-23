@@ -57,6 +57,36 @@ func TestAuthTokens_Validate(t *testing.T) {
 	}
 }
 
+func TestAuthTokens_KeepSigningKeys(t *testing.T) {
+	cur := secret.Ref{Kind: secret.KindStored, ID: "auth-tokens-signing-key-b"}
+	prev := secret.Ref{Kind: secret.KindStored, ID: "auth-tokens-signing-key-a"}
+	installed := &AuthTokens{SigningKey: cur, PreviousSigningKey: prev}
+	other := secret.Ref{Kind: secret.KindStored, ID: "elsewhere"}
+	for _, tc := range []struct {
+		name    string
+		next    AuthTokens
+		current *AuthTokens
+		wantErr bool
+	}{
+		{name: "omitted keeps installed", current: installed},
+		{name: "echoed back", next: AuthTokens{SigningKey: cur, PreviousSigningKey: prev}, current: installed},
+		{name: "other signing key", next: AuthTokens{SigningKey: other}, current: installed, wantErr: true},
+		{name: "other previous key", next: AuthTokens{PreviousSigningKey: other}, current: installed, wantErr: true},
+		{name: "ref before any is installed", next: AuthTokens{SigningKey: cur}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := tc.next
+			err := next.KeepSigningKeys(tc.current)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("KeepSigningKeys = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil && tc.current != nil && (next.SigningKey != cur || next.PreviousSigningKey != prev) {
+				t.Errorf("refs = %+v / %+v, want the installed ones", next.SigningKey, next.PreviousSigningKey)
+			}
+		})
+	}
+}
+
 func TestAuthTokensFrom_MissingSection(t *testing.T) {
 	// A reader that knows nothing must still answer with the defaults —
 	// callers gate on Enabled, never on a nil.
