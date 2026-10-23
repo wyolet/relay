@@ -45,10 +45,15 @@ var provisioningSections = map[string]bool{
 	AuthSCIMSection: true,
 }
 
+// credentialSections decide how long an inference token lives and which key signs it, so writing them takes an admin.
+var credentialSections = map[string]bool{
+	AuthTokensSection: true,
+}
+
 // AdminOnly reports whether writing section requires an admin caller.
 func AdminOnly(section string) bool {
 	_, ok := secretScopes[section]
-	return ok || retentionSections[section] || provisioningSections[section]
+	return ok || retentionSections[section] || provisioningSections[section] || credentialSections[section]
 }
 
 func checkSecretRef(section, field string, r secret.Ref) error {
