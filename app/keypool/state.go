@@ -15,7 +15,6 @@ const (
 	ReasonUpstreamRateLimited  CooldownReason = "upstream_rate_limited"
 	ReasonUpstreamServerError  CooldownReason = "upstream_server_error"
 	ReasonUpstreamNetworkError CooldownReason = "upstream_network_error"
-	ReasonLocalRateLimited     CooldownReason = "local_rl_exhausted"
 )
 
 // CircuitRecord is the per-key circuit-breaker state stored under

@@ -39,7 +39,7 @@ var (
 	// ProviderKeysDown counts the times a pooled provider key was placed
 	// into cooldown by a failure — the leading indicator of heading
 	// toward "no healthy keys in pool". `reason` is the failure class
-	// (auth/rate_limit/server_error/network/local_rl).
+	// (auth/rate_limit/server_error/network).
 	//
 	// A counter, not a gauge: breaker state lives in shared kv, so a
 	// per-pod gauge of "keys down right now" would be inconsistent across
