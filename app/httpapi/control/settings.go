@@ -61,6 +61,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.AuthSCIMSection,
 		Description: "SCIM 2.0 provisioning from an identity provider at /scim/v2 on the control listener; disabled by default, and the endpoint answers 404 while it is. Each identity provider authenticates with a token from /scim-clients. deleteDisables makes a SCIM DELETE of a user disable the account instead of deleting it. linkClaim names the id_token claim (default sub; oid for Entra) a first OIDC sign-in is matched on against a provisioned account's externalId, linking that account when it has no sign-in identity yet. Hot-reloaded. Admin only.",
 	})
+	registerSettingsSection[settings.AuthTokens](api, d, protect, settings.Section{
+		Name:        settings.AuthTokensSection,
+		Description: "Relay-signed inference tokens a signed-in user mints for a project. defaultTTL applies when a mint names no ttl and maxTTL caps what it may ask for (both in nanoseconds); verifyCacheSize bounds each pod's verified-token cache (0 = default, negative = off). signingKey and previousSigningKey are set by relay and changed only by POST /auth/token/keys/rotate: a PUT that leaves them out keeps them, and one naming another secret is refused. Hot-reloaded. Admin only.",
+	})
 	registerSettingsSection[settings.OTLPReceiver](api, d, protect, settings.Section{
 		Name:        settings.SectionOTLPReceiver,
 		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy grant and none of the rate limits of inference apply; export requests are capped per credential. captureContent also stores the message content clients report, in the payload store, while payload logging is enabled; for a credential governed by a policy, only when that policy has payloadLoggingEnabled. Both default off. Hot-reloaded.",
@@ -239,6 +243,16 @@ func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewar
 		// single mode every signed-in user holds settings.update.
 		if settings.AdminOnly(section) && !authz.IsAdmin(ctx) {
 			return nil, huma.Error403Forbidden(section + " may only be changed by an admin")
+		}
+		if next, ok := any(&in.Body).(*settings.AuthTokens); ok {
+			row, err := d.Stores.Settings.Get(ctx, section)
+			if err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
+			}
+			current, _ := row.Value.(*settings.AuthTokens)
+			if err := next.KeepSigningKeys(current); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 		}
 		raw, err := json.Marshal(in.Body)
 		if err != nil {

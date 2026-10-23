@@ -227,7 +227,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		excluded     []*hostkey.HostKey
 		resp         *http.Response
 		keyValue     string // current secret for acq.Key; overridden on a heal-retry
-		attempts     int    // distinct keys tried (a same-key retry doesn't count)
+		attempts     int    // distinct keys called upstream (a same-key retry doesn't count)
 		connAttempts int    // consecutive dial failures against the host (any key)
 		// Last upstream response observed during retry, carried into the final error: without it "all keys exhausted" hides both the reason upstream rejected (auth? quota? bad model?) and the backoff/rate-limit headers the caller needs to pace its retry.
 		lastStatus int
@@ -254,11 +254,14 @@ loop:
 				})
 			}
 			if errors.Is(err, policy.ErrSaturated) {
+				// A key over its tier never reached the upstream, so it doesn't
+				// spend an attempt; excluding it bounds the loop by the key count.
 				if acq != nil && acq.Key != nil {
 					excluded = append(excluded, acq.Key)
+				} else {
+					attempts++
 				}
 				acq = nil
-				attempts++
 				continue
 			}
 			if err != nil {

@@ -83,8 +83,8 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.batchPayloadDir` | `/var/lib/relay/batch-payloads` | Batch payload directory (`RELAY_BATCH_PAYLOAD_DIR`), on the pod's `emptyDir`. See the caveats below. |
 | `relay.settingsDir` | `/var/lib/relay/settings` | Where the settings ConfigMap is mounted (`RELAY_SETTINGS_DIR`). |
 | `relay.pgMaxConns`, `relay.pgMinConns` | `""` | Postgres pool size per pod; empty keeps relay's 10 / 2. Keep `pgMaxConns` × replicas below Postgres `max_connections` (100 on the bundled one). |
-| `relay.redisPoolSize`, `relay.redisMinIdleConns` | `""` | Valkey client pool size and idle floor; empty keeps the client defaults, which have no idle floor. |
-| `relay.redisPostFlightPoolSize`, `relay.redisPostFlightPoolTimeoutMs`, `relay.redisPostFlightReadTimeoutMs` | `""` | `RELAY_REDIS_POSTFLIGHT_*`: the pool size, pool wait and read bound of the Valkey client that writes after the response; empty keeps relay's 10 / 1000 / 1000. |
+| `relay.redisPoolSize`, `relay.redisMinIdleConns` | `""` | Valkey client pool size and idle floor; empty keeps relay's 25 connections per CPU and no idle floor. |
+| `relay.redisPostFlightPoolSize`, `relay.redisPostFlightPoolTimeoutMs`, `relay.redisPostFlightReadTimeoutMs` | `""` | `RELAY_REDIS_POSTFLIGHT_*`: the pool size, pool wait and read bound of the Valkey client that writes after the response; empty keeps relay's 25 per CPU / 1000 / 1000. |
 | `relay.payloadLogging.enabled` | `true` | Seeds `payload-logging.enabled`. Capture still needs a per-policy opt-in. |
 | `relay.payloadLogging.backend` | `clickhouse` | `file`, `s3` or `clickhouse`. `clickhouse` reuses `RELAY_CH_DSN`. |
 | `relay.payloadLogging.maxBytes` | `1048576` | Cap per stored body; `0` is unlimited. |

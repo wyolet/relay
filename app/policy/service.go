@@ -2,7 +2,7 @@
 // RL per (provider, model, host), reserves inbound + upstream buckets,
 // and rolls them back on failure. One Service per process.
 //
-// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty.
+// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). A key whose tier reserve was refused is skipped for that model until the refusal's retry-after, without a kv call (tier_full.go). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty.
 
 package policy
 
@@ -37,10 +37,13 @@ type Service struct {
 	// postSelector and postLimiter run Settle.
 	postSelector *keypool.Selector
 	postLimiter  *pkgratelimit.Limiter
+
+	full  tierFull
+	clock func() time.Time
 }
 
 func NewService(snap SnapshotReader, sel *keypool.Selector, lim *pkgratelimit.Limiter) *Service {
-	return &Service{snap: snap, selector: sel, limiter: lim, postSelector: sel, postLimiter: lim}
+	return &Service{snap: snap, selector: sel, limiter: lim, postSelector: sel, postLimiter: lim, clock: time.Now}
 }
 
 // WithPostFlight runs Settle on sel and lim instead, built on a kv store of their own: a served request's commit carries its token counts, so it must not be dropped when admission has taken every connection of the shared pool. Call before serving.
@@ -160,20 +163,55 @@ func (s *Service) CommitInbound(ctx context.Context, res *pkgratelimit.Reservati
 	return s.limiter.Commit(ctx, res, obs)
 }
 
-// Acquire picks one key (excluding in.Excluded) and reserves its
-// upstream bucket. On ExceededError, records FailureRateLimitShort and
-// returns ErrSaturated (with Acquisition.Key set for logging).
+// Acquire picks one key (excluding in.Excluded and the keys this process
+// remembers as over their tier for the model) and reserves its upstream
+// bucket. A refused reserve returns ErrSaturated (with Acquisition.Key set so
+// the caller can exclude it); no key left but full ones returns ErrKeyTiersFull.
 func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, error) {
 	if s.selector == nil {
 		return nil, fmt.Errorf("policy.Service.Acquire: selector not configured")
 	}
 
+	excluded, full := s.full.exclude(in.Keys, in.Excluded, modelIDOf(in), s.clock())
+	if full != nil && allExcluded(in.Keys, excluded) {
+		return nil, keyTiersFullError(full)
+	}
 	scope, algo := pickScope(in.Policy)
-	picked, err := s.selector.PickCandidate(ctx, scope, algo, in.Keys, in.Excluded)
+	picked, err := s.selector.PickCandidate(ctx, scope, algo, in.Keys, excluded)
 	if err != nil {
-		return nil, err
+		return nil, pickError(err, full)
 	}
 	return s.reserveTier(ctx, picked, in)
+}
+
+// pickError reports a pick that found no healthy key as ErrKeyTiersFull when
+// keys were skipped as full: those have room again at a known time, so the
+// caller gets a retry-after instead of "no healthy keys".
+func pickError(err error, full *pkgratelimit.KeyQuotaExhausted) error {
+	if full != nil && errors.Is(err, keypool.ErrNoHealthyKeys) {
+		return keyTiersFullError(full)
+	}
+	return err
+}
+
+func allExcluded(keys, excluded []*hostkey.HostKey) bool {
+	skip := make(map[*hostkey.HostKey]struct{}, len(excluded))
+	for _, k := range excluded {
+		skip[k] = struct{}{}
+	}
+	for _, k := range keys {
+		if _, ok := skip[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func modelIDOf(in AcquireInput) string {
+	if in.Model == nil {
+		return ""
+	}
+	return in.Model.Meta.ID
 }
 
 // pickScope is the key-selection scope and strategy pol sets.
@@ -184,7 +222,7 @@ func pickScope(pol *Policy) (string, keypool.KeySelection) {
 	return pol.Meta.Name, pol.EffectiveKeySelection()
 }
 
-// reserveTier reserves the picked key's upstream bucket when its tier policy has rules for this request. On KeyQuotaExhausted it records FailureRateLimitShort and returns ErrSaturated with the key set.
+// reserveTier reserves the picked key's upstream bucket when its tier policy has rules for this request. On KeyQuotaExhausted it remembers the key as full for the model until the limiter's retry-after and returns ErrSaturated with the key set.
 func (s *Service) reserveTier(ctx context.Context, picked keypool.Candidate, in AcquireInput) (*Acquisition, error) {
 	key, writeSuccess := picked.Key, picked.SuccessNeedsWrite()
 	modelSlug, modelID, hostSlug := "", "", ""
@@ -208,7 +246,7 @@ func (s *Service) reserveTier(ctx context.Context, picked keypool.Candidate, in 
 	if err != nil {
 		var exceeded *pkgratelimit.KeyQuotaExhausted
 		if errors.As(err, &exceeded) {
-			s.selector.RecordFailure(ctx, key.KeyHash, keypool.FailureRateLimitShort, 0)
+			s.full.record(key.Meta.ID, modelID, exceeded, s.clock())
 			return &Acquisition{Key: key}, ErrSaturated
 		}
 		return nil, fmt.Errorf("policy.Service.Acquire: reserve: %w", err)

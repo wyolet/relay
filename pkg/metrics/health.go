@@ -11,12 +11,12 @@ var (
 	// emitter queue was full or a WAL dropped segments over its disk cap
 	// (usage rows, payload captures). The async contract mandates this
 	// counter: a drop you can't see is a billing or audit hole. `kind` is
-	// the emitter: "usage" | "payload".
+	// the emitter queue: "usage" | "usage_refused" | "payload" | "payload_refused".
 	RecordsLost = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: Namespace,
 			Name:      "records_lost_total",
-			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage/payload).",
+			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage, payload, and usage_refused/payload_refused for requests that never reached an upstream).",
 		},
 		[]string{"kind"},
 	)
@@ -39,7 +39,7 @@ var (
 	// ProviderKeysDown counts the times a pooled provider key was placed
 	// into cooldown by a failure — the leading indicator of heading
 	// toward "no healthy keys in pool". `reason` is the failure class
-	// (auth/rate_limit/server_error/network/local_rl).
+	// (auth/rate_limit/server_error/network).
 	//
 	// A counter, not a gauge: breaker state lives in shared kv, so a
 	// per-pod gauge of "keys down right now" would be inconsistent across
@@ -89,7 +89,7 @@ func RegisterQueueDepth(kind string, fn func() float64) {
 	Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace:   Namespace,
 		Name:        "emit_queue_depth",
-		Help:        "Events waiting in a bounded emitter queue, by kind (usage/payload).",
+		Help:        "Events waiting in a bounded emitter queue, by kind (usage/usage_refused/payload/payload_refused).",
 		ConstLabels: prometheus.Labels{"kind": SafeLabel(kind)},
 	}, fn))
 }

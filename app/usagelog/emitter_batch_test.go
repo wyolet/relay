@@ -87,11 +87,11 @@ func TestEmitter_DrainsBurstInBatches(t *testing.T) {
 	sink := newBatchSink()
 	e := NewEmitter(EmitterOptions{QueueSize: 2000, Logger: testLogger()}, sink)
 
-	e.Emit(Event{RequestID: "first"})
+	e.Emit(served("first"))
 	<-sink.entered
 	burst := ids("b", 1200)
 	for _, id := range burst {
-		e.Emit(Event{RequestID: id})
+		e.Emit(served(id))
 	}
 	if d := e.QueueDepth(); d != len(burst) {
 		t.Fatalf("queue depth with drain parked = %d, want %d", d, len(burst))
@@ -119,11 +119,11 @@ func TestEmitter_FallsBackToWriteForNonBatchSink(t *testing.T) {
 	sink := &writeOnlySink{entered: make(chan struct{}), release: make(chan struct{})}
 	e := NewEmitter(EmitterOptions{QueueSize: 100, Logger: testLogger()}, sink)
 
-	e.Emit(Event{RequestID: "first"})
+	e.Emit(served("first"))
 	<-sink.entered
 	burst := ids("w", 50)
 	for _, id := range burst {
-		e.Emit(Event{RequestID: id})
+		e.Emit(served(id))
 	}
 	close(sink.release)
 	e.Close()
@@ -140,11 +140,11 @@ func TestEmitter_CloseDrainsQueuedBatches(t *testing.T) {
 	sink := newBatchSink()
 	e := NewEmitter(EmitterOptions{QueueSize: 2000, Logger: testLogger()}, sink)
 
-	e.Emit(Event{RequestID: "first"})
+	e.Emit(served("first"))
 	<-sink.entered
 	queued := ids("q", 1500)
 	for _, id := range queued {
-		e.Emit(Event{RequestID: id})
+		e.Emit(served(id))
 	}
 	closed := make(chan struct{})
 	go func() {

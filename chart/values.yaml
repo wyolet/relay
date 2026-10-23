@@ -70,11 +70,12 @@ relay:
   # max_connections (bundled PG defaults to 100).
   pgMaxConns: ""
   pgMinConns: ""
-  # -- go-redis pool sizing (RELAY_REDIS_POOL_SIZE / RELAY_REDIS_MIN_IDLE_CONNS,
-  # relay >= 0.9.6). Empty = library defaults, which have NO idle floor: request
-  # bursts on a fresh pod dial Valkey connections cold (TCP + uncached DNS) inside
-  # the request budget. Set redisMinIdleConns to keep a warm floor, mirroring
-  # pgMinConns.
+  # -- go-redis pool sizing (RELAY_REDIS_POOL_SIZE / RELAY_REDIS_MIN_IDLE_CONNS).
+  # Empty = relay defaults: pool 25 per CPU of the pod's limit, NO idle floor, so
+  # request bursts on a fresh pod dial Valkey connections cold (TCP + uncached
+  # DNS) inside the request budget. Set redisMinIdleConns to keep a warm floor,
+  # mirroring pgMinConns. A pool smaller than the default caps the pod's
+  # throughput well before Valkey is busy.
   redisPoolSize: ""
   redisMinIdleConns: ""
   # -- Valkey client bounds in milliseconds (RELAY_REDIS_*_TIMEOUT_MS); empty =
@@ -88,7 +89,7 @@ relay:
   # A resent rate-limit check can count one request twice.
   redisMaxRetries: ""
   # -- The second Valkey client that settles a request after its response
-  # (RELAY_REDIS_POSTFLIGHT_*); empty = relay defaults: pool 10, pool wait 1000,
+  # (RELAY_REDIS_POSTFLIGHT_*); empty = relay defaults: pool 25 per CPU, pool wait 1000,
   # read 1000. Its own pool keeps rate-limit commits from being dropped while
   # admission holds every connection of the shared one.
   redisPostFlightPoolSize: ""
