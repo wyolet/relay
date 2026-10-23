@@ -11,21 +11,34 @@ import (
 
 // ParseRequest decodes an Anthropic /v1/messages request body into canonical *v1.Request.
 func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
+	if req, ok := parseRequestFlat(body); ok {
+		return req, nil
+	}
+	return parseRequestLayered(body)
+}
+
+// requestScalars holds every top-level member except system, messages and tools.
+type requestScalars struct {
+	Model         string          `json:"model"`
+	ToolChoice    json.RawMessage `json:"tool_choice"`
+	MaxTokens     *int            `json:"max_tokens"`
+	Temperature   *float64        `json:"temperature"`
+	TopP          *float64        `json:"top_p"`
+	TopK          *int            `json:"top_k"`
+	StopSequences []string        `json:"stop_sequences"`
+	Stream        bool            `json:"stream"`
+	Metadata      json.RawMessage `json:"metadata"`
+	Thinking      json.RawMessage `json:"thinking"`
+	OutputConfig  json.RawMessage `json:"output_config"`
+}
+
+// parseRequestLayered decodes the body level by level, each nested value re-unmarshalled from its raw bytes. ParseRequest uses it for the bodies parseRequestFlat declines; its results define the ones parseRequestFlat accepts.
+func parseRequestLayered(body []byte) (*v1.Request, error) {
 	var wire struct {
-		Model         string            `json:"model"`
-		System        json.RawMessage   `json:"system"`
-		Messages      []json.RawMessage `json:"messages"`
-		Tools         []json.RawMessage `json:"tools"`
-		ToolChoice    json.RawMessage   `json:"tool_choice"`
-		MaxTokens     *int              `json:"max_tokens"`
-		Temperature   *float64          `json:"temperature"`
-		TopP          *float64          `json:"top_p"`
-		TopK          *int              `json:"top_k"`
-		StopSequences []string          `json:"stop_sequences"`
-		Stream        bool              `json:"stream"`
-		Metadata      json.RawMessage   `json:"metadata"`
-		Thinking      json.RawMessage   `json:"thinking"`
-		OutputConfig  json.RawMessage   `json:"output_config"`
+		requestScalars
+		System   json.RawMessage   `json:"system"`
+		Messages []json.RawMessage `json:"messages"`
+		Tools    []json.RawMessage `json:"tools"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("anthropic parse_request: %w", err)
@@ -34,15 +47,7 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		return nil, fmt.Errorf("anthropic parse_request: model is required")
 	}
 
-	req := &v1.Request{
-		Model: v1.ModelRefs{wire.Model},
-	}
-
-	if wire.Stream {
-		req.OutputMode = v1.OutputModeStream
-	} else {
-		req.OutputMode = v1.OutputModeSync
-	}
+	req := wire.toCanonical()
 
 	var breakpoints cacheBreakpoints
 	var instructionsCached, toolsCached bool
@@ -51,6 +56,50 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	if len(wire.System) > 0 && string(wire.System) != "null" {
 		req.Instructions = anthropicExtractSystemText(wire.System)
 		instructionsCached = breakpoints.systemMarked(wire.System)
+	}
+
+	// Tools
+	if len(wire.Tools) > 0 {
+		tc := &v1.ToolsConfig{}
+		for _, raw := range wire.Tools {
+			tool, err := anthropicParseTool(raw)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic parse_request: tool: %w", err)
+			}
+			if tool != nil {
+				tc.Definitions = append(tc.Definitions, tool)
+			}
+			if breakpoints.blockMarked(raw) {
+				toolsCached = true
+			}
+		}
+		if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
+			tc.Choice, tc.Parallel = anthropicParseToolChoice(wire.ToolChoice)
+		}
+		req.Tools = tc
+	}
+
+	// Build Input from messages.
+	input, err := anthropicMessagesToCanonical(wire.Messages, &breakpoints)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic parse_request: messages: %w", err)
+	}
+	req.Input = input
+	req.CacheConfig = breakpoints.config(instructionsCached, toolsCached)
+
+	return req, nil
+}
+
+// toCanonical maps the scalar members: model, output mode, user and the model options.
+func (wire *requestScalars) toCanonical() *v1.Request {
+	req := &v1.Request{
+		Model: v1.ModelRefs{wire.Model},
+	}
+
+	if wire.Stream {
+		req.OutputMode = v1.OutputModeStream
+	} else {
+		req.OutputMode = v1.OutputModeSync
 	}
 
 	// metadata.user_id → User
@@ -93,27 +142,6 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	if hasSampling {
 		opts.Sampling = sp
 		hasOpts = true
-	}
-
-	// Tools
-	if len(wire.Tools) > 0 {
-		tc := &v1.ToolsConfig{}
-		for _, raw := range wire.Tools {
-			tool, err := anthropicParseTool(raw)
-			if err != nil {
-				return nil, fmt.Errorf("anthropic parse_request: tool: %w", err)
-			}
-			if tool != nil {
-				tc.Definitions = append(tc.Definitions, tool)
-			}
-			if breakpoints.blockMarked(raw) {
-				toolsCached = true
-			}
-		}
-		if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
-			tc.Choice, tc.Parallel = anthropicParseToolChoice(wire.ToolChoice)
-		}
-		req.Tools = tc
 	}
 
 	// Thinking → ReasoningConfig
@@ -161,14 +189,5 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	if hasOpts {
 		req.ModelConfig = map[string]*v1.ModelOpts{wire.Model: opts}
 	}
-
-	// Build Input from messages.
-	input, err := anthropicMessagesToCanonical(wire.Messages, &breakpoints)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic parse_request: messages: %w", err)
-	}
-	req.Input = input
-	req.CacheConfig = breakpoints.config(instructionsCached, toolsCached)
-
-	return req, nil
+	return req
 }

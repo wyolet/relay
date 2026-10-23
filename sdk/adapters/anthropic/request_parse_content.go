@@ -144,16 +144,7 @@ func anthropicDocumentBlockToPart(raw json.RawMessage) *v1.FilePart {
 	if err := json.Unmarshal(raw, &block); err != nil {
 		return nil
 	}
-	switch block.Source.Type {
-	case "base64":
-		return &v1.FilePart{FileData: block.Source.Data, MediaType: block.Source.MediaType}
-	case "url":
-		return &v1.FilePart{FileURL: block.Source.URL}
-	case "file":
-		return &v1.FilePart{FileID: block.Source.FileID}
-	}
-	// canonical: document text and content sources dropped — FilePart.FileData is base64 file bytes, and Anthropic accepts base64 documents only as PDF.
-	return nil
+	return documentSourceToPart(blockSource(block.Source))
 }
 
 // splitToolResults extracts tool_result blocks from raw content and returns them as
@@ -270,20 +261,7 @@ func anthropicAssistantContentToItems(raw json.RawMessage, breakpoints *cacheBre
 				CacheConfig: breakpoints.blockAnchor(b),
 			})
 		case "thinking":
-			var pd json.RawMessage
-			if probe.Signature != "" {
-				pdMap := map[string]string{
-					"type":      "thinking",
-					"thinking":  probe.Thinking,
-					"signature": probe.Signature,
-				}
-				pd, _ = json.Marshal(pdMap)
-			}
-			toolItems = append(toolItems, &v1.Reasoning{
-				Content:      probe.Thinking,
-				Summary:      []v1.SummaryText{{Text: probe.Thinking}},
-				ProviderData: pd,
-			})
+			toolItems = append(toolItems, thinkingToReasoning(probe.Thinking, probe.Signature))
 		}
 	}
 
@@ -307,15 +285,5 @@ func anthropicImageBlockToURL(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &block); err != nil {
 		return ""
 	}
-	switch block.Source.Type {
-	case "url":
-		return block.Source.URL
-	case "base64":
-		mt := block.Source.MediaType
-		if mt == "" {
-			mt = "application/octet-stream"
-		}
-		return "data:" + mt + ";base64," + block.Source.Data
-	}
-	return ""
+	return imageSourceToURL(blockSource{Type: block.Source.Type, URL: block.Source.URL, MediaType: block.Source.MediaType, Data: block.Source.Data})
 }
