@@ -73,7 +73,7 @@ The policy's limit is reserved once per request, before a host key is picked, so
 
 Every host key names a tier policy owned by its host (see [Tier policies](/concepts/policies#tier-policies-on-host-keys)). If that tier policy has a rate limit, Relay reserves it per host key, so the counters for one key are shared by every policy and team that spends the key. The catalog's tier policies carry provider-published limits; edit them, or point the key at a different tier, to match your account.
 
-When a key is over its upstream limit, Relay skips it for this request without opening its circuit breaker and tries the next key in the pool. If none of the keys it tries has room (a request tries at most three), the request fails with `502 upstream_error`.
+When a key is over its upstream limit, Relay skips it without opening its circuit breaker and tries the next key in the pool. A skipped key does not count toward the three keys a request tries upstream. The pod remembers the refusal for that key and model until the limiter's retry time, so later requests skip the key without reserving it again. Each pod learns this from its own refusals. If every key is over its limit, the request fails with `429 rate_limit_exceeded`, and `Retry-After` says when the first key has room.
 
 ### System rate limits
 

@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
+	"runtime/debug"
 	"testing"
 )
 
@@ -41,5 +43,24 @@ func TestAdmissionRegisteredAfterIOCollectors(t *testing.T) {
 		if pos > admission {
 			t.Errorf("%s registers its collector after registerAdmission; the in-flight cap would not cover its post-flight work", name)
 		}
+	}
+}
+
+func TestPayloadQueueSize(t *testing.T) {
+	if got := payloadQueueSize(500); got != 500 {
+		t.Fatalf("configured 500: got %d", got)
+	}
+	prev := debug.SetMemoryLimit(900 << 20)
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+	if got := payloadQueueSize(0); got != 900 {
+		t.Fatalf("900 MiB memory limit: got %d, want 900", got)
+	}
+	debug.SetMemoryLimit(64 << 20)
+	if got := payloadQueueSize(0); got != minDerivedPayloadQueue {
+		t.Fatalf("64 MiB memory limit: got %d, want the floor %d", got, minDerivedPayloadQueue)
+	}
+	debug.SetMemoryLimit(math.MaxInt64)
+	if got := payloadQueueSize(0); got != noMemLimitPayloadQueue {
+		t.Fatalf("no memory limit: got %d, want %d", got, noMemLimitPayloadQueue)
 	}
 }

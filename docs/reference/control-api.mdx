@@ -158,7 +158,7 @@ GET /api/settings/{section}       one section
 PUT /api/settings/{section}       replace one section
 ```
 
-Sections with their own route: `inference`, `parsing`, `proxy-mode`, `usage-logging`, `payload-logging`, `otlp-receiver`, `audit`, `catalog-source`, `auth:oidc`, `auth:scim`, `governance:provider`, `governance:host`, `governance:model`, `governance:policy`. `license` and `auth:tokens` are listed by `GET /api/settings` but have no route of their own: the license is written with `PUT /api/license`, and `auth:tokens` only by relay and by seed files. A PUT replaces the whole section; changes apply without a restart. Writing `usage-logging`, `payload-logging`, `audit`, `auth:oidc` or `auth:scim` takes an admin. See [Settings](/reference/settings) for each section's fields.
+Sections with their own route: `inference`, `parsing`, `proxy-mode`, `usage-logging`, `payload-logging`, `otlp-receiver`, `audit`, `catalog-source`, `auth:oidc`, `auth:scim`, `auth:tokens`, `governance:provider`, `governance:host`, `governance:model`, `governance:policy`. `license` is listed by `GET /api/settings` but has no route of its own: it is written with `PUT /api/license`. A PUT replaces the whole section, except the `auth:tokens` signing-key references, which only rotation changes; changes apply without a restart. Writing `usage-logging`, `payload-logging`, `audit`, `auth:oidc`, `auth:scim` or `auth:tokens` takes an admin. See [Settings](/reference/settings) for each section's fields.
 
 ## GitOps
 

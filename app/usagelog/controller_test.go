@@ -52,7 +52,7 @@ func TestController_ReconcileSwapsBackendAndClosesOld(t *testing.T) {
 		return Backend{Sink: be, Reader: be}, nil
 	}
 
-	c := NewController(src, build, 0, testLogger())
+	c := NewController(src, build, EmitterOptions{}, testLogger())
 
 	// Initial reconcile → first backend live.
 	c.reconcile(context.Background())
@@ -98,7 +98,7 @@ func TestController_KeepsPreviousOnBuildError(t *testing.T) {
 		}
 		return Backend{Sink: good, Reader: good}, nil
 	}
-	c := NewController(src, build, 0, testLogger())
+	c := NewController(src, build, EmitterOptions{}, testLogger())
 	c.reconcile(context.Background())
 
 	src.Change(settings.SectionUsageLogging, &settings.UsageLogging{Backend: "bad"})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/routing"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -78,6 +79,36 @@ func TestMapPipelineErr_InboundLimitExceeded_429WithRetryAfter(t *testing.T) {
 	// One client reads the delay out of the message text and never looks at Retry-After.
 	if !strings.Contains(env.Err.Message, "try again in 3s") {
 		t.Fatalf("message must name the retry delay: %q", env.Err.Message)
+	}
+}
+
+// Every host key over its tier is a 429 naming the key tiers, with the
+// earliest time a key has room, and keeps the tier's rule name to itself.
+func TestMapPipelineErr_KeyTiersFull_429WithRetryAfter(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mapPipelineErr(rec, fmt.Errorf("%w: %w", policy.ErrKeyTiersFull, &pkgratelimit.KeyQuotaExhausted{
+		Rule:       pkgratelimit.Rule{Name: "openai-tier-1 requests"},
+		RetryAfter: 11500 * time.Millisecond,
+	}))
+
+	if rec.Code != 429 {
+		t.Fatalf("status: %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "12" {
+		t.Fatalf("Retry-After: %q, want %q", got, "12")
+	}
+	var env httpapi.APIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
+		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
+	}
+	if !strings.Contains(env.Err.Message, "tier rate limit") || !strings.Contains(env.Err.Message, "try again in 12s") {
+		t.Fatalf("message must name the key tiers and the delay: %q", env.Err.Message)
+	}
+	if strings.Contains(env.Err.Message, "openai-tier-1") {
+		t.Fatalf("message leaks the tier's rule name: %q", env.Err.Message)
 	}
 }
 

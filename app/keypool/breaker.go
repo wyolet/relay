@@ -167,17 +167,6 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 	s.recordFailure(ctx, keyHash, op, logReason)
 }
 
-// RecordLocalRateLimit cools down a key because our own rate-limit rule
-// fired (KeyQuotaExhausted from pkg/ratelimit). Distinct from upstream-driven
-// cooldowns: no backoff escalation — the duration is deterministic from
-// Retry-After.
-func (s *Selector) RecordLocalRateLimit(ctx context.Context, keyHash string, retryAfter time.Duration) {
-	if isAnonymous(keyHash) {
-		return
-	}
-	s.recordFailure(ctx, keyHash, failureOp{now: s.clock(), reason: ReasonLocalRateLimited, openFor: retryAfter}, "local_rl_exhausted")
-}
-
 func (s *Selector) recordFailure(ctx context.Context, keyHash string, op failureOp, logReason string) {
 	raw, err := s.runRecordScript(ctx, failureCall(keyHash, op), func(rec CircuitRecord, _ bool) (CircuitRecord, bool) {
 		return applyFailure(rec, op)

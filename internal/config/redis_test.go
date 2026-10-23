@@ -1,6 +1,7 @@
 package config
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -8,7 +9,7 @@ import (
 )
 
 func TestRedisClientDefaults(t *testing.T) {
-	for _, k := range []string{"RELAY_REDIS_DIAL_TIMEOUT_MS", "RELAY_REDIS_READ_TIMEOUT_MS", "RELAY_REDIS_WRITE_TIMEOUT_MS", "RELAY_REDIS_POOL_TIMEOUT_MS", "RELAY_REDIS_MAX_RETRIES"} {
+	for _, k := range []string{"RELAY_REDIS_POOL_SIZE", "RELAY_REDIS_DIAL_TIMEOUT_MS", "RELAY_REDIS_READ_TIMEOUT_MS", "RELAY_REDIS_WRITE_TIMEOUT_MS", "RELAY_REDIS_POOL_TIMEOUT_MS", "RELAY_REDIS_MAX_RETRIES"} {
 		t.Setenv(k, "")
 	}
 	cfg, err := Load()
@@ -22,6 +23,9 @@ func TestRedisClientDefaults(t *testing.T) {
 	}
 	if cfg.RedisMaxRetries != 0 {
 		t.Fatalf("RedisMaxRetries = %d, want 0", cfg.RedisMaxRetries)
+	}
+	if want := 25 * runtime.GOMAXPROCS(0); cfg.RedisPoolSize != want {
+		t.Fatalf("RedisPoolSize = %d, want %d", cfg.RedisPoolSize, want)
 	}
 }
 
@@ -70,9 +74,9 @@ func TestRedisPostFlightDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RedisPostFlightPoolSize != 10 || cfg.RedisPostFlightPoolTimeout != time.Second || cfg.RedisPostFlightReadTimeout != time.Second {
-		t.Fatalf("post-flight = pool %d, pool wait %v, read %v; want 10, 1s, 1s",
-			cfg.RedisPostFlightPoolSize, cfg.RedisPostFlightPoolTimeout, cfg.RedisPostFlightReadTimeout)
+	if want := 25 * runtime.GOMAXPROCS(0); cfg.RedisPostFlightPoolSize != want || cfg.RedisPostFlightPoolTimeout != time.Second || cfg.RedisPostFlightReadTimeout != time.Second {
+		t.Fatalf("post-flight = pool %d, pool wait %v, read %v; want %d, 1s, 1s",
+			cfg.RedisPostFlightPoolSize, cfg.RedisPostFlightPoolTimeout, cfg.RedisPostFlightReadTimeout, want)
 	}
 }
 

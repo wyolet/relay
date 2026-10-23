@@ -12,10 +12,12 @@ type cacheBreakpoints struct {
 }
 
 type cacheControlProbe struct {
-	Type         string `json:"type"`
-	CacheControl *struct {
-		TTL string `json:"ttl"`
-	} `json:"cache_control"`
+	Type         string            `json:"type"`
+	CacheControl *wireCacheControl `json:"cache_control"`
+}
+
+type wireCacheControl struct {
+	TTL string `json:"ttl"`
 }
 
 // note reports whether the block is a breakpoint and records its tier.
@@ -74,6 +76,14 @@ func (c *cacheBreakpoints) contentAnchor(content json.RawMessage) *v1.ItemCacheC
 // blockAnchor returns the item anchor for one block (tool_use, tool_result) that carries a breakpoint.
 func (c *cacheBreakpoints) blockAnchor(raw json.RawMessage) *v1.ItemCacheConfig {
 	if c == nil || !c.blockMarked(raw) {
+		return nil
+	}
+	return &v1.ItemCacheConfig{Anchor: true}
+}
+
+// anchorIfMarked returns the item anchor for a block whose decoded cache_control is cc.
+func (c *cacheBreakpoints) anchorIfMarked(cc *wireCacheControl) *v1.ItemCacheConfig {
+	if !c.note(cacheControlProbe{CacheControl: cc}) {
 		return nil
 	}
 	return &v1.ItemCacheConfig{Anchor: true}
