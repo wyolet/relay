@@ -228,6 +228,16 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 			want: "slug-compatible",
 		},
 		{
+			// Normalizing would drop the star and keep a prefix that grants nothing.
+			name: "a star beside a name in the model position",
+			p: func() *Policy {
+				p := fix("p")
+				p.Spec.Models = []string{"acme/model-*"}
+				return p
+			}(),
+			want: "contains *",
+		},
+		{
 			name: "an rlBinding model ref the parser cannot read is not checked here",
 			p: func() *Policy {
 				p := fix("p")

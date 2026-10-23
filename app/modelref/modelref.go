@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/wyolet/relay/pkg/slug"
@@ -112,6 +113,11 @@ func Parse(s string) (Ref, error) {
 		n := slug.From(raw)
 		if n == "" || !slugRe.MatchString(n) {
 			return "", &SyntaxError{Raw: ref.Raw, Reason: segment + " has no slug-compatible characters"}
+		}
+		// Normalizing would drop the * and leave a literal prefix that names
+		// nothing, so the ref would be accepted and grant nothing.
+		if strings.ContainsRune(raw, '*') {
+			return "", &SyntaxError{Raw: ref.Raw, Reason: segment + " " + strconv.Quote(raw) + " contains *: refs take no patterns; leave the " + segment + " out to match every one"}
 		}
 		return n, nil
 	}
