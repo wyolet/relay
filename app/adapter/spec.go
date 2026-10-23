@@ -15,7 +15,6 @@
 package adapter
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -43,10 +42,10 @@ type AuthStrategy struct {
 // StreamUsageOptIn is how byte-pass asks a stream for its usage on the
 // caller's behalf and hides the answer from a caller that did not ask.
 type StreamUsageOptIn struct {
-	// Request sets the opt-in on a request's top-level fields and reports
-	// whether it changed them (false when the caller already asked or the
-	// request is not streamed).
-	Request func(fields map[string]json.RawMessage) bool
+	// Request returns the top-level member to set for the opt-in, reading the
+	// request's members through member (nil when absent); ok is false when the
+	// caller already asked or the request is not streamed.
+	Request func(member func(key string) []byte) (key string, value []byte, ok bool)
 
 	// IsUsageFrame reports whether an SSE frame (separator stripped) is the
 	// extra usage-only frame the opt-in adds.
@@ -172,6 +171,14 @@ type InboundPath struct {
 
 	// Summary is the huma operation summary.
 	Summary string
+}
+
+// RequestKeys returns the top-level request members the shape's translator names, zero for a shape without one.
+func (s *Spec) RequestKeys() v1.RequestKeys {
+	if p, ok := s.Translator.(v1.RequestKeysProvider); ok {
+		return p.RequestKeys()
+	}
+	return v1.RequestKeys{}
 }
 
 // Build finalises the Spec by constructing its shared HTTP client and snapshotting the per-call deadlines. The client pools upstream connections via a tuned transport (per-host idle ceiling from SetUpstreamMaxIdleConnsPerHost).

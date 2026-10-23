@@ -27,12 +27,17 @@ func TestRequestStreamUsage(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.body), &fields); err != nil {
 				t.Fatal(err)
 			}
-			if got := RequestStreamUsage(fields); got != tc.changed {
-				t.Fatalf("changed = %v, want %v", got, tc.changed)
+			key, value, changed := RequestStreamUsage(func(k string) []byte { return fields[k] })
+			if changed != tc.changed {
+				t.Fatalf("changed = %v, want %v", changed, tc.changed)
 			}
 			if !tc.changed {
 				return
 			}
+			if key != "stream_options" {
+				t.Fatalf("key = %q, want stream_options", key)
+			}
+			fields[key] = value
 			var opts map[string]json.RawMessage
 			if err := json.Unmarshal(fields["stream_options"], &opts); err != nil {
 				t.Fatalf("stream_options: %v", err)

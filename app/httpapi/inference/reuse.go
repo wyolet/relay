@@ -1,43 +1,38 @@
 package inference
 
 // Exports of internal request helpers so the batch subsystem can run an
-// item through the realtime pipeline without forking the (fiddly) model-field
-// rewrite, the minimal model/stream parse, or the capability-driven param
+// item through the realtime pipeline without forking the (fiddly) one-pass
+// request parse, the model-field rewrite, or the capability-driven param
 // strip. Single source of truth stays here.
 
 import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/pkg/metrics"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// ExtractModelStream parses the caller-supplied model name and stream flag from
-// a request body. Reused by the batch subsystem's per-item runner.
-func ExtractModelStream(body []byte) (model string, stream bool, err error) {
-	return extractModelStream(body)
+// ParseRequest parses a request body once, refusing what the realtime routes
+// refuse. Its Model may be empty; the caller decides what that means.
+func ParseRequest(body []byte) (*ParsedRequest, error) {
+	req, rej := parseRequest(body, v1.RequestKeys{})
+	if rej != nil {
+		return nil, rej
+	}
+	return req, nil
 }
 
-// RewriteModelField returns body with its "model" field rewritten to
-// upstreamModel (the resolved upstream model name). Reused by the batch
-// subsystem's per-item runner.
-func RewriteModelField(body []byte, upstreamModel string) []byte {
-	return rewriteModelField(body, upstreamModel)
-}
-
-// StripUnsupportedParams applies the routed model's UnsupportedParams to a
-// vendor-shaped body via the spec's ParamPaths, recording the per-param drop
-// metric. Reused by runners that build pipeline requests outside Dispatch
-// (batch) so capability gating holds on every path to Pipeline.Run.
-func StripUnsupportedParams(body []byte, m *model.Model, paramPaths map[string]string) ([]byte, []string) {
-	if m == nil {
-		return body, nil
+// UpstreamBody returns req's body with its model set to upstreamModel and
+// the params m declares unsupported removed at their paramPaths locations,
+// recording the per-param drop metric, so capability gating holds on every
+// path to Pipeline.Run.
+func UpstreamBody(req *ParsedRequest, upstreamModel string, m *model.Model, paramPaths map[string]string) ([]byte, []string) {
+	var edits []memberEdit
+	var dropped []string
+	if m != nil && len(m.Spec.Capabilities.UnsupportedParams) > 0 {
+		edits, dropped = req.stripParams(nil, m.Spec.Capabilities.UnsupportedParams, paramPaths)
+		for _, p := range dropped {
+			metrics.DroppedParam(p, m.Meta.Name)
+		}
 	}
-	u := m.Spec.Capabilities.UnsupportedParams
-	if len(u) == 0 {
-		return body, nil
-	}
-	out, dropped := stripWireParams(body, u, paramPaths)
-	for _, p := range dropped {
-		metrics.DroppedParam(p, m.Meta.Name)
-	}
-	return out, dropped
+	return req.upstreamBody(upstreamModel, edits), dropped
 }

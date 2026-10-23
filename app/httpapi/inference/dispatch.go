@@ -67,6 +67,11 @@ type DispatchInput struct {
 	// forward starts.
 	Body []byte
 
+	// Request is Body parsed once by the route, read by every later step
+	// instead of the body. Nil when the caller holds only bytes; byte-pass
+	// then parses Body itself.
+	Request *ParsedRequest
+
 	// ProxyBody forwards a proxy-mode body: Body, then the rest as it
 	// streams from the client. Nil means Body is the whole body.
 	ProxyBody *scannedBody
@@ -293,15 +298,26 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
 	ctx := r.Context()
 
-	var usageOptIn func(map[string]json.RawMessage) bool
-	if d.RequestStreamUsage && in.Stream && inboundSpec.StreamUsage != nil {
-		usageOptIn = inboundSpec.StreamUsage.Request
+	wireBody, usageRequested := in.Body, false
+	req := in.Request
+	if req == nil {
+		// Unparseable bytes are forwarded as they came.
+		req, _ = parseRequest(in.Body, inboundSpec.RequestKeys())
 	}
-	wireBody, usageRequested := rewriteTopLevel(in.Body, plan.UpstreamModel(), usageOptIn)
-	if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
-		var dropped []string
-		wireBody, dropped = stripWireParams(wireBody, u, inboundSpec.ParamPaths)
-		surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
+	if req != nil {
+		var edits []memberEdit
+		if d.RequestStreamUsage && in.Stream && inboundSpec.StreamUsage != nil {
+			if key, value, ok := inboundSpec.StreamUsage.Request(req.Member); ok {
+				edits = append(edits, memberEdit{key: key, value: value})
+				usageRequested = true
+			}
+		}
+		if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
+			var dropped []string
+			edits, dropped = req.stripParams(edits, u, inboundSpec.ParamPaths)
+			surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
+		}
+		wireBody = req.upstreamBody(plan.UpstreamModel(), edits)
 	}
 
 	teamID, tokenJTI := reserveIdentity(ctx)

@@ -2,9 +2,6 @@ package inference
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -84,38 +81,9 @@ func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapte
 	}
 }
 
-// extractModelStream extracts the model name and stream flag from a raw JSON
-// request body, spanning every inbound shape. Vendor shapes signal streaming
-// with a top-level "stream" bool; the canonical shape uses
-// "output_mode":"stream". The model field is read as a JSON string (the
-// single-model case); canonical's array form is rejected upstream as multiplex
-// and isn't used by streaming clients. Model may be absent (empty string
-// returned); callers check. A body with more than one top-level model key is
-// errDuplicateModel: encoding/json keeps the last, and the bytes a byte-pass
-// forwards may be read differently upstream.
-func extractModelStream(body []byte) (model string, stream bool, err error) {
-	var probe struct {
-		Model      string `json:"model"`
-		Stream     *bool  `json:"stream"`
-		OutputMode string `json:"output_mode"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return "", false, fmt.Errorf("invalid JSON: %w", err)
-	}
-	var scan modelScanner
-	if scan.feed(body); scan.err == errDuplicateModel {
-		return "", false, errDuplicateModel
-	}
-	s := probe.OutputMode == "stream"
-	if probe.Stream != nil {
-		s = *probe.Stream
-	}
-	return probe.Model, s, nil
-}
-
 // handleShape is the generic per-shape route handler. It reads the request
-// body, performs a minimal JSON parse to extract model and stream, and calls
-// Dispatch with the spec's Name as the inbound shape.
+// body, parses it once (model, stream, the top-level member offsets), and
+// calls Dispatch with the spec's Name as the inbound shape.
 func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
 	if m := ClassificationFrom(r.Context()).Mode; m == ModeProxyAuthed || m == ModeProxyAnonymous {
 		handleProxyShape(spec, d, w, r)
@@ -131,27 +99,24 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	modelName, stream, err := extractModelStream(body)
-	if err != nil {
-		writeModelParseErr(w, err)
+	req, rej := parseRequest(body, spec.RequestKeys())
+	if rej != nil {
+		writeBodyError(w, rej)
 		return
 	}
-	if modelName == "" {
+	if req.Model == "" {
 		WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_model",
 			"field 'model' is required")
 		return
 	}
 
-	// Byte-pass shapes (e.g. Embeddings) are never streaming.
-	if spec.BytePass {
-		stream = false
-	}
-
 	Dispatch(d, w, r, DispatchInput{
 		Inbound:   spec.Name,
 		Body:      body,
-		ModelName: modelName,
-		Stream:    stream,
+		Request:   req,
+		ModelName: req.Model,
+		// Byte-pass shapes (e.g. Embeddings) are never streaming.
+		Stream: req.Stream && !spec.BytePass,
 	})
 }
 
@@ -175,15 +140,6 @@ func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http
 	// Any answer before the forward reads the body to its end (a shed, a routing refusal) leaves a remainder on the wire.
 	markConnection(w, body)
 	Dispatch(d, w, r, DispatchInput{Inbound: spec.Name, Body: held, ModelName: body.scan.model, ProxyBody: body})
-}
-
-// writeModelParseErr answers an extractModelStream error.
-func writeModelParseErr(w http.ResponseWriter, err error) {
-	code := "parse_error"
-	if be := (*bodyError)(nil); errors.As(err, &be) {
-		code = be.code
-	}
-	WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", code, err.Error())
 }
 
 // maxUpfrontBodyBytes caps what a declared Content-Length allocates before the bytes arrive, so a caller cannot reserve memory it never sends.

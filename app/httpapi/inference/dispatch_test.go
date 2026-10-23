@@ -394,31 +394,6 @@ func TestStreamCanonical_NoReasoning_NoSpan(t *testing.T) {
 	}
 }
 
-func TestExtractModelStream_StreamSignals(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want bool
-	}{
-		{"canonical output_mode stream", `{"model":"m","output_mode":"stream"}`, true},
-		{"canonical output_mode sync", `{"model":"m","output_mode":"sync"}`, false},
-		{"vendor stream true", `{"model":"m","stream":true}`, true},
-		{"vendor stream false", `{"model":"m","stream":false}`, false},
-		{"neither", `{"model":"m"}`, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, stream, err := extractModelStream([]byte(tc.body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if stream != tc.want {
-				t.Errorf("stream = %v, want %v", stream, tc.want)
-			}
-		})
-	}
-}
-
 // TestDispatch_NormalOpenAI_UnaffectedByGuards confirms that a standard
 // Inbound=OpenAI request is not blocked by either the Responses or
 // Embeddings guard (the guards are shape-conditional).

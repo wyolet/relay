@@ -223,7 +223,7 @@ func referenceScan(b []byte) (model, code string, ok bool) {
 	if s == nil || *s == "" {
 		return "", "missing_model", true
 	}
-	// The single-key case must also be what extractModelStream reads.
+	// The single-key case must also be what a probe decode reads.
 	var probe struct {
 		Model string `json:"model"`
 	}
@@ -431,18 +431,18 @@ func (g *jsonGen) value(depth int) {
 	g.ws()
 }
 
-func TestExtractModelStream_DuplicateModel(t *testing.T) {
+func TestParseRequest_DuplicateModel(t *testing.T) {
 	for _, body := range []string{
 		`{"model":"cheap","messages":[],"model":"expensive"}`,
 		`{"model":"cheap","Model":"expensive"}`,
 		`{"model":null,"model":"expensive"}`,
 	} {
-		if _, _, err := extractModelStream([]byte(body)); err != errDuplicateModel {
+		if _, err := parseRequest([]byte(body), vendorKeys); err != errDuplicateModel {
 			t.Errorf("%s: err = %v, want errDuplicateModel", body, err)
 		}
 	}
-	if m, _, err := extractModelStream([]byte(`{"model":"m","meta":{"model":"a","model":"b"}}`)); err != nil || m != "m" {
-		t.Errorf("nested duplicate: (%q, %v), want (m, nil)", m, err)
+	if req, err := parseRequest([]byte(`{"model":"m","meta":{"model":"a","model":"b"}}`), vendorKeys); err != nil || req.Model != "m" {
+		t.Errorf("nested duplicate: (%+v, %v), want (m, nil)", req, err)
 	}
 }
 

@@ -7,34 +7,33 @@ import (
 	"github.com/wyolet/relay/sdk/internal/sse"
 )
 
-// RequestStreamUsage sets stream_options.include_usage on a streamed Chat
-// Completions request, given its top-level fields, because without it the
-// stream never reports token usage. Reports whether it changed the fields:
-// false when the request is not streamed, already asks for usage, or carries
-// a stream_options value that is not an object (left for the upstream to
-// reject).
-func RequestStreamUsage(fields map[string]json.RawMessage) bool {
+// RequestStreamUsage asks a streamed Chat Completions request for token
+// usage, because without it the stream never reports any. member returns the
+// raw value of a top-level member (nil when absent). It returns the member to
+// set, stream_options with include_usage, and false when the request is not
+// streamed, already asks for usage, or carries a stream_options value that is
+// not an object (left for the upstream to reject).
+func RequestStreamUsage(member func(key string) []byte) (key string, value []byte, ok bool) {
 	var stream bool
-	if raw, ok := fields["stream"]; !ok || json.Unmarshal(raw, &stream) != nil || !stream {
-		return false
+	if raw := member("stream"); raw == nil || json.Unmarshal(raw, &stream) != nil || !stream {
+		return "", nil, false
 	}
 	opts := map[string]json.RawMessage{}
-	if raw, ok := fields["stream_options"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	if raw := member("stream_options"); raw != nil && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		if json.Unmarshal(raw, &opts) != nil {
-			return false
+			return "", nil, false
 		}
 		var include bool
 		if v, ok := opts["include_usage"]; ok && json.Unmarshal(v, &include) == nil && include {
-			return false
+			return "", nil, false
 		}
 	}
 	opts["include_usage"] = json.RawMessage("true")
 	b, err := json.Marshal(opts)
 	if err != nil {
-		return false
+		return "", nil, false
 	}
-	fields["stream_options"] = b
-	return true
+	return "stream_options", b, true
 }
 
 // IsUsageOnlyChunk reports whether one SSE frame (separator stripped) is the
