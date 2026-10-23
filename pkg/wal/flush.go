@@ -47,17 +47,20 @@ func (q *Queue[T]) FlushPending() {
 		records, err := readSegment[T](seg, q.log)
 		if err != nil {
 			q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
+			q.failing.Store(true)
 			return
 		}
 		if err := q.flush(records); err != nil {
 			// Do NOT delete — leave for retry on next tick.
 			q.log.Warn("wal: flush failed, will retry", "file", filepath.Base(seg), "err", err)
+			q.failing.Store(true)
 			return
 		}
 		if err := os.Remove(seg); err != nil {
 			q.log.Warn("wal: remove segment", "file", filepath.Base(seg), "err", err)
 		}
 	}
+	q.failing.Store(false)
 }
 
 // reportFlushLag publishes the age of the oldest un-flushed segment

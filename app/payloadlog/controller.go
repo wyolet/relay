@@ -2,6 +2,7 @@ package payloadlog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -196,6 +197,31 @@ func (r *reloadableSink) Write(rec Record) error {
 		return nil // no sink configured → drop (disabled/unconfigured)
 	}
 	return r.cur.Write(rec)
+}
+
+func (r *reloadableSink) WriteBatch(recs []Record) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.cur == nil {
+		return nil
+	}
+	if bw, ok := r.cur.(BatchWriter); ok {
+		return bw.WriteBatch(recs)
+	}
+	var firstErr error
+	failed := 0
+	for i := range recs {
+		if err := r.cur.Write(recs[i]); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("%d of %d records failed: %w", failed, len(recs), firstErr)
+	}
+	return nil
 }
 
 // swap installs s (may be nil to tear down) and closes the previous sink

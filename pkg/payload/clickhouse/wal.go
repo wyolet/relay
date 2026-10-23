@@ -41,6 +41,9 @@ func newSegmentQueue(
 		MaxBytes:      maxBytes,
 		FlushInterval: flushInterval,
 		MaxSegments:   maxSegments,
+		// Bodies are MB-scale: decoding and inserting a whole tick's worth at
+		// once spikes heap and CPU on a busy pod.
+		FlushOnRotate: true,
 		Kind:          "payload",
 		Logger:        log,
 	}, flushFn)

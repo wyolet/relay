@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -230,3 +231,47 @@ func benchmarkQueue(b *testing.B, batch bool) {
 
 func BenchmarkQueueWrite(b *testing.B)      { benchmarkQueue(b, false) }
 func BenchmarkQueueWriteBatch(b *testing.B) { benchmarkQueue(b, true) }
+
+// With FlushOnRotate a full segment reaches the flush function without
+// waiting for the tick, and after a failed flush rotations stop retrying.
+func TestFlushOnRotate(t *testing.T) {
+	flushed := make(chan int, 16)
+	var fail atomic.Bool
+	q := openTestQueue(t, Config{MaxLines: 2, FlushOnRotate: true}, func(recs []testRecord) error {
+		if fail.Load() {
+			flushed <- -1
+			return errors.New("sink down")
+		}
+		flushed <- len(recs)
+		return nil
+	})
+	defer q.StopBackground()
+
+	if err := q.WriteBatch(testRecords(2)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-flushed:
+		if n != 2 {
+			t.Fatalf("flushed %d records, want 2", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a rotated segment was not flushed before the tick")
+	}
+
+	fail.Store(true)
+	if err := q.WriteBatch(testRecords(2)); err != nil {
+		t.Fatal(err)
+	}
+	if n := <-flushed; n != -1 {
+		t.Fatalf("flush = %d, want the failing attempt", n)
+	}
+	if err := q.WriteBatch(testRecords(4)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-flushed:
+		t.Fatal("a rotation retried a failing flush before the tick")
+	case <-time.After(200 * time.Millisecond):
+	}
+}

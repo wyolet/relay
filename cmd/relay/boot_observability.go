@@ -139,28 +139,22 @@ func buildAudit(st *storagemod.Storage, cat *appcatalog.Catalog) (*audit.Store, 
 	return auditStore, auditEmitter
 }
 
-// payloadSlotBytes is the memory assumed per queued payload record: a request with some conversation history plus its response. A record can hold up to twice the payload-logging per-body cap, so this is an average, not a bound.
-const payloadSlotBytes = 64 << 10
+// noMemLimitPayloadQueueBytes applies when no memory limit is set, so the budget has nothing to divide.
+const noMemLimitPayloadQueueBytes = 64 << 20
 
-const (
-	minDerivedPayloadQueue = 256
-	// noMemLimitPayloadQueue applies when no memory limit is set, so the budget has nothing to divide.
-	noMemLimitPayloadQueue = 1024
-)
-
-// payloadQueueOptions sizes the payload emitter's queues from RELAY_PAYLOAD_QUEUE_SIZE and RELAY_PAYLOAD_REFUSED_QUEUE_SIZE.
+// payloadQueueOptions sizes the payload emitter's queues from RELAY_PAYLOAD_QUEUE_BYTES and RELAY_PAYLOAD_REFUSED_QUEUE_BYTES.
 func payloadQueueOptions(cfg *config.Config) payloadlog.EmitterOptions {
-	return payloadlog.EmitterOptions{QueueSize: payloadQueueSize(cfg.PayloadQueueSize), RefusedQueueSize: cfg.PayloadRefusedQueueSize}
+	return payloadlog.EmitterOptions{QueueBytes: payloadQueueBytes(cfg.PayloadQueueBytes), RefusedQueueBytes: cfg.PayloadRefusedQueueBytes}
 }
 
-// payloadQueueSize is RELAY_PAYLOAD_QUEUE_SIZE when set, else as many records as fit in 1/16 of the Go memory limit (GOMEMLIMIT) at payloadSlotBytes each, and at least 256.
-func payloadQueueSize(configured int) int {
+// payloadQueueBytes is RELAY_PAYLOAD_QUEUE_BYTES when set, else 1/16 of the Go memory limit (GOMEMLIMIT), and at least payloadlog.DefaultQueueBytes.
+func payloadQueueBytes(configured int) int {
 	if configured > 0 {
 		return configured
 	}
 	limit := debug.SetMemoryLimit(-1)
 	if limit == math.MaxInt64 {
-		return noMemLimitPayloadQueue
+		return noMemLimitPayloadQueueBytes
 	}
-	return max(minDerivedPayloadQueue, int(limit/16/payloadSlotBytes))
+	return max(payloadlog.DefaultQueueBytes, int(limit/16))
 }
