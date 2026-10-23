@@ -46,7 +46,7 @@ func buildUsageLog(listenerCtx context.Context, cfg *config.Config, cat *appcata
 		KV:         kvStore,
 		FilePath:   usagePath,
 		WALDir:     usageWALDir,
-	}), cfg.UsageQueueSize, slog.Default())
+	}), usagelog.EmitterOptions{QueueSize: cfg.UsageQueueSize, RefusedQueueSize: cfg.UsageRefusedQueueSize}, slog.Default())
 	usageReader := usageCtl.Reader()
 	// Emit-time cost: the usage producer prices each event's tokens against
 	// the pricing the plan resolved (id stamped on the lifecycle Context),
@@ -119,6 +119,7 @@ func registerMetrics(lifecycleReg *lifecycle.Registry, usageCtl *usagelog.Contro
 	// post_flight_seconds is emitted by the runners themselves (whole detached
 	// goroutine incl. commit RTTs) — no finalize observer needed.
 	metrics.RegisterQueueDepth("usage", func() float64 { return float64(usageCtl.Emitter().QueueDepth()) })
+	metrics.RegisterQueueDepth("usage_refused", func() float64 { return float64(usageCtl.Emitter().RefusedQueueDepth()) })
 	metrics.RegisterQueueDepth("payload", func() float64 { return float64(payloadCtl.Emitter().QueueDepth()) })
 	slog.Debug("metricslog: observer wired (/metrics on control plane)")
 }

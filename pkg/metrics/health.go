@@ -11,12 +11,12 @@ var (
 	// emitter queue was full or a WAL dropped segments over its disk cap
 	// (usage rows, payload captures). The async contract mandates this
 	// counter: a drop you can't see is a billing or audit hole. `kind` is
-	// the emitter: "usage" | "payload".
+	// the emitter queue: "usage" | "usage_refused" | "payload".
 	RecordsLost = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: Namespace,
 			Name:      "records_lost_total",
-			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage/payload).",
+			Help:      "Background records dropped due to a full emitter queue or a WAL over its segment cap, by kind (usage, usage_refused for requests that never reached an upstream, payload).",
 		},
 		[]string{"kind"},
 	)
@@ -89,7 +89,7 @@ func RegisterQueueDepth(kind string, fn func() float64) {
 	Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace:   Namespace,
 		Name:        "emit_queue_depth",
-		Help:        "Events waiting in a bounded emitter queue, by kind (usage/payload).",
+		Help:        "Events waiting in a bounded emitter queue, by kind (usage/usage_refused/payload).",
 		ConstLabels: prometheus.Labels{"kind": SafeLabel(kind)},
 	}, fn))
 }

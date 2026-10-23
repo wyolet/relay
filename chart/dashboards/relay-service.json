@@ -673,8 +673,8 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(relay_records_lost_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "records lost/s",
+          "expr": "sum by (kind) (rate(relay_records_lost_total{job=~\"$job\"}[$__rate_interval]))",
+          "legendFormat": "{{kind}}",
           "range": true,
           "refId": "A"
         }

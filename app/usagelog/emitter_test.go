@@ -65,7 +65,7 @@ func TestEmitter_DropOnFull(t *testing.T) {
 	// Fill the queue (1 item drains into the goroutine, the next
 	// fills the channel slot, anything beyond should drop).
 	for i := 0; i < 50; i++ {
-		e.Emit(Event{RequestID: "r"})
+		e.Emit(served("r"))
 	}
 	// Allow time for the drain goroutine to consume what it can.
 	time.Sleep(50 * time.Millisecond)
@@ -89,10 +89,10 @@ func TestEmitter_QueueDepth(t *testing.T) {
 	}
 	// Park the drain goroutine in the sink, then overfill: 4 queue, the
 	// rest drop — depth must read the full queue.
-	e.Emit(Event{RequestID: "r"})
+	e.Emit(served("r"))
 	<-entered
 	for i := 0; i < 8; i++ {
-		e.Emit(Event{RequestID: "r"})
+		e.Emit(served("r"))
 	}
 	if d := e.QueueDepth(); d != 4 {
 		t.Fatalf("depth with blocked sink = %d, want 4 (queue full)", d)
@@ -110,7 +110,7 @@ func TestEmitter_ConcurrentEmit(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				e.Emit(Event{RequestID: "concurrent"})
+				e.Emit(served("concurrent"))
 			}
 		}()
 	}
@@ -141,7 +141,7 @@ func TestEmitter_TryEmitRefusesInsteadOfDropping(t *testing.T) {
 		t.Fatalf("fresh emitter capacity = %d free = %d, want 2 and 2", e.Capacity(), e.Free())
 	}
 	// Park the drain goroutine in the sink so the queue only fills.
-	e.Emit(Event{RequestID: "parked"})
+	e.Emit(served("parked"))
 	<-entered
 	if !e.TryEmit(Event{RequestID: "a"}) || e.Free() != 1 {
 		t.Fatalf("first TryEmit refused or free = %d, want accepted and 1", e.Free())
@@ -170,6 +170,12 @@ func TestEmitter_CloseIsIdempotent(t *testing.T) {
 }
 
 // --- helpers ---
+
+// served is an event of a request that reached an upstream, so it waits in
+// the main queue.
+func served(id string) Event {
+	return Event{RequestID: id, Upstream: &UpstreamTiming{Start: 1}}
+}
 
 type blockingSink struct{ ch <-chan struct{} }
 
