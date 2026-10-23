@@ -53,6 +53,12 @@ relay:
   upstreamDialTimeoutS: ""
   # -- Seconds a proxy-mode request body may go without a byte before relay answers 408; "0" disables, empty = relay default (30).
   proxyBodyIdleS: ""
+  # -- Seconds a deleted pod keeps serving before relay is sent SIGTERM, so the ingress stops routing to it before its listener closes. Uses the preStop sleep action (Kubernetes 1.30+); 0 removes the hook.
+  preStopSleepS: 5
+  # -- Seconds relay's graceful shutdown waits for in-flight requests (RELAY_SHUTDOWN_DEADLINE_S); empty = relay default (15).
+  shutdownDeadlineS: ""
+  # -- Pod terminationGracePeriodSeconds; empty = preStopSleepS + the shutdown deadline + 10.
+  terminationGracePeriodSeconds: ""
   healthzDeadlineMs: "500"
   # -- Writable dir for the ClickHouse WAL segments (emptyDir-backed).
   eventlogDir: /var/lib/relay/eventlog

@@ -33,6 +33,8 @@ spec:
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
     spec:
       serviceAccountName: {{ include "relay.serviceAccountName" . }}
+      {{- $preStop := int .Values.relay.preStopSleepS }}
+      terminationGracePeriodSeconds: {{ .Values.relay.terminationGracePeriodSeconds | default (add $preStop (int (.Values.relay.shutdownDeadlineS | default 15)) 10) }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -93,6 +95,13 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if gt $preStop 0 }}
+          # The endpoint goes not-ready as soon as the pod is deleted, but the ingress learns it a moment later; serving through that moment keeps it from sending to a closed listener.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $preStop }}
+          {{- end }}
           # Liveness is process-only (/livez has NO backend dependency): a PG/DNS
           # blip must NOT kill a healthy process — that cascades restarts
           # exactly when the backend is stressed. It probes the control port so
