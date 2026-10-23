@@ -22,8 +22,8 @@ func TestEmitterEmitConcurrentWithCloseDoesNotPanic(t *testing.T) {
 	const trials = 2000
 	for trial := 0; trial < trials; trial++ {
 		e := NewEmitter(EmitterOptions{
-			QueueSize: 64,
-			Logger:    slog.New(slog.DiscardHandler),
+			QueueBytes: 64 * recordBytes(Record{}),
+			Logger:     slog.New(slog.DiscardHandler),
 		})
 
 		var (

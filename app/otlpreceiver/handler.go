@@ -57,7 +57,7 @@ type PayloadLog interface {
 	MaxBytes() int
 }
 
-// boundedQueue is a queue the receiver shares with proxied traffic.
+// boundedQueue is a queue the receiver shares with proxied traffic. Free and Capacity count in the queue's own unit: events for usage, bytes for payloads.
 type boundedQueue interface {
 	Free() int
 	Capacity() int
@@ -66,7 +66,7 @@ type boundedQueue interface {
 // share is how much of a queue reported telemetry may occupy: half, rounded up so a queue of one still takes a record. The other half stays free for proxied traffic, whose records are dropped, not refused, when the queue is full.
 func share(q boundedQueue) int { return (q.Capacity() + 1) / 2 }
 
-// sharedRoom is how many more records the receiver may queue before the queue is half full. Other traffic may have filled it past that, which makes it negative.
+// sharedRoom is how much more the receiver may queue before the queue is half full. Other traffic may have filled it past that, which makes it negative.
 func sharedRoom(q boundedQueue) int { return share(q) - (q.Capacity() - q.Free()) }
 
 // tenantOf names whose calls a reporter's exports describe: its project, so one service reporting through two keys of a project is recognised as one, or the principal itself when the credential belongs to no project.

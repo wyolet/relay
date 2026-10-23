@@ -52,6 +52,12 @@ type Config struct {
 	// records in relay_records_lost_total{kind=Kind}. 0 disables the cap.
 	MaxSegments int
 
+	// FlushOnRotate hands a segment to the flush function as soon as it
+	// rotates on a full cap instead of on the next tick, so a busy queue
+	// flushes in segment-sized steps rather than one tick-sized burst. After a
+	// failed flush only the tick retries.
+	FlushOnRotate bool
+
 	// Kind labels the flush-lag metric and this queue's log lines
 	// ("usage", "payload").
 	Kind string
@@ -78,6 +84,10 @@ type Queue[T any] struct {
 	flushMu sync.Mutex
 
 	dropped atomic.Uint64
+	// failing is set while the last flush pass failed, so rotations stop
+	// triggering retries.
+	failing atomic.Bool
+	rotated chan struct{}
 
 	ticker *time.Ticker
 	stop   chan struct{}
@@ -93,11 +103,12 @@ func Open[T any](cfg Config, flush func([]T) error) (*Queue[T], error) {
 		return nil, fmt.Errorf("wal/%s: mkdir: %w", cfg.Kind, err)
 	}
 	q := &Queue[T]{
-		cfg:   cfg,
-		flush: flush,
-		log:   cfg.Logger.With("wal", cfg.Kind),
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
+		cfg:     cfg,
+		flush:   flush,
+		log:     cfg.Logger.With("wal", cfg.Kind),
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
+		rotated: make(chan struct{}, 1),
 	}
 	if err := q.openActive(); err != nil {
 		return nil, err
@@ -212,6 +223,11 @@ func (q *Queue[T]) appendLocked(b []byte) error {
 	if q.lines >= q.cfg.MaxLines || (q.cfg.MaxBytes > 0 && q.bytes >= q.cfg.MaxBytes) {
 		if err := q.rotateLocked(); err != nil {
 			q.log.Warn("wal: rotate on full", "err", err)
+		} else if q.cfg.FlushOnRotate && !q.failing.Load() {
+			select {
+			case q.rotated <- struct{}{}:
+			default:
+			}
 		}
 	}
 	return nil
@@ -264,6 +280,8 @@ func (q *Queue[T]) background() {
 		select {
 		case <-q.stop:
 			return
+		case <-q.rotated:
+			q.FlushPending()
 		case <-q.ticker.C:
 			q.mu.Lock()
 			err := q.rotateLocked()

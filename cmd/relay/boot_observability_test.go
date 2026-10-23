@@ -7,6 +7,8 @@ import (
 	"math"
 	"runtime/debug"
 	"testing"
+
+	"github.com/wyolet/relay/app/payloadlog"
 )
 
 // The admission collector releases the in-flight slot, so it must be
@@ -46,21 +48,21 @@ func TestAdmissionRegisteredAfterIOCollectors(t *testing.T) {
 	}
 }
 
-func TestPayloadQueueSize(t *testing.T) {
-	if got := payloadQueueSize(500); got != 500 {
-		t.Fatalf("configured 500: got %d", got)
+func TestPayloadQueueBytes(t *testing.T) {
+	if got := payloadQueueBytes(500 << 20); got != 500<<20 {
+		t.Fatalf("configured 500 MiB: got %d", got)
 	}
 	prev := debug.SetMemoryLimit(900 << 20)
 	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
-	if got := payloadQueueSize(0); got != 900 {
-		t.Fatalf("900 MiB memory limit: got %d, want 900", got)
+	if got := payloadQueueBytes(0); got != 900<<20/16 {
+		t.Fatalf("900 MiB memory limit: got %d, want %d", got, 900<<20/16)
 	}
 	debug.SetMemoryLimit(64 << 20)
-	if got := payloadQueueSize(0); got != minDerivedPayloadQueue {
-		t.Fatalf("64 MiB memory limit: got %d, want the floor %d", got, minDerivedPayloadQueue)
+	if got := payloadQueueBytes(0); got != payloadlog.DefaultQueueBytes {
+		t.Fatalf("64 MiB memory limit: got %d, want the floor %d", got, payloadlog.DefaultQueueBytes)
 	}
 	debug.SetMemoryLimit(math.MaxInt64)
-	if got := payloadQueueSize(0); got != noMemLimitPayloadQueue {
-		t.Fatalf("no memory limit: got %d, want %d", got, noMemLimitPayloadQueue)
+	if got := payloadQueueBytes(0); got != noMemLimitPayloadQueueBytes {
+		t.Fatalf("no memory limit: got %d, want %d", got, noMemLimitPayloadQueueBytes)
 	}
 }

@@ -60,7 +60,8 @@ func TestEmitter_RefusalsNeverDisplaceServedRecords(t *testing.T) {
 	lostRefused := testutil.ToFloat64(metrics.RecordsLost.WithLabelValues("payload_refused"))
 
 	sink := newRecordingSink()
-	e := NewEmitter(EmitterOptions{QueueSize: servedN, RefusedQueueSize: refusedCap, Logger: testLogger()}, sink)
+	refusedBytes := refusedCap * recordBytes(Record{RequestID: "refused-0-0000", RequestBody: []byte(`{}`)})
+	e := NewEmitter(EmitterOptions{QueueBytes: 1 << 20, RefusedQueueBytes: refusedBytes, Logger: testLogger()}, sink)
 	e.Emit(Record{RequestID: "parked"})
 	<-sink.entered
 
@@ -68,7 +69,7 @@ func TestEmitter_RefusalsNeverDisplaceServedRecords(t *testing.T) {
 	for f := range flooders {
 		wg.Go(func() {
 			for i := range perFlooder {
-				e.EmitRefused(Record{RequestID: fmt.Sprintf("refused-%d-%d", f, i), RequestBody: []byte(`{}`)})
+				e.EmitRefused(Record{RequestID: fmt.Sprintf("refused-%d-%04d", f, i), RequestBody: []byte(`{}`)})
 			}
 		})
 	}

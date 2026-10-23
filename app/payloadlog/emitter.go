@@ -8,45 +8,50 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
-// DefaultQueueSize is the bounded-channel capacity when EmitterOptions
-// leaves it zero. Payload Records are larger than usage events, so the
-// default is smaller — drop-on-full still protects the post-flight
-// goroutine; a dropped payload is acceptable (it's an audit best-effort,
-// not billing truth).
-const DefaultQueueSize = 256
+// DefaultQueueBytes is the served queue's budget when EmitterOptions leaves
+// it zero. Drop-on-full still protects the post-flight goroutine.
+const DefaultQueueBytes = 16 << 20
 
-// DefaultRefusedQueueSize is the capacity for Records of requests that never
+// DefaultRefusedQueueBytes is the budget for Records of requests that never
 // reached an upstream (shed, rate-limited, refused). Refusals peak exactly
 // when relay is overloaded, so they wait apart and cannot crowd out the
 // Records of served requests.
-const DefaultRefusedQueueSize = 32
+const DefaultRefusedQueueBytes = 2 << 20
 
 // EmitterOptions tunes Emitter behavior. Zero values are sane defaults.
 type EmitterOptions struct {
-	// QueueSize is the bounded-channel capacity. <= 0 → DefaultQueueSize.
-	QueueSize int
+	// QueueBytes bounds the memory held by queued served Records, counted
+	// by recordBytes. <= 0 → DefaultQueueBytes.
+	QueueBytes int
 
-	// RefusedQueueSize is the capacity for Records of requests that never
-	// reached an upstream. <= 0 → DefaultRefusedQueueSize.
-	RefusedQueueSize int
+	// RefusedQueueBytes is the same bound for Records of requests that never
+	// reached an upstream. <= 0 → DefaultRefusedQueueBytes.
+	RefusedQueueBytes int
 
 	// Logger is used for drop / sink-error warnings. nil → slog.Default.
 	Logger *slog.Logger
 }
 
-// Emitter fans captured Records to its Sinks via a single drain
-// goroutine. Drop-on-full preserves the "post-flight never blocks"
-// invariant; the drop count is exposed via Dropped().
+// Emitter fans captured Records to its Sinks via a single drain goroutine,
+// which takes everything queued at once and hands it to each Sink as one
+// batch. The queues are bounded by the bytes their Records hold, not by
+// count: record sizes span three orders of magnitude, so a count sized for
+// large bodies drops small ones in a burst. Drop-on-full preserves the
+// "post-flight never blocks" invariant; the drop count is exposed via
+// Dropped().
 //
 // Records of requests that never reached an upstream wait in a separate,
 // smaller queue that the drain reads only while the main one is empty, so a
 // flood of refusals drops refusal Records, never served ones.
 type Emitter struct {
-	queue   chan Record
-	refused chan Record
+	served  recordQueue
+	refused recordQueue
+	ready   chan struct{}
 	stop    chan struct{}
 	sinks   []Sink
 	log     *slog.Logger
+	// spare is the drain's empty batch slice, swapped with a queue's.
+	spare []Record
 
 	wg             sync.WaitGroup
 	stopped        atomic.Bool
@@ -57,21 +62,22 @@ type Emitter struct {
 // NewEmitter constructs an Emitter and starts its drain goroutine. Close
 // it at shutdown to flush in-flight Records.
 func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
-	qsize := opts.QueueSize
-	if qsize <= 0 {
-		qsize = DefaultQueueSize
+	qbytes := opts.QueueBytes
+	if qbytes <= 0 {
+		qbytes = DefaultQueueBytes
 	}
-	rsize := opts.RefusedQueueSize
-	if rsize <= 0 {
-		rsize = DefaultRefusedQueueSize
+	rbytes := opts.RefusedQueueBytes
+	if rbytes <= 0 {
+		rbytes = DefaultRefusedQueueBytes
 	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
 	e := &Emitter{
-		queue:   make(chan Record, qsize),
-		refused: make(chan Record, rsize),
+		served:  recordQueue{max: qbytes},
+		refused: recordQueue{max: rbytes},
+		ready:   make(chan struct{}, 1),
 		stop:    make(chan struct{}),
 		sinks:   sinks,
 		log:     log,
@@ -88,11 +94,11 @@ func (e *Emitter) Emit(r Record) {
 	if e.stopped.Load() {
 		return
 	}
-	select {
-	case e.queue <- r:
-	default:
-		e.recordDrop("payload", &e.dropped, cap(e.queue))
+	if !e.served.push(r) {
+		e.recordDrop("payload", &e.dropped, e.served.max)
+		return
 	}
+	e.wake()
 }
 
 // EmitRefused queues r, the Record of a request that never reached an
@@ -102,43 +108,46 @@ func (e *Emitter) EmitRefused(r Record) {
 	if e.stopped.Load() {
 		return
 	}
+	if !e.refused.push(r) {
+		e.recordDrop("payload_refused", &e.droppedRefused, e.refused.max)
+		return
+	}
+	e.wake()
+}
+
+func (e *Emitter) wake() {
 	select {
-	case e.refused <- r:
+	case e.ready <- struct{}{}:
 	default:
-		e.recordDrop("payload_refused", &e.droppedRefused, cap(e.refused))
 	}
 }
 
-func (e *Emitter) recordDrop(kind string, counter *atomic.Uint64, size int) {
+func (e *Emitter) recordDrop(kind string, counter *atomic.Uint64, maxBytes int) {
 	metrics.RecordLost(kind)
 	n := counter.Add(1)
 	if n == 1 || n&(n-1) == 0 {
 		e.log.Warn("payloadlog: queue full, record dropped",
 			"queue", kind,
 			"total_dropped", n,
-			"queue_size", size,
+			"queue_bytes", maxBytes,
 		)
 	}
 }
 
 // TryEmit queues r on the main queue like Emit but reports a full or closed queue instead of dropping: nothing is counted or logged, the caller decides what a refused Record means.
 func (e *Emitter) TryEmit(r Record) bool {
-	if e.stopped.Load() {
+	if e.stopped.Load() || !e.served.push(r) {
 		return false
 	}
-	select {
-	case e.queue <- r:
-		return true
-	default:
-		return false
-	}
+	e.wake()
+	return true
 }
 
-// Free returns how many more Records the queue takes before Emit starts dropping. Concurrent emits make it a snapshot, not a reservation.
-func (e *Emitter) Free() int { return cap(e.queue) - len(e.queue) }
+// Free returns how many more bytes the queue takes before Emit starts dropping. Concurrent emits make it a snapshot, not a reservation.
+func (e *Emitter) Free() int { return e.served.max - e.served.held() }
 
-// Capacity returns the queue's size.
-func (e *Emitter) Capacity() int { return cap(e.queue) }
+// Capacity returns the queue's budget in bytes.
+func (e *Emitter) Capacity() int { return e.served.max }
 
 // Dropped returns the cumulative count of Records dropped due to a full
 // queue.
@@ -149,12 +158,12 @@ func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }
 func (e *Emitter) DroppedRefused() uint64 { return e.droppedRefused.Load() }
 
 // RefusedQueueDepth returns the number of refused requests' Records waiting.
-func (e *Emitter) RefusedQueueDepth() int { return len(e.refused) }
+func (e *Emitter) RefusedQueueDepth() int { return e.refused.depth() }
 
 // QueueDepth returns the number of Records waiting in the bounded queue —
 // the leading signal before Dropped starts counting. Safe to call
-// concurrently (chan len).
-func (e *Emitter) QueueDepth() int { return len(e.queue) }
+// concurrently.
+func (e *Emitter) QueueDepth() int { return e.served.depth() }
 
 // Close drains pending Records, then closes any Closer sink. Subsequent
 // Emit calls are no-ops. The queue is never closed: an Emit racing Close
@@ -178,44 +187,60 @@ func (e *Emitter) drain() {
 	defer e.wg.Done()
 	for {
 		// Served Records first: a refused one is written only when none waits.
-		select {
-		case r := <-e.queue:
-			e.write(r)
+		if e.writeQueued(&e.served) || e.writeQueued(&e.refused) {
 			continue
-		default:
 		}
 		select {
-		case r := <-e.queue:
-			e.write(r)
-		case r := <-e.refused:
-			e.write(r)
+		case <-e.ready:
 		case <-e.stop:
 			// Flush what was queued before Close; later racing Emits are lost.
-			e.flush(e.queue)
-			e.flush(e.refused)
+			for e.writeQueued(&e.served) {
+			}
+			for e.writeQueued(&e.refused) {
+			}
 			return
 		}
 	}
 }
 
-func (e *Emitter) flush(q <-chan Record) {
-	for {
-		select {
-		case r := <-q:
-			e.write(r)
-		default:
-			return
-		}
+// writeQueued writes everything waiting in q as one batch and reports
+// whether there was anything. The batch's bytes stay counted against q until
+// the write returns, so the budget also bounds the batch being written.
+func (e *Emitter) writeQueued(q *recordQueue) bool {
+	batch := q.swap(e.spare)
+	if len(batch) == 0 {
+		e.spare = batch
+		return false
 	}
+	e.write(batch)
+	n := 0
+	for i := range batch {
+		n += recordBytes(batch[i])
+	}
+	clear(batch)
+	q.release(n)
+	e.spare = batch[:0]
+	return true
 }
 
-func (e *Emitter) write(r Record) {
+func (e *Emitter) write(batch []Record) {
 	for _, sink := range e.sinks {
-		if err := sink.Write(r); err != nil {
-			e.log.Warn("payloadlog: sink write failed",
-				"err", err,
-				"request_id", r.RequestID,
-			)
+		if bw, ok := sink.(BatchWriter); ok {
+			if err := bw.WriteBatch(batch); err != nil {
+				e.log.Warn("payloadlog: sink batch write failed",
+					"err", err,
+					"records", len(batch),
+				)
+			}
+			continue
+		}
+		for i := range batch {
+			if err := sink.Write(batch[i]); err != nil {
+				e.log.Warn("payloadlog: sink write failed",
+					"err", err,
+					"request_id", batch[i].RequestID,
+				)
+			}
 		}
 	}
 }
