@@ -20,6 +20,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/routing"
@@ -234,6 +235,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
 			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p", "top_k": "top_k"},
+			Overloaded:    &adapter.ErrorResponse{Status: pkganthropic.StatusOverloaded, Body: pkganthropic.OverloadedError(httpapi.OverloadMessage)},
 		}).Build(),
 		// Gemini native shape — upstream-only for now (HostBinding.Adapter:
 		// gemini), reachable via the canonical / OpenAI / Anthropic inbound

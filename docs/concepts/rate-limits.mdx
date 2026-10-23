@@ -112,7 +112,7 @@ Content-Type: application/json
 
 `Retry-After` is the wait in whole seconds until the refused rule has room, at least `1`. Relay does not send `X-RateLimit-*` headers for its own limits. When the upstream itself answers `429` and no other key can take the request, the upstream's response is forwarded, including its rate-limit headers.
 
-A `429` with code `overloaded` and `Retry-After: 1` is not a rate limit: it means the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`, see [Configuration](/configuration)).
+A `503` with code `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) and `Retry-After: 1` is not a rate limit: it means the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`, see [Configuration](/configuration)).
 
 ## Example
 

@@ -48,7 +48,7 @@ func TestErrorMappers_RedactTransportURLs(t *testing.T) {
 
 	for name, write := range map[string]func(http.ResponseWriter){
 		"pipeline": func(w http.ResponseWriter) { mapPipelineErr(w, transportErr) },
-		"proxy":    func(w http.ResponseWriter) { mapProxyErr(w, transportErr) },
+		"proxy":    func(w http.ResponseWriter) { mapProxyErr(w, nil, transportErr) },
 	} {
 		w := httptest.NewRecorder()
 		write(w)

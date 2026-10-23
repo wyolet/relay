@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/routing"
@@ -142,7 +143,8 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 	applyProfile(lc, clientprofile.FromContext(ctx), r.Header)
 	applyPlanIdentity(lc, plan)
 	ctx = lifecycle.ContextWith(ctx, lc)
-	if !d.runPreFlight(ctx, w, lc) {
+	inbound := d.Specs.Spec(adapters.Name(clientprofile.FromContext(ctx).Shape()))
+	if !d.runPreFlight(ctx, w, lc, inbound) {
 		return 0, false
 	}
 
@@ -164,7 +166,7 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 		Lifecycle:     lc,
 	})
 	if err != nil {
-		mapRunErr(w, err)
+		mapRunErr(w, inbound, err)
 		return 0, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(result.Body, adapter.MaxCountBody))
@@ -186,7 +188,7 @@ func refuseRevokedToken(ctx context.Context, d Deps, w http.ResponseWriter) bool
 		return true
 	}
 	if _, err := d.Pipeline.Policy.ReserveInbound(ctx, policy.InboundInput{TeamID: teamID, TokenJTI: jti}); err != nil {
-		mapRunErr(w, err)
+		mapRunErr(w, d.Specs.Spec(adapters.Name(clientprofile.FromContext(ctx).Shape())), err)
 		return false
 	}
 	return true

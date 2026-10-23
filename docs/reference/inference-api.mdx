@@ -307,13 +307,13 @@ Relay writes errors in one envelope:
 | `408` | `request_timeout` | Proxy mode: the request body sent no bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (default 30). |
 | `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), or in proxy mode has no top-level `model` in its first 32 MiB. |
 | `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent, or every host key for the model is over its tier limit. `Retry-After` says when it refills. |
-| `429` | `overloaded` | The pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`). `Retry-After: 1`. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
 | `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |
 | `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
 | `503` | `no_host_binding` | The model has no enabled host binding. |
 | `503` | `no_keys` | No usable host key for the chosen host. |
 | `503` | `catalog_unavailable` | The catalog is still loading. `Retry-After: 5`. |
+| `503`; `529` on Anthropic-shaped routes | `overloaded`; `overloaded_error` on Anthropic-shaped routes | Relay is out of capacity: the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`), or Valkey did not answer a rate-limit check in time. `Retry-After: 1`. `/anthropic/v1/messages` and profile routes in that shape answer like Anthropic's API, `529` with `{"type":"error","error":{"type":"overloaded_error","message":"..."}}`, so its SDKs retry it as an overload. |
 | upstream's | upstream's | The upstream rejected the request on every key. Relay returns the last upstream status and body unchanged. |
 
 When an upstream failure is forwarded, Relay keeps only `Retry-After` (rewritten to whole seconds), `X-Should-Retry`, `X-Request-Id`, `Content-Type` and the upstream's rate-limit headers (`Anthropic-Ratelimit-*`, `X-Ratelimit-*`), and adds `X-WR-Upstream-Status` with the upstream's status.

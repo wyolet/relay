@@ -114,7 +114,7 @@ More in [Architecture](https://docs.wyolet.com/concepts/architecture).
 - **Key pools.** A policy lists the host keys its traffic may use. Relay picks one with `prioritized`, `round-robin` or `least-recently-used`, keeps a circuit breaker per key, and moves to the next key when one fails. A rotated key starts with a fresh breaker. [Key pooling](https://docs.wyolet.com/concepts/key-pooling)
 - **Recovery on auth failure.** When a host key returns 401, relay re-reads its value from the env var or stored secret and either retries or fails over while it heals in the background. [Key pooling](https://docs.wyolet.com/concepts/key-pooling)
 - **Rate limits.** Rules count `requests`, `concurrency`, `tokens` or a single token class such as input, output, cache reads, cache writes or reasoning. Strategies are token bucket, sliding window, fixed window, leaky bucket and session window. Limits attach to a policy, shared by the credentials it governs within a team, and to host keys, to stay inside each upstream account's limits. [Rate limits](https://docs.wyolet.com/concepts/rate-limits)
-- **Load shedding.** A per-pod in-flight cap (`RELAY_MAX_INFLIGHT`) answers overflow with `429` and `Retry-After` before it reads the body. [Configuration](https://docs.wyolet.com/configuration)
+- **Load shedding.** A per-pod in-flight cap (`RELAY_MAX_INFLIGHT`) answers overflow with `503` (`529` on Anthropic-shaped routes) and `Retry-After` before it reads the body. [Configuration](https://docs.wyolet.com/configuration)
 
 ### Access and tenancy
 

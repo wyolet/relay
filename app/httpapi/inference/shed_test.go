@@ -1,11 +1,14 @@
 package inference
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/usagelog"
@@ -54,7 +58,7 @@ func gatedRouter(adm *httpapi.Admission) (chi.Router, *bool) {
 		OperationID: "gated",
 		Method:      http.MethodPost,
 		Path:        "/gated",
-		Middlewares: huma.Middlewares{shedWhenFull(adm)},
+		Middlewares: huma.Middlewares{shedWhenFull(adm, &relayOverloaded)},
 	}, func(context.Context, *struct{}) (*struct{}, error) {
 		*reached = true
 		return nil, nil
@@ -69,7 +73,7 @@ func TestShedWhenFull_PassesThroughBelowCap(t *testing.T) {
 	if !*reached {
 		t.Fatalf("handler not reached below the cap (status %d)", w.Code)
 	}
-	if w.Code == http.StatusTooManyRequests {
+	if w.Code == http.StatusServiceUnavailable {
 		t.Fatal("shed below the cap")
 	}
 }
@@ -82,17 +86,59 @@ func TestShedWhenFull_RefusesAtCapWithoutReadingBody(t *testing.T) {
 	if *reached {
 		t.Fatal("handler reached at the cap")
 	}
-	assertShed429(t, w)
-	if got := w.Header().Get("Connection"); got != "close" {
-		t.Errorf("Connection = %q, want close", got)
+	assertOverloaded(t, w)
+	if got := w.Header().Get("Connection"); got != "" {
+		t.Errorf("Connection = %q, want none: a refusal must not force a reconnect", got)
 	}
 }
 
-// assertShed429 checks the refusal both shed stages write.
-func assertShed429(t *testing.T, w *httptest.ResponseRecorder) {
+// A refusal at the cap leaves a keep-alive connection usable: the unread body is drained by the server, and the next request on the same connection is served once a slot frees.
+func TestShedWhenFull_KeepsTheConnection(t *testing.T) {
+	adm := httpapi.NewAdmission(1)
+	holder := lifecycle.NewContext("holder", "pipeline", time.Now())
+	if err := adm.PreFlight(context.Background(), holder, &lifecycle.PreFlightEvent{}); err != nil {
+		t.Fatalf("hold the slot: %v", err)
+	}
+	r, reached := gatedRouter(adm)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	br := bufio.NewReader(conn)
+	post := func() *http.Response {
+		t.Helper()
+		body := `{"pad":"` + strings.Repeat("a", 16<<10) + `"}`
+		if _, err := fmt.Fprintf(conn, "POST /gated HTTP/1.1\r\nHost: relay\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+			t.Fatalf("write request: %v", err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		res, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		return res
+	}
+
+	if res := post(); res.StatusCode != http.StatusServiceUnavailable || res.Close {
+		t.Fatalf("at the cap: status %d close %v, want 503 on an open connection", res.StatusCode, res.Close)
+	}
+	adm.Collect(holder)
+	if res := post(); res.StatusCode >= 300 || !*reached {
+		t.Fatalf("next request on the same connection: status %d, handler reached %v", res.StatusCode, *reached)
+	}
+}
+
+// assertOverloaded checks relay's own overload refusal, as both shed stages and an unreachable state store write it for a shape that declares none.
+func assertOverloaded(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429 (body %s)", w.Code, w.Body)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", w.Code, w.Body)
 	}
 	for header, want := range map[string]string{
 		"Retry-After":                httpapi.RetryAfterShed,
@@ -108,8 +154,8 @@ func assertShed429(t *testing.T, w *httptest.ResponseRecorder) {
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("body is not the relay error envelope: %v (%s)", err, w.Body)
 	}
-	if env.Err.Type != "rate_limit_error" || env.Err.Code != "overloaded" || env.Err.Message == "" {
-		t.Errorf("envelope = %+v, want rate_limit_error/overloaded with a message", env.Err)
+	if env.Err.Type != "server_error" || env.Err.Code != "overloaded" || env.Err.Message == "" {
+		t.Errorf("envelope = %+v, want server_error/overloaded with a message", env.Err)
 	}
 }
 
@@ -132,14 +178,12 @@ func TestMount_ShedsOnlyGenerationRoutes(t *testing.T) {
 	for _, path := range []string{"/anthropic/v1/messages", "/stub/v1/messages"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, unreadBody{t}))
-		if w.Code != http.StatusTooManyRequests {
-			t.Errorf("POST %s at the cap: status %d, want 429", path, w.Code)
-		}
+		assertSpecOverloaded(t, w)
 	}
 	for _, path := range []string{"/healthz", "/v1/models"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		if w.Code == http.StatusTooManyRequests {
+		if w.Code == testOverloaded.Status {
 			t.Errorf("GET %s shed at the cap", path)
 		}
 	}
@@ -170,7 +214,7 @@ func TestDispatch_LateShedSkipsUsageAndKeepsSlots(t *testing.T) {
 	Dispatch(Deps{Lifecycle: reg}, w, httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", bytes.NewReader(body)),
 		DispatchInput{Inbound: adapters.OpenAI, Body: body, ModelName: "m"})
 
-	assertShed429(t, w)
+	assertOverloaded(t, w)
 	if strings.Contains(logs.String(), "inference: error response") {
 		t.Errorf("late shed logged a per-request line:\n%s", logs.String())
 	}
@@ -190,11 +234,45 @@ func TestDispatch_LateShedSkipsUsageAndKeepsSlots(t *testing.T) {
 }
 
 func BenchmarkShedWhenFull_PassThrough(b *testing.B) {
-	mw := shedWhenFull(httpapi.NewAdmission(1))
+	mw := shedWhenFull(httpapi.NewAdmission(1), &relayOverloaded)
 	hctx := humachi.NewContext(&huma.Operation{}, httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
 	next := func(huma.Context) {}
 	b.ReportAllocs()
 	for b.Loop() {
 		mw(hctx, next)
 	}
+}
+
+// testOverloaded stands in for a shape's own overload answer.
+var testOverloaded = &adapter.ErrorResponse{Status: 529, Body: []byte(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`)}
+
+// assertSpecOverloaded checks a refusal answered with the shape's declared overload response and relay's retry headers.
+func assertSpecOverloaded(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != testOverloaded.Status || w.Body.String() != string(testOverloaded.Body) {
+		t.Fatalf("got %d %s, want the shape's %d %s", w.Code, w.Body, testOverloaded.Status, testOverloaded.Body)
+	}
+	for header, want := range map[string]string{
+		"Retry-After":                httpapi.RetryAfterShed,
+		HeaderOrigin:                 "relay",
+		httpheader.HeaderShouldRetry: "true",
+	} {
+		if got := w.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+}
+
+// A late shed answers in the inbound shape's own overload form when the shape declares one.
+func TestDispatch_LateShedAnswersInTheInboundShape(t *testing.T) {
+	adm := admissionAt(t, true)
+	reg := lifecycle.New()
+	reg.RegisterPreFlight(adm.PreFlight)
+	reg.RegisterCollector(adm)
+
+	body := []byte(`{"model":"m"}`)
+	w := httptest.NewRecorder()
+	Dispatch(Deps{Lifecycle: reg, Specs: buildPathRegistry()}, w, httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewReader(body)),
+		DispatchInput{Inbound: adapters.Anthropic, Body: body, ModelName: "m"})
+	assertSpecOverloaded(t, w)
 }

@@ -86,7 +86,7 @@ relay:
   redisMinIdleConns: ""
   # -- Valkey client bounds in milliseconds (RELAY_REDIS_*_TIMEOUT_MS); empty =
   # relay defaults: dial 2000, read 500, write 500, pool 250. A rate-limit
-  # check that gets no reply in time refuses the request with 429.
+  # check that gets no reply in time refuses the request as overloaded (503).
   redisDialTimeoutMs: ""
   redisReadTimeoutMs: ""
   redisWriteTimeoutMs: ""

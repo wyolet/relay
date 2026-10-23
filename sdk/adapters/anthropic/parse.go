@@ -14,6 +14,11 @@ type parseError struct {
 func (e *parseError) Error() string { return string(e.body) }
 
 func newParseError(status int, errType, msg string) *parseError {
+	return &parseError{status: status, body: errorBody(errType, msg)}
+}
+
+// errorBody is Anthropic's error envelope.
+func errorBody(errType, msg string) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"type": "error",
 		"error": map[string]string{
@@ -21,7 +26,15 @@ func newParseError(status int, errType, msg string) *parseError {
 			"message": msg,
 		},
 	})
-	return &parseError{status: status, body: b}
+	return b
+}
+
+// StatusOverloaded is the status Anthropic's API answers when it is temporarily overloaded. Anthropic's SDKs and Claude Code retry it with backoff, apart from a 429 rate limit.
+const StatusOverloaded = 529
+
+// OverloadedError returns the body Anthropic's API sends with StatusOverloaded.
+func OverloadedError(msg string) []byte {
+	return errorBody("overloaded_error", msg)
 }
 
 // ParseError returns the HTTP status and JSON envelope body if err is a *parseError,

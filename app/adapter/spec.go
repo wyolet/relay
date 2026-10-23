@@ -152,6 +152,9 @@ type Spec struct {
 	// Embeddings), this field is nil — the standard Name-equality check handles it.
 	IsNativePath func(plan *routing.Plan) bool
 
+	// Overloaded is how this shape's callers expect to be told the server is overloaded, sent when relay refuses a request for its own lack of capacity (the in-flight cap, an unreachable state store). Nil means 503 in relay's error envelope.
+	Overloaded *ErrorResponse
+
 	// client is the shared *http.Client for this spec's pipeline.Adapter.
 	// Populated by Build.
 	client *http.Client
@@ -179,6 +182,12 @@ func (s *Spec) RequestKeys() v1.RequestKeys {
 		return p.RequestKeys()
 	}
 	return v1.RequestKeys{}
+}
+
+// ErrorResponse is a complete error answer, written as is.
+type ErrorResponse struct {
+	Status int
+	Body   []byte
 }
 
 // Build finalises the Spec by constructing its shared HTTP client and snapshotting the per-call deadlines. The client pools upstream connections via a tuned transport (per-host idle ceiling from SetUpstreamMaxIdleConnsPerHost).

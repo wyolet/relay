@@ -112,7 +112,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
-	if !d.runPreFlight(ctx, w, lc) {
+	if !d.runPreFlight(ctx, w, lc, d.Specs.Spec(in.Inbound)) {
 		return
 	}
 
@@ -266,8 +266,8 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
 }
 
-// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. A shed is the one false return with no Finalize. On false the response is written.
-func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifecycle.Context) bool {
+// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request in inbound's shape whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. A shed is the one false return with no Finalize. On false the response is written.
+func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifecycle.Context, inbound *adapter.Spec) bool {
 	if d.Lifecycle == nil {
 		return true
 	}
@@ -275,14 +275,14 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 	if err == nil {
 		return true
 	}
-	// In-flight cap reached → shed with a retriable 429 + Retry-After so
-	// clients back off instead of hammering a saturated pod. No Finalize is
+	// In-flight cap reached → shed with the shape's retriable overload answer
+	// + Retry-After so clients back off instead of hammering a saturated pod. No Finalize is
 	// owed: admission is the first pre-flight middleware, so a shed aborts
 	// before any other one marks lc, and the slot was never acquired. Skipping
 	// it keeps a flood from turning into one usage event per refusal. Any
 	// other abort stays a 500.
 	if errors.Is(err, httpapi.ErrShed) {
-		writeShed(w)
+		writeOverloaded(w, overloadedFor(inbound))
 		return false
 	}
 	d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
@@ -346,7 +346,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 
 	result, err := d.Pipeline.Run(ctx, preq)
 	if err != nil {
-		mapRunErr(w, err)
+		mapRunErr(w, inboundSpec, err)
 		return
 	}
 	defer result.Body.Close()
@@ -480,7 +480,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 
 	result, pErr := d.Pipeline.Run(ctx, preq)
 	if pErr != nil {
-		mapRunErr(w, pErr)
+		mapRunErr(w, d.Specs.Spec(in.Inbound), pErr)
 		return
 	}
 	defer result.Body.Close()

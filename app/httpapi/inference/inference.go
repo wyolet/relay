@@ -77,8 +77,8 @@ type Deps struct {
 	RouteMounters []RouteMounter
 
 	// Admission is the in-flight cap. When set, the RouteMounters' routes
-	// refuse new requests with a 429 before reading the body while the cap is
-	// reached. Nil installs no such check.
+	// refuse new requests with their shape's overload answer before reading
+	// the body while the cap is reached. Nil installs no such check.
 	Admission *httpapi.Admission
 
 	// Profiles are the client profiles this deployment serves, registered
@@ -154,14 +154,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 		httpapi.HumaAuth(ClassifyMiddleware()),
 		httpapi.HumaAuth(PrincipalMiddleware(d.Catalog, d.Tokens)),
 	}
-	// The capacity check leads, and only on the generation routes: a probe or
-	// model listing must keep answering on a saturated pod.
-	routeMW := mw
-	if d.Admission != nil {
-		routeMW = append(huma.Middlewares{shedWhenFull(d.Admission)}, mw...)
-	}
 	for _, mount := range d.RouteMounters {
-		mount(api, d, routeMW)
+		mount(api, d, mw)
 	}
 	registerModels(api, d, mw)
 	registerCatalog(api, d, mw)

@@ -39,13 +39,14 @@ curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer <relay-key>"
 ```
 
-## `503`: nothing to route to
+## `503`: nothing to route to, or relay is overloaded
 
 | Code | Cause | Fix |
 | --- | --- | --- |
 | `catalog_unavailable` | The process has not finished loading the catalog after start. | Retry after the `Retry-After` delay. `/healthz` reports `503` until it is ready. |
 | `no_host_binding` | The model has no enabled host binding. | Bind the model to a host, or enable the binding. |
 | `no_keys` | No usable host key: the policy lists none on the chosen host, or none is enabled. | Add a host key for that host and list it in the policy's `hostKeyIds`. |
+| `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), or Valkey did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`. | Retry after 1 second. If it persists, add replicas, or check `relay_kv_errors_total` and Valkey's load. |
 
 ## `502`: every key fails or is cooling down
 
@@ -70,10 +71,11 @@ To recover:
 
 ## `429`: slow down
 
+A `429` written by Relay always means a limit set for the caller. Relay's own lack of capacity is a `503` (see above).
+
 | Code | Cause |
 | --- | --- |
 | `rate_limit_exceeded` | A [rate limit](/concepts/rate-limits) on the governing policy is used up. `Retry-After` says when the bucket refills. |
-| `overloaded` | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048). Retry after 1 second, or add replicas. |
 | A provider body, `X-WR-Origin: upstream` | The provider's own rate limit, after every key was tried. |
 
 ## `413`: request too large
