@@ -3,6 +3,8 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strings"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -25,7 +27,17 @@ func fieldTypeError(key, kind string) *bodyError {
 	return jsonSyntaxError("field '%s' must be %s", key, kind)
 }
 
+func duplicateStreamError(key string) *bodyError {
+	return &bodyError{http.StatusBadRequest, "duplicate_stream", fmt.Sprintf("request body has more than one top-level '%s' field", key)}
+}
+
+func streamKeySpellingError(key string) *bodyError {
+	return &bodyError{http.StatusBadRequest, "invalid_stream_key", fmt.Sprintf("the top-level '%s' key must be spelled exactly %q, without other letter case", key, key)}
+}
+
 // parseRequest reads body once: it refuses what encoding/json refuses, then a model or stream member of the wrong type (parse_error), then a second top-level model key (duplicate_model), in that order, as the probe decode it replaces did. A missing model is the caller's to refuse; a top-level null reads as an empty request.
+//
+// The stream key is then held to one member spelled exactly as the shape names it (escapes decoded): relay reads it case-insensitively and last-wins, as encoding/json does, while an upstream may match case-sensitively or keep the first, and a stream relay does not see is a stream it neither meters nor asks for usage.
 func parseRequest(body []byte, keys v1.RequestKeys) (*ParsedRequest, *bodyError) {
 	p := &ParsedRequest{modelAt: -1}
 	obj, err := scanJSONObject(body, p.inline[:])
@@ -40,7 +52,7 @@ func parseRequest(body []byte, keys v1.RequestKeys) (*ParsedRequest, *bodyError)
 		return nil, jsonSyntaxError("request body must be a JSON object")
 	}
 	var typeErr *bodyError
-	modelKeys := 0
+	modelKeys, streamKeys, streamAt := 0, 0, -1
 	var streamBool, streamSet bool
 	var streamStr string
 	for i := range obj.members {
@@ -64,6 +76,8 @@ func parseRequest(body []byte, keys v1.RequestKeys) (*ParsedRequest, *bodyError)
 		if keys.Stream == "" || !obj.keyFold(i, keys.Stream) {
 			continue
 		}
+		streamKeys++
+		streamAt = i
 		if keys.StreamOn == "" {
 			switch v[0] {
 			case 't', 'f':
@@ -94,6 +108,12 @@ func parseRequest(body []byte, keys v1.RequestKeys) (*ParsedRequest, *bodyError)
 	}
 	if modelKeys > 1 {
 		return nil, errDuplicateModel
+	}
+	if streamKeys > 1 {
+		return nil, duplicateStreamError(keys.Stream)
+	}
+	if streamAt >= 0 && !obj.keyIs(streamAt, keys.Stream) {
+		return nil, streamKeySpellingError(keys.Stream)
 	}
 	if keys.StreamOn == "" {
 		p.Stream = streamSet && streamBool

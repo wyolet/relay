@@ -290,6 +290,8 @@ Relay writes errors in one envelope:
 | `400` | `parse_error`, `missing_model`, `read_body` | The body is not JSON or has no `model`. |
 | `400` | `duplicate_model` | The body has more than one top-level `model` key, matched case-insensitively. |
 | `400` | `invalid_model_key` | Proxy mode: the top-level `model` key is spelled with other letter case or escapes. Proxy mode forwards the body as sent, so the key must be exactly `model`. |
+| `400` | `duplicate_stream` | The body has more than one top-level stream key (`stream`; `output_mode` on `/v1/generate`), matched case-insensitively. |
+| `400` | `invalid_stream_key` | The top-level stream key is spelled with other letter case, e.g. `Stream`. An upstream that matches keys case-sensitively would read a different stream setting than relay. |
 | `400` | `translate_request` | The request could not be translated to the upstream's shape. |
 | `400` | `embeddings_unsupported_host` | An embeddings request routed to a binding that is not `adapter: openai`. |
 | `400` | `bad_request` | `X-WR-Proxy-Mode` has an unknown value, or proxy mode was asked for without an `Authorization` header. |

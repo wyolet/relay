@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/openai"
@@ -144,10 +149,9 @@ func TestParseRequest_StreamPerShape(t *testing.T) {
 		{"output_mode stream", `{"model":"m","output_mode":"stream"}`, false, true},
 		{"output_mode sync", `{"model":"m","output_mode":"sync"}`, false, false},
 		{"neither", `{"model":"m"}`, false, false},
-		{"last stream wins", `{"model":"m","stream":true,"Stream":false}`, false, false},
-		{"null resets stream", `{"model":"m","stream":true,"stream":null}`, false, false},
-		{"null keeps output_mode", `{"model":"m","output_mode":"stream","output_mode":null}`, false, true},
+		{"stream null", `{"model":"m","stream":null}`, false, false},
 		{"escaped output_mode value", `{"model":"m","output_mode":"str` + uEscape("0065") + `am"}`, false, true},
+		{"escaped exact stream key", `{"model":"m","str` + uEscape("0065") + `am":true}`, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,6 +171,72 @@ func TestParseRequest_StreamPerShape(t *testing.T) {
 	}
 	if _, rej := parseRequest([]byte(`{"model":"m","output_mode":1}`), canonicalKeys); rej == nil || rej.code != "parse_error" {
 		t.Errorf("canonical output_mode number: %v, want parse_error", rej)
+	}
+}
+
+// longS is U+017F, which Unicode case folding (and so encoding/json's key matching) equates with 's'.
+const longS = "ſ"
+
+// A stream key relay and a case-sensitive or first-wins upstream could read differently is refused, so relay never takes a stream for a buffered call.
+func TestParseRequest_StreamKeySpelling(t *testing.T) {
+	var probe struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal([]byte(`{"`+longS+`tream":true}`), &probe); err != nil || !probe.Stream {
+		t.Fatalf("encoding/json no longer folds U+017F onto 's' (%v), so this case tests nothing", err)
+	}
+	cases := []struct {
+		name, body string
+		keys       v1.RequestKeys
+		code       string
+	}{
+		{"other case after exact", `{"model":"m","stream":true,"Stream":false}`, vendorKeys, "duplicate_stream"},
+		{"exact duplicate with null", `{"model":"m","stream":true,"stream":null}`, vendorKeys, "duplicate_stream"},
+		{"exact duplicate", `{"model":"m","stream":false,"stream":true}`, vendorKeys, "duplicate_stream"},
+		{"escaped duplicate", `{"model":"m","stream":true,"str` + uEscape("0065") + `am":false}`, vendorKeys, "duplicate_stream"},
+		{"fold duplicate", `{"model":"m","stream":true,"` + longS + `tream":false}`, vendorKeys, "duplicate_stream"},
+		{"other case alone", `{"model":"m","Stream":true}`, vendorKeys, "invalid_stream_key"},
+		{"upper case alone", `{"model":"m","STREAM":false}`, vendorKeys, "invalid_stream_key"},
+		{"fold alone", `{"model":"m","` + longS + `tream":true}`, vendorKeys, "invalid_stream_key"},
+		{"escaped other case", `{"model":"m","` + uEscape("0053") + `tream":true}`, vendorKeys, "invalid_stream_key"},
+		{"canonical duplicate", `{"model":"m","output_mode":"stream","output_mode":null}`, canonicalKeys, "duplicate_stream"},
+		{"canonical other case", `{"model":"m","Output_Mode":"stream"}`, canonicalKeys, "invalid_stream_key"},
+		{"type error first", `{"model":"m","stream":"x","Stream":true}`, vendorKeys, "parse_error"},
+		{"duplicate model first", `{"model":"m","model":"n","stream":true,"stream":true}`, vendorKeys, "duplicate_model"},
+		{"before missing model", `{"stream":true,"Stream":true}`, vendorKeys, "duplicate_stream"},
+		{"shape without a stream key", `{"model":"m","stream":true,"Stream":false}`, v1.RequestKeys{}, ""},
+		{"vendor key on the canonical route", `{"model":"m","stream":true,"Stream":false}`, canonicalKeys, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, code := requestCode([]byte(tc.body), tc.keys); code != tc.code {
+				t.Fatalf("code %q, want %q", code, tc.code)
+			}
+			if _, _, code := referenceRequest([]byte(tc.body), tc.keys); code != tc.code {
+				t.Fatalf("reference code %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+func TestHandleShape_StreamKeyRefused(t *testing.T) {
+	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	d := buildDeps(t, cat)
+	spec := &adapter.Spec{Name: adapters.OpenAI, Translator: openai.CCTranslator{}}
+	for body, code := range map[string]string{
+		`{"model":"test-model","stream":true,"Stream":false,"messages":[]}`: "duplicate_stream",
+		`{"model":"test-model","stream":true,"stream":null,"messages":[]}`:  "duplicate_stream",
+		`{"model":"test-model","` + longS + `tream":true,"messages":[]}`:    "invalid_stream_key",
+	} {
+		r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(body)), prin)
+		w := httptest.NewRecorder()
+		handleShape(spec, d, w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status %d, want 400; body %s", body, w.Code, w.Body)
+		}
+		if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Type != "invalid_request_error" || e.Error.Code != code {
+			t.Fatalf("%s: envelope %s/%s, want invalid_request_error/%s", body, e.Error.Type, e.Error.Code, code)
+		}
 	}
 }
 
@@ -515,10 +585,45 @@ func referenceRequest(b []byte, keys v1.RequestKeys) (model string, stream bool,
 	if _, refCode, ok := referenceScan(b); ok && refCode == errDuplicateModel.code {
 		return "", false, refCode
 	}
+	if keys.Stream != "" {
+		var matches []string
+		for _, k := range topLevelKeys(b) {
+			if strings.EqualFold(k, keys.Stream) {
+				matches = append(matches, k)
+			}
+		}
+		switch {
+		case len(matches) > 1:
+			return "", false, "duplicate_stream"
+		case len(matches) == 1 && matches[0] != keys.Stream:
+			return "", false, "invalid_stream_key"
+		}
+	}
 	if model == "" {
 		return "", false, "missing_model"
 	}
 	return model, stream, ""
+}
+
+// topLevelKeys lists an object's top-level keys as encoding/json decodes them; none for anything else.
+func topLevelKeys(b []byte) []string {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
+	var keys []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return keys
+		}
+		keys = append(keys, tok.(string))
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return keys
+		}
+	}
+	return keys
 }
 
 func TestParseRequest_AgreesOnGeneratedObjects(t *testing.T) {
