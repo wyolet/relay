@@ -222,7 +222,7 @@ These are built from a checkout of the repository; the relay images don't includ
 Prints usage events and summaries from the control API as text tables, or JSON with `--json`.
 
 ```bash
-go build -o relay-stats ./cmd/relay-stats
+GOEXPERIMENT=jsonv2 go build -o relay-stats ./cmd/relay-stats
 relay-stats summary --url http://localhost:8081/api --by model_id --since 24h
 relay-stats events --url http://localhost:8081/api --since 1h --limit 50
 ```
@@ -245,7 +245,7 @@ Exits `1` when the request fails and `2` on a usage error. See [Usage](/concepts
 Copies a JSONL dump from the `file` payload-logging backend into the ClickHouse payload store, so captured bodies become readable through ClickHouse. Rows already present are skipped, so an interrupted run can be repeated.
 
 ```bash
-go build -o payload-migrate ./cmd/payload-migrate
+GOEXPERIMENT=jsonv2 go build -o payload-migrate ./cmd/payload-migrate
 payload-migrate -file relay-payloads.jsonl -dsn "$RELAY_CH_DSN"
 ```
 

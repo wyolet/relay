@@ -88,9 +88,11 @@ RUN touch cmd/relay/web/dist/.gitkeep
 # (bare `docker build`). The release pipeline passes the git tag via
 # docker-bake.hcl.
 ARG VERSION=dev
+# build.env holds the Go build settings (GOEXPERIMENT) every relay build shares.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
+    set -a; . ./build.env; set +a; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/wyolet/relay/app/httpapi.Version=${VERSION}" \
     -o /relay ./cmd/relay
@@ -101,6 +103,7 @@ ARG GO_CACHE_MOUNTS=1
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
+    set -a; . ./build.env; set +a; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/catalog-server ./cmd/catalog-validate
 
 # --- final (lean): distroless, nonroot — production image, external Postgres ---

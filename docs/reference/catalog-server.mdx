@@ -89,7 +89,7 @@ src := catalogsource.Latest(catalogsource.WithBaseURL("https://catalog.example.c
 ## Running catalog-server
 
 ```bash
-go build -o catalog-server ./cmd/catalog-server
+GOEXPERIMENT=jsonv2 go build -o catalog-server ./cmd/catalog-server
 catalog-server serve
 ```
 

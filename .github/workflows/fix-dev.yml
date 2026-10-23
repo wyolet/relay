@@ -161,6 +161,11 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      # The Go build settings CI ran with, so a reproduction builds the same
+      # way; commits from before build.env existed have none.
+      - name: Go build settings
+        run: '[ ! -f build.env ] || grep -E "^[A-Z_]+=" build.env >> "$GITHUB_ENV"'
+
       # For a failing lint or chart check; same pinned version as ci.yml.
       - uses: golangci/golangci-lint-action@v9
         with:

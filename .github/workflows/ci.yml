@@ -64,6 +64,7 @@ jobs:
               - '.github/workflows/ci.yml'
             boot:
               - 'versions.env'
+              - 'build.env'
               - 'scripts/boot-smoke.sh'
               - '.github/workflows/ci.yml'
 
@@ -106,6 +107,7 @@ jobs:
 
       - name: Build
         run: |
+          set -a; . ./build.env; set +a
           go build ./...
           (cd sdk && go build ./...)
           (cd jobq && go build ./...)
