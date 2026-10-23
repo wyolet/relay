@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // How an answer was reached, reported in httpheader.HeaderTokenCount.
@@ -64,11 +65,12 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	modelName, _, err := extractModelStream(body)
-	if err != nil {
-		writeModelParseErr(w, err)
+	req, rej := parseRequest(body, v1.RequestKeys{})
+	if rej != nil {
+		writeBodyError(w, rej)
 		return
 	}
+	modelName := req.Model
 	if modelName == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_model", "field 'model' is required")
 		return
@@ -102,7 +104,7 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if counter, ok := exactCounter(d, profile, plan); ok {
-		if count, ok := countUpstream(d, w, r, plan, counter, body, modelName); ok {
+		if count, ok := countUpstream(d, w, r, plan, counter, req, modelName); ok {
 			writeTokenCount(w, count, tierExact)
 		}
 		return
@@ -132,7 +134,7 @@ func exactCounter(d Deps, profile clientprofile.Profile, plan *routing.Plan) (ad
 }
 
 // countUpstream asks the upstream to count through the admission step and pipeline a generation takes. The model field is rewritten to the binding's upstream name, exactly as the byte-pass generation path does. Reports false after writing the error.
-func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing.Plan, counter adapter.TokenCounter, body []byte, requested string) (int, bool) {
+func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing.Plan, counter adapter.TokenCounter, req *ParsedRequest, requested string) (int, bool) {
 	ctx := r.Context()
 	lc := mintLifecycle(ctx, d.Catalog, sourceCount, ClassificationFrom(ctx).ClientIP)
 	lc.RequestedModel = requested
@@ -146,7 +148,7 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 
 	teamID, tokenJTI := reserveIdentity(ctx)
 	result, err := d.Pipeline.Run(ctx, &pipeline.Request{
-		Body:          rewriteModelField(body, plan.UpstreamModel()),
+		Body:          req.upstreamBody(plan.UpstreamModel(), nil),
 		Headers:       forwardHeaders(r.Header),
 		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       counter.CountAdapter(),

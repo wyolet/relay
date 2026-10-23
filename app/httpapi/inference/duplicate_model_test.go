@@ -41,10 +41,10 @@ func TestHandleCountTokens_DuplicateModel(t *testing.T) {
 }
 
 // Normal mode rewrites the model key before forwarding, so it keeps routing a key spelled in another case or with escapes; proxy mode refuses those (TestProxyShape_ModelKeySpelling).
-func TestExtractModelStream_ModelKeySpelling(t *testing.T) {
+func TestParseRequest_ModelKeySpelling(t *testing.T) {
 	for _, body := range []string{`{"Model":"test-model","messages":[]}`, `{"` + uEscape("006d") + `odel":"test-model","messages":[]}`} {
-		if m, _, err := extractModelStream([]byte(body)); err != nil || m != "test-model" {
-			t.Fatalf("%s: (%q, %v), want the model", body, m, err)
+		if req, err := parseRequest([]byte(body), vendorKeys); err != nil || req.Model != "test-model" {
+			t.Fatalf("%s: (%+v, %v), want the model", body, req, err)
 		}
 	}
 }

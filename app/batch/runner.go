@@ -69,10 +69,11 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 		return 0, nil, fmt.Errorf("%w: %v", ErrCredentialInvalid, err)
 	}
 
-	modelName, _, err := inference.ExtractModelStream(body)
+	req, err := inference.ParseRequest(body)
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: parse model: %w", err)
 	}
+	modelName := req.Model
 
 	var pol *policy.Policy
 	if policyID != "" {
@@ -169,10 +170,9 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 	}
 	lc.Translator = upstreamSpec.Translator
 
-	wireBody := inference.RewriteModelField(body, plan.UpstreamModel())
 	// Same-shape only (guarded above), so the body stays inbound-shaped and
 	// the inbound spec's ParamPaths address it — mirrors runBytePass.
-	wireBody, _ = inference.StripUnsupportedParams(wireBody, plan.Model, inboundSpec.ParamPaths)
+	wireBody, _ := inference.UpstreamBody(req, plan.UpstreamModel(), plan.Model, inboundSpec.ParamPaths)
 
 	preq := &pipeline.Request{
 		Body:          wireBody,
