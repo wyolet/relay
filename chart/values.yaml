@@ -47,7 +47,7 @@ relay:
   # -- Cookies are Secure (set false only for plain-HTTP testing).
   cookieSecure: "true"
   maxRequestBytes: ""        # empty = relay default
-  # -- Open connections the inference listener accepts (RELAY_MAX_CONNS); empty = one per 64 KiB of goMemLimit.
+  # -- Open connections the inference listener accepts (RELAY_MAX_CONNS); empty = 40 % of goMemLimit at 64 KiB each.
   maxConns: ""
   # -- Upstream TCP connect timeout in seconds (RELAY_UPSTREAM_DIAL_TIMEOUT_S); empty = 10.
   upstreamDialTimeoutS: ""

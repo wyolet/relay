@@ -124,15 +124,29 @@ func TestInferenceMaxConns(t *testing.T) {
 	}
 	prev := debug.SetMemoryLimit(900 << 20)
 	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
-	if got := inferenceMaxConns(0); got != 14400 {
-		t.Fatalf("900 MiB memory limit: got %d, want 14400", got)
+	if got := inferenceMaxConns(0); got != 5760 {
+		t.Fatalf("900 MiB memory limit: got %d, want 5760", got)
 	}
-	debug.SetMemoryLimit(16 << 20)
+	debug.SetMemoryLimit(64 << 20)
 	if got := inferenceMaxConns(0); got != minDerivedMaxConns {
-		t.Fatalf("16 MiB memory limit: got %d, want the floor %d", got, minDerivedMaxConns)
+		t.Fatalf("64 MiB memory limit: got %d, want the floor %d", got, minDerivedMaxConns)
 	}
 	debug.SetMemoryLimit(math.MaxInt64)
 	if got := inferenceMaxConns(0); got != noMemLimitMaxConns {
 		t.Fatalf("no memory limit: got %d, want %d", got, noMemLimitMaxConns)
+	}
+}
+
+// Above the floor, the derived cap's connections at their budgeted cost stay within 40 % of the memory limit and use most of it.
+func TestInferenceMaxConnsStaysWithinMemoryShare(t *testing.T) {
+	prev := debug.SetMemoryLimit(-1)
+	t.Cleanup(func() { debug.SetMemoryLimit(prev) })
+	for _, limit := range []int64{256 << 20, 512 << 20, 900 << 20, 1000 << 20, 3 << 30, 7<<30 + 123} {
+		debug.SetMemoryLimit(limit)
+		conns := int64(inferenceMaxConns(0))
+		share := limit * 2 / 5
+		if used := conns * connBudgetBytes; used > share || used <= share-connBudgetBytes {
+			t.Errorf("limit %d MiB: %d connections budget %d MiB, want at most and within one connection of %d MiB", limit>>20, conns, used>>20, share>>20)
+		}
 	}
 }
