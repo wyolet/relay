@@ -39,10 +39,10 @@ type RedisConfig struct {
 	Pool string
 }
 
-// Client defaults: short enough that a stalled server costs a request well under a second instead of the library's multi-second defaults.
+// Client defaults: short enough that a stalled server costs a request about a second instead of the library's multi-second defaults. The read bound outlasts two TCP retransmit timeouts (~420–600 ms), so one lost packet doesn't close the connection and force a redial.
 const (
 	DefaultDialTimeout  = 2 * time.Second
-	DefaultReadTimeout  = 500 * time.Millisecond
+	DefaultReadTimeout  = 1 * time.Second
 	DefaultWriteTimeout = 500 * time.Millisecond
 	DefaultPoolTimeout  = 250 * time.Millisecond
 )
