@@ -27,7 +27,7 @@ const (
 	DefaultRedisPostFlightQueueSize  = 4096
 )
 
-// loadRedisClient reads the go-redis client timeouts and retry count, and the post-flight client's pool, wait bounds and settle queue.
+// loadRedisClient reads the go-redis client timeouts, retry count and admission wait bound, and the post-flight client's pool, wait bounds and settle queue. It runs after RedisPoolSize is read.
 func loadRedisClient(cfg *Config) error {
 	for _, d := range []struct {
 		key string
@@ -52,6 +52,11 @@ func loadRedisClient(cfg *Config) error {
 	} else {
 		cfg.RedisMaxRetries = v
 	}
+	waiters, err := envPositiveInt("RELAY_REDIS_POOL_MAX_WAITERS", cfg.RedisPoolSize)
+	if err != nil {
+		return fmt.Errorf("RELAY_REDIS_POOL_MAX_WAITERS must be >= 1")
+	}
+	cfg.RedisPoolMaxWaiters = waiters
 	v, err := envPositiveInt("RELAY_REDIS_POSTFLIGHT_POOL_SIZE", DefaultRedisPostFlightPoolSizePerCPU*runtime.GOMAXPROCS(0))
 	if err != nil {
 		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_POOL_SIZE must be >= 1")

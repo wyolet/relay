@@ -50,6 +50,12 @@ func (r *Redis) loadSHA(ctx context.Context, name, script string) (string, error
 
 // RunScript implements Scripter.
 func (r *Redis) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
+	r.enter()
+	defer r.leave()
+	return r.runScript(ctx, name, script, keys, args...)
+}
+
+func (r *Redis) runScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	r.inflight.Add(1)
 	defer r.inflight.Done()
 	start := time.Now()

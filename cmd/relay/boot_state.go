@@ -37,6 +37,8 @@ func openKV(bootCtx context.Context, cfg *config.Config) (shared, postFlight kv.
 	sharedCfg.Pool = "shared"
 	sharedCfg.PoolSize, sharedCfg.MinIdleConns = cfg.RedisPoolSize, cfg.RedisMinIdleConns
 	sharedCfg.ReadTimeout, sharedCfg.PoolTimeout = cfg.RedisReadTimeout, cfg.RedisPoolTimeout
+	sharedCfg.MaxPoolWaiters = cfg.RedisPoolMaxWaiters
+	// The post-flight client sets no wait bound: a served request's settle is never refused.
 	postCfg := base
 	postCfg.Pool = "post-flight"
 	postCfg.PoolSize = cfg.RedisPostFlightPoolSize
@@ -54,6 +56,14 @@ func openKV(bootCtx context.Context, cfg *config.Config) (shared, postFlight kv.
 		os.Exit(1)
 	}
 	return rs, post
+}
+
+// kvPoolBusy returns the shared store's wait-queue check for the inference routes' early refusal; nil when the store never queues for a connection.
+func kvPoolBusy(s kv.Store) func() bool {
+	if p, ok := s.(kv.PoolShedder); ok {
+		return p.PoolBusy
+	}
+	return nil
 }
 
 func startOAuthRefresher(listenerCtx context.Context, st *storagemod.Storage, stores *appcatalog.Stores, kvStore kv.Store) {

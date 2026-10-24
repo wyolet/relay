@@ -42,6 +42,44 @@ func TestBatchRedis_PoolTimeoutFailsEveryResult(t *testing.T) {
 	}
 }
 
+// With the one connection held and the one allowed waiter queued, an admission batch is refused at once with nothing sent, while the waiter itself still waits out the pool timeout.
+func TestBatchRedis_ShedAtWaitBound(t *testing.T) {
+	cfg := kvtest.Config(t)
+	cfg.PoolTimeout, cfg.MaxPoolWaiters = 500*time.Millisecond, 1
+	s := kvtest.ExhaustedPool(t, cfg)
+	ctx := context.Background()
+
+	waited := make(chan error, 1)
+	go func() {
+		_, err := s.Get(ctx, "{t}:queued")
+		waited <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !s.PoolBusy() {
+		if time.Now().After(deadline) {
+			t.Fatal("the waiter never queued")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	b := kv.NewBatch(s)
+	results := []*kv.BatchResult{b.Script(echoCall("{t}:k", "a")), b.Get("{t}:g")}
+	b.ShedWhenPoolBusy()
+	start := time.Now()
+	b.Exec(ctx)
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("refusal took %v, want no pool wait", d)
+	}
+	for i, r := range results {
+		if !errors.Is(r.Err, kv.ErrPoolBusy) {
+			t.Errorf("result %d: err = %v, want ErrPoolBusy", i, r.Err)
+		}
+	}
+	if err := <-waited; !errors.Is(err, redis.ErrPoolTimeout) {
+		t.Errorf("waiter err = %v, want the pool timeout", err)
+	}
+}
+
 // A script evicted between the SHA preload and the pipeline answers NOSCRIPT inside the batch; that one script reruns alone and the batch still succeeds.
 func TestBatchRedis_NoScriptRerunsAlone(t *testing.T) {
 	cfg := kvtest.Config(t)

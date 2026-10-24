@@ -57,6 +57,8 @@ type Config struct {
 	RedisWriteTimeout time.Duration
 	RedisPoolTimeout  time.Duration
 	RedisMaxRetries   int
+	// RELAY_REDIS_POOL_MAX_WAITERS: calls that may wait for a shared-pool connection before admission is refused at once rather than after the pool wait; default RedisPoolSize.
+	RedisPoolMaxWaiters int
 	// RELAY_REDIS_POSTFLIGHT_{POOL_SIZE,POOL_TIMEOUT_MS,READ_TIMEOUT_MS}: the second client that settles served requests after the response; dial and write bounds and retries are the shared ones.
 	RedisPostFlightPoolSize    int
 	RedisPostFlightPoolTimeout time.Duration

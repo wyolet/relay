@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"sort"
 	"sync"
@@ -35,6 +36,8 @@ type RedisConfig struct {
 	PoolTimeout  time.Duration
 	// MaxRetries is how many times a failed command is resent; 0 sends it once.
 	MaxRetries int
+	// MaxPoolWaiters is how many calls may wait for a connection before the PoolShedder calls refuse; other calls queue regardless. Zero sets no bound.
+	MaxPoolWaiters int
 
 	// Pool names this client in the slow-op log, so a process with more than one pool shows which one ran out.
 	Pool string
@@ -92,6 +95,9 @@ type Redis struct {
 	pool     string
 	shas     sync.Map // name -> sha string
 	inflight sync.WaitGroup
+	// calls holding or waiting for a connection; the PoolShedder calls refuse past callLimit (pool size + MaxPoolWaiters).
+	calls     atomic.Int64
+	callLimit int64
 }
 
 // NewRedis constructs a Redis and pings the server.
@@ -153,7 +159,11 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 		_ = client.Close()
 		return nil, fmt.Errorf("state: redis ping: %w", err)
 	}
-	return &Redis{client: client, pool: cfg.Pool}, nil
+	r := &Redis{client: client, pool: cfg.Pool, callLimit: math.MaxInt64}
+	if cfg.MaxPoolWaiters > 0 {
+		r.callLimit = int64(poolSize(client, cfg.PoolSize) + cfg.MaxPoolWaiters)
+	}
+	return r, nil
 }
 
 // isUnavailable reports whether err is an ErrUnavailable case. A cancelled caller is not: that is the caller leaving, not the store failing.
@@ -192,6 +202,8 @@ func serverCannotServe(err error) bool {
 
 // Ping checks the connection.
 func (r *Redis) Ping(ctx context.Context) error {
+	r.enter()
+	defer r.leave()
 	return markUnavailable(r.client.Ping(ctx).Err())
 }
 
@@ -232,6 +244,8 @@ func (r *Redis) trackSlow(op, key string, start time.Time, err error) {
 }
 
 func (r *Redis) Get(ctx context.Context, key string) ([]byte, error) {
+	r.enter()
+	defer r.leave()
 	start := time.Now()
 	v, err := r.client.Get(ctx, key).Bytes()
 	r.trackSlow("get", key, start, err)
@@ -242,6 +256,8 @@ func (r *Redis) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	r.enter()
+	defer r.leave()
 	start := time.Now()
 	err := r.client.Set(ctx, key, value, ttl).Err()
 	r.trackSlow("set", key, start, err)
@@ -249,6 +265,8 @@ func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Dura
 }
 
 func (r *Redis) Del(ctx context.Context, key string) error {
+	r.enter()
+	defer r.leave()
 	start := time.Now()
 	err := r.client.Del(ctx, key).Err()
 	r.trackSlow("del", key, start, err)
@@ -256,6 +274,8 @@ func (r *Redis) Del(ctx context.Context, key string) error {
 }
 
 func (r *Redis) Incr(ctx context.Context, key string, delta int64) (int64, error) {
+	r.enter()
+	defer r.leave()
 	start := time.Now()
 	n, err := r.client.IncrBy(ctx, key, delta).Result()
 	r.trackSlow("incr", key, start, err)
@@ -263,6 +283,8 @@ func (r *Redis) Incr(ctx context.Context, key string, delta int64) (int64, error
 }
 
 func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	r.enter()
+	defer r.leave()
 	start := time.Now()
 	ok, err := r.client.Expire(ctx, key, ttl).Result()
 	r.trackSlow("expire", key, start, err)
@@ -277,6 +299,8 @@ func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error
 
 // TODO(kv): Cluster-unsafe — SCAN only covers one shard.
 func (r *Redis) Range(ctx context.Context, prefix string) ([]Entry, error) {
+	r.enter()
+	defer r.leave()
 	pattern := prefix + "*"
 	var keys []string
 	var cursor uint64

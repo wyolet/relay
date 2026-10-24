@@ -12,6 +12,8 @@ import (
 
 // ExpireNX sets ttl on key only when it has no expiry (EXPIRE NX, Redis 7.0+ and every Valkey) and reports whether it did.
 func (r *Redis) ExpireNX(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	r.enter()
+	defer r.leave()
 	start := time.Now()
 	ok, err := r.client.ExpireNX(ctx, key, ttl).Result()
 	r.trackSlow("expire_nx", key, start, err)
@@ -23,6 +25,12 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 	if len(ops) == 0 {
 		return
 	}
+	r.enter()
+	defer r.leave()
+	r.execBatch(ctx, ops)
+}
+
+func (r *Redis) execBatch(ctx context.Context, ops []BatchOp) {
 	r.inflight.Add(1)
 	defer r.inflight.Done()
 

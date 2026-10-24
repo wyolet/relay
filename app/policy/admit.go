@@ -34,6 +34,7 @@ func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) 
 		if reserve, err = s.limiter.PrepareReserve(b, inboundScope(in), rules); err != nil {
 			return Admission{}, err
 		}
+		b.ShedWhenPoolBusy()
 	}
 	excluded, full := s.full.exclude(acq.Keys, acq.Excluded, modelIDOf(acq), s.clock())
 	var pick *keypool.PreparedPick

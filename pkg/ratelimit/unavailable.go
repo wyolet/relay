@@ -13,6 +13,10 @@ var ErrUnavailable = errors.New("limit: rate-limit store unavailable")
 
 // reserveFailed maps a reserve script's failure. A store that did not answer refuses the request: admitting it would run it unmetered and, for a token, unchecked for revocation.
 func reserveFailed(err error) error {
+	if errors.Is(err, kv.ErrPoolBusy) {
+		reserveShed.Inc()
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	if errors.Is(err, kv.ErrUnavailable) {
 		metrics.KVError("limit_reserve", metrics.KVRefused)
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)

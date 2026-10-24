@@ -7,7 +7,7 @@ var KVErrors = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: Namespace,
 		Name:      "kv_errors_total",
-		Help:      "Failed kv calls on the inference path, by op and outcome (refused = request rejected, fallback = decided without the stored state, dropped = write abandoned).",
+		Help:      "Failed kv calls on the inference path, by op and outcome (refused = request rejected, shed = request rejected with the call unsent because the connection wait queue was full, fallback = decided without the stored state, dropped = write abandoned).",
 	},
 	[]string{"op", "outcome"},
 )
@@ -15,6 +15,7 @@ var KVErrors = prometheus.NewCounterVec(
 // KV error outcomes.
 const (
 	KVRefused  = "refused"
+	KVShed     = "shed"
 	KVFallback = "fallback"
 	KVDropped  = "dropped"
 )
