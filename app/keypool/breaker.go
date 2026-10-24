@@ -133,14 +133,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 	if isAnonymous(keyHash) {
 		return
 	}
-	op := failureOp{now: s.clock()}
-	var logReason string
-	switch kind {
-	case FailureUpstreamUnreachable:
-		// Host unreachable (dial failure) — not the key's fault. Never cool the
-		// key down; the pipeline retries the same host with backoff instead.
-		return
-	case FailureRateLimitShort:
+	if kind == FailureRateLimitShort {
 		// Stay closed; no state change.
 		s.log.Debug("keypool transition",
 			"request_id", reqid.From(ctx),
@@ -149,6 +142,18 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 			"open_for_seconds", 0,
 		)
 		return
+	}
+	op, logReason, ok := s.failureOpFor(kind, retryAfter)
+	if !ok {
+		return
+	}
+	s.recordFailure(ctx, keyHash, op, logReason)
+}
+
+// failureOpFor is the breaker transition kind asks for; ok is false when kind writes nothing.
+func (s *Selector) failureOpFor(kind FailureKind, retryAfter time.Duration) (op failureOp, logReason string, ok bool) {
+	op = failureOp{now: s.clock()}
+	switch kind {
 	case FailureAuth:
 		op.reason, op.ladder, logReason = ReasonUpstreamAuthFailed, authCooldowns[:], "401"
 	case FailureForbidden:
@@ -162,9 +167,10 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		}
 		op.ladder, op.threshold, op.window = backoffSchedule[:], s.failureThreshold, s.failureWindow
 	default:
-		return
+		// FailureUpstreamUnreachable included: a dial failure is the host's, never the key's.
+		return op, "", false
 	}
-	s.recordFailure(ctx, keyHash, op, logReason)
+	return op, logReason, true
 }
 
 func (s *Selector) recordFailure(ctx context.Context, keyHash string, op failureOp, logReason string) {
@@ -174,6 +180,11 @@ func (s *Selector) recordFailure(ctx context.Context, keyHash string, op failure
 	raw, err := s.runRecordScript(ctx, failureCall(keyHash, op), func(rec CircuitRecord, _ bool) (CircuitRecord, bool) {
 		return applyFailure(rec, op)
 	})
+	s.finishFailure(ctx, keyHash, op, logReason, raw, err)
+}
+
+// finishFailure logs a failure script's outcome and counts a key it opened.
+func (s *Selector) finishFailure(ctx context.Context, keyHash string, op failureOp, logReason string, raw []byte, err error) {
 	var out recordOutcome
 	if err == nil {
 		out, err = decodeOutcome(raw)

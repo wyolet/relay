@@ -234,6 +234,42 @@ func TestRunRefundsInboundReservationOnUpstreamFailure(t *testing.T) {
 	}
 }
 
+// A failed request's refund goes through the post-flight limiter too, on both the authed and the RateScope path.
+func TestRunRefundsOnThePostFlightStore(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadURL := dead.URL
+	dead.Close()
+
+	for _, authed := range []bool{true, false} {
+		p, shared, in := authedPipeline(t)
+		mem, ok := shared.ScriptStore.(*kv.Mem)
+		if !ok {
+			t.Fatal("authedPipeline store is not a *kv.Mem")
+		}
+		post := kvtest.NewRecording(mem)
+		postLim := pkgratelimit.New(post, slog.New(slog.DiscardHandler), nil)
+		p.PostFlightLimiter = postLim
+		p.Policy.WithPostFlight(nil, postLim)
+
+		req := authedRequest(deadURL, in)
+		if !authed {
+			req.Inbound = nil
+			req.RateScope = "ip:203.0.113.7"
+			req.Rules = []pkgratelimit.Rule{{
+				Key: "ip-req", Name: "requests", Meter: "requests",
+				Strategy: pkgratelimit.StrategyTokenBucket, Amount: 1, Window: time.Hour,
+			}}
+		}
+		if _, err := p.Run(context.Background(), req); err == nil {
+			t.Fatalf("authed=%v: Run against a dead upstream succeeded", authed)
+		}
+		// Refunded before Run returned.
+		if n, s := len(post.Named("limit.commit")), len(shared.Named("limit.commit")); n != 1 || s != 0 {
+			t.Fatalf("authed=%v: commits = %d post-flight, %d shared; want 1, 0", authed, n, s)
+		}
+	}
+}
+
 // A reserve the store could not answer wraps the store's timeout; its usage row must still read as a kv refusal, not as a timeout.
 func TestClassifyFailureStoreUnavailable(t *testing.T) {
 	err := fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded))
