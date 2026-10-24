@@ -6,7 +6,7 @@
 go get github.com/wyolet/relay/sdk@latest
 ```
 
-Requires Go 1.26 or later.
+Requires Go 1.27 or later.
 
 ## Modes
 

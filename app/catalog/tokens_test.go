@@ -224,8 +224,8 @@ func TestReloadTokenVersions_ReadHappensUnderTheLock(t *testing.T) {
 
 	<-lister.entered
 	select {
-	case <-reloadDone:
-		t.Fatal("a concurrent Reload completed while TokenVersions was still being read — the read is not under c.rmu")
+	case err := <-reloadDone:
+		t.Fatalf("a concurrent Reload completed (err %v) while TokenVersions was still being read — the read is not under c.rmu", err)
 	case <-time.After(100 * time.Millisecond):
 		// Still blocked, as it must be: Reload needs the same c.rmu the
 		// in-flight read is holding.

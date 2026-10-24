@@ -30,6 +30,7 @@ type edgeOptions struct {
 	idle      time.Duration     // RELAY_PROXY_BODY_IDLE_S
 	perHour   int64             // policy requests per hour; 0 = unlimited
 	transport http.RoundTripper // upstream transport; nil = the proxy's default
+	inflight  int               // admission cap; 0 = 1
 }
 
 type edge struct {
@@ -75,10 +76,13 @@ func proxyEdge(t *testing.T, upstreamURL string, o edgeOptions) edge {
 	if o.perHour == 0 {
 		o.perHour = 1 << 40
 	}
+	if o.inflight == 0 {
+		o.inflight = 1
+	}
 	d, pr, store := proxyStreamDepsLimited(t, upstreamURL, o.perHour)
 	ch := make(chan postFlightSeen, 8)
 	reg := lifecycle.New()
-	adm := httpapi.NewAdmission(1)
+	adm := httpapi.NewAdmission(o.inflight)
 	reg.RegisterPreFlight(adm.PreFlight)
 	reg.RegisterCollector(adm)
 	reg.RegisterHook(lifecycle.HookFunc{HookName: "seen", Fn: func(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
@@ -255,7 +259,8 @@ func TestProxyEdge_NextRequestAfterARefusal(t *testing.T) {
 			_, _ = conn.Write(body)
 			return conn, br, smuggled
 		}},
-		{name: "rate limited", opts: edgeOptions{perHour: 1}, status: http.StatusTooManyRequests, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
+		// Two slots: the spending request's frees in post-flight, after its response, so the next one can arrive while it is still held.
+		{name: "rate limited", opts: edgeOptions{perHour: 1, inflight: 2}, status: http.StatusTooManyRequests, send: func(t *testing.T, addr string) (net.Conn, *bufio.Reader, string) {
 			spend, sbr := rawPost(t, addr, len(modelFirst))
 			_, _ = spend.Write(modelFirst)
 			if res, msg := readStatus(t, sbr); res.StatusCode != http.StatusOK {

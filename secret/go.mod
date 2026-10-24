@@ -1,8 +1,8 @@
 module github.com/wyolet/relay/secret
 
-go 1.26.0
+go 1.27.0
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 require golang.org/x/crypto v0.57.0
 
