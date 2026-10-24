@@ -38,10 +38,17 @@ func newPostFlightWriters(s kv.Store) postFlightWriters {
 	}
 }
 
-func buildPipeline(cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *pkgratelimit.Limiter, selector *keypool.Selector,
+// buildPipeline wires the realtime pipeline; the caller drains its settle queue with Policy.CloseSettleQueue before closing the post-flight store.
+func buildPipeline(cfg *config.Config, cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *pkgratelimit.Limiter, selector *keypool.Selector,
 	postFlight postFlightWriters) (*pipeline.Pipeline, *lifecycle.Registry) {
 	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter).
-		WithPostFlight(postFlight.selector, postFlight.limiter)
+		WithPostFlight(postFlight.selector, postFlight.limiter).
+		WithSettleQueue(policy.SettleQueueConfig{
+			BatchSize: cfg.RedisPostFlightBatchSize,
+			MaxDelay:  cfg.RedisPostFlightBatchDelay,
+			QueueSize: cfg.RedisPostFlightQueueSize,
+			PoolSize:  cfg.RedisPostFlightPoolSize,
+		}, slog.Default())
 
 	// Lifecycle registry — the single point where observer/middleware hooks
 	// attach. Hooks register below before pipeline+proxy start serving.

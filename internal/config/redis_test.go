@@ -122,6 +122,49 @@ func TestRedisPostFlightRejectsBadValues(t *testing.T) {
 	}
 }
 
+func TestSettleQueueDefaults(t *testing.T) {
+	for _, k := range []string{"RELAY_REDIS_POSTFLIGHT_BATCH_SIZE", "RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS", "RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RedisPostFlightBatchSize != 64 || cfg.RedisPostFlightBatchDelay != 2*time.Millisecond || cfg.RedisPostFlightQueueSize != 4096 {
+		t.Fatalf("settle queue = batch %d, delay %v, queue %d; want 64, 2ms, 4096",
+			cfg.RedisPostFlightBatchSize, cfg.RedisPostFlightBatchDelay, cfg.RedisPostFlightQueueSize)
+	}
+}
+
+func TestSettleQueueFromEnv(t *testing.T) {
+	t.Setenv("RELAY_REDIS_POSTFLIGHT_BATCH_SIZE", "16")
+	t.Setenv("RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS", "0")
+	t.Setenv("RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE", "0")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RedisPostFlightBatchSize != 16 || cfg.RedisPostFlightBatchDelay != 0 || cfg.RedisPostFlightQueueSize != 0 {
+		t.Fatalf("settle queue = batch %d, delay %v, queue %d; want 16, 0, 0",
+			cfg.RedisPostFlightBatchSize, cfg.RedisPostFlightBatchDelay, cfg.RedisPostFlightQueueSize)
+	}
+}
+
+func TestSettleQueueRejectsBadValues(t *testing.T) {
+	for _, tc := range []struct{ key, val string }{
+		{"RELAY_REDIS_POSTFLIGHT_BATCH_SIZE", "0"},
+		{"RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS", "-1"},
+		{"RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE", "-1"},
+	} {
+		t.Run(tc.key+"="+tc.val, func(t *testing.T) {
+			t.Setenv(tc.key, tc.val)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted %s=%q", tc.key, tc.val)
+			}
+		})
+	}
+}
+
 func TestRedisPasswordFromEnv(t *testing.T) {
 	t.Setenv("RELAY_REDIS_ADDR", "valkey:6379")
 	t.Setenv("RELAY_REDIS_PASSWORD", "s3cret-valkey-pass")

@@ -51,6 +51,15 @@ data:
   {{- with .Values.relay.redisPostFlightReadTimeoutMs }}
   RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.redisPostFlightBatchSize }}
+  RELAY_REDIS_POSTFLIGHT_BATCH_SIZE: {{ . | quote }}
+  {{- end }}
+  {{- if ne (toString .Values.relay.redisPostFlightBatchDelayMs) "" }}
+  RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS: {{ .Values.relay.redisPostFlightBatchDelayMs | quote }}
+  {{- end }}
+  {{- if ne (toString .Values.relay.redisPostFlightQueueSize) "" }}
+  RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE: {{ .Values.relay.redisPostFlightQueueSize | quote }}
+  {{- end }}
   RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
   RELAY_COOKIE_SECURE: {{ .Values.relay.cookieSecure | quote }}
   RELAY_HEALTHZ_DEADLINE_MS: {{ .Values.relay.healthzDeadlineMs | quote }}

@@ -15,6 +15,9 @@ type PreparedCommit struct {
 	result *kv.BatchResult
 }
 
+// NeedsCommit reports whether Commit would make a call for res with obs. Safe with a nil res.
+func (r *Reservation) NeedsCommit(obs Observations) bool { return r.needsCommit(obs) }
+
 // PrepareCommit queues the commit script for res on b, built exactly as Commit builds it. It returns nil when there is nothing to commit, as Commit would make no call.
 func (l *Limiter) PrepareCommit(b *kv.Batch, res *Reservation, obs Observations) (*PreparedCommit, error) {
 	if !res.needsCommit(obs) {
@@ -26,6 +29,9 @@ func (l *Limiter) PrepareCommit(b *kv.Batch, res *Reservation, obs Observations)
 	}
 	return &PreparedCommit{l: l, res: res, obs: obs, result: b.Script(call)}, nil
 }
+
+// Err is the commit script's outcome as the batch left it, before Finish counts or logs it.
+func (p *PreparedCommit) Err() error { return p.result.Err }
 
 // Finish returns the commit script's failure, as Commit would.
 func (p *PreparedCommit) Finish() error {

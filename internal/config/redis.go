@@ -20,7 +20,14 @@ const (
 	DefaultRedisPostFlightReadTimeout = time.Second
 )
 
-// loadRedisClient reads the go-redis client timeouts and retry count, and the post-flight client's pool and wait bounds.
+// Settle queue defaults. A 2 ms wait gathers 10–20 settles per round trip at 5–10k requests a second per pod and delays only post-flight work and a concurrency slot's release. 64 caps one pipeline at some 130–190 commands while catching up after a stall. 4096 queued settles absorb about 400 ms of stalled Valkey at 10k a second before settles go direct.
+const (
+	DefaultRedisPostFlightBatchSize  = 64
+	DefaultRedisPostFlightBatchDelay = 2 * time.Millisecond
+	DefaultRedisPostFlightQueueSize  = 4096
+)
+
+// loadRedisClient reads the go-redis client timeouts and retry count, and the post-flight client's pool, wait bounds and settle queue.
 func loadRedisClient(cfg *Config) error {
 	for _, d := range []struct {
 		key string
@@ -50,5 +57,24 @@ func loadRedisClient(cfg *Config) error {
 		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_POOL_SIZE must be >= 1")
 	}
 	cfg.RedisPostFlightPoolSize = v
+	return loadSettleQueue(cfg)
+}
+
+func loadSettleQueue(cfg *Config) error {
+	size, err := envPositiveInt("RELAY_REDIS_POSTFLIGHT_BATCH_SIZE", DefaultRedisPostFlightBatchSize)
+	if err != nil {
+		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_BATCH_SIZE must be >= 1")
+	}
+	cfg.RedisPostFlightBatchSize = size
+	delayMs := envInt("RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS", int(DefaultRedisPostFlightBatchDelay/time.Millisecond))
+	if delayMs < 0 {
+		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS must be >= 0")
+	}
+	cfg.RedisPostFlightBatchDelay = time.Duration(delayMs) * time.Millisecond
+	queue := envInt("RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE", DefaultRedisPostFlightQueueSize)
+	if queue < 0 {
+		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE must be >= 0")
+	}
+	cfg.RedisPostFlightQueueSize = queue
 	return nil
 }

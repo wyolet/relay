@@ -106,7 +106,9 @@ func main() {
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)
 	limiter.ReleaseUnansweredOn(postFlight.limiter)
-	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, postFlight)
+	pl, lifecycleReg := buildPipeline(cfg, cat, stores, limiter, selector, postFlight)
+	// Deferred after the post-flight store's Close, so it runs first: queued settles land before the store closes.
+	defer pl.Policy.CloseSettleQueue()
 	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
 
 	specs := buildAdapterSpecs()

@@ -88,6 +88,7 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.pgMaxConns`, `relay.pgMinConns` | `""` | Postgres pool size per pod; empty keeps relay's 10 / 2. Keep `pgMaxConns` × replicas below Postgres `max_connections` (100 on the bundled one). |
 | `relay.redisPoolSize`, `relay.redisMinIdleConns` | `""` | Valkey client pool size and idle floor; empty keeps relay's 25 connections per CPU and no idle floor. |
 | `relay.redisPostFlightPoolSize`, `relay.redisPostFlightPoolTimeoutMs`, `relay.redisPostFlightReadTimeoutMs` | `""` | `RELAY_REDIS_POSTFLIGHT_*`: the pool size, pool wait and read bound of the Valkey client that writes after the response; empty keeps relay's 25 per CPU / 1000 / 1000. |
+| `relay.redisPostFlightBatchSize`, `relay.redisPostFlightBatchDelayMs`, `relay.redisPostFlightQueueSize` | `""` | `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE`, `_BATCH_DELAY_MS`, `_QUEUE_SIZE`: how many requests' settles share one round trip on that client, how long a batch waits to fill, and how many may wait; empty keeps relay's 64 / 2 / 4096. A queue size of `0` turns batching off. |
 | `relay.payloadLogging.enabled` | `true` | Seeds `payload-logging.enabled`. Capture still needs a per-policy opt-in. |
 | `relay.payloadLogging.backend` | `clickhouse` | `file`, `s3` or `clickhouse`. `clickhouse` reuses `RELAY_CH_DSN`. |
 | `relay.payloadLogging.maxBytes` | `1048576` | Cap per stored body; `0` is unlimited. |
