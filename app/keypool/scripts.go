@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -296,6 +297,9 @@ func parseFailureArgs(args []any) (failureOp, time.Duration, error) {
 			return failureOp{}, 0, fmt.Errorf("record_failure: arg[%d]: %w", i, err)
 		}
 		ints = append(ints, v)
+	}
+	if ints[1] < 0 || ints[1] > math.MaxInt32 {
+		return failureOp{}, 0, fmt.Errorf("record_failure: threshold %d out of range", ints[1])
 	}
 	op := failureOp{
 		now:       fromMillis(ints[0]),
