@@ -123,6 +123,23 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		}
 	})
 
+	t.Run("shed_when_pool_busy_runs_when_idle", func(t *testing.T) {
+		ctx := context.Background()
+		s := factory(t)
+		registerEcho(s)
+		b := kv.NewBatch(s)
+		r := b.Script(echoCall("{t}:shed", "a"))
+		n := b.Incr("{t}:shed-ctr", 1)
+		b.ShedWhenPoolBusy()
+		b.Exec(ctx)
+		if r.Err != nil || string(r.Value) != "{t}:shed:a" {
+			t.Fatalf("script = %q, %v", r.Value, r.Err)
+		}
+		if n.Err != nil || n.Int != 1 {
+			t.Fatalf("incr = %d, %v", n.Int, n.Err)
+		}
+	})
+
 	t.Run("empty", func(t *testing.T) {
 		kv.NewBatch(factory(t)).Exec(context.Background())
 	})

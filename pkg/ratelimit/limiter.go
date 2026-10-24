@@ -30,6 +30,8 @@ type Limiter struct {
 	releaser     kv.Scripter
 	releaseSlots chan struct{}
 	releases     sync.WaitGroup
+	// shedRunner runs ReserveOrShed's script: the store's RunScriptOrShed when it has one, else runner.
+	shedRunner kv.Scripter
 }
 
 // New creates a Limiter. If clock is nil, time.Now is used.
@@ -41,6 +43,10 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 	if sr, ok := s.(kv.Scripter); ok {
 		l.runner = sr
 		l.releaser = sr
+	}
+	l.shedRunner = l.runner
+	if ps, ok := s.(kv.PoolShedder); ok {
+		l.shedRunner = shedScripter{ps}
 	}
 	if ms, ok := s.(*kv.Mem); ok {
 		RegisterScripts(ms)
@@ -89,12 +95,16 @@ func (r *Reservation) needsCommit(obs Observations) bool {
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
 // scope is the Redis Cluster hash-tag anchor (e.g. "policy:prod-policy").
 func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Reservation, error) {
+	return l.reserve(ctx, l.runner, scope, rules)
+}
+
+func (l *Limiter) reserve(ctx context.Context, runner kv.Scripter, scope string, rules []Rule) (*Reservation, error) {
 	token := reqid.Generate()
 	call, err := l.buildReserveCall(scope, rules, token)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
+	raw, err := runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	if err != nil {
 		l.releaseUnanswered(scope, rules, token, err)
 		return nil, reserveFailed(err)

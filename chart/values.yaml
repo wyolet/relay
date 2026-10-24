@@ -91,6 +91,10 @@ relay:
   redisReadTimeoutMs: ""
   redisWriteTimeoutMs: ""
   redisPoolTimeoutMs: ""
+  # -- Callers that may wait for a shared-pool connection
+  # (RELAY_REDIS_POOL_MAX_WAITERS); empty = the pool size. Past it new
+  # requests are refused as overloaded (503) at once instead of after the pool wait.
+  redisPoolMaxWaiters: ""
   # -- Resends of a failed Valkey command (RELAY_REDIS_MAX_RETRIES); empty = 0.
   # A resent rate-limit check can count one request twice.
   redisMaxRetries: ""

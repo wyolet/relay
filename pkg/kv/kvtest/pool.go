@@ -14,7 +14,7 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 )
 
-// ExhaustedPool connects a kv.Redis on cfg with a one-connection pool whose connection is held by a command a proxy keeps from the server until cleanup, so every other call waits PoolTimeout for a connection and fails.
+// ExhaustedPool connects a kv.Redis on cfg with a one-connection pool whose connection is held by a command a proxy keeps from the server until cleanup, so every other call waits PoolTimeout (50 ms unless cfg sets one) for a connection and fails.
 func ExhaustedPool(t testing.TB, cfg kv.RedisConfig) *kv.Redis {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -48,7 +48,9 @@ func ExhaustedPool(t testing.TB, cfg kv.RedisConfig) *kv.Redis {
 
 	cfg.Addr = ln.Addr().String()
 	cfg.PoolSize, cfg.MinIdleConns = 1, 0
-	cfg.PoolTimeout = 50 * time.Millisecond
+	if cfg.PoolTimeout == 0 {
+		cfg.PoolTimeout = 50 * time.Millisecond
+	}
 	// The held command must keep its connection until cleanup, not give it back at a read timeout.
 	cfg.ReadTimeout = time.Minute
 	s := Connect(t, cfg)

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
@@ -26,6 +28,7 @@ import (
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // admissionAt returns a one-slot Admission, with its slot held when full.
@@ -50,7 +53,7 @@ func (b unreadBody) Read([]byte) (int, error) {
 }
 
 // gatedRouter mounts one POST /gated operation behind shedWhenFull and reports whether its handler ran.
-func gatedRouter(adm *httpapi.Admission) (chi.Router, *bool) {
+func gatedRouter(adm *httpapi.Admission, kvPoolBusy func() bool) (chi.Router, *bool) {
 	r := chi.NewRouter()
 	api := humachi.New(r, huma.DefaultConfig("test", "1"))
 	reached := new(bool)
@@ -58,7 +61,7 @@ func gatedRouter(adm *httpapi.Admission) (chi.Router, *bool) {
 		OperationID: "gated",
 		Method:      http.MethodPost,
 		Path:        "/gated",
-		Middlewares: huma.Middlewares{shedWhenFull(adm, &relayOverloaded)},
+		Middlewares: huma.Middlewares{shedWhenFull(adm, kvPoolBusy, &relayOverloaded)},
 	}, func(context.Context, *struct{}) (*struct{}, error) {
 		*reached = true
 		return nil, nil
@@ -67,7 +70,7 @@ func gatedRouter(adm *httpapi.Admission) (chi.Router, *bool) {
 }
 
 func TestShedWhenFull_PassesThroughBelowCap(t *testing.T) {
-	r, reached := gatedRouter(admissionAt(t, false))
+	r, reached := gatedRouter(admissionAt(t, false), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", strings.NewReader(`{}`)))
 	if !*reached {
@@ -79,7 +82,7 @@ func TestShedWhenFull_PassesThroughBelowCap(t *testing.T) {
 }
 
 func TestShedWhenFull_RefusesAtCapWithoutReadingBody(t *testing.T) {
-	r, reached := gatedRouter(admissionAt(t, true))
+	r, reached := gatedRouter(admissionAt(t, true), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", unreadBody{t}))
 
@@ -92,6 +95,52 @@ func TestShedWhenFull_RefusesAtCapWithoutReadingBody(t *testing.T) {
 	}
 }
 
+// scrapedValue reads one series from the /metrics exposition; 0 when it has no sample yet.
+func scrapedValue(t *testing.T, series string) float64 {
+	t.Helper()
+	w := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	for line := range strings.Lines(w.Body.String()) {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), series+" "); ok {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				t.Fatalf("parse %s: %v", line, err)
+			}
+			return f
+		}
+	}
+	return 0
+}
+
+// While the kv pool's wait queue is full the admission reserve would be refused unsent, so the route refuses first, before the body read, counted as a kv_pool shed: no reserve was attempted.
+func TestShedWhenFull_RefusesWhileKVPoolBusyWithoutReadingBody(t *testing.T) {
+	const shedSeries = `relay_requests_shed_total{stage="kv_pool"}`
+	reserveShed := metrics.KVErrors.WithLabelValues("limit_reserve", metrics.KVShed)
+	before, reserveBefore := scrapedValue(t, shedSeries), testutil.ToFloat64(reserveShed)
+	busy := true
+	r, reached := gatedRouter(admissionAt(t, false), func() bool { return busy })
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", unreadBody{t}))
+	if *reached {
+		t.Fatal("handler reached while the kv pool was busy")
+	}
+	assertOverloaded(t, w)
+	if got := scrapedValue(t, shedSeries) - before; got != 1 {
+		t.Fatalf("kv_pool shed counter moved by %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(reserveShed) - reserveBefore; got != 0 {
+		t.Fatalf("limit_reserve shed counter moved by %v, want 0: no reserve was sent", got)
+	}
+
+	busy = false
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", strings.NewReader(`{}`)))
+	if !*reached {
+		t.Fatalf("handler not reached once the pool freed (status %d)", w.Code)
+	}
+}
+
 // A refusal at the cap leaves a keep-alive connection usable: the unread body is drained by the server, and the next request on the same connection is served once a slot frees.
 func TestShedWhenFull_KeepsTheConnection(t *testing.T) {
 	adm := httpapi.NewAdmission(1)
@@ -99,7 +148,7 @@ func TestShedWhenFull_KeepsTheConnection(t *testing.T) {
 	if err := adm.PreFlight(context.Background(), holder, &lifecycle.PreFlightEvent{}); err != nil {
 		t.Fatalf("hold the slot: %v", err)
 	}
-	r, reached := gatedRouter(adm)
+	r, reached := gatedRouter(adm, nil)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
@@ -234,7 +283,7 @@ func TestDispatch_LateShedSkipsUsageAndKeepsSlots(t *testing.T) {
 }
 
 func BenchmarkShedWhenFull_PassThrough(b *testing.B) {
-	mw := shedWhenFull(httpapi.NewAdmission(1), &relayOverloaded)
+	mw := shedWhenFull(httpapi.NewAdmission(1), func() bool { return false }, &relayOverloaded)
 	hctx := humachi.NewContext(&huma.Operation{}, httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
 	next := func(huma.Context) {}
 	b.ReportAllocs()

@@ -50,12 +50,12 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 	}
 }
 
-// withShed puts the in-flight capacity check ahead of mw, answering in spec's shape. It goes on the generation routes only: a probe or model listing must keep answering on a saturated pod.
+// withShed puts the in-flight capacity and kv pool checks ahead of mw, answering in spec's shape. It goes on the generation routes only: a probe or model listing must keep answering on a saturated pod.
 func withShed(d Deps, spec *adapter.Spec, mw huma.Middlewares) huma.Middlewares {
-	if d.Admission == nil {
+	if d.Admission == nil && d.KVPoolBusy == nil {
 		return mw
 	}
-	return append(huma.Middlewares{shedWhenFull(d.Admission, overloadedFor(spec))}, mw...)
+	return append(huma.Middlewares{shedWhenFull(d.Admission, d.KVPoolBusy, overloadedFor(spec))}, mw...)
 }
 
 // mountProfileAliases mirrors one inbound path under /{profile}/ for every

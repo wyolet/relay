@@ -58,7 +58,9 @@ func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Con
 	ttlMs := strconv.FormatInt(int64(30*time.Second/time.Millisecond), 10)
 
 	for {
+		r.enter()
 		acquired, err := r.runLua(ctx, "state.withlock.acquire", luaAcquire, deduped, token, ttlMs)
+		r.leave()
 		if err != nil {
 			return markUnavailable(err)
 		}
@@ -74,6 +76,8 @@ func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Con
 	defer func() {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		r.enter()
+		defer r.leave()
 		_, _ = r.runLua(releaseCtx, "state.withlock.release", luaRelease, deduped, token)
 	}()
 	return fn(ctx)

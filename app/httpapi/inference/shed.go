@@ -28,14 +28,18 @@ func overloadedFor(spec *adapter.Spec) *adapter.ErrorResponse {
 	return &relayOverloaded
 }
 
-// shedWhenFull refuses an inference request at the route while the pod is at its in-flight cap, before auth or the body read. A native huma middleware rather than a wrapped net/http one so the pass-through path allocates nothing. The connection stays open: the server drains a small unread body itself and closes on its own past that, and forcing a close would turn every refusal into a reconnect.
-func shedWhenFull(adm *httpapi.Admission, overloaded *adapter.ErrorResponse) func(huma.Context, func(huma.Context)) {
+// shedWhenFull refuses an inference request at the route while the pod is at its in-flight cap, or while kvPoolBusy (nil-safe) reports that its admission reserve would be refused unsent, before auth or the body read. A native huma middleware rather than a wrapped net/http one so the pass-through path allocates nothing. The connection stays open: the server drains a small unread body itself and closes on its own past that, and forcing a close would turn every refusal into a reconnect.
+func shedWhenFull(adm *httpapi.Admission, kvPoolBusy func() bool, overloaded *adapter.ErrorResponse) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
-		if !adm.Full() {
+		switch {
+		case adm.Full():
+			httpapi.RecordShed(httpapi.ShedStageEarly)
+		case kvPoolBusy != nil && kvPoolBusy():
+			httpapi.RecordShed(httpapi.ShedStageKVPool)
+		default:
 			next(ctx)
 			return
 		}
-		httpapi.RecordShed(httpapi.ShedStageEarly)
 		_, w := humachi.Unwrap(ctx)
 		writeOverloaded(w, overloaded)
 	}

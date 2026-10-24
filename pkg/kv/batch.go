@@ -13,8 +13,9 @@ var ErrNoScripter = errors.New("state: store does not run scripts")
 //
 // It is not a transaction: each command is atomic on its own, a failed command does not undo the others, and no command sees another's result. Each script's keys must share a hash tag; keys of different commands need not.
 type Batch struct {
-	store Store
-	ops   []BatchOp
+	store  Store
+	ops    []BatchOp
+	orShed bool
 }
 
 // NewBatch returns an empty batch on s.
@@ -72,6 +73,9 @@ func (b *Batch) Script(call ScriptCall) *BatchResult {
 	return b.add(BatchOp{Kind: OpScript, Script: call})
 }
 
+// ShedWhenPoolBusy makes every later Exec of b refuse at once, each result failing with ErrPoolBusy and nothing sent, while the store is a PoolShedder whose connection wait queue is at its bound.
+func (b *Batch) ShedWhenPoolBusy() { b.orShed = true }
+
 func (b *Batch) add(op BatchOp) *BatchResult {
 	op.Result = &BatchResult{}
 	b.ops = append(b.ops, op)
@@ -84,6 +88,12 @@ func (b *Batch) Exec(ctx context.Context) {
 	b.ops = nil
 	if len(ops) == 0 {
 		return
+	}
+	if b.orShed {
+		if s, ok := b.store.(PoolShedder); ok {
+			s.ExecBatchOrShed(ctx, ops)
+			return
+		}
 	}
 	if p, ok := b.store.(Batcher); ok {
 		p.ExecBatch(ctx, ops)

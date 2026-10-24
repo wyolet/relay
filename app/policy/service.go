@@ -111,7 +111,7 @@ func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgrate
 	if len(rules) == 0 || s.limiter == nil {
 		return nil, nil
 	}
-	res, err := s.limiter.Reserve(ctx, inboundScope(in), rules)
+	res, err := s.limiter.ReserveOrShed(ctx, inboundScope(in), rules)
 	if err != nil {
 		return nil, err
 	}

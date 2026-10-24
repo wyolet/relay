@@ -191,3 +191,13 @@ func TestReleaseUnansweredSkipsLeaseFreeReserve(t *testing.T) {
 		t.Fatalf("release scripts = %d, want 0", n)
 	}
 }
+
+// A reserve refused at the wait-queue bound was never sent, so it must not release anything.
+func TestReleaseUnansweredSkipsPoolBusy(t *testing.T) {
+	if mayHaveRun(kv.ErrPoolBusy) {
+		t.Fatal("mayHaveRun(ErrPoolBusy) = true, want false")
+	}
+	if !errors.Is(kv.ErrPoolBusy, kv.ErrUnavailable) {
+		t.Fatal("ErrPoolBusy is not ErrUnavailable")
+	}
+}

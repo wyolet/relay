@@ -46,7 +46,7 @@ curl http://localhost:8080/v1/models \
 | `catalog_unavailable` | The process has not finished loading the catalog after start. | Retry after the `Retry-After` delay. `/healthz` reports `503` until it is ready. |
 | `no_host_binding` | The model has no enabled host binding. | Bind the model to a host, or enable the binding. |
 | `no_keys` | No usable host key: the policy lists none on the chosen host, or none is enabled. | Add a host key for that host and list it in the policy's `hostKeyIds`. |
-| `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), or Valkey did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`. | Retry after 1 second. If it persists, add replicas, or check `relay_kv_errors_total` and Valkey's load. |
+| `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), Valkey did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`, or `RELAY_REDIS_POOL_MAX_WAITERS` calls were already waiting for a Valkey connection. | Retry after 1 second. If it persists, add replicas, or check `relay_requests_shed_total` (`stage="kv_pool"` means the Valkey pool was the limit), `relay_kv_errors_total` and Valkey's load. |
 
 ## `502`: every key fails or is cooling down
 

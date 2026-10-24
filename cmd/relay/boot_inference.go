@@ -28,7 +28,7 @@ import (
 func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Catalog, tokenVerifier *inference.TokenVerifier,
 	routingOpts []routing.Option, pl *pipeline.Pipeline, proxyPipeline *proxy.Pipeline, lifecycleReg *lifecycle.Registry,
 	specRegistry *adapter.Registry, profiles *clientprofile.Registry, tokenCalibrator *tokencount.Calibrator,
-	admission *httpapi.Admission, batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
+	admission *httpapi.Admission, kvPoolBusy func() bool, batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
@@ -50,6 +50,7 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		Profiles:           profiles,
 		RouteMounters:      []inference.RouteMounter{inference.MountRegistry(specRegistry)},
 		Admission:          admission,
+		KVPoolBusy:         kvPoolBusy,
 		PublicURL:          cfg.Runtime.InferenceAPIURL,
 		TokenCalibrator:    tokenCalibrator,
 		StreamKeepAlive:    cfg.StreamKeepAlive,

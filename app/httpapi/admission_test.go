@@ -166,19 +166,25 @@ func TestRecordShed_CountsAndSamplesLog(t *testing.T) {
 	shedLastLogNanos.Store(0)
 	shedEarlySinceLog.Store(0)
 	shedLateSinceLog.Store(0)
+	shedKVPoolSinceLog.Store(0)
 
-	early, late := testutil.ToFloat64(shedEarlyTotal), testutil.ToFloat64(shedLateTotal)
+	early, late, kvPool := testutil.ToFloat64(shedEarlyTotal), testutil.ToFloat64(shedLateTotal), testutil.ToFloat64(shedKVPoolTotal)
 	RecordShed(ShedStageEarly) // first shed of the interval logs
 	for range 3 {
 		RecordShed(ShedStageEarly)
 	}
 	RecordShed(ShedStageLate)
+	RecordShed(ShedStageKVPool)
+	RecordShed(ShedStageKVPool)
 
 	if got := testutil.ToFloat64(shedEarlyTotal) - early; got != 4 {
 		t.Errorf("early shed counter rose by %v, want 4", got)
 	}
 	if got := testutil.ToFloat64(shedLateTotal) - late; got != 1 {
 		t.Errorf("late shed counter rose by %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(shedKVPoolTotal) - kvPool; got != 2 {
+		t.Errorf("kv_pool shed counter rose by %v, want 2", got)
 	}
 	if n := strings.Count(buf.String(), "shedding load"); n != 1 {
 		t.Fatalf("logged %d shed lines within one interval, want 1:\n%s", n, buf.String())
@@ -190,12 +196,13 @@ func TestRecordShed_CountsAndSamplesLog(t *testing.T) {
 	RecordShed(ShedStageLate)
 	var line struct {
 		Shed, Early, Late int64
+		KVPool            int64 `json:"kv_pool"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
 		t.Fatalf("shed line: %v (%q)", err, buf.String())
 	}
-	if line.Shed != 5 || line.Early != 3 || line.Late != 2 {
-		t.Fatalf("shed line = %+v, want shed 5 early 3 late 2", line)
+	if line.Shed != 7 || line.Early != 3 || line.Late != 2 || line.KVPool != 2 {
+		t.Fatalf("shed line = %+v, want shed 7 early 3 late 2 kv_pool 2", line)
 	}
 }
 

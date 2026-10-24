@@ -66,6 +66,33 @@ func TestRedisClientRejectsBadValues(t *testing.T) {
 	}
 }
 
+func TestRedisPoolMaxWaiters(t *testing.T) {
+	t.Setenv("RELAY_REDIS_POOL_SIZE", "40")
+	t.Setenv("RELAY_REDIS_POOL_MAX_WAITERS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RedisPoolMaxWaiters != 40 {
+		t.Fatalf("RedisPoolMaxWaiters = %d, want the pool size 40", cfg.RedisPoolMaxWaiters)
+	}
+
+	t.Setenv("RELAY_REDIS_POOL_MAX_WAITERS", "7")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RedisPoolMaxWaiters != 7 {
+		t.Fatalf("RedisPoolMaxWaiters = %d, want 7", cfg.RedisPoolMaxWaiters)
+	}
+
+	for _, v := range []string{"0", "-1"} {
+		t.Setenv("RELAY_REDIS_POOL_MAX_WAITERS", v)
+		if _, err := Load(); err == nil {
+			t.Fatalf("Load accepted RELAY_REDIS_POOL_MAX_WAITERS=%q", v)
+		}
+	}
+}
+
 func TestRedisPostFlightDefaults(t *testing.T) {
 	for _, k := range []string{"RELAY_REDIS_POSTFLIGHT_POOL_SIZE", "RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS", "RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS"} {
 		t.Setenv(k, "")

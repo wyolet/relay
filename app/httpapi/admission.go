@@ -68,8 +68,9 @@ var ErrShed = errors.New("in-flight capacity reached")
 
 // Shed stages, the values of requests_shed_total's stage label.
 const (
-	ShedStageEarly = "early" // refused at the route, before the body is read
-	ShedStageLate  = "late"  // refused by PreFlight, after the body was read
+	ShedStageEarly  = "early"   // refused at the route, before the body is read
+	ShedStageLate   = "late"    // refused by PreFlight, after the body was read
+	ShedStageKVPool = "kv_pool" // refused at the route, before the body is read, while the kv pool's wait queue is full
 )
 
 // admittedKey marks (in lc.Metadata, the documented pre-flight-write /
@@ -84,12 +85,13 @@ const admittedKey = "httpapi.admission.held"
 var requestsShedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Name:      "requests_shed_total",
-	Help:      "Inference requests refused at admission because the in-flight cap was reached (load shedding), by stage: early (before the body is read) or late (after).",
+	Help:      "Inference requests refused at admission (load shedding), by stage: early (in-flight cap reached, before the body is read), late (in-flight cap reached, after) or kv_pool (the kv connection wait queue full, before the body is read).",
 }, []string{"stage"})
 
 var (
-	shedEarlyTotal = requestsShedTotal.WithLabelValues(ShedStageEarly)
-	shedLateTotal  = requestsShedTotal.WithLabelValues(ShedStageLate)
+	shedEarlyTotal  = requestsShedTotal.WithLabelValues(ShedStageEarly)
+	shedLateTotal   = requestsShedTotal.WithLabelValues(ShedStageLate)
+	shedKVPoolTotal = requestsShedTotal.WithLabelValues(ShedStageKVPool)
 )
 
 func init() { metrics.Register(requestsShedTotal) }
@@ -99,19 +101,24 @@ func init() { metrics.Register(requestsShedTotal) }
 const shedLogInterval = time.Second
 
 var (
-	shedEarlySinceLog atomic.Int64
-	shedLateSinceLog  atomic.Int64
-	shedLastLogNanos  atomic.Int64
+	shedEarlySinceLog  atomic.Int64
+	shedLateSinceLog   atomic.Int64
+	shedKVPoolSinceLog atomic.Int64
+	shedLastLogNanos   atomic.Int64
 )
 
-// RecordShed counts one shed request at stage (ShedStageEarly or
-// ShedStageLate) and logs at most one WARN per shedLogInterval process-wide,
-// carrying the sheds since the previous line.
+// RecordShed counts one shed request at stage (a ShedStage* value) and logs
+// at most one WARN per shedLogInterval process-wide, carrying the sheds since
+// the previous line.
 func RecordShed(stage string) {
-	if stage == ShedStageEarly {
+	switch stage {
+	case ShedStageEarly:
 		shedEarlyTotal.Inc()
 		shedEarlySinceLog.Add(1)
-	} else {
+	case ShedStageKVPool:
+		shedKVPoolTotal.Inc()
+		shedKVPoolSinceLog.Add(1)
+	default:
 		shedLateTotal.Inc()
 		shedLateSinceLog.Add(1)
 	}
@@ -120,8 +127,8 @@ func RecordShed(stage string) {
 	if now-last < int64(shedLogInterval) || !shedLastLogNanos.CompareAndSwap(last, now) {
 		return
 	}
-	early, late := shedEarlySinceLog.Swap(0), shedLateSinceLog.Swap(0)
-	slog.Warn("inference: shedding load", "shed", early+late, "early", early, "late", late)
+	early, late, kvPool := shedEarlySinceLog.Swap(0), shedLateSinceLog.Swap(0), shedKVPoolSinceLog.Swap(0)
+	slog.Warn("inference: shedding load", "shed", early+late+kvPool, "early", early, "late", late, "kv_pool", kvPool)
 }
 
 // Admission bounds concurrent in-flight inference requests via a buffered
