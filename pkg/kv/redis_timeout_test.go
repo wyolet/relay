@@ -193,8 +193,8 @@ func TestRedisScriptNotResentAfterReplyTimeout(t *testing.T) {
 		_, err := s.RunScript(context.Background(), "test.count", `return redis.call('INCR', KEYS[1])`, []string{"{t}:n"})
 		return err
 	})
-	if !errors.Is(err, kv.ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrUnavailable", err)
+	if !errors.Is(err, kv.ErrUnavailable) || errors.Is(err, kv.ErrNotRun) {
+		t.Fatalf("err = %v, want ErrUnavailable that may have run", err)
 	}
 	time.Sleep(300 * time.Millisecond) // room for a late resend to arrive
 	if n, m := f.count("EVALSHA"), f.count("EVAL"); n != 1 || m != 0 {
@@ -208,8 +208,8 @@ func TestRedisScriptNotResentAfterDroppedConnection(t *testing.T) {
 	s := connectFake(t, kv.RedisConfig{Addr: f.addr})
 
 	_, err := s.RunScript(context.Background(), "test.count", `return 1`, []string{"{t}:n"})
-	if !errors.Is(err, kv.ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrUnavailable", err)
+	if !errors.Is(err, kv.ErrUnavailable) || errors.Is(err, kv.ErrNotRun) {
+		t.Fatalf("err = %v, want ErrUnavailable that may have run", err)
 	}
 	if n := f.count("EVALSHA"); n != 1 {
 		t.Fatalf("EVALSHA sent %d times, want 1", n)
@@ -260,8 +260,8 @@ func TestRedisPoolWaitBoundedByPoolTimeout(t *testing.T) {
 		_, err := s.Get(context.Background(), "b")
 		return err
 	})
-	if !errors.Is(err, kv.ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrUnavailable", err)
+	if !errors.Is(err, kv.ErrUnavailable) || !errors.Is(err, kv.ErrNotRun) {
+		t.Fatalf("err = %v, want ErrUnavailable and ErrNotRun", err)
 	}
 	<-held
 }
@@ -295,8 +295,8 @@ func TestRedisBatchPoolTimeoutFailsEveryResult(t *testing.T) {
 	b.Exec(context.Background())
 	// Errorf, not Fatalf: closing the store while the held call is pending hangs the cleanup.
 	for i, r := range results {
-		if !errors.Is(r.Err, kv.ErrUnavailable) {
-			t.Errorf("result %d: err = %v, want ErrUnavailable", i, r.Err)
+		if !errors.Is(r.Err, kv.ErrUnavailable) || !errors.Is(r.Err, kv.ErrNotRun) {
+			t.Errorf("result %d: err = %v, want ErrUnavailable and ErrNotRun", i, r.Err)
 		}
 	}
 	if n, m := f.count("EVALSHA"), f.count("EVAL"); n != 0 || m != 0 {
@@ -320,8 +320,8 @@ func TestRedisBatchGivesUpOnceAtReadTimeout(t *testing.T) {
 		return nil
 	})
 	for i, r := range results {
-		if !errors.Is(r.Err, kv.ErrUnavailable) {
-			t.Fatalf("result %d: err = %v, want ErrUnavailable", i, r.Err)
+		if !errors.Is(r.Err, kv.ErrUnavailable) || errors.Is(r.Err, kv.ErrNotRun) {
+			t.Fatalf("result %d: err = %v, want ErrUnavailable that may have run", i, r.Err)
 		}
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -354,8 +354,8 @@ func TestRedisReplyErrorsClassified(t *testing.T) {
 	})
 	s := connectFake(t, kv.RedisConfig{Addr: f.addr})
 
-	if _, err := s.Get(context.Background(), "k"); !errors.Is(err, kv.ErrUnavailable) {
-		t.Fatalf("LOADING: err = %v, want ErrUnavailable", err)
+	if _, err := s.Get(context.Background(), "k"); !errors.Is(err, kv.ErrUnavailable) || !errors.Is(err, kv.ErrNotRun) {
+		t.Fatalf("LOADING: err = %v, want ErrUnavailable and ErrNotRun", err)
 	}
 	if _, err := s.Incr(context.Background(), "k", 1); err == nil || errors.Is(err, kv.ErrUnavailable) {
 		t.Fatalf("WRONGTYPE: err = %v, want a reply error that is not ErrUnavailable", err)

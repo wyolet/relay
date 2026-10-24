@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
@@ -24,6 +25,11 @@ type Limiter struct {
 	store  kv.Store
 	log    *slog.Logger
 	clock  func() time.Time
+
+	// releaser frees the leases of reserves whose reply was lost (release_unanswered.go).
+	releaser     kv.Scripter
+	releaseSlots chan struct{}
+	releases     sync.WaitGroup
 }
 
 // New creates a Limiter. If clock is nil, time.Now is used.
@@ -31,9 +37,10 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 	if clock == nil {
 		clock = time.Now
 	}
-	l := &Limiter{store: s, log: log, clock: clock}
+	l := &Limiter{store: s, log: log, clock: clock, releaseSlots: make(chan struct{}, maxUnansweredReleases)}
 	if sr, ok := s.(kv.Scripter); ok {
 		l.runner = sr
+		l.releaser = sr
 	}
 	if ms, ok := s.(*kv.Mem); ok {
 		RegisterScripts(ms)
@@ -89,6 +96,7 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 	}
 	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
 	if err != nil {
+		l.releaseUnanswered(scope, rules, token, err)
 		return nil, reserveFailed(err)
 	}
 	return l.decodeReserve(ctx, scope, rules, token, raw)
@@ -104,18 +112,37 @@ func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string) (kv
 	if err != nil {
 		return kv.ScriptCall{}, fmt.Errorf("limit: marshal rules: %w", err)
 	}
+	// A reserve that takes a lease checks the token's commit guard, which a release for a lost reply writes, so it cannot take the lease after that release.
+	releaseIdx := 0
+	if holdsLease(rules) {
+		keys = append(keys, commitGuardKey(scope, token))
+		releaseIdx = len(keys)
+	}
 	return kv.ScriptCall{
 		Name:   "limit.reserve",
 		Script: reserveLuaScript,
 		Keys:   keys,
-		Args:   []any{now.UnixMilli(), string(rulesJSON), token},
+		Args:   []any{now.UnixMilli(), string(rulesJSON), token, releaseIdx},
 	}, nil
+}
+
+func holdsLease(rules []Rule) bool {
+	for _, r := range rules {
+		if r.Meter == "concurrency" {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule, token string, raw []byte) (*Reservation, error) {
 	var res reserveResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("limit: decode reserve result: %w", err)
+	}
+
+	if res.Released {
+		return nil, fmt.Errorf("limit: reserve %s ran after its release", token)
 	}
 
 	if res.Revoked {

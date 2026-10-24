@@ -29,6 +29,7 @@ func (l *Limiter) PrepareReserve(b *kv.Batch, scope string, rules []Rule) (*Prep
 // Finish returns what Reserve would have: the reservation, *ExceededError, ErrRevoked, or the script's failure.
 func (p *PreparedReserve) Finish(ctx context.Context) (*Reservation, error) {
 	if p.result.Err != nil {
+		p.l.releaseUnanswered(p.scope, p.rules, p.token, p.result.Err)
 		return nil, reserveFailed(p.result.Err)
 	}
 	return p.l.decodeReserve(ctx, p.scope, p.rules, p.token, p.result.Value)

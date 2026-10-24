@@ -105,6 +105,7 @@ func main() {
 	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)
+	limiter.ReleaseUnansweredOn(postFlight.limiter)
 	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, postFlight)
 	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
 

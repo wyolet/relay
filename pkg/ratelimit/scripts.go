@@ -21,6 +21,7 @@ import (
 //	ARGV[1] = now_ms  (int)
 //	ARGV[2] = rules_json (JSON array of ruleArg)
 //	ARGV[3] = token (unique reservation ID, stored in the result)
+//	ARGV[4] = release_key_idx (1-based KEYS index of the token's commit guard; 0 = none)
 //
 // Returns JSON-encoded reserveResult.
 //
@@ -45,10 +46,16 @@ const reserveLuaScript = `
 -- Comparator invariant: all strategies use > (strictly greater than amount).
 -- A value equal to amount is still allowed.
 --
--- ARGV[1]=now_ms, ARGV[2]=rules_json, ARGV[3]=token
+-- ARGV[1]=now_ms, ARGV[2]=rules_json, ARGV[3]=token, ARGV[4]=release_key_idx
 local now_ms   = tonumber(ARGV[1])
 local rules    = cjson.decode(ARGV[2])
 local tok      = ARGV[3]
+local release_idx = tonumber(ARGV[4] or "0") or 0
+
+-- Already released: relay gave up on this reply and freed the lease, so taking it now would hold a slot nothing frees.
+if release_idx > 0 and redis.call('EXISTS', KEYS[release_idx]) == 1 then
+  return cjson.encode({released=true})
+end
 
 -- pending holds the phase-2 write plan, one entry per rule.
 -- Each entry is a table with a "kind" field plus strategy-specific fields.
@@ -388,6 +395,7 @@ type ruleArg struct {
 type reserveResult struct {
 	Exceeded     bool   `json:"exceeded"`
 	Revoked      bool   `json:"revoked"`
+	Released     bool   `json:"released"`
 	Token        string `json:"token"`
 	RetryAfterMs int64  `json:"retry_after_ms"`
 	RuleKey      string `json:"rule_key"`
@@ -509,6 +517,12 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 	if !ok {
 		return nil, fmt.Errorf("limit.reserve: arg[2] must be string")
 	}
+	var releaseIdx int64
+	if len(args) > 3 {
+		if releaseIdx, err = toInt64(args[3]); err != nil {
+			return nil, fmt.Errorf("limit.reserve: arg[3] release_key_idx: %w", err)
+		}
+	}
 
 	var rules []ruleArg
 	if err := json.Unmarshal([]byte(rulesJSON), &rules); err != nil {
@@ -518,6 +532,13 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 	var result reserveResult
 
 	lockErr := store.WithLock(ctx, keys, func(ctx context.Context) error {
+		if releaseIdx > 0 {
+			if _, err := store.Get(ctx, keys[releaseIdx-1]); err == nil {
+				result = reserveResult{Released: true}
+				return nil
+			}
+		}
+
 		// ── Phase 1: decide ──────────────────────────────────────────────────
 		var pending []pendingEntry
 
