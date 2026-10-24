@@ -2,7 +2,7 @@
 // RL per (provider, model, host), reserves inbound + upstream buckets,
 // and rolls them back on failure. One Service per process.
 //
-// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). A key whose tier reserve was refused is skipped for that model until the refusal's retry-after, without a kv call (tier_full.go). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty.
+// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). A key whose tier reserve was refused is skipped for that model until the refusal's retry-after, without a kv call (tier_full.go). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty. A failed attempt's Release is one batch (the refund and the key's failure write), and a request ending in an error settles in one more (SettleFailed). All of these run on the post-flight store (WithPostFlight).
 
 package policy
 
@@ -34,7 +34,7 @@ type Service struct {
 	snap     SnapshotReader
 	selector *keypool.Selector
 	limiter  *pkgratelimit.Limiter
-	// postSelector and postLimiter run Settle.
+	// postSelector and postLimiter run every write after an attempt: Settle, SettleFailed, Release, CommitInbound and Commit.
 	postSelector *keypool.Selector
 	postLimiter  *pkgratelimit.Limiter
 
@@ -46,7 +46,7 @@ func NewService(snap SnapshotReader, sel *keypool.Selector, lim *pkgratelimit.Li
 	return &Service{snap: snap, selector: sel, limiter: lim, postSelector: sel, postLimiter: lim, clock: time.Now}
 }
 
-// WithPostFlight runs Settle on sel and lim instead, built on a kv store of their own: a served request's commit carries its token counts, so it must not be dropped when admission has taken every connection of the shared pool. Call before serving.
+// WithPostFlight runs the writes after an attempt on sel and lim instead, built on a kv store of their own: a served request's commit carries its token counts and a failed one's refund frees its slots, so neither must be dropped when admission has taken every connection of the shared pool. Call before serving.
 func (s *Service) WithPostFlight(sel *keypool.Selector, lim *pkgratelimit.Limiter) *Service {
 	s.postSelector, s.postLimiter = sel, lim
 	return s
@@ -157,10 +157,10 @@ func inboundScope(in InboundInput) string {
 // CommitInbound returns the inbound reservation to the bucket with the
 // observed usage. Safe to call with res=nil.
 func (s *Service) CommitInbound(ctx context.Context, res *pkgratelimit.Reservation, obs pkgratelimit.Observations) error {
-	if res == nil || s.limiter == nil {
+	if res == nil || s.postLimiter == nil {
 		return nil
 	}
-	return s.limiter.Commit(ctx, res, obs)
+	return s.postLimiter.Commit(ctx, res, obs)
 }
 
 // Acquire picks one key (excluding in.Excluded and the keys this process
@@ -256,17 +256,31 @@ func (s *Service) reserveTier(ctx context.Context, picked keypool.Candidate, in 
 
 // Commit returns the upstream reservation to the bucket.
 func (s *Service) Commit(ctx context.Context, acq *Acquisition, obs pkgratelimit.Observations) error {
-	if acq == nil || acq.Reservation == nil || s.limiter == nil {
+	if acq == nil || acq.Reservation == nil || s.postLimiter == nil {
 		return nil
 	}
-	return s.limiter.Commit(ctx, acq.Reservation, obs)
+	return s.postLimiter.Commit(ctx, acq.Reservation, obs)
 }
 
-// releaseTimeout bounds Release's writes, which run detached from the request.
+// releaseTimeout bounds the failure writes (Release, SettleFailed), which ignore the caller's cancellation.
 const releaseTimeout = 2 * time.Second
 
-// Release rolls back the upstream reservation (zero observations) and
-// records the key failure.
+// SettleFailed settles a request that ends in an error: both reservations committed with obs in one round trip, no key write (the attempt loop recorded any failure). Safe with nil reservations or acquisition.
+func (s *Service) SettleFailed(ctx context.Context, inbound *pkgratelimit.Reservation, acq *Acquisition, obs pkgratelimit.Observations) error {
+	if s.postLimiter == nil {
+		return nil
+	}
+	var upstream *pkgratelimit.Reservation
+	if acq != nil {
+		upstream = acq.Reservation
+	}
+	// The refund must land even when the caller has gone, or the slot stays held until its lease expires.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	return s.postLimiter.CommitBoth(ctx, inbound, upstream, obs)
+}
+
+// Release rolls back the upstream reservation (zero observations) and records the key failure, in one round trip.
 func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.FailureKind, retryAfter time.Duration) {
 	if acq == nil {
 		return
@@ -274,11 +288,34 @@ func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.Fa
 	// The refund must land even when the caller has gone, or the slot stays held until its lease expires.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
-	if acq.Reservation != nil && s.limiter != nil {
-		_ = s.limiter.Commit(ctx, acq.Reservation, pkgratelimit.Observations{})
+	sel, lim := s.postSelector, s.postLimiter
+	refund := acq.Reservation != nil && lim != nil
+	if sel == nil {
+		if refund {
+			_ = lim.Commit(ctx, acq.Reservation, pkgratelimit.Observations{})
+		}
+		return
 	}
-	if s.selector != nil && acq.Key != nil {
-		s.selector.RecordFailure(ctx, acq.Key.KeyHash, kind, retryAfter)
+
+	b := sel.NewBatch()
+	var commit *pkgratelimit.PreparedCommit
+	if refund {
+		commit, _ = lim.PrepareCommit(b, acq.Reservation, pkgratelimit.Observations{})
+	}
+	var failure *keypool.PreparedFailure
+	if acq.Key != nil {
+		failure = sel.PrepareRecordFailure(b, acq.Key.KeyHash, kind, retryAfter)
+	}
+	b.Exec(ctx)
+
+	if commit != nil {
+		_ = commit.Finish()
+	}
+	switch {
+	case failure != nil:
+		failure.Finish(ctx)
+	case acq.Key != nil:
+		sel.RecordFailure(ctx, acq.Key.KeyHash, kind, retryAfter)
 	}
 }
 

@@ -11,7 +11,7 @@
 //
 // Expected kv ops per request:
 //   - Pick: one kv.Batch round trip with a GET of each candidate's breaker record and, for round-robin, the counter's INCR and EXPIRE NX. Prioritized reads only the first candidate in the batch; the ones behind it cost a GET each, and only while the keys ahead are open. Promoting an expired open key to half-open adds a SET; least-recently-used adds a GET per healthy candidate and a SET. PreparePick queues the same reads on a caller's batch (policy admission sends them with the rate-limit reserve).
-//   - RecordSuccess: one script; PrepareRecordSuccess queues it on a caller's batch. A key's record exists only once it has failed: post-flight writes a success only for a half-open probe, a record with a backoff step, or a failure count (Candidate.SuccessNeedsWrite). RecordFailure: one script. Claiming a half-open probe in Pick: one script.
+//   - RecordSuccess: one script; PrepareRecordSuccess queues it on a caller's batch. A key's record exists only once it has failed: post-flight writes a success only for a half-open probe, a record with a backoff step, or a failure count (Candidate.SuccessNeedsWrite). RecordFailure: one script; PrepareRecordFailure queues it on a caller's batch. Claiming a half-open probe in Pick: one script.
 //
 // The KeySelection enum lives in this package (not policy) so policy can
 // import keypool without creating a cycle when its Service composes

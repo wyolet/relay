@@ -157,7 +157,7 @@ type Result struct {
 // goroutine-safe.
 type Pipeline struct {
 	Limiter *pkgratelimit.Limiter
-	// PostFlightLimiter commits a RateScope reservation after the response, on a kv pool of its own; nil uses Limiter.
+	// PostFlightLimiter commits a RateScope reservation after the response, or refunds it after a failure, on a kv pool of its own; nil uses Limiter.
 	PostFlightLimiter *pkgratelimit.Limiter
 	// Policy reserves Request.Inbound; required for authed requests.
 	Policy    *policy.Service
@@ -219,8 +219,11 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 					err = refused
 				}
 			}
+			// Refunded before the error returns, so a caller retrying at once never finds its own slot held.
 			if reservation != nil {
-				_ = p.commit(context.WithoutCancel(ctx), req, reservation, pkgratelimit.Observations{Cancelled: true})
+				refundCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refundTimeout)
+				_ = p.refund(refundCtx, req, reservation)
+				cancel()
 			}
 			go p.fireFailure(req, err)
 		}
@@ -375,21 +378,29 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 	}
 }
 
-// commit returns res through whichever side reserved it.
-func (p *Pipeline) commit(ctx context.Context, req *Request, res *pkgratelimit.Reservation, obs pkgratelimit.Observations) error {
+// refundTimeout bounds a failed request's refund, which ignores the caller's cancellation.
+const refundTimeout = 2 * time.Second
+
+// refund returns res cancelled through whichever side reserved it, on the post-flight store.
+func (p *Pipeline) refund(ctx context.Context, req *Request, res *pkgratelimit.Reservation) error {
+	obs := pkgratelimit.Observations{Cancelled: true}
 	if req.Inbound != nil {
 		if p.Policy == nil {
 			return nil
 		}
-		return p.Policy.CommitInbound(ctx, res, obs)
+		return p.Policy.SettleFailed(ctx, res, nil, obs)
 	}
-	if p.Limiter == nil {
+	lim := p.PostFlightLimiter
+	if lim == nil {
+		lim = p.Limiter
+	}
+	if lim == nil {
 		return nil
 	}
-	return p.Limiter.Commit(ctx, res, obs)
+	return lim.Commit(ctx, res, obs)
 }
 
-// settle is commit for a served request, through the post-flight side.
+// settle commits a served request's reservation through the post-flight side.
 func (p *Pipeline) settle(ctx context.Context, req *Request, res *pkgratelimit.Reservation, obs pkgratelimit.Observations) error {
 	if req.Inbound != nil {
 		if p.Policy == nil {

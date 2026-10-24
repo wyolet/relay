@@ -150,8 +150,8 @@ var (
 // Result.Body to release the connection and trigger post-flight.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	// Reservations are committed by post-flight on success; on any error
-	// return they're settled here so a failed request never leaks a
-	// concurrency slot. The bucket cost is refunded only when no attempt
+	// return they're settled here, on the post-flight store, so a failed
+	// request never leaks a concurrency slot. The bucket cost is refunded only when no attempt
 	// reached the upstream: once one may have (the caller cancelling
 	// mid-call included), the request charge stands. The failure also fires
 	// a post-flight observer event (success fires it on Body.Close instead).
@@ -162,13 +162,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	)
 	defer func() {
 		if err != nil {
-			detached := context.WithoutCancel(ctx)
-			obs := pkgratelimit.Observations{Cancelled: !dispatched}
-			if inbound != nil {
-				_ = p.Policy.CommitInbound(detached, inbound, obs)
-			}
-			if acq != nil {
-				_ = p.Policy.Commit(detached, acq, obs)
+			// Settled before the error returns, so a caller retrying at once never finds its own slot held. The post-flight pool admission never takes keeps this to one round trip.
+			if p.Policy != nil && (inbound != nil || acq != nil) {
+				_ = p.Policy.SettleFailed(ctx, inbound, acq, pkgratelimit.Observations{Cancelled: !dispatched})
 			}
 			go p.fireFailure(req, err)
 		}
@@ -493,7 +489,8 @@ const (
 // For retryable failures it consults the KeyAgent when set; otherwise it falls
 // back to legacy behavior (release the key → fail over). The breaker-tripping
 // Release is issued on every path that abandons the key (Next / agent-Fail),
-// and skipped on a heal-retry (the key is good again).
+// and skipped on a heal-retry (the key is good again). Release runs detached:
+// the next attempt excludes the key itself, so it never waits on the write.
 func (p *Pipeline) handleFailure(
 	ctx context.Context,
 	acq *policy.Acquisition,
@@ -510,12 +507,12 @@ func (p *Pipeline) handleFailure(
 		case VerdictRetry:
 			return actRetrySame, fresh // healed → reuse the key, no breaker trip
 		case VerdictFail:
-			p.Policy.Release(ctx, acq, kind, retryAfter)
+			go p.Policy.Release(ctx, acq, kind, retryAfter)
 			return actStop, ""
 		}
 		// VerdictNext falls through to the failover release below.
 	}
-	p.Policy.Release(ctx, acq, kind, retryAfter)
+	go p.Policy.Release(ctx, acq, kind, retryAfter)
 	return actNextKey, ""
 }
 
