@@ -2,7 +2,7 @@
 // RL per (provider, model, host), reserves inbound + upstream buckets,
 // and rolls them back on failure. One Service per process.
 //
-// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). A key whose tier reserve was refused is skipped for that model until the refusal's retry-after, without a kv call (tier_full.go). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty. A failed attempt's Release is one batch (the refund and the key's failure write), and a request ending in an error settles in one more (SettleFailed). All of these run on the post-flight store (WithPostFlight).
+// kv round trips per request: Admit sends the inbound reserve and the first pick's reads in one batch; a tier policy with rules adds its reserve after the pick, and each failover is an Acquire (a pick batch, plus the tier reserve). A key whose tier reserve was refused is skipped for that model until the refusal's retry-after, without a kv call (tier_full.go). The success post-flight (Settle) is one batch: the commits that settle something (concurrency or token meters) and, only for a half-open probe or a backoff to reset, the key's success write; often it is empty. A failed attempt's Release is one batch (the refund and the key's failure write), and a request ending in an error settles in one more (SettleFailed). All of these run on the post-flight store (WithPostFlight). With the settle queue on (settle_queue.go), the settles of many requests share one batch.
 
 package policy
 
@@ -37,6 +37,8 @@ type Service struct {
 	// postSelector and postLimiter run every write after an attempt: Settle, SettleFailed, Release, CommitInbound and Commit.
 	postSelector *keypool.Selector
 	postLimiter  *pkgratelimit.Limiter
+	// settleQueue, when set, coalesces Settle across requests (WithSettleQueue).
+	settleQueue *settleQueue
 
 	full  tierFull
 	clock func() time.Time

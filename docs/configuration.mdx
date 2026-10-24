@@ -45,6 +45,9 @@ Behaviour that can change while relay runs (proxy mode, payload logging, usage s
 | `RELAY_REDIS_POSTFLIGHT_POOL_SIZE` | 25 per CPU | Most connections in the second Valkey client, which settles a request after its response: the rate-limit commit (token counts included), the key's success record, host reachability and the token-count ratio. Its own pool, so a pool full of rate-limit checks under load doesn't make these writes give up. |
 | `RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS` | `1000` | Milliseconds a post-flight write waits for a free connection on that client. A write that still gets none is dropped and counted in `relay_kv_errors_total`. |
 | `RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS` | `1000` | Milliseconds a post-flight write waits for the Valkey reply. Dial and write bounds and retries are the `RELAY_REDIS_*` ones above. |
+| `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE` | `64` | Most requests whose rate-limit commits and key success records share one pipelined round trip on the post-flight client. |
+| `RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS` | `2` | Milliseconds the first request of a batch waits for others before the batch is sent. `0` sends what is already queued without waiting. |
+| `RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE` | `4096` | Requests that can wait for a batch. A request that finds the queue full settles on a round trip of its own and is counted in `relay_settle_queue_full_total`; nothing is dropped. `0` turns batching off. |
 | `RELAY_CLUSTER_MODE` | `off` | Accepts `on` or `off` and has no other effect: every relay process listens for catalog and settings changes on Postgres, so replicas stay in sync without it. |
 
 ## Secrets and authentication

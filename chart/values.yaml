@@ -101,6 +101,12 @@ relay:
   redisPostFlightPoolSize: ""
   redisPostFlightPoolTimeoutMs: ""
   redisPostFlightReadTimeoutMs: ""
+  # -- Settles of many requests sharing one round trip on that client
+  # (RELAY_REDIS_POSTFLIGHT_BATCH_SIZE / _BATCH_DELAY_MS / _QUEUE_SIZE); empty =
+  # relay defaults: 64 per batch, 2 ms wait, 4096 queued. Queue size 0 turns it off.
+  redisPostFlightBatchSize: ""
+  redisPostFlightBatchDelayMs: ""
+  redisPostFlightQueueSize: ""
   # -- Request/response body capture (the /logs UI), seeded into the
   # payload-logging settings section. backend "clickhouse" reuses RELAY_CH_DSN
   # (the bundled CH) — no extra store, no credentials in the settings row.

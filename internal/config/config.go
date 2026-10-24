@@ -61,8 +61,12 @@ type Config struct {
 	RedisPostFlightPoolSize    int
 	RedisPostFlightPoolTimeout time.Duration
 	RedisPostFlightReadTimeout time.Duration
-	CHDSN                      string
-	OTLPEndpoint               string
+	// RELAY_REDIS_POSTFLIGHT_{BATCH_SIZE,BATCH_DELAY_MS,QUEUE_SIZE}: the queue that coalesces served requests' settles into shared round trips on that client; a queue size of 0 turns it off.
+	RedisPostFlightBatchSize  int
+	RedisPostFlightBatchDelay time.Duration
+	RedisPostFlightQueueSize  int
+	CHDSN                     string
+	OTLPEndpoint              string
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema

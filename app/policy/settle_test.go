@@ -9,12 +9,18 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// runSettleSuite pins Settle on one backend: the commits and, only when the picked key's record needs it, the success write go out in one round trip.
+// runSettleSuite pins Settle on one backend, with and without the settle queue: the commits and, only when the picked key's record needs it, the success write go out in one round trip.
 func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore) {
+	t.Run("direct", func(t *testing.T) { runSettleCases(t, newStore, false) })
+	t.Run("queued", func(t *testing.T) { runSettleCases(t, newStore, true) })
+}
+
+func runSettleCases(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore, queued bool) {
 	obs := pkgratelimit.Observations{}
 
 	t.Run("clean_key_commits_only", func(t *testing.T) {
 		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10, concurrencyRule())
+		queueSettles(t, f.svc, queued)
 		ctx := context.Background()
 		adm, err := f.svc.Admit(ctx, f.in, f.acq)
 		if err != nil || adm.AcqErr != nil || adm.Acq.Reservation == nil {
@@ -35,6 +41,7 @@ func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore
 
 	t.Run("nothing_to_settle", func(t *testing.T) {
 		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10)
+		queueSettles(t, f.svc, queued)
 		ctx := context.Background()
 		if err := f.svc.Settle(ctx, nil, nil, obs); err != nil {
 			t.Fatal(err)
@@ -49,6 +56,7 @@ func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore
 
 	t.Run("half_open_probe_writes_success", func(t *testing.T) {
 		f := newAdmitFixture(t, newStore(t), keypool.KeySelectionPrioritized, 10, concurrencyRule())
+		queueSettles(t, f.svc, queued)
 		ctx := context.Background()
 		sel := keypool.New(f.store, discardLogger(), nil, nil)
 		// Open with a cooldown that has already run out: the next pick probes.
@@ -86,6 +94,7 @@ func runSettleSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore
 		f := newAdmitFixture(t, store, keypool.KeySelectionPrioritized, 10, concurrencyRule())
 		post := kvtest.NewRecording(store)
 		f.svc.WithPostFlight(keypool.New(post, discardLogger(), nil, nil), pkgratelimit.New(post, discardLogger(), nil))
+		queueSettles(t, f.svc, queued)
 		ctx := context.Background()
 		// A half-open probe, so the settle carries the success write too.
 		keypool.New(f.store, discardLogger(), nil, nil).RecordFailure(ctx, f.keys[0].KeyHash, keypool.FailureRateLimitLong, 0)
