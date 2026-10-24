@@ -25,6 +25,7 @@ import (
 func MountRegistry(reg *adapter.Registry) RouteMounter {
 	return func(api huma.API, d Deps, mw huma.Middlewares) {
 		for _, s := range reg.Specs() {
+			specMW := withShed(d, s, mw)
 			for _, ip := range s.InboundPaths {
 				// Capture loop vars.
 				spec := s
@@ -35,7 +36,7 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 					Path:        path.Path,
 					Summary:     path.Summary,
 					Tags:        []string{"inference"},
-					Middlewares: mw,
+					Middlewares: specMW,
 					Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
 				}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 					return &huma.StreamResponse{Body: func(hctx huma.Context) {
@@ -43,10 +44,18 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 						handleShape(spec, d, w, r)
 					}}, nil
 				})
-				mountProfileAliases(api, d, mw, spec, path)
+				mountProfileAliases(api, d, specMW, spec, path)
 			}
 		}
 	}
+}
+
+// withShed puts the in-flight capacity check ahead of mw, answering in spec's shape. It goes on the generation routes only: a probe or model listing must keep answering on a saturated pod.
+func withShed(d Deps, spec *adapter.Spec, mw huma.Middlewares) huma.Middlewares {
+	if d.Admission == nil {
+		return mw
+	}
+	return append(huma.Middlewares{shedWhenFull(d.Admission, overloadedFor(spec))}, mw...)
 }
 
 // mountProfileAliases mirrors one inbound path under /{profile}/ for every

@@ -185,12 +185,7 @@ func TestCountTokens_ShedAtTheInflightCap(t *testing.T) {
 	}
 	before := countHits.Load()
 	w := countRequest(d, pr, countBody, nil)
-	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != httpapi.RetryAfterShed {
-		t.Fatalf("count at the cap: status %d retry-after %q, want 429/%q", w.Code, w.Header().Get("Retry-After"), httpapi.RetryAfterShed)
-	}
-	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "overloaded" {
-		t.Errorf("error code = %q, want overloaded", e.Error.Code)
-	}
+	assertOverloaded(t, w)
 	if countHits.Load() != before {
 		t.Fatal("a shed count still reached the upstream")
 	}

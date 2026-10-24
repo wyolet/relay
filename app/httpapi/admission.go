@@ -2,7 +2,7 @@ package httpapi
 
 // Admission is the per-pod in-flight cap: a counting semaphore that bounds
 // how many inference requests can be in flight at once, so a flood degrades
-// into a flat ceiling of fast 429s instead of an unbounded goroutine/RSS
+// into a flat ceiling of fast overload refusals instead of an unbounded goroutine/RSS
 // spiral (the load test's 5krps knee hit 53k goroutines / 1.3GB before this).
 //
 // It rides the lifecycle spine, not a chi middleware, for two reasons:
@@ -52,14 +52,17 @@ import (
 // pods.
 const DefaultMaxInflight = 2048
 
-// RetryAfterShed is the Retry-After header value (seconds) sent with a shed
-// 429. One second is far longer than the ~20ms a healthy request path takes,
+// RetryAfterShed is the Retry-After header value (seconds) sent when relay
+// refuses a request as overloaded. One second is far longer than the ~20ms a healthy request path takes,
 // so the transient saturation has cleared by the time a well-behaved client
 // retries.
 const RetryAfterShed = "1"
 
+// OverloadMessage is the error message of a request refused as overloaded.
+const OverloadMessage = "relay is at capacity; retry shortly"
+
 // ErrShed is returned by PreFlight when the in-flight cap is reached. The
-// inference dispatch maps it to a retriable 429 + Retry-After; any other
+// inference dispatch maps it to the route's retriable overload answer; any other
 // pre-flight error stays a 500.
 var ErrShed = errors.New("in-flight capacity reached")
 
@@ -153,7 +156,7 @@ func (a *Admission) Full() bool {
 // PreFlight is a lifecycle.PreFlightMiddleware: it acquires a slot without
 // blocking. On success it marks lc so the Collector knows to release; when the
 // cap is reached it counts the shed and returns ErrShed for the dispatch to
-// map to a 429. A request whose Context can't carry the release mark is
+// map to the route's overload answer. A request whose Context can't carry the release mark is
 // admitted rather than held (never take a slot we can't return).
 func (a *Admission) PreFlight(_ context.Context, lc *lifecycle.Context, _ *lifecycle.PreFlightEvent) error {
 	if lc == nil || lc.Metadata == nil {

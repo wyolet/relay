@@ -187,7 +187,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	markConnection(w, reqBody)
 	if err != nil {
 		slog.Warn("proxy: upstream call returned error", "request_id", reqid.From(ctx), "err", err)
-		mapProxyErr(w, err)
+		mapProxyErr(w, spec, err)
 		return
 	}
 	slog.Debug("proxy: upstream responded; streaming back",
@@ -361,7 +361,7 @@ func relayKeyHashSubject(ctx context.Context) string {
 	return apikey.Hash(cls.Key)
 }
 
-func mapProxyErr(w http.ResponseWriter, err error) {
+func mapProxyErr(w http.ResponseWriter, inbound *adapter.Spec, err error) {
 	var rej *bodyError
 	switch {
 	case errors.As(err, &rej):
@@ -375,7 +375,7 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, proxy.ErrPolicyMissing):
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "policy_missing", "proxy mode is not wired to a policy service")
 	case errors.Is(err, pkgratelimit.ErrUnavailable):
-		writeStoreUnavailable(w)
+		writeOverloaded(w, overloadedFor(inbound))
 	default:
 		// Limiter exceeded → 429 with Retry-After from the limiter's
 		// bucket-refill timing, so SDK clients back off correctly instead of

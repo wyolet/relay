@@ -51,7 +51,7 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 | `relay_post_flight_seconds` | histogram | _(none)_ | Duration of the background work after each response: token extraction, usage, payload and metric recording, rate-limit and host-health commits. It never delays the response. |
 | `relay_inflight_requests` | gauge | `source` | Requests currently open. A streamed request counts until its body closes. Batch items are not counted. |
 | `relay_inflight_limit` | gauge | _(none)_ | The per-pod in-flight cap, `RELAY_MAX_INFLIGHT` (default 2048). |
-| `relay_requests_shed_total` | counter | `stage` | Inference requests refused with `429` and `Retry-After: 1` because the in-flight cap was reached. `stage` is `early` (refused before the body is read) or `late` (the last slot was taken after the body was read). Shed requests write no usage event. |
+| `relay_requests_shed_total` | counter | `stage` | Inference requests refused as overloaded (`503`, or `529` on Anthropic-shaped routes) with `Retry-After: 1` because the in-flight cap was reached. `stage` is `early` (refused before the body is read) or `late` (the last slot was taken after the body was read). Shed requests write no usage event. |
 | `relay_inference_auth_rejected_total` | counter | `reason` | Inference and OTLP requests refused by the credential check. See [Auth rejection reasons](#auth-rejection-reasons). |
 
 `relay_inflight_requests / relay_inflight_limit` is a pod's headroom before it starts shedding. A non-zero shed rate means the pod is at capacity, which a quota `429` (`error_kind` `rate_limited` in [usage](/concepts/usage#failed-requests)) is not.

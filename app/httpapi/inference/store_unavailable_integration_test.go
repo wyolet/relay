@@ -14,14 +14,14 @@ import (
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-// An admission batch that never gets a pooled connection answers the shed's 429, recorded as kv_unavailable, rather than a 502.
-func TestAdmitPoolTimeoutAnswers429(t *testing.T) {
+// An admission batch that never gets a pooled connection answers the shed's 503, recorded as kv_unavailable, rather than a 502.
+func TestAdmitPoolTimeoutAnswersOverloaded(t *testing.T) {
 	f := newHotPathFixtureOn(t, true, kvtest.ExhaustedPool(t, kvtest.Config(t)))
 	f.arm()
 
 	w := f.do(t, "sk-wr-live")
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429: %s", w.Code, w.Body)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s", w.Code, w.Body)
 	}
 	if got := w.Header().Get("Retry-After"); got != httpapi.RetryAfterShed {
 		t.Fatalf("Retry-After = %q, want %q", got, httpapi.RetryAfterShed)

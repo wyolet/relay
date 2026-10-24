@@ -7,17 +7,29 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/httpapi"
 )
 
-// shedBody is the 429 envelope for a shed request, marshalled once: under a flood the refusal itself is the hot path.
-var shedBody, _ = json.Marshal(httpapi.APIError{
-	Err:        httpapi.APIErrorBody{Type: "rate_limit_error", Code: "overloaded", Message: "relay is at capacity; retry shortly"},
-	HTTPStatus: http.StatusTooManyRequests,
-})
+// relayOverloaded answers for a shape that declares no overload response of its own, marshalled once: under a flood the refusal itself is the hot path. 503, not 429: the caller is within its limits and relay is the one out of capacity.
+var relayOverloaded = adapter.ErrorResponse{
+	Status: http.StatusServiceUnavailable,
+	Body: func() []byte {
+		b, _ := json.Marshal(httpapi.APIError{Err: httpapi.APIErrorBody{Type: "server_error", Code: "overloaded", Message: httpapi.OverloadMessage}})
+		return b
+	}(),
+}
 
-// shedWhenFull refuses an inference request at the route while the pod is at its in-flight cap, before auth or the body read. A native huma middleware rather than a wrapped net/http one so the pass-through path allocates nothing.
-func shedWhenFull(adm *httpapi.Admission) func(huma.Context, func(huma.Context)) {
+// overloadedFor returns the overload answer for requests that arrived in spec's shape; nil spec gets relay's own.
+func overloadedFor(spec *adapter.Spec) *adapter.ErrorResponse {
+	if spec != nil && spec.Overloaded != nil {
+		return spec.Overloaded
+	}
+	return &relayOverloaded
+}
+
+// shedWhenFull refuses an inference request at the route while the pod is at its in-flight cap, before auth or the body read. A native huma middleware rather than a wrapped net/http one so the pass-through path allocates nothing. The connection stays open: the server drains a small unread body itself and closes on its own past that, and forcing a close would turn every refusal into a reconnect.
+func shedWhenFull(adm *httpapi.Admission, overloaded *adapter.ErrorResponse) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		if !adm.Full() {
 			next(ctx)
@@ -25,19 +37,17 @@ func shedWhenFull(adm *httpapi.Admission) func(huma.Context, func(huma.Context))
 		}
 		httpapi.RecordShed(httpapi.ShedStageEarly)
 		_, w := humachi.Unwrap(ctx)
-		// The body was never read; closing spares the server draining it to reuse the connection.
-		w.Header().Set("Connection", "close")
-		writeShed(w)
+		writeOverloaded(w, overloaded)
 	}
 }
 
-// writeShed writes the shed 429 with the headers writeAPIError would set, without its per-request log line: sheds are logged sampled by httpapi.RecordShed.
-func writeShed(w http.ResponseWriter) {
+// writeOverloaded refuses a request for relay's own lack of capacity, with the headers writeAPIError would set and without its per-request log line: sheds are logged sampled by httpapi.RecordShed, store outages counted in relay_kv_errors_total.
+func writeOverloaded(w http.ResponseWriter, resp *adapter.ErrorResponse) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Set(HeaderOrigin, "relay")
 	h.Set("Retry-After", httpapi.RetryAfterShed)
-	setShouldRetry(w, http.StatusTooManyRequests)
-	w.WriteHeader(http.StatusTooManyRequests)
-	_, _ = w.Write(shedBody)
+	setShouldRetry(w, resp.Status)
+	w.WriteHeader(resp.Status)
+	_, _ = w.Write(resp.Body)
 }

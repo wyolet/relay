@@ -88,6 +88,7 @@ func buildPathRegistry() *adapter.Registry {
 		DefaultPath: "/v1/messages",
 		Auth:        adapter.AuthStrategy{Header: "x-api-key"},
 		Translator:  stubV1Translator{},
+		Overloaded:  testOverloaded,
 	}).Build()
 	return adapter.NewRegistry(anthropicSpec)
 }

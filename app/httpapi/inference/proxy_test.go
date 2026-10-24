@@ -183,7 +183,7 @@ func TestBodyCapture_ConcurrentFinalize(t *testing.T) {
 // path's, and must not report a different error.type/code for it.
 func TestMapProxyErr_RateLimit_UsesTheSharedEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapProxyErr(rec, &pkgratelimit.KeyQuotaExhausted{
+	mapProxyErr(rec, nil, &pkgratelimit.KeyQuotaExhausted{
 		Rule:       pkgratelimit.Rule{Name: "rpm"},
 		RetryAfter: 2300 * time.Millisecond,
 	})
