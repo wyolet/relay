@@ -192,7 +192,9 @@ func TestRun(t *testing.T) {
 	}
 	// A failed reload is not reported as one.
 	before := reloads.Load()
-	<-errs
+	if err := <-errs; !errors.Is(err, boom) {
+		t.Fatalf("second ReloadError got %v", err)
+	}
 	if reloads.Load() != before {
 		t.Fatal("OnReload called after a failed reload")
 	}
@@ -329,7 +331,7 @@ func TestFlightOutlivesCancelledLeader(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("waiter hung")
 	}
-	<-leader
+	<-leader //nolint:errcheck // waits for the leader to return; its error depends on when the cancel lands
 }
 
 func TestFlightReleasedOnPanic(t *testing.T) {
