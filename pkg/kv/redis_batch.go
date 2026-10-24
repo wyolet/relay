@@ -3,6 +3,7 @@ package kv
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -105,13 +106,14 @@ func (r *Redis) ExecBatch(ctx context.Context, ops []BatchOp) {
 	}
 }
 
-// failUnsent gives err to every command of a pipeline that was never sent. go-redis sets a transport error on each command it sent and left unanswered, but when it got no connection (pool wait, dial) it returns the error alone, so no command failing means none went out.
+// failUnsent gives err, marked ErrNotRun, to every command of a pipeline that was never sent. go-redis sets a transport error on each command it sent and left unanswered, but when it got no connection (pool wait, dial) it returns the error alone, so no command failing means none went out.
 func failUnsent(cmds []redis.Cmder, err error) {
 	for _, c := range cmds {
 		if c.Err() != nil {
 			return
 		}
 	}
+	err = fmt.Errorf("%w: %w", ErrNotRun, err)
 	for _, c := range cmds {
 		c.SetErr(err)
 	}

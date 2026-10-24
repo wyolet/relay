@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -47,8 +48,11 @@ const (
 	DefaultPoolTimeout  = 250 * time.Millisecond
 )
 
-// ErrUnavailable marks a call the store could not serve: no reply in time or at all (timeout, exhausted pool, refused or dropped connection), or a reply that the server cannot serve right now (LOADING, READONLY, BUSY, ...). Other error replies are the command's own failure and stay unwrapped. Whether the command ran on the server is unknown.
+// ErrUnavailable marks a call the store could not serve: no reply in time or at all (timeout, exhausted pool, refused or dropped connection), or a reply that the server cannot serve right now (LOADING, READONLY, BUSY, ...). Other error replies are the command's own failure and stay unwrapped. Whether the command ran on the server is unknown unless the error also matches ErrNotRun.
 var ErrUnavailable = errors.New("state: store unavailable")
+
+// ErrNotRun marks a failed call the server did not run: it never left relay (no pooled connection, a failed dial, a closed client), or the server refused it with a reply it cannot serve now.
+var ErrNotRun = errors.New("state: command not run")
 
 func (c *RedisConfig) withDefaults() RedisConfig {
 	out := *c
@@ -165,7 +169,19 @@ func markUnavailable(err error) error {
 	if !isUnavailable(err) {
 		return err
 	}
+	if !errors.Is(err, ErrNotRun) && (notSent(err) || serverCannotServe(err)) {
+		err = fmt.Errorf("%w: %w", ErrNotRun, err)
+	}
 	return fmt.Errorf("%w: %w", ErrUnavailable, err)
+}
+
+// notSent reports a failure go-redis returns before writing the command.
+func notSent(err error) bool {
+	if errors.Is(err, redis.ErrPoolTimeout) || errors.Is(err, redis.ErrPoolExhausted) || errors.Is(err, redis.ErrClosed) {
+		return true
+	}
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }
 
 func serverCannotServe(err error) bool {
