@@ -39,13 +39,15 @@ func TestMigrationDSN(t *testing.T) {
 func TestLockTimedOut(t *testing.T) {
 	timeout := &pgconn.PgError{Code: lockNotAvailable}
 	other := &pgconn.PgError{Code: "42P07"}
+	// Typed as error so vet accepts wrapping a pointer to a value-receiver error.
+	var pointerErr error = &database.Error{OrigErr: timeout}
 	for _, tc := range []struct {
 		name string
 		err  error
 		want bool
 	}{
 		{"value", database.Error{OrigErr: timeout}, true},
-		{"pointer", fmt.Errorf("wrapped: %w", &database.Error{OrigErr: timeout}), true},
+		{"pointer", fmt.Errorf("wrapped: %w", pointerErr), true},
 		{"bare", timeout, true},
 		{"another sqlstate", database.Error{OrigErr: other}, false},
 		{"not a postgres error", errors.New("boom"), false},
@@ -59,7 +61,8 @@ func TestLockTimedOut(t *testing.T) {
 // The lock-timeout error is logged; the migration body golang-migrate's error carries must not be.
 func TestMigrationCauseDropsTheBody(t *testing.T) {
 	const body = "ALTER TABLE providers ADD COLUMN note text;"
-	cause := migrationCause(fmt.Errorf("wrapped: %w", &database.Error{Query: []byte(body), OrigErr: &pgconn.PgError{Code: lockNotAvailable}}))
+	var dbErr error = &database.Error{Query: []byte(body), OrigErr: &pgconn.PgError{Code: lockNotAvailable}}
+	cause := migrationCause(fmt.Errorf("wrapped: %w", dbErr))
 	if strings.Contains(cause.Error(), body) || !strings.Contains(cause.Error(), lockNotAvailable) {
 		t.Fatalf("cause = %q, want the SQLSTATE and no migration body", cause)
 	}

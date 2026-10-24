@@ -60,7 +60,7 @@ jobs:
       units: ${{ steps.p.outputs.units }}
       has_key: ${{ steps.p.outputs.has_key }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.to || github.sha }}
           fetch-depth: 0
@@ -94,7 +94,7 @@ jobs:
             [ "$HAS_KEY" = true ] || echo "AI_REVIEW_RELAY_KEY is not set: nothing is reviewed."
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: steps.p.outputs.run == 'true'
         with:
           name: review-context
@@ -111,18 +111,18 @@ jobs:
       matrix:
         unit: ${{ fromJSON(needs.plan.outputs.units) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.to || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: review-context
           path: ${{ runner.temp }}/review
 
       # The cluster runner image has no Node, which Claude Code needs.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         if: runner.environment == 'self-hosted'
         with:
           node-version: '24'
@@ -148,7 +148,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out"
           scripts/review-run.sh "$RUNNER_TEMP/review" "$KIND" "$ID" "$RUNNER_TEMP/out/$ID.json"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: review-result-${{ matrix.unit.id }}
@@ -161,23 +161,23 @@ jobs:
     runs-on: ${{ vars.CI_POOL == 'cluster' && 'relay-ci' || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.to || github.sha }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: review-context
           path: ${{ runner.temp }}/review
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: review-result-*
           merge-multiple: true
           path: ${{ runner.temp }}/review/results
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         if: runner.environment == 'self-hosted'
         with:
           node-version: '24'
@@ -201,7 +201,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out"
           scripts/review-run.sh "$RUNNER_TEMP/review" cross cross "$RUNNER_TEMP/out/cross.json"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: review-result-cross
@@ -216,14 +216,14 @@ jobs:
       contents: write
       issues: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: review-context
           path: ${{ runner.temp }}/review
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           pattern: review-result-*
