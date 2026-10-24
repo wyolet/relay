@@ -85,9 +85,12 @@ func (q *Queue) Cancel(ctx context.Context, id string) (CancelResult, error) {
 	if ok {
 		return CancelledPending, nil
 	}
+	// Under claiming, a claim in flight has finished tracking its job.
+	q.claiming.Lock()
 	q.mu.Lock()
 	rj := q.running[id]
 	q.mu.Unlock()
+	q.claiming.Unlock()
 	if rj != nil {
 		rj.cancelled.Store(true)
 		rj.cancel()

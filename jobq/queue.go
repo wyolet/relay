@@ -26,6 +26,8 @@ type Queue struct {
 	handlers map[string]Handler
 	running  map[string]*runningJob
 	started  bool
+	// claiming is read-held from a claim until its job is in running, so Cancel (write side) never sees a job running in the store but not yet here.
+	claiming sync.RWMutex
 
 	wg sync.WaitGroup
 }
