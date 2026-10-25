@@ -14,7 +14,7 @@ What to expect:
 
 ## Supported versions
 
-Security fixes go into the latest minor release line (currently `0.10.x`) and `main`. Older lines are not patched; upgrade to receive fixes. See [upgrading](docs/concepts/upgrade.mdx).
+Security fixes go into the latest minor release line and `main`. Older lines are not patched; upgrade to receive fixes. See [upgrading](docs/concepts/upgrade.mdx).
 
 ## Scope
 
@@ -30,7 +30,7 @@ Out of scope:
 
 - Actions an authenticated caller can take by design. Under `RELAY_AUTHZ=single` every authenticated control-plane user is fully trusted; report authorization issues against `rbac`.
 - Findings that require the admin token, the master key, or write access to the database, process environment, or host.
-- Denial of service through request volume. Rate limits and budgets are operator configuration.
+- Denial of service through request volume. Rate limits are operator configuration.
 - Vulnerabilities in upstream providers or third-party dependencies with no relay-specific impact (report those upstream; we track dependency advisories in CI).
 
 ## Deployment security model
@@ -45,7 +45,7 @@ These are the trust assumptions the code is written against. A deployment that b
 
 ## Security checks in CI
 
-Every change runs `govulncheck` over all Go modules and Trivy over dependencies, configuration, and secrets; both also run weekly against `main`. Release images are scanned before they are published, and a release with fixable high or critical vulnerabilities does not ship.
+CI on `main` runs `govulncheck` over all Go modules and Trivy over dependencies, configuration, and secrets; both also run weekly against `main`. Release images are scanned before they are published, and a release with fixable high or critical vulnerabilities does not ship.
 
 ## Verifying releases
 

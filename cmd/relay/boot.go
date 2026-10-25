@@ -14,42 +14,38 @@ import (
 	"github.com/wyolet/relay/jobq"
 )
 
-func runSubcommand() bool {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "migrate":
-			if err := runMigrate(os.Args[2:]); err != nil {
-				slog.Error("migrate failed", "err", err)
-				os.Exit(1)
-			}
-			return true
-		case "seed":
-			if err := runSeed(os.Args[2:]); err != nil {
-				slog.Error("seed failed", "err", err)
-				os.Exit(1)
-			}
-			return true
-		case "apply":
-			runCLI("apply", runApply, os.Args[2:])
-			return true
-		case "export":
-			runCLI("export", runExport, os.Args[2:])
-			return true
-		case "keygen":
-			runCLI("keygen", runKeygen, os.Args[2:])
-			return true
-		case "token":
-			runCLI("token", runToken, os.Args[2:])
-			return true
-		case "auth":
-			runCLI("auth", runAuth, os.Args[2:])
-			return true
-		case "secret":
-			runCLI("secret", runSecret, os.Args[2:])
-			return true
+// subcommands maps each operator command to its runner; any other first argument starts the server.
+var subcommands = map[string]func(args []string){
+	"migrate": func(args []string) {
+		if err := runMigrate(args); err != nil {
+			slog.Error("migrate failed", "err", err)
+			os.Exit(1)
 		}
+	},
+	"seed": func(args []string) {
+		if err := runSeed(args); err != nil {
+			slog.Error("seed failed", "err", err)
+			os.Exit(1)
+		}
+	},
+	"apply":  func(args []string) { runCLI("apply", runApply, args) },
+	"export": func(args []string) { runCLI("export", runExport, args) },
+	"keygen": func(args []string) { runCLI("keygen", runKeygen, args) },
+	"token":  func(args []string) { runCLI("token", runToken, args) },
+	"auth":   func(args []string) { runCLI("auth", runAuth, args) },
+	"secret": func(args []string) { runCLI("secret", runSecret, args) },
+}
+
+func runSubcommand() bool {
+	if len(os.Args) < 2 {
+		return false
 	}
-	return false
+	run := subcommands[os.Args[1]]
+	if run == nil {
+		return false
+	}
+	run(os.Args[2:])
+	return true
 }
 
 func loadConfig() *config.Config {
@@ -81,7 +77,7 @@ func openStorage(bootCtx context.Context, cfg *config.Config) *storagemod.Storag
 	return st
 }
 
-func waitForStop(inferErr, ctrlErr <-chan error) int {
+func waitForStop(inferErr, ctrlErr, pprofErr <-chan error) int {
 	exitCode := 0
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
@@ -98,11 +94,16 @@ func waitForStop(inferErr, ctrlErr <-chan error) int {
 			exitCode = 1
 			slog.Error("relay control: server error", "err", err)
 		}
+	case err := <-pprofErr:
+		if err != nil && err != http.ErrServerClosed {
+			exitCode = 1
+			slog.Error("relay pprof: server error", "err", err)
+		}
 	}
 	return exitCode
 }
 
-func shutdown(cfg *config.Config, ctrlSrv, inferSrv *http.Server, cancelListener context.CancelFunc, batchQueue *jobq.Queue) {
+func shutdown(cfg *config.Config, ctrlSrv, inferSrv, pprofSrv *http.Server, cancelListener context.CancelFunc, batchQueue *jobq.Queue) {
 	deadline := time.Duration(cfg.ShutdownDeadlineS) * time.Second
 	if deadline == 0 {
 		deadline = 15 * time.Second
@@ -113,6 +114,9 @@ func shutdown(cfg *config.Config, ctrlSrv, inferSrv *http.Server, cancelListener
 		_ = ctrlSrv.Shutdown(shutCtx)
 	}
 	_ = inferSrv.Shutdown(shutCtx)
+	if pprofSrv != nil {
+		_ = pprofSrv.Shutdown(shutCtx)
+	}
 	cancelListener()
 	// Drain in-flight batch jobs so the graceful-requeue path can run;
 	// without this the process exits mid-handler and interrupted jobs sit

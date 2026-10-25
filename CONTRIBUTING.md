@@ -7,7 +7,7 @@ obey.
 
 ## Prerequisites
 
-- **Go 1.26+**
+- **Go 1.27+**
 - **Docker** (for the integration tests and the local compose stack)
 - `make` (the `Makefile` is the entry point for most workflows)
 
@@ -17,12 +17,10 @@ obey.
 git clone https://github.com/wyolet/relay
 cd relay
 cp .env.example .env          # then set RELAY_MASTER_KEY (openssl rand -base64 32)
-docker compose up             # bundled Postgres / ClickHouse / Valkey / Jaeger
+docker compose up             # bundled Postgres / ClickHouse / Valkey
 ```
 
-The data plane listens on `:5100`, the control plane on `:5103`. See the
-configuration docs in [`docs/`](docs/) (published at docs.wyolet.com) for
-configuration details.
+The data plane listens on `:8080` and the control plane on `:8081`, the binary's defaults. The multi-pod dev stack under `deploy/compose/` (`make dev-compose`) differs: its nginx load balancer serves the data plane on `:5100`, and the first pod's control plane is on `:5103`. See the configuration docs in [`docs/`](docs/) (published at docs.wyolet.com) for configuration details.
 
 ## Build & test
 
@@ -34,6 +32,8 @@ make test-integration         # tag-gated PG/e2e tests (needs Docker)
 make lint                     # golangci-lint over every module
 go vet ./...
 ```
+
+Relay builds and tests with `GOEXPERIMENT=jsonv2`: `encoding/json` keeps its v1 API and results but runs on the faster v2 engine. `build.env` sets it for the Makefile, CI and the Dockerfile. A bare `go build` or `go test` runs on the classic engine and still passes (allocation pins that differ per engine are picked by the `goexperiment.jsonv2` build tag); set `GOEXPERIMENT=jsonv2` to test what ships. `make bench-gate` measures against a v2-only baseline.
 
 `make lint` needs [golangci-lint](https://golangci-lint.run/) v2 on `PATH` (CI pins the version in `.github/workflows/ci.yml`); the enabled linters live in `.golangci.yml`.
 
@@ -92,11 +92,7 @@ on every commit.
 
 ## Hot-path discipline
 
-The request path is performance-critical. In particular: no Postgres
-calls on the request path (reads come from the in-memory snapshot); token
-counts come from the provider response, not relay-side tokenization;
-all emits (usage, traces, payloads) are async via bounded channels with
-drop-on-full — never block the response.
+The request path is performance-critical. In particular: no Postgres calls on the request path (reads come from the in-memory snapshot); token counts come from the provider response, not relay-side tokenization; usage and payload emits are async via bounded channels with drop-on-full — never block the response.
 
 ## Schema changes
 

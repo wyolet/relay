@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	transportws "github.com/wyolet/relay/app/transport/ws"
+	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -64,15 +65,31 @@ func wsHandler(d Deps) http.HandlerFunc {
 				}
 				fr = fr.WithContext(context.WithValue(fr.Context(), ctxPrincipalT{}, frame))
 			}
+			// The upgrade was admitted under the proxy-mode setting of its time; a change since must reach the live connection too.
+			if !authorizeProxyMode(fw, d.Catalog, ClassificationFrom(fr.Context()).Mode) {
+				return
+			}
 			handleShape(spec, d, fw, fr)
 		}
 
 		_ = transportws.Serve(r.Context(), conn, r, perFrame, transportws.Options{
+			ReadLimit: wsReadLimit(d.MaxRequestBytes),
 			// Each frame is its own request and must not share the upgrade's id.
 			PerRequest: func(ctx context.Context) context.Context { return reqid.WithNewID(ctx, slog.Default()) },
 			Logger:     slog.Default(),
 		})
 	}
+}
+
+// wsFrameEnvelopeBytes is the room a frame's id and field names take on top of the request body it carries.
+const wsFrameEnvelopeBytes = 4 << 10
+
+// wsReadLimit caps an inbound frame at the HTTP body limit plus its envelope, so a request the HTTP routes accept also fits in a frame.
+func wsReadLimit(maxBody int64) int64 {
+	if maxBody <= 0 {
+		maxBody = httpmw.DefaultMaxRequestBytes
+	}
+	return maxBody + wsFrameEnvelopeBytes
 }
 
 // framePrincipal re-resolves the connection's credential against the frame's

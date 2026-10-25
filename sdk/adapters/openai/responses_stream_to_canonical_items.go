@@ -41,8 +41,8 @@ func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFram
 	// text came over reasoning_summary_text deltas). Backfill it from what we
 	// accumulated so non-streaming consumers / logs see the thinking too.
 	if r, ok := ci.(*v1.Reasoning); ok && len(r.Summary) == 0 {
-		if acc := s.reasoningSummary[responsesItemID(wireItem)]; acc != "" {
-			r.Summary = []v1.SummaryText{{Text: acc}}
+		if acc := s.reasoningSummary[responsesItemID(wireItem)]; len(acc) > 0 {
+			r.Summary = []v1.SummaryText{{Text: string(acc)}}
 		}
 	}
 	// A truncated (max_output_tokens) turn can close a function_call with

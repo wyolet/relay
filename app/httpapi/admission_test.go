@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,12 +47,15 @@ func TestAdmission_AcquireShedRelease(t *testing.T) {
 		t.Fatalf("second acquire: %v", err)
 	}
 
-	before := testutil.ToFloat64(requestsShedTotal)
+	before, beforeEarly := testutil.ToFloat64(shedLateTotal), testutil.ToFloat64(shedEarlyTotal)
 	if err := admit(a, lc3); !errors.Is(err, ErrShed) {
 		t.Fatalf("third acquire err = %v, want ErrShed", err)
 	}
-	if after := testutil.ToFloat64(requestsShedTotal); after != before+1 {
-		t.Fatalf("shed counter = %v, want %v", after, before+1)
+	if after := testutil.ToFloat64(shedLateTotal); after != before+1 {
+		t.Fatalf("late shed counter = %v, want %v", after, before+1)
+	}
+	if after := testutil.ToFloat64(shedEarlyTotal); after != beforeEarly {
+		t.Fatalf("early shed counter moved on a PreFlight shed: %v, want %v", after, beforeEarly)
 	}
 
 	// Only the two admitted requests carry the release mark.
@@ -114,6 +121,88 @@ func TestAdmission_ShedCollectNoOp(t *testing.T) {
 	a.Collect(held)
 	if err := admit(a, newLC("now-free")); err != nil {
 		t.Fatalf("acquire after real release: %v", err)
+	}
+}
+
+// Full tracks the slots PreFlight and Collect take and return, and checking it takes none.
+func TestAdmission_FullTracksSlots(t *testing.T) {
+	var none *Admission
+	if none.Full() {
+		t.Fatal("nil Admission reports full")
+	}
+
+	a := NewAdmission(2)
+	held := []*lifecycle.Context{newLC("1"), newLC("2")}
+	for i, lc := range held {
+		if a.Full() {
+			t.Fatalf("full with %d of 2 slots held", i)
+		}
+		if err := admit(a, lc); err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+	}
+	if !a.Full() {
+		t.Fatal("not full with every slot held")
+	}
+	a.Collect(held[0])
+	if a.Full() {
+		t.Fatal("still full after a release")
+	}
+	if err := admit(a, newLC("3")); err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+	if err := admit(a, newLC("4")); !errors.Is(err, ErrShed) {
+		t.Fatalf("acquire past the cap err = %v, want ErrShed", err)
+	}
+}
+
+// RecordShed counts per stage and logs at most one line per interval, carrying every shed since the previous line.
+func TestRecordShed_CountsAndSamplesLog(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	// Open a fresh interval with nothing pending from other tests.
+	shedLastLogNanos.Store(0)
+	shedEarlySinceLog.Store(0)
+	shedLateSinceLog.Store(0)
+	shedKVPoolSinceLog.Store(0)
+
+	early, late, kvPool := testutil.ToFloat64(shedEarlyTotal), testutil.ToFloat64(shedLateTotal), testutil.ToFloat64(shedKVPoolTotal)
+	RecordShed(ShedStageEarly) // first shed of the interval logs
+	for range 3 {
+		RecordShed(ShedStageEarly)
+	}
+	RecordShed(ShedStageLate)
+	RecordShed(ShedStageKVPool)
+	RecordShed(ShedStageKVPool)
+
+	if got := testutil.ToFloat64(shedEarlyTotal) - early; got != 4 {
+		t.Errorf("early shed counter rose by %v, want 4", got)
+	}
+	if got := testutil.ToFloat64(shedLateTotal) - late; got != 1 {
+		t.Errorf("late shed counter rose by %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(shedKVPoolTotal) - kvPool; got != 2 {
+		t.Errorf("kv_pool shed counter rose by %v, want 2", got)
+	}
+	if n := strings.Count(buf.String(), "shedding load"); n != 1 {
+		t.Fatalf("logged %d shed lines within one interval, want 1:\n%s", n, buf.String())
+	}
+
+	// The next interval's line carries the sheds held back since the first.
+	buf.Reset()
+	shedLastLogNanos.Store(time.Now().Add(-2 * shedLogInterval).UnixNano())
+	RecordShed(ShedStageLate)
+	var line struct {
+		Shed, Early, Late int64
+		KVPool            int64 `json:"kv_pool"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("shed line: %v (%q)", err, buf.String())
+	}
+	if line.Shed != 7 || line.Early != 3 || line.Late != 2 || line.KVPool != 2 {
+		t.Fatalf("shed line = %+v, want shed 7 early 3 late 2 kv_pool 2", line)
 	}
 }
 

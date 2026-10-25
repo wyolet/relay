@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/routing"
@@ -18,6 +19,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // How an answer was reached, reported in httpheader.HeaderTokenCount.
@@ -64,11 +66,12 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	modelName, _, err := extractModelStream(body)
-	if err != nil {
-		writeModelParseErr(w, err)
+	req, rej := parseRequest(body, v1.RequestKeys{})
+	if rej != nil {
+		writeBodyError(w, rej)
 		return
 	}
+	modelName := req.Model
 	if modelName == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_model", "field 'model' is required")
 		return
@@ -102,7 +105,7 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if counter, ok := exactCounter(d, profile, plan); ok {
-		if count, ok := countUpstream(d, w, r, plan, counter, body, modelName); ok {
+		if count, ok := countUpstream(d, w, r, plan, counter, req, modelName); ok {
 			writeTokenCount(w, count, tierExact)
 		}
 		return
@@ -132,7 +135,7 @@ func exactCounter(d Deps, profile clientprofile.Profile, plan *routing.Plan) (ad
 }
 
 // countUpstream asks the upstream to count through the admission step and pipeline a generation takes. The model field is rewritten to the binding's upstream name, exactly as the byte-pass generation path does. Reports false after writing the error.
-func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing.Plan, counter adapter.TokenCounter, body []byte, requested string) (int, bool) {
+func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing.Plan, counter adapter.TokenCounter, req *ParsedRequest, requested string) (int, bool) {
 	ctx := r.Context()
 	lc := mintLifecycle(ctx, d.Catalog, sourceCount, ClassificationFrom(ctx).ClientIP)
 	lc.RequestedModel = requested
@@ -140,13 +143,14 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 	applyProfile(lc, clientprofile.FromContext(ctx), r.Header)
 	applyPlanIdentity(lc, plan)
 	ctx = lifecycle.ContextWith(ctx, lc)
-	if !d.runPreFlight(ctx, w, lc) {
+	inbound := d.Specs.Spec(adapters.Name(clientprofile.FromContext(ctx).Shape()))
+	if !d.runPreFlight(ctx, w, lc, inbound) {
 		return 0, false
 	}
 
 	teamID, tokenJTI := reserveIdentity(ctx)
 	result, err := d.Pipeline.Run(ctx, &pipeline.Request{
-		Body:          rewriteModelField(body, plan.UpstreamModel()),
+		Body:          req.upstreamBody(plan.UpstreamModel(), nil),
 		Headers:       forwardHeaders(r.Header),
 		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       counter.CountAdapter(),
@@ -162,7 +166,7 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 		Lifecycle:     lc,
 	})
 	if err != nil {
-		mapPipelineErr(w, err)
+		mapRunErr(w, inbound, err)
 		return 0, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(result.Body, adapter.MaxCountBody))
@@ -184,7 +188,7 @@ func refuseRevokedToken(ctx context.Context, d Deps, w http.ResponseWriter) bool
 		return true
 	}
 	if _, err := d.Pipeline.Policy.ReserveInbound(ctx, policy.InboundInput{TeamID: teamID, TokenJTI: jti}); err != nil {
-		mapPipelineErr(w, err)
+		mapRunErr(w, d.Specs.Spec(adapters.Name(clientprofile.FromContext(ctx).Shape())), err)
 		return false
 	}
 	return true

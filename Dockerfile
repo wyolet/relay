@@ -20,7 +20,7 @@ ARG CATALOG_REF
 ARG CATALOG_SHA256
 
 # --- assets: fetch pinned UI dist + catalog data; no toolchain reaches final ---
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS assets
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS assets
 RUN apk add --no-cache curl tar jq ca-certificates
 ARG UI_VERSION
 ARG UI_SHA256
@@ -54,7 +54,7 @@ RUN set -eu; \
   echo "fetched catalog ${CATALOG_REF}"
 
 # --- source: module cache + source tree, shared by the binary builds below ---
-FROM golang:1.26-alpine@sha256:5cb67f19c5e7994dcb80c074f7cfca8aeeada45bbdca035f73df269cefdcce61 AS source
+FROM golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS source
 WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
@@ -88,9 +88,11 @@ RUN touch cmd/relay/web/dist/.gitkeep
 # (bare `docker build`). The release pipeline passes the git tag via
 # docker-bake.hcl.
 ARG VERSION=dev
+# build.env holds the Go build settings (GOEXPERIMENT) every relay build shares.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
+    set -a; . ./build.env; set +a; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/wyolet/relay/app/httpapi.Version=${VERSION}" \
     -o /relay ./cmd/relay
@@ -101,6 +103,7 @@ ARG GO_CACHE_MOUNTS=1
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
+    set -a; . ./build.env; set +a; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/catalog-server ./cmd/catalog-validate
 
 # --- final (lean): distroless, nonroot — production image, external Postgres ---
@@ -120,7 +123,7 @@ ENTRYPOINT ["/relay"]
 # the apk postgresql16 package (no LLVM JIT) — a fraction of the official
 # postgres image's size. Single-node only; production uses the lean image above
 # against managed PG.
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS standalone
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS standalone
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 RUN apk add --no-cache postgresql16 postgresql16-client tzdata \
     && mkdir -p /var/lib/postgresql/data /run/postgresql \
@@ -153,7 +156,7 @@ ENTRYPOINT ["/usr/local/bin/relay-standalone-entrypoint.sh"]
 # --- catalog-server: serves relay-catalog releases; also the catalog repo's CI tools ---
 # git is required: release data tarballs are `git archive` output. No ENTRYPOINT,
 # so `docker run <image> catalog-validate ...` runs either binary.
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS catalog-server
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS catalog-server
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 RUN apk add --no-cache git \
     && addgroup -S -g 65532 catalog \

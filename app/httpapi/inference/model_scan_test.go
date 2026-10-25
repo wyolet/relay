@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -225,7 +223,7 @@ func referenceScan(b []byte) (model, code string, ok bool) {
 	if s == nil || *s == "" {
 		return "", "missing_model", true
 	}
-	// The single-key case must also be what extractModelStream reads.
+	// The single-key case must also be what a probe decode reads.
 	var probe struct {
 		Model string `json:"model"`
 	}
@@ -433,18 +431,18 @@ func (g *jsonGen) value(depth int) {
 	g.ws()
 }
 
-func TestExtractModelStream_DuplicateModel(t *testing.T) {
+func TestParseRequest_DuplicateModel(t *testing.T) {
 	for _, body := range []string{
 		`{"model":"cheap","messages":[],"model":"expensive"}`,
 		`{"model":"cheap","Model":"expensive"}`,
 		`{"model":null,"model":"expensive"}`,
 	} {
-		if _, _, err := extractModelStream([]byte(body)); err != errDuplicateModel {
+		if _, err := parseRequest([]byte(body), vendorKeys); err != errDuplicateModel {
 			t.Errorf("%s: err = %v, want errDuplicateModel", body, err)
 		}
 	}
-	if m, _, err := extractModelStream([]byte(`{"model":"m","meta":{"model":"a","model":"b"}}`)); err != nil || m != "m" {
-		t.Errorf("nested duplicate: (%q, %v), want (m, nil)", m, err)
+	if req, err := parseRequest([]byte(`{"model":"m","meta":{"model":"a","model":"b"}}`), vendorKeys); err != nil || req.Model != "m" {
+		t.Errorf("nested duplicate: (%+v, %v), want (m, nil)", req, err)
 	}
 }
 
@@ -453,45 +451,21 @@ func BenchmarkModelScanner(b *testing.B) {
 		name string
 		body []byte
 	}{
-		{"source-files", claudeCodeSizedBody(b, 350<<10)},
+		{"source-files", claudeCodeSizedBody(b, 350<<10, true)},
 		{"quote-every-17-bytes", denseQuoteBody(350 << 10)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.SetBytes(int64(len(tc.body)))
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := scanModel(tc.body, false); err != nil {
+				var s modelScanner
+				s.feed(tc.body)
+				if err := s.finish(); err != nil {
 					b.Fatal(err)
 				}
 			}
 		})
 	}
-}
-
-// claudeCodeSizedBody is a coding-agent-like chat body of about size bytes: this package's Go sources as tool results between short turns, the model last.
-func claudeCodeSizedBody(tb testing.TB, size int) []byte {
-	tb.Helper()
-	files, err := filepath.Glob("*.go")
-	if err != nil || len(files) == 0 {
-		tb.Fatalf("no source files: %v", err)
-	}
-	var msgs []any
-	for i, n := 0, 0; n < size; i++ {
-		src, err := os.ReadFile(files[i%len(files)])
-		if err != nil {
-			tb.Fatal(err)
-		}
-		msgs = append(msgs,
-			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprintf("t%d", i), "name": "Read", "input": map[string]any{"file_path": files[i%len(files)]}}}},
-			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": fmt.Sprintf("t%d", i), "content": string(src)}}},
-		)
-		n += len(src)
-	}
-	b, err := json.Marshal(map[string]any{"max_tokens": 4096, "stream": true, "system": "You are a coding agent.", "messages": msgs})
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return append(b[:len(b)-1], `,"model":"test-model"}`...)
 }
 
 // denseQuoteBody is a body of about size bytes whose strings hold an escaped quote about every 17 bytes, the worst case for a scan that stops at each quote.

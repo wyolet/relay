@@ -6,13 +6,6 @@
         "amount": {
           "type": "string"
         },
-        "onExceed": {
-          "enum": [
-            "block",
-            "warn"
-          ],
-          "type": "string"
-        },
         "period": {
           "enum": [
             "month",

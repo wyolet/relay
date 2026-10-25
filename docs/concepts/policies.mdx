@@ -1,0 +1,172 @@
+---
+title: "Policies"
+description: "What a policy grants, which policy governs a request, and how to write one"
+---
+
+A **policy** decides what a request may do: which models it may call, which host keys it may spend, how those keys are picked, and which rate limit applies. Every request made with a relay key or an inference token is governed by at most one policy.
+
+## What a policy holds
+
+| Field (API) | Field (manifest) | Meaning |
+| --- | --- | --- |
+| `models` | `models` | The model grant, as a list of model references. Empty means every model the policy's host keys can serve. See [Granting models](#granting-models). |
+| `hostKeyIds` | `hostKeys` (names) | The host keys requests may spend. For each request the pool is the listed keys that belong to the chosen host. The order matters for `prioritized` selection. |
+| `keySelection` | `keySelection` | `prioritized` (default), `round-robin` or `least-recently-used`. See [Key pooling](/concepts/key-pooling#picking-a-key). |
+| `rateLimitId` | `rateLimit` (name) | One [rate limit](/concepts/rate-limits) applied to every model the policy grants, with one set of counters across all of them. |
+| `rlBindings` | `rlBindings` | Per-model rate limits: a list of `{models, rateLimitId}` (`rateLimit` by name in manifests). The first entry whose `models` matches the request applies, with counters kept per model; a model no entry matches is not limited by this policy. Mutually exclusive with `rateLimitId`. |
+| `includeDeprecated` | `includeDeprecated` | Lets wildcard grants include deprecated and sunset models. Default `false`. |
+| `payloadLoggingEnabled` | `payloadLoggingEnabled` | Captures request and response bodies for every request this policy governs, when [payload logging](/concepts/payload-logging) is enabled globally. Overrides the relay key's own flag in both directions. |
+| `enabled` | `enabled` | Default `true`. Requests governed by a disabled policy get `403 policy_disabled`. |
+
+A policy you create is owned by a user, a project, or the deployment (system); host-owned policies are the catalog's [tier policies](#tier-policies-on-host-keys).
+
+## Granting models
+
+`models` is an allow-list of references. A reference has up to three parts, and a missing part matches everything:
+
+| Reference | Example | Grants |
+| --- | --- | --- |
+| `provider` | `anthropic` | Every model from the provider, on every host |
+| `provider@host` | `anthropic@anthropic` | Every model from the provider, on that host only |
+| `provider/model` | `openai/gpt-4o-mini` | That model on every host |
+| `provider/model@host` | `openai/gpt-4o-mini@openai` | That model on that host only |
+| `@host` | `@ollama-self` | Every model on that host |
+
+Rules:
+
+- Names are normalized, so `openai/gpt-5.5` and `openai/gpt-5-5` are the same reference.
+- There are no patterns. A part containing `*`, such as `openai/gpt-*`, is refused with `400`; leave the part out to match everything.
+- References with a missing part expand against the live catalog, so a model added later is covered without editing the policy.
+- Those wildcard references skip deprecated and sunset models unless `includeDeprecated` is set. A `provider/model` reference grants the model whatever its status.
+- There is no deny syntax. To exclude a model, list what you do want.
+- An empty `models` list grants every model reachable through the policy's host keys, except models on keyless (`noAuth`) hosts, which always need an explicit reference.
+
+A grant alone does not make a model callable: the request also needs a host key in `hostKeyIds` for a host that serves the model, unless the host is keyless. When a model is granted on several hosts, routing uses the first granted binding whose host has a usable key; pin a host with `model@host` in the request to choose. See [Naming a model in a request](/concepts/catalog#naming-a-model-in-a-request).
+
+To check what a reference expands to before saving it:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/catalog/resolve?ref=anthropic@anthropic&ref=@ollama-self"
+```
+
+## Which policy governs a request
+
+Relay resolves the governing policy once per request, in this order, and stops at the first match:
+
+1. The relay key's own `spec.policyId`.
+2. The service account's `spec.policyId`, when the key belongs to a service account.
+3. The project's policy bindings, lowest `priority` first, ties broken by name. The first enabled binding that names one of the caller's subjects wins.
+
+A disabled policy found at any step is the answer: Relay returns `403 policy_disabled` instead of falling through to a broader one. A credential scoped to a project that resolves no policy gets `403 no_policy`.
+
+Inference tokens carry no policy of their own, so they always resolve through the project's policy bindings.
+
+### Policy bindings
+
+A policy binding points subjects inside one project at one policy:
+
+| Field | Meaning |
+| --- | --- |
+| `projectId` (`project` in manifests) | The project the binding lives in. |
+| `policyId` (`policy`) | The policy it assigns. |
+| `subjects` | One or more `{kind, id}` for `user` and `serviceaccount`, or `{kind: group, name}`. Manifests name every subject by `name`. |
+| `priority` | `0` to `10000`, lower wins. Default `100`. |
+| `enabled` | Default `true`. A disabled binding is ignored. |
+
+The caller's subjects are its identity plus its groups:
+
+- A **user** (personal relay key or inference token): `user:<id>`, every group the user belongs to, and `system:authenticated`.
+- A **service account**: `serviceaccount:<id>`, `system:serviceaccounts`, `system:serviceaccounts:<project>`, and `system:authenticated`.
+
+Bind `system:authenticated` at a high priority number to give a project a default policy, and bind specific users, groups or service accounts at lower numbers to override it.
+
+### Personal keys and project policies
+
+A relay key that belongs to a user and points at a project-owned policy is attributed to that project: its usage carries the project and team, and it shares the policy's rate-limit counters with the project's other callers. A personal key that points at no policy and belongs to no project uses the policy-less flow below.
+
+### Requests without a policy
+
+A personal relay key with no policy and no project is served only when the `inference` setting `allowMissingPolicy` is `true`, and never under `RELAY_AUTHZ=rbac`. Such requests have no model grant and no policy rate limit: they reach any model whose host has a system-owned host key or one of the caller's own, and they skip deprecated models. With the setting off, they get `403 policyless_disabled`.
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/inference \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"allowMissingPolicy": true, "keyRotateMaxGrace": 0}'
+```
+
+`PUT` replaces the whole section; read it first with `GET /api/settings/inference` and change only this field. See [Settings](/reference/settings).
+
+## Tier policies on host keys
+
+The catalog also ships **tier policies**, owned by a host, that describe a provider's account tiers (for example OpenAI's usage tiers). They never govern a request. Every host key names one in `spec.policyId`, and it must belong to the key's own host. The tier policy does two things for that key:
+
+- Its model grant narrows which models the key may serve. A key whose tier policy does not grant the requested model is left out of the pool.
+- Its rate limit caps the key upstream, shared by every policy that lists the key. See [Upstream limits per host key](/concepts/rate-limits#upstream-limits-per-host-key).
+
+List a host's tier policies, with their limits, to pick one for a new host key:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/hosts/openai/policies
+```
+
+## Example manifest
+
+A project-owned rate limit and policy, and a binding that makes the policy the project's default. Apply it with [`relay apply`](/concepts/gitops):
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: RateLimit
+metadata:
+  name: search-default-rl
+  owner: {kind: project, name: search}
+spec:
+  rules:
+    - {meter: requests, amount: 600, window: 1m, strategy: sliding-window}
+    - {meter: tokens, amount: 2000000, window: 1m, strategy: sliding-window}
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Policy
+metadata:
+  name: search-default
+  owner: {kind: project, name: search}
+spec:
+  models:
+    - openai/gpt-4o-mini
+    - anthropic@anthropic
+  hostKeys:
+    - openai-prod-1
+    - openai-prod-2
+    - anthropic-prod
+  keySelection: prioritized
+  rateLimit: search-default-rl
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: PolicyBinding
+metadata:
+  name: search-everyone
+spec:
+  project: search
+  policy: search-default
+  priority: 100
+  subjects:
+    - {kind: group, name: "system:authenticated"}
+```
+
+Manifests reference other rows by name; the control API takes ids (`hostKeyIds`, `rateLimitId`, `projectId`, `policyId`).
+
+## Control API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET`, `POST /api/policies`; `GET /api/policies/{ref}`; `PUT`, `DELETE /api/policies/by-id/{id}` | CRUD |
+| `POST`, `DELETE /api/policies/by-id/{id}/keys/{keyId}` | Point a relay key at this policy, or detach it. Attaching replaces the key's current policy; detaching a key that points elsewhere returns `409`. |
+| `GET /api/policies/{ref}/models` | Models the policy grants, with per-model limits |
+| `GET /api/policies/{ref}/hosts` | Hosts the policy reaches, with its host keys |
+| `GET /api/policies/{ref}/rate-limits` | Rate limits the policy references |
+| `GET /api/models/{ref}/policies` | Policies that grant a model |
+| `GET`, `POST /api/policy-bindings`; `GET /api/policy-bindings/{ref}`; `PUT`, `DELETE /api/policy-bindings/by-id/{id}` | Policy binding CRUD |
+
+Changes reach every pod within about a second. See [Control API](/reference/control-api) for authentication and the shared CRUD conventions.

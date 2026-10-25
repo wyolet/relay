@@ -1,15 +1,18 @@
 name: Full CI on dev
 
-# Pull requests into dev run only the light CI tier. Every three hours this
-# dispatches ci.yml on dev, unless dev's HEAD already had a dispatched run; the
-# run executes in dev's context, so its checks land on that commit and its
-# caches stay scoped to dev. When a dispatched run on dev finishes, a green one
-# moves the ci-full-passed tag and release/next (scripts/release-pr.sh keeps
-# the one release pull request into main up to date); a red one gets the range
-# to bisect in this run's summary and starts fix-dev.yml. To run the full tier
-# now: gh workflow run ci.yml --ref dev
+# Pull requests into dev run only the light CI tier. On every push to dev, and
+# every three hours as a backstop for dropped cron slots and pushes that start
+# no workflows, this dispatches ci.yml on dev, unless dev's HEAD already had a
+# dispatched run; the run executes in dev's context, so its checks land on that
+# commit and its caches stay scoped to dev. When a dispatched run on dev
+# finishes, a green one moves the ci-full-passed tag and release/next
+# (scripts/release-pr.sh keeps the one release pull request into main up to
+# date); a red one gets the range to bisect in this run's summary and starts
+# fix-dev.yml. To run the full tier now: gh workflow run ci.yml --ref dev
 
 on:
+  push:
+    branches: [dev]
   schedule:
     - cron: '41 */3 * * *'
   workflow_run:
@@ -29,12 +32,22 @@ env:
 
 jobs:
   dispatch:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'push'
+    # A newer dispatcher cancels a waiting one, so a burst of merges starts one
+    # full run, on the newest HEAD. Dispatched ci.yml runs have groups of their
+    # own and are never cancelled.
+    concurrency:
+      group: full-dispatch
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: write
     steps:
+      - name: Wait for further merges
+        if: github.event_name == 'push'
+        run: sleep 120
+
       - id: app
         if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -117,7 +130,7 @@ jobs:
           fi
           exit 1
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.tag.outputs.moved == 'true'
         with:
           fetch-depth: 0

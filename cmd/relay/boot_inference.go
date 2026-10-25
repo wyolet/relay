@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/otlpreceiver"
 	"github.com/wyolet/relay/app/pipeline"
@@ -27,7 +28,7 @@ import (
 func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Catalog, tokenVerifier *inference.TokenVerifier,
 	routingOpts []routing.Option, pl *pipeline.Pipeline, proxyPipeline *proxy.Pipeline, lifecycleReg *lifecycle.Registry,
 	specRegistry *adapter.Registry, profiles *clientprofile.Registry, tokenCalibrator *tokencount.Calibrator,
-	batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
+	admission *httpapi.Admission, kvPoolBusy func() bool, batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
@@ -48,10 +49,14 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		Specs:              specRegistry,
 		Profiles:           profiles,
 		RouteMounters:      []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		Admission:          admission,
+		KVPoolBusy:         kvPoolBusy,
 		PublicURL:          cfg.Runtime.InferenceAPIURL,
 		TokenCalibrator:    tokenCalibrator,
 		StreamKeepAlive:    cfg.StreamKeepAlive,
 		RequestStreamUsage: cfg.StreamUsage,
+		MaxRequestBytes:    maxBody,
+		ProxyBodyIdle:      cfg.ProxyBodyIdle,
 		TrustEventTime:     cfg.DevTrustEventTime,
 	})
 
@@ -84,7 +89,8 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		// mid-flight. Header/idle limits plus the in-flight admission cap bound
 		// resource use instead of a response-duration cap.
 	}
-	slog.Info("relay inference listening", "addr", inferSrv.Addr)
-	_, inferErr := serve(inferSrv)
+	maxConns := inferenceMaxConns(cfg.MaxConns)
+	slog.Info("relay inference listening", "addr", inferSrv.Addr, "max_conns", maxConns)
+	_, inferErr := serve(inferSrv, maxConns)
 	return inferSrv, inferErr
 }

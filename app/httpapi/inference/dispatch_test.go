@@ -394,31 +394,6 @@ func TestStreamCanonical_NoReasoning_NoSpan(t *testing.T) {
 	}
 }
 
-func TestExtractModelStream_StreamSignals(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want bool
-	}{
-		{"canonical output_mode stream", `{"model":"m","output_mode":"stream"}`, true},
-		{"canonical output_mode sync", `{"model":"m","output_mode":"sync"}`, false},
-		{"vendor stream true", `{"model":"m","stream":true}`, true},
-		{"vendor stream false", `{"model":"m","stream":false}`, false},
-		{"neither", `{"model":"m"}`, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, stream, err := extractModelStream([]byte(tc.body))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if stream != tc.want {
-				t.Errorf("stream = %v, want %v", stream, tc.want)
-			}
-		})
-	}
-}
-
 // TestDispatch_NormalOpenAI_UnaffectedByGuards confirms that a standard
 // Inbound=OpenAI request is not blocked by either the Responses or
 // Embeddings guard (the guards are shape-conditional).
@@ -514,6 +489,21 @@ func TestBufferCanonical_FlatUsage(t *testing.T) {
 	}
 	if resp.Usage["input"] != 10 || resp.Usage["output"] != 5 {
 		t.Fatalf("usage not flat-canonical: %v", resp.Usage)
+	}
+}
+
+// The cross-shape handler decodes the upstream body to translate it; its Summary is recorded so post-flight does not decode the tee'd copy again.
+func TestBufferCanonical_RecordsResponseSummary(t *testing.T) {
+	lc := lifecycle.NewContext("req", "pipeline", time.Now())
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	r = r.WithContext(lifecycle.ContextWith(r.Context(), lc))
+
+	bufferCanonical(Deps{}, httptest.NewRecorder(), r, io.NopCloser(strings.NewReader(rawUpstreamBody)), http.StatusOK, false, nil,
+		okUpstreamTranslator{}, pkgrelay.IdentityTranslator{})
+
+	sum, ok := lc.ResponseSummary()
+	if !ok || sum.Tokens["input"] != 10 || sum.Tokens["output"] != 5 {
+		t.Fatalf("response Summary %+v recorded=%v, want the translated usage", sum, ok)
 	}
 }
 

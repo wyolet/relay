@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"os"
+	"runtime/debug"
 
 	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -46,7 +48,7 @@ func buildUsageLog(listenerCtx context.Context, cfg *config.Config, cat *appcata
 		KV:         kvStore,
 		FilePath:   usagePath,
 		WALDir:     usageWALDir,
-	}), slog.Default())
+	}), usagelog.EmitterOptions{QueueSize: cfg.UsageQueueSize, RefusedQueueSize: cfg.UsageRefusedQueueSize}, slog.Default())
 	usageReader := usageCtl.Reader()
 	// Emit-time cost: the usage producer prices each event's tokens against
 	// the pricing the plan resolved (id stamped on the lifecycle Context),
@@ -71,8 +73,8 @@ func payloadCHBootConfig(cfg *config.Config) payloadCHBoot {
 }
 
 func buildPayloadLog(listenerCtx context.Context, cat *appcatalog.Catalog, stores *appcatalog.Stores, lifecycleReg *lifecycle.Registry,
-	payloadCHBootCfg payloadCHBoot) *payloadlog.Controller {
-	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets, payloadCHBootCfg), slog.Default())
+	payloadCHBootCfg payloadCHBoot, queue payloadlog.EmitterOptions) *payloadlog.Controller {
+	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets, payloadCHBootCfg), queue, slog.Default())
 	lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(payloadCtl))
 	lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadCtl.Emitter()))
 	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
@@ -82,25 +84,28 @@ func buildPayloadLog(listenerCtx context.Context, cat *appcatalog.Catalog, store
 	return payloadCtl
 }
 
-func buildTokenCalibrator(kvStore kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
-	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; one kv write per completed request, post-flight only.
-	tokenCalibrator := tokencount.NewCalibrator(kvStore)
-	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
-	return tokenCalibrator
+func buildTokenCalibrator(kvStore, postFlightKV kv.Store, lifecycleReg *lifecycle.Registry) *tokencount.Calibrator {
+	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; kv writes only when a ratio moves or is due for a refresh, post-flight only.
+	// The writes go through the post-flight store; the returned Calibrator serves the count-tokens reads on the shared one. Only the writer keeps state (what it last wrote), so two instances are safe.
+	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokencount.NewCalibrator(postFlightKV)))
+	return tokencount.NewCalibrator(kvStore)
 }
 
-func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) {
+func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) *httpapi.Admission {
 	// Admission control: a per-pod in-flight cap on inference requests. Rides
-	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
-	// pre-flight so a shed request is never counted as in-flight, Collect
+	// the lifecycle spine — PreFlight (acquire) registered FIRST, before the
+	// metrics pre-flight, so a shed request has marked nothing and needs no
+	// Finalize (the inference dispatch skips it), Collect
 	// (release) fires from Finalize at response-body close so a streamed request
 	// holds its slot for the whole stream. Scope is Dispatch only (inference +
 	// each WS frame), never /healthz or the control plane. RELAY_MAX_INFLIGHT
 	// tunes the cap; 0 = httpapi.DefaultMaxInflight.
 	admission := httpapi.NewAdmission(cfg.MaxInflight)
 	lifecycleReg.RegisterPreFlight(admission.PreFlight)
+	// Must stay registered after the usage, payload and tokencount collectors: collectors run in order, so a request holds its slot until their post-flight work is done and the in-flight cap also bounds the post-flight backlog.
 	lifecycleReg.RegisterCollector(admission)
 	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
+	return admission
 }
 
 func registerMetrics(lifecycleReg *lifecycle.Registry, usageCtl *usagelog.Controller, payloadCtl *payloadlog.Controller) {
@@ -116,7 +121,9 @@ func registerMetrics(lifecycleReg *lifecycle.Registry, usageCtl *usagelog.Contro
 	// post_flight_seconds is emitted by the runners themselves (whole detached
 	// goroutine incl. commit RTTs) — no finalize observer needed.
 	metrics.RegisterQueueDepth("usage", func() float64 { return float64(usageCtl.Emitter().QueueDepth()) })
+	metrics.RegisterQueueDepth("usage_refused", func() float64 { return float64(usageCtl.Emitter().RefusedQueueDepth()) })
 	metrics.RegisterQueueDepth("payload", func() float64 { return float64(payloadCtl.Emitter().QueueDepth()) })
+	metrics.RegisterQueueDepth("payload_refused", func() float64 { return float64(payloadCtl.Emitter().RefusedQueueDepth()) })
 	slog.Debug("metricslog: observer wired (/metrics on control plane)")
 }
 
@@ -130,4 +137,24 @@ func buildAudit(st *storagemod.Storage, cat *appcatalog.Catalog) (*audit.Store, 
 		auditEmitter.SetRetentionDays(a.RetentionDays)
 	}, slog.Default()).Start()
 	return auditStore, auditEmitter
+}
+
+// noMemLimitPayloadQueueBytes applies when no memory limit is set, so the budget has nothing to divide.
+const noMemLimitPayloadQueueBytes = 64 << 20
+
+// payloadQueueOptions sizes the payload emitter's queues from RELAY_PAYLOAD_QUEUE_BYTES and RELAY_PAYLOAD_REFUSED_QUEUE_BYTES.
+func payloadQueueOptions(cfg *config.Config) payloadlog.EmitterOptions {
+	return payloadlog.EmitterOptions{QueueBytes: payloadQueueBytes(cfg.PayloadQueueBytes), RefusedQueueBytes: cfg.PayloadRefusedQueueBytes}
+}
+
+// payloadQueueBytes is RELAY_PAYLOAD_QUEUE_BYTES when set, else 1/16 of the Go memory limit (GOMEMLIMIT), and at least payloadlog.DefaultQueueBytes.
+func payloadQueueBytes(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 {
+		return noMemLimitPayloadQueueBytes
+	}
+	return max(payloadlog.DefaultQueueBytes, int(limit/16))
 }

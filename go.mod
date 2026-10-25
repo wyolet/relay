@@ -1,8 +1,8 @@
 module github.com/wyolet/relay
 
-go 1.26.0
+go 1.27.0
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 replace github.com/wyolet/relay/sdk => ./sdk
 
@@ -28,7 +28,7 @@ require (
 	github.com/minio/minio-go/v7 v7.1.0
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/wyolet/relay/auth v0.3.0
 	github.com/wyolet/relay/jobq v0.1.1
@@ -37,10 +37,11 @@ require (
 	go.opentelemetry.io/proto/otlp v1.9.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -91,7 +92,6 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )

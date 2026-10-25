@@ -14,7 +14,19 @@ func (q *Queue) dispatch(ctx context.Context, queue string) {
 		if err := q.gate.acquire(ctx); err != nil {
 			return
 		}
+		q.claiming.RLock()
 		job, err := q.store.claimOne(ctx, queue)
+		var (
+			jobCtx context.Context
+			rj     *runningJob
+		)
+		if err == nil && job != nil {
+			var cancel context.CancelFunc
+			jobCtx, cancel = context.WithCancel(ctx)
+			rj = &runningJob{cancel: cancel}
+			q.trackRunning(job.ID, rj)
+		}
+		q.claiming.RUnlock()
 		if err != nil {
 			q.gate.release()
 			if ctx.Err() != nil {
@@ -37,12 +49,15 @@ func (q *Queue) dispatch(ctx context.Context, queue string) {
 		go func(j *Job) {
 			defer q.wg.Done()
 			defer q.gate.release()
-			q.execute(ctx, j)
+			defer q.untrackRunning(j.ID)
+			defer rj.cancel()
+			q.execute(ctx, jobCtx, j, rj)
 		}(job)
 	}
 }
 
-func (q *Queue) execute(parent context.Context, job *Job) {
+// execute runs a claimed job. parent ends on shutdown; jobCtx also ends when Cancel reaches the job.
+func (q *Queue) execute(parent, jobCtx context.Context, job *Job, rj *runningJob) {
 	q.mu.Lock()
 	h := q.handlers[job.Queue]
 	q.mu.Unlock()
@@ -65,12 +80,13 @@ func (q *Queue) execute(parent context.Context, job *Job) {
 		}
 		job.input = in
 	}
+	if rj.cancelled.Load() {
+		q.finalizeCancel(job)
+		return
+	}
 
-	jctx, cancel := context.WithTimeout(parent, q.opts.JobTimeout)
+	jctx, cancel := context.WithTimeout(jobCtx, q.opts.JobTimeout)
 	defer cancel()
-	rj := &runningJob{cancel: cancel}
-	q.trackRunning(job.ID, rj)
-	defer q.untrackRunning(job.ID)
 
 	out, err := safeRun(h, jctx, job)
 

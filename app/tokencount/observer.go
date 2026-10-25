@@ -23,13 +23,11 @@ type Observer struct {
 func NewObserver(cal *Calibrator) *Observer { return &Observer{cal: cal} }
 
 // Collect records this request's (body bytes, prompt tokens) pair. No-op unless both are known and the request resolved to a model: an unrouted or failed request measures nothing.
-//
-// The body length is read off the retained inbound reference — never copied, and skipped when the runner only captured a prefix of it, which would read as a request far denser in tokens than it was.
 func (o *Observer) Collect(lc *lifecycle.Context) {
 	if o == nil || o.cal == nil || lc == nil {
 		return
 	}
-	if lc.ModelID == "" || lc.RequestBodyTruncated || len(lc.RequestBody) == 0 {
+	if lc.ModelID == "" || lc.RequestBytes == 0 {
 		return
 	}
 	v, ok := lc.Collected(usagelog.Namespace)
@@ -49,5 +47,5 @@ func (o *Observer) Collect(lc *lifecycle.Context) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), observeTimeout)
 	defer cancel()
-	o.cal.Observe(ctx, session, lc.ModelID, len(lc.RequestBody), prompt)
+	o.cal.Observe(ctx, session, lc.ModelID, lc.RequestBytes, prompt)
 }

@@ -13,6 +13,7 @@
 #   RELAY_CH_DSN        — relay's ClickHouse (bundled service DNS).
 #   postgres-password   — consumed by the bundled PG StatefulSet.
 #   clickhouse-password — consumed by the bundled CH StatefulSet.
+#   RELAY_REDIS_PASSWORD — Valkey's requirepass and relay's AUTH password.
 #
 # Passwords are hex (URL-safe) because they are embedded verbatim in the DSN URLs.
 #
@@ -23,6 +24,8 @@
 #   ./gen-secret.sh --show               # print the admin token from the live secret
 #   ./gen-secret.sh --refresh-dsn        # rewrite PG/CH DSNs to FQDN hosts, in place
 #                                        # (safe: master key + passwords untouched)
+#   ./gen-secret.sh --add-redis-password # add RELAY_REDIS_PASSWORD to an existing
+#                                        # secret that lacks it; nothing else changes
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-relay}"
@@ -38,12 +41,14 @@ CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-cluster.local}"
 FORCE=0
 SHOW=0
 REFRESH_DSN=0
+ADD_REDIS_PW=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
     --show)  SHOW=1 ;;
     --refresh-dsn) REFRESH_DSN=1 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --add-redis-password) ADD_REDIS_PW=1 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
@@ -81,6 +86,26 @@ if [[ "$REFRESH_DSN" == 1 ]]; then
   exit 0
 fi
 
+# --add-redis-password: a secret minted before the key existed leaves Valkey
+# without a password. Adds a fresh one only when the key is absent; the value is
+# patched from stdin, so it never reaches argv or the terminal.
+if [[ "$ADD_REDIS_PW" == 1 ]]; then
+  kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" >/dev/null 2>&1 \
+    || { echo "secret $NAMESPACE/$SECRET_NAME not found — mint it first (run without --add-redis-password)" >&2; exit 1; }
+  if [[ -n "$(kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" -o jsonpath='{.data.RELAY_REDIS_PASSWORD}')" ]]; then
+    echo "✓ $NAMESPACE/$SECRET_NAME already holds RELAY_REDIS_PASSWORD — leaving it untouched."
+    exit 0
+  fi
+  printf '{"stringData":{"RELAY_REDIS_PASSWORD":"%s"}}' "$(openssl rand -hex 24)" \
+    | kubectl -n "$NAMESPACE" patch secret "$SECRET_NAME" --type merge --patch-file /dev/stdin >/dev/null
+  echo "✓ added RELAY_REDIS_PASSWORD to $NAMESPACE/$SECRET_NAME (other keys untouched)"
+  echo "  Relay pods send it on connect, which a passwordless Valkey accepts, so roll relay first:"
+  echo "    kubectl -n ${NAMESPACE} rollout restart deploy/${FULLNAME} && kubectl -n ${NAMESPACE} rollout status deploy/${FULLNAME}"
+  echo "  then restart Valkey, which starts requiring it (requests needing Valkey fail until it is ready):"
+  echo "    kubectl -n ${NAMESPACE} rollout restart sts/${FULLNAME}-valkey"
+  exit 0
+fi
+
 if [[ "$SHOW" == 1 ]]; then
   kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" \
     -o jsonpath='{.data.RELAY_ADMIN_TOKEN}' | base64 -d; echo
@@ -106,6 +131,7 @@ ADMIN_TOKEN="sk-wr-$(openssl rand -hex 24)"
 ADMIN_PASSWORD="$(openssl rand -hex 16)"
 PG_PW="$(openssl rand -hex 24)"
 CH_PW="$(openssl rand -hex 24)"
+REDIS_PW="$(openssl rand -hex 24)"
 
 PG_DSN="postgres://${PG_USER}:${PG_PW}@${PG_HOST}:5432/${PG_DB}?sslmode=disable"
 CH_DSN="clickhouse://${CH_USER}:${CH_PW}@${CH_HOST}:9000/${CH_DB}"
@@ -117,7 +143,8 @@ kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
   --from-literal=RELAY_PG_DSN="$PG_DSN" \
   --from-literal=RELAY_CH_DSN="$CH_DSN" \
   --from-literal=postgres-password="$PG_PW" \
-  --from-literal=clickhouse-password="$CH_PW"
+  --from-literal=clickhouse-password="$CH_PW" \
+  --from-literal=RELAY_REDIS_PASSWORD="$REDIS_PW"
 
 kubectl -n "$NAMESPACE" label secret "$SECRET_NAME" \
   app.kubernetes.io/part-of=relay app.kubernetes.io/managed-by=gen-secret.sh --overwrite >/dev/null

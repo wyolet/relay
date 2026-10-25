@@ -27,11 +27,59 @@ data:
   {{- with .Values.relay.redisMinIdleConns }}
   RELAY_REDIS_MIN_IDLE_CONNS: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.redisDialTimeoutMs }}
+  RELAY_REDIS_DIAL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisReadTimeoutMs }}
+  RELAY_REDIS_READ_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisWriteTimeoutMs }}
+  RELAY_REDIS_WRITE_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPoolTimeoutMs }}
+  RELAY_REDIS_POOL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPoolMaxWaiters }}
+  RELAY_REDIS_POOL_MAX_WAITERS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisMaxRetries }}
+  RELAY_REDIS_MAX_RETRIES: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightPoolSize }}
+  RELAY_REDIS_POSTFLIGHT_POOL_SIZE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightPoolTimeoutMs }}
+  RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightReadTimeoutMs }}
+  RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisPostFlightBatchSize }}
+  RELAY_REDIS_POSTFLIGHT_BATCH_SIZE: {{ . | quote }}
+  {{- end }}
+  {{- if ne (toString .Values.relay.redisPostFlightBatchDelayMs) "" }}
+  RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS: {{ .Values.relay.redisPostFlightBatchDelayMs | quote }}
+  {{- end }}
+  {{- if ne (toString .Values.relay.redisPostFlightQueueSize) "" }}
+  RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE: {{ .Values.relay.redisPostFlightQueueSize | quote }}
+  {{- end }}
   RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
   RELAY_COOKIE_SECURE: {{ .Values.relay.cookieSecure | quote }}
   RELAY_HEALTHZ_DEADLINE_MS: {{ .Values.relay.healthzDeadlineMs | quote }}
   {{- with .Values.relay.maxRequestBytes }}
   RELAY_MAX_REQUEST_BYTES: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.maxConns }}
+  RELAY_MAX_CONNS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.upstreamDialTimeoutS }}
+  RELAY_UPSTREAM_DIAL_TIMEOUT_S: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.proxyBodyIdleS }}
+  RELAY_PROXY_BODY_IDLE_S: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.shutdownDeadlineS }}
+  RELAY_SHUTDOWN_DEADLINE_S: {{ . | quote }}
   {{- end }}
   {{- with .Values.relay.controlAllowOrigins }}
   RELAY_CONTROL_ALLOW_ORIGINS: {{ . | quote }}

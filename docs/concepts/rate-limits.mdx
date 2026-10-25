@@ -1,0 +1,152 @@
+---
+title: "Rate Limits"
+description: "Meters, strategies, where a rate limit applies, and what a limited caller sees"
+---
+
+A **rate limit** is a named list of rules. Each rule caps one meter over one window, and each rule keeps its own counter: a request is admitted only when every rule of every rate limit that applies to it has room. Rate limits are enforced by Relay before the request leaves for the upstream, with counters in the state backend.
+
+## Rules
+
+A rule has four fields, all required:
+
+| Field | Meaning |
+| --- | --- |
+| `meter` | What is counted. See [Meters](#meters). |
+| `amount` | The cap, greater than zero. |
+| `window` | The period. The control API takes an integer number of seconds (`60`); manifests take a duration string (`1m`, `5h`). |
+| `strategy` | How the window is enforced. See [Strategies](#strategies). |
+
+A rate limit with `enabled: false` applies no rules. An enabled rate limit needs at least one rule.
+
+<Warning>
+In a manifest, write `window` as a duration string. A bare integer there is read as nanoseconds, not seconds.
+</Warning>
+
+### Meters
+
+| Meter | Counts |
+| --- | --- |
+| `requests` | Requests, counted when the request is admitted. |
+| `concurrency` | Requests in flight. The slot is held until the response ends, including the full length of a stream. |
+| `tokens` | Input plus output tokens. |
+| `tokens.input` | Input tokens. |
+| `tokens.output` | Output tokens. |
+| `tokens.cache_read` | Prompt-cache read tokens. |
+| `tokens.cache_creation` | Prompt-cache write tokens. |
+| `tokens.reasoning` | Reasoning tokens. |
+| `tokens.server_tool_use_input` | Input tokens of server-side tool use. |
+| `tokens.server_tool_use_output` | Output tokens of server-side tool use. |
+
+Token counts come from the provider's response. Relay does not tokenize requests itself.
+
+### Strategies
+
+The strategy applies to the `requests` meter:
+
+| Strategy | Behavior |
+| --- | --- |
+| `token-bucket` | Capacity refills continuously at `amount` per `window`; bursts up to `amount`. |
+| `sliding-window` | Weighted count across the current and previous window, so the cap holds at any point, not only at window edges. |
+| `fixed-window` | The count resets at each window boundary. |
+| `leaky-bucket` | Drains at a constant `amount` per `window`; requests that would overflow are rejected. |
+| `session-window` | The window starts with the first request and runs for `window`; the next request after it ends starts a new one. Use it for session quotas such as "N requests per 5 hours from first use". |
+
+Two meters ignore the strategy:
+
+- **Token meters** are always enforced as a sliding window, because tokens are only known after the response. A request is admitted while the window's counted tokens are at or under `amount`, so the request that crosses the cap still completes; the next one is refused until the window moves on.
+- **`concurrency`** is a gauge: the request is refused when `amount` requests are already in flight.
+
+## Where rate limits apply
+
+### Inbound limits on a policy
+
+A [policy](/concepts/policies) carries either one rate limit (`rateLimitId`) that covers every model it grants with one set of counters, or per-model rate limits (`rlBindings`) where the first entry matching the requested model applies and counters are kept per model. A model no entry matches is not limited by the policy.
+
+The counters belong to the policy, not to a credential:
+
+- Every relay key and inference token governed by the policy shares them. Callers in a project share them per team: two teams governed by the same policy have separate counters.
+- Relay keys carry no rate limit of their own. To cap one key on its own, give it its own policy.
+
+The policy's limit is reserved once per request, before a host key is picked, so failing over between host keys does not charge it again.
+
+### Upstream limits per host key
+
+Every host key names a tier policy owned by its host (see [Tier policies](/concepts/policies#tier-policies-on-host-keys)). If that tier policy has a rate limit, Relay reserves it per host key, so the counters for one key are shared by every policy and team that spends the key. The catalog's tier policies carry provider-published limits; edit them, or point the key at a different tier, to match your account.
+
+When a key is over its upstream limit, Relay skips it without opening its circuit breaker and tries the next key in the pool. A skipped key does not count toward the three keys a request tries upstream. The pod remembers the refusal for that key and model until the limiter's retry time, so later requests skip the key without reserving it again. Each pod learns this from its own refusals. If every key is over its limit, the request fails with `429 rate_limit_exceeded`, and `Retry-After` says when the first key has room.
+
+### System rate limits
+
+Relay ships a few rate limits of its own, owned by the system:
+
+| Name | Applies to | Counted per | Shipped as |
+| --- | --- | --- | --- |
+| `inference-api-proxy` | Authenticated [proxy mode](/concepts/proxy-mode) requests, as a ceiling on top of the policy's limit | Credential | Disabled, no rules |
+| `inference-api-proxy-anonymous` | Anonymous proxy mode requests | Client IP | Enabled: 60 requests and 5,000 tokens per minute, 10 concurrent |
+| `otlp-export` | Exports to the [OTLP receiver](/concepts/otlp-receiver) | Credential | Enabled: 1,200 requests per minute |
+
+Each boot creates any of these that is missing and leaves an existing row unchanged, so edits made through `PUT /api/rate-limits/by-id/{id}` survive restarts, upgrades and catalog re-seeds. To switch one off, set `enabled: false`; a deleted one comes back as shipped on the next boot. To change what they start as on a new database, put a YAML file defining them (same names, `owner.kind: system`) under `<RELAY_CONFIG_DIR>/ratelimits/`.
+
+## Reserve and commit
+
+Each request goes through two steps per applicable rate limit:
+
+1. **Reserve**, before the upstream call. All rules of the policy's limit are checked in one atomic script: `requests` and `concurrency` are counted, token meters are checked against what has already been counted. If any rule is over, nothing is counted and the request is refused.
+2. **Commit**, after the response ends. The token counts from the provider's response are added to the token meters and the concurrency slot is released. This runs in the background once the caller has read the response.
+
+If a request fails before any attempt reaches the upstream, its reservation is cancelled: the concurrency slot is released and, for `token-bucket`, `leaky-bucket` and `session-window` rules, the request is refunded. Once an attempt may have reached the upstream, the request charge stands.
+
+With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` (Valkey) to share counters across pods.
+
+## What a limited caller sees
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+X-Should-Retry: true
+X-WR-Origin: relay
+Content-Type: application/json
+
+{"error": {"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "<the rule that was exceeded>; try again in 12s"}}
+```
+
+`Retry-After` is the wait in whole seconds until the refused rule has room, at least `1`. Relay does not send `X-RateLimit-*` headers for its own limits. When the upstream itself answers `429` and no other key can take the request, the upstream's response is forwarded, including its rate-limit headers.
+
+A `503` with code `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) and `Retry-After: 1` is not a rate limit: it means the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`, see [Configuration](/configuration)).
+
+## Example
+
+A rate limit with three rules, as a manifest:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: RateLimit
+metadata:
+  name: team-chat-rl
+  owner: {kind: project, name: chat}
+spec:
+  rules:
+    - {meter: requests, amount: 600, window: 1m, strategy: sliding-window}
+    - {meter: tokens, amount: 2000000, window: 1m, strategy: sliding-window}
+    - {meter: concurrency, amount: 20, window: 1m, strategy: sliding-window}
+```
+
+The same through the control API, with the window in seconds:
+
+```bash
+curl -X POST http://localhost:8081/api/rate-limits \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {"displayName": "Team chat"},
+    "spec": {
+      "rules": [
+        {"meter": "requests", "amount": 600, "window": 60, "strategy": "sliding-window"},
+        {"meter": "tokens", "amount": 2000000, "window": 60, "strategy": "sliding-window"},
+        {"meter": "concurrency", "amount": 20, "window": 60, "strategy": "sliding-window"}
+      ]
+    }
+  }'
+```
+
+Attach it to a policy with `rateLimitId` (or `rateLimit: team-chat-rl` in a policy manifest). `GET /api/policies/{ref}/rate-limits` shows the rate limits a policy references.

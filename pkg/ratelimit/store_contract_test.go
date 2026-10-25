@@ -10,6 +10,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.T, now *time.Time) *Limiter) {
@@ -223,6 +225,57 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		other := Rule{Key: "jti:other-jti", Name: "token revocation", Meter: MeterRevoked}
 		if _, err := l.Reserve(ctx, "team:contract-team", []Rule{other}); err != nil {
 			t.Fatalf("reserve for a different jti: %v", err)
+		}
+	})
+
+	// A reserve queued on a kv batch grants, refuses and revokes exactly as Reserve does, and a commit queued on one releases what it held.
+	t.Run(name+"/PrepareReserve_MatchesReserve", func(t *testing.T) {
+		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+		l := factory(t, &now)
+		ctx := context.Background()
+		const scope = "prepared-policy"
+		reserve := func(rules []Rule) (*Reservation, error) {
+			b := kv.NewBatch(l.store)
+			p, err := l.PrepareReserve(b, scope, rules)
+			if err != nil {
+				t.Fatalf("PrepareReserve: %v", err)
+			}
+			b.Exec(ctx)
+			return p.Finish(ctx)
+		}
+		rules := []Rule{
+			reqRule("Route:prepared:rl-req", "requests", 2, time.Minute),
+			conRule("Route:prepared:rl-con", "concurrency", 1, time.Minute),
+		}
+		res, err := reserve(rules)
+		if err != nil {
+			t.Fatalf("first prepared reserve: %v", err)
+		}
+		if _, err := reserve(rules); !errors.Is(err, ErrExceeded) {
+			t.Fatalf("second while the slot is held: err = %v, want ErrExceeded", err)
+		}
+		b := kv.NewBatch(l.store)
+		pc, err := l.PrepareCommit(b, res, Observations{})
+		if err != nil || pc == nil {
+			t.Fatalf("PrepareCommit = %v, %v", pc, err)
+		}
+		b.Exec(ctx)
+		if err := pc.Finish(); err != nil {
+			t.Fatalf("batched commit: %v", err)
+		}
+		if _, err := reserve(rules); err != nil {
+			t.Fatalf("after the slot was released: %v", err)
+		}
+		if pc, _ := l.PrepareCommit(b, nil, Observations{}); pc != nil {
+			t.Fatal("PrepareCommit queued a commit for no reservation")
+		}
+
+		revoked := Rule{Key: "jti:prepared-jti", Name: "token revocation", Meter: MeterRevoked}
+		if err := l.store.Set(ctx, "limit:{"+scope+"}:jti:prepared-jti", []byte("1"), time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reserve([]Rule{revoked}); !errors.Is(err, ErrRevoked) {
+			t.Fatalf("revoked: err = %v, want ErrRevoked", err)
 		}
 	})
 

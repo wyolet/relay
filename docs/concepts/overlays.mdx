@@ -1,65 +1,62 @@
 ---
 title: "Catalog Overlays"
-description: "Customize catalog-managed resources without losing your edits on the next update"
+description: "Customize catalog models without losing your changes on the next catalog update"
 ---
 
-The catalog ships providers, hosts, and models as **system-owned** data, and
-catalog updates replace those rows. So how do you tweak a system-owned model —
-say, pin a different context window or add your own alias — without your change
-getting clobbered the next time the catalog refreshes?
+Catalog upgrades refresh catalog rows, and a direct API edit marks a row dirty so upgrades skip it from then on, including fields you never touched. An **overlay** avoids both: it is a sparse patch you own, stored next to the pristine catalog row and merged over it when Relay builds its in-memory snapshot. Routing sees the merged result; catalog upgrades keep updating every field you did not override.
 
-**Overlays.** An overlay is a small, user-owned patch layered on top of a
-pristine catalog row. Relay merges the two when it builds its in-memory
-snapshot, and the merged result is what routing sees.
+Overlays apply to **models**. Use one to pin a context window, add an alias, or add tags to a catalog model.
 
 ## How it works
 
-Three words describe the model:
-
 | Term | What it is |
 | --- | --- |
-| **Template** | The pristine catalog row, exactly as shipped/seeded. The catalog owns it. |
-| **Overlay** | Your sparse patch — just the fields you changed. You own it. |
-| **Effective** | `merge(template, overlay)` — what the snapshot serves. Exists only in memory. |
+| **Template** | The catalog row as seeded. Catalog upgrades replace it. |
+| **Overlay** | Your patch: only the spec fields you set. |
+| **Effective** | The template with the overlay merged over it. Exists only in memory, and is what routing uses. |
 
-Only the fields you touch are pinned. Everything else keeps tracking the
-upstream catalog — so a catalog update can ship a new context window, new model
-snapshots, or new pricing and they flow straight through, while your custom
-aliases and notes stay put.
+The merge follows JSON merge patch rules:
+
+- A scalar or array in the patch replaces the template's value.
+- A nested object merges field by field.
+- `null` removes the field.
+- `aliases` and `tags` are the exception: the patch's entries are added to the template's, so a catalog upgrade can still add aliases or tags. To remove one the template ships, edit the model directly.
+- `enabled` cannot be set through an overlay; enable or disable the model with a direct edit.
 
 <Info>
-Because the effective row lives only in memory, a direct database read shows the
-**template**. The overlay endpoint is the source of truth for what you've
-changed — it returns the template, your patch, the merged result, and any
-validation state in one response.
+Because the effective row lives only in memory, reading the model through the CRUD endpoints or the database shows the **template**. The overlay endpoint returns the template, your patch and the effective spec in one response.
 </Info>
 
 ## Managing an overlay
 
-The overlay is a subresource on the model, under the `/api` control prefix:
+The overlay is a sub-resource of the model on the control API:
 
 ```bash
-# View template + your patch + effective merge
+# Template, your patch, and the effective spec
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   http://localhost:8081/api/models/by-id/<id>/overlay
 
-# Set (or replace) your sparse patch
+# Set or replace your patch: spec fields at the top level
 curl -X PUT http://localhost:8081/api/models/by-id/<id>/overlay \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"patch": {"spec": {"aliases": ["my-model"]}}}'
+  -d '{"patch": {"aliases": ["my-model"], "contextWindowTotal": 200000}}'
 
-# Factory reset — drop the overlay, the template resumes verbatim
+# Remove the overlay; the template applies unchanged
 curl -X DELETE http://localhost:8081/api/models/by-id/<id>/overlay \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN"
 ```
 
+`patch` holds spec fields directly, not a `spec` wrapper; metadata cannot be patched.
+
 <Note>
-`PUT` **replaces** the whole patch (it's not a deep merge of patches), so send
-the complete set of fields you want overridden. `DELETE` is a clean factory
-reset: the catalog template takes over again with nothing pinned.
+`PUT` **replaces** the whole patch; it does not merge with the previous one. Send every field you want overridden. A `PUT` whose result would not be a valid model is rejected with `400`.
 </Note>
 
-Your entire customization state is just the overlay rows in Postgres — back up
-the database and you've captured everything. There's no separate config to keep
-in sync.
+Setting an overlay counts as an edit of the model, so it follows the same rules: the `governance:model` setting and, under RBAC, the caller's permissions.
+
+## When the template changes underneath
+
+If a catalog upgrade changes the template so that your patch no longer produces a valid model, Relay serves the template unchanged and the overlay response reports `quarantined: true` with a `quarantineReason`. Fix the patch with a new `PUT`, or delete it.
+
+Overlays are rows in Postgres, so backing up the database captures them. [`relay export`](/concepts/gitops#export) includes them in an unscoped export, and `relay apply` can write them back.

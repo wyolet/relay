@@ -15,7 +15,10 @@ const Namespace = "payload"
 type (
 	Record = payload.Record
 	Sink   = payload.Sink
-	Closer = payload.Closer
+	// BatchWriter is the optional bulk-write path a Sink may implement; the
+	// Emitter uses it for each drained batch.
+	BatchWriter = payload.BatchWriter
+	Closer      = payload.Closer
 
 	// Reader is the read-side contract (Get by request_id), re-exported so
 	// the control plane imports just payloadlog.

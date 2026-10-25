@@ -30,9 +30,14 @@ func (q *Queue[T]) FlushPending() {
 	if q.cfg.MaxSegments > 0 && len(segments) > q.cfg.MaxSegments {
 		excess := segments[:len(segments)-q.cfg.MaxSegments]
 		for _, s := range excess {
+			lines, cerr := CountLines(s)
+			if cerr != nil {
+				q.log.Warn("wal: count lines of dropped segment", "file", filepath.Base(s), "err", cerr)
+			}
 			if rerr := os.Remove(s); rerr == nil {
-				q.log.Warn("wal: dropped oldest segment (maxSegments exceeded)", "file", filepath.Base(s))
+				q.log.Warn("wal: dropped oldest segment (maxSegments exceeded)", "file", filepath.Base(s), "records", lines)
 				q.dropped.Add(1)
+				metrics.AddRecordsLost(q.cfg.Kind, lines)
 			}
 		}
 		segments = segments[len(segments)-q.cfg.MaxSegments:]
@@ -42,17 +47,20 @@ func (q *Queue[T]) FlushPending() {
 		records, err := readSegment[T](seg, q.log)
 		if err != nil {
 			q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
+			q.failing.Store(true)
 			return
 		}
 		if err := q.flush(records); err != nil {
 			// Do NOT delete — leave for retry on next tick.
 			q.log.Warn("wal: flush failed, will retry", "file", filepath.Base(seg), "err", err)
+			q.failing.Store(true)
 			return
 		}
 		if err := os.Remove(seg); err != nil {
 			q.log.Warn("wal: remove segment", "file", filepath.Base(seg), "err", err)
 		}
 	}
+	q.failing.Store(false)
 }
 
 // reportFlushLag publishes the age of the oldest un-flushed segment

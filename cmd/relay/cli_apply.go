@@ -52,6 +52,10 @@ func runApply(args []string) error {
 	if *from == "" {
 		return fmt.Errorf("apply: -f <file|dir> is required")
 	}
+	// A dotenv token would write to whatever deployment the file names; the operator must name the target.
+	if *serverURL == "" && *token == "" && dotEnvKeys["RELAY_ADMIN_TOKEN"] {
+		return fmt.Errorf("apply: RELAY_ADMIN_TOKEN comes from %s; pass --url to confirm the target", dotEnvFile)
+	}
 
 	body, err := loadBundle(*from)
 	if err != nil {
@@ -72,8 +76,9 @@ func runApply(args []string) error {
 		q.Set("selector", *selector)
 	}
 
-	raw, err := newControlClient(*serverURL, *token).
-		do("POST", "/api/apply?"+q.Encode(), "application/yaml", body)
+	client := newControlClient(*serverURL, *token)
+	fmt.Fprintf(os.Stderr, "apply: target %s (%s)\n", client.baseURL, applyTargetSource(*serverURL))
+	raw, err := client.do("POST", "/api/apply?"+q.Encode(), "application/yaml", body)
 	if err != nil {
 		return &exitError{code: exitFailed, err: err}
 	}
@@ -123,6 +128,20 @@ func runApply(args []string) error {
 			differing)}
 	}
 	return nil
+}
+
+// applyTargetSource names where the control URL came from, so the operator sees a target picked up from a file.
+func applyTargetSource(flagURL string) string {
+	switch {
+	case flagURL != "":
+		return "--url"
+	case os.Getenv("RELAY_URL") == "":
+		return "default"
+	case dotEnvKeys["RELAY_URL"]:
+		return "RELAY_URL from " + dotEnvFile
+	default:
+		return "RELAY_URL"
+	}
 }
 
 // loadBundle parses the manifests locally — so a typo fails before the round

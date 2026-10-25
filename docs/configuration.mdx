@@ -1,242 +1,148 @@
 ---
 title: "Configuration"
-description: "Environment variables and runtime settings"
+description: "Every environment variable the relay binary reads"
 ---
 
-Relay is configured through `RELAY_*` environment variables. The standalone
-image ships with sensible defaults and auto-generates its secrets on first
-boot — a bare `docker run` needs no environment variables at all. The values
-below matter when you move to a real (lean-image + managed-Postgres) deployment.
+Relay takes its bootstrap configuration from `RELAY_*` environment variables, read once at startup; changing one needs a restart. At startup the server also reads a `.env` file from its working directory, if there is one, and applies each variable that is not already set; `RELAY_ENV_FILE` names a different file. The operator commands read a file only through `RELAY_ENV_FILE` ([CLI reference](/reference/cli#configuration)).
 
-## Environment variables
+Behaviour that can change while relay runs (proxy mode, payload logging, usage storage, SSO, governance and the rest) lives in settings sections instead, changed through the control API without a restart: see [Settings](/reference/settings). The images set some variables themselves; see [Docker](/deploy/docker) and [Kubernetes](/deploy/kubernetes).
+
+## Listeners
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RELAY_PG_DSN` | _(required, except standalone)_ | Postgres connection string. The standalone image provides its own. |
-| `RELAY_PORT` | `8080` | Inference (data plane) listener port. |
-| `RELAY_CONTROL_PORT` | `8081` | Control plane + admin UI listener port. Set `off` to disable. |
-| `RELAY_LISTEN_HOST` | _(empty: every interface)_ | Host or IP the inference listener binds, and the control listener's default. No port; an IPv6 literal may be bracketed. Set `127.0.0.1` when a reverse proxy on the same host is the only client. Unrelated to `RELAY_BIND_ADDR`, which only sets the host side of the bundled `docker-compose.yml` port mappings. |
-| `RELAY_CONTROL_LISTEN_HOST` | _(`RELAY_LISTEN_HOST`)_ | Host or IP the control listener (admin UI, control API, `/metrics`) binds. Set `127.0.0.1` to keep the admin plane off the network while inference stays reachable. |
-| `RELAY_MASTER_KEY` | _(auto-generated on standalone)_ | 32-byte base64 key that wraps the data keys stored secrets are encrypted under (see [Stored secrets and key rotation](/concepts/secret-keys)). Generate with `openssl rand -base64 32`. Must be **stable** in production. |
-| `RELAY_MASTER_KEY_EXTRA` | _(empty)_ | Further master keys, comma-separated, same format. Held only while [changing the master key](/concepts/secret-keys#changing-the-master-key): which key wraps new data keys is recorded in the database, not taken from these variables. Requires `RELAY_MASTER_KEY`. |
-| `RELAY_ADMIN_TOKEN` | _(auto-generated on standalone)_ | Break-glass control-plane bearer. Empty disables it on the lean image. |
-| `RELAY_PUBLIC_URL` | _(empty)_ | Externally reachable control-plane origin. Exported manifests point their `$schema` directive at this host; empty renders it relative. |
-| `RELAY_AUTHZ` | `single` | Control-plane authorization mode. `single` grants every authenticated caller every action; `rbac` evaluates [roles and bindings](/concepts/auth). |
-| `RELAY_MULTI_USER` | _(empty)_ | Deprecated. A truthy value (`on`/`1`/`true`/`yes`) is read as `RELAY_AUTHZ=rbac` when `RELAY_AUTHZ` is unset, with a startup warning. Set `RELAY_AUTHZ` explicitly instead. |
-| `RELAY_TRUSTED_PROXIES` | _(empty)_ | Comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`. Empty means no proxy is trusted — the client IP is always `RemoteAddr`. |
-| `RELAY_LICENSE_FILE` | _(empty)_ | Path to a [license](/concepts/license) file, unlocking gated features. Highest precedence. |
-| `RELAY_LICENSE` | _(empty)_ | The [license](/concepts/license) value inline. Used when `RELAY_LICENSE_FILE` is unset; both win over the stored `license` setting installed via `PUT /api/license`. |
-| `RELAY_INFERENCE_API_URL` | _(standalone: `http://localhost:8080`)_ | Data-plane origin the admin UI calls (served via `/config.json`). Set to your public API URL in production. |
-| `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Use `redis` for multi-pod deployments. |
-| `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
-| `RELAY_REDIS_PASSWORD` | _(empty)_ | Password sent with `AUTH` to `RELAY_REDIS_ADDR`. Empty sends none. Valkey holds control-plane sessions, so give any Valkey reachable beyond the relay pods a password. |
-| `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
-| `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML: users, settings, and under `ratelimits/` the starting values of the built-in rate limits (applied only when a row does not exist yet). |
-| `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. Like a fetched release, it seeds catalog kinds only: host keys, relay keys, teams, projects, service accounts, groups, roles and bindings in it are skipped with a warning — load those with `relay seed --apply` or `relay apply`. |
-| `RELAY_CATALOG_VERSION` | _(empty; `make build` binaries: their pinned release)_ | Pin the seeded catalog to a published [relay-catalog](https://github.com/wyolet/relay-catalog) release tag (e.g. `v0.1.0`). On boot, if the stored catalog version differs, the release archive is fetched and re-seeded — no image rebuild needed. Re-seeds never overwrite your changes: operator-edited resources are skipped and overlays re-apply. A binary built with `make build` uses the catalog release it was built against when neither this nor `RELAY_CATALOG_DIR` is set; `off` turns that default off. |
-| `RELAY_CATALOG_URL` | `https://catalog.wyolet.com/releases/{version}/relay-catalog-data-{version}.tar.gz` | Override the archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point at a [catalog server](/reference/catalog-server) or mirror for airgapped deployments. The archive is extracted only when its sha256 matches the sum file at the same URL plus `.sha256`, so a GitHub source archive doesn't work: use the release's data tarball (tags from v0.1.15) or seed from `RELAY_CATALOG_DIR`. |
-| `RELAY_CATALOG_INDEX_URL` | `https://catalog.wyolet.com/index.yaml` | Channel index that `RELAY_CATALOG_VERSION=latest` resolves the newest release from. |
-| `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). It also lets the `auth:oidc` issuer and the payload-logging S3 endpoint use plain HTTP; otherwise both must use TLS. |
-| `RELAY_MIGRATE_ON_BOOT` | `on` | Run pending schema migrations at startup. Set `off` while [rolling the schema back](/concepts/upgrade#rolling-back) so a restarting pod doesn't re-apply them. |
+| `RELAY_PORT` | `8080` | Inference API listener port. |
+| `RELAY_CONTROL_PORT` | `8081` | Control plane listener port: admin UI, control API under `/api`, `/metrics`, `/config.json`. `off` disables the listener. |
+| `RELAY_LISTEN_HOST` | _(empty: every interface)_ | Host or IP the inference listener binds, and the control listener's default. No port; an IPv6 literal may be bracketed. Set `127.0.0.1` when a reverse proxy on the same host is the only client. Unrelated to `RELAY_BIND_ADDR`, which only sets the host side of the Compose stack's port mappings. |
+| `RELAY_CONTROL_LISTEN_HOST` | _(`RELAY_LISTEN_HOST`)_ | Host or IP the control listener binds. Set `127.0.0.1` to keep the control plane off the network while inference stays reachable. |
+| `RELAY_TRUSTED_PROXIES` | _(empty)_ | Comma-separated IPs or CIDRs of reverse proxies allowed to set `X-Forwarded-For`. Empty trusts none: the client IP is the connection's remote address. |
+| `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Seconds a graceful shutdown waits for in-flight requests. |
+
+## Postgres
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_PG_DSN` | _(required; the standalone image sets it)_ | Postgres connection string. |
+| `RELAY_PG_MAX_CONNS` | `10` | Most connections the pool opens per process. Keep it times the replica count below the server's `max_connections`. |
+| `RELAY_PG_MIN_CONNS` | `2` | Connections the pool keeps open while idle, so a burst doesn't wait for new connections. |
+| `RELAY_MIGRATE_ON_BOOT` | `on` | Run pending schema migrations at startup (`on` \| `off`). Set `off` while [rolling the schema back](/concepts/upgrade#rolling-back), so a restarting pod doesn't re-apply what was undone. |
 | `RELAY_MIGRATE_LOCK_TIMEOUT_S` | `10` | Seconds a migration waits for a table lock before it fails and applies nothing, so it can be retried; see [Lock timeout](/concepts/upgrade#lock-timeout). `0` waits indefinitely. |
-| `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget in seconds. |
-| `RELAY_LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warn` \| `error`. |
 
-### Clustering & scale
+## Valkey and shared state
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RELAY_CLUSTER_MODE` | `off` | `on` enables the Postgres `LISTEN` consumer so every pod's snapshot stays in sync. Turn `on` for any multi-pod deployment. |
-| `RELAY_INSTANCE_ID` | _(empty)_ | Stable pod/instance identity, surfaced in logs, metrics, and usage events (`extras.instance`). |
-| `RELAY_MAX_REQUEST_BYTES` | _(unlimited)_ | Reject inbound request bodies larger than this many bytes. |
+| `RELAY_STATE_BACKEND` | `memory` | Where sessions, rate-limit counters, key breaker state and host reachability live: `memory` (per process) or `redis` (shared, Valkey or Redis). Use `redis` with more than one replica. |
+| `RELAY_REDIS_ADDR` | _(empty)_ | `host:port` of Valkey or Redis. Required when `RELAY_STATE_BACKEND=redis`. The server must be Redis 7.0 or later, or any Valkey version. |
+| `RELAY_REDIS_PASSWORD` | _(empty)_ | Password sent with `AUTH`. Empty sends none. Valkey holds control-plane sessions, so give any Valkey reachable beyond the relay pods a password. |
+| `RELAY_REDIS_POOL_SIZE` | 25 per CPU | Most connections in the shared Valkey client pool, which serves rate-limit checks and every other Valkey call except the post-flight writes below. CPUs are `GOMAXPROCS`, which follows the container's CPU limit. Under load requests wait for a free connection long before Valkey itself is busy, so lowering it costs throughput. Each replica opens up to this pool plus the post-flight pool; keep that times the replica count under Valkey's `maxclients` (10,000 by default). |
+| `RELAY_REDIS_MIN_IDLE_CONNS` | _(client default: none)_ | Connections kept open while idle, so a burst on a fresh pod doesn't wait for new connections. |
+| `RELAY_REDIS_READ_TIMEOUT_MS` | `1000` | Milliseconds to wait for a Valkey reply. Below about 600 ms, two TCP retransmits in a row close the connection, and the next command has to dial a new one. When a rate-limit check gets no reply in time, the request is refused as overloaded: `503` (`529` on Anthropic-shaped routes) with `Retry-After: 1`, as when the pod is at capacity. |
+| `RELAY_REDIS_WRITE_TIMEOUT_MS` | `500` | Milliseconds to wait to send a command to Valkey. |
+| `RELAY_REDIS_POOL_TIMEOUT_MS` | `250` | Milliseconds to wait for a free connection when every pooled Valkey connection is busy. |
+| `RELAY_REDIS_POOL_MAX_WAITERS` | twice the pool size | How many Valkey calls may wait for a shared-pool connection. Once that many are waiting, new inference requests are refused as overloaded at once, before their body is read or their rate-limit check is sent: `503` (`529` on Anthropic-shaped routes) with `Retry-After: 1`. Refusals at the route count in `relay_requests_shed_total{stage="kv_pool"}`, those at the rate-limit check in `relay_kv_errors_total{op="limit_reserve",outcome="shed"}`. Without it each would wait `RELAY_REDIS_POOL_TIMEOUT_MS` and be refused anyway. Calls of a request already admitted, and post-flight writes, still wait. |
+| `RELAY_REDIS_DIAL_TIMEOUT_MS` | `2000` | Milliseconds to wait to open a Valkey connection. A request that needs a new connection waits for it, so this adds to the three bounds above. |
+| `RELAY_REDIS_MAX_RETRIES` | `0` | How many times a failed Valkey command is resent. A command whose reply timed out or whose connection dropped after it was sent may already have run, so a resent rate-limit check can count one request twice; raise it only if that is acceptable. |
+| `RELAY_REDIS_POSTFLIGHT_POOL_SIZE` | 25 per CPU | Most connections in the second Valkey client, which settles a request after its response: the rate-limit commit (token counts included), the key's success record, host reachability and the token-count ratio. Its own pool, so a pool full of rate-limit checks under load doesn't make these writes give up. |
+| `RELAY_REDIS_POSTFLIGHT_POOL_TIMEOUT_MS` | `1000` | Milliseconds a post-flight write waits for a free connection on that client. A write that still gets none is dropped and counted in `relay_kv_errors_total`. |
+| `RELAY_REDIS_POSTFLIGHT_READ_TIMEOUT_MS` | `1000` | Milliseconds a post-flight write waits for the Valkey reply. Dial and write bounds and retries are the `RELAY_REDIS_*` ones above. |
+| `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE` | `64` | Most requests whose rate-limit commits and key success records share one pipelined round trip on the post-flight client. |
+| `RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS` | `2` | Milliseconds the first request of a batch waits for others before the batch is sent. `0` sends what is already queued without waiting. |
+| `RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE` | `4096` | Requests that can wait for a batch. A request that finds the queue full settles on a round trip of its own and is counted in `relay_settle_queue_full_total`; nothing is dropped. `0` turns batching off. |
+| `RELAY_CLUSTER_MODE` | `off` | Accepts `on` or `off` and has no other effect: every relay process listens for catalog and settings changes on Postgres, so replicas stay in sync without it. |
+
+## Secrets and authentication
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_MASTER_KEY` | _(empty; the standalone image generates one)_ | Base64 of 32 random bytes (`openssl rand -base64 32`). Wraps the data keys stored secrets are encrypted under; see [Stored secrets and key rotation](/concepts/secret-keys). Without it, relay can't store host key values or sign inference tokens. Must be the same on every replica and stable across restarts. |
+| `RELAY_MASTER_KEY_EXTRA` | _(empty)_ | Further master keys, comma-separated, same format. Held only while [changing the master key](/concepts/secret-keys#changing-the-master-key): which key wraps new data keys is recorded in the database, not taken from these variables. Requires `RELAY_MASTER_KEY`. |
+| `RELAY_ADMIN_TOKEN` | _(empty: disabled; the standalone image generates one)_ | Break-glass bearer token for the control API. It acts as an admin. |
+| `RELAY_AUTHZ` | `single` | Control-plane authorization. `single` allows every authenticated caller every action, including granting themselves the `admin` role, so it suits a single operator; `rbac` evaluates [roles and bindings](/concepts/auth#authorization); use it when more than one person signs in. |
+| `RELAY_MULTI_USER` | _(empty)_ | Deprecated. A truthy value (`on`, `1`, `true`, `yes`) is read as `RELAY_AUTHZ=rbac` when `RELAY_AUTHZ` is unset, with a startup warning. Set `RELAY_AUTHZ` instead. |
+| `RELAY_CONFIG_DIR` | `config` | Directory of relay-internal YAML, read recursively: `kind: User` files for password sign-in, the default settings directory (`settings/`), and under `ratelimits/` the starting values of the built-in rate limits (applied only when the row does not exist yet). |
+| `RELAY_COOKIE_SECURE` | `true` | Marks the session cookie `Secure`. Set `false` only for plain-HTTP access (the standalone image does). `false` also lets the `auth:oidc` issuer and the payload-logging S3 endpoint use plain HTTP; otherwise both must use TLS. |
+| `RELAY_LICENSE_FILE` | _(empty)_ | Path to a [license](/concepts/license) file. Highest precedence. |
+| `RELAY_LICENSE` | _(empty)_ | The license value inline. Used when `RELAY_LICENSE_FILE` is unset; both win over a license installed with `PUT /api/license`. |
+
+Single sign-on is configured with the `auth:oidc` settings section or with `WYOLET_AUTH_MODE` and the `WYOLET_OIDC_*` variables; see [SSO](/concepts/sso). Variables a settings section reads secrets from must carry that section's prefix: `RELAY_OIDC_*` or `WYOLET_OIDC_*` for the OIDC client secret, `RELAY_PAYLOAD_S3_*` for payload-logging S3 credentials.
+
+## Catalog and settings seeding
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_AUTO_SEED_IF_EMPTY` | _(empty; both images set `1`)_ | When `1` and Postgres holds no catalog yet, seed it from `RELAY_CATALOG_DIR` at boot. |
+| `RELAY_CATALOG_DIR` | _(empty; both images set `/catalog`)_ | Local catalog data tree to seed from. Like a fetched release, it seeds catalog kinds only: host keys, relay keys, teams, projects, service accounts, groups, roles and bindings in it are skipped with a warning; load those with `relay seed --apply` or `relay apply`. |
+| `RELAY_CATALOG_VERSION` | _(empty)_ | Pin the seeded catalog to a [relay-catalog](https://github.com/wyolet/relay-catalog) release tag (for example `v0.1.19`), or `latest`. At boot, if the stored catalog version differs, relay fetches that release and re-seeds it, without an image rebuild. Re-seeds skip resources you edited, and overlays re-apply. A binary built from source with `make build` defaults to the catalog release it was built against when neither this nor `RELAY_CATALOG_DIR` is set; `off` turns that default off. See [Pinning a catalog version](/concepts/catalog#pinning-a-catalog-version). |
+| `RELAY_CATALOG_URL` | `https://catalog.wyolet.com/releases/{version}/relay-catalog-data-{version}.tar.gz` | Archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point it at a [catalog server](/reference/catalog-server) or mirror for airgapped deployments. The archive is extracted only when its sha256 matches the sum file at the same URL plus `.sha256`, so a GitHub source archive doesn't work: use a release's data tarball (tags from v0.1.15) or seed from `RELAY_CATALOG_DIR`. |
+| `RELAY_CATALOG_INDEX_URL` | `https://catalog.wyolet.com/index.yaml` | Channel index that `RELAY_CATALOG_VERSION=latest` resolves the newest release from. |
+| `RELAY_SETTINGS_DIR` | `<RELAY_CONFIG_DIR>/settings` | Directory of `kind: Setting` files. At boot, each section that has no stored value yet is written from its file; see [Seeding settings from files](/reference/settings#seeding-settings-from-files). |
+
+## Usage and request storage
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_EVENTLOG_BACKEND` | `file` | Usage event backend (`file` \| `clickhouse` \| `postgres` \| `valkey`) used while the [`usage-logging`](/reference/settings#usage-logging) settings section names none. A backend set in the section wins. |
+| `RELAY_USAGE_LOG` | `relay-usage.jsonl` | File the `file` usage backend writes to, relative to the working directory, unless the `usage-logging` section sets `file.path`. |
+| `RELAY_CH_DSN` | _(empty)_ | ClickHouse DSN; required when the usage or payload-logging backend is `clickhouse`. Connections use zstd compression unless the DSN sets `compress=`. |
+| `RELAY_EVENTLOG_DIR` | `relay-usage-wal` | Directory for the ClickHouse usage backend's write-ahead segments, which hold events until ClickHouse accepts them. The `usage-logging` section's `clickhouse.walDir` overrides it. |
+| `RELAY_USAGE_QUEUE_SIZE` | `16384` | Usage events held in memory while the backend catches up; once full, new events are dropped and counted in `relay_records_lost_total{kind="usage"}`. Each slot is preallocated at about 0.5 KiB, so the default costs about 8 MiB. Raise it if `relay_emit_queue_depth{kind="usage"}` reaches it during bursts. |
+| `RELAY_USAGE_REFUSED_QUEUE_SIZE` | `4096` | Usage events of requests refused before reaching an upstream (shed, rate-limited, unauthenticated, unroutable). They wait in this separate queue, emptied after the main one, so a flood of refusals never drops the events of served requests; once full, new refusal events are dropped and counted in `relay_records_lost_total{kind="usage_refused"}`. |
+| `RELAY_PAYLOAD_QUEUE_BYTES` | _(from `GOMEMLIMIT`)_ | Bytes of captured payload records held in memory while the payload backend catches up: their request and response bodies plus a few hundred bytes each. Once full, new records are dropped and counted in `relay_records_lost_total{kind="payload"}`. The default is 1/16 of `GOMEMLIMIT` (56 MiB at 900 MiB), at least 16 MiB; 64 MiB when no memory limit is set. An empty queue still takes one record larger than the whole budget. |
+| `RELAY_PAYLOAD_REFUSED_QUEUE_BYTES` | `2097152` (2 MiB) | Bytes of payload records of requests refused before reaching an upstream (shed, rate-limited, unroutable). They wait in this separate queue, written only while the main one is empty, so a flood of refusals never drops a served request's record; once full, new ones are dropped and counted in `relay_records_lost_total{kind="payload_refused"}`. |
+| `RELAY_BATCH_PAYLOAD_DIR` | `relay-batch-payloads` | Directory batch inputs and results are stored in as files. Any replica may run a batch item or serve its results, so with more than one replica it must be storage they all share. |
+
+Payload logging has no environment variables; it is configured in the [`payload-logging`](/reference/settings#payload-logging) settings section.
+
+## Request handling
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_MAX_REQUEST_BYTES` | `33554432` (32 MiB) | Largest inference request body accepted; larger ones get `413`. |
+| `RELAY_PROXY_BODY_IDLE_S` | `30` | Seconds a proxy-mode request body may go without a byte before Relay answers `408` and aborts the upstream request. Proxy mode streams the body upstream as it arrives, so a stalled upload would otherwise hold an in-flight slot and an upstream connection. A forward whose body makes no progress for this long, because the upstream stopped reading it, is ended with `502` `upstream_stalled`. `0` disables both bounds. |
+| `RELAY_MAX_INFLIGHT` | `2048` | Most inference requests one process handles at once. A streamed request holds its slot until the stream ends. Over the cap, generation requests get `503` (`529` on Anthropic-shaped routes) with `Retry-After: 1` before their body is read; `/healthz` and model listings are never refused. |
+| `RELAY_MAX_CONNS` | 40 % of `GOMEMLIMIT` at 64 KiB per connection (5760 at 900 MiB), at least `1024`; `16384` without a memory limit | Most connections the inference listener holds open at once, idle keep-alive ones included. An idle connection holds about 19 KiB and one stopped mid-request about 31 KiB, so the default leaves room for garbage between collections and keeps the rest of the memory limit for the requests in flight. Past the cap, new connections wait in the kernel's accept queue until one closes. |
+| `RELAY_UPSTREAM_DIAL_TIMEOUT_S` | `10` | Seconds to wait for a TCP connection to an upstream before trying the next candidate. |
+| `RELAY_UPSTREAM_MAX_IDLE_PER_HOST` | `RELAY_MAX_INFLIGHT` | Idle keep-alive connections kept per upstream host, so busy upstreams reuse connections instead of dialing new ones. Below the number of requests in flight to one host, connections past the cap close after each response and the next requests dial again. |
+| `RELAY_KEY_BREAKER_THRESHOLD` | `5` | Upstream `5xx` or network errors on one host key, with no success between them, that take the key out of rotation. `401` and `403` take it out at once. See [Key pooling](/concepts/key-pooling#circuit-breakers). |
+| `RELAY_KEY_BREAKER_WINDOW_S` | `30` | Seconds within which those errors must fall; an error after the window starts a new count. |
 | `RELAY_BATCH_MAX_ITEMS` | `50000` | Most items one `POST /v1/batches` submission may carry; larger submissions get `400`. |
-| `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Timeout for the `/healthz` dependency checks. |
-
-### Streaming
-
-| Variable | Default | Description |
-| --- | --- | --- |
 | `RELAY_STREAM_KEEPALIVE_S` | `15` | Seconds of upstream silence after which Relay emits the inbound wire shape's own no-op stream frame, so clients that abort on silence keep waiting. `0` disables it. |
-| `RELAY_STREAM_USAGE` | `on` | On a same-shape streamed request whose wire shape reports token usage only when asked (OpenAI Chat Completions `stream_options.include_usage`), Relay asks for it so token budgets and usage records see the tokens. If the caller did not ask, the extra usage-only chunk is removed from its stream; the other chunks carry `"usage": null`, as they do when a caller asks itself. `off` forwards the request unchanged. |
-| `RELAY_STREAM_IDLE_TIMEOUT_S` | `600` | Seconds of upstream silence after which Relay gives up on a streamed call. Streams have no total deadline — this is their only bound. Keep it above your client's own stream watchdog; `0` disables it. |
+| `RELAY_STREAM_USAGE` | `on` | On a same-shape streamed request whose wire shape reports token usage only when asked (OpenAI Chat Completions `stream_options.include_usage`), Relay asks for it so rate limits and usage records see the tokens. If the caller did not ask, the extra usage-only chunk is removed from its stream; the other chunks carry `"usage": null`, as they do when a caller asks itself. `off` forwards the request unchanged. |
+| `RELAY_STREAM_IDLE_TIMEOUT_S` | `600` | Seconds of upstream silence after which Relay gives up on a streamed call. Streams have no total deadline; this is their only bound. Keep it above your client's own stream watchdog. `0` disables it. |
 
-### Storage backends
+## Admin UI and CORS
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `RELAY_CATALOG_BACKEND` | _(empty)_ | Catalog source strategy (`pg` for Postgres-backed). |
-| `RELAY_EVENTLOG_BACKEND` | `file` | Usage/event sink: `file` \| `clickhouse` \| `postgres` \| `valkey`. |
-| `RELAY_EVENTLOG_DIR` | _(empty)_ | Directory for the `file` event-log backend. |
-| `RELAY_CH_DSN` | _(empty)_ | ClickHouse DSN; required when an event/usage backend is `clickhouse`. Connections use zstd compression unless the DSN sets `compress=`. |
-
-### Observability
+The admin UI fetches these values from `GET /config.json` on the control listener; they are public.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RELAY_OTLP_ENDPOINT` | _(empty)_ | OpenTelemetry collector endpoint for traces. |
+| `RELAY_INFERENCE_API_URL` | _(empty; the standalone image sets `http://localhost:8080`)_ | Inference API origin the admin UI calls. Set it to your public inference URL. |
+| `RELAY_CONTROL_API_URL` | _(empty: `/api` on the UI's own origin)_ | Control API base URL the admin UI calls, including the `/api` path. Set it only when the UI is served from another origin. |
+| `RELAY_CONTROL_ALLOW_ORIGINS` | _(empty: CORS off)_ | Comma-separated exact origins allowed to call the control API from a browser. |
+| `RELAY_UI_DISABLE` | _(empty)_ | `1` stops the control listener from serving the embedded admin UI. |
+| `RELAY_MODE` | `oss` | `oss` or `cloud`. Read only by the admin UI. |
+| `RELAY_UI_DOCS_URL` | _(empty)_ | Overrides the documentation link in the admin UI. |
+| `RELAY_UI_SUPPORT_URL` | _(empty)_ | Overrides the support link in the admin UI. |
+| `RELAY_UI_SENTRY_DSN` | _(empty)_ | Public client-side Sentry DSN for the admin UI. |
+| `RELAY_UI_TELEMETRY_ENV` | _(empty)_ | Environment name the admin UI reports to Sentry. |
+| `RELAY_PUBLIC_URL` | _(empty)_ | Externally reachable control-plane origin. Exported manifests point their `$schema` directive at this host; empty renders it relative. |
 
-### SSO / OIDC login
+The control listener refuses to be framed (`frame-ancestors 'none'`, `X-Frame-Options: DENY`) and sends `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin` on every response. The embedded UI's Content-Security-Policy allows network calls to its own origin plus the origins of `RELAY_CONTROL_API_URL` and `RELAY_INFERENCE_API_URL`; if the UI must reach another host, point one of those variables at it. Images load from the control origin and `data:` URLs only, so a provider or host icon set to an external URL shows its initial instead.
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `WYOLET_AUTH_MODE` | _(empty)_ | Set `oidc` to enable OpenID Connect login for the admin UI, independent of the DB-backed `auth:oidc` settings section (which stays the fallback when unset). |
-| `WYOLET_OIDC_ISSUER` | _(empty)_ | Identity provider issuer URL. |
-| `WYOLET_OIDC_CLIENT_ID` | _(empty)_ | OIDC client id. |
-| `WYOLET_OIDC_CLIENT_SECRET` | _(empty)_ | OIDC client secret. |
-| `WYOLET_OIDC_REDIRECT_URL` | _(empty)_ | Callback URL registered with the provider — conventionally `https://<ui-origin>/auth/callback`. |
-| `WYOLET_OIDC_REGISTRATION` | `open` | `open` auto-provisions a user on first login; `closed` rejects unknown subjects. |
-| `WYOLET_OIDC_POST_LOGIN_URL` | `/` | Where the browser lands after a successful SSO login. Set it to the UI origin when the UI is served elsewhere. |
-
-The DB-backed `auth:oidc` section names its client secret by env var (`clientSecretEnv`). The name must start with `RELAY_OIDC_` (for example `RELAY_OIDC_CLIENT_SECRET`) or `WYOLET_OIDC_`, the issuer must be `https://` (unless `RELAY_COOKIE_SECURE=false`), and only an admin may change the section. A stored section that breaks these rules is read as disabled and logged at startup; rename the variable and write the section again.
-
-Set the issuer to the `issuer` value of the provider's discovery document (`<issuer>/.well-known/openid-configuration`). A configured issuer that differs from it only by a trailing slash is accepted, and accounts are matched with or without the slash; ID tokens must carry the document's `issuer` exactly.
-
-Sign-in starts at `GET /api/auth/oidc/start`. Its optional `return_to` parameter is an absolute `http`/`https` URL the browser goes to after sign-in instead of the post-login URL. Its origin (scheme, host and port) must be one of: the origin of the redirect URL, the origin of the post-login URL when that is absolute, an entry of `RELAY_CONTROL_ALLOW_ORIGINS`, or the origin the start request reached. That last origin is `https` only over TLS, or when the peer is in `RELAY_TRUSTED_PROXIES` and sends `X-Forwarded-Proto: https`. Any other `return_to` is refused with `400` and code `invalid_return_to`.
-
-When sign-in fails after a `return_to` was accepted, the browser is redirected there with `error=<code>` added to its query. Without one, the callback answers `{"error":{"type":"authentication_error","code":"<code>","message":"..."}}` with the status below.
-
-| Code | Status | Cause |
-| --- | --- | --- |
-| `flow_expired` | `400` | The login flow cookie is missing or expired; start again. |
-| `state_mismatch` | `400` | The callback's `state` does not match the login flow. |
-| `missing_code` | `400` | The callback carries no authorization code. |
-| `invalid_return_to` | `400` | `return_to` is not allowed (start only). |
-| `idp_error` | `502` | The provider returned an error, for example because the user cancelled. |
-| `exchange_failed` | `502` | The authorization code could not be exchanged. |
-| `invalid_identity` | `502` | The ID token is invalid or names no user. |
-| `idp_unavailable` | `502` | The provider's discovery document could not be fetched. |
-| `account_disabled` | `401` | The account is disabled. |
-| `registration_closed` | `403` | No account has this identity and registration is closed. |
-| `email_in_use` | `403` | An account with this email exists; an administrator must link it to this sign-in. |
-| `account_ambiguous` | `409` | The sign-in matches more than one provisioned account. |
-| `identity_conflict` | `409` | The provisioned account is linked to another sign-in. |
-| `login_failed` | `500` | Looking up, provisioning or linking the account, or creating the session, failed. |
-
-With Zitadel:
-
-- Turn on **User Info inside ID Token** (`idTokenUserinfoAssertion`) for the application. Without it the ID token carries no email or username, and new accounts get generic usernames (`user`, `user-2`, …).
-- Zitadel has no flat `groups` claim, which relay reads groups from by default (`groupsClaim`). Add an Action that collects the role keys of the user's grants (`ctx.v1.user.grants`) and sets them as a `groups` claim, and attach it to the **Complement Token** flow on both the **Pre Userinfo creation** and **Pre access token creation** triggers.
-
-### Admin UI & CORS
+## Diagnostics
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RELAY_CONTROL_API_URL` | _(empty ⇒ UI uses its own origin)_ | Control-API origin the admin UI calls. Defaults to `/api`. |
-| `RELAY_CONTROL_ALLOW_ORIGINS` | _(empty)_ | Comma-separated CORS allowlist for the control API. |
-| `RELAY_UI_DISABLE` | _(empty)_ | Set `1` to suppress the embedded admin UI on the control listener. |
+| `RELAY_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. Logs are JSON on stdout. |
+| `RELAY_INSTANCE_ID` | _(empty)_ | Name of this instance, recorded on usage events (`extras.instance`), including those from the OTLP receiver. The Helm chart sets it to the pod name. |
+| `RELAY_PPROF_ADDR` | _(empty: off)_ | `host:port` of a separate listener serving the Go runtime profiling endpoints under `/debug/pprof/`. They have no authentication, so the address must not be reachable from outside the host or cluster: bind `127.0.0.1` and use `kubectl port-forward`, for example. On the Helm chart, set it through `relay.extraEnv`. |
+| `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Accepted and validated, but has no effect: `/healthz` gives Postgres a fixed 2 seconds to answer. |
 
-The control listener refuses to be framed (`frame-ancestors 'none'`,
-`X-Frame-Options: DENY`) and sends `X-Content-Type-Options: nosniff` and
-`Referrer-Policy: same-origin` on every response. The embedded UI's
-Content-Security-Policy allows network calls to its own origin plus the origins
-of `RELAY_CONTROL_API_URL` and `RELAY_INFERENCE_API_URL`; if the UI must reach
-another host, point one of those variables at it. Images load from the control
-origin and `data:` URLs only, so a provider or host icon set to an external URL
-shows its initial instead.
+## Standalone image only
 
-<Info>
-On the standalone image, the master key, admin password, and admin token are
-generated on first boot, printed to the container logs, and persisted on the
-data volume. To pin your own, pass them with `-e`.
-</Info>
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_PG_LOG` | _(empty: quiet)_ | `stdout` streams the embedded Postgres log to the container output instead of `postgres.log` on the data volume. |
 
-## Minimal standalone run
-
-```bash
-docker run -p 8080:8080 -p 8081:8081 wyolet/relay:standalone
-```
-
-- Inference API → `http://localhost:8080`
-- Admin UI + control API → `http://localhost:8081`
-- Credentials are auto-generated and printed to the logs on first boot.
-
-## Persisting data across runs
-
-A bare `docker run` uses an ephemeral filesystem, so starting a **new**
-container regenerates the master key, admin credentials, and an empty catalog.
-Mount a named volume to keep everything:
-
-```bash
-docker run -p 8080:8080 -p 8081:8081 \
-  -v relay-data:/var/lib/postgresql/data \
-  wyolet/relay:standalone
-```
-
-The standalone image stores everything under that one directory — Postgres
-data **and** the relay bootstrap state:
-
-```
-/var/lib/postgresql/data/
-├── (postgres data files)
-├── relay-bootstrap.env     # RELAY_MASTER_KEY + RELAY_ADMIN_TOKEN
-└── relay-config/
-    └── admin-user.yaml      # admin username + password
-```
-
-So the single `-v` mount preserves the catalog, your config, **and** the
-secrets. First boot against an empty volume generates them once; every run
-after reuses them.
-
-<Warning>
-The master key lives in this volume. **Don't delete it** — losing the key makes
-any stored (encrypted) provider keys permanently unreadable.
-</Warning>
-
-## Retrieving or pinning the master key
-
-The master key and admin token are printed to the logs on first boot. After
-that, read them back from the container or volume:
-
-```bash
-# from the running container
-docker exec <container> cat /var/lib/postgresql/data/relay-bootstrap.env
-docker exec <container> cat /var/lib/postgresql/data/relay-config/admin-user.yaml
-
-# or from the named volume, no container needed
-docker run --rm -v relay-data:/d alpine cat /d/relay-bootstrap.env
-```
-
-For anything beyond a demo, **supply your own** key instead of relying on the
-auto-generated one — then you already hold it and aren't dependent on the
-volume to recover it. Operator-supplied env always wins; the entrypoint never
-overwrites or regenerates a value you pass:
-
-```bash
-docker run -p 8080:8080 -p 8081:8081 \
-  -v relay-data:/var/lib/postgresql/data \
-  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
-  -e RELAY_ADMIN_TOKEN="$(openssl rand -hex 24)" \
-  wyolet/relay:standalone
-```
-
-## Production run (lean image + managed Postgres)
-
-```bash
-docker run -p 8080:8080 -p 8081:8081 \
-  -e RELAY_PG_DSN="postgres://user:pass@db:5432/relay?sslmode=require" \
-  -e RELAY_MASTER_KEY="<your-stable-master-key>" \
-  -e RELAY_CONTROL_PORT=8081 \
-  -e RELAY_STATE_BACKEND=redis \
-  -e RELAY_REDIS_ADDR="redis:6379" \
-  wyolet/relay:latest
-```
-
-<Warning>
-`RELAY_MASTER_KEY` must be **stable** across restarts in production. It
-unwraps the data keys your stored secrets are encrypted under: replacing it
-without following [Changing the master key](/concepts/secret-keys#changing-the-master-key)
-makes existing stored secrets unreadable.
-</Warning>
-
-## Runtime settings
-
-Some behavior is configured at runtime via the control plane rather than
-env vars, and hot-reloads without a restart. For example, rich request
-parsing:
-
-```bash
-curl -X PUT http://localhost:8081/api/settings/parsing \
-  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"richParsing": false}'
-```
+The `relay` CLI subcommands that talk to a running relay read `RELAY_URL`, `RELAY_ADMIN_TOKEN`, `RELAY_USER` and `RELAY_PASSWORD`; see [CLI](/reference/cli).

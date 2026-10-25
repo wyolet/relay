@@ -2,6 +2,7 @@ package payloadlog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -45,16 +46,18 @@ type Controller struct {
 
 // NewController wires the emitter → reloadable-sink chain. The sink starts
 // empty (nothing written) until the first reconcile applies the live
-// config. reader provides the live settings; build constructs sinks.
-func NewController(src SettingsSource, build SinkBuilder, log *slog.Logger) *Controller {
+// config. reader provides the live settings; build constructs sinks; queue
+// sizes the emitter's queues, its Logger replaced by log.
+func NewController(src SettingsSource, build SinkBuilder, queue EmitterOptions, log *slog.Logger) *Controller {
 	if log == nil {
 		log = slog.Default()
 	}
+	queue.Logger = log
 	rsink := &reloadableSink{}
 	return &Controller{
 		src:     src,
 		build:   build,
-		emitter: NewEmitter(EmitterOptions{Logger: log}, rsink),
+		emitter: NewEmitter(queue, rsink),
 		rsink:   rsink,
 		log:     log,
 		kick:    make(chan struct{}, 1),
@@ -194,6 +197,31 @@ func (r *reloadableSink) Write(rec Record) error {
 		return nil // no sink configured → drop (disabled/unconfigured)
 	}
 	return r.cur.Write(rec)
+}
+
+func (r *reloadableSink) WriteBatch(recs []Record) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.cur == nil {
+		return nil
+	}
+	if bw, ok := r.cur.(BatchWriter); ok {
+		return bw.WriteBatch(recs)
+	}
+	var firstErr error
+	failed := 0
+	for i := range recs {
+		if err := r.cur.Write(recs[i]); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("%d of %d records failed: %w", failed, len(recs), firstErr)
+	}
+	return nil
 }
 
 // swap installs s (may be nil to tear down) and closes the previous sink

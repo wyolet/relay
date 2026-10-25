@@ -1,0 +1,172 @@
+---
+title: "Docker"
+description: "Run Relay with the standalone image, the Compose stack, or the lean image against your own Postgres and Valkey"
+---
+
+Relay ships two images, both published to Docker Hub (`wyolet/relay`) and GHCR (`ghcr.io/wyolet/relay`), both built for `linux/amd64` only.
+
+| Image | Tags | Contents | Use it for |
+| --- | --- | --- | --- |
+| Lean | `<version>`, `latest` | The relay binary with the admin UI and the catalog bundled. Distroless, runs as UID 65532. | Production, with an external Postgres (and Valkey for more than one replica). |
+| Standalone | `standalone`, `<version>-standalone` | The same binary plus Postgres 16 in one container. Generates its own credentials on first boot. | Trying Relay out, single-node installs. |
+
+Version tags drop the leading `v`: release `v0.11.6` is `wyolet/relay:0.11.6`. Pin a version anywhere you care about what runs; `latest` and `standalone` move with every release.
+
+Both images carry the catalog at `/catalog` and set `RELAY_CATALOG_DIR=/catalog` and `RELAY_AUTO_SEED_IF_EMPTY=1`, so an empty database is seeded with the catalog on first boot. To move to a newer catalog without a new image, see [Pinning a catalog version](/concepts/catalog#pinning-a-catalog-version).
+
+Every container listens on two ports: `8080` for the inference API and `8081` for the admin UI and control API. Variables not covered here are in [Configuration](/configuration).
+
+## Standalone image
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -v relay-data:/var/lib/postgresql/data \
+  wyolet/relay:standalone
+```
+
+The entrypoint initializes Postgres in `/var/lib/postgresql/data` on first run, starts it on `127.0.0.1` inside the container (it is never exposed), then starts relay against it. The image also sets `RELAY_CONTROL_PORT=8081`, `RELAY_INFERENCE_API_URL=http://localhost:8080` and `RELAY_COOKIE_SECURE=false`, so the admin UI works over plain HTTP on `localhost`. Override any of them with `-e`.
+
+Postgres writes its log to `postgres.log` on the data volume, so `docker logs` shows only relay. Set `RELAY_PG_LOG=stdout` to stream the Postgres log to the container output instead.
+
+### First-boot credentials
+
+On an empty data directory the entrypoint generates three things and saves them on the volume:
+
+- `RELAY_MASTER_KEY`, which wraps the keys stored secrets are encrypted under (see [Stored secrets and key rotation](/concepts/secret-keys)).
+- `RELAY_ADMIN_TOKEN`, a bearer token for the control API.
+- A user `admin` with a random password, created only when the config directory holds no files yet.
+
+The password and the admin token are printed once, to the container log:
+
+```bash
+docker logs <container>
+```
+
+A value you pass with `-e` is used as given and never overwritten or regenerated. To bring your own users, mount a directory of `kind: User` files and point `RELAY_CONFIG_DIR` at it; the entrypoint then creates no `admin` user.
+
+### Persisting data
+
+Without a volume, every new container starts from an empty data directory and generates a new master key, new credentials and a freshly seeded catalog. `docker stop` followed by `docker start` on the same container keeps its state; only a new `docker run` without a volume starts clean.
+
+With the volume above, everything relay needs to restart lives in one directory:
+
+```
+/var/lib/postgresql/data/
+├── (Postgres data files)
+├── postgres.log
+├── relay-bootstrap.env     # RELAY_MASTER_KEY and RELAY_ADMIN_TOKEN
+└── relay-config/
+    └── admin-user.yaml     # admin username and password
+```
+
+<Warning>
+The master key lives in this volume. Deleting the volume, or replacing the key, makes every stored (encrypted) host key unreadable. Keep a copy of the key somewhere other than the volume.
+</Warning>
+
+Usage events, captured request bodies and batch payloads are files in the container's working directory by default, not on the volume, so they are lost when the container is removed. To keep usage events in the bundled Postgres instead, switch the usage backend once (see [Settings](/reference/settings#usage-logging)):
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/usage-logging \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"backend": "postgres", "retentionDays": 0, "file": {}, "clickhouse": {}}'
+```
+
+### Retrieving or pinning the master key
+
+After first boot, read the generated values back from the running container or from the volume:
+
+```bash
+# from the running container
+docker exec <container> cat /var/lib/postgresql/data/relay-bootstrap.env
+docker exec <container> cat /var/lib/postgresql/data/relay-config/admin-user.yaml
+
+# from the named volume, without the container
+docker run --rm -v relay-data:/d alpine cat /d/relay-bootstrap.env
+```
+
+For anything beyond a trial, generate the key yourself and pass it in, so you hold it independently of the volume:
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -v relay-data:/var/lib/postgresql/data \
+  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
+  -e RELAY_ADMIN_TOKEN="$(openssl rand -hex 24)" \
+  wyolet/relay:standalone
+```
+
+Pass the same values on every later run. To replace a key that already protects stored secrets, follow [Changing the master key](/concepts/secret-keys#changing-the-master-key).
+
+### Reaching it from other machines
+
+The image's defaults assume `localhost`. Behind a TLS-terminating proxy, set `RELAY_COOKIE_SECURE=true` so the session cookie is marked `Secure`, and set `RELAY_INFERENCE_API_URL` to the public inference URL the admin UI should call (for example `https://api.relay.example.com`). The standalone image runs one Postgres in one container; for more than one replica, use the lean image.
+
+## Compose stack
+
+The repository's root [`docker-compose.yml`](https://github.com/wyolet/relay/blob/main/docker-compose.yml) runs the lean image with its own Postgres 16 and Valkey 8, each on a named volume (`pg-data`, `valkey-data`):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/wyolet/relay/main/docker-compose.yml
+echo "RELAY_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> .env
+echo "RELAY_MASTER_KEY=$(openssl rand -base64 32)" >> .env
+docker compose up -d
+docker compose logs -f relay
+```
+
+Sign in at [localhost:8081](http://localhost:8081) as `admin` with `RELAY_ADMIN_PASSWORD`. Compose reads these variables from `.env` next to the file, or from the shell:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `RELAY_ADMIN_PASSWORD` | _(required)_ | Password of the `admin` user. Compose refuses to start without it; relay refuses one shorter than 8 characters or a published placeholder such as `change-me`. |
+| `RELAY_MASTER_KEY` | _(empty)_ | Master key for stored secrets. Relay boots without one, but storing a host key value needs it. Set it before the first stored secret and keep it. |
+| `RELAY_ADMIN_TOKEN` | _(empty: disabled)_ | Bearer token for the control API, for scripts and CI. |
+| `RELAY_BIND_ADDR` | `127.0.0.1` | Host address the two ports are published on. `0.0.0.0` exposes them to the network. |
+| `RELAY_IMAGE` | `wyolet/relay:latest` | Relay image. Set a version tag, for example `wyolet/relay:0.11.6`. |
+
+The stack runs relay with `RELAY_STATE_BACKEND=redis` against the bundled Valkey, so sessions, rate-limit counters and breaker state survive a relay restart. As with the standalone image, usage events go to a file inside the relay container until you switch the [`usage-logging`](/reference/settings#usage-logging) section to `postgres`.
+
+`docker compose down` keeps the volumes; `docker compose down -v` deletes them, and with them the catalog, your configuration and every stored host key.
+
+## Lean image against your own stores
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -e RELAY_PG_DSN="postgres://relay:<password>@db.example.com:5432/relay?sslmode=require" \
+  -e RELAY_MASTER_KEY="<your master key>" \
+  -e RELAY_ADMIN_TOKEN="<your admin token>" \
+  -e RELAY_STATE_BACKEND=redis \
+  -e RELAY_REDIS_ADDR="valkey.example.com:6379" \
+  -e RELAY_REDIS_PASSWORD="<valkey password>" \
+  -e RELAY_INFERENCE_API_URL="https://api.relay.example.com" \
+  wyolet/relay:0.11.6
+```
+
+- `RELAY_PG_DSN` is the only required variable. Give relay a database of its own. Pending migrations run at boot under a Postgres advisory lock, so several replicas can start at once; see [Upgrading](/concepts/upgrade).
+- `RELAY_MASTER_KEY` must be the same on every replica and stable across restarts.
+- With more than one replica, set `RELAY_STATE_BACKEND=redis`. With the default `memory`, every process keeps its own sessions, rate-limit counters and breaker state. Catalog changes reach every replica through Postgres `LISTEN`/`NOTIFY` without further configuration, usually within about a second.
+- Batch payloads are files under `RELAY_BATCH_PAYLOAD_DIR`. Any replica may run a batch item or serve its results, so with more than one replica that directory must be storage every replica shares.
+- Keep the control port off the public network: publish only `8080`, or bind the control listener to a private address with `RELAY_CONTROL_LISTEN_HOST`.
+- Probe `/livez` for liveness and `/healthz` for readiness on the inference port. `/healthz` answers `503` until Postgres responds and the catalog has loaded.
+
+The lean image creates no login user. Use `RELAY_ADMIN_TOKEN` as a bearer token, or mount a `kind: User` file into `RELAY_CONFIG_DIR` and read the password from the environment so the file holds no secret:
+
+```yaml users/admin.yaml
+apiVersion: relay.wyolet.dev/v1
+kind: User
+metadata: { name: admin }
+spec:
+  username: admin
+  email: admin@example.com
+  password: { valueFrom: { env: RELAY_ADMIN_PASSWORD } }
+  roles: [admin]
+```
+
+```bash
+docker run ... \
+  -v "$PWD/users:/config/users:ro" \
+  -e RELAY_CONFIG_DIR=/config \
+  -e RELAY_ADMIN_PASSWORD="<password>" \
+  wyolet/relay:0.11.6
+```
+
+For single sign-on instead of local passwords, see [SSO](/concepts/sso). On Kubernetes, the [Helm chart](/deploy/kubernetes) wires all of this up.

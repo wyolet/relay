@@ -191,7 +191,23 @@ func TestPayloadCapture_Pipeline(t *testing.T) {
 	}
 }
 
-// Proxy mode reaches the same decision; the request stops at the proxy-mode switch, after the gate is set.
+// admittedProxyEdge serves the shape route with the context PrincipalMiddleware leaves on a proxy-mode request the proxy-mode setting admits: that setting can only be switched on through Hydrate.
+func admittedProxyEdge(d Deps) http.Handler {
+	spec := d.Specs.Spec(adapters.OpenAI)
+	return ClassifyMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cls := ClassificationFrom(r.Context()); cls.Mode == ModeProxyAuthed {
+			snap := d.Catalog.Current()
+			p, k, ok := authenticate(w, snap, nil, cls.Key)
+			if !ok || !authorizePrincipal(w, snap, p, cls.Mode) {
+				return
+			}
+			r = r.WithContext(withPrincipal(r.Context(), snap, p, k))
+		}
+		handleShape(spec, d, w, r)
+	}))
+}
+
+// Proxy mode reaches the same decision.
 func TestPayloadCapture_ProxyAuthed(t *testing.T) {
 	for _, c := range captureCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -200,11 +216,7 @@ func TestPayloadCapture_ProxyAuthed(t *testing.T) {
 			r.Header.Set(httpheader.HeaderProxyMode, httpheader.ProxyModeValueProxy)
 			r.Header.Set(httpheader.HeaderRelayAPIKey, captureKeyPlaintext)
 			r.Header.Set("Authorization", "Bearer upstream-key")
-			w := httptest.NewRecorder()
-			captureEdge(d).ServeHTTP(w, r)
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("status %d, want the proxy-mode switch's 403: %s", w.Code, w.Body.String())
-			}
+			admittedProxyEdge(d).ServeHTTP(httptest.NewRecorder(), r)
 			if got := awaitGate(t, gates); got != c.want {
 				t.Fatalf("captured = %v, want %v", got, c.want)
 			}
@@ -219,7 +231,7 @@ func TestPayloadCapture_ProxyAnonymous(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(captureBody))
 	r.Header.Set(httpheader.HeaderProxyMode, httpheader.ProxyModeValueProxy)
 	r.Header.Set("Authorization", "Bearer upstream-key")
-	captureEdge(d).ServeHTTP(httptest.NewRecorder(), r)
+	admittedProxyEdge(d).ServeHTTP(httptest.NewRecorder(), r)
 	if awaitGate(t, gates) {
 		t.Fatal("anonymous proxy request captured")
 	}

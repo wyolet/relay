@@ -1,31 +1,26 @@
 ---
 title: "Proxy Mode"
-description: "Forward requests with the caller's own upstream key, no key pool"
+description: "Forward requests with the caller's own upstream key, without the key pool"
 ---
 
-Normal Relay routing maps a **relay key** to a pool of your provider keys and
-picks one for each request. **Proxy mode** is the other way around: the caller
-brings their **own upstream provider key**, and Relay forwards the request to
-the provider verbatim — no policy resolution, no key pool, no model rewrite,
-no translation.
+In normal mode Relay picks a host key from a pool for each request. In **proxy mode** the caller sends its **own upstream credential**, and Relay forwards the request body unchanged to the host with that credential attached. Relay still authenticates the relay key, applies its policy's rate limits, and records usage, cost and (if enabled) payloads.
 
-It's useful when you want Relay in front of provider traffic for rate
-limiting, observability, and a single endpoint, but the credential belongs to
-the caller rather than to a Relay-managed pool.
+Use it when the credential belongs to the caller, for example a developer's own provider subscription, but you still want one endpoint, rate limits and usage records in front of the traffic. [Claude Code](/claude-code) uses it this way.
 
 ## Normal mode vs proxy mode
 
 | | Normal mode | Proxy mode |
 | --- | --- | --- |
-| Upstream credential | Drawn from your key pool | The caller's, forwarded as-is |
-| Routing | Full policy → model → host binding | Host pinned by header (or model lookup) |
-| Model rewrite | Yes | No — body forwarded verbatim |
-| Translation | Cross-shape supported | None — byte-for-byte forward |
-| Key pooling & failover | Yes | No |
+| Upstream credential | A host key from the policy's pool | The caller's `Authorization` header, forwarded as-is |
+| Host selection | Policy grants, then the model's host bindings | The `X-WR-Upstream-Host` header, or the policy's grants when the header is absent |
+| Request body | Model name rewritten; translated across shapes when needed | Forwarded byte for byte, no translation |
+| Key pooling and failover | Yes | No. One attempt |
+| Policy rate limits | Yes | Yes, for authenticated requests |
+| Usage, cost, payload capture | Yes | Yes |
 
 ## Enabling it
 
-Proxy mode is **off by default**. Turn it on through the control plane:
+Proxy mode is off by default. Turn it on through the control API:
 
 ```bash
 curl -X PUT http://localhost:8081/api/settings/proxy-mode \
@@ -36,76 +31,85 @@ curl -X PUT http://localhost:8081/api/settings/proxy-mode \
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `enabled` | `false` | Master switch. While `false`, every proxy request returns `403`. |
-| `allowUnauthenticated` | `false` | Whether anonymous proxy requests (no relay key) are allowed. |
+| `enabled` | `false` | Global switch. While `false`, every proxy request returns `403 proxy_disabled`. |
+| `allowUnauthenticated` | `false` | Allows proxy requests that carry no relay key. |
 
-The change hot-reloads across all pods within ~1s — no restart.
+The change reaches every pod within about a second.
 
-<Note>
-Proxy mode is gated by this **global** switch today. A per-relay-key
-`passthroughAllowed` flag exists for future per-key gating but is not yet
-enforced — for now, `enabled` is what controls access.
-</Note>
+### Allowing a relay key to proxy
+
+An authenticated proxy request also needs a relay key with `spec.passthroughAllowed: true`; any other credential gets `403 passthrough_forbidden`. Inference tokens never carry the flag, so they cannot be used for proxy mode. Set the flag when you create the key:
+
+```bash
+curl -X POST http://localhost:8081/api/keys \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {"displayName": "alice laptop"},
+    "spec": {
+      "principal": {"kind": "user", "id": "<user-id>"},
+      "passthroughAllowed": true
+    }
+  }'
+```
+
+For an existing key, read it with `GET /api/keys/{ref}`, set `spec.passthroughAllowed` to `true`, and send the object back with `PUT /api/keys/by-id/{id}`. In a manifest the field is `spec.passthroughAllowed` on the `Key` document.
 
 ## Making a proxy request
 
-Send `X-WR-Proxy-Mode: Proxy`, put your upstream key in `Authorization`, and
-pin the upstream host with `X-WR-Upstream-Host`:
+Send `X-WR-Proxy-Mode: Proxy`, put your relay key in `X-WR-API-Key`, put your upstream credential in `Authorization`, and name the host in `X-WR-Upstream-Host`:
 
 ```bash
-curl http://localhost:8080/anthropic/v1/messages \
+curl http://localhost:8080/openai/v1/chat/completions \
   -H "X-WR-Proxy-Mode: Proxy" \
   -H "X-WR-API-Key: <your-relay-key>" \
-  -H "X-WR-Upstream-Host: anthropic" \
-  -H "Authorization: Bearer sk-ant-your-own-key" \
+  -H "X-WR-Upstream-Host: openai" \
+  -H "Authorization: Bearer sk-your-own-openai-key" \
   -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-Relay strips its own headers (`X-WR-*`, `X-WR-API-Key`) and forwards the body
-unchanged, with your `Authorization` reattached as the upstream credential.
+Relay removes its own headers (`X-WR-*`) and hop-by-hop headers, sets `Authorization` to the value you sent, and posts the body to the host's endpoint for that shape. In proxy mode the relay key is read only from `X-WR-API-Key`, because `Authorization` carries the upstream credential. Send the body in the shape the target host expects, since nothing is translated.
 
-### Authenticated vs anonymous
+### Authenticated requests
 
-- **Authenticated proxy** — include your relay key in `X-WR-API-Key`. The
-  request is attributed to that key and rate-limited per key by the
-  `inference-api-proxy` rate limit, which ships disabled with no rules: add
-  rules and enable it to cap authenticated proxy traffic. If you omit
-  `X-WR-Upstream-Host`, Relay reads the `model` from the body and resolves
-  the host from your relay key's policy.
-- **Anonymous proxy** — omit the relay key. Allowed only when
-  `allowUnauthenticated` is on, rate-limited per client IP by the
-  `inference-api-proxy-anonymous` rate limit, and **`X-WR-Upstream-Host` is
-  required** (there's no policy to infer the host from). It ships enabled at
-  60 requests, 5,000 tokens and 10 concurrent requests per client IP per
-  minute.
+With a relay key:
 
-Both rate limits are created on every boot when missing and are never
-overwritten once they exist; change them with
-`PUT /api/rate-limits/by-id/{id}`. Disabling one removes the limit, and a
-deleted one is recreated as shipped on the next boot. See
-[client IP](/reference/headers#client-ip-and-trusted-proxies) for how Relay
-finds the caller's address behind a load balancer.
+- **Host.** If `X-WR-Upstream-Host` is set, Relay forwards to that host. If it is absent, Relay reads `model` from the body and picks the host through the governing policy's grants and the model's bindings, as normal routing does, without requiring a host key.
+- **Grants.** A pinned request reaches only a model the governing policy grants on the pinned host, as normal routing does, and its usage is priced from that binding. The caller's own credential does not widen the grant. A model that does not route there is refused with the same errors as normal mode (`model_not_found`, `model_not_allowed`), and an `@host` in the model that names a different host than `X-WR-Upstream-Host` gets `400 upstream_host_conflict`. A keyless (`noAuth`) host such as a self-hosted Ollama additionally needs a policy that explicitly grants that host. A key with no governing policy has no grant to check: a model that does not route at the pin is forwarded unpriced.
+- **Rate limits.** The governing policy's rate limit is reserved and committed as in normal mode. The `inference-api-proxy` rate limit is applied on top as a per-credential ceiling. It ships disabled with no rules; add rules and enable it to cap every relay key's proxy traffic. A key with no governing policy gets only that ceiling.
+- **Attribution.** The request is recorded against the relay key, its principal, project and policy.
+
+### Anonymous requests
+
+Without a relay key, a proxy request is allowed only when `allowUnauthenticated` is on. `X-WR-Upstream-Host` is then required, and the request is rate-limited per client IP by the `inference-api-proxy-anonymous` rate limit, which ships enabled at 60 requests and 5,000 tokens per minute and 10 concurrent requests per IP. Keyless hosts cannot be reached anonymously. See [client IP](/reference/headers#client-ip-and-trusted-proxies) for how Relay finds the caller's address behind a load balancer.
+
+Both system rate limits are created on boot when missing and never overwritten once they exist. Change them with `PUT /api/rate-limits/by-id/{id}`; set `enabled: false` to remove a limit. A deleted one is recreated as shipped on the next boot. See [Rate limits](/concepts/rate-limits#system-rate-limits).
 
 ## Discovering upstream hosts
 
-List the host slugs you can target with `X-WR-Upstream-Host`:
+List the host slugs you can pass in `X-WR-Upstream-Host`:
 
 ```bash
 curl http://localhost:8080/v1/proxy/hosts \
   -H "X-WR-API-Key: <your-relay-key>"
 ```
 
+Keyless hosts appear only when the caller's policy grants them.
+
 ## Errors
 
-| Status | Meaning |
-| --- | --- |
-| `400` | `X-WR-Proxy-Mode` has an invalid value, `Authorization` (upstream key) is missing, or `X-WR-Upstream-Host` is unknown / required-but-absent. |
-| `401` | Anonymous proxy request while `allowUnauthenticated` is off. |
-| `403` | Proxy mode is disabled (`enabled: false`). |
-| `429` + `Retry-After` | The key or client IP is over its proxy rate limit. |
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `400` | `bad_request` | `X-WR-Proxy-Mode` has a value other than `Proxy` or `No-Proxy`, or `Authorization` is missing. |
+| `400` | `unknown_upstream_host` | `X-WR-Upstream-Host` names no host, or a keyless host the policy does not grant. |
+| `400` | `missing_upstream_host` | Anonymous request without `X-WR-Upstream-Host`. |
+| `400` | `upstream_host_conflict` | The model's `@host` names a different host than `X-WR-Upstream-Host`. |
+| `403`, `404` | `model_not_allowed`, `model_not_found` | A pinned request for a model the policy does not grant on that host, or that is not in the catalog. |
+| `401` | `unauthenticated` | Anonymous request while `allowUnauthenticated` is off, or an unknown relay key. |
+| `403` | `proxy_disabled` | Proxy mode is off. |
+| `403` | `passthrough_forbidden` | The relay key lacks `passthroughAllowed`, or the credential is an inference token. |
+| `403` | `policy_disabled`, `no_policy` | The governing policy is disabled, or a project-scoped key resolves no policy. |
+| `429` | `rate_limit_exceeded` | Over the policy's rate limit or a proxy rate limit. `Retry-After` gives the wait in seconds. |
 
-<Note>
-Proxy mode does no translation and no model rewriting — the body is forwarded
-exactly as sent. Send the request in the wire shape the target host expects.
-</Note>
+An upstream error is returned as the upstream sent it.

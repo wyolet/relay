@@ -76,6 +76,14 @@ type Deps struct {
 	// that satisfies RouteMounter; cmd/relay/main.go wires them in.
 	RouteMounters []RouteMounter
 
+	// Admission is the in-flight cap. When set, the RouteMounters' routes
+	// refuse new requests with their shape's overload answer before reading
+	// the body while the cap is reached. Nil installs no such check.
+	Admission *httpapi.Admission
+
+	// KVPoolBusy reports whether the shared kv store's connection wait queue is at its bound, where the admission reserve would be refused unsent. When set, the same routes refuse new requests with their shape's overload answer before reading the body while it holds. Nil installs no such check.
+	KVPoolBusy func() bool
+
 	// Profiles are the client profiles this deployment serves, registered
 	// at the composition root. Nil means none: no /{profile}/ routes, no
 	// profile on the request context, behaviour unchanged.
@@ -95,6 +103,12 @@ type Deps struct {
 
 	// RequestStreamUsage makes byte-pass ask a streamed upstream for its token usage when the wire shape reports it only on request and the caller did not ask (RELAY_STREAM_USAGE). The extra usage frame is removed before the caller sees it. Without it such streams leave token budgets and usage records at zero.
 	RequestStreamUsage bool
+
+	// MaxRequestBytes is the inference body limit the listener enforces (RELAY_MAX_REQUEST_BYTES); a declared Content-Length within it sizes the read buffer (see readRequestBody). 0 means httpmw.DefaultMaxRequestBytes.
+	MaxRequestBytes int64
+
+	// ProxyBodyIdle bounds the wait for each read of a proxy-mode request body (RELAY_PROXY_BODY_IDLE_S); a client silent that long gets 408. 0 disables it.
+	ProxyBodyIdle time.Duration
 
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay

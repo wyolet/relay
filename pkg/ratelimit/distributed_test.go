@@ -14,8 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // TestDistributed_Reserve_TwoLimiters: correctness gate.
@@ -48,10 +51,14 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 	var admitted atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
+	// Capped below the kv pool size: 1000 calls at once can outwait the pool on a loaded runner and fail as store-unavailable.
+	inFlight := make(chan struct{}, 100)
 
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
+			inFlight <- struct{}{}
+			defer func() { <-inFlight }()
 			l := l1
 			if i%2 == 0 {
 				l = l2
@@ -89,6 +96,79 @@ func redisLimiterFactory(cfg kv.RedisConfig) func(t *testing.T, now *time.Time) 
 func TestContractLimit_RedisStore(t *testing.T) {
 	factory := redisLimiterFactory(kvtest.Config(t))
 	runLimiterContractSuite(t, "RedisStore", factory)
+}
+
+func TestConcurrencyLease_RedisStore(t *testing.T) {
+	runConcurrencyLeaseSuite(t, "RedisStore", redisLimiterFactory(kvtest.Config(t)))
+}
+
+func TestCommitSkipRedis(t *testing.T) {
+	runCommitSkipSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
+}
+
+func TestCommitGuardRedis(t *testing.T) {
+	runCommitGuardSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
+}
+
+func TestReserveOrShedMatchesReserveRedis(t *testing.T) {
+	runReserveOrShedMatchesReserve(t, New(kvtest.NewRedis(t), discardLog(), nil))
+}
+
+// With the connection held and the one allowed waiter queued, an admission reserve is refused at once and counted as shed.
+func TestDistributed_ReserveOrShedRefusedAtWaitBound(t *testing.T) {
+	cfg := kvtest.Config(t)
+	cfg.PoolTimeout, cfg.MaxPoolWaiters = 500*time.Millisecond, 1
+	s := kvtest.ExhaustedPool(t, cfg)
+	l := New(s, discardLog(), nil)
+	shed := metrics.KVErrors.WithLabelValues("limit_reserve", metrics.KVShed)
+	before := testutil.ToFloat64(shed)
+
+	waited := make(chan struct{})
+	go func() {
+		defer close(waited)
+		_, _ = s.Get(context.Background(), "{t}:queued")
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !s.PoolBusy() {
+		if time.Now().After(deadline) {
+			t.Fatal("the waiter never queued")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	start := time.Now()
+	res, err := l.ReserveOrShed(context.Background(), "policy:p", []Rule{reqRule("r", "r", 10, time.Minute)})
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Errorf("refusal took %v, want no pool wait", d)
+	}
+	if res != nil || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("ReserveOrShed = %v, %v; want nil, ErrUnavailable", res, err)
+	}
+	if got := testutil.ToFloat64(shed) - before; got != 1 {
+		t.Fatalf("shed counter moved by %v, want 1", got)
+	}
+	<-waited
+}
+
+// A reserve queued on a batch that never got a pooled connection is refused as unavailable and counted, not failed as an undecodable reply.
+func TestDistributed_BatchedReservePoolTimeoutRefused(t *testing.T) {
+	s := kvtest.ExhaustedPool(t, kvtest.Config(t))
+	l := New(s, discardLog(), nil)
+	refused := metrics.KVErrors.WithLabelValues("limit_reserve", metrics.KVRefused)
+	before := testutil.ToFloat64(refused)
+
+	b := kv.NewBatch(s)
+	p, err := l.PrepareReserve(b, "policy:p", []Rule{reqRule("r", "r", 10, time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Exec(context.Background())
+	if res, err := p.Finish(context.Background()); res != nil || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("batched reserve = %v, %v; want nil, ErrUnavailable", res, err)
+	}
+	if got := testutil.ToFloat64(refused) - before; got != 1 {
+		t.Fatalf("refused counter moved by %v, want 1", got)
+	}
 }
 
 // TestDistributed_CommitBoth_Parity: against real Redis, committing an inbound

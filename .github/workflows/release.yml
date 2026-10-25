@@ -60,7 +60,7 @@ jobs:
       catalog_ref: ${{ steps.v.outputs.catalog_ref }}
       catalog_sha256: ${{ steps.v.outputs.catalog_sha256 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -121,7 +121,7 @@ jobs:
       TRIVY_SKIP_VERSION_CHECK: 'true'
       TRIVY_DISABLE_TELEMETRY: 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Require secrets
         if: needs.guard.outputs.publish == 'true'
@@ -131,7 +131,7 @@ jobs:
         run: |
           [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets are required"; exit 1; }
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:
           driver: ${{ runner.environment == 'self-hosted' && 'remote' || 'docker-container' }}
           endpoint: ${{ runner.environment == 'self-hosted' && env.BUILDKIT_ENDPOINT || '' }}
@@ -141,7 +141,7 @@ jobs:
       # Authenticated base-image pulls; nothing is pushed from this job.
       - name: Log in to Docker Hub
         if: needs.guard.outputs.publish == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -178,7 +178,7 @@ jobs:
               --output "$RUNNER_TEMP/sbom/relay-$VERSION-$img.cdx.json"
           done
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom
           path: ${{ runner.temp }}/sbom/*.cdx.json
@@ -204,9 +204,9 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         with:
           driver: ${{ runner.environment == 'self-hosted' && 'remote' || 'docker-container' }}
           endpoint: ${{ runner.environment == 'self-hosted' && env.BUILDKIT_ENDPOINT || '' }}
@@ -216,7 +216,7 @@ jobs:
       # Registry auth stays on the runner; buildx forwards it to buildkitd per session.
       - name: Log in to GitHub Container Registry
         if: needs.guard.outputs.publish == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: needs.guard.outputs.publish == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -251,7 +251,7 @@ jobs:
             echo "catalog_server=$(jq -r '."catalog-server"."containerimage.digest"' "$meta")"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: needs.guard.outputs.publish == 'true'
         with:
           name: sbom
@@ -261,7 +261,7 @@ jobs:
       # GitHub and pushed to ghcr; Docker Hub carries the same digests.
       - name: Attest lean provenance
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/wyolet/relay
           subject-digest: ${{ steps.bake.outputs.lean }}
@@ -270,7 +270,7 @@ jobs:
 
       - name: Attest standalone provenance
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/wyolet/relay
           subject-digest: ${{ steps.bake.outputs.standalone }}
@@ -279,7 +279,7 @@ jobs:
 
       - name: Attest catalog-server provenance
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/wyolet/catalog-server
           subject-digest: ${{ steps.bake.outputs.catalog_server }}
@@ -288,7 +288,7 @@ jobs:
 
       - name: Attest lean SBOM
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/wyolet/relay
           subject-digest: ${{ steps.bake.outputs.lean }}
@@ -298,7 +298,7 @@ jobs:
 
       - name: Attest standalone SBOM
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/wyolet/relay
           subject-digest: ${{ steps.bake.outputs.standalone }}
@@ -308,7 +308,7 @@ jobs:
 
       - name: Attest catalog-server SBOM
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ghcr.io/wyolet/catalog-server
           subject-digest: ${{ steps.bake.outputs.catalog_server }}
@@ -319,7 +319,7 @@ jobs:
       # Provenance for the SBOM files attached to the GitHub release.
       - name: Attest SBOM files
         if: needs.guard.outputs.publish == 'true'
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ runner.temp }}/sbom/*.cdx.json
 
@@ -343,9 +343,9 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         if: runner.environment == 'github-hosted'
 
       # Chart version and appVersion both equal the image tag (tag without v),
@@ -357,7 +357,7 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: sbom
           path: ${{ runner.temp }}/sbom

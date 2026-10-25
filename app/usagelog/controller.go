@@ -2,6 +2,7 @@ package usagelog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -53,16 +54,18 @@ type Controller struct {
 }
 
 // NewController wires the emitter → reloadable-sink chain and the reloadable
-// reader. The sink/reader start empty until the first reconcile.
-func NewController(src SettingsSource, build BackendBuilder, log *slog.Logger) *Controller {
+// reader. The sink/reader start empty until the first reconcile. queue sizes
+// the emitter's queues; its Logger is replaced by log.
+func NewController(src SettingsSource, build BackendBuilder, queue EmitterOptions, log *slog.Logger) *Controller {
 	if log == nil {
 		log = slog.Default()
 	}
+	queue.Logger = log
 	rsink := &reloadableSink{}
 	return &Controller{
 		src:     src,
 		build:   build,
-		emitter: NewEmitter(EmitterOptions{Logger: log}, rsink),
+		emitter: NewEmitter(queue, rsink),
 		rsink:   rsink,
 		reader:  &reloadableReader{},
 		log:     log,
@@ -163,6 +166,31 @@ func (r *reloadableSink) Write(ev Event) error {
 		return nil
 	}
 	return r.cur.Write(ev)
+}
+
+func (r *reloadableSink) WriteBatch(evs []Event) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.cur == nil {
+		return nil
+	}
+	if bw, ok := r.cur.(BatchWriter); ok {
+		return bw.WriteBatch(evs)
+	}
+	var firstErr error
+	failed := 0
+	for i := range evs {
+		if err := r.cur.Write(evs[i]); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("%d of %d events failed: %w", failed, len(evs), firstErr)
+	}
+	return nil
 }
 
 func (r *reloadableSink) swap(s Sink, log *slog.Logger) {

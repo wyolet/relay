@@ -32,8 +32,8 @@ func (r *Registry) NewStreamSession(lc *Context) *StreamSession {
 // callers with a frame boundary already in hand call Observe; the runner
 // tees the raw upstream body into the session as an io.Writer (Write), which
 // reframes on the SSE blank-line separator and Observes each frame. Either
-// way the session runs a StreamSummarizer alongside the observers so the
-// runner can commit rate-limit tokens without re-parsing a buffered body.
+// way the session runs the request's single StreamSummarizer alongside the
+// observers; its Summary feeds both the rate-limit commit and usage.
 type StreamSession struct {
 	lc   *Context
 	obs  []namedObserver
@@ -122,13 +122,14 @@ func (s *StreamSession) Frames() int {
 	return s.frames
 }
 
-// Finish closes the session: any buffered partial frame is flushed, each
-// observer's Result is attached to the Context under its name (the Registry
-// is still the sole writer), the rate-limit tokens the summarizer extracted
-// are stashed for the runner, and the request is marked filled so the
-// post-flight Finalize reuses the same collection instead of re-producing
-// it. Idempotent — the echo response-writer Finishes early to splice usage,
-// then the runner's post-flight Finishes again (a no-op). Nil-safe.
+// Finish closes the session: any buffered partial frame is flushed, the
+// summarizer's Summary is stashed on the Context (before observers' Result
+// runs, so they read it) along with the rate-limit tokens, each observer's
+// Result is attached under its name (the Registry is still the sole writer),
+// and the request is marked filled so the post-flight Finalize reuses the
+// same collection instead of re-producing it. Idempotent — the echo
+// response-writer Finishes early to splice usage, then the runner's
+// post-flight Finishes again (a no-op). Nil-safe.
 func (s *StreamSession) Finish() {
 	if s == nil || s.lc == nil || s.finished {
 		return
@@ -138,13 +139,15 @@ func (s *StreamSession) Finish() {
 		s.feed(v1.NormalizeSSELineEnds(s.buf))
 	}
 	s.buf = nil
+	sum := s.summ.Summary()
+	s.lc.setStreamSummary(sum)
 	for _, no := range s.obs {
 		v := safeResult(no, s.lc)
 		if v != nil {
 			s.lc.attach(no.name, v)
 		}
 	}
-	s.lc.setStreamTokens(map[string]int64(s.summ.Summary().Tokens))
+	s.lc.setStreamTokens(map[string]int64(sum.Tokens))
 	s.lc.filled = true
 }
 

@@ -1,114 +1,92 @@
 ---
 title: "Control API"
-description: "The admin plane — manage your catalog, keys, and policies"
+description: "Endpoints of the control plane: catalog and tenancy CRUD, settings, credentials, usage, and operations"
 ---
 
-The control plane is the admin API behind the dashboard. It listens on
-`RELAY_CONTROL_PORT` (separate from the inference port) and serves the admin
-UI, CRUD for every catalog entity, auth, and operational endpoints.
+The control plane listens on `RELAY_CONTROL_PORT` (default `8081`), separate from the inference port. It serves the control API under `/api` and the admin UI on the same origin.
 
 <Info>
-All control-API routes are mounted under the **`/api`** prefix (e.g.
-`GET /api/providers`). The prefix keeps the API from shadowing the embedded
-admin UI's client-side routes (`/models`, `/policies`, …), which are served
-on the same origin — a hard reload of `/models` must return the UI, not JSON.
-Only `/config.json` and `/metrics` stay at the listener root.
+API routes are mounted under `/api` (for example `GET /api/providers`) so they do not shadow the admin UI's own routes (`/models`, `/policies`, …): a hard reload of `/models` returns the UI, not JSON. Any path not claimed by the API falls through to the UI, except under `/api`, where an unknown path answers a JSON `404`. Set `RELAY_UI_DISABLE=1` to serve the API without the UI.
 </Info>
+
+A few paths sit at the listener root instead:
+
+| Path | Purpose |
+| --- | --- |
+| `/config.json` | Runtime configuration the admin UI reads before it knows the `/api` prefix. |
+| `/metrics` | Prometheus metrics, unauthenticated. See [Metrics](/reference/metrics). |
+| `/auth/callback` | OIDC redirect URI. See [SSO](/concepts/sso). |
+| `/scim/v2` | SCIM 2.0 endpoint for identity providers. See [SCIM](/concepts/scim). |
+
+The generated OpenAPI document at `GET /api/openapi.json` is the complete, typed list of operations, with request and response schemas; `GET /api/docs` renders it. This page groups the routes and links the page that explains each area.
 
 ## Authentication
 
-Two ways to authenticate:
-
 | Caller | Mechanism |
 | --- | --- |
-| Browser / dashboard | `relay_session` cookie, set by `POST /api/auth/login` |
-| Operator / CI | `Authorization: Bearer ${RELAY_ADMIN_TOKEN}` (break-glass) |
+| Browser (admin UI) | `relay_session` cookie, set by `POST /api/auth/login` or the OIDC sign-in |
+| Operator, CI, scripts | `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
 
 ```bash
-# Break-glass bearer (CI, scripts)
-curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
-  http://localhost:8081/api/providers
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" http://localhost:8081/api/providers
 ```
 
-## CRUD surface
+Public, with no credentials: `GET /api/version`, `GET /api/healthz`, `GET /api/livez`, `POST /api/auth/login`, the OIDC sign-in routes, `GET /api/schemas/*` and `/config.json`. Every other route requires a session or the admin token and is authorized per action; under `RELAY_AUTHZ=rbac` the caller's role bindings decide. See [Authentication](/concepts/auth).
 
-Every kind shares one uniform shape:
+Control-plane actions are recorded in the [audit log](/concepts/audit), which describes what is recorded.
+
+## Resource CRUD
+
+Every kind shares one shape:
 
 ```
 GET    /api/{plural}                 list
-GET    /api/{plural}/{ref}           read by slug or id (UUID form prefers id)
-POST   /api/{plural}                 create (server stamps id + slug)
-PUT    /api/{plural}/by-id/{id}      update
+GET    /api/{plural}/{ref}           read by slug or id (a UUID is tried as an id first)
+POST   /api/{plural}                 create; the server assigns id and slug
+PUT    /api/{plural}/by-id/{id}      replace
 DELETE /api/{plural}/by-id/{id}      delete
 ```
 
-Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
-`policies`, `pricings`, `host-bindings`, `keys`, `teams`, `projects`,
-`service-accounts`, `groups`, `roles`, `role-bindings`, `policy-bindings`.
+| Plural | Kind | Concept |
+| --- | --- | --- |
+| `providers`, `hosts`, `models`, `host-bindings`, `pricings` | Catalog | [Catalog](/concepts/catalog) |
+| `host-keys` | Upstream credentials | [Authentication](/concepts/auth), [Key pooling](/concepts/key-pooling) |
+| `policies` | Grants, key pool, limits | [Policies](/concepts/policies) |
+| `rate-limits` | Rule sets | [Rate limits](/concepts/rate-limits) |
+| `keys` | Relay keys (create through [`POST /api/keys`](#relay-keys)) | [Authentication](/concepts/auth) |
+| `teams`, `projects`, `service-accounts`, `groups` | Tenancy | [Authentication](/concepts/auth) |
+| `roles`, `role-bindings`, `policy-bindings` | Access control | [Authentication](/concepts/auth) |
 
-Roles, role bindings, and policy bindings are stored, validated, and
-served like every other kind. With `RELAY_AUTHZ=rbac` they are what
-decides access: every read is filtered and every write authorized against
-the bindings naming the caller, at the scope of the row being touched.
-Authoring a role of your own is a licensed feature; the built-in roles
-ship with every deployment and are reserved by name.
+List endpoints accept `q` (free text), `sort`, `limit`, `offset`, `label=key=value` (repeatable), and per-kind field filters; an unknown filter answers `400`. The OpenAPI document lists each kind's filters.
 
-Every read returns `metadata.resourceVersion`, an opaque string that changes on every write to the row. Send it back unchanged in the PUT body to make the update conditional: if the row changed since you read it, the PUT fails with `409` and error code `stale_resource_version`, and nothing is written. Read the row again and reapply your change. A PUT without `resourceVersion` replaces the row unconditionally.
+Every read returns `metadata.resourceVersion`, an opaque string that changes on every write to the row. Send it back unchanged in the PUT body to make the update conditional: if the row changed since you read it, the PUT fails with `409` and the code `stale_resource_version`, and nothing is written. A PUT without `resourceVersion` replaces the row unconditionally.
 
-<Info>
-Every write triggers a Postgres `NOTIFY`; the change propagates to every
-pod's in-memory snapshot within ~1 second. No manual reload needed for
-CRUD operations.
-</Info>
+Every write is applied to each pod's in-memory catalog within about a second; no reload is needed. Edits and deletes of catalog-owned rows are governed by the `governance:*` settings; see [Settings](/reference/settings).
 
-## Host keys
+### References and detach
 
-A **host key** is your upstream provider credential (e.g. your OpenAI key).
-Two value modes:
-
-<CodeGroup>
-
-```json Env-ref (no secret in DB)
-{
-  "metadata": { "displayName": "My OpenAI key" },
-  "spec": {
-    "hostId": "<host-id>",
-    "policyId": "<host-tier-policy-id>",
-    "valueFrom": { "kind": "env", "env": "OPENAI_API_KEY" }
-  }
-}
+```
+GET  /api/{plural}/by-id/{id}/references   rows that reference this one, before a delete
+POST /api/{plural}/by-id/{id}/detach       clear every reference to this row the caller may edit; returns what still references it
 ```
 
-```json Stored (encrypted in Postgres)
-{
-  "metadata": { "displayName": "My OpenAI key" },
-  "spec": {
-    "hostId": "<host-id>",
-    "policyId": "<host-tier-policy-id>",
-    "valueFrom": { "kind": "stored" },
-    "value": "sk-..."
-  }
-}
+Available for `providers`, `hosts`, `models`, `pricings`, `policies`, `host-keys`, `rate-limits`, `teams`, `projects`, `service-accounts`, `groups` and `roles`. Detach deletes nothing.
+
+### Host keys
+
+```
+POST /api/host-keys/by-id/{id}/rotate   {"value": "<new value>"}: replace a stored or oauth value
+GET  /api/host-keys/by-id/{id}/health   the key's circuit-breaker state
 ```
 
-</CodeGroup>
+A PUT cannot change a host key's value; rotation is explicit. An env-referenced key is rotated by changing the variable, and the rotate call answers `400`. See [Key pooling](/concepts/key-pooling) for breaker states and [Stored secrets](/concepts/secret-keys) for how stored values are sealed.
 
-Stored-mode values are encrypted under the owner's data key, which
-`RELAY_MASTER_KEY` wraps, and only the ciphertext is persisted; see
-[Stored secrets and key rotation](/concepts/secret-keys).
+### Relay keys
 
-An env-ref may not name a `RELAY_*` or `WYOLET_*` variable: those hold relay's own configuration, and a host key's value is sent to its host. Such a key is refused on write, and one already stored loads unresolved and is never used.
-
-## Relay keys
-
-A **key** is the inbound bearer your callers use. It is a credential of a
-principal — a service account or a user — so rotating it leaves everything
-bound to that principal alone. The server generates the plaintext via
-`crypto/rand`, stores only `sha256(plaintext)` + a short display prefix, and
-returns the plaintext **once** on create.
-
-`spec.principal` is required; `spec.expiresAt` (RFC3339) is optional and
-stops the key authenticating once passed.
+```
+POST /api/keys                         create; the plaintext is returned once
+POST /api/keys/by-id/{id}/rotate       new plaintext; optional {"graceSeconds": N} keeps the old one valid that long
+```
 
 ```bash
 curl -X POST http://localhost:8081/api/keys \
@@ -124,73 +102,90 @@ curl -X POST http://localhost:8081/api/keys \
   }'
 ```
 
-Response:
-
 ```json
 {
-  "plaintext": "rk_live_...",   // save this now — never retrievable again
-  "key": { "metadata": { "id": "..." }, "spec": { "prefix": "rk_live" } }
+  "plaintext": "sk-wr-…",
+  "key": { "metadata": { "id": "…" }, "spec": { "prefix": "sk-wr-…", "...": "..." } }
 }
 ```
 
-<Warning>
-The `plaintext` field is returned exactly once. Persist it on receipt — it
-cannot be retrieved later, only rotated.
-</Warning>
+`spec.principal` is required. Optional fields: `policyId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal.
 
-## Teams, projects, and RBAC
-
-`teams`, `projects`, `groups`, `service-accounts`, `keys`, `roles`,
-`role-bindings`, and `policy-bindings` use the CRUD surface above, except
-that a key is created through its own endpoint so the plaintext never comes
-from the caller. The other endpoints for these kinds:
+### Policies
 
 ```
-POST   /api/keys                               create a key; the plaintext is returned once
-POST   /api/keys/by-id/{id}/rotate             replace the plaintext; graceSeconds keeps the old one valid for a window
-POST   /api/policies/by-id/{id}/keys/{keyId}   attach a key to a policy
+POST   /api/policies/by-id/{id}/keys/{keyId}   attach a relay key to the policy
 DELETE /api/policies/by-id/{id}/keys/{keyId}   detach it (409 if the key points at another policy)
-GET    /api/{plural}/by-id/{id}/references     rows that reference this one, before a delete
-GET    /api/license                            the live license
-PUT    /api/license                            install a license
 ```
 
-Tokens, users, the audit log, and apply/export are covered below; see
-[License](/concepts/license) for what a license unlocks.
-
-## Model overlays
+### Model overlays
 
 ```
-GET    /api/models/by-id/{id}/overlay        read the overlay on a catalog model
-PUT    /api/models/by-id/{id}/overlay        set it
-DELETE /api/models/by-id/{id}/overlay        remove it
+GET    /api/models/by-id/{id}/overlay   the overlay, the catalog template and the effective spec
+PUT    /api/models/by-id/{id}/overlay   set the overlay
+DELETE /api/models/by-id/{id}/overlay   remove it, back to the catalog template
 ```
 
-## Tokens
+See [Overlays](/concepts/overlays).
 
-A **token** is a relay-signed, short-lived credential for `/v1/*`, scoped
-to one project and minted for the session holder — see
-[Authentication](/concepts/auth#inference-tokens).
+### Catalog views
+
+Read-only projections for building UIs and checking a configuration:
 
 ```
-POST   /api/auth/token               mint a token for a project (session auth only)
-DELETE /api/auth/token/{jti}         revoke one token by id
-POST   /api/auth/token/revoke        revoke the presented token (self-service)
-POST   /api/auth/token/revoke-all    bump the caller's token_version, revoking every token they hold
-POST   /api/auth/token/keys/rotate   rotate the signing key
-POST   /api/users/by-id/{id}/revoke-tokens   bump another user's token_version
+GET /api/models/{ref}/hosts          hosts serving the model, with binding and pricing
+GET /api/models/{ref}/pricing        the model's pricing per host
+GET /api/models/{ref}/policies       policies granting the model, with the limits each applies
+GET /api/hosts/{ref}/models          models the host serves, with binding and pricing
+GET /api/hosts/{ref}/keys            the host's keys, without values
+GET /api/hosts/{ref}/policies        the host's tier policies, with limits
+GET /api/policies/{ref}/models       models the policy grants, with the limits it applies
+GET /api/policies/{ref}/hosts        hosts the policy can reach, with the keys that reach each
+GET /api/policies/{ref}/rate-limits  rate limits the policy references
+GET /api/catalog/resolve             expand model references into matching catalog rows
+GET /api/catalog/graph               providers, hosts, models and bindings, minimal
+GET /api/debug/snapshot              counts and joins of the in-memory catalog the inference plane reads
 ```
 
-Revoking by `jti` needs `tokens.revoke` at the scope of the project the token
-was minted for, and the user who minted a token may always revoke it. Only the
-fallback path — passing `team_id` and `exp` because the mint is no longer in
-the audit log — requires an admin caller, since nothing then proves who minted
-it. Bumping another user's `token_version` needs `users.update` at the global
-scope.
+Compare `/api/debug/snapshot` with the list endpoints when a row does not seem to reach inference.
 
-A revoked token fails on the inference plane with `401` and the code
-`token_revoked`, whether it was the token's `jti` that landed on the denylist
-(revoke by jti or by value) or the user's `token_version` that moved.
+## Settings
+
+```
+GET /api/settings                 every section with its current value
+GET /api/settings/sections        section names, descriptions and schema names
+GET /api/settings/{section}       one section
+PUT /api/settings/{section}       replace one section
+```
+
+Sections with their own route: `inference`, `parsing`, `proxy-mode`, `usage-logging`, `payload-logging`, `otlp-receiver`, `audit`, `catalog-source`, `auth:oidc`, `auth:scim`, `auth:tokens`, `governance:provider`, `governance:host`, `governance:model`, `governance:policy`. `license` is listed by `GET /api/settings` but has no route of its own: it is written with `PUT /api/license`. A PUT replaces the whole section, except the `auth:tokens` signing-key references, which only rotation changes; changes apply without a restart. Writing `usage-logging`, `payload-logging`, `audit`, `auth:oidc`, `auth:scim` or `auth:tokens` takes an admin. See [Settings](/reference/settings) for each section's fields.
+
+## GitOps
+
+```
+POST /api/apply                       plan and, unless dryRun, write a manifest bundle
+GET  /api/export                      render tenant-owned rows as a manifest bundle
+GET  /api/schemas/{version}           JSON Schemas for manifests (public)
+GET  /api/schemas/{version}/{kind}    one kind's schema (public)
+```
+
+See [GitOps](/concepts/gitops).
+
+## Sign-in, tokens and the master key
+
+```
+POST   /api/auth/login                     username and password → session cookie
+POST   /api/auth/logout                    end the session
+GET    /api/auth/whoami                    the authenticated caller
+GET    /api/auth/oidc/start                start OIDC sign-in
+GET    /api/auth/oidc/callback             OIDC callback (also served at /auth/callback)
+POST   /api/auth/token                     mint an inference token for a project (session only)
+DELETE /api/auth/token/{jti}               revoke one token
+POST   /api/auth/token/revoke              revoke the presented token
+POST   /api/auth/token/revoke-all          revoke every token the caller holds
+POST   /api/auth/token/keys/rotate         rotate the token signing key
+POST   /api/master-key/generate            return a candidate RELAY_MASTER_KEY; installs nothing
+```
 
 ```bash
 curl -X POST http://localhost:8081/api/auth/token \
@@ -199,79 +194,75 @@ curl -X POST http://localhost:8081/api/auth/token \
   -d '{"project": "my-project", "ttl": "1h"}'
 ```
 
-## Users and audit
+Who may revoke which token, and how revocation reaches inference, is on [Authentication](/concepts/auth#inference-tokens). Sign-in with an identity provider is on [SSO](/concepts/sso).
+
+## Users, access review and audit
 
 ```
-GET  /api/users            list users (id, username, email, roles, disabled — never a password hash)
-PUT  /api/users/by-id/{id} edit `disabled` and `roles`; disabling also bumps token_version
-GET  /api/audit            the admin audit log; filter by actor_id, actor_name, action,
-                            resource_kind, resource_id, scope, status, from, to
-POST /api/access-review    explain whether a user or service account may perform an action
+GET  /api/users                              list users (never a password hash)
+PUT  /api/users/by-id/{id}                   edit disabled and roles
+POST /api/users/by-id/{id}/revoke-tokens     revoke every inference token the user holds
+POST /api/access-review                      explain whether a user or service account may perform an action
+GET  /api/audit                              audit events, newest first; filter by actor_id, actor_name, action,
+                                             resource_kind, resource_id, scope, status, from, to
 ```
 
-Both user endpoints authorize at the global scope: an account belongs to the deployment, so a binding inside one team or project grants neither the list nor an edit. A disabled account is signed out on its next request and refused at login, both with `401` and the error code `account_disabled`. Disabling also invalidates every inference token it holds (the `token_version` bump), so re-enabling it does not bring those tokens back.
-
-See [Audit Log](/concepts/audit) for the audit event shape and retention, and [Checking access](/concepts/auth#checking-access) for the access review.
+User endpoints authorize at the global scope. Disabling a user signs them out on their next request, refuses their login with `401` `account_disabled`, and revokes their inference tokens; re-enabling does not bring the tokens back. The access review answers `501` under `RELAY_AUTHZ=single`. See [Checking access](/concepts/auth#checking-access) and [Audit log](/concepts/audit).
 
 ## SCIM clients
 
 ```
-GET  /api/scim-clients               list clients (name, token prefix, created, last used, revoked)
-POST /api/scim-clients               {"name": "entra"} → the client and its token, returned once
-POST /api/scim-clients/{name}/revoke stop the token; the users and groups it provisioned stay
+GET  /api/scim-clients                  list clients (name, token prefix, created, last used, revoked)
+POST /api/scim-clients                  {"name": "entra"} → the client and its token, returned once
+POST /api/scim-clients/{name}/rotate    replace the client's token, returned once
+POST /api/scim-clients/{name}/revoke    stop the token; users and groups it provisioned stay
 ```
 
-The SCIM endpoint itself is `/scim/v2` at the root of the control listener, enabled by the `auth:scim` settings section. See [SCIM Provisioning](/concepts/scim).
-
-## GitOps
-
-```
-POST /api/apply    plan and (unless dryRun) write a manifest bundle
-GET  /api/export    render the tenant-owned rows as a manifest bundle
-```
-
-See [GitOps](/concepts/gitops) for the plan/apply/prune/export model and
-the CLI wrapper.
-
-## Usage
-
-```
-GET /api/usage/events        raw usage events, filterable
-GET /api/usage/summary       aggregated totals over a window, optional group_by
-GET /api/usage/timeseries    bucketed usage over time, optional group_by
-GET /api/usage/facets        top values per dimension, for filter dropdowns
-```
-
-See [Usage & Logging](/concepts/observability) for the filter and
-`group_by` vocabulary.
-
-## Operational endpoints
-
-```
-POST   /api/auth/login           username + password → session cookie
-POST   /api/auth/logout          destroy session
-GET    /api/auth/whoami          return the authenticated caller
-POST   /api/master-key/generate  mint a candidate RELAY_MASTER_KEY
-POST   /api/reload               force full snapshot rebuild from Postgres
-GET    /api/version              build version (public)
-GET    /api/openapi.json         generated typed spec
-```
-
-`/reload` is a manual fallback; normal CRUD writes propagate automatically
-via `NOTIFY`.
+See [SCIM](/concepts/scim).
 
 ## Secret keys
 
 ```
-GET  /api/secret-keys                     data keys, target KEK, KEKs this pod holds, legacy rows left
-POST /api/secret-keys/rotate              {"scope": "project:<id>"} or {"all": true} → the new data keys
-POST /api/secret-keys/rewrap              {"to": "<kek id>"} → target, rewrapped count, skipped keys
-POST /api/secret-keys/by-id/{id}/destroy  optional {"force": true} → the destroyed key
+GET  /api/secret-keys                      data keys, target master key, master keys this pod holds, legacy rows left
+POST /api/secret-keys/rotate               {"scope": "project:<id>"} or {"all": true} → the new data keys
+POST /api/secret-keys/rewrap               {"to": "<kek id>"} → target, rewrapped count, skipped keys
+POST /api/secret-keys/by-id/{id}/destroy   optional {"force": true} → the destroyed key
 ```
 
-Admin only, and audited. Refusals answer `409` with the reason: rewrap to a
-KEK the pod does not hold or while legacy rows remain; destroy of a scope's
-primary, of a key stored values still use, or within 24 hours of demotion
-without `force`. An unknown key or a scope with no data key answers `404`, a
-malformed id `400`. No response carries key bytes. See
-[Stored secrets and key rotation](/concepts/secret-keys).
+Admin only. No response carries key bytes. See [Stored secrets and key rotation](/concepts/secret-keys) for the refusals each call can answer.
+
+## License
+
+```
+GET /api/license    the live license
+PUT /api/license    install a license without a redeploy
+```
+
+See [License](/concepts/license).
+
+## Usage and request logs
+
+```
+GET  /api/usage/events          raw usage events, filterable
+GET  /api/usage/summary         aggregates per group over a window
+GET  /api/usage/timeseries      aggregates per time bucket
+GET  /api/usage/facets          values per dimension, for filters
+GET  /api/logs                  request log, newest first
+GET  /api/logs/{request_id}     one request, with captured bodies
+POST /api/logs/erase            delete captured bodies by project and/or principal (admin)
+```
+
+Filters, grouping and comparison are on [Usage tracking](/concepts/usage); captured bodies and erasure on [Payload logging](/concepts/payload-logging).
+
+## Operations
+
+```
+GET  /api/version        build version (public; license details only for authenticated callers)
+GET  /api/healthz        readiness: process and backends (public)
+GET  /api/livez          liveness: process only (public)
+POST /api/reload         rebuild the in-memory catalog from Postgres
+GET  /api/openapi.json   OpenAPI document
+GET  /api/docs           API reference UI
+```
+
+`/api/reload` is a fallback; normal writes reach every pod on their own.

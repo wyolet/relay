@@ -44,14 +44,14 @@ func setPayload(src *settingstest.Source, cfg settings.PayloadLogging) {
 // memSink installed — no reconcile loop running.
 func enabledCtrl(maxBytes int) (*Controller, *memSink) {
 	sink := &memSink{}
-	c := NewController(&settingstest.Source{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return sink, nil }, testLogger())
+	c := NewController(&settingstest.Source{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return sink, nil }, EmitterOptions{}, testLogger())
 	c.set(true, maxBytes, settings.PayloadLogging{Enabled: true})
 	c.rsink.swap(sink, c.log)
 	return c, sink
 }
 
 func disabledCtrl() *Controller {
-	return NewController(&settingstest.Source{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return &memSink{}, nil }, testLogger())
+	return NewController(&settingstest.Source{}, func(context.Context, settings.PayloadLogging) (Sink, error) { return &memSink{}, nil }, EmitterOptions{}, testLogger())
 }
 
 func mustResult(t *testing.T, obs lifecycle.StreamObserver) *Record {
@@ -173,7 +173,7 @@ func TestController_Reconcile(t *testing.T) {
 		sinks[cfg.S3.Bucket] = s
 		return s, nil
 	}
-	c := NewController(reader, build, testLogger())
+	c := NewController(reader, build, EmitterOptions{}, testLogger())
 
 	// No settings row yet → reconcile leaves it disabled, no build.
 	c.reconcile(context.Background())
@@ -217,7 +217,7 @@ func TestController_BuildErrorKeepsPrevious(t *testing.T) {
 			return nil, io.ErrUnexpectedEOF
 		}
 		return &memSink{}, nil
-	}, testLogger())
+	}, EmitterOptions{}, testLogger())
 
 	setPayload(reader, settings.PayloadLogging{Enabled: true, Backend: "file"})
 	c.reconcile(context.Background())
@@ -238,7 +238,7 @@ func TestController_SignalDrivenRun(t *testing.T) {
 	reader := &settingstest.Source{}
 	c := NewController(reader, func(context.Context, settings.PayloadLogging) (Sink, error) {
 		return &memSink{}, nil
-	}, testLogger())
+	}, EmitterOptions{}, testLogger())
 
 	c.Subscribe()
 	if nSubs := reader.Callbacks(settings.SectionPayloadLogging); nSubs != 1 {

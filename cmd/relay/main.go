@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/routing"
@@ -34,7 +36,10 @@ import (
 )
 
 func main() {
-	loadDotEnv(".env")
+	if err := loadEnvFile(os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, "relay:", err)
+		os.Exit(1)
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
 	exitCode := 0
 	defer func() {
@@ -81,8 +86,11 @@ func main() {
 
 	seedBuiltinRoles(bootCtx, st, stores)
 
-	kvStore := openKV(bootCtx, cfg)
+	kvStore, postFlightKV := openKV(bootCtx, cfg)
 	defer kvStore.Close()
+	if postFlightKV != kvStore {
+		defer postFlightKV.Close()
+	}
 
 	startOAuthRefresher(listenerCtx, st, stores, kvStore)
 
@@ -93,10 +101,15 @@ func main() {
 
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
-	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	selector := keypool.New(kvStore, slog.Default(), nil, nil).WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow)
+	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
-	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, hostHealth)
-	proxyPipeline := buildProxy(cfg, limiter, lifecycleReg)
+	postFlight := newPostFlightWriters(postFlightKV)
+	limiter.ReleaseUnansweredOn(postFlight.limiter)
+	pl, lifecycleReg := buildPipeline(cfg, cat, stores, limiter, selector, postFlight)
+	// Deferred after the post-flight store's Close, so it runs first: queued settles land before the store closes.
+	defer pl.Policy.CloseSettleQueue()
+	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
 
 	specs := buildAdapterSpecs()
 	profiles := buildClientProfiles()
@@ -112,11 +125,12 @@ func main() {
 	// opt-in resolved at the inference entry. S3 credentials resolve through
 	// the shared secret registry.
 	payloadCHBootCfg := payloadCHBootConfig(cfg)
-	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg)
+	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg,
+		payloadQueueOptions(cfg))
 	defer payloadCtl.Close()
 
-	tokenCalibrator := buildTokenCalibrator(kvStore, lifecycleReg)
-	registerAdmission(cfg, lifecycleReg)
+	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
+	admission := registerAdmission(cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
@@ -138,7 +152,7 @@ func main() {
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
-		specRegistry, profiles, tokenCalibrator, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
+		specRegistry, profiles, tokenCalibrator, admission, kvPoolBusy(kvStore), batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
 	// RELAY_CONTROL_PORT. Disabled when empty or "off".
@@ -150,8 +164,10 @@ func main() {
 			selector, hostHealth)
 	}
 
-	exitCode = waitForStop(inferErr, ctrlErr)
-	shutdown(cfg, ctrlSrv, inferSrv, cancelListener, batchQueue)
+	pprofSrv, pprofErr := startPprof(cfg)
+
+	exitCode = waitForStop(inferErr, ctrlErr, pprofErr)
+	shutdown(cfg, ctrlSrv, inferSrv, pprofSrv, cancelListener, batchQueue)
 }
 
 func buildAdapterSpecs() []*adapter.Spec {
@@ -222,6 +238,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
 			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p", "top_k": "top_k"},
+			Overloaded:    &adapter.ErrorResponse{Status: pkganthropic.StatusOverloaded, Body: pkganthropic.OverloadedError(httpapi.OverloadMessage)},
 		}).Build(),
 		// Gemini native shape — upstream-only for now (HostBinding.Adapter:
 		// gemini), reachable via the canonical / OpenAI / Anthropic inbound

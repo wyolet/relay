@@ -636,6 +636,8 @@ is gated. Full guide: `.tmp/design/cluster.md`.
   `least-recently-used`. Quota-aware weighted-random is roadmap.
 - **Breaker keyed by value-hash** — a rotated key gets a new hash → a fresh
   (closed) breaker automatically; the old hash's record orphans + TTLs out.
+- A key's health record exists only once it has failed: a success writes it
+  only to close a half-open probe or reset a backoff.
 - **Dial-vs-key failure split**: an unreachable host re-dials the same host
   (not a key failure); only 401/403 breaks a key. Anon keys are breaker-exempt.
   See `app/hosthealth`.
@@ -709,7 +711,7 @@ use live numbers for SLO conversations.
 
 ## Code style (Go)
 
-- Go 1.26+. Module: `github.com/wyolet/relay` (sdk, jobq, auth, secret are separate
+- Go 1.27+. Module: `github.com/wyolet/relay` (sdk, jobq, auth, secret are separate
   modules under the root `go.work`).
 - Hot-path code must be allocation-conscious. Use `sync.Pool` for buffers;
   avoid string conversions; reuse header maps.

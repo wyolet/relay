@@ -16,6 +16,7 @@ import (
 
 // Compile-time interface assertions.
 var _ usage.Sink = (*Sink)(nil)
+var _ usage.BatchWriter = (*Sink)(nil)
 var _ usage.Reader = (*Sink)(nil)
 var _ usage.Closer = (*Sink)(nil)
 
@@ -282,6 +283,11 @@ func New(cfg Config) (*Sink, error) {
 // durable on the local filesystem; CH delivery is asynchronous.
 func (s *Sink) Write(ev usage.Event) error {
 	return s.wal.Write(ev)
+}
+
+// WriteBatch appends evs to the WAL with one flush to disk.
+func (s *Sink) WriteBatch(evs []usage.Event) error {
+	return s.wal.WriteBatch(evs)
 }
 
 // Close flushes the WAL and closes the ClickHouse connection.

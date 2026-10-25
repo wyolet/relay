@@ -1,122 +1,118 @@
 ---
 title: "Troubleshooting"
-description: "Common errors and how to fix them"
+description: "Error codes, login problems, keys that stop working, and how to fix them"
 ---
 
-The fastest way to diagnose a failed request is the status code plus the
-error body. Here are the stumbles you're most likely to hit first.
+Start from the status code and the `code` field of the error body: `{"error": {"type": "...", "code": "...", "message": "..."}}`. Routing, rate-limit and upstream errors Relay writes itself carry `X-WR-Origin: relay` and an `X-Should-Retry` verdict. When the upstream provider rejected the request on every key Relay tried, Relay forwards the provider's last response instead, with its status and body, `X-WR-Origin: upstream`, and the provider's status in `X-WR-Upstream-Status`.
 
-## `401 Unauthorized` on `/v1` requests
+## `401`: relay key or token rejected
 
-Your relay key is missing, malformed, or wrong.
+The code is `unauthenticated`, and the message says why: `missing relay key`, `invalid api key`, `api key disabled`, `api key revoked`, `api key expired`, `api key rotated`, `invalid token`, `token expired`.
 
-- Confirm the header is exactly `Authorization: Bearer <relay-key>`.
-- Use the **plaintext** returned when the key was created, not the id or
-  prefix. If you lost it, mint a new one — plaintext is never retrievable.
-- A disabled relay key also returns 401; check it's enabled in the dashboard.
-- `token_revoked` means an inference token was revoked — either by id
-  (`DELETE /api/auth/token/{jti}`) or in bulk (`POST
-  /api/auth/token/revoke-all`, which invalidates every token the caller
-  holds). Mint a fresh one; see [Inference tokens](/concepts/auth#inference-tokens).
+- Send the relay key as `Authorization: Bearer <relay-key>` (or `X-WR-API-Key`, or `x-api-key`).
+- Use the full value returned when the key was created, not its id or prefix. It is shown once; if you lost it, create or rotate a key.
+- `api key rotated` means the key was rotated and the old value's grace period has ended. Use the new value.
+- `token_revoked` means an inference token was revoked, by id (`DELETE /api/auth/token/{jti}`) or for all of a user's tokens (`POST /api/auth/token/revoke-all`). Mint a new one; see [Inference tokens](/concepts/auth#inference-tokens).
 
-## `403 Forbidden` — model not granted
+A `401` with `X-WR-Origin: upstream` is the provider rejecting a host key, not your relay key; see [Every key fails](#502-every-key-fails-or-is-cooling-down).
 
-The relay key authenticated, but its **policy** doesn't grant the requested
-model.
+## `403`: authenticated, but not allowed
 
-- In the dashboard, open the policy attached to your relay key and confirm
-  the model is in its allowed set.
-- The model name in your request must match a catalog model the policy grants.
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `model_not_allowed` | The governing policy does not grant the model. | Add the model to the policy's grants; see [Policies](/concepts/policies). |
+| `model_disabled` | The model is disabled in the catalog. | Enable it, or use another model. |
+| `policy_disabled` | The governing policy is disabled. | Enable the policy. |
+| `policy_not_found` | The key points at a policy that no longer exists. | Attach an existing policy. |
+| `no_policy` | No policy governs the key: none on the key, its service account, or its project's policy bindings. | Attach or bind a policy. |
+| `policyless_disabled` | The key has no policy and policy-less traffic is off. | Attach a policy, or (under `RELAY_AUTHZ=single` only) set `allowMissingPolicy` in the [`inference` section](/reference/settings#inference). |
+| `project_unavailable` | The inference token's project is gone or unavailable. | Mint a token for an existing project. |
+| `proxy_disabled` | A [proxy-mode](/concepts/proxy-mode) request arrived while proxy mode is off. | Enable the `proxy-mode` section, or drop the proxy-mode header. |
+| `passthrough_forbidden` | An authenticated proxy-mode request used a credential without `passthroughAllowed`. | Use a relay key with `spec.passthroughAllowed: true`. |
 
-## `404` — unknown model or no binding
+## `404 model_not_found`
 
-- The `model` value doesn't resolve to any catalog model, **or**
-- the model has no **enabled host binding**. A model needs a binding to a
-  host (with an adapter and an upstream name) to be routable.
-
-List what your key can actually reach:
+The `model` value matches no catalog model or alias. List the models your credential can reach:
 
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer <relay-key>"
 ```
 
-## `502` / `503` — "no healthy keys in pool"
+## `503`: nothing to route to, or relay is overloaded
 
-Every host key for the route has tripped its **circuit breaker** — usually
-because the upstream credential is wrong, revoked, or rate-limited. Each key
-has a per-key breaker keyed on auth / quota / rate-limit / server-error
-classification.
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `catalog_unavailable` | The process has not finished loading the catalog after start. | Retry after the `Retry-After` delay. `/healthz` reports `503` until it is ready. |
+| `no_host_binding` | The model has no enabled host binding. | Bind the model to a host, or enable the binding. |
+| `no_keys` | No usable host key: the policy lists none on the chosen host, or none is enabled. | Add a host key for that host and list it in the policy's `hostKeyIds`. |
+| `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), Valkey did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`, or `RELAY_REDIS_POOL_MAX_WAITERS` calls were already waiting for a Valkey connection. | Retry after 1 second. If it persists, add replicas, or check `relay_requests_shed_total` (`stage="kv_pool"` means the Valkey pool was the limit), `relay_kv_errors_total` and Valkey's load. |
+
+## `502`: every key fails or is cooling down
+
+Each host key has a circuit breaker. A key that the upstream rejects with `401` cools down for 30 seconds, then 1, 5 and 15 minutes, then an hour per further failure; `403` backs off from 1 to 60 seconds, and so do `5xx` and network errors once 5 of them land within 30 seconds; a `429` with a `Retry-After` above 5 seconds cools it down for that long. A rotated key value starts with a fresh breaker. See [Key pooling](/concepts/key-pooling).
+
+| What you see | Cause |
+| --- | --- |
+| `upstream_error` with `no healthy keys in pool` in the message | Every key for the route is cooling down. |
+| The provider's own status and body, `X-WR-Origin: upstream` | Every key was tried and failed; this is the last provider response. |
+| `upstream_unavailable` | Every key failed and the provider sent no body. |
+| `upstream_unreachable` | Relay could not connect to the host at all (refused, DNS, TLS). This is the host's base URL or network, not a key. |
 
 To recover:
 
-1. Fix the underlying cause — correct the upstream key value, or wait out a
-   rate limit.
-2. Clear the breaker state so the fixed key can be tried again. In dev with
-   the bundled stack:
+1. Fix the cause: correct or rotate the upstream key, or check the host's `baseURL` for `upstream_unreachable`.
+2. Read a key's breaker state with `GET /api/host-keys/by-id/{id}/health` (`state`, `reason`, `cooldown_remaining_seconds`).
+3. Wait out the cooldown, or rotate the key's value, which gets a fresh breaker. With `RELAY_STATE_BACKEND=memory`, restarting relay clears every breaker. With Valkey, breaker records are the keys matching `secret_health:*`; deleting them clears them:
 
    ```bash
-   make breakers-reset
+   valkey-cli --scan --pattern 'secret_health:*' | xargs -r valkey-cli del
    ```
 
-   This clears the pooled host keys' circuit-breaker state. In production,
-   breakers heal automatically once the cooldown passes.
+## `429`: slow down
 
-<Info>
-A rotated key gets a fresh breaker automatically — the breaker is keyed by
-value-hash, so a new value starts clean and the old hash's record expires.
-</Info>
+A `429` written by Relay always means a limit set for the caller. Relay's own lack of capacity is a `503` (see above).
 
-## Adapter mismatch
+| Code | Cause |
+| --- | --- |
+| `rate_limit_exceeded` | A [rate limit](/concepts/rate-limits) on the governing policy is used up. `Retry-After` says when the bucket refills. |
+| A provider body, `X-WR-Origin: upstream` | The provider's own rate limit, after every key was tried. |
 
-If a request to a model returns a wire-format error from the upstream, the
-host binding's `adapter` (`openai` or `anthropic`) likely doesn't match the
-upstream's actual wire protocol.
+## `413`: request too large
 
-- A single host (e.g. AWS Bedrock) can serve models on different protocols —
-  the adapter is set **per binding**, not per host.
-- Confirm the binding's adapter matches how that specific model speaks
-  (Claude on Bedrock → `anthropic`; Llama on Bedrock → `openai`).
+`request_too_large`: the body is over `RELAY_MAX_REQUEST_BYTES` (32 MiB by default); see [Configuration](/configuration#request-handling).
 
-## The container starts but the dashboard won't log in
+In proxy mode `request_too_large` also means the first 32 MiB of the body hold no top-level `model`: Relay keeps the body until it reads the model, so send `model` before `messages` in large bodies.
 
-- On the **standalone** image the admin password is auto-generated and
-  **printed to the container logs** on first boot — check `docker logs` for
-  the `admin` / password line. It's persisted on the data volume across
-  restarts.
-- The admin UI is served on `RELAY_CONTROL_PORT` (`:8081` by default; standalone
-  maps it there). Set it to `off` only if you want the control plane disabled.
-- For local HTTP (no TLS), `RELAY_COOKIE_SECURE` must be `false` — otherwise
-  the session cookie is marked `Secure` and the browser drops it. The
-  standalone image already defaults it to `false`; set it on the lean image.
-- On the **lean** image you supply credentials yourself: set
-  `RELAY_ADMIN_TOKEN` for bearer access, or mount a `kind: User` YAML into
-  `RELAY_CONFIG_DIR` for dashboard username/password login.
+## `408`: request timeout
 
-## Credentials (and catalog) regenerate on every run
+`request_timeout` (proxy mode): the client sent no request body bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (30 by default) while the body streamed upstream; see [Configuration](/configuration#request-handling).
 
-You're starting a **new** container each time without a volume, so the
-standalone image boots against an empty data dir and regenerates the master
-key, admin credentials, and catalog. Mount a named volume to persist them:
+## Wrong wire format from the upstream
 
-```bash
-docker run -p 8080:8080 -p 8081:8081 \
-  -v relay-data:/var/lib/postgresql/data \
-  wyolet/relay:standalone
-```
+If a model returns a wire-format error from its provider, the host binding's `adapter` probably doesn't match how that endpoint speaks. Valid adapters are `openai` (Chat Completions and OpenAI-compatible servers such as Ollama), `openai_responses`, `anthropic` and `gemini` (Gemini's native `generateContent`). The adapter is set per binding, not per host, because one host can serve models over different wire shapes.
 
-Everything — Postgres data, master key, admin login — lives under that one
-directory. See [Persisting data](/configuration#persisting-data-across-runs)
-and [Retrieving or pinning the master key](/configuration#retrieving-or-pinning-the-master-key).
+## The admin UI won't sign you in
 
-`docker stop` + `docker start <container>` already preserves state; only a
-fresh `docker run` without a volume starts clean.
+- **Standalone image**: the `admin` password is printed to the container log on first boot (`docker logs <container>`) and saved on the data volume. On a volume that already had a config directory, no new password is generated; read it back as in [Retrieving or pinning the master key](/deploy/docker#retrieving-or-pinning-the-master-key).
+- **Compose stack**: sign in as `admin` with `RELAY_ADMIN_PASSWORD` from `.env`.
+- **Lean image**: there is no user until you create one. Use `RELAY_ADMIN_TOKEN` as a bearer token, or mount a `kind: User` file into `RELAY_CONFIG_DIR`; see [Docker](/deploy/docker#lean-image-against-your-own-stores).
+- Over plain HTTP, set `RELAY_COOKIE_SECURE=false`; otherwise the session cookie is marked `Secure` and the browser drops it. The standalone image already does.
+- The admin UI is on the control port (`RELAY_CONTROL_PORT`, `8081` by default), not the inference port.
+
+## Credentials and catalog regenerate on every run
+
+Each new `docker run` of the standalone image without a volume starts from an empty data directory and generates a new master key, new credentials and a fresh catalog. Mount a volume; see [Persisting data](/deploy/docker#persisting-data).
+
+## Inference tokens can't be minted
+
+Relay keeps the token signing key as a stored secret, so tokens need `RELAY_MASTER_KEY`. Without one, relay logs `inference tokens are disabled` at startup and minting fails. Set the master key and restart.
 
 ## Stored host key won't decrypt after a restart
 
-`RELAY_MASTER_KEY` changed between runs. It must be **stable** — it unwraps the data keys stored secrets are encrypted under. `relay secret status` lists those data keys as `locked`, and lists the ids of the values the process cannot decrypt in `undecryptableRows`. Restore the original master key, or keep the new one and add the original as `RELAY_MASTER_KEY_EXTRA`, then follow [Changing the master key](/concepts/secret-keys#changing-the-master-key) to move onto the new one.
+`RELAY_MASTER_KEY` changed between runs. It must be **stable**: it unwraps the data keys stored secrets are encrypted under. `relay secret status` lists those data keys as `locked`, and lists the ids of the values the process cannot decrypt in `undecryptableRows`. Restore the original master key, or keep the new one and add the original as `RELAY_MASTER_KEY_EXTRA`, then follow [Changing the master key](/concepts/secret-keys#changing-the-master-key) to move onto the new one.
 
-The standalone image keeps the key stable automatically **as long as you mount a volume** (see above).
+The standalone image keeps the key stable as long as you mount a volume.
 
 ### The original master key is lost
 
@@ -135,11 +131,11 @@ The values encrypted under it are lost too. To store values again under the new 
    An id that starts with `payload-logging:` holds payload-logging credentials: write them again in the `payload-logging` settings section. Any other id with no host key is the inference-token signing key: clear `signingKey` in the `auth:tokens` settings section so the next boot generates a new one (tokens signed by the old key stop verifying).
 3. Run `relay secret rewrap --to <new kek id>`, where the new KEK id is the one in `heldKeks`. It lists every data key under the lost key as skipped, and new data keys are wrapped under the new key from then on.
 4. Run `relay secret rotate --all`, so every scope gets a primary data key the new key opens.
-5. Re-enter the values of the host keys from step 2 and of any other host key that loads unresolved, and re-authorize OAuth host keys.
+5. Re-enter the values of the host keys from step 2 and of any other host key that loads unresolved.
 
 ## Wrong master key at the upgrade to data keys
 
-When `RELAY_MASTER_KEY` held a different key than the one the stored values were encrypted under before the upgrade, those values stay in the old format: `legacyRows` stays above 0, `undecryptableRows` lists them, pods log `cannot rewrite stored secret`, and the host keys load unresolved. Values written since then (a host key value entered again, a refreshed OAuth token) were stored under data keys wrapped by the wrong key, and the first of them made it the target (`targetKek`).
+This applies to the upgrade to 0.11.6 (schema 34). When `RELAY_MASTER_KEY` held a different key than the one the stored values were encrypted under before the upgrade, those values stay in the old format: `legacyRows` stays above 0, `undecryptableRows` lists them, pods log `cannot rewrite stored secret`, and the host keys load unresolved. Values written since then (for example a host key value entered again) were stored under data keys wrapped by the wrong key, and the first of them made it the target (`targetKek`).
 
 1. Set `RELAY_MASTER_KEY` to the correct key and `RELAY_MASTER_KEY_EXTRA` to the wrong one, and roll every pod. The pods convert the old-format values within seconds; wait until `legacyRows` is 0. New data keys are still wrapped under the wrong key until the next step.
 2. Run `relay secret rewrap --to <kek id of the correct key>` (the first entry in `heldKeks`). Every data key is wrapped under the correct key and it becomes the target. Skip this step if `targetKek` is empty or already the correct key.
@@ -149,14 +145,18 @@ When `RELAY_MASTER_KEY` held a different key than the one the stored values were
 ## Health checks
 
 ```bash
-# Inference readiness: Postgres ping + catalog loaded (public)
+# Readiness: 200 once Postgres answers and the catalog has loaded, else 503; Postgres stops counting after that (public)
 curl http://localhost:8080/healthz
 
-# Control plane build version (public)
+# Liveness: 200 while the process serves (public)
+curl http://localhost:8080/livez
+
+# Build version (public)
 curl http://localhost:8081/api/version
 ```
 
+The control listener serves its own probes at `/api/healthz` (Postgres, and Valkey when `RELAY_STATE_BACKEND=redis`; not the catalog) and `/api/livez`.
+
 <Note>
-Still stuck? Send the request, the full error body, and the output of
-`/healthz` and `/api/version` — that's enough to diagnose almost anything.
+When asking for help, include the request, the full error body with its `X-WR-*` response headers, and the output of `/healthz` and `/api/version`.
 </Note>

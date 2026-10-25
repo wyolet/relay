@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
@@ -18,13 +19,37 @@ import (
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/pkg/clientprofile"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-func buildPipeline(cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *pkgratelimit.Limiter, selector *keypool.Selector,
-	hostHealth *hosthealth.Recorder) (*pipeline.Pipeline, *lifecycle.Registry) {
-	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
+// postFlightWriters write after the response, on the post-flight kv store. They hold no state the request path's limiter and selector need, so separate instances are safe.
+type postFlightWriters struct {
+	limiter    *pkgratelimit.Limiter
+	selector   *keypool.Selector
+	hostHealth *hosthealth.Recorder
+}
+
+func newPostFlightWriters(s kv.Store) postFlightWriters {
+	return postFlightWriters{
+		limiter:    pkgratelimit.New(s, slog.Default(), nil),
+		selector:   keypool.New(s, slog.Default(), nil, nil),
+		hostHealth: hosthealth.New(s, nil),
+	}
+}
+
+// buildPipeline wires the realtime pipeline; the caller drains its settle queue with Policy.CloseSettleQueue before closing the post-flight store.
+func buildPipeline(cfg *config.Config, cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *pkgratelimit.Limiter, selector *keypool.Selector,
+	postFlight postFlightWriters) (*pipeline.Pipeline, *lifecycle.Registry) {
+	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter).
+		WithPostFlight(postFlight.selector, postFlight.limiter).
+		WithSettleQueue(policy.SettleQueueConfig{
+			BatchSize: cfg.RedisPostFlightBatchSize,
+			MaxDelay:  cfg.RedisPostFlightBatchDelay,
+			QueueSize: cfg.RedisPostFlightQueueSize,
+			PoolSize:  cfg.RedisPostFlightPoolSize,
+		}, slog.Default())
 
 	// Lifecycle registry — the single point where observer/middleware hooks
 	// attach. Hooks register below before pipeline+proxy start serving.
@@ -38,17 +63,20 @@ func buildPipeline(cat *appcatalog.Catalog, stores *appcatalog.Stores, limiter *
 		// out-of-band (rotation), failing over without blocking when other
 		// candidates exist and parking only when this key is the last resort.
 		KeyAgent:   appsecret.NewAgent(keyRefresher{store: stores.HostKey, cat: cat}, 0, slog.Default()),
-		HostHealth: hostHealth,
+		HostHealth: postFlight.hostHealth,
 	}
 	return pl, lifecycleReg
 }
 
-func buildProxy(cfg *config.Config, limiter *pkgratelimit.Limiter, lifecycleReg *lifecycle.Registry) *proxy.Pipeline {
+func buildProxy(cfg *config.Config, limiter, postFlightLimiter *pkgratelimit.Limiter, policySvc *policy.Service, lifecycleReg *lifecycle.Registry) *proxy.Pipeline {
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
+	proxyPipeline.PostFlightLimiter = postFlightLimiter
+	proxyPipeline.Policy = policySvc
 
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.
-	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
+	adapter.SetUpstreamMaxIdleConnsPerHost(upstreamMaxIdlePerHost(cfg))
+	adapter.SetUpstreamDialTimeout(cfg.UpstreamDialTimeout)
 	adapter.SetUpstreamStreamIdleTimeout(cfg.StreamIdleTimeout)
 	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
 	return proxyPipeline
@@ -93,4 +121,15 @@ func (r catalogSnapReader) Policy(ctx context.Context, id string) (*policy.Polic
 
 func (r catalogSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
 	return r.snap(ctx).RateLimit(id)
+}
+
+// upstreamMaxIdlePerHost defaults to the in-flight cap: each request in flight holds at most one upstream connection, and an idle cap below that peak closes connections the next requests must dial again.
+func upstreamMaxIdlePerHost(cfg *config.Config) int {
+	if cfg.UpstreamMaxIdlePerHost > 0 {
+		return cfg.UpstreamMaxIdlePerHost
+	}
+	if cfg.MaxInflight > 0 {
+		return cfg.MaxInflight
+	}
+	return httpapi.DefaultMaxInflight
 }

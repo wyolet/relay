@@ -47,6 +47,18 @@ relay:
   # -- Cookies are Secure (set false only for plain-HTTP testing).
   cookieSecure: "true"
   maxRequestBytes: ""        # empty = relay default
+  # -- Open connections the inference listener accepts (RELAY_MAX_CONNS); empty = 40 % of goMemLimit at 64 KiB each.
+  maxConns: ""
+  # -- Upstream TCP connect timeout in seconds (RELAY_UPSTREAM_DIAL_TIMEOUT_S); empty = 10.
+  upstreamDialTimeoutS: ""
+  # -- Seconds a proxy-mode request body may go without a byte before relay answers 408; "0" disables, empty = relay default (30).
+  proxyBodyIdleS: ""
+  # -- Seconds a deleted pod keeps serving before relay is sent SIGTERM, so the ingress stops routing to it before its listener closes. Uses the preStop sleep action (Kubernetes 1.30+); 0 removes the hook.
+  preStopSleepS: 5
+  # -- Seconds relay's graceful shutdown waits for in-flight requests (RELAY_SHUTDOWN_DEADLINE_S); empty = relay default (15).
+  shutdownDeadlineS: ""
+  # -- Pod terminationGracePeriodSeconds; empty = preStopSleepS + the shutdown deadline + 10.
+  terminationGracePeriodSeconds: ""
   healthzDeadlineMs: "500"
   # -- Writable dir for the ClickHouse WAL segments (emptyDir-backed).
   eventlogDir: /var/lib/relay/eventlog
@@ -64,13 +76,41 @@ relay:
   # max_connections (bundled PG defaults to 100).
   pgMaxConns: ""
   pgMinConns: ""
-  # -- go-redis pool sizing (RELAY_REDIS_POOL_SIZE / RELAY_REDIS_MIN_IDLE_CONNS,
-  # relay >= 0.9.6). Empty = library defaults, which have NO idle floor: request
-  # bursts on a fresh pod dial Valkey connections cold (TCP + uncached DNS) inside
-  # the request budget. Set redisMinIdleConns to keep a warm floor, mirroring
-  # pgMinConns.
+  # -- go-redis pool sizing (RELAY_REDIS_POOL_SIZE / RELAY_REDIS_MIN_IDLE_CONNS).
+  # Empty = relay defaults: pool 25 per CPU of the pod's limit, NO idle floor, so
+  # request bursts on a fresh pod dial Valkey connections cold (TCP + uncached
+  # DNS) inside the request budget. Set redisMinIdleConns to keep a warm floor,
+  # mirroring pgMinConns. A pool smaller than the default caps the pod's
+  # throughput well before Valkey is busy.
   redisPoolSize: ""
   redisMinIdleConns: ""
+  # -- Valkey client bounds in milliseconds (RELAY_REDIS_*_TIMEOUT_MS); empty =
+  # relay defaults: dial 2000, read 1000, write 500, pool 250. A rate-limit
+  # check that gets no reply in time refuses the request as overloaded (503).
+  redisDialTimeoutMs: ""
+  redisReadTimeoutMs: ""
+  redisWriteTimeoutMs: ""
+  redisPoolTimeoutMs: ""
+  # -- Callers that may wait for a shared-pool connection
+  # (RELAY_REDIS_POOL_MAX_WAITERS); empty = twice the pool size. Past it new
+  # requests are refused as overloaded (503) at once instead of after the pool wait.
+  redisPoolMaxWaiters: ""
+  # -- Resends of a failed Valkey command (RELAY_REDIS_MAX_RETRIES); empty = 0.
+  # A resent rate-limit check can count one request twice.
+  redisMaxRetries: ""
+  # -- The second Valkey client that settles a request after its response
+  # (RELAY_REDIS_POSTFLIGHT_*); empty = relay defaults: pool 25 per CPU, pool wait 1000,
+  # read 1000. Its own pool keeps rate-limit commits from being dropped while
+  # admission holds every connection of the shared one.
+  redisPostFlightPoolSize: ""
+  redisPostFlightPoolTimeoutMs: ""
+  redisPostFlightReadTimeoutMs: ""
+  # -- Settles of many requests sharing one round trip on that client
+  # (RELAY_REDIS_POSTFLIGHT_BATCH_SIZE / _BATCH_DELAY_MS / _QUEUE_SIZE); empty =
+  # relay defaults: 64 per batch, 2 ms wait, 4096 queued. Queue size 0 turns it off.
+  redisPostFlightBatchSize: ""
+  redisPostFlightBatchDelayMs: ""
+  redisPostFlightQueueSize: ""
   # -- Request/response body capture (the /logs UI), seeded into the
   # payload-logging settings section. backend "clickhouse" reuses RELAY_CH_DSN
   # (the bundled CH) — no extra store, no credentials in the settings row.
@@ -232,7 +272,7 @@ valkey:
 external:
   pgDsn: ""        # postgres://user:pw@host:5432/relay?sslmode=require
   chDsn: ""        # clickhouse://user:pw@host:9000/relay
-  redisAddr: ""    # host:6379
+  redisAddr: ""    # host:6379 — Redis 7.0 or later, or any Valkey version
   redisPassword: "" # AUTH password for redisAddr, if it requires one
 
 # ----------------------------------------------------------------------------

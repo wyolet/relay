@@ -150,29 +150,34 @@ jobs:
       RELAY_TEST_CH_DSN: clickhouse://relay:relay@127.0.0.1:9000/default
       SHORT: ${{ needs.guard.outputs.short }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.sha }}
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
+      # The Go build settings CI ran with, so a reproduction builds the same
+      # way; commits from before build.env existed have none.
+      - name: Go build settings
+        run: '[ ! -f build.env ] || grep -E "^[A-Z_]+=" build.env >> "$GITHUB_ENV"'
+
       # For a failing lint or chart check; same pinned version as ci.yml.
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
-          version: v2.12.2
+          version: v2.15.0
           install-only: true
           skip-cache: ${{ runner.environment == 'self-hosted' }}
 
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         if: runner.environment == 'github-hosted'
 
       # The cluster runner image has neither Node (for Claude Code) nor gh.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         if: runner.environment == 'self-hosted'
         with:
           node-version: '24'

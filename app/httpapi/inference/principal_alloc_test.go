@@ -83,7 +83,7 @@ func TestTokenPathAllocations(t *testing.T) {
 // TestTokenPathAllocationsColdCache pins what a first-sight token costs: the
 // Ed25519 verification and the claims decode the cache exists to avoid.
 func TestTokenPathAllocationsColdCache(t *testing.T) {
-	const want = 23
+	const want = pinTokenColdCache
 
 	f := benchFixture(8)
 	f.tokens.SetCacheSize(-1)
@@ -91,7 +91,15 @@ func TestTokenPathAllocationsColdCache(t *testing.T) {
 	token := f.mint(t, nil)
 	h, r := authOnly(t, st, f.tokens, token)
 
-	if got := allocsFor(t, h, r); got != want {
+	got := allocsFor(t, h, r)
+	if raceInstrumented {
+		if ceiling := want * 3 / 2; got > ceiling {
+			t.Fatalf("cold-cache token path allocates %d objects per request under -race, over the %d ceiling "+
+				"around the pin of %d", got, ceiling, want)
+		}
+		return
+	}
+	if got != want {
 		t.Fatalf("cold-cache token path allocates %d objects per request, pinned at %d — "+
 			"re-pin deliberately if the change is intended", got, want)
 	}

@@ -1,25 +1,22 @@
 ---
-title: "Using the SDKs"
-description: "Point the OpenAI and Anthropic client libraries at Relay"
+title: "OpenAI and Anthropic SDKs"
+description: "Point the official OpenAI and Anthropic client libraries at Relay"
 ---
 
-Relay speaks the OpenAI and Anthropic wire protocols, so you don't need a new
-client library — point the official SDK you already use at Relay's base URL
-and pass your **relay key** as the API key. Relay accepts the key whether the
-SDK sends it as a bearer token or an `x-api-key` header, so this just works.
+Relay accepts the OpenAI and Anthropic wire shapes, so the official SDKs work against it unchanged: set the SDK's base URL to Relay and use your **relay key** (or an inference token) as the API key. Relay reads the credential whether the SDK sends it as a bearer token or as an `x-api-key` header.
 
-| SDK | Base URL | Endpoint it calls |
+| SDK | Base URL | Endpoints it calls |
 | --- | --- | --- |
-| OpenAI | `http://localhost:8080/openai/v1` | `/openai/v1/chat/completions` |
+| OpenAI | `http://localhost:8080/openai/v1` | `/openai/v1/chat/completions`, `/openai/v1/responses`, `/openai/v1/embeddings`, `/openai/v1/models` |
 | Anthropic | `http://localhost:8080/anthropic` | `/anthropic/v1/messages` |
-| [Claude Code](/claude-code) | `http://localhost:8080/claude-code` | `/claude-code/v1/messages`, plus model discovery and the startup probe |
-| [Codex CLI](/codex) | `http://localhost:8080/codex/v1` | `/codex/v1/responses` |
-| [OpenCode](/opencode) | `http://localhost:8080/opencode/v1` | `/opencode/v1/chat/completions` or `/opencode/v1/messages`, plus the model catalog at `/opencode/api.json` |
+
+The model you name does not have to belong to the SDK's vendor. Relay routes it through your policy and translates between shapes, so the OpenAI SDK can call a Claude model and the Anthropic SDK an OpenAI one. Embeddings are the exception: they are forwarded unchanged and need a model with an `adapter: openai` binding.
 
 <Info>
-Swap `http://localhost:8080` for your relay's public URL in production. The
-data plane is the inference port (`8080` by default).
+Swap `http://localhost:8080` for your relay's public URL in production. SDK traffic goes to the inference port (`8080` by default), not the control port.
 </Info>
+
+For coding agents, use their dedicated base URLs instead: [Claude Code](/claude-code), [Codex CLI](/codex), [OpenCode](/opencode). For Go, the [Go SDK](/go-sdk) speaks Relay's canonical shape.
 
 ## OpenAI shape
 
@@ -63,6 +60,15 @@ curl http://localhost:8080/openai/v1/chat/completions \
 ```
 
 </CodeGroup>
+
+The same client reaches the Responses API and embeddings:
+
+```python Python
+resp = client.responses.create(model="gpt-4o", input="hello")
+print(resp.output_text)
+
+emb = client.embeddings.create(model="<embedding-model>", input="hello")
+```
 
 ## Anthropic shape
 
@@ -111,7 +117,7 @@ curl http://localhost:8080/anthropic/v1/messages \
 
 ## Streaming
 
-Both SDKs stream as usual — Relay passes the event stream straight through.
+Both SDKs stream as usual. When the upstream speaks the same shape, Relay passes the event stream through byte for byte; otherwise it translates each event.
 
 <CodeGroup>
 
@@ -137,14 +143,39 @@ with client.messages.stream(
 
 </CodeGroup>
 
+## Relay headers from an SDK
+
+Both SDKs let you add headers per client, which is how you send Relay's own request headers, such as usage tags or a host pin. See [Headers](/reference/headers).
+
+<CodeGroup>
+
+```python OpenAI · Python
+client = OpenAI(
+    base_url="http://localhost:8080/openai/v1",
+    api_key="<your-relay-key>",
+    default_headers={"X-WR-Request-Tags": '{"job":"nightly-summaries"}'},
+)
+```
+
+```javascript Anthropic · Node
+const client = new Anthropic({
+  baseURL: "http://localhost:8080/anthropic",
+  apiKey: "<your-relay-key>",
+  defaultHeaders: { "X-WR-Request-Tags": '{"job":"nightly-summaries"}' },
+});
+```
+
+</CodeGroup>
+
 ## Which models can I call?
 
-The `model` you pass must be granted by your relay key's policy and have an
-enabled host binding. List what your key can reach:
+The `model` you pass must be granted by the policy that governs your relay key and have an enabled host binding. List what your key can reach:
 
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer <your-relay-key>"
 ```
 
-See [Troubleshooting](/troubleshooting) if a model returns `403` or `404`.
+`GET /openai/v1/models`, which the OpenAI SDK's `client.models.list()` calls, returns the same list limited to models with an enabled `adapter: openai` binding.
+
+See [Troubleshooting](/troubleshooting) if a model returns `403` or `404`, and [Errors](/reference/inference-api#errors) for every error code.

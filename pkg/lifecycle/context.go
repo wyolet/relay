@@ -107,6 +107,10 @@ type Context struct {
 	// observer skips the request and its stream observer does not buffer.
 	PayloadLog bool
 
+	// RequestBytes is the length of the whole inbound request body, set at
+	// the inference entry whether or not the body itself is retained.
+	RequestBytes int
+
 	// RequestBody is the raw inbound request bytes, retained for the
 	// payloadlog observer. Set at the inference entry (pipeline: the
 	// dispatched body; proxy: a capped tee of the request stream). Nil
@@ -116,8 +120,8 @@ type Context struct {
 
 	// RequestBodyTruncated marks RequestBody as an incomplete prefix of a
 	// larger streamed body — set on the proxy peek-then-stream path when
-	// the remainder wasn't captured (payload logging off, the tee capture
-	// hit its cap, or upstream answered before draining the request) — so
+	// the remainder wasn't captured (the tee capture hit its cap, or
+	// upstream answered before draining the request) — so
 	// payload records never pretend the stored bytes were the whole
 	// request. False whenever RequestBody holds the complete body.
 	RequestBodyTruncated bool
@@ -156,6 +160,16 @@ type Context struct {
 	// from "not extracted".
 	streamTokens    map[string]int64
 	streamTokensSet bool
+
+	// streamSummary is the session summarizer's result, set by Finish before
+	// stream observers' Result runs so they reuse it instead of translating
+	// every frame a second time.
+	streamSummary    v1.Summary
+	streamSummarySet bool
+
+	// responseSummary is a buffered response's Summary, decoded once by whichever reaches the body first (the handler translating it, or the runner's post-flight) and reused by the rate-limit commit and the usage hook.
+	responseSummary    v1.Summary
+	responseSummarySet bool
 
 	// ResponseStatus is the upstream HTTP status the runner stamps at
 	// post-flight, so an observer that runs when the post-flight Hook fan-out
@@ -246,4 +260,40 @@ func (c *Context) setStreamTokens(t map[string]int64) {
 	}
 	c.streamTokens = t
 	c.streamTokensSet = true
+}
+
+// StreamSummary returns the usage Summary the StreamSession harvested from
+// the upstream stream, and whether the session has finished. Nil-safe.
+func (c *Context) StreamSummary() (v1.Summary, bool) {
+	if c == nil {
+		return v1.Summary{}, false
+	}
+	return c.streamSummary, c.streamSummarySet
+}
+
+// ResponseSummary returns the buffered response's Summary, and whether one was recorded. Nil-safe.
+func (c *Context) ResponseSummary() (v1.Summary, bool) {
+	if c == nil {
+		return v1.Summary{}, false
+	}
+	return c.responseSummary, c.responseSummarySet
+}
+
+// SetResponseSummary records the buffered response's Summary. It is not locked: set it on the post-flight goroutine, or before that goroutine starts. Nil-safe.
+func (c *Context) SetResponseSummary(s v1.Summary) {
+	if c == nil {
+		return
+	}
+	c.responseSummary = s
+	c.responseSummarySet = true
+}
+
+// setStreamSummary records the session's Summary. Package-private: only
+// StreamSession.Finish writes it.
+func (c *Context) setStreamSummary(s v1.Summary) {
+	if c == nil {
+		return
+	}
+	c.streamSummary = s
+	c.streamSummarySet = true
 }

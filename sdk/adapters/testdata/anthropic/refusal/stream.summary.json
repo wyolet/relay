@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "input": 30,
+    "output": 7
+  },
+  "finish_reason": "refusal",
+  "service_tier": ""
+}

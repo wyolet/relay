@@ -1,17 +1,119 @@
 ---
-title: "Go SDK: proxy, telemetry and direct calls"
-description: "Choose whether a call goes through Relay, goes to the provider and is reported to Relay, or goes to the provider alone"
+title: "Go SDK"
+description: "Call models through Relay from Go, or call the provider directly and report each call to Relay"
 ---
 
-The Go SDK (`github.com/wyolet/relay/sdk`) takes one canonical request and sends it either through Relay or straight to a provider. `client.ForMode` picks the path from one switch:
+The Go SDK (`github.com/wyolet/relay/sdk`) takes one request in Relay's [canonical shape](/reference/inference-api#canonical-shape) and sends it through Relay or straight to a provider. Its module imports nothing from the server, so it can be vendored on its own.
+
+```bash
+go get github.com/wyolet/relay/sdk
+```
+
+## Calling Relay
+
+`client.Relay` sends requests to Relay's `POST /v1/generate` with your relay key. Routing, policy, rate limits and key pooling happen on the server.
+
+```go
+import (
+	"github.com/wyolet/relay/sdk/client"
+	v1 "github.com/wyolet/relay/sdk/v1"
+)
+
+c := client.Relay("https://relay.example.com", os.Getenv("WR_API_KEY"))
+
+resp, err := c.Generate(ctx, &v1.Request{
+	Model: v1.ModelRefs{"claude-sonnet-4-6"},
+	Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "Hello"}}}},
+})
+if err != nil {
+	log.Fatal(err)
+}
+for _, item := range resp.Output {
+	if m, ok := item.(*v1.Message); ok {
+		for _, p := range m.Content {
+			if t, ok := p.(*v1.OutputTextPart); ok {
+				fmt.Print(t.Text)
+			}
+		}
+	}
+}
+fmt.Println(resp.Usage["input"], resp.Usage["output"])
+```
+
+`GenerateStream` returns the canonical event stream. Call `Recv` until `io.EOF` and close the stream when done:
+
+```go
+s, err := c.GenerateStream(ctx, req)
+if err != nil {
+	log.Fatal(err)
+}
+defer s.Close()
+for {
+	ev, err := s.Recv()
+	if err == io.EOF {
+		break
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+	if ev.Type == v1.EventItemDelta {
+		var d v1.ItemDeltaEvent
+		_ = json.Unmarshal(ev.Data, &d)
+		fmt.Print(d.Delta)
+	}
+}
+```
+
+A non-`2xx` answer is returned as `*client.APIError`, with `StatusCode`, `Code`, `Message` and the raw body. Missing or invalid configuration does not fail construction: it is returned by the first `Generate` or `GenerateStream`.
+
+### Relay client environment
+
+Empty arguments to `client.Relay` fall back to the environment:
+
+| Variable | Meaning |
+| --- | --- |
+| `WR_BASE_URL` | Relay's inference URL, used when `baseURL` is empty |
+| `WR_API_KEY` | Relay key, used when `relayKey` is empty |
+| `WR_USAGE` | Default `X-WR-Usage` header. `full` adds the `relay_usage` block (request id, tokens, attempts, timing) to every response. |
+| `WR_HEADERS` | Extra headers on every request, as `name1=value1,name2=value2`. Options passed to `client.Relay` override them. |
+| `WR_TIMEOUT` | Deadline for `Generate`, as a Go duration (`30s`). Streams are not affected. |
+
+`client.WithHeader(name, value)` adds a header per client, for example `X-WR-Request-Tags` to tag usage events. See [Headers](/reference/headers).
+
+### WebSocket
+
+`client.RelayWS` has the same API as `client.Relay` but sends every request over one WebSocket to Relay's `/v1/ws`, so a loop of many requests pays the TLS and authentication handshake once. One client sends one request at a time: a request holds the connection until its response or stream is closed. Call `c.Close()` when done. See [WebSocket](/reference/inference-api#websocket) for the protocol.
+
+```go
+c := client.RelayWS("https://relay.example.com", os.Getenv("WR_API_KEY"))
+defer c.Close()
+```
+
+## Calling a provider directly
+
+`client.For` resolves a model reference against the catalog embedded in the SDK and returns a client wired to that host's API, shape and pricing. It calls the provider with your provider key, without Relay:
+
+```go
+c, err := client.For("claude-sonnet-4-6", os.Getenv("ANTHROPIC_API_KEY"))
+resp, err := c.Generate(ctx, req)
+cost, ok := resp.Cost() // in the binding's price currency; ok is false when the binding is unpriced
+```
+
+References take the forms `gpt-4o`, `openai/gpt-4o` and `gpt-4o@<host>`. `Cost()` is available on responses and, once the final usage event has arrived, on streams; it is always `false` for clients that call Relay, since Relay prices the call itself.
+
+`client.OpenAI`, `client.OpenAIResponses`, `client.Anthropic` and `client.Gemini` build a client for a base URL you give, with no catalog lookup and no pricing. An empty key falls back to `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` then `GOOGLE_API_KEY`.
+
+## Choosing where calls go
+
+`client.ForMode` builds one of three clients from a single switch, so the same code can run through Relay in one deployment and straight to the provider in another:
 
 | Mode | The call goes to | Relay records it | Message content |
 | --- | --- | --- | --- |
-| `proxy` | Relay, with your relay key | yes, as a proxied request | kept when Relay's [payload logging](/concepts/observability#payload-logging) applies |
+| `proxy` | Relay's `/v1/generate`, with your relay key | yes, as a routed request | kept when Relay's [payload logging](/concepts/payload-logging) applies |
 | `telemetry` | the provider, with your provider key | yes, reported over OTLP with your relay key | sent when Relay asks for it, or when you opt in and no policy decides; see [Content](#content) |
 | `direct` | the provider, with your provider key | no | never sent |
 
-Telemetry cannot be on in `proxy` mode, so a call is never counted twice.
+The SDK's `proxy` mode is a normal routed request through Relay, not Relay's [proxy mode](/concepts/proxy-mode), which forwards your own upstream key. Telemetry cannot be on in `proxy` mode, so a call is never counted twice.
 
 ```go
 c, err := client.ForMode("gpt-4o")
@@ -25,7 +127,7 @@ resp, err := c.Generate(ctx, &v1.Request{
 })
 ```
 
-## Choosing the mode
+### How the mode is chosen
 
 The mode is, in order:
 
@@ -33,9 +135,9 @@ The mode is, in order:
 2. `WR_MODE` = `proxy`, `telemetry` or `direct`.
 3. `proxy` when `WR_BASE_URL` and `WR_API_KEY` are set, else `direct`. Telemetry is never chosen by default.
 
-In `proxy` mode the client sends every call to `WR_BASE_URL` with `WR_API_KEY`, and the model reference passed to `ForMode` is the model Relay resolves. In `telemetry` and `direct` mode the reference is resolved against the catalog embedded in the SDK, like `client.For`, and the call goes to that host.
+In `proxy` mode the client is `client.Relay` with `WR_BASE_URL` and `WR_API_KEY`, and the model reference passed to `ForMode` is the model Relay resolves. In `telemetry` and `direct` mode the reference is resolved against the catalog embedded in the SDK, like `client.For`, and the call goes to that host.
 
-## Environment
+### Environment
 
 | Variable | Used by | Meaning |
 | --- | --- | --- |
@@ -56,7 +158,7 @@ Missing configuration does not panic: it is returned by the first `Generate` or 
 
 | Mode | Reads | Contains |
 | --- | --- | --- |
-| `proxy` | Relay's `GET /v1/models` and `GET /v1/catalog`, with your relay key | what the key's policy can route to |
+| `proxy` (and `client.Relay`, `client.RelayWS`) | Relay's `GET /v1/models` and `GET /v1/catalog`, with your relay key | what the key's policy can route to |
 | `telemetry`, `direct` | the latest public catalog, through `catalogsource.Latest` | the host the model reference resolved to |
 
 In `telemetry` and `direct` mode nothing is sent to Relay or to the provider; the relay key authenticates reports only. `Models` lists the model slugs the host serves. What the catalog lists is what the host serves, not what your provider key can call; a model the key can't use fails on the call. A client built with `client.OpenAI`, `client.Anthropic`, `client.Gemini` or `client.New` has no catalog host and gets the whole catalog.
@@ -88,7 +190,7 @@ c, err := client.ForFrom(ic, "gpt-4o", os.Getenv("OPENAI_API_KEY"))
 
 ## Telemetry mode
 
-Each call becomes one OpenTelemetry span in the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), exported as OTLP/HTTP JSON with gzip. Token counts come from the SDK's own translators, the same counts Relay stores for a proxied call, including cache reads and writes, reasoning and audio, and streams. A call made through `client.For` or `ForMode` also carries `wyolet.relay.host`, the catalog host it was resolved to, so Relay [prices it at that host](/concepts/observability#pricing-and-provider-names).
+Each call becomes one OpenTelemetry span in the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), exported as OTLP/HTTP JSON with gzip. Token counts come from the SDK's own translators, the same counts Relay stores for a call routed through it, including cache reads and writes, reasoning and audio, and streams. A call made through `client.For` or `ForMode` also carries `wyolet.relay.host`, the catalog host it was resolved to, so Relay [prices it at that host](/concepts/otlp-receiver#pricing-and-provider-names).
 
 Reporting never slows or fails a call. Calls wait in a queue of 2,048 and are exported in batches of up to 512, every 5 seconds. When the queue is full a call is dropped; an export that fails is retried up to three times (on `429`, `502`, `503`, `504` and network errors, honouring `Retry-After`, 30 seconds at most) and then dropped. `Dropped()` counts what was lost and `LastWarning()` returns the last message Relay sent back in a partial success.
 
@@ -120,7 +222,7 @@ A process that exits right after its calls must send what is queued first:
 
 ### Content
 
-The policy that governs your relay key decides whether Relay stores message content; your opt-in decides only when no policy governs the key, and nothing is stored while Relay's [content capture](/concepts/observability#message-content) is off. Relay answers every accepted export with the `X-WR-Content-Capture` header, and the SDK follows it:
+The policy that governs your relay key decides whether Relay stores message content; your opt-in decides only when no policy governs the key, and nothing is stored while Relay's [content capture](/concepts/otlp-receiver#message-content) is off. Relay answers every accepted export with the `X-WR-Content-Capture` header, and the SDK follows it:
 
 | Answer | Content is sent |
 | --- | --- |

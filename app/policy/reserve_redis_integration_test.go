@@ -74,6 +74,33 @@ func TestReserve_IsOneScriptOnRedis(t *testing.T) {
 	}
 }
 
+// Extra rules join the same EVAL under the same hash tag, so a real cluster
+// runs the policy rules and the ceiling together.
+func TestReserve_ExtraRulesOnRedis(t *testing.T) {
+	svc, store, pol := redisFixture(t,
+		appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 1 << 20,
+			Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyFixedWindow})
+	ctx := context.Background()
+
+	if _, err := svc.ReserveInbound(ctx, InboundInput{
+		Policy: pol, TeamID: "team-1", TokenJTI: "jti-1", ExtraRules: ceilingRules(1 << 20),
+	}); err != nil {
+		t.Fatalf("ReserveInbound: %v", err)
+	}
+	scripts := store.Scripts()
+	if len(scripts) != 1 || scripts[0].Name != "limit.reserve" {
+		t.Fatalf("script calls = %v, want exactly one limit.reserve", scriptNames(store))
+	}
+	if len(scripts[0].Keys) != 3 {
+		t.Fatalf("script keys = %v, want revocation, policy and extra rule keys", scripts[0].Keys)
+	}
+	for _, k := range scripts[0].Keys {
+		if !strings.HasPrefix(k, "limit:{team:team-1}:") {
+			t.Errorf("key %q is outside the team hash tag; a real cluster refuses the script", k)
+		}
+	}
+}
+
 // A revoked token is refused inside that same single call — the denylist
 // entry is read by the reservation, not by a second round trip before it.
 func TestReserve_RevokedJTIOnRedis(t *testing.T) {

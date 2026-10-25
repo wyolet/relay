@@ -4,12 +4,13 @@ import (
 	"context"
 	"sync"
 	"testing"
+
+	"github.com/wyolet/relay/app/hostkey"
 )
 
-// TestRecordSuccess_ReadsPriorState confirms the atomic Lua path returns the
-// prior record (used for the from-state log line): after a failure opens the
-// breaker, RecordSuccess observes the open state and writes closed in one round
-// trip.
+// TestRecordSuccess_ReadsPriorState confirms the atomic script path closes a
+// probed key: after a failure opens the breaker and its cooldown ends, the
+// probe's RecordSuccess writes closed in one round trip.
 func TestRecordSuccess_ReadsPriorState(t *testing.T) {
 	sel, ms := newSel(t, frozenClock(t0))
 	ctx := context.Background()
@@ -26,6 +27,10 @@ func TestRecordSuccess_ReadsPriorState(t *testing.T) {
 		t.Fatalf("precondition: want open, got %v", rec.State)
 	}
 
+	sel.clock = frozenClock(t0.Add(authCooldowns[0]))
+	if _, err := sel.Pick(ctx, "p", KeySelectionPrioritized, []*hostkey.HostKey{key("s", k)}); err != nil {
+		t.Fatal(err)
+	}
 	sel.RecordSuccess(ctx, k)
 	rec := sel.readRecord(ctx, k)
 	if rec.State != CircuitClosed || rec.BackoffStep != 0 || rec.Reason != "" {

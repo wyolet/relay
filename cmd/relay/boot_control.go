@@ -116,6 +116,6 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		// constraint and gains nothing from a response-duration cap here.
 	}
 	slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
-	_, ch := serve(ctrlSrv)
+	_, ch := serve(ctrlSrv, 0)
 	return ctrlSrv, ch
 }

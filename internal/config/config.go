@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -43,15 +44,31 @@ type Config struct {
 	PGMinConns    int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
 	RedisAddr     string
 	RedisPassword string // RELAY_REDIS_PASSWORD; empty = no AUTH
-	// RedisPoolSize / RedisMinIdleConns tune the go-redis client pool.
-	// 0 = library defaults (pool 10×GOMAXPROCS, NO idle floor). A warm
-	// floor keeps connections pre-dialed so request bursts never pay
-	// cold-dial (TCP + uncached DNS) latency inside a request budget —
-	// same rationale as the PG warm floor above.
+	// RedisPoolSize / RedisMinIdleConns tune the shared go-redis client pool.
+	// Pool defaults to DefaultRedisPoolSizePerCPU × GOMAXPROCS; idle floor 0
+	// = none. A warm floor keeps connections pre-dialed so request bursts
+	// never pay cold-dial (TCP + uncached DNS) latency inside a request
+	// budget — same rationale as the PG warm floor above.
 	RedisPoolSize     int // RELAY_REDIS_POOL_SIZE
 	RedisMinIdleConns int // RELAY_REDIS_MIN_IDLE_CONNS
-	CHDSN             string
-	OTLPEndpoint      string
+	// RELAY_REDIS_{DIAL,READ,WRITE,POOL}_TIMEOUT_MS and RELAY_REDIS_MAX_RETRIES. Defaults are kv.Default*; retries default to 0 because a resent reserve script can count one request twice.
+	RedisDialTimeout  time.Duration
+	RedisReadTimeout  time.Duration
+	RedisWriteTimeout time.Duration
+	RedisPoolTimeout  time.Duration
+	RedisMaxRetries   int
+	// RELAY_REDIS_POOL_MAX_WAITERS: calls that may wait for a shared-pool connection before admission is refused at once rather than after the pool wait; default twice RedisPoolSize.
+	RedisPoolMaxWaiters int
+	// RELAY_REDIS_POSTFLIGHT_{POOL_SIZE,POOL_TIMEOUT_MS,READ_TIMEOUT_MS}: the second client that settles served requests after the response; dial and write bounds and retries are the shared ones.
+	RedisPostFlightPoolSize    int
+	RedisPostFlightPoolTimeout time.Duration
+	RedisPostFlightReadTimeout time.Duration
+	// RELAY_REDIS_POSTFLIGHT_{BATCH_SIZE,BATCH_DELAY_MS,QUEUE_SIZE}: the queue that coalesces served requests' settles into shared round trips on that client; a queue size of 0 turns it off.
+	RedisPostFlightBatchSize  int
+	RedisPostFlightBatchDelay time.Duration
+	RedisPostFlightQueueSize  int
+	CHDSN                     string
+	OTLPEndpoint              string
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema
@@ -87,17 +104,37 @@ type Config struct {
 	CatalogIndexURL string
 	InstanceID      string
 	EventlogDir     string
-	MaxRequestBytes int64 // 0 = use httpmw.DefaultMaxRequestBytes
-	MaxInflight     int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
+	// UsageQueueSize is how many usage events wait in memory for the sink before new ones are dropped (RELAY_USAGE_QUEUE_SIZE); 0 = usagelog.DefaultQueueSize.
+	UsageQueueSize int
+	// UsageRefusedQueueSize is the same for events of requests that never reached an upstream (RELAY_USAGE_REFUSED_QUEUE_SIZE); 0 = usagelog.DefaultRefusedQueueSize.
+	UsageRefusedQueueSize int
+	// PayloadQueueBytes bounds the memory captured payload records hold while they wait for the sink (RELAY_PAYLOAD_QUEUE_BYTES); 0 = sized from the memory limit.
+	PayloadQueueBytes int
+	// PayloadRefusedQueueBytes is the same for records of requests that never reached an upstream (RELAY_PAYLOAD_REFUSED_QUEUE_BYTES); 0 = payloadlog.DefaultRefusedQueueBytes.
+	PayloadRefusedQueueBytes int
+	MaxRequestBytes          int64 // 0 = use httpmw.DefaultMaxRequestBytes
+	MaxInflight              int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
 
 	// UpstreamMaxIdlePerHost caps idle keep-alive connections the upstream
-	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST, default 128).
-	// The stdlib default (2) forces a fresh dial on nearly every request at
-	// high per-host RPS; a higher ceiling keeps hot upstream connections warm.
+	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST); 0 = the
+	// in-flight cap, so every request in flight can return its connection to the pool.
 	UpstreamMaxIdlePerHost int
+
+	// UpstreamDialTimeout bounds the TCP connect to an upstream (RELAY_UPSTREAM_DIAL_TIMEOUT_S, default 10s).
+	UpstreamDialTimeout time.Duration
+
+	// MaxConns caps the open connections the inference listener accepts (RELAY_MAX_CONNS); 0 = derived from the memory limit at boot.
+	MaxConns int
+
+	// KeyBreakerThreshold and KeyBreakerWindow set how many upstream server or network errors within the window open a host key's breaker (RELAY_KEY_BREAKER_THRESHOLD, RELAY_KEY_BREAKER_WINDOW_S); 0 = keypool defaults. 401 and 403 open it at once.
+	KeyBreakerThreshold int
+	KeyBreakerWindow    time.Duration
 
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
+
+	// ProxyBodyIdle is how long a proxy-mode request body may go without a byte before relay answers 408 and aborts the forward (RELAY_PROXY_BODY_IDLE_S, default 30s; 0 disables). The body streams upstream while the request holds an in-flight slot, a rate-limit lease and an upstream connection, and the listener has no read timeout of its own.
+	ProxyBodyIdle time.Duration
 
 	// StreamUsage makes same-shape streamed requests ask the upstream for token usage when the wire shape reports it only on request (RELAY_STREAM_USAGE, default on). The extra usage frame is removed from the caller's stream unless the caller asked for it.
 	StreamUsage bool
@@ -133,6 +170,9 @@ type Config struct {
 
 	// ControlListenHost is the address the control listener binds (RELAY_CONTROL_LISTEN_HOST, default ListenHost), so the admin plane can stay private while inference is reachable.
 	ControlListenHost string
+
+	// PprofAddr is the host:port the runtime profiling listener binds (RELAY_PPROF_ADDR). Empty disables it.
+	PprofAddr string
 
 	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
 	// separated list of exact origin strings (no wildcards — credentialed
@@ -247,7 +287,7 @@ func Load() (*Config, error) {
 	}
 	cfg.RedisAddr = os.Getenv("RELAY_REDIS_ADDR")
 	cfg.RedisPassword = os.Getenv("RELAY_REDIS_PASSWORD")
-	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", 0); err != nil {
+	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", DefaultRedisPoolSizePerCPU*runtime.GOMAXPROCS(0)); err != nil {
 		return nil, fmt.Errorf("RELAY_REDIS_POOL_SIZE must be >= 1")
 	} else {
 		cfg.RedisPoolSize = v
@@ -256,6 +296,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_REDIS_MIN_IDLE_CONNS must be >= 1")
 	} else {
 		cfg.RedisMinIdleConns = v
+	}
+	if err := loadRedisClient(cfg); err != nil {
+		return nil, err
 	}
 	cfg.CHDSN = os.Getenv("RELAY_CH_DSN")
 	cfg.OTLPEndpoint = os.Getenv("RELAY_OTLP_ENDPOINT")
@@ -346,6 +389,26 @@ func Load() (*Config, error) {
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")
+	if v, err := envPositiveInt("RELAY_USAGE_QUEUE_SIZE", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_USAGE_QUEUE_SIZE must be >= 1")
+	} else {
+		cfg.UsageQueueSize = v
+	}
+	if v, err := envPositiveInt("RELAY_USAGE_REFUSED_QUEUE_SIZE", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_USAGE_REFUSED_QUEUE_SIZE must be >= 1")
+	} else {
+		cfg.UsageRefusedQueueSize = v
+	}
+	if v, err := envPositiveInt("RELAY_PAYLOAD_QUEUE_BYTES", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_PAYLOAD_QUEUE_BYTES must be >= 1")
+	} else {
+		cfg.PayloadQueueBytes = v
+	}
+	if v, err := envPositiveInt("RELAY_PAYLOAD_REFUSED_QUEUE_BYTES", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_PAYLOAD_REFUSED_QUEUE_BYTES must be >= 1")
+	} else {
+		cfg.PayloadRefusedQueueBytes = v
+	}
 
 	if v := envInt64("RELAY_MAX_REQUEST_BYTES", 0); v > 0 {
 		cfg.MaxRequestBytes = v
@@ -362,10 +425,31 @@ func Load() (*Config, error) {
 		cfg.BatchMaxItems = v
 	}
 
-	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 128); err != nil {
+	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 0); err != nil {
 		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
 	} else {
 		cfg.UpstreamMaxIdlePerHost = v
+	}
+
+	if v, err := envPositiveInt("RELAY_UPSTREAM_DIAL_TIMEOUT_S", 10); err != nil {
+		return nil, fmt.Errorf("RELAY_UPSTREAM_DIAL_TIMEOUT_S must be >= 1")
+	} else {
+		cfg.UpstreamDialTimeout = time.Duration(v) * time.Second
+	}
+	if v, err := envPositiveInt("RELAY_MAX_CONNS", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_MAX_CONNS must be >= 1")
+	} else {
+		cfg.MaxConns = v
+	}
+	if v := envInt("RELAY_KEY_BREAKER_THRESHOLD", 0); v < 0 {
+		return nil, fmt.Errorf("RELAY_KEY_BREAKER_THRESHOLD must be >= 0")
+	} else {
+		cfg.KeyBreakerThreshold = v
+	}
+	if v := envInt("RELAY_KEY_BREAKER_WINDOW_S", 0); v < 0 {
+		return nil, fmt.Errorf("RELAY_KEY_BREAKER_WINDOW_S must be >= 0")
+	} else {
+		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
@@ -373,6 +457,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_STREAM_KEEPALIVE_S must be >= 0")
 	} else {
 		cfg.StreamKeepAlive = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_PROXY_BODY_IDLE_S", 30); v < 0 {
+		return nil, fmt.Errorf("RELAY_PROXY_BODY_IDLE_S must be >= 0")
+	} else {
+		cfg.ProxyBodyIdle = time.Duration(v) * time.Second
 	}
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_STREAM_USAGE"))); v {
 	case "", "on", "1", "true":
@@ -428,6 +517,9 @@ func Load() (*Config, error) {
 		cfg.ControlPort = "8081"
 	}
 	if err := loadListenHosts(cfg); err != nil {
+		return nil, err
+	}
+	if err := loadPprofAddr(cfg); err != nil {
 		return nil, err
 	}
 

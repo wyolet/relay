@@ -23,7 +23,7 @@ var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/tenancy_g
 const tenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha2
 kind: Team
 metadata: {name: platform, displayName: Platform, owner: {kind: user}, labels: {managed: gitops}}
-spec: {budget: {amount: "100", onExceed: block}}
+spec: {budget: {amount: "100"}}
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Team
@@ -33,7 +33,7 @@ spec: {enabled: true}
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Project
 metadata: {name: ml-search, displayName: ML Search, annotations: {note: seeded}}
-spec: {team: platform, budget: {amount: "25.50", period: week, onExceed: warn}}
+spec: {team: platform, budget: {amount: "25.50", period: week}}
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Project

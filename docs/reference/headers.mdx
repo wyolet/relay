@@ -1,68 +1,67 @@
 ---
 title: "Headers"
-description: "The HTTP headers Relay reads and emits"
+description: "The HTTP headers Relay reads and emits on the inference plane"
 ---
 
-Relay uses a small set of `X-WR-*` request headers to control routing and
-behavior, plus standard auth and request-id headers. Anything Relay doesn't
-recognize is left alone.
+Relay reads a small set of `X-WR-*` request headers to control routing and recording, plus the standard auth and request-id headers. It never forwards an `X-WR-*` header to the upstream. Any other header is passed through.
 
 ## Request headers
 
 | Header | Purpose |
 | --- | --- |
-| `Authorization` | `Bearer <relay-key>` in normal mode. In [proxy mode](/concepts/proxy-mode) it carries your **own upstream provider key**, forwarded verbatim. |
-| `X-WR-API-Key` | Your relay key — the preferred place to send it. Takes precedence over `Authorization`. |
+| `Authorization` | `Bearer <relay-key-or-token>` in normal mode. In [proxy mode](/concepts/proxy-mode) it carries **your own upstream key**, forwarded to the provider. |
+| `X-WR-API-Key` | Your relay key or inference token. Checked before `Authorization`, and the only place for it in proxy mode. |
 | `x-api-key` | Relay-key fallback, for Anthropic-SDK-style clients that send the key here. |
-| `X-WR-Proxy-Mode` | Set to `Proxy` to enable [proxy mode](/concepts/proxy-mode). Omit (or `No-Proxy`) for normal routing. |
-| `X-WR-Upstream-Host` | Pin a specific upstream host by its catalog slug. Required for anonymous proxy requests. |
-| `X-WR-Usage` | Set to `full` to receive an inline `relay_usage` block in the response. Honored only for canonical-shape requests. |
-| `X-Request-ID` | Your own correlation ID (printable ASCII, 1–128 chars; otherwise ignored). Relay echoes it back and records it on the log record as `extras.client_request_id`. It never replaces the request ID Relay generates. |
+| `X-WR-Proxy-Mode` | `Proxy` turns on [proxy mode](/concepts/proxy-mode). Omit it, or send `No-Proxy`, for normal routing. Any other value is a `400`. |
+| `X-WR-Upstream-Host` | A host slug. In normal mode it pins the host when several serve the model, like `model@host` in the body (an `@host` in the body wins). In proxy mode it names the upstream; anonymous proxy requests must send it. |
+| `X-WR-Usage` | `full` adds a `relay_usage` block (request id, tokens, attempts, timing) to the response. Canonical-shape requests only. |
+| `X-WR-Request-Tags` | Tags recorded on the usage event: a flat JSON object of strings, for example `{"team":"search","job":"nightly"}`. At most 16 keys, keys up to 64 characters, values up to 256, the whole header up to 2,048 bytes. A value that breaks any rule is dropped whole and the request proceeds. Query them with the `tag` filter and `tags.<key>` grouping of the [usage API](/concepts/usage#request-tags). |
+| `X-WR-Client` | Names the calling client (`claude-code`, `codex`, `opencode`) when it uses neither the client's path prefix nor its usual `User-Agent`. The client is recorded on the usage event. An unknown value is ignored. |
+| `X-Request-ID` | Your own correlation id (printable ASCII, 1 to 128 characters; otherwise ignored). Relay echoes it and records it on the usage event as `extras.client_request_id`. It never replaces the id Relay generates. |
 
 ### How Relay finds your relay key
 
-In normal mode, Relay looks for the relay key in this order:
+In normal mode Relay looks for the relay key or inference token in this order:
 
 1. `X-WR-API-Key`
-2. `Authorization: Bearer <token>`
+2. `Authorization: Bearer <credential>`
 3. `x-api-key`
 
-Use whichever fits your client. If you're pointing an existing OpenAI or
-Anthropic SDK at Relay, just set its API key — it lands in `Authorization` or
-`x-api-key` and Relay picks it up.
+If you point an existing OpenAI or Anthropic SDK at Relay, set its API key to your relay key: it lands in `Authorization` or `x-api-key` and Relay reads it from there.
+
+In proxy mode `Authorization` belongs to the upstream, so the relay key goes in `X-WR-API-Key`. Without it the request is anonymous proxy traffic.
 
 ## Response headers
 
 | Header | Meaning |
 | --- | --- |
-| `X-Relay-Request-ID` | Set on every response: the ID Relay generated for this request. It is the `request_id` for `GET /logs/{request_id}`. |
+| `X-Relay-Request-ID` | Set on every response: the id Relay generated for this request. It is the `request_id` for `GET /api/logs/{request_id}` on the control API. |
 | `X-Request-ID` | Your `X-Request-ID`, echoed when you sent a valid one. |
-| `X-WR-Content-Capture` | On accepted OTLP exports (`/otlp/v1/traces`, `/otlp/v1/logs`): `store`, `drop` or `client`, whether Relay stores the message content this credential reports. See [Message content](/concepts/observability#message-content). |
+| `X-WR-Origin` | `relay` when Relay wrote the response, `upstream` when the status and body came from the provider. Use it to tell a relay-key `401` from a provider `401`. |
+| `X-WR-Upstream-Status` | On an error that reports an upstream failure: the provider's HTTP status. |
+| `X-Should-Retry` | `true` or `false` on errors Relay writes: whether repeating the identical request can succeed (`true` for `408`, `429` and `5xx`). An upstream's own value is kept. |
+| `Retry-After` | Seconds to wait, on Relay's `429` (rate limit or in-flight cap) and `503` while the catalog loads. An upstream's value is forwarded, rewritten to whole seconds when it was a date. |
+| `X-WR-Warnings` | Non-fatal changes Relay made to the request, for example `dropped_params=temperature; reason=unsupported_by_model` when the catalog marks a parameter unsupported for the routed model. |
+| `X-WR-Token-Count` | On `/claude-code/v1/messages/count_tokens`: `exact` (the upstream counted), `calibrated` (from the ratio Relay measured on earlier requests of the session or model) or `estimated` (from the body size). |
+| `X-WR-Content-Capture` | On accepted OTLP exports (`/otlp/v1/traces`, `/otlp/v1/logs`): `store`, `drop` or `client`, whether Relay stores the message content this credential reports. See [Message content](/concepts/otlp-receiver#message-content). |
 
-Relay forwards the upstream provider's response headers through to you, minus
-hop-by-hop headers. On cross-shape translated responses, `Content-Length` and
-`Content-Encoding` are dropped, since the translated body differs from the
-upstream's.
+On a successful response Relay forwards the upstream's headers, minus hop-by-hop headers. On a cross-shape translated response it drops `Content-Length` and `Content-Encoding`, since the translated body differs from the upstream's.
+
+When Relay returns an upstream failure in place of a response, it forwards only `Retry-After`, `X-Should-Retry`, `X-Request-Id`, `Content-Type` and the upstream's rate-limit headers (`Anthropic-Ratelimit-*`, `X-Ratelimit-*`).
 
 ## What Relay strips before calling upstream
 
-Relay never leaks its own auth or control headers to the provider. Before
-forwarding a request upstream it removes:
+Relay never sends its own auth or control headers to the provider. Before forwarding a request upstream it removes:
 
-- `Authorization` and `x-api-key` (replaced with the correct upstream
-  credential)
+- `Authorization` and `x-api-key` (replaced with the host key in normal mode, or re-attached as your own upstream key in proxy mode)
 - `Cookie`
 - every `X-WR-*` header
-- standard hop-by-hop headers
+- hop-by-hop headers, and any header named in `Connection`
 
 <Info>
-This is why your relay key is safe to send as a bearer token: it's used to
-authenticate *you to Relay*, then stripped — it never reaches the provider.
+This is why your relay key is safe to send as a bearer token: it authenticates you to Relay and is then removed, so it never reaches the provider.
 </Info>
 
 ## Client IP and trusted proxies
 
-For anonymous proxy rate limiting, Relay needs your real client IP. If Relay
-sits behind a load balancer, set `RELAY_TRUSTED_PROXIES` to a comma-separated
-list of CIDRs; Relay then trusts `X-Forwarded-For` from those peers and uses
-the rightmost untrusted IP. Unset, it uses the direct connection address.
+Anonymous proxy rate limits are counted per client IP. If Relay sits behind a load balancer, set `RELAY_TRUSTED_PROXIES` to a comma-separated list of CIDRs; Relay then trusts `X-Forwarded-For` from those peers and uses the rightmost untrusted address. Unset, it uses the address of the direct connection.

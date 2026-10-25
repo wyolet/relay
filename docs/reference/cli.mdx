@@ -1,0 +1,263 @@
+---
+title: "CLI reference"
+description: "Commands, flags, environment variables and exit codes of the relay binary and the other command-line tools"
+---
+
+The `relay` binary is both the server and its operator commands. With no arguments it starts the server; a first argument naming one of the commands below runs that command instead.
+
+| Command | What it does | Talks to |
+| --- | --- | --- |
+| `relay` | Start the inference and control listeners | Postgres, and Valkey when configured |
+| [`relay apply`](#relay-apply) | Plan and apply a manifest bundle | Control API |
+| [`relay export`](#relay-export) | Render stored rows as a manifest bundle | Control API |
+| [`relay auth can-i`](#relay-auth-can-i) | Ask whether a subject may perform an action | Control API |
+| [`relay token mint`](#relay-token-mint) | Log in with a password and mint an inference token | Control API |
+| [`relay keygen`](#relay-keygen) | Generate a relay key locally | Nothing |
+| [`relay migrate`](#relay-migrate) | Apply, roll back or repair the database schema | Postgres |
+| [`relay seed`](#relay-seed) | Validate a manifest directory, or write it straight to Postgres | Postgres |
+| [`relay secret`](#relay-secret) | Inspect and rotate the stored-secret key ring | Postgres |
+
+## Configuration
+
+The server (`relay` with no command) first reads `.env` from the working directory, if present, and sets each variable that is not already set in the environment. The commands below do not read `.env`, so they never pick up a target or credentials from the directory they run in. To load a file for any invocation, name it in `RELAY_ENV_FILE`; the command then fails if the file can't be read.
+
+**Control API commands** (`apply`, `export`, `auth can-i`, `token mint`) call the control API over HTTP:
+
+| Variable | Flag | Default | Used by |
+| --- | --- | --- | --- |
+| `RELAY_URL` | `--url` | `http://localhost:8081` | All four. The control listener's base URL, without `/api`. |
+| `RELAY_ADMIN_TOKEN` | `--token` | _(none)_ | `apply`, `export`, `auth can-i`. Sent as `Authorization: Bearer`. |
+| `RELAY_USER` | `--user` | _(none)_ | `token mint` |
+| `RELAY_PASSWORD` | _(no flag)_ | _(prompt)_ | `token mint`. Without it, the command prompts on a terminal and fails when there is none. |
+
+**Database commands** (`migrate`, `seed --apply`, `secret`) connect to Postgres directly and need no running server. They read the same environment as the server, so an invalid `RELAY_*` value fails them as it would fail a boot. The variables they use:
+
+| Variable | Used by |
+| --- | --- |
+| `RELAY_PG_DSN` | All of them; required. |
+| `RELAY_MASTER_KEY`, `RELAY_MASTER_KEY_EXTRA` | `seed --apply` (to store host key values) and `secret`. See [Stored secrets](/concepts/secret-keys). |
+| `RELAY_MIGRATE_LOCK_TIMEOUT_S` | `migrate` and `seed --apply`: how long a migration waits for a table lock (default `10`). |
+
+`apply`, `export`, `auth can-i`, `token mint`, `keygen` and `secret` print errors to stderr as `<command>: <message>`. `migrate` and `seed` log as the server does, in JSON on stdout.
+
+### Running commands in a container
+
+The lean image's entrypoint is the `relay` binary, so a command is the container's arguments:
+
+```bash
+docker run --rm -e RELAY_URL=http://relay-control:8081 -e RELAY_ADMIN_TOKEN \
+  -v "$PWD/manifests:/manifests:ro" wyolet/relay apply -f /manifests --dry-run
+```
+
+The standalone image's entrypoint starts Postgres and the server and ignores arguments. Run commands inside the running container instead, passing the variables they need: `docker exec -e RELAY_ADMIN_TOKEN=<token> <container> /relay export`.
+
+## relay
+
+Starts the inference listener (`RELAY_PORT`, default `8080`) and the control listener (`RELAY_CONTROL_PORT`, default `8081`), applying pending schema migrations first unless `RELAY_MIGRATE_ON_BOOT=off`. Every server setting is an environment variable; see [Configuration](/configuration).
+
+On `SIGTERM` or `SIGINT` it stops accepting requests and waits up to `RELAY_SHUTDOWN_DEADLINE_S` seconds (default `15`) for in-flight work. It exits `1` when the configuration is invalid, `RELAY_PG_DSN` is unset, Postgres can't be opened, or a listener fails.
+
+## relay apply
+
+```bash
+relay apply -f manifests/ --dry-run
+```
+
+Parses a manifest file, or every `.yaml` and `.yml` file under a directory, sends the bundle to `POST /api/apply`, and prints the plan as a table with a count per action. See [GitOps](/concepts/gitops) for the plan actions, dirty rows and pruning.
+
+Before sending, it prints the control URL it targets and where that came from to stderr. When `RELAY_ADMIN_TOKEN` was set by the `RELAY_ENV_FILE` file rather than the environment or `--token`, it refuses to run without an explicit `--url`.
+
+| Flag | Description |
+| --- | --- |
+| `-f <path>` | Manifest file or directory. Required. |
+| `--dry-run` | Print the plan; write nothing. |
+| `--force` | Overwrite rows edited through the control API, and groups a SCIM client manages. |
+| `--prune` | Delete selected rows the bundle omits. Requires `--selector`. |
+| `--selector <k=v,...>` | Labels a row must all carry to be pruned. |
+| `--url`, `--token` | See [Configuration](#configuration). |
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Every entry was `create`, `update`, `unchanged` or `delete`. |
+| `1` | Drift (`skip-dirty` without `--force`, `conflict`, or `forbidden` entries), or the command line or a manifest failed to parse. |
+| `2` | The server refused the request or could not be reached. |
+
+## relay export
+
+```bash
+relay export --scope project:<id> -o manifests/ml.yaml
+```
+
+Writes `GET /api/export` to stdout or a file. See [Export](/concepts/gitops#export) for which rows are included.
+
+| Flag | Description |
+| --- | --- |
+| `--scope <team:id \| project:id>` | Restrict the export to one team or project. |
+| `--kinds <plurals>` | Comma-separated API plurals. Default: every exportable kind. |
+| `--format <yaml \| json>` | Output format. Default `yaml`. |
+| `--include-system` | Also include system-owned rows and catalog rows edited through the API. |
+| `-o <file>` | Write to this file (mode `0600`) instead of stdout. |
+| `--url`, `--token` | See [Configuration](#configuration). |
+
+Exits `0` on success, `2` when the server refused the request or could not be reached, and `1` on any other error.
+
+## relay auth can-i
+
+```bash
+relay auth can-i keys.create keys --owner project/ml --as alice
+```
+
+```
+relay auth can-i <action> <kind>[/<name>] [--as <subject>] [--owner <kind>/<name>] [-o json]
+```
+
+Calls `POST /api/access-review` and prints `yes` or `no` with the role binding or rule that decided it. `<action>` is `<kind>.<verb>` or a bare verb, which takes the resource's kind. See [Checking access](/concepts/auth#checking-access).
+
+| Flag | Description |
+| --- | --- |
+| `--as <subject>` | A username, or `sa:<name>` for a service account (`user:` and `serviceaccount:` prefixes are also accepted). Default: the caller. Checking someone else takes an admin. |
+| `--owner <kind>/<name>` | Owner of the collection a list or create is about: `project/ml`, `team/platform`, `user/alice`, or `system`. |
+| `-o json` | Print the server's full answer. |
+| `--url`, `--token` | See [Configuration](#configuration). |
+
+Flags may appear before or after the positional arguments. Exits `0` when allowed, `1` when denied, and `2` when the arguments are invalid or the request fails. The server answers `501` under `RELAY_AUTHZ=single`.
+
+## relay token mint
+
+```bash
+RELAY_PASSWORD=... relay token mint --project my-project --ttl 1h --user alice
+```
+
+Logs in with `POST /api/auth/login`, mints an [inference token](/concepts/auth#inference-tokens) with `POST /api/auth/token`, logs out, and prints the token to stdout. It needs an account with a password; the admin bearer names no user and cannot mint a token.
+
+| Flag | Description |
+| --- | --- |
+| `--project <slug>` | Project the token is scoped to. Required. |
+| `--ttl <duration>` | Token lifetime as a Go duration (`30m`, `1h`). Default: the `auth:tokens` section's `defaultTTL`; capped by its `maxTTL`. |
+| `--user <name>` | Username. Default `$RELAY_USER`; one of the two is required. |
+| `--url` | See [Configuration](#configuration). |
+
+There is no password flag: command lines are visible in the process table and kept in shell history. The password comes from `$RELAY_PASSWORD`, or from a prompt on an interactive terminal.
+
+Exits `0` on success, `2` when the login or the mint is refused or the server can't be reached, and `1` on a usage error or a missing password.
+
+## relay keygen
+
+```bash
+relay keygen
+# plaintext: sk-wr-...
+# keyHash:   3f9a...
+# prefix:    sk-wr-...
+```
+
+Generates a relay key locally and prints its plaintext, its `keyHash` (sha256, hex) and its display prefix. Put the hash and prefix in a `Key` manifest and hand the plaintext to the caller; the plaintext never passes through the server. `--prefix` prints only the prefix of the generated key. Needs no configuration.
+
+## relay migrate
+
+```bash
+relay migrate up
+relay migrate down <version>
+relay migrate force <version>
+relay migrate auth down <version>
+```
+
+| Subcommand | Description |
+| --- | --- |
+| `up` | Apply every pending migration, Relay's and then the auth module's: the same ones the server applies at boot. Use it to migrate once before any pod starts, with `RELAY_MIGRATE_ON_BOOT=off` on the pods. |
+| `down <version>` | Run down-migrations until the schema is at `<version>`, for rolling back to an older image. Destructive: the tables and columns they remove are dropped. Below version 34 it is refused while stored secrets use data keys; run `relay secret downgrade` first. Below version 26 it first steps the auth module back to its version 1. |
+| `force <version>` | Record `<version>` as the schema version and clear the dirty flag a failed migration left. No migration runs. |
+| `auth down <version>` | Step back only the auth module's migrations, leaving Relay's version alone. The lowest target is `1`. |
+
+With no subcommand it prints a hint and exits `0`. Every subcommand exits `1` on error. Stop the pods, or set `RELAY_MIGRATE_ON_BOOT=off` on them, before rolling back, or a restarting pod applies the migrations again. See [Upgrading](/concepts/upgrade) for the rollback procedure.
+
+## relay seed
+
+```bash
+relay seed --from manifests/            # validate only
+relay seed --from manifests/ --apply    # write to Postgres
+```
+
+Loads every manifest under a directory. Without `--apply` it only parses and validates the documents and logs a count per kind; it needs no database.
+
+With `--apply` it applies pending migrations, then writes the documents straight to Postgres, without going through the control API: no authorization, governance or license checks apply, and every kind is accepted, including teams, projects, service accounts, keys, host keys, roles, bindings and users. Rows edited through the control API are skipped unless `--dirty` is given. `Setting` documents are skipped with a warning; settings are seeded from `RELAY_SETTINGS_DIR` at boot.
+
+| Flag | Description |
+| --- | --- |
+| `--from <dir>` | Manifest directory. Default `config`. |
+| `--apply` | Write to Postgres. Without it, the run is a dry run. |
+| `--dirty` | Also overwrite rows edited through the control API, resetting them to the manifest. |
+
+Exits `0` on success and `1` on any error.
+
+## relay secret
+
+```
+relay secret status
+relay secret rotate (--scope <scope> | --all)
+relay secret rewrap --to <kek id>
+relay secret destroy <data key id> [--force]
+relay secret migrate
+relay secret downgrade
+```
+
+Operates on the key ring that encrypts stored secrets, directly in Postgres, so it works while every server is stopped. `rotate`, `rewrap` and `destroy` also work against a running fleet, which picks up the change within about a second. Every subcommand except `status` writes [audit](/concepts/audit) rows under the actor kind `cli`.
+
+| Subcommand | Description |
+| --- | --- |
+| `status` | Print the key ring as JSON: data keys, the target KEK, the KEKs this process holds, and legacy and undecryptable values. |
+| `rotate --scope <scope>` or `--all` | Give a scope (`system`, `user:<id>`, `project:<id>`), or every scope with a data key, a new primary data key. |
+| `rewrap --to <kek id>` | Wrap every data key under another master key. Exits `1` when some data keys were left under a master key this process does not hold. |
+| `destroy <id> [--force]` | Destroy a demoted data key with no values left under it. `--force` skips the 24-hour wait. |
+| `migrate` | Rewrite stored values that are in the format from before data keys, or under a data key that is no longer their scope's primary, under the primary. For use while no server is running; running servers do the same in the background. |
+| `downgrade` | Rewrite every stored value to the format from before data keys, under `RELAY_MASTER_KEY`, so the schema can be rolled back below version 34. |
+
+Exits `0` on success and `1` on any error, including a failed audit write after the change was made. See [Stored secrets and key rotation](/concepts/secret-keys) for when to run each one.
+
+## Other tools
+
+These are built from a checkout of the repository; the relay images don't include them.
+
+### relay-stats
+
+Prints usage events and summaries from the control API as text tables, or JSON with `--json`.
+
+```bash
+GOEXPERIMENT=jsonv2 go build -o relay-stats ./cmd/relay-stats
+relay-stats summary --url http://localhost:8081/api --by model_id --since 24h
+relay-stats events --url http://localhost:8081/api --since 1h --limit 50
+```
+
+Pass `--url` (or set `RELAY_CONTROL_URL`) to the control listener with the `/api` prefix: the built-in default, `http://127.0.0.1:8090`, does not match the control listener's default port. `--token` defaults to `$RELAY_ADMIN_TOKEN`.
+
+| Flag | Description |
+| --- | --- |
+| `--since <duration>` | Time window: `30m`, `1h`, `24h`, `7d`. Default `1h`. |
+| `--relay_key_hash`, `--policy_id`, `--model_id`, `--host_id`, `--project_id`, `--team_id`, `--principal_id`, `--source` | Filters. `--source` takes a usage event source such as `pipeline` or `proxy`. |
+| `--status_min`, `--status_max` | HTTP status range. |
+| `--by <field>` | `summary` only: the field to group by. Default `source`; also `model_id`, `host_id`, `policy_id`, `relay_key_hash`, `host_key_id`, `project`, `team`, `principal`, `project_id`, `team_id`, `principal_id`, `credential_id`. |
+| `--limit <n>` | `events` only: rows returned. Default `100`, maximum `10000`. |
+| `--json` | Print the raw JSON response. |
+
+Exits `1` when the request fails and `2` on a usage error. See [Usage](/concepts/usage) for the underlying API.
+
+### payload-migrate
+
+Copies a JSONL dump from the `file` payload-logging backend into the ClickHouse payload store, so captured bodies become readable through ClickHouse. Rows already present are skipped, so an interrupted run can be repeated.
+
+```bash
+GOEXPERIMENT=jsonv2 go build -o payload-migrate ./cmd/payload-migrate
+payload-migrate -file relay-payloads.jsonl -dsn "$RELAY_CH_DSN"
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-file` | `relay-payloads.jsonl` | The JSONL dump to copy. |
+| `-dsn` | `$RELAY_CH_DSN` | ClickHouse DSN. |
+| `-batch` | `50` | Maximum rows per insert. |
+| `-batch-mb` | `32` | Maximum body megabytes per insert. |
+
+See [Payload logging](/concepts/payload-logging) for the backends.
+
+### catalog-server
+
+`catalog-server serve` mirrors the catalog repository and serves its releases; `catalog-server build` builds one release's files. It ships as its own image together with `catalog-validate`. See [Catalog server](/reference/catalog-server).

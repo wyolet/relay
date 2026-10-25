@@ -9,6 +9,10 @@
 //   - "round-robin" — distribute traffic evenly using a counter.
 //   - "least-recently-used" — pick the key with the oldest last-used timestamp.
 //
+// Expected kv ops per request:
+//   - Pick: one kv.Batch round trip with a GET of each candidate's breaker record and, for round-robin, the counter's INCR and EXPIRE NX. Prioritized reads only the first candidate in the batch; the ones behind it cost a GET each, and only while the keys ahead are open. Promoting an expired open key to half-open adds a SET; least-recently-used adds a GET per healthy candidate and a SET. PreparePick queues the same reads on a caller's batch (policy admission sends them with the rate-limit reserve).
+//   - RecordSuccess: one script; PrepareRecordSuccess queues it on a caller's batch. A key's record exists only once it has failed: post-flight writes a success only for a half-open probe, a record with a backoff step, or a failure count (Candidate.SuccessNeedsWrite). RecordFailure: one script; PrepareRecordFailure queues it on a caller's batch. Claiming a half-open probe in Pick: one script.
+//
 // The KeySelection enum lives in this package (not policy) so policy can
 // import keypool without creating a cycle when its Service composes
 // Selector + Limiter at runtime.
@@ -37,6 +41,16 @@ const (
 	// ttlLRU is the TTL on pool_lru timestamps. Long enough to survive between
 	// pool deployments; staleness is harmless (treated as never-used).
 	ttlLRU = 30 * 24 * time.Hour
+
+	// DefaultFailureThreshold and DefaultFailureWindow apply when WithBreaker is not given positive values: a closed key opens on this many server or network errors within the window, with no success between them.
+	DefaultFailureThreshold = 5
+	DefaultFailureWindow    = 30 * time.Second
+
+	// probeLease bounds how long one half-open probe keeps other picks off a key. A probe's outcome lands only when its response ends, so a long stream lets one more probe through per lease rather than holding the key out for the stream's length.
+	probeLease = 10 * time.Second
+
+	// recordTimeout bounds a failure write, which runs detached from the request that saw the failure.
+	recordTimeout = 2 * time.Second
 )
 
 // Selector picks HostKeys from Pools and tracks per-key circuit-breaker state.
@@ -46,6 +60,9 @@ type Selector struct {
 	log    *slog.Logger
 	clock  func() time.Time
 	rng    *rand.Rand
+
+	failureThreshold int
+	failureWindow    time.Duration
 }
 
 // New constructs a Selector. clock and rng may be nil.
@@ -57,7 +74,8 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time, rng *rand.Rand) *
 	if rng == nil {
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	sel := &Selector{state: s, log: log, clock: clock, rng: rng}
+	sel := &Selector{state: s, log: log, clock: clock, rng: rng,
+		failureThreshold: DefaultFailureThreshold, failureWindow: DefaultFailureWindow}
 	if sr, ok := s.(kv.Scripter); ok {
 		sel.runner = sr
 	}
@@ -65,6 +83,17 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time, rng *rand.Rand) *
 		RegisterScripts(ms)
 	}
 	return sel
+}
+
+// WithBreaker sets how many server or network errors within window open a closed key. Values below 1 keep the defaults.
+func (s *Selector) WithBreaker(threshold int, window time.Duration) *Selector {
+	if threshold > 0 {
+		s.failureThreshold = threshold
+	}
+	if window > 0 {
+		s.failureWindow = window
+	}
+	return s
 }
 
 // isAnonymous reports whether keyHash belongs to the synthetic no-auth key

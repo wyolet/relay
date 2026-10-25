@@ -13,7 +13,7 @@ import (
 const authKindsYAML = `apiVersion: relay.wyolet.dev/v1alpha2
 kind: Team
 metadata: {name: platform, owner: {kind: user}, labels: {env: prod}}
-spec: {budget: {amount: "100", onExceed: block}}
+spec: {budget: {amount: "100"}}
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Project
@@ -72,7 +72,7 @@ func TestAuthKindsParseTheSameUnderEitherAPIVersion(t *testing.T) {
 			t.Errorf("%s rows differ:\n relay %+v\n auth  %+v", a.Kind(), rowA, rowB)
 		}
 	}
-	if relay[0].Team.Spec.Budget == nil || relay[0].Team.Spec.Budget.OnExceed != "block" || relay[2].ServiceAccount.Spec.Policy != "ml-search-default" {
+	if relay[0].Team.Spec.Budget == nil || relay[0].Team.Spec.Budget.Amount != "100" || relay[2].ServiceAccount.Spec.Policy != "ml-search-default" {
 		t.Errorf("relay fields lost: %+v %+v", relay[0].Team.Spec, relay[2].ServiceAccount.Spec)
 	}
 }

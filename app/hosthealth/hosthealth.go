@@ -22,6 +22,7 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // defaultTTL bounds how long a health observation survives without refresh.
@@ -48,8 +49,8 @@ type store interface {
 	Range(ctx context.Context, prefix string) ([]kv.Entry, error)
 }
 
-// Recorder persists host reachability to kv. Construct once at boot and share
-// between the data plane (writes) and the control plane (Read).
+// Recorder persists host reachability to kv. The data plane's writes need one
+// Recorder per process (it holds the debounce); a reader may use its own.
 type Recorder struct {
 	state    store
 	clock    func() time.Time
@@ -182,5 +183,7 @@ func (r *Recorder) write(ctx context.Context, hostID string, st host.Status) {
 	if err != nil {
 		return
 	}
-	_ = r.state.Set(ctx, healthKey(hostID), b, r.ttl)
+	if err := r.state.Set(ctx, healthKey(hostID), b, r.ttl); err != nil {
+		metrics.KVError("host_health", metrics.KVDropped)
+	}
 }

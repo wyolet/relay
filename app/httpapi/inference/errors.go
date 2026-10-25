@@ -12,6 +12,7 @@ import (
 
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/httpheader"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -50,6 +51,11 @@ func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string,
 	slog.Warn("inference: error response",
 		append([]any{"status", status, "type", errType, "code", code, "msg", msg}, attrs...)...,
 	)
+	writeErrorEnvelope(w, status, errType, code, msg)
+}
+
+// writeErrorEnvelope writes relay's error envelope without logging it, for refusals a flood could repeat and that are counted instead.
+func writeErrorEnvelope(w http.ResponseWriter, status int, errType, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(HeaderOrigin, "relay")
 	setShouldRetry(w, status)
@@ -176,6 +182,12 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 		// Reserve script, so this lands before any upstream call.
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked",
 			"this token has been revoked")
+	case errors.Is(err, policy.ErrKeyTiersFull) && errors.As(err, &exceeded):
+		// Every host key is over its tier: the caller's own limit had room. The
+		// tier's rule names are the host's configuration and stay out of it.
+		secs := setRetryAfter(w, exceeded.RetryAfter)
+		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
+			fmt.Sprintf("every host key for this model is over its tier rate limit; try again in %ds", secs))
 	case errors.As(err, &exceeded):
 		// Relay's own inbound rate limit rejected the request before any
 		// upstream call. This MUST be a 429 with Retry-After from the
@@ -286,10 +298,6 @@ func ForwardUpstreamHeaders(dst, src http.Header) {
 	}
 	dst.Set(HeaderOrigin, "upstream")
 }
-
-// MapPipelineErr is the exported form for adapter-side cross-shape handlers
-// that drive pipeline.Pipeline.Run directly.
-func MapPipelineErr(w http.ResponseWriter, err error) { mapPipelineErr(w, err) }
 
 // SplitSSEChunks is exported so adapter packages can use the same SSE
 // chunking logic in their cross-shape stream handlers.

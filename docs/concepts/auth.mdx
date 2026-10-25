@@ -1,82 +1,93 @@
 ---
-title: "Authentication"
-description: "Relay keys, host keys, and how the two planes are secured"
+title: "Authentication and access"
+description: "Relay keys, inference tokens, host keys, control-plane credentials, tenancy, and role-based access control"
 ---
 
-Relay has three kinds of caller, and each authenticates differently. Keeping
-them straight is the key to understanding the whole security model.
+Relay has four kinds of caller, and each authenticates differently.
 
 | Caller | Reaches | Credential |
 | --- | --- | --- |
-| Your app | Inference plane (`/openai/v1/*`, `/anthropic/v1/*`, `/v1/*`) | **Relay key** — `Authorization: Bearer <relay-key>` |
-| A browser / the dashboard | Control plane | **Session cookie** (`relay_session`) |
-| An operator or CI | Control plane | **Admin bearer** — `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
-| The `relay` CLI | Control plane | The admin bearer for `relay apply` / `relay export`; a password login for `relay token mint`, which needs a user session |
+| Your app | Every inference route (`/openai/v1/*`, `/anthropic/v1/*`, `/v1/*`, …) | A **relay key** or an **inference token**, as `Authorization: Bearer <credential>` |
+| A browser (the admin UI) | Control plane | **Session cookie** (`relay_session`) |
+| An operator or CI | Control plane | **Admin bearer**: `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
+| The `relay` CLI | Control plane | The admin bearer for `apply`, `export` and `auth can-i`; a password login for `token mint`. See the [CLI reference](/reference/cli). |
 
-## Relay keys (your apps)
+Relay keys and host keys never meet on the wire: a caller presents a relay key, and Relay separately draws a host key from the pool to call the upstream. Your callers never see the upstream credential.
 
-A **relay key** is the bearer token your application code uses. It's an
-*indirection*: it never exposes the underlying provider credentials, and you
-can scope it, rate-limit it, and revoke it on its own.
+## Teams, projects, and principals
 
-- Relay generates the plaintext with `crypto/rand` and stores only
-  `sha256(plaintext)` plus a short display prefix.
-- The plaintext is returned **exactly once**, on creation — save it then.
-- Every inference request is authenticated by hashing the bearer and looking
-  it up in the in-memory snapshot. No database round-trip.
+Tenancy has three levels:
 
-Each relay key points at a **policy**, which decides what it can do — see
-[the mental model](/introduction#the-mental-model).
+- A **team** is the outer scope. It has no member list: a user belongs to a team through a role binding at team scope.
+- A **project** belongs to one team. Policies, rate limits, host keys, service accounts, policy bindings and service-account keys can be owned by a project.
+- A **principal** is who a request acts as: a **user** (a person, from local config, [SSO](/concepts/sso) or [SCIM](/concepts/scim)) or a **service account** (a machine principal that lives in one project).
+
+A relay key is a credential of one principal, named in `spec.principal` (`{kind: serviceaccount | user, ...}`). Rotating, revoking or deleting a key leaves the principal and everything bound to it untouched.
+
+- A **service account's key** belongs to the account's project. Its requests are attributed to that project and team.
+- A **user's key** (a personal key) belongs to the user. It carries no project unless its own policy is owned by a project; then its requests carry that project's attribution and limits.
+- An **inference token** is minted for a user in one project, and its requests are attributed to that project.
+
+The [policy](/concepts/policies) that governs a request is the credential's own `policyId`, else the service account's `policyId`, else the first of the project's policy bindings that names one of the principal's subjects, ordered by `priority` (lower wins, default `100`) and then by name. A project-scoped credential that resolves no policy is refused with `403`. A personal key with no project and no policy is served only under `RELAY_AUTHZ=single` with `allowMissingPolicy: true` in the `inference` settings section.
+
+Teams, projects, service accounts, keys and bindings are ordinary resources: create them through the [control API](/reference/control-api) or declare them as manifests and [apply them from git](/concepts/gitops).
+
+## Relay keys
+
+A **relay key** (`sk-wr-…`) is the bearer your application uses. Relay generates the plaintext from `crypto/rand` and stores only `sha256(plaintext)` and a short display prefix. The plaintext is returned once, on creation. Each request is authenticated by hashing the bearer and looking it up in memory; no database call is made.
+
+A key stops authenticating when it is disabled, revoked (`revokedAt`), past `expiresAt`, or owned by a disabled user. Rotating a key (`POST /api/keys/by-id/{id}/rotate`) can keep the previous value working for `graceSeconds`, capped by `keyRotateMaxGrace` in the `inference` settings section (default 24 hours). To mint a key without sending the plaintext through the server, use [`relay keygen`](/reference/cli#relay-keygen) and put only the hash in a manifest.
 
 ## Inference tokens
 
-`/v1/*` also accepts a relay-signed **token** in the same
-`Authorization: Bearer` header, minted for a specific project by a session
-holder with `tokens.mint` (`POST /api/auth/token`). Relay tells a key from a
-token by shape — a token looks like a JWT (`ey…`, two `.` separators); a key
-never does — so the same header works for either.
+Every inference route also accepts a relay-signed **inference token** in the same `Authorization: Bearer` header. Relay tells the two apart by shape: a token looks like a JWT (`ey…`, two `.` separators) and a key never does.
 
-A token names the user it was minted for and the project it's scoped to; it
-carries no secret beyond its own signature, so leaking one exposes only what
-that user's bindings already grant inside that project. See
-[the GitOps token example](/concepts/gitops#minting-a-token) for how to mint
-one.
+A token is minted by a signed-in user who holds `tokens.mint` in the project. It names that user and project and carries no secret beyond its signature, so a leaked token exposes only what that user's bindings already grant inside that project. The admin bearer names no user and cannot mint one.
+
+```bash
+curl -X POST http://localhost:8081/api/auth/token \
+  -H "Cookie: relay_session=<session from POST /api/auth/login>" \
+  -H "Content-Type: application/json" \
+  -d '{"project": "my-project", "ttl": "1h"}'
+```
+
+```json
+{
+  "token": "eyJhbGciOi...",
+  "jti": "...",
+  "expiresAt": "2027-01-01T01:00:00Z",
+  "project": "my-project",
+  "teamId": "..."
+}
+```
+
+`relay token mint --project my-project --user alice` logs in and mints in one step; see the [CLI reference](/reference/cli#relay-token-mint).
+
+The `auth:tokens` settings section controls tokens: `enabled` (default `true`), `defaultTTL` (default 1 hour, used when a mint names no `ttl`) and `maxTTL` (default 24 hours), both in nanoseconds. An admin changes it with `PUT /api/settings/auth:tokens`. Tokens need `RELAY_MASTER_KEY`: the signing key is generated on first boot and stored encrypted under it, and a deployment without a master key mints no tokens. One user may mint 30 tokens per minute. `POST /api/auth/token/keys/rotate` replaces the signing key and takes the right to update settings; tokens signed by the previous key keep verifying until they expire.
 
 ### Revoking a token
 
-Three ways to invalidate a token, from narrowest to widest:
+From narrowest to widest:
 
-- `POST /api/auth/token/revoke` — the caller revokes the token it just
-  presented (self-service, no session needed).
-- `DELETE /api/auth/token/{jti}` — revoke one token by its id. Its mint is
-  read from the audit log, and the caller needs `tokens.revoke` at the
-  token's project (the user who minted it always may). Only the fallback for
-  a mint that is no longer in the log — passing `team_id` and `exp` — requires
-  an admin.
-- `POST /api/auth/token/revoke-all` — the caller bumps their own
-  `token_version`, invalidating every token they hold at once. A caller with
-  `users.update` at the global scope can do the same for another user with
-  `POST /api/users/by-id/{id}/revoke-tokens`, and disabling an account with
-  `PUT /api/users/by-id/{id}` bumps it too.
+- `POST /api/auth/token/revoke` with `{"token": "<token>"}`: revokes the presented token. No session is needed.
+- `DELETE /api/auth/token/{jti}`: revokes one token by its id. The mint is read from the audit log, and the caller needs `tokens.revoke` at the token's project; the user who minted it always may. Only the fallback for a mint no longer in the log, passing `team_id` and `exp`, requires an admin.
+- `POST /api/auth/token/revoke-all`: bumps the caller's own `token_version`, invalidating every token they hold. A caller with `users.update` at global scope can do the same for another user with `POST /api/users/by-id/{id}/revoke-tokens`, and disabling an account bumps it too.
 
-Rejections all answer `401`. Both revocation paths — a denylisted `jti` and a
-token behind the user's `token_version` — carry the code `token_revoked`; an
-expired token carries `unauthenticated` with the message `token expired`.
+Rejections answer `401`. A revoked token, by `jti` or by `token_version`, carries the code `token_revoked`; an expired token carries `unauthenticated` with the message `token expired`.
 
-## Host keys (your provider credentials)
+## Host keys
 
-A **host key** is a real upstream credential (your OpenAI key, your Anthropic
-key). Relay holds these for you in one of two modes:
+A **host key** is an upstream credential, such as your OpenAI or Anthropic API key. Relay holds its value in one of two modes:
 
 <CodeGroup>
 
-```json Env reference — no secret in the database
+```json Env reference: no secret in the database
 {
   "valueFrom": { "kind": "env", "env": "OPENAI_API_KEY" }
 }
 ```
 
-```json Stored — encrypted in Postgres
+```json Stored: encrypted in Postgres
 {
   "valueFrom": { "kind": "stored" },
   "value": "sk-..."
@@ -85,129 +96,85 @@ key). Relay holds these for you in one of two modes:
 
 </CodeGroup>
 
-Stored values are encrypted under a data key of the host key's owner, and the
-data keys are wrapped by `RELAY_MASTER_KEY`; only ciphertext touches the
-database. See [Stored secrets and key rotation](/concepts/secret-keys) for the
-scheme, what it protects against, and how to rotate keys. External fetch-only
-backends (AWS / Azure / GCP Secret Manager, Bitwarden, 1Password) are also
-supported — those secrets are held in memory only and never persisted.
+An env reference is read from the relay process's environment. Names starting with `RELAY_` or `WYOLET_` are refused, because a host key's value is sent to its host and those names hold Relay's own configuration.
+
+A stored value is encrypted under a data key of the host key's owner, and the data keys are wrapped by `RELAY_MASTER_KEY`; only ciphertext reaches the database, and reads never return the value. `POST /api/host-keys/by-id/{id}/rotate` replaces a stored value. See [Stored secrets and key rotation](/concepts/secret-keys) for the scheme and the rotation procedures.
 
 <Warning>
-`RELAY_MASTER_KEY` must stay **stable** across restarts — it unwraps the data
-keys your stored host keys are encrypted under. Losing it, or replacing it
-without following [Changing the master key](/concepts/secret-keys#changing-the-master-key),
-makes existing stored secrets unreadable.
+`RELAY_MASTER_KEY` must stay the same across restarts: it unwraps the data keys your stored host keys are encrypted under. Losing it, or replacing it without following [Changing the master key](/concepts/secret-keys#changing-the-master-key), makes existing stored secrets unreadable.
 </Warning>
-
-Relay keys and host keys never touch each other on the wire: a caller presents
-a relay key, and Relay separately draws a host key from the pool to call
-upstream. The provider credential is never exposed to your callers.
 
 ## The control plane
 
-The admin surface (dashboard + CRUD + ops endpoints) accepts either:
+The control API (`/api/*`) and the admin UI accept either:
 
-- a **session cookie**, set by `POST /api/auth/login` and backed by server-side
-  sessions (opaque token, rotated on login, destroyed on logout); or
-- the **admin bearer**, `RELAY_ADMIN_TOKEN` — a break-glass credential for
-  operators and CI that coexists with sessions.
+- a **session cookie**, set by `POST /api/auth/login` and backed by server-side sessions: an opaque token, rotated on login and destroyed on logout; or
+- the **admin bearer**, `RELAY_ADMIN_TOKEN`: a break-glass credential for operators and CI that works alongside sessions.
 
-The CLI uses both: `relay apply` and `relay export` send the admin bearer
-(`$RELAY_ADMIN_TOKEN` or `--token`), while `relay token mint` logs in with a
-password and carries the session it gets back, because a token names the user
-it was minted for and the admin bearer names no user.
+Local account passwords may be bcrypt hashes (`$2a$`, `$2b$`, `$2y$`). A plain-text password still works and logs a deprecation warning. For single sign-on, see [SSO](/concepts/sso).
 
-An account is disabled with `PUT /api/users/by-id/{id}` (`{"disabled": true}`). A disabled account is signed out on its next request and refused at login, and its personal keys and inference tokens stop at once. The control plane answers it `401` with the error code `account_disabled`.
+An account is disabled with `PUT /api/users/by-id/{id}` and `{"disabled": true}`. It is signed out on its next request and refused at login, and its personal keys and inference tokens stop working at once. The control plane answers it `401` with the code `account_disabled`.
 
-Run the control plane on its own port (`RELAY_CONTROL_PORT`) and keep it off
-the public internet; expose only the inference plane.
-
-### Passwords
-
-Admin passwords are bcrypt-aware: hashes prefixed `$2a$ / $2b$ / $2y$` are
-verified with bcrypt; plain-text passwords still work for legacy config but
-log a deprecation warning.
+Run the control plane on its own port (`RELAY_CONTROL_PORT`) behind your network controls, and expose only the inference plane publicly.
 
 ## Authorization
 
-`RELAY_AUTHZ` picks how the control plane authorizes a caller:
+`RELAY_AUTHZ` sets how the control plane authorizes a caller:
 
 | Value | Behaviour |
 | --- | --- |
-| `single` (default) | Every authenticated caller may perform every action. Access is controlled at your network boundary. |
+| `single` (default) | Every authenticated caller may perform every action, including binding the `admin` role to themselves. Access is controlled at your network boundary. For installs with one operator. |
 | `rbac` | Each action is checked against the caller's role bindings. Anything not granted is denied. |
 
-The admin bearer (`RELAY_ADMIN_TOKEN`) and any user carrying the `admin` role
-bypass the check in both modes — that is the break-glass path, and it is why a
-fresh `rbac` deployment is never locked out.
+The admin bearer and any user holding the `admin` role pass every check in both modes, so a new `rbac` deployment cannot lock itself out.
+
+Use `rbac` as soon as more than one person signs in.
 
 <Note>
-`RELAY_MULTI_USER` is deprecated. If `RELAY_AUTHZ` is unset, a truthy
-`RELAY_MULTI_USER` is still read as `RELAY_AUTHZ=rbac` (with a startup
-warning) so an existing multi-user deployment doesn't silently drop to
-`single`. Set `RELAY_AUTHZ` explicitly and drop `RELAY_MULTI_USER`.
+`RELAY_MULTI_USER` is deprecated. When `RELAY_AUTHZ` is unset, a truthy `RELAY_MULTI_USER` is read as `RELAY_AUTHZ=rbac` with a startup warning. Set `RELAY_AUTHZ` explicitly.
 </Note>
 
 <Warning>
-Under `single`, OIDC with `registration: open` makes every user your identity
-provider can authenticate an admin. The relay logs a warning at startup for
-this pairing; use `rbac` or `registration: closed`.
+Under `single`, OIDC with `registration: open` makes every user your identity provider can authenticate an admin. Relay logs a warning at startup for this pairing; use `rbac` or `registration: closed`.
 </Warning>
 
 ### The model
 
-Four pieces, and one rule that connects them:
-
 - A **Role** is a set of `(kinds, verbs)` rules. It carries no scope.
-- A **RoleBinding** grants one Role to subjects — users, groups, or service
-  accounts — at one **scope**: a project, a team, or global (`{kind: system}`).
-- Every resource resolves to a **scope chain**: a project-owned row lives in
-  `[project, team, global]`, a team-owned row in `[team, global]`, and catalog
-  or personal rows in `[global]`.
-- A binding at scope *S* grants its Role on every resource whose chain
-  contains *S*. A team binding therefore covers every project in that team,
-  current and future; a project binding never reaches a sibling project.
+- A **RoleBinding** grants one role to subjects (users, groups or service accounts) at one **scope**: a project, a team, or global (`{kind: system}`).
+- Every resource has a **scope chain**: a project-owned row lives in `[project, team, global]`, a team-owned row in `[team, global]`, and catalog and personal rows in `[global]`.
+- A binding at scope *S* grants its role on every resource whose chain contains *S*. A team binding covers every project in the team, current and future; a project binding never reaches a sibling project.
 
-Two rules need no binding at all:
+Two rules need no binding:
 
-- **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every
-  verb on it. Keys, policies, host keys, and rate limits can be personal;
-  providers, hosts, models, host bindings, and pricings are shared catalog
-  data: no user, team, or project owns one, so writing one takes `admin` or
-  `catalog-editor`, and a request body that names such an owner for one is
-  refused with `400`.
-- **Catalog reads.** Providers, hosts, models, host bindings, pricings, and
-  system rate limits are readable by any authenticated caller. Mutating them
-  needs a binding (and still passes the governance settings).
+- **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every verb on it. Keys, policies, host keys and rate limits can be personal. Providers, hosts, models, host bindings and pricings are shared catalog data that no user, team or project can own: writing one takes `admin` or `catalog-editor`, and a request that names such an owner for one is refused with `400`.
+- **Catalog reads.** Providers, hosts, models, host bindings, pricings and system rate limits are readable by any authenticated caller. Changing them needs a binding and still passes the governance settings.
 
-A row whose project or team is disabled or deleted collapses to `[global]`, so
-only an admin can reach it to repair it.
+A row whose project or team is disabled or deleted falls back to `[global]`, so only an admin can reach it to repair it.
 
 ### Built-in roles
 
-Seeded as system rows on boot; bind them, don't edit them.
+Seeded as system rows on boot. Bind them; they cannot be edited through the API.
 
 | Role | Bind at | Grants |
 | --- | --- | --- |
-| `admin` | global | every verb on every kind |
-| `auditor` | global | read audit, usage, and request logs everywhere |
-| `catalog-editor` | global | mutate the shared catalog layer |
-| `team-admin` | team | everything scoped under the team, plus its projects, bindings, and `apply` |
-| `project-admin` | project | everything inside one project |
-| `developer` | project | read the project's configuration; own its keys and service accounts; mint tokens |
-| `viewer` | project or team | read-only, plus usage |
+| `admin` | global | Every verb on every kind |
+| `auditor` | global | Read the audit log, usage and request logs |
+| `catalog-editor` | global | Change providers, hosts, models, host bindings, pricings and rate limits |
+| `team-admin` | team | Everything on the team's projects, policies, keys, service accounts, host keys, rate limits and bindings; update the team; mint and revoke tokens; `apply`; read usage and logs |
+| `project-admin` | project | Everything on the project's policies, keys, service accounts, host keys, rate limits and bindings; update or delete the project; mint and revoke tokens; read usage and logs |
+| `developer` | project | Read the project's configuration; manage its keys and service accounts; mint tokens; read usage and logs |
+| `viewer` | project or team | Read-only, plus usage |
 
 ### Writing bindings
 
-Roles and bindings are ordinary manifests — `POST /api/apply` them from a repo
-or create them through the API.
+Roles and bindings are manifests like any other resource: [apply them](/concepts/gitops) from a repository or create them through the API.
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: RoleBinding
 metadata:
   name: platform-admins
-  owner: {kind: team, name: platform}   # = scope target; system for global bindings
 spec:
   role: team-admin
   scope:
@@ -216,11 +183,10 @@ spec:
   subjects:
     - {kind: group, name: platform-eng}          # IdP or local group
     - {kind: user, name: alice}
-    - {kind: serviceaccount, name: ci-deployer}  # SA slug; project inferred
+    - {kind: serviceaccount, name: ci-deployer}  # service account name; project inferred
 ```
 
-A custom Role, if the built-ins don't fit (licensed feature). Its name must
-not be one of the built-in role names:
+A custom role, when the built-ins don't fit, needs a [license](/concepts/license) with `custom-roles`. Its name must not be a built-in role's name:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha2
@@ -239,26 +205,15 @@ spec:
       verbs: [read]
 ```
 
-`kinds` are the API plurals (`providers`, `keys`, `policies`, …) plus `*`;
-`verbs` are `get list create update delete rotate health attach detach read
-mint revoke reload generate snapshot apply rewrap destroy` plus `*`.
+`kinds` are `audit debug groups host-bindings host-keys hosts keys license logs master-key models policies policy-bindings pricings projects providers rate-limits role-bindings roles scim-clients secret-keys service-accounts settings system teams tokens usage users`, plus `*`. `verbs` are `apply attach create delete destroy detach generate get health list mint read reload revoke rewrap rotate snapshot update`, plus `*`.
 
 ### Groups
 
-A binding names a group by name. The name is satisfied by a local `Group` row
-(for deployments without an identity provider) **and** by a group claim your
-IdP asserts at login — the two union, so you can start local and move to SSO
-without rewriting bindings. Three virtual groups always exist and never need a
-row: `system:authenticated`, `system:serviceaccounts`, and
-`system:serviceaccounts:<project>`.
+A binding names a group by name. The name is matched by a local `Group` row and by a group claim your identity provider asserts at sign-in; the two combine, so bindings keep working when you move from local groups to SSO. Three virtual groups always exist without a row: `system:authenticated`, `system:serviceaccounts`, and `system:serviceaccounts:<project>`.
 
 ### Reads
 
-List endpoints return only the rows the caller could `get`, and a row they may
-not see answers `404`, not `403` — existence is not leaked. Usage and request
-logs narrow the same way: a caller with a global binding reads the whole
-stream, everyone else reads the events of the projects they can see plus the
-events their own keys produced.
+List endpoints return only the rows the caller could `get`, and a row they may not see answers `404`, not `403`, so its existence is not revealed. Usage and request logs narrow the same way: a caller with a global binding reads every event; everyone else reads the events of the projects they can see and the events their own keys produced.
 
 ### Checking access
 
@@ -281,10 +236,4 @@ curl -X POST http://localhost:8081/api/access-review \
        "resource": {"kind": "keys", "owner": {"kind": "project", "name": "ml"}}}'
 ```
 
-The answer's `reason` is `admin`, `rule` (one of the shortcuts above, such as `personal-row` or `catalog-read`), `binding` (with the binding, role, and scope that matched), or `none`, alongside the resource's scope chain. It covers authorization only: a request it allows can still fail validation, a governance setting, or a reference check. A resource you cannot see answers `404`, as its own routes do. Another user is checked with their roles and local groups; groups an identity provider asserts live only in their session, so they are not part of the answer. The endpoint needs `RELAY_AUTHZ=rbac` and answers `501` under `single`.
-
-<Note>
-Run the control plane on its own port behind your network controls, and use
-the admin bearer (`RELAY_ADMIN_TOKEN`) for operators and CI. The inference
-plane is the only surface you expose publicly.
-</Note>
+The answer's `reason` is `admin`, `rule` (one of the shortcuts above, such as `personal-row` or `catalog-read`), `binding` (with the binding, role and scope that matched), or `none`, alongside the resource's scope chain. It covers authorization only: an allowed request can still fail validation, a governance setting or a reference check. A resource you cannot see answers `404`, as its own routes do. Another user is checked with their roles and local groups; groups an identity provider asserts live only in that user's session and are not part of the answer. The endpoint needs `RELAY_AUTHZ=rbac` and answers `501` under `single`.

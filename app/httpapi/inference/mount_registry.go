@@ -2,11 +2,9 @@ package inference
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -27,6 +25,7 @@ import (
 func MountRegistry(reg *adapter.Registry) RouteMounter {
 	return func(api huma.API, d Deps, mw huma.Middlewares) {
 		for _, s := range reg.Specs() {
+			specMW := withShed(d, s, mw)
 			for _, ip := range s.InboundPaths {
 				// Capture loop vars.
 				spec := s
@@ -37,7 +36,7 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 					Path:        path.Path,
 					Summary:     path.Summary,
 					Tags:        []string{"inference"},
-					Middlewares: mw,
+					Middlewares: specMW,
 					Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
 				}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 					return &huma.StreamResponse{Body: func(hctx huma.Context) {
@@ -45,10 +44,18 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 						handleShape(spec, d, w, r)
 					}}, nil
 				})
-				mountProfileAliases(api, d, mw, spec, path)
+				mountProfileAliases(api, d, specMW, spec, path)
 			}
 		}
 	}
+}
+
+// withShed puts the in-flight capacity and kv pool checks ahead of mw, answering in spec's shape. It goes on the generation routes only: a probe or model listing must keep answering on a saturated pod.
+func withShed(d Deps, spec *adapter.Spec, mw huma.Middlewares) huma.Middlewares {
+	if d.Admission == nil && d.KVPoolBusy == nil {
+		return mw
+	}
+	return append(huma.Middlewares{shedWhenFull(d.Admission, d.KVPoolBusy, overloadedFor(spec))}, mw...)
 }
 
 // mountProfileAliases mirrors one inbound path under /{profile}/ for every
@@ -83,45 +90,15 @@ func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapte
 	}
 }
 
-// extractModelStream extracts the model name and stream flag from a raw JSON
-// request body, spanning every inbound shape. Vendor shapes signal streaming
-// with a top-level "stream" bool; the canonical shape uses
-// "output_mode":"stream". The model field is read as a JSON string (the
-// single-model case); canonical's array form is rejected upstream as multiplex
-// and isn't used by streaming clients. Model may be absent (empty string
-// returned); callers check. A body with more than one top-level model key is
-// errDuplicateModel: encoding/json keeps the last, and the bytes a byte-pass
-// forwards may be read differently upstream.
-func extractModelStream(body []byte) (model string, stream bool, err error) {
-	return parseModelStream(body, false)
-}
-
-// parseModelStream is extractModelStream; exactKey refuses a model key spelled other than `model`, for proxy mode, which forwards the body unchanged.
-func parseModelStream(body []byte, exactKey bool) (model string, stream bool, err error) {
-	var probe struct {
-		Model      string `json:"model"`
-		Stream     *bool  `json:"stream"`
-		OutputMode string `json:"output_mode"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return "", false, fmt.Errorf("invalid JSON: %w", err)
-	}
-	scan := modelScanner{exactKey: exactKey}
-	if scan.feed(body); scan.err == errDuplicateModel || scan.err == errModelKeySpelling {
-		return "", false, scan.err
-	}
-	s := probe.OutputMode == "stream"
-	if probe.Stream != nil {
-		s = *probe.Stream
-	}
-	return probe.Model, s, nil
-}
-
 // handleShape is the generic per-shape route handler. It reads the request
-// body, performs a minimal JSON parse to extract model and stream, and calls
-// Dispatch with the spec's Name as the inbound shape.
+// body, parses it once (model, stream, the top-level member offsets), and
+// calls Dispatch with the spec's Name as the inbound shape.
 func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	if m := ClassificationFrom(r.Context()).Mode; m == ModeProxyAuthed || m == ModeProxyAnonymous {
+		handleProxyShape(spec, d, w, r)
+		return
+	}
+	body, err := readRequestBody(r, d.MaxRequestBytes)
 	if err != nil {
 		if httpmw.IsBodyTooLargeError(err) {
 			WriteAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large", err.Error())
@@ -131,36 +108,87 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	mode := ClassificationFrom(r.Context()).Mode
-	modelName, stream, err := parseModelStream(body, mode == ModeProxyAuthed || mode == ModeProxyAnonymous)
-	if err != nil {
-		writeModelParseErr(w, err)
+	req, rej := parseRequest(body, spec.RequestKeys())
+	if rej != nil {
+		writeBodyError(w, rej)
 		return
 	}
-	if modelName == "" {
+	if req.Model == "" {
 		WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_model",
 			"field 'model' is required")
 		return
 	}
 
-	// Byte-pass shapes (e.g. Embeddings) are never streaming.
-	if spec.BytePass {
-		stream = false
-	}
-
 	Dispatch(d, w, r, DispatchInput{
 		Inbound:   spec.Name,
 		Body:      body,
-		ModelName: modelName,
-		Stream:    stream,
+		Request:   req,
+		ModelName: req.Model,
+		// Byte-pass shapes (e.g. Embeddings) are never streaming.
+		Stream: req.Stream && !spec.BytePass,
 	})
 }
 
-// writeModelParseErr answers an extractModelStream error.
-func writeModelParseErr(w http.ResponseWriter, err error) {
-	code := "parse_error"
-	if be := (*bodyError)(nil); errors.As(err, &be) {
-		code = be.code
+// handleProxyShape is handleShape for proxy mode: the body is read only until its model is known, and the rest streams upstream as it arrives, checked on the way (scannedBody). The stream flag is not needed: the proxy path takes it from the response's Content-Type.
+func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
+	cls := ClassificationFrom(r.Context())
+	// An anonymous pinned request is routed and metered without its model, so nothing waits for it.
+	needModel := cls.Mode == ModeProxyAuthed || cls.UpstreamHost == ""
+	src := io.Reader(r.Body)
+	if d.ProxyBodyIdle > 0 {
+		idle := &idleDeadlineBody{body: r.Body, rc: http.NewResponseController(w), idle: d.ProxyBodyIdle}
+		defer idle.done.Store(true)
+		src = idle
 	}
-	WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", code, err.Error())
+	body, held, rej := holdProxyBody(src, r.ContentLength, needModel)
+	if rej != nil {
+		markConnection(w, nil)
+		writeBodyError(w, rej)
+		return
+	}
+	// Any answer before the forward reads the body to its end (a shed, a routing refusal) leaves a remainder on the wire.
+	markConnection(w, body)
+	Dispatch(d, w, r, DispatchInput{Inbound: spec.Name, Body: held, ModelName: body.scan.model, ProxyBody: body})
+}
+
+// maxUpfrontBodyBytes caps what a declared Content-Length allocates before the bytes arrive, so a caller cannot reserve memory it never sends.
+const maxUpfrontBodyBytes = 1 << 20
+
+// readRequestBody sizes the buffer from the declared Content-Length when it is within limit: one exact allocation up to maxUpfrontBodyBytes, then growth capped at the declared length as bytes arrive, instead of io.ReadAll's growth to about twice the body. An unknown or larger length goes through io.ReadAll, where the listener's MaxBytesReader rejects an oversized body. On error the bytes read so far are returned with it.
+func readRequestBody(r *http.Request, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		limit = httpmw.DefaultMaxRequestBytes
+	}
+	declared := r.ContentLength
+	if declared <= 0 || declared > limit {
+		return io.ReadAll(r.Body)
+	}
+	body := make([]byte, 0, min(declared, maxUpfrontBodyBytes))
+	for int64(len(body)) < declared {
+		if len(body) == cap(body) {
+			body = slices.Grow(body, int(min(declared, 2*int64(cap(body))))-len(body))
+		}
+		n, err := r.Body.Read(body[len(body):cap(body)])
+		body = body[:len(body)+n]
+		if err == io.EOF {
+			if int64(len(body)) < declared {
+				return body, io.ErrUnexpectedEOF
+			}
+			return body, nil
+		}
+		if err != nil {
+			return body, err
+		}
+	}
+	var next [1]byte
+	n, err := io.ReadFull(r.Body, next[:])
+	if n == 0 {
+		if err == io.EOF {
+			return body, nil
+		}
+		return body, err
+	}
+	// More bytes than declared: keep them, as io.ReadAll would.
+	rest, err := io.ReadAll(r.Body)
+	return append(append(body, next[0]), rest...), err
 }

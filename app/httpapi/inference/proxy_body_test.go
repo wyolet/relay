@@ -24,7 +24,7 @@ func scannedFrom(t *testing.T, body []byte, prefixLen int, src io.Reader) *scann
 	if scan.err != nil {
 		t.Fatalf("prefix rejected: %v", scan.err)
 	}
-	return newScannedBody(scan, prefix, closeAt, src, io.NopCloser(nil))
+	return newScannedBody(scan, prefix, closeAt, src)
 }
 
 func TestScannedBody_ForwardsTheBodyUnchanged(t *testing.T) {
@@ -93,6 +93,7 @@ func TestScannedBody_Refusals(t *testing.T) {
 		{"duplicate late", `{"model":"a","messages":[{"content":"` + pad + `"}],"model":"b"}`, nil, "duplicate_model"},
 		{"duplicate split across reads", `{"model":"a","x":"` + pad + `","mod` + `el":"b"}`, func(r []byte) io.Reader { return iotest.OneByteReader(bytes.NewReader(r)) }, "duplicate_model"},
 		{"trailing value", `{"model":"a","x":"` + pad + `"} {"model":"b"}`, nil, "parse_error"},
+		{"too much after the close", `{"model":"a","x":"` + pad + `"}` + strings.Repeat(" ", maxHeldTail+1), nil, "parse_error"},
 		{"ends before the close", `{"model":"a","x":"` + pad + `"`, nil, "parse_error"},
 		{"malformed tail", `{"model":"a","x":"` + pad + `",}`, nil, "parse_error"},
 		{"client disconnect", `{"model":"a","x":"` + pad + `"}`, func(r []byte) io.Reader {

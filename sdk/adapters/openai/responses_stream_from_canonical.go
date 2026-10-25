@@ -42,8 +42,8 @@ type canonicalToResponsesStream struct {
 type responsesStreamItem struct {
 	itemType    v1.ItemType
 	outputIndex int
-	textBuf     string
-	argsBuf     string
+	textBuf     []byte
+	argsBuf     []byte
 	callID      string
 	name        string
 	custom      bool // this call's tool was defined as `custom` on the request
@@ -155,7 +155,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		}
 		switch ev.Kind {
 		case v1.DeltaKindText:
-			st.textBuf += ev.Delta
+			st.textBuf = append(st.textBuf, ev.Delta...)
 			s.outputItems[ev.ItemID] = st
 			deltaData, _ := json.Marshal(ResponsesOutputTextDeltaEvent{
 				ItemID:       ev.ItemID,
@@ -166,7 +166,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventOutputTextDelta, Data: deltaData})
 
 		case v1.DeltaKindArguments:
-			st.argsBuf += ev.Delta
+			st.argsBuf = append(st.argsBuf, ev.Delta...)
 			s.outputItems[ev.ItemID] = st
 			if st.custom {
 				// A custom tool's input is the freeform string inside the JSON arguments, which only becomes readable once the object closes — so the whole input ships as one delta from itemDoneFrames.
@@ -182,7 +182,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventFunctionCallArgumentsDelta, Data: deltaData})
 
 		case v1.DeltaKindReasoning:
-			st.textBuf += ev.Delta
+			st.textBuf = append(st.textBuf, ev.Delta...)
 			s.outputItems[ev.ItemID] = st
 			deltaData, _ := json.Marshal(ResponsesReasoningTextDeltaEvent{
 				ItemID:       ev.ItemID,

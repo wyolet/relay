@@ -320,6 +320,63 @@ func TestIntegration_CancelRunning(t *testing.T) {
 	waitState(t, q, id, StateCancelled, 3*time.Second)
 }
 
+// slowGet holds every Get until release closes, signalling loading on the first.
+type slowGet struct {
+	payload.Store
+	loading chan struct{}
+	release chan struct{}
+	once    sync.Once
+	freed   sync.Once
+}
+
+func (s *slowGet) free() { s.freed.Do(func() { close(s.release) }) }
+
+func (s *slowGet) Get(ctx context.Context, uri string) ([]byte, error) {
+	s.once.Do(func() { close(s.loading) })
+	<-s.release
+	return s.Store.Get(ctx, uri)
+}
+
+// A job claimed but still loading its input is running in the store; Cancel must reach it there too.
+func TestIntegration_CancelWhileLoadingInput(t *testing.T) {
+	q, _ := testQueue(t, fastOpts())
+	slow := &slowGet{Store: q.payload, loading: make(chan struct{}), release: make(chan struct{})}
+	q.payload = slow
+	ran := make(chan struct{}, 1)
+	q.Register("load", func(ctx context.Context, _ *Job) ([]byte, error) {
+		ran <- struct{}{}
+		return []byte("done"), nil
+	})
+	run(t, q)
+	// Registered after run, so it runs first: a failed test must not leave Get holding shutdown.
+	t.Cleanup(slow.free)
+
+	id, err := q.Enqueue(context.Background(), []byte("in"), EnqueueOpts{Queue: "load"})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	select {
+	case <-slow.loading:
+	case <-time.After(3 * time.Second):
+		t.Fatal("input never loaded")
+	}
+
+	res, err := q.Cancel(context.Background(), id)
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if res != CancelRequestedRunning {
+		t.Fatalf("cancel result = %v, want CancelRequestedRunning", res)
+	}
+	slow.free()
+	waitState(t, q, id, StateCancelled, 3*time.Second)
+	select {
+	case <-ran:
+		t.Fatal("handler ran for a cancelled job")
+	default:
+	}
+}
+
 func TestIntegration_ScheduledPromotion(t *testing.T) {
 	q, _ := testQueue(t, fastOpts())
 	var ran int32

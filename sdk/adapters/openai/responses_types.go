@@ -87,7 +87,7 @@ type ResponsesItem interface {
 
 // ResponsesPart is a sealed interface for elements of a Responses API message's Content array.
 // Valid concrete types: *ResponsesTextPart, *ResponsesImagePart, *ResponsesFilePart (input),
-// *ResponsesOutputTextPart, *ResponsesRefusalPart (output).
+// *ResponsesOutputTextPart, *ResponsesRefusalPart (output), and *ResponsesRawPart.
 type ResponsesPart interface {
 	isResponsesPart()
 	ResponsesPartType() ResponsesPartType

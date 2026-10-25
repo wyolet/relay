@@ -158,6 +158,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	lifecycleReg := lifecycle.New()
 	pl := &pipeline.Pipeline{Policy: policySvc, Lifecycle: lifecycleReg, Logger: slog.Default()}
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
+	proxyPipeline.Policy = policySvc
 
 	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
 	anthropicAuth := adapter.AuthStrategy{
@@ -959,8 +960,8 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 	}
 }
 
-// seedProxyHost installs a single Host pointing at upstreamURL and a
-// Key unattached to any Policy (proxy mode doesn't need one).
+// seedProxyHost installs a Host pointing at upstreamURL, serving the model
+// "claude-opus-4-7", and a passthrough Key under a wildcard Policy.
 // Returns the cleartext key bearer.
 func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string) {
 	s.t.Helper()
@@ -973,8 +974,23 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string
 	}
 	mustUpsert(s.t, s.stores.Host.Upsert(ctx, hst), "host")
 
-	// Need a Policy because Key.Spec.PolicyID is required, even
-	// though proxy mode doesn't consult it.
+	// A pinned request must route its model at the host, so the model the proxy tests send has a binding there.
+	prov := &provider.Provider{
+		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-provider", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+	}
+	mustUpsert(s.t, s.stores.Provider.Upsert(ctx, prov), "provider")
+	mdl := &model.Model{
+		Meta: meta.Metadata{ID: ids.New(), Name: "claude-opus-4-7", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "claude-opus-4-7"}}, Pointer: "claude-opus-4-7"},
+	}
+	mustUpsert(s.t, s.stores.Model.Upsert(ctx, mdl), "model")
+	bnd := &binding.Binding{
+		Meta: meta.Metadata{ID: ids.New(), Name: "claude-opus-4-7-on-proxy-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: mdl.Meta.ID, HostID: hst.Meta.ID, Adapter: adapters.Anthropic},
+	}
+	mustUpsert(s.t, s.stores.Binding.Upsert(ctx, bnd), "binding")
+
+	// The key's policy grants every model; proxy mode needs no host key.
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-policy",
 			Owner: meta.Owner{Kind: meta.OwnerSystem}},

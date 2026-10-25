@@ -40,7 +40,7 @@ Codex's `/model` picker lists a catalog compiled into its binary. For a provider
 curl -H "Authorization: Bearer $RELAY_API_KEY" \
   https://your-relay/codex/v1/models > ~/.codex/relay-models.json
 
-curl -L https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/models-manager/prompt.md \
+curl -L https://raw.githubusercontent.com/openai/codex/rust-v<version>/codex-rs/models-manager/prompt.md \
   > ~/.codex/relay-prompt.md
 ```
 
@@ -49,7 +49,7 @@ model_catalog_json      = "~/.codex/relay-models.json"
 model_instructions_file = "~/.codex/relay-prompt.md"
 ```
 
-Match the tag in that second URL to your own `codex --version` — the prompt ships with the binary and changes between releases.
+Replace `<version>` in that second URL with the one `codex --version` prints (for example `rust-v0.153.4`): the prompt ships with the binary and changes between releases.
 
 Both are **top-level** keys, so they must sit above the first `[table]` header in `config.toml` — above `[model_providers.relay]`, `[projects."…"]`, `[profiles.…]`, all of them. TOML assigns every key after a header to that table, so the same two lines appended to the end of the file silently become `projects."…".model_catalog_json` and are ignored: the picker keeps showing Codex's bundled models and nothing is logged.
 
@@ -97,11 +97,11 @@ If you would rather hand-write the file, this is a complete minimal entry — ev
 
 ## What you get
 
-- **Usage** — every turn appears in `GET /logs` and the `/usage/*` endpoints, attributed to your relay key, with token counts and timing.
-- **Payloads** — with payload logging enabled, the full request and response bodies are readable at `GET /logs/{request_id}`.
-- **Attribution** — the client's `session-id`, `thread-id`, `x-client-request-id`, `x-codex-installation-id`, `x-codex-window-id`, `x-codex-parent-thread-id`, `x-openai-subagent` and `originator` headers are recorded on the usage event as `extras`, alongside `client=codex`. That is what lets you cost one session, or one sub-agent turn inside it.
+- **Usage**: every turn appears in `GET /api/logs` and the `/api/usage/*` endpoints of the control API, attributed to your relay key, with token counts, cost and timing.
+- **Payloads**: with payload logging enabled, the full request and response bodies are readable at `GET /api/logs/{request_id}`.
+- **Attribution**: the client's `session-id`, `thread-id`, `x-client-request-id`, `x-codex-installation-id`, `x-codex-window-id`, `x-codex-parent-thread-id`, `x-openai-subagent` and `originator` headers are recorded on the usage event as `extras`, alongside `client=codex`. That is what lets you cost one session, or one sub-agent turn inside it.
 
-See [Usage & Logging](/concepts/observability) for reading it back.
+See [Usage](/concepts/usage) for reading it back and [Payload logging](/concepts/payload-logging) for capture.
 
 ## Known limits
 

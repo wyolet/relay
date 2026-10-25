@@ -15,6 +15,7 @@ import (
 var _ payload.Sink = (*Sink)(nil)
 var _ payload.Reader = (*Sink)(nil)
 var _ payload.Closer = (*Sink)(nil)
+var _ payload.BatchWriter = (*Sink)(nil)
 
 // Config holds all tunables for the ClickHouse payload sink. It mirrors the
 // usage CH sink's config; the WAL knobs are shared, plus a byte-based
@@ -174,6 +175,11 @@ func New(cfg Config) (*Sink, error) {
 // local filesystem; CH delivery is asynchronous.
 func (s *Sink) Write(r payload.Record) error {
 	return s.wal.Write(r)
+}
+
+// WriteBatch appends rs to the WAL under one lock and one write.
+func (s *Sink) WriteBatch(rs []payload.Record) error {
+	return s.wal.WriteBatch(rs)
 }
 
 // Close flushes the WAL and closes the ClickHouse connection.
