@@ -100,6 +100,23 @@ func TestLoadEnvFileMissingDotEnvIsFine(t *testing.T) {
 	}
 }
 
+func TestLoadEnvFileUnreadableDotEnvIsSkipped(t *testing.T) {
+	withEnvFileState(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.Open(".env"); !os.IsPermission(err) {
+		t.Skipf("working directory still readable (running as root?): %v", err)
+	}
+	t.Setenv("RELAY_ENV_FILE", "")
+	if err := loadEnvFile([]string{"relay"}); err != nil {
+		t.Fatalf("unreadable working directory: %v", err)
+	}
+}
+
 func TestApplyRefusesDotEnvTokenWithoutURL(t *testing.T) {
 	withEnvFileState(t)
 	dotEnvFile, dotEnvKeys = "prod.env", map[string]bool{"RELAY_ADMIN_TOKEN": true}
