@@ -116,9 +116,8 @@ type Config struct {
 	MaxInflight              int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
 
 	// UpstreamMaxIdlePerHost caps idle keep-alive connections the upstream
-	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST, default 128).
-	// The stdlib default (2) forces a fresh dial on nearly every request at
-	// high per-host RPS; a higher ceiling keeps hot upstream connections warm.
+	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST); 0 = the
+	// in-flight cap, so every request in flight can return its connection to the pool.
 	UpstreamMaxIdlePerHost int
 
 	// UpstreamDialTimeout bounds the TCP connect to an upstream (RELAY_UPSTREAM_DIAL_TIMEOUT_S, default 10s).
@@ -426,7 +425,7 @@ func Load() (*Config, error) {
 		cfg.BatchMaxItems = v
 	}
 
-	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 128); err != nil {
+	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 0); err != nil {
 		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
 	} else {
 		cfg.UpstreamMaxIdlePerHost = v

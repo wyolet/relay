@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
@@ -74,7 +75,7 @@ func buildProxy(cfg *config.Config, limiter, postFlightLimiter *pkgratelimit.Lim
 
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.
-	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
+	adapter.SetUpstreamMaxIdleConnsPerHost(upstreamMaxIdlePerHost(cfg))
 	adapter.SetUpstreamDialTimeout(cfg.UpstreamDialTimeout)
 	adapter.SetUpstreamStreamIdleTimeout(cfg.StreamIdleTimeout)
 	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
@@ -120,4 +121,15 @@ func (r catalogSnapReader) Policy(ctx context.Context, id string) (*policy.Polic
 
 func (r catalogSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
 	return r.snap(ctx).RateLimit(id)
+}
+
+// upstreamMaxIdlePerHost defaults to the in-flight cap: each request in flight holds at most one upstream connection, and an idle cap below that peak closes connections the next requests must dial again.
+func upstreamMaxIdlePerHost(cfg *config.Config) int {
+	if cfg.UpstreamMaxIdlePerHost > 0 {
+		return cfg.UpstreamMaxIdlePerHost
+	}
+	if cfg.MaxInflight > 0 {
+		return cfg.MaxInflight
+	}
+	return httpapi.DefaultMaxInflight
 }
