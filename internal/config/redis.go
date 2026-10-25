@@ -12,6 +12,8 @@ import (
 const (
 	DefaultRedisPoolSizePerCPU           = 25
 	DefaultRedisPostFlightPoolSizePerCPU = 25
+	// A larger queue brings back the pool-wait latency the cap exists to stop; a smaller one refuses load the pool would serve.
+	DefaultRedisPoolMaxWaitersPerConn = 2
 )
 
 // Post-flight client wait bounds. A command waits at most pool + write + read (2.5 s with the default write bound), plus one dial on a pool miss, which stays inside the 5 s deadline a served request's post-flight runs under.
@@ -52,7 +54,7 @@ func loadRedisClient(cfg *Config) error {
 	} else {
 		cfg.RedisMaxRetries = v
 	}
-	waiters, err := envPositiveInt("RELAY_REDIS_POOL_MAX_WAITERS", cfg.RedisPoolSize)
+	waiters, err := envPositiveInt("RELAY_REDIS_POOL_MAX_WAITERS", DefaultRedisPoolMaxWaitersPerConn*cfg.RedisPoolSize)
 	if err != nil {
 		return fmt.Errorf("RELAY_REDIS_POOL_MAX_WAITERS must be >= 1")
 	}

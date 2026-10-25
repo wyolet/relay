@@ -73,8 +73,8 @@ func TestRedisPoolMaxWaiters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RedisPoolMaxWaiters != 40 {
-		t.Fatalf("RedisPoolMaxWaiters = %d, want the pool size 40", cfg.RedisPoolMaxWaiters)
+	if cfg.RedisPoolMaxWaiters != 80 {
+		t.Fatalf("RedisPoolMaxWaiters = %d, want twice the pool size 80", cfg.RedisPoolMaxWaiters)
 	}
 
 	t.Setenv("RELAY_REDIS_POOL_MAX_WAITERS", "7")
