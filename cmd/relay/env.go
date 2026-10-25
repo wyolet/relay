@@ -42,7 +42,8 @@ func loadEnvFile(args []string) error {
 	}
 	keys, err := loadDotEnv(path)
 	if err != nil {
-		if !explicit && errors.Is(err, fs.ErrNotExist) {
+		// The image's working directory is unreadable to a user other than its own (docker --user, random OpenShift UIDs), and the implicit file is optional.
+		if !explicit && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)) {
 			return nil
 		}
 		return fmt.Errorf("RELAY_ENV_FILE: %w", err)
