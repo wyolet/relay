@@ -51,7 +51,7 @@ func allocsFor(t *testing.T, h http.Handler, r *http.Request) int {
 // the snapshot, take the precomputed subject slice, scan the project's
 // policy bindings, and stash the principal on the context.
 func TestKeyPathAllocations(t *testing.T) {
-	const want = 7
+	const want = 3
 
 	f := benchFixture(8)
 	st := f.stack(t, benchKey(f, "sk-wr-alloc"))
@@ -67,7 +67,7 @@ func TestKeyPathAllocations(t *testing.T) {
 // claims come from the cache, so what is left is the claim checks, the
 // snapshot reads and the Principal.
 func TestTokenPathAllocations(t *testing.T) {
-	const want = 7
+	const want = 4
 
 	f := benchFixture(8)
 	st := f.stack(t)

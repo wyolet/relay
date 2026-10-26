@@ -84,10 +84,18 @@ func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapte
 		}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 			return &huma.StreamResponse{Body: func(hctx huma.Context) {
 				r, w := humachi.Unwrap(hctx)
-				handleShape(spec, d, w, r.WithContext(clientprofile.WithProfile(r.Context(), profile)))
+				handleShape(spec, d, w, withRouteProfile(r, profile))
 			}}, nil
 		})
 	}
+}
+
+// withRouteProfile sets the profile a /{profile}/ route belongs to on r, unless the profile middleware already resolved that same profile from the path. Profile names are unique within the registry both read.
+func withRouteProfile(r *http.Request, p clientprofile.Profile) *http.Request {
+	if clientprofile.FromContext(r.Context()).Name() == p.Name() {
+		return r
+	}
+	return r.WithContext(clientprofile.WithProfile(r.Context(), p))
 }
 
 // handleShape is the generic per-shape route handler. It reads the request

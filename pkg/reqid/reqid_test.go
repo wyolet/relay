@@ -154,6 +154,46 @@ func TestLoggerIncludesRequestID(t *testing.T) {
 	}
 }
 
+func TestLoggerBuiltOnceOnFirstUse(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
+		s := stateFrom(ctx)
+		if s.logger != nil {
+			t.Fatal("logger built before anything asked for it")
+		}
+		if first := Logger(ctx); first == nil || Logger(ctx) != first {
+			t.Fatal("Logger must build the request logger once and keep returning it")
+		}
+	}), r)
+}
+
+// A frame id keeps the connection's client id but, as before, does not log it.
+func TestWithNewIDKeepsClientIDUnlogged(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set(HeaderInbound, "client-1")
+
+	applyMiddleware(logger, newHandler(func(ctx context.Context) {
+		frame := WithNewID(ctx, logger)
+		if ClientID(frame) != "client-1" {
+			t.Errorf("frame ClientID = %q, want the connection's", ClientID(frame))
+		}
+		Logger(frame).Info("frame")
+	}), r)
+
+	var record map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+		t.Fatalf("json decode: %v; buf=%q", err, buf.String())
+	}
+	if _, ok := record["client_request_id"]; ok {
+		t.Errorf("frame logger carries client_request_id: %v", record)
+	}
+	if id, _ := record["request_id"].(string); len(id) != 26 {
+		t.Errorf("request_id attr = %v, want a ULID", record["request_id"])
+	}
+}
+
 func TestFromAndLoggerOnEmptyContext(t *testing.T) {
 	ctx := context.Background()
 	if id := From(ctx); id != "" {

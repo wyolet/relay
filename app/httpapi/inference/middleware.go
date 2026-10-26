@@ -9,6 +9,38 @@ import (
 	"github.com/wyolet/relay/app/key"
 )
 
+// requestState is the one context value the middleware chain gives a request: ClassifyMiddleware sets it and the credential middleware fills it in, so the chain adds no further context layers or request copies.
+type requestState struct {
+	cls       Classification
+	key       *key.Key
+	principal *Principal
+	snap      *appcatalog.Snapshot
+	// snapSet tells a pinned nil snapshot from none.
+	snapSet bool
+}
+
+type ctxStateT struct{}
+
+func stateFrom(ctx context.Context) *requestState {
+	s, _ := ctx.Value(ctxStateT{}).(*requestState)
+	return s
+}
+
+// derivedState returns a copy of ctx's nearest state, or a new one, for the caller to change and put on a child context. A state already on a context may be read by other goroutines, so only the credential middleware changes one in place (fillPrincipal).
+func derivedState(ctx context.Context) *requestState {
+	s := new(requestState)
+	if outer := stateFrom(ctx); outer != nil {
+		*s = *outer
+	}
+	return s
+}
+
+func withState(ctx context.Context, s *requestState) context.Context {
+	return context.WithValue(ctx, ctxStateT{}, s)
+}
+
+// The keys below are what contexts built without the middleware chain (tests) carry; the accessors fall back to them where the state leaves a value unset.
+
 // ctxKeyT is the context-value key used to stash the authenticated
 // Key for handlers to read via KeyFromContext.
 type ctxKeyT struct{}
@@ -21,10 +53,12 @@ type ctxPrincipalT struct{}
 type ctxSnapshotT struct{}
 
 // WithSnapshot pins snap as the catalog view for everything downstream of
-// ctx. The credential middleware and the WebSocket per-frame path are the
-// only writers.
+// ctx, for callers outside the middleware chain; the chain and the WebSocket
+// per-frame path set it on the request state directly.
 func WithSnapshot(ctx context.Context, snap *appcatalog.Snapshot) context.Context {
-	return context.WithValue(ctx, ctxSnapshotT{}, snap)
+	s := derivedState(ctx)
+	s.snap, s.snapSet = snap, true
+	return withState(ctx, s)
 }
 
 // SnapshotFrom returns the catalog view this request was authenticated
@@ -32,6 +66,9 @@ func WithSnapshot(ctx context.Context, snap *appcatalog.Snapshot) context.Contex
 // Downstream phases read it rather than cat.Current() so a reload landing
 // mid-request cannot split one request across two snapshots.
 func SnapshotFrom(ctx context.Context) *appcatalog.Snapshot {
+	if s := stateFrom(ctx); s != nil && s.snapSet {
+		return s.snap
+	}
 	if v, ok := ctx.Value(ctxSnapshotT{}).(*appcatalog.Snapshot); ok {
 		return v
 	}
@@ -55,6 +92,9 @@ func reserveIdentity(ctx context.Context) (teamID, tokenJTI string) {
 // KeyFromContext returns the authenticated relay key from ctx, or
 // nil if no key middleware fired.
 func KeyFromContext(ctx context.Context) *key.Key {
+	if s := stateFrom(ctx); s != nil && s.key != nil {
+		return s.key
+	}
 	if v, ok := ctx.Value(ctxKeyT{}).(*key.Key); ok {
 		return v
 	}
@@ -64,6 +104,9 @@ func KeyFromContext(ctx context.Context) *key.Key {
 // PrincipalFrom returns the resolved principal from ctx, or nil when the
 // request carried no credential (anonymous proxy mode).
 func PrincipalFrom(ctx context.Context) *Principal {
+	if s := stateFrom(ctx); s != nil && s.principal != nil {
+		return s.principal
+	}
 	if v, ok := ctx.Value(ctxPrincipalT{}).(*Principal); ok {
 		return v
 	}
@@ -111,7 +154,7 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 			if !authorizeProxyMode(w, cat, cls.Mode) {
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), snap, p, k)))
+			next.ServeHTTP(w, fillPrincipal(r, snap, p, k))
 		})
 	}
 }
@@ -130,7 +173,7 @@ func AuthenticateMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func
 			if !ok {
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), snap, p, k)))
+			next.ServeHTTP(w, fillPrincipal(r, snap, p, k))
 		})
 	}
 }
@@ -144,13 +187,28 @@ func authenticate(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *Toke
 	return keyPrincipal(w, snap, bearer)
 }
 
-// withPrincipal stashes the resolved principal, its key when it has one, and the snapshot it resolved against.
-func withPrincipal(ctx context.Context, snap *appcatalog.Snapshot, p *Principal, k *key.Key) context.Context {
-	ctx = WithSnapshot(ctx, snap)
-	if k != nil {
-		ctx = context.WithValue(ctx, ctxKeyT{}, k)
+// fillPrincipal records the resolved principal, its key when it has one, and the snapshot it resolved against on r's state.
+func fillPrincipal(r *http.Request, snap *appcatalog.Snapshot, p *Principal, k *key.Key) *http.Request {
+	// Filled in place: one goroutine runs the middleware chain, and nothing past this middleware has seen the state yet. A WebSocket connection's frames share the upgrade's state, so they each take a copy (frameRequest).
+	if s := stateFrom(r.Context()); s != nil {
+		s.setPrincipal(snap, p, k)
+		return r
 	}
-	return context.WithValue(ctx, ctxPrincipalT{}, p)
+	return r.WithContext(withPrincipal(r.Context(), snap, p, k))
+}
+
+// withPrincipal is fillPrincipal on a copy of ctx's state.
+func withPrincipal(ctx context.Context, snap *appcatalog.Snapshot, p *Principal, k *key.Key) context.Context {
+	s := derivedState(ctx)
+	s.setPrincipal(snap, p, k)
+	return withState(ctx, s)
+}
+
+func (s *requestState) setPrincipal(snap *appcatalog.Snapshot, p *Principal, k *key.Key) {
+	s.snap, s.snapSet, s.principal = snap, true, p
+	if k != nil {
+		s.key = k
+	}
 }
 
 // authorizePrincipal resolves p's policy and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.
