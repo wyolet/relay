@@ -193,13 +193,13 @@ func TestFlushSizesRecordsFromRotation(t *testing.T) {
 			t.Fatalf("segment %d: cap %d, len %d", i, cap(recs), len(recs))
 		}
 	}
-	if n := len(q.segmentLines); n != 0 {
+	if n := len(q.segments); n != 0 {
 		t.Fatalf("%d segment line counts left after the flush", n)
 	}
 }
 
 // BenchmarkQueueWriteFlush writes 10k records in 512-record batches, rotates them
-// into one segment and flushes it, so it covers the write and the read-back.
+// into one segment and flushes it from memory, as the sinks' queues do.
 func BenchmarkQueueWriteFlush(b *testing.B) {
 	const records = 10_000
 	recs := make([]testRecord, records)
@@ -216,7 +216,7 @@ func BenchmarkQueueWriteFlush(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		q := openTestQueue(b, Config{MaxLines: records}, func(recs []testRecord) error {
+		q := openRetainingTestQueue(b, Config{MaxLines: records}, func(recs []testRecord) error {
 			flushed += len(recs)
 			return nil
 		})

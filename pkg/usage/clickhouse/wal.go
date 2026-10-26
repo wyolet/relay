@@ -34,12 +34,36 @@ func newSegmentQueue(
 	log *slog.Logger,
 	flushFn func([]usage.Event) error,
 ) (*segmentQueue, error) {
-	return wal.Open(wal.Config{
+	return wal.OpenRetaining(wal.Config{
 		Dir:           dir,
 		MaxLines:      maxLines,
 		FlushInterval: flushInterval,
 		MaxSegments:   maxSegments,
 		Kind:          "usage",
 		Logger:        log,
-	}, flushFn)
+	}, flushFn, decodedEvent)
+}
+
+// decodedEvent returns ev as json.Unmarshal of its WAL line yields it, so the
+// queue can flush ev from memory. omitempty drops empty maps, which decode as
+// nil; every other field decodes to the value written.
+func decodedEvent(ev usage.Event) (usage.Event, bool) {
+	ts, ok := wal.DecodedTime(ev.Timestamp)
+	if !ok {
+		return usage.Event{}, false
+	}
+	ev.Timestamp = ts
+	if len(ev.Tokens) == 0 {
+		ev.Tokens = nil
+	}
+	if len(ev.Extras) == 0 {
+		ev.Extras = nil
+	}
+	if len(ev.Tags) == 0 {
+		ev.Tags = nil
+	}
+	if len(ev.CostBreakdown) == 0 {
+		ev.CostBreakdown = nil
+	}
+	return ev, true
 }

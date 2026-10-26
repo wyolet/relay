@@ -12,7 +12,8 @@ import (
 
 // FlushPending finds all pending segments and flushes them oldest-first.
 // Before flushing it enforces MaxSegments by dropping the oldest excess. A
-// segment whose flush fails is left on disk for the next pass.
+// segment held in memory flushes from there, any other is read from its
+// file. A segment whose flush fails is left on disk for the next pass.
 func (q *Queue[T]) FlushPending() {
 	q.flushMu.Lock()
 	defer q.flushMu.Unlock()
@@ -45,16 +46,26 @@ func (q *Queue[T]) FlushPending() {
 	}
 
 	for _, seg := range segments {
-		records, err := readSegment[T](seg, q.segmentLineCount(seg), q.log)
-		if err != nil {
-			q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
-			q.failing.Store(true)
-			return
+		records, held, inMemory := q.takeRecords(seg)
+		if !inMemory {
+			var err error
+			records, err = readSegment[T](seg, q.segmentLineCount(seg), q.log)
+			if err != nil {
+				q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
+				q.failing.Store(true)
+				q.dropRetained()
+				return
+			}
 		}
-		if err := q.flush(records); err != nil {
+		err := q.flush(records)
+		if inMemory {
+			q.releaseRetained(held)
+		}
+		if err != nil {
 			// Do NOT delete — leave for retry on next tick.
 			q.log.Warn("wal: flush failed, will retry", "file", filepath.Base(seg), "err", err)
 			q.failing.Store(true)
+			q.dropRetained()
 			return
 		}
 		if err := os.Remove(seg); err != nil {
@@ -71,13 +82,14 @@ func (q *Queue[T]) FlushPending() {
 func (q *Queue[T]) segmentLineCount(path string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.segmentLines[path]
+	return q.segments[path].lines
 }
 
 func (q *Queue[T]) forgetSegment(path string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	delete(q.segmentLines, path)
+	q.retainedBytes -= q.segments[path].bytes
+	delete(q.segments, path)
 }
 
 // reportFlushLag publishes the age of the oldest un-flushed segment

@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,9 +85,24 @@ type Queue[T any] struct {
 	encoder *json.Encoder
 
 	lastSegmentNano int64
-	// segmentLines holds the line count of each segment this process
-	// rotated, keyed by path, so the read-back sizes its slice once.
-	segmentLines map[string]int
+	// segments holds what this process knows of each segment it rotated,
+	// keyed by path: the line count, so the read-back sizes its slice once,
+	// and the records held for its first flush.
+	segments map[string]rotatedSegment[T]
+
+	// decoded, set by OpenRetaining, gives a record as its line decodes.
+	// While retaining, retained mirrors every line of the active segment;
+	// retainedBytes counts it and every held rotated segment against
+	// retainLimit (maxRetainedBytes).
+	decoded             func(T) (T, bool)
+	recordSize          int
+	retainLimit         int
+	retaining           bool
+	retained            []T
+	activeRetainedBytes int
+	retainedBytes       int
+	// retainCap sizes the next held slice from the last rotated segment.
+	retainCap int
 
 	// flushMu serializes FlushPending so the boot-time Recover() and the
 	// background ticker can't process (and double-insert) the same segment.
@@ -108,17 +124,33 @@ type Queue[T any] struct {
 // segments left by a previous run — the constructor does not, so callers can
 // finish wiring the sink in between.
 func Open[T any](cfg Config, flush func([]T) error) (*Queue[T], error) {
+	return OpenRetaining(cfg, flush, nil)
+}
+
+// OpenRetaining is Open for a queue that hands a segment it rotated to flush
+// from memory instead of reading the file back. decoded returns a record as
+// json.Unmarshal of its line yields it (see DecodedTime), or false when only
+// decoding can tell; that segment then flushes from disk. The file stays the
+// source of truth: it is deleted only after a successful flush, and Recover
+// and every retry after a failed flush read it. Write and WriteBatch keep
+// referencing the records' maps, slices and pointers until the flush, so the
+// caller must not modify them afterwards.
+func OpenRetaining[T any](cfg Config, flush func([]T) error, decoded func(T) (T, bool)) (*Queue[T], error) {
 	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
 		return nil, fmt.Errorf("wal/%s: mkdir: %w", cfg.Kind, err)
 	}
 	q := &Queue[T]{
-		cfg:          cfg,
-		flush:        flush,
-		log:          cfg.Logger.With("wal", cfg.Kind),
-		segmentLines: make(map[string]int),
-		stop:         make(chan struct{}),
-		done:         make(chan struct{}),
-		rotated:      make(chan struct{}, 1),
+		cfg:         cfg,
+		flush:       flush,
+		log:         cfg.Logger.With("wal", cfg.Kind),
+		segments:    make(map[string]rotatedSegment[T]),
+		decoded:     decoded,
+		recordSize:  int(reflect.TypeFor[T]().Size()),
+		retainLimit: maxRetainedBytes,
+		retainCap:   cfg.MaxLines,
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+		rotated:     make(chan struct{}, 1),
 	}
 	q.encoder = json.NewEncoder(&q.line)
 	if err := q.openActive(); err != nil {
@@ -159,6 +191,7 @@ func (q *Queue[T]) openActive() error {
 	}
 	q.lines = n
 	q.bytes = int(info.Size())
+	q.startRetainingLocked(info.Size())
 	return nil
 }
 
@@ -173,10 +206,10 @@ func (q *Queue[T]) Write(rec T) error {
 	if err != nil {
 		return fmt.Errorf("wal/%s: marshal record: %w", q.cfg.Kind, err)
 	}
-	if err := q.appendLocked(b); err != nil {
+	if err := q.appendLocked(rec, b); err != nil {
 		return err
 	}
-	return q.writer.Flush()
+	return q.flushWriterLocked()
 }
 
 // WriteBatch appends recs in order under one lock and flushes once, rotating
@@ -198,11 +231,11 @@ func (q *Queue[T]) WriteBatch(recs []T) error {
 			}
 			continue
 		}
-		if err := q.appendLocked(b); err != nil {
+		if err := q.appendLocked(recs[i], b); err != nil {
 			return err
 		}
 	}
-	if err := q.writer.Flush(); err != nil {
+	if err := q.flushWriterLocked(); err != nil {
 		return err
 	}
 	if marshalErr != nil {
@@ -231,25 +264,38 @@ func (q *Queue[T]) releaseLineLocked() {
 	}
 }
 
-// appendLocked buffers one newline-terminated record line and rotates once
+// flushWriterLocked flushes the writer. After a failed write the file's
+// content is unknown, so the active segment stops being held in memory.
+// Must be called with mu held.
+func (q *Queue[T]) flushWriterLocked() error {
+	if err := q.writer.Flush(); err != nil {
+		q.stopRetainingLocked()
+		return err
+	}
+	return nil
+}
+
+// appendLocked buffers rec's newline-terminated line and rotates once
 // the segment is full. Records count as accepted only after the caller's
 // Flush returns: no fsync, so a process crash loses nothing accepted, a power
 // cut may lose the last OS-buffered window. Must be called with mu held.
-func (q *Queue[T]) appendLocked(line []byte) error {
+func (q *Queue[T]) appendLocked(rec T, line []byte) error {
 	// Hand the OS whole lines, so a crash mid-batch tears at most the record
 	// being written instead of one that straddles two writes.
 	if q.writer.Buffered() > 0 && q.writer.Available() < len(line) {
-		if err := q.writer.Flush(); err != nil {
+		if err := q.flushWriterLocked(); err != nil {
 			return err
 		}
 	}
 	// bufio copies line or writes it through before returning; it keeps no
 	// reference, so q.line is free for the next record.
 	if _, err := q.writer.Write(line); err != nil {
+		q.stopRetainingLocked()
 		return err
 	}
 	q.lines++
 	q.bytes += len(line)
+	q.retainLocked(rec, line)
 
 	if q.lines >= q.cfg.MaxLines || (q.cfg.MaxBytes > 0 && q.bytes >= q.cfg.MaxBytes) {
 		if err := q.rotateLocked(); err != nil {
@@ -271,10 +317,11 @@ func (q *Queue[T]) rotateLocked() error {
 		return nil
 	}
 
-	if err := q.writer.Flush(); err != nil {
+	if err := q.flushWriterLocked(); err != nil {
 		return err
 	}
 	if err := q.active.Close(); err != nil {
+		q.stopRetainingLocked()
 		return err
 	}
 
@@ -285,9 +332,16 @@ func (q *Queue[T]) rotateLocked() error {
 	q.lastSegmentNano = nano
 	dst := filepath.Join(q.cfg.Dir, fmt.Sprintf("%s%d.jsonl", segmentPrefix, nano))
 	if err := os.Rename(src, dst); err != nil {
+		q.stopRetainingLocked()
 		return err
 	}
-	q.segmentLines[dst] = q.lines
+	seg := rotatedSegment[T]{lines: q.lines}
+	if q.retaining {
+		seg.records, seg.bytes = q.retained, q.activeRetainedBytes
+		q.retained, q.activeRetainedBytes, q.retaining = nil, 0, false
+	}
+	q.segments[dst] = seg
+	q.retainCap = q.lines
 
 	return q.openActive()
 }

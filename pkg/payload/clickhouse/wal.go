@@ -35,7 +35,7 @@ func newSegmentQueue(
 	log *slog.Logger,
 	flushFn func([]payload.Record) error,
 ) (*segmentQueue, error) {
-	return wal.Open(wal.Config{
+	return wal.OpenRetaining(wal.Config{
 		Dir:           dir,
 		MaxLines:      maxLines,
 		MaxBytes:      maxBytes,
@@ -46,5 +46,23 @@ func newSegmentQueue(
 		FlushOnRotate: true,
 		Kind:          "payload",
 		Logger:        log,
-	}, flushFn)
+	}, flushFn, decodedRecord)
+}
+
+// decodedRecord returns r as json.Unmarshal of its WAL line yields it, so the
+// queue can flush r from memory. omitempty drops empty bodies, which decode
+// as nil; every other field decodes to the value written.
+func decodedRecord(r payload.Record) (payload.Record, bool) {
+	ts, ok := wal.DecodedTime(r.Timestamp)
+	if !ok {
+		return payload.Record{}, false
+	}
+	r.Timestamp = ts
+	if len(r.RequestBody) == 0 {
+		r.RequestBody = nil
+	}
+	if len(r.ResponseBody) == 0 {
+		r.ResponseBody = nil
+	}
+	return r, true
 }
