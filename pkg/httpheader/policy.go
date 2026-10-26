@@ -13,45 +13,46 @@ var (
 )
 
 // Relay-internal control headers. Read at the inference edge by the
-// mode classifier; never forwarded upstream.
+// mode classifier; never forwarded upstream. Spelled in canonical form
+// so Header.Get/Set/Del skip re-canonicalizing into a fresh string.
 const (
-	HeaderRelayAPIKey   = "X-WR-API-Key"
-	HeaderProxyMode     = "X-WR-Proxy-Mode"
-	HeaderUpstreamHost  = "X-WR-Upstream-Host"
+	HeaderRelayAPIKey   = "X-Wr-Api-Key"
+	HeaderProxyMode     = "X-Wr-Proxy-Mode"
+	HeaderUpstreamHost  = "X-Wr-Upstream-Host"
 	ProxyModeValueProxy = "Proxy"
 
 	// HeaderUsage opts the caller into an inline relay_usage block on the
 	// response ("full"). Relay-internal; stripped from the upstream
 	// request by the X-WR-* denylist.
-	HeaderUsage    = "X-WR-Usage"
+	HeaderUsage    = "X-Wr-Usage"
 	UsageValueFull = "full"
 
 	// HeaderEventTime overrides the usage Event timestamp (RFC3339).
 	// Honored only under RELAY_DEV_TRUST_EVENT_TIME=1 — dev/replay
 	// tooling. Stripped from the upstream request by the X-WR-* denylist.
-	HeaderEventTime = "X-WR-Event-Time"
+	HeaderEventTime = "X-Wr-Event-Time"
 
 	// HeaderRequestTags carries caller-supplied observability tags as a
 	// flat JSON object (string→string). Validated post-flight and landed
 	// on the usage Event's tags field. Stripped from the upstream request
 	// by the X-WR-* denylist.
-	HeaderRequestTags = "X-WR-Request-Tags"
+	HeaderRequestTags = "X-Wr-Request-Tags"
 
 	// HeaderClient names the calling client profile (e.g. "claude-code")
 	// explicitly, ahead of path-prefix and User-Agent detection. Stripped
 	// from the upstream request by the X-WR-* denylist.
-	HeaderClient = "X-WR-Client"
+	HeaderClient = "X-Wr-Client"
 
 	// HeaderWarnings is a response header carrying non-fatal request
 	// adjustments the relay made (e.g. params stripped because the routed
 	// model declares them unsupported) so drops are surfaced, never silent.
-	HeaderWarnings = "X-WR-Warnings"
+	HeaderWarnings = "X-Wr-Warnings"
 
 	// HeaderTokenCount is a response header naming how an input-token count was arrived at: "exact" from the upstream's own counter, "calibrated" from the ratio relay measured on this session's or model's traffic, "estimated" from bytes alone. A caller that cares about precision can tell the three apart.
-	HeaderTokenCount = "X-WR-Token-Count"
+	HeaderTokenCount = "X-Wr-Token-Count"
 
 	// HeaderContentCapture is the OTLP receiver's response header saying whether it stores the message content of this credential's calls, so a reporting client neither withholds what a policy wants nor uploads what relay drops.
-	HeaderContentCapture = "X-WR-Content-Capture"
+	HeaderContentCapture = "X-Wr-Content-Capture"
 	ContentCaptureStore  = "store"  // the governing policy stores content
 	ContentCaptureDrop   = "drop"   // the governing policy or an operator switch does not
 	ContentCaptureClient = "client" // no policy governs; the client's opt-in decides
@@ -88,7 +89,7 @@ var HopByHop = []string{
 	"Keep-Alive",
 	"Proxy-Authenticate",
 	"Proxy-Authorization",
-	"TE",
+	"Te",
 	"Trailers",
 	"Transfer-Encoding",
 	"Upgrade",
@@ -156,17 +157,13 @@ func SanitizeUpstreamResponse(h http.Header) http.Header {
 // case-insensitively. Patterns may be exact (e.g., "Authorization")
 // or prefix-style with a trailing "*" (e.g., "X-WR-*").
 func Match(name string, patterns []string) bool {
-	lower := strings.ToLower(name)
 	for _, p := range patterns {
-		if strings.HasSuffix(p, "*") {
-			prefix := strings.ToLower(p[:len(p)-1])
-			if strings.HasPrefix(lower, prefix) {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			if len(name) >= len(prefix) && strings.EqualFold(name[:len(prefix)], prefix) {
 				return true
 			}
-		} else {
-			if lower == strings.ToLower(p) {
-				return true
-			}
+		} else if strings.EqualFold(name, p) {
+			return true
 		}
 	}
 	return false

@@ -104,7 +104,7 @@ func Classify(r *http.Request) (Classification, error) {
 		relay = bearer(r.Header.Get("Authorization"))
 	}
 	if relay == "" {
-		relay = r.Header.Get("x-api-key")
+		relay = r.Header.Get("X-Api-Key")
 	}
 	return Classification{
 		Mode:     ModeNormal,
