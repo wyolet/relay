@@ -49,6 +49,11 @@ type Adapter interface {
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
 }
 
+// CallTimeouter is the optional capability of an Adapter that caps one call end to end, body read included; 0 means no cap. The runner sets that cap on the call context it derives anyway, so the adapter need not derive a second one.
+type CallTimeouter interface {
+	CallTimeout(stream bool) time.Duration
+}
+
 // Request is the pre-resolved input. Built by the handler/router.
 type Request struct {
 	// Body is the upstream wire body. Run sets it to nil once an upstream response is accepted: no retry can follow, and a long stream must not pin it.
@@ -283,7 +288,7 @@ loop:
 		// to an api key (or vice versa) authenticates each correctly.
 		oauth := acq != nil && acq.Key != nil && acq.Key.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
 		req.Lifecycle.MarkUpstreamStart()
-		call := newUpstreamCall(ctx)
+		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
 		resp, err = req.Adapter.Call(call.ctx, req.HostBaseURL, hostPath(req), keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
@@ -345,6 +350,18 @@ loop:
 
 // maxUpstreamErrorBody bounds the retained upstream error body. Generous enough that no provider's error JSON is truncated (they run to a few KiB at most with a validation trace), bounded because this buffer outlives the response and a hostile upstream must not be able to pin arbitrary memory per failed request.
 const maxUpstreamErrorBody = 64 << 10
+
+// maxTeePresize caps the response buffer sized up front from Content-Length. The header is the upstream's claim, not bytes received, so a larger one grows the buffer as the body arrives instead.
+const maxTeePresize = 64 << 10
+
+// newTeeBuffer returns the buffer a buffered response is copied into, sized up front when contentLength is known and at most maxTeePresize.
+func newTeeBuffer(contentLength int64) *bytes.Buffer {
+	b := &bytes.Buffer{}
+	if contentLength > 0 && contentLength <= maxTeePresize {
+		b.Grow(int(contentLength))
+	}
+	return b
+}
 
 // errorExcerpt bounds how much of the retained body reaches a log line or an error string.
 const errorExcerpt = 512
@@ -578,7 +595,7 @@ func (p *Pipeline) makeResult(
 		req.Lifecycle.SetStreamSession(sess)
 		teeDst = sess
 	} else {
-		collected = &bytes.Buffer{}
+		collected = newTeeBuffer(resp.ContentLength)
 		teeDst = collected
 	}
 	read := &readState{r: io.TeeReader(resp.Body, teeDst)}
