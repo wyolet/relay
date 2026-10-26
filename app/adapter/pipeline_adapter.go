@@ -35,6 +35,7 @@ type specAdapter struct {
 var (
 	_ pipeline.Adapter            = (*specAdapter)(nil)
 	_ pipeline.ResponseSummarizer = (*specAdapter)(nil)
+	_ pipeline.CallTimeouter      = (*specAdapter)(nil)
 )
 
 // Call issues POST {baseURL}{path}: the host's own path when set (hostPath
@@ -54,14 +55,14 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 	callCtx, cancel := a.callContext(ctx, stream)
 	req, releaseBody, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
 	if err != nil {
-		cancel()
+		cancelIfSet(cancel)
 		return nil, err
 	}
 
 	resp, err := a.spec.client.Do(req)
 	releaseBody()
 	if err != nil {
-		cancel()
+		cancelIfSet(cancel)
 		return nil, err
 	}
 	resp.Body = a.bindBody(resp.Body, cancel, stream)

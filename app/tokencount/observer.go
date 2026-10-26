@@ -2,7 +2,6 @@ package tokencount
 
 import (
 	"context"
-	"time"
 
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -10,9 +9,6 @@ import (
 
 // MetadataKeySession is the lifecycle Metadata key carrying the caller's conversation id. The request entry resolves it through the client profile — only the profile knows which header its client marks a session with — and records it under this profile-neutral name so observers need no such knowledge.
 const MetadataKeySession = "session_id"
-
-// observeTimeout bounds the kv write. The post-flight goroutine is detached from the response, but it must still end.
-const observeTimeout = 5 * time.Second
 
 // Observer feeds completed generations back into the Calibrator. It is a lifecycle.Collector, so it runs after the usage producer filled its Event — which is where the upstream's true input-token count already sits, parsed once, for streamed and buffered responses alike.
 type Observer struct {
@@ -45,7 +41,5 @@ func (o *Observer) Collect(lc *lifecycle.Context) {
 	}
 	session, _ := lc.Metadata[MetadataKeySession].(string)
 
-	ctx, cancel := context.WithTimeout(context.Background(), observeTimeout)
-	defer cancel()
-	o.cal.Observe(ctx, session, lc.ModelID, lc.RequestBytes, prompt)
+	o.cal.Observe(context.Background(), session, lc.ModelID, lc.RequestBytes, prompt)
 }

@@ -126,3 +126,64 @@ func TestCall_BodyCloseCancelsContext(t *testing.T) {
 		}
 	}
 }
+
+// stalledBodyUpstream sends its headers, then nothing until the test ends.
+func stalledBodyUpstream(t *testing.T) string {
+	t.Helper()
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	t.Cleanup(up.Close)
+	t.Cleanup(func() { close(release) })
+	return up.URL
+}
+
+// A caller that already set the sync cap or a tighter one (the pipeline, via CallTimeout) gets no second context: its own deadline bounds the body read.
+func TestCall_CallerDeadlineIsReused(t *testing.T) {
+	s := buildTimeoutSpec(t, time.Minute, 0)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	resp, err := s.PipelineAdapter().Call(ctx, stalledBodyUpstream(t), nil, "", []byte(`{}`), nil, "test-model", false, false)
+	if err != nil {
+		t.Fatalf("sync call: %v", err)
+	}
+	defer resp.Body.Close()
+	if _, derived := resp.Body.(*cancelOnCloseBody); derived {
+		t.Fatal("adapter derived a context under a caller deadline inside its cap")
+	}
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatal("stalled upstream: read returned nil error, want the caller's deadline")
+	}
+}
+
+// A caller deadline past the sync cap does not loosen it.
+func TestCall_LaterCallerDeadlineKeepsCap(t *testing.T) {
+	s := buildTimeoutSpec(t, 100*time.Millisecond, 0)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+	defer cancel()
+	resp, err := s.PipelineAdapter().Call(ctx, stalledBodyUpstream(t), nil, "", []byte(`{}`), nil, "test-model", false, false)
+	if err != nil {
+		t.Fatalf("sync call: %v", err)
+	}
+	defer resp.Body.Close()
+	start := time.Now()
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatal("stalled upstream: read returned nil error, want the sync cap")
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("read ended after %v, want about the 100ms cap", waited)
+	}
+}
+
+func TestCallTimeout(t *testing.T) {
+	a := buildTimeoutSpec(t, 3*time.Second, time.Second).PipelineAdapter().(*specAdapter)
+	if got := a.CallTimeout(false); got != 3*time.Second {
+		t.Errorf("CallTimeout(buffered) = %v, want the sync cap", got)
+	}
+	if got := a.CallTimeout(true); got != 0 {
+		t.Errorf("CallTimeout(stream) = %v, want none (the idle timer bounds a stream)", got)
+	}
+}

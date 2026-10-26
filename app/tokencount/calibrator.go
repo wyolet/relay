@@ -29,6 +29,9 @@ const (
 
 	// maxWrittenEntries bounds the per-process record of written ratios: session ids accrue without limit, and a forgotten key costs one extra write and nothing else.
 	maxWrittenEntries = 10_000
+
+	// writeTimeout bounds the kv writes of one observation. Observe runs on the detached post-flight goroutine, but it must still end.
+	writeTimeout = 5 * time.Second
 )
 
 // store is the narrow kv surface a Calibrator needs: one ratio per key, last write wins, every key expiring on its own.
@@ -58,25 +61,44 @@ func NewCalibrator(s kv.Store) *Calibrator { return &Calibrator{state: s} }
 // Observe records one true measurement: inputTokens is what the upstream reported for a request whose body was bodyBytes long. Both ids are optional — an empty or unusable one is skipped, so a request with no session still teaches the model ratio. Non-positive inputs are ignored rather than stored as a zero ratio. A key is written only when the ratio moved or its last write is due for a refresh (see claimWrite).
 //
 // Errors are dropped on purpose: a lost sample costs the next estimate some accuracy and nothing else, and this runs in post-flight where there is no caller to tell.
+//
+// The writes together are bounded by writeTimeout within ctx. The deadline is taken only once a write is claimed: most observations write nothing.
 func (c *Calibrator) Observe(ctx context.Context, sessionID, modelID string, bodyBytes, inputTokens int) {
 	if c == nil || c.state == nil || bodyBytes <= 0 || inputTokens <= 0 {
 		return
 	}
 	r := float64(inputTokens) / float64(bodyBytes)
+	var session, model string
 	if id := safeID(sessionID); id != "" {
-		c.write(ctx, sessionKey(id), r, sessionTTL)
+		session = c.claimKey(sessionKey(id), r)
 	}
 	if id := safeID(modelID); id != "" {
-		c.write(ctx, modelKey(id), r, modelTTL)
+		model = c.claimKey(modelKey(id), r)
+	}
+	if session == "" && model == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	if session != "" {
+		c.write(ctx, session, r, sessionTTL)
+	}
+	if model != "" {
+		c.write(ctx, model, r, modelTTL)
 	}
 }
 
-// write sends r to key when claimWrite allows it.
-func (c *Calibrator) write(ctx context.Context, key string, r float64, ttl time.Duration) {
+// claimKey returns key when claimWrite allows writing r to it, else "".
+func (c *Calibrator) claimKey(key string, r float64) string {
 	if !c.claimWrite(key, r) {
 		ratioWrites.WithLabelValues(outcomeSkipped).Inc()
-		return
+		return ""
 	}
+	return key
+}
+
+// write sends r to a claimed key.
+func (c *Calibrator) write(ctx context.Context, key string, r float64, ttl time.Duration) {
 	if err := c.state.Set(ctx, key, formatRatio(r), ttl); err != nil {
 		ratioWrites.WithLabelValues(outcomeFailed).Inc()
 		metrics.KVError("token_ratio", metrics.KVDropped)
