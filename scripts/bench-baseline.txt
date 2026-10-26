@@ -10,8 +10,8 @@ app/httpapi/inference/BenchmarkBindingMatch 0
 app/httpapi/inference/BenchmarkKeyPrincipal 26
 app/httpapi/inference/BenchmarkTokenPrincipal 26
 app/httpapi/inference/BenchmarkTokenPrincipalColdCache 34
-app/policy/BenchmarkReserveInboundKey 90
-app/policy/BenchmarkReserveInboundToken 97
+app/policy/BenchmarkReserveInboundKey 64
+app/policy/BenchmarkReserveInboundToken 69
 app/policy/BenchmarkResolveRules 8
 app/routing/BenchmarkResolvePolicyless 3
 app/routing/BenchmarkResolveTwoBindings 5

@@ -509,7 +509,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 	if err != nil {
 		return nil, fmt.Errorf("limit.reserve: arg[0] now_ms: %w", err)
 	}
-	rulesJSON, ok := args[1].(string)
+	rulesJSON, ok := toBytes(args[1])
 	if !ok {
 		return nil, fmt.Errorf("limit.reserve: arg[1] must be string")
 	}
@@ -525,7 +525,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 	}
 
 	var rules []ruleArg
-	if err := json.Unmarshal([]byte(rulesJSON), &rules); err != nil {
+	if err := json.Unmarshal(rulesJSON, &rules); err != nil {
 		return nil, fmt.Errorf("limit.reserve: parse rules: %w", err)
 	}
 
@@ -885,7 +885,7 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 	if err != nil {
 		return nil, fmt.Errorf("limit.commit: arg[3] n_tok: %w", err)
 	}
-	tokAmountsJSON, ok2 := args[4].(string)
+	tokAmountsJSON, ok2 := toBytes(args[4])
 	if !ok2 {
 		return nil, fmt.Errorf("limit.commit: arg[4] tok_amounts_json must be string")
 	}
@@ -898,34 +898,34 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 		return nil, fmt.Errorf("limit.commit: arg[6] cancelled: %w", err)
 	}
 	cancelled := cancelledInt == 1
-	tbRefundsJSON, ok3 := args[7].(string)
+	tbRefundsJSON, ok3 := toBytes(args[7])
 	if !ok3 {
 		return nil, fmt.Errorf("limit.commit: arg[7] tb_refunds_json must be string")
 	}
-	lbRefundsJSON, ok4 := args[8].(string)
+	lbRefundsJSON, ok4 := toBytes(args[8])
 	if !ok4 {
 		return nil, fmt.Errorf("limit.commit: arg[8] lb_refunds_json must be string")
 	}
-	swRefundsJSON, ok5 := args[9].(string)
+	swRefundsJSON, ok5 := toBytes(args[9])
 	if !ok5 {
 		return nil, fmt.Errorf("limit.commit: arg[9] sw_refunds_json must be string")
 	}
 
 	var tokAmounts []int64
-	if err := json.Unmarshal([]byte(tokAmountsJSON), &tokAmounts); err != nil {
+	if err := json.Unmarshal(tokAmountsJSON, &tokAmounts); err != nil {
 		return nil, fmt.Errorf("limit.commit: parse tok_amounts: %w", err)
 	}
 	// tb/lb refunds are JSON arrays-of-arrays: [[key_idx, cost, burst], ...]
 	var tbRefunds [][3]int64
-	if err := json.Unmarshal([]byte(tbRefundsJSON), &tbRefunds); err != nil {
+	if err := json.Unmarshal(tbRefundsJSON, &tbRefunds); err != nil {
 		return nil, fmt.Errorf("limit.commit: parse tb_refunds: %w", err)
 	}
 	var lbRefunds [][2]int64
-	if err := json.Unmarshal([]byte(lbRefundsJSON), &lbRefunds); err != nil {
+	if err := json.Unmarshal(lbRefundsJSON, &lbRefunds); err != nil {
 		return nil, fmt.Errorf("limit.commit: parse lb_refunds: %w", err)
 	}
 	var swRefunds [][2]int64
-	if err := json.Unmarshal([]byte(swRefundsJSON), &swRefunds); err != nil {
+	if err := json.Unmarshal(swRefundsJSON, &swRefunds); err != nil {
 		return nil, fmt.Errorf("limit.commit: parse sw_refunds: %w", err)
 	}
 
@@ -1016,6 +1016,18 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 		return nil, lockErr
 	}
 	return result, nil
+}
+
+// toBytes reads a string argument as Redis receives it: a string and a []byte are the same bulk string.
+func toBytes(v any) ([]byte, bool) {
+	switch x := v.(type) {
+	case []byte:
+		return x, true
+	case string:
+		return []byte(x), true
+	default:
+		return nil, false
+	}
 }
 
 func toInt64(v any) (int64, error) {

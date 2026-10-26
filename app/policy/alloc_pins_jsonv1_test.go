@@ -5,8 +5,8 @@ package policy
 // The allocation pins on the classic JSON engine, for a build without
 // build.env's GOEXPERIMENT (a bare go test).
 const (
-	pinReserveKey     = 54
-	pinReserveToken   = 59
-	pinReserveNoRules = 21
-	pinCommit         = 38
+	pinReserveKey     = 29
+	pinReserveToken   = 32
+	pinReserveNoRules = 18
+	pinCommit         = 14
 )
