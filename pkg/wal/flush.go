@@ -35,6 +35,7 @@ func (q *Queue[T]) FlushPending() {
 				q.log.Warn("wal: count lines of dropped segment", "file", filepath.Base(s), "err", cerr)
 			}
 			if rerr := os.Remove(s); rerr == nil {
+				q.forgetSegment(s)
 				q.log.Warn("wal: dropped oldest segment (maxSegments exceeded)", "file", filepath.Base(s), "records", lines)
 				q.dropped.Add(1)
 				metrics.AddRecordsLost(q.cfg.Kind, lines)
@@ -44,7 +45,7 @@ func (q *Queue[T]) FlushPending() {
 	}
 
 	for _, seg := range segments {
-		records, err := readSegment[T](seg, q.log)
+		records, err := readSegment[T](seg, q.segmentLineCount(seg), q.log)
 		if err != nil {
 			q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
 			q.failing.Store(true)
@@ -58,9 +59,25 @@ func (q *Queue[T]) FlushPending() {
 		}
 		if err := os.Remove(seg); err != nil {
 			q.log.Warn("wal: remove segment", "file", filepath.Base(seg), "err", err)
+		} else {
+			q.forgetSegment(seg)
 		}
 	}
 	q.failing.Store(false)
+}
+
+// segmentLineCount returns the line count recorded when this process rotated
+// the segment, or 0 for one left by an earlier run.
+func (q *Queue[T]) segmentLineCount(path string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.segmentLines[path]
+}
+
+func (q *Queue[T]) forgetSegment(path string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.segmentLines, path)
 }
 
 // reportFlushLag publishes the age of the oldest un-flushed segment

@@ -16,6 +16,7 @@ package wal
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -77,7 +78,15 @@ type Queue[T any] struct {
 	lines  int
 	bytes  int
 
+	// line holds the record being appended, encoded by encoder; reused
+	// under mu and copied into writer before the append returns.
+	line    bytes.Buffer
+	encoder *json.Encoder
+
 	lastSegmentNano int64
+	// segmentLines holds the line count of each segment this process
+	// rotated, keyed by path, so the read-back sizes its slice once.
+	segmentLines map[string]int
 
 	// flushMu serializes FlushPending so the boot-time Recover() and the
 	// background ticker can't process (and double-insert) the same segment.
@@ -103,13 +112,15 @@ func Open[T any](cfg Config, flush func([]T) error) (*Queue[T], error) {
 		return nil, fmt.Errorf("wal/%s: mkdir: %w", cfg.Kind, err)
 	}
 	q := &Queue[T]{
-		cfg:     cfg,
-		flush:   flush,
-		log:     cfg.Logger.With("wal", cfg.Kind),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
-		rotated: make(chan struct{}, 1),
+		cfg:          cfg,
+		flush:        flush,
+		log:          cfg.Logger.With("wal", cfg.Kind),
+		segmentLines: make(map[string]int),
+		stop:         make(chan struct{}),
+		done:         make(chan struct{}),
+		rotated:      make(chan struct{}, 1),
 	}
+	q.encoder = json.NewEncoder(&q.line)
 	if err := q.openActive(); err != nil {
 		return nil, err
 	}
@@ -154,14 +165,14 @@ func (q *Queue[T]) openActive() error {
 // Write appends rec to the active segment. Rotation happens synchronously
 // when MaxLines (or MaxBytes) is reached.
 func (q *Queue[T]) Write(rec T) error {
-	b, err := json.Marshal(rec)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	defer q.releaseLineLocked()
+
+	b, err := q.encodeLocked(rec)
 	if err != nil {
 		return fmt.Errorf("wal/%s: marshal record: %w", q.cfg.Kind, err)
 	}
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	if err := q.appendLocked(b); err != nil {
 		return err
 	}
@@ -174,11 +185,12 @@ func (q *Queue[T]) Write(rec T) error {
 func (q *Queue[T]) WriteBatch(recs []T) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	defer q.releaseLineLocked()
 
 	var marshalErr error
 	skipped := 0
 	for i := range recs {
-		b, err := json.Marshal(recs[i])
+		b, err := q.encodeLocked(recs[i])
 		if err != nil {
 			skipped++
 			if marshalErr == nil {
@@ -199,26 +211,45 @@ func (q *Queue[T]) WriteBatch(recs []T) error {
 	return nil
 }
 
-// appendLocked buffers one record line and rotates once the segment is full.
-// Records count as accepted only after the caller's Flush returns: no fsync,
-// so a process crash loses nothing accepted, a power cut may lose the last
-// OS-buffered window. Must be called with mu held.
-func (q *Queue[T]) appendLocked(b []byte) error {
+// encodeLocked encodes rec into q.line as json.Marshal does, plus the
+// trailing newline. The result is valid until the next call. Must be called
+// with mu held.
+func (q *Queue[T]) encodeLocked(rec T) ([]byte, error) {
+	q.line.Reset()
+	if err := q.encoder.Encode(rec); err != nil {
+		return nil, err
+	}
+	return q.line.Bytes(), nil
+}
+
+// releaseLineLocked drops a line buffer grown past the write buffer, so one
+// MB-scale payload record isn't kept alive between writes. Must be called
+// with mu held.
+func (q *Queue[T]) releaseLineLocked() {
+	if q.line.Cap() > writeBufferSize {
+		q.line = bytes.Buffer{}
+	}
+}
+
+// appendLocked buffers one newline-terminated record line and rotates once
+// the segment is full. Records count as accepted only after the caller's
+// Flush returns: no fsync, so a process crash loses nothing accepted, a power
+// cut may lose the last OS-buffered window. Must be called with mu held.
+func (q *Queue[T]) appendLocked(line []byte) error {
 	// Hand the OS whole lines, so a crash mid-batch tears at most the record
 	// being written instead of one that straddles two writes.
-	if q.writer.Buffered() > 0 && q.writer.Available() < len(b)+1 {
+	if q.writer.Buffered() > 0 && q.writer.Available() < len(line) {
 		if err := q.writer.Flush(); err != nil {
 			return err
 		}
 	}
-	if _, err := q.writer.Write(b); err != nil {
-		return err
-	}
-	if err := q.writer.WriteByte('\n'); err != nil {
+	// bufio copies line or writes it through before returning; it keeps no
+	// reference, so q.line is free for the next record.
+	if _, err := q.writer.Write(line); err != nil {
 		return err
 	}
 	q.lines++
-	q.bytes += len(b) + 1
+	q.bytes += len(line)
 
 	if q.lines >= q.cfg.MaxLines || (q.cfg.MaxBytes > 0 && q.bytes >= q.cfg.MaxBytes) {
 		if err := q.rotateLocked(); err != nil {
@@ -256,6 +287,7 @@ func (q *Queue[T]) rotateLocked() error {
 	if err := os.Rename(src, dst); err != nil {
 		return err
 	}
+	q.segmentLines[dst] = q.lines
 
 	return q.openActive()
 }
