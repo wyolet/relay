@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -16,7 +18,7 @@ import (
 )
 
 // newBearerSpec returns a minimal built Spec for the openai name.
-func newBearerSpec(t *testing.T, path string, opts ...func(*adapter.Spec)) *adapter.Spec {
+func newBearerSpec(t testing.TB, path string, opts ...func(*adapter.Spec)) *adapter.Spec {
 	t.Helper()
 	s := &adapter.Spec{
 		Name:        adapters.OpenAI,
@@ -71,6 +73,48 @@ func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
 
 	if gotCustom := got.Header("X-Relay-Test"); gotCustom != "hello" {
 		t.Errorf("X-Relay-Test: want hello, got %s", gotCustom)
+	}
+}
+
+// The upstream must see the forwarded headers, relay's own and the body byte for byte, on both sides of the size where the body reader changes.
+func TestSpecAdapter_Call_HeadersAndBodyArriveIntact(t *testing.T) {
+	type seen struct {
+		header http.Header
+		body   []byte
+	}
+	got := make(chan seen, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- seen{r.Header.Clone(), b}
+	}))
+	defer srv.Close()
+
+	a := newBearerSpec(t, "/v1/chat/completions").PipelineAdapter()
+	hdr := http.Header{
+		"Accept":     {"application/json"},
+		"User-Agent": {"client/1.0"},
+		"X-Multi":    {"a", "b"},
+	}
+	for _, size := range []int{3 << 10, 64 << 10, 64<<10 + 1, 1 << 20} {
+		body := bytes.Repeat([]byte("x"), size)
+		resp, err := a.Call(context.Background(), srv.URL, nil, "key", body, hdr, "", false, false)
+		if err != nil {
+			t.Fatalf("size %d: Call: %v", size, err)
+		}
+		resp.Body.Close()
+		s := <-got
+
+		if !bytes.Equal(s.body, body) {
+			t.Errorf("size %d: upstream read %d bytes", size, len(s.body))
+		}
+		want := hdr.Clone()
+		want.Set("Authorization", "Bearer key")
+		want.Set("Content-Type", "application/json")
+		want.Set("Content-Length", strconv.Itoa(size))
+		want.Set("Accept-Encoding", "gzip")
+		if !reflect.DeepEqual(s.header, want) {
+			t.Errorf("size %d: upstream headers\n got %v\nwant %v", size, s.header, want)
+		}
 	}
 }
 
