@@ -12,10 +12,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/ch-go/proto"
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/wyolet/relay/pkg/usage"
 )
@@ -98,6 +100,102 @@ ORDER BY (ts, model_id, policy_id)`
 		if !have[c] {
 			t.Fatalf("column %q missing after ensureSchema", c)
 		}
+	}
+}
+
+// Every inserted column reads back as the value insertValues gives, across
+// two batches through one reused column set.
+func TestIntegration_InsertedRowsMatchInsertValues(t *testing.T) {
+	dsn := os.Getenv("RELAY_TEST_CH_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_TEST_CH_DSN unset; skipping live ClickHouse insert check")
+	}
+	s, err := New(Config{DSN: scratchDatabase(t, dsn), WALDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if opts, err := clickhouse.ParseDSN(dsn); err == nil && opts.Protocol == clickhouse.Native && s.native == nil {
+		t.Fatal("native DSN did not get the column-reusing inserter")
+	}
+	ctx := context.Background()
+
+	events := sampleEvents()
+	for _, batch := range [][]usage.Event{events[:3], events[3:]} {
+		if err := s.insertBatch(batch); err != nil {
+			t.Fatalf("insertBatch: %v", err)
+		}
+	}
+
+	byID := map[string]usage.Event{}
+	for _, ev := range events {
+		byID[ev.RequestID] = ev
+	}
+	rows, err := s.conn.Query(ctx, "SELECT "+strings.Join(insertColumns, ", ")+" FROM "+chTable)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		ref := insertValues(usage.Event{})
+		dest := make([]any, len(ref))
+		for i, v := range ref {
+			dest[i] = reflect.New(reflect.TypeOf(v)).Interface()
+		}
+		if err := rows.Scan(dest...); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		id := *dest[0].(*string)
+		ev, ok := byID[id]
+		if !ok {
+			t.Fatalf("unexpected row %q", id)
+		}
+		seen++
+		want := wantRow(ev)
+		for i, d := range dest {
+			got := reflect.ValueOf(d).Elem().Interface()
+			if ts, ok := got.(time.Time); ok {
+				got = proto.ToDateTime64(ts, proto.PrecisionNano)
+			}
+			if !reflect.DeepEqual(got, want[i]) {
+				t.Errorf("row %q column %s: got %#v, want %#v", id, insertColumns[i], got, want[i])
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if seen != len(events) {
+		t.Fatalf("read back %d rows, want %d", seen, len(events))
+	}
+}
+
+// A connection that died between batches is replaced before the insert.
+func TestIntegration_InsertRedialsClosedConnection(t *testing.T) {
+	dsn := os.Getenv("RELAY_TEST_CH_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_TEST_CH_DSN unset; skipping live ClickHouse insert check")
+	}
+	s, err := New(Config{DSN: scratchDatabase(t, dsn), WALDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if s.native == nil {
+		t.Skip("HTTP DSN inserts through clickhouse-go")
+	}
+	events := sampleEvents()
+	if err := s.insertBatch(events[:1]); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	_ = s.native.client.Close()
+	if err := s.insertBatch(events[1:2]); err != nil {
+		t.Fatalf("insert after the connection closed: %v", err)
+	}
+	var n uint64
+	if err := s.conn.QueryRow(context.Background(), "SELECT count() FROM "+chTable).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("count: %d, %v", n, err)
 	}
 }
 
