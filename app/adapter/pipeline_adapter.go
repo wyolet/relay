@@ -84,10 +84,9 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 	}
 	releaseBody = reqbody.Attach(req, body)
 
-	for k, vs := range hdr {
-		for _, v := range vs {
-			req.Header.Add(k, v)
-		}
+	// A copy per attempt: failover reuses hdr, and the auth headers set below differ per host.
+	if hdr != nil {
+		req.Header = hdr.Clone()
 	}
 
 	req.Header.Set("Content-Type", "application/json")
