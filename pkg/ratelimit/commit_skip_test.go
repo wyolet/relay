@@ -44,7 +44,7 @@ func runCommitSkipSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptS
 		if err := l.CommitBoth(ctx, res, other, obs); err != nil {
 			t.Fatal(err)
 		}
-		b := kv.NewBatch(rec)
+		b := kv.NewBatch(rec, 1)
 		if pc, _ := l.PrepareCommit(b, res, obs); pc != nil {
 			t.Fatal("PrepareCommit queued a commit that settles nothing")
 		}

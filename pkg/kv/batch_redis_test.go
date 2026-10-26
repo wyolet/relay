@@ -24,7 +24,7 @@ func TestBatchRedis_PoolTimeoutFailsEveryResult(t *testing.T) {
 	s := kvtest.ExhaustedPool(t, kvtest.Config(t))
 	ctx := context.Background()
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 4)
 	results := []*kv.BatchResult{
 		b.Script(echoCall("{t}:k", "a")), b.Get("{t}:g"), b.Incr("{t}:ctr", 1), b.ExpireNX("{t}:ctr", time.Minute),
 	}
@@ -62,7 +62,7 @@ func TestBatchRedis_ShedAtWaitBound(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 2)
 	results := []*kv.BatchResult{b.Script(echoCall("{t}:k", "a")), b.Get("{t}:g")}
 	b.ShedWhenPoolBusy()
 	start := time.Now()
@@ -95,7 +95,7 @@ func TestBatchRedis_NoScriptRerunsAlone(t *testing.T) {
 		t.Fatalf("SCRIPT FLUSH: %v", err)
 	}
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 2)
 	r := b.Script(echoCall("{t}:k", "a"))
 	n := b.Incr("{t}:ctr", 1)
 	b.Exec(ctx)

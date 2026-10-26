@@ -66,13 +66,17 @@ func (r *Redis) execBatch(ctx context.Context, ops []BatchOp) {
 		}
 		return nil
 	})
-	// Pipelined returns the first command's error; a command's own error reply says nothing about the batch.
-	var reply redis.Error
-	if errors.As(err, &reply) && !serverCannotServe(err) {
+	// Pipelined returns the first command's error; a command's own error reply says nothing about the batch. A missing key is the usual one, so it skips the classification.
+	if errors.Is(err, redis.Nil) {
 		err = nil
 	}
-	if err != nil && !errors.As(err, &reply) {
-		failUnsent(cmds, err)
+	if err != nil {
+		var reply redis.Error
+		if !errors.As(err, &reply) {
+			failUnsent(cmds, err)
+		} else if !serverCannotServe(err) {
+			err = nil
+		}
 	}
 	r.trackSlow("batch", "", start, err)
 

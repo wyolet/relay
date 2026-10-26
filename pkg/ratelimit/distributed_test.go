@@ -157,7 +157,7 @@ func TestDistributed_BatchedReservePoolTimeoutRefused(t *testing.T) {
 	refused := metrics.KVErrors.WithLabelValues("limit_reserve", metrics.KVRefused)
 	before := testutil.ToFloat64(refused)
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 1)
 	p, err := l.PrepareReserve(b, "policy:p", []Rule{reqRule("r", "r", 10, time.Minute)})
 	if err != nil {
 		t.Fatal(err)

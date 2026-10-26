@@ -13,13 +13,16 @@ var ErrNoScripter = errors.New("state: store does not run scripts")
 //
 // It is not a transaction: each command is atomic on its own, a failed command does not undo the others, and no command sees another's result. Each script's keys must share a hash tag; keys of different commands need not.
 type Batch struct {
-	store  Store
-	ops    []BatchOp
-	orShed bool
+	store   Store
+	ops     []BatchOp
+	results []BatchResult
+	orShed  bool
 }
 
-// NewBatch returns an empty batch on s.
-func NewBatch(s Store) *Batch { return &Batch{store: s} }
+// NewBatch returns an empty batch on s with room for size commands; more may be queued.
+func NewBatch(s Store, size int) *Batch {
+	return &Batch{store: s, ops: make([]BatchOp, 0, size), results: make([]BatchResult, 0, size)}
+}
 
 // BatchOpKind names the command a BatchOp runs.
 type BatchOpKind uint8
@@ -77,7 +80,13 @@ func (b *Batch) Script(call ScriptCall) *BatchResult {
 func (b *Batch) ShedWhenPoolBusy() { b.orShed = true }
 
 func (b *Batch) add(op BatchOp) *BatchResult {
-	op.Result = &BatchResult{}
+	// Past the slab each result is allocated alone: growing the slab would leave handed-out results behind in the old array.
+	if n := len(b.results); n < cap(b.results) {
+		b.results = b.results[:n+1]
+		op.Result = &b.results[n]
+	} else {
+		op.Result = &BatchResult{}
+	}
 	b.ops = append(b.ops, op)
 	return op.Result
 }

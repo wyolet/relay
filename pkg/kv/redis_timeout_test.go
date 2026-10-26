@@ -287,7 +287,7 @@ func TestRedisBatchPoolTimeoutFailsEveryResult(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 4)
 	results := []*kv.BatchResult{
 		b.Script(kv.ScriptCall{Name: "test.count", Script: `return 1`, Keys: []string{"{t}:n"}}),
 		b.Get("{a}:k"), b.Incr("{c}:n", 1), b.ExpireNX("{c}:n", time.Minute),
@@ -310,7 +310,7 @@ func TestRedisBatchGivesUpOnceAtReadTimeout(t *testing.T) {
 	f := newFakeRedis(t, func(string, int) string { return noReply })
 	s := connectFake(t, kv.RedisConfig{Addr: f.addr, ReadTimeout: 100 * time.Millisecond})
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 5)
 	results := []*kv.BatchResult{
 		b.Script(kv.ScriptCall{Name: "test.count", Script: `return 1`, Keys: []string{"{t}:n"}}),
 		b.Get("{a}:k"), b.Get("{b}:k"), b.Incr("{c}:n", 1), b.ExpireNX("{c}:n", time.Minute),
@@ -335,11 +335,47 @@ func TestRedisBatchMissIsNotUnavailable(t *testing.T) {
 	f := newFakeRedis(t, func(string, int) string { return "$-1\r\n" })
 	s := connectFake(t, kv.RedisConfig{Addr: f.addr})
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 1)
 	r := b.Get("{a}:k")
 	b.Exec(context.Background())
 	if !errors.Is(r.Err, kv.ErrNotFound) || errors.Is(r.Err, kv.ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrNotFound alone", r.Err)
+	}
+}
+
+// The pipeline reports only its first command's error. Whether that is the miss or a reply the server cannot serve, each result keeps its own classification.
+func TestRedisBatchMissBesideReplyErrors(t *testing.T) {
+	f := newFakeRedis(t, func(name string, _ int) string {
+		switch name {
+		case "GET":
+			return "$-1\r\n"
+		case "INCRBY":
+			return "-LOADING Redis is loading the dataset in memory\r\n"
+		default:
+			return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+		}
+	})
+	s := connectFake(t, kv.RedisConfig{Addr: f.addr})
+
+	for _, missFirst := range []bool{true, false} {
+		b := kv.NewBatch(s, 3)
+		var miss, loading *kv.BatchResult
+		if missFirst {
+			miss, loading = b.Get("{a}:k"), b.Incr("{a}:n", 1)
+		} else {
+			loading, miss = b.Incr("{a}:n", 1), b.Get("{a}:k")
+		}
+		wrongType := b.ExpireNX("{a}:n", time.Minute)
+		b.Exec(context.Background())
+		if !errors.Is(miss.Err, kv.ErrNotFound) || errors.Is(miss.Err, kv.ErrUnavailable) {
+			t.Errorf("miss first %v: miss err = %v, want ErrNotFound alone", missFirst, miss.Err)
+		}
+		if !errors.Is(loading.Err, kv.ErrUnavailable) || !errors.Is(loading.Err, kv.ErrNotRun) {
+			t.Errorf("miss first %v: LOADING err = %v, want ErrUnavailable and ErrNotRun", missFirst, loading.Err)
+		}
+		if wrongType.Err == nil || errors.Is(wrongType.Err, kv.ErrUnavailable) {
+			t.Errorf("miss first %v: WRONGTYPE err = %v, want a reply error that is not ErrUnavailable", missFirst, wrongType.Err)
+		}
 	}
 }
 

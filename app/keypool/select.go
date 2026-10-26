@@ -65,7 +65,7 @@ func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, ke
 
 // PickCandidate is Pick returning the record the key was picked on, so the caller can tell whether its success needs writing.
 func (s *Selector) PickCandidate(ctx context.Context, scope string, algo KeySelection, keys, exclude []*hostkey.HostKey) (Candidate, error) {
-	b := s.NewBatch()
+	b := s.NewBatch(PickOps(algo, len(keys)))
 	p := s.PreparePick(b, scope, algo, keys, exclude)
 	b.Exec(ctx)
 	return p.Finish(ctx)

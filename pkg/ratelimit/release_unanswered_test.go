@@ -85,7 +85,7 @@ func runReleaseUnansweredSuite(t *testing.T, newStore func(t *testing.T) kvtest.
 
 			var err error
 			if batched {
-				b := kv.NewBatch(l.store)
+				b := kv.NewBatch(l.store, 1)
 				p, perr := l.PrepareReserve(b, scope, []Rule{con})
 				if perr != nil {
 					t.Fatal(perr)
