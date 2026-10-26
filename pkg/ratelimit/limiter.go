@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,7 +119,8 @@ func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string) (kv
 	if err != nil {
 		return kv.ScriptCall{}, err
 	}
-	rulesJSON, err := json.Marshal(ruleArgs)
+	// A pointer spares Marshal the addressable copy it makes of a slice value; the output is the same.
+	rulesJSON, err := json.Marshal(&ruleArgs)
 	if err != nil {
 		return kv.ScriptCall{}, fmt.Errorf("limit: marshal rules: %w", err)
 	}
@@ -132,7 +134,7 @@ func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string) (kv
 		Name:   "limit.reserve",
 		Script: reserveLuaScript,
 		Keys:   keys,
-		Args:   []any{now.UnixMilli(), string(rulesJSON), token, releaseIdx},
+		Args:   []any{now.UnixMilli(), rulesJSON, token, releaseIdx},
 	}, nil
 }
 
@@ -324,45 +326,46 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		}
 	}
 
-	// Append tb/lb/sw state keys and build refund descriptors (1-based KEYS indices).
-	type refund3 [3]int64 // [key_idx, cost_scaled, burst]
-	type refund2 [2]int64 // [key_idx, cost_scaled]
-	tbRefunds := make([]refund3, 0, len(res.tbRules))
-	for _, rule := range res.tbRules {
-		keys = append(keys, tbStateKey(res.scope, rule))
-		keyIdx := int64(len(keys)) // 1-based
-		tbRefunds = append(tbRefunds, refund3{keyIdx, 1000, rule.Amount})
-	}
-	lbRefunds := make([]refund2, 0, len(res.lbRules))
-	for _, rule := range res.lbRules {
-		keys = append(keys, lbStateKey(res.scope, rule))
-		keyIdx := int64(len(keys)) // 1-based
-		lbRefunds = append(lbRefunds, refund2{keyIdx, 1000})
-	}
-	swRefunds := make([]refund2, 0, len(res.swRules))
-	for _, rule := range res.swRules {
-		keys = append(keys, swStateKey(res.scope, rule))
-		keyIdx := int64(len(keys)) // 1-based
-		swRefunds = append(swRefunds, refund2{keyIdx, 1})
-	}
+	// The four JSON arrays share one buffer, sized for the widest int64, and go to the store as sub-slices.
+	const maxInt = len("-9223372036854775808")
+	nRefund := len(res.tbRules) + len(res.lbRules) + len(res.swRules)
+	buf := make([]byte, 0, 8+len(tokAmounts)*(maxInt+1)+nRefund*(3*maxInt+5))
 
-	// Encode per-rule token amounts as JSON array.
-	tokAmountsJSON, err := json.Marshal(tokAmounts)
-	if err != nil {
-		return kv.ScriptCall{}, fmt.Errorf("limit: marshal tok_amounts: %w", err)
+	// tok_amounts: [amount, ...], one per tokRule.
+	buf = append(buf, '[')
+	for i, n := range tokAmounts {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = strconv.AppendInt(buf, n, 10)
 	}
-	tbRefundsJSON, err := json.Marshal(tbRefunds)
-	if err != nil {
-		return kv.ScriptCall{}, fmt.Errorf("limit: marshal tb_refunds: %w", err)
+	buf = append(buf, ']')
+	tokEnd := len(buf)
+
+	// Refund descriptors carry 1-based KEYS indices: tb [key_idx, cost_scaled, burst], lb and sw [key_idx, cost_scaled].
+	buf = append(buf, '[')
+	for i, rule := range res.tbRules {
+		keys = append(keys, tbStateKey(res.scope, rule))
+		buf = appendRefund(buf, i, int64(len(keys)), 1000)
+		buf = append(buf, ',')
+		buf = strconv.AppendInt(buf, rule.Amount, 10)
+		buf = append(buf, ']')
 	}
-	lbRefundsJSON, err := json.Marshal(lbRefunds)
-	if err != nil {
-		return kv.ScriptCall{}, fmt.Errorf("limit: marshal lb_refunds: %w", err)
+	buf = append(buf, ']')
+	tbEnd := len(buf)
+	buf = append(buf, '[')
+	for i, rule := range res.lbRules {
+		keys = append(keys, lbStateKey(res.scope, rule))
+		buf = append(appendRefund(buf, i, int64(len(keys)), 1000), ']')
 	}
-	swRefundsJSON, err := json.Marshal(swRefunds)
-	if err != nil {
-		return kv.ScriptCall{}, fmt.Errorf("limit: marshal sw_refunds: %w", err)
+	buf = append(buf, ']')
+	lbEnd := len(buf)
+	buf = append(buf, '[')
+	for i, rule := range res.swRules {
+		keys = append(keys, swStateKey(res.scope, rule))
+		buf = append(appendRefund(buf, i, int64(len(keys)), 1), ']')
 	}
+	buf = append(buf, ']')
 
 	cancelledInt := int64(0)
 	if obs.Cancelled {
@@ -378,14 +381,25 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 			guardTTLMs,
 			int64(len(res.conKeys)),
 			int64(len(res.tokRules)),
-			string(tokAmountsJSON),
+			buf[:tokEnd:tokEnd],
 			tokTTLMs,
 			cancelledInt,
-			string(tbRefundsJSON),
-			string(lbRefundsJSON),
-			string(swRefundsJSON),
+			buf[tokEnd:tbEnd:tbEnd],
+			buf[tbEnd:lbEnd:lbEnd],
+			buf[lbEnd:],
 		},
 	}, nil
+}
+
+// appendRefund appends the i-th refund descriptor's opening and first two fields, "[key_idx,cost", to buf.
+func appendRefund(buf []byte, i int, keyIdx, cost int64) []byte {
+	if i > 0 {
+		buf = append(buf, ',')
+	}
+	buf = append(buf, '[')
+	buf = strconv.AppendInt(buf, keyIdx, 10)
+	buf = append(buf, ',')
+	return strconv.AppendInt(buf, cost, 10)
 }
 
 // logCommit emits the post-commit debug line, treating "noop" (duplicate
