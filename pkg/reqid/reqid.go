@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	HeaderInbound  = "X-Request-ID"
-	HeaderOutbound = "X-Relay-Request-ID"
+	HeaderInbound  = "X-Request-Id"
+	HeaderOutbound = "X-Relay-Request-Id"
 )
 
 type ctxKey int

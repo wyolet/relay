@@ -140,6 +140,65 @@ func TestMatch_PrefixWildcard(t *testing.T) {
 	}
 }
 
+// matchLower lower-cases both sides before comparing: the reference result Match must agree with.
+func matchLower(name string, patterns []string) bool {
+	lower := strings.ToLower(name)
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "*") {
+			if strings.HasPrefix(lower, strings.ToLower(p[:len(p)-1])) {
+				return true
+			}
+		} else if lower == strings.ToLower(p) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestMatch_AgreesWithLowercasedComparison(t *testing.T) {
+	names := []string{
+		"", "X", "x-wr-", "X-WR-", "X-Wr-Api-Key", "x-wr-api-key", "X-WR-API-KEY", "X-Wr", "x-w",
+		"Authorization", "authorization", "AUTHORIZATION", "Authorizatio", "Authorizations",
+		"X-Api-Key", "x-api-key", "X-API-KEY", "Cookie", "cOOKIE", "Set-Cookie",
+		"Retry-After", "retry-after", "X-Request-Id", "x-request-id", "X-Request-ID", "X-Should-Retry",
+		"Content-Type", "content-type", "Content-Length",
+		"Anthropic-Ratelimit-Requests-Limit", "anthropic-ratelimit-tokens-reset", "Anthropic-Ratelimit",
+		"X-Ratelimit-Remaining-Requests", "x-ratelimit-limit-tokens", "X-Ratelimit",
+		"X-Stainless-Lang", "X-Claude-Code-Session-Id", "Accept-Encoding",
+	}
+	for _, patterns := range [][]string{StripDenylist, UpstreamErrorAllowlist, HopByHop, {"*"}, {"X-WR-*", "x-api-key"}} {
+		for _, name := range names {
+			if got, want := Match(name, patterns), matchLower(name, patterns); got != want {
+				t.Errorf("Match(%q, %q) = %v, want %v", name, patterns, got, want)
+			}
+		}
+	}
+}
+
+func TestMatch_DoesNotAllocate(t *testing.T) {
+	allocs := testing.AllocsPerRun(100, func() {
+		Match("X-Stainless-Package-Version", StripDenylist)
+		Match("x-wr-api-key", StripDenylist)
+		Match("Anthropic-Ratelimit-Tokens-Reset", UpstreamErrorAllowlist)
+	})
+	if allocs != 0 {
+		t.Errorf("Match allocates %v times per run, want 0", allocs)
+	}
+}
+
+func TestHeaderConstantsAreCanonical(t *testing.T) {
+	names := append([]string{
+		HeaderRelayAPIKey, HeaderProxyMode, HeaderUpstreamHost, HeaderUsage, HeaderEventTime,
+		HeaderRequestTags, HeaderClient, HeaderWarnings, HeaderTokenCount, HeaderContentCapture,
+		HeaderShouldRetry,
+	}, HopByHop...)
+	for _, name := range names {
+		if canonical := http.CanonicalHeaderKey(name); canonical != name {
+			t.Errorf("%q is not canonical, want %q: Header.Get/Set/Del would re-canonicalize it on every call", name, canonical)
+		}
+	}
+}
+
 func TestSafeUpstreamError_RedactsIP(t *testing.T) {
 	err := errors.New("dial tcp 192.168.0.109:443: connect: connection refused")
 	msg := SafeUpstreamError("openai", err)

@@ -173,13 +173,14 @@ func main() {
 func buildAdapterSpecs() []*adapter.Spec {
 	// Adapter specs — one Spec per supported wire shape. The composition
 	// root is the only place vendor names appear; everything else looks
-	// up by adapters.Name via the registry.
+	// up by adapters.Name via the registry. Header names are canonical so the
+	// per-attempt Header.Set/Get don't re-canonicalize them.
 	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
 	anthropicAuth := adapter.AuthStrategy{
-		Header:       "x-api-key",
-		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
+		Header:       "X-Api-Key",
+		ExtraHeaders: map[string]string{"Anthropic-Version": "2023-06-01"},
 	}
-	geminiAuth := adapter.AuthStrategy{Header: "x-goog-api-key"}
+	geminiAuth := adapter.AuthStrategy{Header: "X-Goog-Api-Key"}
 	// Gemini encodes the model and the sync/stream choice in the URL path
 	// rather than the request body, so its upstream path is resolved per call.
 	geminiUpstreamPath := func(model string, stream bool) string {

@@ -35,11 +35,11 @@ const (
 	// HeaderOrigin is "relay" when relay minted the response (auth,
 	// routing, rate limit, admission — or a relay verdict about an upstream
 	// failure), "upstream" when the provider's bytes passed through.
-	HeaderOrigin = "X-WR-Origin"
+	HeaderOrigin = "X-Wr-Origin"
 	// HeaderUpstreamStatus carries the provider's HTTP status on
 	// relay-minted errors that report an upstream failure, so the two
 	// layers' statuses are never conflated.
-	HeaderUpstreamStatus = "X-WR-Upstream-Status"
+	HeaderUpstreamStatus = "X-Wr-Upstream-Status"
 )
 
 // writeAPIError is the internal form used by handlers inside this
