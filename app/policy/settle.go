@@ -43,7 +43,7 @@ func (s *Service) settleNow(ctx context.Context, inbound *pkgratelimit.Reservati
 		}
 		return lim.CommitBoth(ctx, inbound, upstream, obs)
 	}
-	b := sel.NewBatch()
+	b := sel.NewBatch(settleOps)
 	p := s.prepareSettle(b, inbound, acq, obs)
 	b.Exec(ctx)
 	return p.finish(ctx, ctx)
@@ -58,6 +58,9 @@ type preparedSettle struct {
 	// successKey is a success write the store could not batch, made on its own in finish.
 	successKey string
 }
+
+// settleOps is the most commands prepareSettle queues: two commits and a success write.
+const settleOps = 3
 
 // prepareSettle queues the commits and the success write of one settle on b. Requires a post-flight selector.
 func (s *Service) prepareSettle(b *kv.Batch, inbound *pkgratelimit.Reservation, acq *Acquisition, obs pkgratelimit.Observations) preparedSettle {

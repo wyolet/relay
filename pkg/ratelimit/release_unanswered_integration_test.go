@@ -23,7 +23,7 @@ func TestReleaseUnansweredRedisSkipsUnsentBatch(t *testing.T) {
 	s := kvtest.ExhaustedPool(t, cfg)
 	l := New(s, discardLog(), nil).ReleaseUnansweredOn(New(rec, discardLog(), nil))
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 1)
 	p, err := l.PrepareReserve(b, "unanswered-unsent", []Rule{conRule("unanswered:unsent:con", "concurrency", 1, time.Minute)})
 	if err != nil {
 		t.Fatal(err)

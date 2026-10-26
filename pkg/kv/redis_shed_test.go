@@ -51,7 +51,7 @@ func TestRedisBatchOrShedRefusedAtWaitBound(t *testing.T) {
 	calls.Go(func() { _, _ = s.Get(ctx, "{t}:queued") })
 	waitFor(t, "the waiter to queue", s.PoolBusy)
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 2)
 	script := b.Script(kv.ScriptCall{Name: "test.count", Script: `return 1`, Keys: []string{"{t}:n"}})
 	get := b.Get("{t}:k")
 	b.ShedWhenPoolBusy()
@@ -103,7 +103,7 @@ func TestRedisBatchOrShedRunsOnceThePoolFrees(t *testing.T) {
 		t.Fatal("PoolBusy after every call returned")
 	}
 
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 1)
 	get := b.Get("{t}:k")
 	b.ShedWhenPoolBusy()
 	b.Exec(ctx)
@@ -119,7 +119,7 @@ func TestRedisBatchOrShedUnboundedByDefault(t *testing.T) {
 	if s.PoolBusy() {
 		t.Fatal("PoolBusy with no bound set")
 	}
-	b := kv.NewBatch(s)
+	b := kv.NewBatch(s, 1)
 	get := b.Get("{t}:k")
 	b.ShedWhenPoolBusy()
 	b.Exec(context.Background())

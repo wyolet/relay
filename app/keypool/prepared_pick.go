@@ -10,8 +10,20 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
-// NewBatch returns a kv batch on the selector's store, so a caller can send PreparePick's reads in the same round trip as its own commands.
-func (s *Selector) NewBatch() *kv.Batch { return kv.NewBatch(s.state) }
+// NewBatch returns a kv batch on the selector's store with room for size commands, so a caller can send PreparePick's reads in the same round trip as its own commands.
+func (s *Selector) NewBatch(size int) *kv.Batch { return kv.NewBatch(s.state, size) }
+
+// PickOps is the most commands PreparePick queues for n keys under algo.
+func PickOps(algo KeySelection, n int) int {
+	switch algo {
+	case KeySelectionRoundRobin:
+		return n + 2
+	case KeySelectionLeastRecentlyUsed:
+		return n
+	default:
+		return min(n, 1)
+	}
+}
 
 // PreparedPick is a Pick whose reads are queued on a kv batch; Finish chooses the key once the batch has run.
 type PreparedPick struct {
@@ -65,7 +77,11 @@ func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	if p.rotationTTL != nil && p.rotationTTL.Err != nil {
 		metrics.KVError("key_rotation", metrics.KVDropped)
 	}
-	var healthy []Candidate
+	n := len(p.keys)
+	if p.algo == KeySelectionPrioritized {
+		n = min(n, 1)
+	}
+	healthy := make([]Candidate, 0, n)
 	for i, k := range p.keys {
 		if _, skip := p.skip[k.KeyHash]; skip {
 			continue

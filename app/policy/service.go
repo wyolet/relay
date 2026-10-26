@@ -299,7 +299,7 @@ func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.Fa
 		return
 	}
 
-	b := sel.NewBatch()
+	b := sel.NewBatch(2)
 	var commit *pkgratelimit.PreparedCommit
 	if refund {
 		commit, _ = lim.PrepareCommit(b, acq.Reservation, pkgratelimit.Observations{})

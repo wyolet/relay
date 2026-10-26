@@ -31,7 +31,7 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		if err := s.Set(ctx, "{t}:present", []byte("v"), time.Minute); err != nil {
 			t.Fatal(err)
 		}
-		b := kv.NewBatch(s)
+		b := kv.NewBatch(s, 4)
 		present := b.Get("{t}:present")
 		missing := b.Get("{t}:missing")
 		n1 := b.Incr("{t}:ctr", 1)
@@ -57,7 +57,7 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		if err := s.Set(ctx, "{t}:short", []byte("1"), 300*time.Millisecond); err != nil {
 			t.Fatal(err)
 		}
-		b := kv.NewBatch(s)
+		b := kv.NewBatch(s, 4)
 		first := b.ExpireNX("{t}:persistent", time.Hour)
 		again := b.ExpireNX("{t}:persistent", time.Hour)
 		short := b.ExpireNX("{t}:short", time.Hour)
@@ -84,7 +84,7 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		ctx := context.Background()
 		s := factory(t)
 		registerEcho(s)
-		b := kv.NewBatch(s)
+		b := kv.NewBatch(s, 2)
 		r := b.Script(echoCall("{t}:k", "a"))
 		g := b.Get("{t}:absent")
 		b.Exec(ctx)
@@ -107,7 +107,7 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		if err := s.Set(ctx, "{t}:text", []byte("not a number"), time.Minute); err != nil {
 			t.Fatal(err)
 		}
-		b := kv.NewBatch(s)
+		b := kv.NewBatch(s, 3)
 		bad := b.Incr("{t}:text", 1)
 		good := b.Incr("{t}:ctr-beside-error", 1)
 		missing := b.Get("{t}:missing")
@@ -127,7 +127,7 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		ctx := context.Background()
 		s := factory(t)
 		registerEcho(s)
-		b := kv.NewBatch(s)
+		b := kv.NewBatch(s, 2)
 		r := b.Script(echoCall("{t}:shed", "a"))
 		n := b.Incr("{t}:shed-ctr", 1)
 		b.ShedWhenPoolBusy()
@@ -140,8 +140,36 @@ func runBatchSuite(t *testing.T, factory storeFactory) {
 		}
 	})
 
+	t.Run("missing_only", func(t *testing.T) {
+		ctx := context.Background()
+		b := kv.NewBatch(factory(t), 2)
+		first := b.Get("{t}:never-set-1")
+		second := b.Get("{t}:never-set-2")
+		b.Exec(ctx)
+		for name, r := range map[string]*kv.BatchResult{"first": first, "second": second} {
+			if !errors.Is(r.Err, kv.ErrNotFound) || errors.Is(r.Err, kv.ErrUnavailable) || r.Value != nil {
+				t.Fatalf("%s = %q, %v; want ErrNotFound alone", name, r.Value, r.Err)
+			}
+		}
+	})
+
+	t.Run("more_commands_than_size", func(t *testing.T) {
+		ctx := context.Background()
+		b := kv.NewBatch(factory(t), 1)
+		var results []*kv.BatchResult
+		for range 3 {
+			results = append(results, b.Incr("{t}:past-size", 1))
+		}
+		b.Exec(ctx)
+		for i, r := range results {
+			if r.Err != nil || r.Int != int64(i+1) {
+				t.Fatalf("incr %d = %d, %v; want %d", i, r.Int, r.Err, i+1)
+			}
+		}
+	})
+
 	t.Run("empty", func(t *testing.T) {
-		kv.NewBatch(factory(t)).Exec(context.Background())
+		kv.NewBatch(factory(t), 0).Exec(context.Background())
 	})
 }
 
