@@ -113,20 +113,18 @@ func Classify(r *http.Request) (Classification, error) {
 	}, nil
 }
 
-// ctxClassificationT is the context-value key for the request mode
-// classification.
-type ctxClassificationT struct{}
-
 // WithClassification returns a child ctx carrying c.
 func WithClassification(ctx context.Context, c Classification) context.Context {
-	return context.WithValue(ctx, ctxClassificationT{}, c)
+	s := derivedState(ctx)
+	s.cls = c
+	return withState(ctx, s)
 }
 
 // ClassificationFrom returns the mode classification from ctx. The zero
 // Classification (Mode == ModeUnknown) is returned if no classifier ran.
 func ClassificationFrom(ctx context.Context) Classification {
-	if v, ok := ctx.Value(ctxClassificationT{}).(Classification); ok {
-		return v
+	if s := stateFrom(ctx); s != nil {
+		return s.cls
 	}
 	return Classification{}
 }

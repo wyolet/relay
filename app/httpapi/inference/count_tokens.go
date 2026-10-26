@@ -45,7 +45,7 @@ func mountTokenCountRoutes(r chi.Router, d Deps) {
 			ClassifyMiddleware(),
 			PrincipalMiddleware(d.Catalog, d.Tokens),
 		).Post("/"+p.Name()+route.TokenCountPath(), func(w http.ResponseWriter, r *http.Request) {
-			handleCountTokens(d, w, r.WithContext(clientprofile.WithProfile(r.Context(), profile)))
+			handleCountTokens(d, w, withRouteProfile(r, profile))
 		})
 	}
 }
