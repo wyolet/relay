@@ -28,7 +28,8 @@ const bytesPerEstimatedToken = 4
 // accepted it is cancelled with the caller's context, so a caller leaving
 // mid-call aborts the upstream at once. After that the caller's cancellation
 // only cuts the upstream drainTimeout later, so the response tail (where usage
-// lives) can still be read for accounting.
+// lives) can still be read for accounting. A positive timeout caps the call
+// from here to release.
 type upstreamCall struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -36,9 +37,13 @@ type upstreamCall struct {
 	accepted atomic.Bool
 }
 
-func newUpstreamCall(parent context.Context) *upstreamCall {
+func newUpstreamCall(parent context.Context, timeout time.Duration) *upstreamCall {
 	c := &upstreamCall{}
-	c.ctx, c.cancel = context.WithCancel(context.WithoutCancel(parent))
+	if timeout > 0 {
+		c.ctx, c.cancel = context.WithTimeout(context.WithoutCancel(parent), timeout)
+	} else {
+		c.ctx, c.cancel = context.WithCancel(context.WithoutCancel(parent))
+	}
 	c.unlink = context.AfterFunc(parent, func() {
 		if c.accepted.Load() {
 			time.AfterFunc(drainTimeout, c.cancel)
@@ -47,6 +52,14 @@ func newUpstreamCall(parent context.Context) *upstreamCall {
 		c.cancel()
 	})
 	return c
+}
+
+// callTimeout is the cap adapter a puts on one call, 0 when it reports none.
+func callTimeout(a Adapter, stream bool) time.Duration {
+	if t, ok := a.(CallTimeouter); ok {
+		return t.CallTimeout(stream)
+	}
+	return 0
 }
 
 // release ends the call: the caller-cancellation link is dropped and the

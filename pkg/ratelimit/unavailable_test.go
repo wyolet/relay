@@ -41,7 +41,7 @@ func TestReserveRefusedWhenStoreUnavailable(t *testing.T) {
 	}
 
 	// The reserve queued on an admission batch is refused the same way.
-	b := kv.NewBatch(store)
+	b := kv.NewBatch(store, 1)
 	p, err := l.PrepareReserve(b, "policy:p", []Rule{reqRule("r", "r", 10, time.Minute)})
 	if err != nil {
 		t.Fatal(err)

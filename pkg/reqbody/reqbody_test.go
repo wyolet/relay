@@ -2,11 +2,14 @@ package reqbody
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -34,22 +37,95 @@ func TestReaderCloseDropsBufferAndFailsLaterReads(t *testing.T) {
 }
 
 func TestAttachSetsLengthAndRewindsUntilReleased(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), pinnedMax+1)
 	req, _ := http.NewRequest(http.MethodPost, "http://upstream.invalid/", nil)
-	release := Attach(req, []byte("payload"))
-	if req.ContentLength != 7 {
-		t.Fatalf("ContentLength = %d, want 7", req.ContentLength)
+	release := Attach(req, body)
+	if req.ContentLength != int64(len(body)) {
+		t.Fatalf("ContentLength = %d, want %d", req.ContentLength, len(body))
 	}
 	rc, err := req.GetBody()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := io.ReadAll(rc); string(got) != "payload" {
-		t.Fatalf("GetBody read %q", got)
+	if got, _ := io.ReadAll(rc); !bytes.Equal(got, body) {
+		t.Fatalf("GetBody read %d bytes, want %d", len(got), len(body))
 	}
 	release()
 	if _, err := req.GetBody(); !errors.Is(err, errReleased) {
 		t.Fatalf("GetBody after release = %v, want errReleased", err)
 	}
+}
+
+func TestAttachSmallBodyMatchesNewRequest(t *testing.T) {
+	body := []byte("payload")
+	req, _ := http.NewRequest(http.MethodPost, "http://upstream.invalid/", nil)
+	release := Attach(req, body)
+	want, _ := http.NewRequest(http.MethodPost, "http://upstream.invalid/", bytes.NewReader(body))
+	if req.ContentLength != want.ContentLength {
+		t.Fatalf("ContentLength = %d, want %d", req.ContentLength, want.ContentLength)
+	}
+	release()
+	for range 2 {
+		rc, err := req.GetBody()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := io.ReadAll(rc); string(got) != "payload" {
+			t.Fatalf("GetBody read %q", got)
+		}
+	}
+	if got, _ := io.ReadAll(req.Body); string(got) != "payload" {
+		t.Fatalf("Body read %q", got)
+	}
+}
+
+// net/http flushes the headers on their own unless it knows the body is in memory.
+func TestAttachSmallBodyWritesOnce(t *testing.T) {
+	gotBody := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody <- b
+	}))
+	defer srv.Close()
+
+	var writes atomic.Int32
+	dialer := &net.Dialer{}
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return writeCountingConn{Conn: c, writes: &writes}, nil
+		},
+	}}
+	defer client.CloseIdleConnections()
+
+	body := bytes.Repeat([]byte("x"), 3<<10)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
+	release := Attach(req, body)
+	resp, err := client.Do(req)
+	release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := <-gotBody; !bytes.Equal(got, body) {
+		t.Fatalf("upstream read %d bytes, want %d", len(got), len(body))
+	}
+	if n := writes.Load(); n != 1 {
+		t.Fatalf("request took %d writes, want 1", n)
+	}
+}
+
+type writeCountingConn struct {
+	net.Conn
+	writes *atomic.Int32
+}
+
+func (c writeCountingConn) Write(p []byte) (int, error) {
+	c.writes.Add(1)
+	return c.Conn.Write(p)
 }
 
 func TestAttachEmptyBodyIsNoBody(t *testing.T) {

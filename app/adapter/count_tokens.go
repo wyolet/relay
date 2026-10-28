@@ -45,13 +45,13 @@ func (a *countCallAdapter) Call(ctx context.Context, baseURL string, _ *string, 
 	callCtx, cancel := a.callContext(ctx, false)
 	req, releaseBody, err := a.newRequest(callCtx, baseURL+a.spec.CountPath, apiKey, body, hdr, oauth)
 	if err != nil {
-		cancel()
+		cancelIfSet(cancel)
 		return nil, err
 	}
 	resp, err := a.spec.client.Do(req)
 	releaseBody()
 	if err != nil {
-		cancel()
+		cancelIfSet(cancel)
 		return nil, err
 	}
 	resp.Body = a.bindBody(resp.Body, cancel, false)

@@ -26,17 +26,18 @@ const (
 	scanBuf = 48 << 20
 )
 
-// readSegment decodes one segment file. Oversized and undecodable lines are
-// logged and skipped rather than failing the whole segment — one bad record
-// must not block every later one from reaching the sink.
-func readSegment[T any](path string, log *slog.Logger) ([]T, error) {
+// readSegment decodes one segment file, sizing the result for lines records
+// (0 when unknown). Oversized and undecodable lines are logged and skipped
+// rather than failing the whole segment — one bad record must not block every
+// later one from reaching the sink.
+func readSegment[T any](path string, lines int, log *slog.Logger) ([]T, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var records []T
+	records := make([]T, 0, lines)
 	r := bufio.NewReader(f)
 	lineNo := 0
 	for {
@@ -56,6 +57,8 @@ func readSegment[T any](path string, log *slog.Logger) ([]T, error) {
 			continue
 		}
 		var rec T
+		// line is r's buffer: Unmarshal copies what it keeps, and the next
+		// read happens only after it returns.
 		if err := json.Unmarshal(line, &rec); err != nil {
 			log.Warn("wal: skip undecodable line", "file", filepath.Base(path), "line", lineNo, "err", err)
 			continue
@@ -93,11 +96,15 @@ func CountLines(path string) (int, error) {
 }
 
 // readLine reads one newline-terminated record, reporting tooLong (and
-// discarding the line) when it exceeds scanBuf.
+// discarding the line) when it exceeds scanBuf. A line that fits r's buffer
+// is returned in place, so it is valid only until the next read on r.
 func readLine(r *bufio.Reader) ([]byte, bool, error) {
 	var line []byte
 	for {
 		frag, err := r.ReadSlice('\n')
+		if line == nil && (err == nil || (err == io.EOF && len(frag) > 0)) {
+			return trimLine(frag), false, nil
+		}
 		if len(line)+len(frag) > scanBuf {
 			if err == bufio.ErrBufferFull {
 				for err == bufio.ErrBufferFull {

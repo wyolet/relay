@@ -43,30 +43,8 @@ func wsHandler(d Deps) http.HandlerFunc {
 		}
 
 		perFrame := func(fw http.ResponseWriter, fr *http.Request) {
-			// A connection lives for hours, so each frame re-pins the live
-			// snapshot instead of inheriting the handshake's: consistent
-			// within a frame, never stale across frames.
-			var snap *appcatalog.Snapshot
-			if d.Catalog != nil {
-				snap = d.Catalog.Current()
-			}
-			fr = fr.WithContext(WithSnapshot(fr.Context(), snap))
-			// Revocation and policy resolution re-run per frame so a revoked
-			// credential or rebound policy reaches a live connection. Frames
-			// run concurrently, so this writes to a copy of the principal.
-			if p := PrincipalFrom(fr.Context()); p != nil && snap != nil {
-				if err := p.Recheck(snap, time.Now()); err != nil {
-					writeAuthErr(fw, err.Error())
-					return
-				}
-				frame := framePrincipal(p, snap)
-				if !authorizePrincipal(fw, snap, frame, ClassificationFrom(fr.Context()).Mode) {
-					return
-				}
-				fr = fr.WithContext(context.WithValue(fr.Context(), ctxPrincipalT{}, frame))
-			}
-			// The upgrade was admitted under the proxy-mode setting of its time; a change since must reach the live connection too.
-			if !authorizeProxyMode(fw, d.Catalog, ClassificationFrom(fr.Context()).Mode) {
+			fr, ok := frameRequest(d, fw, fr)
+			if !ok {
 				return
 			}
 			handleShape(spec, d, fw, fr)
@@ -79,6 +57,39 @@ func wsHandler(d Deps) http.HandlerFunc {
 			Logger:     slog.Default(),
 		})
 	}
+}
+
+// frameRequest gives one frame its own request state: the live snapshot and the credential re-resolved against it. Frames run concurrently over the upgrade's context, so the state is a copy, never the upgrade's. Reports false after writing the rejection.
+func frameRequest(d Deps, fw http.ResponseWriter, fr *http.Request) (*http.Request, bool) {
+	// A connection lives for hours, so each frame re-pins the live
+	// snapshot instead of inheriting the handshake's: consistent
+	// within a frame, never stale across frames.
+	var snap *appcatalog.Snapshot
+	if d.Catalog != nil {
+		snap = d.Catalog.Current()
+	}
+	frame := derivedState(fr.Context())
+	frame.snap, frame.snapSet = snap, true
+	ctx := withState(fr.Context(), frame)
+	// Revocation and policy resolution re-run per frame so a revoked
+	// credential or rebound policy reaches a live connection. Frames
+	// run concurrently, so this writes to a copy of the principal.
+	if p := PrincipalFrom(ctx); p != nil && snap != nil {
+		if err := p.Recheck(snap, time.Now()); err != nil {
+			writeAuthErr(fw, err.Error())
+			return nil, false
+		}
+		fp := framePrincipal(p, snap)
+		if !authorizePrincipal(fw, snap, fp, frame.cls.Mode) {
+			return nil, false
+		}
+		frame.principal = fp
+	}
+	// The upgrade was admitted under the proxy-mode setting of its time; a change since must reach the live connection too.
+	if !authorizeProxyMode(fw, d.Catalog, frame.cls.Mode) {
+		return nil, false
+	}
+	return fr.WithContext(ctx), true
 }
 
 // wsFrameEnvelopeBytes is the room a frame's id and field names take on top of the request body it carries.

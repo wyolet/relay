@@ -12,17 +12,37 @@ import (
 )
 
 const (
-	HeaderInbound  = "X-Request-ID"
-	HeaderOutbound = "X-Relay-Request-ID"
+	HeaderInbound  = "X-Request-Id"
+	HeaderOutbound = "X-Relay-Request-Id"
 )
 
-type ctxKey int
+type ctxKey struct{}
 
-const (
-	ctxKeyID ctxKey = iota
-	ctxKeyLogger
-	ctxKeyClientID
-)
+// state is the one context value a request's ids ride in. The logger is built only when something asks for it: most requests never log.
+type state struct {
+	id       string
+	clientID string
+	// logClientID is false for a state WithNewID derived: it inherits the caller's client id but does not log it.
+	logClientID bool
+	base        *slog.Logger
+	once        sync.Once
+	logger      *slog.Logger
+}
+
+func (s *state) log() *slog.Logger {
+	s.once.Do(func() {
+		s.logger = s.base.With(slog.String("request_id", s.id))
+		if s.logClientID {
+			s.logger = s.logger.With(slog.String("client_request_id", s.clientID))
+		}
+	})
+	return s.logger
+}
+
+func stateFrom(ctx context.Context) *state {
+	s, _ := ctx.Value(ctxKey{}).(*state)
+	return s
+}
 
 var (
 	entropyMu sync.Mutex
@@ -54,18 +74,13 @@ func isValidInbound(s string) bool {
 func Middleware(base *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			id := Generate()
-			w.Header().Set(HeaderOutbound, id)
-			logger := base.With(slog.String("request_id", id))
-			ctx := r.Context()
+			s := &state{id: Generate(), base: base}
+			w.Header().Set(HeaderOutbound, s.id)
 			if cid := r.Header.Get(HeaderInbound); isValidInbound(cid) {
 				w.Header().Set(HeaderInbound, cid)
-				logger = logger.With(slog.String("client_request_id", cid))
-				ctx = context.WithValue(ctx, ctxKeyClientID, cid)
+				s.clientID, s.logClientID = cid, true
 			}
-			ctx = context.WithValue(ctx, ctxKeyID, id)
-			ctx = context.WithValue(ctx, ctxKeyLogger, logger)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, s)))
 		})
 	}
 }
@@ -73,25 +88,27 @@ func Middleware(base *slog.Logger) func(http.Handler) http.Handler {
 // WithNewID derives a context carrying a freshly minted id, for requests
 // multiplexed over one HTTP request (one WebSocket connection).
 func WithNewID(ctx context.Context, base *slog.Logger) context.Context {
-	id := Generate()
-	ctx = context.WithValue(ctx, ctxKeyID, id)
-	return context.WithValue(ctx, ctxKeyLogger, base.With(slog.String("request_id", id)))
+	return context.WithValue(ctx, ctxKey{}, &state{id: Generate(), clientID: ClientID(ctx), base: base})
 }
 
 func From(ctx context.Context) string {
-	v, _ := ctx.Value(ctxKeyID).(string)
-	return v
+	if s := stateFrom(ctx); s != nil {
+		return s.id
+	}
+	return ""
 }
 
 // ClientID returns the caller's own X-Request-ID, empty when absent or invalid.
 func ClientID(ctx context.Context) string {
-	v, _ := ctx.Value(ctxKeyClientID).(string)
-	return v
+	if s := stateFrom(ctx); s != nil {
+		return s.clientID
+	}
+	return ""
 }
 
 func Logger(ctx context.Context) *slog.Logger {
-	if l, ok := ctx.Value(ctxKeyLogger).(*slog.Logger); ok {
-		return l
+	if s := stateFrom(ctx); s != nil {
+		return s.log()
 	}
 	return slog.Default()
 }

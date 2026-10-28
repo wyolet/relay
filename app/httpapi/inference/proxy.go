@@ -101,7 +101,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		if cls.Mode != ModeProxyAuthed {
 			d.fireUsageFailure(ctx, "missing_upstream_host", "anonymous proxy traffic requires an upstream-host header")
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_upstream_host",
-				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
+				"anonymous proxy traffic requires X-WR-Upstream-Host header naming a configured host")
 			return
 		}
 		plan, err := resolveProxyHostByPolicy(d.Resolver, PrincipalFrom(ctx), snap, modelName)
@@ -333,7 +333,7 @@ func writePinnedRoutingErr(d Deps, w http.ResponseWriter, r *http.Request, err e
 	if errors.Is(err, errPinnedHostConflict) {
 		d.fireUsageFailure(ctx, "upstream_host_conflict", err.Error())
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "upstream_host_conflict",
-			"model "+strconvQuote(modelName)+" names a host other than "+httpheader.HeaderUpstreamHost)
+			"model "+strconvQuote(modelName)+" names a host other than X-WR-Upstream-Host")
 		return
 	}
 	d.fireUsageFailure(ctx, routingErrKind(err), err.Error())

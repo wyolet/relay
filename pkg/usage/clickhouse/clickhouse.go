@@ -207,8 +207,10 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 // and usage.Closer.
 type Sink struct {
 	conn clickhouse.Conn
-	wal  *segmentQueue
-	log  *slog.Logger
+	// native is nil for an HTTP DSN, whose inserts go through conn.
+	native *nativeInserter
+	wal    *segmentQueue
+	log    *slog.Logger
 }
 
 // New opens a ClickHouse connection, ensures the schema exists, constructs
@@ -260,6 +262,14 @@ func New(cfg Config) (*Sink, error) {
 		conn: conn,
 		log:  slog.Default(),
 	}
+	if opts.Protocol == clickhouse.Native {
+		var database string
+		if err := conn.QueryRow(pingCtx, "SELECT currentDatabase()").Scan(&database); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("usage/clickhouse: current database: %w", err)
+		}
+		s.native = newNativeInserter(opts, database)
+	}
 
 	wal, err := newSegmentQueue(
 		cfg.WALDir,
@@ -295,6 +305,9 @@ func (s *Sink) Close() error {
 	if err := s.wal.Close(); err != nil {
 		s.log.Warn("usage/clickhouse: wal close", "err", err)
 	}
+	if s.native != nil {
+		s.native.close()
+	}
 	return s.conn.Close()
 }
 
@@ -313,6 +326,9 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	if s.native != nil {
+		return s.native.insert(ctx, events)
+	}
 	batch, err := s.conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
 		return fmt.Errorf("prepare batch: %w", err)
@@ -327,7 +343,8 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 	return batch.Send()
 }
 
-// insertValues returns ev's column values in insertColumns order.
+// insertValues returns ev's column values in insertColumns order, for the
+// HTTP protocol's row-wise batch.
 func insertValues(ev usage.Event) []any {
 	// Sentinel -1 means "no upstream timing available" in Int64 columns.
 	var upStart, upRespStart, upRespEnd int64 = -1, -1, -1

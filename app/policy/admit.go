@@ -26,7 +26,8 @@ func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) 
 		return Admission{Inbound: inbound, Acq: a, AcqErr: err}, nil
 	}
 
-	b := s.selector.NewBatch()
+	scope, algo := pickScope(acq.Policy)
+	b := s.selector.NewBatch(1 + keypool.PickOps(algo, len(acq.Keys)))
 	var reserve *pkgratelimit.PreparedReserve
 	rules, metered := s.inboundRules(ctx, in)
 	if len(rules) > 0 {
@@ -39,7 +40,6 @@ func (s *Service) Admit(ctx context.Context, in InboundInput, acq AcquireInput) 
 	excluded, full := s.full.exclude(acq.Keys, acq.Excluded, modelIDOf(acq), s.clock())
 	var pick *keypool.PreparedPick
 	if full == nil || !allExcluded(acq.Keys, excluded) {
-		scope, algo := pickScope(acq.Policy)
 		pick = s.selector.PreparePick(b, scope, algo, acq.Keys, excluded)
 	}
 	b.Exec(ctx)

@@ -235,7 +235,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		ctx := context.Background()
 		const scope = "prepared-policy"
 		reserve := func(rules []Rule) (*Reservation, error) {
-			b := kv.NewBatch(l.store)
+			b := kv.NewBatch(l.store, 1)
 			p, err := l.PrepareReserve(b, scope, rules)
 			if err != nil {
 				t.Fatalf("PrepareReserve: %v", err)
@@ -254,7 +254,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if _, err := reserve(rules); !errors.Is(err, ErrExceeded) {
 			t.Fatalf("second while the slot is held: err = %v, want ErrExceeded", err)
 		}
-		b := kv.NewBatch(l.store)
+		b := kv.NewBatch(l.store, 1)
 		pc, err := l.PrepareCommit(b, res, Observations{})
 		if err != nil || pc == nil {
 			t.Fatalf("PrepareCommit = %v, %v", pc, err)

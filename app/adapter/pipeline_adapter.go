@@ -35,6 +35,7 @@ type specAdapter struct {
 var (
 	_ pipeline.Adapter            = (*specAdapter)(nil)
 	_ pipeline.ResponseSummarizer = (*specAdapter)(nil)
+	_ pipeline.CallTimeouter      = (*specAdapter)(nil)
 )
 
 // Call issues POST {baseURL}{path}: the host's own path when set (hostPath
@@ -54,14 +55,14 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 	callCtx, cancel := a.callContext(ctx, stream)
 	req, releaseBody, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
 	if err != nil {
-		cancel()
+		cancelIfSet(cancel)
 		return nil, err
 	}
 
 	resp, err := a.spec.client.Do(req)
 	releaseBody()
 	if err != nil {
-		cancel()
+		cancelIfSet(cancel)
 		return nil, err
 	}
 	resp.Body = a.bindBody(resp.Body, cancel, stream)
@@ -84,10 +85,9 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 	}
 	releaseBody = reqbody.Attach(req, body)
 
-	for k, vs := range hdr {
-		for _, v := range vs {
-			req.Header.Add(k, v)
-		}
+	// A copy per attempt: failover reuses hdr, and the auth headers set below differ per host.
+	if hdr != nil {
+		req.Header = hdr.Clone()
 	}
 
 	req.Header.Set("Content-Type", "application/json")

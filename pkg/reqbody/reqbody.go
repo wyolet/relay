@@ -1,9 +1,10 @@
 // Package reqbody builds outbound HTTP request bodies over an in-memory buffer that stop referencing the buffer once the transport is done with it.
 //
-// A *bytes.Reader body stays reachable from the client transport (and from Response.Request) for as long as the response is read, so a large request stays pinned for the whole length of a long stream. These readers drop the buffer at EOF or Close instead. Streamed bodies of unknown size are out of scope.
+// A *bytes.Reader body stays reachable from the client transport (and from Response.Request) for as long as the response is read, so a large request stays pinned for the whole length of a long stream. These readers drop the buffer at EOF or Close instead; Attach uses them only above pinnedMax. Streamed bodies of unknown size are out of scope.
 package reqbody
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -20,12 +21,20 @@ func NewReader(b []byte) io.ReadCloser {
 	return &reader{b: b}
 }
 
-// Attach sets b as req's body with its Content-Length and a GetBody for transport retries, as http.NewRequest does for a *bytes.Reader. The returned release drops GetBody's reference to b; call it once the response is in hand, after which no transport retry can rewind the body.
+// pinnedMax is the largest body attached as a plain *bytes.Reader. net/http knows that type is in memory and skips flushing the headers on their own, so headers and body share the transport's write buffer; pinning a body this small for the length of a stream costs little.
+const pinnedMax = 64 << 10
+
+// Attach sets b as req's body with its Content-Length and a GetBody for transport retries, as http.NewRequest does for a *bytes.Reader. For bodies above pinnedMax the returned release drops GetBody's reference to b; call it once the response is in hand, after which no transport retry can rewind the body.
 func Attach(req *http.Request, b []byte) (release func()) {
 	req.ContentLength = int64(len(b))
 	if len(b) == 0 {
 		req.Body = http.NoBody
 		req.GetBody = func() (io.ReadCloser, error) { return http.NoBody, nil }
+		return func() {}
+	}
+	if len(b) <= pinnedMax {
+		req.Body = io.NopCloser(bytes.NewReader(b))
+		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }
 		return func() {}
 	}
 	src := &source{b: b}

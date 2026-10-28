@@ -204,7 +204,7 @@ func (q *settleQueue) flush() {
 func (q *settleQueue) run(batch []*queuedSettle) {
 	ctx, cancel := context.WithTimeout(context.Background(), settleBatchTimeout)
 	defer cancel()
-	b := q.svc.postSelector.NewBatch()
+	b := q.svc.postSelector.NewBatch(settleOps * len(batch))
 	prepared := make([]preparedSettle, len(batch))
 	for i, it := range batch {
 		prepared[i] = q.svc.prepareSettle(b, it.inbound, it.acq, it.obs)
