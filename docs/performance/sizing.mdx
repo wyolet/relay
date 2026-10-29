@@ -1,0 +1,89 @@
+---
+title: "Sizing and tuning"
+description: "How many cores and how much memory a relay pod needs, and which settings to change for more throughput"
+---
+
+This page turns the [benchmark results](/performance/benchmarks) into planning figures and lists the settings that move them. The figures come from one setup, the v0.11.7 code before a planned engine rework, with small non-streaming requests against an upstream answering in about 50 ms. Use them for a first estimate, then measure your own deployment with [`relay_overhead_seconds`](/reference/metrics#measuring-relay-overhead) and the metrics under [Check a sizing](#check-a-sizing).
+
+## Planning figures
+
+Two numbers per box size. The **latency knee** is the highest load at which p99 relay overhead stays at or under 15 ms with at most 0.1 % errors. **Error capacity** is the highest load with at most 0.1 % errors, whatever the latency; its p99 is in brackets.
+
+| Box | Latency knee, rps | Error capacity, rps (p99) | rps per core at error capacity |
+| --- | ---: | ---: | ---: |
+| 4 cores | 8,000 | 8,000 (10 ms) | 2,000 |
+| 8 cores | 16,000 | 24,000 (38 ms) | 3,000 |
+| 16 cores | not measured, below 24,000 | 32,000 (38 ms) | 2,000 |
+| 32 cores | 16,000 | 48,000 (88 ms) | 1,500 |
+| 4 × 8 cores behind HAProxy, one store | 32,000 | 62,000 (36 ms) | 1,950 |
+
+A later run on the v0.11.8 code reached 40,000 rps on 16 cores and 52,000 on 32 cores at error capacity; see the later run on the [benchmarks page](/performance/benchmarks).
+
+- Size for the latency knee when p99 overhead matters to your callers, and for error capacity when only throughput does.
+- Several 8-core pods carry more per core than one large pod. Scale out with replicas rather than up.
+- A small request cost about 0.29 ms of relay CPU in this mix. Translation between wire shapes, large bodies, streaming and payload logging all cost more; measure with your own traffic.
+- Streaming costs about 213 KiB of working set and 0.45 cores per 1,000 open streams, on top of a base of about 185 MiB.
+
+## In-flight cap
+
+`RELAY_MAX_INFLIGHT` (default `2048`) is the most inference requests one process handles at once; a stream holds its slot until it ends. Requests over it are refused as overloaded, `503` (`529` on Anthropic-shaped routes) with `Retry-After: 1`, before their body is read. The cap is what keeps a pod from running out of memory under overload, so size it two ways and take the lower:
+
+1. **From traffic.** Requests in flight are the request rate times how long each request takes, upstream time included. 1,000 rps of 4-second generations needs about 4,000 slots. Add headroom for upstream slowdowns.
+2. **From memory.** About (`GOMEMLIMIT` − 185 MiB) ÷ 0.2 MiB for small requests: about 3,500 at the chart's default `GOMEMLIMIT` of 900 MiB. Requests with Claude Code-size bodies (several hundred KB held for the whole stream) fit about 1,000 per GiB.
+
+With short requests the default stops costing throughput at 8 cores and below. On 16 and 32 cores it held the box near 30,000 rps while cores sat idle, so raise it there. On Kubernetes set it through `relay.extraEnv`; the chart has no dedicated value.
+
+## Memory and garbage collection
+
+- Set `GOMEMLIMIT` to about 90 % of the container memory limit. The chart sets it from `goMemLimit` (default `900MiB`, against a `1Gi` limit in `resources.limits.memory`); raise the two together.
+- `RELAY_MAX_CONNS` defaults to as many connections as fit in 40 % of `GOMEMLIMIT`, so it follows a raised limit without being set.
+- `GOGC` stays at `100` by default (chart value `goGC`). Setting `GOGC=400` is a tuning override for pods with spare memory: on 16 and 32 cores it used 9–16 % fewer cores per request and cut p99 overhead by a quarter to a half, for 0.7–1.6 GiB more working set. Keep `GOMEMLIMIT` set when you raise it, so the heap still has a bound.
+- The in-memory state backend (`RELAY_STATE_BACKEND=memory`) is for single-pod use; under load it is GC-bound.
+
+## Upstream connections
+
+`RELAY_UPSTREAM_MAX_IDLE_PER_HOST` is how many idle keep-alive connections Relay keeps per upstream host. It defaults to the in-flight cap, so every request in flight can return its connection to the pool. Below the number of requests in flight to one host, connections past the cap close after each response and the next requests dial again: at 128, an 8-core relay past its capacity spent 14.6 % of its CPU dialing and served 14,700 rps at 28,000 offered, against about 22,000 at 1,024. Leave it at the default unless an upstream limits connections.
+
+## State store
+
+With `RELAY_STATE_BACKEND=redis`, each request made about 18 store commands in the benchmark mix: the rate-limit reserve and settle, key breaker reads and the rotation counter. Before the upstream call, the reserve and the key pick go out in one round trip (two when the host key's tier policy has its own rate limit). The settle runs after the response, batched with other requests' settles.
+
+- **Valkey** runs commands on one main thread, which levelled off at about 420,000 commands per second, about 23,000 rps across every relay that shares it. Give that thread a whole core; a CPU limit at or near one core throttles it. I/O threads (`io-threads 4` in the benchmark) help the network side, not the scripts.
+- **Dragonfly** spreads keys over threads. Run it with `--cluster_mode=emulated --lock_on_hashtags`: Relay's keys carry hash tags, and with these flags each script stays on one shard. With default flags every script runs as a transaction across shards and Dragonfly levelled off below Valkey. With the flags, a 16-core relay was still under 0.1 % errors at 28,000 rps.
+- **Several relays on one store** wait longer for it. At the same load per relay, four 8-core relays sharing one Dragonfly waited about ten times longer for a store connection than one relay alone. Plan on about 15,000 rps per 8-core relay at error capacity, or 8,000 at the latency knee, and watch `relay_admission_seconds`.
+
+The client pools follow the pod's CPUs and rarely need changing:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `RELAY_REDIS_POOL_SIZE` | 25 per CPU | Connections for the rate-limit reserve and other calls before the upstream. CPUs are `GOMAXPROCS`. |
+| `RELAY_REDIS_POOL_MAX_WAITERS` | twice the pool size | Calls that may wait for one of those connections. Past it, new requests are refused as overloaded at once instead of queueing. |
+| `RELAY_REDIS_POSTFLIGHT_POOL_SIZE` | 25 per CPU | Connections for the settle after the response. |
+
+See [Configuration](/configuration) for the full list.
+
+## Host settings
+
+The benchmark boxes ran with these limits, which a relay box at tens of thousands of requests per second needs:
+
+| Setting | Value |
+| --- | --- |
+| Open files (`nofile`) | `1048576` |
+| `net.core.somaxconn` | `4096` |
+| `net.ipv4.ip_local_port_range` | `10240 65535` |
+| `net.netfilter.nf_conntrack_max` | `1048576` |
+
+## Load balancer
+
+In the four-relay benchmark HAProxy 3.2 sat in front of the relays with keep-alive on both sides and `http-reuse always`, so requests reuse established connections to the relays instead of opening one each. It used about 0.07 cores per 1,000 rps over plain HTTP. In a container, set HAProxy's `nbthread` from the CPU limit: it counts the CPUs it may run on, not the container's CPU quota.
+
+## Check a sizing
+
+| Metric | What to watch |
+| --- | --- |
+| `relay_overhead_seconds` | p99 against your latency budget. The latency knee above is where it crossed 15 ms. |
+| `relay_admission_seconds` | Time to the upstream handoff. When it grows with load while CPU has room, the store is the limit. |
+| `relay_inflight_requests` / `relay_inflight_limit` | Headroom before the in-flight cap. |
+| `relay_requests_shed_total` | Any steady rate means the pod is at capacity: add replicas, or raise the cap if memory allows. |
+
+See [Metrics](/reference/metrics) for the full list.
