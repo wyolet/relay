@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="420" viewBox="0 0 880 420" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif"><rect width="880" height="420" fill="#FCFCFF"/>
+<text x="40.0" y="30.0" font-size="15" fill="#1e293b" text-anchor="start" font-weight="700">Four 8-core relays behind HAProxy, one shared store</text>
+<line x1="90.0" y1="350.0" x2="810.0" y2="350.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="354.0" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">0</text>
+<line x1="90.0" y1="308.3" x2="810.0" y2="308.3" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="312.3" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">16k</text>
+<line x1="90.0" y1="266.7" x2="810.0" y2="266.7" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="270.7" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">32k</text>
+<line x1="90.0" y1="225.0" x2="810.0" y2="225.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="229.0" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">48k</text>
+<line x1="90.0" y1="183.3" x2="810.0" y2="183.3" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="187.3" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">64k</text>
+<line x1="90.0" y1="141.7" x2="810.0" y2="141.7" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="145.7" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">80k</text>
+<line x1="90.0" y1="100.0" x2="810.0" y2="100.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="82.0" y="104.0" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">96k</text>
+<text x="90.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">0</text>
+<text x="210.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">16k</text>
+<text x="330.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">32k</text>
+<text x="450.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">48k</text>
+<text x="570.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">64k</text>
+<text x="690.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">80k</text>
+<text x="810.0" y="367.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">96k</text>
+<text x="810.0" y="384.0" font-size="11" fill="#64748b" text-anchor="end" font-weight="400">offered rps</text>
+<text x="90.0" y="90.0" font-size="11" fill="#64748b" text-anchor="start" font-weight="400">served rps</text>
+<path d="M330.0,266.7 L450.0,225.0 L570.0,183.3 L690.0,141.7 L810.0,99.9" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="3 4"/>
+<path d="M210.0,308.3 L330.0,266.6 L450.0,225.1 L570.0,187.5 L690.0,147.1 L810.0,192.1" fill="none" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="210.0" cy="308.3" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<circle cx="330.0" cy="266.6" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<circle cx="450.0" cy="225.1" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<circle cx="570.0" cy="187.5" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<circle cx="690.0" cy="147.1" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<circle cx="810.0" cy="192.1" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<circle cx="570.0" cy="187.5" r="8" fill="none" stroke="#8B5CF6" stroke-width="1.5"/>
+<text x="582.0" y="205.5" font-size="11" fill="#64748b" text-anchor="start" font-weight="400">≤0.1 % errors: 62k, p99 36 ms</text>
+<path d="M40.0,52.0 L62.0,52.0" fill="none" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="51.0" cy="52.0" r="4.5" fill="#8B5CF6" stroke="#FCFCFF" stroke-width="2"/>
+<text x="70.0" y="56.0" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">4 × 8 cores, v0.11.7</text>
+<path d="M214.0,52.0 L236.0,52.0" fill="none" stroke="#64748b" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 4"/>
+<text x="244.0" y="56.0" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">4 × one 8-core box, v0.11.7</text>
+<text x="40.0" y="406.0" font-size="11" fill="#64748b" text-anchor="start" font-weight="400">Generator-bound steps omitted. Reference: one 8-core box at a quarter of the load, times four.</text>
+</svg>

@@ -1,0 +1,382 @@
+---
+title: "Benchmark results"
+description: "Throughput, overhead and resource use of Relay under load on dedicated boxes, with the method behind each number"
+---
+
+These results measure the Relay v0.11.7 code under load, on dedicated AWS boxes with a mock upstream. They are the baseline taken before a planned rework of the request engine; the same scenarios will be rerun after it and added as a new tab beside each table. These are measurements of one setup. Your capacity depends on your store, network, request mix and upstream latency; measure your own with [`relay_overhead_seconds`](/reference/metrics#measuring-relay-overhead).
+
+For how to turn these numbers into a deployment, see [Sizing and tuning](/performance/sizing).
+
+## What this measures
+
+Each run puts one relay (or a group of relays behind HAProxy) on its own box, sends it an open-loop request schedule from a generator box, and steps the offered rate up until the relay refuses part of it. The upstream is a mock that answers with a fixed latency model, so every millisecond of variation above it is Relay, the network, or the state store.
+
+This is not a service-level objective, and the numbers are not a promise for any other setup. The repository's in-process benchmarks (`make bench-gate`, in-memory state, no network) are a regression gate for allocations and are not published as performance figures.
+
+## Setup
+
+| | v0.11.7 (before engine rework) |
+| --- | --- |
+| Relay code | Development builds with no Go changes against v0.11.7. The state-store and upstream idle-connection runs used v0.11.7 without its last commit, which makes the upstream idle cap default to the in-flight cap; each table states its settings. |
+| Go | 1.27.3, default `GOEXPERIMENT` |
+| Relay boxes | AWS c7a: `c7a.xlarge` (4 cores), `c7a.2xlarge` (8), `c7a.4xlarge` (16), `c7a.8xlarge` (32). One relay per box, the whole box. |
+| Generator and mock | One box running 40 generator processes and the mock upstream on separate pinned cores: `c7a.16xlarge`, or `c7a.8xlarge` for the four-relay group and the default in-flight cap runs. |
+| State store | Dragonfly v2.0.2 with `--cluster_mode=emulated --lock_on_hashtags`, 12 threads, on its own `c7a.8xlarge`, unless the scenario says otherwise. Postgres 16 and ClickHouse 24.8 on the same box. |
+| Network | Private addresses in one availability zone, plain HTTP, no load balancer except in the four-relay group. |
+| Request mix | Half Anthropic Messages, half OpenAI Chat Completions, non-streaming, routed to a host of the same shape, so bodies pass through without translation. Request bodies 2 KB at p50, 20 KB at p99. The relay keys belong to rate-limited policies, so every request reserves and settles a rate limit in the store. |
+| Mock upstream | Time to first token 20 ms, 5,000 tokens per second, 150 output tokens at p50: about 50 ms per request. |
+| Steps | Each offered rate is warmed up for 30 s and then held for 90 s. |
+| Relay environment | `GOMAXPROCS` = box cores, `GOMEMLIMIT` = 90 % of the container memory limit, `GOGC=100`, `RELAY_STATE_BACKEND=redis`, `RELAY_MAX_INFLIGHT=20000` unless stated, `RELAY_PG_MAX_CONNS=20`, usage events to ClickHouse. |
+
+## How to read the numbers
+
+- **Overhead** is measured by the generator: the client-side total latency of a request minus the duration the mock upstream reports for it. It includes two network hops inside one availability zone, so it is a little higher than [`relay_overhead_seconds`](/reference/metrics#measuring-relay-overhead), which Relay measures inside the process. Each step reports the worse of the two request types.
+- **Errors** are every non-2xx response, as a share of all responses, the worse of the two request types. A request refused as overloaded (`503`, or `529` on Anthropic-shaped routes) counts as an error.
+- **Latency knee** is the highest step at which p99 overhead stays at or under 15 ms with at most 0.1 % errors, with every lower step passing too.
+- **Error capacity** is the highest served rate at a step with at most 0.1 % errors. Its p99 is always given with it, because it is usually well past the knee.
+- **Relay cores** and **working set** cover the last two minutes of each step. Working set is the largest value in that window.
+- A step where the generators fell behind their schedule measures the generator, not Relay. Those steps are marked as excluded and left out of every figure. Where the generators sent less than the step's rate without falling behind, the table shows what was sent.
+- Usage record delivery was not checked in these runs.
+
+## Results by scenario
+
+### One relay per box
+
+<Frame caption="Served against offered requests per second on one relay, by box size. The v0.11.8 line on 16 and 32 cores is the later run described below, not part of the v0.11.7 tables.">
+  <img className="block dark:hidden" src="/images/performance/box-sizes.svg" alt="Served against offered requests per second for 4, 8, 16 and 32 core relays" />
+  <img className="hidden dark:block" src="/images/performance/box-sizes-dark.svg" alt="Served against offered requests per second for 4, 8, 16 and 32 core relays" />
+</Frame>
+
+<Tabs>
+  <Tab title="v0.11.7 (before engine rework)">
+
+| Box | Latency knee, rps (p99) | Error capacity, rps (p99) | Highest served, rps (errors) |
+| --- | ---: | ---: | ---: |
+| 4 cores | 8,000 (10.5 ms) | 7,978 (10.5 ms) | 13,754 (14 %) |
+| 8 cores | 16,007 (8.2 ms) | 24,008 (37.8 ms) | 26,141 (6.6 %) |
+| 16 cores | not measured: the ladder started at 24,000, where p99 was 24.9 ms | 32,006 (37.9 ms) | 41,860 (12.7 %) |
+| 32 cores | 15,985 (3.9 ms) | 48,005 (88.1 ms) | 52,195 (10.7 %) |
+
+The 32-core ladder steps from 16,000 straight to 32,000 (p99 41.1 ms), so its knee lies somewhere between the two. Its highest served figure comes from a second run on the same boxes; the first run's 64,000 step was generator-bound.
+
+**4 cores (c7a.xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8,000 | 7,978 | 0.000 | 0.6 / 10.5 | 2.25 | 263 |
+| 12,000 | 11,971 | 0.276 | 3.4 / 41.2 | 3.26 | 371 |
+| 16,000 | 13,754 | 14.0 | 15.5 / 73.5 | 3.72 | 432 |
+| 20,000 | 13,412 | 33.0 | 26.0 / 88.2 | 3.97 | 436 |
+
+**8 cores (c7a.2xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8,000 | 7,999 | 0.000 | 0.5 / 0.8 | 2.24 | 284 |
+| 12,000 | 11,999 | 0.000 | 0.6 / 1.8 | 3.69 | 377 |
+| 16,000 | 16,007 | 0.000 | 0.6 / 8.2 | 4.60 | 408 |
+| 20,000 | 19,996 | 0.000 | 0.8 / 19.4 | 5.61 | 457 |
+| 24,000 | 24,008 | 0.006 | 6.5 / 37.8 | 6.87 | 522 |
+| 28,000 | 26,141 | 6.6 | 18.6 / 57.6 | 7.57 | 600 |
+| 32,000 | 25,563 | 20.1 | 25.7 / 75.4 | 8.09 | 641 |
+
+**16 cores (c7a.4xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 24,000 | 23,999 | 0.000 | 1.0 / 24.9 | 7.61 | 649 |
+| 32,000 | 32,006 | 0.000 | 2.4 / 37.9 | 10.97 | 763 |
+| 40,000 | 39,925 | 0.175 | 17.0 / 70.5 | 13.72 | 917 |
+| 48,000 | 41,860 | 12.7 | 28.2 / 91.8 | 14.16 | 1,072 |
+| 56,000 | 41,451 | 26.1 | 37.4 / 109.2 | 15.08 | 1,229 |
+
+Second run on the same boxes:
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 24,000 | 23,984 | 0.000 | 0.8 / 25.9 | 7.37 | 665 |
+| 32,000 | 32,010 | 0.000 | 2.4 / 37.6 | 10.96 | 672 |
+| 40,000 | 39,884 | 0.308 | 18.0 / 69.4 | 12.91 | 943 |
+| 48,000 | 41,083 | 14.5 | 29.3 / 94.0 | 15.09 | 1,191 |
+| 56,000 | 40,853 | 27.1 | 39.2 / 108.1 | 15.97 | 1,259 |
+
+**32 cores (c7a.8xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 15,985 | 0.000 | 0.7 / 3.9 | 5.21 | 574 |
+| 32,000 | 32,037 | 0.000 | 6.6 / 41.1 | 14.09 | 849 |
+| 48,000 | 48,005 | 0.000 | 14.6 / 88.1 | 20.94 | 1,132 |
+| 64,000 | excluded: the generators fell behind | – | – | – | – |
+
+Second run on the same boxes:
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 32,000 | 32,009 | 0.000 | 8.5 / 51.9 | 13.09 | 1,040 |
+| 48,000 | 47,997 | 0.000 | 15.3 / 91.1 | 21.13 | 1,147 |
+| 64,000 (58,400 sent) | 52,195 | 10.7 | 45.3 / 169.0 | 24.69 | 1,781 |
+| 80,000 | excluded: the generators fell behind | – | – | – | – |
+| 96,000 | excluded: the generators fell behind | – | – | – | – |
+  </Tab>
+</Tabs>
+
+### Requests per core
+
+<Frame caption="Latency knee and error capacity per core. Box cores, 32 for the four-relay group.">
+  <img className="block dark:hidden" src="/images/performance/rps-per-core.svg" alt="Requests per second per core at the latency knee and at error capacity" />
+  <img className="hidden dark:block" src="/images/performance/rps-per-core-dark.svg" alt="Requests per second per core at the latency knee and at error capacity" />
+</Frame>
+
+Cores are not all busy at error capacity: the 8-core box used 6.87 of its 8 at 24,008 rps, about 0.29 ms of CPU per request for this mix. Per core, the 8-core box carries the most; the 16- and 32-core boxes lose ground to garbage collection and to waiting on the store, which the later v0.11.8 run below partly recovers.
+
+### Four relays behind HAProxy
+
+Four 8-core relays (`c7a.2xlarge`) behind HAProxy 3.2 on a `c7a.4xlarge`, sharing one store. HAProxy keeps connections to the relays alive (`http-reuse always`). The generator box was a `c7a.8xlarge`, smaller than in the single-box runs, and at 64,000 and 80,000 the generators sent slightly less than the step's rate.
+
+<Frame caption="Four 8-core relays sharing one store, against four times one 8-core box at a quarter of the load.">
+  <img className="block dark:hidden" src="/images/performance/four-relays.svg" alt="Served against offered requests per second for four 8-core relays behind HAProxy" />
+  <img className="hidden dark:block" src="/images/performance/four-relays-dark.svg" alt="Served against offered requests per second for four 8-core relays behind HAProxy" />
+</Frame>
+
+<Tabs>
+  <Tab title="v0.11.7 (before engine rework)">
+
+Latency knee 32,022 rps (p99 1.9 ms); error capacity 62,385 rps (p99 35.8 ms). Relay cores are the sum of the four relays; working set is the largest of the four. Admission p99 is [`relay_admission_seconds`](/reference/metrics), the time from accepting a request to handing it upstream, which under load is mostly the wait for a store connection.
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB | HAProxy cores | Store cores | Store commands/s | Admission p99, ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 16,007 | 0.000 | 0.6 / 1.0 | 4.51 | 279 | 1.0 | 2.0 | 273,374 | 0.5 |
+| 32,000 | 32,022 | 0.000 | 0.8 / 1.9 | 8.98 | 310 | 2.1 | 4.0 | 561,233 | 1.8 |
+| 48,000 | 47,967 | 0.000 | 1.1 / 16.2 | 13.68 | 355 | 3.2 | 5.4 | 849,059 | 17.8 |
+| 64,000 (62,400 sent) | 62,385 | 0.000 | 1.5 / 35.8 | 19.04 | 401 | 4.2 | 6.6 | 1,136,545 | 42.8 |
+| 80,000 (78,000 sent) | 77,921 | 0.130 | 8.8 / 120.4 | 25.61 | 594 | 5.3 | 8.5 | 1,423,162 | 112.0 |
+| 96,000 (67,200 sent) | 60,618 | 9.7 | 16.5 / 127.4 | 29.24 | 619 | 6.1 | 9.5 | 1,556,196 | 123.2 |
+| 112,000 | excluded: the generators fell behind | – | – | – | – | – | – | – | – |
+  </Tab>
+</Tabs>
+
+Four 8-core relays sharing one store carried more than one 32-core relay at the same total core count: 62,385 against 48,005 rps at error capacity. The shared store's wait limits the group: at the same load per relay, admission p99 in the group was about ten times a lone 8-core box's (42.8 ms at 16,000 per relay against 4.4 ms). The comparison is not exact, since the group's generator box was smaller and the later v0.11.8 run reached about 52,000 on 32 cores.
+
+### State store
+
+One 16-core relay (`c7a.4xlarge`), the store on its own `c7a.4xlarge`. The Valkey run used the v0.11.7 code without its last commit, the default in-flight cap of 2048 and `RELAY_UPSTREAM_MAX_IDLE_PER_HOST=1024`. Both Dragonfly runs used the v0.11.7 code with the idle cap at its default (the in-flight cap); the default-flags run kept the in-flight cap at 2048, the hash-tag run used 20000. The cap of 2048 does not bind below about 30,000 rps on this box.
+
+<Tabs>
+  <Tab title="v0.11.7 (before engine rework)">
+
+**Valkey 8, io-threads 4**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB | Store commands/s | Admission p99, ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 15,979 | 0.000 | 0.7 / 19.3 | 4.83 | 548 | 265,208 | 19.8 |
+| 20,000 | 19,982 | 0.053 | 1.2 / 37.2 | 6.89 | 577 | 353,909 | 39.4 |
+| 24,000 | 23,131 | 3.7 | 8.1 / 72.6 | 8.26 | 698 | 412,988 | 79.0 |
+| 28,000 | 23,525 | 16.0 | 16.6 / 83.4 | 8.55 | 697 | 421,661 | 90.5 |
+| 32,000 | 23,379 | 27.0 | 17.8 / 82.6 | 9.56 | 715 | 421,010 | 90.4 |
+
+**Dragonfly v2.0.2, default flags**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB | Store commands/s | Admission p99, ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4,000 | 4,010 | 0.000 | 0.6 / 0.8 | 1.15 | 269 | 67,792 | 0.5 |
+| 16,000 | 16,002 | 0.000 | 0.8 / 11.0 | 4.92 | 438 | 275,042 | 4.7 |
+| 20,000 | 20,003 | 0.000 | 0.8 / 19.4 | 6.72 | 529 | 355,747 | 9.0 |
+| 24,000 | 21,033 | 12.3 | 26.9 / 83.8 | 8.39 | 691 | 376,238 | 94.3 |
+| 28,000 | 21,449 | 23.4 | 27.1 / 79.5 | 9.04 | 693 | 385,608 | 92.0 |
+| 32,000 | 21,711 | 32.2 | 27.6 / 81.3 | 8.90 | 698 | 392,841 | 93.1 |
+
+**Dragonfly v2.0.2, --cluster_mode=emulated --lock_on_hashtags**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB | Store commands/s | Admission p99, ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4,000 | 3,994 | 0.000 | 0.5 / 0.7 | 1.21 | 268 | 66,259 | 0.5 |
+| 20,000 | 20,002 | 0.000 | 0.7 / 16.4 | 6.44 | 502 | 337,484 | 7.0 |
+| 24,000 | 24,002 | 0.000 | 0.8 / 23.4 | 7.84 | 558 | 426,658 | 9.0 |
+| 28,000 | 28,048 | 0.000 | 1.0 / 29.0 | 9.95 | 601 | 498,964 | 11.5 |
+  </Tab>
+</Tabs>
+
+Valkey runs commands on one main thread. It levelled off at about 421,000 commands per second with its main thread near one full core, about 18 commands per request, so the relay plateaued near 23,500 rps. At 16,000 rps the two Lua script calls per request took 83 % of Valkey's command time. Dragonfly with default flags runs each script as a transaction across shards and levelled off lower; with `--cluster_mode=emulated --lock_on_hashtags` each script stays on one shard, and 28,048 rps was still under 0.1 % errors at the last step.
+
+### Upstream idle connections
+
+One 8-core relay (`c7a.2xlarge`) on Valkey 8, the v0.11.7 code without its last commit (so the idle cap does not follow the in-flight cap), in-flight cap 2048.
+
+<Tabs>
+  <Tab title="v0.11.7 (before engine rework)">
+
+**`RELAY_UPSTREAM_MAX_IDLE_PER_HOST=128`**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8,000 | 7,992 | 0.000 | 0.5 / 3.6 | 2.14 | 328 |
+| 12,000 | 11,997 | 0.000 | 0.6 / 12.3 | 3.40 | 372 |
+| 16,000 | 15,988 | 0.014 | 0.8 / 23.2 | 4.90 | 435 |
+| 20,000 | 19,879 | 0.673 | 3.0 / 39.8 | 5.67 | 482 |
+| 24,000 | 17,170 | 28.5 | 35.2 / 175.2 | 7.10 | 641 |
+| 28,000 | 14,672 | 47.7 | 46.9 / 209.8 | 7.49 | 826 |
+
+**`RELAY_UPSTREAM_MAX_IDLE_PER_HOST=1024`**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 16,005 | 0.083 | 0.8 / 22.6 | 4.35 | 451 |
+| 20,000 | 19,919 | 0.492 | 2.8 / 35.6 | 5.83 | 471 |
+| 24,000 | 22,034 | 8.2 | 22.0 / 57.3 | 6.73 | 573 |
+| 28,000 | 21,794 | 22.2 | 25.3 / 59.6 | 6.90 | 578 |
+  </Tab>
+</Tabs>
+
+With 128 idle connections per upstream host, connections past the cap close after each response and the next requests dial again. Past capacity the relay spent 14.6 % of its CPU dialing and served traffic fell to 14,672 rps at 28,000 offered. With 1,024 it held about 22,000. Error capacity is the same in both runs, about 16,000, because Valkey bounds this box first. Since v0.11.7 the idle cap defaults to the in-flight cap.
+
+### Streaming
+
+One 16-core relay (`c7a.4xlarge`), streaming Anthropic Messages and OpenAI Chat Completions, 8 tokens per event. The mock starts each stream after 300 ms and sends 80 tokens per second; streams last 2.1 s at p50, 15 s at p99 and 3 s on average, so open streams are the start rate times three.
+
+<Frame caption="Relay working set against open streams on one 16-core relay.">
+  <img className="block dark:hidden" src="/images/performance/streaming-memory.svg" alt="Working set against open streams" />
+  <img className="hidden dark:block" src="/images/performance/streaming-memory-dark.svg" alt="Working set against open streams" />
+</Frame>
+
+<Tabs>
+  <Tab title="v0.11.7 (before engine rework)">
+
+| New streams/s | Open streams | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 500 | 1,500 | 0.000 | 1.1 / 1.7 | 0.66 | 465 |
+| 1,000 | 3,000 | 0.000 | 1.0 / 1.7 | 1.46 | 816 |
+| 2,000 | 6,000 | 0.000 | 1.0 / 1.9 | 2.90 | 1,465 |
+| 4,000 | 12,000 | 0.000 | 1.1 / 34.9 | 5.39 | 2,645 |
+  </Tab>
+</Tabs>
+
+Each open stream costs about 213 KiB of working set and 0.45 cores per 1,000. At 12,000 open streams the p99 overhead rose to 34.9 ms, from scheduler and system-call load across some 52,000 goroutines.
+
+### Default in-flight cap
+
+The same boxes at the default `RELAY_MAX_INFLIGHT` of 2048, generators on a `c7a.8xlarge`. On 16 and 32 cores the cap, not the box, sets the ceiling near 30,000 rps: requests over it are refused as overloaded while cores sit idle.
+
+<Tabs>
+  <Tab title="v0.11.7 (before engine rework)">
+
+**8 cores (c7a.2xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8,000 | 7,994 | 0.000 | 0.5 / 0.8 | 2.21 | 295 |
+| 12,000 | 11,998 | 0.000 | 0.6 / 1.9 | 3.63 | 319 |
+| 16,000 | 15,994 | 0.000 | 0.6 / 8.8 | 4.81 | 366 |
+| 20,000 | 20,014 | 0.000 | 0.8 / 20.0 | 5.68 | 417 |
+| 24,000 | 23,994 | 0.153 | 7.0 / 37.8 | 6.75 | 529 |
+| 28,000 | 25,392 | 9.3 | 13.5 / 45.8 | 7.83 | 551 |
+| 32,000 | 25,006 | 21.8 | 16.3 / 51.3 | 7.34 | 564 |
+
+**16 cores (c7a.4xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8,000 | 8,009 | 0.000 | 0.5 / 1.0 | 2.36 | 316 |
+| 16,000 | 16,005 | 0.000 | 0.6 / 10.2 | 5.25 | 414 |
+| 24,000 | 23,991 | 0.000 | 1.2 / 24.2 | 7.80 | 594 |
+| 32,000 | 29,198 | 8.8 | 1.3 / 23.0 | 9.99 | 619 |
+| 40,000 | 29,522 | 26.2 | 1.9 / 26.4 | 10.17 | 662 |
+| 48,000 | 29,314 | 39.0 | 2.6 / 29.9 | 10.31 | 708 |
+| 56,000 | 29,484 | 47.4 | 2.6 / 28.5 | 10.91 | 700 |
+
+**32 cores (c7a.8xlarge)**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 15,998 | 0.000 | 0.7 / 4.2 | 5.55 | 476 |
+| 32,000 | 29,834 | 6.8 | 2.0 / 13.7 | 11.91 | 609 |
+| 48,000 | 29,446 | 38.7 | 3.2 / 23.4 | 14.09 | 731 |
+| 56,000 | 28,931 | 48.4 | 4.3 / 26.9 | 15.96 | 756 |
+| 64,000 | 30,083 | 53.0 | 2.3 / 17.5 | 15.31 | 919 |
+| 72,000 | 29,925 | 58.4 | 2.6 / 19.2 | 15.70 | 884 |
+| 80,000 | 29,794 | 62.8 | 2.7 / 21.1 | 16.55 | 734 |
+| 88,000 (46,200 sent) | 15,525 | 66.4 | 3.0 / 23.1 | 16.71 | 756 |
+| 96,000 | 27,909 | 70.6 | 6.0 / 35.1 | 18.53 | 822 |
+  </Tab>
+</Tabs>
+
+### Later run: 16 and 32 cores on the v0.11.8 code
+
+A separate run after v0.11.7, on 16 and 32 cores only, with a development build carrying the Go code of v0.11.8 before its dependency updates. It includes allocation and garbage-collection work on the request path. It compares `GOGC=100` with `GOGC=400`, alternating the two on the same boxes; each row is the mean of two runs, except the 32-core steps from 48,000 up, which ran once. Same setup as the v0.11.7 table otherwise: generators on a `c7a.16xlarge`, Dragonfly with hash tags on a `c7a.8xlarge`, `RELAY_MAX_INFLIGHT=20000`. There are no v0.11.8 figures for 4 cores, 8 cores or the four-relay group.
+
+| Box | `GOGC` | Latency knee, rps (p99) | Error capacity, rps (p99) |
+| --- | --- | ---: | ---: |
+| 16 cores | 100 | not measured: p99 22.0 ms at the first step, 24,000 | 40,000 (44.8 ms) |
+| 16 cores | 400 | 23,994 (11.2 ms) | 39,998 (31.7 ms) |
+| 32 cores | 100 | 32,010 (12.7 ms) | 52,012 (92.2 ms) |
+| 32 cores | 400 | 31,994 (7.1 ms) | at least 58,530 (86.1 ms); the generators could not send more |
+
+`GOGC=400` used about 9 % fewer cores per request on 16 cores and 10–16 % fewer on 32 cores, cut p99 overhead by a quarter to a half, and cost 0.7–1.6 GiB more working set. On 16 cores both settings stop at about 40,000, where the wait for the store binds first.
+
+<Accordion title="Step tables">
+
+**16 cores (c7a.4xlarge), GOGC 100**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 24,000 | 24,014 | 0.000 | 0.7 / 22.0 | 6.79 | 641 |
+| 32,000 | 31,996 | 0.000 | 1.0 / 33.0 | 9.37 | 616 |
+| 36,000 | 36,021 | 0.000 | 1.4 / 36.4 | 10.94 | 655 |
+| 40,000 | 40,000 | 0.010 | 4.6 / 44.8 | 11.68 | 785 |
+| 44,000 | 43,844 | 0.335 | 11.2 / 55.4 | 13.25 | 908 |
+| 48,000 | 45,914 | 4.4 | 15.4 / 64.4 | 13.65 | 960 |
+
+**16 cores (c7a.4xlarge), GOGC 400**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 24,000 | 23,994 | 0.000 | 0.7 / 11.2 | 6.28 | 1,474 |
+| 32,000 | 32,006 | 0.000 | 0.8 / 20.1 | 8.44 | 1,497 |
+| 36,000 | 36,014 | 0.000 | 1.2 / 28.3 | 9.45 | 1,720 |
+| 40,000 | 39,998 | 0.006 | 1.5 / 31.7 | 11.01 | 1,822 |
+| 44,000 | 43,918 | 0.159 | 2.1 / 38.9 | 12.10 | 2,094 |
+| 48,000 | 47,507 | 1.0 | 2.0 / 44.1 | 12.63 | 2,166 |
+
+**32 cores (c7a.8xlarge), GOGC 100**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 15,997 | 0.000 | 0.6 / 3.1 | 4.61 | 515 |
+| 24,000 | 23,982 | 0.000 | 0.7 / 6.2 | 7.82 | 526 |
+| 32,000 | 32,010 | 0.000 | 1.1 / 12.7 | 11.00 | 624 |
+| 40,000 | 40,002 | 0.000 | 5.5 / 54.9 | 15.84 | 974 |
+| 44,000 | 43,974 | 0.000 | 6.2 / 63.7 | 17.03 | 991 |
+| 48,000 | 47,995 | 0.000 | 8.1 / 79.0 | 17.16 | 1,253 |
+| 52,000 | 52,012 | 0.000 | 10.1 / 92.2 | 19.83 | 1,139 |
+| 56,000 (51,100 sent) | 51,093 | 0.019 | 14.4 / 107.8 | 22.58 | 1,195 |
+| 60,000 (58,500 sent) | 58,302 | 0.289 | 19.9 / 134.0 | 22.36 | 1,267 |
+
+**32 cores (c7a.8xlarge), GOGC 400**
+
+| Offered rps | Served rps | Errors % | p50 / p99 overhead, ms | Relay cores | Working set, MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,000 | 15,991 | 0.000 | 0.6 / 1.7 | 4.23 | 1,162 |
+| 24,000 | 23,976 | 0.000 | 0.7 / 3.0 | 7.00 | 1,196 |
+| 32,000 | 31,994 | 0.000 | 1.0 / 7.1 | 9.38 | 1,370 |
+| 40,000 | 40,013 | 0.000 | 1.9 / 33.1 | 13.27 | 1,960 |
+| 44,000 | 43,992 | 0.000 | 2.8 / 57.0 | 15.28 | 2,346 |
+| 48,000 | 47,942 | 0.000 | 3.1 / 59.6 | 15.09 | 2,593 |
+| 52,000 | 51,335 | 0.000 | 3.4 / 69.5 | 17.44 | 2,628 |
+| 56,000 (49,000 sent) | 49,006 | 0.005 | 3.6 / 77.2 | 18.01 | 2,792 |
+| 60,000 (58,500 sent) | 58,530 | 0.005 | 3.2 / 86.1 | 20.29 | 2,870 |
+</Accordion>
+
+## Past capacity
+
+Past error capacity, a single relay refuses the excess as overloaded (`503`, or `529` on Anthropic-shaped routes, with `Retry-After: 1`) and keeps serving close to its highest rate: the 8-core box served 25,563 rps at 32,000 offered against a peak of 26,141, and the 16-core box 41,451 at 56,000 against 41,860. Two exceptions:
+
+- The four-relay group fell from 77,921 rps to 60,618 at the next step, with 9.7 % errors, as the wait on the shared store reached its highest (admission p99 123 ms).
+- On 32 cores the generators fell behind above 64,000 offered, so behaviour past that point was not measured.
+
+## Rerun it
+
+The harness (open-loop generator, mock upstream, scenario files, seed manifests and the AWS setup) is being prepared for publication at [github.com/wyolet/relay-bench](https://github.com/wyolet/relay-bench). Until then, the setup and reading rules above describe the method in full: a fixed request mix against a mock with a known latency model, open-loop steps with warm-up and hold, overhead as client latency minus mock duration, and the knee and capacity rules applied per step.
+
+## Changes between campaigns
+
+None yet: v0.11.7 is the first published campaign.
