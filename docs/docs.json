@@ -60,6 +60,13 @@
             ]
           },
           {
+            "group": "Performance",
+            "pages": [
+              "performance/sizing",
+              "performance/benchmarks"
+            ]
+          },
+          {
             "group": "Observability",
             "pages": [
               "concepts/usage",
