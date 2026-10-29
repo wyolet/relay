@@ -35,8 +35,10 @@ import (
 // Error is a refused write with the HTTP status it answers.
 type Error struct {
 	Status int
-	Msg    string
-	Err    error
+	// Code is the machine-readable error code, when the refusal has one.
+	Code string
+	Msg  string
+	Err  error
 }
 
 func (e *Error) Error() string { return e.Msg }
@@ -68,6 +70,9 @@ type Lookup struct {
 	ServiceAccount func(ctx context.Context, id string) *serviceaccount.ServiceAccount
 	// RoleBindingsFor returns the stored bindings naming a role.
 	RoleBindingsFor func(ctx context.Context, roleID string) ([]*rolebinding.RoleBinding, error)
+	// RoleBindings and PolicyBindings return every stored binding.
+	RoleBindings   func(ctx context.Context) ([]*rolebinding.RoleBinding, error)
+	PolicyBindings func(ctx context.Context) ([]*policybinding.PolicyBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
 }

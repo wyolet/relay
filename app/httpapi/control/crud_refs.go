@@ -6,6 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -57,6 +58,10 @@ func refs(d Deps) refcheck.Checker {
 			}
 			return out, nil
 		}
+		c.Rows.RoleBindings = s.RoleBinding.List
+	}
+	if s.PolicyBinding != nil {
+		c.Rows.PolicyBindings = s.PolicyBinding.List
 	}
 	return c
 }
@@ -75,6 +80,12 @@ func getOrNil[T any](get func(context.Context, string) (*T, error)) func(context
 func refErr(err error) error {
 	var re *refcheck.Error
 	if errors.As(err, &re) {
+		if re.Code != "" {
+			return &httpapi.APIError{
+				Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: re.Code, Message: re.Msg},
+				HTTPStatus: re.Status,
+			}
+		}
 		return huma.NewError(re.Status, re.Msg)
 	}
 	return err

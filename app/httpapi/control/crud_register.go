@@ -96,7 +96,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		func(g *group.Group) error { return g.Validate() },
 		meta.OwnerSystem,
 		listScanResolver(d.Stores.Group, gmeta),
-		guardGroupMembers(d),
+		guardGroup(d),
 		nil,
 		nil,
 		d.refuseInUse,
