@@ -42,7 +42,7 @@ func (c Candidate) SuccessNeedsWrite() bool {
 }
 
 // Pick returns a healthy HostKey from the candidate set. scope is the
-// kv key tag (typically the owning Policy's Meta.Name) used for the
+// kv key tag (the owning Policy's Meta.ID) used for the
 // round-robin counter and LRU timestamps. algo is the selection
 // strategy; empty falls back to KeySelectionPrioritized.
 //

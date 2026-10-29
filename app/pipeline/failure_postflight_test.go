@@ -68,7 +68,7 @@ func TestRunFailureWritesUsePostFlightStore(t *testing.T) {
 	}
 	inboundSettled := false
 	for _, c := range post.Named("limit.commit") {
-		inboundSettled = inboundSettled || strings.HasPrefix(c.Keys[0], "limit:{caller}:")
+		inboundSettled = inboundSettled || strings.HasPrefix(c.Keys[0], "limit:{policy:pol-caller}:")
 	}
 	if !inboundSettled {
 		t.Fatal("the inbound reservation was not settled before Run returned")

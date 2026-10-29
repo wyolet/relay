@@ -179,7 +179,7 @@ func (p *Policy) SelectRateLimitID(providerSlug, modelSlug, hostSlug string) (id
 }
 
 // ResolveRules converts the given RateLimit into the limiter's Rule
-// shape, scoped by this policy's slug, the RateLimit, and — for a
+// shape, scoped by this policy's id, the RateLimit, and — for a
 // per-model RLBinding — modelID. Returns nil when rl is nil, disabled, or
 // has no Rules. This is the runtime equivalent of the old
 // ratelimit.Resolve(pol, rl) function — moved here so app/ratelimit
@@ -188,7 +188,7 @@ func (p *Policy) ResolveRules(rl *ratelimit.RateLimit, modelID string) []pkgrate
 	if p == nil || rl == nil {
 		return nil
 	}
-	return ratelimit.ResolveWithScope("policy", ruleSubject(p.Meta.Name, rl.Meta.ID, modelID), rl)
+	return ratelimit.ResolveWithScope("policy", ruleSubject(p.Meta.ID, rl.Meta.ID, modelID), rl)
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:

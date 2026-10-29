@@ -209,7 +209,7 @@ spec:
 
 ### Groups
 
-A binding names a group by name. The name is matched by a local `Group` row and by a group claim your identity provider asserts at sign-in; the two combine, so bindings keep working when you move from local groups to SSO. Three virtual groups always exist without a row: `system:authenticated`, `system:serviceaccounts`, and `system:serviceaccounts:<project>`.
+A binding names a group by name. The name is matched by a local `Group` row and by a group claim your identity provider asserts at sign-in; the two combine, so bindings keep working when you move from local groups to SSO. Three virtual groups always exist without a row: `system:authenticated`, `system:serviceaccounts`, and `system:serviceaccounts:<project>`. Changing a local group's `metadata.name` through the control API is refused with `409 resource_in_use` while a role or policy binding names the old name; remove the group from those bindings or point them at the new name first. Its `displayName` can change freely.
 
 ### Reads
 

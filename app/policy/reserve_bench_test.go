@@ -51,6 +51,7 @@ func BenchmarkReserveInboundKey(b *testing.B) {
 // runs once per rule.
 func BenchmarkResolveRules(b *testing.B) {
 	pol := fix("prod-policy")
+	pol.Meta.ID = "pol-1"
 	rl := &appratelimit.RateLimit{}
 	rl.Meta.ID, rl.Meta.Name = "rl-1", "rl-1"
 	rl.Spec.Rules = benchRules()

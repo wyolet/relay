@@ -18,6 +18,8 @@ A rule has four fields, all required:
 
 A rate limit with `enabled: false` applies no rules. An enabled rate limit needs at least one rule.
 
+A rule's counter is identified by its `meter`, `strategy` and `window`, so two rules of one rate limit cannot share all three. Changing a rule's `amount` or moving it in the list keeps its counter; changing its `meter`, `strategy` or `window` starts a new one from zero. Renaming a policy keeps its counters.
+
 <Warning>
 In a manifest, write `window` as a duration string. A bare integer there is read as nanoseconds, not seconds.
 </Warning>

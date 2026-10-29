@@ -226,11 +226,12 @@ func TestProxyAuthed_SystemCeilingInTheSameReserve(t *testing.T) {
 		t.Fatalf("reserve scripts = %d, want exactly 1", len(reserves))
 	}
 	var sawPolicy, sawCeiling bool
+	polID := pr.PolicyID()
 	for _, k := range reserves[0].Keys {
-		if !strings.HasPrefix(k, "limit:{p}:") {
+		if !strings.HasPrefix(k, "limit:{policy:"+polID+"}:") {
 			t.Errorf("key %q is outside the policy hash tag", k)
 		}
-		sawPolicy = sawPolicy || strings.Contains(k, ":policy:p:")
+		sawPolicy = sawPolicy || strings.Contains(k, ":policy:"+polID+":")
 		sawCeiling = sawCeiling || strings.Contains(k, ":proxy:"+pr.KeyHash+":")
 	}
 	if !sawPolicy || !sawCeiling {

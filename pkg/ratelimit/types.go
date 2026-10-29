@@ -49,8 +49,7 @@ const (
 )
 
 // Rule is a single rate-limit rule passed to Reserve by the caller.
-// The caller is responsible for building Rule.Key as a stable, unique
-// string that identifies the (scope, rate-limit-name, meter) tuple.
+// The caller is responsible for building Rule.Key as a stable, unique string that identifies the rule within its scope; a counter lives as long as its Key does.
 type Rule struct {
 	// Key is the caller-built scope identifier used as the last segment of
 	// Redis keys. Example: "Route:test-route:rl-basic".

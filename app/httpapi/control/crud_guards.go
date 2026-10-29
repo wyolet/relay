@@ -74,12 +74,19 @@ func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 	}
 }
 
-func guardGroupMembers(d Deps) mutationGuard[group.Group] {
-	return func(ctx context.Context, action string, _, incoming *group.Group) error {
+func guardGroup(d Deps) mutationGuard[group.Group] {
+	return func(ctx context.Context, action string, existing, incoming *group.Group) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refErr(refs(d).Group(ctx, incoming))
+		c := refs(d)
+		if err := c.Group(ctx, incoming); err != nil {
+			return refErr(err)
+		}
+		if action == "update" && existing != nil {
+			return refErr(c.GroupRename(ctx, existing.Meta.Name, incoming.Meta.Name))
+		}
+		return nil
 	}
 }
 

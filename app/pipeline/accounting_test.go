@@ -68,7 +68,7 @@ func waitBudgetCommit(t *testing.T, mem *kv.Mem) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		ents, _ := mem.Range(context.Background(), "limit:{budget-policy}:committed:")
+		ents, _ := mem.Range(context.Background(), "limit:{policy:bpol}:committed:")
 		if len(ents) >= 1 {
 			return
 		}
