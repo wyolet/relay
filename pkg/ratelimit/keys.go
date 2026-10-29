@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// keyBufSize fits the usual key on the stack, so building it allocates only the returned string.
-const keyBufSize = 160
+// keyBufSize fits the longest usual key on the stack (a per-model policy rule with UUID ids, ~280 bytes), so building it allocates only the returned string.
+const keyBufSize = 320
 
 // bucketKey returns the state key for a sliding-window bucket.
 // format: limit:{<scope>}:<rule.Key>:<meter>:<bucketTS>

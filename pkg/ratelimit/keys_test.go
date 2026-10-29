@@ -100,3 +100,20 @@ func TestCommitGuardKey_HashTag(t *testing.T) {
 		t.Errorf("commitGuardKey does not match hash-tag pattern: %q", key)
 	}
 }
+
+// The longest key a policy rule produces in practice (UUID scope, policy, rate limit and model ids) still builds in one allocation.
+func TestWindowKeys_LongRuleKeyAllocatesOnce(t *testing.T) {
+	const id = "0192f3a1-7c2e-7b1d-9a4e-5f6a7b8c9d0e"
+	r := Rule{
+		Key:   "policy:" + id + ":rl:" + id + ":m:" + id + ":session-window:2592000:tokens.server_tool_use_output",
+		Meter: "tokens.server_tool_use_output",
+	}
+	scope := "policy:" + id
+	ts := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	if n := testing.AllocsPerRun(100, func() { _ = bucketKey(scope, r, ts) }); n != 1 {
+		t.Errorf("bucketKey allocs = %v, want 1", n)
+	}
+	if n := testing.AllocsPerRun(100, func() { _ = fixedWindowKey(scope, r, ts.UnixMilli()) }); n != 1 {
+		t.Errorf("fixedWindowKey allocs = %v, want 1", n)
+	}
+}

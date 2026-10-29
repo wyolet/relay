@@ -117,6 +117,8 @@ func (r *RateLimit) IsEnabled() bool { return r.Spec.Enabled == nil || *r.Spec.E
 //   - Owner.Kind is required (any of system/provider/user).
 //   - Owner.Kind=provider requires Owner.ID (the Provider id).
 //
+// No two rules may share meter, strategy and window: that triple is a rule's counter identity (see ResolveWithScope).
+//
 // An enabled rate limit needs at least one rule. A disabled one may have none: the built-in rows an operator fills in before enabling ship that way.
 //
 // Cross-entity checks (provider-owned RLs reference an existing Provider;
@@ -127,6 +129,9 @@ func (r *RateLimit) Validate() error {
 	}
 	if len(r.Spec.Rules) == 0 && r.IsEnabled() {
 		return fmt.Errorf("ratelimit %q: Rules: an enabled rate limit needs at least one rule", r.Meta.Name)
+	}
+	if err := r.checkDuplicateRules(); err != nil {
+		return err
 	}
 	switch r.Meta.Owner.Kind {
 	case meta.OwnerSystem, meta.OwnerUser:
@@ -141,6 +146,21 @@ func (r *RateLimit) Validate() error {
 	case meta.OwnerProject:
 	default:
 		return fmt.Errorf("ratelimit %q: owner.kind required (system|provider|host|user|project)", r.Meta.Name)
+	}
+	return nil
+}
+
+// checkDuplicateRules rejects two rules that would count in one counter.
+func (r *RateLimit) checkDuplicateRules() error {
+	rules := r.Spec.Rules
+	for i := range rules {
+		for j := i + 1; j < len(rules); j++ {
+			a, b := rules[i], rules[j]
+			if a.Meter == b.Meter && a.Strategy == b.Strategy && windowSeconds(a.Window) == windowSeconds(b.Window) {
+				return fmt.Errorf("ratelimit %q: rules[%d] and rules[%d] both meter %s with %s over %ds; rules must differ in meter, strategy or window",
+					r.Meta.Name, i, j, a.Meter, a.Strategy, windowSeconds(a.Window))
+			}
+		}
 	}
 	return nil
 }

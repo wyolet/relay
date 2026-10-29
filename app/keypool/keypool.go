@@ -1,8 +1,4 @@
-// Package keypool implements per-key circuit-breaker state and configurable
-// Pool selection over healthy keys. State is persisted in pkg/state under
-// "secret_health:<keyHash>" (circuit records), "pool_rr:<poolName>"
-// (round-robin counters), and "pool_lru:<poolName>:<keyHash>"
-// (LRU timestamps).
+// Package keypool implements per-key circuit-breaker state and configurable Pool selection over healthy keys. State is persisted in pkg/kv under "secret_health:{secret:<keyHash>}" (circuit records), "pool_rr:{pool:<scope>}" (round-robin counters), and "{pool_lru:<scope>}:<keyHash>" (LRU timestamps); the scope is the caller's policy id.
 //
 // Supported selection strategies (KeySelection):
 //   - "prioritized" (default) — always pick the first healthy key in declaration order.

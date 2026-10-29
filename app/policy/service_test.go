@@ -92,7 +92,7 @@ func TestAcquire_TierRateLimit(t *testing.T) {
 		if !strings.HasPrefix(key, wantScope) {
 			t.Errorf("key %q is not under the key's own hash tag %q", key, wantScope)
 		}
-		if !strings.Contains(key, "policy:upstream-tier:rl:tier-rl") {
+		if !strings.Contains(key, "policy:"+f.tier.Meta.ID+":rl:tier-rl") {
 			t.Errorf("key %q does not name the tier and its rate limit", key)
 		}
 	}
