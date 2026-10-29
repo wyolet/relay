@@ -21,14 +21,15 @@ func TestRuleKeyFormat_CarriesRateLimitAndModel(t *testing.T) {
 		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow,
 	}}
 	pol := fix("prod-policy")
+	pol.Meta.ID = "pol-1"
 
 	flat := pol.ResolveRules(rl, "")
-	if len(flat) != 1 || flat[0].Key != "policy:prod-policy:rl:rl-a:0:requests" {
-		t.Fatalf("flat key = %v, want policy:prod-policy:rl:rl-a:0:requests", keysOf(flat))
+	if len(flat) != 1 || flat[0].Key != "policy:pol-1:rl:rl-a:fixed-window:60:requests" {
+		t.Fatalf("flat key = %v, want policy:pol-1:rl:rl-a:fixed-window:60:requests", keysOf(flat))
 	}
 	perModel := pol.ResolveRules(rl, "model-1")
-	if len(perModel) != 1 || perModel[0].Key != "policy:prod-policy:rl:rl-a:m:model-1:0:requests" {
-		t.Fatalf("per-model key = %v, want policy:prod-policy:rl:rl-a:m:model-1:0:requests", keysOf(perModel))
+	if len(perModel) != 1 || perModel[0].Key != "policy:pol-1:rl:rl-a:m:model-1:fixed-window:60:requests" {
+		t.Fatalf("per-model key = %v, want policy:pol-1:rl:rl-a:m:model-1:fixed-window:60:requests", keysOf(perModel))
 	}
 }
 

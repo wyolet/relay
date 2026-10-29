@@ -96,6 +96,7 @@ func TestSelectRateLimitID_FirstMatchWins(t *testing.T) {
 // that no two of the five combinations ever share one.
 func TestResolveRules_KeysDistinctPerRateLimitAndModel(t *testing.T) {
 	pol := fix("prod")
+	pol.Meta.ID = "pol-1"
 	rlA := testRateLimit("rl-a", requestsRule())
 	rlB := testRateLimit("rl-b", requestsRule())
 
@@ -106,10 +107,10 @@ func TestResolveRules_KeysDistinctPerRateLimitAndModel(t *testing.T) {
 		modelID string
 		want    string
 	}{
-		{"flat, rl-b", rlB, "", "policy:prod:rl:rl-b:0:requests"},
-		{"rl-a on model one", rlA, "m-1", "policy:prod:rl:rl-a:m:m-1:0:requests"},
-		{"rl-a on model two", rlA, "m-2", "policy:prod:rl:rl-a:m:m-2:0:requests"},
-		{"rl-b on model one", rlB, "m-1", "policy:prod:rl:rl-b:m:m-1:0:requests"},
+		{"flat, rl-b", rlB, "", "policy:pol-1:rl:rl-b:fixed-window:60:requests"},
+		{"rl-a on model one", rlA, "m-1", "policy:pol-1:rl:rl-a:m:m-1:fixed-window:60:requests"},
+		{"rl-a on model two", rlA, "m-2", "policy:pol-1:rl:rl-a:m:m-2:fixed-window:60:requests"},
+		{"rl-b on model one", rlB, "m-1", "policy:pol-1:rl:rl-b:m:m-1:fixed-window:60:requests"},
 	} {
 		rules := pol.ResolveRules(tc.rl, tc.modelID)
 		if len(rules) != 1 {
@@ -124,9 +125,10 @@ func TestResolveRules_KeysDistinctPerRateLimitAndModel(t *testing.T) {
 		seen[rules[0].Key] = tc.label
 	}
 
-	// Every rule of one RateLimit gets its own index, so two rules of the
-	// same meter family stay separate counters.
-	multi := pol.ResolveRules(testRateLimit("rl-c", requestsRule(), requestsRule()), "")
+	// Two rules of one meter over different windows stay separate counters.
+	hourly := requestsRule()
+	hourly.Window = appratelimit.Window(time.Hour)
+	multi := pol.ResolveRules(testRateLimit("rl-c", requestsRule(), hourly), "")
 	if len(multi) != 2 || multi[0].Key == multi[1].Key {
 		t.Fatalf("keys = %v, want two distinct buckets", keysOf(multi))
 	}

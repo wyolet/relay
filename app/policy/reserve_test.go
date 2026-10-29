@@ -142,7 +142,7 @@ func TestReserveInbound_RevokedJTI(t *testing.T) {
 }
 
 // A project-scoped caller anchors its counters on its team; everyone else
-// keeps the policy slug.
+// on the policy id.
 func TestReserveInbound_ScopeTag(t *testing.T) {
 	rule := appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow}
 
@@ -152,7 +152,7 @@ func TestReserveInbound_ScopeTag(t *testing.T) {
 		want   string
 	}{
 		{name: "project request anchors on the team", teamID: "team-1", want: "limit:{team:team-1}:"},
-		{name: "personal request keeps the policy slug", want: "limit:{prod-policy}:"},
+		{name: "personal request anchors on the policy id", want: "limit:{policy:pol-1}:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, store, pol := reserveFixture(t, rule)
@@ -218,7 +218,7 @@ func TestRevokedKeyFormat(t *testing.T) {
 	if got := RevokedKey("019200aa", "019200bb"); got != "limit:{team:019200aa}:jti:019200bb" {
 		t.Errorf("RevokedKey = %q", got)
 	}
-	if got := reserveScope("", "prod-policy"); got != "prod-policy" {
-		t.Errorf("reserveScope without a team = %q, want the policy slug", got)
+	if got := reserveScope("", "pol-1"); got != "policy:pol-1" {
+		t.Errorf("reserveScope without a team = %q, want the policy id", got)
 	}
 }

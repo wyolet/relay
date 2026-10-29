@@ -57,3 +57,7 @@ func BenchmarkSettleRedis(b *testing.B) {
 		})
 	}
 }
+
+func TestRenameKeysRedis(t *testing.T) {
+	runRenameSuite(t, func(t *testing.T) kvtest.ScriptStore { return kvtest.NewRedis(t) })
+}

@@ -90,7 +90,7 @@ type InboundInput struct {
 	ModelID string
 
 	// TeamID anchors the reservation's hash tag when the caller has a
-	// project; empty keeps the policy-slug tag.
+	// project; empty keeps the policy-id tag.
 	TeamID string
 
 	// TokenJTI, when set, adds the revocation check to this Reserve — the
@@ -149,11 +149,11 @@ func (s *Service) inboundRules(ctx context.Context, in InboundInput) (rules []pk
 }
 
 func inboundScope(in InboundInput) string {
-	policySlug := ""
+	policyID := ""
 	if in.Policy != nil {
-		policySlug = in.Policy.Meta.Name
+		policyID = in.Policy.Meta.ID
 	}
-	return reserveScope(in.TeamID, policySlug)
+	return reserveScope(in.TeamID, policyID)
 }
 
 // CommitInbound returns the inbound reservation to the bucket with the
@@ -216,12 +216,12 @@ func modelIDOf(in AcquireInput) string {
 	return in.Model.Meta.ID
 }
 
-// pickScope is the key-selection scope and strategy pol sets.
+// pickScope is the key-selection scope and strategy pol sets. The scope is the policy id, so a rename keeps the round-robin and LRU state.
 func pickScope(pol *Policy) (string, keypool.KeySelection) {
 	if pol == nil {
 		return "", keypool.KeySelectionPrioritized
 	}
-	return pol.Meta.Name, pol.EffectiveKeySelection()
+	return pol.Meta.ID, pol.EffectiveKeySelection()
 }
 
 // reserveTier reserves the picked key's upstream bucket when its tier policy has rules for this request. On KeyQuotaExhausted it remembers the key as full for the model until the limiter's retry-after and returns ErrSaturated with the key set.

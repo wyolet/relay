@@ -1,6 +1,4 @@
-// The scope is the hash tag every counter of one request shares: the team when
-// the caller has a project, else the policy slug, since a personal key has no
-// team to anchor on.
+// The scope is the hash tag every counter of one request shares: the team when the caller has a project, else the policy, since a personal key has no team to anchor on. Both are ids, so a rename keeps every counter.
 
 package policy
 
@@ -10,29 +8,32 @@ import "fmt"
 // keeps a project's rate-limit buckets, its revocation denylist and (later)
 // its budget counters in one Redis Cluster slot, which is what lets them all
 // ride the single Reserve script.
-func reserveScope(teamID, policySlug string) string {
-	if teamID != "" {
+func reserveScope(teamID, policyID string) string {
+	switch {
+	case teamID != "":
 		return "team:" + teamID
+	case policyID != "":
+		return "policy:" + policyID
 	}
-	return policySlug
+	return ""
 }
 
 // ruleSubject renders the bucket family a policy's rate rules count in. The
-// limiter turns it into "limit:{<scope>}:policy:<subject>:<rule index>:<meter>",
+// limiter turns it into "limit:{<scope>}:policy:<subject>:<rule>:<meter>",
 // so the full key is:
 //
-//	limit:{<scope>}:policy:<policy slug>:rl:<rateLimit id>[:m:<model id>]:<i>:<meter>
+//	limit:{<scope>}:policy:<policy id>:rl:<rateLimit id>[:m:<model id>]:<strategy>:<window seconds>:<meter>
 //
 // The RateLimit id is in the key because one policy can carry several through
 // RLBindings, and the model id because two bindings meter different models —
 // without both, every per-model binding shared one bucket. modelID is empty
 // for the flat Spec.RateLimitID, whose single bucket spans every model.
 // One concatenation, not two: this runs per rule per request.
-func ruleSubject(policySlug, rateLimitID, modelID string) string {
+func ruleSubject(policyID, rateLimitID, modelID string) string {
 	if modelID == "" {
-		return policySlug + ":rl:" + rateLimitID
+		return policyID + ":rl:" + rateLimitID
 	}
-	return policySlug + ":rl:" + rateLimitID + ":m:" + modelID
+	return policyID + ":rl:" + rateLimitID + ":m:" + modelID
 }
 
 // revokedRuleKey returns the rule key for a token's revocation check; the
