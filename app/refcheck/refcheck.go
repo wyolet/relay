@@ -16,14 +16,18 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
@@ -64,6 +68,10 @@ type Lookup struct {
 	Policy         func(ctx context.Context, id string) *policy.Policy
 	RateLimit      func(ctx context.Context, id string) *ratelimit.RateLimit
 	HostKey        func(ctx context.Context, id string) *hostkey.HostKey
+	Host           func(ctx context.Context, id string) *host.Host
+	Account        func(ctx context.Context, id string) *account.Account
+	Pool           func(ctx context.Context, id string) *pool.Pool
+	Budget         func(ctx context.Context, id string) *budget.Budget
 	Project        func(ctx context.Context, id string) *project.Project
 	Team           func(ctx context.Context, id string) *team.Team
 	Role           func(ctx context.Context, id string) *role.Role
@@ -281,7 +289,8 @@ func (c Checker) roleRef(ctx context.Context, roleID string) (*role.Role, error)
 	return r, nil
 }
 
-// subjectsExist refuses an id-bearing subject naming no row. Group subjects
+// subjectsExist refuses an id-bearing subject naming no row; the policy-binding
+// kinds are also refused when the caller may not see the row. Group subjects
 // carry a name an IdP may supply and are never checked.
 func (c Checker) subjectsExist(ctx context.Context, subjects []rolebinding.Subject) error {
 	for i := range subjects {
@@ -304,6 +313,40 @@ func (c Checker) subjectsExist(ctx context.Context, subjects []rolebinding.Subje
 			}
 			if c.Rows.ServiceAccount(ctx, sub.ID) == nil {
 				return badRequest("service account %q does not exist", sub.ID)
+			}
+		case policybinding.SubjectHost:
+			if err := c.hostRef(ctx, sub.ID); err != nil {
+				return err
+			}
+		case policybinding.SubjectTeam:
+			if err := c.teamRef(ctx, sub.ID); err != nil {
+				return err
+			}
+		case policybinding.SubjectProject:
+			if err := c.projectRef(ctx, sub.ID); err != nil {
+				return err
+			}
+		case policybinding.SubjectAccount:
+			if c.Rows.Account == nil {
+				continue
+			}
+			a := c.Rows.Account(ctx, sub.ID)
+			if a == nil {
+				return badRequest("account %q does not exist", sub.ID)
+			}
+			if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
+				return notVisible("account", sub.ID)
+			}
+		case policybinding.SubjectCredential:
+			if c.Rows.HostKey == nil {
+				continue
+			}
+			k := c.Rows.HostKey(ctx, sub.ID)
+			if k == nil {
+				return badRequest("host-key %q does not exist", sub.ID)
+			}
+			if !Visible(ctx, c.Authz, "host-key", k.Meta.ID, k.Meta.Owner) {
+				return notVisible("host-key", sub.ID)
 			}
 		}
 	}
@@ -383,7 +426,7 @@ func (c Checker) Group(ctx context.Context, g *group.Group) error {
 	return nil
 }
 
-// Policy checks the host keys and rate limits a policy draws on.
+// Policy checks the host keys, pools, credentials, rate limits and budgets a policy draws on.
 func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 	if err := c.HostKeyRefs(ctx, p.Spec.HostKeyIDs, p.Meta.Owner); err != nil {
 		return err
@@ -396,11 +439,36 @@ func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 			return err
 		}
 	}
-	return nil
+	if err := c.poolRefs(ctx, p.Spec.PoolIDs, p.Meta.Owner); err != nil {
+		return err
+	}
+	if err := c.credentialRefs(ctx, p.Spec.CredentialIDs, p.Meta.Owner, ""); err != nil {
+		return err
+	}
+	for _, l := range p.Spec.RateLimits {
+		if err := c.RateLimitRef(ctx, l.RateLimitID, p.Meta.Owner); err != nil {
+			return err
+		}
+	}
+	return c.budgetRefs(ctx, p.Spec.BudgetIDs, p.Meta.Owner)
+}
+
+// Account checks the host an account is held at.
+func (c Checker) Account(ctx context.Context, a *account.Account) error {
+	return c.hostRef(ctx, a.Spec.HostID)
+}
+
+// Pool checks the pool's host and requires every key in it to authenticate to that host.
+func (c Checker) Pool(ctx context.Context, p *pool.Pool) error {
+	if err := c.hostRef(ctx, p.Spec.HostID); err != nil {
+		return err
+	}
+	return c.credentialRefs(ctx, p.Spec.CredentialIDs, p.Meta.Owner, p.Spec.HostID)
 }
 
 // HostKey requires the key's tier policy to be host-owned by the key's own
-// host; a mismatched key drops out of the snapshot and answers no_keys.
+// host; a mismatched key drops out of the snapshot and answers no_keys. An
+// account, when named, must be held at the key's host.
 func (c Checker) HostKey(ctx context.Context, k *hostkey.HostKey) error {
 	// An env reference reads the relay's own environment; through the key's
 	// health probe it would answer for any variable the caller names.
@@ -408,6 +476,9 @@ func (c Checker) HostKey(ctx context.Context, k *hostkey.HostKey) error {
 		if err := RequireAdmin(ctx, c.Authz, "an env-sourced host key"); err != nil {
 			return err
 		}
+	}
+	if err := c.accountRef(ctx, k); err != nil {
+		return err
 	}
 	if c.Rows.Policy == nil {
 		return nil

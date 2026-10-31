@@ -55,6 +55,7 @@ var validKinds = map[string]struct{}{
 	"serviceaccount": {}, "group": {},
 	"role": {}, "rolebinding": {}, "policybinding": {},
 	"user": {}, "secretkey": {},
+	"account": {}, "pool": {}, "budget": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
