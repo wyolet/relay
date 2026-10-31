@@ -77,6 +77,11 @@ func main() {
 
 	cat.UseTokenVersions(usersStore)
 
+	plans := buildPlanEngine(cfg, st, stores, usersStore)
+	defer plans.engine.Close()
+	cat.ForwardEvents(plans)
+	go plans.expireCells(listenerCtx)
+
 	tokenSigner, tokenVerifier := buildTokenSigning(bootCtx, cfg, st, stores)
 	// PUT /license writes the section; the watcher is what carries the change
 	// to the other pods (and back to this one after a NOTIFY).
@@ -146,7 +151,7 @@ func main() {
 	// All settings-change subscribers are now registered; start background
 	// hydration. Its first Hydrate runs settings.reload → notifies them with
 	// the stored values (the data plane gates on IsReady until it completes).
-	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
+	go hydrateLoop(listenerCtx, cat, stores, bootOpts, plans.load)
 
 	routingOpts := routingOptions(cfg)
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)

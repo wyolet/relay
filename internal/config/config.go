@@ -130,6 +130,9 @@ type Config struct {
 	KeyBreakerThreshold int
 	KeyBreakerWindow    time.Duration
 
+	// PlanCellIdle is how long runtime state no published plan links any more (a rotated credential's breaker copy, a deleted pool's rotation) is kept before it is dropped (RELAY_PLAN_CELL_IDLE_S, default 600). A plan that links it again within the window gets it back.
+	PlanCellIdle time.Duration
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -450,6 +453,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_KEY_BREAKER_WINDOW_S must be >= 0")
 	} else {
 		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_PLAN_CELL_IDLE_S", 600); v < 1 {
+		return nil, fmt.Errorf("RELAY_PLAN_CELL_IDLE_S must be >= 1")
+	} else {
+		cfg.PlanCellIdle = time.Duration(v) * time.Second
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
