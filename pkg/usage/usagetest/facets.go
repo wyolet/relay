@@ -61,6 +61,19 @@ var facetsCases = []facetsCase{
 		},
 	},
 	{
+		name: "pool and account ids group without labels",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.PoolID = []string{"pool-a"}
+			return q
+		}(),
+		dims: []string{"pool_id", "account_id"},
+		want: map[string][]usage.FacetValue{
+			"pool_id":    {fv("", "", 7), fv("pool-a", "", 2), fv("pool-b", "", 1)},
+			"account_id": {fv("acct-a", "", 2)},
+		},
+	},
+	{
 		name: "a slug dimension ignores its own filter",
 		q: func() usage.EventQuery {
 			q := Window()

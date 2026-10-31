@@ -85,6 +85,8 @@ type EventQuery struct {
 	// membership). Empty slice means no filter on that dimension.
 	RelayKeyHash []string
 	PolicyID     []string
+	PoolID       []string
+	AccountID    []string
 	ProjectID    []string
 	TeamID       []string
 	PrincipalID  []string
@@ -172,7 +174,7 @@ type SummaryQuery struct {
 	EventQuery
 
 	// GroupBy is the dimension to group on. Valid values:
-	// "relay_key_hash", "policy_id", "model_id", "host_id",
+	// "relay_key_hash", "policy_id", "pool_id", "account_id", "model_id", "host_id",
 	// "host_key_id", "source", "finish_reason", "error_kind",
 	// "model", "host", "policy", "provider", "project", "team",
 	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
