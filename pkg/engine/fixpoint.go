@@ -123,7 +123,8 @@ func (b *batch) fail(c *Controller, ref Ref, st *outState, edges []Edge, err err
 		e.hooks.add(func() { h(c.name, ref, err) })
 	}
 	delay := e.retryBase()
-	if !errors.Is(err, ErrRetry) {
+	st.retryNext = errors.Is(err, ErrRetry)
+	if !st.retryNext {
 		st.failures++
 		for i := 1; i < st.failures && delay < maxBackoff; i++ {
 			delay *= 2

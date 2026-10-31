@@ -73,15 +73,23 @@ func (e *Engine) drainLocked(ctx context.Context) {
 	for _, ev := range evs {
 		b.applyEvent(ctx, ev)
 	}
-	for ref, at := range e.retries {
-		if !at.After(now) {
-			b.dirty(e.sch.byKind[ref.Kind].producer, ref.ID)
-		}
-	}
+	b.dirtyRetries(now)
 	b.settle()
 	b.publish(false)
 	if b.abandoned {
 		e.resyncDue = true
+	}
+}
+
+// dirtyRetries dirties the failed outputs whose retry is due and every
+// ErrRetry output, which waits for its timer or the next drain, whichever
+// comes first.
+func (b *batch) dirtyRetries(now time.Time) {
+	e := b.e
+	for ref, at := range e.retries {
+		if st := e.st.outs[ref]; !at.After(now) || st != nil && st.retryNext {
+			b.dirty(e.sch.byKind[ref.Kind].producer, ref.ID)
+		}
 	}
 }
 

@@ -42,6 +42,7 @@ func (e *Engine) writeNow(k *kindInfo, id string, row any) error {
 	}
 	b := e.newBatch()
 	b.applyRow(k, id, row)
+	b.dirtyRetries(time.Now())
 	b.settle()
 	b.publish(false)
 	e.afterBatch(b)

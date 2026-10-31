@@ -353,7 +353,6 @@ func TestSecondPutInOneReconcileFailsIt(t *testing.T) {
 }
 
 func TestErrRetryIsRetriedOnTheNextDrain(t *testing.T) {
-	t.Skip("contract mismatch: an ErrRetry output is not retried in the next Apply drain, only by a later drain of its own")
 	r := newRig(t, engine.Options{})
 	r.parents.set(&parent{ID: "p1", Ver: 1, Val: 1}, &parent{ID: "p9", Ver: 1})
 	r.items.set(&item{ID: "i1", Ver: 1, Parent: "p1"})
