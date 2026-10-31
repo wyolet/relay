@@ -19,7 +19,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/host"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -136,7 +137,7 @@ type Spec struct {
 	// dispatch code.
 	ParamPaths map[string]string
 
-	// IsNativePath reports whether the resolved routing plan implies that the
+	// IsNativePath reports whether a route hop's binding and host imply that the
 	// upstream host natively speaks this inbound shape — making byte-pass to
 	// this spec's UpstreamPath the correct strategy, regardless of whether
 	// the host's HostBinding.Adapter matches the inbound shape Name.
@@ -150,7 +151,7 @@ type Spec struct {
 	//
 	// For shapes where the inbound Name equals the binding Adapter (CC, Anthropic,
 	// Embeddings), this field is nil — the standard Name-equality check handles it.
-	IsNativePath func(plan *routing.Plan) bool
+	IsNativePath func(b *binding.Binding, h *host.Host) bool
 
 	// Overloaded is how this shape's callers expect to be told the server is overloaded, sent when relay refuses a request for its own lack of capacity (the in-flight cap, an unreachable state store). Nil means 503 in relay's error envelope.
 	Overloaded *ErrorResponse

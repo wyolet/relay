@@ -62,6 +62,9 @@ const (
 	KindKeyPlan          engine.Kind = "keyplan"
 	KindKeyPlanShard     engine.Kind = "keyplanshard"
 	KindKeyPlanIndex     engine.Kind = "keyplanindex"
+	KindUserPlan         engine.Kind = "userplan"
+	KindUserIndex        engine.Kind = "userindex"
+	KindProjectIndex     engine.Kind = "projectindex"
 )
 
 // Sources are the stores each input kind loads from. A nil field loads nothing.
@@ -121,6 +124,9 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[KeyPlan](e, KindKeyPlan, 256)
 	derived[KeyPlanShard](e, KindKeyPlanShard, 16)
 	derived[KeyPlanIndex](e, KindKeyPlanIndex, 1)
+	derived[UserPlan](e, KindUserPlan, 64)
+	derived[UserIndex](e, KindUserIndex, 1)
+	derived[ProjectIndex](e, KindProjectIndex, 1)
 
 	c := &controllers{cells: cells}
 	for _, ctl := range c.all() {

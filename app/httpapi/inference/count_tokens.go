@@ -1,7 +1,6 @@
 package inference
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"math"
@@ -13,8 +12,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -43,16 +41,16 @@ func mountTokenCountRoutes(r chi.Router, d Deps) {
 		r.With(
 			ReadinessMiddleware(d.Catalog),
 			ClassifyMiddleware(),
-			PrincipalMiddleware(d.Catalog, d.Tokens),
+			PrincipalMiddleware(d.Auth()),
 		).Post("/"+p.Name()+route.TokenCountPath(), func(w http.ResponseWriter, r *http.Request) {
 			handleCountTokens(d, w, withRouteProfile(r, profile))
 		})
 	}
 }
 
-// handleCountTokens answers how many input tokens the posted request would consume. It resolves the same Plan a generation of that body would take, then answers from the best source that plan affords: the upstream's own counter, the ratio relay measured on comparable traffic, or bytes alone.
+// handleCountTokens answers how many input tokens the posted request would consume. It resolves the same route a generation of that body would take, then answers from the best source that route affords: the upstream's own counter, the ratio relay measured on comparable traffic, or bytes alone.
 //
-// An upstream count spends an operator credential, so it runs the generation path's admission and pipeline: in-flight cap, policy reservation (one request, no tokens), token revocation, key tier and failover, and a usage event under its own source. A local answer spends nothing upstream and only checks token revocation.
+// An upstream count spends an operator credential, so it runs the generation path's admission and pipeline: in-flight cap, the caller's and the credential's counters (one request, no tokens), breakers and failover, and a usage event under its own source. A local answer spends nothing upstream and holds nothing; token revocation was checked at authentication.
 func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -92,29 +90,20 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	if uh := r.Header.Get(httpheader.HeaderUpstreamHost); uh != "" && !strings.Contains(modelRef, "@") {
 		modelRef = modelRef + "@" + uh
 	}
-	plan, err := d.Resolver.Resolve(routing.Request{
-		ModelName:    modelRef,
-		RawModelName: modelName,
-		Policy:       principal.Policy,
-		UserID:       principal.UserID,
-		Snapshot:     SnapshotFrom(ctx),
-	})
-	if err != nil {
-		mapRoutingErr(w, err, modelRef, principal.PolicyID())
+	route := principal.Caller.Routes.Get(modelRef)
+	if route.Refused != nil {
+		mapRouteRefusal(w, route.Refused, modelRef)
 		return
 	}
 
-	if counter, ok := exactCounter(d, profile, plan); ok {
-		if count, ok := countUpstream(d, w, r, plan, counter, req, modelName); ok {
+	if counter, hops, ok := exactCounter(d, profile, route); ok {
+		if count, ok := countUpstream(d, w, r, route, hops, counter, req, modelName); ok {
 			writeTokenCount(w, count, tierExact)
 		}
 		return
 	}
 
-	if !refuseRevokedToken(ctx, d, w) {
-		return
-	}
-	if ratio, ok := d.TokenCalibrator.Ratio(ctx, sessionKeyFor(profile, r.Header), plan.Model.Meta.ID); ok {
+	if ratio, ok := d.TokenCalibrator.Ratio(ctx, sessionKeyFor(profile, r.Header), route.Model.Meta.ID); ok {
 		writeTokenCount(w, int(math.Round(float64(len(body))*ratio)), tierCalibrated)
 		return
 	}
@@ -122,47 +111,45 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	writeTokenCount(w, len(body)/bytesPerEstimatedToken, tierEstimated)
 }
 
-// exactCounter returns the upstream's own token counter when this route can use it. It requires the profile's inbound shape to be the upstream's shape too: the counting endpoint is handed the caller's body verbatim, so a body in another vendor's shape would be rejected rather than counted.
-func exactCounter(d Deps, profile clientprofile.Profile, plan *routing.Plan) (adapter.TokenCounter, bool) {
-	if d.Pipeline == nil || d.Pipeline.Policy == nil {
-		return nil, false
+// exactCounter returns the upstream's own token counter when this route can use it, with the hops that speak the first hop's shape. It requires the profile's inbound shape to be the upstream's shape too: the counting endpoint is handed the caller's body verbatim, so a body in another vendor's shape would be rejected rather than counted.
+func exactCounter(d Deps, profile clientprofile.Profile, route *plan.Route) (adapter.TokenCounter, []plan.RouteHop, bool) {
+	if d.Pipeline == nil || d.Pipeline.Limiter == nil {
+		return nil, nil, false
 	}
-	if !clientprofile.Speaks(profile, string(plan.HostBinding.Spec.Adapter)) {
-		return nil, false
+	shape := route.Hops[0].Binding.Spec.Adapter
+	if !clientprofile.Speaks(profile, string(shape)) {
+		return nil, nil, false
 	}
-	counter, ok := d.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter).(adapter.TokenCounter)
-	return counter, ok
+	counter, ok := d.Specs.PipelineAdapter(shape).(adapter.TokenCounter)
+	if !ok {
+		return nil, nil, false
+	}
+	return counter, keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == shape }), true
 }
 
 // countUpstream asks the upstream to count through the admission step and pipeline a generation takes. The model field is rewritten to the binding's upstream name, exactly as the byte-pass generation path does. Reports false after writing the error.
-func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing.Plan, counter adapter.TokenCounter, req *ParsedRequest, requested string) (int, bool) {
+func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, route *plan.Route, hops []plan.RouteHop, counter adapter.TokenCounter, req *ParsedRequest, requested string) (int, bool) {
 	ctx := r.Context()
-	lc := mintLifecycle(ctx, d.Catalog, sourceCount, ClassificationFrom(ctx).ClientIP)
+	lc := mintLifecycle(ctx, sourceCount, ClassificationFrom(ctx).ClientIP)
 	lc.RequestedModel = requested
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	applyProfile(lc, clientprofile.FromContext(ctx), r.Header)
-	applyPlanIdentity(lc, plan)
+	applyRouteIdentity(lc, route, hops, PrincipalFrom(ctx))
 	ctx = lifecycle.ContextWith(ctx, lc)
 	inbound := d.Specs.Spec(adapters.Name(clientprofile.FromContext(ctx).Shape()))
 	if !d.runPreFlight(ctx, w, lc, inbound) {
 		return 0, false
 	}
 
-	teamID, tokenJTI := reserveIdentity(ctx)
 	result, err := d.Pipeline.Run(ctx, &pipeline.Request{
-		Body:          req.upstreamBody(plan.UpstreamModel(), nil),
+		Body:          req.upstreamBody(route.UpstreamModel, nil),
 		Headers:       forwardHeaders(r.Header),
-		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       counter.CountAdapter(),
-		Policy:        plan.Policy,
-		Model:         plan.Model,
-		Host:          plan.Host,
-		Provider:      plan.Provider,
-		Keys:          plan.Keys,
-		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.UpstreamModel(),
-		TeamID:        teamID,
-		TokenJTI:      tokenJTI,
+		Model:         route.Model,
+		Provider:      route.Provider,
+		Hops:          hops,
+		ModelName:     route.Model.Meta.Name,
+		UpstreamModel: route.UpstreamModel,
 		Lifecycle:     lc,
 	})
 	if err != nil {
@@ -179,19 +166,6 @@ func countUpstream(d Deps, w http.ResponseWriter, r *http.Request, plan *routing
 	}
 	writeAPIError(w, http.StatusBadGateway, "upstream_error", "count_tokens_failed", err.Error())
 	return 0, false
-}
-
-// refuseRevokedToken checks a token's jti against the denylist for a count answered locally, which never reaches the pipeline's reservation. With no policy it meters nothing, so it is one kv read and no commit; a key has no jti and costs nothing. Reports false after writing the response.
-func refuseRevokedToken(ctx context.Context, d Deps, w http.ResponseWriter) bool {
-	teamID, jti := reserveIdentity(ctx)
-	if jti == "" || d.Pipeline == nil || d.Pipeline.Policy == nil {
-		return true
-	}
-	if _, err := d.Pipeline.Policy.ReserveInbound(ctx, policy.InboundInput{TeamID: teamID, TokenJTI: jti}); err != nil {
-		mapRunErr(w, d.Specs.Spec(adapters.Name(clientprofile.FromContext(ctx).Shape())), err)
-		return false
-	}
-	return true
 }
 
 // sessionKeyFor asks the profile which conversation this request belongs to. Empty for a profile that marks no sessions — the calibrator then falls back to the model's ratio.

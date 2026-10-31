@@ -17,13 +17,15 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hosthealth"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
+	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
@@ -79,7 +81,7 @@ func main() {
 
 	plans := buildPlanEngine(cfg, st, stores, usersStore)
 	defer plans.engine.Close()
-	cat.ForwardEvents(plans)
+	cat.ForwardEvents(plan.Forwarder{Engine: plans.engine})
 	go plans.expireCells(listenerCtx)
 
 	tokenSigner, tokenVerifier := buildTokenSigning(bootCtx, cfg, st, stores)
@@ -111,10 +113,10 @@ func main() {
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)
 	limiter.ReleaseUnansweredOn(postFlight.limiter)
-	pl, lifecycleReg := buildPipeline(cfg, cat, stores, limiter, selector, postFlight)
-	// Deferred after the post-flight store's Close, so it runs first: queued settles land before the store closes.
-	defer pl.Policy.CloseSettleQueue()
-	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
+	counting := buildLimiter(limiter, postFlight)
+	pl, lifecycleReg := buildPipeline(counting, selector, postFlight, cat, stores.HostKey, plans)
+	proxyPipeline := buildProxy(cfg, counting, lifecycleReg)
+	revoked := buildRevocations(listenerCtx, kvStore)
 
 	specs := buildAdapterSpecs()
 	profiles := buildClientProfiles()
@@ -153,10 +155,10 @@ func main() {
 	// the stored values (the data plane gates on IsReady until it completes).
 	go hydrateLoop(listenerCtx, cat, stores, bootOpts, plans.load)
 
-	routingOpts := routingOptions(cfg)
-	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
+	auth := &inference.Auth{Catalog: cat, Plans: plans.plans, Revoked: revoked.Set(), Tokens: tokenVerifier}
+	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, auth, pl, specRegistry, cfg.BatchMaxItems)
 
-	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
+	inferSrv, inferErr := startInference(cfg, st, auth, pl, proxyPipeline, lifecycleReg,
 		specRegistry, profiles, tokenCalibrator, admission, kvPoolBusy(kvStore), batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
@@ -166,7 +168,7 @@ func main() {
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
 			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
-			selector, hostHealth)
+			selector, hostHealth, revoked)
 	}
 
 	pprofSrv, pprofErr := startPprof(cfg)
@@ -219,8 +221,8 @@ func buildAdapterSpecs() []*adapter.Spec {
 			ExtractTokens: pkgopenai.ExtractTokens,
 			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p"},
 			UseHTTP1:      true,
-			IsNativePath: func(plan *routing.Plan) bool {
-				return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+			IsNativePath: func(b *binding.Binding, h *host.Host) bool {
+				return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 			},
 		}).Build(),
 		(&adapter.Spec{
@@ -317,25 +319,4 @@ func runtimeConfig(cfg *config.Config) control.RuntimeConfig {
 		}
 	}
 	return rc
-}
-
-// KeyAgent to recover from upstream key rotation without a restart.
-type keyRefresher struct {
-	store *hostkey.Store
-	cat   *appcatalog.Catalog
-}
-
-func (r keyRefresher) Refresh(ctx context.Context, keyID string) (string, bool, error) {
-	k, err := r.store.Get(ctx, keyID)
-	if err != nil || k == nil {
-		return "", false, err
-	}
-	cur, ok := r.cat.Current().HostKey(keyID)
-	changed := !ok || cur.Resolved != k.Resolved
-	if changed {
-		if err := r.cat.ApplyHostKeyUpsert(k); err != nil {
-			return k.Resolved, true, err
-		}
-	}
-	return k.Resolved, changed, nil
 }

@@ -116,6 +116,8 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		RequestedModel: lc.RequestedModel,
 		HostID:         lc.HostID,
 		HostKeyID:      lc.HostKeyID,
+		PoolID:         lc.PoolID,
+		AccountID:      lc.AccountID,
 		ProjectID:      lc.ProjectID,
 		Project:        lc.ProjectName,
 		TeamID:         lc.TeamID,

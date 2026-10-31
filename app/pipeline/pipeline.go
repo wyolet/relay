@@ -1,9 +1,8 @@
-// Package pipeline orchestrates one inference request: reserve inbound
-// budget, acquire an upstream key (and its upstream reservation) via
-// policy.Service, call the adapter, stream back, commit in post-flight.
+// Package pipeline orchestrates one inference request over a route the plans already resolved: hold the caller's counters, walk the route's hops in order, pick a credential inside a hop with the key pool's selection and breakers, hold that credential's upstream counters, call the adapter, stream back, and settle in post-flight.
 //
-// The pipeline is ignorant of catalog/snapshot, wire shapes, and policy
-// internals. All policy-shaped work routes through policy.Service.
+// The pipeline is ignorant of the catalog, wire shapes and the policy ladder: which counters apply and which credentials may serve come from the route (app/plan), counting from a limits.Limiter.
+//
+// Expected store calls per request: one limiter script for the caller's counters and one per credential tried for its upstream counters (none for a side with no counters), plus the key pool's breaker reads per pick. Post-flight: one settle per held reservation and, only when the picked record changes on success, the breaker's success write.
 package pipeline
 
 import (
@@ -22,10 +21,10 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -60,16 +59,13 @@ type Request struct {
 	Body    []byte
 	Headers http.Header
 
-	HostBaseURL string
-	Adapter     Adapter
+	Adapter Adapter
 
-	Policy   *policy.Policy
 	Model    *model.Model
-	Host     *host.Host
 	Provider string
 
-	// Keys is the ordered candidate set. Empty → ErrNoKeys.
-	Keys []*hostkey.HostKey
+	// Hops are the route's pools in failover order, each with the credentials that may serve and the counters each one's request must fit. No slot in any hop → ErrNoKeys. Every hop must speak the Adapter's wire shape: the body is built once.
+	Hops []plan.RouteHop
 
 	ModelName string
 
@@ -83,14 +79,8 @@ type Request struct {
 	// to Adapter.Call for shapes that select a distinct stream URL.
 	Stream bool
 
-	// MaxAttempts caps retries (0 → defaultMaxAttempts).
+	// MaxAttempts caps the credentials called upstream (0 → defaultMaxAttempts).
 	MaxAttempts int
-
-	// TeamID and TokenJTI scope the inbound reservation: the team becomes
-	// the kv hash tag, and a jti adds its revocation check to the same
-	// Reserve script. Both empty for a personal key.
-	TeamID   string
-	TokenJTI string
 
 	// Lifecycle is the per-request shared context, constructed by the
 	// handler before Run. Post-flight observers see it via the registered
@@ -108,10 +98,15 @@ type Result struct {
 	KeyHash string
 }
 
-// Pipeline orchestrates requests. All policy-shaped work is delegated
-// to Policy (the Service). Construct once at boot.
+// Pipeline orchestrates requests. Construct once at boot.
 type Pipeline struct {
-	Policy    *policy.Service
+	// Limiter holds and settles the route's counters. Nil refuses every request (ErrLimiterMissing): limits fail closed.
+	Limiter limits.Limiter
+	// Selector picks a credential inside a hop and reads its breaker; nil takes the first candidate.
+	Selector *keypool.Selector
+	// PostSelector writes breaker transitions after an attempt, on a store admission never waits on; nil uses Selector.
+	PostSelector *keypool.Selector
+
 	Lifecycle *lifecycle.Registry
 	Logger    *slog.Logger
 
@@ -148,205 +143,26 @@ var (
 	ErrNoKeys           = errors.New("pipeline: no candidate keys")
 	ErrAllKeysExhausted = errors.New("pipeline: all keys exhausted")
 	ErrAdapterMissing   = errors.New("pipeline: adapter is nil")
-	ErrPolicyMissing    = errors.New("pipeline: policy service is nil")
+	ErrLimiterMissing   = errors.New("pipeline: limiter is nil")
 )
 
-// Run orchestrates one request. Caller MUST Close the returned
-// Result.Body to release the connection and trigger post-flight.
-func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
-	// Reservations are committed by post-flight on success; on any error
-	// return they're settled here, on the post-flight store, so a failed
-	// request never leaks a concurrency slot. The bucket cost is refunded only when no attempt
-	// reached the upstream: once one may have (the caller cancelling
-	// mid-call included), the request charge stands. The failure also fires
-	// a post-flight observer event (success fires it on Body.Close instead).
-	var (
-		inbound    *pkgratelimit.Reservation
-		acq        *policy.Acquisition
-		dispatched bool
-	)
-	defer func() {
-		if err != nil {
-			// Settled before the error returns, so a caller retrying at once never finds its own slot held. The post-flight pool admission never takes keeps this to one round trip.
-			if p.Policy != nil && (inbound != nil || acq != nil) {
-				_ = p.Policy.SettleFailed(ctx, inbound, acq, pkgratelimit.Observations{Cancelled: !dispatched})
-			}
-			go p.fireFailure(req, err)
-		}
-	}()
-
-	if req.Adapter == nil {
-		return nil, ErrAdapterMissing
-	}
-	if len(req.Keys) == 0 {
-		return nil, ErrNoKeys
-	}
-	if p.Policy == nil {
-		return nil, ErrPolicyMissing
-	}
-
-	maxAttempts := req.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = defaultMaxAttempts
-	}
-	if maxAttempts > len(req.Keys) {
-		maxAttempts = len(req.Keys)
-	}
-
-	modelSlug, modelID, hostSlug := "", "", ""
-	if req.Model != nil {
-		modelSlug = req.Model.Meta.Name
-		modelID = req.Model.Meta.ID
-	}
-	if req.Host != nil {
-		hostSlug = req.Host.Meta.Name
-	}
-
-	// The inbound reserve and the first key pick share one kv round trip; a failover re-picks with Acquire.
-	adm, err := p.Policy.Admit(ctx, policy.InboundInput{
-		Policy:       req.Policy,
-		ProviderSlug: req.Provider,
-		ModelSlug:    modelSlug,
-		ModelID:      modelID,
-		HostSlug:     hostSlug,
-		TeamID:       req.TeamID,
-		TokenJTI:     req.TokenJTI,
-	}, policy.AcquireInput{
-		Policy:   req.Policy,
-		Keys:     req.Keys,
-		Model:    req.Model,
-		Host:     req.Host,
-		Provider: req.Provider,
-	})
-	if err != nil {
-		return nil, err // handler maps ExceededError → 429, ErrRevoked → 401
-	}
-	inbound = adm.Inbound
-	firstAttempt := true
-
-	var (
-		excluded     []*hostkey.HostKey
-		resp         *http.Response
-		keyValue     string // current secret for acq.Key; overridden on a heal-retry
-		attempts     int    // distinct keys called upstream (a same-key retry doesn't count)
-		connAttempts int    // consecutive dial failures against the host (any key)
-		// Last upstream response observed during retry, carried into the final error: without it "all keys exhausted" hides both the reason upstream rejected (auth? quota? bad model?) and the backoff/rate-limit headers the caller needs to pace its retry.
-		lastStatus int
-		lastHeader http.Header
-		lastBody   []byte
-	)
-loop:
-	for {
-		if acq == nil {
-			if attempts >= maxAttempts {
-				break loop
-			}
-			if cerr := ctx.Err(); cerr != nil {
-				err = cerr
-				break loop
-			}
-			if firstAttempt {
-				acq, err = adm.Acq, adm.AcqErr
-				firstAttempt = false
-			} else {
-				acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
-					Policy:   req.Policy,
-					Keys:     req.Keys,
-					Excluded: excluded,
-					Model:    req.Model,
-					Host:     req.Host,
-					Provider: req.Provider,
-				})
-			}
-			if errors.Is(err, policy.ErrSaturated) {
-				// A key over its tier never reached the upstream, so it doesn't
-				// spend an attempt; excluding it bounds the loop by the key count.
-				if acq != nil && acq.Key != nil {
-					excluded = append(excluded, acq.Key)
-				} else {
-					attempts++
-				}
-				acq = nil
-				continue
-			}
-			if err != nil {
-				break loop
-			}
-			attempts++
-			keyValue = acq.Key.Resolved
-		}
-		if req.Lifecycle != nil {
-			req.Lifecycle.Attempts = attempts
-			// Stamped before the call: a stream session builds its usage row at
-			// stream end, before post-flight runs, and a failure never reaches it.
-			req.Lifecycle.HostKeyID = acq.KeyHash()
-		}
-
-		// An OAuth-kind credential authenticates differently upstream (Bearer +
-		// vendor beta header vs an API-key header); the adapter picks the auth
-		// variant. Determined per acquired key, so a failover from an oauth key
-		// to an api key (or vice versa) authenticates each correctly.
-		oauth := acq != nil && acq.Key != nil && acq.Key.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
-		req.Lifecycle.MarkUpstreamStart()
-		call := newUpstreamCall(ctx, callTimeout(req.Adapter, req.Stream))
-		resp, err = req.Adapter.Call(call.ctx, req.HostBaseURL, hostPath(req), keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
-		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
-			call.accepted.Store(true)
-			return p.makeResult(req, inbound, acq, resp, call), nil
-		}
-		// A caller leaving mid-call can surface as a broken pipe or a reset instead of the context error; either way the key did nothing wrong.
-		if cerr := ctx.Err(); err != nil && cerr != nil && !errors.Is(err, cerr) {
-			err = fmt.Errorf("%w: %w", cerr, err)
-		}
-
-		retry, kind, retryAfter := classify(req.Adapter, resp, err)
-		if kind != keypool.FailureUpstreamUnreachable {
-			dispatched = true
-		}
-		if resp != nil {
-			lastStatus = resp.StatusCode
-			lastHeader = resp.Header.Clone()
-			lastBody = readBodyCapped(resp, maxUpstreamErrorBody)
-		}
-		call.release()
-
-		// Dial failure: the host is unreachable, not the key bad. Don't trip
-		// the breaker and don't fail over keys (they share the baseURL) —
-		// re-dial the same host with a short backoff, then report unreachable.
-		if kind == keypool.FailureUpstreamUnreachable {
-			connAttempts++
-			if connAttempts < maxConnAttempts {
-				if werr := sleepCtx(ctx, connBackoff(connAttempts)); werr != nil {
-					err = werr
-					break loop
-				}
-				continue // reuse acq + its reservation; re-call the same host
-			}
-			err = &UpstreamUnreachableError{Host: hostSlug, Attempts: connAttempts, Cause: err}
-			break loop
-		}
-
-		moreCandidates := retry && attempts < maxAttempts && untried(req.Keys, excluded, acq.Key) > 0
-		action, fresh := p.handleFailure(ctx, acq, retry, kind, retryAfter, moreCandidates)
-		switch action {
-		case actRetrySame:
-			keyValue = fresh // reuse acq + its reservation; re-call with healed secret
-		case actNextKey:
-			excluded = append(excluded, acq.Key)
-			acq = nil
-		default: // actStop
-			break loop
-		}
-	}
-
-	if err == nil {
-		err = ErrAllKeysExhausted
-	}
-	if errors.Is(err, ErrAllKeysExhausted) && lastStatus != 0 {
-		err = &UpstreamFailureError{Status: lastStatus, Header: lastHeader, Body: lastBody, Cause: err}
-	}
-	return nil, err
+// UpstreamLimitedError means no credential of the route had room: every one tried was refused by an upstream counter (a host, account or credential limit) or sat in its account's cooldown. RetryAfter is the earliest any of them frees up.
+type UpstreamLimitedError struct {
+	RetryAfter time.Duration
+	// Refused is the last upstream counter that refused, nil when only cooldowns stood in the way.
+	Refused *limits.Refused
 }
+
+func (e *UpstreamLimitedError) Error() string {
+	return "pipeline: every credential for this model is over an upstream limit"
+}
+
+// CallerLimitedError is a refusal on one of the caller's own counters: the request ends there, naming the rung and policy that refused.
+type CallerLimitedError struct{ Refused *limits.Refused }
+
+func (e *CallerLimitedError) Error() string { return e.Refused.Error() }
+
+func (e *CallerLimitedError) Unwrap() error { return e.Refused }
 
 // maxUpstreamErrorBody bounds the retained upstream error body. Generous enough that no provider's error JSON is truncated (they run to a few KiB at most with a validation trace), bounded because this buffer outlives the response and a hostile upstream must not be able to pin arbitrary memory per failed request.
 const maxUpstreamErrorBody = 64 << 10
@@ -493,76 +309,7 @@ func (e *UpstreamUnreachableError) Error() string {
 
 func (e *UpstreamUnreachableError) Unwrap() error { return e.Cause }
 
-type attemptAction int
-
-const (
-	actNextKey   attemptAction = iota // fail over to the next candidate key
-	actRetrySame                      // retry the same key with the fresh secret
-	actStop                           // stop the loop; surface the upstream error
-)
-
-// handleFailure decides what to do after a failed Adapter.Call. Non-retryable
-// failures stop without touching the breaker (a 400 isn't the key's fault).
-// For retryable failures it consults the KeyAgent when set; otherwise it falls
-// back to legacy behavior (release the key → fail over). The breaker-tripping
-// Release is issued on every path that abandons the key (Next / agent-Fail),
-// and skipped on a heal-retry (the key is good again). Release runs detached:
-// the next attempt excludes the key itself, so it never waits on the write.
-func (p *Pipeline) handleFailure(
-	ctx context.Context,
-	acq *policy.Acquisition,
-	retry bool,
-	kind keypool.FailureKind,
-	retryAfter time.Duration,
-	moreCandidates bool,
-) (attemptAction, string) {
-	if !retry {
-		return actStop, ""
-	}
-	if p.KeyAgent != nil && acq != nil && acq.Key != nil {
-		switch v, fresh := p.KeyAgent.OnFailure(ctx, acq.Key.Meta.ID, kind, moreCandidates); v {
-		case VerdictRetry:
-			return actRetrySame, fresh // healed → reuse the key, no breaker trip
-		case VerdictFail:
-			go p.Policy.Release(ctx, acq, kind, retryAfter)
-			return actStop, ""
-		}
-		// VerdictNext falls through to the failover release below.
-	}
-	go p.Policy.Release(ctx, acq, kind, retryAfter)
-	return actNextKey, ""
-}
-
-// untried counts keys neither excluded nor currently held — candidates the
-// loop could still fail over to.
-func untried(all, excluded []*hostkey.HostKey, current *hostkey.HostKey) int {
-	skip := make(map[string]struct{}, len(excluded)+1)
-	if current != nil {
-		skip[current.Meta.ID] = struct{}{}
-	}
-	for _, k := range excluded {
-		if k != nil {
-			skip[k.Meta.ID] = struct{}{}
-		}
-	}
-	n := 0
-	for _, k := range all {
-		if k != nil {
-			if _, ok := skip[k.Meta.ID]; !ok {
-				n++
-			}
-		}
-	}
-	return n
-}
-
-func (p *Pipeline) makeResult(
-	req *Request,
-	inbound *pkgratelimit.Reservation,
-	acq *policy.Acquisition,
-	resp *http.Response,
-	call *upstreamCall,
-) *Result {
+func (p *Pipeline) makeResult(req *Request, st *runState, resp *http.Response, call *upstreamCall) *Result {
 	status := resp.StatusCode
 	requestBytes := len(req.Body)
 	req.Body = nil
@@ -624,7 +371,7 @@ func (p *Pipeline) makeResult(
 				req.Lifecycle.MarkEnd()
 				if read.done {
 					body, frames := finish()
-					go p.runPostFlight(req, inbound, acq, body, frames, requestBytes, status, read.eof)
+					go p.runPostFlight(req, st, body, frames, requestBytes, status, read.eof)
 					err = resp.Body.Close()
 					call.release()
 					return
@@ -636,7 +383,7 @@ func (p *Pipeline) makeResult(
 					body, frames := finish()
 					_ = resp.Body.Close()
 					call.release()
-					p.runPostFlight(req, inbound, acq, body, frames, requestBytes, status, complete)
+					p.runPostFlight(req, st, body, frames, requestBytes, status, complete)
 				}()
 			})
 			return err
@@ -647,14 +394,13 @@ func (p *Pipeline) makeResult(
 		Status:  status,
 		Headers: resp.Header,
 		Body:    body,
-		KeyHash: acq.KeyHash(),
+		KeyHash: st.cur.slot.Credential.KeyHash,
 	}
 }
 
 func (p *Pipeline) runPostFlight(
 	req *Request,
-	inbound *pkgratelimit.Reservation,
-	acq *policy.Acquisition,
+	st *runState,
 	body []byte,
 	sessFrames int,
 	requestBytes int,
@@ -697,15 +443,16 @@ func (p *Pipeline) runPostFlight(
 	// client path, so ordering them last is safe.
 	body = nil
 
-	obs := pkgratelimit.Observations{Tokens: map[string]int64(limitTokens)}
-	// The commits and, when the key's record needs it, its success write go out in one batched round trip (different hash tags, so a pipeline, not one script — see policy.Service.Settle).
-	if err := p.Policy.Settle(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: post-flight settle failed", "err", err)
+	st.settle(limits.Usage{Tokens: limitTokens, CostNanos: st.cost(req.Lifecycle, limitTokens)})
+	if st.cur.cand.SuccessNeedsWrite() {
+		if sel := p.postSelector(); sel != nil {
+			sel.RecordSuccess(ctx, st.cur.slot.Credential.KeyHash)
+		}
 	}
 
 	// The host answered — record reachability (off the latency path).
-	if p.HostHealth != nil && req.Host != nil {
-		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
+	if p.HostHealth != nil {
+		p.HostHealth.Reachable(ctx, st.cur.hop.Host.Meta.ID)
 	}
 }
 
@@ -748,18 +495,18 @@ func responseSummary(lc *lifecycle.Context, a Adapter, body []byte) (v1.Summary,
 // never produced a response body. Runs in its own goroutine (the caller
 // is about to write an error response — telemetry must not block it).
 // No rate-limit commit / RecordSuccess: there was no success.
-func (p *Pipeline) fireFailure(req *Request, runErr error) {
+func (p *Pipeline) fireFailure(req *Request, h *host.Host, runErr error) {
 	// Record host reachability regardless of lifecycle wiring: a dial failure
 	// means unreachable; an upstream-status failure means the host answered
 	// (the keys/quota are the problem, not connectivity).
-	if p.HostHealth != nil && req.Host != nil {
+	if p.HostHealth != nil && h != nil {
 		var unreachable *UpstreamUnreachableError
 		var upstream *UpstreamFailureError
 		switch {
 		case errors.As(runErr, &unreachable):
-			p.HostHealth.Unreachable(context.Background(), req.Host.Meta.ID, runErr.Error())
+			p.HostHealth.Unreachable(context.Background(), h.Meta.ID, runErr.Error())
 		case errors.As(runErr, &upstream):
-			p.HostHealth.Reachable(context.Background(), req.Host.Meta.ID)
+			p.HostHealth.Reachable(context.Background(), h.Meta.ID)
 		}
 	}
 
@@ -781,14 +528,15 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 func classifyFailure(err error) (kind string, status int) {
 	var upstream *UpstreamFailureError
 	var unreachable *UpstreamUnreachableError
-	var exceeded *pkgratelimit.KeyQuotaExhausted
+	var refused *limits.Refused
+	var limited *UpstreamLimitedError
 	switch {
 	case errors.As(err, &unreachable):
 		return "upstream_unreachable", 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
-	case errors.As(err, &exceeded):
-		// Reservation rejected before any upstream call → status 0
+	case errors.As(err, &refused), errors.As(err, &limited):
+		// Refused before any upstream call → status 0
 		// (the kind carries the 429 meaning; Status is the upstream status).
 		return "rate_limited", 0
 	case errors.Is(err, pkgratelimit.ErrUnavailable):
@@ -799,8 +547,8 @@ func classifyFailure(err error) (kind string, status int) {
 		return "keys_exhausted", 0
 	case errors.Is(err, ErrAdapterMissing):
 		return "adapter_missing", 0
-	case errors.Is(err, ErrPolicyMissing):
-		return "policy_missing", 0
+	case errors.Is(err, ErrLimiterMissing):
+		return "limiter_missing", 0
 	case errors.Is(err, context.Canceled):
 		return "client_canceled", 0
 	case errors.Is(err, context.DeadlineExceeded):
@@ -841,19 +589,5 @@ func RetryAfterHeader(h http.Header) time.Duration {
 }
 
 func (r *Request) String() string {
-	policyName := ""
-	if r.Policy != nil {
-		policyName = r.Policy.Meta.Name
-	}
-	return fmt.Sprintf("pipeline.Request{model=%q policy=%q host=%s keys=%d}",
-		r.ModelName, policyName, r.HostBaseURL, len(r.Keys))
-}
-
-// hostPath returns the request host's upstream-path override, nil when the
-// host is absent (tests / legacy callers) or sets none.
-func hostPath(req *Request) *string {
-	if req.Host == nil {
-		return nil
-	}
-	return req.Host.Spec.Path
+	return fmt.Sprintf("pipeline.Request{model=%q hops=%d}", r.ModelName, len(r.Hops))
 }

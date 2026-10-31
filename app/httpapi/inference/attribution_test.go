@@ -22,7 +22,7 @@ func mintFor(t *testing.T, st *principalStack, plaintext string) (*Principal, *l
 		t.Fatal("no principal resolved")
 	}
 	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, p)
-	lc := mintLifecycle(ctx, st.cat, "pipeline", "")
+	lc := mintLifecycle(ctx, "pipeline", "")
 	return p, &lifecycleFields{
 		projectID: lc.ProjectID, project: lc.ProjectName,
 		teamID: lc.TeamID, team: lc.TeamName,

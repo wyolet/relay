@@ -19,7 +19,9 @@ import (
 type Rung struct {
 	Kind      limits.Rung
 	SubjectID string
-	Policy    *ExpandedPolicy
+	// Name is the subject's slug where the plan read its row (team, project, service account), for usage rows; empty otherwise.
+	Name   string
+	Policy *ExpandedPolicy
 }
 
 // AccountPlan is one provider account and its cooldown cell, shared by every credential of the account.

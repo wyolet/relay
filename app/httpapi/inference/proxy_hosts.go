@@ -61,7 +61,7 @@ func proxyHostsFor(snap *appcatalog.Snapshot, p *Principal) []proxyHostEntry {
 	hosts := snap.Hosts()
 	out := make([]proxyHostEntry, 0, len(hosts))
 	for _, h := range hosts {
-		if !proxyPinAllowed(snap, p, h) {
+		if !proxyPinAllowed(p, h) {
 			continue
 		}
 		out = append(out, proxyHostEntry{Slug: h.Meta.Name, DisplayName: h.Meta.DisplayName})

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/account"
@@ -96,47 +95,4 @@ func (pe *planEngine) expireCells(ctx context.Context) {
 			pe.cells.Expire(now)
 		}
 	}
-}
-
-// Event forwards one catalog notification for a kind the plans read; other kinds are ignored.
-func (pe *planEngine) Event(kind, op, id string) {
-	ref, ok := planRef(kind, id)
-	if !ok {
-		return
-	}
-	ev := engine.Event{Ref: ref, Op: engine.OpUpsert}
-	if op == "delete" {
-		ev.Op = engine.OpDelete
-	}
-	pe.engine.Notify(ev)
-}
-
-// Attached resyncs: notifications sent while the listener was detached never arrive.
-func (pe *planEngine) Attached(ctx context.Context) {
-	if err := pe.engine.Resync(ctx); err != nil {
-		slog.Error("plans: resync after the listener attached failed", "err", err)
-	}
-}
-
-// planRef maps a catalog notification to the engine row it names.
-func planRef(kind, id string) (engine.Ref, bool) {
-	switch kind {
-	case "provider", "host", "model", "pricing", "policy", "policybinding", "ratelimit",
-		"budget", "pool", "account", "team", "project", "serviceaccount", "user":
-		return engine.Ref{Kind: engine.Kind(kind), ID: id}, true
-	case "hostkey":
-		return engine.Ref{Kind: plan.KindCredential, ID: id}, true
-	case "relaykey":
-		return engine.Ref{Kind: plan.KindKey, ID: id}, true
-	case "hostbinding":
-		return engine.Ref{Kind: plan.KindBinding, ID: id}, true
-	case "overlay":
-		// The overlay payload id is "<kind>|<resource id>".
-		k, rid, ok := strings.Cut(id, "|")
-		if !ok {
-			return engine.Ref{}, false
-		}
-		return engine.Ref{Kind: plan.KindOverlay, ID: plan.OverlayID(k, rid)}, true
-	}
-	return engine.Ref{}, false
 }

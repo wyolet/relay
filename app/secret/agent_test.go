@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/pipeline"
 )
 
 func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
@@ -47,10 +46,10 @@ func (f *fakeRefresher) Refresh(_ context.Context, _ string) (string, bool, erro
 
 func TestAgent_NonAuth(t *testing.T) {
 	a := NewAgent(&fakeRefresher{}, time.Second, discard())
-	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureServerError, true); v != pipeline.VerdictNext {
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureServerError, true); v != keypool.VerdictNext {
 		t.Fatalf("non-auth + more candidates: want Next, got %v", v)
 	}
-	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureServerError, false); v != pipeline.VerdictFail {
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureServerError, false); v != keypool.VerdictFail {
 		t.Fatalf("non-auth + last: want Fail, got %v", v)
 	}
 }
@@ -60,10 +59,10 @@ func TestAgent_NonAuth(t *testing.T) {
 func TestAgent_ForbiddenDoesNotRefresh(t *testing.T) {
 	f := &fakeRefresher{value: "new", changed: true}
 	a := NewAgent(f, time.Second, discard())
-	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureForbidden, true); v != pipeline.VerdictNext {
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureForbidden, true); v != keypool.VerdictNext {
 		t.Fatalf("forbidden + more candidates: want Next, got %v", v)
 	}
-	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureForbidden, false); v != pipeline.VerdictFail {
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureForbidden, false); v != keypool.VerdictFail {
 		t.Fatalf("forbidden + last: want Fail, got %v", v)
 	}
 	f.mu.Lock()
@@ -78,7 +77,7 @@ func TestAgent_AuthMoreCandidates_NextAndHealsAsync(t *testing.T) {
 	a := NewAgent(f, time.Second, discard())
 
 	v, fresh := a.OnFailure(context.Background(), "k", keypool.FailureAuth, true)
-	if v != pipeline.VerdictNext || fresh != "" {
+	if v != keypool.VerdictNext || fresh != "" {
 		t.Fatalf("auth + more candidates: want Next/\"\", got %v/%q", v, fresh)
 	}
 	select {
@@ -91,21 +90,21 @@ func TestAgent_AuthMoreCandidates_NextAndHealsAsync(t *testing.T) {
 func TestAgent_AuthLast_RotatedRetries(t *testing.T) {
 	a := NewAgent(&fakeRefresher{value: "rotated", changed: true}, time.Second, discard())
 	v, fresh := a.OnFailure(context.Background(), "k", keypool.FailureAuth, false)
-	if v != pipeline.VerdictRetry || fresh != "rotated" {
+	if v != keypool.VerdictRetry || fresh != "rotated" {
 		t.Fatalf("auth + last + rotated: want Retry/rotated, got %v/%q", v, fresh)
 	}
 }
 
 func TestAgent_AuthLast_UnchangedFails(t *testing.T) {
 	a := NewAgent(&fakeRefresher{value: "same", changed: false}, time.Second, discard())
-	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureAuth, false); v != pipeline.VerdictFail {
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureAuth, false); v != keypool.VerdictFail {
 		t.Fatalf("auth + last + unchanged: want Fail, got %v", v)
 	}
 }
 
 func TestAgent_AuthLast_RefreshErrorFails(t *testing.T) {
 	a := NewAgent(&fakeRefresher{err: errors.New("boom")}, time.Second, discard())
-	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureAuth, false); v != pipeline.VerdictFail {
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureAuth, false); v != keypool.VerdictFail {
 		t.Fatalf("auth + last + refresh error: want Fail, got %v", v)
 	}
 }
@@ -123,7 +122,7 @@ func TestAgent_AuthLast_CtxCancelledFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // caller gave up before the (blocked) refresh completes
 
-	if v, _ := a.OnFailure(ctx, "k", keypool.FailureAuth, false); v != pipeline.VerdictFail {
+	if v, _ := a.OnFailure(ctx, "k", keypool.FailureAuth, false); v != keypool.VerdictFail {
 		t.Fatalf("cancelled ctx: want Fail, got %v", v)
 	}
 	close(block) // let the detached heal goroutine finish

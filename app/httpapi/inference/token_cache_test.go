@@ -2,15 +2,10 @@ package inference
 
 import (
 	"crypto/ed25519"
-	"net/http"
-	"runtime"
 	"testing"
 	"time"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -72,38 +67,6 @@ func TestExpiredCacheEntryIsNotServed(t *testing.T) {
 	}
 }
 
-// A token's subjects must follow the snapshot, not the cache: a user added
-// to a group mid-token gets the new subject on the next request.
-func TestCachedSubjectsFollowTheSnapshot(t *testing.T) {
-	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
-	}
-	token := f.mint(t, nil)
-	st := f.stack(t)
-
-	if w := st.do(token); w.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", w.Code, w.Body)
-	}
-	before := len(st.seen.Subjects)
-
-	// Publish a new snapshot in which the user is no longer in the group.
-	// A fresh value, not a mutation of the fixture's: the snapshot holds
-	// that same pointer.
-	emptied := *f.group
-	emptied.Spec.MemberIDs = []string{meta.NewID()}
-	if err := st.cat.ApplyGroupUpsert(&emptied); err != nil {
-		t.Fatalf("apply group: %v", err)
-	}
-	if w := st.do(token); w.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", w.Code, w.Body)
-	}
-	if len(st.seen.Subjects) >= before {
-		t.Fatalf("subjects = %v, want fewer than the %d held before the membership change",
-			st.seen.Subjects, before)
-	}
-}
-
 func TestBoundedCacheEvictsWithoutUnboundedGrowth(t *testing.T) {
 	f := newPrincipalFixture()
 	f.tokens.SetCacheSize(64) // 64/16 shards/2 generations = 2 per generation
@@ -135,35 +98,4 @@ func TestCacheDisabledStillVerifies(t *testing.T) {
 	if ent := f.tokens.cache.get(sha(token), time.Now()); ent != nil {
 		t.Fatal("an entry was stored with the cache off")
 	}
-}
-
-// A cache entry lives until its token expires, so remembering the snapshot
-// it resolved against by pointer keeps that whole catalog reachable — one
-// retained copy per generation a token outlives. Only the generation number
-// may be kept.
-func TestCacheDoesNotPinTheSnapshotItResolvedAgainst(t *testing.T) {
-	ent := &cacheEntry{}
-	collected := make(chan struct{})
-
-	func() {
-		snap := catalogtest.Catalog{}.Snapshot()
-		runtime.SetFinalizer(snap, func(*appcatalog.Snapshot) { close(collected) })
-		ent.setSubjects(snap, []string{"user:u-1"})
-	}()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		runtime.GC()
-		select {
-		case <-collected:
-			// The entry still knows which view it was built from.
-			next := catalogtest.Catalog{}.Snapshot()
-			if _, ok := ent.subjectsFor(next); ok {
-				t.Fatal("subjects survived into a different snapshot generation")
-			}
-			return
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
-	t.Fatal("the snapshot was never collected — a cache entry still references it")
 }

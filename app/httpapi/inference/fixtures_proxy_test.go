@@ -13,26 +13,20 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/limits/lua"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	"github.com/wyolet/relay/pkg/slug"
 )
 
-// proxyStreamDeps wires proxy mode over a catalog with "test-model" on host "anthropic" at upstreamURL, a policy with a generous request limit, and a passthrough key under it. Scripts run on a recording kv.Mem.
+// proxyStreamDeps wires proxy mode over plans with "test-model" on host "anthropic" at upstreamURL, a user policy with a generous request limit, and a passthrough key of that user. Scripts run on a recording kv.Mem.
 func proxyStreamDeps(tb testing.TB, upstreamURL string) (Deps, *Principal, *kvtest.Recording) {
 	tb.Helper()
 	return proxyStreamDepsLimited(tb, upstreamURL, 1<<40)
@@ -41,54 +35,39 @@ func proxyStreamDeps(tb testing.TB, upstreamURL string) (Deps, *Principal, *kvte
 // proxyStreamDepsLimited is proxyStreamDeps with the policy allowing perHour requests.
 func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64) (Deps, *Principal, *kvtest.Recording) {
 	tb.Helper()
-	provID, hostID, hkID, modID, polID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
-	sys := meta.Owner{Kind: meta.OwnerSystem}
-	rl := &ratelimit.RateLimit{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "stream-limit", Owner: sys},
-		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: perHour, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow}}},
-	}
-	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: sys}, Spec: key.Spec{PolicyID: polID, KeyHash: "streamhash", PassthroughAllowed: true}}
-	cat := catalogtest.Catalog{
-		Providers: []*provider.Provider{{Meta: meta.Metadata{ID: provID, Name: "anthropic", Owner: sys}}},
-		Hosts:     []*host.Host{{Meta: meta.Metadata{ID: hostID, Name: "anthropic", Owner: sys}, Spec: host.Spec{BaseURL: upstreamURL}}},
-		HostKeys: []*hostkey.HostKey{{
-			Meta: meta.Metadata{ID: hkID, Name: "k", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
-			Spec: hostkey.Spec{HostID: hostID, PolicyID: polID, Value: "sk-dummy", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
-		}},
-		Models: []*model.Model{{
-			Meta: meta.Metadata{ID: modID, Name: "test-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
-			Spec: model.Spec{Snapshots: []model.Snapshot{{Name: slug.From("test-model")}}, Pointer: slug.From("test-model")},
-		}},
-		Bindings: []*binding.Binding{{Meta: meta.Metadata{ID: meta.NewID(), Name: "b", Owner: sys}, Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.Anthropic}}},
-		Policies: []*policy.Policy{{
-			Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
-			Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}, RateLimitID: rl.Meta.ID},
-		}},
-		RateLimits: []*ratelimit.RateLimit{rl},
-		Keys:       []*key.Key{k},
-	}.Load(tb)
-	pol, ok := cat.Current().Policy(polID)
-	if !ok {
-		tb.Fatal("policy missing from snapshot")
-	}
+	var w plantest.World
+	prov := w.Provider("anthropic")
+	h := w.Host("anthropic", upstreamURL)
+	m := w.Model(prov, "test-model")
+	w.Bind(m, h, adapters.Anthropic)
+	w.Credential(h, nil, plantest.System, "sk-dummy")
+	rl := w.RateLimit(ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: perHour, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow})
+	u := w.User()
+	k := w.UserKey(u, "stream-secret")
+	k.Meta.Name = "rk"
+	k.Spec.PassthroughAllowed = true
+	pol := w.Policy("p", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
+	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
+	plans := w.Load(tb)
+	cat := catalogtest.Catalog{Providers: w.Providers, Hosts: w.Hosts, Models: w.Models, Bindings: w.Bindings, HostKeys: w.Credentials, Keys: w.Keys}.Load(tb)
 
 	mem := kv.NewMem()
 	pkgratelimit.RegisterScripts(mem)
 	tb.Cleanup(func() { _ = mem.Close() })
 	store := kvtest.NewRecording(mem)
-	limiter := pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)
 	reg := buildTestRegistry()
-	d := Deps{Catalog: cat, Resolver: routing.New(cat), Proxy: proxy.New(limiter, nil, nil), Adapters: reg.AdapterMap(), Specs: reg}
-	d.Proxy.Policy = policy.NewService(catSnapReader{cat: cat}, nil, limiter)
-	return d, &Principal{CredentialKind: CredentialKey, CredentialID: k.Meta.ID, KeyHash: k.Spec.KeyHash, Key: k, Policy: pol, PassthroughAllowed: true}, store
+	d := Deps{Catalog: cat, Plans: plans.Holder, Proxy: proxy.New(lua.New(pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)), nil, nil), Adapters: reg.AdapterMap(), Specs: reg}
+	kp := plans.Root().Keys.Lookup(k.Spec.KeyHash, time.Now())
+	if kp == nil {
+		tb.Fatal("fixture key has no plan")
+	}
+	return d, principalOf(kp, k.Spec.KeyHash), store
 }
 
-// withPayloadLogging is pr under a copy of its policy that captures payloads.
+// withPayloadLogging is pr with its key's own capture flag set.
 func withPayloadLogging(pr *Principal) *Principal {
-	pol := *pr.Policy
-	pol.Spec.PayloadLoggingEnabled = true
 	cp := *pr
-	cp.Policy = &pol
+	cp.PayloadLogging = true
 	return &cp
 }
 

@@ -10,25 +10,23 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 // Runner executes one batch item through the realtime inference pipeline,
 // buffering the response. It deliberately reuses app/pipeline.Pipeline.Run so a
-// batch item inherits keypool selection, circuit breakers, failover, and usage
+// batch item inherits key selection, circuit breakers, limits, failover, and usage
 // emission for free — the only difference from a live request is that the
 // lifecycle source is "batch" and the response is buffered rather than streamed.
 type Runner struct {
-	Resolver *routing.Resolver
+	// Auth re-resolves the submitter against the current plans when the item runs.
+	Auth     *inference.Auth
 	Pipeline *pipeline.Pipeline
 	Specs    *adapter.Registry
-	Catalog  *appcatalog.Catalog
 }
 
 // ErrCrossShape is returned when a batch item's inbound shape differs from the
@@ -37,36 +35,29 @@ type Runner struct {
 // silently mis-dispatched (canonical rule 11).
 var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 
-// ErrPolicyUnavailable is returned when the policy the submission resolved to
-// is no longer in the snapshot. The item fails rather than running policy-less.
-var ErrPolicyUnavailable = errors.New("batch: policy_unavailable")
-
 // ErrCredentialInvalid is returned when the credential that submitted an item
-// has since been revoked, expired, disabled, or rotated out.
+// has since been revoked, expired, disabled, or rotated out, or its caller
+// ladder now refuses it.
 var ErrCredentialInvalid = errors.New("batch: credential no longer valid")
 
 // Run executes one item. requestID ties the usage event to the item (the jobq
-// job id); policyID is the policy the submission already resolved to (the
-// resolution order lives in the auth layer, not here), tok carries the
-// submitting token's claims (zero for a key) so a revoked one is refused, and
-// attr is the submission's attribution as recorded at submit. It returns the
+// job id); tok carries the submitting token's claims (zero for a key) and attr
+// the submission's attribution as recorded at submit. The submitter is
+// resolved again against the current plans, so the item runs under the
+// caller ladder of its execution time, not of its submission. It returns the
 // upstream status and the buffered response body. Usage emits automatically
 // with source="batch" when the pipeline body closes.
-func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID string, tok TokenClaims, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
-	snap := rn.Catalog.Current()
-	tokenJTI := tok.JTI
-
-	// An item may run long after submit: the credential is re-checked against
-	// the current snapshot exactly as a WebSocket frame re-checks it.
-	submitter := &inference.Principal{
-		ProjectID: attr.ProjectID, CredentialKind: attr.CredentialKind, KeyHash: relayKeyHash,
-		TokenExp: tok.Expires, TokenVer: tok.Version,
-	}
+func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok TokenClaims, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
+	userID := ""
 	if attr.PrincipalKind == string(key.PrincipalUser) {
-		submitter.UserID = attr.PrincipalID
+		userID = attr.PrincipalID
 	}
-	if err := submitter.Recheck(snap, time.Now()); err != nil {
+	p, err := rn.Auth.Recheck(relayKeyHash, userID, tok.JTI, tok.Version, tok.Expires, time.Now())
+	if err != nil {
 		return 0, nil, fmt.Errorf("%w: %v", ErrCredentialInvalid, err)
+	}
+	if r := p.Caller.Refused; r != nil {
+		return 0, nil, fmt.Errorf("%w: %v", ErrCredentialInvalid, r)
 	}
 
 	req, err := inference.ParseRequest(body)
@@ -74,49 +65,30 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 		return 0, nil, fmt.Errorf("batch: parse model: %w", err)
 	}
 	modelName := req.Model
-
-	var pol *policy.Policy
-	if policyID != "" {
-		var ok bool
-		if pol, ok = snap.Policy(policyID); !ok {
-			// The submission resolved to this policy; running the item without
-			// one would silently execute it under the policy-less rules
-			// instead, unmetered and against a pool the caller never had.
-			if pol, ok = snap.DisabledPolicy(policyID); !ok {
-				return 0, nil, fmt.Errorf("%w: policy %q", ErrPolicyUnavailable, policyID)
-			}
-		}
-	}
-	// A policy-less item draws on the submitter's own host keys, so the
-	// submitting user has to reach routing; a service-account submission
-	// leaves it empty and sees the system-owned pool only.
-	userID := ""
-	if attr.PrincipalKind == string(key.PrincipalUser) {
-		userID = attr.PrincipalID
-	}
-	plan, err := rn.Resolver.Resolve(routing.Request{
-		ModelName:    modelName,
-		RawModelName: modelName,
-		Policy:       pol,
-		UserID:       userID,
-		Snapshot:     snap,
-	})
-	if err != nil {
-		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)
+	route := p.Caller.Routes.Get(modelName)
+	if route.Refused != nil {
+		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, route.Refused)
 	}
 
+	first := &route.Hops[0]
+	shape := first.Binding.Spec.Adapter
 	inboundSpec := rn.Specs.Spec(inbound)
-	upstreamSpec := rn.Specs.Spec(plan.HostBinding.Spec.Adapter)
-	upstreamAdapter := rn.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter)
+	upstreamSpec := rn.Specs.Spec(shape)
+	upstreamAdapter := rn.Specs.PipelineAdapter(shape)
 	if inboundSpec == nil || upstreamSpec == nil || upstreamAdapter == nil {
-		return 0, nil, fmt.Errorf("batch: adapter not registered for %s/%s", inbound, plan.HostBinding.Spec.Adapter)
+		return 0, nil, fmt.Errorf("batch: adapter not registered for %s/%s", inbound, shape)
 	}
-
-	sameShape := inbound == plan.HostBinding.Spec.Adapter ||
-		inboundSpec.BytePass ||
-		(inboundSpec.IsNativePath != nil && inboundSpec.IsNativePath(plan))
+	native := inboundSpec.IsNativePath
+	sameShape := inbound == shape || inboundSpec.BytePass || (native != nil && native(first.Binding, first.Host))
 	if !sameShape {
-		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, plan.HostBinding.Spec.Adapter)
+		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, shape)
+	}
+	// One body serves every hop, so failover keeps to the hops that speak the first hop's shape.
+	hops := make([]plan.RouteHop, 0, len(route.Hops))
+	for _, h := range route.Hops {
+		if h.Binding.Spec.Adapter == shape {
+			hops = append(hops, h)
+		}
 	}
 
 	lc := lifecycle.NewContext(requestID, "batch", time.Now())
@@ -128,71 +100,44 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 	lc.PrincipalID = attr.PrincipalID
 	lc.CredentialKind = attr.CredentialKind
 	lc.CredentialID = attr.CredentialID
-	// Slugs resolve from the snapshot here, as the policy name already does:
-	// the ids were fixed at submit, the names describe them as of execution.
-	if proj, ok := snap.Project(attr.ProjectID); ok {
-		lc.ProjectName = proj.Meta.Name
+	// The ids were fixed at submit; the names describe them as of execution, from the plan the item runs under.
+	cp := p.Caller
+	if cp.Project().ID() == attr.ProjectID {
+		lc.ProjectName = cp.Project().Name
 	}
-	if t, ok := snap.Team(attr.TeamID); ok {
-		lc.TeamName = t.Meta.Name
+	if cp.Team().ID() == attr.TeamID {
+		lc.TeamName = cp.Team().Name
 	}
 	if attr.PrincipalKind == string(key.PrincipalServiceAccount) {
-		if sa, ok := snap.ServiceAccount(attr.PrincipalID); ok {
-			lc.PrincipalName = sa.Meta.Name
-		}
+		lc.PrincipalName = cp.PrincipalRung().Name
 	}
-	if attr.CredentialKind == inference.CredentialKey {
-		if k, ok := snap.Key(attr.CredentialID); ok {
-			lc.RelayKeyName = k.Meta.Name
-		}
+	if p.Key != nil {
+		lc.RelayKeyName = p.Key.Meta.Name
 	}
-	if plan.Policy != nil {
-		lc.PolicyID = plan.Policy.Meta.ID
-		lc.PolicyName = plan.Policy.Meta.Name
+	if pol := p.Policy(); pol != nil {
+		lc.PolicyID, lc.PolicyName = pol.Meta.ID, pol.Meta.Name
 	}
-	if plan.Model != nil {
-		lc.ModelID = plan.Model.Meta.ID
-		lc.ModelName = plan.Model.Meta.Name
-	}
-	if plan.Host != nil {
-		lc.HostID = plan.Host.Meta.ID
-		lc.HostName = plan.Host.Meta.Name
-	}
-	if plan.Provider != "" {
-		lc.ProviderName = plan.Provider
-	}
-	if plan.Pricing != nil {
-		lc.PricingID = plan.Pricing.Meta.ID
-		lc.PricingName = plan.Pricing.Meta.Name
-	}
-	if plan.ResolvedVia != "" {
-		lc.Metadata["resolved_via"] = plan.ResolvedVia
+	lc.ModelID, lc.ModelName, lc.ProviderName = route.Model.Meta.ID, route.Model.Meta.Name, route.Provider
+	if route.ResolvedVia != "" {
+		lc.Metadata["resolved_via"] = route.ResolvedVia
 	}
 	lc.Translator = upstreamSpec.Translator
 
 	// Same-shape only (guarded above), so the body stays inbound-shaped and
 	// the inbound spec's ParamPaths address it — mirrors runBytePass.
-	wireBody, _ := inference.UpstreamBody(req, plan.UpstreamModel(), plan.Model, inboundSpec.ParamPaths)
+	wireBody, _ := inference.UpstreamBody(req, route.UpstreamModel, route.Model, inboundSpec.ParamPaths)
 
-	preq := &pipeline.Request{
+	result, err := rn.Pipeline.Run(ctx, &pipeline.Request{
 		Body:          wireBody,
 		Headers:       http.Header{},
-		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       upstreamAdapter,
-		Policy:        plan.Policy,
-		Model:         plan.Model,
-		Host:          plan.Host,
-		Provider:      plan.Provider,
-		Keys:          plan.Keys,
-		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.UpstreamModel(),
-		Stream:        false,
-		TeamID:        attr.TeamID,
-		TokenJTI:      tokenJTI,
+		Model:         route.Model,
+		Provider:      route.Provider,
+		Hops:          hops,
+		ModelName:     route.Model.Meta.Name,
+		UpstreamModel: route.UpstreamModel,
 		Lifecycle:     lc,
-	}
-
-	result, err := rn.Pipeline.Run(ctx, preq)
+	})
 	if err != nil {
 		return 0, nil, err
 	}

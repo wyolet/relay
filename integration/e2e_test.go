@@ -40,10 +40,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/budget"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -51,14 +53,16 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
@@ -66,6 +70,8 @@ import (
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/engine/cell"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -134,6 +140,24 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		t.Fatalf("catalog.ReloadTokenVersions: %v", err)
 	}
 
+	// The plans the request path reads, over the same stores and fed by the same listener as the binary wires them.
+	cells := cell.NewRegistry(cell.Options{IdleTTL: time.Hour})
+	plans := &plan.Holder{}
+	eng := engine.New(engine.Options{Cells: cells, Hooks: engine.Hooks{OnPublish: plans.OnPublish}})
+	q := gen.New(st.Pool())
+	plan.Register(eng, cells, plan.Sources{
+		Providers: stores.Provider, Hosts: stores.Host, Models: stores.Model, Bindings: stores.Binding, Pricings: stores.Pricing,
+		Overlays: plan.OverlaySource{Store: stores.Overlay}, Policies: stores.Policy, PolicyBindings: stores.PolicyBinding,
+		RateLimits: stores.RateLimit, Budgets: budget.NewStore(q), Pools: pool.NewStore(st.Pool()), Accounts: account.NewStore(q),
+		Credentials: stores.HostKey, Teams: stores.Team, Projects: stores.Project, ServiceAccounts: stores.ServiceAccount,
+		Users: usersStore, Keys: stores.Key,
+	})
+	if err := eng.Load(ctx); err != nil {
+		t.Fatalf("plans load: %v", err)
+	}
+	t.Cleanup(func() { _ = eng.Close() })
+	cat.ForwardEvents(plan.Forwarder{Engine: eng})
+
 	lctx, cancel := context.WithCancel(ctx)
 	listenerDone := make(chan struct{})
 	go func() {
@@ -152,13 +176,12 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	t.Cleanup(func() { _ = kvStore.Close() })
 
 	sessMgr := session.NewWithGroups(kvStore, false, func(userID string) []string { return cat.Current().GroupsForUser(userID) })
-	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
+	counting := lua.New(pkgratelimit.New(kvStore, slog.Default(), nil))
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
-	policySvc := policy.NewService(catSnapReader{cat: cat}, selector, limiter)
 	lifecycleReg := lifecycle.New()
-	pl := &pipeline.Pipeline{Policy: policySvc, Lifecycle: lifecycleReg, Logger: slog.Default()}
-	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
-	proxyPipeline.Policy = policySvc
+	pl := &pipeline.Pipeline{Limiter: counting, Selector: selector, Lifecycle: lifecycleReg, Logger: slog.Default()}
+	proxyPipeline := proxy.New(counting, lifecycleReg, slog.Default())
+	revoked := revocation.New(kvStore)
 
 	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
 	anthropicAuth := adapter.AuthStrategy{
@@ -182,8 +205,8 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 			Translator:    pkgopenai.ResponsesTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
 			UseHTTP1:      true,
-			IsNativePath: func(plan *routing.Plan) bool {
-				return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+			IsNativePath: func(b *binding.Binding, h *host.Host) bool {
+				return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 			},
 		}).Build(),
 		(&adapter.Spec{
@@ -253,7 +276,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		Audit:         auditEmitter,
 		AuditReader:   auditStore,
 		TokenSigner:   signer,
-		TokenDenylist: kvStore,
+		TokenDenylist: revoked,
 	}
 	// Mirror prod: control API under /api so SPA routes aren't shadowed, SCIM at the root.
 	ctrlRouter.Route("/api", func(r chi.Router) { control.Mount(r, ctrlDeps) })
@@ -264,7 +287,8 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		Pinger:        st,
 		Catalog:       cat,
 		Tokens:        verifier,
-		Resolver:      routing.New(cat),
+		Plans:         plans,
+		Revoked:       revoked.Set(),
 		Pipeline:      pl,
 		Proxy:         proxyPipeline,
 		Adapters:      specRegistry.AdapterMap(),
@@ -1134,25 +1158,6 @@ func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status: want 400, got %d", resp.StatusCode)
 	}
-}
-
-// catSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader.
-type catSnapReader struct{ cat *appcatalog.Catalog }
-
-func (r catSnapReader) Policy(ctx context.Context, id string) (*policy.Policy, bool) {
-	return r.snap(ctx).Policy(id)
-}
-
-func (r catSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
-	return r.snap(ctx).RateLimit(id)
-}
-
-// snap mirrors the binary: the request's pinned snapshot when there is one.
-func (r catSnapReader) snap(ctx context.Context) *appcatalog.Snapshot {
-	if s := inference.SnapshotFrom(ctx); s != nil {
-		return s
-	}
-	return r.cat.Current()
 }
 
 // TestE2E_KeyRotate exercises POST /keys/by-id/{id}/rotate:

@@ -14,7 +14,6 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/pipeline"
 )
 
 // Refresher re-resolves a host key's secret from its backend and persists the
@@ -54,20 +53,20 @@ type healResult struct {
 }
 
 // OnFailure implements pipeline.KeyAgent.
-func (a *Agent) OnFailure(ctx context.Context, keyID string, kind keypool.FailureKind, moreCandidates bool) (pipeline.Verdict, string) {
+func (a *Agent) OnFailure(ctx context.Context, keyID string, kind keypool.FailureKind, moreCandidates bool) (keypool.Verdict, string) {
 	// Only an auth failure implies a possibly-rotated secret; everything else
 	// is a plain failover (or stop when this was the last candidate).
 	if kind != keypool.FailureAuth {
 		if moreCandidates {
-			return pipeline.VerdictNext, ""
+			return keypool.VerdictNext, ""
 		}
-		return pipeline.VerdictFail, ""
+		return keypool.VerdictFail, ""
 	}
 
 	if moreCandidates {
 		// Optimistic: fail over now, heal in the background for next time.
 		a.sf.DoChan(keyID, a.heal(keyID))
-		return pipeline.VerdictNext, ""
+		return keypool.VerdictNext, ""
 	}
 
 	// Last candidate: nothing to fail over to. Park on the single-flighted
@@ -76,15 +75,15 @@ func (a *Agent) OnFailure(ctx context.Context, keyID string, kind keypool.Failur
 	select {
 	case r := <-a.sf.DoChan(keyID, a.heal(keyID)):
 		if r.Err != nil {
-			return pipeline.VerdictFail, ""
+			return keypool.VerdictFail, ""
 		}
 		res, _ := r.Val.(healResult)
 		if res.changed {
-			return pipeline.VerdictRetry, res.value
+			return keypool.VerdictRetry, res.value
 		}
-		return pipeline.VerdictFail, ""
+		return keypool.VerdictFail, ""
 	case <-ctx.Done():
-		return pipeline.VerdictFail, ""
+		return keypool.VerdictFail, ""
 	}
 }
 

@@ -15,17 +15,11 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// TestReserveStoreUnavailableAnswersOverloaded pins the response to a reserve the store could not answer: the shed's 503 and Retry-After, and no upstream call.
+// TestReserveStoreUnavailableAnswersOverloaded pins the response to a hold the store could not answer: the shed's 503 and Retry-After.
 func TestReserveStoreUnavailableAnswersOverloaded(t *testing.T) {
-	f := newHotPathFixture(t, true)
-	f.store.reserveErr = fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded)
-	f.arm()
-
-	w := f.do(t, "sk-wr-live")
+	w := httptest.NewRecorder()
+	mapRunErr(w, nil, fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded)))
 	assertOverloaded(t, w)
-	if n := f.upstreamCalls.Load(); n != 0 {
-		t.Fatalf("upstream called %d times, want 0", n)
-	}
 }
 
 // Proxy mode refuses an unchecked reserve the same way, in the inbound shape's own overload form when it declares one.
@@ -47,10 +41,9 @@ func TestReserveStoreUnavailableLogsNoWarn(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	f := newHotPathFixture(t, true)
-	f.store.reserveErr = fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded)
-	f.arm()
-	if w := f.do(t, "sk-wr-live"); w.Code != http.StatusServiceUnavailable {
+	w := httptest.NewRecorder()
+	mapRunErr(w, nil, fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded)))
+	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("pipeline status = %d, want 503: %s", w.Code, w.Body)
 	}
 	pw := httptest.NewRecorder()

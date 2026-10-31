@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/usagelog"
@@ -34,7 +35,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	idStore *identity.Store, usersStore *user.Store, tokenSigner *control.TokenSigner, tokenVerifier *inference.TokenVerifier,
 	kvStore kv.Store, limiter *pkgratelimit.Limiter, sessMgr *session.Manager, licenseSvc *license.Service, cookieSecure bool,
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
-	selector *keypool.Selector, hostHealth *hosthealth.Recorder) (*http.Server, <-chan error) {
+	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List) (*http.Server, <-chan error) {
 	ctrlRouter := chi.NewRouter()
 	ctrlRouter.Use(httpmw.SecurityHeaders)
 	if len(cfg.ControlAllowOrigins) > 0 {
@@ -58,7 +59,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		MasterKeyConfigured: cfg.MasterKey != nil,
 		Identity:            idStore,
 		TokenSigner:         tokenSigner,
-		TokenDenylist:       kvStore,
+		TokenDenylist:       revoked,
 		MintLimiter:         limiter,
 		RotateTokenKey: func(ctx context.Context) error {
 			return rotateTokenSigningKey(ctx, st.Pool(), stores, cfg.MasterKey, tokenSigner, tokenVerifier)

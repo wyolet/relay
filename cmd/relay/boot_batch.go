@@ -7,27 +7,15 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/batch"
-	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/routing"
-	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
 )
 
-func routingOptions(cfg *config.Config) []routing.Option {
-	// RBAC makes a credential's grants the whole access model, so a key whose
-	// policy does not resolve has no access rather than the shared pool's.
-	var routingOpts []routing.Option
-	if cfg.Authz == config.AuthzRBAC {
-		routingOpts = append(routingOpts, routing.RequirePolicy())
-	}
-	return routingOpts
-}
-
-func buildBatch(bootCtx, listenerCtx context.Context, st *storagemod.Storage, cat *appcatalog.Catalog, pl *pipeline.Pipeline,
-	specRegistry *adapter.Registry, routingOpts []routing.Option, maxItems int) (*jobq.Queue, *batch.Service) {
+func buildBatch(bootCtx, listenerCtx context.Context, st *storagemod.Storage, auth *inference.Auth, pl *pipeline.Pipeline,
+	specRegistry *adapter.Registry, maxItems int) (*jobq.Queue, *batch.Service) {
 	// Batch subsystem: jobq-backed background execution of bulk inference
 	// submissions. jobq owns durable per-item execution + payload storage;
 	// app/batch owns the batch record and the customer API. The per-item
@@ -49,7 +37,7 @@ func buildBatch(bootCtx, listenerCtx context.Context, st *storagemod.Storage, ca
 	batchSvc := batch.NewService(
 		batch.NewStore(st.Pool()),
 		batchQueue,
-		&batch.Runner{Resolver: routing.New(cat, routingOpts...), Pipeline: pl, Specs: specRegistry, Catalog: cat},
+		&batch.Runner{Auth: auth, Pipeline: pl, Specs: specRegistry},
 		batchCaller,
 		maxItems,
 	)

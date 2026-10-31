@@ -60,6 +60,9 @@ type Event struct {
 	// keypool breaker is keyed by), not the HostKey row id: a rotated key
 	// records a new value.
 	HostKeyID string `json:"host_key_id,omitempty"`
+	// PoolID and AccountID are the pool the serving credential was drawn from and the provider account it belongs to; empty when it was linked on its own or holds no account. PolicyID is the innermost caller policy.
+	PoolID    string `json:"pool_id,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
 
 	// Tenancy + principal attribution as resolved at request entry.
 	// Project/Team/Principal are the event-time slugs beside their ids —

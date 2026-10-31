@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -21,22 +20,15 @@ func TestRun_StampsTheKeyName(t *testing.T) {
 	}))
 	defer up.Close()
 
-	rn, _, policyID := runnerFixture(t)
-	h := *rn.Catalog.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: up.URL, NoAuth: true}
-	if err := rn.Catalog.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	f := runnerFixture(t, up.URL)
 	events := make(usageCapture, 1)
 	reg := lifecycle.New()
 	reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
 	reg.RegisterCollector(events)
-	rn.Pipeline.Lifecycle = reg
+	f.rn.Pipeline.Lifecycle = reg
 
-	k, _ := rn.Catalog.Current().KeyByHash(fixtureKeyHash)
-	attr := keyAttr()
-	attr.CredentialID = k.Meta.ID
-	if _, _, err := rn.Run(context.Background(), "item", fixtureKeyHash, policyID, TokenClaims{}, attr, adapters.OpenAI, []byte(`{"model":"test-model"}`)); err != nil {
+	k := f.key
+	if _, _, err := f.rn.Run(context.Background(), "item", k.Spec.KeyHash, TokenClaims{}, f.keyAttr(), adapters.OpenAI, []byte(`{"model":"test-model"}`)); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

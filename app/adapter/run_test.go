@@ -16,22 +16,16 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
-
-type emptySnapshot struct{}
-
-func (emptySnapshot) Policy(context.Context, string) (*policy.Policy, bool) { return nil, false }
-func (emptySnapshot) RateLimit(context.Context, string) (*ratelimit.RateLimit, bool) {
-	return nil, false
-}
 
 // postFlightDone signals the end of post-flight: Reachable is its last step.
 type postFlightDone chan struct{}
@@ -53,20 +47,23 @@ func newRunFixture(tb testing.TB) *runFixture {
 	pkgratelimit.RegisterScripts(mem)
 	keypool.RegisterScripts(mem)
 	done := make(postFlightDone, 1)
-	keys := []*hostkey.HostKey{{Meta: meta.Metadata{ID: "key-1", Name: "key-1"}, Resolved: "sk-test", KeyHash: "hash-1"}}
-	pol := &policy.Policy{Meta: meta.Metadata{ID: "pol-1", Name: "pol"}, Spec: policy.Spec{KeySelection: policy.KeySelectionPrioritized}}
+	cred := &hostkey.HostKey{Meta: meta.Metadata{ID: "key-1", Name: "key-1"}, Resolved: "sk-test", KeyHash: "hash-1"}
 	mdl := &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}}
-	hst := &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}}
 	return &runFixture{
 		p: &pipeline.Pipeline{
-			Policy:     policy.NewService(emptySnapshot{}, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), nil)),
+			Limiter:    lua.New(pkgratelimit.New(mem, slog.Default(), nil)),
+			Selector:   keypool.New(mem, slog.Default(), nil, nil),
 			Lifecycle:  lifecycle.New(),
 			HostHealth: done,
 		},
 		done: done,
 		req: func(a pipeline.Adapter, baseURL string, body []byte) *pipeline.Request {
+			hst := &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}, Spec: host.Spec{BaseURL: baseURL}}
+			slot := &plan.KeySlot{Credential: cred, Host: hst}
+			pp := &plan.PoolPlan{Host: hst, Slots: []*plan.KeySlot{slot}, Selection: keypool.KeySelectionPrioritized}
 			return &pipeline.Request{
-				Body: body, HostBaseURL: baseURL, Adapter: a, Keys: keys, Policy: pol, Model: mdl, Host: hst,
+				Body: body, Adapter: a, Model: mdl,
+				Hops:      []plan.RouteHop{{Pool: pp, Host: hst, Slots: pp.Slots, Counters: [][]limits.Counter{nil}}},
 				Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
 			}
 		},

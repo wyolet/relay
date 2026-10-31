@@ -44,20 +44,16 @@ func TestAuthRejectionsAreCounted(t *testing.T) {
 
 func TestForbiddenRejectionsAreCountedByCode(t *testing.T) {
 	f := newPrincipalFixture()
-	f.bindings = nil
+	fls := false
+	f.boundPol.Spec.Enabled = &fls
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "b", 1, f.boundPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID)}
 	st := f.stack(t, saKey(f, "sk-wr-live"))
 
-	before := rejectionCount(t, "no_policy")
-	// The service account's own policy is what normally resolves; drop it
-	// so the principal reaches the no-policy refusal.
-	f.sa.Spec.PolicyID = ""
-	if err := st.cat.ApplyServiceAccountUpsert(f.sa); err != nil {
-		t.Fatalf("apply sa: %v", err)
-	}
+	before := rejectionCount(t, "policy_disabled")
 	if w := st.do("sk-wr-live"); w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
-	if got := rejectionCount(t, "no_policy") - before; got != 1 {
+	if got := rejectionCount(t, "policy_disabled") - before; got != 1 {
 		t.Fatalf("counter rose by %v, want 1", got)
 	}
 }
@@ -84,7 +80,7 @@ func TestSnapshotIsPinnedOnTheRequestContext(t *testing.T) {
 		seen.live = c.cat.Current()
 		w.WriteHeader(http.StatusOK)
 	})
-	h := ClassifyMiddleware()(PrincipalMiddleware(c.cat, f.tokens)(inner))
+	h := ClassifyMiddleware()(PrincipalMiddleware(c.auth)(inner))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	req.Header.Set("Authorization", "Bearer sk-wr-live")

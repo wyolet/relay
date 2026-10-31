@@ -101,7 +101,7 @@ func TestWSFrameReadsTheLiveSnapshot(t *testing.T) {
 	renamed.Meta.Name = "late-model"
 	renamed.Spec.Snapshots = []model.Snapshot{{Name: slug.From("late-model")}}
 	renamed.Spec.Pointer = slug.From("late-model")
-	if err := cat.ApplyModelUpsert(&renamed); err != nil {
+	if err := applyModel(t, cat, &renamed); err != nil {
 		t.Fatalf("upsert model: %v", err)
 	}
 	if cat.Current() == pinned {

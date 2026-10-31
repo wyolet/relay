@@ -9,9 +9,9 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -76,21 +76,20 @@ func TestObsHeadersAreStripped(t *testing.T) {
 	}
 }
 
-// applyPlanIdentity is the single fill point both runners (pipeline
-// dispatch and proxy plan-override) route through — ids and the
-// denormalized slugs must land together, and partial plans must fill
-// only what they resolved.
-func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
+// applyRouteIdentity stamps ids and the denormalized slugs together: the innermost caller policy, the model, and the first hop's host and pricing.
+func TestApplyRouteIdentity_IDsAndSlugs(t *testing.T) {
 	lc := lifecycle.NewContext("req", "pipeline", time.Now())
-	plan := &routing.Plan{
-		Policy:   &policy.Policy{Meta: meta.Metadata{ID: "pid", Name: "default"}},
-		Model:    &model.Model{Meta: meta.Metadata{ID: "mid", Name: "gpt-4o"}},
-		Host:     &host.Host{Meta: meta.Metadata{ID: "hid", Name: "openai"}},
-		Provider: "openai",
-		Pricing:  &pricing.Pricing{Meta: meta.Metadata{ID: "prid", Name: "openai-gpt-4o"}},
-	}
+	route := &plan.Route{Model: &model.Model{Meta: meta.Metadata{ID: "mid", Name: "gpt-4o"}}, Provider: "openai"}
+	hops := []plan.RouteHop{{
+		Host:    &host.Host{Meta: meta.Metadata{ID: "hid", Name: "openai"}},
+		Pricing: &pricing.Pricing{Meta: meta.Metadata{ID: "prid", Name: "openai-gpt-4o"}},
+	}}
+	pol := &policy.Policy{Meta: meta.Metadata{ID: "pid", Name: "default"}}
+	cp := &plan.CallerPlan{}
+	cp.Rungs[2].Policy = &plan.ExpandedPolicy{Policy: pol}
+	p := &Principal{Caller: cp}
 
-	applyPlanIdentity(lc, plan)
+	applyRouteIdentity(lc, route, hops, p)
 
 	if lc.PolicyID != "pid" || lc.PolicyName != "default" {
 		t.Fatalf("policy: %q/%q", lc.PolicyID, lc.PolicyName)
@@ -111,27 +110,16 @@ func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
 		t.Fatal("resolved_via stamped without alias resolution")
 	}
 
-	// Alias-resolved plan stamps the resolved_via tag (read by the usage
-	// hook into Event.Extras).
+	// An alias-resolved route stamps the resolved_via tag (read by the usage hook into Event.Extras).
 	lcA := lifecycle.NewContext("req-a", "pipeline", time.Now())
-	planA := *plan
-	planA.ResolvedVia = "alias:gpt-4o[1m]"
-	applyPlanIdentity(lcA, &planA)
+	routeA := *route
+	routeA.ResolvedVia = "alias:gpt-4o[1m]"
+	applyRouteIdentity(lcA, &routeA, hops, &Principal{Caller: &plan.CallerPlan{}})
 	if got := lcA.Metadata["resolved_via"]; got != "alias:gpt-4o[1m]" {
 		t.Fatalf("resolved_via: %v", got)
 	}
-
-	// Partial plan (anonymous proxy / header-pinned host): only the host
-	// resolves; policy/model stay untouched. Nil-safe in both arguments.
-	lc2 := lifecycle.NewContext("req2", "proxy", time.Now())
-	applyPlanIdentity(lc2, &routing.Plan{
-		Host: &host.Host{Meta: meta.Metadata{ID: "hid2", Name: "ollama"}},
-	})
-	if lc2.HostID != "hid2" || lc2.HostName != "ollama" {
-		t.Fatalf("partial host: %q/%q", lc2.HostID, lc2.HostName)
+	if lcA.PolicyID != "" {
+		t.Fatalf("policy stamped with no caller policy: %q", lcA.PolicyID)
 	}
-	if lc2.PolicyName != "" || lc2.ModelName != "" || lc2.ProviderName != "" || lc2.PricingID != "" {
-		t.Fatalf("partial plan leaked names: %+v", lc2)
-	}
-	applyPlanIdentity(nil, nil)
+	applyRouteIdentity(nil, nil, nil, nil)
 }
