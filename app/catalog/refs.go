@@ -188,13 +188,17 @@ func outboundRoleBindingRefs(b *rolebinding.RoleBinding) []refKey {
 	return refs
 }
 
-// outboundPolicyBindingRefs returns the Project the binding lives in and
-// the Policy it points at. Both hard.
+// outboundPolicyBindingRefs returns the Policy the binding points at and
+// the Project or Team owning it. All hard.
 func outboundPolicyBindingRefs(b *policybinding.PolicyBinding) []refKey {
-	return []refKey{
-		{Kind: refProject, ID: b.Spec.ProjectID},
-		{Kind: refPolicy, ID: b.Spec.PolicyID},
+	refs := []refKey{{Kind: refPolicy, ID: b.Spec.PolicyID}}
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		refs = append(refs, refKey{Kind: refProject, ID: b.Meta.Owner.ID})
+	case meta.OwnerTeam:
+		refs = append(refs, refKey{Kind: refTeam, ID: b.Meta.Owner.ID})
 	}
+	return refs
 }
 
 // registerRefs records that `child` depends on every entry in `parents`.

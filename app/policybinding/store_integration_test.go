@@ -109,6 +109,69 @@ func TestIntegration_SubjectsOfEveryKindRoundTripAndDropOut(t *testing.T) {
 	}
 }
 
+// A binding's owner round-trips through its columns: a project, a team or the system. Deleting the owning team deletes its binding.
+func TestIntegration_OwnersRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := storagetest.Pool(t)
+	teams := team.NewStore(db)
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "owners", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := teams.Upsert(ctx, tm); err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+	prj := &project.Project{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "owners", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}},
+		Spec: project.Spec{TeamID: tm.Meta.ID},
+	}
+	if err := project.NewStore(db).Upsert(ctx, prj); err != nil {
+		t.Fatalf("upsert project: %v", err)
+	}
+	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "owners", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := policy.NewStore(db).Upsert(ctx, pol); err != nil {
+		t.Fatalf("upsert policy: %v", err)
+	}
+	store := policybinding.NewStore(db)
+	for i, owner := range []meta.Owner{
+		{Kind: meta.OwnerSystem},
+		{Kind: meta.OwnerTeam, ID: tm.Meta.ID},
+		{Kind: meta.OwnerProject, ID: prj.Meta.ID},
+	} {
+		b := &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: "owned-by-" + string(owner.Kind), Owner: owner},
+			Spec: policybinding.Spec{PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{{Kind: policybinding.SubjectProject, ID: prj.Meta.ID}}},
+		}
+		if i > 0 {
+			// One binding per subject: each owner binds a subject of its own.
+			b.Spec.Subjects[0] = rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "g-" + string(owner.Kind)}
+		}
+		if err := store.Upsert(ctx, b); err != nil {
+			t.Fatalf("upsert %s-owned: %v", owner.Kind, err)
+		}
+		got, err := store.Get(ctx, b.Meta.ID)
+		if err != nil || got == nil {
+			t.Fatalf("get %s-owned: %v (row %v)", owner.Kind, err, got)
+		}
+		wantProject := ""
+		if owner.Kind == meta.OwnerProject {
+			wantProject = owner.ID
+		}
+		if got.Meta.Owner != owner || got.Spec.ProjectID != wantProject {
+			t.Fatalf("%s-owned read back as owner %+v projectId %q", owner.Kind, got.Meta.Owner, got.Spec.ProjectID)
+		}
+	}
+	if err := teams.Delete(ctx, tm.Meta.ID); err != nil {
+		t.Fatalf("delete team: %v", err)
+	}
+	all, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, b := range all {
+		if b.Meta.Owner.Kind == meta.OwnerTeam {
+			t.Fatalf("binding %s outlived its team", b.Meta.Name)
+		}
+	}
+}
+
 // A subject with an id is held by one binding: a second binding naming it is refused by the store's own index, so two writes racing past the save-time check cannot both land. Group subjects may repeat.
 func TestIntegration_SubjectHeldByOneBinding(t *testing.T) {
 	ctx := context.Background()

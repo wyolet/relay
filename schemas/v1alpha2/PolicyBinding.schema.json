@@ -28,7 +28,6 @@
         }
       },
       "required": [
-        "project",
         "policy",
         "subjects"
       ],

@@ -81,9 +81,14 @@ func (s *Store) Get(ctx context.Context, id string) (*PolicyBinding, error) {
 	return b, nil
 }
 
-// Upsert re-derives Owner from ProjectID.
+// Upsert re-derives Owner from ProjectID when the owner is a project.
 func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	b.StampOwner()
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerSystem, meta.OwnerTeam, meta.OwnerProject:
+	default:
+		return fmt.Errorf("policybinding.Upsert: owner.kind must be system, team or project, got %q", b.Meta.Owner.Kind)
+	}
 	params, err := toUpsertParams(b)
 	if err != nil {
 		return fmt.Errorf("policybinding.Upsert: %w", err)
@@ -166,14 +171,21 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	if err := json.Unmarshal(r.Spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	sp.ProjectID = r.ProjectID
+	sp.ProjectID = r.ProjectID.String
 	sp.PolicyID = r.PolicyID
 	prio := int(r.Priority)
 	sp.Priority = &prio
 	sp.Subjects = nil
-	b := &PolicyBinding{Meta: md, Spec: sp}
-	b.StampOwner()
-	return b, nil
+	// The owner columns are the truth; the metadata copy is ignored.
+	switch {
+	case r.ProjectID.Valid:
+		md.Owner = meta.Owner{Kind: meta.OwnerProject, ID: r.ProjectID.String}
+	case r.TeamID.Valid:
+		md.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: r.TeamID.String}
+	default:
+		md.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	}
+	return &PolicyBinding{Meta: md, Spec: sp}, nil
 }
 
 func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
@@ -196,11 +208,16 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, err
 	}
+	var teamID string
+	if b.Meta.Owner.Kind == meta.OwnerTeam {
+		teamID = b.Meta.Owner.ID
+	}
 	return gen.UpsertPolicyBindingParams{
 		ID:              b.Meta.ID,
 		Name:            b.Meta.Name,
 		DisplayName:     b.Meta.DisplayName,
-		ProjectID:       b.Spec.ProjectID,
+		ProjectID:       text(b.Spec.ProjectID),
+		TeamID:          text(teamID),
 		PolicyID:        b.Spec.PolicyID,
 		Priority:        int32(b.EffectivePriority()),
 		Metadata:        metaJSON,

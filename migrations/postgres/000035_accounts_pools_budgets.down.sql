@@ -1,6 +1,11 @@
--- Reverse 000035. Policy-binding subjects of the added kinds are deleted: the restored check refuses them. A HostKey's spec.accountId is left in place; older releases ignore it.
+-- Reverse 000035. Policy-binding subjects of the added kinds, and bindings owned by a team or the system, are deleted: the restored checks refuse them. A HostKey's spec.accountId is left in place; older releases ignore it.
 
 DROP INDEX IF EXISTS policy_binding_subjects_one_binding;
+DELETE FROM policy_bindings WHERE project_id IS NULL;
+DROP INDEX IF EXISTS policy_bindings_team_idx;
+ALTER TABLE policy_bindings DROP CONSTRAINT IF EXISTS policy_bindings_one_owner;
+ALTER TABLE policy_bindings DROP COLUMN IF EXISTS team_id;
+ALTER TABLE policy_bindings ALTER COLUMN project_id SET NOT NULL;
 DELETE FROM policy_binding_subjects WHERE kind NOT IN ('user', 'group', 'serviceaccount');
 ALTER TABLE policy_binding_subjects DROP CONSTRAINT IF EXISTS policy_binding_subjects_kind_check;
 ALTER TABLE policy_binding_subjects ADD CONSTRAINT policy_binding_subjects_kind_check

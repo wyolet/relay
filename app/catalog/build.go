@@ -129,7 +129,7 @@ func build(
 	// Bindings last: they sanitize against the roles, tenancy rows and
 	// policies already indexed above.
 	s.addRoleBindings(roleBindings, snapIDs(s.rolesByID), snapIDs(s.teamsByID), snapIDs(s.projectsByID))
-	s.addPolicyBindings(policyBindings, snapIDs(s.projectsByID), s.policyResolvable)
+	s.addPolicyBindings(policyBindings, s.ownerScopeExists, s.policyResolvable)
 
 	return s
 }

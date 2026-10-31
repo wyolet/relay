@@ -1,4 +1,4 @@
--- 000035: accounts, pools, budgets; policy links to them; more policy-binding subject kinds.
+-- 000035: accounts, pools, budgets; policy links to them; more policy-binding subject kinds; team- and system-owned policy bindings.
 --
 -- Account is a provider org on one host; Pool is an ordered set of one host's keys; Budget is a recurring USD cap. host_id is a column so a host delete cascades, as for pricings and host_bindings.
 --
@@ -100,6 +100,12 @@ CREATE INDEX IF NOT EXISTS policy_binding_subjects_account_idx    ON policy_bind
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_credential_idx ON policy_binding_subjects (subject_credential_id);
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_team_idx       ON policy_binding_subjects (subject_team_id);
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_project_idx    ON policy_binding_subjects (subject_project_id);
+-- A policy binding is owned by a project (project_id), a team (team_id) or the system (neither); deleting the owner deletes the binding.
+ALTER TABLE policy_bindings ALTER COLUMN project_id DROP NOT NULL;
+ALTER TABLE policy_bindings ADD COLUMN IF NOT EXISTS team_id TEXT REFERENCES teams(id) ON DELETE CASCADE;
+ALTER TABLE policy_bindings DROP CONSTRAINT IF EXISTS policy_bindings_one_owner;
+ALTER TABLE policy_bindings ADD CONSTRAINT policy_bindings_one_owner CHECK (project_id IS NULL OR team_id IS NULL);
+CREATE INDEX IF NOT EXISTS policy_bindings_team_idx ON policy_bindings (team_id);
 -- A subject is bound to at most one policy, across every binding. Group subjects carry a name, not an id, and are not policy rungs. Subjects already in two bindings stop the upgrade, listed, so the operator chooses which binding keeps them.
 DO $$
 DECLARE

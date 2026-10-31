@@ -154,7 +154,7 @@ type PolicyBinding struct {
 	ID              string             `db:"id" json:"id"`
 	Name            string             `db:"name" json:"name"`
 	DisplayName     string             `db:"display_name" json:"display_name"`
-	ProjectID       string             `db:"project_id" json:"project_id"`
+	ProjectID       pgtype.Text        `db:"project_id" json:"project_id"`
 	PolicyID        string             `db:"policy_id" json:"policy_id"`
 	Priority        int32              `db:"priority" json:"priority"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
@@ -162,6 +162,7 @@ type PolicyBinding struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	TeamID          pgtype.Text        `db:"team_id" json:"team_id"`
 }
 
 type PolicyBindingSubject struct {

@@ -53,13 +53,41 @@ func TestValidate(t *testing.T) {
 			want: "Priority",
 		},
 		{
-			name: "team owner rejected",
+			name: "team owner without a project",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+		},
+		{
+			name: "system owner without a project",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+		},
+		{
+			name: "team owner with a projectId",
 			b: func() *PolicyBinding {
 				b := fix()
 				b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
 				return b
 			}(),
-			want: "owner.kind must be project",
+			want: "spec.projectId must be empty",
+		},
+		{
+			name: "user owner rejected",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+			want: "owner.kind must be system, team or project",
 		},
 		{
 			name: "owner id drifted from projectId",

@@ -121,8 +121,8 @@ func validateRoleBindingInSnap(b *rolebinding.RoleBinding, s *Snapshot) error {
 }
 
 func validatePolicyBindingInSnap(b *policybinding.PolicyBinding, s *Snapshot) error {
-	if _, ok := s.projectsByID[b.Spec.ProjectID]; !ok {
-		return fmt.Errorf("policybinding %q: spec.projectId %q does not resolve", b.Meta.Name, b.Spec.ProjectID)
+	if !s.ownerScopeExists(b.Meta.Owner) {
+		return fmt.Errorf("policybinding %q: owner %s %q does not resolve", b.Meta.Name, b.Meta.Owner.Kind, b.Meta.Owner.ID)
 	}
 	if !s.policyResolvable(b.Spec.PolicyID) {
 		return fmt.Errorf("policybinding %q: spec.policyId %q does not resolve", b.Meta.Name, b.Spec.PolicyID)
