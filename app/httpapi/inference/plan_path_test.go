@@ -5,15 +5,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
@@ -151,6 +154,97 @@ func TestFrameReauthenticates(t *testing.T) {
 	w = httptest.NewRecorder()
 	if _, ok := st.auth.reauthenticate(w, tokenPrincipal); ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("signed-out token: ok=%v status %d, want a 401", ok, w.Code)
+	}
+}
+
+// An upstream token count spends a credential, so it holds the caller's counters like a generation: the second count under a one-request budget is refused before the upstream.
+func TestCountTokens_UpstreamCountIsMetered(t *testing.T) {
+	var hits int
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"input_tokens":7}`))
+	}))
+	defer up.Close()
+	cat, rk := countCatalog(t, up.URL)
+	limitCaller(t, cat, 1)
+	d := buildRunnableDeps(t, cat)
+	useSpecs(&d, countingRegistry())
+	d.Profiles = profileRegistry(newCountProfile())
+
+	body := `{"model":"test-model","messages":[]}`
+	if count, tier := countAnswer(t, countRequest(d, rk, body, nil)); count != 7 || tier != "exact" {
+		t.Fatalf("first count = %d/%s, want 7/exact", count, tier)
+	}
+	w := countRequest(d, rk, body, nil)
+	if w.Code != http.StatusTooManyRequests || errCode(t, w.Body.Bytes()) != "rate_limit_exceeded" {
+		t.Fatalf("second count = %d %s, want 429 rate_limit_exceeded", w.Code, w.Body)
+	}
+	if hits != 1 {
+		t.Fatalf("upstream counted %d times, want 1", hits)
+	}
+}
+
+// Bringing an upstream key does not lift the operator's proxy ceiling: an authed proxy request holds the system bucket per credential, beside the caller's own counters, and an anonymous one holds the anonymous bucket per client IP.
+func TestProxy_SystemCeiling(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer up.Close()
+	for _, tc := range []struct {
+		name, bucket string
+		authed       bool
+	}{
+		{"authed", systemRLProxyAuthed, true},
+		{"anonymous", systemRLProxyAnon, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ceiling := &ratelimit.RateLimit{
+				Meta: meta.Metadata{ID: meta.NewID(), Name: tc.bucket, Owner: meta.Owner{Kind: meta.OwnerSystem}},
+				Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 1, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow}}},
+			}
+			d, pr, _ := proxyStreamDepsLimited(t, up.URL, 1<<40, ceiling)
+			call := proxyShapeCall{pin: "anthropic", length: -1}
+			if tc.authed {
+				call.principal = pr
+			}
+			send := func() *httptest.ResponseRecorder {
+				call.body = strings.NewReader(`{"model":"test-model","messages":[]}`)
+				return serveProxyShape(d, call)
+			}
+			if w := send(); w.Code != http.StatusOK {
+				t.Fatalf("first request = %d %s", w.Code, w.Body)
+			}
+			w := send()
+			if w.Code != http.StatusTooManyRequests || errCode(t, w.Body.Bytes()) != "rate_limit_exceeded" {
+				t.Fatalf("second request = %d %s, want the ceiling's 429", w.Code, w.Body)
+			}
+		})
+	}
+}
+
+// Payload capture: the innermost caller policy decides when one governs, else the key's own flag.
+func TestCapturesPayload(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name           string
+		policyCaptures *bool
+		keyCaptures    bool
+		want           bool
+	}{
+		{"policy on, key off", &on, false, true},
+		{"policy off, key on", &off, true, false},
+		{"no policy, key on", nil, true, true},
+		{"no policy, key off", nil, false, false},
+	} {
+		cp := &plan.CallerPlan{}
+		if tc.policyCaptures != nil {
+			cp.Rungs[1].Policy = &plan.ExpandedPolicy{Policy: &policy.Policy{Spec: policy.Spec{PayloadLoggingEnabled: *tc.policyCaptures}}}
+		}
+		p := &Principal{Caller: cp, PayloadLogging: tc.keyCaptures}
+		if got := p.CapturesPayload(); got != tc.want {
+			t.Errorf("%s: captures = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

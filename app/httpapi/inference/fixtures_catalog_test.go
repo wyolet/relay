@@ -13,7 +13,10 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan/plantest"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/rolebinding"
 )
 
 // dispatchFixture is the plans behind one buildDispatchCatalog catalog, so a later edit (pointHostAt) reaches the principal the test already holds.
@@ -86,6 +89,20 @@ func applyModel(t *testing.T, cat *catalog.Catalog, m *model.Model) error {
 	plantest.Apply(t, f.plans, m)
 	*f.principal = *f.resolve(t)
 	return cat.ApplyModelUpsert(m)
+}
+
+// limitCaller binds a policy capping the fixture user at perHour requests an hour, and refreshes the principal the test holds.
+func limitCaller(t *testing.T, cat *catalog.Catalog, perHour int64) {
+	t.Helper()
+	f := fixtureOf(t, cat)
+	var w plantest.World
+	rl := w.RateLimit(ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: perHour, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow})
+	pol := w.Policy("hourly", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
+	pb := w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, f.principal.UserID))
+	plantest.Apply(t, f.plans, rl)
+	plantest.Apply(t, f.plans, pol)
+	plantest.Apply(t, f.plans, pb)
+	*f.principal = *f.resolve(t)
 }
 
 // resolve is the principal the fixture's key authenticates as now.
