@@ -201,8 +201,7 @@ func (b *batch) markDuplicates() {
 	}
 }
 
-// publish freezes the working state into the next View when the batch
-// changed anything (always when force), then reports cell links and stats.
+// publish freezes the working state into the next View when the batch changed anything (always when force), then reports cell links and queues the hooks.
 func (b *batch) publish(force bool) {
 	e := b.e
 	b.markDuplicates()
@@ -224,10 +223,12 @@ func (b *batch) publish(force bool) {
 	b.stats.Gen = v.gen
 	b.stats.Duration = time.Since(b.start)
 	if h := e.opts.Hooks.OnBatchAbandoned; h != nil && b.abandoned {
-		h(v.gen, b.stats.Rounds)
+		gen, rounds := v.gen, b.stats.Rounds
+		e.hooks.add(func() { h(gen, rounds) })
 	}
 	if h := e.opts.Hooks.OnPublish; h != nil {
-		h(v, b.stats)
+		s := b.stats
+		e.hooks.add(func() { h(v, s) })
 	}
 }
 

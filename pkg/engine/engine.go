@@ -29,6 +29,8 @@ type Engine struct {
 	queue map[Ref]Event
 	wake  chan struct{}
 
+	hooks hookQueue
+
 	sealed   atomic.Bool // registration closed
 	loaded   atomic.Bool
 	closed   atomic.Bool
@@ -67,8 +69,9 @@ type Options struct {
 	Cells     cell.Linker // the cell registry; nil disables Txn.Link
 }
 
-// Hooks are the observation points; every field is optional, so a caller sets
-// one without implementing the rest.
+// Hooks are the observation points; every field is optional, so a caller sets one without implementing the rest.
+//
+// Hooks run after the engine lock is released, one call at a time and in the order their events happened (OnPublish in generation order), so a hook may call Apply, Delete or Resync; it must not call Close.
 type Hooks struct {
 	OnPublish        func(v *View, s PublishStats)
 	OnReconcileError func(controller string, out Ref, err error)
@@ -114,6 +117,7 @@ func New(o Options) *Engine {
 		ctx:      ctx,
 		cancel:   cancel,
 	}
+	e.hooks.init()
 	e.view.Store(emptyView(e.sch))
 	return e
 }
@@ -124,9 +128,14 @@ func (e *Engine) mustBeUnloaded(what string) {
 	}
 }
 
-// Load lists every input kind through its Source, runs every controller to
-// fixpoint and publishes generation 1. Boot and nothing else.
+// Load lists every input kind through its Source, runs every controller to fixpoint and publishes generation 1. Boot and nothing else; the hooks for generation 1 have run when it returns.
 func (e *Engine) Load(ctx context.Context) error {
+	err := e.load(ctx)
+	e.hooks.flush()
+	return err
+}
+
+func (e *Engine) load(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
@@ -223,7 +232,7 @@ func (e *Engine) kick() {
 // View returns the current published view; cheap and lock-free.
 func (e *Engine) View() *View { return e.view.Load() }
 
-// Close drains the queue once and stops. No publish after it returns.
+// Close drains the queue once and stops. No publish and no hook call after it returns.
 func (e *Engine) Close() error {
 	if !e.closed.CompareAndSwap(false, true) {
 		return nil
@@ -236,11 +245,12 @@ func (e *Engine) Close() error {
 		<-e.loopDone
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if started {
 		e.drainLocked(context.Background())
 	}
 	e.stopped = true
 	e.cancel()
+	e.mu.Unlock()
+	e.hooks.flush()
 	return nil
 }
