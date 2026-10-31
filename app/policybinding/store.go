@@ -1,5 +1,5 @@
 // Subjects live in the policy_binding_subjects junction, where a subject with
-// an id also fills the matching FK column so a deleted principal drops out.
+// an id also fills the matching FK column so a deleted row drops out.
 
 package policybinding
 
@@ -98,13 +98,18 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	for i := range b.Spec.Subjects {
 		sub := &b.Spec.Subjects[i]
 		if err := q.InsertPolicyBindingSubject(ctx, gen.InsertPolicyBindingSubjectParams{
-			BindingID:     b.Meta.ID,
-			Kind:          string(sub.Kind),
-			SubjectID:     text(sub.ID),
-			SubjectName:   text(sub.Name),
-			SubjectUserID: text(subjectFK(sub, rolebinding.SubjectUser)),
-			SubjectSaID:   text(subjectFK(sub, rolebinding.SubjectServiceAccount)),
-			Position:      int32(i),
+			BindingID:           b.Meta.ID,
+			Kind:                string(sub.Kind),
+			SubjectID:           text(sub.ID),
+			SubjectName:         text(sub.Name),
+			SubjectUserID:       text(subjectFK(sub, rolebinding.SubjectUser)),
+			SubjectSaID:         text(subjectFK(sub, rolebinding.SubjectServiceAccount)),
+			SubjectHostID:       text(subjectFK(sub, SubjectHost)),
+			SubjectAccountID:    text(subjectFK(sub, SubjectAccount)),
+			SubjectCredentialID: text(subjectFK(sub, SubjectCredential)),
+			SubjectTeamID:       text(subjectFK(sub, SubjectTeam)),
+			SubjectProjectID:    text(subjectFK(sub, SubjectProject)),
+			Position:            int32(i),
 		}); err != nil {
 			return fmt.Errorf("policybinding.Upsert: insert subject %s: %w", sub.Key(), err)
 		}
