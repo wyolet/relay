@@ -101,6 +101,8 @@ type stack struct {
 	adminToken string
 	audit      *audit.Store
 	lifecycle  *lifecycle.Registry
+	engine     *engine.Engine
+	plans      *plan.Holder
 }
 
 // newStack boots the relay against a fresh database of its own. Returns a
@@ -312,7 +314,28 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		adminToken: adminToken,
 		audit:      auditStore,
 		lifecycle:  lifecycleReg,
+		engine:     eng,
+		plans:      plans,
 	}
+}
+
+// reload rebuilds the catalog snapshot and resyncs the plans from the stores, returning once the request path reads the resynced plans: a seed written straight to the stores must not race their notifications.
+func (s *stack) reload(ctx context.Context) error {
+	if err := s.cat.Reload(ctx); err != nil {
+		return err
+	}
+	if err := s.engine.Resync(ctx); err != nil {
+		return err
+	}
+	want := uint64(s.engine.View().Gen())
+	deadline := time.Now().Add(5 * time.Second)
+	for r := s.plans.Load(); r == nil || r.Gen < want; r = s.plans.Load() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("plans generation %d never published", want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil
 }
 
 // seedHappyPath wires the minimum catalog needed for a successful
@@ -351,8 +374,9 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		s.t.Fatalf("setenv: %v", err)
 	}
 	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
+	// System-owned, so every principal reaches it without a caller policy linking it.
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
 			PolicyID:  hostTier.Meta.ID,
@@ -402,9 +426,9 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	}
 	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
 
-	// Force a snapshot rebuild rather than racing the 1s NOTIFY debouncer.
-	if err := s.cat.Reload(ctx); err != nil {
-		s.t.Fatalf("catalog.Reload: %v", err)
+	// Force a rebuild rather than racing the NOTIFY debouncer.
+	if err := s.reload(ctx); err != nil {
+		s.t.Fatalf("reload: %v", err)
 	}
 
 	return keyPlain
@@ -1037,7 +1061,7 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string
 	}
 	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
 
-	if err := s.cat.Reload(ctx); err != nil {
+	if err := s.reload(ctx); err != nil {
 		s.t.Fatalf("Reload: %v", err)
 	}
 	return hst.Meta.Name, keyPlain
@@ -1232,9 +1256,9 @@ func TestE2E_KeyRotate(t *testing.T) {
 		t.Fatalf("rotation must not change PolicyID: want %q, got %q", policyID, rot.Key.Spec.PolicyID)
 	}
 
-	// Force a snapshot rebuild rather than racing the NOTIFY debouncer.
-	if err := st.cat.Reload(ctx); err != nil {
-		t.Fatalf("catalog.Reload: %v", err)
+	// Force a rebuild rather than racing the NOTIFY debouncer.
+	if err := st.reload(ctx); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	if got := infer(oldKey); got != http.StatusUnauthorized {
 		t.Fatalf("post-rotate inference with OLD key: want 401, got %d", got)

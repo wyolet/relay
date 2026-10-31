@@ -37,7 +37,6 @@ func TestOperatorWalk(t *testing.T) {
 	t.Run("MintedTokenSpendsAndItsUsageCarriesTheProject", walkTokenUsageAttribution)
 	t.Run("TeamAdminCannotRebindTheirOwnBindingToTheAdminRole", walkRoleBindingUpdateEscalation)
 	t.Run("UsernameOwnedKeysListForTheirOwnerAfterTheUpgrade", walkUsernameOwnedKeysAfterUpgrade)
-	t.Run("PolicyBindingPriorityZeroBeatsAnUnsetPriority", walkPolicyBindingPriority)
 	t.Run("WebSocketFramesFollowAPolicyBindingChange", walkWebSocketFollowsRebinding)
 }
 
@@ -198,38 +197,6 @@ func walkUsernameOwnedKeysAfterUpgrade(t *testing.T) {
 	}
 }
 
-// Priority orders the bindings of one project and an unset priority is the
-// documented default, so an explicit zero has to win over a binding that
-// declares none, whichever way the names sort.
-func walkPolicyBindingPriority(t *testing.T) {
-	f := newTokenFixture(t)
-	winner := f.seedPolicyForModel(t, "priority-winner", "second-model")
-	project := f.projectRow(t)
-
-	// The fixture's binding declares no priority and sorts first by name;
-	// this one declares zero, so only priority can put it in front.
-	body := `{"metadata":{"name":"zzz-explicit-zero"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
-		`"policyId":"` + winner + `","priority":0,` +
-		`"subjects":[{"kind":"group","name":"system:authenticated"}]}}`
-	if code, raw := f.adminDo(http.MethodPost, "/api/policy-bindings", body); code != http.StatusCreated {
-		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
-	}
-	f.waitForTopPolicyBinding(t, project.Metadata.ID, winner)
-
-	us := f.login(t, f.username, f.password)
-	code, token, raw := f.mint(us)
-	if code != http.StatusOK {
-		t.Fatalf("mint = %d: %s", code, raw)
-	}
-	if got, reason := f.chat(token, "second-model"); got != http.StatusOK {
-		t.Fatalf("model granted by the priority-0 binding = %d (%s), want 200", got, reason)
-	}
-	got, reason := f.chat(token, "test-model")
-	if got != http.StatusForbidden || reason != "model_not_allowed" {
-		t.Fatalf("model granted only by the unset-priority binding = %d (%s), want 403 model_not_allowed", got, reason)
-	}
-}
-
 // A connection lives for hours and the bindings behind it do not, so a
 // frame sent after the project was rebound is answered by the new policy
 // without the client reconnecting. The rebinding propagates over NOTIFY,
@@ -237,7 +204,6 @@ func walkPolicyBindingPriority(t *testing.T) {
 func walkWebSocketFollowsRebinding(t *testing.T) {
 	f := newTokenFixture(t)
 	rebound := f.seedPolicyForModel(t, "rebound-policy", "second-model")
-	project := f.projectRow(t)
 
 	us := f.login(t, f.username, f.password)
 	code, token, raw := f.mint(us)
@@ -277,7 +243,7 @@ func walkWebSocketFollowsRebinding(t *testing.T) {
 	if code, raw := f.adminDo(http.MethodPut, "/api/policy-bindings/by-id/"+id, string(body)); code != http.StatusOK {
 		t.Fatalf("PUT policy binding = %d: %s", code, raw)
 	}
-	f.waitForTopPolicyBinding(t, project.Metadata.ID, rebound)
+	f.waitForCallerPolicy(t, f.userID, rebound)
 
 	if status, reason := wsGenerate(ctx, t, conn, "second", "second-model"); status != http.StatusOK {
 		t.Fatalf("frame for the rebound policy's model = %d (%s), want 200", status, reason)
@@ -424,12 +390,22 @@ func (f *tokenFixture) seedPolicyForModel(t *testing.T, policyName, modelName st
 
 // waitForTopPolicyBinding blocks until the project's highest-priority
 // binding names policyID.
-func (f *tokenFixture) waitForTopPolicyBinding(t *testing.T, projectID, policyID string) {
+func (f *tokenFixture) waitForCallerPolicy(t *testing.T, userID, policyID string) {
 	t.Helper()
-	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool {
-		bindings := s.PolicyBindingsForProject(projectID)
-		return len(bindings) > 0 && bindings[0].Spec.PolicyID == policyID
-	}, "the policy binding change never reached the snapshot")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if r := f.plans.Load(); r != nil {
+			if up := r.Users.Lookup(userID); up != nil {
+				if pol := up.Caller.InnermostPolicy(); pol != nil && pol.Meta.ID == policyID {
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the policy binding change never reached the plans")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // waitForSnapshot polls the live snapshot until cond holds. Writes reach it

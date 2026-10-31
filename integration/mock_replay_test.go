@@ -263,7 +263,7 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	}
 	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
 			PolicyID:  hostTier.Meta.ID,
@@ -308,7 +308,7 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 		},
 	}
 	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
-	if err := s.cat.Reload(ctx); err != nil {
+	if err := s.reload(ctx); err != nil {
 		s.t.Fatalf("Reload: %v", err)
 	}
 	return keyPlain
