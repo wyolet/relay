@@ -28,10 +28,11 @@ type RouteTable struct {
 	misses atomic.Uint64
 }
 
+// routeShard allocates on its first fill: most principals touch a few models, and a table exists per principal.
 type routeShard struct {
 	mu     sync.RWMutex
 	routes map[string]*Route
-	order  [routesPerShard]string // ring of filled refs, oldest dropped first
+	order  []string // ring of filled refs, oldest dropped first
 	next   int
 }
 
@@ -80,6 +81,7 @@ func (t *RouteTable) Get(ref string) *Route {
 	r = t.fill(ref)
 	if sh.routes == nil {
 		sh.routes = make(map[string]*Route)
+		sh.order = make([]string, routesPerShard)
 	}
 	if old := sh.order[sh.next]; old != "" {
 		delete(sh.routes, old)
