@@ -27,11 +27,12 @@ type planEngine struct {
 	cells  *cell.Registry
 	plans  *plan.Holder
 	idle   time.Duration
+	resync time.Duration
 }
 
 // buildPlanEngine registers the plan kinds and controllers over the PG stores. Nothing is loaded until load.
 func buildPlanEngine(cfg *config.Config, st *storagemod.Storage, stores *appcatalog.Stores, users *user.Store) *planEngine {
-	pe := &planEngine{plans: &plan.Holder{}, idle: cfg.PlanCellIdle}
+	pe := &planEngine{plans: &plan.Holder{}, idle: cfg.PlanCellIdle, resync: cfg.PlanResync}
 	pe.cells = cell.NewRegistry(cell.Options{IdleTTL: cfg.PlanCellIdle})
 	pe.engine = engine.New(engine.Options{
 		Debounce: planDebounce,
@@ -80,7 +81,26 @@ func (pe *planEngine) load(ctx context.Context) error {
 		return err
 	}
 	slog.Info("plans: loaded", "generation", pe.engine.View().Gen(), "duration", time.Since(start))
+	if pe.resync > 0 {
+		go pe.resyncEvery(ctx)
+	}
 	return nil
+}
+
+// resyncEvery lists every kind again on the interval until ctx ends, so a notification that never arrived is healed; nothing is published unless a row differs.
+func (pe *planEngine) resyncEvery(ctx context.Context) {
+	t := time.NewTicker(pe.resync)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := pe.engine.Resync(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("plans: periodic resync failed", "err", err)
+			}
+		}
+	}
 }
 
 // expireCells drops runtime state no plan has linked for the idle window, until ctx ends.

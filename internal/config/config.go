@@ -133,6 +133,9 @@ type Config struct {
 	// PlanCellIdle is how long runtime state no published plan links any more (a rotated credential's breaker copy, a deleted pool's rotation) is kept before it is dropped (RELAY_PLAN_CELL_IDLE_S, default 600). A plan that links it again within the window gets it back.
 	PlanCellIdle time.Duration
 
+	// PlanResync is how often the plans are listed again from Postgres and compared with what they hold (RELAY_PLAN_RESYNC_S, default 600; 0 disables), the safety net for a catalog notification that never arrived. It publishes only when a row differs.
+	PlanResync time.Duration
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
@@ -458,6 +461,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_PLAN_CELL_IDLE_S must be >= 1")
 	} else {
 		cfg.PlanCellIdle = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_PLAN_RESYNC_S", 600); v < 0 {
+		return nil, fmt.Errorf("RELAY_PLAN_RESYNC_S must be >= 0")
+	} else {
+		cfg.PlanResync = time.Duration(v) * time.Second
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
