@@ -46,6 +46,7 @@ type Store interface {
 	// before returning; a per-command failure goes in Reply.Err. A returned
 	// error means the round trip failed and Replies may not have run.
 	Pipeline(ctx context.Context, cmds []Cmd) error
+	// Publish sends payload to channel's subscribers and returns once ctx ends at the latest.
 	Publish(ctx context.Context, channel string, payload []byte) error
 	// Subscribe delivers payloads until ctx ends or stop is called,
 	// reconnecting internally.

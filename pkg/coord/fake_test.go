@@ -125,12 +125,16 @@ func (s *fakeStore) exec(c Cmd) Reply {
 	return Reply{}
 }
 
-func (s *fakeStore) Publish(_ context.Context, channel string, payload []byte) error {
+func (s *fakeStore) Publish(ctx context.Context, channel string, payload []byte) error {
 	s.mu.Lock()
 	gate := s.gate
 	s.mu.Unlock()
 	if gate != nil {
-		<-gate
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	s.mu.Lock()
 	if s.down {
