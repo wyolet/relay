@@ -40,11 +40,14 @@ type Principal struct {
 }
 
 // CapturesPayload reports whether this principal's requests have their
-// bodies captured, the same answer on every runner: the credential's own
-// opt-in, until capture becomes a scope setting. Nil (anonymous proxy
-// traffic) carries no opt-in and captures nothing.
+// bodies captured, the same answer on every runner: the innermost caller
+// policy decides when one governs, else the credential's own opt-in. Nil
+// (anonymous proxy traffic) carries no opt-in and captures nothing.
 func (p *Principal) CapturesPayload() bool {
-	return p != nil && p.PayloadLogging
+	if p == nil {
+		return false
+	}
+	return policy.CapturesPayload(p.Policy(), p.PayloadLogging)
 }
 
 // Policy returns the innermost caller policy, nil when no caller rung binds one. Nil-safe so error paths can call it unguarded.

@@ -32,8 +32,8 @@ func proxyStreamDeps(tb testing.TB, upstreamURL string) (Deps, *Principal, *kvte
 	return proxyStreamDepsLimited(tb, upstreamURL, 1<<40)
 }
 
-// proxyStreamDepsLimited is proxyStreamDeps with the policy allowing perHour requests.
-func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64) (Deps, *Principal, *kvtest.Recording) {
+// proxyStreamDepsLimited is proxyStreamDeps with the policy allowing perHour requests; system rate limits join the catalog.
+func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64, system ...*ratelimit.RateLimit) (Deps, *Principal, *kvtest.Recording) {
 	tb.Helper()
 	var w plantest.World
 	prov := w.Provider("anthropic")
@@ -49,7 +49,7 @@ func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64) (D
 	pol := w.Policy("p", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
 	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
 	plans := w.Load(tb)
-	cat := catalogtest.Catalog{Providers: w.Providers, Hosts: w.Hosts, Models: w.Models, Bindings: w.Bindings, HostKeys: w.Credentials, Keys: w.Keys}.Load(tb)
+	cat := catalogtest.Catalog{Providers: w.Providers, Hosts: w.Hosts, Models: w.Models, Bindings: w.Bindings, HostKeys: w.Credentials, Keys: w.Keys, RateLimits: system}.Load(tb)
 
 	mem := kv.NewMem()
 	pkgratelimit.RegisterScripts(mem)
@@ -64,10 +64,21 @@ func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64) (D
 	return d, principalOf(kp, k.Spec.KeyHash), store
 }
 
-// withPayloadLogging is pr with its key's own capture flag set.
+// withPayloadLogging is pr under a copy of its innermost caller policy that captures payloads.
 func withPayloadLogging(pr *Principal) *Principal {
+	caller := *pr.Caller
+	for i := len(caller.Rungs) - 1; i >= 0; i-- {
+		if ep := caller.Rungs[i].Policy; ep != nil {
+			pol := *ep.Policy
+			pol.Spec.PayloadLoggingEnabled = true
+			epc := *ep
+			epc.Policy = &pol
+			caller.Rungs[i].Policy = &epc
+			break
+		}
+	}
 	cp := *pr
-	cp.PayloadLogging = true
+	cp.Caller = &caller
 	return &cp
 }
 
