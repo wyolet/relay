@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -69,6 +70,10 @@ type List struct {
 	store Store
 	set   Set
 	now   func() time.Time
+	// mu orders a refresh's replace against a local revocation, so a refresh that read the list before the revocation landed cannot erase it.
+	mu sync.Mutex
+	// pending holds the ids this pod revoked that no read has returned yet, with their expiry.
+	pending map[string]int64
 }
 
 // New returns a list over store with an empty copy; Refresh or Run fills it.
@@ -94,15 +99,31 @@ func (l *List) Revoke(ctx context.Context, id string, exp time.Time) error {
 	if err != nil {
 		return err
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.pending == nil {
+		l.pending = map[string]int64{}
+	}
+	l.pending[id] = exp.Unix()
 	l.set.add(id, exp.Unix())
 	return nil
 }
 
-// Refresh replaces this pod's copy with the shared list.
+// Refresh replaces this pod's copy with the shared list, keeping the ids this pod revoked that the read does not hold yet.
 func (l *List) Refresh(ctx context.Context) error {
-	m, err := l.read(ctx, l.now())
+	now := l.now()
+	m, err := l.read(ctx, now)
 	if err != nil {
 		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id, exp := range l.pending {
+		if _, seen := m[id]; seen || now.Unix() >= exp {
+			delete(l.pending, id)
+			continue
+		}
+		m[id] = exp
 	}
 	l.set.replace(m)
 	return nil
