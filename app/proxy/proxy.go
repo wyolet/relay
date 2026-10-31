@@ -31,8 +31,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
@@ -200,8 +202,12 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	// rejection, upstream network failure) fires a post-flight observer
 	// event so failed proxy requests aren't invisible to usage tracking.
 	// Success returns nil err here and fires post-flight on Body.Close.
-	// A reservation taken before the failure is refunded.
-	var reservation limits.Reservation
+	// A reservation taken before the failure is refunded when the request
+	// never went out, and kept once it was written to the upstream.
+	var (
+		reservation limits.Reservation
+		written     atomic.Bool
+	)
 	refusing, _ := req.Body.(RefusingBody)
 	defer func() {
 		if err != nil {
@@ -211,9 +217,13 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 					err = refused
 				}
 			}
-			// Released before the error returns, so a caller retrying at once never finds its own hold.
+			// Closed before the error returns, so a caller retrying at once never finds its own hold.
 			if reservation != nil {
-				reservation.Release()
+				if written.Load() {
+					reservation.Settle(limits.Usage{})
+				} else {
+					reservation.Release()
+				}
 			}
 			go p.fireFailure(req, err)
 		}
@@ -234,7 +244,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	}
 
 	url := strings.TrimRight(req.HostBaseURL, "/") + req.Path
-	upstream, err := http.NewRequestWithContext(ctx, req.Method, url, req.Body)
+	// The headers going out is the line: before it the upstream saw nothing; after it, a cancellation or a body refused mid-send still reached it.
+	sent := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { written.Store(true) }})
+	upstream, err := http.NewRequestWithContext(sent, req.Method, url, req.Body)
 	if err != nil {
 		return nil, fmt.Errorf("proxy: build upstream request: %w", err)
 	}

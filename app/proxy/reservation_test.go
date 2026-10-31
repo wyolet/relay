@@ -246,6 +246,38 @@ func TestRunKeepsTheChargeWhenTheBodyIsRefusedAfterTheAnswer(t *testing.T) {
 	}
 }
 
+// failingBody sends its first part, then fails: a body refused after the request went out.
+type failingBody struct{ sent bool }
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if b.sent {
+		return 0, &BodyError{Kind: "duplicate_model", Err: errors.New("second model key")}
+	}
+	b.sent = true
+	return copy(p, `{"model":"m",`), nil
+}
+
+// A request that failed after it was written to the upstream keeps its charge; one that never reached it (TestRunRefundsOnThePostFlightStore) is refunded.
+func TestRunKeepsTheChargeOnceTheRequestWentOut(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer upstream.Close()
+	p, _, cs := meteredPipeline(t)
+
+	req := meteredRequest(upstream.URL, cs)
+	req.Body = &failingBody{}
+	var bodyErr *BodyError
+	if _, err := p.Run(context.Background(), req); !errors.As(err, &bodyErr) {
+		t.Fatalf("Run: err = %v, want the body's refusal", err)
+	}
+	_, err := p.Run(context.Background(), meteredRequest(upstream.URL, cs))
+	var refused *limits.Refused
+	if !errors.As(err, &refused) {
+		t.Fatalf("second Run: err = %v, want a refusal: the first request's charge was refunded", err)
+	}
+}
+
 // A hold the store could not answer wraps the store's timeout; its usage row must still read as a kv refusal, not as a timeout.
 func TestClassifyFailureStoreUnavailable(t *testing.T) {
 	err := fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded))
