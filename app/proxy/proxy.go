@@ -8,12 +8,11 @@
 //     handler hands us the resolved BaseURL.
 //   - No keypool, no per-key circuit breaker, no retry/failover. The
 //     caller's Authorization is the upstream credential; one attempt.
-//   - An authed request reserves its governing policy's rate limit as
-//     normal mode does, with the inference-api-proxy system bucket as a
-//     further ceiling in the same Reserve: bringing an upstream key
-//     must not lift the operator's limits. A policy-less key reserves
-//     that system bucket alone; anonymous requests reserve only
-//     inference-api-proxy-anonymous, keyed by client IP.
+//   - An authed request holds its caller ladder's counters as normal
+//     mode does, with the inference-api-proxy system bucket as a further
+//     ceiling: bringing an upstream key must not lift the operator's
+//     limits. Anonymous requests hold only inference-api-proxy-anonymous,
+//     keyed by client IP.
 //   - Same tee + detached post-flight pattern as app/pipeline: the
 //     post-flight goroutine commits the reservation and extracts
 //     tokens for usage logging. Never blocks the response.
@@ -36,7 +35,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/pkg/contentcoding"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
@@ -118,15 +118,11 @@ type Request struct {
 	// supplied (typically "Bearer …"). Forwarded as-is.
 	UpstreamAuth string
 
-	// Inbound, when set, is reserved through Pipeline.Policy and replaces
-	// RateScope/Rules: the authed path, metered by the caller's policy.
-	Inbound *policy.InboundInput
+	// Counters are what the request must fit: an authed caller's own counters and the proxy ceiling, or the anonymous ceiling alone. Empty disables limiting.
+	Counters []limits.Counter
 
-	// RateScope and Rules reserve system-owned rules directly when Inbound
-	// is nil: anonymous (scoped by client IP) and policy-less keys (by key
-	// hash). Empty disables limiting.
-	RateScope string
-	Rules     []pkgratelimit.Rule
+	// Pricing prices the tokens settled against budgets; nil when the request routed to no priced binding.
+	Pricing *pricing.Pricing
 
 	// Extractor parses the upstream response body for usage logging.
 	// nil disables extraction (post-flight still commits the reservation).
@@ -156,11 +152,8 @@ type Result struct {
 // Pipeline is the orchestrator. Constructed once at boot; Run() is
 // goroutine-safe.
 type Pipeline struct {
-	Limiter *pkgratelimit.Limiter
-	// PostFlightLimiter commits a RateScope reservation after the response, or refunds it after a failure, on a kv pool of its own; nil uses Limiter.
-	PostFlightLimiter *pkgratelimit.Limiter
-	// Policy reserves Request.Inbound; required for authed requests.
-	Policy    *policy.Service
+	// Limiter holds and settles Request.Counters; required when a request has any.
+	Limiter   limits.Limiter
 	Lifecycle *lifecycle.Registry
 	Client    *http.Client
 	Logger    *slog.Logger
@@ -172,7 +165,7 @@ type Pipeline struct {
 //
 // lifecycle is optional; pass nil if post-flight observers aren't wired
 // in this deployment (tests, minimal smoke).
-func New(limiter *pkgratelimit.Limiter, registry *lifecycle.Registry, logger *slog.Logger) *Pipeline {
+func New(limiter limits.Limiter, registry *lifecycle.Registry, logger *slog.Logger) *Pipeline {
 	return &Pipeline{
 		Limiter:   limiter,
 		Lifecycle: registry,
@@ -184,9 +177,8 @@ func New(limiter *pkgratelimit.Limiter, registry *lifecycle.Registry, logger *sl
 // ErrNoUpstreamAuth signals the handler forgot to populate UpstreamAuth.
 var ErrNoUpstreamAuth = errors.New("proxy: upstream authorization required")
 
-// ErrPolicyMissing signals an authed request reached a Pipeline with no
-// policy service; refused rather than forwarded unmetered.
-var ErrPolicyMissing = errors.New("proxy: policy service not configured")
+// ErrLimiterMissing signals a request with counters reached a Pipeline with no limiter; refused rather than forwarded unmetered.
+var ErrLimiterMissing = errors.New("proxy: limiter not configured")
 
 // BodyError is returned by a Request.Body reader that refuses the inbound body while it streams upstream, so the upstream received it incomplete. The failure is the caller's request, not the upstream; Kind names it in telemetry.
 type BodyError struct {
@@ -209,7 +201,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	// event so failed proxy requests aren't invisible to usage tracking.
 	// Success returns nil err here and fires post-flight on Body.Close.
 	// A reservation taken before the failure is refunded.
-	var reservation *pkgratelimit.Reservation
+	var reservation limits.Reservation
 	refusing, _ := req.Body.(RefusingBody)
 	defer func() {
 		if err != nil {
@@ -219,11 +211,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 					err = refused
 				}
 			}
-			// Refunded before the error returns, so a caller retrying at once never finds its own slot held.
+			// Released before the error returns, so a caller retrying at once never finds its own hold.
 			if reservation != nil {
-				refundCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refundTimeout)
-				_ = p.refund(refundCtx, req, reservation)
-				cancel()
+				reservation.Release()
 			}
 			go p.fireFailure(req, err)
 		}
@@ -233,17 +223,12 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		return nil, ErrNoUpstreamAuth
 	}
 
-	switch {
-	case req.Inbound != nil:
-		if p.Policy == nil {
-			return nil, ErrPolicyMissing
+	if len(req.Counters) > 0 {
+		if p.Limiter == nil {
+			return nil, ErrLimiterMissing
 		}
-		// 429 / revoked mapping is the caller's.
-		if reservation, err = p.Policy.ReserveInbound(ctx, *req.Inbound); err != nil {
-			return nil, err
-		}
-	case p.Limiter != nil && len(req.Rules) > 0 && req.RateScope != "":
-		if reservation, err = p.Limiter.Reserve(ctx, req.RateScope, req.Rules); err != nil {
+		// The 429 mapping is the caller's.
+		if reservation, err = p.Limiter.Admit(ctx, req.Counters, limits.Usage{}); err != nil {
 			return nil, err
 		}
 	}
@@ -310,7 +295,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	}, nil
 }
 
-func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int, encoding string, refusing RefusingBody) {
+func (p *Pipeline) runPostFlight(req *Request, res limits.Reservation, body []byte, status int, encoding string, refusing RefusingBody) {
 	// post_flight_seconds spans this whole goroutine — extraction, observer
 	// fan-out, and the commit RTT below — not just the Finalize fan-out.
 	pfStart := time.Now()
@@ -366,56 +351,30 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 	// post-flight is off the client path, so ordering it last is safe.
 	body = nil
 
-	if res != nil {
-		obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
-		if refused != nil {
-			obs = pkgratelimit.Observations{Cancelled: true}
-		}
-		if err := p.settle(ctx, req, res, obs); err != nil && p.Logger != nil {
-			p.Logger.Warn("proxy: limiter commit failed",
-				"err", err, "scope", req.RateScope)
-		}
+	if res == nil {
+		return
 	}
+	if refused != nil {
+		res.Release()
+		return
+	}
+	res.Settle(limits.Usage{Tokens: tokens, CostNanos: costNanos(req.Pricing, req.Lifecycle, tokens)})
 }
 
-// refundTimeout bounds a failed request's refund, which ignores the caller's cancellation.
-const refundTimeout = 2 * time.Second
-
-// refund returns res cancelled through whichever side reserved it, on the post-flight store.
-func (p *Pipeline) refund(ctx context.Context, req *Request, res *pkgratelimit.Reservation) error {
-	obs := pkgratelimit.Observations{Cancelled: true}
-	if req.Inbound != nil {
-		if p.Policy == nil {
-			return nil
-		}
-		return p.Policy.SettleFailed(ctx, res, nil, obs)
+// costNanos prices tokens at pr, at the service tier the upstream reported; 0 when unpriced.
+func costNanos(pr *pricing.Pricing, lc *lifecycle.Context, tokens sdkusage.Tokens) int64 {
+	if pr == nil || len(tokens) == 0 {
+		return 0
 	}
-	lim := p.PostFlightLimiter
-	if lim == nil {
-		lim = p.Limiter
+	tier := ""
+	if s, ok := lc.ResponseSummary(); ok {
+		tier = s.ServiceTier
 	}
-	if lim == nil {
-		return nil
+	n, _, ok := pr.CostNanosForServiceTier(tokens, tier)
+	if !ok {
+		return 0
 	}
-	return lim.Commit(ctx, res, obs)
-}
-
-// settle commits a served request's reservation through the post-flight side.
-func (p *Pipeline) settle(ctx context.Context, req *Request, res *pkgratelimit.Reservation, obs pkgratelimit.Observations) error {
-	if req.Inbound != nil {
-		if p.Policy == nil {
-			return nil
-		}
-		return p.Policy.Settle(ctx, res, nil, obs)
-	}
-	lim := p.PostFlightLimiter
-	if lim == nil {
-		lim = p.Limiter
-	}
-	if lim == nil {
-		return nil
-	}
-	return lim.Commit(ctx, res, obs)
+	return n
 }
 
 // fireFailure emits a post-flight observer event for a proxy request
@@ -438,22 +397,20 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 // reaches upstream in one attempt with the caller's own credential, so
 // the failure set is narrower than the pipeline's.
 func classifyFailure(err error) (kind string, status int) {
-	var exceeded *pkgratelimit.KeyQuotaExhausted
+	var refused *limits.Refused
 	var body *BodyError
 	switch {
 	case errors.As(err, &body):
 		return body.Kind, 0
 	case errors.Is(err, ErrNoUpstreamAuth):
 		return "no_upstream_auth", 0
-	case errors.As(err, &exceeded):
-		// Reservation rejected before the upstream call → status 0.
+	case errors.As(err, &refused):
+		// Refused before the upstream call → status 0.
 		return "rate_limited", 0
-	case errors.Is(err, pkgratelimit.ErrRevoked):
-		return "token_revoked", 0
 	case errors.Is(err, pkgratelimit.ErrUnavailable):
 		return "kv_unavailable", 0
-	case errors.Is(err, ErrPolicyMissing):
-		return "policy_missing", 0
+	case errors.Is(err, ErrLimiterMissing):
+		return "limiter_missing", 0
 	case errors.Is(err, context.Canceled):
 		return "client_canceled", 0
 	case errors.Is(err, context.DeadlineExceeded):

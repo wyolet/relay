@@ -10,10 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -37,17 +33,9 @@ func TestRunCallerGoneOpensNoKey(t *testing.T) {
 	calls := 0
 	for i := range 20 {
 		ctx, cancel := context.WithCancel(context.Background())
-		_, err := h.p.Run(ctx, &Request{
-			Adapter: callerGoneAdapter{leave: cancel, calls: &calls},
-			Keys:    h.keys,
-			Policy: &policy.Policy{
-				Meta: meta.Metadata{ID: "pol-caller", Name: "caller"},
-				Spec: policy.Spec{RateLimitID: "rl-inbound", KeySelection: policy.KeySelectionPrioritized},
-			},
-			Model:     &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}},
-			Host:      &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}},
-			Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
-		})
+		req := h.request(lifecycle.NewContext("req", "pipeline", time.Now()), h.hops)
+		req.Adapter = callerGoneAdapter{leave: cancel, calls: &calls}
+		_, err := h.p.Run(ctx, req)
 		cancel()
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("request %d: err = %v, want context.Canceled", i, err)

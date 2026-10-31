@@ -30,11 +30,14 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/otlpreceiver"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
@@ -167,6 +170,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	}
 	fx.keyRow.Spec.PayloadLoggingEnabled = o.keyCaptures
 	var policies []*policy.Policy
+	var policyBindings []*policybinding.PolicyBinding
 	if o.policyCaptures != nil {
 		enabled := !o.policyDisabled
 		governing := &policy.Policy{
@@ -174,7 +178,10 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 			Spec: policy.Spec{PayloadLoggingEnabled: *o.policyCaptures, Enabled: &enabled, Models: o.policyModels},
 		}
 		policies = append(policies, governing)
-		fx.keyRow.Spec.PolicyID = governing.Meta.ID
+		policyBindings = append(policyBindings, &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-binding", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
+			Spec: policybinding.Spec{ProjectID: fx.project.Meta.ID, PolicyID: governing.Meta.ID, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: fx.sa.Meta.ID}}},
+		})
 	}
 	sibling := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "crawler"}, Spec: serviceaccount.Spec{ProjectID: fx.project.Meta.ID}}
 	sibling.StampOwner()
@@ -286,8 +293,14 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		Payloads:         fx.payloads,
 		InstanceID:       "pod-a",
 	})
+	plans := (&plantest.World{
+		Policies: policies, PolicyBindings: policyBindings,
+		Keys: []*key.Key{fx.keyRow, siblingRow, outsiderRow}, Teams: []*team.Team{fx.team}, Projects: []*project.Project{fx.project, fx.otherProject},
+		ServiceAccounts: []*serviceaccount.ServiceAccount{fx.sa, sibling, outsider},
+	}).Load(t)
+	auth := &inference.Auth{Catalog: cat, Plans: plans.Holder}
 	authenticated := func(next http.Handler) http.Handler {
-		return inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(cat, nil)(next))
+		return inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(auth)(next))
 	}
 	mux := http.NewServeMux()
 	mux.Handle(otlpreceiver.TracesPath, authenticated(h.Traces()))

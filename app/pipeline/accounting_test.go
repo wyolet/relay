@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,12 +12,12 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
@@ -49,26 +48,29 @@ func (a *sseAdapter) Retryable(*http.Response) (bool, keypool.FailureKind, time.
 	return false, 0, 0
 }
 
-func budgetPolicy(meter ratelimit.Meter, strategy ratelimit.Strategy, amount int64) (*policy.Policy, policy.SnapshotReader) {
-	pol := &policy.Policy{Meta: meta.Metadata{ID: "bpol", Name: "budget-policy"}, Spec: policy.Spec{RateLimitID: "brl"}}
-	rl := &ratelimit.RateLimit{
-		Meta: meta.Metadata{ID: "brl", Name: "brl"},
-		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: meter, Amount: amount, Window: ratelimit.Window(time.Hour), Strategy: strategy}}},
-	}
-	return pol, &fakeSnap{pols: map[string]*policy.Policy{"bpol": pol}, rls: map[string]*ratelimit.RateLimit{"brl": rl}}
+// budgetCounters is one caller rule of amount per hour.
+func budgetCounters(meter ratelimit.Meter, strategy ratelimit.Strategy, amount int64) []limits.Counter {
+	rl := &ratelimit.RateLimit{Meta: meta.Metadata{ID: "brl", Name: "brl"}}
+	r := ratelimit.Rule{Meter: meter, Amount: amount, Window: ratelimit.Window(time.Hour), Strategy: strategy}
+	return []limits.Counter{limits.CallerRule(limits.RungPrincipal, rl, r, "bpol", "user:u", "user:u")}
 }
 
-func budgetPipeline(t *testing.T, snap policy.SnapshotReader) (*pipeline.Pipeline, *kv.Mem) {
+// budgetHops is one credential whose request must fit the caller counters cs.
+func budgetHops(cs []limits.Counter) []plan.RouteHop {
+	return []plan.RouteHop{counted(hopOf([]*hostkey.HostKey{makeKey("bk", "sk")})[0], cs, nil)}
+}
+
+func budgetPipeline(t *testing.T) (*pipeline.Pipeline, *kv.Mem) {
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
-	return &pipeline.Pipeline{Policy: serviceOver(snap, mem), Logger: slog.Default()}, mem
+	return pipelineOver(mem), mem
 }
 
 func waitBudgetCommit(t *testing.T, mem *kv.Mem) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		ents, _ := mem.Range(context.Background(), "limit:{policy:bpol}:committed:")
+		ents, _ := mem.Range(context.Background(), "limit:{user:u}:committed:")
 		if len(ents) >= 1 {
 			return
 		}
@@ -85,12 +87,12 @@ const (
 // A caller that closes the body before the terminal usage frame is charged
 // the same tokens as one that drains it.
 func TestEarlyCloseStillChargesTokens(t *testing.T) {
-	pol, snap := budgetPolicy(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1)
+	pol := budgetCounters(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1)
 	for _, drain := range []bool{true, false} {
-		pl, mem := budgetPipeline(t, snap)
+		pl, mem := budgetPipeline(t)
 		ad := &sseAdapter{body: sseContent + sseUsage}
 		mk := func() *pipeline.Request {
-			return &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: ad, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}, Stream: true}
+			return &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: ad, Hops: budgetHops(pol), Stream: true}
 		}
 		res, err := pl.Run(context.Background(), mk())
 		if err != nil {
@@ -106,7 +108,7 @@ func TestEarlyCloseStillChargesTokens(t *testing.T) {
 		waitBudgetCommit(t, mem)
 
 		_, err = pl.Run(context.Background(), mk())
-		var ex *pkgratelimit.KeyQuotaExhausted
+		var ex *pipeline.CallerLimitedError
 		if !errors.As(err, &ex) {
 			t.Fatalf("drained=%v: second request err = %v, want tokens budget exceeded", drain, err)
 		}
@@ -129,13 +131,13 @@ func (a *pipeAdapter) Call(ctx context.Context, _ string, _ *string, _ string, _
 // usage frame is still charged the reported tokens: the upstream outlives
 // the caller long enough for post-flight to read the tail.
 func TestCallerGoneBeforeUsageFrameStillChargesTokens(t *testing.T) {
-	pol, snap := budgetPolicy(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1)
-	pl, mem := budgetPipeline(t, snap)
+	pol := budgetCounters(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1)
+	pl, mem := budgetPipeline(t)
 	pr, pw := io.Pipe()
 	ad := &pipeAdapter{pr: pr}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	res, err := pl.Run(ctx, &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: ad, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}, Stream: true})
+	res, err := pl.Run(ctx, &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: ad, Hops: budgetHops(pol), Stream: true})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -150,8 +152,8 @@ func TestCallerGoneBeforeUsageFrameStillChargesTokens(t *testing.T) {
 	_ = pw.Close()
 	waitBudgetCommit(t, mem)
 
-	_, err = pl.Run(context.Background(), &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: &sseAdapter{body: "{}"}, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}})
-	var ex *pkgratelimit.KeyQuotaExhausted
+	_, err = pl.Run(context.Background(), &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: &sseAdapter{body: "{}"}, Hops: budgetHops(pol)})
+	var ex *pipeline.CallerLimitedError
 	if !errors.As(err, &ex) {
 		t.Fatalf("second request err = %v, want tokens budget exceeded", err)
 	}
@@ -161,13 +163,13 @@ func TestCallerGoneBeforeUsageFrameStillChargesTokens(t *testing.T) {
 // by the drain bound, and post-flight still commits.
 func TestEarlyCloseDrainIsBounded(t *testing.T) {
 	t.Parallel()
-	pol, snap := budgetPolicy(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1000)
-	pl, mem := budgetPipeline(t, snap)
+	pol := budgetCounters(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1000)
+	pl, mem := budgetPipeline(t)
 	pr, pw := io.Pipe()
 	defer pw.Close()
 	ad := &pipeAdapter{pr: pr}
 
-	res, err := pl.Run(context.Background(), &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: ad, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}, Stream: true})
+	res, err := pl.Run(context.Background(), &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: ad, Hops: budgetHops(pol), Stream: true})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -196,12 +198,12 @@ func (c *cutReader) Read(p []byte) (int, error) {
 // A response that ends before the upstream reported usage charges a floor
 // (request size for input, frames seen for output) instead of nothing.
 func TestCutResponseChargesTokenFloor(t *testing.T) {
-	pol, snap := budgetPolicy(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 50)
-	pl, mem := budgetPipeline(t, snap)
+	pol := budgetCounters(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 50)
+	pl, mem := budgetPipeline(t)
 	ad := &cutAdapter{sseAdapter{body: sseContent}}
 	reqBody := []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("x", 400) + `"}]}`)
 
-	res, err := pl.Run(context.Background(), &pipeline.Request{Body: reqBody, Headers: http.Header{}, Adapter: ad, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}, Stream: true})
+	res, err := pl.Run(context.Background(), &pipeline.Request{Body: reqBody, Headers: http.Header{}, Adapter: ad, Hops: budgetHops(pol), Stream: true})
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -211,8 +213,8 @@ func TestCutResponseChargesTokenFloor(t *testing.T) {
 	_ = res.Body.Close()
 	waitBudgetCommit(t, mem)
 
-	_, err = pl.Run(context.Background(), &pipeline.Request{Body: reqBody, Headers: http.Header{}, Adapter: &sseAdapter{body: "{}"}, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}})
-	var ex *pkgratelimit.KeyQuotaExhausted
+	_, err = pl.Run(context.Background(), &pipeline.Request{Body: reqBody, Headers: http.Header{}, Adapter: &sseAdapter{body: "{}"}, Hops: budgetHops(pol)})
+	var ex *pipeline.CallerLimitedError
 	if !errors.As(err, &ex) {
 		t.Fatalf("second request err = %v, want tokens budget exceeded", err)
 	}
@@ -227,8 +229,8 @@ func (a *cutAdapter) Call(context.Context, string, *string, string, []byte, http
 // A caller that cancels after the request reached the upstream keeps its
 // request charge: the next request under a 1-request budget is rejected.
 func TestCancelAfterDispatchKeepsRequestCharge(t *testing.T) {
-	pol, snap := budgetPolicy(ratelimit.MeterRequests, ratelimit.StrategyTokenBucket, 1)
-	pl, _ := budgetPipeline(t, snap)
+	pol := budgetCounters(ratelimit.MeterRequests, ratelimit.StrategyTokenBucket, 1)
+	pl, _ := budgetPipeline(t)
 
 	received := make(chan struct{})
 	ad := &sseAdapter{body: "{}", callFn: func(ctx context.Context) error {
@@ -237,7 +239,7 @@ func TestCancelAfterDispatchKeepsRequestCharge(t *testing.T) {
 		return ctx.Err()
 	}}
 	mk := func(a pipeline.Adapter) *pipeline.Request {
-		return &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: a, Policy: pol, Keys: []*hostkey.HostKey{makeKey("bk", "sk")}}
+		return &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: a, Hops: budgetHops(pol)}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -252,7 +254,7 @@ func TestCancelAfterDispatchKeepsRequestCharge(t *testing.T) {
 	if res != nil {
 		drainResult(t, res)
 	}
-	var ex *pkgratelimit.KeyQuotaExhausted
+	var ex *pipeline.CallerLimitedError
 	if !errors.As(err, &ex) {
 		t.Fatalf("second request after a dispatched-then-cancelled request: err = %v, want requests budget exceeded", err)
 	}

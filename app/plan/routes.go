@@ -8,6 +8,7 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pricing"
@@ -54,14 +55,29 @@ type Route struct {
 
 // RouteHop is one pool's slots that may serve the route, with the binding and pricing at the pool's host. Counters[i] is everything slot i's request must fit: the caller rungs' counters, then the slot's upstream ones.
 type RouteHop struct {
-	Pool     *PoolPlan
-	Binding  *binding.Binding
-	Host     *host.Host
-	Pricing  *pricing.Pricing
-	Priced   bool
-	Slots    []*KeySlot
-	Counters [][]limits.Counter
+	Pool    *PoolPlan
+	Binding *binding.Binding
+	Host    *host.Host
+	Pricing *pricing.Pricing
+	Priced  bool
+	Slots   []*KeySlot
+	// Credentials is each slot's credential, in slot order, so a pick over the whole hop builds no slice.
+	Credentials []*hostkey.HostKey
+	Counters    [][]limits.Counter
+	// CallerN is how many leading counters of each Counters[i] are the caller's; they are the same for every slot of the hop, so a failover inside it keeps the caller's hold.
+	CallerN int
 }
+
+// CallerCounters returns the caller rungs' counters of this hop.
+func (h *RouteHop) CallerCounters() []limits.Counter {
+	if len(h.Counters) == 0 {
+		return nil
+	}
+	return h.Counters[0][:h.CallerN]
+}
+
+// UpstreamCounters returns the upstream rungs' counters of slot i.
+func (h *RouteHop) UpstreamCounters(i int) []limits.Counter { return h.Counters[i][h.CallerN:] }
 
 // Get returns the route for ref, filling it on first use; never nil. A hit is one read-locked map lookup.
 func (t *RouteTable) Get(ref string) *Route {
@@ -97,16 +113,118 @@ func (t *RouteTable) Misses() uint64 { return t.misses.Load() }
 
 // Models lists the models the caller can reach, by running the route fill per model: the listing cannot advertise what a request would be refused.
 func (t *RouteTable) Models() []*model.Model {
+	var out []*model.Model
+	for _, l := range t.Listing() {
+		out = append(out, l.Model)
+	}
+	return out
+}
+
+// Listed is one reachable model and the bindings its route would use, one per hop.
+type Listed struct {
+	Model    *model.Model
+	Provider string
+	Bindings []*binding.Binding
+}
+
+// Listing runs the route fill for every model, uncached, and keeps those with a hop; a snapshot name is reachable when one of its bindings serves it. The fill skips nothing a request for a named snapshot would not, so the list never advertises a refusal.
+func (t *RouteTable) Listing() []Listed {
 	if t.caller.Refused != nil || t.idx == nil {
 		return nil
 	}
-	var out []*model.Model
+	var out []Listed
 	for _, m := range t.idx.Snap.AllModels() {
-		if r := t.route([]*model.Model{m}, nil, ""); len(r.Hops) > 0 {
-			out = append(out, m)
+		r := t.route([]*model.Model{m}, nil, "")
+		if len(r.Hops) == 0 {
+			continue
 		}
+		l := Listed{Model: m, Provider: r.Provider, Bindings: make([]*binding.Binding, 0, len(r.Hops))}
+		for i := range r.Hops {
+			l.Bindings = append(l.Bindings, r.Hops[i].Binding)
+		}
+		out = append(out, l)
 	}
 	return out
+}
+
+// Unkeyed is where a model ref goes when the caller brings its own upstream key: the first binding the caller's model grants allow, whatever credentials it reaches. Refused is set when none does.
+type Unkeyed struct {
+	Model         *model.Model
+	Provider      string
+	Binding       *binding.Binding
+	Host          *host.Host
+	Pricing       *pricing.Pricing
+	UpstreamModel string
+	ResolvedVia   string
+	Refused       *Refusal
+}
+
+// ResolveUnkeyed resolves ref without credentials, uncached. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
+func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
+	cp := t.caller
+	if cp.Refused != nil {
+		return &Unkeyed{Refused: cp.Refused}
+	}
+	notFound := &Unkeyed{Refused: &Refusal{Code: CodeModelNotFound, Message: "no model named " + ref}}
+	if t.idx == nil {
+		return notFound
+	}
+	snap := t.idx.Snap
+	res := snap.ResolveModelRef(ref)
+	if len(res.Models) == 0 {
+		return notFound
+	}
+	best := refusalAt{r: &Refusal{Code: CodeModelDisabled, Message: "the model is disabled"}}
+	for _, m := range res.Models {
+		if !m.IsEnabled() {
+			continue
+		}
+		prov, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+		for _, b := range snap.BindingsForModel(m.Meta.ID) {
+			if !b.IsEnabled() || (res.PinHostID != "" && b.Spec.HostID != res.PinHostID) || (res.Snapshot != nil && !b.Serves(res.Snapshot.Name)) {
+				continue
+			}
+			h, ok := snap.Host(b.Spec.HostID)
+			if !ok || !h.Routable() {
+				continue
+			}
+			if i := cp.Allow.rejects(prov, m, h.Meta.Name); i >= 0 {
+				best.note(stepModelNotAllowed, cp.notAllowed(i))
+				continue
+			}
+			if h.Spec.NoAuth && !cp.ReachesHost(h.Meta.ID) {
+				best.note(stepNoCredentials, &Refusal{Code: CodeNoCredentials, Message: "host " + h.Meta.Name + " needs no key and is reached only through a pool"})
+				continue
+			}
+			u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h}
+			u.Pricing, _ = snap.PricingForBinding(b)
+			u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
+			if u.UpstreamModel == "" && res.Snapshot != nil {
+				u.UpstreamModel = res.Snapshot.Upstream()
+			}
+			return u
+		}
+		best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
+	}
+	return &Unkeyed{Refused: best.r}
+}
+
+// ReachesHost reports whether one of the caller's pools is at the host.
+func (p *CallerPlan) ReachesHost(hostID string) bool {
+	for _, pp := range p.Pools {
+		if pp.Host.Meta.ID == hostID {
+			return true
+		}
+	}
+	return false
+}
+
+// Catalog is the catalog snapshot this table resolves against, for projecting what it lists.
+func (t *RouteTable) Catalog() *appcatalog.Snapshot {
+	if t.idx == nil {
+		return nil
+	}
+	return t.idx.Snap
 }
 
 func (t *RouteTable) fill(ref string) *Route {
@@ -237,7 +355,10 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			}
 			seen[s] = struct{}{}
 			hop.Slots = append(hop.Slots, s)
-			hop.Counters = append(hop.Counters, t.counters(s, prov, m, sv.h.Meta.Name))
+			hop.Credentials = append(hop.Credentials, s.Credential)
+			cs, callerN := t.counters(s, prov, m, sv.h.Meta.Name)
+			hop.Counters = append(hop.Counters, cs)
+			hop.CallerN = callerN
 		}
 		if len(hop.Slots) > 0 {
 			hops = append(hops, hop)
@@ -254,8 +375,8 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 	return hops
 }
 
-// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing.
-func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug string) []limits.Counter {
+// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing, and how many of them lead as the caller's.
+func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug string) ([]limits.Counter, int) {
 	cp := t.caller
 	byModel := s.ByModel[m.Meta.ID]
 	out := make([]limits.Counter, 0, len(cp.Counters)+len(s.Whole)+len(byModel))
@@ -265,8 +386,9 @@ func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug 
 			out = append(out, sc.counters...)
 		}
 	}
+	callerN := len(out)
 	out = append(out, s.Whole...)
-	return append(out, byModel...)
+	return append(out, byModel...), callerN
 }
 
 // notAllowed names the caller rung that refused a model.

@@ -6,15 +6,10 @@ app/catalog/BenchmarkGroupUpsert10kKeys 14050 1
 app/catalog/BenchmarkHostKeysForHost 0
 app/catalog/BenchmarkProjectUpsert10kKeys 10298 1
 app/catalog/BenchmarkSnapshotClone10kKeys 10274
-app/httpapi/inference/BenchmarkBindingMatch 0
 app/httpapi/inference/BenchmarkKeyPrincipal 22
 app/httpapi/inference/BenchmarkTokenPrincipal 23
-app/httpapi/inference/BenchmarkTokenPrincipalColdCache 31
-app/policy/BenchmarkReserveInboundKey 64
-app/policy/BenchmarkReserveInboundToken 69
-app/policy/BenchmarkResolveRules 8
-app/routing/BenchmarkResolvePolicyless 3
-app/routing/BenchmarkResolveTwoBindings 5
+app/httpapi/inference/BenchmarkTokenPrincipalColdCache 28
+app/limits/lua/BenchmarkAdmitSettle_Mem 256
 auth/token/BenchmarkHeaderKeyID 2
 auth/token/BenchmarkKeySetVerify 12
 auth/token/BenchmarkParse 10

@@ -67,7 +67,6 @@ A field a file leaves out takes its zero value (`false`, `0`, empty), not its de
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `allowMissingPolicy` | `false` | Lets a relay key with no governing policy reach inference over the relay's shared host keys, with no policy grant or policy rate limit. Read only under `RELAY_AUTHZ=single`; under `rbac` such a key is always refused (`403 policyless_disabled`). See [Policies](/concepts/policies). |
 | `keyRotateMaxGrace` | `86400` | Most seconds a rotated relay key's previous value keeps working. `0` means the default; a rotation asking for more is refused. |
 
 ### parsing

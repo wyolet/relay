@@ -91,7 +91,6 @@ func (s *Service) Handler() jobq.Handler {
 			ctx,
 			job.ID,
 			job.Meta(metaKeyHash),
-			job.Meta(metaPolicyID),
 			TokenClaims{JTI: job.Meta(metaTokenJTI), Version: ver, Expires: exp},
 			Attribution{
 				ProjectID:      job.Meta(metaProjectID),

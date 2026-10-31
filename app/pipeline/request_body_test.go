@@ -10,8 +10,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/plan"
 )
 
 // A retried attempt must still send the whole body: releasing it is only allowed once a response is accepted.
@@ -41,11 +44,9 @@ func TestRetry_SecondAttemptSendsFullBody(t *testing.T) {
 
 	body := bytes.Repeat([]byte("x"), 256<<10)
 	req := &pipeline.Request{
-		Body:        body,
-		HostBaseURL: srv.URL,
-		Adapter:     adp,
-		Keys:        []*hostkey.HostKey{makeKey("h1", "sk-1"), makeKey("h2", "sk-2")},
-		Policy:      makePolicy(),
+		Body:    body,
+		Adapter: adp,
+		Hops:    []plan.RouteHop{hopAt(&host.Host{Meta: meta.Metadata{ID: "h", Name: "h"}, Spec: host.Spec{BaseURL: srv.URL}}, []*hostkey.HostKey{makeKey("h1", "sk-1"), makeKey("h2", "sk-2")})},
 	}
 	res, err := newPipeline().Run(context.Background(), req)
 	if err != nil {

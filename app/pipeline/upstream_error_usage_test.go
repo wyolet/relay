@@ -70,8 +70,7 @@ func TestRun_PassedThroughErrorStatusIsAnUpstreamError(t *testing.T) {
 				Adapter: &fakeAdapter{callFn: func(context.Context, string, string, []byte, http.Header) (*http.Response, error) {
 					return errorResp(status), nil
 				}},
-				Keys:      []*hostkey.HostKey{makeKey("h", "sk")},
-				Policy:    makePolicy(),
+				Hops:      hopOf([]*hostkey.HostKey{makeKey("h", "sk")}),
 				Stream:    stream,
 				Lifecycle: lc,
 			})
@@ -107,8 +106,7 @@ func TestRun_ExhaustedErrorStatusIsAnUpstreamError(t *testing.T) {
 					return true, keypool.FailureServerError, 0
 				},
 			},
-			Keys:      []*hostkey.HostKey{makeKey("h", "sk")},
-			Policy:    makePolicy(),
+			Hops:      hopOf([]*hostkey.HostKey{makeKey("h", "sk")}),
 			Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
 		})
 		if err == nil {
@@ -156,8 +154,7 @@ func TestRun_UsageRecordsTheHostKeyOnEveryPath(t *testing.T) {
 		lc.Translator = identityTranslator{}
 		res, err := p.Run(context.Background(), &pipeline.Request{
 			Adapter:   adp,
-			Keys:      []*hostkey.HostKey{makeKey("key-hash", "sk")},
-			Policy:    makePolicy(),
+			Hops:      hopOf([]*hostkey.HostKey{makeKey("key-hash", "sk")}),
 			Stream:    tc.stream,
 			Lifecycle: lc,
 		})

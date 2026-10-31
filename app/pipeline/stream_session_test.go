@@ -77,8 +77,7 @@ func TestRun_StreamSessionExtractsTokens(t *testing.T) {
 	lc.Translator = identityTranslator{}
 	req := &pipeline.Request{
 		Adapter:   adp,
-		Keys:      []*hostkey.HostKey{makeKey("h", "sk")},
-		Policy:    makePolicy(),
+		Hops:      hopOf([]*hostkey.HostKey{makeKey("h", "sk")}),
 		Stream:    true,
 		Lifecycle: lc,
 	}

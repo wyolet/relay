@@ -48,8 +48,10 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 	teamID := st.mkTeam(t, "tokens")
 	projectID := st.mkProject(t, "token-project", teamID)
 
-	// The token resolves its policy through a project binding, which is the
-	// only route a token has: it carries no key to read one off.
+	const username, password = "token-minter", "correct-horse-battery"
+	userID := st.seedLogin(t, username, password)
+
+	// A token acts under its user's caller ladder, so the policy is bound to the user.
 	code, raw := st.adminDo(http.MethodGet, "/api/policies/test-policy", "")
 	if code != http.StatusOK {
 		t.Fatalf("GET policy = %d: %s", code, raw)
@@ -59,16 +61,13 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 		t.Fatalf("decode policy: %v", err)
 	}
 	body := `{"metadata":{"name":"token-project-everyone"},"spec":{"projectId":"` + projectID + `",` +
-		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
+		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"user","id":"` + userID + `"}]}}`
 	if code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", body); code != http.StatusCreated {
 		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
 	}
 
-	const username, password = "token-minter", "correct-horse-battery"
-	userID := st.seedLogin(t, username, password)
-
-	if err := st.cat.Reload(t.Context()); err != nil {
-		t.Fatalf("catalog.Reload: %v", err)
+	if err := st.reload(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	return &tokenFixture{
 		stack: st, project: "token-project",

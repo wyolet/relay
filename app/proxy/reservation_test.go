@@ -14,8 +14,9 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 
+	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
@@ -23,44 +24,48 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-type policySnap struct {
-	pol *policy.Policy
-	rl  *appratelimit.RateLimit
-}
-
-func (s policySnap) Policy(context.Context, string) (*policy.Policy, bool) { return s.pol, true }
-func (s policySnap) RateLimit(_ context.Context, id string) (*appratelimit.RateLimit, bool) {
-	return s.rl, s.rl.Meta.ID == id
-}
-
 // oneRequestPerHour is a token bucket a cancelled reservation refunds.
 var oneRequestPerHour = appratelimit.Rule{
 	Meter: appratelimit.MeterRequests, Amount: 1, Window: appratelimit.Window(time.Hour),
 	Strategy: appratelimit.StrategyTokenBucket,
 }
 
-// authedPipeline is a Pipeline whose policy service meters rules (default: oneRequestPerHour).
-func authedPipeline(t *testing.T, rules ...appratelimit.Rule) (*Pipeline, *kvtest.Recording, *policy.InboundInput) {
+var concurrency = appratelimit.Rule{
+	Meter: appratelimit.MeterConcurrency, Amount: 10, Window: appratelimit.Window(time.Minute),
+	Strategy: appratelimit.StrategySlidingWindow,
+}
+
+// meteredPipeline is a Pipeline whose limiter counts on a recorded store, and the caller counters of rules (default: oneRequestPerHour).
+func meteredPipeline(t *testing.T, rules ...appratelimit.Rule) (*Pipeline, *kvtest.Recording, []limits.Counter) {
 	t.Helper()
 	mem := kv.NewMem()
 	pkgratelimit.RegisterScripts(mem)
 	t.Cleanup(func() { _ = mem.Close() })
 	store := kvtest.NewRecording(mem)
-
 	if len(rules) == 0 {
 		rules = []appratelimit.Rule{oneRequestPerHour}
 	}
-	rl := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-1", Name: "one-per-hour"}}
-	rl.Spec.Rules = rules
-	pol := &policy.Policy{Meta: meta.Metadata{ID: "pol-1", Name: "p"}, Spec: policy.Spec{RateLimitID: rl.Meta.ID}}
-	limiter := pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)
-
-	p := New(limiter, nil, nil)
-	p.Policy = policy.NewService(policySnap{pol: pol, rl: rl}, nil, limiter)
-	return p, store, &policy.InboundInput{Policy: pol}
+	rl := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-1", Name: "one-per-hour"}, Spec: appratelimit.Spec{Rules: rules}}
+	var cs []limits.Counter
+	for _, r := range rules {
+		cs = append(cs, limits.CallerRule(limits.RungPrincipal, rl, r, "pol-1", "user:u", "user:u"))
+	}
+	return New(lua.New(pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)), nil, nil), store, cs
 }
 
-func authedRequest(baseURL string, in *policy.InboundInput) *Request {
+// withPostFlight moves p's settles to a second recorded view of shared's store.
+func withPostFlight(t *testing.T, p *Pipeline, shared *kvtest.Recording) *kvtest.Recording {
+	t.Helper()
+	mem, ok := shared.ScriptStore.(*kv.Mem)
+	if !ok {
+		t.Fatal("meteredPipeline store is not a *kv.Mem")
+	}
+	post := kvtest.NewRecording(mem)
+	p.Limiter = lua.New(pkgratelimit.New(shared, slog.New(slog.DiscardHandler), nil)).WithPostFlight(pkgratelimit.New(post, slog.New(slog.DiscardHandler), nil))
+	return post
+}
+
+func meteredRequest(baseURL string, cs []limits.Counter) *Request {
 	return &Request{
 		Method:       http.MethodPost,
 		Path:         "/v1/chat/completions",
@@ -68,7 +73,7 @@ func authedRequest(baseURL string, in *policy.InboundInput) *Request {
 		Headers:      http.Header{},
 		HostBaseURL:  baseURL,
 		UpstreamAuth: "Bearer upstream-key",
-		Inbound:      in,
+		Counters:     cs,
 	}
 }
 
@@ -84,18 +89,15 @@ func awaitCommits(t *testing.T, store *kvtest.Recording, want int) {
 	t.Fatalf("commit scripts = %d, want %d", len(store.Named("limit.commit")), want)
 }
 
-func TestRunCommitsInboundReservationOnBodyClose(t *testing.T) {
+func TestRunSettlesReservationOnBodyClose(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer upstream.Close()
-	// The concurrency slot is what the commit has to release.
-	p, store, in := authedPipeline(t, oneRequestPerHour, appratelimit.Rule{
-		Meter: appratelimit.MeterConcurrency, Amount: 10, Window: appratelimit.Window(time.Minute),
-		Strategy: appratelimit.StrategySlidingWindow,
-	})
+	// The concurrency slot is what the settle has to release.
+	p, store, cs := meteredPipeline(t, oneRequestPerHour, concurrency)
 
-	res, err := p.Run(context.Background(), authedRequest(upstream.URL, in))
+	res, err := p.Run(context.Background(), meteredRequest(upstream.URL, cs))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -109,63 +111,35 @@ func TestRunCommitsInboundReservationOnBodyClose(t *testing.T) {
 	_ = res.Body.Close()
 	awaitCommits(t, store, 1)
 
-	// The commit kept the charge: the bucket's one request is spent.
-	_, err = p.Run(context.Background(), authedRequest(upstream.URL, in))
-	var exceeded *pkgratelimit.KeyQuotaExhausted
-	if !errors.As(err, &exceeded) {
-		t.Fatalf("second Run: err = %v, want KeyQuotaExhausted", err)
+	// The settle kept the charge: the bucket's one request is spent.
+	_, err = p.Run(context.Background(), meteredRequest(upstream.URL, cs))
+	var refused *limits.Refused
+	if !errors.As(err, &refused) || refused.Counter.PolicyID != "pol-1" {
+		t.Fatalf("second Run: err = %v, want a refusal naming pol-1", err)
 	}
 }
 
-// A served request's commit goes through the post-flight limiter, on both the authed and the RateScope path; the reserve stays on the shared one.
+// A served request settles through the post-flight limiter; the hold stays on the shared one.
 func TestRunCommitsOnThePostFlightStore(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer upstream.Close()
-	concurrency := appratelimit.Rule{
-		Meter: appratelimit.MeterConcurrency, Amount: 10, Window: appratelimit.Window(time.Minute),
-		Strategy: appratelimit.StrategySlidingWindow,
+	p, shared, cs := meteredPipeline(t, oneRequestPerHour, concurrency)
+	post := withPostFlight(t, p, shared)
+
+	res, err := p.Run(context.Background(), meteredRequest(upstream.URL, cs))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-
-	for _, tc := range []struct {
-		name   string
-		authed bool
-	}{{"inbound", true}, {"rate_scope", false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			p, shared, in := authedPipeline(t, oneRequestPerHour, concurrency)
-			mem, ok := shared.ScriptStore.(*kv.Mem)
-			if !ok {
-				t.Fatal("authedPipeline store is not a *kv.Mem")
-			}
-			post := kvtest.NewRecording(mem)
-			postLim := pkgratelimit.New(post, slog.New(slog.DiscardHandler), nil)
-			p.PostFlightLimiter = postLim
-			p.Policy.WithPostFlight(nil, postLim)
-
-			req := authedRequest(upstream.URL, in)
-			if !tc.authed {
-				req.Inbound = nil
-				req.RateScope = "ip:203.0.113.7"
-				req.Rules = []pkgratelimit.Rule{{
-					Key: "ip-con", Name: "concurrency", Meter: "concurrency",
-					Strategy: pkgratelimit.StrategySlidingWindow, Amount: 10, Window: time.Minute,
-				}}
-			}
-			res, err := p.Run(context.Background(), req)
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			_, _ = io.Copy(io.Discard, res.Body)
-			_ = res.Body.Close()
-			awaitCommits(t, post, 1)
-			if n := len(shared.Named("limit.reserve")); n != 1 {
-				t.Fatalf("shared reserves = %d, want 1", n)
-			}
-			if n := len(shared.Named("limit.commit")); n != 0 {
-				t.Fatalf("shared commits = %d, want none", n)
-			}
-		})
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+	awaitCommits(t, post, 1)
+	if n := len(shared.Named("limit.reserve")); n != 1 {
+		t.Fatalf("shared reserves = %d, want 1", n)
+	}
+	if n := len(shared.Named("limit.commit")); n != 0 {
+		t.Fatalf("shared commits = %d, want none", n)
 	}
 }
 
@@ -190,15 +164,15 @@ func awaitPostFlight(t *testing.T, before uint64) {
 	}
 }
 
-// A requests-only reservation was settled by the reserve: a successful request keeps its charge and post-flight sends no commit.
+// A requests-only reservation was settled by the hold: a successful request keeps its charge and post-flight sends no commit.
 func TestRunRequestOnlyReservationSendsNoCommit(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer upstream.Close()
-	p, store, in := authedPipeline(t)
+	p, store, cs := meteredPipeline(t)
 
-	res, err := p.Run(context.Background(), authedRequest(upstream.URL, in))
+	res, err := p.Run(context.Background(), meteredRequest(upstream.URL, cs))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -206,71 +180,37 @@ func TestRunRequestOnlyReservationSendsNoCommit(t *testing.T) {
 	before := postFlightsFinished(t)
 	_ = res.Body.Close()
 	awaitPostFlight(t, before)
-	_, err = p.Run(context.Background(), authedRequest(upstream.URL, in))
-	var exceeded *pkgratelimit.KeyQuotaExhausted
-	if !errors.As(err, &exceeded) {
-		t.Fatalf("second Run: err = %v, want KeyQuotaExhausted", err)
+	_, err = p.Run(context.Background(), meteredRequest(upstream.URL, cs))
+	var refused *limits.Refused
+	if !errors.As(err, &refused) {
+		t.Fatalf("second Run: err = %v, want a refusal", err)
 	}
 	if got := len(store.Named("limit.commit")); got != 0 {
 		t.Fatalf("commit scripts = %d, want none for a requests-only reservation", got)
 	}
 }
 
-func TestRunRefundsInboundReservationOnUpstreamFailure(t *testing.T) {
-	dead := httptest.NewServer(http.NotFoundHandler())
-	deadURL := dead.URL
-	dead.Close()
-	p, store, in := authedPipeline(t)
-
-	for i := range 2 {
-		_, err := p.Run(context.Background(), authedRequest(deadURL, in))
-		var exceeded *pkgratelimit.KeyQuotaExhausted
-		if err == nil || errors.As(err, &exceeded) {
-			t.Fatalf("Run %d: err = %v, want the upstream failure (a refunded bucket admits the retry)", i, err)
-		}
-	}
-	if got := len(store.Named("limit.commit")); got != 2 {
-		t.Fatalf("commit scripts = %d, want one refund per failed request", got)
-	}
-}
-
-// A failed request's refund goes through the post-flight limiter too, on both the authed and the RateScope path.
+// A failed request's hold is released before Run returns, on the post-flight store: the refunded bucket admits the retry.
 func TestRunRefundsOnThePostFlightStore(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	deadURL := dead.URL
 	dead.Close()
+	p, shared, cs := meteredPipeline(t)
+	post := withPostFlight(t, p, shared)
 
-	for _, authed := range []bool{true, false} {
-		p, shared, in := authedPipeline(t)
-		mem, ok := shared.ScriptStore.(*kv.Mem)
-		if !ok {
-			t.Fatal("authedPipeline store is not a *kv.Mem")
+	for i := range 2 {
+		_, err := p.Run(context.Background(), meteredRequest(deadURL, cs))
+		var refused *limits.Refused
+		if err == nil || errors.As(err, &refused) {
+			t.Fatalf("Run %d: err = %v, want the upstream failure (a refunded bucket admits the retry)", i, err)
 		}
-		post := kvtest.NewRecording(mem)
-		postLim := pkgratelimit.New(post, slog.New(slog.DiscardHandler), nil)
-		p.PostFlightLimiter = postLim
-		p.Policy.WithPostFlight(nil, postLim)
-
-		req := authedRequest(deadURL, in)
-		if !authed {
-			req.Inbound = nil
-			req.RateScope = "ip:203.0.113.7"
-			req.Rules = []pkgratelimit.Rule{{
-				Key: "ip-req", Name: "requests", Meter: "requests",
-				Strategy: pkgratelimit.StrategyTokenBucket, Amount: 1, Window: time.Hour,
-			}}
-		}
-		if _, err := p.Run(context.Background(), req); err == nil {
-			t.Fatalf("authed=%v: Run against a dead upstream succeeded", authed)
-		}
-		// Refunded before Run returned.
-		if n, s := len(post.Named("limit.commit")), len(shared.Named("limit.commit")); n != 1 || s != 0 {
-			t.Fatalf("authed=%v: commits = %d post-flight, %d shared; want 1, 0", authed, n, s)
+		if n, s := len(post.Named("limit.commit")), len(shared.Named("limit.commit")); n != i+1 || s != 0 {
+			t.Fatalf("Run %d: commits = %d post-flight, %d shared; want %d, 0", i, n, s, i+1)
 		}
 	}
 }
 
-// A reserve the store could not answer wraps the store's timeout; its usage row must still read as a kv refusal, not as a timeout.
+// A hold the store could not answer wraps the store's timeout; its usage row must still read as a kv refusal, not as a timeout.
 func TestClassifyFailureStoreUnavailable(t *testing.T) {
 	err := fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded))
 	if kind, status := classifyFailure(err); kind != "kv_unavailable" || status != 0 {
@@ -278,16 +218,17 @@ func TestClassifyFailureStoreUnavailable(t *testing.T) {
 	}
 }
 
-func TestRunAuthedWithoutPolicyServiceRefuses(t *testing.T) {
+func TestRunWithCountersAndNoLimiterRefuses(t *testing.T) {
 	var hits int
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
 	defer upstream.Close()
 
-	_, err := New(nil, nil, nil).Run(context.Background(), authedRequest(upstream.URL, &policy.InboundInput{}))
-	if !errors.Is(err, ErrPolicyMissing) {
-		t.Fatalf("err = %v, want ErrPolicyMissing", err)
+	_, cs := func() (*Pipeline, []limits.Counter) { p, _, cs := meteredPipeline(t); return p, cs }()
+	_, err := New(nil, nil, nil).Run(context.Background(), meteredRequest(upstream.URL, cs))
+	if !errors.Is(err, ErrLimiterMissing) {
+		t.Fatalf("err = %v, want ErrLimiterMissing", err)
 	}
 	if hits != 0 {
-		t.Fatal("an unmetered authed request reached the upstream")
+		t.Fatal("an unmetered request reached the upstream")
 	}
 }

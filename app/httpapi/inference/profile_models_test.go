@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
@@ -87,9 +88,39 @@ func entriesFixture(t *testing.T, grants ...string) (*catalog.Snapshot, *policy.
 	return snap, pol, []*model.Model{m}
 }
 
+// listed is what a route table lists when every enabled binding of models reaches a hop: the projection tests below cover rendering, not reach.
+func listed(snap *catalog.Snapshot, models []*model.Model) []plan.Listed {
+	var out []plan.Listed
+	for _, m := range models {
+		l := plan.Listed{Model: m}
+		for _, b := range snap.BindingsForModel(m.Meta.ID) {
+			if b.IsEnabled() {
+				l.Bindings = append(l.Bindings, b)
+			}
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// listedAt is listed with only the bindings at hostName: what a route table lists when the caller's grant names that host.
+func listedAt(snap *catalog.Snapshot, models []*model.Model, hostName string) []plan.Listed {
+	out := listed(snap, models)
+	for i := range out {
+		var kept []*binding.Binding
+		for _, b := range out[i].Bindings {
+			if name, _ := snap.HostSlug(b.Spec.HostID); name == hostName {
+				kept = append(kept, b)
+			}
+		}
+		out[i].Bindings = kept
+	}
+	return out
+}
+
 func TestModelEntries_SnapshotsAliasesAndHosts(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
-	entries := modelEntries(nil, snap, pol, "", models)
+	snap, _, models := entriesFixture(t, "prov/big-model")
+	entries := modelEntries(snap, listed(snap, models))
 
 	if len(entries) != 2 {
 		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
@@ -130,8 +161,8 @@ func TestModelEntries_SnapshotsAliasesAndHosts(t *testing.T) {
 // The parent slug and the pointer bit are what a profile needs to tell one
 // model's snapshots apart — they all carry the same display name.
 func TestModelEntries_CarriesParentSlugAndPointer(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
-	entries := modelEntries(nil, snap, pol, "", models)
+	snap, _, models := entriesFixture(t, "prov/big-model")
+	entries := modelEntries(snap, listed(snap, models))
 
 	if len(entries) != 2 {
 		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
@@ -152,12 +183,12 @@ func TestModelEntries_CarriesParentSlugAndPointer(t *testing.T) {
 // Every snapshot of a model inherits the model's catalog metadata: a
 // profile sizes a session and labels capabilities off these.
 func TestModelEntries_CarriesCatalogMetadata(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
+	snap, _, models := entriesFixture(t, "prov/big-model")
 	models[0].Spec.ContextWindowTotal = 1000000
 	models[0].Spec.MaxOutputTokens = 384000
 	models[0].Spec.Capabilities = model.Capabilities{Reasoning: true, Tools: true}
 
-	entries := modelEntries(nil, snap, pol, "", models)
+	entries := modelEntries(snap, listed(snap, models))
 	if len(entries) != 2 {
 		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
 	}
@@ -177,10 +208,10 @@ func TestModelEntries_CarriesCatalogMetadata(t *testing.T) {
 // A model publishing only the input/output split still gets a window; a
 // model declaring none gets a zero, never a substituted number.
 func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
+	snap, _, models := entriesFixture(t, "prov/big-model")
 	models[0].Spec.ContextWindowInput = 272000
 
-	entries := modelEntries(nil, snap, pol, "", models)
+	entries := modelEntries(snap, listed(snap, models))
 	if len(entries) == 0 {
 		t.Fatal("no entries")
 	}
@@ -188,8 +219,8 @@ func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
 		t.Errorf("context window = %d, want the input window", entries[0].ContextWindow)
 	}
 
-	snap, pol, models = entriesFixture(t, "prov/big-model")
-	entries = modelEntries(nil, snap, pol, "", models)
+	snap, _, models = entriesFixture(t, "prov/big-model")
+	entries = modelEntries(snap, listed(snap, models))
 	if entries[0].ContextWindow != 0 || entries[0].MaxOutputTokens != 0 {
 		t.Errorf("undeclared metadata = %d/%d, want zeros", entries[0].ContextWindow, entries[0].MaxOutputTokens)
 	}
@@ -198,7 +229,7 @@ func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
 // A document that prints prices needs the cache meters and the context
 // tiers, each read at its own threshold rather than patched onto the base.
 func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
+	snap, _, models := entriesFixture(t, "prov/big-model")
 	for _, p := range snap.AllPricings() {
 		p.Spec.Rates = append(p.Spec.Rates,
 			pricing.Rate{Meter: pricing.MeterTokensCacheRead, Unit: pricing.UnitPerMillion, Amount: 0.3},
@@ -209,7 +240,7 @@ func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
 		)
 	}
 
-	entries := modelEntries(nil, snap, pol, "", models)
+	entries := modelEntries(snap, listed(snap, models))
 	var priced clientprofile.ModelHost
 	for _, h := range entries[0].Hosts {
 		if h.Name == "priced-host" {
@@ -242,8 +273,8 @@ func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
 // A meter the sheet does not price stays absent: nil is "unpriced", which
 // a projection must not print as free.
 func TestModelEntries_UnpricedCacheMetersStayNil(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
-	for _, h := range modelEntries(nil, snap, pol, "", models)[0].Hosts {
+	snap, _, models := entriesFixture(t, "prov/big-model")
+	for _, h := range modelEntries(snap, listed(snap, models))[0].Hosts {
 		if h.CacheReadUSDPerMtok != nil || h.CacheWriteUSDPerMtok != nil {
 			t.Errorf("%q cache rates = %v / %v, want nil", h.Name, h.CacheReadUSDPerMtok, h.CacheWriteUSDPerMtok)
 		}
@@ -253,12 +284,12 @@ func TestModelEntries_UnpricedCacheMetersStayNil(t *testing.T) {
 // Modalities, release date and the temperature bit come off the catalog as
 // stated; temperature is the inverse of the parameters the model rejects.
 func TestModelEntries_CarriesModalitiesReleaseDateAndTemperature(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
+	snap, _, models := entriesFixture(t, "prov/big-model")
 	models[0].Spec.Modalities = model.Modalities{Input: []string{"text", "image"}, Output: []string{"text"}}
 	models[0].Spec.Capabilities = model.Capabilities{Vision: true, UnsupportedParams: []string{"temperature"}}
 	models[0].Spec.Snapshots[0].ReleasedAt = "2026-02-17"
 
-	entries := modelEntries(nil, snap, pol, "", models)
+	entries := modelEntries(snap, listed(snap, models))
 	if got := entries[0].ReleasedAt; got != "2026-02-17" {
 		t.Errorf("released at = %q", got)
 	}
@@ -303,10 +334,10 @@ func hostNames(hosts []clientprofile.ModelHost) []string {
 // A binding restricted to one snapshot must not advertise the others — the
 // same Serves gate routing applies when it picks a binding.
 func TestModelEntries_HostsFollowTheBindingSnapshotSet(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
+	snap, _, models := entriesFixture(t, "prov/big-model")
 	restrictBinding(t, snap, "b-priced", "big-model-2026")
 
-	entries := modelEntries(nil, snap, pol, "", models)
+	entries := modelEntries(snap, listed(snap, models))
 	if len(entries) != 2 {
 		t.Fatalf("entries = %d, want both snapshots served", len(entries))
 	}
@@ -321,10 +352,10 @@ func TestModelEntries_HostsFollowTheBindingSnapshotSet(t *testing.T) {
 // With the only granted host restricted to one snapshot, the others are not
 // addressable at all and must not be listed.
 func TestModelEntries_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
+	snap, _, models := entriesFixture(t, "prov/big-model@priced-host")
 	restrictBinding(t, snap, "b-priced", "big-model-2026")
 
-	entries := modelEntries(nil, snap, pol, "", models)
+	entries := modelEntries(snap, listedAt(snap, models, "priced-host"))
 	if len(entries) != 1 || entries[0].ID != "big-model-2026" {
 		t.Fatalf("entries = %+v, want big-model-2026 alone", entries)
 	}
@@ -336,25 +367,25 @@ func TestModelEntries_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
 // The OpenAI-shaped listings share the rule: an unserved snapshot is not a
 // model id anyone can send.
 func TestAppendModelRows_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
+	snap, _, models := entriesFixture(t, "prov/big-model@priced-host")
 	restrictBinding(t, snap, "b-priced", "big-model-2026")
 
 	var rows []modelObject
 	seen := map[string]struct{}{}
 	m := models[0]
-	appendModelRows(&rows, snap, m, grantedBindings(nil, snap, pol, "", m, ""), seen)
+	appendModelRows(&rows, snap, m, listedAt(snap, []*model.Model{m}, "priced-host")[0].Bindings, seen)
 	if len(rows) != 1 || rows[0].ID != "big-model-2026" {
 		t.Fatalf("rows = %+v, want big-model-2026 alone", rows)
 	}
 }
 
 func TestModelEntries_SkipsDisabledBindings(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model")
+	snap, _, models := entriesFixture(t, "prov/big-model")
 	disabled := false
 	for _, b := range snap.AllBindings() {
 		b.Spec.Enabled = &disabled
 	}
-	for _, e := range modelEntries(nil, snap, pol, "", models) {
+	for _, e := range modelEntries(snap, listed(snap, models)) {
 		if len(e.Hosts) != 0 {
 			t.Fatalf("disabled bindings must not surface a host: %+v", e.Hosts)
 		}
@@ -364,8 +395,8 @@ func TestModelEntries_SkipsDisabledBindings(t *testing.T) {
 // A host outside the grant must not be advertised — the description would
 // otherwise name a route the caller's key cannot take.
 func TestModelEntries_ListsOnlyGrantedHosts(t *testing.T) {
-	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
-	entries := modelEntries(nil, snap, pol, "", models)
+	snap, _, models := entriesFixture(t, "prov/big-model@priced-host")
+	entries := modelEntries(snap, listedAt(snap, models, "priced-host"))
 	if len(entries) == 0 {
 		t.Fatal("no entries")
 	}

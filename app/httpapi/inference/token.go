@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/plan"
 	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
@@ -156,26 +156,29 @@ func looksLikeToken(bearer string) bool {
 }
 
 // tokenPrincipal verifies a token bearer and resolves it against the
-// snapshot, writing the response and reporting false on any rejection.
+// published plans, writing the response and reporting false on any rejection.
 //
 // The signature check is the expensive half and its result is cached until
-// the token expires; the version check and (downstream, in the reserve
-// script) the jti denylist are not — those are the revocation paths and run
-// on every request.
-func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *TokenVerifier, bearer string) (*Principal, bool) {
+// the token expires; the version check and the revoked-token set are not —
+// those are the revocation paths and run on every request, in memory.
+func tokenPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, bearer string) (*Principal, bool) {
 	now := time.Now()
-	ent, ok := tokens.verified(bearer, now)
+	ent, ok := a.Tokens.verified(bearer, now)
 	if !ok {
 		writeAuthErr(w, "invalid token")
 		return nil, false
 	}
-	claims := ent.claims
+	return tokenClaimsPrincipal(w, a, root, ent.claims, ent.typ, now)
+}
+
+// tokenClaimsPrincipal checks verified claims against the plans and the revoked set, the part of token authentication a long-lived connection repeats per frame.
+func tokenClaimsPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, claims crypto.TokenClaims, typ string, now time.Time) (*Principal, bool) {
 	userID := claims.UserID()
 	// iat stays out: tokens minted on another pod would fail on clock skew,
 	// which relay has never checked. Validate checks typ and iss before exp,
 	// so a foreign token reads as invalid, not expired. Relay mints only JWT;
 	// an at+jwt is an access token issued for some other resource.
-	err := authtoken.Validate(authtoken.Claims{Issuer: claims.Iss, Expiry: claims.Exp, Type: ent.typ}, now,
+	err := authtoken.Validate(authtoken.Claims{Issuer: claims.Iss, Expiry: claims.Exp, Type: typ}, now,
 		authtoken.Want{Issuer: crypto.TokenIssuer, Type: authtoken.TypeJWT})
 	switch {
 	case userID == "", err != nil && !errors.Is(err, authtoken.ErrExpired):
@@ -187,19 +190,21 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 	}
 	// A version mismatch (or an unknown user) is the bulk-revocation path:
 	// the user signed out everywhere after this token was minted.
-	if ver, ok := snap.TokenVersion(userID); !ok || ver != claims.Ver {
+	up := root.Users.Lookup(userID)
+	if up == nil || up.TokenVersion != claims.Ver {
 		writeAuthErr(w, msgTokenRevoked)
 		return nil, false
 	}
-	proj, ok := snap.Project(claims.Prj)
-	if !ok {
+	if a.Revoked.Revoked(claims.Jti, now) {
+		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked", "this token has been revoked")
+		return nil, false
+	}
+	proj := root.Projects.Lookup(claims.Prj)
+	if proj == nil {
 		writeForbidden(w, "project_unavailable", "the token's project is not available")
 		return nil, false
 	}
 	return &Principal{
-		// A token is stateless: its IdP groups come from the claims it was
-		// minted with, unioned with the local membership the snapshot holds now.
-		Subjects:       ent.subjectsIn(snap, userID),
 		UserID:         userID,
 		ProjectID:      proj.Meta.ID,
 		TeamID:         proj.Spec.TeamID,
@@ -207,7 +212,9 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 		CredentialID:   claims.Jti,
 		TokenExp:       claims.Exp,
 		TokenVer:       claims.Ver,
-		token:          ent,
+		Caller:         up.Caller,
+		claims:         claims,
+		claimsTyp:      typ,
 	}, true
 }
 
@@ -229,17 +236,4 @@ func (v *TokenVerifier) verified(bearer string, now time.Time) (*cacheEntry, boo
 	ent := &cacheEntry{claims: claims, typ: typ, exp: time.Unix(claims.Exp, 0)}
 	v.cache.put(digest, ent)
 	return ent, true
-}
-
-// subjectsIn returns the subject list the claims resolve to in snap, reusing
-// the cached one while the snapshot it was derived from is still live. A
-// membership change publishes a new snapshot, so it is picked up at once
-// rather than at token expiry.
-func (e *cacheEntry) subjectsIn(snap *appcatalog.Snapshot, userID string) []string {
-	if got, ok := e.subjectsFor(snap); ok {
-		return got
-	}
-	subs := appcatalog.UserSubjects(userID, snap.GroupsForUser(userID), e.claims.Grp)
-	e.setSubjects(snap, subs)
-	return subs
 }
