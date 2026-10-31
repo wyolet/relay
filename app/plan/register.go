@@ -58,6 +58,7 @@ const (
 	KindKeySlot          engine.Kind = "keyslot"
 	KindPoolPlan         engine.Kind = "poolplan"
 	KindOwnedCredentials engine.Kind = "ownedcredentials"
+	KindHostRungs        engine.Kind = "hostrungs"
 	KindCallerPlan       engine.Kind = "callerplan"
 	KindKeyPlan          engine.Kind = "keyplan"
 	KindKeyPlanShard     engine.Kind = "keyplanshard"
@@ -120,6 +121,7 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[KeySlot](e, KindKeySlot, 16)
 	derived[PoolPlan](e, KindPoolPlan, 1)
 	derived[OwnedCredentials](e, KindOwnedCredentials, 16)
+	derived[HostRungs](e, KindHostRungs, 1)
 	derived[CallerPlan](e, KindCallerPlan, 64)
 	derived[KeyPlan](e, KindKeyPlan, 256)
 	derived[KeyPlanShard](e, KindKeyPlanShard, 16)

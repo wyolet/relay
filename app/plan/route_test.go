@@ -249,6 +249,59 @@ func TestRoute_UpstreamBudgetRefusesUnpricedOnThatSlotOnly(t *testing.T) {
 	wantRefused(t, h.route(b.key, "m2@host-a"), CodeUnpricedUnderBudget, limits.RungAccount)
 }
 
+func wantUnkeyedRefused(t *testing.T, u *Unkeyed, code string, rung limits.Rung) {
+	t.Helper()
+	if u.Refused == nil || u.Refused.Code != code || u.Refused.Rung != rung {
+		t.Fatalf("unkeyed = %+v, want refusal %s on %q", u, code, rung)
+	}
+}
+
+// A request bringing its own key passes the host rung as a routed one does: a host policy that denies the model or is disabled refuses it, and the host's counters are held after the caller's.
+func TestResolveUnkeyed_HostRungApplies(t *testing.T) {
+	b := newBasic()
+	b.w.model(b.prov, "other")
+	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
+	narrow := b.w.policy("host-a-ops", policy.Spec{Models: []string{"acme/other"}})
+	b.w.bindPolicy(narrow, subject(policybinding.SubjectHost, b.hostA.Meta.ID))
+	capped := b.w.policy("host-b-ops", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
+	b.w.bindPolicy(capped, subject(policybinding.SubjectHost, b.hostB.Meta.ID))
+	h := b.w.start(t)
+	table := h.keyPlan(b.key).Caller.Routes
+
+	wantUnkeyedRefused(t, table.ResolveUnkeyed("m1@host-a"), CodeModelNotAllowed, limits.RungHost)
+	u := table.ResolveUnkeyed("m1@host-b")
+	if u.Refused != nil {
+		t.Fatalf("m1@host-b refused: %v", u.Refused)
+	}
+	if n := len(u.Counters); n != 1 || u.Counters[0].Rung != limits.RungHost || u.Counters[0].SubjectID != "host:"+b.hostB.Meta.ID {
+		t.Fatalf("counters = %+v, want host-b's one rule", u.Counters)
+	}
+
+	off := false
+	disabled := clone(capped)
+	disabled.Spec.Enabled = &off
+	apply(h, disabled)
+	wantUnkeyedRefused(t, h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m1@host-b"), CodePolicyDisabled, limits.RungHost)
+}
+
+// An unpriced binding is refused under a budget whether the request brings its own key or not, so a budget has no hole.
+func TestResolveUnkeyed_UnpricedUnderBudgetIsRefused(t *testing.T) {
+	b := newBasic()
+	m2 := b.w.model(b.prov, "m2")
+	b.w.bind(m2, b.hostA)
+	bud := b.w.budget("50")
+	p := b.w.policy("capped", policy.Spec{BudgetIDs: []string{bud.Meta.ID}})
+	b.w.bindPolicy(p, subject(policybinding.SubjectTeam, b.team.Meta.ID))
+	h := b.w.start(t)
+	table := h.keyPlan(b.key).Caller.Routes
+
+	wantUnkeyedRefused(t, table.ResolveUnkeyed("m2"), CodeUnpricedUnderBudget, limits.RungTeam)
+	u := table.ResolveUnkeyed("m1")
+	if u.Refused != nil || u.Pricing == nil || len(u.Counters) != 1 || u.Counters[0].Kind != limits.KindBudget {
+		t.Fatalf("priced m1 = %+v, want served under the team budget", u)
+	}
+}
+
 func TestRoute_TableCachesFills(t *testing.T) {
 	b := newBasic()
 	h := b.w.start(t)

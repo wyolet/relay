@@ -122,7 +122,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		return
 	}
 
-	// The system bucket for this mode, per credential (authed) or per client IP (anonymous), on top of an authed caller's own counters.
+	// The system bucket for this mode, per credential (authed) or per client IP (anonymous), on top of the caller's and the host's counters the resolution found.
 	bucketName := systemRLProxyAuthed
 	subject := relayKeyHashSubject(ctx)
 	if cls.Mode == ModeProxyAnonymous {
@@ -130,8 +130,8 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		subject = cls.ClientIP
 	}
 	counters := systemCounters(snap, bucketName, subject)
-	if cls.Mode == ModeProxyAuthed && principal != nil && len(principal.Caller.Counters) > 0 {
-		counters = append(append(make([]limits.Counter, 0, len(principal.Caller.Counters)+len(counters)), principal.Caller.Counters...), counters...)
+	if resolved != nil && len(resolved.Counters) > 0 {
+		counters = append(append(make([]limits.Counter, 0, len(resolved.Counters)+len(counters)), resolved.Counters...), counters...)
 	}
 
 	// Strip relay-internal headers before forward — Authorization, X-WR-*,
@@ -211,7 +211,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	defer body.Close()
 	// Deferred after Close, so it runs before it: the watch has stopped, and recorded any stall, before post-flight reads the refusal.
 	defer watch.stop()
-	// A refusal found by now, a stall included, replaces the upstream's answer; one found later ends the stream. Post-flight records either and settles the reservation as cancelled (proxy.RefusingBody).
+	// A refusal found by now, a stall included, replaces the upstream's answer; one found later ends the stream. Post-flight records either and settles the reservation with what the upstream reported (proxy.RefusingBody).
 	if !watch.track(result.Abort) || reqBody.rejection() != nil {
 		writeBodyError(w, reqBody.rejection())
 		return

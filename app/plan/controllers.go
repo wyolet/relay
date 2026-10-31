@@ -54,6 +54,9 @@ func (c *controllers) all() []*engine.Controller {
 	owned := engine.NewController("owned-credentials", KindOwnedCredentials, c.ownedCredentials)
 	engine.Watch(owned, func(k *hostkey.HostKey) []string { return []string{ownerRef(k.Meta.Owner)} })
 
+	hostRungs := engine.NewController("host-rungs", KindHostRungs, c.hostRungs)
+	engine.Watch(hostRungs, toSingleton[host.Host])
+
 	caller := engine.NewController("caller-plan", KindCallerPlan, c.callerPlan)
 	engine.Watch(caller, func(sa *serviceaccount.ServiceAccount) []string { return []string{"serviceaccount:" + sa.Meta.ID} })
 	engine.Watch(caller, func(u *user.User) []string { return []string{"user:" + u.ID} })
@@ -76,5 +79,5 @@ func (c *controllers) all() []*engine.Controller {
 	projects := engine.NewController("project-index", KindProjectIndex, c.projectIndex)
 	engine.Watch(projects, toSingleton[project.Project])
 
-	return []*engine.Controller{catalog, expanded, rung, acct, slot, pl, owned, caller, kp, shard, index, up, users, projects}
+	return []*engine.Controller{catalog, expanded, rung, acct, slot, pl, owned, hostRungs, caller, kp, shard, index, up, users, projects}
 }

@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 type edgeOptions struct {
@@ -160,6 +162,33 @@ func readStatus(t *testing.T, br *bufio.Reader) (*http.Response, string) {
 	}
 	b, _ := io.ReadAll(res.Body)
 	return res, string(b)
+}
+
+// postFlightsDone counts finished post-flight goroutines: post-flight records post_flight_seconds as its last act, after the settle.
+func postFlightsDone(t *testing.T) uint64 {
+	t.Helper()
+	var m dto.Metric
+	if err := metrics.PostFlightSeconds.Write(&m); err != nil {
+		t.Fatalf("read post_flight_seconds: %v", err)
+	}
+	return m.GetHistogram().GetSampleCount()
+}
+
+// assertChargeKept waits for the post-flight that started after before to finish and wants no cancelled commit: the upstream answered, so the reservation keeps its charge.
+func assertChargeKept(t *testing.T, store *kvtest.Recording, before uint64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for postFlightsDone(t) == before {
+		if time.Now().After(deadline) {
+			t.Fatal("post-flight never finished")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	for _, c := range store.Named("limit.commit") {
+		if len(c.Args) >= 7 && c.Args[6] == int64(1) {
+			t.Fatalf("reservation released after the upstream answered: %+v", c)
+		}
+	}
 }
 
 // assertCancelledSettle waits for the reservation's one commit, which post-flight runs after its hooks, and wants it cancelled.
@@ -355,7 +384,7 @@ func TestProxyEdge_OverTheBodyLimit(t *testing.T) {
 	}
 }
 
-// A body refused after an early upstream answer: the caller gets the refusal if it came before the answer was forwarded, else the answer on a connection that then closes. Either way the request is recorded as the refusal with its reservation settled as cancelled.
+// A body refused after an early upstream answer: the caller gets the refusal if it came before the answer was forwarded, else the answer on a connection that then closes. Either way the request is recorded as the refusal.
 func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -378,7 +407,6 @@ func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 			if s := awaitPostFlight(t, e.seen); s.errorKind != tc.kind {
 				t.Fatalf("recorded as %q, want %s", s.errorKind, tc.kind)
 			}
-			assertCancelledSettle(t, e.store)
 		})
 	}
 }

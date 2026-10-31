@@ -210,6 +210,42 @@ func TestRunRefundsOnThePostFlightStore(t *testing.T) {
 	}
 }
 
+// lateRefusal is a request body read to its end whose refusal comes once the upstream has answered, as a body checked while it streams can be.
+type lateRefusal struct {
+	io.Reader
+	refused *BodyError
+}
+
+func (b *lateRefusal) Refusal() *BodyError { return b.refused }
+
+// A body refused after the upstream answered still keeps the request's charge: the upstream served it, so releasing the hold would refund what was spent.
+func TestRunKeepsTheChargeWhenTheBodyIsRefusedAfterTheAnswer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	p, _, cs := meteredPipeline(t)
+
+	req := meteredRequest(upstream.URL, cs)
+	body := &lateRefusal{Reader: strings.NewReader(`{}`)}
+	req.Body = body
+	res, err := p.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	body.refused = &BodyError{Kind: "duplicate_model", Err: errors.New("second model key")}
+	before := postFlightsFinished(t)
+	_ = res.Body.Close()
+	awaitPostFlight(t, before)
+
+	_, err = p.Run(context.Background(), meteredRequest(upstream.URL, cs))
+	var refused *limits.Refused
+	if !errors.As(err, &refused) {
+		t.Fatalf("second Run: err = %v, want a refusal: the first request's charge was refunded", err)
+	}
+}
+
 // A hold the store could not answer wraps the store's timeout; its usage row must still read as a kv refusal, not as a timeout.
 func TestClassifyFailureStoreUnavailable(t *testing.T) {
 	err := fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded))

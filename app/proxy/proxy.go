@@ -189,7 +189,7 @@ type BodyError struct {
 func (e *BodyError) Error() string { return e.Err.Error() }
 func (e *BodyError) Unwrap() error { return e.Err }
 
-// RefusingBody is a Request.Body that can refuse the inbound body after the upstream has answered, when Run has already returned. Post-flight asks it: a refused request is recorded under the refusal's kind and its reservation settled as cancelled, not as a success.
+// RefusingBody is a Request.Body that can refuse the inbound body after the upstream has answered, when Run has already returned. Post-flight asks it: a refused request is recorded under the refusal's kind, not as a success; its reservation still settles with what the upstream reported, since the upstream served it.
 type RefusingBody interface {
 	Refusal() *BodyError
 }
@@ -351,11 +351,8 @@ func (p *Pipeline) runPostFlight(req *Request, res limits.Reservation, body []by
 	// post-flight is off the client path, so ordering it last is safe.
 	body = nil
 
+	// The upstream answered, so the hold is settled with what it reported even when the inbound body was refused afterwards.
 	if res == nil {
-		return
-	}
-	if refused != nil {
-		res.Release()
 		return
 	}
 	res.Settle(limits.Usage{Tokens: tokens, CostNanos: costNanos(req.Pricing, req.Lifecycle, tokens)})

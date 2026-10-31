@@ -33,6 +33,8 @@ type CallerPlan struct {
 	// Counters are the caller rungs' rules without a model scope and their budgets, outer rung first.
 	Counters []limits.Counter
 	Routes   *RouteTable
+	// hosts governs requests that bring their own upstream key (ResolveUnkeyed).
+	hosts    *HostRungs
 	scoped   []scopedCounters
 	budgetAt int // index into Rungs of the first rung with a budget, -1 for none
 	linkedAt int // index into Rungs of the rung deciding reach, -1 for ownership
@@ -173,7 +175,8 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 	cp.Pools = pools
 	cp.in = append(cp.in, in...)
 	idx := engine.Get[CatalogIndex](tx, "")
-	cp.in = append(cp.in, idx)
+	cp.hosts = engine.Get[HostRungs](tx, "")
+	cp.in = append(cp.in, idx, cp.hosts)
 	if prev := engine.Get[CallerPlan](tx, principal); SameOr(prev, cp) == prev {
 		engine.Put(tx, prev)
 		return nil
