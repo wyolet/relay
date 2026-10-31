@@ -13,6 +13,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
 	authtoken "github.com/wyolet/relay/auth/token"
@@ -436,5 +437,41 @@ func TestUnknownKidIsRefused(t *testing.T) {
 	tok := signedWith(t, f, f.signer, "deadbeefdeadbeef")
 	if w := f.stack(t).do(tok); w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for a kid naming no held key", w.Code)
+	}
+}
+
+// A token acts in its project: the project's and its team's rungs sit above the user's own, so a disabled project policy or a disabled team refuses it, on every request and on every WebSocket frame.
+func TestTokenActsInItsProject(t *testing.T) {
+	f := newPrincipalFixture()
+	off := false
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID)}
+	st := f.stack(t)
+	token := f.mint(t, nil)
+	if w := st.do(token); w.Code != http.StatusOK {
+		t.Fatalf("token status %d: %s", w.Code, w.Body)
+	}
+	cp := st.seen.Caller
+	if cp.Project().SubjectID != "project:"+f.project.Meta.ID || cp.Team().SubjectID != "team:"+f.team.Meta.ID || cp.Project().Policy == nil {
+		t.Fatalf("token rungs: team %q, project %q (policy %v); want the token's project and team", cp.Team().SubjectID, cp.Project().SubjectID, cp.Project().Policy)
+	}
+	upgraded := st.seen
+
+	pol := *f.boundPol
+	pol.Spec.Enabled = &off
+	plantest.Apply(t, st.plans, &pol)
+	if w := st.do(token); w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "policy_disabled" {
+		t.Fatalf("token under a disabled project policy: %d %s, want 403 policy_disabled", w.Code, w.Body)
+	}
+	pol.Spec.Enabled = nil
+	plantest.Apply(t, st.plans, &pol)
+	tm := *f.team
+	tm.Spec.Enabled = &off
+	plantest.Apply(t, st.plans, &tm)
+	if w := st.do(token); w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "subject_disabled" {
+		t.Fatalf("token under a disabled team: %d %s, want 403 subject_disabled", w.Code, w.Body)
+	}
+	fp, ok := st.auth.reauthenticate(httptest.NewRecorder(), upgraded)
+	if !ok || fp.Caller.Refused == nil || fp.Caller.Refused.Code != "subject_disabled" {
+		t.Fatalf("frame re-authentication under a disabled team: ok=%v caller %+v, want the team's refusal", ok, fp)
 	}
 }

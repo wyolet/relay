@@ -65,6 +65,7 @@ const (
 	KindKeyPlanIndex     engine.Kind = "keyplanindex"
 	KindUserPlan         engine.Kind = "userplan"
 	KindUserIndex        engine.Kind = "userindex"
+	KindProjectPlan      engine.Kind = "projectplan"
 	KindProjectIndex     engine.Kind = "projectindex"
 )
 
@@ -128,6 +129,7 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[KeyPlanIndex](e, KindKeyPlanIndex, 1)
 	derived[UserPlan](e, KindUserPlan, 64)
 	derived[UserIndex](e, KindUserIndex, 1)
+	derived[ProjectPlan](e, KindProjectPlan, 16)
 	derived[ProjectIndex](e, KindProjectIndex, 1)
 
 	c := &controllers{cells: cells}

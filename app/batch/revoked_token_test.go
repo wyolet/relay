@@ -14,28 +14,37 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/revocation"
+	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgrelay "github.com/wyolet/relay/sdk/v1"
 )
 
-// fixture is a Runner over published plans: one model served at one host through a system-owned credential, one user and that user's key.
+// fixture is a Runner over published plans: one model served at one host through a system-owned credential, one user, that user's key, and a project of a team the user's tokens act in.
 type fixture struct {
 	rn      *Runner
+	plans   *plantest.Plans
 	revoked *revocation.List
 	userID  string
 	key     *key.Key
+	team    *team.Team
+	project *project.Project
 }
 
-// keyAttr and tokenAttr are submissions by the fixture's key and its user.
+// keyAttr and tokenAttr are submissions by the fixture's key and by a token of its user in the fixture's project.
 func (f *fixture) keyAttr() Attribution {
 	return Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: f.userID, CredentialKind: inference.CredentialKey, CredentialID: f.key.Meta.ID}
 }
 
 func (f *fixture) tokenAttr(jti string) Attribution {
-	return Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: f.userID, CredentialKind: inference.CredentialToken, CredentialID: jti}
+	a := Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: f.userID, CredentialKind: inference.CredentialToken, CredentialID: jti}
+	a.ProjectID, a.TeamID = f.project.Meta.ID, f.team.Meta.ID
+	return a
 }
 
 // runnerFixture wires a Runner whose pipeline counts on kv.Mem, against a host at baseURL.
@@ -50,8 +59,11 @@ func runnerFixture(t *testing.T, baseURL string) *fixture {
 	u := w.User()
 	k := w.UserKey(u, "rk-secret")
 	k.Meta.Name = "rk"
-	rn, revoked := runnerOver(t, w.Load(t))
-	return &fixture{rn: rn, revoked: revoked, userID: u.ID, key: k}
+	tm := w.Team()
+	proj := w.Project(tm)
+	plans := w.Load(t)
+	rn, revoked := runnerOver(t, plans)
+	return &fixture{rn: rn, plans: plans, revoked: revoked, userID: u.ID, key: k, team: tm, project: proj}
 }
 
 // runnerOver wires a Runner over published plans, with a pipeline counting on kv.Mem and the revoked-token list beside it.
@@ -119,6 +131,38 @@ func TestRunRefusesItemsWhoseCredentialLapsed(t *testing.T) {
 	}
 	if _, _, err := f.rn.Run(ctx, "item", f.key.Spec.KeyHash, TokenClaims{}, f.keyAttr(), adapters.OpenAI, body); errors.Is(err, ErrCredentialInvalid) {
 		t.Errorf("live key refused: %v", err)
+	}
+}
+
+// A token acts in its project, so its queued items stop when the project or its team is disabled or gone, as its live requests do.
+func TestRunRefusesTokenItemsWhoseProjectLapsed(t *testing.T) {
+	body := []byte(`{"model":"test-model"}`)
+	off := false
+	for name, lapse := range map[string]func(f *fixture){
+		"project disabled": func(f *fixture) {
+			p := *f.project
+			p.Spec.Enabled = &off
+			plantest.Apply(t, f.plans, &p)
+		},
+		"team disabled": func(f *fixture) {
+			tm := *f.team
+			tm.Spec.Enabled = &off
+			plantest.Apply(t, f.plans, &tm)
+		},
+		"project gone": func(f *fixture) {
+			if err := engine.Delete(f.plans.Engine, engine.Ref{Kind: plan.KindProject, ID: f.project.Meta.ID}); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		f := runnerFixture(t, "http://upstream.invalid")
+		if _, _, err := f.rn.Run(context.Background(), "item", "", TokenClaims{JTI: "j"}, f.tokenAttr("j"), adapters.OpenAI, body); errors.Is(err, ErrCredentialInvalid) {
+			t.Fatalf("%s: refused before the lapse: %v", name, err)
+		}
+		lapse(f)
+		if _, _, err := f.rn.Run(context.Background(), "item", "", TokenClaims{JTI: "j"}, f.tokenAttr("j"), adapters.OpenAI, body); !errors.Is(err, ErrCredentialInvalid) {
+			t.Errorf("%s: err = %v, want ErrCredentialInvalid", name, err)
+		}
 	}
 }
 
