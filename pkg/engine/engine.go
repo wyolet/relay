@@ -43,7 +43,7 @@ type Engine struct {
 // state is the working copy the drain goroutine edits; publish freezes it.
 type state struct {
 	objs   []shardWriter[string, obj]
-	names  []shardWriter[string, []string]
+	names  []shardWriter[string, map[string]struct{}] // name → ids holding it
 	graph  graph
 	issues issueStore
 	outs   map[Ref]*outState
@@ -179,7 +179,7 @@ func (e *Engine) reset() {
 	n := len(e.sch.kinds)
 	e.st = state{
 		objs:   make([]shardWriter[string, obj], n),
-		names:  make([]shardWriter[string, []string], n),
+		names:  make([]shardWriter[string, map[string]struct{}], n),
 		graph:  newGraph(),
 		issues: newIssueStore(),
 		outs:   map[Ref]*outState{},
@@ -187,7 +187,7 @@ func (e *Engine) reset() {
 	}
 	for i, k := range e.sch.kinds {
 		e.st.objs[i].cur = newShardMap[string, obj](k.shards)
-		e.st.names[i].cur = newShardMap[string, []string](k.shards)
+		e.st.names[i].cur = newShardMap[string, map[string]struct{}](k.shards)
 	}
 	for _, c := range e.sch.ctls {
 		clear(c.dirty)
