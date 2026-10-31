@@ -37,9 +37,9 @@ func (e *Engine) newBatch() *batch {
 	}
 }
 
-// write sets object id of kind k to v (nil deletes) and dirties everything
-// that depends on it. It reports whether anything changed; an identical
-// pointer is no change.
+// write sets object id of kind k to v (nil deletes) and dirties everything that depends on it. It reports whether anything changed; an identical pointer is no change.
+//
+// Any change of a named row dirties the readers of its old name, since a ByName reader sees the row's value and not only which row holds the name; a rename also dirties the readers of the new name.
 func (b *batch) write(k *kindInfo, id string, v any) bool {
 	st := &b.e.st
 	old, had := st.objs[k.idx].get(id)
@@ -201,8 +201,7 @@ func (b *batch) markDuplicates() {
 	}
 }
 
-// publish freezes the working state into the next View when the batch
-// changed anything (always when force), then reports cell links and stats.
+// publish freezes the working state into the next View when the batch changed anything (always when force), then reports cell links and queues the hooks.
 func (b *batch) publish(force bool) {
 	e := b.e
 	b.markDuplicates()
@@ -224,10 +223,12 @@ func (b *batch) publish(force bool) {
 	b.stats.Gen = v.gen
 	b.stats.Duration = time.Since(b.start)
 	if h := e.opts.Hooks.OnBatchAbandoned; h != nil && b.abandoned {
-		h(v.gen, b.stats.Rounds)
+		gen, rounds := v.gen, b.stats.Rounds
+		e.hooks.add(func() { h(gen, rounds) })
 	}
 	if h := e.opts.Hooks.OnPublish; h != nil {
-		h(v, b.stats)
+		s := b.stats
+		e.hooks.add(func() { h(v, s) })
 	}
 }
 

@@ -35,7 +35,7 @@ type Edge struct {
 // ByID is an edge to one object by id.
 func ByID(k Kind, id string) Edge { return Edge{Kind: k, ID: id} }
 
-// ByName is an edge to whichever object of kind k holds name.
+// ByName is an edge to whichever object of kind k holds name. Any change to that object dirties the reader, not only a rename.
 func ByName(k Kind, name string) Edge { return Edge{Kind: k, Name: name} }
 
 // Any is an edge to every object of kind k.
