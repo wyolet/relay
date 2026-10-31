@@ -37,9 +37,9 @@ func (e *Engine) newBatch() *batch {
 	}
 }
 
-// write sets object id of kind k to v (nil deletes) and dirties everything
-// that depends on it. It reports whether anything changed; an identical
-// pointer is no change.
+// write sets object id of kind k to v (nil deletes) and dirties everything that depends on it. It reports whether anything changed; an identical pointer is no change.
+//
+// Any change of a named row dirties the readers of its old name, since a ByName reader sees the row's value and not only which row holds the name; a rename also dirties the readers of the new name.
 func (b *batch) write(k *kindInfo, id string, v any) bool {
 	st := &b.e.st
 	old, had := st.objs[k.idx].get(id)

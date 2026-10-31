@@ -48,7 +48,6 @@ type Store interface {
 	Pipeline(ctx context.Context, cmds []Cmd) error
 	// Publish sends payload to channel's subscribers and returns once ctx ends at the latest.
 	Publish(ctx context.Context, channel string, payload []byte) error
-	// Subscribe delivers payloads until ctx ends or stop is called,
-	// reconnecting internally.
+	// Subscribe delivers payloads to fn until ctx ends or stop is called, reconnecting internally. Payloads published while disconnected are lost without a signal; a Watcher's watermark re-list recovers them. err reports only a failed initial subscribe.
 	Subscribe(ctx context.Context, channel string, fn func([]byte)) (stop func(), err error)
 }
