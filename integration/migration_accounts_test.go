@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
@@ -15,11 +16,74 @@ import (
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
+
+// A database with a subject already in two policy bindings stops the upgrade with a message naming the subject and both bindings, rather than failing on the unique index.
+func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	st, err := storagemod.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db := st.Pool()
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	prj := &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-project", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}}, Spec: project.Spec{TeamID: tm.Meta.ID}}
+	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-sa"}, Spec: serviceaccount.Spec{ProjectID: prj.Meta.ID}}
+	sa.StampOwner()
+	binding := func(name string, sub rolebinding.Subject) *policybinding.PolicyBinding {
+		return &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
+			Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{sub}},
+		}
+	}
+	first := binding("first-binding", rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: sa.Meta.ID})
+	second := binding("second-binding", rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"})
+	for _, step := range []struct {
+		name  string
+		write func() error
+	}{
+		{"team", func() error { return team.NewStore(db).Upsert(ctx, tm) }},
+		{"project", func() error { return project.NewStore(db).Upsert(ctx, prj) }},
+		{"service account", func() error { return serviceaccount.NewStore(db).Upsert(ctx, sa) }},
+		{"policy", func() error { return policy.NewStore(db).Upsert(ctx, pol) }},
+	} {
+		if err := step.write(); err != nil {
+			t.Fatalf("upsert %s: %v", step.name, err)
+		}
+	}
+	for _, b := range []*policybinding.PolicyBinding{first, second} {
+		if err := policybinding.NewStore(db).Upsert(ctx, b); err != nil {
+			t.Fatalf("upsert binding %s: %v", b.Meta.Name, err)
+		}
+	}
+	st.Close()
+
+	// Below 000035 nothing holds a subject to one binding.
+	if err := storagemod.MigrateTo(dsn, 34); err != nil {
+		t.Fatalf("migrate down to 34: %v", err)
+	}
+	conn := testPool(t, dsn)
+	if _, err := conn.Exec(ctx, "INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_sa_id, position) VALUES ($1, 'serviceaccount', $2, $2, 1)", second.Meta.ID, sa.Meta.ID); err != nil {
+		t.Fatalf("bind the service account twice: %v", err)
+	}
+	err = storagemod.MigrateUp(dsn)
+	if err == nil {
+		t.Fatal("the upgrade went through with a subject in two bindings")
+	}
+	for _, want := range []string{"serviceaccount " + sa.Meta.ID, "first-binding", "second-binding"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("upgrade error %q does not name %q", err, want)
+		}
+	}
+}
 
 // Rolling back below accounts, pools and budgets drops their tables and the policy links to them, and keeps the policy bindings, minus the subjects the older schema cannot hold.
 func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
