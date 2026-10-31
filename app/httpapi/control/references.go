@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -24,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/settings"
 )
@@ -342,6 +344,10 @@ func scanHostKeyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 				break
 			}
 		}
+		// Not detachable: a policy's last linked credential going away would widen its reach to every credential its scopes own.
+		if slices.Contains(p.Spec.CredentialIDs, id) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.credentialIds", owner: p.Meta.Owner})
+		}
 	}
 	// A host key's delete removes the stored secret kept under its id, so a
 	// settings section naming that secret is a reference too. Settings are
@@ -367,6 +373,11 @@ func scanRateLimitRefs(ctx context.Context, d Deps, id string) ([]referenceItem,
 		return nil, fmt.Errorf("list policies: %w", err)
 	}
 	for _, p := range pols {
+		// Not detachable: dropping the link would lift the cap it puts on the policy.
+		if slices.ContainsFunc(p.Spec.RateLimits, func(l policy.RateLimitLink) bool { return l.RateLimitID == id }) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rateLimits[].rateLimitId", owner: p.Meta.Owner})
+			continue
+		}
 		if p.Spec.RateLimitID == id {
 			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rateLimitId", owner: p.Meta.Owner, detachable: true})
 			continue

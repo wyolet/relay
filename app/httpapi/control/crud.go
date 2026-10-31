@@ -495,6 +495,9 @@ func registerKind[T any](
 			if managed := managedError(err); managed != nil {
 				return nil, managed
 			}
+			if inUse := restrictedDelete(singular, metaOf(existing).Name, err); inUse != nil {
+				return nil, inUse
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
 		return &emptyResponse{}, nil

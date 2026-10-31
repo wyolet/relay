@@ -107,7 +107,7 @@ func (s *Store) Upsert(ctx context.Context, p *Pool) error {
 	return nil
 }
 
-// Delete removes a Pool by id; its credential rows and policy links cascade.
+// Delete removes a Pool by id and its credential rows; a pool a policy links is refused by its foreign key.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.db).DeletePool(ctx, id)
 }

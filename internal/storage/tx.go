@@ -45,8 +45,17 @@ const (
 	sqlstateDeadlockDetected     = "40P01"
 )
 
-// sqlstateUniqueViolation is the SQLSTATE of a write a unique constraint or index refused.
-const sqlstateUniqueViolation = "23505"
+// SQLSTATE codes for a write a constraint refused.
+const (
+	sqlstateForeignKeyViolation = "23503"
+	sqlstateUniqueViolation     = "23505"
+)
+
+// IsForeignKeyViolation reports whether err is Postgres refusing a write that would break a reference, such as deleting a row another still restricts on.
+func IsForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == sqlstateForeignKeyViolation
+}
 
 // IsUniqueViolation reports whether err is Postgres refusing a write that would break the named unique constraint or index.
 func IsUniqueViolation(err error, constraint string) bool {
