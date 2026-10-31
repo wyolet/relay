@@ -79,7 +79,7 @@ func main() {
 
 	cat.UseTokenVersions(usersStore)
 
-	plans := buildPlanEngine(cfg, st, stores, usersStore)
+	plans := buildPlanEngine(cfg, stores, usersStore)
 	defer plans.engine.Close()
 	cat.ForwardEvents(plan.Forwarder{Engine: plans.engine})
 	go plans.expireCells(listenerCtx)
