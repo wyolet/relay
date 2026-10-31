@@ -287,7 +287,7 @@ func registerKind[T any](
 			Tags:          []string{tag},
 			Middlewares:   protect,
 			DefaultStatus: http.StatusCreated,
-			Errors:        []int{400, 401, 403, 500},
+			Errors:        []int{400, 401, 403, 409, 500},
 		}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
 			v := &in.Body
 			m := metaOf(v)
@@ -350,10 +350,7 @@ func registerKind[T any](
 				create = w.Create
 			}
 			if err := create(ctx, v); err != nil {
-				if refused := grantRefusal(err); refused != nil {
-					return nil, refused
-				}
-				return nil, huma.Error500InternalServerError(err.Error())
+				return nil, mapWriteErr(singular, m.ID, err)
 			}
 			created, err := store.Get(ctx, m.ID)
 			if err != nil {

@@ -100,6 +100,8 @@ CREATE INDEX IF NOT EXISTS policy_binding_subjects_account_idx    ON policy_bind
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_credential_idx ON policy_binding_subjects (subject_credential_id);
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_team_idx       ON policy_binding_subjects (subject_team_id);
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_project_idx    ON policy_binding_subjects (subject_project_id);
+-- A subject is bound to at most one policy, across every binding. Group subjects carry a name, not an id, and are not policy rungs.
+CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_binding ON policy_binding_subjects (kind, subject_id);
 
 CREATE TRIGGER accounts_notify AFTER INSERT OR UPDATE OR DELETE ON accounts
     FOR EACH ROW EXECUTE FUNCTION catalog_notify('account');
