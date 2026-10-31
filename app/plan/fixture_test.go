@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +76,11 @@ type world struct {
 	keys      []*key.Key
 }
 
+var nameSeq atomic.Uint64
+
+// seq gives fixture rows unique names, as the stores require.
+func seq() string { return strconv.FormatUint(nameSeq.Add(1), 10) }
+
 func md(name string, owner meta.Owner) meta.Metadata {
 	return meta.Metadata{ID: meta.NewID(), Name: name, Owner: owner}
 }
@@ -117,14 +124,14 @@ func (w *world) price(m *model.Model, h *host.Host) *pricing.Pricing {
 }
 
 func (w *world) account(h *host.Host) *account.Account {
-	a := &account.Account{Meta: md("acct-"+meta.NewID()[:8], system), Spec: account.Spec{HostID: h.Meta.ID}}
+	a := &account.Account{Meta: md("acct-"+seq(), system), Spec: account.Spec{HostID: h.Meta.ID}}
 	w.accounts = append(w.accounts, a)
 	return a
 }
 
 // cred is a resolved credential at h, in account a when non-nil.
 func (w *world) cred(h *host.Host, a *account.Account, owner meta.Owner) *hostkey.HostKey {
-	c := &hostkey.HostKey{Meta: md("cred-"+meta.NewID()[:8], owner), Spec: hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
+	c := &hostkey.HostKey{Meta: md("cred-"+seq(), owner), Spec: hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
 	if a != nil {
 		c.Spec.AccountID = a.Meta.ID
 	}
@@ -140,7 +147,7 @@ func rotate(c *hostkey.HostKey, value string) {
 }
 
 func (w *world) pool(h *host.Host, creds ...*hostkey.HostKey) *pool.Pool {
-	p := &pool.Pool{Meta: md("pool-"+meta.NewID()[:8], system), Spec: pool.Spec{HostID: h.Meta.ID}}
+	p := &pool.Pool{Meta: md("pool-"+seq(), system), Spec: pool.Spec{HostID: h.Meta.ID}}
 	for _, c := range creds {
 		p.Spec.CredentialIDs = append(p.Spec.CredentialIDs, c.Meta.ID)
 	}
@@ -153,13 +160,13 @@ func rule(meter ratelimit.Meter, amount int64, window time.Duration) ratelimit.R
 }
 
 func (w *world) rateLimit(rules ...ratelimit.Rule) *ratelimit.RateLimit {
-	rl := &ratelimit.RateLimit{Meta: md("rl-"+meta.NewID()[:8], system), Spec: ratelimit.Spec{Rules: rules}}
+	rl := &ratelimit.RateLimit{Meta: md("rl-"+seq(), system), Spec: ratelimit.Spec{Rules: rules}}
 	w.rls = append(w.rls, rl)
 	return rl
 }
 
 func (w *world) budget(amount string) *budget.Budget {
-	b := &budget.Budget{Meta: md("budget-"+meta.NewID()[:8], system), Spec: budget.Spec{AmountUSD: amount, Period: budget.PeriodMonth, Mode: budget.ModeHard}}
+	b := &budget.Budget{Meta: md("budget-"+seq(), system), Spec: budget.Spec{AmountUSD: amount, Period: budget.PeriodMonth, Mode: budget.ModeHard}}
 	w.budgets = append(w.budgets, b)
 	return b
 }
@@ -171,7 +178,7 @@ func (w *world) policy(name string, spec policy.Spec) *policy.Policy {
 }
 
 func (w *world) bindPolicy(p *policy.Policy, subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
-	b := &policybinding.PolicyBinding{Meta: md("pb-"+meta.NewID()[:8], system), Spec: policybinding.Spec{PolicyID: p.Meta.ID, Subjects: subjects}}
+	b := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), system), Spec: policybinding.Spec{PolicyID: p.Meta.ID, Subjects: subjects}}
 	w.pbs = append(w.pbs, b)
 	return b
 }
@@ -181,25 +188,25 @@ func subject(kind rolebinding.SubjectKind, id string) rolebinding.Subject {
 }
 
 func (w *world) team() *team.Team {
-	t := &team.Team{Meta: md("team-"+meta.NewID()[:8], system)}
+	t := &team.Team{Meta: md("team-"+seq(), system)}
 	w.teams = append(w.teams, t)
 	return t
 }
 
 func (w *world) project(t *team.Team) *project.Project {
-	p := &project.Project{Meta: md("proj-"+meta.NewID()[:8], meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}), Spec: project.Spec{TeamID: t.Meta.ID}}
+	p := &project.Project{Meta: md("proj-"+seq(), meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}), Spec: project.Spec{TeamID: t.Meta.ID}}
 	w.projects = append(w.projects, p)
 	return p
 }
 
 func (w *world) sa(p *project.Project) *serviceaccount.ServiceAccount {
-	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+meta.NewID()[:8], meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: p.Meta.ID}}
+	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: p.Meta.ID}}
 	w.sas = append(w.sas, s)
 	return s
 }
 
 func (w *world) user() *user.User {
-	u := &user.User{ID: meta.NewID(), Username: "user-" + meta.NewID()[:8]}
+	u := &user.User{ID: meta.NewID(), Username: "user-" + seq()}
 	w.users = append(w.users, u)
 	return u
 }
@@ -210,7 +217,7 @@ func keyHash(seed string) string {
 }
 
 func (w *world) keyFor(kind key.PrincipalKind, id string) *key.Key {
-	k := &key.Key{Meta: md("key-"+meta.NewID()[:8], system), Spec: key.Spec{Principal: key.Principal{Kind: kind, ID: id}}}
+	k := &key.Key{Meta: md("key-"+seq(), system), Spec: key.Spec{Principal: key.Principal{Kind: kind, ID: id}}}
 	k.Spec.KeyHash = keyHash(k.Meta.ID)
 	w.keys = append(w.keys, k)
 	return k
