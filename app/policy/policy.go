@@ -24,6 +24,8 @@ package policy
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
@@ -109,6 +111,24 @@ type Spec struct {
 	// every request this policy governs are captured, overriding the
 	// credential's own flag either way (see CapturesPayload). Off by default.
 	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+
+	// PoolIDs are the pools this policy draws keys from, tried in order, so a later pool is the failover for an earlier one. Host-owned policies list none.
+	PoolIDs []string `json:"poolIds,omitempty" yaml:"poolIds,omitempty" validate:"omitempty,dive,uuid"`
+
+	// CredentialIDs are host keys linked directly, each one a pool of one. Replaces HostKeyIDs; a policy sets one or the other. Host-owned policies list none.
+	CredentialIDs []string `json:"credentialIds,omitempty" yaml:"credentialIds,omitempty" validate:"omitempty,dive,uuid"`
+
+	// RateLimits are the rate limits a request under this policy must fit. Replaces RateLimitID and RLBindings; a policy sets one form.
+	RateLimits []RateLimitLink `json:"rateLimits,omitempty" yaml:"rateLimits,omitempty" validate:"omitempty,dive"`
+
+	// BudgetIDs are the budgets a request under this policy must fit.
+	BudgetIDs []string `json:"budgetIds,omitempty" yaml:"budgetIds,omitempty" validate:"omitempty,dive,uuid"`
+}
+
+// RateLimitLink applies one RateLimit to a policy's requests: to every model when Models is empty, otherwise only to requests for a model matching one of Models (app/modelref grammar). One rate limit may be linked more than once with different Models.
+type RateLimitLink struct {
+	RateLimitID string   `json:"rateLimitId"      yaml:"rateLimitId"      validate:"required,uuid"`
+	Models      []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1"`
 }
 
 // RLBinding maps a set of Models to one RateLimit. The Models list uses
@@ -193,7 +213,9 @@ func (p *Policy) ResolveRules(rl *ratelimit.RateLimit, modelID string) []pkgrate
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
 //   - Owner.Kind is user or system.
-//   - ModelIDs / HostKeyIDs have no within-list duplicates.
+//   - no id list repeats an entry.
+//   - host-owned policies link no pools or credentials.
+//   - rateLimits is not mixed with rateLimitId/rlBindings, nor credentialIds with hostKeyIds.
 //
 // Cross-entity checks (every id resolves; ProviderKeys + Models share a
 // Provider; RateLimitID resolves; auth-required Providers have at least
@@ -215,6 +237,9 @@ func (p *Policy) Validate() error {
 		if len(p.Spec.HostKeyIDs) > 0 {
 			return fmt.Errorf("policy %q: host-owned policies must not list hostKeyIds", p.Meta.Name)
 		}
+		if len(p.Spec.PoolIDs) > 0 || len(p.Spec.CredentialIDs) > 0 {
+			return fmt.Errorf("policy %q: host-owned policies must not list poolIds or credentialIds", p.Meta.Name)
+		}
 	case meta.OwnerProject:
 	default:
 		return fmt.Errorf("policy %q: owner.kind required (user|system|host|project)", p.Meta.Name)
@@ -223,14 +248,46 @@ func (p *Policy) Validate() error {
 	if p.Spec.RateLimitID != "" && len(p.Spec.RLBindings) > 0 {
 		return fmt.Errorf("policy %q: rateLimitId and rlBindings are mutually exclusive", p.Meta.Name)
 	}
-	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
-		return err
+	if len(p.Spec.RateLimits) > 0 && (p.Spec.RateLimitID != "" || len(p.Spec.RLBindings) > 0) {
+		return fmt.Errorf("policy %q: rateLimits replaces rateLimitId and rlBindings; set one form", p.Meta.Name)
 	}
-	if err := uniqueIDs("hostKeyIds", p.Meta.Name, p.Spec.HostKeyIDs); err != nil {
-		return err
+	if len(p.Spec.CredentialIDs) > 0 && len(p.Spec.HostKeyIDs) > 0 {
+		return fmt.Errorf("policy %q: credentialIds replaces hostKeyIds; set one", p.Meta.Name)
+	}
+	for _, f := range []struct {
+		name string
+		ids  []string
+	}{
+		{"modelIds", p.Spec.ModelIDs},
+		{"hostKeyIds", p.Spec.HostKeyIDs},
+		{"poolIds", p.Spec.PoolIDs},
+		{"credentialIds", p.Spec.CredentialIDs},
+		{"budgetIds", p.Spec.BudgetIDs},
+	} {
+		if err := uniqueIDs(f.name, p.Meta.Name, f.ids); err != nil {
+			return err
+		}
 	}
 	if err := validateModelRefs(p.Meta.Name, p.Spec.Models); err != nil {
 		return err
+	}
+	return validateRateLimitLinks(p.Meta.Name, p.Spec.RateLimits)
+}
+
+// validateRateLimitLinks checks each link's model refs and refuses two links of one rate limit over the same models, which would only count every request twice.
+func validateRateLimitLinks(policyName string, links []RateLimitLink) error {
+	seen := make(map[string]int, len(links))
+	for i, l := range links {
+		if err := validateModelRefs(policyName, l.Models); err != nil {
+			return fmt.Errorf("rateLimits[%d]: %w", i, err)
+		}
+		models := slices.Clone(l.Models)
+		slices.Sort(models)
+		key := l.RateLimitID + "\x00" + strings.Join(models, "\x00")
+		if j, dup := seen[key]; dup {
+			return fmt.Errorf("policy %q: rateLimits[%d] and rateLimits[%d] link rate limit %q over the same models", policyName, j, i, l.RateLimitID)
+		}
+		seen[key] = i
 	}
 	return nil
 }
