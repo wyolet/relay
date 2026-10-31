@@ -115,13 +115,13 @@ func (b *batch) applyEvent(ctx context.Context, ev Event) {
 		return
 	}
 	id := ev.Ref.ID
+	if cur, had := e.st.objs[k.idx].get(id); had && stale(cur.meta.Version, ev.Version) {
+		return
+	}
 	if ev.Op == OpDelete {
 		if b.write(k, id, nil) {
 			b.stats.Inputs++
 		}
-		return
-	}
-	if cur, had := e.st.objs[k.idx].get(id); had && stale(cur.meta.Version, ev.Version) {
 		return
 	}
 	row, err := k.get(ctx, id)
