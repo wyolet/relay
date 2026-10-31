@@ -2,7 +2,7 @@
 --
 -- Account is a provider org on one host; Pool is an ordered set of one host's keys; Budget is a recurring USD cap. host_id is a column so a host delete cascades, as for pricings and host_bindings.
 --
--- A policy's links to pools, credentials, rate limits and budgets live in junctions like policy_host_keys. A linked target cannot be deleted while a policy links it: dropping the link would lose a cap, or turn a policy's last pool or credential into reach by ownership, which widens it. Deleting the policy drops its links.
+-- A policy's links to pools, credentials, rate limits and budgets live in junctions like policy_host_keys. A deleted target drops the link rather than blocking the delete: the policy loses that cap or credential.
 --
 -- A HostKey's accountId lives in the secrets spec JSONB, beside its policyId.
 
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS budgets (
 
 CREATE TABLE IF NOT EXISTS policy_pools (
     policy_id TEXT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    pool_id   TEXT NOT NULL REFERENCES pools(id)    ON DELETE RESTRICT,
+    pool_id   TEXT NOT NULL REFERENCES pools(id)    ON DELETE CASCADE,
     position  INT  NOT NULL,
     PRIMARY KEY (policy_id, pool_id)
 );
@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS policy_pools_pool_idx ON policy_pools (pool_id);
 
 CREATE TABLE IF NOT EXISTS policy_credentials (
     policy_id   TEXT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    host_key_id TEXT NOT NULL REFERENCES secrets(id)  ON DELETE RESTRICT,
+    host_key_id TEXT NOT NULL REFERENCES secrets(id)  ON DELETE CASCADE,
     position    INT  NOT NULL,
     PRIMARY KEY (policy_id, host_key_id)
 );
@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS policy_credentials_key_idx ON policy_credentials (hos
 -- One rate limit may appear more than once with different model scopes, so rows are keyed by position.
 CREATE TABLE IF NOT EXISTS policy_rate_limits (
     policy_id     TEXT  NOT NULL REFERENCES policies(id)    ON DELETE CASCADE,
-    rate_limit_id TEXT  NOT NULL REFERENCES rate_limits(id) ON DELETE RESTRICT,
+    rate_limit_id TEXT  NOT NULL REFERENCES rate_limits(id) ON DELETE CASCADE,
     models        JSONB NOT NULL DEFAULT '[]'::jsonb,
     position      INT   NOT NULL,
     PRIMARY KEY (policy_id, position)
@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS policy_rate_limits_rl_idx ON policy_rate_limits (rate
 
 CREATE TABLE IF NOT EXISTS policy_budgets (
     policy_id TEXT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    budget_id TEXT NOT NULL REFERENCES budgets(id)  ON DELETE RESTRICT,
+    budget_id TEXT NOT NULL REFERENCES budgets(id)  ON DELETE CASCADE,
     position  INT  NOT NULL,
     PRIMARY KEY (policy_id, budget_id)
 );

@@ -1,6 +1,6 @@
 //go:build integration
 
-// links_integration_test.go covers a Policy's links to pools, credentials, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement and the refused delete of a linked target are the behaviour. Run with: make test-integration.
+// links_integration_test.go covers a Policy's links to pools, credentials, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement and what a deleted target leaves behind are the behaviour. Run with: make test-integration.
 
 package policy_test
 
@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
@@ -88,37 +87,21 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 		BudgetIDs:  []string{b.Meta.ID},
 	})
 
-	// A linked pool, credential, rate limit or budget is not deleted while the policy links it: losing the link would lift a cap or widen the policy's reach.
-	p.Spec.CredentialIDs = []string{f.hostKeyID}
-	if err := f.store.Upsert(ctx, p); err != nil {
-		t.Fatalf("relink credential: %v", err)
+	// Deleting a linked pool, budget or rate limit drops the link and keeps the policy.
+	if err := pools.Delete(ctx, poolIDs[0]); err != nil {
+		t.Fatalf("delete pool: %v", err)
 	}
-	deletes := map[string]func() error{
-		"pool":       func() error { return pools.Delete(ctx, poolIDs[0]) },
-		"credential": func() error { return gen.New(f.db).DeleteSecret(ctx, f.hostKeyID) },
-		"rate limit": func() error { return ratelimit.NewStore(gen.New(f.db)).Delete(ctx, f.otherRateLimit) },
-		"budget":     func() error { return budgets.Delete(ctx, b.Meta.ID) },
+	if err := budgets.Delete(ctx, b.Meta.ID); err != nil {
+		t.Fatalf("delete budget: %v", err)
 	}
-	for name, del := range deletes {
-		if err := del(); !storage.IsForeignKeyViolation(err) {
-			t.Errorf("delete linked %s: err = %v, want a foreign-key refusal", name, err)
-		}
+	if err := ratelimit.NewStore(gen.New(f.db)).Delete(ctx, f.otherRateLimit); err != nil {
+		t.Fatalf("delete rate limit: %v", err)
 	}
 	got, err = f.store.Get(ctx, p.Meta.ID)
 	if err != nil || got == nil {
-		t.Fatalf("Get after refused deletes: %v (row %v)", err, got)
+		t.Fatalf("Get after deletes: %v (row %v)", err, got)
 	}
-	assertLinks(t, "after refused deletes", got.Spec, p.Spec)
-
-	// Deleting the policy drops its links, and the targets go.
-	if err := f.store.Delete(ctx, p.Meta.ID); err != nil {
-		t.Fatalf("delete policy: %v", err)
-	}
-	for name, del := range deletes {
-		if err := del(); err != nil {
-			t.Errorf("delete %s once unlinked: %v", name, err)
-		}
-	}
+	assertLinks(t, "after deletes", got.Spec, policy.Spec{})
 }
 
 func assertLinks(t *testing.T, step string, got, want policy.Spec) {

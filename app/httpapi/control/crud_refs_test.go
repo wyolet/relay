@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
@@ -26,18 +24,6 @@ func TestRefErrKeepsTheRefusalCode(t *testing.T) {
 	}
 	if err := mapGuardErr(err); err != error(ae) {
 		t.Fatalf("guard mapping replaced the refusal: %v", err)
-	}
-}
-
-// A delete the store refuses because a row linked the target after the references scan is the caller's conflict, not a missing row.
-func TestRestrictedDeleteIsAConflict(t *testing.T) {
-	err := restrictedDelete("rate-limit", "rl", fmt.Errorf("delete: %w", &pgconn.PgError{Code: "23503"}))
-	var ae *httpapi.APIError
-	if !errors.As(err, &ae) || ae.HTTPStatus != http.StatusConflict || ae.Err.Code != "resource_in_use" {
-		t.Fatalf("err = %v, want a 409 resource_in_use", err)
-	}
-	if restrictedDelete("rate-limit", "rl", errors.New("boom")) != nil {
-		t.Fatal("an unrelated store error read as in use")
 	}
 }
 

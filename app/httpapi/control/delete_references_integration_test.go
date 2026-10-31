@@ -345,30 +345,6 @@ func TestDeleteRateLimit_PolicyRefsBlockAsDetachable(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "rate-limits", unused.Meta.ID, false), http.StatusNoContent)
 }
 
-// A credential or rate limit a policy links is not deleted, and the policy is not let go of it: losing the link would lift a cap or widen the policy's reach. The 409 names the policy.
-func TestDeleteLinkedCredentialAndRateLimit_PolicyBlocks(t *testing.T) {
-	f, ctx := newPolicyDeleteFixture(t)
-	tier := f.policy(t, ctx, "linked-tier", f.projectOwner())
-	hk := f.hostKey(t, ctx, "linked-key", tier.Meta.ID)
-	rl := f.rateLimit(t, ctx, "linked-limit", meta.Owner{Kind: meta.OwnerSystem})
-	linking := &policy.Policy{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "linking", Owner: f.projectOwner()},
-		Spec: policy.Spec{CredentialIDs: []string{hk.Meta.ID}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}},
-	}
-	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, linking))
-
-	body := wantBlockers(t, f.deleteRow(t, "host-keys", hk.Meta.ID, false), wantGroup{"policy", "spec.credentialIds", false, 1})
-	if items := body.Blockers[0].Items; len(items) != 1 || items[0].Name != linking.Meta.Name {
-		t.Fatalf("blocker items = %+v, want the linking policy", items)
-	}
-	wantBlockers(t, f.deleteRow(t, "rate-limits", rl.Meta.ID, false), wantGroup{"policy", "spec.rateLimits[].rateLimitId", false, 1})
-
-	got, err := f.stores.Policy.Get(ctx, linking.Meta.ID)
-	if err != nil || got == nil || !slices.Contains(got.Spec.CredentialIDs, hk.Meta.ID) || len(got.Spec.RateLimits) != 1 {
-		t.Fatalf("policy after refused deletes = %+v (err %v), want both links kept", got, err)
-	}
-}
-
 // A policy in a project alice can't see still blocks her rate limit, counted
 // but never named.
 func TestDeleteRateLimit_HiddenReferenceBlocksWithoutItsName(t *testing.T) {

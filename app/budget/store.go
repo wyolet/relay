@@ -58,7 +58,7 @@ func (s *Store) Upsert(ctx context.Context, b *Budget) error {
 	return meta.StaleIfNoRows(s.q.UpsertBudget(ctx, params))
 }
 
-// Delete removes a Budget by id; a budget a policy links is refused by its foreign key.
+// Delete removes a Budget by id; policies linking it lose the link.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteBudget(ctx, id)
 }

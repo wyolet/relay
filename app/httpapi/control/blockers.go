@@ -14,7 +14,6 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/internal/storage"
 )
 
 type blockerItem struct {
@@ -92,21 +91,6 @@ func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceIte
 		return groups[i].Detachable && !groups[j].Detachable
 	})
 	return groups
-}
-
-// restrictedDelete is the 409 for a delete the store refused because a row still references the target, one linked after the references scan ran; nil when err is not one.
-func restrictedDelete(kind, name string, err error) error {
-	if !storage.IsForeignKeyViolation(err) {
-		return nil
-	}
-	return &httpapi.APIError{
-		Err: httpapi.APIErrorBody{
-			Type:    "invalid_request_error",
-			Code:    "resource_in_use",
-			Message: fmt.Sprintf("%s %q is still referenced; see its references", kind, name),
-		},
-		HTTPStatus: http.StatusConflict,
-	}
 }
 
 // refuseInUse returns the 409 for deleting a row that is still referenced,
