@@ -129,24 +129,24 @@ func (t *RouteTable) fill(ref string) *Route {
 	return r
 }
 
-// Refusal stages, in the order a fill passes them; when no hop remains the refusal from the furthest stage reached is the one reported.
+// Refusal steps, in the order a fill passes them; when no hop remains the refusal from the furthest step reached is the one reported.
 const (
-	stageModelDisabled = iota
-	stageNoBinding
-	stageModelNotAllowed
-	stageNoCredentials
-	stageUpstream
-	stageUnpriced
+	stepModelDisabled = iota
+	stepNoBinding
+	stepModelNotAllowed
+	stepNoCredentials
+	stepUpstream
+	stepUnpriced
 )
 
 type refusalAt struct {
-	stage int
-	r     *Refusal
+	step int
+	r    *Refusal
 }
 
-func (b *refusalAt) note(stage int, r *Refusal) {
-	if b.r == nil || stage > b.stage {
-		b.stage, b.r = stage, r
+func (b *refusalAt) note(step int, r *Refusal) {
+	if b.r == nil || step > b.step {
+		b.step, b.r = step, r
 	}
 }
 
@@ -176,14 +176,14 @@ func (t *RouteTable) route(models []*model.Model, sn *model.Snapshot, pinHostID 
 				continue
 			}
 			if i := cp.Allow.rejects(prov, m, h.Meta.Name); i >= 0 {
-				best.note(stageModelNotAllowed, cp.notAllowed(i))
+				best.note(stepModelNotAllowed, cp.notAllowed(i))
 				continue
 			}
 			pr, _ := snap.PricingForBinding(b)
 			cands = append(cands, served{b: b, h: h, pricing: pr})
 		}
 		if len(cands) == 0 {
-			best.note(stageNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
+			best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
 			continue
 		}
 		if hops := t.hops(m, prov, cands, &best); len(hops) > 0 {
@@ -213,7 +213,7 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 		reached = true
 		priced := sv.pricing != nil
 		if !priced && cp.budgetAt >= 0 {
-			best.note(stageUnpriced, rungRefusal(CodeUnpricedUnderBudget, &cp.Rungs[cp.budgetAt], cp.Rungs[cp.budgetAt].Policy.Policy.Meta.ID, "binding "+sv.b.Meta.Name+" has no pricing and a budget applies"))
+			best.note(stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, &cp.Rungs[cp.budgetAt], cp.Rungs[cp.budgetAt].Policy.Policy.Meta.ID, "binding "+sv.b.Meta.Name+" has no pricing and a budget applies"))
 			continue
 		}
 		hop := RouteHop{Pool: p, Binding: sv.b, Host: sv.h, Pricing: sv.pricing, Priced: priced}
@@ -222,17 +222,17 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 				continue
 			}
 			if s.Refused != nil {
-				best.note(stageUpstream, s.Refused)
+				best.note(stepUpstream, s.Refused)
 				continue
 			}
 			if i := s.rejects(prov, m, sv.h.Meta.Name); i >= 0 {
 				r := &s.Upstream[i]
-				best.note(stageUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the "+string(r.Kind)+" policy"))
+				best.note(stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the "+string(r.Kind)+" policy"))
 				continue
 			}
 			if !priced && s.hasBudget {
 				r := &s.Upstream[s.budgetAt]
-				best.note(stageUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+sv.b.Meta.Name+" has no pricing and a budget applies"))
+				best.note(stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+sv.b.Meta.Name+" has no pricing and a budget applies"))
 				continue
 			}
 			seen[s] = struct{}{}
@@ -249,7 +249,7 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			rg := &cp.Rungs[cp.linkedAt]
 			r = rungRefusal(CodeNoCredentials, rg, rg.Policy.Policy.Meta.ID, r.Message)
 		}
-		best.note(stageNoCredentials, r)
+		best.note(stepNoCredentials, r)
 	}
 	return hops
 }
