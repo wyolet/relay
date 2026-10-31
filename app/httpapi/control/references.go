@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -24,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/settings"
 )
@@ -68,6 +70,32 @@ var referenceScans = map[string]func(ctx context.Context, d Deps, id string) ([]
 	"service-account": scanServiceAccountRefs,
 	"group":           scanGroupRefs,
 	"role":            scanRoleRefs,
+}
+
+// droppedLinkScans maps a kind to the scan listing the policies a delete of one of its rows takes a link from without refusing it: a rate limit the policy stops counting, or a credential it stops reaching (the policy keeps the id and narrows, never widens).
+var droppedLinkScans = map[string]func(ctx context.Context, d Deps, id string) ([]referenceItem, error){
+	"host-key": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+		return policiesLinking(ctx, d, "spec.credentialIds", func(p *policy.Policy) bool { return slices.Contains(p.Spec.CredentialIDs, id) })
+	},
+	"rate-limit": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+		return policiesLinking(ctx, d, "spec.rateLimits[].rateLimitId", func(p *policy.Policy) bool {
+			return slices.ContainsFunc(p.Spec.RateLimits, func(l policy.RateLimitLink) bool { return l.RateLimitID == id })
+		})
+	},
+}
+
+func policiesLinking(ctx context.Context, d Deps, via string, links func(*policy.Policy) bool) ([]referenceItem, error) {
+	pols, err := d.Stores.Policy.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	var out []referenceItem
+	for _, p := range pols {
+		if links(p) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: via, owner: p.Meta.Owner})
+		}
+	}
+	return out, nil
 }
 
 // referencedPlurals are the kinds with a references scan, in API plural form.
