@@ -96,6 +96,7 @@ func hopAt(h *host.Host, keys []*hostkey.HostKey) plan.RouteHop {
 		s := &plan.KeySlot{Credential: k, Host: h}
 		pp.Slots = append(pp.Slots, s)
 		hop.Slots = append(hop.Slots, s)
+		hop.Credentials = append(hop.Credentials, k)
 		hop.Counters = append(hop.Counters, nil)
 	}
 	return hop

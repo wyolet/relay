@@ -53,6 +53,7 @@ func buildHop(sel keypool.KeySelection, caller []limits.Counter, slots ...testSl
 		ks := &plan.KeySlot{Credential: s.key, Host: upstreamHost, Account: s.acc}
 		pp.Slots = append(pp.Slots, ks)
 		hop.Slots = append(hop.Slots, ks)
+		hop.Credentials = append(hop.Credentials, s.key)
 		hop.Counters = append(hop.Counters, append(append([]limits.Counter(nil), caller...), s.upstream...))
 	}
 	return hop

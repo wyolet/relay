@@ -49,6 +49,7 @@ func newRunFixture(tb testing.TB) *runFixture {
 	done := make(postFlightDone, 1)
 	cred := &hostkey.HostKey{Meta: meta.Metadata{ID: "key-1", Name: "key-1"}, Resolved: "sk-test", KeyHash: "hash-1"}
 	mdl := &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}}
+	routes := map[string][]plan.RouteHop{}
 	return &runFixture{
 		p: &pipeline.Pipeline{
 			Limiter:    lua.New(pkgratelimit.New(mem, slog.Default(), nil)),
@@ -58,12 +59,17 @@ func newRunFixture(tb testing.TB) *runFixture {
 		},
 		done: done,
 		req: func(a pipeline.Adapter, baseURL string, body []byte) *pipeline.Request {
-			hst := &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}, Spec: host.Spec{BaseURL: baseURL}}
-			slot := &plan.KeySlot{Credential: cred, Host: hst}
-			pp := &plan.PoolPlan{Host: hst, Slots: []*plan.KeySlot{slot}, Selection: keypool.KeySelectionPrioritized}
+			// Built once per upstream, as a route is filled once and served many times.
+			hops, ok := routes[baseURL]
+			if !ok {
+				hst := &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}, Spec: host.Spec{BaseURL: baseURL}}
+				slot := &plan.KeySlot{Credential: cred, Host: hst}
+				pp := &plan.PoolPlan{Host: hst, Slots: []*plan.KeySlot{slot}, Selection: keypool.KeySelectionPrioritized}
+				hops = []plan.RouteHop{{Pool: pp, Host: hst, Slots: pp.Slots, Credentials: []*hostkey.HostKey{cred}, Counters: [][]limits.Counter{nil}}}
+				routes[baseURL] = hops
+			}
 			return &pipeline.Request{
-				Body: body, Adapter: a, Model: mdl,
-				Hops:      []plan.RouteHop{{Pool: pp, Host: hst, Slots: pp.Slots, Counters: [][]limits.Counter{nil}}},
+				Body: body, Adapter: a, Model: mdl, Hops: hops,
 				Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
 			}
 		},

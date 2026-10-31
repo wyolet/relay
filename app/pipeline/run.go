@@ -32,7 +32,9 @@ type runState struct {
 	callerCS []limits.Counter
 	// callerReached is set once any attempt under the caller's hold may have reached the upstream.
 	callerReached bool
-	cur           *attempt
+	// cur points at att while an attempt is held; one allocation serves every attempt of the request.
+	cur *attempt
+	att attempt
 	// host is the last host called, for the reachability record of a failure.
 	host *host.Host
 }
@@ -87,7 +89,14 @@ hops:
 		if err = p.holdCaller(ctx, st, hop); err != nil {
 			return nil, err
 		}
-		excluded := make([]bool, len(hop.Slots))
+		// Most hops hold a few credentials: their exclusions fit a stack buffer.
+		var exBuf [8]bool
+		excluded := exBuf[:0]
+		if n := len(hop.Slots); n <= len(exBuf) {
+			excluded = exBuf[:n]
+		} else {
+			excluded = make([]bool, n)
+		}
 		for attempts < maxAttempts {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
@@ -113,7 +122,8 @@ hops:
 				continue
 			}
 			attempts++
-			st.cur = &attempt{hop: hop, slot: slot, cand: cand, res: upRes}
+			st.att = attempt{hop: hop, slot: slot, cand: cand, res: upRes}
+			st.cur = &st.att
 			st.host = hop.Host
 			stampAttempt(req.Lifecycle, st.cur, attempts)
 
@@ -324,24 +334,34 @@ func sameCounters(a, b []limits.Counter) bool {
 // pick returns the index in hop.Slots of the credential to call next and the breaker record it was picked on; -1 when none is left. Excluded slots are skipped, and so are slots whose account is cooling, noting when it ends on lim.
 func (p *Pipeline) pick(ctx context.Context, hop *plan.RouteHop, excluded []bool, lim **UpstreamLimitedError) (int, keypool.Candidate, error) {
 	nowMs := time.Now().UnixMilli()
-	keys := make([]*hostkey.HostKey, 0, len(hop.Slots))
-	at := make([]int, 0, len(hop.Slots))
-	for i, s := range hop.Slots {
-		if excluded[i] {
-			continue
+	// The common pick is over the whole hop: its own credential list then serves, and no slice is built.
+	keys, at := hop.Credentials, []int(nil)
+	if len(keys) != len(hop.Slots) || skipsAny(hop, excluded, nowMs) {
+		keys = make([]*hostkey.HostKey, 0, len(hop.Slots))
+		at = make([]int, 0, len(hop.Slots))
+		for i, s := range hop.Slots {
+			if excluded[i] {
+				continue
+			}
+			if s.Account != nil && s.Account.Cooldown.Cooled(nowMs) {
+				*lim = noteLimited(*lim, time.Duration(s.Account.Cooldown.Until()-nowMs)*time.Millisecond, nil)
+				continue
+			}
+			keys = append(keys, s.Credential)
+			at = append(at, i)
 		}
-		if s.Account != nil && s.Account.Cooldown.Cooled(nowMs) {
-			*lim = noteLimited(*lim, time.Duration(s.Account.Cooldown.Until()-nowMs)*time.Millisecond, nil)
-			continue
-		}
-		keys = append(keys, s.Credential)
-		at = append(at, i)
 	}
 	if len(keys) == 0 {
 		return -1, keypool.Candidate{}, nil
 	}
+	slotOf := func(j int) int {
+		if at == nil {
+			return j
+		}
+		return at[j]
+	}
 	if p.Selector == nil {
-		return at[0], keypool.Candidate{Key: keys[0]}, nil
+		return slotOf(0), keypool.Candidate{Key: keys[0]}, nil
 	}
 	c, err := p.Selector.PickCandidate(ctx, pickScope(hop), hop.Pool.Selection, keys, nil)
 	if err != nil {
@@ -349,10 +369,20 @@ func (p *Pipeline) pick(ctx context.Context, hop *plan.RouteHop, excluded []bool
 	}
 	for j, k := range keys {
 		if k == c.Key {
-			return at[j], c, nil
+			return slotOf(j), c, nil
 		}
 	}
 	return -1, keypool.Candidate{}, keypool.ErrNoHealthyKeys
+}
+
+// skipsAny reports whether a pick over hop must leave a slot out: excluded, or its account cooling.
+func skipsAny(hop *plan.RouteHop, excluded []bool, nowMs int64) bool {
+	for i, s := range hop.Slots {
+		if excluded[i] || (s.Account != nil && s.Account.Cooldown.Cooled(nowMs)) {
+			return true
+		}
+	}
+	return false
 }
 
 // pickScope keys a hop's rotation state by its pool, so every caller drawing on one pool shares one rotation; a credential linked on its own has nothing to rotate.
@@ -408,11 +438,13 @@ func stampAttempt(lc *lifecycle.Context, a *attempt, attempts int) {
 
 // closeAttempt settles the reservation of an attempt the walk moves on from: kept when the call may have reached the upstream, released otherwise. Detached: the next attempt does not wait on it.
 func (st *runState) closeAttempt() {
-	a := st.cur
-	st.cur = nil
-	if a == nil || a.res == nil {
+	if st.cur == nil || st.cur.res == nil {
+		st.cur = nil
 		return
 	}
+	// A copy: the next attempt reuses st.att while this one settles.
+	a := *st.cur
+	st.cur = nil
 	go a.close()
 }
 

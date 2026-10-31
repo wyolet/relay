@@ -8,6 +8,7 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pricing"
@@ -54,13 +55,15 @@ type Route struct {
 
 // RouteHop is one pool's slots that may serve the route, with the binding and pricing at the pool's host. Counters[i] is everything slot i's request must fit: the caller rungs' counters, then the slot's upstream ones.
 type RouteHop struct {
-	Pool     *PoolPlan
-	Binding  *binding.Binding
-	Host     *host.Host
-	Pricing  *pricing.Pricing
-	Priced   bool
-	Slots    []*KeySlot
-	Counters [][]limits.Counter
+	Pool    *PoolPlan
+	Binding *binding.Binding
+	Host    *host.Host
+	Pricing *pricing.Pricing
+	Priced  bool
+	Slots   []*KeySlot
+	// Credentials is each slot's credential, in slot order, so a pick over the whole hop builds no slice.
+	Credentials []*hostkey.HostKey
+	Counters    [][]limits.Counter
 	// CallerN is how many leading counters of each Counters[i] are the caller's; they are the same for every slot of the hop, so a failover inside it keeps the caller's hold.
 	CallerN int
 }
@@ -352,6 +355,7 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			}
 			seen[s] = struct{}{}
 			hop.Slots = append(hop.Slots, s)
+			hop.Credentials = append(hop.Credentials, s.Credential)
 			cs, callerN := t.counters(s, prov, m, sv.h.Meta.Name)
 			hop.Counters = append(hop.Counters, cs)
 			hop.CallerN = callerN
