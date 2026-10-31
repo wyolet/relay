@@ -24,10 +24,10 @@ func (e *Engine) loop() {
 		}
 		e.mu.Lock()
 		e.drainLocked(e.ctx)
-		if e.resyncDue {
-			e.resyncDue = false
+		if !e.resyncAt.IsZero() && !time.Now().Before(e.resyncAt) {
+			e.resyncAt = time.Time{}
 			if err := e.resyncLocked(e.ctx); err != nil {
-				e.resyncDue = true
+				e.scheduleResync()
 			}
 		}
 		next := e.nextWake()
@@ -81,7 +81,16 @@ func (e *Engine) drainLocked(ctx context.Context) {
 	b.settle()
 	b.publish(false)
 	if b.abandoned {
-		e.resyncDue = true
+		e.scheduleResync()
+	}
+}
+
+// scheduleResync asks the loop for a Resync one maxBackoff from now, unless
+// one is already due sooner. Never immediate, so a cycle that keeps being
+// abandoned costs MaxRounds once per interval.
+func (e *Engine) scheduleResync() {
+	if at := time.Now().Add(maxBackoff); e.resyncAt.IsZero() || at.Before(e.resyncAt) {
+		e.resyncAt = at
 	}
 }
 
@@ -93,10 +102,8 @@ func (e *Engine) nextWake() time.Time {
 			next = at
 		}
 	}
-	if e.resyncDue {
-		if at := time.Now().Add(maxBackoff); next.IsZero() || at.Before(next) {
-			next = at
-		}
+	if !e.resyncAt.IsZero() && (next.IsZero() || e.resyncAt.Before(next)) {
+		next = e.resyncAt
 	}
 	return next
 }
