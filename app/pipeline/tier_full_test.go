@@ -189,7 +189,7 @@ func TestCoolAccountOnlyForAccountWideWindows(t *testing.T) {
 	} {
 		slot := &plan.KeySlot{Account: accountPlan("a")}
 		coolAccount(slot, &limits.Refused{Counter: &tc.c, RetryAfter: time.Minute})
-		if got := slot.Account.Cooldown.Cooled(time.Now().UnixMilli()); got != tc.cools {
+		if got := slot.Account.Cooldown.Cooled(time.Now().UnixMilli(), "model-a"); got != tc.cools {
 			t.Errorf("%s: account cooled = %v, want %v", tc.name, got, tc.cools)
 		}
 	}
@@ -215,5 +215,23 @@ func TestRunAllAccountsFull(t *testing.T) {
 	}
 	if len(h.used) != 0 {
 		t.Fatalf("upstream was called with %v", h.used)
+	}
+}
+
+// A pick over accounts that cool other models reads the cooldowns without allocating.
+func TestPickOverModelCooldownsAllocatesNothing(t *testing.T) {
+	acc := accountPlan("a")
+	acc.Cooldown.ExtendModel("model-other", time.Now().Add(time.Minute).UnixMilli(), time.Now().UnixMilli())
+	hop := buildHop(keypool.KeySelectionPrioritized, nil, testSlot{key: testKey("k1"), acc: acc}, testSlot{key: testKey("k2"), acc: acc})
+	p := &Pipeline{}
+	excluded := make([]bool, len(hop.Slots))
+	var lim *UpstreamLimitedError
+	allocs := testing.AllocsPerRun(100, func() {
+		if i, _, _ := p.pick(context.Background(), &hop, "model-1", excluded, &lim); i != 0 {
+			t.Fatalf("picked %d, want 0", i)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("pick allocates %v times", allocs)
 	}
 }
