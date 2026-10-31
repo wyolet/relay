@@ -153,8 +153,8 @@ func TestIntegration_SecretMigrationRoundTrip(t *testing.T) {
 	if err := runMigrate([]string{"down", "33"}); err == nil {
 		t.Fatal("relay migrate down 33 ran while sealed rows remained")
 	}
-	if v := versionIn(t, dsn, "schema_migrations"); v != 34 {
-		t.Fatalf("schema after the refused rollback = %d, want 34", v)
+	if v := versionIn(t, dsn, "schema_migrations"); v != int64(storagetest.LatestVersion(t)) {
+		t.Fatalf("schema after the refused rollback = %d, want %d", v, storagetest.LatestVersion(t))
 	}
 	if err := runSecret([]string{"downgrade"}); err != nil {
 		t.Fatalf("relay secret downgrade: %v", err)
