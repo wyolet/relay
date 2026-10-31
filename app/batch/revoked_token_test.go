@@ -50,8 +50,13 @@ func runnerFixture(t *testing.T, baseURL string) *fixture {
 	u := w.User()
 	k := w.UserKey(u, "rk-secret")
 	k.Meta.Name = "rk"
-	plans := w.Load(t)
+	rn, revoked := runnerOver(t, w.Load(t))
+	return &fixture{rn: rn, revoked: revoked, userID: u.ID, key: k}
+}
 
+// runnerOver wires a Runner over published plans, with a pipeline counting on kv.Mem and the revoked-token list beside it.
+func runnerOver(t *testing.T, plans *plantest.Plans) (*Runner, *revocation.List) {
+	t.Helper()
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
 	pkgratelimit.RegisterScripts(mem)
@@ -63,20 +68,15 @@ func runnerFixture(t *testing.T, baseURL string) *fixture {
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		Translator:  pkgrelay.IdentityTranslator{},
 	}).Build()
-	return &fixture{
-		rn: &Runner{
-			Auth: &inference.Auth{Plans: plans.Holder, Revoked: revoked.Set()},
-			Pipeline: &pipeline.Pipeline{
-				Limiter:  lua.New(pkgratelimit.New(mem, slog.Default(), nil)),
-				Selector: keypool.New(mem, slog.Default(), nil, nil),
-				Logger:   slog.Default(),
-			},
-			Specs: adapter.NewRegistry(spec),
+	return &Runner{
+		Auth: &inference.Auth{Plans: plans.Holder, Revoked: revoked.Set()},
+		Pipeline: &pipeline.Pipeline{
+			Limiter:  lua.New(pkgratelimit.New(mem, slog.Default(), nil)),
+			Selector: keypool.New(mem, slog.Default(), nil, nil),
+			Logger:   slog.Default(),
 		},
-		revoked: revoked,
-		userID:  u.ID,
-		key:     k,
-	}
+		Specs: adapter.NewRegistry(spec),
+	}, revoked
 }
 
 // A token revoked after submit stops its already-queued items, from the in-memory revoked set; an unrevoked token gets past authentication and only then fails on the unreachable upstream.
