@@ -30,7 +30,6 @@ package routing
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -41,7 +40,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/settings"
-	"github.com/wyolet/relay/pkg/slug"
 )
 
 // Errors returned by Resolve. Each maps to a distinct HTTP status in
@@ -335,16 +333,11 @@ func applyAlias(plan *Plan, ref *appcatalog.AliasRef, req Request) {
 	if ref == nil {
 		return
 	}
-	plan.ResolvedVia = "alias:" + ref.Name
-	if !ref.Pattern {
-		plan.UpstreamOverride = ref.Name
-		return
-	}
 	raw := req.RawModelName
 	if raw == "" {
 		raw = req.ModelName
 	}
-	plan.UpstreamOverride = raw
+	plan.ResolvedVia, plan.UpstreamOverride = appcatalog.AliasUpstream(ref, raw)
 }
 
 // resolveModel maps a caller-supplied model ref to its snapshot via the
@@ -354,22 +347,8 @@ func applyAlias(plan *Plan, ref *appcatalog.AliasRef, req Request) {
 // pinHostID is non-empty when the ref named a host ("model@host"), in which
 // case binding selection is constrained to that host.
 func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model, snap2 *model.Snapshot, pinHostID string, alias *appcatalog.AliasRef) {
-	key := slug.From(name)
-	if key == "" {
-		return nil, nil, "", nil
-	}
-	if m, s, hostID, ok := snap.ResolveSnapshot(key); ok {
-		return []*model.Model{m}, s, hostID, nil
-	}
-	// Declared aliases are last-priority: probed only after every real
-	// catalog name missed. Wildcard patterns are skipped for refs that
-	// carry an "@host" pin — the pin segment is glued into the normalized
-	// key and would corrupt the match (exact aliases support pins via
-	// synthesized forms).
-	if ref, ok := snap.ResolveAlias(key, !strings.ContainsRune(name, '@')); ok {
-		return []*model.Model{ref.Model}, ref.Snapshot, ref.HostID, &ref
-	}
-	return nil, nil, "", nil
+	r := snap.ResolveModelRef(name)
+	return r.Models, r.Snapshot, r.PinHostID, r.Alias
 }
 
 // candidateKeys returns the keys this policy may spend against h for m, or
