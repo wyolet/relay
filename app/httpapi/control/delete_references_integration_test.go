@@ -345,6 +345,55 @@ func TestDeleteRateLimit_PolicyRefsBlockAsDetachable(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "rate-limits", unused.Meta.ID, false), http.StatusNoContent)
 }
 
+// A credential or rate limit a policy links is deleted, and the answer and the audit say which policies lost which link: the policy stops counting the rate limit and keeps the credential's id, so it narrows rather than widens.
+func TestDeleteLinkedCredentialAndRateLimit_ReportsThePolicies(t *testing.T) {
+	f, ctx := newPolicyDeleteFixture(t)
+	tier := f.policy(t, ctx, "linked-tier", f.projectOwner())
+	hk := f.hostKey(t, ctx, "linked-key", tier.Meta.ID)
+	rl := f.rateLimit(t, ctx, "linked-limit", meta.Owner{Kind: meta.OwnerSystem})
+	linking := &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "linking", Owner: f.projectOwner()},
+		Spec: policy.Spec{CredentialIDs: []string{hk.Meta.ID}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}},
+	}
+	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, linking))
+
+	for _, tc := range []struct{ plural, id, field string }{
+		{"host-keys", hk.Meta.ID, "spec.credentialIds"},
+		{"rate-limits", rl.Meta.ID, "spec.rateLimits[].rateLimitId"},
+	} {
+		w := f.deleteRow(t, tc.plural, tc.id, false)
+		wantStatus(t, w, http.StatusOK)
+		var body struct {
+			Detached []struct {
+				Kind, Field string
+				Items       []struct{ ID, Name string }
+			} `json:"detached"`
+		}
+		must(t, "decode "+tc.plural+" delete", json.Unmarshal(w.Body.Bytes(), &body))
+		if len(body.Detached) != 1 || body.Detached[0].Kind != "policy" || body.Detached[0].Field != tc.field ||
+			len(body.Detached[0].Items) != 1 || body.Detached[0].Items[0].Name != linking.Meta.Name {
+			t.Fatalf("%s delete answer = %s, want the linking policy under %s", tc.plural, w.Body, tc.field)
+		}
+	}
+	wantStatus(t, f.deleteRow(t, "rate-limits", f.rateLimit(t, ctx, "unlinked-limit", meta.Owner{Kind: meta.OwnerSystem}).Meta.ID, false), http.StatusNoContent)
+
+	got, err := f.stores.Policy.Get(ctx, linking.Meta.ID)
+	if err != nil || got == nil || !slices.Equal(got.Spec.CredentialIDs, []string{hk.Meta.ID}) || len(got.Spec.RateLimits) != 0 {
+		t.Fatalf("policy after the deletes = %+v (err %v), want the credential id kept and the rate limit gone", got, err)
+	}
+
+	f.emitter.Close()
+	updates := 0
+	for _, ev := range f.sink.all() {
+		if ev.Action == "policies.update" && ev.Resource.ID == linking.Meta.ID {
+			updates++
+		}
+	}
+	if updates != 2 {
+		t.Fatalf("audit rows for the policy's lost links = %d, want 2", updates)
+	}
+}
+
 // A policy in a project alice can't see still blocks her rate limit, counted
 // but never named.
 func TestDeleteRateLimit_HiddenReferenceBlocksWithoutItsName(t *testing.T) {

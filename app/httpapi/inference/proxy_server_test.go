@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 type edgeOptions struct {
@@ -162,17 +164,36 @@ func readStatus(t *testing.T, br *bufio.Reader) (*http.Response, string) {
 	return res, string(b)
 }
 
-// assertCancelledSettle waits for the reservation's one commit, which post-flight runs after its hooks, and wants it cancelled.
-func assertCancelledSettle(t *testing.T, store *kvtest.Recording) {
+// postFlightsDone counts finished post-flight goroutines: post-flight records post_flight_seconds as its last act, after the settle.
+func postFlightsDone(t *testing.T) uint64 {
+	t.Helper()
+	var m dto.Metric
+	if err := metrics.PostFlightSeconds.Write(&m); err != nil {
+		t.Fatalf("read post_flight_seconds: %v", err)
+	}
+	return m.GetHistogram().GetSampleCount()
+}
+
+// assertChargeKept waits for the post-flight that started after before to finish and wants no cancelled commit: the upstream answered, so the reservation keeps its charge.
+func assertChargeKept(t *testing.T, store *kvtest.Recording, before uint64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	commits := store.Named("limit.commit")
-	for len(commits) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-		commits = store.Named("limit.commit")
+	for postFlightsDone(t) == before {
+		if time.Now().After(deadline) {
+			t.Fatal("post-flight never finished")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	if len(commits) != 1 || len(commits[0].Args) < 7 || commits[0].Args[6] != int64(1) {
-		t.Fatalf("reservation settlement: %+v, want one cancelled commit", commits)
+	assertNotRefunded(t, store)
+}
+
+// assertNotRefunded wants no cancelled commit: once the request was written to the upstream its charge stands. A request that failed after it went out settles before its error is answered, so by then the store holds what it will.
+func assertNotRefunded(t *testing.T, store *kvtest.Recording) {
+	t.Helper()
+	for _, c := range store.Named("limit.commit") {
+		if len(c.Args) >= 7 && c.Args[6] == int64(1) {
+			t.Fatalf("reservation refunded after the request reached the upstream: %+v", c)
+		}
 	}
 }
 
@@ -306,7 +327,7 @@ func TestProxyEdge_NextRequestAfterARefusal(t *testing.T) {
 	}
 }
 
-// A client that stops sending mid-body is cut off with 408; its in-flight slot and reservation are released and the request is recorded as the timeout.
+// A client that stops sending mid-body is cut off with 408; its in-flight slot is released, its reservation keeps the charge (the request had gone out to the upstream), and the request is recorded as the timeout.
 func TestProxyEdge_StalledBodyIsCutOff(t *testing.T) {
 	up, got := recordingUpstream(t)
 	e := proxyEdge(t, up.URL, edgeOptions{idle: 200 * time.Millisecond})
@@ -328,7 +349,7 @@ func TestProxyEdge_StalledBodyIsCutOff(t *testing.T) {
 		t.Fatalf("recorded as %q", s.errorKind)
 	}
 	waitForFreeSlot(t, e.adm)
-	assertCancelledSettle(t, e.store)
+	assertNotRefunded(t, e.store)
 	if g := <-got; g.readErr == nil {
 		t.Fatal("upstream read a complete body")
 	}
@@ -349,13 +370,13 @@ func TestProxyEdge_OverTheBodyLimit(t *testing.T) {
 	if s := awaitPostFlight(t, e.seen); s.errorKind != "request_too_large" {
 		t.Fatalf("recorded as %q", s.errorKind)
 	}
-	assertCancelledSettle(t, e.store)
+	assertNotRefunded(t, e.store)
 	if g := <-got; g.readErr == nil {
 		t.Fatal("upstream read a complete body")
 	}
 }
 
-// A body refused after an early upstream answer: the caller gets the refusal if it came before the answer was forwarded, else the answer on a connection that then closes. Either way the request is recorded as the refusal with its reservation settled as cancelled.
+// A body refused after an early upstream answer: the caller gets the refusal if it came before the answer was forwarded, else the answer on a connection that then closes. Either way the request is recorded as the refusal and keeps its charge.
 func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -368,7 +389,8 @@ func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 		{"over the limit after an early answer", 256 << 10, proxyTestBody("test-model", 1<<20, false), http.StatusRequestEntityTooLarge, "request_too_large"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := proxyEdge(t, earlyUpstream(t).URL, edgeOptions{limit: tc.limit})
+			// One request an hour: the refused request went out to the upstream, so whichever way it ended, it spent the allowance.
+			e := proxyEdge(t, earlyUpstream(t).URL, edgeOptions{limit: tc.limit, perHour: 1, inflight: 2})
 			conn, br := rawPost(t, e.addr, len(tc.body))
 			go func() { _, _ = conn.Write(tc.body) }()
 			res, msg := readStatus(t, br)
@@ -378,7 +400,13 @@ func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 			if s := awaitPostFlight(t, e.seen); s.errorKind != tc.kind {
 				t.Fatalf("recorded as %q, want %s", s.errorKind, tc.kind)
 			}
-			assertCancelledSettle(t, e.store)
+			next := proxyTestBody("test-model", 1<<10, false)
+			conn2, br2 := rawPost(t, e.addr, len(next))
+			_, _ = conn2.Write(next)
+			if res, msg := readStatus(t, br2); res.StatusCode != http.StatusTooManyRequests || !strings.Contains(msg, "rate_limit_exceeded") {
+				t.Fatalf("next request = %d %s, want 429 rate_limit_exceeded: the refused request's charge was refunded", res.StatusCode, msg)
+			}
+			assertNotRefunded(t, e.store)
 		})
 	}
 }

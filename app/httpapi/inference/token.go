@@ -199,20 +199,21 @@ func tokenClaimsPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, claim
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked", "this token has been revoked")
 		return nil, false
 	}
-	proj := root.Projects.Lookup(claims.Prj)
-	if proj == nil {
+	pp := root.Projects.Lookup(claims.Prj)
+	if pp == nil {
 		writeForbidden(w, "project_unavailable", "the token's project is not available")
 		return nil, false
 	}
+	// The token acts in its project: the project's and its team's rungs apply above the user's own.
 	return &Principal{
 		UserID:         userID,
-		ProjectID:      proj.Meta.ID,
-		TeamID:         proj.Spec.TeamID,
+		ProjectID:      pp.Project.Meta.ID,
+		TeamID:         pp.Project.Spec.TeamID,
 		CredentialKind: CredentialToken,
 		CredentialID:   claims.Jti,
 		TokenExp:       claims.Exp,
 		TokenVer:       claims.Ver,
-		Caller:         up.Caller,
+		Caller:         pp.CallerFor(up.Caller),
 		claims:         claims,
 		claimsTyp:      typ,
 	}, true

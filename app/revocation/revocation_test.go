@@ -2,6 +2,7 @@ package revocation
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,5 +59,49 @@ func TestExpiredEntriesArePruned(t *testing.T) {
 	}
 	if err := l.Revoke(ctx, "gone", now.Add(-time.Second)); err != nil || l.Set().Revoked("gone", now) {
 		t.Fatalf("an already expired token is not recorded: %v", err)
+	}
+}
+
+// pausedRead holds the first Get after it has read, until released: a refresh caught between its read and its replace.
+type pausedRead struct {
+	Store
+	paused   atomic.Bool
+	read     chan struct{}
+	released chan struct{}
+}
+
+func (p *pausedRead) Get(ctx context.Context, key string) ([]byte, error) {
+	v, err := p.Store.Get(ctx, key)
+	if p.paused.CompareAndSwap(false, true) {
+		close(p.read)
+		<-p.released
+	}
+	return v, err
+}
+
+// A refresh that read the list before this pod revoked a token must not erase the revocation when it lands after it; the next read that holds the id takes over.
+func TestRefreshReadBeforeARevokeKeepsIt(t *testing.T) {
+	ctx := context.Background()
+	mem := kv.NewMem()
+	t.Cleanup(func() { _ = mem.Close() })
+	store := &pausedRead{Store: mem, read: make(chan struct{}), released: make(chan struct{})}
+	l := New(store)
+	now := time.Now()
+
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- l.Refresh(ctx) }()
+	<-store.read
+	if err := l.Revoke(ctx, "jti-1", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	close(store.released)
+	if err := <-refreshed; err != nil {
+		t.Fatal(err)
+	}
+	if !l.Set().Revoked("jti-1", now) {
+		t.Fatal("a refresh that read before the revocation erased it")
+	}
+	if err := l.Refresh(ctx); err != nil || !l.Set().Revoked("jti-1", now) || len(l.pending) != 0 {
+		t.Fatalf("after a read holding the id: revoked=%v pending=%v err=%v; want it revoked from the list alone", l.Set().Revoked("jti-1", now), l.pending, err)
 	}
 }

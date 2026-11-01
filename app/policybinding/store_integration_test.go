@@ -6,6 +6,7 @@ package policybinding_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -105,5 +106,44 @@ func TestIntegration_SubjectsOfEveryKindRoundTripAndDropOut(t *testing.T) {
 	}
 	if want := subjects[3:]; !reflect.DeepEqual(got.Spec.Subjects, want) {
 		t.Fatalf("subjects after deletes = %+v, want %+v", got.Spec.Subjects, want)
+	}
+}
+
+// A subject with an id is held by one binding: a second binding naming it is refused by the store's own index, so two writes racing past the save-time check cannot both land. Group subjects may repeat.
+func TestIntegration_SubjectHeldByOneBinding(t *testing.T) {
+	ctx := context.Background()
+	db := storagetest.Pool(t)
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "one-binding", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := team.NewStore(db).Upsert(ctx, tm); err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+	prj := &project.Project{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "one-binding", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}},
+		Spec: project.Spec{TeamID: tm.Meta.ID},
+	}
+	if err := project.NewStore(db).Upsert(ctx, prj); err != nil {
+		t.Fatalf("upsert project: %v", err)
+	}
+	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "one-binding", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := policy.NewStore(db).Upsert(ctx, pol); err != nil {
+		t.Fatalf("upsert policy: %v", err)
+	}
+	store := policybinding.NewStore(db)
+	bind := func(name string, subjects ...rolebinding.Subject) error {
+		return store.Upsert(ctx, &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
+			Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: subjects},
+		})
+	}
+	group := rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}
+	project := rolebinding.Subject{Kind: policybinding.SubjectProject, ID: prj.Meta.ID}
+	if err := bind("first", project, group); err != nil {
+		t.Fatalf("first binding: %v", err)
+	}
+	if err := bind("second", project); !errors.Is(err, policybinding.ErrSubjectBound) {
+		t.Fatalf("second binding of the project: err = %v, want ErrSubjectBound", err)
+	}
+	if err := bind("third", rolebinding.Subject{Kind: policybinding.SubjectTeam, ID: tm.Meta.ID}, group); err != nil {
+		t.Fatalf("another subject beside a repeated group: %v", err)
 	}
 }

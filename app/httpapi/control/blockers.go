@@ -6,12 +6,14 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 )
@@ -93,21 +95,70 @@ func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceIte
 	return groups
 }
 
-// refuseInUse returns the 409 for deleting a row that is still referenced,
-// or nil when nothing references it.
-func (d Deps) refuseInUse(ctx context.Context, kind, id, name string) error {
+// droppedLinks is what a delete takes from rows that stay: the groups the answer lists and an audit row per changed row, recorded once the delete has landed.
+type droppedLinks struct {
+	groups []blockerGroup
+	rows   []audit.Row
+}
+
+// deleteOutput answers a delete: 204, or 200 listing the links it took.
+type deleteOutput struct {
+	Body func(huma.Context)
+}
+
+// answer records the changed rows and builds the delete's answer; a nil receiver is a delete that took nothing.
+func (dl *droppedLinks) answer(ctx context.Context) *deleteOutput {
+	if dl == nil {
+		return &deleteOutput{Body: func(hc huma.Context) { hc.SetStatus(http.StatusNoContent) }}
+	}
+	for _, r := range dl.rows {
+		audit.RecordExtra(ctx, r)
+	}
+	return &deleteOutput{Body: func(hc huma.Context) {
+		hc.SetHeader("Content-Type", "application/json")
+		hc.SetStatus(http.StatusOK)
+		_ = json.NewEncoder(hc.BodyWriter()).Encode(struct {
+			Detached []blockerGroup `json:"detached"`
+		}{dl.groups})
+	}}
+}
+
+// droppedLinks lists the links a delete of the kind's row takes from rows that stay; nil when it takes none.
+func (d Deps) droppedLinks(ctx context.Context, kind, id string) (*droppedLinks, error) {
+	scan, ok := droppedLinkScans[kind]
+	if !ok {
+		return nil, nil
+	}
+	items, err := scan(ctx, d, id)
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+	dl := &droppedLinks{groups: groupBlockers(ctx, d.Authz, items)}
+	for _, it := range items {
+		dl.rows = append(dl.rows, audit.Row{Action: "policies.update", Fields: []string{it.Via}, Resource: d.auditResource(it.Kind, it.ID, it.Name, it.owner)})
+	}
+	return dl, nil
+}
+
+// refuseInUse returns the 409 for deleting a row that is still referenced;
+// otherwise the links the delete takes from rows that stay, nil for none.
+func (d Deps) refuseInUse(ctx context.Context, kind, id, name string) (*droppedLinks, error) {
 	groups, err := blockers(ctx, d, kind, id)
 	if err != nil {
-		return huma.Error500InternalServerError(err.Error())
+		return nil, huma.Error500InternalServerError(err.Error())
 	}
 	if len(groups) == 0 {
-		return nil
+		dl, err := d.droppedLinks(ctx, kind, id)
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		return dl, nil
 	}
 	total := 0
 	for _, g := range groups {
 		total += g.Count
 	}
-	return &resourceInUseError{
+	return nil, &resourceInUseError{
 		APIError: httpapi.APIError{
 			Err: httpapi.APIErrorBody{
 				Type:    "invalid_request_error",

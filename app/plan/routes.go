@@ -147,7 +147,7 @@ func (t *RouteTable) Listing() []Listed {
 	return out
 }
 
-// Unkeyed is where a model ref goes when the caller brings its own upstream key: the first binding the caller's model grants allow, whatever credentials it reaches. Refused is set when none does.
+// Unkeyed is where a model ref goes when the caller brings its own upstream key: the first binding the caller's and the host's grants allow, whatever credentials it reaches. Refused is set when none does.
 type Unkeyed struct {
 	Model         *model.Model
 	Provider      string
@@ -156,10 +156,12 @@ type Unkeyed struct {
 	Pricing       *pricing.Pricing
 	UpstreamModel string
 	ResolvedVia   string
-	Refused       *Refusal
+	// Counters are what the request must fit: the caller rungs' counters, then the host rung's.
+	Counters []limits.Counter
+	Refused  *Refusal
 }
 
-// ResolveUnkeyed resolves ref without credentials, uncached. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
+// ResolveUnkeyed resolves ref without credentials, uncached. The host rung applies as on a routed request; the account and credential rungs do not, as no relay credential serves. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
 func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 	cp := t.caller
 	if cp.Refused != nil {
@@ -196,8 +198,18 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 				best.note(stepNoCredentials, &Refusal{Code: CodeNoCredentials, Message: "host " + h.Meta.Name + " needs no key and is reached only through a pool"})
 				continue
 			}
-			u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h}
-			u.Pricing, _ = snap.PricingForBinding(b)
+			pr, _ := snap.PricingForBinding(b)
+			if r := cp.unpriced(b, pr != nil); r != nil {
+				best.note(stepUnpriced, r)
+				continue
+			}
+			hr := cp.hosts.Of(h.Meta.ID)
+			if step, r := hr.refuses(prov, m, b, h.Meta.Name, pr != nil); r != nil {
+				best.note(step, r)
+				continue
+			}
+			u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h, Pricing: pr}
+			u.Counters, _ = t.counters(hr, prov, m, h.Meta.Name)
 			u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
 			if u.UpstreamModel == "" && res.Snapshot != nil {
 				u.UpstreamModel = res.Snapshot.Upstream()
@@ -330,8 +342,8 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 		}
 		reached = true
 		priced := sv.pricing != nil
-		if !priced && cp.budgetAt >= 0 {
-			best.note(stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, &cp.Rungs[cp.budgetAt], cp.Rungs[cp.budgetAt].Policy.Policy.Meta.ID, "binding "+sv.b.Meta.Name+" has no pricing and a budget applies"))
+		if r := cp.unpriced(sv.b, priced); r != nil {
+			best.note(stepUnpriced, r)
 			continue
 		}
 		hop := RouteHop{Pool: p, Binding: sv.b, Host: sv.h, Pricing: sv.pricing, Priced: priced}
@@ -339,18 +351,8 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			if _, dup := seen[s]; dup {
 				continue
 			}
-			if s.Refused != nil {
-				best.note(stepUpstream, s.Refused)
-				continue
-			}
-			if i := s.rejects(prov, m, sv.h.Meta.Name); i >= 0 {
-				r := &s.Upstream[i]
-				best.note(stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the "+string(r.Kind)+" policy"))
-				continue
-			}
-			if !priced && s.hasBudget {
-				r := &s.Upstream[s.budgetAt]
-				best.note(stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+sv.b.Meta.Name+" has no pricing and a budget applies"))
+			if step, r := s.refuses(prov, m, sv.b, sv.h.Meta.Name, priced); r != nil {
+				best.note(step, r)
 				continue
 			}
 			seen[s] = struct{}{}
@@ -389,6 +391,15 @@ func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug 
 	callerN := len(out)
 	out = append(out, s.Whole...)
 	return append(out, byModel...), callerN
+}
+
+// unpriced is the caller's refusal of a binding with no pricing while a caller budget applies; nil otherwise.
+func (cp *CallerPlan) unpriced(b *binding.Binding, priced bool) *Refusal {
+	if priced || cp.budgetAt < 0 {
+		return nil
+	}
+	r := &cp.Rungs[cp.budgetAt]
+	return rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
 }
 
 // notAllowed names the caller rung that refused a model.

@@ -21,7 +21,7 @@ const (
 	rungPrincipal
 )
 
-// CallerPlan is the caller half of the ladder folded for one principal (a user or a service account). Every key of the principal points at it, so a key write or rotation touches no allowance.
+// CallerPlan is the caller half of the ladder folded for one principal (a user or a service account), or for a user acting in a project through a token (ProjectPlan.CallerFor). Every key of the principal points at it, so a key write or rotation touches no allowance.
 type CallerPlan struct {
 	Principal string // "user:<id>" or "serviceaccount:<id>"
 	Rungs     [3]Rung
@@ -33,15 +33,17 @@ type CallerPlan struct {
 	// Counters are the caller rungs' rules without a model scope and their budgets, outer rung first.
 	Counters []limits.Counter
 	Routes   *RouteTable
+	// hosts governs requests that bring their own upstream key (ResolveUnkeyed).
+	hosts    *HostRungs
 	scoped   []scopedCounters
 	budgetAt int // index into Rungs of the first rung with a budget, -1 for none
 	linkedAt int // index into Rungs of the rung deciding reach, -1 for ownership
-	in       inputs
+	reads    callerReads
 }
 
-func (p *CallerPlan) builtFrom() inputs { return p.in }
+func (p *CallerPlan) builtFrom() inputs { return p.reads.in }
 
-// Team and Project return the principal's team and project rungs; their SubjectID is empty for a user.
+// Team and Project return the principal's team and project rungs; their SubjectID is empty for a user outside a project.
 func (p *CallerPlan) Team() *Rung    { return &p.Rungs[rungTeam] }
 func (p *CallerPlan) Project() *Rung { return &p.Rungs[rungProject] }
 
@@ -97,12 +99,47 @@ func (a *AllowSet) rejects(providerSlug string, m *model.Model, hostSlug string)
 	return -1
 }
 
+// rungRead is one caller rung as the fold needs it, read once through the engine.
+type rungRead struct {
+	rung     Rung
+	disabled bool
+	// refused is set when the rung's binding refuses: its policy disabled, or its subject bound twice.
+	refused *Refusal
+	// linked is what the rung's policy links, read when it links pools or credentials.
+	linked []*PoolPlan
+}
+
+// callerReads is everything a caller fold reads. The plan keeps it so a token's plan can fold the user's own rung under a project's and its team's (ProjectPlan.CallerFor) without the engine.
+type callerReads struct {
+	rungs [3]rungRead
+	// owned holds what the principal's, the project's, the team's and the system's scopes own, the reach when no rung links; read only then.
+	owned [4]*OwnedCredentials
+	idx   *CatalogIndex
+	hosts *HostRungs
+	in    inputs
+}
+
+// Owner scopes in callerReads.owned, innermost first.
+const (
+	ownedPrincipal = iota
+	ownedProject
+	ownedTeam
+	ownedSystem
+)
+
+func (rd *callerReads) links() bool {
+	for i := range rd.rungs {
+		if rd.rungs[i].rung.Policy.links() {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 	kind, id, _ := strings.Cut(principal, ":")
-	cp := &CallerPlan{Principal: principal, budgetAt: -1, linkedAt: -1}
-	cp.Rungs = [3]Rung{{Kind: limits.RungTeam}, {Kind: limits.RungProject}, {Kind: limits.RungPrincipal, SubjectID: principal}}
-	var disabled [3]bool
-	var scopes []string
+	var rd callerReads
+	rd.rungs = [3]rungRead{{rung: Rung{Kind: limits.RungTeam}}, {rung: Rung{Kind: limits.RungProject}}, {rung: Rung{Kind: limits.RungPrincipal, SubjectID: principal}}}
 	switch kind {
 	case "serviceaccount":
 		sa := engine.Get[serviceaccount.ServiceAccount](tx, id)
@@ -122,66 +159,113 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 			engine.Drop(tx)
 			return nil
 		}
-		cp.Rungs[rungTeam].SubjectID, cp.Rungs[rungTeam].Name = "team:"+tm.Meta.ID, tm.Meta.Name
-		cp.Rungs[rungProject].SubjectID, cp.Rungs[rungProject].Name = "project:"+proj.Meta.ID, proj.Meta.Name
-		cp.Rungs[rungPrincipal].Name = sa.Meta.Name
-		disabled = [3]bool{!tm.IsEnabled(), !proj.IsEnabled(), !sa.IsEnabled()}
-		scopes = []string{cp.Rungs[rungProject].SubjectID, cp.Rungs[rungTeam].SubjectID, "system:"}
-		cp.in = inputs{sa, proj, tm}
+		rd.rungs[rungTeam], rd.rungs[rungProject] = teamRung(tm), projectRung(proj)
+		rd.rungs[rungPrincipal].rung.Name, rd.rungs[rungPrincipal].disabled = sa.Meta.Name, !sa.IsEnabled()
+		rd.in = inputs{sa, proj, tm}
 	case "user":
 		u := engine.Get[user.User](tx, id)
 		if u == nil {
 			engine.Drop(tx)
 			return nil
 		}
-		disabled[rungPrincipal] = u.Disabled
-		scopes = []string{principal, "system:"}
+		rd.rungs[rungPrincipal].disabled = u.Disabled
 		// The user row also carries login state; only the disabled flag shapes the plan.
-		cp.in = inputs{u.ID, u.Disabled}
+		rd.in = inputs{u.ID, u.Disabled}
 	default:
 		engine.Drop(tx)
 		return nil
 	}
-	// Counters of one principal share the team's atomicity group (the user's, without a team), so a team-wide bucket and the principal's own ride one store call.
-	group := principal
-	if t := cp.Rungs[rungTeam].SubjectID; t != "" {
-		group = t
+	for i := range rd.rungs {
+		readRung(tx, &rd.rungs[i], &rd.in)
+	}
+	if !rd.links() {
+		// A service account owns nothing; a user's own scope is its principal.
+		if kind == "user" {
+			rd.owned[ownedPrincipal] = readOwned(tx, principal, &rd.in)
+		}
+		if p := rd.rungs[rungProject].rung.SubjectID; p != "" {
+			rd.owned[ownedProject] = readOwned(tx, p, &rd.in)
+			rd.owned[ownedTeam] = readOwned(tx, rd.rungs[rungTeam].rung.SubjectID, &rd.in)
+		}
+		rd.owned[ownedSystem] = readOwned(tx, "system:", &rd.in)
+	}
+	rd.idx = engine.Get[CatalogIndex](tx, "")
+	rd.hosts = engine.Get[HostRungs](tx, "")
+	rd.in = append(rd.in, rd.idx, rd.hosts)
+	if prev := engine.Get[CallerPlan](tx, principal); prev != nil && prev.reads.in.equal(rd.in) {
+		engine.Put(tx, prev)
+		return nil
+	}
+	engine.Put(tx, foldCaller(principal, rd))
+	return nil
+}
+
+func teamRung(tm *team.Team) rungRead {
+	return rungRead{rung: Rung{Kind: limits.RungTeam, SubjectID: "team:" + tm.Meta.ID, Name: tm.Meta.Name}, disabled: !tm.IsEnabled()}
+}
+
+func projectRung(p *project.Project) rungRead {
+	return rungRead{rung: Rung{Kind: limits.RungProject, SubjectID: "project:" + p.Meta.ID, Name: p.Meta.Name}, disabled: !p.IsEnabled()}
+}
+
+// readRung reads the policy bound to the rung's subject and, when the policy links pools or credentials, what it links.
+func readRung(tx *engine.Txn, r *rungRead, in *inputs) {
+	if r.rung.SubjectID == "" {
+		return
+	}
+	rp := engine.Get[RungPolicy](tx, r.rung.SubjectID)
+	*in = append(*in, rp)
+	if rp == nil {
+		return
+	}
+	r.rung.Policy, r.refused = rp.Rung.Policy, rp.Refused
+	if r.rung.Policy.links() {
+		r.linked = linkedPools(tx, r.rung.Policy, in)
+	}
+}
+
+func readOwned(tx *engine.Txn, scope string, in *inputs) *OwnedCredentials {
+	oc := engine.Get[OwnedCredentials](tx, scope)
+	*in = append(*in, oc)
+	return oc
+}
+
+// foldCaller folds read rungs into a caller plan; it reads nothing more, so a token's plan folds the same way off the engine.
+func foldCaller(principal string, rd callerReads) *CallerPlan {
+	cp := &CallerPlan{Principal: principal, budgetAt: -1, linkedAt: -1, hosts: rd.hosts, reads: rd}
+	for i := range rd.rungs {
+		cp.Rungs[i] = rd.rungs[i].rung
 	}
 	for i := range cp.Rungs {
 		r := &cp.Rungs[i]
 		if r.SubjectID == "" {
 			continue
 		}
-		if disabled[i] && cp.Refused == nil {
+		if rd.rungs[i].disabled && cp.Refused == nil {
 			cp.Refused = rungRefusal(CodeSubjectDisabled, r, "", r.SubjectID+" is disabled")
 		}
-		rp := engine.Get[RungPolicy](tx, r.SubjectID)
-		cp.in = append(cp.in, rp)
-		if rp == nil {
-			continue
-		}
-		r.Policy = rp.Rung.Policy
-		if rp.Refused != nil {
+		if refused := rd.rungs[i].refused; refused != nil {
 			if cp.Refused == nil {
-				cp.Refused = rp.Refused
+				cp.Refused = refused
 			}
 			continue
 		}
-		cp.foldRung(i, group)
+		if r.Policy != nil {
+			cp.foldRung(i, counterGroup(principal, cp.Rungs[rungTeam].SubjectID, i))
+		}
 	}
-	pools, in := callerPools(tx, cp, scopes)
-	cp.Pools = pools
-	cp.in = append(cp.in, in...)
-	idx := engine.Get[CatalogIndex](tx, "")
-	cp.in = append(cp.in, idx)
-	if prev := engine.Get[CallerPlan](tx, principal); SameOr(prev, cp) == prev {
-		engine.Put(tx, prev)
-		return nil
+	cp.Pools = callerPools(cp, &rd)
+	// One table per plan: the keys of a principal share it; principals with the same rungs fill their own.
+	cp.Routes = newRouteTable(cp, rd.idx)
+	return cp
+}
+
+// counterGroup is the atomicity group of rung i's counters: the team's when there is one, so a team-wide bucket and the principal's own ride one store call. A user's own rung keeps the user's group in any project a token puts it in, so the user's buckets stay one wherever the user calls from.
+func counterGroup(principal, team string, i int) string {
+	if team == "" || (i == rungPrincipal && strings.HasPrefix(principal, "user:")) {
+		return principal
 	}
-	// One table per principal: the keys of a principal share it; principals with the same rungs fill their own.
-	cp.Routes = newRouteTable(cp, idx)
-	engine.Put(tx, cp)
-	return nil
+	return team
 }
 
 // foldRung adds rung i's grant and counters. Caller counters count per (rule, policy, bound subject), so a policy reused by two subjects gives each its own bucket.
@@ -214,34 +298,31 @@ func (cp *CallerPlan) foldRung(i int, group string) {
 }
 
 // callerPools resolves the pools the principal reaches. Pools and credentials the policy links but that are missing or cannot serve narrow the list; the policy carries the ref_missing issue.
-func callerPools(tx *engine.Txn, cp *CallerPlan, scopes []string) ([]*PoolPlan, inputs) {
-	var in inputs
+func callerPools(cp *CallerPlan, rd *callerReads) []*PoolPlan {
 	inner := -1
-	for i := len(cp.Rungs) - 1; i >= 0; i-- {
-		if cp.Rungs[i].Policy.links() {
+	for i := len(rd.rungs) - 1; i >= 0; i-- {
+		if rd.rungs[i].rung.Policy.links() {
 			inner = i
 			break
 		}
 	}
 	if inner < 0 {
 		var pools []*PoolPlan
-		for _, sc := range scopes {
-			oc := engine.Get[OwnedCredentials](tx, sc)
-			in = append(in, oc)
+		for _, oc := range rd.owned {
 			if oc != nil {
 				pools = append(pools, oc.Pools...)
 			}
 		}
-		return pools, in
+		return pools
 	}
 	cp.linkedAt = inner
-	pools := linkedPools(tx, cp.Rungs[inner].Policy, &in)
+	pools := rd.rungs[inner].linked
 	for i := inner - 1; i >= 0; i-- {
-		if cp.Rungs[i].Policy.links() {
-			pools = narrow(pools, linkedPools(tx, cp.Rungs[i].Policy, &in))
+		if rd.rungs[i].rung.Policy.links() {
+			pools = narrow(pools, rd.rungs[i].linked)
 		}
 	}
-	return pools, in
+	return pools
 }
 
 func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, in *inputs) []*PoolPlan {

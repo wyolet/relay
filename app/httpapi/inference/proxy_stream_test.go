@@ -100,7 +100,7 @@ func TestProxyShape_PayloadCapture(t *testing.T) {
 	}
 }
 
-// A second model is refused before the forward when it is in the held part, and aborts it when it arrives later: the upstream never holds a complete body, the reservation settles as cancelled, and the request is recorded as the refusal.
+// A second model is refused before the forward when it is in the held part, and aborts it when it arrives later: the upstream never holds a complete body, the reservation keeps the charge of a request that had gone out, and the request is recorded as the refusal.
 func TestProxyShape_DuplicateModel(t *testing.T) {
 	up, got := recordingUpstream(t)
 	d, pr, store := proxyStreamDeps(t, up.URL)
@@ -127,10 +127,7 @@ func TestProxyShape_DuplicateModel(t *testing.T) {
 	if s := awaitPostFlight(t, seen); s.errorKind != "duplicate_model" {
 		t.Fatalf("recorded as %q, want duplicate_model", s.errorKind)
 	}
-	commits := store.Named("limit.commit")
-	if len(commits) != 1 || len(commits[0].Args) < 7 || commits[0].Args[6] != int64(1) {
-		t.Fatalf("reservation settlement: %+v, want one cancelled commit", commits)
-	}
+	assertNotRefunded(t, store)
 }
 
 // Proxy mode forwards the body as sent, so a model key spelled in another case or with escapes, which a case-sensitive upstream would not read, is refused, whether the forward waited for the model or not.

@@ -553,5 +553,40 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 	if err := c.PolicyRef(ctx, pb.Spec.PolicyID, pb.Meta.Owner); err != nil {
 		return err
 	}
-	return c.subjectsExist(ctx, pb.Spec.Subjects)
+	if err := c.subjectsExist(ctx, pb.Spec.Subjects); err != nil {
+		return err
+	}
+	return c.subjectsUnbound(ctx, pb)
+}
+
+// CodeDuplicateBinding is the error code of a binding naming a subject another binding already holds.
+const CodeDuplicateBinding = "duplicate_binding"
+
+// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. Group subjects are not policy rungs and may repeat.
+func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBinding) error {
+	if c.Rows.PolicyBindings == nil {
+		return nil
+	}
+	all, err := c.Rows.PolicyBindings(ctx)
+	if err != nil {
+		return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+	}
+	for _, other := range all {
+		if other.Meta.ID == pb.Meta.ID {
+			continue
+		}
+		for _, held := range other.Spec.Subjects {
+			for _, sub := range pb.Spec.Subjects {
+				if sub.ID == "" || sub.Kind != held.Kind || sub.ID != held.ID {
+					continue
+				}
+				by := "another policy binding"
+				if Visible(ctx, c.Authz, "policy-binding", other.Meta.ID, other.Meta.Owner) {
+					by = fmt.Sprintf("policy binding %q", other.Meta.Name)
+				}
+				return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf("%s is already bound by %s; a subject is bound to one policy", sub.Key(), by)}
+			}
+		}
+	}
+	return nil
 }

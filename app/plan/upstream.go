@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
@@ -183,6 +184,56 @@ func foldUpstream(tx *engine.Txn, cred *hostkey.HostKey, h *host.Host, acc *Acco
 		s.ByModel = expandScoped(idx, h, scoped)
 	}
 	return s
+}
+
+// refuses reports why the slot may not serve model m through binding b at its host, and the fill step that refuses it; a nil refusal means it may.
+func (s *KeySlot) refuses(providerSlug string, m *model.Model, b *binding.Binding, hostSlug string, priced bool) (int, *Refusal) {
+	if s.Refused != nil {
+		return stepUpstream, s.Refused
+	}
+	if i := s.rejects(providerSlug, m, hostSlug); i >= 0 {
+		r := &s.Upstream[i]
+		return stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the "+string(r.Kind)+" policy")
+	}
+	if !priced && s.hasBudget {
+		r := &s.Upstream[s.budgetAt]
+		return stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
+	}
+	return 0, nil
+}
+
+// HostRungs is every host's own rung folded on its own: what governs a request that brings its own upstream key, where no account or credential rung applies but the host's operator-wide policy does.
+type HostRungs struct {
+	byID map[string]*KeySlot
+	in   inputs
+}
+
+func (h *HostRungs) builtFrom() inputs { return h.in }
+
+// noHostRung stands for a host with no fold: nothing on it constrains.
+var noHostRung = &KeySlot{budgetAt: -1}
+
+// Of returns the host's fold.
+func (h *HostRungs) Of(hostID string) *KeySlot {
+	if h != nil {
+		if s := h.byID[hostID]; s != nil {
+			return s
+		}
+	}
+	return noHostRung
+}
+
+// hostRungs folds each host as an anonymous credential, which has no account or credential rung, so foldUpstream reads the host rung alone.
+func (c *controllers) hostRungs(tx *engine.Txn, _ string) error {
+	hosts := engine.Members[host.Host](tx)
+	hr := &HostRungs{byID: make(map[string]*KeySlot, len(hosts))}
+	for _, h := range hosts {
+		s := foldUpstream(tx, hostkey.Anonymous(h.Meta.ID, h.Meta.Name), h, nil)
+		hr.byID[h.Meta.ID] = s
+		hr.in = append(hr.in, s.in...)
+	}
+	engine.Put(tx, SameOr(engine.Get[HostRungs](tx, ""), hr))
+	return nil
 }
 
 // scopedLink is an upstream rate-limit link with a model scope, waiting to be expanded against the models its host serves.

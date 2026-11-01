@@ -1,8 +1,8 @@
 // Package policybinding is the domain layer for the PolicyBinding entity —
-// it points a set of subjects inside one Project at one Policy. Several
-// bindings may match a principal; the lowest priority wins, so a principal
-// always resolves to exactly one Policy. Subjects may also name a host, an
-// account, a credential, a team or a project.
+// it points a set of subjects inside one Project at one Policy. A subject
+// with an id is held by at most one binding, so it resolves to at most one
+// Policy. Subjects may also name a host, an account, a credential, a team or
+// a project.
 //
 // Authorization is app/authz's concern; this package validates shape only.
 package policybinding

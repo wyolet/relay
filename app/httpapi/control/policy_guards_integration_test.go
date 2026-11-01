@@ -176,7 +176,7 @@ func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
 		t.Fatalf("upsert host-key: %v", err)
 	}
 
-	err = d.refuseInUse(ctx, "policy", tier.Meta.ID, tier.Meta.Name)
+	_, err = d.refuseInUse(ctx, "policy", tier.Meta.ID, tier.Meta.Name)
 	var inUse *resourceInUseError
 	if !errors.As(err, &inUse) || statusOf(t, err) != 409 {
 		t.Fatalf("err = %v, want a 409 resource_in_use", err)
@@ -185,7 +185,7 @@ func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
 		len(inUse.Blockers[0].Items) != 1 || inUse.Blockers[0].Items[0].Name != hk.Meta.Name {
 		t.Fatalf("blockers = %+v, want host key %q, not detachable", inUse.Blockers, hk.Meta.Name)
 	}
-	if err := d.refuseInUse(ctx, "policy", unused.Meta.ID, unused.Meta.Name); err != nil {
+	if _, err := d.refuseInUse(ctx, "policy", unused.Meta.ID, unused.Meta.Name); err != nil {
 		t.Fatalf("deleting a policy no host key mirrors was refused: %v", err)
 	}
 }

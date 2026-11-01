@@ -121,9 +121,10 @@ type enrichFn[T any] func(ctx context.Context, t *T)
 type enrichListFn[T any] func(ctx context.Context, items []*T)
 
 // inUseFn refuses deleting a row anything still references (see
-// Deps.refuseInUse). It runs last before store.Delete, once the caller is
-// known to be allowed to delete the row.
-type inUseFn func(ctx context.Context, kind, id, name string) error
+// Deps.refuseInUse), and otherwise returns the links the delete takes from
+// rows that stay, nil for none. It runs last before store.Delete, once the
+// caller is known to be allowed to delete the row.
+type inUseFn func(ctx context.Context, kind, id, name string) (*droppedLinks, error)
 
 // mergeOnUpdateFn copies fields the API allows to be omitted on update from
 // the existing row onto the incoming body, before validate/upsert run.
@@ -287,7 +288,7 @@ func registerKind[T any](
 			Tags:          []string{tag},
 			Middlewares:   protect,
 			DefaultStatus: http.StatusCreated,
-			Errors:        []int{400, 401, 403, 500},
+			Errors:        []int{400, 401, 403, 409, 500},
 		}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
 			v := &in.Body
 			m := metaOf(v)
@@ -350,10 +351,7 @@ func registerKind[T any](
 				create = w.Create
 			}
 			if err := create(ctx, v); err != nil {
-				if refused := grantRefusal(err); refused != nil {
-					return nil, refused
-				}
-				return nil, huma.Error500InternalServerError(err.Error())
+				return nil, mapWriteErr(singular, m.ID, err)
 			}
 			created, err := store.Get(ctx, m.ID)
 			if err != nil {
@@ -465,11 +463,12 @@ func registerKind[T any](
 		Method:        http.MethodDelete,
 		Path:          base + "/by-id/{id}",
 		Summary:       "Delete " + singular + " by id",
+		Description:   "Answers 204, or 200 with {\"detached\": [...]} grouped like blockers when the delete took links from rows that stay: a policy that loses a rate limit or budget, or narrows to the pools and credentials it still links.",
 		Tags:          []string{tag},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{401, 403, 404, 409, 500},
-	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
+	}, func(ctx context.Context, in *idInput) (*deleteOutput, error) {
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
@@ -488,8 +487,9 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		var dropped *droppedLinks
 		if refuseInUse != nil {
-			if err := refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
+			if dropped, err = refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
 				return nil, err
 			}
 		}
@@ -500,7 +500,7 @@ func registerKind[T any](
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
-		return &emptyResponse{}, nil
+		return dropped.answer(ctx), nil
 	})
 
 	return kindRows{

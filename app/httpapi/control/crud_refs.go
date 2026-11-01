@@ -32,6 +32,18 @@ func refs(d Deps) refcheck.Checker {
 	if s.HostKey != nil {
 		c.Rows.HostKey = getOrNil(s.HostKey.Get)
 	}
+	if s.Host != nil {
+		c.Rows.Host = getOrNil(s.Host.Get)
+	}
+	if s.Account != nil {
+		c.Rows.Account = getOrNil(s.Account.Get)
+	}
+	if s.Pool != nil {
+		c.Rows.Pool = getOrNil(s.Pool.Get)
+	}
+	if s.Budget != nil {
+		c.Rows.Budget = getOrNil(s.Budget.Get)
+	}
 	if s.Project != nil {
 		c.Rows.Project = getOrNil(s.Project.Get)
 	}

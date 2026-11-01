@@ -2,7 +2,7 @@
 --
 -- Account is a provider org on one host; Pool is an ordered set of one host's keys; Budget is a recurring USD cap. host_id is a column so a host delete cascades, as for pricings and host_bindings.
 --
--- A policy's links to pools, credentials, rate limits and budgets live in junctions like policy_host_keys. A deleted target drops the link rather than blocking the delete: the policy loses that cap or credential.
+-- A policy's links to pools, credentials, rate limits and budgets live in junctions like policy_host_keys. Deleting a linked rate limit or budget drops the link: the policy acts as if it never had that cap. Deleting a linked pool or credential keeps the link's id, which no longer resolves, so the policy narrows to what it still links instead of widening to ownership; those columns therefore carry no foreign key.
 --
 -- A HostKey's accountId lives in the secrets spec JSONB, beside its policyId.
 
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS budgets (
 
 CREATE TABLE IF NOT EXISTS policy_pools (
     policy_id TEXT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    pool_id   TEXT NOT NULL REFERENCES pools(id)    ON DELETE CASCADE,
+    pool_id   TEXT NOT NULL,
     position  INT  NOT NULL,
     PRIMARY KEY (policy_id, pool_id)
 );
@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS policy_pools_pool_idx ON policy_pools (pool_id);
 
 CREATE TABLE IF NOT EXISTS policy_credentials (
     policy_id   TEXT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    host_key_id TEXT NOT NULL REFERENCES secrets(id)  ON DELETE CASCADE,
+    host_key_id TEXT NOT NULL,
     position    INT  NOT NULL,
     PRIMARY KEY (policy_id, host_key_id)
 );
@@ -100,6 +100,24 @@ CREATE INDEX IF NOT EXISTS policy_binding_subjects_account_idx    ON policy_bind
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_credential_idx ON policy_binding_subjects (subject_credential_id);
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_team_idx       ON policy_binding_subjects (subject_team_id);
 CREATE INDEX IF NOT EXISTS policy_binding_subjects_project_idx    ON policy_binding_subjects (subject_project_id);
+-- A subject is bound to at most one policy, across every binding. Group subjects carry a name, not an id, and are not policy rungs. Subjects already in two bindings stop the upgrade, listed, so the operator chooses which binding keeps them.
+DO $$
+DECLARE
+    dups TEXT;
+BEGIN
+    SELECT string_agg(format('%s %s in %s', kind, subject_id, bindings), '; ' ORDER BY kind, subject_id) INTO dups
+    FROM (
+        SELECT s.kind, s.subject_id, string_agg(b.name, ', ' ORDER BY b.name) AS bindings
+        FROM policy_binding_subjects s JOIN policy_bindings b ON b.id = s.binding_id
+        WHERE s.subject_id IS NOT NULL
+        GROUP BY s.kind, s.subject_id
+        HAVING count(*) > 1
+    ) d;
+    IF dups IS NOT NULL THEN
+        RAISE EXCEPTION 'migration 000035: a subject may be bound by one policy binding; remove the subject from all but one binding, then upgrade again: %', dups;
+    END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_binding ON policy_binding_subjects (kind, subject_id);
 
 CREATE TRIGGER accounts_notify AFTER INSERT OR UPDATE OR DELETE ON accounts
     FOR EACH ROW EXECUTE FUNCTION catalog_notify('account');

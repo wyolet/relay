@@ -104,8 +104,8 @@ func wsReadLimit(maxBody int64) int64 {
 	return maxBody + wsFrameEnvelopeBytes
 }
 
-// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry and the revoked set. The error says why it no longer authenticates; the caller ladder's own refusal is the caller's to check.
-func (a *Auth) Recheck(keyHash, userID, jti string, tokenVer int, tokenExp int64, now time.Time) (*Principal, error) {
+// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry, the revoked set and the project it acts in. The error says why it no longer authenticates; the caller ladder's own refusal (a disabled team among them) is the caller's to check.
+func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tokenExp int64, now time.Time) (*Principal, error) {
 	root := a.root()
 	if root == nil {
 		return nil, errors.New("plans not loaded")
@@ -117,15 +117,23 @@ func (a *Auth) Recheck(keyHash, userID, jti string, tokenVer int, tokenExp int64
 		}
 		return principalOf(kp, keyHash), nil
 	}
-	switch up := root.Users.Lookup(userID); {
+	up := root.Users.Lookup(userID)
+	pp := root.Projects.Lookup(projectID)
+	switch {
 	case tokenExp > 0 && tokenExp <= now.Unix():
 		return nil, errors.New("token expired")
 	case up == nil || up.TokenVersion != tokenVer:
 		return nil, errors.New(msgTokenRevoked)
 	case a.Revoked.Revoked(jti, now):
 		return nil, errors.New("token revoked")
+	case pp == nil:
+		return nil, errors.New("the token's project is not available")
 	default:
-		return &Principal{UserID: userID, CredentialKind: CredentialToken, CredentialID: jti, TokenExp: tokenExp, TokenVer: tokenVer, Caller: up.Caller}, nil
+		return &Principal{
+			UserID: userID, ProjectID: pp.Project.Meta.ID, TeamID: pp.Project.Spec.TeamID,
+			CredentialKind: CredentialToken, CredentialID: jti, TokenExp: tokenExp, TokenVer: tokenVer,
+			Caller: pp.CallerFor(up.Caller),
+		}, nil
 	}
 }
 

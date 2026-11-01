@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -395,10 +396,15 @@ func pickScope(hop *plan.RouteHop) string {
 
 // coolAccount skips the slot's account on this pod until the refused account counter frees up: every credential of the account shares that ceiling.
 func coolAccount(s *plan.KeySlot, r *limits.Refused) {
-	if s.Account == nil || r.Counter.Rung != limits.RungAccount || r.RetryAfter <= 0 {
+	if s.Account == nil || !coolsAccount(r.Counter) || r.RetryAfter <= 0 {
 		return
 	}
 	s.Account.Cooldown.Extend(time.Now().Add(r.RetryAfter).UnixMilli())
+}
+
+// coolsAccount reports a refusal that holds for every request to the account until its retry-after: an account-wide request or token window. A model-scoped rule refuses only its model, a concurrency lease frees when a request ends, and a budget answers to cap edits, so those are asked again per request.
+func coolsAccount(c *limits.Counter) bool {
+	return c.Rung == limits.RungAccount && c.Kind == limits.KindRule && c.ModelID == "" && c.Rule.Meter != ratelimit.MeterConcurrency
 }
 
 // noteLimited keeps the earliest time any refused or cooled credential frees up.

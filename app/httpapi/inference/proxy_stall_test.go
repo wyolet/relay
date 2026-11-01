@@ -208,7 +208,7 @@ func assertForwardEnded(t *testing.T, e edge, start time.Time, idle time.Duratio
 	}
 }
 
-// An upstream that answers 200 and keeps streaming while it stops reading the body: the stall ends the stream from the watch's goroutine while the handler still copies it, the caller sees a broken response rather than a clean 200, and the request is recorded as the stall. Meaningful under -race.
+// An upstream that answers 200 and keeps streaming while it stops reading the body: the stall ends the stream from the watch's goroutine while the handler still copies it, the caller sees a broken response rather than a clean 200, the request is recorded as the stall, and the upstream having answered, its charge is kept. Meaningful under -race.
 func TestProxyEdge_StallMidStream(t *testing.T) {
 	const idle = 200 * time.Millisecond
 	for _, tc := range []struct {
@@ -227,6 +227,7 @@ func TestProxyEdge_StallMidStream(t *testing.T) {
 			url, tr := tc.upstream(t)
 			e := proxyEdge(t, url, edgeOptions{idle: idle, transport: tr})
 			body := proxyTestBody("test-model", 24<<20, false)
+			before := postFlightsDone(t)
 			conn, br := rawPost(t, e.addr, len(body))
 			start := time.Now()
 			go func() { _, _ = conn.Write(body) }()
@@ -240,7 +241,7 @@ func TestProxyEdge_StallMidStream(t *testing.T) {
 			if s := awaitPostFlight(t, e.seen); s.errorKind != "upstream_stalled" {
 				t.Fatalf("recorded as %q, want upstream_stalled", s.errorKind)
 			}
-			assertCancelledSettle(t, e.store)
+			assertChargeKept(t, e.store, before)
 			assertForwardEnded(t, e, start, idle)
 		})
 	}

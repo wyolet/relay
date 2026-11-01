@@ -5,15 +5,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/budget"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/plan"
-	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/config"
-	storagemod "github.com/wyolet/relay/internal/storage"
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
 )
@@ -31,7 +26,7 @@ type planEngine struct {
 }
 
 // buildPlanEngine registers the plan kinds and controllers over the PG stores. Nothing is loaded until load.
-func buildPlanEngine(cfg *config.Config, st *storagemod.Storage, stores *appcatalog.Stores, users *user.Store) *planEngine {
+func buildPlanEngine(cfg *config.Config, stores *appcatalog.Stores, users *user.Store) *planEngine {
 	pe := &planEngine{plans: &plan.Holder{}, idle: cfg.PlanCellIdle, resync: cfg.PlanResync}
 	pe.cells = cell.NewRegistry(cell.Options{IdleTTL: cfg.PlanCellIdle})
 	pe.engine = engine.New(engine.Options{
@@ -47,7 +42,6 @@ func buildPlanEngine(cfg *config.Config, st *storagemod.Storage, stores *appcata
 			},
 		},
 	})
-	q := gen.New(st.Pool())
 	src := plan.Sources{
 		Providers:       stores.Provider,
 		Hosts:           stores.Host,
@@ -57,9 +51,9 @@ func buildPlanEngine(cfg *config.Config, st *storagemod.Storage, stores *appcata
 		Policies:        stores.Policy,
 		PolicyBindings:  stores.PolicyBinding,
 		RateLimits:      stores.RateLimit,
-		Budgets:         budget.NewStore(q),
-		Pools:           pool.NewStore(st.Pool()),
-		Accounts:        account.NewStore(q),
+		Budgets:         stores.Budget,
+		Pools:           stores.Pool,
+		Accounts:        stores.Account,
 		Credentials:     stores.HostKey,
 		Teams:           stores.Team,
 		Projects:        stores.Project,

@@ -1,6 +1,6 @@
 //go:build integration
 
-// links_integration_test.go covers a Policy's links to pools, credentials, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement and what a deleted target leaves behind are the behaviour. Run with: make test-integration.
+// links_integration_test.go covers a Policy's links to pools, credentials, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement and what a deleted target leaves behind (nothing for a cap, its id for a pool or credential) are the behaviour. Run with: make test-integration.
 
 package policy_test
 
@@ -87,9 +87,16 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 		BudgetIDs:  []string{b.Meta.ID},
 	})
 
-	// Deleting a linked pool, budget or rate limit drops the link and keeps the policy.
+	// Deleting a linked budget or rate limit drops the link; a deleted pool or credential stays linked by id, so the policy narrows instead of falling back to ownership.
+	p.Spec.CredentialIDs = []string{f.hostKeyID}
+	if err := f.store.Upsert(ctx, p); err != nil {
+		t.Fatalf("relink credential: %v", err)
+	}
 	if err := pools.Delete(ctx, poolIDs[0]); err != nil {
 		t.Fatalf("delete pool: %v", err)
+	}
+	if err := gen.New(f.db).DeleteSecret(ctx, f.hostKeyID); err != nil {
+		t.Fatalf("delete credential: %v", err)
 	}
 	if err := budgets.Delete(ctx, b.Meta.ID); err != nil {
 		t.Fatalf("delete budget: %v", err)
@@ -101,7 +108,8 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get after deletes: %v (row %v)", err, got)
 	}
-	assertLinks(t, "after deletes", got.Spec, policy.Spec{})
+	assertLinks(t, "after deletes", got.Spec, policy.Spec{PoolIDs: poolIDs[:1], CredentialIDs: []string{f.hostKeyID}})
+	assertLinks(t, "listed after deletes", listedPolicy(t, ctx, f.store, p.Meta.ID).Spec, policy.Spec{PoolIDs: poolIDs[:1], CredentialIDs: []string{f.hostKeyID}})
 }
 
 func assertLinks(t *testing.T, step string, got, want policy.Spec) {

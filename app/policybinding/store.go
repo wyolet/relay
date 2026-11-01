@@ -17,6 +17,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
+// ErrSubjectBound is a write naming a subject another binding already holds: a subject is bound to at most one policy.
+var ErrSubjectBound = errors.New("policybinding: subject is already bound by another policy binding")
+
+// oneBindingIndex is the unique index holding a subject to one binding.
+const oneBindingIndex = "policy_binding_subjects_one_binding"
+
 // Store holds a DB rather than Queries so Upsert can run a multi-table
 // transaction.
 type Store struct {
@@ -111,6 +117,9 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 			SubjectProjectID:    text(subjectFK(sub, SubjectProject)),
 			Position:            int32(i),
 		}); err != nil {
+			if storage.IsUniqueViolation(err, oneBindingIndex) {
+				return fmt.Errorf("%w: %s", ErrSubjectBound, sub.Key())
+			}
 			return fmt.Errorf("policybinding.Upsert: insert subject %s: %w", sub.Key(), err)
 		}
 	}

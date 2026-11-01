@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -163,6 +165,33 @@ func TestRunServesPastFullAccount(t *testing.T) {
 	}
 	if trips := h.store.RoundTrips() - before; trips != 4 {
 		t.Fatalf("kv round trips = %d, want 4 (%v)", trips, h.store.Batches())
+	}
+}
+
+// Only an account-wide request or token window cools the account: a model-scoped rule would block other models, a concurrency lease frees when its request ends, and a budget answers to a raised cap, so those refusals are asked again on the next request.
+func TestCoolAccountOnlyForAccountWideWindows(t *testing.T) {
+	requests := perMinute("rl-req", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 1)
+	tokens := perMinute("rl-tok", appratelimit.MeterTokens, appratelimit.StrategySlidingWindow, 1)
+	leases := perMinute("rl-conc", appratelimit.MeterConcurrency, appratelimit.StrategySlidingWindow, 1)
+	scoped := limits.UpstreamRule(limits.RungAccount, requests, requests.Spec.Rules[0], "pol-tier", "account:a", "model-a", "account:a")
+	bud := &budget.Budget{Meta: meta.Metadata{ID: "b"}, Spec: budget.Spec{AmountUSD: "1", Period: budget.PeriodMonth}}
+	for _, tc := range []struct {
+		name  string
+		c     limits.Counter
+		cools bool
+	}{
+		{"request window", accountCounters("a", requests)[0], true},
+		{"token window", accountCounters("a", tokens)[0], true},
+		{"concurrency", accountCounters("a", leases)[0], false},
+		{"model-scoped", scoped, false},
+		{"budget", limits.BudgetCounter(limits.RungAccount, bud, "pol-tier", "account:a", "account:a"), false},
+		{"credential rung", limits.UpstreamRule(limits.RungCredential, requests, requests.Spec.Rules[0], "pol-key", "credential:k", "", "account:a"), false},
+	} {
+		slot := &plan.KeySlot{Account: accountPlan("a")}
+		coolAccount(slot, &limits.Refused{Counter: &tc.c, RetryAfter: time.Minute})
+		if got := slot.Account.Cooldown.Cooled(time.Now().UnixMilli()); got != tc.cools {
+			t.Errorf("%s: account cooled = %v, want %v", tc.name, got, tc.cools)
+		}
 	}
 }
 
