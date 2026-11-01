@@ -44,12 +44,15 @@ func (b *batch) pending() bool {
 }
 
 // abandon gives up on a batch that did not converge (a cycle between
-// controllers): what is left dirty keeps its last output and an issue.
+// controllers): what is left dirty keeps its last output and an issue, and is
+// kept aside for the scheduled Resync, not for every later drain, so a
+// permanent cycle costs MaxRounds once per Resync.
 func (b *batch) abandon() {
 	b.abandoned = true
 	for _, c := range b.e.sch.ctls {
 		for id := range c.dirty {
 			ref := Ref{c.produces, id}
+			b.e.abandoned[ref] = struct{}{}
 			b.setIssues(issueOwner{by: byAbandonedBatch, out: ref}, []Issue{{
 				Severity: SeverityError,
 				Code:     "batch_abandoned",

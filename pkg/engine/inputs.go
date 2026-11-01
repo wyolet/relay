@@ -61,9 +61,9 @@ func (e *Engine) usable() error {
 // afterBatch hands follow-up work from a synchronous batch to the loop.
 func (e *Engine) afterBatch(b *batch) {
 	if b.abandoned {
-		e.resyncDue = true
+		e.scheduleResync()
 	}
-	if e.resyncDue || len(e.retries) > 0 {
+	if !e.resyncAt.IsZero() || len(e.retries) > 0 {
 		e.kick()
 	}
 }
@@ -119,6 +119,11 @@ func (e *Engine) resyncLocked(ctx context.Context) error {
 			}
 		}
 	}
+	// Retry what an earlier batch abandoned; abandon puts back whatever still does not converge.
+	for ref := range e.abandoned {
+		b.dirty(e.sch.byKind[ref.Kind].producer, ref.ID)
+	}
+	clear(e.abandoned)
 	b.settle()
 	b.publish(false)
 	e.afterBatch(b)
