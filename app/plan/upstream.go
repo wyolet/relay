@@ -47,13 +47,13 @@ func (c *controllers) accountPlan(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// KeySlot is one credential with the upstream half of the ladder folded: its host and account, the policies bound to them and to the credential, the counters those impose, and the breaker cell. One KeySlot is shared by every pool holding the credential.
+// KeySlot is one credential with the upstream half of the ladder folded: its host and account, the policies bound to them, the counters those impose, and the breaker cell. One KeySlot is shared by every pool holding the credential.
 type KeySlot struct {
 	Credential *hostkey.HostKey
 	Host       *host.Host
 	Account    *AccountPlan         // nil when the credential names no account
 	Breaker    *keypool.BreakerCell // nil for a keyless host's anonymous slot
-	Upstream   [3]Rung              // host, account, credential
+	Upstream   [2]Rung              // host, account
 	// Refused is set when an upstream rung's policy is disabled or its binding ambiguous: the credential then serves nothing, rather than serving unmetered.
 	Refused *Refusal
 	// Whole holds the upstream rules with no model scope and the upstream budgets, outer rung first; ByModel the scoped rules, expanded per model id.
@@ -121,22 +121,16 @@ func (c *controllers) keySlot(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// foldUpstream builds a slot from the host, account and credential rungs. Credential and account counters share the account's atomicity group, so one store call covers both.
+// foldUpstream builds a slot from the host and account rungs. A credential has no rung of its own: a binding naming it is stored as its account's. Each rung's counters are grouped by its subject, the host's or the account's.
 func foldUpstream(tx *engine.Txn, cred *hostkey.HostKey, h *host.Host, acc *AccountPlan) *KeySlot {
 	s := &KeySlot{Credential: cred, Host: h, Account: acc, budgetAt: -1}
 	s.in = inputs{h, acc}
-	group := "credential:" + cred.Meta.ID
-	s.Upstream = [3]Rung{
+	s.Upstream = [2]Rung{
 		{Kind: limits.RungHost, SubjectID: "host:" + h.Meta.ID},
 		{Kind: limits.RungAccount},
-		{Kind: limits.RungCredential, SubjectID: "credential:" + cred.Meta.ID},
 	}
 	if acc != nil {
 		s.Upstream[1].SubjectID = "account:" + acc.Account.Meta.ID
-		group = s.Upstream[1].SubjectID
-	}
-	if cred.Meta.ID == hostkey.AnonIDPrefix+h.Meta.ID {
-		s.Upstream[2].SubjectID = "" // the anonymous slot has no credential rung
 	}
 	var scoped []scopedLink
 	for i := range s.Upstream {
@@ -156,10 +150,7 @@ func foldUpstream(tx *engine.Txn, cred *hostkey.HostKey, h *host.Host, acc *Acco
 			}
 			continue
 		}
-		g := group
-		if r.Kind == limits.RungHost {
-			g = r.SubjectID
-		}
+		g := r.SubjectID
 		pid := r.Policy.Policy.Meta.ID
 		for j := range r.Policy.RateLimits {
 			l := &r.Policy.RateLimits[j]
@@ -202,7 +193,7 @@ func (s *KeySlot) refuses(providerSlug string, m *model.Model, b *binding.Bindin
 	return 0, nil
 }
 
-// HostRungs is every host's own rung folded on its own: what governs a request that brings its own upstream key, where no account or credential rung applies but the host's operator-wide policy does.
+// HostRungs is every host's own rung folded on its own: what governs a request that brings its own upstream key, where no account rung applies but the host's operator-wide policy does.
 type HostRungs struct {
 	byID map[string]*KeySlot
 	in   inputs
@@ -223,7 +214,7 @@ func (h *HostRungs) Of(hostID string) *KeySlot {
 	return noHostRung
 }
 
-// hostRungs folds each host as an anonymous credential, which has no account or credential rung, so foldUpstream reads the host rung alone.
+// hostRungs folds each host as an anonymous credential, which has no account rung, so foldUpstream reads the host rung alone.
 func (c *controllers) hostRungs(tx *engine.Txn, _ string) error {
 	hosts := engine.Members[host.Host](tx)
 	hr := &HostRungs{byID: make(map[string]*KeySlot, len(hosts))}

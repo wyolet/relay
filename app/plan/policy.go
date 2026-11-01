@@ -228,7 +228,7 @@ type ScopedRung struct {
 
 func (r *RungPolicy) builtFrom() inputs { return r.in }
 
-// rungOf maps a binding subject to its ladder rung; group and key subjects are not rungs.
+// rungOf maps a binding subject to its ladder rung. Group and key subjects are not rungs, and neither is a credential: the store keeps a credential subject as its account.
 func rungOf(subject string) (limits.Rung, bool) {
 	kind, _, _ := strings.Cut(subject, ":")
 	switch kind {
@@ -242,8 +242,6 @@ func rungOf(subject string) (limits.Rung, bool) {
 		return limits.RungHost, true
 	case "account":
 		return limits.RungAccount, true
-	case "credential":
-		return limits.RungCredential, true
 	}
 	return "", false
 }
@@ -267,7 +265,7 @@ func (c *controllers) rungPolicy(tx *engine.Txn, subject string) error {
 		for _, b := range bs {
 			tx.Issue(engine.Issue{
 				Severity: engine.SeverityWarning, Code: IssueSubjectInvalid, Source: engine.Ref{Kind: KindPolicyBinding, ID: b.Meta.ID}, Field: "spec.subjects",
-				Message: subject + " is not a rung of the policy ladder (team, project, user, service account, host, account, credential); the binding is ignored for it",
+				Message: subject + " is not a rung of the policy ladder (team, project, user, service account, host, account); the binding is ignored for it",
 			})
 		}
 		engine.Drop(tx)

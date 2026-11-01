@@ -56,10 +56,6 @@ func subjectScope(tx *engine.Txn, subject string) (meta.Owner, bool) {
 		if a := engine.Get[account.Account](tx, id); a != nil {
 			return a.Meta.Owner, true
 		}
-	case "credential":
-		if k := engine.Get[hostkey.HostKey](tx, id); k != nil {
-			return k.Meta.Owner, true
-		}
 	case "host":
 		return meta.Owner{Kind: meta.OwnerHost, ID: id}, true
 	}

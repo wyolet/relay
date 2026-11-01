@@ -25,19 +25,18 @@ const (
 type Rung string
 
 const (
-	RungHost       Rung = "host"
-	RungAccount    Rung = "account"
-	RungCredential Rung = "credential"
-	RungTeam       Rung = "team"
-	RungProject    Rung = "project"
-	RungPrincipal  Rung = "principal"
+	RungHost      Rung = "host"
+	RungAccount   Rung = "account"
+	RungTeam      Rung = "team"
+	RungProject   Rung = "project"
+	RungPrincipal Rung = "principal"
 	// RungSystem marks a relay-wide ceiling no policy binds, such as the proxy-mode limit.
 	RungSystem Rung = "system"
 )
 
 // Upstream reports whether the rung is on the provider side of the ladder, where counters are shared by every caller that reaches the rung object.
 func (r Rung) Upstream() bool {
-	return r == RungHost || r == RungAccount || r == RungCredential
+	return r == RungHost || r == RungAccount
 }
 
 // Counter is one rate-limit rule or one budget a request must fit. Plans build it once; the request path hands it to a Limiter unchanged, so ID and Group are rendered here rather than per request.
@@ -45,7 +44,7 @@ type Counter struct {
 	Kind     Kind
 	Rung     Rung
 	PolicyID string
-	// SubjectID is the subject the policy is bound to, as "<kind>:<id>": a team, project or principal on the caller side; the host, account or credential upstream.
+	// SubjectID is the subject the policy is bound to, as "<kind>:<id>": a team, project or principal on the caller side; the host or account upstream.
 	SubjectID string
 	// ModelID is set when an upstream rule is scoped to models; such a rule counts once per matched model.
 	ModelID     string
@@ -67,7 +66,7 @@ func CallerRule(rung Rung, rl *ratelimit.RateLimit, r ratelimit.Rule, policyID, 
 	}
 }
 
-// UpstreamRule describes a rule of a host, account or credential policy. Its identity is (rule, rung object, model) without the policy, so the provider's ceiling keeps its count when the rung is rebound to another tier policy that links the same rate limit, and every caller reaching the object shares it.
+// UpstreamRule describes a rule of a host or account policy. Its identity is (rule, rung object, model) without the policy, so the provider's ceiling keeps its count when the rung is rebound to another tier policy that links the same rate limit, and every caller reaching the object shares it.
 func UpstreamRule(rung Rung, rl *ratelimit.RateLimit, r ratelimit.Rule, policyID, subjectID, modelID, group string) Counter {
 	id := ruleContent(rl.Meta.ID, r) + ":o:" + subjectID
 	if modelID != "" {

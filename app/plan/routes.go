@@ -162,7 +162,7 @@ type Unkeyed struct {
 	Refused  *Refusal
 }
 
-// ResolveUnkeyed resolves ref without credentials, uncached. The host rung applies as on a routed request; the account and credential rungs do not, as no relay credential serves. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
+// ResolveUnkeyed resolves ref without credentials, uncached. The host rung applies as on a routed request; the account rung does not, as no relay credential serves. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
 func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 	cp := t.caller
 	if cp.Refused != nil {

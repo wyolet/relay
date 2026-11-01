@@ -185,7 +185,7 @@ func TestCoolAccountOnlyForAccountWideWindows(t *testing.T) {
 		{"concurrency", accountCounters("a", leases)[0], false},
 		{"model-scoped", scoped, false},
 		{"budget", limits.BudgetCounter(limits.RungAccount, bud, "pol-tier", "account:a", "account:a"), false},
-		{"credential rung", limits.UpstreamRule(limits.RungCredential, requests, requests.Spec.Rules[0], "pol-key", "credential:k", "", "account:a"), false},
+		{"host rung", limits.UpstreamRule(limits.RungHost, requests, requests.Spec.Rules[0], "pol-host", "host:h", "", "host:h"), false},
 	} {
 		slot := &plan.KeySlot{Account: accountPlan("a")}
 		coolAccount(slot, &limits.Refused{Counter: &tc.c, RetryAfter: time.Minute})

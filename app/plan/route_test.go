@@ -228,10 +228,24 @@ func TestRoute_DisabledAccountPolicyTakesItsCredentialsOut(t *testing.T) {
 func TestRoute_UpstreamGrantNarrowsSlots(t *testing.T) {
 	b := newBasic()
 	b.w.model(b.prov, "other")
+	own := b.w.account(b.hostA)
+	b.a1.Spec.AccountID = own.Meta.ID
 	tier := b.w.policy("tier", policy.Spec{Models: []string{"acme/other"}})
-	b.w.bindPolicy(tier, subject(policybinding.SubjectCredential, b.a1.Meta.ID))
+	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, own.Meta.ID))
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a2), ids(b.b1))
+}
+
+// A credential is no rung: the store keeps a binding on one as its account's, so a stored credential subject binds nothing and says so.
+func TestRoute_CredentialSubjectBindsNothing(t *testing.T) {
+	b := newBasic()
+	tier := b.w.policy("tier", policy.Spec{Models: []string{"acme/other"}})
+	pb := b.w.bindPolicy(tier, subject(policybinding.SubjectCredential, b.a1.Meta.ID))
+	h := b.w.start(t)
+	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
+	if !hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectInvalid) {
+		t.Fatalf("issues = %+v, want %s", h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectInvalid)
+	}
 }
 
 func TestRoute_UnpricedUnderBudgetIsRefusedAndFlagged(t *testing.T) {
