@@ -126,7 +126,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ### Distinct counts
 
-`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
+`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `pool_id`, `account_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \

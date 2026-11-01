@@ -318,7 +318,7 @@ type usageSummaryInput struct {
 	CompareFrom string `query:"compare_from" doc:"Start (RFC3339, inclusive) of an explicit window to compare rows with, instead of compare=previous; needs compare_to. Rows gain previous exactly as with compare=previous, and previous_from/previous_to echo this window. Its length may differ from the requested window's and it may overlap it: the caller picks it."`
 	CompareTo   string `query:"compare_to" doc:"End (RFC3339, exclusive) of the explicit compare window; needs compare_from and must be after it."`
 
-	Distinct string `query:"distinct" doc:"Adds distinct to each row: the number of distinct non-empty values of this dimension among the row's events. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
+	Distinct string `query:"distinct" doc:"Adds distinct to each row: the number of distinct non-empty values of this dimension among the row's events. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
 }
 
 type usageSummaryOutput struct {
@@ -331,7 +331,7 @@ type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
 	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series; \"none\" returns that series with group {}."`
-	Distinct string `query:"distinct" doc:"Adds distinct to each point: the number of distinct non-empty values of this dimension among the bucket's events. Per-bucket values cannot be summed across buckets (a value seen in two buckets counts in each); use /usage/summary for a window total. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
+	Distinct string `query:"distinct" doc:"Adds distinct to each point: the number of distinct non-empty values of this dimension among the bucket's events. Per-bucket values cannot be summed across buckets (a value seen in two buckets counts in each); use /usage/summary for a window total. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
 }
 
 type usageTimeSeriesOutput struct {
