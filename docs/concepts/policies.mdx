@@ -33,8 +33,8 @@ Which caller rungs a request has depends on its credential:
 | Credential | Team and project rungs | Principal rung |
 | --- | --- | --- |
 | Service account key | The service account's project and that project's team | The service account |
-| A user's own relay key | None | The user, through system-owned bindings only |
-| Inference token | The project the token was minted for, and its team | The user, through the binding that governs inside that project |
+| A user's own relay key | None | The user, through a system-owned binding or the user's own |
+| Inference token | The project the token was minted for, and its team | The user, through the binding that governs inside that project or a system-owned one |
 
 The upstream rungs are the host the request goes to, the account of the host key that serves it, and that host key. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
 
@@ -117,7 +117,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
-| `metadata.owner` | `metadata.owner` | `{kind: system}` or `{kind: team, ...}`. A project-owned binding sets `projectId` instead. |
+| `metadata.owner` | `metadata.owner` | `{kind: system}`, `{kind: team, ...}` or `{kind: user}`. A project-owned binding sets `projectId` instead. |
 | `projectId` | `project` (name) | The owning project, for a project-owned binding. |
 | `policyId` | `policy` (name) | The policy it attaches. |
 | `subjects` | `subjects` | One or more `{kind, id}` (`{kind, name}` in manifests). Kinds: `host`, `account`, `credential` (a host key), `team`, `project`, `user`, `serviceaccount`. |
@@ -130,18 +130,21 @@ The owner decides which subjects a binding may name:
 | System | Any subject. Only a system-owned binding binds a host. |
 | Team | The team, its projects, their service accounts, accounts and host keys owned by the team or one of its projects, and users who are members of the team. |
 | Project | The project, its service accounts, accounts and host keys it owns, and users who are members of the project. |
+| User | Only that user. See [A user's own binding](#a-users-own-binding). |
 
-A user is a member of a team or project when they may mint inference tokens there. A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A subject outside the owner's scope, or a policy it may not use, is refused with `400`. If a subject later leaves the owner's scope, for example a project moved to another team, the binding stops applying to it.
+A user is a member of a team or project when they may mint inference tokens there. A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A policy owned by a user is bound by that user to themselves, or by a team or project binding where its owner may create policy bindings (a project admin binds their own policy to the project's service accounts). A subject outside the owner's scope, or a policy it may not use, is refused with `400`. If a subject later leaves the owner's scope, for example a project moved to another team, the binding stops applying to it, and so does a team or project binding of a user's policy once that user may no longer create policy bindings there.
 
 A group is not a rung, so a group subject is refused with `400`; bind the users, their team or their project instead. A binding stored with a group subject by an earlier version binds nothing through it and must drop the group before it can be saved again. Relay keys are never subjects.
 
 ### Bindings on users
 
-A user may be bound once per owner scope, because a team- or project-owned binding on a user governs only that user's requests inside that scope: the inference tokens minted for that project, or for a project of that team. A system-owned binding on a user governs everywhere, including the user's own relay keys. Two scopes that would both govern one request conflict and the second is refused: a system-owned binding and any other, or a team's binding and one owned by a project of that team.
+A user may be bound once per owner scope, because a team- or project-owned binding on a user governs only that user's requests inside that scope: the inference tokens minted for that project, or for a project of that team. A system-owned binding on a user governs everywhere, including the user's own relay keys. Two scopes that would both govern one request conflict and the second is refused: a system-owned binding and any other (the user's own included), or a team's binding and one owned by a project of that team.
 
 Counters follow the scope, so a policy bound to the same user by two projects counts each project's requests on its own.
 
-A user-owned policy cannot be bound: bindings are owned by the system, a team or a project, and none of them may use a personal policy.
+### A user's own binding
+
+A user may bind a policy to themselves with a binding they own: `metadata.owner: {kind: user}` and the user as the only subject. The policy is the user's own, a system policy or a host's. It governs the user's requests outside any project, which are the user's relay keys; inference tokens act inside a project and follow that project's or team's binding of the user instead, so both bindings can stand together. A system-owned binding on the user governs everywhere, so it conflicts with the user's own and the second one is refused with `409`. Its links must be usable by the user: the user's own pools and host keys, or system-owned ones. A user signed in to the control API leaves `owner.id` out; the admin token names the user in it.
 
 ### One binding per subject
 
