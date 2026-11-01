@@ -18,18 +18,15 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// bindingsInScope keeps the bindings whose owner's scope holds subject and files an issue for each one it drops. Users are left to splitScoped: a team- or project-owned binding on a user governs only the user's requests inside that scope.
+// bindingsInScope keeps the bindings whose owner's scope holds subject and files an issue for each one it drops. A user is held by the user's own scope only; the other scopes are left to splitScoped: a team- or project-owned binding on a user governs only the user's requests inside that scope.
 func bindingsInScope(tx *engine.Txn, subject string, bs []*policybinding.PolicyBinding) []*policybinding.PolicyBinding {
-	if strings.HasPrefix(subject, "user:") {
-		return bs
-	}
 	in, ok := subjectScope(tx, subject)
 	if !ok {
 		return bs
 	}
 	kept := bs[:0:0]
 	for _, b := range bs {
-		if scopeHolds(tx, b.Meta.Owner, in) {
+		if scopeHolds(tx, b.Meta.Owner, in) || in.Kind == meta.OwnerUser && b.Meta.Owner.Kind != meta.OwnerUser {
 			kept = append(kept, b)
 			continue
 		}
@@ -45,6 +42,8 @@ func bindingsInScope(tx *engine.Txn, subject string, bs []*policybinding.PolicyB
 func subjectScope(tx *engine.Txn, subject string) (meta.Owner, bool) {
 	kind, id, _ := strings.Cut(subject, ":")
 	switch kind {
+	case "user":
+		return meta.Owner{Kind: meta.OwnerUser, ID: id}, true
 	case "team":
 		return meta.Owner{Kind: meta.OwnerTeam, ID: id}, true
 	case "project":
