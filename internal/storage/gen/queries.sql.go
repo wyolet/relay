@@ -589,7 +589,7 @@ func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error
 }
 
 const getPolicyBinding = `-- name: GetPolicyBinding :one
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version, team_id
 FROM policy_bindings WHERE id = $1
 `
 
@@ -608,6 +608,7 @@ func (q *Queries) GetPolicyBinding(ctx context.Context, id string) (PolicyBindin
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -1167,8 +1168,8 @@ type InsertAuditEventParams struct {
 const insertPolicyBindingSubject = `-- name: InsertPolicyBindingSubject :exec
 INSERT INTO policy_binding_subjects
     (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id,
-     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position, owner_scope)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type InsertPolicyBindingSubjectParams struct {
@@ -1184,6 +1185,7 @@ type InsertPolicyBindingSubjectParams struct {
 	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
 	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
 	Position            int32       `db:"position" json:"position"`
+	OwnerScope          string      `db:"owner_scope" json:"owner_scope"`
 }
 
 func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPolicyBindingSubjectParams) error {
@@ -1200,6 +1202,7 @@ func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPoli
 		arg.SubjectTeamID,
 		arg.SubjectProjectID,
 		arg.Position,
+		arg.OwnerScope,
 	)
 	return err
 }
@@ -2056,7 +2059,7 @@ func (q *Queries) ListPolicyBindingSubjects(ctx context.Context) ([]ListPolicyBi
 
 const listPolicyBindings = `-- name: ListPolicyBindings :many
 
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version, team_id
 FROM policy_bindings ORDER BY name
 `
 
@@ -2082,6 +2085,7 @@ func (q *Queries) ListPolicyBindings(ctx context.Context) ([]PolicyBinding, erro
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -3544,25 +3548,27 @@ func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) (int
 }
 
 const upsertPolicyBinding = `-- name: UpsertPolicyBinding :execrows
-INSERT INTO policy_bindings (id, name, display_name, project_id, policy_id, priority, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+INSERT INTO policy_bindings (id, name, display_name, project_id, team_id, policy_id, priority, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name         = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     project_id   = EXCLUDED.project_id,
+    team_id      = EXCLUDED.team_id,
     policy_id    = EXCLUDED.policy_id,
     priority     = EXCLUDED.priority,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
-WHERE $9::bigint IS NULL OR policy_bindings.resource_version = $9::bigint
+WHERE $10::bigint IS NULL OR policy_bindings.resource_version = $10::bigint
 `
 
 type UpsertPolicyBindingParams struct {
 	ID              string      `db:"id" json:"id"`
 	Name            string      `db:"name" json:"name"`
 	DisplayName     string      `db:"display_name" json:"display_name"`
-	ProjectID       string      `db:"project_id" json:"project_id"`
+	ProjectID       pgtype.Text `db:"project_id" json:"project_id"`
+	TeamID          pgtype.Text `db:"team_id" json:"team_id"`
 	PolicyID        string      `db:"policy_id" json:"policy_id"`
 	Priority        int32       `db:"priority" json:"priority"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
@@ -3576,6 +3582,7 @@ func (q *Queries) UpsertPolicyBinding(ctx context.Context, arg UpsertPolicyBindi
 		arg.Name,
 		arg.DisplayName,
 		arg.ProjectID,
+		arg.TeamID,
 		arg.PolicyID,
 		arg.Priority,
 		arg.Metadata,

@@ -65,14 +65,16 @@ func sanitizeRoleBinding(b *rolebinding.RoleBinding, roles, teams, projects idSe
 //
 // Indexes: policyBindingsByID and policyBindingsByProject (sorted by
 // effective priority, then name — the order resolution reads them in).
-func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, projects, policies idSet) {
+func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, scopes func(meta.Owner) bool, policies idSet) {
 	for _, b := range bindings {
-		clean, keep := sanitizePolicyBinding(b, projects, policies)
+		clean, keep := sanitizePolicyBinding(b, scopes, policies)
 		if !keep {
 			continue
 		}
 		s.policyBindingsByID[clean.Meta.ID] = clean
-		s.policyBindingsByProject[clean.Spec.ProjectID] = append(s.policyBindingsByProject[clean.Spec.ProjectID], clean)
+		if pid := clean.Spec.ProjectID; pid != "" {
+			s.policyBindingsByProject[pid] = append(s.policyBindingsByProject[pid], clean)
+		}
 		s.registerRefs(refKey{Kind: refPolicyBinding, ID: clean.Meta.ID}, outboundPolicyBindingRefs(clean))
 	}
 	for projectID := range s.policyBindingsByProject {
@@ -80,11 +82,24 @@ func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, pr
 	}
 }
 
-// sanitizePolicyBinding drops the binding when its Project or its Policy is
-// missing: both edges are hard, a dangling one would resolve a principal to
-// nothing.
-func sanitizePolicyBinding(b *policybinding.PolicyBinding, projects, policies idSet) (*policybinding.PolicyBinding, bool) {
-	if !projects(b.Spec.ProjectID) {
+// ownerScopeExists reports whether a policy binding's owner scope is in the snapshot: its project, its team, or the system.
+func (s *Snapshot) ownerScopeExists(o meta.Owner) bool {
+	switch o.Kind {
+	case meta.OwnerProject:
+		_, ok := s.projectsByID[o.ID]
+		return ok
+	case meta.OwnerTeam:
+		_, ok := s.teamsByID[o.ID]
+		return ok
+	}
+	return o.Kind == meta.OwnerSystem
+}
+
+// sanitizePolicyBinding drops the binding when its owner scope or its Policy
+// is missing: both edges are hard, a dangling one would resolve a principal
+// to nothing.
+func sanitizePolicyBinding(b *policybinding.PolicyBinding, scopes func(meta.Owner) bool, policies idSet) (*policybinding.PolicyBinding, bool) {
+	if !scopes(b.Meta.Owner) {
 		return nil, false
 	}
 	if !policies(b.Spec.PolicyID) {

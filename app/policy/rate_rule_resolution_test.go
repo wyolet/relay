@@ -125,9 +125,8 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 			want: "must not list hostKeyIds",
 		},
 		{
-			name: "team owner is not a policy owner",
+			name: "team owner",
 			p:    withOwner(meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}),
-			want: "owner.kind required",
 		},
 		{
 			name: "a model ref the parser cannot read",

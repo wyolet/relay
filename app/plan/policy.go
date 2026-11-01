@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/binding"
@@ -218,12 +219,19 @@ func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[
 	}
 }
 
-// RungPolicy is the policy bound at one rung (a subject such as "team:<id>"), or the refusal the rung imposes when its policy is disabled or its binding ambiguous.
+// RungPolicy is the policy bound at one rung (a subject such as "team:<id>"), or the refusal the rung imposes when its policy is disabled or its binding ambiguous. For a user, Rung, Binding and Refused come from system-owned bindings, which apply everywhere; Scoped holds the user's team- and project-owned ones.
 type RungPolicy struct {
 	Rung    Rung
 	Binding *policybinding.PolicyBinding
 	Refused *Refusal
+	Scoped  []ScopedRung // sorted by Scope
 	in      inputs
+}
+
+// ScopedRung is a user's binding owned by a team or a project: it governs only the user's requests inside that scope, which are the user's tokens for that project or for a project of that team.
+type ScopedRung struct {
+	Scope  string // "team:<id>" or "project:<id>"
+	Policy *RungPolicy
 }
 
 func (r *RungPolicy) builtFrom() inputs { return r.in }
@@ -273,17 +281,73 @@ func (c *controllers) rungPolicy(tx *engine.Txn, subject string) error {
 		engine.Drop(tx)
 		return nil
 	}
+	prev := engine.Get[RungPolicy](tx, subject)
+	var scoped []ScopedRung
+	if kind == limits.RungPrincipal && strings.HasPrefix(subject, "user:") {
+		bs, scoped = splitScoped(tx, kind, subject, bs, prev)
+	}
+	rp := bindRung(tx, kind, subject, bs)
+	if rp == nil && len(scoped) == 0 {
+		engine.Drop(tx)
+		return nil
+	}
+	if rp == nil {
+		rp = &RungPolicy{Rung: Rung{Kind: kind, SubjectID: subject}}
+	}
+	rp.Scoped = scoped
+	for _, s := range scoped {
+		rp.in = append(rp.in, s.Scope, s.Policy)
+	}
+	engine.Put(tx, SameOr(prev, rp))
+	return nil
+}
+
+// splitScoped keeps a user's system-owned bindings and folds the team- and project-owned ones per owner scope, reusing prev's fold of a scope whose bindings did not change.
+func splitScoped(tx *engine.Txn, kind limits.Rung, subject string, bs []*policybinding.PolicyBinding, prev *RungPolicy) ([]*policybinding.PolicyBinding, []ScopedRung) {
+	everywhere := bs[:0:0]
+	byScope := map[string][]*policybinding.PolicyBinding{}
+	for _, b := range bs {
+		if s := b.ScopeKey(); s != "" {
+			byScope[s] = append(byScope[s], b)
+		} else {
+			everywhere = append(everywhere, b)
+		}
+	}
+	if len(byScope) == 0 {
+		return everywhere, nil
+	}
+	scopes := make([]string, 0, len(byScope))
+	for s := range byScope {
+		scopes = append(scopes, s)
+	}
+	slices.Sort(scopes)
+	out := make([]ScopedRung, 0, len(scopes))
+	for _, s := range scopes {
+		rp := bindRung(tx, kind, subject, byScope[s])
+		if rp == nil {
+			continue
+		}
+		if prev != nil {
+			if i, ok := slices.BinarySearchFunc(prev.Scoped, s, func(e ScopedRung, t string) int { return strings.Compare(e.Scope, t) }); ok {
+				rp = SameOr(prev.Scoped[i].Policy, rp)
+			}
+		}
+		out = append(out, ScopedRung{Scope: s, Policy: rp})
+	}
+	return everywhere, out
+}
+
+// bindRung folds the bindings naming one subject into its rung; nil when none binds a policy that exists.
+func bindRung(tx *engine.Txn, kind limits.Rung, subject string, bs []*policybinding.PolicyBinding) *RungPolicy {
 	rp := &RungPolicy{Rung: Rung{Kind: kind, SubjectID: subject}}
 	switch len(bs) {
 	case 0:
-		engine.Drop(tx)
 		return nil
 	case 1:
 		b := bs[0]
 		ep := engine.Get[ExpandedPolicy](tx, b.Spec.PolicyID)
 		if ep == nil {
 			tx.Issue(parentMissing(engine.Ref{Kind: KindPolicyBinding, ID: b.Meta.ID}, "spec.policyId", engine.Ref{Kind: KindPolicy, ID: b.Spec.PolicyID}))
-			engine.Drop(tx)
 			return nil
 		}
 		rp.Binding, rp.Rung.Policy, rp.in = b, ep, inputs{b, ep}
@@ -301,6 +365,5 @@ func (c *controllers) rungPolicy(tx *engine.Txn, subject string) error {
 			})
 		}
 	}
-	engine.Put(tx, SameOr(engine.Get[RungPolicy](tx, subject), rp))
-	return nil
+	return rp
 }

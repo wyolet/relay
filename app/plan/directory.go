@@ -95,7 +95,7 @@ func (c *controllers) projectPlan(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// CallerFor returns the plan of the user whose own plan is user, acting in this project: the user's rung under the project's and its team's, reaching what the project and the team own as well as what the user does. Folded on first use and kept while neither plan changes: plans are immutable, so a changed user plan is a new pointer and a changed project a new ProjectPlan.
+// CallerFor returns the plan of the user whose own plan is user, acting in this project: the user's rung under the project's and its team's, reaching what the project and the team own as well as what the user does. The user's rung is the binding that governs inside this project: a system-owned one, or one the project or its team owns. Folded on first use and kept while neither plan changes: plans are immutable, so a changed user plan is a new pointer and a changed project a new ProjectPlan.
 func (p *ProjectPlan) CallerFor(user *CallerPlan) *CallerPlan {
 	p.mu.RLock()
 	e := p.callers[user.Principal]
@@ -110,6 +110,7 @@ func (p *ProjectPlan) CallerFor(user *CallerPlan) *CallerPlan {
 	}
 	rd := user.reads
 	rd.rungs[rungTeam], rd.rungs[rungProject] = p.rungs[0], p.rungs[1]
+	rd.rungs[rungPrincipal] = rd.principalIn(p.rungs[1].rung.SubjectID, p.rungs[0].rung.SubjectID)
 	rd.owned[ownedProject], rd.owned[ownedTeam] = p.owned[0], p.owned[1]
 	cp := foldCaller(user.Principal, rd)
 	if p.callers == nil {

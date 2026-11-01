@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -124,6 +125,10 @@ func TestCatalogOwnedLimitsAndPoliciesReferenceableFromAnyScope(t *testing.T) {
 	c := Checker{Authz: scopingAuthz{}, Rows: Lookup{
 		RateLimit: func(_ context.Context, id string) *ratelimit.RateLimit { return rls[id] },
 		Policy:    func(_ context.Context, id string) *policy.Policy { return pols[id] },
+		// p-1 sits in another team than t-1, so t-1's rows are not its own.
+		Project: func(_ context.Context, id string) *project.Project {
+			return &project.Project{Meta: meta.Metadata{ID: id}, Spec: project.Spec{TeamID: "t-9"}}
+		},
 	}}
 	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
 	project := owner(meta.OwnerProject, "p-1")

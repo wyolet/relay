@@ -306,9 +306,10 @@ func registerKind[T any](
 			}
 			// system is reserved for seed paths, except where it is the kind's
 			// default (a personal Team, Group or Role would inherit whatever binds
-			// to its name) and role-bindings, whose owner mirrors spec.scope.
+			// to its name), role-bindings, whose owner mirrors spec.scope, and
+			// policy-bindings, which a system owner lets reach every scope.
 			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem &&
-				singular != "role-binding" {
+				singular != "role-binding" && singular != "policy-binding" {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {

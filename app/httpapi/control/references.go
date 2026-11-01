@@ -420,6 +420,24 @@ func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 			out = append(out, referenceItem{Kind: "project", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.teamId", owner: p.Meta.Owner})
 		}
 	}
+	pols, err := d.Stores.Policy.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	for _, p := range pols {
+		if ownedBy(p.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id", owner: p.Meta.Owner})
+		}
+	}
+	pbs, err := d.Stores.PolicyBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policy-bindings: %w", err)
+	}
+	for _, b := range pbs {
+		if ownedBy(b.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "metadata.owner.id", owner: b.Meta.Owner})
+		}
+	}
 	scoped, err := scanRoleBindingsScopedTo(ctx, d, meta.OwnerTeam, id)
 	if err != nil {
 		return nil, err

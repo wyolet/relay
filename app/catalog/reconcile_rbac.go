@@ -230,7 +230,7 @@ func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizePolicyBinding(b, snapIDs(s.projectsByID), s.policyResolvable)
+	clean, keep := sanitizePolicyBinding(b, s.ownerScopeExists, s.policyResolvable)
 	if !keep {
 		deletePolicyBinding(s, b.Meta.ID)
 		c.snap.Store(s)
@@ -257,9 +257,11 @@ func insertPolicyBinding(s *Snapshot, b *policybinding.PolicyBinding) {
 		removePolicyBindingFromProject(s, old)
 	}
 	s.policyBindingsByID[b.Meta.ID] = b
-	list := append(s.policyBindingsByProject[b.Spec.ProjectID], b)
-	sortPolicyBindings(list)
-	s.policyBindingsByProject[b.Spec.ProjectID] = list
+	if pid := b.Spec.ProjectID; pid != "" {
+		list := append(s.policyBindingsByProject[pid], b)
+		sortPolicyBindings(list)
+		s.policyBindingsByProject[pid] = list
+	}
 	s.registerRefs(refKey{Kind: refPolicyBinding, ID: b.Meta.ID}, outboundPolicyBindingRefs(b))
 }
 
@@ -274,6 +276,9 @@ func deletePolicyBinding(s *Snapshot, id string) {
 }
 
 func removePolicyBindingFromProject(s *Snapshot, b *policybinding.PolicyBinding) {
+	if b.Spec.ProjectID == "" {
+		return
+	}
 	list := s.policyBindingsByProject[b.Spec.ProjectID]
 	out := make([]*policybinding.PolicyBinding, 0, len(list))
 	for _, cur := range list {

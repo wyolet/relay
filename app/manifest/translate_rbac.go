@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -97,13 +98,20 @@ func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindin
 	return dto
 }
 
-// ToPolicyBinding resolves the project, the policy, and the subjects. Owner
-// mirrors spec.project.
+// ToPolicyBinding resolves the owner, the project, the policy, and the
+// subjects. A spec.project makes the binding that project's; without one,
+// metadata.owner names a team or the system.
 func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBinding, error) {
-	projectID, ok := idx.ProjectID(d.Spec.Project)
-	if !ok {
-		return nil, refNotFound("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+	var projectID string
+	if d.Spec.Project != "" {
+		id, ok := idx.ProjectID(d.Spec.Project)
+		if !ok {
+			return nil, refNotFound("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+		}
+		projectID = id
 	}
+	m := d.Metadata.toMeta()
+	resolveScopeOwner(&m.Owner, idx)
 	policyID, ok := idx.PolicyID(d.Spec.Policy)
 	if !ok {
 		return nil, refNotFound("policybinding %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
@@ -121,7 +129,7 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 		priority = &def
 	}
 	b := &policybinding.PolicyBinding{
-		Meta: d.Metadata.toMeta(),
+		Meta: m,
 		Spec: policybinding.Spec{
 			ProjectID: projectID,
 			PolicyID:  policyID,
@@ -135,16 +143,26 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 }
 
 func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) PolicyBindingDTO {
-	projectName, _ := rev.ProjectName(b.Spec.ProjectID)
-	if projectName == "" {
-		projectName = b.Spec.ProjectID
+	var projectName string
+	if b.Spec.ProjectID != "" {
+		projectName, _ = rev.ProjectName(b.Spec.ProjectID)
+		if projectName == "" {
+			projectName = b.Spec.ProjectID
+		}
 	}
 	policyName, _ := rev.PolicyName(b.Spec.PolicyID)
 	if policyName == "" {
 		policyName = b.Spec.PolicyID
 	}
 	wm := metaToWire(b.Meta)
-	wm.Owner.Name = projectName
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		wm.Owner.Name = projectName
+	case meta.OwnerTeam:
+		if name, ok := rev.TeamName(b.Meta.Owner.ID); ok {
+			wm.Owner.Name = name
+		}
+	}
 	effectivePriority := b.EffectivePriority()
 	return PolicyBindingDTO{
 		APIVersion: APIVersion,

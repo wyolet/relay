@@ -83,6 +83,8 @@ type Lookup struct {
 	PolicyBindings func(ctx context.Context) ([]*policybinding.PolicyBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
+	// UserActsIn reports whether a user is a member of a team or project scope: one whose requests can fall inside it.
+	UserActsIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
 }
 
 // Checker applies the rules for the caller in ctx. A nil Authz is a loader
@@ -219,7 +221,7 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 	if err := c.personalToProject(ctx, rl.Meta.Owner, refOwner); err != nil {
 		return err
 	}
-	return SharedOwner("rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
+	return c.linkable(ctx, "rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
 }
 
 // HostKeyRefs checks the host keys a policy spends. Missing ids pass: the
@@ -240,7 +242,7 @@ func (c Checker) HostKeyRefs(ctx context.Context, keyIDs []string, refOwner meta
 		if scoped && refOwner.Kind == meta.OwnerUser && k.Meta.Owner.Kind == meta.OwnerProject {
 			return badRequest("personal rows cannot reference project resources")
 		}
-		if err := SharedOwner("host-key", k.Meta.Name, k.Meta.Owner, refOwner); err != nil {
+		if err := c.linkable(ctx, "host-key", k.Meta.Name, k.Meta.Owner, refOwner); err != nil {
 			return err
 		}
 	}
@@ -539,7 +541,8 @@ func (c Checker) Role(ctx context.Context, r *role.Role) error {
 }
 
 // PolicyBinding re-derives the owner from spec.projectId, fills in the
-// default priority, and checks the project, policy, and subjects.
+// default priority, and checks the owning scope, the policy, and the
+// subjects, each of which must sit inside that scope.
 func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	pb.StampOwner()
 	// Absent means the default; an explicit 0 is a real priority.
@@ -547,13 +550,23 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 		def := policybinding.DefaultPriority
 		pb.Spec.Priority = &def
 	}
-	if err := c.projectRef(ctx, pb.Spec.ProjectID); err != nil {
-		return err
+	switch pb.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		if err := c.projectRef(ctx, pb.Meta.Owner.ID); err != nil {
+			return err
+		}
+	case meta.OwnerTeam:
+		if err := c.teamRef(ctx, pb.Meta.Owner.ID); err != nil {
+			return err
+		}
 	}
-	if err := c.PolicyRef(ctx, pb.Spec.PolicyID, pb.Meta.Owner); err != nil {
+	if err := c.BindablePolicy(ctx, pb.Spec.PolicyID, pb.Meta.Owner); err != nil {
 		return err
 	}
 	if err := c.subjectsExist(ctx, pb.Spec.Subjects); err != nil {
+		return err
+	}
+	if err := c.subjectsInScope(ctx, pb); err != nil {
 		return err
 	}
 	return c.subjectsUnbound(ctx, pb)
@@ -562,7 +575,7 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 // CodeDuplicateBinding is the error code of a binding naming a subject another binding already holds.
 const CodeDuplicateBinding = "duplicate_binding"
 
-// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. Group subjects are not policy rungs and may repeat.
+// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. A user may be bound once per scope, since a binding governs only the requests inside its owner's scope; two scopes where one holds the other (the system and anything, a team and its projects) would both govern one request, so they conflict. Group subjects are not policy rungs and may repeat.
 func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	if c.Rows.PolicyBindings == nil {
 		return nil
@@ -580,11 +593,19 @@ func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBi
 				if sub.ID == "" || sub.Kind != held.Kind || sub.ID != held.ID {
 					continue
 				}
+				user := sub.Kind == rolebinding.SubjectUser
+				if user && !c.containsScope(ctx, pb.Meta.Owner, other.Meta.Owner) && !c.containsScope(ctx, other.Meta.Owner, pb.Meta.Owner) {
+					continue
+				}
 				by := "another policy binding"
 				if Visible(ctx, c.Authz, "policy-binding", other.Meta.ID, other.Meta.Owner) {
 					by = fmt.Sprintf("policy binding %q", other.Meta.Name)
 				}
-				return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf("%s is already bound by %s; a subject is bound to one policy", sub.Key(), by)}
+				rule := "a subject is bound to one policy"
+				if user {
+					rule = "a user is bound to one policy per scope, and that binding's scope overlaps this one"
+				}
+				return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf("%s is already bound by %s; %s", sub.Key(), by, rule)}
 			}
 		}
 	}

@@ -197,7 +197,7 @@ func (p *Policy) SelectRateLimitID(providerSlug, modelSlug, hostSlug string) (id
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is user or system.
+//   - Owner.Kind is system, host, team, project or user.
 //   - no id list repeats an entry.
 //   - host-owned policies link no pools or credentials.
 //   - rateLimits is not mixed with rateLimitId/rlBindings, nor credentialIds with hostKeyIds.
@@ -225,9 +225,9 @@ func (p *Policy) Validate() error {
 		if len(p.Spec.PoolIDs) > 0 || len(p.Spec.CredentialIDs) > 0 {
 			return fmt.Errorf("policy %q: host-owned policies must not list poolIds or credentialIds", p.Meta.Name)
 		}
-	case meta.OwnerProject:
+	case meta.OwnerProject, meta.OwnerTeam:
 	default:
-		return fmt.Errorf("policy %q: owner.kind required (user|system|host|project)", p.Meta.Name)
+		return fmt.Errorf("policy %q: owner.kind required (user|system|host|team|project)", p.Meta.Name)
 	}
 	// RateLimit shape: flat singular OR per-model bindings, never both.
 	if p.Spec.RateLimitID != "" && len(p.Spec.RLBindings) > 0 {

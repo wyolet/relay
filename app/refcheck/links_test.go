@@ -259,8 +259,9 @@ func TestPolicyBindingSubjectsOfEveryKindMustExist(t *testing.T) {
 	rows := newLinkRows()
 	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
 	c := rows.checker(hidingAuthz{hidden: map[string]bool{"acct-p-2": true}})
+	// System-owned, so every subject is in scope and only existence and visibility decide.
 	bind := func(subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
-		return &policybinding.PolicyBinding{Spec: policybinding.Spec{ProjectID: "p-1", Subjects: subjects}}
+		return &policybinding.PolicyBinding{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policybinding.Spec{Subjects: subjects}}
 	}
 	ok := bind(
 		rolebinding.Subject{Kind: policybinding.SubjectHost, ID: "h-1"},

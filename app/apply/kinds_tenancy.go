@@ -239,7 +239,7 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 				}
 			}
 		case "PolicyBinding":
-			if pb, _ := b.declared[e.ID].(*policybinding.PolicyBinding); pb != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: pb.Spec.ProjectID}] {
+			if pb, _ := b.declared[e.ID].(*policybinding.PolicyBinding); pb != nil && gone[pb.Meta.Owner] {
 				err = authmanifest.ErrScopePruned
 			}
 		}

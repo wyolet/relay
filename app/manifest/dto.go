@@ -450,7 +450,8 @@ type RoleBindingSpec struct {
 }
 
 // PolicyBindingDTO is the wire form of a PolicyBinding. Spec.Project and
-// Spec.Policy are *names*.
+// Spec.Policy are *names*; a binding with no project names its team or
+// system owner in metadata.owner.
 type PolicyBindingDTO struct {
 	APIVersion string            `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string            `json:"kind"       yaml:"kind"`
@@ -459,7 +460,7 @@ type PolicyBindingDTO struct {
 }
 
 type PolicyBindingSpec struct {
-	Project  string       `json:"project"            yaml:"project"`
+	Project  string       `json:"project,omitempty"  yaml:"project,omitempty"`
 	Policy   string       `json:"policy"             yaml:"policy"`
 	Priority *int         `json:"priority,omitempty" yaml:"priority,omitempty"`
 	Subjects []SubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
