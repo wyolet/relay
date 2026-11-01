@@ -162,6 +162,7 @@ type PolicyBinding struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 	TeamID          pgtype.Text        `db:"team_id" json:"team_id"`
+	UserID          pgtype.Text        `db:"user_id" json:"user_id"`
 }
 
 type PolicyBindingSubject struct {

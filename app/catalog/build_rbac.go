@@ -82,7 +82,7 @@ func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, sc
 	}
 }
 
-// ownerScopeExists reports whether a policy binding's owner scope is in the snapshot: its project, its team, or the system.
+// ownerScopeExists reports whether a policy binding's owner scope is in the snapshot: its project, its team, or the system. Users are not snapshot rows; a user-owned binding goes with its user through the foreign key.
 func (s *Snapshot) ownerScopeExists(o meta.Owner) bool {
 	switch o.Kind {
 	case meta.OwnerProject:
@@ -91,6 +91,8 @@ func (s *Snapshot) ownerScopeExists(o meta.Owner) bool {
 	case meta.OwnerTeam:
 		_, ok := s.teamsByID[o.ID]
 		return ok
+	case meta.OwnerUser:
+		return o.ID != ""
 	}
 	return o.Kind == meta.OwnerSystem
 }
