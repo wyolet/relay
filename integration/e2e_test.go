@@ -153,6 +153,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		RateLimits: stores.RateLimit, Budgets: budget.NewStore(q), Pools: pool.NewStore(st.Pool()), Accounts: account.NewStore(q),
 		Credentials: stores.HostKey, Teams: stores.Team, Projects: stores.Project, ServiceAccounts: stores.ServiceAccount,
 		Users: usersStore, Keys: stores.Key,
+		Roles: stores.Role, RoleBindings: stores.RoleBinding, Groups: stores.Group, RBAC: mode == "rbac",
 	})
 	if err := eng.Load(ctx); err != nil {
 		t.Fatalf("plans load: %v", err)

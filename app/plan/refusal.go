@@ -47,6 +47,7 @@ const (
 	IssueCredentialUnresolved  = "credential_unresolved"
 	IssueHostMismatch          = "host_mismatch"
 	IssueCredentialsIgnored    = "credentials_ignored"
+	IssuePolicyNotBindable     = "policy_not_bindable"
 )
 
 // rungRefusal is the refusal a rung's policy imposes, naming the rung.

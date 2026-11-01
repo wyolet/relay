@@ -35,7 +35,7 @@ func (f Forwarder) Attached(ctx context.Context) {
 func NotifyRef(kind, id string) (engine.Ref, bool) {
 	switch kind {
 	case "provider", "host", "model", "pricing", "policy", "policybinding", "ratelimit",
-		"budget", "pool", "account", "team", "project", "serviceaccount", "user":
+		"budget", "pool", "account", "team", "project", "serviceaccount", "user", "role", "rolebinding", "group":
 		return engine.Ref{Kind: engine.Kind(kind), ID: id}, true
 	case "hostkey":
 		return engine.Ref{Kind: KindCredential, ID: id}, true
