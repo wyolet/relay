@@ -327,6 +327,96 @@ func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
 	}
 }
 
+// A bound policy whose only model or host-key restriction is the pre-0.20 list stops the upgrade, named with its bindings, rather than serving every model and key after it; once unbound, the upgrade goes through. A policy bound only to a group, which binds nothing after the upgrade, does not stop it.
+func TestMigrateUpRefusesWideningABoundPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	if err := storagemod.MigrateTo(dsn, 35); err != nil {
+		t.Fatalf("migrate to 35: %v", err)
+	}
+	conn := testPool(t, dsn)
+	system := `{"owner":{"kind":"system"}}`
+	userID, hostID, modelID, hostKeyID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	teamID, projectID, saID := meta.NewID(), meta.NewID(), meta.NewID()
+	byModels, byKeys, byGroup, narrowed := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	inProject := `{"owner":{"kind":"project","id":"` + projectID + `"}}`
+	binding := func(policyID, name string) []any { return []any{meta.NewID(), name, projectID, policyID, inProject} }
+	bindings := map[string][]any{
+		"sa-binding":    binding(byModels, "sa-binding"),
+		"user-binding":  binding(byKeys, "user-binding"),
+		"group-binding": binding(byGroup, "group-binding"),
+		"kept-binding":  binding(narrowed, "kept-binding"),
+	}
+	for _, stmt := range []struct {
+		what, sql string
+		args      []any
+	}{
+		{"user", `INSERT INTO users (id, username) VALUES ($1, 'widen-user')`, []any{userID}},
+		{"host", `INSERT INTO hosts (id, name, metadata, spec) VALUES ($1, 'widen-host', $2, '{"baseUrl":"https://api.example.com"}')`, []any{hostID, system}},
+		{"model", `INSERT INTO models (id, name, metadata, spec) VALUES ($1, 'widen-model', $2, '{}')`, []any{modelID, system}},
+		{"host key", `INSERT INTO secrets (id, name, value_kind, value_from_env, metadata, spec) VALUES ($1, 'widen-host-key', 'env', 'WIDEN_KEY', $2, $3)`, []any{hostKeyID, system, `{"hostId":"` + hostID + `"}`}},
+		{"team", `INSERT INTO teams (id, name, metadata, spec) VALUES ($1, 'widen-team', $2, '{}')`, []any{teamID, system}},
+		{"project", `INSERT INTO projects (id, name, team_id, metadata, spec) VALUES ($1, 'widen-project', $2, $3, '{}')`, []any{projectID, teamID, `{"owner":{"kind":"team","id":"` + teamID + `"}}`}},
+		{"service account", `INSERT INTO service_accounts (id, name, project_id, metadata, spec) VALUES ($1, 'widen-sa', $2, $3, $4)`, []any{saID, projectID, inProject, `{"projectId":"` + projectID + `"}`}},
+		{"policy by model ids", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'by-model-ids', $2, '{}')`, []any{byModels, system}},
+		{"policy by host keys", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'by-host-keys', $2, '{}')`, []any{byKeys, system}},
+		{"policy bound to a group", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'by-group', $2, '{}')`, []any{byGroup, system}},
+		{"policy keeping model refs", `INSERT INTO policies (id, name, metadata, spec, models) VALUES ($1, 'keeps-refs', $2, '{}', '["acme/*"]')`, []any{narrowed, system}},
+		{"model ids", `INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $3, 0), ($2, $3, 0), ($4, $3, 0)`, []any{byModels, byGroup, modelID, narrowed}},
+		{"host keys", `INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, 0)`, []any{byKeys, hostKeyID}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("insert %s: %v", stmt.what, err)
+		}
+	}
+	for name, args := range bindings {
+		if _, err := conn.Exec(ctx, `INSERT INTO policy_bindings (id, name, project_id, policy_id, metadata, spec) VALUES ($1, $2, $3, $4, $5, '{}')`, args...); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+	scope := "project:" + projectID
+	for what, stmt := range map[string]struct {
+		sql  string
+		args []any
+	}{
+		"service account subject": {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_sa_id, position, owner_scope) VALUES ($1, 'serviceaccount', $2, $2, 0, $3)`, []any{bindings["sa-binding"][0], saID, scope}},
+		"user subject":            {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_user_id, position, owner_scope) VALUES ($1, 'user', $2, $2, 0, $3)`, []any{bindings["user-binding"][0], userID, scope}},
+		"group subject":           {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_name, position, owner_scope) VALUES ($1, 'group', 'system:authenticated', 0, $2)`, []any{bindings["group-binding"][0], scope}},
+		"project subject":         {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_project_id, position, owner_scope) VALUES ($1, 'project', $2, $2, 0, $3)`, []any{bindings["kept-binding"][0], projectID, scope}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("insert %s: %v", what, err)
+		}
+	}
+
+	err := storagemod.MigrateUp(dsn)
+	if err == nil {
+		t.Fatal("the upgrade went through with bound policies losing their only restriction")
+	}
+	for _, want := range []string{"policy by-model-ids loses its model ids (bound by sa-binding)", "policy by-host-keys loses its host keys (bound by user-binding)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("upgrade error %q does not name %q", err, want)
+		}
+	}
+	for _, unwanted := range []string{"by-group", "keeps-refs"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("upgrade error %q names %q, which loses nothing a subject relied on", err, unwanted)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `DELETE FROM policy_bindings WHERE name IN ('sa-binding', 'user-binding')`); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	// The refused step left nothing applied, only the dirty flag the upgrade guide clears.
+	if err := storagemod.ForceVersion(dsn, 35); err != nil {
+		t.Fatalf("clear the failed step: %v", err)
+	}
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("upgrade after unbinding: %v", err)
+	}
+}
+
 // Rolling back below accounts, pools and budgets drops their tables and the policy links to them, and keeps the policy bindings, minus the subjects the older schema cannot hold.
 func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 	t.Parallel()

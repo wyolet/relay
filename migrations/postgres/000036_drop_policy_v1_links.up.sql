@@ -2,6 +2,32 @@
 --
 -- Moving data to the new shape is manual, so nothing is converted: the legacy model-id and host-key junctions, the single rate-limit column, the binding priority, and the old fields inside the spec documents are removed.
 
+-- A policy bound to a subject keeps governing it after the upgrade, and an empty list does not narrow, so dropping a bound policy's only model-id or host-key list would widen what its subjects reach. Such policies stop the upgrade, listed, so the operator unbinds them or clears that list knowingly first. Group subjects bind nothing after the upgrade and do not count.
+DO $$
+DECLARE
+    widened TEXT;
+BEGIN
+    SELECT string_agg(format('policy %s loses its %s (bound by %s)', p.name, l.lost, l.bindings), '; ' ORDER BY p.name) INTO widened
+    FROM policies p
+    CROSS JOIN LATERAL (
+        SELECT concat_ws(' and ',
+                   CASE WHEN EXISTS (SELECT 1 FROM policy_models pm WHERE pm.policy_id = p.id)
+                         AND (CASE WHEN jsonb_typeof(p.models) = 'array' THEN jsonb_array_length(p.models) ELSE 0 END) = 0
+                        THEN 'model ids' END,
+                   CASE WHEN EXISTS (SELECT 1 FROM policy_host_keys phk WHERE phk.policy_id = p.id)
+                         AND NOT EXISTS (SELECT 1 FROM policy_pools pp WHERE pp.policy_id = p.id)
+                         AND NOT EXISTS (SELECT 1 FROM policy_credentials pc WHERE pc.policy_id = p.id)
+                        THEN 'host keys' END) AS lost,
+               (SELECT string_agg(DISTINCT b.name, ', ' ORDER BY b.name)
+                FROM policy_bindings b JOIN policy_binding_subjects s ON s.binding_id = b.id
+                WHERE b.policy_id = p.id AND s.subject_id IS NOT NULL) AS bindings
+    ) l
+    WHERE l.lost <> '' AND l.bindings IS NOT NULL;
+    IF widened IS NOT NULL THEN
+        RAISE EXCEPTION 'migration 000036: bound policies would lose their only model or host-key restriction and widen; remove them from their bindings, or delete their policy_models / policy_host_keys rows if the wider reach is intended, then upgrade again and re-create the restriction as models, pools or credentials: %', widened;
+    END IF;
+END $$;
+
 -- Each link removed below, and each binding that stops governing what it governed, is reported by name first, so the operator running the upgrade can re-create the ones still wanted. A target whose row is gone is reported by id.
 DO $$
 DECLARE
