@@ -120,7 +120,7 @@ func (b *batch) fail(c *Controller, ref Ref, st *outState, edges []Edge, err err
 		Message:  err.Error(),
 	}})
 	if h := e.opts.Hooks.OnReconcileError; h != nil {
-		h(c.name, ref, err)
+		e.hooks.add(func() { h(c.name, ref, err) })
 	}
 	delay := e.retryBase()
 	if !errors.Is(err, ErrRetry) {

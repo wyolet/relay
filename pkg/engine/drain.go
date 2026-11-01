@@ -32,6 +32,7 @@ func (e *Engine) loop() {
 		}
 		next := e.nextWake()
 		e.mu.Unlock()
+		e.hooks.run()
 		timer.Stop()
 		if !next.IsZero() {
 			timer.Reset(max(time.Until(next), 0))

@@ -26,8 +26,7 @@ func (c *clock) add(d time.Duration) time.Time {
 	return c.t
 }
 
-// counter is a participant shaped like a window cell: a local delta synced
-// every period beats, base set from the store's total.
+// counter is a participant keeping a local delta synced every period beats, its base set from the store's total.
 type counter struct {
 	key    string
 	period uint64

@@ -24,9 +24,7 @@ type Batch struct{ cmds []Cmd }
 // Add appends one command to this beat's pipeline.
 func (b *Batch) Add(c Cmd) { b.cmds = append(b.cmds, c) }
 
-// Participant is a cell type's sync adapter. Collect runs on the tick
-// goroutine, appends the commands for entries due now with Reply closures
-// that apply the store's answer, and must not block.
+// Participant is one component's sync adapter. Collect runs on the tick goroutine, appends the commands for entries due now with Reply closures that apply the store's answer, and must not block.
 type Participant interface {
 	Collect(t Tick, b *Batch)
 }

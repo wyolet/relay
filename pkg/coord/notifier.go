@@ -3,16 +3,18 @@ package coord
 import (
 	"context"
 	"sync/atomic"
+	"time"
 )
 
 // Notifier is pub/sub with a bounded outbound queue: Publish never blocks, a
 // full queue or a failed send drops the message and counts it. Transitions
 // publish here; a Watcher's watermark bounds what a lost message costs.
 type Notifier struct {
-	s      Store
-	q      chan message
-	onDrop func()
-	active atomic.Bool // a sender goroutine is draining q
+	s       Store
+	q       chan message
+	timeout time.Duration
+	onDrop  func()
+	active  atomic.Bool // a sender goroutine is draining q
 }
 
 type message struct {
@@ -20,10 +22,12 @@ type message struct {
 	payload []byte
 }
 
-// NewNotifier returns a notifier holding at most queue unsent messages.
-// onDrop, when set, is called once per dropped message.
-func NewNotifier(s Store, queue int, onDrop func()) *Notifier {
-	return &Notifier{s: s, q: make(chan message, max(queue, 1)), onDrop: onDrop}
+// NewNotifier returns a notifier holding at most queue unsent messages. timeout bounds each send (0 means one second), so a hung store drops messages instead of stalling the queue. onDrop, when set, is called once per dropped message.
+func NewNotifier(s Store, queue int, timeout time.Duration, onDrop func()) *Notifier {
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	return &Notifier{s: s, q: make(chan message, max(queue, 1)), timeout: timeout, onDrop: onDrop}
 }
 
 // Publish queues payload for topic; never blocks.
@@ -45,7 +49,10 @@ func (n *Notifier) send() {
 	for {
 		select {
 		case m := <-n.q:
-			if err := n.s.Publish(context.Background(), m.topic, m.payload); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), n.timeout)
+			err := n.s.Publish(ctx, m.topic, m.payload)
+			cancel()
+			if err != nil {
 				n.drop()
 			}
 		default:

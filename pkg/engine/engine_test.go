@@ -3,6 +3,7 @@ package engine_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/pkg/engine"
 )
@@ -59,6 +60,36 @@ func TestApplyRebuildsOnlyDependents(t *testing.T) {
 	// The previous generation is untouched.
 	if engine.Get[userPlan](before, "u1").Team.Limit != 10 || before.Gen() != 1 {
 		t.Fatal("published view changed after a later write")
+	}
+}
+
+func TestHookMayApply(t *testing.T) {
+	var gens []engine.Generation
+	f := newFixture(t, engine.Options{}, func(f *fixture) {
+		f.onPublish = func(v *engine.View) {
+			gens = append(gens, v.Gen())
+			if v.Gen() == 2 {
+				if err := engine.Apply(f.e, &team{ID: "t2", Name: "beta", Limit: 21}); err != nil {
+					t.Errorf("Apply from the hook: %v", err)
+				}
+			}
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- engine.Apply(f.e, &team{ID: "t1", Name: "alpha", Limit: 11}) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Apply from a hook did not complete")
+	}
+	if !slices.Equal(gens, []engine.Generation{1, 2, 3}) {
+		t.Fatalf("hook saw generations %v", gens)
+	}
+	if got := engine.Get[userPlan](f.view(), "u3").Team.Limit; got != 21 {
+		t.Fatalf("u3 sees limit %d after the hook's write", got)
 	}
 }
 

@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// Apply writes an input row the caller already holds and drains at once, so
-// a write is visible on the writing process before its notification returns.
+// Apply writes an input row the caller already holds and drains at once, so a write is visible on the writing process before its notification returns. Its hooks have run when it returns, unless another goroutine was already running hooks (a hook calling Apply, or the drain loop); that goroutine runs them next.
 func Apply[T any](e *Engine, row *T) error {
 	k := e.sch.byType[reflect.TypeFor[T]()]
 	switch {
@@ -35,6 +34,7 @@ func Delete(e *Engine, ref Ref) error {
 }
 
 func (e *Engine) writeNow(k *kindInfo, id string, row any) error {
+	defer e.hooks.run()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.usable(); err != nil {
@@ -72,6 +72,7 @@ func (e *Engine) afterBatch(b *batch) {
 // versions (or values, when a Version is 0) and publishes only when something
 // changed.
 func (e *Engine) Resync(ctx context.Context) error {
+	defer e.hooks.run()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.usable(); err != nil {
@@ -122,7 +123,8 @@ func (e *Engine) resyncLocked(ctx context.Context) error {
 	b.publish(false)
 	e.afterBatch(b)
 	if h := e.opts.Hooks.OnResync; h != nil {
-		h(b.stats.Inputs, time.Since(start))
+		n, d := b.stats.Inputs, time.Since(start)
+		e.hooks.add(func() { h(n, d) })
 	}
 	return nil
 }

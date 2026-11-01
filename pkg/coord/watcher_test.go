@@ -63,7 +63,7 @@ func TestWatcherListThenWatch(t *testing.T) {
 	s := newFakeStore()
 	s.zadd("{breakers}:changed", "k1", 10)
 	s.zadd("{breakers}:changed", "k2", 11)
-	n := NewNotifier(s, 16, nil)
+	n := NewNotifier(s, 16, 0, nil)
 	var r recorder
 	w := NewWatcher(s, n, WatchOptions{
 		Key:   "{breakers}:changed",
@@ -109,7 +109,7 @@ func TestWatcherRetriesFirstListAndSubscribe(t *testing.T) {
 	s := newFakeStore()
 	s.setDown(true)
 	s.zadd("set", "m", 1)
-	n := NewNotifier(s, 16, nil)
+	n := NewNotifier(s, 16, 0, nil)
 	var r recorder
 	w := NewWatcher(s, n, WatchOptions{Key: "set", Topic: "topic", Every: 2 * time.Millisecond, Apply: r.onApply})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,7 +135,7 @@ func TestNotifierDropsWhenFull(t *testing.T) {
 	gate := make(chan struct{})
 	s.gate = gate
 	var drops atomic.Int32
-	n := NewNotifier(s, 2, func() { drops.Add(1) })
+	n := NewNotifier(s, 2, time.Minute, func() { drops.Add(1) })
 	for i := range 5 {
 		n.Publish("t", []byte{byte('a' + i)})
 	}
@@ -155,4 +155,26 @@ func TestNotifierDropsWhenFull(t *testing.T) {
 	s.setDown(true)
 	n.Publish("t", []byte("x"))
 	eventually(t, "a failed send counted", func() bool { return drops.Load() == before+1 })
+}
+
+func TestNotifierTimedOutSendIsDropped(t *testing.T) {
+	s := newFakeStore()
+	gate := make(chan struct{})
+	s.gate = gate
+	var drops atomic.Int32
+	n := NewNotifier(s, 4, 10*time.Millisecond, func() { drops.Add(1) })
+	n.Publish("t", []byte("a"))
+	n.Publish("t", []byte("b"))
+	eventually(t, "both sends timed out", func() bool { return drops.Load() == 2 })
+
+	close(gate)
+	n.Publish("t", []byte("c"))
+	eventually(t, "delivery after the store answers", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return slices.Equal(s.published, []string{"c"})
+	})
+	if drops.Load() != 2 {
+		t.Fatalf("drops = %d", drops.Load())
+	}
 }

@@ -36,7 +36,7 @@ func withBindings(f *fixture, rows ...*binding) *src[binding] {
 	return s
 }
 
-func TestByNameEdgesFollowRenames(t *testing.T) {
+func TestByNameEdgesFollowRenamesAndValueChanges(t *testing.T) {
 	f := newFixture(t, engine.Options{}, func(f *fixture) {
 		withBindings(f, &binding{ID: "b1", TeamName: "delta"}, &binding{ID: "b2", TeamName: "alpha"})
 	})
@@ -59,6 +59,13 @@ func TestByNameEdgesFollowRenames(t *testing.T) {
 	mustApply(t, f.e, &team{ID: "t1", Name: "delta", Limit: 99})
 	if engine.Get[bindingPlan](f.view(), "b1").Team.Limit != 99 {
 		t.Fatal("name reader missed a value change")
+	}
+
+	if err := engine.Delete(f.e, engine.Ref{Kind: "team", ID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if engine.Get[bindingPlan](f.view(), "b1").Team != nil {
+		t.Fatal("name reader missed a delete")
 	}
 }
 

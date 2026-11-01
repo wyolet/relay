@@ -1,13 +1,6 @@
-// Package coord moves bytes between a process and a shared store on a
-// schedule and reports whether the store is reachable. The Ticker sends every
-// participant's commands in one pipeline per beat and keeps the failure clock
-// and the live-process count; the Notifier publishes rare transitions; a
-// Watcher keeps a local copy of a changed-set current by push, with a version
-// watermark bounding a lost message.
+// Package coord is cross-pod coordination for app components over a shared store. A Notifier publishes rare transitions; a Watcher keeps a local copy of a changed-set current by push, with a version watermark bounding a lost message; a Ticker, an optional helper for components that sync local state on a schedule, sends every participant's commands in one pipeline per beat, keeps the failure clock and counts live processes.
 //
-// Out of scope: what the commands mean (counters, breakers, budgets and their
-// key formats belong to the participants), scripts and multi-key atomicity,
-// and the store client itself (callers implement Store).
+// Out of scope: what the commands mean (breakers, cooldowns and their key formats belong to the components), scripts and multi-key atomicity, and the store client itself (callers implement Store). It is not part of package engine and imports only the standard library.
 package coord
 
 import "context"
@@ -53,8 +46,8 @@ type Store interface {
 	// before returning; a per-command failure goes in Reply.Err. A returned
 	// error means the round trip failed and Replies may not have run.
 	Pipeline(ctx context.Context, cmds []Cmd) error
+	// Publish sends payload to channel's subscribers and returns once ctx ends at the latest.
 	Publish(ctx context.Context, channel string, payload []byte) error
-	// Subscribe delivers payloads until ctx ends or stop is called,
-	// reconnecting internally.
+	// Subscribe delivers payloads to fn until ctx ends or stop is called, reconnecting internally. Payloads published while disconnected are lost without a signal; a Watcher's watermark re-list recovers them. err reports only a failed initial subscribe.
 	Subscribe(ctx context.Context, channel string, fn func([]byte)) (stop func(), err error)
 }

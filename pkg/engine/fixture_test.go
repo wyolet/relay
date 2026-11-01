@@ -96,6 +96,7 @@ type fixture struct {
 	stats     []engine.PublishStats
 	errs      []error
 	published chan engine.Generation
+	onPublish func(v *engine.View) // set before Load; runs inside OnPublish
 }
 
 func (f *fixture) count(name string) {
@@ -132,6 +133,9 @@ func newFixture(t *testing.T, o engine.Options, extra func(f *fixture)) *fixture
 		f.mu.Lock()
 		f.stats = append(f.stats, s)
 		f.mu.Unlock()
+		if f.onPublish != nil {
+			f.onPublish(v)
+		}
 		select {
 		case f.published <- v.Gen():
 		default:
