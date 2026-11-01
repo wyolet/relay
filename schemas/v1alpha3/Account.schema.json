@@ -3,6 +3,9 @@
     "AccountSpec": {
       "additionalProperties": false,
       "properties": {
+        "default": {
+          "type": "boolean"
+        },
         "host": {
           "type": "string"
         },

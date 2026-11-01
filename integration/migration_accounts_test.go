@@ -85,6 +85,99 @@ func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
 	}
 }
 
+// Upgrading over host keys without an account gives each its owner's default account at its host: one per owner and host, named after the host and suffixed when taken. A named account is kept; a key whose host is gone is left alone.
+func TestMigrateUpGivesKeysTheirOwnersDefaultAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	st, err := storagemod.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	q := gen.New(st.Pool())
+	hst := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", DisplayName: "Acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
+	taken := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: hst.Meta.ID}}
+	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+	if err := account.NewStore(q).Upsert(ctx, taken); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	st.Close()
+
+	if err := storagemod.MigrateTo(dsn, 35); err != nil {
+		t.Fatalf("migrate down to 35: %v", err)
+	}
+	conn := testPool(t, dsn)
+	alice := meta.NewID()
+	ids := map[string]string{}
+	for _, k := range []struct{ name, owner, spec string }{
+		{"sys-a", `{"owner":{"kind":"system"}}`, `{"hostId":"` + hst.Meta.ID + `"}`},
+		{"sys-b", `{"owner":{"kind":"system"}}`, `{"hostId":"` + hst.Meta.ID + `","accountId":""}`},
+		{"alice", `{"owner":{"kind":"user","id":"` + alice + `"}}`, `{"hostId":"` + hst.Meta.ID + `"}`},
+		{"named", `{"owner":{"kind":"system"}}`, `{"hostId":"` + hst.Meta.ID + `","accountId":"` + taken.Meta.ID + `"}`},
+		{"no-host", `{"owner":{"kind":"system"}}`, `{"hostId":"` + meta.NewID() + `"}`},
+	} {
+		ids[k.name] = meta.NewID()
+		if _, err := conn.Exec(ctx, "INSERT INTO secrets (id, name, value_kind, value_from_env, metadata, spec) VALUES ($1, $2, 'env', 'ACME_API_KEY', $3, $4)",
+			ids[k.name], k.name, k.owner, k.spec); err != nil {
+			t.Fatalf("insert key %s: %v", k.name, err)
+		}
+	}
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+
+	accountOf := func(name string) string {
+		t.Helper()
+		var id string
+		if err := conn.QueryRow(ctx, "SELECT COALESCE(spec->>'accountId', '') FROM secrets WHERE id = $1", ids[name]).Scan(&id); err != nil {
+			t.Fatalf("read key %s: %v", name, err)
+		}
+		return id
+	}
+	sys, ali := accountOf("sys-a"), accountOf("alice")
+	if sys == "" || sys != accountOf("sys-b") {
+		t.Errorf("system keys joined %q and %q, want one default account", sys, accountOf("sys-b"))
+	}
+	if ali == "" || ali == sys {
+		t.Errorf("alice's key joined %q, want her own default account", ali)
+	}
+	if got := accountOf("named"); got != taken.Meta.ID {
+		t.Errorf("named key's account = %q, want %q kept", got, taken.Meta.ID)
+	}
+	if got := accountOf("no-host"); got != "" {
+		t.Errorf("key without a host joined %q, want none", got)
+	}
+
+	// The host's own name is taken, so the two defaults take the next free suffixes, in key order.
+	accounts := account.NewStore(gen.New(conn))
+	names := map[string]bool{}
+	for _, tc := range []struct {
+		id    string
+		owner meta.Owner
+	}{
+		{sys, meta.Owner{Kind: meta.OwnerSystem}},
+		{ali, meta.Owner{Kind: meta.OwnerUser, ID: alice}},
+	} {
+		a, err := accounts.Get(ctx, tc.id)
+		if err != nil || a == nil {
+			t.Fatalf("Get default account %s: %v (row %v)", tc.id, err, a)
+		}
+		names[a.Meta.Name] = true
+		if a.Meta.DisplayName != "Acme" || a.Meta.Owner != tc.owner || !a.Spec.Default || a.Spec.HostID != hst.Meta.ID {
+			t.Errorf("default account = %+v %+v, want one owned by %+v", a.Meta, a.Spec, tc.owner)
+		}
+		// The store finds the account the migration made.
+		if id, err := accounts.EnsureDefault(ctx, tc.owner, hst.Meta.ID); err != nil || id != tc.id {
+			t.Errorf("EnsureDefault(%+v) = %q, %v; want %q", tc.owner, id, err, tc.id)
+		}
+	}
+	if !names["acme-2"] || !names["acme-3"] {
+		t.Errorf("default account names = %v, want acme-2 and acme-3", names)
+	}
+}
+
 // Rolling back below accounts, pools and budgets drops their tables and the policy links to them, and keeps the policy bindings, minus the subjects the older schema cannot hold.
 func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 	t.Parallel()

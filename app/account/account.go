@@ -1,6 +1,6 @@
 // Package account is the domain layer for the Account entity: one provider organization at one host. Upstream tier limits are counted per account, so several host keys of one organization share its capacity; adding a key adds failover and rotation, not throughput.
 //
-// This package validates one row's shape and stores it. Out of scope: learning org ids from upstream responses, creating an owner's default account on first use, and applying an account's tier policy to requests.
+// This package validates one row's shape, stores it, and creates an owner's default account at a host on first use (Store.EnsureDefault). Out of scope: learning org ids from upstream responses and applying an account's tier policy to requests.
 package account
 
 import (
@@ -22,6 +22,9 @@ type Spec struct {
 
 	// OrgID is the provider's organization id: the org, never a person or an email, since one login can belong to several orgs with separate limits. Empty until known.
 	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty"`
+
+	// Default marks the account a host key of the same owner at HostID joins when it names none. An owner has at most one per host.
+	Default bool `json:"default,omitempty" yaml:"default,omitempty"`
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and requires an owner of kind system, team, project or user; team and project owners carry an id.

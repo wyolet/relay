@@ -99,7 +99,7 @@ type Spec struct {
 	// Replaces the pre-refactor Meta.Owner pointing at a Host.
 	HostID string `json:"hostId" yaml:"hostId" validate:"required"`
 
-	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits, and the account's bound tier policy caps them. Optional. The account must be at HostID, a cross-row check in app/refcheck.
+	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits, and the account's bound tier policy caps them. Optional on write: Store.Upsert fills in the owner's default account at HostID. The account must be at HostID, a cross-row check in app/refcheck.
 	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid"`
 
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`

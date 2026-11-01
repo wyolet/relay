@@ -47,6 +47,8 @@ type AccountDTO struct {
 type AccountSpec struct {
 	Host  string `json:"host"            yaml:"host"`
 	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty"`
+	// Default marks the account its owner's keys at the host join when they name none; at most one per owner and host.
+	Default bool `json:"default,omitempty" yaml:"default,omitempty"`
 }
 
 // PoolDTO is the wire form of a Pool: one host's keys and how a key is

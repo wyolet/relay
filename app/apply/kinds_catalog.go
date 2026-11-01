@@ -82,7 +82,11 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		Kind: "HostKey", Docs: d.hostKeys, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
-		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error { keepHostKeySecret(prev, next); return nil },
+		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error {
+			keepHostKeySecret(prev, next)
+			keepDefaultAccount(b.rows.Accounts, prev, next)
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -133,6 +137,23 @@ func deletePolicyWithDetach(s *Stores) func(context.Context, string) error {
 			return err
 		}
 		return s.Policy.Delete(ctx, id)
+	}
+}
+
+// keepDefaultAccount keeps the default account a key declared without one
+// joined on an earlier save, so the diff does not report the fill as drift.
+// A key moved off a non-default account still reports the change.
+func keepDefaultAccount(accounts []*account.Account, prev, next *hostkey.HostKey) {
+	if next.Spec.AccountID != "" || prev.Spec.AccountID == "" {
+		return
+	}
+	for _, a := range accounts {
+		if a.Meta.ID == prev.Spec.AccountID {
+			if a.Spec.Default && a.Spec.HostID == next.Spec.HostID && a.Meta.Owner == next.Meta.Owner {
+				next.Spec.AccountID = a.Meta.ID
+			}
+			return
+		}
 	}
 }
 

@@ -596,22 +596,35 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 -- ── accounts, pools, budgets (migration 0035) ────────────────────────────────
 
 -- name: ListAccounts :many
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM accounts ORDER BY name;
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner FROM accounts ORDER BY name;
 
 -- name: GetAccount :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM accounts WHERE id = $1;
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner FROM accounts WHERE id = $1;
 
 -- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    host_id      = EXCLUDED.host_id,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
+    name          = EXCLUDED.name,
+    display_name  = EXCLUDED.display_name,
+    host_id       = EXCLUDED.host_id,
+    metadata      = EXCLUDED.metadata,
+    spec          = EXCLUDED.spec,
+    default_owner = EXCLUDED.default_owner,
+    updated_at    = NOW()
 WHERE sqlc.narg('expected_version')::bigint IS NULL OR accounts.resource_version = sqlc.narg('expected_version')::bigint;
+
+-- name: GetDefaultAccountID :one
+SELECT id FROM accounts WHERE host_id = $1 AND default_owner = $2;
+
+-- A concurrent save may create the same default, or take the name; either conflict inserts nothing and the caller looks again.
+-- name: InsertDefaultAccount :execrows
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING;
+
+-- name: AccountNameTaken :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1);
 
 -- name: DeleteAccount :exec
 DELETE FROM accounts WHERE id = $1;

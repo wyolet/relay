@@ -1,4 +1,7 @@
--- Reverse 000036. The tables and the column come back empty: the links they held, and the spec fields 000036 removed, are not restored.
+-- Reverse 000036. The tables and the column come back empty: the links they held, and the spec fields 000036 removed, are not restored. Default accounts stay as plain accounts and keys keep the account they joined.
+
+DROP INDEX IF EXISTS accounts_one_default;
+ALTER TABLE accounts DROP COLUMN IF EXISTS default_owner;
 
 ALTER TABLE policies ADD COLUMN IF NOT EXISTS rate_limit_id TEXT REFERENCES rate_limits(id) ON DELETE SET NULL;
 

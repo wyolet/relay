@@ -18,6 +18,7 @@ type Account struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	DefaultOwner    pgtype.Text        `db:"default_owner" json:"default_owner"`
 }
 
 type AuditEvent struct {

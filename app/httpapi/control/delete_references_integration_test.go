@@ -222,7 +222,9 @@ func TestDeleteHost_EveryRowOnTheHostBlocks(t *testing.T) {
 	f.pricing(t, ctx, "host-pricing", m.Meta.ID)
 	f.rateLimit(t, ctx, "host-limit", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
 
+	// The key joined its owner's default account at the host, which blocks too.
 	wantBlockers(t, f.deleteRow(t, "hosts", f.host.Meta.ID, false),
+		wantGroup{"account", "spec.hostId", false, 1},
 		wantGroup{"host-binding", "spec.hostId", false, 1},
 		wantGroup{"host-key", "spec.hostId", false, 1},
 		wantGroup{"policy", "metadata.owner.id", false, 1},

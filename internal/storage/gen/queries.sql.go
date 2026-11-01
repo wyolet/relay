@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const accountNameTaken = `-- name: AccountNameTaken :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1)
+`
+
+func (q *Queries) AccountNameTaken(ctx context.Context, name string) (bool, error) {
+	row := q.db.QueryRow(ctx, accountNameTaken, name)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const allowLegacySecretWrite = `-- name: AllowLegacySecretWrite :exec
 SELECT set_config('relay.secret_legacy_write', 'on', true)
 `
@@ -372,7 +383,7 @@ func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) erro
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM accounts WHERE id = $1
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner FROM accounts WHERE id = $1
 `
 
 func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
@@ -388,6 +399,7 @@ func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
+		&i.DefaultOwner,
 	)
 	return i, err
 }
@@ -438,6 +450,22 @@ func (q *Queries) GetBudget(ctx context.Context, id string) (Budget, error) {
 		&i.ResourceVersion,
 	)
 	return i, err
+}
+
+const getDefaultAccountID = `-- name: GetDefaultAccountID :one
+SELECT id FROM accounts WHERE host_id = $1 AND default_owner = $2
+`
+
+type GetDefaultAccountIDParams struct {
+	HostID       string      `db:"host_id" json:"host_id"`
+	DefaultOwner pgtype.Text `db:"default_owner" json:"default_owner"`
+}
+
+func (q *Queries) GetDefaultAccountID(ctx context.Context, arg GetDefaultAccountIDParams) (string, error) {
+	row := q.db.QueryRow(ctx, getDefaultAccountID, arg.HostID, arg.DefaultOwner)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getHost = `-- name: GetHost :one
@@ -1097,6 +1125,39 @@ type InsertAuditEventParams struct {
 	ChangedFields []string           `db:"changed_fields" json:"changed_fields"`
 }
 
+const insertDefaultAccount = `-- name: InsertDefaultAccount :execrows
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type InsertDefaultAccountParams struct {
+	ID           string      `db:"id" json:"id"`
+	Name         string      `db:"name" json:"name"`
+	DisplayName  string      `db:"display_name" json:"display_name"`
+	HostID       string      `db:"host_id" json:"host_id"`
+	Metadata     []byte      `db:"metadata" json:"metadata"`
+	Spec         []byte      `db:"spec" json:"spec"`
+	DefaultOwner pgtype.Text `db:"default_owner" json:"default_owner"`
+}
+
+// A concurrent save may create the same default, or take the name; either conflict inserts nothing and the caller looks again.
+func (q *Queries) InsertDefaultAccount(ctx context.Context, arg InsertDefaultAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertDefaultAccount,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.HostID,
+		arg.Metadata,
+		arg.Spec,
+		arg.DefaultOwner,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertPolicyBindingSubject = `-- name: InsertPolicyBindingSubject :exec
 INSERT INTO policy_binding_subjects
     (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id,
@@ -1461,7 +1522,7 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 
 const listAccounts = `-- name: ListAccounts :many
 
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM accounts ORDER BY name
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner FROM accounts ORDER BY name
 `
 
 // ── accounts, pools, budgets (migration 0035) ────────────────────────────────
@@ -1484,6 +1545,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
+			&i.DefaultOwner,
 		); err != nil {
 			return nil, err
 		}
@@ -3092,16 +3154,17 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 }
 
 const upsertAccount = `-- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 ON CONFLICT (id) DO UPDATE SET
-    name         = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    host_id      = EXCLUDED.host_id,
-    metadata     = EXCLUDED.metadata,
-    spec         = EXCLUDED.spec,
-    updated_at   = NOW()
-WHERE $7::bigint IS NULL OR accounts.resource_version = $7::bigint
+    name          = EXCLUDED.name,
+    display_name  = EXCLUDED.display_name,
+    host_id       = EXCLUDED.host_id,
+    metadata      = EXCLUDED.metadata,
+    spec          = EXCLUDED.spec,
+    default_owner = EXCLUDED.default_owner,
+    updated_at    = NOW()
+WHERE $8::bigint IS NULL OR accounts.resource_version = $8::bigint
 `
 
 type UpsertAccountParams struct {
@@ -3111,6 +3174,7 @@ type UpsertAccountParams struct {
 	HostID          string      `db:"host_id" json:"host_id"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
+	DefaultOwner    pgtype.Text `db:"default_owner" json:"default_owner"`
 	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
@@ -3122,6 +3186,7 @@ func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (i
 		arg.HostID,
 		arg.Metadata,
 		arg.Spec,
+		arg.DefaultOwner,
 		arg.ExpectedVersion,
 	)
 	if err != nil {
