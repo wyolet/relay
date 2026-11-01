@@ -108,7 +108,7 @@ func TestRoute_ProviderWildcardGrantsTheProvidersModels(t *testing.T) {
 	if r := h.route(b.key, "acme/m1@host-a"); r.Refused != nil || len(r.Hops) == 0 {
 		t.Fatalf("acme/m1 under acme/* = %+v, want served", r.Refused)
 	}
-	wantRefused(t, h.route(b.key, "beta/x"), CodeModelNotAllowed, limits.RungProject)
+	_ = wantRefused(t, h.route(b.key, "beta/x"), CodeModelNotAllowed, limits.RungProject)
 	byModel := get[HostRungs](h, "").Of(b.hostA.Meta.ID).ByModel
 	if len(byModel[b.m1.Meta.ID]) != 1 || len(byModel[x.Meta.ID]) != 0 {
 		t.Fatalf("scoped host counters by model = %v, want one for m1 and none for x", byModel)
@@ -132,7 +132,7 @@ func TestRoute_DisabledPolicyRefusesOnItsRungWithoutFallThrough(t *testing.T) {
 	if kp.Caller.Refused == nil || kp.Caller.Refused.Code != CodePolicyDisabled || kp.Caller.Refused.Rung != limits.RungProject {
 		t.Fatalf("caller refusal = %v, want policy_disabled on the project rung", kp.Caller.Refused)
 	}
-	wantRefused(t, h.route(b.key, "m1"), CodePolicyDisabled, limits.RungProject)
+	_ = wantRefused(t, h.route(b.key, "m1"), CodePolicyDisabled, limits.RungProject)
 
 	on := clone(p)
 	on.Spec.Enabled = nil
@@ -147,7 +147,7 @@ func TestRoute_DuplicateBindingRefusesAndFlagsBoth(t *testing.T) {
 	pb2 := b.w.bindPolicy(p2, subject(policybinding.SubjectProject, b.proj.Meta.ID))
 	h := b.w.start(t)
 
-	wantRefused(t, h.route(b.key, "m1"), CodeDuplicateBinding, limits.RungProject)
+	_ = wantRefused(t, h.route(b.key, "m1"), CodeDuplicateBinding, limits.RungProject)
 	for _, pb := range []string{pb1.Meta.ID, pb2.Meta.ID} {
 		if !hasIssue(h.issues(KindPolicyBinding, pb), CodeDuplicateBinding) {
 			t.Fatalf("binding %s has no duplicate_binding issue", pb)
@@ -222,7 +222,7 @@ func TestRoute_DisabledAccountPolicyTakesItsCredentialsOut(t *testing.T) {
 	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.b1))
-	wantRefused(t, h.route(b.key, "m1@host-a"), CodePolicyDisabled, limits.RungAccount)
+	_ = wantRefused(t, h.route(b.key, "m1@host-a"), CodePolicyDisabled, limits.RungAccount)
 }
 
 func TestRoute_UpstreamGrantNarrowsSlots(t *testing.T) {
@@ -284,7 +284,7 @@ func TestRoute_UpstreamBudgetRefusesUnpricedOnThatSlotOnly(t *testing.T) {
 	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m2"), ids(b.b1))
-	wantRefused(t, h.route(b.key, "m2@host-a"), CodeUnpricedUnderBudget, limits.RungAccount)
+	_ = wantRefused(t, h.route(b.key, "m2@host-a"), CodeUnpricedUnderBudget, limits.RungAccount)
 }
 
 func wantUnkeyedRefused(t *testing.T, u *Unkeyed, code string, rung limits.Rung) {
@@ -374,7 +374,7 @@ func TestRoute_AliasStillPassesTheGate(t *testing.T) {
 	p := b.w.policy("p", policy.Spec{Models: []string{"acme/other"}})
 	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
 	h := b.w.start(t)
-	wantRefused(t, h.route(b.key, "m1-latest"), CodeModelNotAllowed, limits.RungProject)
+	_ = wantRefused(t, h.route(b.key, "m1-latest"), CodeModelNotAllowed, limits.RungProject)
 }
 
 func TestKeyPlan_GraceAndExpiry(t *testing.T) {

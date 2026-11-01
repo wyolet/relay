@@ -141,7 +141,7 @@ func TestProjectCallersAreBounded(t *testing.T) {
 		t.Fatalf("user plan caches %d project plans, want at most %d", n, maxProjectCallers)
 	}
 	last := root.Projects.Lookup(projects[len(projects)-1])
-	if last.CallerFor(userPlan) != last.CallerFor(userPlan) {
+	if first := last.CallerFor(userPlan); last.CallerFor(userPlan) != first {
 		t.Fatal("the latest project's plan was folded again")
 	}
 }
@@ -167,7 +167,7 @@ func TestProjectCallersUnderConcurrency(t *testing.T) {
 	wg.Wait()
 	for _, id := range projects {
 		p := root.Projects.Lookup(id)
-		if p.CallerFor(userPlan) != p.CallerFor(userPlan) {
+		if first := p.CallerFor(userPlan); p.CallerFor(userPlan) != first {
 			t.Fatalf("project %s folded again after the cache settled", id)
 		}
 	}

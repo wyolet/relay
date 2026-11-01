@@ -13,8 +13,5 @@ package lua
 
 import "github.com/wyolet/relay/app/limits"
 
-// scope is the hash tag of c's keys.
-func scope(c *limits.Counter) string { return c.Group }
-
 // ruleKey is c's key segment inside its scope.
 func ruleKey(c *limits.Counter) string { return c.ID }

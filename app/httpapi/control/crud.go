@@ -73,7 +73,6 @@ type refInput struct {
 type idInput struct {
 	ID string `path:"id" doc:"Resource id (UUIDv7)."`
 }
-type emptyResponse struct{}
 
 var errSlugNotFound = errors.New("not found")
 
