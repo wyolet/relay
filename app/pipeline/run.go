@@ -96,7 +96,7 @@ hops:
 		}
 		// Most hops hold a few credentials: their exclusions fit a stack buffer.
 		var exBuf [8]bool
-		excluded := exBuf[:0]
+		var excluded []bool
 		if n := len(hop.Slots); n <= len(exBuf) {
 			excluded = exBuf[:n]
 		} else {

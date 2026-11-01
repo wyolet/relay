@@ -73,12 +73,12 @@ func TestCarryOver_KeylessHostNeedsAnExplicitPool(t *testing.T) {
 	m3 := w.model(b.prov, "m3")
 	w.bind(m3, local)
 	h := w.start(t)
-	wantRefused(t, h.route(b.key, "m3"), CodeNoCredentials, "")
+	_ = wantRefused(t, h.route(b.key, "m3"), CodeNoCredentials, "")
 
 	wild := w.policy("wild", policy.Spec{Models: []string{"acme"}})
 	apply(h, wild)
 	apply(h, w.bindPolicy(wild, subject(policybinding.SubjectProject, b.proj.Meta.ID)))
-	wantRefused(t, h.route(b.key, "m3"), CodeNoCredentials, "")
+	_ = wantRefused(t, h.route(b.key, "m3"), CodeNoCredentials, "")
 
 	lp := w.pool(local)
 	apply(h, lp)
@@ -136,7 +136,7 @@ func TestCarryOver_BindingServesOnlyItsSnapshots(t *testing.T) {
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
 	wantHops(t, h.route(b.key, "m1-2026"), ids(b.a1), ids(b.a2))
-	wantRefused(t, h.route(b.key, "m1-2026@host-b"), CodeNoBinding, "")
+	_ = wantRefused(t, h.route(b.key, "m1-2026@host-b"), CodeNoBinding, "")
 }
 
 func TestCarryOver_DisabledUnknownAndUnroutable(t *testing.T) {
@@ -151,10 +151,10 @@ func TestCarryOver_DisabledUnknownAndUnroutable(t *testing.T) {
 	b.w.bind(m4, dark)
 	b.w.pool(dark, b.w.cred(dark, nil, system))
 	h := b.w.start(t)
-	wantRefused(t, h.route(b.key, "gone"), CodeModelDisabled, "")
-	wantRefused(t, h.route(b.key, "nope"), CodeModelNotFound, "")
-	wantRefused(t, h.route(b.key, ""), CodeModelNotFound, "")
-	wantRefused(t, h.route(b.key, "m4"), CodeNoBinding, "")
+	_ = wantRefused(t, h.route(b.key, "gone"), CodeModelDisabled, "")
+	_ = wantRefused(t, h.route(b.key, "nope"), CodeModelNotFound, "")
+	_ = wantRefused(t, h.route(b.key, ""), CodeModelNotFound, "")
+	_ = wantRefused(t, h.route(b.key, "m4"), CodeNoBinding, "")
 }
 
 // C29: a grant that can never match narrows to nothing and is reported, never read as "no list".
@@ -165,7 +165,7 @@ func TestCarryOver_UnmatchableGrantNarrowsToNothing(t *testing.T) {
 			p := b.w.policy("p", policy.Spec{Models: []string{ref}})
 			b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
 			h := b.w.start(t)
-			wantRefused(t, h.route(b.key, "m1"), CodeModelNotAllowed, limits.RungProject)
+			_ = wantRefused(t, h.route(b.key, "m1"), CodeModelNotAllowed, limits.RungProject)
 			is := h.issues(KindPolicy, p.Meta.ID)
 			if !hasIssue(is, IssueModelGroupUnsupported) && !hasIssue(is, IssueModelRefInvalid) {
 				t.Fatalf("issues = %v, want the unmatchable ref reported", is)

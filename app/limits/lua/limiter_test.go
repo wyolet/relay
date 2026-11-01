@@ -150,7 +150,7 @@ func runSuite(t *testing.T, store newStore) {
 				}
 				admit(t, l, caller, up)
 				admit(t, l, caller, up)
-				refused(t, l, caller, up)
+				_ = refused(t, l, caller, up)
 			})
 		}
 	})
@@ -162,7 +162,7 @@ func runSuite(t *testing.T, store newStore) {
 				l := newLimiter(store(t), &now)
 				caller := callerCounter(rule(ratelimit.MeterRequests, strategy, 1), "project:x")
 				admit(t, l, caller).Settle(limits.Usage{Tokens: usage.Tokens{"input": 5}})
-				refused(t, l, caller)
+				_ = refused(t, l, caller)
 			})
 		}
 	})
@@ -175,7 +175,7 @@ func runSuite(t *testing.T, store newStore) {
 		now = now.Add(time.Minute)
 		admit(t, l, caller)
 		old.Release()
-		refused(t, l, caller)
+		_ = refused(t, l, caller)
 	})
 
 	t.Run("SharedAndDistinctBuckets", func(t *testing.T) {
@@ -192,7 +192,7 @@ func runSuite(t *testing.T, store newStore) {
 		two := callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 2), "project:z")
 		admit(t, l, two, two) // equal IDs count once
 		admit(t, l, two)
-		refused(t, l, two)
+		_ = refused(t, l, two)
 	})
 
 	t.Run("FailClosed", func(t *testing.T) {
@@ -267,7 +267,7 @@ func runSuite(t *testing.T, store newStore) {
 					t.Fatalf("retry-after = %v, want %v", r.RetryAfter, tc.retry)
 				}
 				now = now.Add(tc.retry - time.Millisecond)
-				refused(t, l, b)
+				_ = refused(t, l, b)
 				now = now.Add(time.Millisecond)
 				admit(t, l, b).Settle(limits.Usage{CostNanos: usd / 2})
 				admit(t, l, b)
@@ -283,7 +283,7 @@ func runSuite(t *testing.T, store newStore) {
 		a, c := admit(t, l, b), admit(t, l, b)
 		a.Settle(limits.Usage{CostNanos: usd / 2})
 		c.Settle(limits.Usage{CostNanos: usd / 2})
-		refused(t, l, b)
+		_ = refused(t, l, b)
 	})
 
 	t.Run("SettleChargesRealCost", func(t *testing.T) {
@@ -298,11 +298,11 @@ func runSuite(t *testing.T, store newStore) {
 		admit(t, l, b).Release()
 		admit(t, l, b).Settle(limits.Usage{CostNanos: 7*usd/10 - 1})
 		admit(t, l, b).Settle(limits.Usage{CostNanos: 1})
-		refused(t, l, b)
+		_ = refused(t, l, b)
 
 		raised := budgetCounter("2", budget.PeriodDay, budget.ModeHard)
 		admit(t, l, raised).Settle(limits.Usage{CostNanos: usd})
-		refused(t, l, raised)
+		_ = refused(t, l, raised)
 	})
 
 	t.Run("SettleTrueUpAndLease", func(t *testing.T) {

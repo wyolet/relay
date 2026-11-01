@@ -178,8 +178,8 @@ func BenchmarkRequestPath(b *testing.B) {
 	for b.Loop() {
 		kp := h.holder.Load().Keys.Lookup(hash, now)
 		r := kp.Caller.Routes.Get("m1")
-		if len(r.Hops[0].Counters[0]) < 0 {
-			b.Fatal()
+		if r.Refused != nil {
+			b.Fatal(r.Refused)
 		}
 	}
 }

@@ -132,12 +132,6 @@ func callerRule(amount int64) limits.Counter {
 	return limits.CallerRule(limits.RungProject, testRateLimit, r, "pol-caller", "project:p", "team:t")
 }
 
-// accountRule is an account counter of amount requests per minute on account id.
-func accountRule(id string, amount int64) limits.Counter {
-	r := ratelimit.Rule{Meter: ratelimit.MeterRequests, Strategy: ratelimit.StrategyFixedWindow, Amount: amount, Window: ratelimit.Window(time.Minute)}
-	return limits.UpstreamRule(limits.RungAccount, testRateLimit, r, "pol-tier", "account:"+id, "", "account:"+id)
-}
-
 // limiterOver is the Lua limiter over s.
 func limiterOver(s kv.Store) limits.Limiter {
 	if m, ok := s.(*kv.Mem); ok {

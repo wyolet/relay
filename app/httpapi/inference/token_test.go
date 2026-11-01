@@ -330,18 +330,6 @@ func boundTo(f principalFixture, name string, policyID string, subjects ...strin
 	return b
 }
 
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // signedWith mints a token for the fixture's user under priv, naming kid.
 func signedWith(t *testing.T, f principalFixture, priv ed25519.PrivateKey, kid string) string {
 	t.Helper()
