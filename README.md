@@ -58,7 +58,7 @@ Relay is a single Go binary with two listeners: the inference API on `:8080` and
 
 Other ways to run it:
 
-- **Docker Compose**: the lean image with its own Postgres and Valkey ([`docker-compose.yml`](docker-compose.yml), [docs](https://docs.wyolet.com/deploy/docker)).
+- **Docker Compose**: the lean image with its own Postgres and Dragonfly ([`docker-compose.yml`](docker-compose.yml), [docs](https://docs.wyolet.com/deploy/docker)).
 - **Kubernetes**: `helm upgrade --install relay oci://ghcr.io/wyolet/charts/relay --version <version>` ([chart README](chart/README.md), [docs](https://docs.wyolet.com/deploy/kubernetes)).
 
 ### Already using an SDK?
@@ -88,16 +88,16 @@ flowchart LR
   end
   clients -->|"relay key or inference token"| inf --> pipe
   pipe -->|"byte-pass or translated"| up["Upstream hosts<br/>OpenAI · Anthropic · Gemini · compatible endpoints"]
-  pipe <-->|"counters, key health"| kv[("Valkey / Redis")]
+  pipe <-->|"counters, key health"| kv[("Dragonfly")]
   snap -.-> pipe
   ctl -->|"writes"| pg[("Postgres")]
   pg -.->|"NOTIFY"| snap
   pipe -.->|"async"| post
-  post --> sinks[("ClickHouse · Postgres · file · Valkey")]
+  post --> sinks[("ClickHouse · Postgres · file · Dragonfly")]
 ```
 
 - The inference path makes no Postgres calls. Routing reads an in-memory snapshot of the catalog, keys and policies; every pod updates it from a Postgres NOTIFY within about a second of a control-plane write.
-- Rate-limit counters and key health live in Valkey or Redis, shared by all pods. A single pod can keep them in memory instead.
+- Rate-limit counters and key health live in Dragonfly, shared by all pods. A single pod can keep them in memory instead.
 - Failover runs across the host keys of the chosen host and only before the first byte. Once bytes reach the caller, relay does not retry.
 - Usage, cost, payload and metric records are emitted after the response, on bounded queues that never block the caller. If a queue is full the record is dropped and counted in `relay_records_lost_total`.
 - When the caller's shape matches the upstream's, the body is passed through unchanged. Otherwise relay translates it, one SSE event at a time for streams, through a vendor-neutral canonical protocol (`sdk/v1`).
@@ -126,7 +126,7 @@ More in [Architecture](https://docs.wyolet.com/concepts/architecture).
 
 ### Observability and cost
 
-- **Usage and cost.** Each request produces one usage record. Token counts come from the provider's response, and cost comes from the catalog pricing of the binding that served it. Records go to ClickHouse, Postgres, a JSONL file or Valkey, and you query them at `/api/usage/*`. [Usage](https://docs.wyolet.com/concepts/usage)
+- **Usage and cost.** Each request produces one usage record. Token counts come from the provider's response, and cost comes from the catalog pricing of the binding that served it. Records go to ClickHouse, Postgres, a JSONL file or the state store, and you query them at `/api/usage/*`. [Usage](https://docs.wyolet.com/concepts/usage)
 - **Payload logging.** Request and response bodies are captured only when enabled both globally and on the governing policy. They are stored in ClickHouse, S3 or a file, and the ClickHouse store has an erase API. [Payload logging](https://docs.wyolet.com/concepts/payload-logging)
 - **OTLP receiver.** Applications that call providers directly can report those calls over OTLP/HTTP (`/otlp/v1/traces`, `/otlp/v1/logs`) and get the same usage and cost records. Off by default. [OTLP receiver](https://docs.wyolet.com/concepts/otlp-receiver)
 - **Metrics.** Prometheus `/metrics` on the control listener. The Helm chart ships two Grafana dashboards. [Metrics](https://docs.wyolet.com/reference/metrics)
@@ -135,7 +135,7 @@ More in [Architecture](https://docs.wyolet.com/concepts/architecture).
 
 - **GitOps.** `relay apply -f` plans with `--dry-run` and deletes omitted rows with `--prune --selector`. `relay export` renders the current state, and every manifest kind has a published JSON Schema. [GitOps](https://docs.wyolet.com/concepts/gitops)
 - **Secrets.** A host key either references an env var or is stored sealed with XAES-256-GCM under a per-owner data key wrapped by `RELAY_MASTER_KEY`. `relay secret` rotates data keys and re-wraps them under a new master key. [Secret keys](https://docs.wyolet.com/concepts/secret-keys)
-- **Kubernetes.** The Helm chart includes a pre-upgrade migration Job, HPA, PDB, NetworkPolicy, ServiceMonitor, Ingress or Gateway API route, and bundled Postgres, ClickHouse and Valkey, each of which can be replaced by an external store. [Chart README](chart/README.md) · [Kubernetes](https://docs.wyolet.com/deploy/kubernetes)
+- **Kubernetes.** The Helm chart includes a pre-upgrade migration Job, HPA, PDB, NetworkPolicy, ServiceMonitor, Ingress or Gateway API route, and bundled Postgres, ClickHouse and Dragonfly, each of which can be replaced by an external store. [Chart README](chart/README.md) · [Kubernetes](https://docs.wyolet.com/deploy/kubernetes)
 - **Catalog.** Provider, model and pricing data come from the open [relay-catalog](https://github.com/wyolet/relay-catalog) repo and are bundled in the image. Pin `RELAY_CATALOG_VERSION` to upgrade the catalog, keep local edits as overlays that survive upgrades, and serve releases from your own `catalog-server`. [Catalog](https://docs.wyolet.com/concepts/catalog) · [Overlays](https://docs.wyolet.com/concepts/overlays) · [Catalog server](https://docs.wyolet.com/reference/catalog-server)
 
 ### Also included

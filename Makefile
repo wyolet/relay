@@ -65,9 +65,9 @@ help: ## Show this help
 	@echo '════════════════════════════════════════════════════════════════'
 	@echo ''
 	@echo '⚡ Local dev (host-side go run — fastest inner loop):'
-	@echo '  make dev               start valkey in compose, then go run relay on :$(DEV_DATA_PORT)/:$(DEV_CONTROL_PORT)'
-	@echo '  make dev-redis         bring up just the valkey container (host-published on $(RELAY_VALKEY_PORT))'
-	@echo '  make dev-down          stop the valkey container'
+	@echo '  make dev               start dragonfly in compose, then go run relay on :$(DEV_DATA_PORT)/:$(DEV_CONTROL_PORT)'
+	@echo '  make dev-redis         bring up just the dragonfly container (host-published on $(RELAY_VALKEY_PORT))'
+	@echo '  make dev-down          stop the dragonfly container'
 	@echo ''
 	@echo '🐋 Full compose stack (multi-pod + nginx LB — for integration shape):'
 	@echo '  make dev-compose       bring stack up (build relay-a/b locally, PG/CH/Jaeger from dev-stack)'
@@ -141,7 +141,7 @@ DEV_DATA_PORT    ?= $(RELAY_LB_PORT)
 DEV_CONTROL_PORT ?= $(RELAY_CONTROL_PORT)
 RELAY_VALKEY_PORT ?= 6379
 
-dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack PG/CH + local valkey
+dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack PG/CH + local dragonfly
 	@echo "▸ building ./relay…"
 	CGO_ENABLED=0 go build -o relay ./cmd/relay
 	@echo "▸ relay-api.wyolet.dev → Mac:$(DEV_DATA_PORT)   control → :$(DEV_CONTROL_PORT)"
@@ -152,17 +152,17 @@ dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack 
 	RELAY_INSTANCE_ID=relay-local \
 	./relay
 
-dev-redis: ## bring up just the valkey container, host-published on $(RELAY_VALKEY_PORT)
-	RELAY_VALKEY_PORT=$(RELAY_VALKEY_PORT) docker compose $(COMPOSE_DEV_ARGS) up -d valkey
-	@until docker exec relay-valkey valkey-cli ping >/dev/null 2>&1; do sleep 0.5; done
-	@echo "valkey ready on 127.0.0.1:$(RELAY_VALKEY_PORT)"
+dev-redis: ## bring up just the dragonfly container, host-published on $(RELAY_VALKEY_PORT)
+	RELAY_VALKEY_PORT=$(RELAY_VALKEY_PORT) docker compose $(COMPOSE_DEV_ARGS) up -d dragonfly
+	@until docker exec relay-dragonfly redis-cli ping >/dev/null 2>&1; do sleep 0.5; done
+	@echo "dragonfly ready on 127.0.0.1:$(RELAY_VALKEY_PORT)"
 
-dev-down: ## stop the valkey container
-	docker compose $(COMPOSE_DEV_ARGS) stop valkey
+dev-down: ## stop the dragonfly container
+	docker compose $(COMPOSE_DEV_ARGS) stop dragonfly
 
-breakers-reset: ## clear all keypool circuit-breaker state in valkey (lets the next request retry from healthy). Token revocations live separately, under limit:{team:<id>}:jti:<jti>
-	@for k in $$(docker exec relay-valkey valkey-cli --scan --pattern 'secret_health:*'); do \
-		docker exec -i relay-valkey valkey-cli del "$$k" >/dev/null; \
+breakers-reset: ## clear all keypool circuit-breaker state in dragonfly (lets the next request retry from healthy). Token revocations live separately, under limit:{team:<id>}:jti:<jti>
+	@for k in $$(docker exec relay-dragonfly redis-cli --scan --pattern 'secret_health:*'); do \
+		docker exec -i relay-dragonfly redis-cli del "$$k" >/dev/null; \
 	done
 	@echo "circuit breakers cleared"
 
