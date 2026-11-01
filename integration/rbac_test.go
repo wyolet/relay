@@ -212,12 +212,12 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 		t.Fatalf("POST with a non-user subject = %d: %s", code, raw)
 	}
 
-	// A group is no policy subject.
+	// A group is no policy subject: the schema offers no such kind.
 	body = `{"metadata":{"name":"ml-search-group"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
 		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
 	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", body)
-	if code != http.StatusBadRequest || !strings.Contains(string(raw), "groups are not policy subjects") {
-		t.Fatalf("POST /api/policy-bindings naming a group = %d: %s, want 400", code, raw)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "body.spec.subjects[0].kind") {
+		t.Fatalf("POST /api/policy-bindings naming a group = %d: %s, want 422 on subjects[0].kind", code, raw)
 	}
 
 	// A project's policy binding is owned by the project.
