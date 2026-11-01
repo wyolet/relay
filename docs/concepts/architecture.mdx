@@ -86,7 +86,7 @@ To see the time Relay itself adds to a request, watch the `relay_overhead_second
 | --- | --- | --- |
 | **Postgres** | Catalog, host keys, relay keys, policies, rate limits, tenancy, settings, audit log, batch jobs; usage events when that sink is selected | No. Only through the snapshot |
 | **In-memory snapshot** | Read-optimized copy of the Postgres rows routing needs | Yes, for every routing and auth decision |
-| **State backend** (`RELAY_STATE_BACKEND`: `memory` or `redis`, i.e. Valkey/Redis) | Rate-limit counters, circuit breakers, round-robin and LRU state, host reachability, token revocations, control-plane sessions | Yes. Use `redis` when you run more than one pod, or each pod keeps its own counters |
-| **Usage sink** | Usage events: local JSONL file (default), ClickHouse, Postgres, or Valkey. See [Usage](/concepts/usage) | No. Written after the response |
+| **State backend** (`RELAY_STATE_BACKEND`: `memory` or `redis`, i.e. Dragonfly) | Rate-limit counters, circuit breakers, round-robin and LRU state, host reachability, token revocations, control-plane sessions | Yes. Use `redis` when you run more than one pod, or each pod keeps its own counters |
+| **Usage sink** | Usage events: local JSONL file (default), ClickHouse, Postgres, or the state store. See [Usage](/concepts/usage) | No. Written after the response |
 | **Payload store** | Captured request and response bodies, when enabled: file, S3, or ClickHouse. See [Payload logging](/concepts/payload-logging) | No. Written after the response |
 | **Batch payload directory** (`RELAY_BATCH_PAYLOAD_DIR`) | Batch item bodies, as local files. See [Batch](/batch) | Only by batch workers |
