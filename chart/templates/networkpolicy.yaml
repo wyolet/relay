@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
 # Restrict the bundled data stores to accept traffic only from relay pods.
-{{- range $c := list "postgresql" "clickhouse" "valkey" }}
+{{- range $c := list "postgresql" "clickhouse" "dragonfly" "valkey" }}
 {{- $enabled := (index $.Values $c).enabled }}
 {{- if $enabled }}
 ---

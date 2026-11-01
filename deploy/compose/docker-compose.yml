@@ -10,23 +10,26 @@
 name: wyolet-relay
 
 volumes:
-  valkey-data:
+  dragonfly-data:
 
 services:
-  valkey:
-    image: valkey/valkey:8-alpine
-    container_name: relay-valkey
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2
+    container_name: relay-dragonfly
     restart: unless-stopped
+    command: ["--cluster_mode=emulated", "--lock_on_hashtags", "--proactor_threads=2", "--dbfilename=dump", "--snapshot_cron=* * * * *"]
+    ulimits:
+      memlock: -1
     volumes:
-      - valkey-data:/data
+      - dragonfly-data:/data
     # Published on the host so `make dev` (host-side go run) can reach it.
-    # The full compose stack still talks to it as `valkey:6379` over the
+    # The full compose stack still talks to it as `dragonfly:6379` over the
     # default network regardless of this mapping. Passwordless, so loopback
     # only unless RELAY_STORE_BIND_ADDR widens it.
     ports:
       - "${RELAY_STORE_BIND_ADDR:-127.0.0.1}:${RELAY_VALKEY_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       timeout: 5s
       retries: 10
@@ -42,7 +45,7 @@ services:
     volumes:
       - ./config:/config:ro
     depends_on:
-      valkey: {condition: service_healthy}
+      dragonfly: {condition: service_healthy}
     ports:
       - "${RELAY_A_PORT:-5101}:8080"
       - "${RELAY_CONTROL_PORT:-5103}:8081"
@@ -56,7 +59,7 @@ services:
     volumes:
       - ./config:/config:ro
     depends_on:
-      valkey: {condition: service_healthy}
+      dragonfly: {condition: service_healthy}
     ports:
       - "${RELAY_B_PORT:-5102}:8080"
   nginx:
