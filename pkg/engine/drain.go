@@ -115,13 +115,18 @@ func (b *batch) applyEvent(ctx context.Context, ev Event) {
 		return
 	}
 	id := ev.Ref.ID
+	cur, had := e.st.objs[k.idx].get(id)
 	if ev.Op == OpDelete {
+		// A delete trigger reports the deleted row's own version, so only an older one is stale.
+		if had && cur.meta.Version != 0 && ev.Version != 0 && ev.Version < cur.meta.Version {
+			return
+		}
 		if b.write(k, id, nil) {
 			b.stats.Inputs++
 		}
 		return
 	}
-	if cur, had := e.st.objs[k.idx].get(id); had && stale(cur.meta.Version, ev.Version) {
+	if had && stale(cur.meta.Version, ev.Version) {
 		return
 	}
 	row, err := k.get(ctx, id)
