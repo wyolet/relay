@@ -19,48 +19,48 @@ import (
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/tenancy_golden.txt from this run")
 
-// tenancyBundle covers every tenancy and RBAC kind apply writes: teams and projects with budgets, a service account with a policy override, a group, a custom role, and bindings at the global, team and project scopes naming users, a group, a service account and every authenticated caller.
-const tenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha2
+// tenancyBundle covers every tenancy and RBAC kind apply writes: teams and projects with budgets, a service account, a group, a custom role, and bindings at the global, team and project scopes naming users, a group, a service account and every authenticated caller.
+const tenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata: {name: platform, displayName: Platform, owner: {kind: user}, labels: {managed: gitops}}
 spec: {budget: {amount: "100"}}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata: {name: research, displayName: Research, owner: {kind: user}}
 spec: {enabled: true}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata: {name: ml-search, displayName: ML Search, annotations: {note: seeded}}
 spec: {team: platform, budget: {amount: "25.50", period: week}}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata: {name: sandbox, displayName: Sandbox}
 spec: {team: research}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: ml-search-default, owner: {kind: project, name: ml-search}}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
 metadata: {name: search-indexer, displayName: Search Indexer}
-spec: {project: ml-search, policy: ml-search-default}
+spec: {project: ml-search}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
 metadata: {name: sandbox-bot}
 spec: {project: sandbox, enabled: false}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Group
 metadata: {name: eng, displayName: Engineering}
 spec: {members: [alice, bob]}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Role
 metadata: {name: key-reader, displayName: Key Reader}
 spec:
@@ -68,7 +68,7 @@ spec:
     - {kinds: [keys], verbs: [get, list]}
     - {kinds: [policies], verbs: [get]}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata: {name: platform-admins}
 spec:
@@ -76,7 +76,7 @@ spec:
   scope: {kind: team, name: platform}
   subjects: [{kind: group, name: eng}]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata: {name: ml-readers}
 spec:
@@ -84,7 +84,7 @@ spec:
   scope: {kind: project, name: ml-search}
   subjects: [{kind: user, name: bob}, {kind: serviceaccount, name: search-indexer}]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata: {name: everyone-reads}
 spec:
@@ -92,7 +92,7 @@ spec:
   scope: {kind: system}
   subjects: [{kind: group, name: "system:authenticated"}]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata: {name: research-auditors}
 spec:

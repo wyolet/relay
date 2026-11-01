@@ -7,7 +7,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 )
 
 // hostview.go is the host-detail mirror of the model/policy projections. A Host
@@ -30,7 +29,7 @@ type HostKeyView struct {
 }
 
 // HostPolicyRow — a host-tier policy this host owns, with its rate-limit rule
-// sets (per-model RLBindings + the flat default).
+// sets (model-scoped and unscoped links alike).
 type HostPolicyRow struct {
 	ID         string               `json:"id"`
 	Name       string               `json:"name"`
@@ -102,17 +101,4 @@ func (s *Service) HostPolicies(ctx context.Context, ref string) (HostRef, []Host
 
 func hostKeyEnabled(k *hostkey.HostKey) bool {
 	return k.Spec.Enabled == nil || *k.Spec.Enabled
-}
-
-// policyRateLimitRows is shared by PolicyRateLimits and HostPolicies: each
-// per-model RLBinding in declared order, then the flat default last.
-func (idx *index) policyRateLimitRows(p *policy.Policy) []PolicyRateLimitRow {
-	rows := []PolicyRateLimitRow{}
-	for _, b := range p.Spec.RLBindings {
-		rows = append(rows, idx.rlRow(b.RateLimitID, b.Models, false))
-	}
-	if p.Spec.RateLimitID != "" {
-		rows = append(rows, idx.rlRow(p.Spec.RateLimitID, nil, true))
-	}
-	return rows
 }

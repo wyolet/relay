@@ -34,7 +34,7 @@ func TestIntegration_StoredReservedEnvRefDoesNotResolve(t *testing.T) {
 			id := meta.NewID()
 			k := &hostkey.HostKey{
 				Meta: meta.Metadata{ID: id, Name: "env-key-" + id[len(id)-8:], Owner: meta.Owner{Kind: meta.OwnerSystem}},
-				Spec: hostkey.Spec{HostID: meta.NewID(), PolicyID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: tc.env}},
+				Spec: hostkey.Spec{HostID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: tc.env}},
 			}
 			if err := store.Upsert(ctx, k); err != nil {
 				t.Fatalf("Upsert: %v", err)
@@ -65,7 +65,7 @@ func TestIntegration_AccountIDRoundTrips(t *testing.T) {
 	t.Setenv("ACME_API_KEY", "sk-acme")
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "account-key", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: meta.NewID(), PolicyID: meta.NewID(), AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
+		Spec: hostkey.Spec{HostID: meta.NewID(), AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
 	}
 	if err := store.Upsert(ctx, k); err != nil {
 		t.Fatalf("Upsert: %v", err)

@@ -22,7 +22,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
-// registerCRUD wires the eight kinds onto api and returns how each finds its rows. metaOf closures + slug resolvers are supplied per kind.
+// registerCRUD wires the CRUD kinds onto api and returns how each finds its rows. metaOf closures + slug resolvers are supplied per kind.
 func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows := kindIndex{}
 	pmeta := func(p *provider.Provider) *meta.Metadata { return &p.Meta }
@@ -293,7 +293,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		func(k *key.Key) error { return k.Validate() },
 		meta.OwnerProject,
 		listScanResolver(d.Stores.Key, rkmeta),
-		guardKeyPolicy(d),
+		nil,
 		nil,
 		nil,
 		d.refuseInUse,

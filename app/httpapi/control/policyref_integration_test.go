@@ -145,7 +145,7 @@ func TestCheckHostKeyRefsVisible_PersonalRowCannotReferenceProjectHostKey(t *tes
 	}
 
 	t.Run("user-owned key referencing a project-owned host-key is rejected", func(t *testing.T) {
-		err := checkHostKeyRefsVisible(visibleCtx(ctx), d, []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"})
+		err := refErr(refs(d).CredentialRefs(visibleCtx(ctx), []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}))
 		if err == nil {
 			t.Fatal("want an error, got nil")
 		}
@@ -155,14 +155,14 @@ func TestCheckHostKeyRefsVisible_PersonalRowCannotReferenceProjectHostKey(t *tes
 	})
 
 	t.Run("project-owned key referencing a project-owned host-key is allowed", func(t *testing.T) {
-		if err := checkHostKeyRefsVisible(visibleCtx(ctx), d, []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerProject, ID: projectHostKey.Meta.Owner.ID}); err != nil {
-			t.Fatalf("checkHostKeyRefsVisible: %v", err)
+		if err := refs(d).CredentialRefs(visibleCtx(ctx), []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerProject, ID: projectHostKey.Meta.Owner.ID}); err != nil {
+			t.Fatalf("CredentialRefs: %v", err)
 		}
 	})
 
 	t.Run("user-owned key referencing a user-owned host-key is allowed", func(t *testing.T) {
-		if err := checkHostKeyRefsVisible(visibleCtx(ctx), d, []string{userHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}); err != nil {
-			t.Fatalf("checkHostKeyRefsVisible: %v", err)
+		if err := refs(d).CredentialRefs(visibleCtx(ctx), []string{userHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}); err != nil {
+			t.Fatalf("CredentialRefs: %v", err)
 		}
 	})
 }

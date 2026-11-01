@@ -111,7 +111,7 @@ func TestMintLimitKeyFormat(t *testing.T) {
 func TestSchemaPathRejectsTraversal(t *testing.T) {
 	srv := schemaServer(t)
 	for _, path := range []string{
-		"/api/schemas/v1alpha2/..",
+		"/api/schemas/v1alpha3/..",
 		"/api/schemas/..",
 	} {
 		resp, err := http.Get(srv.URL + path)

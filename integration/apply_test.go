@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ import (
 
 // bundle is the fixture manifest: one team, its project, and rows owned by
 // each — enough to exercise ordering, ownership, and cross-refs.
-const bundle = `apiVersion: relay.wyolet.dev/v1alpha2
+const bundle = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata:
   name: platform
@@ -50,7 +51,7 @@ metadata:
 spec:
   enabled: true
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata:
   name: ml-search
@@ -59,7 +60,7 @@ metadata:
 spec:
   team: platform
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: ml-search-default
@@ -67,21 +68,20 @@ metadata:
   labels: {managed: gitops}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
 metadata:
   name: search-indexer
   labels: {managed: gitops}
 spec:
   project: ml-search
-  policy: ml-search-default
 `
 
 // globalBinding is a RoleBinding at the global scope. Its owner mirrors the
 // scope, so the row is system-owned while still being tenant-authored — the
 // case export and prune must not mistake for a catalog row.
 const globalBinding = `---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: global-admins
@@ -99,6 +99,10 @@ type applyResp struct {
 		Name          string   `json:"name"`
 		Action        string   `json:"action"`
 		ChangedFields []string `json:"changedFields"`
+		Detached      *struct {
+			Field    string   `json:"field"`
+			Policies []string `json:"policies"`
+		} `json:"detached"`
 	} `json:"plan"`
 	Applied bool `json:"applied"`
 	Counts  struct {
@@ -275,11 +279,10 @@ func TestIntegration_ApplyPrune(t *testing.T) {
 	}
 }
 
-// Pruning a host key or a rate limit detaches it from the policies that name
-// it first, as the control API's delete does: the host key's join row would
-// otherwise refuse the delete, and the rate limit would leave a dangling
-// binding behind.
-func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
+// Pruning a host key or a rate limit a policy links is allowed, as the
+// control API's delete is: the plan names the policy, the rate limit's link
+// goes, and the credential's id stays so the policy narrows.
+func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
@@ -296,8 +299,6 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 
 	h := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://acme.example.com"}}
 	mustUpsert(t, st.stores.Host.Upsert(ctx, h), "host")
-	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "acme-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
-	mustUpsert(t, st.stores.Policy.Upsert(ctx, tier), "tier policy")
 	pruneEnv := uniqueEnvName("HK_")
 	if err := os.Setenv(pruneEnv, "sk-prune"); err != nil {
 		t.Fatalf("setenv: %v", err)
@@ -305,7 +306,7 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 	t.Cleanup(func() { _ = os.Unsetenv(pruneEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned, Labels: managed},
-		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "host key")
 	rl := &ratelimit.RateLimit{
@@ -318,8 +319,8 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 	side := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "side-policy", Owner: owned},
 		Spec: policy.Spec{
-			HostKeyIDs: []string{hk.Meta.ID},
-			RLBindings: []policy.RLBinding{{Models: []string{"*"}, RateLimitID: rl.Meta.ID}},
+			CredentialIDs: []string{hk.Meta.ID},
+			RateLimits:    []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
 		},
 	}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, side), "policy")
@@ -331,12 +332,17 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 	if plan.action("HostKey", "acme-key") != "delete" || plan.action("RateLimit", "burst") != "delete" {
 		t.Fatalf("prune plan = %+v", plan.Plan)
 	}
+	for _, e := range plan.Plan {
+		if (e.Kind == "HostKey" || e.Kind == "RateLimit") && (e.Detached == nil || len(e.Detached.Policies) != 1 || e.Detached.Policies[0] != "side-policy") {
+			t.Fatalf("%s %s detached = %+v, want side-policy named", e.Kind, e.Name, e.Detached)
+		}
+	}
 	got, err := st.stores.Policy.Get(ctx, side.Meta.ID)
 	if err != nil || got == nil {
 		t.Fatalf("read policy: %v", err)
 	}
-	if len(got.Spec.HostKeyIDs) != 0 || len(got.Spec.RLBindings) != 0 {
-		t.Fatalf("policy still names pruned rows: hostKeyIds=%v rlBindings=%v", got.Spec.HostKeyIDs, got.Spec.RLBindings)
+	if !slices.Equal(got.Spec.CredentialIDs, []string{hk.Meta.ID}) || len(got.Spec.RateLimits) != 0 {
+		t.Fatalf("policy after prune: credentialIds=%v rateLimits=%v, want the key id kept and the limit gone", got.Spec.CredentialIDs, got.Spec.RateLimits)
 	}
 }
 
@@ -489,7 +495,7 @@ func TestIntegration_ExportRoundTripsThroughApply(t *testing.T) {
 		}
 	}
 	// Every document carries its schema directive and its server-owned id.
-	if strings.Count(out, "# yaml-language-server: $schema=/api/schemas/v1alpha2/") != 5 {
+	if strings.Count(out, "# yaml-language-server: $schema=/api/schemas/v1alpha3/") != 5 {
 		t.Fatalf("expected one schema directive per document:\n%s", out)
 	}
 	// A global binding is tenant-authored and belongs in the bundle; the
@@ -533,7 +539,7 @@ func TestIntegration_ExportRoundTripsThroughApply(t *testing.T) {
 		if !ok {
 			continue
 		}
-		code, raw := st.adminDo(http.MethodGet, "/api/schemas/v1alpha2/"+kind, "")
+		code, raw := st.adminDo(http.MethodGet, "/api/schemas/v1alpha3/"+kind, "")
 		if code != http.StatusOK {
 			t.Fatalf("schema for exported kind %q: %d %s", kind, code, raw)
 		}
@@ -592,6 +598,7 @@ func applyStores(st *stack) *apply.Stores {
 		HostKey: st.stores.HostKey, Model: st.stores.Model, Policy: st.stores.Policy,
 		Pricing: st.stores.Pricing, HostBinding: st.stores.Binding, Key: st.stores.Key,
 		Team: st.stores.Team, Project: st.stores.Project,
+		Account: st.stores.Account, Pool: st.stores.Pool, Budget: st.stores.Budget,
 		ServiceAccount: st.stores.ServiceAccount, Group: st.stores.Group, Role: st.stores.Role,
 		RoleBinding: st.stores.RoleBinding, PolicyBinding: st.stores.PolicyBinding,
 		Overlay: st.stores.Overlay, User: st.users,
@@ -658,14 +665,14 @@ func goldenRows(t *testing.T, st *stack) map[string]string {
 
 // catalogAndTenancyBundle mixes a catalog kind with the tenancy kinds a
 // catalog tree must not be able to ship.
-const catalogAndTenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha2
+const catalogAndTenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Provider
 metadata:
   name: acme
   displayName: Acme
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata:
   name: smuggled
@@ -715,27 +722,26 @@ func TestIntegration_BootSeedRefusesTenancyKinds(t *testing.T) {
 
 // envHostKeyTree is a catalog tree that declares a host, its tier policy and
 // an env-sourced key for it naming a relay credential.
-const envHostKeyTree = `apiVersion: relay.wyolet.dev/v1alpha2
+const envHostKeyTree = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Host
 metadata:
   name: tree-host
 spec:
   baseURL: https://upstream.invalid
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: tree-tier
   owner: {kind: host, name: tree-host}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
 metadata:
   name: tree-key
 spec:
   hostId: tree-host
-  policyId: tree-tier
   valueFrom: {kind: env, env: TREE_UPSTREAM_KEY}
 `
 
@@ -774,21 +780,21 @@ func TestIntegration_BootSeedRefusesHostKeys(t *testing.T) {
 
 // ownedPolicy renders a Policy owned by the named host.
 func ownedPolicy(hostName string) string {
-	return `apiVersion: relay.wyolet.dev/v1alpha2
+	return `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Host
 metadata:
   name: host-a
 spec:
   baseURL: https://a.invalid
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Host
 metadata:
   name: host-b
 spec:
   baseURL: https://b.invalid
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: shared
@@ -841,52 +847,46 @@ func TestIntegration_SeedAppliesAnOwnerChange(t *testing.T) {
 
 // ── scoped apply, cross-entity rules, and the published schemas ──────────
 
-// hostKeyOnAForeignPolicy declares a host key whose tier policy belongs to a
-// project rather than to the key's own host. The rule itself is unit-tested;
-// what the endpoint owes is the status and the empty write — a green apply
-// followed by "no keys" on every request for that host is the failure.
-const hostKeyOnAForeignPolicy = `apiVersion: relay.wyolet.dev/v1alpha2
+// hostKeyOnAForeignAccount declares a host key whose account is held at
+// another host. The rule itself is unit-tested; what the endpoint owes is
+// the status and the empty write — a green apply followed by keys pooled
+// under the wrong organization is the failure.
+const hostKeyOnAForeignAccount = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Host
 metadata:
   name: guarded-host
 spec:
   baseURL: https://upstream.invalid
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
-kind: Team
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Host
 metadata:
-  name: guarded-team
-spec: {}
----
-apiVersion: relay.wyolet.dev/v1alpha2
-kind: Project
-metadata:
-  name: guarded-project
+  name: other-host
 spec:
-  team: guarded-team
+  baseURL: https://other.invalid
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
-kind: Policy
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
 metadata:
-  name: guarded-project-policy
-  owner: {kind: project, name: guarded-project}
-spec: {}
+  name: other-org
+spec:
+  host: other-host
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
 metadata:
   name: guarded-key
 spec:
   hostId: guarded-host
-  policyId: guarded-project-policy
+  account: other-org
   valueFrom: {kind: env, env: GUARDED_KEY}
 `
 
-func TestApplyRefusesAHostKeyOnAPolicyItsHostDoesNotOwn(t *testing.T) {
+func TestApplyRefusesAHostKeyOnAnAccountAtAnotherHost(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
 
-	code, _, raw := st.applyBundle(hostKeyOnAForeignPolicy, "dryRun=true")
+	code, _, raw := st.applyBundle(hostKeyOnAForeignAccount, "dryRun=true")
 	if code != http.StatusBadRequest {
 		t.Fatalf("apply = %d: %s, want 400", code, raw)
 	}
@@ -926,7 +926,7 @@ func TestApplyReportsOutOfScopeRowsAsForbidden(t *testing.T) {
 	// Both rows already exist exactly as declared, so neither entry is a
 	// write: the plan reduces to what the caller may see.
 	doc := func(name string) string {
-		return "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Team\nmetadata:\n  name: " + name + "\nspec: {}\n"
+		return "apiVersion: relay.wyolet.dev/v1alpha3\nkind: Team\nmetadata:\n  name: " + name + "\nspec: {}\n"
 	}
 	us := st.login(t, "alpha-admin", password)
 	code, raw := us.doAs(http.MethodPost, "/api/apply", doc(ownTeam)+"---\n"+doc(otherTeam), "application/yaml")

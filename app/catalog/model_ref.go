@@ -54,10 +54,28 @@ func AliasUpstream(ref *AliasRef, raw string) (via, upstream string) {
 	return "alias:" + ref.Name, ref.Name
 }
 
-// RefsGrant reports whether any ref grants (provider, model, host) under the rules policy allow sets use: with hideDeprecated, a wildcard-model match does not grant, while a ref naming the model still does.
+// RefsGrant reports whether any ref grants (provider, model, host) under the policy grant rules: with hideDeprecated, a wildcard-model match does not grant, while a ref naming the model still does.
 func RefsGrant(refs []modelref.Ref, providerSlug, modelSlug, hostSlug string, hideDeprecated bool) bool {
-	return refsGrant(refs, providerSlug, modelSlug, hostSlug, hideDeprecated)
+	for _, ref := range refs {
+		if !ref.Matches(providerSlug, modelSlug, hostSlug) {
+			continue
+		}
+		if hideDeprecated && ref.ModelWildcard {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // ModelDeprecated reports whether m is deprecated or sunset, which hides it from wildcard grants.
-func ModelDeprecated(m *model.Model) bool { return modelDeprecated(m) }
+func ModelDeprecated(m *model.Model) bool {
+	if m.Spec.Deprecation == nil {
+		return false
+	}
+	switch m.Spec.Deprecation.Status {
+	case model.DeprecationDeprecated, model.DeprecationSunset:
+		return true
+	}
+	return false
+}

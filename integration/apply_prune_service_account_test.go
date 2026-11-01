@@ -15,7 +15,7 @@ func TestIntegration_ApplyPruneOfAServiceAccountRefusesSilentCascades(t *testing
 	st := newStack(t)
 	ctx := context.Background()
 	seedBuiltinRoles(t, st)
-	const header = "apiVersion: relay.wyolet.dev/v1alpha2\n"
+	const header = "apiVersion: relay.wyolet.dev/v1alpha3\n"
 	kept := header + "kind: Team\nmetadata: {name: alpha, owner: {kind: system}}\nspec: {}\n" +
 		"---\n" + header + "kind: Project\nmetadata: {name: search}\nspec: {team: alpha}\n" +
 		"---\n" + header + "kind: Policy\nmetadata: {name: search-policy, owner: {kind: project, name: search}}\nspec: {}\n"

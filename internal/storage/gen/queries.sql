@@ -2,7 +2,7 @@
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers ORDER BY name;
 
 -- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
 SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name;
@@ -353,30 +353,6 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR hosts.resource_version = 
 -- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1;
 
--- name: SetPolicyRateLimit :exec
-UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1;
-
--- name: ListPolicyModels :many
-SELECT policy_id, model_id, position FROM policy_models ORDER BY policy_id, position;
-
--- name: DeletePolicyModels :exec
-DELETE FROM policy_models WHERE policy_id = $1;
-
--- name: InsertPolicyModel :exec
-INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, $3);
-
--- name: ListPolicyHostKeys :many
-SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position;
-
--- name: DeletePolicyHostKeys :exec
-DELETE FROM policy_host_keys WHERE policy_id = $1;
-
--- name: InsertPolicyHostKey :exec
-INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
-
--- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
-
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
 -- name: ListPricings :many
@@ -447,7 +423,7 @@ SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_en
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits WHERE id = $1;
 
 -- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies WHERE id = $1;
 
 -- name: SetPolicyModels :exec
 UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
@@ -458,14 +434,9 @@ SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, 
 -- name: GetRelayKey :one
 SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys WHERE id = $1;
 
--- name: GetPolicyModels :many
-SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
-
 -- name: GetPricingModels :many
 SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position;
 
--- name: GetPolicyHostKeys :many
-SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position;
 
 
 -- name: ListSettings :many

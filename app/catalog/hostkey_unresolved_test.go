@@ -33,12 +33,12 @@ func TestUnresolvedHostKeyDroppedFromSnapshot(t *testing.T) {
 	hostID := meta.NewID()
 	good := &hostkey.HostKey{
 		Meta:     meta.Metadata{ID: meta.NewID(), Name: "good", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec:     hostkey.Spec{HostID: hostID, PolicyID: "tier", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "GOOD"}},
+		Spec:     hostkey.Spec{HostID: hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "GOOD"}},
 		Resolved: "sk-good",
 	}
 	bad := &hostkey.HostKey{
 		Meta:   meta.Metadata{ID: meta.NewID(), Name: "bad", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec:   hostkey.Spec{HostID: hostID, PolicyID: "tier", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "MISSING"}},
+		Spec:   hostkey.Spec{HostID: hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "MISSING"}},
 		Status: hostkey.Status{Unresolved: &hostkey.UnresolvedStatus{Reason: "env MISSING not set"}},
 	}
 

@@ -16,7 +16,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -25,7 +24,6 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/overlay"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/settings"
 )
@@ -72,32 +70,6 @@ var referenceScans = map[string]func(ctx context.Context, d Deps, id string) ([]
 	"role":            scanRoleRefs,
 }
 
-// droppedLinkScans maps a kind to the scan listing the policies a delete of one of its rows takes a link from without refusing it: a rate limit the policy stops counting, or a credential it stops reaching (the policy keeps the id and narrows, never widens).
-var droppedLinkScans = map[string]func(ctx context.Context, d Deps, id string) ([]referenceItem, error){
-	"host-key": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
-		return policiesLinking(ctx, d, "spec.credentialIds", func(p *policy.Policy) bool { return slices.Contains(p.Spec.CredentialIDs, id) })
-	},
-	"rate-limit": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
-		return policiesLinking(ctx, d, "spec.rateLimits[].rateLimitId", func(p *policy.Policy) bool {
-			return slices.ContainsFunc(p.Spec.RateLimits, func(l policy.RateLimitLink) bool { return l.RateLimitID == id })
-		})
-	},
-}
-
-func policiesLinking(ctx context.Context, d Deps, via string, links func(*policy.Policy) bool) ([]referenceItem, error) {
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	var out []referenceItem
-	for _, p := range pols {
-		if links(p) {
-			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: via, owner: p.Meta.Owner})
-		}
-	}
-	return out, nil
-}
-
 // referencedPlurals are the kinds with a references scan, in API plural form.
 var referencedPlurals = []string{
 	"providers", "hosts", "models", "pricings", "policies", "host-keys",
@@ -121,6 +93,14 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			items, err := scan(ctx, d, in.ID)
 			if err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
+			}
+			// Links a delete would take without refusing are references too.
+			if dropped, ok := droppedLinkScans[singular]; ok {
+				more, err := dropped(ctx, d, in.ID)
+				if err != nil {
+					return nil, huma.Error500InternalServerError(err.Error())
+				}
+				items = append(items, more...)
 			}
 			// Drop referencing rows the caller may not see — "in use by" must
 			// not leak other users' rows.
@@ -231,18 +211,6 @@ func scanRateLimitsOwnedBy(ctx context.Context, d Deps, kind meta.OwnerKind, id 
 
 func scanModelRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	for _, p := range pols {
-		for _, mid := range p.Spec.ModelIDs {
-			if mid == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.modelIds", owner: p.Meta.Owner, detachable: true})
-				break
-			}
-		}
-	}
 	pricings, err := d.Stores.Pricing.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list pricings: %w", err)
@@ -301,33 +269,6 @@ func scanPricingRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 
 func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	rks, err := d.Stores.Key.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list keys: %w", err)
-	}
-	for _, k := range rks {
-		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner, detachable: true})
-		}
-	}
-	sas, err := d.Stores.ServiceAccount.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list service-accounts: %w", err)
-	}
-	for _, sa := range sas {
-		if sa.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "service-account", ID: sa.Meta.ID, Name: sa.Meta.Name, Via: "spec.policyId", owner: sa.Meta.Owner, detachable: true})
-		}
-	}
-	keys, err := d.Stores.HostKey.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list host-keys: %w", err)
-	}
-	for _, k := range keys {
-		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
-		}
-	}
 	pbs, err := d.Stores.PolicyBinding.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list policy-bindings: %w", err)
@@ -359,18 +300,6 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 
 func scanHostKeyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	for _, p := range pols {
-		for _, kid := range p.Spec.HostKeyIDs {
-			if kid == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.hostKeyIds", owner: p.Meta.Owner, detachable: true})
-				break
-			}
-		}
-	}
 	// A host key's delete removes the stored secret kept under its id, so a
 	// settings section naming that secret is a reference too. Settings are
 	// reconfigured by the operator, never detached.
@@ -388,25 +317,10 @@ func scanHostKeyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	return out, nil
 }
 
-func scanRateLimitRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
-	out := []referenceItem{}
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	for _, p := range pols {
-		if p.Spec.RateLimitID == id {
-			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rateLimitId", owner: p.Meta.Owner, detachable: true})
-			continue
-		}
-		for _, b := range p.Spec.RLBindings {
-			if b.RateLimitID == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rlBindings[].rateLimitId", owner: p.Meta.Owner, detachable: true})
-				break
-			}
-		}
-	}
-	return out, nil
+// scanRateLimitRefs finds nothing that blocks a rate limit's delete: the
+// policies linking it lose the link (droppedLinkScans).
+func scanRateLimitRefs(context.Context, Deps, string) ([]referenceItem, error) {
+	return []referenceItem{}, nil
 }
 
 func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {

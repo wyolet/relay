@@ -42,6 +42,7 @@ func viewService(ctx context.Context, d Deps) *catalogview.Service {
 		RateLimits: d.Stores.RateLimit,
 		Providers:  d.Stores.Provider,
 		HostKeys:   d.Stores.HostKey,
+		Pools:      d.Stores.Pool,
 	}
 	if s, ok := d.Authz.(authz.Scoper); ok {
 		svc.Visible = func(kind, id string, owner meta.Owner) bool {
@@ -116,7 +117,6 @@ type policyRateLimitsOut struct {
 		Policy      catalogview.PolicyRef            `json:"policy"`
 		RateLimits  []catalogview.PolicyRateLimitRow `json:"rateLimits"`
 		Unthrottled []catalogview.UnthrottledModel   `json:"unthrottled"`
-		Overlaps    []catalogview.RateLimitOverlap   `json:"overlaps"`
 	}
 }
 
@@ -250,7 +250,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		out := &policyRateLimitsOut{}
 		out.Body.Policy = p
-		out.Body.RateLimits, out.Body.Unthrottled, out.Body.Overlaps = view.RateLimits, view.Unthrottled, view.Overlaps
+		out.Body.RateLimits, out.Body.Unthrottled = view.RateLimits, view.Unthrottled
 		return out, nil
 	})
 }

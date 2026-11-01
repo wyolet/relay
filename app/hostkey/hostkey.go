@@ -45,9 +45,9 @@ type HostKey struct {
 	KeyHash string `json:"-" yaml:"-"`
 
 	// Derived: populated by the control-API enrich step from the catalog
-	// snapshot; not stored and not loaded from YAML. Lists every user
-	// Policy whose Spec.HostKeyIDs references this HostKey, so the admin
-	// UI can show where a key is in use.
+	// snapshot; not stored and not loaded from YAML. Lists every Policy
+	// linking this HostKey in Spec.CredentialIDs, so the admin UI can show
+	// where a key is in use.
 	Policies []PolicyRef `json:"policies,omitempty" yaml:"-"`
 }
 
@@ -74,8 +74,8 @@ func (s Spec) EffectivePricingStrategy() string {
 // a host marked Spec.NoAuth — a keyless upstream (e.g. self-hosted Ollama).
 // Resolved is empty so the adapter attaches no Authorization header. KeyHash is
 // host-scoped (not derived from the empty value) so every no-auth host gets its
-// own circuit breaker rather than sharing one. Spec.PolicyID is left empty: it
-// is injected past the tier gate and carries no rate-limit tier.
+// own circuit breaker rather than sharing one. It has no account, so no tier
+// caps it.
 func Anonymous(hostID, hostName string) *HostKey {
 	return &HostKey{
 		Meta:     meta.Metadata{ID: AnonIDPrefix + hostID, Name: AnonIDPrefix + hostName},
@@ -99,15 +99,7 @@ type Spec struct {
 	// Replaces the pre-refactor Meta.Owner pointing at a Host.
 	HostID string `json:"hostId" yaml:"hostId" validate:"required"`
 
-	// PolicyID is the id of the host-owned tier Policy this key mirrors.
-	// Required: every key must declare an upstream tier so the pipeline
-	// has rate-limit rules to apply. The referenced Policy must be host-
-	// owned (Owner.Kind=host) AND its Owner.ID must equal HostID — i.e.
-	// a key can only mirror a policy belonging to its own host. Cross-
-	// entity validation lives in the composition layer.
-	PolicyID string `json:"policyId" yaml:"policyId" validate:"required"`
-
-	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits. Optional. The account must be at HostID, a cross-row check in app/refcheck.
+	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits, and the account's bound tier policy caps them. Optional. The account must be at HostID, a cross-row check in app/refcheck.
 	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid"`
 
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
@@ -121,7 +113,7 @@ type Spec struct {
 	// figure only, never enforced. Empty defaults to "api". The value must
 	// be one of the credential's Host.Spec.PricingStrategies (the host's
 	// menu of offered billing modes); that membership is a composition-layer
-	// invariant, like Spec.PolicyID belonging to the host.
+	// invariant.
 	PricingStrategy string `json:"pricingStrategy,omitempty" yaml:"pricingStrategy,omitempty" validate:"omitempty,oneof=api sub"`
 
 	// Value is cleartext on the write path for ValueKindStored. Accepted
@@ -182,14 +174,12 @@ func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Ena
 //   - Owner.Kind must be user or system (the actor that created the key);
 //     keys are not owned by the Host they authenticate to.
 //   - Spec.HostID is required; it points at the Host this key targets.
-//   - Spec.PolicyID is required; it picks the upstream tier Policy this
-//     key mirrors.
 //   - ValueKindEnv requires Spec.ValueFrom.Env outside the reserved RELAY_*/WYOLET_* names; cleartext Value must be empty.
 //   - ValueKindStored requires non-empty cleartext Spec.Value at write time;
 //     ValueFrom.Env must be empty.
 //
-// Cross-entity checks (HostID resolves to a Host; PolicyID resolves to a
-// host-owned Policy of THAT host) live in the composition layer.
+// Cross-entity checks (HostID resolves to a Host; AccountID names an account
+// at THAT host) live in app/refcheck.
 func (k *HostKey) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err
@@ -201,9 +191,6 @@ func (k *HostKey) Validate() error {
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
-	}
-	if k.Spec.PolicyID == "" {
-		return fmt.Errorf("hostkey %q: spec.policyId is required", k.Meta.Name)
 	}
 	switch k.Spec.ValueFrom.Kind {
 	case ValueKindEnv:

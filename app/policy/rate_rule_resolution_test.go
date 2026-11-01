@@ -4,94 +4,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/wyolet/relay/app/meta"
-	appratelimit "github.com/wyolet/relay/app/ratelimit"
 )
 
-func testRateLimit(id string, rules ...appratelimit.Rule) *appratelimit.RateLimit {
-	rl := &appratelimit.RateLimit{}
-	rl.Meta.ID, rl.Meta.Name = id, id
-	rl.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
-	rl.Spec.Rules = rules
-	return rl
-}
-
-func requestsRule() appratelimit.Rule {
-	return appratelimit.Rule{
-		Meter: appratelimit.MeterRequests, Amount: 10,
-		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow,
-	}
-}
-
-// RLBindings are scanned in declared order and the first match wins, so an
-// author who overlaps two binding model sets gets the earlier one — never
-// both, and never the later one. The flat RateLimitID is the fallback for a
-// request no binding covers, and it never buckets per model.
-func TestSelectRateLimitID_FirstMatchWins(t *testing.T) {
-	overlapping := fix("p")
-	overlapping.Spec.RLBindings = []RLBinding{
-		{Models: []string{"acme/fast"}, RateLimitID: "rl-narrow"},
-		{Models: []string{"acme"}, RateLimitID: "rl-broad"},
-	}
-
-	for _, tc := range []struct {
-		name                              string
-		pol                               *Policy
-		providerSlug, modelSlug, hostSlug string
-		wantID                            string
-		wantPerModel                      bool
-	}{
-		{
-			name: "the earlier binding wins over a later one that also matches",
-			pol:  overlapping, providerSlug: "acme", modelSlug: "fast", hostSlug: "h",
-			wantID: "rl-narrow", wantPerModel: true,
-		},
-		{
-			name: "a model only the broad binding covers takes it",
-			pol:  overlapping, providerSlug: "acme", modelSlug: "slow", hostSlug: "h",
-			wantID: "rl-broad", wantPerModel: true,
-		},
-		{
-			name: "a model no binding covers is uncapped at this policy",
-			pol:  overlapping, providerSlug: "other", modelSlug: "fast", hostSlug: "h",
-			wantID: "", wantPerModel: false,
-		},
-		{
-			name: "the flat rate limit applies to every model and buckets once",
-			pol: func() *Policy {
-				p := fix("p")
-				p.Spec.RateLimitID = "rl-flat"
-				return p
-			}(),
-			providerSlug: "acme", modelSlug: "anything", hostSlug: "h",
-			wantID: "rl-flat", wantPerModel: false,
-		},
-		{
-			name: "a policy with neither is uncapped",
-			pol:  fix("p"), providerSlug: "acme", modelSlug: "fast", hostSlug: "h",
-			wantID: "", wantPerModel: false,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			id, perModel := tc.pol.SelectRateLimitID(tc.providerSlug, tc.modelSlug, tc.hostSlug)
-			if id != tc.wantID || perModel != tc.wantPerModel {
-				t.Fatalf("SelectRateLimitID = (%q, %v), want (%q, %v)", id, perModel, tc.wantID, tc.wantPerModel)
-			}
-		})
-	}
-
-	// A nil policy is the policy-less caller; it caps nothing rather than
-	// panicking on the RLBindings walk.
-	if id, perModel := (*Policy)(nil).SelectRateLimitID("acme", "fast", "h"); id != "" || perModel {
-		t.Fatalf("nil policy = (%q, %v), want (\"\", false)", id, perModel)
-	}
-}
-
-// The owner shapes a Policy accepts differ by tier: a host-owned row is an
-// upstream tier definition and carries no inbound grants, a project- or
-// user-owned row is a customer policy. Model refs are parsed at write time so
+// The owner shapes a Policy accepts differ by rung: a host-owned row is a
+// tier preset and links no pools or credentials, a project-, team- or
+// user-owned row is a caller policy. Model refs are parsed at write time so
 // a grant that can never match is refused rather than silently ignored.
 func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 	withOwner := func(o meta.Owner) *Policy {
@@ -105,7 +24,7 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 		p    *Policy
 		want string // empty means the row is accepted
 	}{
-		{name: "project-owned is a customer policy", p: withOwner(meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()})},
+		{name: "project-owned is a caller policy", p: withOwner(meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()})},
 		{
 			name: "host-owned tier with an id and no grants",
 			p:    withOwner(meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}),
@@ -116,13 +35,13 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 			want: "owner.id is required for host-owned policy",
 		},
 		{
-			name: "host-owned tier listing host keys",
+			name: "host-owned tier linking a pool",
 			p: func() *Policy {
 				p := withOwner(meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()})
-				p.Spec.HostKeyIDs = []string{meta.NewID()}
+				p.Spec.PoolIDs = []string{meta.NewID()}
 				return p
 			}(),
-			want: "must not list hostKeyIds",
+			want: "must not list poolIds or credentialIds",
 		},
 		{
 			name: "team owner",
@@ -176,12 +95,13 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 			want: "contains *",
 		},
 		{
-			name: "an rlBinding model ref the parser cannot read is not checked here",
+			name: "a rate-limit scope the parser cannot read",
 			p: func() *Policy {
 				p := fix("p")
-				p.Spec.RLBindings = []RLBinding{{Models: []string{"acme/model@"}, RateLimitID: meta.NewID()}}
+				p.Spec.RateLimits = []RateLimitLink{{Models: []string{"acme/model@"}, RateLimitID: meta.NewID()}}
 				return p
 			}(),
+			want: "rateLimits[0]",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,7 +124,7 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 func TestCanonicalizeSpecModelRefs_RewritesEveryGrantList(t *testing.T) {
 	p := fix("p")
 	p.Spec.Models = []string{"Acme/GPT-5.5", "acme/gpt-5-5", "Acme"}
-	p.Spec.RLBindings = []RLBinding{
+	p.Spec.RateLimits = []RateLimitLink{
 		{Models: []string{"Acme/GPT-5.5@Host"}, RateLimitID: meta.NewID()},
 	}
 	if err := p.CanonicalizeSpecModelRefs(); err != nil {
@@ -214,8 +134,8 @@ func TestCanonicalizeSpecModelRefs_RewritesEveryGrantList(t *testing.T) {
 	if want := []string{"acme/gpt-5-5", "acme"}; !slices.Equal(p.Spec.Models, want) {
 		t.Errorf("models = %v, want %v", p.Spec.Models, want)
 	}
-	if got := p.Spec.RLBindings[0].Models; len(got) != 1 || got[0] != "acme/gpt-5-5@host" {
-		t.Errorf("rlBinding models = %v, want [acme/gpt-5-5@host]", got)
+	if got := p.Spec.RateLimits[0].Models; len(got) != 1 || got[0] != "acme/gpt-5-5@host" {
+		t.Errorf("rateLimits models = %v, want [acme/gpt-5-5@host]", got)
 	}
 	// Canonicalizing twice is a no-op: the second pass is what apply's diff
 	// compares against.
@@ -233,9 +153,9 @@ func TestCanonicalizeSpecModelRefs_RewritesEveryGrantList(t *testing.T) {
 		t.Errorf("err = %v, want one naming the models field", err)
 	}
 	bad = fix("bad")
-	bad.Spec.RLBindings = []RLBinding{{Models: []string{"acme/model@"}, RateLimitID: meta.NewID()}}
-	if err := bad.CanonicalizeSpecModelRefs(); err == nil || !strings.Contains(err.Error(), "rlBindings") {
-		t.Errorf("err = %v, want one naming the rlBindings field", err)
+	bad.Spec.RateLimits = []RateLimitLink{{Models: []string{"acme/model@"}, RateLimitID: meta.NewID()}}
+	if err := bad.CanonicalizeSpecModelRefs(); err == nil || !strings.Contains(err.Error(), "rateLimits") {
+		t.Errorf("err = %v, want one naming the rateLimits field", err)
 	}
 }
 

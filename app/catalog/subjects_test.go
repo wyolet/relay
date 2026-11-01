@@ -26,7 +26,6 @@ type subjectsFixture struct {
 	pol     *policy.Policy
 	sa      *serviceaccount.ServiceAccount
 	orphan  *serviceaccount.ServiceAccount
-	badPol  *serviceaccount.ServiceAccount
 	k       *key.Key
 	group   *group.Group
 	alice   string
@@ -46,17 +45,16 @@ func newSubjectsFixture() subjectsFixture {
 	proj.StampOwner()
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-pol", Owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}}}
 
-	newSA := func(name, projectID, policyID string) *serviceaccount.ServiceAccount {
+	newSA := func(name, projectID string) *serviceaccount.ServiceAccount {
 		sa := &serviceaccount.ServiceAccount{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
-			Spec: serviceaccount.Spec{ProjectID: projectID, PolicyID: policyID},
+			Spec: serviceaccount.Spec{ProjectID: projectID},
 		}
 		sa.StampOwner()
 		return sa
 	}
-	sa := newSA("indexer", proj.Meta.ID, "")
-	orphan := newSA("orphan", meta.NewID(), "")
-	badPol := newSA("bad-policy", proj.Meta.ID, meta.NewID())
+	sa := newSA("indexer", proj.Meta.ID)
+	orphan := newSA("orphan", meta.NewID())
 
 	k := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-prod", Owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}},
@@ -74,7 +72,7 @@ func newSubjectsFixture() subjectsFixture {
 
 	return subjectsFixture{
 		team: tm, project: proj, pol: pol,
-		sa: sa, orphan: orphan, badPol: badPol,
+		sa: sa, orphan: orphan,
 		k: k, group: g, alice: alice, bob: bob,
 	}
 }
@@ -83,7 +81,7 @@ func (f subjectsFixture) catalog(t *testing.T) *Catalog {
 	t.Helper()
 	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k}, rcList{}, bndList{})
 	c.UseTenancy(teamList{f.team}, projList{f.project},
-		saList{f.sa, f.orphan, f.badPol}, grpList{f.group}, roleList{}, rbList{}, pbList{})
+		saList{f.sa, f.orphan}, grpList{f.group}, roleList{}, rbList{}, pbList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -99,9 +97,6 @@ func TestBuild_ServiceAccountAndKeyMembership(t *testing.T) {
 	}
 	if _, ok := s.ServiceAccount(f.orphan.Meta.ID); ok {
 		t.Error("service account whose project is absent should be dropped")
-	}
-	if _, ok := s.ServiceAccount(f.badPol.Meta.ID); ok {
-		t.Error("service account whose policy override does not resolve should be dropped")
 	}
 	if got := s.ServiceAccountsForProject(f.project.Meta.ID); len(got) != 1 || got[0].Meta.Name != "indexer" {
 		t.Errorf("ServiceAccountsForProject = %v, want [indexer]", got)

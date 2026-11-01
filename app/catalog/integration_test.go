@@ -227,7 +227,6 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "stored-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  tier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored},
 			Value:     "sk-test-secret",
 		},
@@ -284,7 +283,6 @@ func TestIntegration_UnresolvedEnvHostKey(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "unset-env-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  tier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_TEST_UNSET_ENV_KEY"},
 		},
 	}
