@@ -185,3 +185,30 @@ func TestScopedUserBindingCountsPerScope(t *testing.T) {
 		t.Fatalf("counter group %q, want the user's", first[0].Group)
 	}
 }
+
+// A binding owned by one project and naming another project's service account is ignored for it with an issue, however it was written; the account's own project binds it. Moving the account into the binding's project brings the binding into effect.
+func TestBindingOutsideItsOwnersScopeNeverApplies(t *testing.T) {
+	b := newBasic()
+	elsewhere := b.w.project(b.team)
+	pol := b.w.policy("only-m1", policy.Spec{Models: []string{"acme/m1"}})
+	foreign := ownedBy(b.w.bindPolicy(pol, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID)), meta.Owner{Kind: meta.OwnerProject, ID: elsewhere.Meta.ID})
+	h := b.w.start(t)
+
+	if rung := h.keyPlan(b.key).Caller.PrincipalRung(); rung.Policy != nil {
+		t.Fatalf("service account governed by another project's binding: %+v", rung.Policy)
+	}
+	if !hasIssue(h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope) {
+		t.Fatalf("issues = %+v, want %s", h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope)
+	}
+
+	moved := clone(b.sa)
+	moved.Spec.ProjectID = elsewhere.Meta.ID
+	moved.StampOwner()
+	apply(h, moved)
+	if rung := h.keyPlan(b.key).Caller.PrincipalRung(); rung.Policy == nil || rung.Policy.Policy.Meta.ID != pol.Meta.ID {
+		t.Fatalf("service account inside the binding's project = %+v, want the bound policy", rung.Policy)
+	}
+	if hasIssue(h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope) {
+		t.Fatal("the out-of-scope issue stayed after the account moved into scope")
+	}
+}

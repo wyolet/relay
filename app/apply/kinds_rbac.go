@@ -48,7 +48,11 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 		Kind: "PolicyBinding", Docs: pbDocs, Names: b.idx.PolicyBindings, Rows: b.rows.PolicyBindings,
 		To: manifest.ToPolicyBinding, Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
 		Upsert: s.PolicyBinding.Upsert, Delete: s.PolicyBinding.Delete,
-		Check: refsFor(b, refcheck.Checker.PolicyBinding),
+		// Which subjects and policies a binding may name is a rule of the rows, not of the caller, so the seed and the CLI run it too.
+		Check: func() func(context.Context, *policybinding.PolicyBinding) error {
+			c := b.refs()
+			return func(ctx context.Context, pb *policybinding.PolicyBinding) error { return c.PolicyBinding(ctx, pb) }
+		}(),
 	}); err != nil {
 		return err
 	}

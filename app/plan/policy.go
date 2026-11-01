@@ -270,6 +270,7 @@ func (c *controllers) rungPolicy(tx *engine.Txn, subject string) error {
 		engine.Drop(tx)
 		return nil
 	}
+	bs = bindingsInScope(tx, subject, bs)
 	prev := engine.Get[RungPolicy](tx, subject)
 	var scoped []ScopedRung
 	if kind == limits.RungPrincipal && strings.HasPrefix(subject, "user:") {
