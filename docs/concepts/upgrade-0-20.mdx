@@ -56,15 +56,22 @@ migration 000035: a subject may be bound by one policy binding (a user by one pe
 
 **Migration 36** drops the `policy_models` and `policy_host_keys` tables, the `policies.rate_limit_id` column and the `policy_bindings.priority` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, `policyId` from every relay key, service account and host key, `policies` and `defaultPolicy` from every host, and `budget` from every team and project. Policies keep their name, owner, `models`, `includeDeprecated`, `payloadLoggingEnabled` and `enabled`. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
 
+<Note>
+Migration 36 refuses to run if any still-bound policy would lose its only access restriction. A policy with rows in `policy_models` and an empty `models` field, or rows in `policy_host_keys` and no pools or credentials, becomes unrestricted once those rows are gone. If any such policy is bound to a non-group subject—disabled bindings count—the migration stops and lists each policy and its bindings. Adding `models` or pools before upgrading is not possible; the pools table exists only in 0.20. Unbind those policies (or delete their bindings) on the 0.11 database first, upgrade, then add `models`, pools or credentials following [Re-creating the dropped links](#re-creating-the-dropped-links). See step 5 of [Before you upgrade](#before-you-upgrade) for the check query.
+</Note>
+
 Before it drops them, it logs each link it removes by the names of both ends, on boot and in `relay migrate up`: one log entry per link, with the message `migrate: postgres notice` and the line below in its `notice` field. A target whose row no longer exists is named by its id:
 
 ```
 000036: dropping link: key "ci-runner" -> policy "ci"
 000036: dropping link: host key "anthropic-main" -> tier policy "anthropic-start"
+000036: dropping link: service account "legacy-api" -> policy "ci"
 000036: dropping link: policy "ci" -> host key "anthropic-main"
 000036: dropping link: policy "ci" -> model "claude-haiku-4-5"
 000036: dropping link: policy "ci" -> rate limit "ci-rpm"
 000036: dropping link: policy "anthropic-start" -> rate limit "anthropic-start-rl" for models anthropic/claude-opus-5-5, anthropic/claude-sonnet-5-5
+000036: binding no longer applies: policy binding "project-default" (policy "users") -> group "system:authenticated"
+000036: binding narrows to project tokens: policy binding "project-alice" (policy "users") -> user "alice" governs only tokens in project "dev", not personal keys
 ```
 
 It then gives every host key without an account its owner's default account at the key's host, creating one account per owner and host, named after the host (suffixed `-2`, `-3`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account. Keys whose host no longer exists are left without one.
@@ -79,7 +86,7 @@ The catalog's tier policies lose their rate limits with this migration. They get
    relay export --include-system -o before-0.20.yaml
    ```
 
-2. **Export the links migration 36 drops**, by name. The query only reads; run it against the 0.11 database and keep the result for [Re-creating the dropped links](#re-creating-the-dropped-links):
+2. **Export the links migration 36 drops and the bindings it changes**, by name. The query only reads; run it against the 0.11 database and keep the result for [Re-creating the dropped links](#re-creating-the-dropped-links):
 
    ```sql
    SELECT 'key -> policy' AS link, k.name AS source, COALESCE(p.name, k.spec->>'policyId') AS target, NULL AS models
@@ -89,6 +96,24 @@ The catalog's tier policies lose their rate limits with this migration. They get
    SELECT 'host key -> tier policy', s.name, COALESCE(p.name, s.spec->>'policyId'), NULL
    FROM secrets s LEFT JOIN policies p ON p.id = s.spec->>'policyId'
    WHERE COALESCE(s.spec->>'policyId', '') <> ''
+   UNION ALL
+   SELECT 'service account -> policy', sa.name, COALESCE(p.name, sa.spec->>'policyId'), NULL
+   FROM service_accounts sa LEFT JOIN policies p ON p.id = sa.spec->>'policyId'
+   WHERE COALESCE(sa.spec->>'policyId', '') <> ''
+   UNION ALL
+   SELECT 'binding -> group (no longer applies)', b.name, s.subject_name, p.name
+   FROM policy_binding_subjects s
+   JOIN policy_bindings b ON b.id = s.binding_id
+   JOIN policies p ON p.id = b.policy_id
+   WHERE s.kind = 'group'
+   UNION ALL
+   SELECT 'binding -> user (project tokens only)', b.name, COALESCE(u.username, s.subject_id), pr.name
+   FROM policy_binding_subjects s
+   JOIN policy_bindings b ON b.id = s.binding_id
+   JOIN policies p ON p.id = b.policy_id
+   JOIN projects pr ON pr.id = b.project_id
+   LEFT JOIN users u ON u.id = s.subject_id
+   WHERE s.kind = 'user'
    UNION ALL
    SELECT 'policy -> host key', p.name, s.name, NULL
    FROM policy_host_keys l JOIN policies p ON p.id = l.policy_id JOIN secrets s ON s.id = l.host_key_id
@@ -112,7 +137,7 @@ The catalog's tier policies lose their rate limits with this migration. They get
    psql "$RELAY_PG_DSN" --csv -f dropped-links.sql > dropped-links.csv
    ```
 
-   Host keys are the rows of the `secrets` table. The migration logs the same links as it drops them.
+   Host keys are the rows of the `secrets` table. For `binding -> group` and `binding -> user` rows the `models` column holds the policy name and project name; these bindings are not dropped but change: group subjects bind nothing after the upgrade, user subjects govern only that project's tokens. The migration logs the same dropped links as it drops them.
 
 3. **Back up Postgres.** Rolling back needs it; see [Rolling back](#rolling-back).
 
@@ -129,7 +154,30 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
    For each row, decide which binding keeps the subject and remove it from the others, on 0.11, before upgrading.
 
-5. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the exports; [Re-creating the dropped links](#re-creating-the-dropped-links) maps each dropped link to its replacement:
+5. **Check for policies that migration 36 would refuse.** A policy with rows in `policy_models` and an empty `models` field, or rows in `policy_host_keys` and no pools or credentials, would become unrestricted once those tables are dropped; if it is bound to a non-group subject—disabled bindings count—the migration stops. Run this against the 0.11 database to find them:
+
+   ```sql
+   SELECT p.name AS policy, l.lost AS would_lose, l.bindings
+   FROM policies p
+   CROSS JOIN LATERAL (
+       SELECT concat_ws(' and ',
+                  CASE WHEN EXISTS (SELECT 1 FROM policy_models pm WHERE pm.policy_id = p.id)
+                        AND (CASE WHEN jsonb_typeof(p.models) = 'array' THEN jsonb_array_length(p.models) ELSE 0 END) = 0
+                       THEN 'model ids' END,
+                  CASE WHEN EXISTS (SELECT 1 FROM policy_host_keys phk WHERE phk.policy_id = p.id)
+                        AND NOT EXISTS (SELECT 1 FROM policy_pools pp WHERE pp.policy_id = p.id)
+                        AND NOT EXISTS (SELECT 1 FROM policy_credentials pc WHERE pc.policy_id = p.id)
+                       THEN 'host keys' END) AS lost,
+              (SELECT string_agg(DISTINCT b.name, ', ' ORDER BY b.name)
+               FROM policy_bindings b JOIN policy_binding_subjects s ON s.binding_id = b.id
+               WHERE b.policy_id = p.id AND s.subject_id IS NOT NULL) AS bindings
+   ) l
+   WHERE l.lost <> '' AND l.bindings IS NOT NULL;
+   ```
+
+   For each row, the migration stops and reports: `migration 000036: bound policies would lose their only model or host-key restriction and widen; …: policy <name> loses its <what> (bound by <bindings>)`. Adding `models` or pools before upgrading is not possible—the pools table exists only in 0.20. On the 0.11 database, delete those bindings or remove those policies from them, then upgrade. After upgrading, add `models`, pools or credentials following [Re-creating the dropped links](#re-creating-the-dropped-links).
+
+6. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the exports; [Re-creating the dropped links](#re-creating-the-dropped-links) maps each dropped link to its replacement:
 
    - An `Account` for each provider organization, and `account` on each of its host keys. A key you leave without one stays in the default account migration 36 gave it.
    - A `PolicyBinding` of a tier preset (or your own tier policy) on each account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
@@ -141,7 +189,7 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
    [Policy examples](/policy-examples) shows each of these.
 
-6. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
+7. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
 
 ## Upgrade steps
 
