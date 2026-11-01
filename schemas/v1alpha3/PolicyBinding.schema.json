@@ -36,7 +36,6 @@
           "enum": [
             "user",
             "serviceaccount",
-            "group",
             "host",
             "account",
             "credential",

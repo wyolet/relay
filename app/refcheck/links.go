@@ -24,7 +24,7 @@ func (c Checker) hostRef(ctx context.Context, hostID string) error {
 	return nil
 }
 
-// accountRef checks the account a host key names: visible, usable from the key's scope, and held at the key's host.
+// accountRef checks the account a host key names: visible, owned by the key's own owner, and held at the key's host.
 func (c Checker) accountRef(ctx context.Context, k *hostkey.HostKey) error {
 	if k.Spec.AccountID == "" || c.Rows.Account == nil {
 		return nil
@@ -33,7 +33,7 @@ func (c Checker) accountRef(ctx context.Context, k *hostkey.HostKey) error {
 	if a == nil {
 		return badRequest("account %q does not exist", k.Spec.AccountID)
 	}
-	if err := c.linkRef(ctx, "account", k.Spec.AccountID, a.Meta, k.Meta.Owner); err != nil {
+	if err := c.joinable(ctx, k.Spec.AccountID, a.Meta, k.Meta.Owner); err != nil {
 		return err
 	}
 	if a.Spec.HostID != k.Spec.HostID {
@@ -115,7 +115,18 @@ func (c Checker) AccountRef(ctx context.Context, id string, refOwner meta.Owner)
 	if a == nil {
 		return badRequest("account %q does not exist", id)
 	}
-	return c.linkRef(ctx, "account", id, a.Meta, refOwner)
+	return c.joinable(ctx, id, a.Meta, refOwner)
+}
+
+// joinable lets a key join only an account its own owner owns: a key in an account shares the account's counters and its 429 cooldown, which changes state the account's other keys depend on, so using a shared account is not enough.
+func (c Checker) joinable(ctx context.Context, id string, m meta.Metadata, keyOwner meta.Owner) error {
+	if !Visible(ctx, c.Authz, "account", m.ID, m.Owner) {
+		return notVisible("account", id)
+	}
+	if m.Owner == keyOwner {
+		return nil
+	}
+	return badRequest("account %q is owned by %s; a key owned by %s may join only an account of its own owner", m.Name, ownerText(m.Owner), ownerText(keyOwner))
 }
 
 // PoolRefs checks pools a policy owned by refOwner links.

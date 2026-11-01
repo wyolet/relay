@@ -10,8 +10,8 @@
 // Resolved/KeyHash fields by resolving the secret Ref.
 //
 // Upsert is the one write path every caller (control API, apply, seed)
-// shares, so it is where a key saved without an account joins its owner's
-// default account at its host.
+// shares, so it is where a key saved without an account keeps the one it has
+// or joins its owner's default account at its host.
 
 package hostkey
 
@@ -78,11 +78,12 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 // cleartext into secret_values (via the stored resolver) and persist a
 // ciphertext-free secrets row. Cleartext Spec.Value never reaches the
 // secrets table and is cleared after a successful stored write. A key
-// without an account gets its owner's default account at its host, created
-// on first use; a key whose host does not exist keeps none.
+// saved without an account keeps the one it has, or else gets its owner's
+// default account at its host, created on first use; a key whose host does
+// not exist keeps none.
 func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 	if k.Spec.AccountID == "" && k.Spec.HostID != "" {
-		id, err := s.accounts.EnsureDefault(ctx, k.Meta.Owner, k.Spec.HostID)
+		id, err := s.accountFor(ctx, k)
 		if err != nil {
 			return fmt.Errorf("hostkey.Upsert: %w", err)
 		}
@@ -175,6 +176,28 @@ func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
 		return nil, fmt.Errorf("hostkey.Get: %w", err)
 	}
 	return k, nil
+}
+
+// accountFor is the account k joins when saved without one: on an update that keeps its owner and host, the account it already has, as the stored secret is kept; else its owner's default account at its host. An account belongs to one owner and host, so a key moved to another leaves it.
+func (s *Store) accountFor(ctx context.Context, k *HostKey) (string, error) {
+	r, err := s.q.GetSecret(ctx, k.Meta.ID)
+	switch {
+	case err == nil:
+		md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+		if err != nil {
+			return "", err
+		}
+		var spec Spec
+		if err := json.Unmarshal(r.Spec, &spec); err != nil {
+			return "", fmt.Errorf("spec: %w", err)
+		}
+		if spec.AccountID != "" && spec.HostID == k.Spec.HostID && md.Owner == k.Meta.Owner {
+			return spec.AccountID, nil
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return "", err
+	}
+	return s.accounts.EnsureDefault(ctx, k.Meta.Owner, k.Spec.HostID)
 }
 
 // Delete removes a HostKey by id, plus its stored secret value (best-effort

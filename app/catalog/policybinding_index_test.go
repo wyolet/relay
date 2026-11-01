@@ -15,7 +15,7 @@ func TestPolicyBindingSubjectKeysArePrecomputed(t *testing.T) {
 	b := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}}
 	b.Spec.ProjectID = proj.Meta.ID
 	b.Spec.PolicyID = pol.Meta.ID
-	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "data-science"}}
+	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: meta.NewID()}}
 	b.StampOwner()
 
 	if err := c.ApplyPolicyBindingUpsert(b); err != nil {

@@ -19,11 +19,11 @@ import (
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/tenancy_golden.txt from this run")
 
-// tenancyBundle covers every tenancy and RBAC kind apply writes: teams and projects with budgets, a service account, a group, a custom role, and bindings at the global, team and project scopes naming users, a group, a service account and every authenticated caller.
+// tenancyBundle covers every tenancy and RBAC kind apply writes: teams and projects, a service account, a group, a custom role, and bindings at the global, team and project scopes naming users, a group, a service account and every authenticated caller.
 const tenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata: {name: platform, displayName: Platform, owner: {kind: user}, labels: {managed: gitops}}
-spec: {budget: {amount: "100"}}
+spec: {}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
@@ -33,7 +33,7 @@ spec: {enabled: true}
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata: {name: ml-search, displayName: ML Search, annotations: {note: seeded}}
-spec: {team: platform, budget: {amount: "25.50", period: week}}
+spec: {team: platform}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
@@ -198,9 +198,8 @@ func editThroughAPI(t *testing.T, st *stack) []string {
 
 	edit("teams", "research", func(r map[string]any) {
 		r["metadata"].(map[string]any)["displayName"] = "Research Lab"
-		spec(r)["budget"] = map[string]any{"amount": "40", "period": "day"}
 	})
-	edit("projects", "ml-search", func(r map[string]any) { delete(spec(r), "budget") })
+	edit("projects", "ml-search", func(r map[string]any) { r["metadata"].(map[string]any)["displayName"] = "ML Search v2" })
 	edit("service-accounts", "sandbox-bot", func(r map[string]any) {
 		r["metadata"].(map[string]any)["displayName"] = "Sandbox Bot"
 		spec(r)["enabled"] = true

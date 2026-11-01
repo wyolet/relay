@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/host"
@@ -87,5 +88,49 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 				t.Fatalf("owner = %+v, want %s", row.Metadata.Owner, tc.wantOwner)
 			}
 		})
+	}
+}
+
+// A project admin may read a system policy to bind it, but not one linking another team's pool: binding it would put the project's traffic on that team's credentials.
+func TestIntegration_PolicyBindingRefusesAnotherTeamsPool(t *testing.T) {
+	t.Parallel()
+	st := newStackAuthz(t, "rbac")
+	ctx := context.Background()
+	roles := seedBuiltinRoles(t, st)
+	teamA, teamB := st.mkTeam(t, "borrow-a"), st.mkTeam(t, "borrow-b")
+	projA := st.mkProject(t, "borrow-a-one", teamA)
+	hst := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "borrow-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
+	if err := st.stores.Host.Upsert(ctx, hst); err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+	create := func(path, body string) string {
+		code, raw := st.adminDo(http.MethodPost, path, body)
+		if code != http.StatusCreated {
+			t.Fatalf("POST %s = %d: %s", path, code, raw)
+		}
+		var row tenancyRow
+		if err := json.Unmarshal(raw, &row); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return row.Metadata.ID
+	}
+	poolB := create("/api/pools", `{"metadata":{"name":"borrow-b-pool","owner":{"kind":"team","id":"`+teamB+`"}},"spec":{"hostId":"`+hst.Meta.ID+`"}}`)
+	borrowing := create("/api/policies", `{"metadata":{"name":"borrow-shared"},"spec":{"poolIds":["`+poolB+`"]}}`)
+	plain := create("/api/policies", `{"metadata":{"name":"borrow-plain"},"spec":{}}`)
+
+	adminID := st.seedLogin(t, "borrow-admin", "pw-borrow-admin")
+	st.bindRole(t, "borrow-a-admins", roles["project-admin"].Meta.ID, adminID, "project", projA)
+	if err := st.cat.Reload(ctx); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	admin := st.login(t, "borrow-admin", "pw-borrow-admin")
+	binding := func(name, policyID string) string {
+		return `{"metadata":{"name":"` + name + `","owner":{"kind":"project","id":"` + projA + `"}},"spec":{"policyId":"` + policyID + `","subjects":[{"kind":"project","id":"` + projA + `"}]}}`
+	}
+	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-pool", borrowing)); code != http.StatusBadRequest || !strings.Contains(string(raw), "cannot use") {
+		t.Fatalf("binding a system policy on another team's pool = %d, want 400 naming the pool: %s", code, raw)
+	}
+	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-plain", plain)); code != http.StatusCreated {
+		t.Fatalf("binding a system policy without links = %d, want 201: %s", code, raw)
 	}
 }

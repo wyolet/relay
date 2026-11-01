@@ -1,7 +1,7 @@
 package plan
 
 import (
-	"sync"
+	"maps"
 
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/team"
@@ -56,21 +56,22 @@ func (c *controllers) userIndex(tx *engine.Txn, _ string) error {
 	return nil
 }
 
-// ProjectPlan is what a token scoped to an enabled project adds to its user's plan: the project's and its team's rungs, read once, and the caller plans of the users acting in it, folded on first use.
+// ProjectPlan is what a token scoped to an enabled project adds to its user's plan: the project's and its team's rungs, read once.
 type ProjectPlan struct {
 	Project *project.Project
 	rungs   [2]rungRead          // team, project
 	owned   [2]*OwnedCredentials // project's, team's
 	in      inputs
-
-	mu      sync.RWMutex
-	callers map[string]*projectCaller // by the user's principal
 }
 
-// projectCaller is a user's plan in the project, with the user plan it was folded from.
+// projectCaller is a user's plan in a project, with the project plan it was folded from.
 type projectCaller struct {
-	user, caller *CallerPlan
+	project *ProjectPlan
+	caller  *CallerPlan
 }
+
+// maxProjectCallers bounds the projects one user plan keeps a folded plan for; past it the cache starts over.
+const maxProjectCallers = 128
 
 func (p *ProjectPlan) builtFrom() inputs { return p.in }
 
@@ -95,29 +96,41 @@ func (c *controllers) projectPlan(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// CallerFor returns the plan of the user whose own plan is user, acting in this project: the user's rung under the project's and its team's, reaching what the project and the team own as well as what the user does. The user's rung is the binding that governs inside this project: a system-owned one, or one the project or its team owns. Folded on first use and kept while neither plan changes: plans are immutable, so a changed user plan is a new pointer and a changed project a new ProjectPlan.
+// CallerFor returns the plan of the user whose own plan is user, acting in this project: the user's rung under the project's and its team's, reaching what the project and the team own as well as what the user does. The user's rung is the binding that governs inside this project: a system-owned one, or one the project or its team owns. Folded on first use and kept on the user's plan while this project plan is current; the cache goes with the user's plan, so a rebuilt plan (any catalog change rebuilds every one) releases the old folds and the catalog they hold.
 func (p *ProjectPlan) CallerFor(user *CallerPlan) *CallerPlan {
-	p.mu.RLock()
-	e := p.callers[user.Principal]
-	p.mu.RUnlock()
-	if e != nil && e.user == user {
-		return e.caller
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if e = p.callers[user.Principal]; e != nil && e.user == user {
-		return e.caller
+	id := p.Project.Meta.ID
+	cache := user.inProjects
+	var cached *map[string]projectCaller
+	if cache != nil {
+		if cached = cache.m.Load(); cached != nil {
+			if e, ok := (*cached)[id]; ok && e.project == p {
+				return e.caller
+			}
+		}
 	}
 	rd := user.reads
 	rd.rungs[rungTeam], rd.rungs[rungProject] = p.rungs[0], p.rungs[1]
 	rd.rungs[rungPrincipal] = rd.principalIn(p.rungs[1].rung.SubjectID, p.rungs[0].rung.SubjectID)
 	rd.owned[ownedProject], rd.owned[ownedTeam] = p.owned[0], p.owned[1]
 	cp := foldCaller(user.Principal, rd)
-	if p.callers == nil {
-		p.callers = map[string]*projectCaller{}
+	if cache == nil {
+		return cp
 	}
-	p.callers[user.Principal] = &projectCaller{user: user, caller: cp}
-	return cp
+	// Copy on write: readers take no lock. Two first requests racing may both fold; the one stored wins.
+	for {
+		next := map[string]projectCaller{}
+		if cached != nil && len(*cached) < maxProjectCallers {
+			if e, ok := (*cached)[id]; ok && e.project == p {
+				return e.caller
+			}
+			maps.Copy(next, *cached)
+		}
+		next[id] = projectCaller{project: p, caller: cp}
+		if cache.m.CompareAndSwap(cached, &next) {
+			return cp
+		}
+		cached = cache.m.Load()
+	}
 }
 
 // ProjectIndex finds an enabled project's plan by id, for the project a token is scoped to.

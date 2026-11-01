@@ -1,5 +1,8 @@
 -- Reverse 000036. The tables and the columns come back empty: the links they held, and the spec fields 000036 removed, are not restored; every binding gets the default priority. Default accounts stay as plain accounts and keys keep the account they joined.
 
+DROP TRIGGER IF EXISTS projects_drop_keyless_default_accounts ON projects;
+DROP TRIGGER IF EXISTS teams_drop_keyless_default_accounts ON teams;
+DROP FUNCTION IF EXISTS accounts_drop_keyless_defaults();
 DROP INDEX IF EXISTS accounts_one_default;
 ALTER TABLE accounts DROP COLUMN IF EXISTS default_owner;
 

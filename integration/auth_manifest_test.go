@@ -77,7 +77,7 @@ func TestIntegration_AuthKindsWriteTheSameRowsUnderEitherAPIVersion(t *testing.T
 const mixedBundle = `apiVersion: auth.wyolet.dev/v1alpha1
 kind: Team
 metadata: {name: data}
-spec: {budget: {amount: "10"}}
+spec: {}
 ---
 apiVersion: auth.wyolet.dev/v1alpha1
 kind: Project

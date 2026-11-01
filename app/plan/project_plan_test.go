@@ -1,8 +1,11 @@
 package plan
 
 import (
+	"runtime"
+	"sync"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/limits"
@@ -84,5 +87,88 @@ func TestProjectPlan_TokenCallerFoldsTheProjectAndTeam(t *testing.T) {
 	apply(h, tm)
 	if r := h.tokenCaller(b, u.ID).Refused; r == nil || r.Code != CodeSubjectDisabled || r.Rung != limits.RungTeam {
 		t.Fatalf("token under a disabled team: refused = %+v, want subject_disabled on the team rung", r)
+	}
+}
+
+// A user's plans in projects live on the user's own plan: a catalog change rebuilds it, and a user who never calls again leaves no old token plan, and no catalog index it was folded over, kept by the project, which the change leaves as it was.
+func TestProjectCallersGoWithTheUserPlan(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	h := b.w.start(t)
+	project := h.holder.Load().Projects.Lookup(b.proj.Meta.ID)
+	old := h.tokenCaller(b, u.ID)
+	oldPlan, oldIndex := weak.Make(old), weak.Make(old.reads.idx)
+	old = nil
+
+	renamed := clone(b.m1)
+	for range 3 {
+		renamed = clone(renamed)
+		renamed.Meta.DisplayName = "renamed-" + seq()
+		apply(h, renamed)
+	}
+	if h.holder.Load().Projects.Lookup(b.proj.Meta.ID) != project {
+		t.Fatal("a catalog change rebuilt the project plan; the test needs it kept")
+	}
+	if cached := h.holder.Load().Users.Lookup(u.ID).Caller.inProjects.m.Load(); cached != nil {
+		t.Fatalf("the rebuilt user plan starts with %d project plans, want none", len(*cached))
+	}
+	runtime.GC()
+	runtime.GC()
+	if oldPlan.Value() != nil || oldIndex.Value() != nil {
+		t.Fatalf("after the catalog changed: old token plan alive %v, old catalog index alive %v; want both released", oldPlan.Value() != nil, oldIndex.Value() != nil)
+	}
+	h.tokenCaller(b, u.ID)
+	if n := len(*h.holder.Load().Users.Lookup(u.ID).Caller.inProjects.m.Load()); n != 1 {
+		t.Fatalf("user plan caches %d project plans after one token request, want 1", n)
+	}
+}
+
+// One user plan keeps at most maxProjectCallers project plans.
+func TestProjectCallersAreBounded(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	projects := make([]string, maxProjectCallers+5)
+	for i := range projects {
+		projects[i] = b.w.project(b.team).Meta.ID
+	}
+	h := b.w.start(t)
+	root := h.holder.Load()
+	userPlan := root.Users.Lookup(u.ID).Caller
+	for _, id := range projects {
+		root.Projects.Lookup(id).CallerFor(userPlan)
+	}
+	if n := len(*userPlan.inProjects.m.Load()); n > maxProjectCallers {
+		t.Fatalf("user plan caches %d project plans, want at most %d", n, maxProjectCallers)
+	}
+	last := root.Projects.Lookup(projects[len(projects)-1])
+	if last.CallerFor(userPlan) != last.CallerFor(userPlan) {
+		t.Fatal("the latest project's plan was folded again")
+	}
+}
+
+// Token requests racing in several projects each get a plan, and once the cache settles every project answers with one plan.
+func TestProjectCallersUnderConcurrency(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	projects := []string{b.proj.Meta.ID, b.w.project(b.team).Meta.ID, b.w.project(b.team).Meta.ID}
+	h := b.w.start(t)
+	root := h.holder.Load()
+	userPlan := root.Users.Lookup(u.ID).Caller
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for _, id := range projects {
+				if root.Projects.Lookup(id).CallerFor(userPlan) == nil {
+					t.Error("no token plan")
+				}
+			}
+		})
+	}
+	wg.Wait()
+	for _, id := range projects {
+		p := root.Projects.Lookup(id)
+		if p.CallerFor(userPlan) != p.CallerFor(userPlan) {
+			t.Fatalf("project %s folded again after the cache settled", id)
+		}
 	}
 }

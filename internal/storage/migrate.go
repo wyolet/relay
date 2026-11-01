@@ -1,16 +1,20 @@
 package storage
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"math"
+	"net/url"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/database"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/lib/pq"
 
 	authpg "github.com/wyolet/relay/auth/store/postgres"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
@@ -47,8 +51,13 @@ func runRelayMigrations(dsn string) error {
 	if err != nil {
 		return fmt.Errorf("storage: read migration source: %w", err)
 	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	drv, err := openNoticeLogged(dsn)
 	if err != nil {
+		return fmt.Errorf("storage: init migrations: %w", err)
+	}
+	m, err := migrate.NewWithInstance("iofs", src, "postgres", drv)
+	if err != nil {
+		_ = drv.Close()
 		return fmt.Errorf("storage: init migrations: %w", err)
 	}
 	defer m.Close()
@@ -70,6 +79,33 @@ func runRelayMigrations(dsn string) error {
 		return fmt.Errorf("storage: migrate up: %w", retryable(m, src, true, err))
 	}
 	return nil
+}
+
+// openNoticeLogged opens dsn as golang-migrate's postgres driver does, and logs the notices Postgres sends: an up-migration reports the links it drops with RAISE NOTICE.
+func openNoticeLogged(dsn string) (database.Driver, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+	conn, err := pq.NewConnector(migrate.FilterCustomQuery(u).String())
+	if err != nil {
+		return nil, err
+	}
+	db := sql.OpenDB(pq.ConnectorWithNoticeHandler(conn, logNotice(slog.Default())))
+	// The URL path as the database name, as the driver's own Open sets it: the advisory lock id derives from it, so every relay version takes the same lock.
+	drv, err := postgres.WithInstance(db, &postgres.Config{DatabaseName: u.Path, MultiStatementMaxSize: postgres.DefaultMultiStatementMaxSize})
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return drv, nil
+}
+
+// logNotice returns a notice handler logging each notice to log.
+func logNotice(log *slog.Logger) func(*pq.Error) {
+	return func(e *pq.Error) {
+		log.Info("migrate: postgres notice", "notice", e.Message, "severity", e.Severity)
+	}
 }
 
 // ForceVersion records version as the schema's current one and clears the

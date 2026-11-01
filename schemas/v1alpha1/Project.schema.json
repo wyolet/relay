@@ -49,25 +49,6 @@
     "spec": {
       "additionalProperties": false,
       "properties": {
-        "budget": {
-          "additionalProperties": false,
-          "properties": {
-            "amount": {
-              "type": "string"
-            },
-            "period": {
-              "enum": [
-                "month",
-                "week",
-                "day"
-              ]
-            }
-          },
-          "required": [
-            "amount"
-          ],
-          "type": "object"
-        },
         "enabled": {
           "type": "boolean"
         },

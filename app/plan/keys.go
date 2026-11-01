@@ -14,7 +14,10 @@ type Root struct {
 	Keys     *KeyPlanIndex
 	Users    *UserIndex
 	Projects *ProjectIndex
-	Gen      uint64 // the generation it was published as, for caches keyed by it
+	// Hosts and Catalog govern requests that name no caller (ResolveAtHost).
+	Hosts   *HostRungs
+	Catalog *CatalogIndex
+	Gen     uint64 // the generation it was published as, for caches keyed by it
 }
 
 // Holder keeps the current Root behind one atomic pointer, swapped when the engine publishes.
@@ -29,6 +32,8 @@ func (h *Holder) OnPublish(v *engine.View, _ engine.PublishStats) {
 		Keys:     engine.Get[KeyPlanIndex](v, ""),
 		Users:    engine.Get[UserIndex](v, ""),
 		Projects: engine.Get[ProjectIndex](v, ""),
+		Hosts:    engine.Get[HostRungs](v, ""),
+		Catalog:  engine.Get[CatalogIndex](v, ""),
 		Gen:      uint64(v.Gen()),
 	})
 }

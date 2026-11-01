@@ -92,52 +92,15 @@ func TestKeyPolicyIsRefused(t *testing.T) {
 	}
 }
 
-// A budget with no period is a monthly budget; without the default the
-// stored row and the manifest that declared it never converge.
-func TestBudgetPeriodDefaultsToMonth(t *testing.T) {
-	d := TeamDTO{Metadata: WireMeta{Name: "platform"}}
-	d.Spec.Budget = &ScopeBudgetDTO{Amount: "100"}
-	tm, err := ToTeam(d, MapResolver{})
-	if err != nil {
-		t.Fatalf("ToTeam: %v", err)
-	}
-	if tm.Spec.Budget.Period != "month" {
-		t.Errorf("period = %q, want month", tm.Spec.Budget.Period)
-	}
-
-	d.Spec.Budget.Period = "week"
-	tm, err = ToTeam(d, MapResolver{})
-	if err != nil {
-		t.Fatalf("ToTeam: %v", err)
-	}
-	if tm.Spec.Budget.Period != "week" {
-		t.Errorf("period = %q, want the declared week", tm.Spec.Budget.Period)
-	}
-}
-
-// Nothing enforces a budget, so a manifest may not ask for an action on exceeding one.
-func TestBudgetOnExceedRefused(t *testing.T) {
+// A Team or Project spend cap is a Budget kind now; a document still carrying spec.budget is refused rather than silently losing the cap it meant.
+func TestScopeBudgetIsRefused(t *testing.T) {
 	for _, doc := range []string{
-		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\", onExceed: block}}\n",
-		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Project\nmetadata: {name: search}\nspec: {budget: {amount: \"100\", onExceed: warn}}\n",
-		"apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\", onExceed: block}}\n",
+		"apiVersion: " + APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n",
+		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Project\nmetadata: {name: search}\nspec: {team: platform, budget: {amount: \"100\", period: week}}\n",
+		"apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n",
 	} {
-		if _, err := Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "onExceed is not supported") {
-			t.Errorf("Parse(%q) err = %v, want the onExceed refusal", doc, err)
+		if _, err := Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "budget") {
+			t.Errorf("Parse(%q) err = %v, want a refusal naming spec.budget", doc, err)
 		}
-	}
-	if _, err := budgetField.ToAttribute([]byte(`{"amount": "100", "onExceed": "warn"}`), nil); err == nil || !strings.Contains(err.Error(), "onExceed is not supported") {
-		t.Fatalf("ToAttribute err = %v, want the onExceed refusal", err)
-	}
-}
-
-// A row stored while onExceed was accepted still exports, without it.
-func TestBudgetStoredOnExceedIgnored(t *testing.T) {
-	out, err := budgetField.FromAttribute([]byte(`{"amount": "100", "period": "week", "onExceed": "block"}`), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(out), `{"amount":"100","period":"week"}`; got != want {
-		t.Errorf("FromAttribute = %s, want %s", got, want)
 	}
 }

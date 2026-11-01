@@ -214,7 +214,9 @@ type RungPolicy struct {
 	Binding *policybinding.PolicyBinding
 	Refused *Refusal
 	Scoped  []ScopedRung // sorted by Scope
-	in      inputs
+	// unusable are the pool and credential ids the policy links that the subject's scope may not use, sorted; the caller fold skips them.
+	unusable []string
+	in       inputs
 }
 
 // ScopedRung is a user's binding owned by a team or a project: it governs only the user's requests inside that scope, which are the user's tokens for that project or for a project of that team.
@@ -270,6 +272,7 @@ func (c *controllers) rungPolicy(tx *engine.Txn, subject string) error {
 		engine.Drop(tx)
 		return nil
 	}
+	bs = bindingsInScope(tx, subject, bs)
 	prev := engine.Get[RungPolicy](tx, subject)
 	var scoped []ScopedRung
 	if kind == limits.RungPrincipal && strings.HasPrefix(subject, "user:") {
@@ -340,6 +343,11 @@ func bindRung(tx *engine.Txn, kind limits.Rung, subject string, bs []*policybind
 			return nil
 		}
 		rp.Binding, rp.Rung.Policy, rp.in = b, ep, inputs{b, ep}
+		if scope, ok := linkScope(tx, subject, b); ok && ep.links() {
+			if rp.unusable = unusableLinks(tx, ep.Policy, scope, b); len(rp.unusable) > 0 {
+				rp.in = append(rp.in, strings.Join(rp.unusable, ","))
+			}
+		}
 		if !ep.Policy.IsEnabled() {
 			rp.Refused = rungRefusal(CodePolicyDisabled, &rp.Rung, ep.Policy.Meta.ID, "policy "+ep.Policy.Meta.Name+" is disabled")
 		}

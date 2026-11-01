@@ -2,6 +2,7 @@ package plan
 
 import (
 	"hash/maphash"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -219,6 +220,59 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 		best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
 	}
 	return &Unkeyed{Refused: best.r}
+}
+
+// ResolveAtHost is what governs a request that brings its own upstream key and names no caller, as anonymous proxy traffic does: the host's own rung, for the model ref at host h. A model the catalog does not serve at h has Model unset and only the host's whole-policy counters; it is refused when the host's policy names models or carries a budget, since neither can be checked for it.
+func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
+	hr := r.Hosts.Of(h.Meta.ID)
+	if hr.Refused != nil {
+		return &Unkeyed{Refused: hr.Refused}
+	}
+	if ref != "" && !strings.Contains(ref, "@") {
+		ref += "@" + h.Meta.Name
+	}
+	if ref != "" && r.Catalog != nil {
+		snap := r.Catalog.Snap
+		res := snap.ResolveModelRef(ref)
+		for _, m := range res.Models {
+			if !m.IsEnabled() {
+				continue
+			}
+			prov, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+			for _, b := range snap.BindingsForModel(m.Meta.ID) {
+				if !b.IsEnabled() || b.Spec.HostID != h.Meta.ID || (res.Snapshot != nil && !b.Serves(res.Snapshot.Name)) {
+					continue
+				}
+				pr, _ := snap.PricingForBinding(b)
+				if _, refused := hr.refuses(prov, m, b, h.Meta.Name, pr != nil); refused != nil {
+					return &Unkeyed{Refused: refused}
+				}
+				u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h, Pricing: pr}
+				u.Counters = append(append(make([]limits.Counter, 0, len(hr.Whole)+len(hr.ByModel[m.Meta.ID])), hr.Whole...), hr.ByModel[m.Meta.ID]...)
+				u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
+				if u.UpstreamModel == "" && res.Snapshot != nil {
+					u.UpstreamModel = res.Snapshot.Upstream()
+				}
+				return u
+			}
+		}
+	}
+	rung := &hr.Upstream[0]
+	if p := rung.Policy; p != nil && p.Grant != nil {
+		return &Unkeyed{Refused: rungRefusal(CodeModelNotAllowed, rung, p.Policy.Meta.ID, "the catalog has no "+ref+" and the host policy names the models it allows")}
+	}
+	if hr.hasBudget {
+		br := &hr.Upstream[hr.budgetAt]
+		return &Unkeyed{Refused: rungRefusal(CodeUnpricedUnderBudget, br, br.Policy.Policy.Meta.ID, "the catalog has no pricing for "+ref+" and a budget applies")}
+	}
+	return &Unkeyed{Host: h, Counters: hr.Whole}
+}
+
+// AtHostNeedsModel reports whether the host's own rung decides by model (a model list, a budget, or per-model limits), so ResolveAtHost needs the request's model; otherwise the request may stream before its model is read.
+func (r *Root) AtHostNeedsModel(hostID string) bool {
+	hr := r.Hosts.Of(hostID)
+	p := hr.Upstream[0].Policy
+	return hr.Refused == nil && p != nil && (p.Grant != nil || hr.hasBudget || len(hr.ByModel) > 0)
 }
 
 // ReachesHost reports whether one of the caller's pools is at the host.

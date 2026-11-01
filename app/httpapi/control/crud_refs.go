@@ -11,6 +11,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/rolebinding"
 )
@@ -80,6 +81,19 @@ func refs(d Deps) refcheck.Checker {
 	}
 	if s.PolicyBinding != nil {
 		c.Rows.PolicyBindings = s.PolicyBinding.List
+		c.Rows.PolicyBindingsFor = func(ctx context.Context, policyID string) ([]*policybinding.PolicyBinding, error) {
+			all, err := s.PolicyBinding.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			var out []*policybinding.PolicyBinding
+			for _, pb := range all {
+				if pb.Spec.PolicyID == policyID {
+					out = append(out, pb)
+				}
+			}
+			return out, nil
+		}
 	}
 	return c
 }

@@ -78,7 +78,12 @@ func mapRouteRefusal(w http.ResponseWriter, r *plan.Refusal, model string) {
 	case plan.CodeModelDisabled:
 		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, modelMsg("model %q is disabled"), attrs...)
 	case plan.CodeModelNotAllowed:
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, modelMsg("model %q is not allowed: ")+r.Message, attrs...)
+		msg := modelMsg("model %q is not allowed: ") + r.Message
+		if r.PolicyID != "" {
+			// Named like the 429 of a caller limit: the rung, then the policy.
+			msg = fmt.Sprintf("model %q is not allowed by the %s policy %s", model, r.Rung, r.PolicyID)
+		}
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, msg, attrs...)
 	case plan.CodeNoBinding:
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", "no enabled host binding for model", attrs...)
 	case plan.CodeNoCredentials:

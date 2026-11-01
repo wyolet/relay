@@ -81,6 +81,8 @@ type Lookup struct {
 	// RoleBindings and PolicyBindings return every stored binding.
 	RoleBindings   func(ctx context.Context) ([]*rolebinding.RoleBinding, error)
 	PolicyBindings func(ctx context.Context) ([]*policybinding.PolicyBinding, error)
+	// PolicyBindingsFor returns the bindings using a policy.
+	PolicyBindingsFor func(ctx context.Context, policyID string) ([]*policybinding.PolicyBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
 	// UserActsIn reports whether a user is a member of a team or project scope: one whose requests can fall inside it.
@@ -396,8 +398,14 @@ func (c Checker) Group(ctx context.Context, g *group.Group) error {
 	return nil
 }
 
-// Policy checks the pools, credentials, rate limits and budgets a policy draws on.
+// Policy checks the pools, credentials, rate limits and budgets a policy draws on, that a models scope on its rate limits reaches no caller subject it is bound to, and that every binding using it may use its pools and credentials.
 func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
+	if err := c.modelScopeOnPolicy(ctx, p); err != nil {
+		return err
+	}
+	if err := c.linksOnPolicy(ctx, p); err != nil {
+		return err
+	}
 	if err := c.poolRefs(ctx, p.Spec.PoolIDs, p.Meta.Owner); err != nil {
 		return err
 	}
@@ -507,6 +515,9 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 		return err
 	}
 	if err := c.subjectsInScope(ctx, pb); err != nil {
+		return err
+	}
+	if err := c.modelScopeOnBinding(ctx, pb); err != nil {
 		return err
 	}
 	return c.subjectsUnbound(ctx, pb)

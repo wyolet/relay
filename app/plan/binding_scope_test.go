@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/meta"
@@ -184,4 +185,74 @@ func TestScopedUserBindingCountsPerScope(t *testing.T) {
 	if first[0].Group != "user:"+u.ID {
 		t.Fatalf("counter group %q, want the user's", first[0].Group)
 	}
+}
+
+// A binding owned by one project and naming another project's service account is ignored for it with an issue, however it was written; the account's own project binds it. Moving the account into the binding's project brings the binding into effect.
+func TestBindingOutsideItsOwnersScopeNeverApplies(t *testing.T) {
+	b := newBasic()
+	elsewhere := b.w.project(b.team)
+	pol := b.w.policy("only-m1", policy.Spec{Models: []string{"acme/m1"}})
+	foreign := ownedBy(b.w.bindPolicy(pol, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID)), meta.Owner{Kind: meta.OwnerProject, ID: elsewhere.Meta.ID})
+	h := b.w.start(t)
+
+	if rung := h.keyPlan(b.key).Caller.PrincipalRung(); rung.Policy != nil {
+		t.Fatalf("service account governed by another project's binding: %+v", rung.Policy)
+	}
+	if !hasIssue(h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope) {
+		t.Fatalf("issues = %+v, want %s", h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope)
+	}
+
+	moved := clone(b.sa)
+	moved.Spec.ProjectID = elsewhere.Meta.ID
+	moved.StampOwner()
+	apply(h, moved)
+	if rung := h.keyPlan(b.key).Caller.PrincipalRung(); rung.Policy == nil || rung.Policy.Policy.Meta.ID != pol.Meta.ID {
+		t.Fatalf("service account inside the binding's project = %+v, want the bound policy", rung.Policy)
+	}
+	if hasIssue(h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope) {
+		t.Fatal("the out-of-scope issue stayed after the account moved into scope")
+	}
+}
+
+// A binding written around the save check, whose policy links another tenant's pool and a shared pool holding another tenant's key, reaches neither for its subject: the pool and the slot are left out with an issue, the subject's own scope keeps the rest.
+func TestLinksOutsideTheSubjectsScopeAreIgnored(t *testing.T) {
+	b := newBasic()
+	elsewhere := b.w.project(b.w.team())
+	theirs := meta.Owner{Kind: meta.OwnerProject, ID: elsewhere.Meta.ID}
+	theirKey := b.w.cred(b.hostA, b.acctA, theirs)
+	theirPool := b.w.pool(b.hostA, theirKey)
+	theirPool.Meta.Owner = theirs
+	shared := b.w.pool(b.hostA, theirKey, b.a1)
+	pol := b.w.policy("borrows", policy.Spec{PoolIDs: []string{theirPool.Meta.ID, shared.Meta.ID}})
+	pb := ownedBy(b.w.bindPolicy(pol, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+	h := b.w.start(t)
+
+	pools := h.keyPlan(b.key).Caller.Pools
+	if len(pools) != 1 || pools[0].Pool.Meta.ID != shared.Meta.ID {
+		t.Fatalf("pools = %d, want only the shared pool", len(pools))
+	}
+	if got := ids(slotCreds(pools[0])...); len(got) != 1 || got[0] != b.a1.Meta.ID {
+		t.Fatalf("shared pool slots = %v, want only the system key %s", got, b.a1.Meta.ID)
+	}
+	if r := h.route(b.key, "m1"); r.Refused != nil {
+		t.Fatalf("route over the usable key refused: %+v", r.Refused)
+	}
+	is := h.issues(KindPolicyBinding, pb.Meta.ID)
+	n := 0
+	for _, i := range is {
+		if i.Code == IssueLinkOutOfScope {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("issues = %+v, want %s for the pool and the key", is, IssueLinkOutOfScope)
+	}
+}
+
+func slotCreds(p *PoolPlan) []*hostkey.HostKey {
+	out := make([]*hostkey.HostKey, 0, len(p.Slots))
+	for _, s := range p.Slots {
+		out = append(out, s.Credential)
+	}
+	return out
 }

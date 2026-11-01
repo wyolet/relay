@@ -3,9 +3,6 @@
     "ProjectSpec": {
       "additionalProperties": false,
       "properties": {
-        "budget": {
-          "$ref": "#/$defs/ScopeBudgetDTO"
-        },
         "enabled": {
           "type": "boolean"
         },
@@ -15,26 +12,6 @@
       },
       "required": [
         "team"
-      ],
-      "type": "object"
-    },
-    "ScopeBudgetDTO": {
-      "additionalProperties": false,
-      "properties": {
-        "amount": {
-          "type": "string"
-        },
-        "period": {
-          "enum": [
-            "month",
-            "week",
-            "day"
-          ],
-          "type": "string"
-        }
-      },
-      "required": [
-        "amount"
       ],
       "type": "object"
     },

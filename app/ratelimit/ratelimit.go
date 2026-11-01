@@ -15,10 +15,10 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-// RateLimit is a named rule set. All three OwnerKinds are valid:
+// RateLimit is a named rule set. Owners:
 //   - system: bundled, operator-immutable (e.g. inference-api, control-api).
-//   - provider: auto-injected upstream-tier mirror; Owner.ID = Provider id.
-//   - user: operator-defined.
+//   - provider, host: upstream tiers; Owner.ID names the provider or host.
+//   - user, team, project: tenant-defined, usable in that scope and below.
 type RateLimit struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
@@ -114,8 +114,8 @@ func (r *RateLimit) IsEnabled() bool { return r.Spec.Enabled == nil || *r.Spec.E
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the RateLimit-specific owner shape:
-//   - Owner.Kind is required (any of system/provider/user).
-//   - Owner.Kind=provider requires Owner.ID (the Provider id).
+//   - Owner.Kind is required (system, provider, host, user, team or project).
+//   - Owner.Kind=provider, host or team requires Owner.ID.
 //
 // No two rules may share meter, strategy and window: that triple is a rule's counter identity (see ResolveWithScope).
 //
@@ -143,9 +143,13 @@ func (r *RateLimit) Validate() error {
 		if r.Meta.Owner.ID == "" {
 			return fmt.Errorf("ratelimit %q: owner.id is required (host id)", r.Meta.Name)
 		}
+	case meta.OwnerTeam:
+		if r.Meta.Owner.ID == "" {
+			return fmt.Errorf("ratelimit %q: owner.id is required (team id)", r.Meta.Name)
+		}
 	case meta.OwnerProject:
 	default:
-		return fmt.Errorf("ratelimit %q: owner.kind required (system|provider|host|user|project)", r.Meta.Name)
+		return fmt.Errorf("ratelimit %q: owner.kind required (system|provider|host|user|team|project)", r.Meta.Name)
 	}
 	return nil
 }

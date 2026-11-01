@@ -59,7 +59,7 @@ func TestPruneRefusesAPolicyBindingInAPrunedProject(t *testing.T) {
 	rows := prunedScopeRows(false)
 	rows.Policies = []*policy.Policy{{Meta: meta.Metadata{ID: meta.NewID(), Name: "shared-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}}}}
 	doc := "kind: PolicyBinding\nmetadata: {name: ml-binding, owner: {kind: project, name: ml-search}}\n" +
-		"spec: {project: ml-search, policy: shared-policy, subjects: [{kind: group, name: eng}]}\n"
+		"spec: {project: ml-search, policy: shared-policy, subjects: [{kind: project, name: ml-search}]}\n"
 	wantRefused(t, planPruned(t, rows, doc), "PolicyBinding", "ml-binding", authmanifest.ErrScopePruned)
 }
 

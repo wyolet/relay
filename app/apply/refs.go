@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
@@ -43,6 +44,15 @@ func (b *builder) refs() refcheck.Checker {
 				for _, rb := range b.rows.RoleBindings {
 					if rb.Spec.RoleID == roleID {
 						out = append(out, rb)
+					}
+				}
+				return out, nil
+			},
+			PolicyBindingsFor: func(_ context.Context, policyID string) ([]*policybinding.PolicyBinding, error) {
+				var out []*policybinding.PolicyBinding
+				for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
+					if pb.Spec.PolicyID == policyID {
+						out = append(out, pb)
 					}
 				}
 				return out, nil

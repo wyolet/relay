@@ -1,31 +1,8 @@
 {
   "$defs": {
-    "ScopeBudgetDTO": {
-      "additionalProperties": false,
-      "properties": {
-        "amount": {
-          "type": "string"
-        },
-        "period": {
-          "enum": [
-            "month",
-            "week",
-            "day"
-          ],
-          "type": "string"
-        }
-      },
-      "required": [
-        "amount"
-      ],
-      "type": "object"
-    },
     "TeamSpec": {
       "additionalProperties": false,
       "properties": {
-        "budget": {
-          "$ref": "#/$defs/ScopeBudgetDTO"
-        },
         "enabled": {
           "type": "boolean"
         }
