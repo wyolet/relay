@@ -43,7 +43,7 @@ Retry-After: 302400
 
 `Retry-After` is the time left until the next period starts.
 
-A budget on an upstream rung (a host, an account or a host key) caps the total spend through that subject, whoever the caller is. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it.
+A budget on an upstream rung (a host or an account; one bound to a host key is its account's) caps the total spend through that subject, whoever the caller is. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it.
 
 An **alert** budget is never checked at admission. Both modes report the charge that takes a budget to its cap, once per budget and period, in the `relay_limits_budget_crossings_total` counter, labelled by `rung` and `mode`.
 

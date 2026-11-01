@@ -89,7 +89,7 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 
 | Metric | Type | Labels | What it answers |
 | --- | --- | --- | --- |
-| `relay_limits_budget_crossings_total` | counter | `rung` (`host`, `account`, `credential`, `team`, `project`, `principal`), `mode` (`hard`, `alert`) | Charges that took a [budget](/concepts/budgets) to its cap, counted once per budget, bound subject and period. An `alert` budget is reported here and nowhere else. |
+| `relay_limits_budget_crossings_total` | counter | `rung` (`host`, `account`, `team`, `project`, `principal`), `mode` (`hard`, `alert`) | Charges that took a [budget](/concepts/budgets) to its cap, counted once per budget, bound subject and period. An `alert` budget is reported here and nowhere else. |
 
 ## OTLP receiver
 

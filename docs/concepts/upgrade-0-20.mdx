@@ -23,7 +23,7 @@ This is a [stop-and-start upgrade](/concepts/upgrade#stop-and-start-upgrades): a
 | Relay key `policyId`, service account `policyId` | A policy binding on the key's principal. |
 | Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [account](/concepts/key-pooling#accounts). A key without an account joins its owner's [default account](/concepts/key-pooling#default-accounts). |
 | Policy binding `priority`, several bindings per subject | One binding per subject. `priority` is gone: the control API refuses it with `422` and manifests ignore it. |
-| Group subjects in policy bindings, `system:authenticated` as a project default | Group subjects are refused with `400` on save, and stored ones bind nothing. Bind the users, the team or the project instead. |
+| Group subjects in policy bindings, `system:authenticated` as a project default | Group subjects are refused with `422` on save, and stored ones bind nothing. Bind the users, the team or the project instead. |
 | Host `policies` and `defaultPolicy` | Gone. A host's tier presets are the policies it owns (`GET /api/hosts/{host}/policies`), and one applies once it is bound to an account. The control API refuses the fields with `422`, manifests ignore them, and the hosts list filters `policy_id`, `default_policy` and `has_default_policy` answer `400`. |
 | Team and project `spec.budget`, which nothing enforced | A [budget](/concepts/budgets) linked by the policy bound to the team or project. A manifest that still carries `budget` is refused with a pointer to `Budget`. |
 | `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE`, `RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS`, `RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE`, the chart's `relay.redisPostFlightBatchSize`, `relay.redisPostFlightBatchDelayMs`, `relay.redisPostFlightQueueSize`, and the metrics `relay_settle_queue_full_total`, `relay_settle_retries_total` | Gone: each request settles its counters on store calls of its own. Leftover values are ignored. |
@@ -79,6 +79,8 @@ It then gives every host key without an account its owner's default account at t
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
 
 **Migration 37** adds `policy_bindings.user_id`, the owner of a user's own binding; deleting the user deletes it.
+
+**Migration 38** moves every binding subject that names a host key to the key's account, since a limit set on a key counts on its account (see [Bindings on host keys](/concepts/policies#bindings-on-host-keys)). A 0.11 database has none. If an account would end up in two bindings, the migration stops and names the account and the bindings; remove all but one and upgrade again.
 
 ## Before you upgrade
 
