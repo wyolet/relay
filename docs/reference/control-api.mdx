@@ -145,7 +145,7 @@ A policy binding is owned by the system, a team or a user binding themselves (`m
 }
 ```
 
-Subject kinds are `host`, `account`, `credential` (a host key), `team`, `project`, `user` and `serviceaccount`. On save:
+Subject kinds are `host`, `account`, `credential` (a host key), `team`, `project`, `user` and `serviceaccount`. A `credential` subject is saved, and answered, as an `account` subject naming the key's account. On save:
 
 | Answer | When |
 | --- | --- |

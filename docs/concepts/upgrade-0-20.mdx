@@ -80,6 +80,8 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
 **Migration 37** adds `policy_bindings.user_id`, the owner of a user's own binding; deleting the user deletes it.
 
+**Migration 38** moves every binding subject that names a host key to the key's account, since a limit set on a key counts on its account (see [Bindings on host keys](/concepts/policies#bindings-on-host-keys)). A 0.11 database has none. If an account would end up in two bindings, the migration stops and names the account and the bindings; remove all but one and upgrade again.
+
 ## Before you upgrade
 
 1. **Export the current configuration** with the 0.11 CLI, as the reference for the rewrite:

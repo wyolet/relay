@@ -7,17 +7,16 @@ A **policy** links a subject to what it may use: the models it may call, the poo
 
 ## The ladder
 
-Every request passes six rungs, three on the upstream side and three on the caller side:
+Every request passes five rungs, two on the upstream side and three on the caller side:
 
 ```
-Host → Account → Credential → Team → Project → Principal
+Host → Account → Team → Project → Principal
 ```
 
 | Rung | Subject | Typical use |
 | --- | --- | --- |
 | Host | A [host](/concepts/catalog) | Rules for everything sent to that host. Only a system-owned binding can bind a host. |
-| Account | A provider [account](/concepts/key-pooling#accounts) | The provider's tier: what the provider allows that organization. |
-| Credential | One host key | Narrowing a single upstream key. |
+| Account | A provider [account](/concepts/key-pooling#accounts) | The provider's tier: what the provider allows that organization. A limit set on one host key is its account's, see [Bindings on host keys](#bindings-on-host-keys). |
 | Team | The caller's team | A team-wide model list, budget or rate limit. |
 | Project | The caller's project | The same, for one project. |
 | Principal | A user or a service account | The same, for one identity. |
@@ -36,7 +35,7 @@ Which caller rungs a request has depends on its credential:
 | A user's own relay key | None | The user, through a system-owned binding or the user's own |
 | Inference token | The project the token was minted for, and its team | The user, through the binding that governs inside that project, a system-owned one, or the user's own |
 
-The upstream rungs are the host the request goes to, the account of the host key that serves it, and that host key. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
+The upstream rungs are the host the request goes to and the account of the host key that serves it. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
 
 ## How the rungs combine
 
@@ -60,7 +59,7 @@ When no caller rung links pools or host keys, the principal reaches the host key
 
 They are tried in that order, and within one scope in the order they were created. A keyless (`noAuth`) host is never reached this way: it takes a pool at that host, linked by a caller policy, because no key gates it.
 
-Upstream rungs still apply to these requests: the account's tier, the host's rules and any policy bound to the host key.
+Upstream rungs still apply to these requests: the account's tier and the host's rules.
 
 To give a principal anything beyond this, or a different order, link pools or host keys in a caller policy.
 
@@ -120,7 +119,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 | `metadata.owner` | `metadata.owner` | `{kind: system}`, `{kind: team, ...}` or `{kind: user}`. A project-owned binding sets `projectId` instead. |
 | `projectId` | `project` (name) | The owning project, for a project-owned binding. |
 | `policyId` | `policy` (name) | The policy it attaches. |
-| `subjects` | `subjects` | One or more `{kind, id}` (`{kind, name}` in manifests). Kinds: `host`, `account`, `credential` (a host key), `team`, `project`, `user`, `serviceaccount`. |
+| `subjects` | `subjects` | One or more `{kind, id}` (`{kind, name}` in manifests). Kinds: `host`, `account`, `credential` (a host key, saved as its account), `team`, `project`, `user`, `serviceaccount`. |
 | `enabled` | `enabled` | Default `true`. A disabled binding binds nothing. |
 
 The owner decides which subjects a binding may name:
@@ -145,6 +144,10 @@ Counters follow the scope, so a policy bound to the same user by two projects co
 ### A user's own binding
 
 A user may bind a policy to themselves with a binding they own: `metadata.owner: {kind: user}` and the user as the only subject. The policy is the user's own, a system policy or a host's. It governs every request of the user, relay keys and inference tokens alike, as a system-owned binding does, so it conflicts with any other binding on that user and the second one is refused with `409`. Its links must be usable by the user: the user's own pools and host keys, or system-owned ones. A user signed in to the control API leaves `owner.id` out; the admin token names the user in it.
+
+### Bindings on host keys
+
+A provider counts its limits per organization, not per key, so a policy bound to a host key is bound to the key's [account](/concepts/key-pooling#accounts). A `credential` subject is saved as an `account` subject naming the key's account, and the API answers and lists the binding that way; an exported manifest names the account. Its rate limits and budgets count across every host key of the account. Binding a second key of the account, or the account itself, is refused with `409` like any other subject bound twice. To cap one key on its own, put it in an account of its own.
 
 ### One binding per subject
 

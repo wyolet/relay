@@ -15,7 +15,7 @@ Use it when the credential belongs to the caller, for example a developer's own 
 | Host selection | The caller's pools, in order, at hosts serving the model | The `X-WR-Upstream-Host` header, or the first host binding the caller's grants allow when the header is absent |
 | Request body | Model name rewritten; translated across shapes when needed | Forwarded byte for byte, no translation |
 | Key pooling and failover | Yes | No. One attempt |
-| Policy ladder | Every rung | The caller rungs and the host rung, for authenticated requests. No account or credential rung, since no host key serves |
+| Policy ladder | Every rung | The caller rungs and the host rung, for authenticated requests. No account rung, since no host key serves |
 | Usage, cost, payload capture | Yes | Yes |
 
 ## Enabling it
