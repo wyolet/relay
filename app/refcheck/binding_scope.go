@@ -1,12 +1,14 @@
-// Scope rules for a policy binding: it is owned by the system, a team or a project, it binds only subjects inside that scope, and it uses a policy of that scope, an ancestor of it, the system, or a host.
+// Scope rules for a policy binding: it is owned by the system, a team or a project, it binds only subjects inside that scope, and it uses a policy of that scope, an ancestor of it, the system, or a host, whose linked pools and credentials that scope may use.
 
 package refcheck
 
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
 )
@@ -23,10 +25,67 @@ func (c Checker) BindablePolicy(ctx context.Context, policyID string, scope meta
 	if !Visible(ctx, c.Authz, "policy", p.Meta.ID, p.Meta.Owner) {
 		return notVisible("policy", policyID)
 	}
-	if p.Meta.Owner.Kind == meta.OwnerHost || c.containsScope(ctx, p.Meta.Owner, scope) {
+	if p.Meta.Owner.Kind != meta.OwnerHost && !c.containsScope(ctx, p.Meta.Owner, scope) {
+		return badRequest("policy %q is owned by %s; a binding owned by %s may use a policy of its own scope, an ancestor of it, the system, or a host", p.Meta.Name, ownerText(p.Meta.Owner), ownerText(scope))
+	}
+	return c.linksUsableIn(ctx, p, scope)
+}
+
+// linksUsableIn refuses a policy linking a pool or credential, directly or inside a linked pool, that scope may not use: binding the policy would hand the scope's subjects another scope's credentials. A missing link is left to the plan, where it narrows.
+func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta.Owner) error {
+	credentials := func(ids []string, via string) error {
+		if c.Rows.HostKey == nil {
+			return nil
+		}
+		for _, id := range ids {
+			k := c.Rows.HostKey(ctx, id)
+			if k != nil && !c.containsScope(ctx, k.Meta.Owner, scope) {
+				return badRequest("policy %q links %shost-key %s owned by %s, which a binding owned by %s cannot use", p.Meta.Name, via, c.linkName(ctx, "host-key", k.Meta), ownerText(k.Meta.Owner), ownerText(scope))
+			}
+		}
 		return nil
 	}
-	return badRequest("policy %q is owned by %s; a binding owned by %s may use a policy of its own scope, an ancestor of it, the system, or a host", p.Meta.Name, ownerText(p.Meta.Owner), ownerText(scope))
+	if c.Rows.Pool != nil {
+		for _, id := range p.Spec.PoolIDs {
+			pl := c.Rows.Pool(ctx, id)
+			if pl == nil {
+				continue
+			}
+			name := c.linkName(ctx, "pool", pl.Meta)
+			if !c.containsScope(ctx, pl.Meta.Owner, scope) {
+				return badRequest("policy %q links pool %s owned by %s, which a binding owned by %s cannot use", p.Meta.Name, name, ownerText(pl.Meta.Owner), ownerText(scope))
+			}
+			if err := credentials(pl.Spec.CredentialIDs, "pool "+name+" holding "); err != nil {
+				return err
+			}
+		}
+	}
+	return credentials(p.Spec.CredentialIDs, "")
+}
+
+// linkName names a linked row by name when the caller may see it, else by id.
+func (c Checker) linkName(ctx context.Context, kind string, m meta.Metadata) string {
+	if Visible(ctx, c.Authz, kind, m.ID, m.Owner) {
+		return strconv.Quote(m.Name)
+	}
+	return strconv.Quote(m.ID)
+}
+
+// linksOnPolicy checks the bindings already using p against its links, so a bound policy cannot gain a pool or credential its bindings' scopes may not use.
+func (c Checker) linksOnPolicy(ctx context.Context, p *policy.Policy) error {
+	if c.Rows.PolicyBindingsFor == nil || p.Meta.ID == "" || (len(p.Spec.PoolIDs) == 0 && len(p.Spec.CredentialIDs) == 0) {
+		return nil
+	}
+	bindings, err := c.Rows.PolicyBindingsFor(ctx, p.Meta.ID)
+	if err != nil {
+		return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+	}
+	for _, pb := range bindings {
+		if err := c.linksUsableIn(ctx, p, pb.Meta.Owner); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // subjectsInScope refuses a subject outside the binding owner's scope. A project binds itself, its service accounts, the accounts and credentials it owns, and its members; a team the same for itself and each of its projects; the system anything, and only the system binds a host. Group subjects are not rungs and are not checked.

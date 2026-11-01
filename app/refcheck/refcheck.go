@@ -398,9 +398,12 @@ func (c Checker) Group(ctx context.Context, g *group.Group) error {
 	return nil
 }
 
-// Policy checks the pools, credentials, rate limits and budgets a policy draws on, and that a models scope on its rate limits reaches no caller subject it is bound to.
+// Policy checks the pools, credentials, rate limits and budgets a policy draws on, that a models scope on its rate limits reaches no caller subject it is bound to, and that every binding using it may use its pools and credentials.
 func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 	if err := c.modelScopeOnPolicy(ctx, p); err != nil {
+		return err
+	}
+	if err := c.linksOnPolicy(ctx, p); err != nil {
 		return err
 	}
 	if err := c.poolRefs(ctx, p.Spec.PoolIDs, p.Meta.Owner); err != nil {
