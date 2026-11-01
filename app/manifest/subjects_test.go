@@ -9,16 +9,15 @@ import (
 )
 
 const subjectsYAML = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
 metadata:
   name: search-indexer
   annotations: {wyolet.com/runbook: "https://runbooks.example/indexer"}
 spec:
   project: ml-search
-  policy: ml-search-default
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Group
 metadata:
   name: data-science
@@ -26,14 +25,13 @@ metadata:
 spec:
   members: [alice, bob]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Key
 metadata:
   name: search-indexer-prod
   owner: {kind: project, name: ml-search}
 spec:
   principal: {kind: serviceaccount, name: search-indexer}
-  policy: ml-search-default
   keyHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   prefix: rk_a8b3f2
   expiresAt: "2027-01-01T00:00:00Z"
@@ -74,13 +72,13 @@ func TestRoundTrip_Subjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToServiceAccount: %v", err)
 	}
-	if sa.Spec.ProjectID != projectUUID || sa.Spec.PolicyID != policyUUID {
-		t.Errorf("service account refs = (%q, %q)", sa.Spec.ProjectID, sa.Spec.PolicyID)
+	if sa.Spec.ProjectID != projectUUID {
+		t.Errorf("service account project = %q", sa.Spec.ProjectID)
 	}
 	if sa.Meta.Owner.ID != projectUUID {
 		t.Errorf("service account owner = %+v, want the project", sa.Meta.Owner)
 	}
-	if back := manifest.FromServiceAccount(sa, subjectsRev); back.Spec.Project != "ml-search" || back.Spec.Policy != "ml-search-default" {
+	if back := manifest.FromServiceAccount(sa, subjectsRev); back.Spec.Project != "ml-search" {
 		t.Errorf("FromServiceAccount = %+v", back.Spec)
 	}
 
@@ -117,16 +115,26 @@ func TestRoundTrip_Subjects(t *testing.T) {
 	}
 }
 
+// A service account binds through a PolicyBinding; spec.policy is refused
+// under either apiVersion rather than dropped.
+func TestParse_ServiceAccountPolicyIsRefused(t *testing.T) {
+	for _, v := range []string{manifest.APIVersion, manifest.PreviousAPIVersion} {
+		doc := "apiVersion: " + v + "\nkind: ServiceAccount\nmetadata: {name: sa}\nspec: {project: p, policy: x}\n"
+		if _, err := manifest.Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "spec.policy") {
+			t.Errorf("%s: Parse = %v, want a refusal naming spec.policy", v, err)
+		}
+	}
+}
+
 func TestParse_UserPrincipalKey(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Key
 metadata:
   name: alice-personal
   owner: {kind: user}
 spec:
   principal: {kind: user, name: alice}
-  policy: ml-search-default
   keyHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 `
 	docs, err := manifest.Parse(strings.NewReader(yaml))
@@ -144,7 +152,7 @@ spec:
 
 func TestParse_RelayKeyIsNotAKind(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RelayKey
 metadata:
   name: legacy

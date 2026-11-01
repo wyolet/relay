@@ -20,8 +20,8 @@ func TestRenderSchemaHeaderUsesPublicURL(t *testing.T) {
 	}
 	body := string(out)
 	for _, want := range []string{
-		"# yaml-language-server: $schema=https://relay.example.com/api/schemas/v1alpha2/Team.schema.json",
-		"# yaml-language-server: $schema=https://relay.example.com/api/schemas/v1alpha2/Project.schema.json",
+		"# yaml-language-server: $schema=https://relay.example.com/api/schemas/v1alpha3/Team.schema.json",
+		"# yaml-language-server: $schema=https://relay.example.com/api/schemas/v1alpha3/Project.schema.json",
 		"\n---\n",
 	} {
 		if !strings.Contains(body, want) {
@@ -36,7 +36,7 @@ func TestRenderSchemaHeaderUsesPublicURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if !strings.HasPrefix(string(relative), "# yaml-language-server: $schema=/api/schemas/v1alpha2/Team.schema.json") {
+	if !strings.HasPrefix(string(relative), "# yaml-language-server: $schema=/api/schemas/v1alpha3/Team.schema.json") {
 		t.Fatalf("empty base must render a relative reference:\n%s", relative)
 	}
 }

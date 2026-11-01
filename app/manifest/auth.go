@@ -19,9 +19,8 @@ var AuthManifests = authmanifest.MustRegistry(authmanifest.Config{
 	RuleKinds: role.Kinds,
 	RuleVerbs: role.Verbs,
 	Fields: map[string][]authmanifest.Field{
-		authmanifest.KindTeam:           {budgetField},
-		authmanifest.KindProject:        {budgetField},
-		authmanifest.KindServiceAccount: {policyField},
+		authmanifest.KindTeam:    {budgetField},
+		authmanifest.KindProject: {budgetField},
 	},
 })
 
@@ -58,45 +57,12 @@ var budgetField = authmanifest.Field{
 	},
 }
 
-// policyField is a service account's policy override: a policy name in YAML, its id in the row.
-var policyField = authmanifest.Field{
-	Name: "policy", Attribute: "policyId",
-	Schema: map[string]any{"type": "string", "description": "The policy's name."},
-	ToAttribute: func(value json.RawMessage, refs authmanifest.Resolver) (json.RawMessage, error) {
-		var name string
-		if err := json.Unmarshal(value, &name); err != nil {
-			return nil, err
-		}
-		if name == "" {
-			return nil, nil
-		}
-		id, ok := refs.ID("Policy", name)
-		if !ok {
-			return nil, &authmanifest.RefError{Kind: "policy", Name: name}
-		}
-		return json.Marshal(id)
-	},
-	FromAttribute: func(stored json.RawMessage, names authmanifest.Namer) (json.RawMessage, error) {
-		var id string
-		if json.Unmarshal(stored, &id) != nil {
-			return stored, nil
-		}
-		if id == "" {
-			return nil, nil
-		}
-		if n, ok := names.Name("Policy", id); ok {
-			return json.Marshal(n)
-		}
-		return json.Marshal(id)
-	},
-}
-
 // errOnExceed refuses budget.onExceed: earlier releases accepted it, though nothing acted on it.
 var errOnExceed = errors.New("budget.onExceed is not supported: budgets are not enforced; remove the field")
 
 // decodeBudget reads a budget strictly. onExceed gets its own error.
-func decodeBudget(raw json.RawMessage) (*BudgetDTO, error) {
-	var b *BudgetDTO
+func decodeBudget(raw json.RawMessage) (*ScopeBudgetDTO, error) {
+	var b *ScopeBudgetDTO
 	if err := strictJSON(raw, &b); err != nil {
 		var old struct {
 			OnExceed json.RawMessage `json:"onExceed"`

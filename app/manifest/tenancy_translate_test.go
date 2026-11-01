@@ -50,13 +50,9 @@ func TestTenancyKindsAreAlwaysSystemOwned(t *testing.T) {
 // cross-reference; leaving the username in place would make the stored owner
 // unresolvable.
 func TestUserOwnerNameResolvesToID(t *testing.T) {
-	idx := MapResolver{
-		Policies: map[string]string{"basic": "p-1"},
-		Users:    map[string]string{"alice": "u-alice"},
-	}
+	idx := MapResolver{Users: map[string]string{"alice": "u-alice"}}
 	d := KeyDTO{Metadata: WireMeta{Name: "alice-cli"}}
 	d.Metadata.Owner = WireOwner{Kind: meta.OwnerUser, Name: "alice"}
-	d.Spec.Policy = "basic"
 	d.Spec.Principal = PrincipalDTO{Kind: "user", Name: "alice"}
 
 	k, err := ToKey(d, idx)
@@ -85,24 +81,14 @@ func TestHostOwnerNameResolvesToID(t *testing.T) {
 	}
 }
 
-// A Key resolves its policy through its principal when it declares none, so
-// omitting spec.policy is legal on the wire.
-func TestKeyPolicyIsOptional(t *testing.T) {
-	idx := MapResolver{ServiceAccounts: map[string]string{"ci": "sa-1"}}
-	d := KeyDTO{Metadata: WireMeta{Name: "ci-key"}}
-	d.Spec.Principal = PrincipalDTO{Kind: "serviceaccount", Name: "ci"}
-
-	k, err := ToKey(d, idx)
-	if err != nil {
-		t.Fatalf("ToKey with no policy: %v", err)
-	}
-	if k.Spec.PolicyID != "" {
-		t.Errorf("policy id = %q, want empty", k.Spec.PolicyID)
-	}
-
-	d.Spec.Policy = "missing"
-	if _, err := ToKey(d, idx); err == nil {
-		t.Error("a named policy that does not resolve must still be an error")
+// A Key holds no policy: a v1alpha3 document still carrying spec.policy is
+// refused rather than silently dropping the restriction it meant.
+func TestKeyPolicyIsRefused(t *testing.T) {
+	doc := "apiVersion: " + APIVersion + "\nkind: Key\nmetadata: {name: ci-key}\n" +
+		"spec: {principal: {kind: serviceaccount, name: ci}, keyHash: x, policy: basic}\n"
+	_, err := Parse(strings.NewReader(doc))
+	if err == nil || !strings.Contains(err.Error(), "spec.policy") {
+		t.Fatalf("Parse = %v, want a refusal naming spec.policy", err)
 	}
 }
 
@@ -110,7 +96,7 @@ func TestKeyPolicyIsOptional(t *testing.T) {
 // stored row and the manifest that declared it never converge.
 func TestBudgetPeriodDefaultsToMonth(t *testing.T) {
 	d := TeamDTO{Metadata: WireMeta{Name: "platform"}}
-	d.Spec.Budget = &BudgetDTO{Amount: "100"}
+	d.Spec.Budget = &ScopeBudgetDTO{Amount: "100"}
 	tm, err := ToTeam(d, MapResolver{})
 	if err != nil {
 		t.Fatalf("ToTeam: %v", err)

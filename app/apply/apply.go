@@ -61,6 +61,8 @@ type Entry struct {
 	// the row its name resolved to. Ids stay server-owned: the document's
 	// id is ignored and the mismatch reported.
 	IDMismatch string `json:"idMismatch,omitempty"`
+	// Detached is set on a delete that takes links from policies that stay.
+	Detached *DetachedLinks `json:"detached,omitempty"`
 
 	plural string
 	owner  meta.Owner

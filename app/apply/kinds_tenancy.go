@@ -107,6 +107,7 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	under := project.Rows{
 		ServiceAccounts: b.rows.ServiceAccounts, Keys: b.rows.Keys, Policies: b.rows.Policies,
 		HostKeys: b.rows.HostKeys, RateLimits: b.rows.RateLimits, PolicyBindings: b.rows.PolicyBindings,
+		Accounts: b.rows.Accounts, Pools: b.rows.Pools, Budgets: b.rows.Budgets,
 	}
 	for _, kind := range b.deletes {
 		for _, e := range kind {
@@ -224,7 +225,7 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 			if gone[e.owner] {
 				err = authmanifest.ErrScopePruned
 			}
-		case "Policy", "HostKey", "RateLimit":
+		case "Policy", "HostKey", "RateLimit", "Account", "Pool", "Budget":
 			if gone[e.owner] {
 				err = errOwnerPruned
 			}

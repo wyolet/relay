@@ -4,20 +4,23 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
 // Rows are the rows that can live under a project. Deleting the project
 // would cascade through the foreign keys to its service accounts, their
-// keys and its policy bindings, and leave its policies, host keys and rate
-// limits owned by a project that no longer exists — so apply's prune
-// refuses while any remain.
+// keys and its policy bindings, and leave its policies, host keys, rate
+// limits, accounts, pools and budgets owned by a project that no longer
+// exists — so apply's prune refuses while any remain.
 type Rows struct {
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Keys            []*key.Key
@@ -25,6 +28,9 @@ type Rows struct {
 	HostKeys        []*hostkey.HostKey
 	RateLimits      []*ratelimit.RateLimit
 	PolicyBindings  []*policybinding.PolicyBinding
+	Accounts        []*account.Account
+	Pools           []*pool.Pool
+	Budgets         []*budget.Budget
 }
 
 // Gone reports a row the caller is deleting in the same operation, keyed by
@@ -62,6 +68,15 @@ func (r Rows) Dependents(id string, gone Gone, visible Visible) (named []string,
 	}
 	for _, x := range r.RateLimits {
 		add("RateLimit", x.Meta, x.Meta.Owner == owned)
+	}
+	for _, x := range r.Accounts {
+		add("Account", x.Meta, x.Meta.Owner == owned)
+	}
+	for _, x := range r.Pools {
+		add("Pool", x.Meta, x.Meta.Owner == owned)
+	}
+	for _, x := range r.Budgets {
+		add("Budget", x.Meta, x.Meta.Owner == owned)
 	}
 	for _, x := range r.PolicyBindings {
 		add("PolicyBinding", x.Meta, x.Spec.ProjectID == id)

@@ -27,6 +27,9 @@ type index struct {
 	RoleBindings    map[string]string
 	PolicyBindings  map[string]string
 	Users           map[string]string
+	Accounts        map[string]string
+	Pools           map[string]string
+	Budgets         map[string]string
 }
 
 func newIndex(r *Rows) *index {
@@ -49,6 +52,18 @@ func newIndex(r *Rows) *index {
 		RoleBindings:    map[string]string{},
 		PolicyBindings:  map[string]string{},
 		Users:           map[string]string{},
+		Accounts:        map[string]string{},
+		Pools:           map[string]string{},
+		Budgets:         map[string]string{},
+	}
+	for _, a := range r.Accounts {
+		i.Accounts[a.Meta.Name] = a.Meta.ID
+	}
+	for _, p := range r.Pools {
+		i.Pools[p.Meta.Name] = p.Meta.ID
+	}
+	for _, b := range r.Budgets {
+		i.Budgets[b.Meta.Name] = b.Meta.ID
 	}
 	for _, t := range r.Teams {
 		i.Teams[t.Meta.Name] = t.Meta.ID
@@ -121,6 +136,10 @@ func (i *index) ServiceAccountID(n string) (string, bool) {
 func (i *index) GroupID(n string) (string, bool) { v, ok := i.Groups[n]; return v, ok }
 func (i *index) RoleID(n string) (string, bool)  { v, ok := i.Roles[n]; return v, ok }
 func (i *index) UserID(n string) (string, bool)  { v, ok := i.Users[n]; return v, ok }
+
+func (i *index) AccountID(n string) (string, bool) { v, ok := i.Accounts[n]; return v, ok }
+func (i *index) PoolID(n string) (string, bool)    { v, ok := i.Pools[n]; return v, ok }
+func (i *index) BudgetID(n string) (string, bool)  { v, ok := i.Budgets[n]; return v, ok }
 
 // mintIDs assigns a fresh UUIDv7 to every manifest name the index doesn't
 // know yet, before translate runs, so cross-refs resolve against names this

@@ -40,7 +40,7 @@ func decodeRelayAuthKind(env *rawEnvelope) (doc Document, ok bool, err error) {
 		doc = Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
 	case "ServiceAccount":
 		var spec ServiceAccountSpec
-		err = env.Spec.Decode(&spec)
+		err = decodeSpec(env, &spec)
 		doc = Document{ServiceAccount: &ServiceAccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
 	case "Group":
 		var spec GroupSpec

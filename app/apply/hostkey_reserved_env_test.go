@@ -17,7 +17,7 @@ func TestApplyRefusesAHostKeyOnAReservedEnvRef(t *testing.T) {
 			doc := &manifest.HostKeyDTO{APIVersion: manifest.APIVersion, Kind: "HostKey"}
 			doc.Metadata.Name = "env-key"
 			doc.Spec = manifest.HostKeySpec{
-				HostID: "acme-api", PolicyID: "acme-tier",
+				HostID:    "acme-api",
 				ValueFrom: manifest.HostKeyValueFrom{Kind: string(hostkey.ValueKindEnv), Env: env},
 			}
 			b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows)}

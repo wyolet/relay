@@ -40,7 +40,7 @@ func setField(d *authmanifest.Document, name string, v any, ok bool) {
 }
 
 // budgetOf reads the budget field strictly, so a typo inside it fails at parse like any other field.
-func budgetOf(d *authmanifest.Document) (*BudgetDTO, error) {
+func budgetOf(d *authmanifest.Document) (*ScopeBudgetDTO, error) {
 	raw, ok := d.Fields["budget"]
 	if !ok {
 		return nil, nil
@@ -50,18 +50,6 @@ func budgetOf(d *authmanifest.Document) (*BudgetDTO, error) {
 		return nil, fmt.Errorf("spec.budget: %w", err)
 	}
 	return b, nil
-}
-
-func policyOf(d *authmanifest.Document) (string, error) {
-	raw, ok := d.Fields["policy"]
-	if !ok {
-		return "", nil
-	}
-	var name string
-	if err := json.Unmarshal(raw, &name); err != nil {
-		return "", fmt.Errorf("spec.policy: %w", err)
-	}
-	return name, nil
 }
 
 // fromAuthDoc wraps a decoded module document in relay's DTO for its kind.
@@ -82,12 +70,8 @@ func fromAuthDoc(d *authmanifest.Document) (Document, error) {
 		return Document{Project: &ProjectDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
 			Spec: ProjectSpec{Team: d.Project.Team, Enabled: d.Project.Enabled, Budget: b}}}, nil
 	case authmanifest.KindServiceAccount:
-		policy, err := policyOf(d)
-		if err != nil {
-			return Document{}, err
-		}
 		return Document{ServiceAccount: &ServiceAccountDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
-			Spec: ServiceAccountSpec{Project: d.ServiceAccount.Project, Policy: policy, Enabled: d.ServiceAccount.Enabled}}}, nil
+			Spec: ServiceAccountSpec{Project: d.ServiceAccount.Project, Enabled: d.ServiceAccount.Enabled}}}, nil
 	case authmanifest.KindGroup:
 		return Document{Group: &GroupDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
 			Spec: GroupSpec{Members: d.Group.Members, Enabled: d.Group.Enabled}}}, nil
@@ -138,7 +122,6 @@ func projectDoc(d ProjectDTO) *authmanifest.Document {
 func serviceAccountDoc(d ServiceAccountDTO) *authmanifest.Document {
 	doc := authDoc(d.APIVersion, authmanifest.KindServiceAccount, d.Metadata)
 	doc.ServiceAccount = &authmanifest.ServiceAccountSpec{Project: d.Spec.Project, Enabled: d.Spec.Enabled}
-	setField(doc, "policy", d.Spec.Policy, d.Spec.Policy != "")
 	return doc
 }
 

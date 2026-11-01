@@ -188,10 +188,12 @@ type HostKeyDTO struct {
 }
 
 type HostKeySpec struct {
-	// HostID and PolicyID carry *names* on the wire; translate resolves
-	// to ids when producing the domain shape.
-	HostID      string           `json:"hostId"                yaml:"hostId"`
-	PolicyID    string           `json:"policyId"              yaml:"policyId"`
+	// HostID carries the host *name* on the wire; translate resolves it to
+	// an id when producing the domain shape.
+	HostID string `json:"hostId"            yaml:"hostId"`
+	// Account is the provider account *name* the key belongs to; keys of one
+	// account share its upstream tier limits. Optional.
+	Account     string           `json:"account,omitempty"     yaml:"account,omitempty"`
 	ValueFrom   HostKeyValueFrom `json:"valueFrom"             yaml:"valueFrom"`
 	DefaultTier string           `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty"`
 	// PricingStrategy is the billing mode this credential is (api | sub).
@@ -205,42 +207,6 @@ type HostKeyValueFrom struct {
 	Kind     string `json:"kind"               yaml:"kind"     enum:"env,stored,aws,azure,gcp,bitwarden,onepassword,oauth"`
 	Env      string `json:"env,omitempty"      yaml:"env,omitempty"`
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
-}
-
-// PolicyDTO carries policy-level model-handling flags + the grant list.
-type PolicyDTO struct {
-	APIVersion string     `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string     `json:"kind"       yaml:"kind"`
-	Metadata   WireMeta   `json:"metadata"   yaml:"metadata"`
-	Spec       PolicySpec `json:"spec"       yaml:"spec"`
-}
-
-type PolicySpec struct {
-	// Models holds modelref DSL strings ("provider", "provider/model",
-	// "@host", ...), not bare model names; see app/modelref.
-	Models []string `json:"models,omitempty"    yaml:"models,omitempty"`
-	// HostKeys holds host-key *names* (wire form).
-	HostKeys []string `json:"hostKeys,omitempty"  yaml:"hostKeys,omitempty"`
-
-	// RateLimit holds a rate-limit *name* (wire form). Mutually exclusive
-	// with RLBindings.
-	RateLimit string `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
-
-	// RLBindings is the per-model rate-limit map (wire form). Each entry's
-	// RateLimit field carries a *name* that translate resolves to an id.
-	RLBindings []RLBindingDTO `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty"`
-
-	KeySelection          string `json:"keySelection,omitempty"          yaml:"keySelection,omitempty"`
-	IncludeDeprecated     bool   `json:"includeDeprecated,omitempty"     yaml:"includeDeprecated,omitempty"`
-	Enabled               *bool  `json:"enabled,omitempty"               yaml:"enabled,omitempty"`
-	PayloadLoggingEnabled bool   `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
-}
-
-// RLBindingDTO is the wire form of a policy.RLBinding. Models are modelref
-// DSL strings carried verbatim; RateLimit is a name resolved to an id.
-type RLBindingDTO struct {
-	Models    []string `json:"models"    yaml:"models"`
-	RateLimit string   `json:"rateLimit" yaml:"rateLimit"`
 }
 
 // RateLimitDTO is the wire form of a RateLimit. No cross-refs.
@@ -263,7 +229,8 @@ type RateLimitRule struct {
 	Strategy string      `json:"strategy" yaml:"strategy"`
 }
 
-// KeyDTO is the wire form of a Key. Policy is a name.
+// KeyDTO is the wire form of a Key. A key holds no policy: its principal is
+// bound to one.
 type KeyDTO struct {
 	APIVersion string   `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string   `json:"kind"       yaml:"kind"`
@@ -274,17 +241,14 @@ type KeyDTO struct {
 type KeySpec struct {
 	// Principal names the subject by kind + *name* (wire form): a service
 	// account slug or a username.
-	Principal PrincipalDTO `json:"principal" yaml:"principal"`
-	// Policy is the policy *name* (wire form). Optional: a Key without one
-	// resolves through its principal.
-	Policy                string  `json:"policy,omitempty"            yaml:"policy,omitempty"`
-	KeyHash               string  `json:"keyHash"                     yaml:"keyHash"`
-	Prefix                string  `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
-	ExpiresAt             *string `json:"expiresAt,omitempty"         yaml:"expiresAt,omitempty"`
-	RevokedAt             *string `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
-	Enabled               *bool   `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
-	PassthroughAllowed    bool    `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
-	PayloadLoggingEnabled bool    `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+	Principal             PrincipalDTO `json:"principal" yaml:"principal"`
+	KeyHash               string       `json:"keyHash"                     yaml:"keyHash"`
+	Prefix                string       `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
+	ExpiresAt             *string      `json:"expiresAt,omitempty"         yaml:"expiresAt,omitempty"`
+	RevokedAt             *string      `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
+	Enabled               *bool        `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
+	PassthroughAllowed    bool         `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
+	PayloadLoggingEnabled bool         `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
 // PrincipalDTO is the wire form of a Key principal.
@@ -318,8 +282,8 @@ type PricingRateDTO struct {
 	ServiceTier string  `json:"serviceTier,omitempty" yaml:"serviceTier,omitempty"`
 }
 
-// BudgetDTO is the wire form of a spend cap, shared by Team and Project.
-type BudgetDTO struct {
+// ScopeBudgetDTO is the wire form of the spend cap a Team or Project carries.
+type ScopeBudgetDTO struct {
 	Amount string `json:"amount"           yaml:"amount"`
 	Period string `json:"period,omitempty" yaml:"period,omitempty" enum:"month,week,day"`
 }
@@ -333,8 +297,8 @@ type TeamDTO struct {
 }
 
 type TeamSpec struct {
-	Enabled *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	Budget  *BudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
+	Enabled *bool           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Budget  *ScopeBudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
 }
 
 // ProjectDTO is the wire form of a Project. Spec.Team is a team *name*.
@@ -347,9 +311,9 @@ type ProjectDTO struct {
 
 type ProjectSpec struct {
 	// Team is the owning team *name* (wire form).
-	Team    string     `json:"team"              yaml:"team"`
-	Enabled *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	Budget  *BudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
+	Team    string          `json:"team"              yaml:"team"`
+	Enabled *bool           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Budget  *ScopeBudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
 }
 
 // SettingDTO is the wire form of a settings section. Unlike the catalog kinds
@@ -386,7 +350,6 @@ type ServiceAccountDTO struct {
 
 type ServiceAccountSpec struct {
 	Project string `json:"project"           yaml:"project"`
-	Policy  string `json:"policy,omitempty"  yaml:"policy,omitempty"`
 	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
@@ -419,7 +382,7 @@ type RoleSpec struct {
 
 // RoleRuleDTO mirrors role.Rule using plain types.
 type RoleRuleDTO struct {
-	Kinds []string `json:"kinds" yaml:"kinds" minItems:"1" enum:"*,audit,debug,groups,host-bindings,host-keys,hosts,keys,license,logs,master-key,models,policies,policy-bindings,pricings,projects,providers,rate-limits,role-bindings,roles,scim-clients,secret-keys,service-accounts,settings,system,teams,tokens,usage,users"`
+	Kinds []string `json:"kinds" yaml:"kinds" minItems:"1" enum:"*,accounts,audit,budgets,debug,groups,host-bindings,host-keys,hosts,keys,license,logs,master-key,models,policies,policy-bindings,pools,pricings,projects,providers,rate-limits,role-bindings,roles,scim-clients,secret-keys,service-accounts,settings,system,teams,tokens,usage,users"`
 	Verbs []string `json:"verbs" yaml:"verbs" minItems:"1" enum:"*,apply,attach,create,delete,destroy,detach,generate,get,health,list,mint,read,reload,revoke,rewrap,rotate,snapshot,update"`
 }
 
@@ -460,9 +423,16 @@ type PolicyBindingDTO struct {
 }
 
 type PolicyBindingSpec struct {
-	Project  string       `json:"project,omitempty"  yaml:"project,omitempty"`
-	Policy   string       `json:"policy"             yaml:"policy"`
-	Priority *int         `json:"priority,omitempty" yaml:"priority,omitempty"`
-	Subjects []SubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
-	Enabled  *bool        `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
+	Project  string             `json:"project,omitempty"  yaml:"project,omitempty"`
+	Policy   string             `json:"policy"             yaml:"policy"`
+	Priority *int               `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Subjects []PolicySubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
+	Enabled  *bool              `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
+}
+
+// PolicySubjectDTO is a policy-binding subject, named: a principal, a group,
+// a tenancy scope, or an upstream rung (host, account, credential = host key).
+type PolicySubjectDTO struct {
+	Kind string `json:"kind" yaml:"kind" enum:"user,serviceaccount,group,host,account,credential,team,project"`
+	Name string `json:"name" yaml:"name"`
 }

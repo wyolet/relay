@@ -2,7 +2,6 @@ package manifest
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/meta"
@@ -14,67 +13,53 @@ import (
 // Policy
 // ---------------------------------------------------------------------------
 
+// ToPolicy resolves every linked pool, credential, rate limit and budget by
+// name. Model refs are canonicalised exactly as the control API does, or
+// apply reports an update on every run for a grant the API wrote.
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
-	// Canonicalised exactly as the control API does, or apply reports an
-	// update on every run for a grant the API wrote.
+	name := d.Metadata.Name
 	models, err := policy.CanonicalizeModelRefs(d.Spec.Models)
 	if err != nil {
-		return nil, fmt.Errorf("policy %q: models: %w", d.Metadata.Name, err)
+		return nil, fmt.Errorf("policy %q: models: %w", name, err)
 	}
-
-	hostKeyIDs := make([]string, 0, len(d.Spec.HostKeys))
-	for _, name := range d.Spec.HostKeys {
-		id, ok := idx.HostKeyID(name)
-		if !ok {
-			return nil, refNotFound("policy %q: hostKey %q not found", d.Metadata.Name, name)
-		}
-		hostKeyIDs = append(hostKeyIDs, id)
+	pools, err := resolveNames(idx.PoolID, d.Spec.Pools, "policy %q: pool %q not found", name)
+	if err != nil {
+		return nil, err
 	}
-
-	var rateLimitID string
-	if d.Spec.RateLimit != "" {
-		id, ok := idx.RateLimitID(d.Spec.RateLimit)
-		if !ok {
-			return nil, refNotFound("policy %q: rateLimit %q not found", d.Metadata.Name, d.Spec.RateLimit)
-		}
-		rateLimitID = id
+	creds, err := resolveNames(idx.HostKeyID, d.Spec.Credentials, "policy %q: credential %q not found", name)
+	if err != nil {
+		return nil, err
 	}
-
-	rlBindings := make([]policy.RLBinding, 0, len(d.Spec.RLBindings))
-	for i, b := range d.Spec.RLBindings {
-		if b.RateLimit == "" {
-			return nil, fmt.Errorf("policy %q: rlBindings[%d].rateLimit is required", d.Metadata.Name, i)
+	budgets, err := resolveNames(idx.BudgetID, d.Spec.Budgets, "policy %q: budget %q not found", name)
+	if err != nil {
+		return nil, err
+	}
+	var limits []policy.RateLimitLink
+	for i, l := range d.Spec.RateLimits {
+		if l.Ref == "" {
+			return nil, fmt.Errorf("policy %q: rateLimits[%d].ref is required", name, i)
 		}
-		id, ok := idx.RateLimitID(b.RateLimit)
+		id, ok := idx.RateLimitID(l.Ref)
 		if !ok {
-			return nil, refNotFound("policy %q: rlBindings[%d] rateLimit %q not found",
-				d.Metadata.Name, i, b.RateLimit)
+			return nil, refNotFound("policy %q: rateLimits[%d] rate limit %q not found", name, i, l.Ref)
 		}
-		bModels, err := policy.CanonicalizeModelRefs(append([]string{}, b.Models...))
+		scope, err := policy.CanonicalizeModelRefs(l.Models)
 		if err != nil {
-			return nil, fmt.Errorf("policy %q: rlBindings[%d].models: %w", d.Metadata.Name, i, err)
+			return nil, fmt.Errorf("policy %q: rateLimits[%d].models: %w", name, i, err)
 		}
-		rlBindings = append(rlBindings, policy.RLBinding{
-			Models:      bModels,
-			RateLimitID: id,
-		})
+		limits = append(limits, policy.RateLimitLink{RateLimitID: id, Models: scope})
 	}
 
 	m := d.Metadata.toMeta()
-	if m.Owner.Kind == meta.OwnerHost && m.Owner.ID != "" {
-		if hid, ok := idx.HostID(m.Owner.ID); ok {
-			m.Owner.ID = hid
-		}
-	}
 	resolveScopeOwner(&m.Owner, idx)
 	return &policy.Policy{
 		Meta: m,
 		Spec: policy.Spec{
 			Models:                models,
-			HostKeyIDs:            hostKeyIDs,
-			RateLimitID:           rateLimitID,
-			RLBindings:            rlBindings,
-			KeySelection:          policy.KeySelection(d.Spec.KeySelection),
+			PoolIDs:               pools,
+			CredentialIDs:         creds,
+			RateLimits:            limits,
+			BudgetIDs:             budgets,
 			IncludeDeprecated:     d.Spec.IncludeDeprecated,
 			Enabled:               d.Spec.Enabled,
 			PayloadLoggingEnabled: d.Spec.PayloadLoggingEnabled,
@@ -83,90 +68,66 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 }
 
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
-	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs is the
-	// legacy literal-ID grant; emit those rows as model refs, not bare model
-	// slugs, because a bare modelref token means "provider". Only when Models
-	// is empty, though: the two coexist on a row, and rendering both would
-	// make a re-apply of the export widen the grant.
-	models := make([]string, 0, len(p.Spec.Models)+len(p.Spec.ModelIDs))
-	models = append(models, p.Spec.Models...)
-	if len(models) == 0 {
-		for _, id := range p.Spec.ModelIDs {
-			models = append(models, legacyModelRef(id, rev))
-		}
-	}
-
-	hostKeys := make([]string, 0, len(p.Spec.HostKeyIDs))
-	for _, id := range p.Spec.HostKeyIDs {
-		name, _ := rev.HostKeyName(id)
-		if name == "" {
-			name = id
-		}
-		hostKeys = append(hostKeys, name)
-	}
-
-	rlName := ""
-	if p.Spec.RateLimitID != "" {
-		name, _ := rev.RateLimitName(p.Spec.RateLimitID)
-		if name == "" {
-			name = p.Spec.RateLimitID
-		}
-		rlName = name
-	}
-
-	bindings := make([]RLBindingDTO, 0, len(p.Spec.RLBindings))
-	for _, b := range p.Spec.RLBindings {
-		rl := b.RateLimitID
-		if name, ok := rev.RateLimitName(rl); ok {
-			rl = name
-		}
-		bindings = append(bindings, RLBindingDTO{
-			Models:    append([]string{}, b.Models...),
-			RateLimit: rl,
+	var limits []PolicyRateLimitDTO
+	for _, l := range p.Spec.RateLimits {
+		limits = append(limits, PolicyRateLimitDTO{
+			Ref:    nameOr(rev.RateLimitName, l.RateLimitID),
+			Models: append([]string(nil), l.Models...),
 		})
 	}
-
 	return PolicyDTO{
 		APIVersion: APIVersion,
 		Kind:       "Policy",
 		Metadata:   metaToWire(p.Meta),
 		Spec: PolicySpec{
-			Models:                models,
-			HostKeys:              hostKeys,
-			RateLimit:             rlName,
-			RLBindings:            bindings,
-			KeySelection:          string(p.Spec.KeySelection),
-			IncludeDeprecated:     p.Spec.IncludeDeprecated,
 			Enabled:               p.Spec.Enabled,
+			IncludeDeprecated:     p.Spec.IncludeDeprecated,
+			Pools:                 namesOf(rev.PoolName, p.Spec.PoolIDs),
+			Credentials:           namesOf(rev.HostKeyName, p.Spec.CredentialIDs),
+			Models:                append([]string(nil), p.Spec.Models...),
+			RateLimits:            limits,
+			Budgets:               namesOf(rev.BudgetName, p.Spec.BudgetIDs),
 			PayloadLoggingEnabled: p.Spec.PayloadLoggingEnabled,
 		},
 	}
 }
 
-type modelProviderIDResolver interface {
-	ModelProviderID(modelID string) (string, bool)
+// resolveNames maps each name to its id through lookup; a missing name is a
+// RefNotFoundError built from format, which takes the referrer's name and
+// then the missing one. A nil or empty input yields nil.
+func resolveNames(lookup func(string) (string, bool), names []string, format, referrer string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		id, ok := lookup(n)
+		if !ok {
+			return nil, refNotFound(format, referrer, n)
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
-// legacyModelRef renders a legacy ModelIDs grant as a modelref. A bare token
-// means "provider" in the DSL, so a bare model slug would re-import as the
-// wrong grant; emit the provider-qualified "provider/model" form when the
-// resolver can supply the model's provider, else fall back to the name.
-func legacyModelRef(id string, rev ReverseResolver) string {
-	name, _ := rev.ModelName(id)
-	if name == "" {
-		return id
+// namesOf renders ids as names; an id the resolver does not know stays as
+// is, so a dangling link still shows up in an export.
+func namesOf(name func(string) (string, bool), ids []string) []string {
+	if len(ids) == 0 {
+		return nil
 	}
-	if strings.Contains(name, "/") {
-		return name
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, nameOr(name, id))
 	}
-	if r, ok := rev.(modelProviderIDResolver); ok {
-		if providerID, ok := r.ModelProviderID(id); ok {
-			if provider, ok := rev.ProviderName(providerID); ok && provider != "" {
-				return provider + "/" + name
-			}
-		}
+	return out
+}
+
+func nameOr(name func(string) (string, bool), id string) string {
+	if n, ok := name(id); ok && n != "" {
+		return n
 	}
-	return name
+	return id
 }
 
 // ---------------------------------------------------------------------------

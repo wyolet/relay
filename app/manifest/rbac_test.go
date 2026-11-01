@@ -11,7 +11,7 @@ import (
 )
 
 const rbacYAML = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Role
 metadata:
   name: developer
@@ -23,7 +23,7 @@ spec:
     - kinds: [usage, logs]
       verbs: [read]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: platform-admins
@@ -35,7 +35,7 @@ spec:
     - {kind: user, name: alice}
     - {kind: serviceaccount, name: search-indexer}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: everyone-viewer
@@ -45,7 +45,7 @@ spec:
   subjects:
     - {kind: group, name: system:authenticated}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: ml-search-everyone
@@ -183,7 +183,7 @@ func TestToPolicyBinding_OmittedPrioritySetsTheDefaultOnSpec(t *testing.T) {
 // an omitted field and picking up the default.
 func TestPolicyBindingExplicitZeroPriorityRoundTrips(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: zero-priority
@@ -215,7 +215,7 @@ spec:
 
 func TestToRoleBinding_UnknownScopeTarget(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: ghost-team
@@ -225,7 +225,7 @@ spec:
   subjects:
     - {kind: group, name: platform-eng}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: ghost-project
@@ -251,7 +251,7 @@ spec:
 
 func TestToRoleBinding_UnknownSubject(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: ghosts
