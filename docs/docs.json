@@ -46,6 +46,7 @@
               "concepts/rate-limits",
               "concepts/budgets",
               "concepts/key-pooling",
+              "policy-examples",
               "concepts/proxy-mode"
             ]
           },
