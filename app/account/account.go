@@ -21,7 +21,7 @@ type Spec struct {
 	HostID string `json:"hostId" yaml:"hostId" validate:"required,uuid"`
 
 	// OrgID is the provider's organization id: the org, never a person or an email, since one login can belong to several orgs with separate limits. Empty until known.
-	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty"`
+	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty" doc:"The provider's organization id (the org, never a person or an email). Empty until known."`
 
 	// Default marks the account a host key of the same owner at HostID joins when it names none. An owner has at most one per host.
 	Default bool `json:"default,omitempty" yaml:"default,omitempty"`
