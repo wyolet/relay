@@ -7,7 +7,7 @@
 //   - Settle: one batched round trip committing the groups that settle something (a concurrency lease, a token meter, a spend charge); none when nothing does.
 //   - Release: one batched round trip.
 //
-// The admission estimate is unused: token meters are checked against what earlier requests used and charged at Settle, and budgets reserve nothing. As in pkg/ratelimit, a release refunds token-bucket, leaky-bucket and session-window charges but not fixed- or sliding-window request counts.
+// The admission estimate is unused: token meters are checked against what earlier requests used and charged at Settle, and budgets reserve nothing. A rollback or Release refunds every strategy's request count, so a refused or unsent request consumes no quota.
 package lua
 
 import (

@@ -2,10 +2,13 @@ package inference
 
 import (
 	"context"
+	"reflect"
 	"sync/atomic"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/wyolet/relay/app/httpapi"
 )
 
 type healthzOutput struct {
@@ -32,6 +35,7 @@ func registerHealth(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/livez",
 		Summary:     "Process liveness (no backend dependency)",
+		Description: "Unauthenticated. Answers ok while the process serves, whatever its backends' state.",
 		Tags:        []string{"system"},
 	}, func(_ context.Context, _ *struct{}) (*livezOutput, error) {
 		out := &livezOutput{}
@@ -46,7 +50,14 @@ func registerHealth(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/healthz",
 		Summary:     "Readiness: a loaded catalog, and Postgres until first ready",
+		Description: "Unauthenticated. Ready once the first catalog snapshot is installed; Postgres is checked only until then, so a database blip does not pull a serving pod.",
 		Tags:        []string{"system"},
+		Responses: map[string]*huma.Response{
+			"503": {
+				Description: "Not ready: the catalog is still loading, or Postgres is unreachable before the pod was first ready.",
+				Content:     map[string]*huma.MediaType{"application/json": {Schema: api.OpenAPI().Components.Schemas.Schema(reflect.TypeOf(httpapi.APIError{}), true, "")}},
+			},
+		},
 	}, func(ctx context.Context, _ *struct{}) (*healthzOutput, error) {
 		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()

@@ -32,6 +32,7 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodPost,
 		Path:        "/host-keys/by-id/{id}/rotate",
 		Summary:     "Rotate a stored-mode HostKey credential",
+		Description: "Replaces the sealed secret of a stored or oauth host key and leaves everything else as is. An env-mode key answers 400: change its environment variable instead.",
 		Tags:        []string{"host-keys"},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 404, 409, 500},

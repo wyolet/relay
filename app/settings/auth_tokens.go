@@ -12,28 +12,28 @@ import (
 // but a deployment with no master key has nowhere to keep the signing key and
 // stays token-less until one is configured.
 type AuthTokens struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" doc:"Let signed-in users mint inference tokens."`
 
 	// DefaultTTL applies when a mint request names no ttl; MaxTTL caps what
 	// a request may ask for. Both are time.Duration — nanoseconds on the
 	// wire, as everywhere Go durations are serialized.
-	DefaultTTL time.Duration `json:"defaultTTL"`
-	MaxTTL     time.Duration `json:"maxTTL"`
+	DefaultTTL time.Duration `json:"defaultTTL" doc:"Lifetime of a token whose mint names no ttl, in nanoseconds."`
+	MaxTTL     time.Duration `json:"maxTTL"     doc:"Longest lifetime a mint may ask for, in nanoseconds."`
 
 	// SigningKey points at the stored Ed25519 seed. Empty means "not
 	// generated yet": boot mints one, stores it through the master-key path,
 	// and writes the ref back here.
-	SigningKey secret.Ref `json:"signingKey,omitempty"`
+	SigningKey secret.Ref `json:"signingKey,omitempty" doc:"Reference to the stored signing key. Set by relay; changed only by POST /auth/token/keys/rotate."`
 
 	// PreviousSigningKey is the ref rotation replaced. Tokens minted under
 	// it still verify, so a rotation is not a fleet-wide logout — every pod
 	// loads both refs at boot, not just the one it happened to rotate.
-	PreviousSigningKey secret.Ref `json:"previousSigningKey,omitempty"`
+	PreviousSigningKey secret.Ref `json:"previousSigningKey,omitempty" doc:"Reference to the key the last rotation replaced; tokens it signed still verify. Set by relay."`
 
 	// VerifyCacheSize bounds how many verified tokens the data plane keeps
 	// so a repeat request skips the Ed25519 verify. 0 uses the default;
 	// negative disables the cache.
-	VerifyCacheSize int `json:"verifyCacheSize,omitempty"`
+	VerifyCacheSize int `json:"verifyCacheSize,omitempty" doc:"Verified tokens each inference pod caches; 0 uses the default, negative turns the cache off."`
 }
 
 // DefaultVerifyCacheSize is the verified-claims cache bound when the

@@ -150,7 +150,7 @@ func as[T any](v any) *T {
 // objects is one kind's maps in some state: a view's or the working batch's.
 type objects struct {
 	objs  *shardMap[string, obj]
-	names *shardMap[string, []string]
+	names *shardMap[string, map[string]struct{}]
 }
 
 type obj struct {
@@ -174,7 +174,10 @@ func (o objects) byName(name string) any {
 	if len(ids) != 1 {
 		return nil
 	}
-	return o.get(ids[0])
+	for id := range ids {
+		return o.get(id)
+	}
+	return nil
 }
 
 func (o objects) sortedIDs() []string {

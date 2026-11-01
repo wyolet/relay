@@ -19,20 +19,31 @@ import (
 )
 
 type blockerItem struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   string `json:"id"   doc:"Id of the referencing row."`
+	Name string `json:"name" doc:"Slug of the referencing row."`
 }
 
 // blockerGroup is every row of one kind pointing at the target through one
 // field. Count includes the Hidden rows the caller may not see; Items lists
 // only the visible ones.
 type blockerGroup struct {
-	Kind       string        `json:"kind"`
-	Field      string        `json:"field"`
-	Detachable bool          `json:"detachable"`
-	Count      int           `json:"count"`
-	Hidden     int           `json:"hidden"`
-	Items      []blockerItem `json:"items"`
+	Kind       string        `json:"kind"       doc:"Kind of the referencing rows, as an API singular (policy, host-key, policy-binding, …)."`
+	Field      string        `json:"field"      doc:"Field path on those rows that names the target, such as spec.poolIds."`
+	Detachable bool          `json:"detachable" doc:"The rows can let go of the target (POST …/detach does it); otherwise reassign or delete them first."`
+	Count      int           `json:"count"      doc:"Every referencing row, including the hidden ones."`
+	Hidden     int           `json:"hidden"     doc:"Referencing rows in scopes the caller may not see; they are counted but not listed."`
+	Items      []blockerItem `json:"items"      doc:"The referencing rows the caller may see."`
+}
+
+// deleteDetachedBody is the 200 a delete answers when it took links from rows that stay.
+type deleteDetachedBody struct {
+	Detached []blockerGroup `json:"detached" doc:"Links the delete took from rows that stay, grouped like blockers: a policy that lost a rate limit or budget, or narrowed to the pools and credentials it still links."`
+}
+
+// conflictBody documents a 409: the error envelope, plus blockers when the code is resource_in_use.
+type conflictBody struct {
+	Err      httpapi.APIErrorBody `json:"error"              doc:"The error. code says which conflict: resource_in_use, stale_resource_version, managed_by_source, duplicate_binding, or a duplicate default account."`
+	Blockers []blockerGroup       `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the target, grouped by kind and field."`
 }
 
 // resourceInUseError is the 409 a referenced row's delete returns: the
@@ -117,9 +128,7 @@ func (dl *droppedLinks) answer(ctx context.Context) *deleteOutput {
 	return &deleteOutput{Body: func(hc huma.Context) {
 		hc.SetHeader("Content-Type", "application/json")
 		hc.SetStatus(http.StatusOK)
-		_ = json.NewEncoder(hc.BodyWriter()).Encode(struct {
-			Detached []blockerGroup `json:"detached"`
-		}{dl.groups})
+		_ = json.NewEncoder(hc.BodyWriter()).Encode(deleteDetachedBody{Detached: dl.groups})
 	}}
 }
 

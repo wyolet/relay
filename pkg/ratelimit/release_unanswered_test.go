@@ -142,7 +142,7 @@ func runReleaseUnansweredSuite(t *testing.T, newStore func(t *testing.T) kvtest.
 		con := conRule("unanswered:late:con", "concurrency", 1, window)
 		req := reqRule("unanswered:late:req", "requests", 1, window)
 		rules := []Rule{con, req}
-		call, err := post.buildReserveCall(scope, rules, "late-token")
+		call, err := post.buildReserveCall(scope, rules, "late-token", post.clock())
 		if err != nil {
 			t.Fatal(err)
 		}

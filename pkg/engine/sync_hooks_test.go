@@ -94,6 +94,28 @@ func TestNotifiedDeleteRemovesRow(t *testing.T) {
 	}
 }
 
+func TestDeleteBelowHeldVersionIsDropped(t *testing.T) {
+	r := newRig(t, engine.Options{})
+	r.items.set(&item{ID: "i1", Ver: 5}, &item{ID: "i2", Ver: 1})
+	r.load()
+	// i2's upsert is queued after the stale delete, so its publish proves the delete was drained.
+	r.items.set(&item{ID: "i2", Ver: 2})
+	r.e.Notify(engine.Event{Ref: refOf(kItem, "i1"), Op: engine.OpDelete, Version: 4})
+	r.e.Notify(upsert("i2", 2))
+	r.nextPub()
+	if engine.Get[item](r.view(), "i1") == nil {
+		t.Fatal("delayed delete at v4 removed the row held at v5")
+	}
+
+	// A delete trigger reports the deleted row's own version: equal to the held one.
+	r.items.remove("i1")
+	r.e.Notify(engine.Event{Ref: refOf(kItem, "i1"), Op: engine.OpDelete, Version: 5})
+	r.nextPub()
+	if engine.Get[item](r.view(), "i1") != nil {
+		t.Fatal("delete at the held v5 left the row")
+	}
+}
+
 func TestFetchOfMissingRowAppliesDelete(t *testing.T) {
 	r := newRig(t, engine.Options{})
 	r.items.set(&item{ID: "i1", Ver: 1})

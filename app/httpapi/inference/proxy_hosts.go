@@ -10,14 +10,14 @@ import (
 
 // proxyHostEntry is one row in the GET /v1/proxy/hosts response.
 type proxyHostEntry struct {
-	Slug        string `json:"slug"`
-	DisplayName string `json:"displayName,omitempty"`
+	Slug        string `json:"slug"                  doc:"Host slug to send in X-WR-Upstream-Host."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
 }
 
 type proxyHostsOutput struct {
 	Body struct {
-		Object string           `json:"object"`
-		Data   []proxyHostEntry `json:"data"`
+		Object string           `json:"object" enum:"list" doc:"Always list."`
+		Data   []proxyHostEntry `json:"data"   doc:"Hosts proxy mode forwards to."`
 	}
 }
 
@@ -32,9 +32,10 @@ func registerProxyHosts(api huma.API, d Deps, mw huma.Middlewares) {
 		Method:      "GET",
 		Path:        "/v1/proxy/hosts",
 		Summary:     "List upstream hosts accepted via X-WR-Upstream-Host",
+		Description: "Hosts a proxy-mode caller may name in X-WR-Upstream-Host, sending its own upstream credential. 403 while proxy mode is off; 401 for an anonymous caller unless anonymous proxy traffic is allowed.",
 		Tags:        []string{"inference"},
 		Middlewares: mw,
-		Errors:      []int{401, 403, 500},
+		Errors:      []int{401, 403, 500, 503},
 	}, func(ctx context.Context, _ *struct{}) (*proxyHostsOutput, error) {
 		pm, ok := proxyModeSettings(d.Catalog)
 		if !ok || !pm.Enabled {

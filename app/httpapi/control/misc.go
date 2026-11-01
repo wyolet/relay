@@ -15,6 +15,11 @@ import (
 	"github.com/wyolet/relay/app/settings"
 )
 
+// reloadLicense reports a stored license that failed to verify on reload.
+type reloadLicense struct {
+	Error string `json:"error" doc:"Why the stored license does not verify."`
+}
+
 type versionOutput struct {
 	Body struct {
 		Version string        `json:"version"           doc:"Relay build version."`
@@ -28,6 +33,7 @@ func registerVersion(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/version",
 		Summary:     "Relay build version",
+		Description: "Unauthenticated. Signed-in callers also get the live license summary.",
 		Tags:        []string{"system"},
 	}, func(ctx context.Context, _ *struct{}) (*versionOutput, error) {
 		out := &versionOutput{}
@@ -73,12 +79,10 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 
 	type reloadOutput struct {
 		Body struct {
-			Status string `json:"status"`
+			Status string `json:"status" doc:"ok once the snapshot is rebuilt."`
 			// License reports a stored license that no longer verifies. The
 			// reload itself still succeeded; the previous license stays live.
-			License *struct {
-				Error string `json:"error"`
-			} `json:"license,omitempty"`
+			License *reloadLicense `json:"license,omitempty" doc:"Present when the stored license no longer verifies. The reload still succeeded and the previous license stays live."`
 		}
 	}
 	huma.Register(api, huma.Operation{
@@ -110,9 +114,7 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 		if d.License != nil {
 			if _, err := d.License.Set(settings.LicenseFrom(d.Catalog).Value); err != nil {
 				slog.Warn("control: stored license does not verify", "err", err)
-				out.Body.License = &struct {
-					Error string `json:"error"`
-				}{Error: err.Error()}
+				out.Body.License = &reloadLicense{Error: err.Error()}
 			}
 		}
 		return out, nil

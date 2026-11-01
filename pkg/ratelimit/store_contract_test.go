@@ -8,6 +8,7 @@ package ratelimit
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -279,6 +280,82 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		}
 	})
 
+	// A cancelled commit takes its count back from the sub-bucket its reserve incremented, not the current one.
+	t.Run(name+"/SlidingWindow_RefundsReservedBucket", func(t *testing.T) {
+		now := time.Date(2024, 1, 1, 0, 0, 50, 0, time.UTC)
+		l := factory(t, &now)
+		ctx := context.Background()
+		const scope = "sw-refund-bucket"
+		rule := reqRule("Route:sw-refund:rl-req", "requests", 10, time.Minute)
+		old, cur := bucketKey(scope, rule, now.Truncate(time.Minute)), bucketKey(scope, rule, now.Truncate(time.Minute).Add(time.Minute))
+
+		cancelled, err := l.Reserve(ctx, scope, []Rule{rule})
+		if err != nil {
+			t.Fatal(err)
+		}
+		served, err := l.Reserve(ctx, scope, []Rule{rule})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCommit(t, l, served, Observations{})
+		now = now.Add(30 * time.Second)
+		if _, err := l.Reserve(ctx, scope, []Rule{rule}); err != nil {
+			t.Fatal(err)
+		}
+		mustCommit(t, l, cancelled, Observations{Cancelled: true})
+		if n, _ := readCount(t, l.store, old); n != 1 {
+			t.Errorf("reserved bucket = %d, want 1: the served request stays", n)
+		}
+		if n, _ := readCount(t, l.store, cur); n != 1 {
+			t.Errorf("current bucket = %d, want 1: untouched by the refund", n)
+		}
+	})
+
+	// A refund after the fixed window rolled over leaves the new window's count alone, and a counter already gone is not recreated.
+	t.Run(name+"/FixedWindow_RefundAfterRollover", func(t *testing.T) {
+		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+		l := factory(t, &now)
+		ctx := context.Background()
+		const scope = "fw-refund-rollover"
+		rule := Rule{Key: "Route:fw-rollover:rl-fw", Name: "requests", Meter: "requests", Strategy: StrategyFixedWindow, Amount: 1, Window: time.Minute}
+		rules := []Rule{rule}
+
+		b := kv.NewBatch(l.store, 1)
+		p, err := l.PrepareReserve(b, scope, rules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Exec(ctx)
+		prepared, err := p.Finish(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustCommit(t, l, prepared, Observations{Cancelled: true})
+		old := mustReserve(t, l, scope, rules)
+		oldKey := fixedWindowKey(scope, rule, fixedWindowStartMs(now, time.Minute))
+
+		now = now.Add(time.Minute)
+		mustReserve(t, l, scope, rules)
+		mustCommit(t, l, old, Observations{Cancelled: true})
+		_ = mustExceed(t, l, scope, rules)
+		if n, _ := readCount(t, l.store, fixedWindowKey(scope, rule, fixedWindowStartMs(now, time.Minute))); n != 1 {
+			t.Errorf("new window = %d, want 1", n)
+		}
+		if n, _ := readCount(t, l.store, oldKey); n != 0 {
+			t.Errorf("old window = %d, want 0", n)
+		}
+
+		gone := mustReserve(t, l, scope+"-gone", rules)
+		goneKey := fixedWindowKey(scope+"-gone", rule, fixedWindowStartMs(now, time.Minute))
+		if err := l.store.Del(ctx, goneKey); err != nil {
+			t.Fatal(err)
+		}
+		mustCommit(t, l, gone, Observations{Cancelled: true})
+		if n, ok := readCount(t, l.store, goneKey); ok {
+			t.Errorf("expired counter came back as %d", n)
+		}
+	})
+
 	// A token-meter rule rejects once committed usage exceeds its amount,
 	// whichever strategy it names.
 	for _, meter := range []string{"tokens", "tokens.output"} {
@@ -304,6 +381,23 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			})
 		}
 	}
+}
+
+// readCount reads an integer counter from s and reports whether it exists.
+func readCount(t *testing.T, s kv.Store, key string) (int64, bool) {
+	t.Helper()
+	b, err := s.Get(context.Background(), key)
+	if errors.Is(err, kv.ErrNotFound) {
+		return 0, false
+	}
+	if err != nil {
+		t.Fatalf("get %s: %v", key, err)
+	}
+	n, err := strconv.ParseInt(string(b), 10, 64)
+	if err != nil {
+		t.Fatalf("counter %s = %q: %v", key, b, err)
+	}
+	return n, true
 }
 
 func TestContractLimit_MemStore(t *testing.T) {

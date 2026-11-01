@@ -44,6 +44,26 @@ func fixedWindowKey(scope string, r Rule, bucketStartMs int64) string {
 	return string(b)
 }
 
+// fixedWindowStartMs returns the start, in Unix ms, of the fixed window of length w containing now.
+func fixedWindowStartMs(now time.Time, w time.Duration) int64 {
+	return (now.UnixMilli() / w.Milliseconds()) * w.Milliseconds()
+}
+
+// windowCountKey returns the counter a reserve at now adds one to for r, and false when r keeps no such counter: only fixed- and sliding-window request meters do.
+func windowCountKey(scope string, r Rule, now time.Time) (string, bool) {
+	if r.Meter == MeterRevoked || r.Meter == MeterSpend || r.Meter == "concurrency" || isTokenMeter(r.Meter) {
+		return "", false
+	}
+	switch r.Strategy {
+	case StrategyFixedWindow:
+		return fixedWindowKey(scope, r, fixedWindowStartMs(now, r.Window)), true
+	case StrategySlidingWindow:
+		cur, _ := windowBuckets(now, r.Window)
+		return bucketKey(scope, r, cur), true
+	}
+	return "", false
+}
+
 // tbStateKey returns the state hash key for a token-bucket rule.
 // format: limit:{<scope>}:tb:<rule.Key>:<meter>
 func tbStateKey(scope string, r Rule) string {

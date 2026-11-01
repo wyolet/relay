@@ -11,7 +11,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/overlay"
@@ -209,7 +208,7 @@ func warnUnpriced(tx *engine.Txn, src engine.Ref, ep *ExpandedPolicy, hosts map[
 	}
 }
 
-// RungPolicy is the policy bound at one rung (a subject such as "team:<id>"), or the refusal the rung imposes when its policy is disabled or its binding ambiguous. For a user, Rung, Binding and Refused come from the system-owned bindings and the user's own, which apply everywhere; Scoped holds the user's team- and project-owned ones.
+// RungPolicy is the policy bound at one rung (a subject such as "team:<id>"), or the refusal the rung imposes when its policy is disabled or its binding ambiguous. For a user, Rung, Binding and Refused come from the system-owned bindings, which apply everywhere; Scoped holds the user's own binding and the team- and project-owned ones.
 type RungPolicy struct {
 	Rung    Rung
 	Binding *policybinding.PolicyBinding
@@ -220,9 +219,9 @@ type RungPolicy struct {
 	in       inputs
 }
 
-// ScopedRung is a user's binding owned by a team or a project: it governs only the user's requests inside that scope, which are the user's tokens for that project or for a project of that team.
+// ScopedRung is a user's binding owned by a team, a project or the user: it governs only the user's requests inside that scope, which are the user's tokens for that project or for a project of that team, or for the user's own binding the requests outside any project (the user's relay keys).
 type ScopedRung struct {
-	Scope  string // "team:<id>" or "project:<id>"
+	Scope  string // "team:<id>", "project:<id>" or "user:<id>"
 	Policy *RungPolicy
 }
 
@@ -293,16 +292,14 @@ func (c *controllers) rungPolicy(tx *engine.Txn, subject string) error {
 	return nil
 }
 
-// splitScoped keeps a user's system-owned bindings and the user's own, which govern every request of the user, and folds the team- and project-owned ones per owner scope, reusing prev's fold of a scope whose bindings did not change.
+// splitScoped keeps a user's system-owned bindings, which govern every request of the user, and folds the others per owner scope: the user's own (scope "user:<id>", the personal requests) and each team's and project's (the tokens inside it), reusing prev's fold of a scope whose bindings did not change.
 func splitScoped(tx *engine.Txn, kind limits.Rung, subject string, bs []*policybinding.PolicyBinding, prev *RungPolicy) ([]*policybinding.PolicyBinding, []ScopedRung) {
 	everywhere := bs[:0:0]
 	byScope := map[string][]*policybinding.PolicyBinding{}
 	for _, b := range bs {
-		switch b.Meta.Owner.Kind {
-		case meta.OwnerTeam, meta.OwnerProject:
-			s := b.ScopeKey()
+		if s := b.ScopeKey(); s != "" {
 			byScope[s] = append(byScope[s], b)
-		default:
+		} else {
 			everywhere = append(everywhere, b)
 		}
 	}

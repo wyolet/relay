@@ -38,3 +38,31 @@ func benchmarkAdmitSettle(b *testing.B, s kvtest.ScriptStore) {
 }
 
 func BenchmarkAdmitSettle_Mem(b *testing.B) { benchmarkAdmitSettle(b, memStore(b)) }
+
+// benchmarkAdmitRefused admits a request whose caller group reserves and whose full account refuses, so every call rolls the caller group back. It reports store round trips per request.
+func benchmarkAdmitRefused(b *testing.B, s kvtest.ScriptStore) {
+	rec := kvtest.NewRecording(s)
+	now := time.Now()
+	l := newLimiter(rec, &now)
+	const many = 1 << 40
+	full := upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "a")
+	cs := []limits.Counter{
+		callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, many), "project:x"),
+		callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategySlidingWindow, many), "project:x"),
+		callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyTokenBucket, many), "project:x"),
+		full,
+	}
+	if _, err := l.Admit(b.Context(), []limits.Counter{full}, limits.Usage{}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	trips := rec.RoundTrips()
+	for b.Loop() {
+		if _, err := l.Admit(b.Context(), cs, limits.Usage{}); err == nil {
+			b.Fatal("admitted past a full account")
+		}
+	}
+	b.ReportMetric(float64(rec.RoundTrips()-trips)/float64(b.N), "trips/op")
+}
+
+func BenchmarkAdmitRefused_Mem(b *testing.B) { benchmarkAdmitRefused(b, memStore(b)) }

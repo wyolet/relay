@@ -42,7 +42,7 @@ type runState struct {
 
 // Run orchestrates one request over req.Hops. Caller MUST Close the returned Result.Body to release the connection and trigger post-flight.
 //
-// A refusal on a caller counter ends the request; one on an upstream counter skips that credential (cooling its account when the account's counter refused) and the walk goes on. Reservations never reaching the upstream are released, ones that reached it and failed are settled with no usage, and the served one is settled in post-flight with the real tokens and cost.
+// A refusal on a caller counter ends the request; one on an upstream counter skips that credential (cooling its account when the account's counter refused) and the walk goes on. An upstream 429 on a credential in an explicit (not default) account cools the account for the request's model, so the walk skips the account's other credentials. Reservations never reaching the upstream are released, ones that reached it and failed are settled with no usage, and the served one is settled in post-flight with the real tokens and cost.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	st := &runState{}
 	defer func() {
@@ -71,6 +71,10 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		maxAttempts = defaultMaxAttempts
 	}
 	maxAttempts = min(maxAttempts, slots)
+	modelID := ""
+	if req.Model != nil {
+		modelID = req.Model.Meta.ID
+	}
 
 	var (
 		attempts int // credentials called upstream (a same-credential retry doesn't count)
@@ -102,7 +106,7 @@ hops:
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
 			}
-			i, cand, perr := p.pick(ctx, hop, excluded, &limited)
+			i, cand, perr := p.pick(ctx, hop, modelID, excluded, &limited)
 			if i < 0 {
 				if perr != nil {
 					pickErr = perr
@@ -129,7 +133,7 @@ hops:
 			stampAttempt(req.Lifecycle, st.cur, attempts)
 
 			canFailOver := attempts < maxAttempts && (untried(excluded, i) || slotsAfter(req.Hops, hi))
-			action, rerr := p.callSlot(ctx, req, st, hop, i, canFailOver)
+			action, rerr := p.callSlot(ctx, req, st, hop, i, modelID, canFailOver)
 			if rerr.result != nil {
 				return rerr.result, nil
 			}
@@ -189,7 +193,7 @@ type callOutcome struct {
 }
 
 // callSlot calls the attempt's credential until it serves, fails over or stops: a dial failure re-dials the same host with a short backoff (the host's problem, not the key's), and a healed secret retries the same credential.
-func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop *plan.RouteHop, i int, canFailOver bool) (attemptAction, callOutcome) {
+func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop *plan.RouteHop, i int, modelID string, canFailOver bool) (attemptAction, callOutcome) {
 	slot := hop.Slots[i]
 	keyValue := slot.Credential.Resolved
 	// An OAuth-kind credential authenticates differently upstream; the adapter picks the auth variant per credential, so a failover between kinds authenticates each correctly.
@@ -236,7 +240,7 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 			return actNextHop, out
 		}
 
-		action, fresh := p.handleFailure(ctx, st.cur, retry, kind, retryAfter, retry && canFailOver)
+		action, fresh := p.handleFailure(ctx, st.cur, modelID, retry, kind, retryAfter, retry && canFailOver)
 		if action == actRetrySame {
 			keyValue = fresh
 			continue
@@ -265,22 +269,47 @@ func (p *Pipeline) observeOrg(a Adapter, s *plan.KeySlot, h http.Header) {
 // actRetrySame retries the same credential with a healed secret; only handleFailure returns it.
 const actRetrySame attemptAction = -1
 
-// handleFailure decides what to do after a failed call. Non-retryable failures stop without touching the breaker (a 400 isn't the key's fault). For retryable ones it consults the KeyAgent when set; the breaker write is issued on every path that abandons the credential and skipped on a heal-retry. The write runs detached: the next attempt excludes the credential itself, so it never waits on it.
-func (p *Pipeline) handleFailure(ctx context.Context, a *attempt, retry bool, kind keypool.FailureKind, retryAfter time.Duration, more bool) (attemptAction, string) {
+// handleFailure decides what to do after a failed call. Non-retryable failures stop without touching the breaker (a 400 isn't the key's fault). For retryable ones it consults the KeyAgent when set; the breaker write is issued on every path that abandons the credential and skipped on a heal-retry, and skipped for a rate limit that cooled the credential's account instead. The write runs detached: the next attempt excludes the credential itself, so it never waits on it.
+func (p *Pipeline) handleFailure(ctx context.Context, a *attempt, modelID string, retry bool, kind keypool.FailureKind, retryAfter time.Duration, more bool) (attemptAction, string) {
 	if !retry {
 		return actStop, ""
 	}
+	toBreaker := !coolAccountModel(a.slot, modelID, kind, retryAfter)
 	if p.KeyAgent != nil {
 		switch v, fresh := p.KeyAgent.OnFailure(ctx, a.slot.Credential.Meta.ID, kind, more); v {
 		case keypool.VerdictRetry:
 			return actRetrySame, fresh
 		case keypool.VerdictFail:
-			go p.recordFailure(ctx, a.slot, kind, retryAfter)
+			if toBreaker {
+				go p.recordFailure(ctx, a.slot, kind, retryAfter)
+			}
 			return actStop, ""
 		}
 	}
-	go p.recordFailure(ctx, a.slot, kind, retryAfter)
+	if toBreaker {
+		go p.recordFailure(ctx, a.slot, kind, retryAfter)
+	}
 	return actNextKey, ""
+}
+
+const (
+	// rateLimitCooldown is how long an upstream 429 without Retry-After cools its account for the model: the longest wait the breaker counts as a short rate limit.
+	rateLimitCooldown = 5 * time.Second
+	// maxRateLimitCooldown caps it: the cooldown lives on this pod only, and a request after it ends relearns a limit that still holds at the cost of one upstream call.
+	maxRateLimitCooldown = time.Minute
+)
+
+// coolAccountModel cools the slot's account for the model on an upstream rate limit and reports whether it did. An explicit account's credentials share its capacity, so a sibling would meet the same 429. A credential with no account, or in its owner's default account (keys grouped by owner, not known to share capacity), is left to its own breaker so its siblings still fail over.
+func coolAccountModel(s *plan.KeySlot, modelID string, kind keypool.FailureKind, retryAfter time.Duration) bool {
+	if s.Account == nil || s.Account.Default || (kind != keypool.FailureRateLimitShort && kind != keypool.FailureRateLimitLong) {
+		return false
+	}
+	if retryAfter <= 0 {
+		retryAfter = rateLimitCooldown
+	}
+	now := time.Now()
+	s.Account.Cooldown.ExtendModel(modelID, now.Add(min(retryAfter, maxRateLimitCooldown)).UnixMilli(), now.UnixMilli())
+	return true
 }
 
 func (p *Pipeline) recordFailure(ctx context.Context, s *plan.KeySlot, kind keypool.FailureKind, retryAfter time.Duration) {
@@ -347,21 +376,23 @@ func sameCounters(a, b []limits.Counter) bool {
 	return true
 }
 
-// pick returns the index in hop.Slots of the credential to call next and the breaker record it was picked on; -1 when none is left. Excluded slots are skipped, and so are slots whose account is cooling, noting when it ends on lim.
-func (p *Pipeline) pick(ctx context.Context, hop *plan.RouteHop, excluded []bool, lim **UpstreamLimitedError) (int, keypool.Candidate, error) {
+// pick returns the index in hop.Slots of the credential to call next and the breaker record it was picked on; -1 when none is left. Excluded slots are skipped, and so are slots whose account is cooling for modelID, noting when it ends on lim.
+func (p *Pipeline) pick(ctx context.Context, hop *plan.RouteHop, modelID string, excluded []bool, lim **UpstreamLimitedError) (int, keypool.Candidate, error) {
 	nowMs := time.Now().UnixMilli()
 	// The common pick is over the whole hop: its own credential list then serves, and no slice is built.
 	keys, at := hop.Credentials, []int(nil)
-	if len(keys) != len(hop.Slots) || skipsAny(hop, excluded, nowMs) {
+	if len(keys) != len(hop.Slots) || skipsAny(hop, modelID, excluded, nowMs) {
 		keys = make([]*hostkey.HostKey, 0, len(hop.Slots))
 		at = make([]int, 0, len(hop.Slots))
 		for i, s := range hop.Slots {
 			if excluded[i] {
 				continue
 			}
-			if s.Account != nil && s.Account.Cooldown.Cooled(nowMs) {
-				*lim = noteLimited(*lim, time.Duration(s.Account.Cooldown.Until()-nowMs)*time.Millisecond, nil)
-				continue
+			if s.Account != nil {
+				if until := s.Account.Cooldown.Until(modelID); nowMs < until {
+					*lim = noteLimited(*lim, time.Duration(until-nowMs)*time.Millisecond, nil)
+					continue
+				}
 			}
 			keys = append(keys, s.Credential)
 			at = append(at, i)
@@ -391,10 +422,10 @@ func (p *Pipeline) pick(ctx context.Context, hop *plan.RouteHop, excluded []bool
 	return -1, keypool.Candidate{}, keypool.ErrNoHealthyKeys
 }
 
-// skipsAny reports whether a pick over hop must leave a slot out: excluded, or its account cooling.
-func skipsAny(hop *plan.RouteHop, excluded []bool, nowMs int64) bool {
+// skipsAny reports whether a pick over hop must leave a slot out: excluded, or its account cooling for modelID.
+func skipsAny(hop *plan.RouteHop, modelID string, excluded []bool, nowMs int64) bool {
 	for i, s := range hop.Slots {
-		if excluded[i] || (s.Account != nil && s.Account.Cooldown.Cooled(nowMs)) {
+		if excluded[i] || (s.Account != nil && s.Account.Cooldown.Cooled(nowMs, modelID)) {
 			return true
 		}
 	}

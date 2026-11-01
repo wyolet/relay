@@ -34,7 +34,7 @@ A stored section that a later release can no longer accept (for example one nami
 At boot, relay reads `kind: Setting` files from `RELAY_SETTINGS_DIR` (default `<RELAY_CONFIG_DIR>/settings`, read recursively) and writes each section that has **no stored value yet**. A section already in the database is left alone, so a file sets the starting value and the control API stays authoritative afterwards. A file naming an unknown section, failing validation, or holding another kind stops relay at boot.
 
 ```yaml settings/proxy-mode.yaml
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Setting
 metadata:
   name: proxy-mode
@@ -49,7 +49,7 @@ A field a file leaves out takes its zero value (`false`, `0`, empty), not its de
 
 | Section | Controls | Admin only |
 | --- | --- | --- |
-| [`inference`](#inference) | Policy-less relay keys, key rotation grace | |
+| [`inference`](#inference) | Key rotation grace | |
 | [`parsing`](#parsing) | How much of each request body relay parses | |
 | [`proxy-mode`](#proxy-mode) | Callers forwarding their own upstream keys | |
 | [`usage-logging`](#usage-logging) | Usage event backend and retention | yes |

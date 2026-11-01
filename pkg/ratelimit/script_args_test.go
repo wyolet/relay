@@ -66,7 +66,7 @@ func TestScriptArgs_Golden(t *testing.T) {
 	l := New(newTestStore(t), discardLog(), func() time.Time { return now })
 	rules := scriptArgRules()
 
-	call, err := l.buildReserveCall("policy:p", rules, "tok-1")
+	call, err := l.buildReserveCall("policy:p", rules, "tok-1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +75,12 @@ func TestScriptArgs_Golden(t *testing.T) {
 		[]string{"1793010615123", "[{\"meter\":\"requests\",\"amount\":100,\"window_ms\":60000,\"strategy\":\"token-bucket\",\"rule_key\":\"P:rl:req\",\"rule_name\":\"requests \\u003con\\u003e rl \\u0026 co\",\"tb_key_idx\":1},{\"meter\":\"requests\",\"amount\":5,\"window_ms\":3600000,\"strategy\":\"sliding-window\",\"rule_key\":\"P:rl:sw\",\"rule_name\":\"sliding\",\"cur_key_idx\":2,\"prev_key_idx\":3},{\"meter\":\"requests\",\"amount\":7,\"window_ms\":10000,\"strategy\":\"fixed-window\",\"rule_key\":\"P:rl:fw\",\"rule_name\":\"fixed\",\"fw_key_idx\":4},{\"meter\":\"requests\",\"amount\":3,\"window_ms\":1000,\"strategy\":\"leaky-bucket\",\"rule_key\":\"P:rl:lb\",\"rule_name\":\"leaky\",\"lb_key_idx\":5},{\"meter\":\"requests\",\"amount\":9,\"window_ms\":18000000,\"strategy\":\"session-window\",\"rule_key\":\"P:rl:sess\",\"rule_name\":\"session\",\"sw_key_idx\":6},{\"meter\":\"tokens\",\"amount\":1099511627776,\"window_ms\":3600000,\"strategy\":\"sliding-window\",\"rule_key\":\"P:rl:tok\",\"rule_name\":\"tokens\",\"cur_key_idx\":7,\"prev_key_idx\":8},{\"meter\":\"tokens.input\",\"amount\":1000,\"window_ms\":86400000,\"strategy\":\"sliding-window\",\"rule_key\":\"P:rl:in\",\"rule_name\":\"input\",\"cur_key_idx\":9,\"prev_key_idx\":10},{\"meter\":\"concurrency\",\"amount\":4,\"window_ms\":60000,\"strategy\":\"token-bucket\",\"rule_key\":\"P:rl:con\",\"rule_name\":\"con\",\"con_key_idx\":11},{\"meter\":\"revoked\",\"amount\":0,\"window_ms\":0,\"strategy\":\"token-bucket\",\"rule_key\":\"T:jti:revoked\",\"rule_name\":\"revoked\",\"deny_key_idx\":12}]", "tok-1", "13"})
 
 	res := &Reservation{ID: "tok-1", scope: "policy:p", rules: rules,
-		conKeys:  []string{concurrencyKey("policy:p", rules[7])},
-		tokRules: []Rule{rules[5], rules[6]},
-		tbRules:  []Rule{rules[0], rules[5]},
-		lbRules:  []Rule{rules[3], rules[2]},
-		swRules:  []Rule{rules[4], rules[1]},
+		conKeys:    []string{concurrencyKey("policy:p", rules[7])},
+		tokRules:   []Rule{rules[5], rules[6]},
+		tbRules:    []Rule{rules[0], rules[5]},
+		lbRules:    []Rule{rules[3], rules[2]},
+		swRules:    []Rule{rules[4], rules[1]},
+		reservedAt: now,
 	}
 	obs := Observations{Tokens: map[string]int64{"input": 120, "output": 40, "cache_read": 9}}
 	call, err = l.buildCommitCall(res, obs, now)
@@ -94,8 +95,10 @@ func TestScriptArgs_Golden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertWire(t, "commit cancelled", call.Keys, call.Args, commitKeys,
-		[]string{"tok-1", "60000", "1", "2", "[0,0]", "172800000", "1", "[[5,1000,100],[6,1000,1099511627776]]", "[[7,1000],[8,1000]]", "[[9,1],[10,1]]"})
+	// A cancelled commit also takes back the sliding- and fixed-window counts, from the buckets the reserve at now incremented.
+	assertWire(t, "commit cancelled", call.Keys, call.Args,
+		append(commitKeys[:len(commitKeys):len(commitKeys)], "limit:{policy:p}:P:rl:sw:requests:2026-10-26T10:00:00Z", "limit:{policy:p}:fw:P:rl:fw:requests:1793010610000"),
+		[]string{"tok-1", "60000", "1", "2", "[0,0]", "172800000", "1", "[[5,1000,100],[6,1000,1099511627776]]", "[[7,1000],[8,1000]]", "[[9,1],[10,1]]", "[]", "0", "[[11,1],[12,1]]"})
 
 	call, err = l.buildCommitCall(&Reservation{ID: "tok-2", scope: "s"}, Observations{}, now)
 	if err != nil {

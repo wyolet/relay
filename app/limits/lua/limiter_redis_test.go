@@ -35,6 +35,7 @@ func TestLimiter_RedisKeysExpire(t *testing.T) {
 		upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategySlidingWindow, 10), "a"),
 	}
 	admit(t, l, cs...).Settle(limits.Usage{Tokens: usage.Tokens{"input": 5}, CostNanos: 100})
+	admit(t, l, cs...).Release()
 	admit(t, l, cs...) // holds a lease
 
 	raw := redis.NewClient(&redis.Options{Addr: cfg.Addr, DB: cfg.DB})
@@ -52,3 +53,5 @@ func TestLimiter_RedisKeysExpire(t *testing.T) {
 }
 
 func BenchmarkAdmitSettle_Redis(b *testing.B) { benchmarkAdmitSettle(b, redisStore(b)) }
+
+func BenchmarkAdmitRefused_Redis(b *testing.B) { benchmarkAdmitRefused(b, redisStore(b)) }

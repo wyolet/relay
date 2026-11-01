@@ -32,7 +32,7 @@ func (r *reservation) Settle(actual limits.Usage) {
 	r.commit(context.Background(), pkgratelimit.Observations{Tokens: actual.Tokens, CostNanos: actual.CostNanos})
 }
 
-// Release commits every group as cancelled: leases freed, bucket charges refunded, nothing charged.
+// Release commits every group as cancelled: leases freed, request counts refunded, nothing charged.
 func (r *reservation) Release() {
 	r.commit(context.Background(), pkgratelimit.Observations{Cancelled: true})
 }
