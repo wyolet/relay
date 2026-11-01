@@ -4,6 +4,7 @@
       "additionalProperties": false,
       "properties": {
         "path": {
+          "description": "Asset path relative to the UI's asset base, such as /provider/anthropic.svg.",
           "type": "string"
         }
       },

@@ -25,9 +25,9 @@ const (
 // group subjects carry a name, because an IdP group has no row to point at
 // and a local group of the same name unions with it.
 type Subject struct {
-	Kind SubjectKind `json:"kind" yaml:"kind" validate:"required,oneof=user group serviceaccount"`
-	ID   string      `json:"id,omitempty"   yaml:"id,omitempty"   validate:"omitempty,uuid"`
-	Name string      `json:"name,omitempty" yaml:"name,omitempty"`
+	Kind SubjectKind `json:"kind" yaml:"kind" validate:"required,oneof=user group serviceaccount" enum:"user,group,serviceaccount" doc:"What the subject is."`
+	ID   string      `json:"id,omitempty"   yaml:"id,omitempty"   validate:"omitempty,uuid" doc:"Id of the subject row. Required for every kind except group."`
+	Name string      `json:"name,omitempty" yaml:"name,omitempty" doc:"Group name, local or from the identity provider (such as system:authenticated). Only for kind group."`
 }
 
 // Key renders the subject as the string the snapshot indexes it under:
@@ -49,10 +49,10 @@ type RoleBinding struct {
 // Scope is a meta.Owner: {system} is global, {team,id} and {project,id}
 // name a tenancy row. Meta.Owner mirrors it.
 type Spec struct {
-	RoleID   string     `json:"roleId"   yaml:"roleId"   validate:"required,uuid"`
-	Scope    meta.Owner `json:"scope"    yaml:"scope"    validate:"required"`
-	Subjects []Subject  `json:"subjects" yaml:"subjects" validate:"required,min=1,dive"`
-	Enabled  *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	RoleID   string     `json:"roleId"   yaml:"roleId"   validate:"required,uuid" doc:"Id of the granted role."`
+	Scope    meta.Owner `json:"scope"    yaml:"scope"    validate:"required" doc:"Where the grant applies: system, or a team or project by id. It covers every resource in that scope and below; the binding's owner follows it."`
+	Subjects []Subject  `json:"subjects" yaml:"subjects" validate:"required,min=1,dive" doc:"Users, groups and service accounts granted the role."`
+	Enabled  *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False suspends the grant. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
