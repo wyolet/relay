@@ -34,6 +34,7 @@ import (
 //	"session-window"  — anchored hash {count, anchor_ms}; refund on cancel
 //	"" (concurrency)  — sorted set of leases {token → expiry_ms}; ignores strategy
 //	"" (revoked)      — existence check on a denylist key; no budget, no write
+//	"" (spend)        — read of the period's spend counter, refused at >= amount; no write
 //
 // Comparator invariant: every strategy uses `>` (strictly greater than amount).
 // A value equal to amount is still allowed. Applied uniformly to all meters.
@@ -89,6 +90,14 @@ for i, r in ipairs(rules) do
     end
     -- The lease frees a slot whose commit is lost; a request outliving its window stops counting early.
     table.insert(pending, {kind="con", key=con_key, expiry_ms=now_ms + win_ms, ttl_ms=win_ms + 1000})
+
+  -- ── spend: refused once the period's spend reached the cap; Commit charges ─
+  elseif meter == "spend" then
+    local spent = tonumber(redis.call('GET', KEYS[r.spend_key_idx]) or "0") or 0
+    if spent >= amount then
+      return cjson.encode({exceeded=true, retry_after_ms=r.period_end_ms - now_ms,
+        rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
+    end
 
   -- ── tokens / tokens.X: peek only at Reserve; Commit increments ───────────
   -- buildReserveArgs always sends sliding-window for token meters.
@@ -292,8 +301,10 @@ return cjson.encode({exceeded=false, token=tok})
 //	ARGV[8]  = tb_refunds_json  — array of {key_idx, cost_scaled, burst} for token-bucket refunds
 //	ARGV[9]  = lb_refunds_json  — array of {key_idx, cost_scaled} for leaky-bucket refunds
 //	ARGV[10] = sw_refunds_json  — array of {key_idx, count} for session-window refunds
+//	ARGV[11] = spends_json      — optional: array of {key_idx, ttl_ms, cap} for spend charges
+//	ARGV[12] = cost nanos       — with ARGV[11]: the charge, 0 when cancelled
 //
-// Returns "ok" or "noop" (duplicate).
+// Returns "ok", "ok:<i>,<j>" naming the spends (1-based) whose cap the charge reached, or "noop" (duplicate).
 const commitLuaScript = `
 -- Commit: release concurrency leases, post-hoc token increment, refund on cancel.
 local guard_key   = KEYS[1]
@@ -366,7 +377,21 @@ if cancelled then
   end
 end
 
+-- spend charge: name the rules whose cap this charge reached, the period's first crossing
+local crossed = {}
+if ARGV[11] and not cancelled and tonumber(ARGV[12]) > 0 then
+  local cost = tonumber(ARGV[12])
+  for j, entry in ipairs(cjson.decode(ARGV[11])) do
+    local key = KEYS[tonumber(entry[1])]
+    local spent = redis.call('INCRBY', key, ARGV[12])
+    redis.call('PEXPIRE', key, entry[2])
+    local cap = tonumber(entry[3])
+    if spent >= cap and spent - cost < cap then table.insert(crossed, j) end
+  end
+end
+
 redis.call('SET', guard_key, tok, 'PX', guard_ttl)
+if #crossed > 0 then return "ok:" .. table.concat(crossed, ",") end
 return "ok"
 `
 
@@ -381,14 +406,16 @@ type ruleArg struct {
 	// RuleName is for error messages.
 	RuleName string `json:"rule_name"`
 	// key indices (1-based into KEYS slice) — set based on strategy
-	CurKeyIdx  int `json:"cur_key_idx,omitempty"`
-	PrevKeyIdx int `json:"prev_key_idx,omitempty"`
-	ConKeyIdx  int `json:"con_key_idx,omitempty"`
-	FwKeyIdx   int `json:"fw_key_idx,omitempty"`
-	TbKeyIdx   int `json:"tb_key_idx,omitempty"`
-	LbKeyIdx   int `json:"lb_key_idx,omitempty"`
-	SwKeyIdx   int `json:"sw_key_idx,omitempty"`
-	DenyKeyIdx int `json:"deny_key_idx,omitempty"`
+	CurKeyIdx   int   `json:"cur_key_idx,omitempty"`
+	PrevKeyIdx  int   `json:"prev_key_idx,omitempty"`
+	ConKeyIdx   int   `json:"con_key_idx,omitempty"`
+	FwKeyIdx    int   `json:"fw_key_idx,omitempty"`
+	TbKeyIdx    int   `json:"tb_key_idx,omitempty"`
+	LbKeyIdx    int   `json:"lb_key_idx,omitempty"`
+	SwKeyIdx    int   `json:"sw_key_idx,omitempty"`
+	DenyKeyIdx  int   `json:"deny_key_idx,omitempty"`
+	SpendKeyIdx int   `json:"spend_key_idx,omitempty"`
+	PeriodEndMs int64 `json:"period_end_ms,omitempty"`
 }
 
 // reserveResult is decoded from the Reserve script return value.
@@ -420,6 +447,19 @@ func buildReserveArgs(scope string, rules []Rule, now time.Time) (keys []string,
 
 	ruleArgs = make([]ruleArg, 0, len(rules))
 	for _, rule := range rules {
+		if rule.Meter == MeterSpend {
+			start, end, err := periodBounds(rule.Period, now)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !rule.Alert {
+				ruleArgs = append(ruleArgs, ruleArg{
+					Meter: rule.Meter, Amount: rule.Amount, RuleKey: rule.Key, RuleName: rule.Name,
+					SpendKeyIdx: addKey(spendKey(scope, rule, start)), PeriodEndMs: end.UnixMilli(),
+				})
+			}
+			continue
+		}
 		w := rule.Window
 		strategy := string(rule.Strategy)
 		if strategy == "" {
@@ -585,6 +625,22 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					kind: "con", key: conKey, ttl: time.Duration(winMs+leaseGraceMs) * time.Millisecond,
 					nowMs: nowMs, expiryMs: nowMs + winMs,
 				})
+
+			case MeterSpend:
+				spent, err := memReadCounter(ctx, store, keys[r.SpendKeyIdx-1])
+				if err != nil {
+					return err
+				}
+				if spent >= amount {
+					result = reserveResult{
+						Exceeded:     true,
+						RetryAfterMs: r.PeriodEndMs - nowMs,
+						RuleKey:      r.RuleKey,
+						RuleName:     r.RuleName,
+						Meter:        r.Meter,
+					}
+					return nil
+				}
 
 			default:
 				// tokens / tokens.X — post-hoc; peek the sliding-window buckets
@@ -928,6 +984,23 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 	if err := json.Unmarshal(swRefundsJSON, &swRefunds); err != nil {
 		return nil, fmt.Errorf("limit.commit: parse sw_refunds: %w", err)
 	}
+	// spends: [key_idx, ttl_ms, cap], present only for reservations holding spend rules.
+	var (
+		spends [][3]int64
+		cost   int64
+	)
+	if len(args) >= 12 {
+		spendsJSON, ok := toBytes(args[10])
+		if !ok {
+			return nil, fmt.Errorf("limit.commit: arg[10] spends_json must be string")
+		}
+		if err := json.Unmarshal(spendsJSON, &spends); err != nil {
+			return nil, fmt.Errorf("limit.commit: parse spends: %w", err)
+		}
+		if cost, err = toInt64(args[11]); err != nil {
+			return nil, fmt.Errorf("limit.commit: arg[11] cost: %w", err)
+		}
+	}
 
 	guardKey := keys[0]
 	guardTTL := time.Duration(guardTTLMs) * time.Millisecond
@@ -1008,8 +1081,24 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 			}
 		}
 
-		_ = store.Set(ctx, guardKey, []byte(tok), guardTTL)
 		result = []byte("ok")
+		if !cancelled && cost > 0 {
+			sep := byte(':')
+			for j, entry := range spends {
+				key := keys[entry[0]-1]
+				spent, err := store.Incr(ctx, key, cost)
+				if err != nil {
+					return err
+				}
+				_ = store.Expire(ctx, key, time.Duration(entry[1])*time.Millisecond)
+				if spent >= entry[2] && spent-cost < entry[2] {
+					result = strconv.AppendInt(append(result, sep), int64(j+1), 10)
+					sep = ','
+				}
+			}
+		}
+
+		_ = store.Set(ctx, guardKey, []byte(tok), guardTTL)
 		return nil
 	})
 	if lockErr != nil {

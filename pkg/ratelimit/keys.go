@@ -62,6 +62,19 @@ func swStateKey(scope string, r Rule) string {
 	return "limit:{" + scope + "}:sw:" + r.Key + ":" + r.Meter
 }
 
+// spendKey returns the counter of a MeterSpend rule for the period starting at periodStart; a new period reads a new key, so the count starts from zero without a reset.
+// format: limit:{<scope>}:spend:<rule.Key>:<period start, YYYY-MM-DD>
+func spendKey(scope string, r Rule, periodStart time.Time) string {
+	var buf [keyBufSize]byte
+	b := append(buf[:0], "limit:{"...)
+	b = append(b, scope...)
+	b = append(b, "}:spend:"...)
+	b = append(b, r.Key...)
+	b = append(b, ':')
+	b = periodStart.UTC().AppendFormat(b, time.DateOnly)
+	return string(b)
+}
+
 // denyKey returns the existence key for a MeterRevoked rule. It carries no
 // meter or strategy segment: the caller writes it directly (on revocation)
 // and only its presence is read.
