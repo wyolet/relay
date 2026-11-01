@@ -122,7 +122,7 @@ Each request goes through two steps:
 1. **Reserve**, before the upstream call. The counters are checked in atomic scripts, one per counter group (the caller's counters usually form one group, a host key's account and key counters another, the host's a third): `requests` and `concurrency` are counted, and token meters are checked against what has already been counted. If any rule is over, nothing stays counted: the groups already reserved are released before the refusal returns.
 2. **Commit**, after the response ends. The token counts from the provider's response are added to the token meters and the concurrency slot is released. This runs in the background once the caller has read the response.
 
-If a request fails before any attempt reaches the upstream, its reservation is cancelled: the concurrency slot is released and, for `token-bucket`, `leaky-bucket` and `session-window` rules, the request is refunded. Once an attempt may have reached the upstream, the request charge stands. A store that cannot be reached refuses the request: limits fail closed.
+A request that is refused, or fails before any attempt reaches the upstream, does not count against any rule of any strategy: its reservation is cancelled and the concurrency slot released. Once an attempt may have reached the upstream, the request charge stands. A store that cannot be reached refuses the request: limits fail closed.
 
 With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` (Dragonfly) to share counters across pods.
 
