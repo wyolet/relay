@@ -83,6 +83,8 @@ type Lookup struct {
 	PolicyBindings func(ctx context.Context) ([]*policybinding.PolicyBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
+	// UserActsIn reports whether a user is a member of a team or project scope: one whose requests can fall inside it.
+	UserActsIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
 }
 
 // Checker applies the rules for the caller in ctx. A nil Authz is a loader
@@ -219,7 +221,7 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 	if err := c.personalToProject(ctx, rl.Meta.Owner, refOwner); err != nil {
 		return err
 	}
-	return SharedOwner("rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
+	return c.linkable(ctx, "rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
 }
 
 // HostKeyRefs checks the host keys a policy spends. Missing ids pass: the
@@ -240,7 +242,7 @@ func (c Checker) HostKeyRefs(ctx context.Context, keyIDs []string, refOwner meta
 		if scoped && refOwner.Kind == meta.OwnerUser && k.Meta.Owner.Kind == meta.OwnerProject {
 			return badRequest("personal rows cannot reference project resources")
 		}
-		if err := SharedOwner("host-key", k.Meta.Name, k.Meta.Owner, refOwner); err != nil {
+		if err := c.linkable(ctx, "host-key", k.Meta.Name, k.Meta.Owner, refOwner); err != nil {
 			return err
 		}
 	}
@@ -539,7 +541,8 @@ func (c Checker) Role(ctx context.Context, r *role.Role) error {
 }
 
 // PolicyBinding re-derives the owner from spec.projectId, fills in the
-// default priority, and checks the project, policy, and subjects.
+// default priority, and checks the owning scope, the policy, and the
+// subjects, each of which must sit inside that scope.
 func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	pb.StampOwner()
 	// Absent means the default; an explicit 0 is a real priority.
@@ -547,13 +550,23 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 		def := policybinding.DefaultPriority
 		pb.Spec.Priority = &def
 	}
-	if err := c.projectRef(ctx, pb.Spec.ProjectID); err != nil {
-		return err
+	switch pb.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		if err := c.projectRef(ctx, pb.Meta.Owner.ID); err != nil {
+			return err
+		}
+	case meta.OwnerTeam:
+		if err := c.teamRef(ctx, pb.Meta.Owner.ID); err != nil {
+			return err
+		}
 	}
-	if err := c.PolicyRef(ctx, pb.Spec.PolicyID, pb.Meta.Owner); err != nil {
+	if err := c.BindablePolicy(ctx, pb.Spec.PolicyID, pb.Meta.Owner); err != nil {
 		return err
 	}
 	if err := c.subjectsExist(ctx, pb.Spec.Subjects); err != nil {
+		return err
+	}
+	if err := c.subjectsInScope(ctx, pb); err != nil {
 		return err
 	}
 	return c.subjectsUnbound(ctx, pb)

@@ -58,8 +58,10 @@ func refusePolicyMove(ctx context.Context, d Deps, moved *policy.Policy) error {
 	c.Rows.Policy = func(context.Context, string) *policy.Policy { return moved }
 	return refuseStrandingMove(ctx, d, "policy", moved.Meta.ID, moved.Meta.Name, moved.Meta.Owner, func(it referenceItem) bool {
 		switch it.Kind {
-		case "key", "service-account", "policy-binding":
+		case "key", "service-account":
 			return c.PolicyRef(ctx, moved.Meta.ID, it.owner) == nil
+		case "policy-binding":
+			return c.BindablePolicy(ctx, moved.Meta.ID, it.owner) == nil
 		}
 		return false
 	})

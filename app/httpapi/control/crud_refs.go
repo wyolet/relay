@@ -6,6 +6,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
@@ -18,6 +21,9 @@ func refs(d Deps) refcheck.Checker {
 	c := refcheck.Checker{Authz: d.Authz}
 	if d.Users != nil {
 		c.Rows.MissingUsers = d.Users.MissingIDs
+		if d.Authz != nil {
+			c.Rows.UserActsIn = userActsIn(d)
+		}
 	}
 	s := d.Stores
 	if s == nil {
@@ -76,6 +82,39 @@ func refs(d Deps) refcheck.Checker {
 		c.Rows.PolicyBindings = s.PolicyBinding.List
 	}
 	return c
+}
+
+// userActsIn reports whether a user may mint tokens in a project, or for a team in the team or one of its projects: the scopes the user's requests can fall inside. It asks the Authorizer as that user, so it follows the configured authorization mode.
+func userActsIn(d Deps) func(context.Context, string, meta.Owner) (bool, error) {
+	return func(ctx context.Context, userID string, scope meta.Owner) (bool, error) {
+		u, err := d.Users.Get(ctx, userID)
+		if err != nil || u == nil {
+			return false, err
+		}
+		as := &actor.Actor{UserID: u.ID, Username: u.Username, Roles: u.Roles}
+		scopes := []meta.Owner{scope}
+		if d.Catalog != nil {
+			if snap := d.Catalog.Current(); snap != nil {
+				as.Subjects = appcatalog.UserSubjects(u.ID, snap.GroupsForUser(u.ID), nil)
+				if scope.Kind == meta.OwnerTeam {
+					for _, p := range snap.ProjectsInTeam(scope.ID) {
+						scopes = append(scopes, meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID})
+					}
+				}
+			}
+		}
+		actx := actor.WithActor(ctx, as)
+		for i := range scopes {
+			err := d.Authz.Authorize(actx, "tokens.mint", authz.Resource{Kind: "token", Owner: &scopes[i]})
+			switch {
+			case err == nil:
+				return true, nil
+			case !errors.Is(err, authz.ErrForbidden):
+				return false, err
+			}
+		}
+		return false, nil
+	}
 }
 
 func getOrNil[T any](get func(context.Context, string) (*T, error)) func(context.Context, string) *T {

@@ -93,11 +93,10 @@ func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
 	return w, ctx
 }
 
-// TestGuardPolicyBinding_CrossProject: a binding may hand out only a policy
-// its own project owns or a system-owned shared one. Another project's policy
-// and a host's tier policy are both refused — the first would let a project
-// spend a credential that is not its own, the second has no inbound keys at
-// all.
+// TestGuardPolicyBinding_CrossProject: a binding may hand out a policy its own
+// project owns, a system-owned shared one, or a host's tier preset. Another
+// project's policy is refused: it would let a project spend a credential that
+// is not its own.
 func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 	w, ctx := newBindingFixture(t)
 	guard := guardPolicyBinding(w.deps)
@@ -120,7 +119,7 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 		{name: "its own project's policy", policyID: w.ownPol.Meta.ID},
 		{name: "a system-owned shared policy", policyID: w.shared.Meta.ID},
 		{name: "another project's policy", policyID: w.farPol.Meta.ID, wantErr: w.farPol.Meta.Name},
-		{name: "a host tier policy", policyID: w.tier.Meta.ID, wantErr: w.tier.Meta.Name},
+		{name: "a host tier preset", policyID: w.tier.Meta.ID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := mkBinding(w.mine.Meta.ID, tc.policyID)
