@@ -388,15 +388,17 @@ func (f *tokenFixture) seedPolicyForModel(t *testing.T, policyName, modelName st
 	return pol.Meta.ID
 }
 
-// waitForTopPolicyBinding blocks until the project's highest-priority
-// binding names policyID.
+// waitForCallerPolicy blocks until the user's token plan in the fixture's
+// project, where the project's binding on the user governs, holds policyID.
 func (f *tokenFixture) waitForCallerPolicy(t *testing.T, userID, policyID string) {
 	t.Helper()
+	projectID := f.projectRow(t).Metadata.ID
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if r := f.plans.Load(); r != nil {
-			if up := r.Users.Lookup(userID); up != nil {
-				if pol := up.Caller.InnermostPolicy(); pol != nil && pol.Meta.ID == policyID {
+			up, pp := r.Users.Lookup(userID), r.Projects.Lookup(projectID)
+			if up != nil && pp != nil {
+				if pol := pp.CallerFor(up.Caller).InnermostPolicy(); pol != nil && pol.Meta.ID == policyID {
 					return
 				}
 			}

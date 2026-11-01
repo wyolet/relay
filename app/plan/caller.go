@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"strings"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -107,11 +108,21 @@ type rungRead struct {
 	refused *Refusal
 	// linked is what the rung's policy links, read when it links pools or credentials.
 	linked []*PoolPlan
+	// scope is the team or project owning a user's binding that governs only inside it; its counters are the user's in that scope alone.
+	scope string
+}
+
+// scopedRead is a user's rung under a team- or project-owned binding, read for the requests inside that scope.
+type scopedRead struct {
+	scope string
+	read  rungRead
 }
 
 // callerReads is everything a caller fold reads. The plan keeps it so a token's plan can fold the user's own rung under a project's and its team's (ProjectPlan.CallerFor) without the engine.
 type callerReads struct {
 	rungs [3]rungRead
+	// scoped are a user's rungs under team- and project-owned bindings, sorted by scope; the user's own plan folds none of them.
+	scoped []scopedRead
 	// owned holds what the principal's, the project's, the team's and the system's scopes own, the reach when no rung links; read only then.
 	owned [4]*OwnedCredentials
 	idx   *CatalogIndex
@@ -176,7 +187,9 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 		return nil
 	}
 	for i := range rd.rungs {
-		readRung(tx, &rd.rungs[i], &rd.in)
+		if rp := readRung(tx, &rd.rungs[i], &rd.in); rp != nil && i == rungPrincipal {
+			rd.scoped = readScoped(tx, rd.rungs[i], rp.Scoped, &rd.in)
+		}
 	}
 	if !rd.links() {
 		// A service account owns nothing; a user's own scope is its principal.
@@ -208,20 +221,62 @@ func projectRung(p *project.Project) rungRead {
 	return rungRead{rung: Rung{Kind: limits.RungProject, SubjectID: "project:" + p.Meta.ID, Name: p.Meta.Name}, disabled: !p.IsEnabled()}
 }
 
-// readRung reads the policy bound to the rung's subject and, when the policy links pools or credentials, what it links.
-func readRung(tx *engine.Txn, r *rungRead, in *inputs) {
+// readRung reads the policy bound to the rung's subject and, when the policy links pools or credentials, what it links. It returns the rung's fold, nil when nothing binds the subject.
+func readRung(tx *engine.Txn, r *rungRead, in *inputs) *RungPolicy {
 	if r.rung.SubjectID == "" {
-		return
+		return nil
 	}
 	rp := engine.Get[RungPolicy](tx, r.rung.SubjectID)
 	*in = append(*in, rp)
 	if rp == nil {
-		return
+		return nil
 	}
 	r.rung.Policy, r.refused = rp.Rung.Policy, rp.Refused
 	if r.rung.Policy.links() {
 		r.linked = linkedPools(tx, r.rung.Policy, in)
 	}
+	return rp
+}
+
+// readScoped reads a user's team- and project-owned bindings as readRung reads the rung's own, each kept for the requests inside its scope.
+func readScoped(tx *engine.Txn, own rungRead, scoped []ScopedRung, in *inputs) []scopedRead {
+	if len(scoped) == 0 {
+		return nil
+	}
+	out := make([]scopedRead, 0, len(scoped))
+	for _, s := range scoped {
+		r := own
+		r.rung.Policy, r.refused, r.linked, r.scope = s.Policy.Rung.Policy, s.Policy.Refused, nil, s.Scope
+		if r.rung.Policy.links() {
+			r.linked = linkedPools(tx, r.rung.Policy, in)
+		}
+		out = append(out, scopedRead{scope: s.Scope, read: r})
+	}
+	return out
+}
+
+// principalIn is the user's rung for a request inside project, a project of team: the one binding whose owner holds the request (the system's, the team's or the project's). Two of them refuse the rung, since a subject has one policy per request and no scope outranks another.
+func (rd *callerReads) principalIn(project, team string) rungRead {
+	r := rd.rungs[rungPrincipal]
+	n := 0
+	if r.rung.Policy != nil || r.refused != nil {
+		n = 1
+	}
+	for i := range rd.scoped {
+		s := &rd.scoped[i]
+		if s.scope != project && s.scope != team {
+			continue
+		}
+		if n == 0 {
+			r = s.read
+		}
+		n++
+	}
+	if n > 1 {
+		r.rung.Policy, r.linked, r.scope = nil, nil, ""
+		r.refused = rungRefusal(CodeDuplicateBinding, &r.rung, "", fmt.Sprintf("%d policy bindings govern %s inside %s", n, r.rung.SubjectID, project))
+	}
+	return r
 }
 
 func readOwned(tx *engine.Txn, scope string, in *inputs) *OwnedCredentials {
@@ -251,7 +306,11 @@ func foldCaller(principal string, rd callerReads) *CallerPlan {
 			continue
 		}
 		if r.Policy != nil {
-			cp.foldRung(i, counterGroup(principal, cp.Rungs[rungTeam].SubjectID, i))
+			subject := r.SubjectID
+			if s := rd.rungs[i].scope; s != "" {
+				subject += "@" + s
+			}
+			cp.foldRung(i, subject, counterGroup(principal, cp.Rungs[rungTeam].SubjectID, i))
 		}
 	}
 	cp.Pools = callerPools(cp, &rd)
@@ -268,8 +327,8 @@ func counterGroup(principal, team string, i int) string {
 	return team
 }
 
-// foldRung adds rung i's grant and counters. Caller counters count per (rule, policy, bound subject), so a policy reused by two subjects gives each its own bucket.
-func (cp *CallerPlan) foldRung(i int, group string) {
+// foldRung adds rung i's grant and counters. Caller counters count per (rule, policy, bound subject), so a policy reused by two subjects gives each its own bucket; subject names the bound subject, with the owner scope of a user's scoped binding.
+func (cp *CallerPlan) foldRung(i int, subject, group string) {
 	r := &cp.Rungs[i]
 	ep := r.Policy
 	cp.Allow.grants[i] = ep.Grant
@@ -281,7 +340,7 @@ func (cp *CallerPlan) foldRung(i int, group string) {
 		l := &ep.RateLimits[j]
 		cs := make([]limits.Counter, 0, len(l.RateLimit.Spec.Rules))
 		for _, rule := range l.RateLimit.Spec.Rules {
-			cs = append(cs, limits.CallerRule(r.Kind, l.RateLimit, rule, pid, r.SubjectID, group))
+			cs = append(cs, limits.CallerRule(r.Kind, l.RateLimit, rule, pid, subject, group))
 		}
 		if l.Scoped {
 			cp.scoped = append(cp.scoped, scopedCounters{scope: l, counters: cs})
@@ -290,7 +349,7 @@ func (cp *CallerPlan) foldRung(i int, group string) {
 		}
 	}
 	for _, b := range ep.Budgets {
-		cp.Counters = append(cp.Counters, limits.BudgetCounter(r.Kind, b, pid, r.SubjectID, group))
+		cp.Counters = append(cp.Counters, limits.BudgetCounter(r.Kind, b, pid, subject, group))
 		if cp.budgetAt < 0 {
 			cp.budgetAt = i
 		}
