@@ -53,9 +53,9 @@ type Deps struct {
 	// signer) disables minting and revoke-by-token.
 	TokenSigner *TokenSigner
 
-	// TokenDenylist is where a revoked token's jti is written for the data
-	// plane to read. nil disables per-token revocation (the token-version
-	// bump still works).
+	// TokenDenylist records a revoked token's jti for the data plane to
+	// refuse. nil disables per-token revocation (the token-version bump
+	// still works).
 	TokenDenylist TokenDenylist
 
 	// MintLimiter caps how often one user may mint an inference token.

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -166,10 +165,27 @@ func TestPrincipalFrom_Token(t *testing.T) {
 	if p.PassthroughAllowed {
 		t.Error("a token must never be allowed to forward upstream keys")
 	}
-	// The claim's group and the snapshot's membership both land, sorted.
-	want := []string{"user:" + f.user, "group:data-science", "group:platform-eng", "group:system:authenticated"}
-	if !equalStrings(p.Subjects, want) {
-		t.Errorf("subjects = %v, want %v", p.Subjects, want)
+	// A token acts under its user's caller ladder.
+	if p.Caller == nil || p.Caller.Principal != "user:"+f.user {
+		t.Errorf("caller plan = %+v, want the user's", p.Caller)
+	}
+}
+
+// A token whose jti was revoked is refused from the in-memory revoked set, before anything downstream runs.
+func TestTokenPrincipal_RevokedJTI(t *testing.T) {
+	f := newPrincipalFixture()
+	st := f.stack(t)
+	jti := meta.NewID()
+	token := f.mint(t, func(c *crypto.TokenClaims) { c.Jti = jti })
+	if w := st.do(token); w.Code != http.StatusOK {
+		t.Fatalf("status before revoke = %d: %s", w.Code, w.Body)
+	}
+	if err := st.revoked.Revoke(context.Background(), jti, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	w := st.do(token)
+	if w.Code != http.StatusUnauthorized || errCode(t, w.Body.Bytes()) != "token_revoked" {
+		t.Fatalf("revoked token: %d %s, want 401 token_revoked", w.Code, w.Body)
 	}
 }
 
@@ -186,131 +202,68 @@ func TestTokenProxyMode_Forbidden(t *testing.T) {
 	}
 }
 
-// TestPolicyResolution walks the resolution order: the credential's own
-// policy, then the service account's, then the project's bindings by
-// (priority, name), then the policy-less flow or a refusal.
-func TestPolicyResolution(t *testing.T) {
+// The caller ladder decides: the innermost rung's policy is the principal's, a disabled policy on any rung refuses with 403 and never falls through, and a principal with nothing bound is admitted (it reaches what its scopes own).
+func TestCallerLadder(t *testing.T) {
+	fls := false
 	for _, tc := range []struct {
 		name       string
-		setup      func(*principalFixture) *key.Key
-		useToken   bool
+		setup      func(*principalFixture)
 		wantPolicy func(principalFixture) string
 		wantStatus int
+		wantCode   string
 	}{
 		{
-			name: "the key's own policy wins over everything",
-			setup: func(f *principalFixture) *key.Key {
-				f.bindings = []*policybinding.PolicyBinding{boundTo(*f, "b", 1, f.boundPol.Meta.ID, "group:system:authenticated")}
-				k := saKey(*f, "sk-wr-live")
-				k.Spec.PolicyID = f.keyPol.Meta.ID
-				return k
+			name: "the service account's binding is the innermost",
+			setup: func(f *principalFixture) {
+				f.bindings = []*policybinding.PolicyBinding{
+					boundTo(*f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
+					boundTo(*f, "b-sa", 1, f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
+				}
 			},
 			wantPolicy: func(f principalFixture) string { return f.keyPol.Meta.ID },
 			wantStatus: http.StatusOK,
 		},
 		{
-			name: "the service account's policy wins over a binding",
-			setup: func(f *principalFixture) *key.Key {
-				f.bindings = []*policybinding.PolicyBinding{boundTo(*f, "b", 1, f.boundPol.Meta.ID, "group:system:authenticated")}
-				return saKey(*f, "sk-wr-live")
-			},
-			wantPolicy: func(f principalFixture) string { return f.saPol.Meta.ID },
+			name:       "nothing bound is admitted with no caller policy",
+			setup:      func(*principalFixture) {},
 			wantStatus: http.StatusOK,
 		},
 		{
-			name: "a binding resolves when nothing overrides it",
-			setup: func(f *principalFixture) *key.Key {
-				f.sa.Spec.PolicyID = ""
+			name: "a disabled project policy refuses",
+			setup: func(f *principalFixture) {
+				f.boundPol.Spec.Enabled = &fls
 				f.bindings = []*policybinding.PolicyBinding{
-					boundTo(*f, "b-second", 20, f.keyPol.Meta.ID, "group:system:serviceaccounts"),
-					boundTo(*f, "b-first", 10, f.boundPol.Meta.ID, "group:system:serviceaccounts"),
+					boundTo(*f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
+					boundTo(*f, "b-sa", 1, f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
 				}
-				return saKey(*f, "sk-wr-live")
-			},
-			wantPolicy: func(f principalFixture) string { return f.boundPol.Meta.ID },
-			wantStatus: http.StatusOK,
-		},
-		{
-			name: "a binding whose subjects don't intersect is skipped",
-			setup: func(f *principalFixture) *key.Key {
-				f.sa.Spec.PolicyID = ""
-				f.bindings = []*policybinding.PolicyBinding{
-					boundTo(*f, "b-other", 1, f.keyPol.Meta.ID, "serviceaccount:"+meta.NewID()),
-					boundTo(*f, "b-mine", 5, f.boundPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
-				}
-				return saKey(*f, "sk-wr-live")
-			},
-			wantPolicy: func(f principalFixture) string { return f.boundPol.Meta.ID },
-			wantStatus: http.StatusOK,
-		},
-		{
-			name: "a project-scoped key with nothing bound is refused",
-			setup: func(f *principalFixture) *key.Key {
-				f.sa.Spec.PolicyID = ""
-				return saKey(*f, "sk-wr-live")
 			},
 			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "a personal key with no project takes the policy-less flow",
-			setup: func(f *principalFixture) *key.Key {
-				return &key.Key{
-					Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-personal", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.user}},
-					Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: f.user}, KeyHash: sha("sk-wr-live")},
-				}
-			},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name: "a token with nothing bound is refused — it never goes policy-less",
-			setup: func(f *principalFixture) *key.Key {
-				f.bindings = nil
-				return nil
-			},
-			useToken:   true,
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "a token resolves through a group subject",
-			setup: func(f *principalFixture) *key.Key {
-				f.bindings = []*policybinding.PolicyBinding{boundTo(*f, "b", 1, f.boundPol.Meta.ID, "group:data-science")}
-				return nil
-			},
-			useToken:   true,
-			wantPolicy: func(f principalFixture) string { return f.boundPol.Meta.ID },
-			wantStatus: http.StatusOK,
+			wantCode:   "policy_disabled",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPrincipalFixture()
-			k := tc.setup(&f)
-
-			var st *principalStack
-			bearer := "sk-wr-live"
-			if tc.useToken {
-				st = f.stack(t)
-				bearer = f.mint(t, nil)
-			} else {
-				st = f.stack(t, k)
-			}
-			rec := st.do(bearer)
+			tc.setup(&f)
+			st := f.stack(t, saKey(f, "sk-wr-live"))
+			rec := st.do("sk-wr-live")
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body)
 			}
-			if tc.wantStatus != http.StatusOK {
-				if got := authCode(t, rec.Body.Bytes()); got != "no policy is bound to this principal" {
-					t.Errorf("message = %q, want the no_policy refusal", got)
+			if tc.wantCode != "" {
+				if got := errCode(t, rec.Body.Bytes()); got != tc.wantCode {
+					t.Fatalf("code = %q, want %q", got, tc.wantCode)
 				}
 				return
 			}
+			got := st.seen.PolicyID()
 			if tc.wantPolicy == nil {
-				if st.seen.Policy != nil {
-					t.Errorf("policy = %q, want none (policy-less flow)", st.seen.Policy.Meta.ID)
+				if got != "" {
+					t.Errorf("policy = %q, want none", got)
 				}
 				return
 			}
-			if st.seen.Policy == nil || st.seen.Policy.Meta.ID != tc.wantPolicy(f) {
-				t.Errorf("policy = %+v, want %q", st.seen.Policy, tc.wantPolicy(f))
+			if got != tc.wantPolicy(f) {
+				t.Errorf("policy = %q, want %q", got, tc.wantPolicy(f))
 			}
 		})
 	}
@@ -345,19 +298,17 @@ func recordRequest(st *principalStack, r *http.Request) *httptest.ResponseRecord
 	return w
 }
 
-// TestListModels_Token proves the model listing reads the principal's
-// resolved policy, whatever credential resolved it.
+// TestListModels_Token proves the model listing reads the principal's caller plan, whatever credential resolved it.
 func TestListModels_Token(t *testing.T) {
-	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	_, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, &Principal{
 		CredentialKind: CredentialToken,
 		CredentialID:   meta.NewID(),
-		UserID:         meta.NewID(),
-		ProjectID:      meta.NewID(),
-		Policy:         pr.Policy,
+		UserID:         pr.UserID,
+		Caller:         pr.Caller,
 	})
 
-	out, err := listModels(ctx, buildDeps(t, cat), "")
+	out, err := listModels(ctx, "")
 	if err != nil {
 		t.Fatalf("listModels: %v", err)
 	}

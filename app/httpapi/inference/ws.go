@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -71,16 +72,16 @@ func frameRequest(d Deps, fw http.ResponseWriter, fr *http.Request) (*http.Reque
 	frame := derivedState(fr.Context())
 	frame.snap, frame.snapSet = snap, true
 	ctx := withState(fr.Context(), frame)
-	// Revocation and policy resolution re-run per frame so a revoked
-	// credential or rebound policy reaches a live connection. Frames
-	// run concurrently, so this writes to a copy of the principal.
-	if p := PrincipalFrom(ctx); p != nil && snap != nil {
-		if err := p.Recheck(snap, time.Now()); err != nil {
-			writeAuthErr(fw, err.Error())
+	// Authentication re-runs per frame against the current plans, so a
+	// revoked or rotated credential, a rebound policy or a disabled
+	// subject reaches a live connection. Frames run concurrently, so each
+	// gets its own principal.
+	if p := PrincipalFrom(ctx); p != nil {
+		fp, ok := d.Auth().reauthenticate(fw, p)
+		if !ok {
 			return nil, false
 		}
-		fp := framePrincipal(p, snap)
-		if !authorizePrincipal(fw, snap, fp, frame.cls.Mode) {
+		if !authorizePrincipal(fw, fp, frame.cls.Mode) {
 			return nil, false
 		}
 		frame.principal = fp
@@ -103,23 +104,46 @@ func wsReadLimit(maxBody int64) int64 {
 	return maxBody + wsFrameEnvelopeBytes
 }
 
-// framePrincipal re-resolves the connection's credential against the frame's
-// snapshot the way the HTTP edge does, so every change the snapshot reflects
-// (key flags and policy, service account, project, group membership) reaches
-// the next frame. Each frame gets its own value: frames run concurrently.
-func framePrincipal(p *Principal, snap *appcatalog.Snapshot) *Principal {
-	if p.CredentialKind == CredentialKey {
-		if k, _ := snap.KeyByHash(p.KeyHash); k != nil {
-			return buildPrincipal(snap, k, p.KeyHash)
+// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry and the revoked set. The error says why it no longer authenticates; the caller ladder's own refusal is the caller's to check.
+func (a *Auth) Recheck(keyHash, userID, jti string, tokenVer int, tokenExp int64, now time.Time) (*Principal, error) {
+	root := a.root()
+	if root == nil {
+		return nil, errors.New("plans not loaded")
+	}
+	if keyHash != "" {
+		kp := root.Keys.Lookup(keyHash, now)
+		if kp == nil {
+			return nil, errors.New("api key no longer valid")
 		}
+		return principalOf(kp, keyHash), nil
 	}
-	frame := *p
-	frame.Policy = nil
-	if p.token != nil {
-		frame.Subjects = p.token.subjectsIn(snap, p.UserID)
+	switch up := root.Users.Lookup(userID); {
+	case tokenExp > 0 && tokenExp <= now.Unix():
+		return nil, errors.New("token expired")
+	case up == nil || up.TokenVersion != tokenVer:
+		return nil, errors.New(msgTokenRevoked)
+	case a.Revoked.Revoked(jti, now):
+		return nil, errors.New("token revoked")
+	default:
+		return &Principal{UserID: userID, CredentialKind: CredentialToken, CredentialID: jti, TokenExp: tokenExp, TokenVer: tokenVer, Caller: up.Caller}, nil
 	}
-	if proj, ok := snap.Project(p.ProjectID); ok {
-		frame.TeamID = proj.Spec.TeamID
+}
+
+// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to. Reports false after writing the response.
+func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, bool) {
+	root := a.root()
+	if root == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
+		return nil, false
 	}
-	return &frame
+	now := time.Now()
+	if p.CredentialKind == CredentialToken {
+		return tokenClaimsPrincipal(w, a, root, p.claims, p.claimsTyp, now)
+	}
+	kp := root.Keys.Lookup(p.KeyHash, now)
+	if kp == nil {
+		writeAuthErr(w, "invalid api key")
+		return nil, false
+	}
+	return principalOf(kp, p.KeyHash), true
 }

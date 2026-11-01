@@ -9,11 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/plan"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
@@ -26,7 +25,7 @@ type hostReached chan struct{}
 func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
 func (hostReached) Unreachable(context.Context, string, string) {}
 
-// A metered round-robin request on a healthy key: before the upstream call the inbound reserve, the breaker reads and the rotation counter go out in one round trip. Post-flight writes no success for a key that never failed, and commits in one more round trip only when a rule has something to settle (a requests-only reservation was settled by the reserve).
+// A round-robin request on a healthy key with only caller counters: before the upstream call, the caller hold and the pick's breaker reads with the rotation counter, one round trip each; the credential has no counters, so its hold costs none. Post-flight writes no success for a key that never failed, and settles in one more round trip only when a rule has something to settle.
 func TestRunRoundTrips(t *testing.T) {
 	requests := appratelimit.Rule{
 		Meter: appratelimit.MeterRequests, Amount: 100,
@@ -36,8 +35,8 @@ func TestRunRoundTrips(t *testing.T) {
 		Meter: appratelimit.MeterTokens, Amount: 1 << 20,
 		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategySlidingWindow,
 	}
-	t.Run("requests_only", func(t *testing.T) { runRoundTrips(t, 1, requests) })
-	t.Run("with_tokens", func(t *testing.T) { runRoundTrips(t, 2, requests, tokens) })
+	t.Run("requests_only", func(t *testing.T) { runRoundTrips(t, 2, requests) })
+	t.Run("with_tokens", func(t *testing.T) { runRoundTrips(t, 3, requests, tokens) })
 }
 
 func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
@@ -47,29 +46,12 @@ func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
 	keypool.RegisterScripts(mem)
 	store := kvtest.NewRecording(mem)
 
-	rl := &appratelimit.RateLimit{
-		Meta: meta.Metadata{ID: "rl-inbound", Name: "inbound"},
-		Spec: appratelimit.Spec{Rules: rules},
-	}
-	tier := &policy.Policy{Meta: meta.Metadata{ID: "pol-tier", Name: "tier"}}
-	caller := &policy.Policy{
-		Meta: meta.Metadata{ID: "pol-caller", Name: "caller"},
-		Spec: policy.Spec{RateLimitID: rl.Meta.ID, KeySelection: policy.KeySelectionRoundRobin},
-	}
-	snap := &reservationTestSnapshot{
-		policies:   map[string]*policy.Policy{tier.Meta.ID: tier},
-		rateLimits: map[string]*appratelimit.RateLimit{rl.Meta.ID: rl},
-	}
-	var keys []*hostkey.HostKey
-	for _, id := range []string{"key-a", "key-b"} {
-		keys = append(keys, &hostkey.HostKey{
-			Meta: meta.Metadata{ID: id, Name: id}, Spec: hostkey.Spec{PolicyID: tier.Meta.ID},
-			Resolved: "sk-" + id, KeyHash: "hash-" + id,
-		})
-	}
+	rl := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-inbound", Name: "inbound"}, Spec: appratelimit.Spec{Rules: rules}}
+	hop := buildHop(keypool.KeySelectionRoundRobin, callerCounter(rl), testSlot{key: testKey("key-a")}, testSlot{key: testKey("key-b")})
 	reached := make(hostReached, 1)
 	p := &Pipeline{
-		Policy:     policy.NewService(snap, keypool.New(store, slog.Default(), nil, nil), pkgratelimit.New(store, slog.Default(), nil)),
+		Limiter:    lua.New(pkgratelimit.New(store, slog.Default(), nil)),
+		Selector:   keypool.New(store, slog.Default(), nil, nil),
 		Logger:     slog.Default(),
 		HostHealth: reached,
 	}
@@ -80,15 +62,13 @@ func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
 			tripsAtCall = store.RoundTrips()
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
 		}},
-		Keys:   keys,
-		Policy: caller,
-		Host:   &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}},
+		Hops: []plan.RouteHop{hop},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if tripsAtCall != 1 {
-		t.Fatalf("kv round trips before the upstream call = %d, want 1", tripsAtCall)
+	if tripsAtCall != 2 {
+		t.Fatalf("kv round trips before the upstream call = %d, want 2 (%v)", tripsAtCall, store.Batches())
 	}
 	_ = res.Body.Close()
 	select {

@@ -18,10 +18,9 @@ import (
 	"github.com/wyolet/relay/app/user"
 )
 
-// TokenDenylist writes the per-token revocation entries the data plane's
-// Reserve script reads. Satisfied by kv.Store.
+// TokenDenylist records a revoked token until its expiry, for every pod's data plane to refuse it. Satisfied by *revocation.List.
 type TokenDenylist interface {
-	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+	Revoke(ctx context.Context, jti string, exp time.Time) error
 }
 
 // tokenDeps is the slice of Deps the token handlers need, resolved once at

@@ -9,10 +9,12 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// Root is what the request path loads: the key index of one published generation.
+// Root is what the request path loads: the indexes of one published generation.
 type Root struct {
-	Keys *KeyPlanIndex
-	Gen  uint64 // the generation it was published as, for caches keyed by it
+	Keys     *KeyPlanIndex
+	Users    *UserIndex
+	Projects *ProjectIndex
+	Gen      uint64 // the generation it was published as, for caches keyed by it
 }
 
 // Holder keeps the current Root behind one atomic pointer, swapped when the engine publishes.
@@ -23,7 +25,12 @@ func (h *Holder) Load() *Root { return h.root.Load() }
 
 // OnPublish is the engine's OnPublish hook: it stores the Root of the view just published.
 func (h *Holder) OnPublish(v *engine.View, _ engine.PublishStats) {
-	h.root.Store(&Root{Keys: engine.Get[KeyPlanIndex](v, ""), Gen: uint64(v.Gen())})
+	h.root.Store(&Root{
+		Keys:     engine.Get[KeyPlanIndex](v, ""),
+		Users:    engine.Get[UserIndex](v, ""),
+		Projects: engine.Get[ProjectIndex](v, ""),
+		Gen:      uint64(v.Gen()),
+	})
 }
 
 // KeyPlan is what authentication derives for one key; the ladder is its principal's.

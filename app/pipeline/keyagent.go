@@ -6,19 +6,6 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 )
 
-// Verdict is what a KeyAgent tells the request to do after a key failed.
-type Verdict int
-
-const (
-	// VerdictNext: give up on this key, fail over to the next candidate.
-	VerdictNext Verdict = iota
-	// VerdictRetry: retry the SAME key with the returned fresh secret value
-	// (the agent re-resolved it — e.g. the key had rotated upstream).
-	VerdictRetry
-	// VerdictFail: stop; return the upstream error to the caller.
-	VerdictFail
-)
-
 // KeyAgent owns what happens when an upstream key fails. The request loop is
 // deliberately dumb: it calls OnFailure and obeys the verdict. All the messy
 // concerns (secret re-resolution, single-flight, park-and-wait, healing the
@@ -34,5 +21,5 @@ const (
 //
 // The returned string is the fresh secret value, set only for VerdictRetry.
 type KeyAgent interface {
-	OnFailure(ctx context.Context, keyID string, kind keypool.FailureKind, moreCandidates bool) (Verdict, string)
+	OnFailure(ctx context.Context, keyID string, kind keypool.FailureKind, moreCandidates bool) (keypool.Verdict, string)
 }

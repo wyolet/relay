@@ -11,15 +11,14 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/routing"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	"github.com/wyolet/relay/app/plan"
 )
 
-func TestMapRoutingErr_ModelNotInPolicy_NamesModel(t *testing.T) {
+func TestMapRouteRefusal_ModelNotAllowed_NamesModel(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapRoutingErr(rec, routing.ErrModelNotInPolicy, "gpt-4o", "pol_123")
+	mapRouteRefusal(rec, &plan.Refusal{Code: plan.CodeModelNotAllowed, Rung: limits.RungProject, PolicyID: "pol_123", Message: "the model is not allowed by the project policy"}, "gpt-4o")
 
 	if rec.Code != 403 {
 		t.Fatalf("status: %d", rec.Code)
@@ -34,34 +33,22 @@ func TestMapRoutingErr_ModelNotInPolicy_NamesModel(t *testing.T) {
 	if !strings.Contains(env.Err.Message, `"gpt-4o"`) {
 		t.Errorf("message should name the model: %q", env.Err.Message)
 	}
-	// the policy id is log-only — it must never reach the client body.
+	if !strings.Contains(env.Err.Message, "project policy") {
+		t.Errorf("message should name the rung that refused: %q", env.Err.Message)
+	}
+	// the policy id is log-only on a model refusal — it must never reach the client body.
 	if strings.Contains(rec.Body.String(), "pol_123") {
 		t.Errorf("policy id leaked into client body: %s", rec.Body.String())
 	}
 }
 
-func TestMapRoutingErr_EmptyModel_FallsBackToGeneric(t *testing.T) {
+// A caller's own rate-limit refusal must be a 429 with Retry-After from the
+// limiter's refill timing — not a 502 blaming an upstream that was never
+// called — and names the rung and policy whose limit refused.
+func TestMapPipelineErr_CallerLimitExceeded_429WithRetryAfter(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapRoutingErr(rec, routing.ErrModelNotInPolicy, "", "")
-
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Err.Message != "model is not allowed by this policy" {
-		t.Errorf("generic fallback expected, got: %q", env.Err.Message)
-	}
-}
-
-// Relay's own inbound rate-limit rejection must be a 429 with Retry-After
-// from the limiter's refill timing — not the default 502 it used to fall
-// into (blaming an upstream that was never called, with no backoff signal).
-func TestMapPipelineErr_InboundLimitExceeded_429WithRetryAfter(t *testing.T) {
-	rec := httptest.NewRecorder()
-	mapPipelineErr(rec, fmt.Errorf("run: %w", &pkgratelimit.KeyQuotaExhausted{
-		Rule:       pkgratelimit.Rule{Name: "rpm"},
-		RetryAfter: 2300 * time.Millisecond,
-	}))
+	c := limits.Counter{Kind: limits.KindRule, Rung: limits.RungTeam, PolicyID: "pol_team", ID: "r:x"}
+	mapPipelineErr(rec, fmt.Errorf("run: %w", &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &c, RetryAfter: 2300 * time.Millisecond}}))
 
 	if rec.Code != 429 {
 		t.Fatalf("status: %d, want 429", rec.Code)
@@ -77,19 +64,29 @@ func TestMapPipelineErr_InboundLimitExceeded_429WithRetryAfter(t *testing.T) {
 		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
 	}
 	// One client reads the delay out of the message text and never looks at Retry-After.
-	if !strings.Contains(env.Err.Message, "try again in 3s") {
-		t.Fatalf("message must name the retry delay: %q", env.Err.Message)
+	if !strings.Contains(env.Err.Message, "try again in 3s") || !strings.Contains(env.Err.Message, "team policy pol_team") {
+		t.Fatalf("message must name the rung, the policy and the retry delay: %q", env.Err.Message)
 	}
 }
 
-// Every host key over its tier is a 429 naming the key tiers, with the
-// earliest time a key has room, and keeps the tier's rule name to itself.
-func TestMapPipelineErr_KeyTiersFull_429WithRetryAfter(t *testing.T) {
+// A spent hard budget is a 429 of its own code, retried at the next period start.
+func TestMapPipelineErr_BudgetExceeded(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapPipelineErr(rec, fmt.Errorf("%w: %w", policy.ErrKeyTiersFull, &pkgratelimit.KeyQuotaExhausted{
-		Rule:       pkgratelimit.Rule{Name: "openai-tier-1 requests"},
-		RetryAfter: 11500 * time.Millisecond,
-	}))
+	c := limits.Counter{Kind: limits.KindBudget, Rung: limits.RungProject, PolicyID: "pol_p", ID: "b:x"}
+	mapPipelineErr(rec, &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &c, RetryAfter: 14 * time.Hour}})
+	var env httpapi.APIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != 429 || env.Err.Code != "budget_exceeded" || rec.Header().Get("Retry-After") != strconv.Itoa(14*3600) {
+		t.Fatalf("status %d code %q retry %q, want 429 budget_exceeded at the period start", rec.Code, env.Err.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
+// Every credential over an upstream limit is a 429 with the earliest time one has room, and keeps the upstream rules to itself.
+func TestMapPipelineErr_UpstreamLimited_429WithRetryAfter(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mapPipelineErr(rec, &pipeline.UpstreamLimitedError{RetryAfter: 11500 * time.Millisecond})
 
 	if rec.Code != 429 {
 		t.Fatalf("status: %d, want 429", rec.Code)
@@ -104,11 +101,8 @@ func TestMapPipelineErr_KeyTiersFull_429WithRetryAfter(t *testing.T) {
 	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
 		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
 	}
-	if !strings.Contains(env.Err.Message, "tier rate limit") || !strings.Contains(env.Err.Message, "try again in 12s") {
-		t.Fatalf("message must name the key tiers and the delay: %q", env.Err.Message)
-	}
-	if strings.Contains(env.Err.Message, "openai-tier-1") {
-		t.Fatalf("message leaks the tier's rule name: %q", env.Err.Message)
+	if !strings.Contains(env.Err.Message, "upstream rate limit") || !strings.Contains(env.Err.Message, "try again in 12s") {
+		t.Fatalf("message must name the upstream limit and the delay: %q", env.Err.Message)
 	}
 }
 

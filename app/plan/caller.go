@@ -6,6 +6,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
@@ -39,6 +40,29 @@ type CallerPlan struct {
 }
 
 func (p *CallerPlan) builtFrom() inputs { return p.in }
+
+// Team and Project return the principal's team and project rungs; their SubjectID is empty for a user.
+func (p *CallerPlan) Team() *Rung    { return &p.Rungs[rungTeam] }
+func (p *CallerPlan) Project() *Rung { return &p.Rungs[rungProject] }
+
+// PrincipalRung returns the principal's own rung.
+func (p *CallerPlan) PrincipalRung() *Rung { return &p.Rungs[rungPrincipal] }
+
+// InnermostPolicy returns the policy bound closest to the principal, nil when no caller rung has one. Usage rows record it.
+func (p *CallerPlan) InnermostPolicy() *policy.Policy {
+	for i := len(p.Rungs) - 1; i >= 0; i-- {
+		if ep := p.Rungs[i].Policy; ep != nil {
+			return ep.Policy
+		}
+	}
+	return nil
+}
+
+// ID returns the subject's id without its kind prefix ("team:<id>" → "<id>").
+func (r *Rung) ID() string {
+	_, id, _ := strings.Cut(r.SubjectID, ":")
+	return id
+}
 
 // scopedCounters are a caller rule's counters with the models they apply to.
 type scopedCounters struct {
@@ -98,8 +122,9 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 			engine.Drop(tx)
 			return nil
 		}
-		cp.Rungs[rungTeam].SubjectID = "team:" + tm.Meta.ID
-		cp.Rungs[rungProject].SubjectID = "project:" + proj.Meta.ID
+		cp.Rungs[rungTeam].SubjectID, cp.Rungs[rungTeam].Name = "team:"+tm.Meta.ID, tm.Meta.Name
+		cp.Rungs[rungProject].SubjectID, cp.Rungs[rungProject].Name = "project:"+proj.Meta.ID, proj.Meta.Name
+		cp.Rungs[rungPrincipal].Name = sa.Meta.Name
 		disabled = [3]bool{!tm.IsEnabled(), !proj.IsEnabled(), !sa.IsEnabled()}
 		scopes = []string{cp.Rungs[rungProject].SubjectID, cp.Rungs[rungTeam].SubjectID, "system:"}
 		cp.in = inputs{sa, proj, tm}

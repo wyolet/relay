@@ -56,7 +56,7 @@ func TestDispatch_WildcardAliasModelStaysOnePathSegment(t *testing.T) {
 	pointHostAt(t, cat, up.URL)
 	m := *snap.ModelsByName("test-model")[0]
 	m.Spec.Aliases = []string{"gem-v[*]"}
-	if err := cat.ApplyModelUpsert(&m); err != nil {
+	if err := applyModel(t, cat, &m); err != nil {
 		t.Fatal(err)
 	}
 	d := buildRunnableDeps(t, cat)

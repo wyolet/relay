@@ -89,69 +89,6 @@ func TestSelectRateLimitID_FirstMatchWins(t *testing.T) {
 	}
 }
 
-// The bucket a rule counts in is named by the policy, the RateLimit it
-// came from and — for a per-model binding — the model, so no two grants of
-// one policy can collide in the same counter. The key's exact rendering is
-// pinned by TestRuleKeyFormat_CarriesRateLimitAndModel; what this adds is
-// that no two of the five combinations ever share one.
-func TestResolveRules_KeysDistinctPerRateLimitAndModel(t *testing.T) {
-	pol := fix("prod")
-	pol.Meta.ID = "pol-1"
-	rlA := testRateLimit("rl-a", requestsRule())
-	rlB := testRateLimit("rl-b", requestsRule())
-
-	seen := map[string]string{}
-	for _, tc := range []struct {
-		label   string
-		rl      *appratelimit.RateLimit
-		modelID string
-		want    string
-	}{
-		{"flat, rl-b", rlB, "", "policy:pol-1:rl:rl-b:fixed-window:60:requests"},
-		{"rl-a on model one", rlA, "m-1", "policy:pol-1:rl:rl-a:m:m-1:fixed-window:60:requests"},
-		{"rl-a on model two", rlA, "m-2", "policy:pol-1:rl:rl-a:m:m-2:fixed-window:60:requests"},
-		{"rl-b on model one", rlB, "m-1", "policy:pol-1:rl:rl-b:m:m-1:fixed-window:60:requests"},
-	} {
-		rules := pol.ResolveRules(tc.rl, tc.modelID)
-		if len(rules) != 1 {
-			t.Fatalf("%s: %d rules, want 1", tc.label, len(rules))
-		}
-		if rules[0].Key != tc.want {
-			t.Errorf("%s: key = %q, want %q", tc.label, rules[0].Key, tc.want)
-		}
-		if other, dup := seen[rules[0].Key]; dup {
-			t.Errorf("%s shares bucket %q with %s", tc.label, rules[0].Key, other)
-		}
-		seen[rules[0].Key] = tc.label
-	}
-
-	// Two rules of one meter over different windows stay separate counters.
-	hourly := requestsRule()
-	hourly.Window = appratelimit.Window(time.Hour)
-	multi := pol.ResolveRules(testRateLimit("rl-c", requestsRule(), hourly), "")
-	if len(multi) != 2 || multi[0].Key == multi[1].Key {
-		t.Fatalf("keys = %v, want two distinct buckets", keysOf(multi))
-	}
-
-	// Nothing to resolve: no rate limit, a disabled one, or an empty rule
-	// set all mean this policy caps nothing here.
-	if got := pol.ResolveRules(nil, ""); got != nil {
-		t.Errorf("nil rate limit = %v, want nil", keysOf(got))
-	}
-	off := false
-	disabled := testRateLimit("rl-off", requestsRule())
-	disabled.Spec.Enabled = &off
-	if got := pol.ResolveRules(disabled, ""); got != nil {
-		t.Errorf("disabled rate limit = %v, want nil", keysOf(got))
-	}
-	if got := pol.ResolveRules(testRateLimit("rl-empty"), ""); got != nil {
-		t.Errorf("rate limit with no rules = %v, want nil", keysOf(got))
-	}
-	if got := (*Policy)(nil).ResolveRules(rlA, ""); got != nil {
-		t.Errorf("nil policy = %v, want nil", keysOf(got))
-	}
-}
-
 // The owner shapes a Policy accepts differ by tier: a host-owned row is an
 // upstream tier definition and carries no inbound grants, a project- or
 // user-owned row is a customer policy. Model refs are parsed at write time so

@@ -91,7 +91,11 @@ func TestMount_ProfileModelsRouteRegistered(t *testing.T) {
 func TestProfileModels_OpenCodeCatalogPathAndAPIURL(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	for _, m := range cat.Current().AllModels() {
-		m.Spec.ContextWindowTotal = 128000
+		cp := *m
+		cp.Spec.ContextWindowTotal = 128000
+		if err := applyModel(t, cat, &cp); err != nil {
+			t.Fatal(err)
+		}
 	}
 	d := buildDeps(t, cat)
 	profiles := clientprofile.New()

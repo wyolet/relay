@@ -52,7 +52,7 @@ func (fakeAuditReader) Events(context.Context, audit.Query) ([]audit.Event, erro
 
 type fakeDenylist struct{}
 
-func (fakeDenylist) Set(context.Context, string, []byte, time.Duration) error { return nil }
+func (fakeDenylist) Revoke(context.Context, string, time.Time) error { return nil }
 
 type fakePayloadReader struct{}
 

@@ -11,11 +11,10 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/httpheader"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -68,71 +67,36 @@ func writeErrorEnvelope(w http.ResponseWriter, status int, errType, code, msg st
 	_, _ = w.Write(body)
 }
 
-// mapRoutingErr translates a routing sentinel to a typed HTTP error. model is
-// the caller-supplied model ref (safe to echo back); policy is the resolved
-// policy id (logged only, never returned to the caller). Either may be "".
-func mapRoutingErr(w http.ResponseWriter, err error, model, policy string) {
-	// log-only attrs; the requested model + policy make a routing rejection
-	// diagnosable from logs without re-deriving them from the request.
-	attrs := []any{"model", model, "policy", policy}
-	// modelMsg echoes the requested model into the client message when known.
-	modelMsg := func(format, fallback string) string {
-		if model == "" {
-			return fallback
-		}
-		return fmt.Sprintf(format, model)
-	}
-	switch {
-	case errors.Is(err, routing.ErrModelNotFound):
-		writeAPIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", modelMsg("model %q not found", "model not found"), attrs...)
-	case errors.Is(err, routing.ErrModelDisabled):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_disabled", modelMsg("model %q is disabled", "model is disabled"), attrs...)
-	case errors.Is(err, routing.ErrPolicyNotFound):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_not_found", "policy not found", attrs...)
-	case errors.Is(err, routing.ErrPolicyDisabled):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_disabled", "policy is disabled", attrs...)
-	case errors.Is(err, routing.ErrPolicyless):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policyless_disabled", "this relay key has no policy attached; policy-less traffic is disabled on this relay", attrs...)
-	case errors.Is(err, routing.ErrModelNotInPolicy):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", modelMsg("model %q is not allowed by this policy", "model is not allowed by this policy"), attrs...)
-	case errors.Is(err, routing.ErrNoHostBinding):
+// mapRouteRefusal answers a route that has no hop. model is the caller-supplied model ref (safe to echo back); the rung, subject and policy that decided are logged.
+func mapRouteRefusal(w http.ResponseWriter, r *plan.Refusal, model string) {
+	// log-only attrs; the requested model and the deciding rung make a routing rejection diagnosable from logs.
+	attrs := []any{"model", model, "rung", string(r.Rung), "subject", r.SubjectID, "policy", r.PolicyID}
+	modelMsg := func(format string) string { return fmt.Sprintf(format, model) }
+	switch r.Code {
+	case plan.CodeModelNotFound:
+		writeAPIError(w, http.StatusNotFound, "invalid_request_error", r.Code, modelMsg("model %q not found"), attrs...)
+	case plan.CodeModelDisabled:
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, modelMsg("model %q is disabled"), attrs...)
+	case plan.CodeModelNotAllowed:
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, modelMsg("model %q is not allowed: ")+r.Message, attrs...)
+	case plan.CodeNoBinding:
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", "no enabled host binding for model", attrs...)
-	case errors.Is(err, routing.ErrHostNotFound):
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "host_not_found", "host referenced by binding not found", attrs...)
-	case errors.Is(err, routing.ErrNoKeys):
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys available", attrs...)
+	case plan.CodeNoCredentials:
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", modelMsg("no credential you can reach serves %q"), attrs...)
 	default:
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "routing_error", err.Error(), attrs...)
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, r.Error(), attrs...)
 	}
 }
 
-// routingErrKind maps a routing sentinel to a machine-readable usage
-// ErrorKind. Mirrors mapRoutingErr's switch so the usage log and the HTTP
-// response agree on what was rejected. The event Status stays 0 (upstream
-// never reached); the kind carries the reason.
-func routingErrKind(err error) string {
-	switch {
-	case errors.Is(err, routing.ErrModelNotFound):
-		return "model_not_found"
-	case errors.Is(err, routing.ErrModelDisabled):
-		return "model_disabled"
-	case errors.Is(err, routing.ErrPolicyNotFound):
-		return "policy_not_found"
-	case errors.Is(err, routing.ErrPolicyDisabled):
-		return "policy_disabled"
-	case errors.Is(err, routing.ErrPolicyless):
-		return "policyless"
-	case errors.Is(err, routing.ErrModelNotInPolicy):
-		return "model_not_allowed"
-	case errors.Is(err, routing.ErrNoHostBinding):
+// routeRefusalKind is the usage ErrorKind of a route refusal, agreeing with the code mapRouteRefusal answers.
+func routeRefusalKind(r *plan.Refusal) string {
+	switch r.Code {
+	case plan.CodeNoBinding:
 		return "no_host_binding"
-	case errors.Is(err, routing.ErrHostNotFound):
-		return "host_not_found"
-	case errors.Is(err, routing.ErrNoKeys):
+	case plan.CodeNoCredentials:
 		return "no_keys"
-	default:
-		return "routing_error"
 	}
+	return r.Code
 }
 
 // setRetryAfter writes a Retry-After header from a bucket-refill duration,
@@ -166,37 +130,45 @@ func setShouldRetry(w http.ResponseWriter, status int) {
 	w.Header().Set(httpheader.HeaderShouldRetry, strconv.FormatBool(retryableStatus(status)))
 }
 
-// rateLimitMessage keeps the limiter's own wording and appends the retry delay in the one phrasing some clients scrape out of the message text because they never read Retry-After.
-func rateLimitMessage(err error, secs int64) string {
-	return fmt.Sprintf("%s; try again in %ds", err.Error(), secs)
+// rateLimitMessage appends the retry delay to msg in the one phrasing some clients scrape out of the message text because they never read Retry-After.
+func rateLimitMessage(msg string, secs int64) string {
+	return fmt.Sprintf("%s; try again in %ds", msg, secs)
+}
+
+// callerLimitCode tells a spent budget from a rate limit.
+func callerLimitCode(r *limits.Refused) string {
+	if r.Counter.Kind == limits.KindBudget {
+		return "budget_exceeded"
+	}
+	return "rate_limit_exceeded"
+}
+
+// callerLimitMessage names the rung and policy whose limit refused, never the rule itself.
+func callerLimitMessage(r *limits.Refused) string {
+	what := "rate limit"
+	if r.Counter.Kind == limits.KindBudget {
+		what = "budget"
+	}
+	return fmt.Sprintf("the %s of the %s policy %s is exhausted", what, r.Counter.Rung, r.Counter.PolicyID)
 }
 
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
 	var upstream *pipeline.UpstreamFailureError
 	var unreachable *pipeline.UpstreamUnreachableError
-	var exceeded *pkgratelimit.KeyQuotaExhausted
+	var limited *pipeline.UpstreamLimitedError
+	var refused *limits.Refused
 	switch {
-	case errors.Is(err, pkgratelimit.ErrRevoked):
-		// The token's jti is on the team's denylist — the check rides the
-		// Reserve script, so this lands before any upstream call.
-		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked",
-			"this token has been revoked")
-	case errors.Is(err, policy.ErrKeyTiersFull) && errors.As(err, &exceeded):
-		// Every host key is over its tier: the caller's own limit had room. The
-		// tier's rule names are the host's configuration and stay out of it.
-		secs := setRetryAfter(w, exceeded.RetryAfter)
+	case errors.As(err, &limited):
+		// Every credential is over an upstream limit or cooling: the caller's own limits had room. The upstream rules are the host's configuration and stay out of the message.
+		secs := setRetryAfter(w, limited.RetryAfter)
 		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
-			fmt.Sprintf("every host key for this model is over its tier rate limit; try again in %ds", secs))
-	case errors.As(err, &exceeded):
-		// Relay's own inbound rate limit rejected the request before any
-		// upstream call. This MUST be a 429 with Retry-After from the
-		// limiter's bucket-refill timing — it previously fell through to the
-		// default 502 "upstream_error", blaming a provider that was never
-		// contacted and giving clients no backoff signal.
-		secs := setRetryAfter(w, exceeded.RetryAfter)
-		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
-			rateLimitMessage(exceeded, secs))
+			fmt.Sprintf("every credential for this model is over its upstream rate limit; try again in %ds", secs))
+	case errors.As(err, &refused):
+		// One of the caller's own limits or budgets refused before any upstream call: a 429 with the refill (or, for a budget, the next period start) as Retry-After, naming the rung and policy that refused.
+		secs := setRetryAfter(w, refused.RetryAfter)
+		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", callerLimitCode(refused),
+			rateLimitMessage(callerLimitMessage(refused), secs), "counter", refused.Counter.ID)
 	case errors.As(err, &unreachable):
 		// Dial failure against the host — likely a misconfigured baseURL or a
 		// down upstream, not a key problem. Surface it distinctly so operators

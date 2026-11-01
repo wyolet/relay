@@ -31,6 +31,8 @@ const (
 	RungTeam       Rung = "team"
 	RungProject    Rung = "project"
 	RungPrincipal  Rung = "principal"
+	// RungSystem marks a relay-wide ceiling no policy binds, such as the proxy-mode limit.
+	RungSystem Rung = "system"
 )
 
 // Upstream reports whether the rung is on the provider side of the ladder, where counters are shared by every caller that reaches the rung object.
@@ -74,6 +76,15 @@ func UpstreamRule(rung Rung, rl *ratelimit.RateLimit, r ratelimit.Rule, policyID
 	return Counter{
 		Kind: KindRule, Rung: rung, PolicyID: policyID, SubjectID: subjectID, ModelID: modelID, RateLimitID: rl.Meta.ID, Rule: r,
 		ID: id, Group: group,
+	}
+}
+
+// SystemRule describes a rule of a system rate limit counted per subject (a key hash, a client IP). It counts in a group of its own, apart from any caller's.
+func SystemRule(rl *ratelimit.RateLimit, r ratelimit.Rule, subject string) Counter {
+	return Counter{
+		Kind: KindRule, Rung: RungSystem, SubjectID: subject, RateLimitID: rl.Meta.ID, Rule: r,
+		ID:    ruleContent(rl.Meta.ID, r) + ":s:" + subject,
+		Group: "system:" + subject,
 	}
 }
 

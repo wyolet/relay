@@ -19,7 +19,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -44,9 +44,11 @@ type Deps struct {
 	// token bearer, which is the posture when tokens are disabled.
 	Tokens *TokenVerifier
 
-	// Resolver translates inbound model+policy refs into a pipeline-
-	// ready Plan against the snapshot.
-	Resolver *routing.Resolver
+	// Plans are the published key, caller and route plans authentication and routing read.
+	Plans PlanSource
+
+	// Revoked is the in-memory set of revoked relay-minted tokens. Nil revokes nothing.
+	Revoked *revocation.Set
 
 	// Pipeline orchestrates one normal-mode inference request.
 	Pipeline *pipeline.Pipeline
@@ -152,10 +154,11 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// The readiness gate runs ahead of both — until the catalog has
 	// completed its first Reload, /v1/* returns 503 instead of an
 	// empty-snapshot 404. /healthz stays unaffected.
+	auth := d.Auth()
 	mw := huma.Middlewares{
 		httpapi.HumaAuth(ReadinessMiddleware(d.Catalog)),
 		httpapi.HumaAuth(ClassifyMiddleware()),
-		httpapi.HumaAuth(PrincipalMiddleware(d.Catalog, d.Tokens)),
+		httpapi.HumaAuth(PrincipalMiddleware(auth)),
 	}
 	for _, mount := range d.RouteMounters {
 		mount(api, d, mw)
@@ -172,7 +175,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	r.With(
 		ReadinessMiddleware(d.Catalog),
 		ClassifyMiddleware(),
-		PrincipalMiddleware(d.Catalog, d.Tokens),
+		PrincipalMiddleware(auth),
 	).Get("/v1/ws", wsHandler(d))
 
 	mountProfileRoutes(r, d)
@@ -200,8 +203,13 @@ func mountProfileRoutes(r chi.Router, d Deps) {
 			r.With(
 				ReadinessMiddleware(d.Catalog),
 				ClassifyMiddleware(),
-				PrincipalMiddleware(d.Catalog, d.Tokens),
+				PrincipalMiddleware(d.Auth()),
 			).Method(route.Method, path, route.Handler)
 		}
 	}
+}
+
+// Auth is the credential middleware's view of d.
+func (d Deps) Auth() *Auth {
+	return &Auth{Catalog: d.Catalog, Plans: d.Plans, Revoked: d.Revoked, Tokens: d.Tokens}
 }

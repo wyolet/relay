@@ -1,0 +1,118 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/budget"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/config"
+	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/engine/cell"
+)
+
+// planDebounce matches the catalog listener's flush interval, so one admin write lands in the snapshot and the plans within the same second.
+const planDebounce = time.Second
+
+// planEngine is the engine that keeps the request path's plans current, with the cell registry its plans link and the holder the request path loads.
+type planEngine struct {
+	engine *engine.Engine
+	cells  *cell.Registry
+	plans  *plan.Holder
+	idle   time.Duration
+	resync time.Duration
+}
+
+// buildPlanEngine registers the plan kinds and controllers over the PG stores. Nothing is loaded until load.
+func buildPlanEngine(cfg *config.Config, st *storagemod.Storage, stores *appcatalog.Stores, users *user.Store) *planEngine {
+	pe := &planEngine{plans: &plan.Holder{}, idle: cfg.PlanCellIdle, resync: cfg.PlanResync}
+	pe.cells = cell.NewRegistry(cell.Options{IdleTTL: cfg.PlanCellIdle})
+	pe.engine = engine.New(engine.Options{
+		Debounce: planDebounce,
+		Cells:    pe.cells,
+		Hooks: engine.Hooks{
+			OnPublish: pe.plans.OnPublish,
+			OnReconcileError: func(controller string, out engine.Ref, err error) {
+				slog.Error("plans: reconcile failed; the previous plan keeps serving", "controller", controller, "kind", out.Kind, "id", out.ID, "err", err)
+			},
+			OnBatchAbandoned: func(gen engine.Generation, rounds int) {
+				slog.Error("plans: change batch did not settle; resyncing", "generation", gen, "rounds", rounds)
+			},
+		},
+	})
+	q := gen.New(st.Pool())
+	src := plan.Sources{
+		Providers:       stores.Provider,
+		Hosts:           stores.Host,
+		Models:          stores.Model,
+		Bindings:        stores.Binding,
+		Pricings:        stores.Pricing,
+		Policies:        stores.Policy,
+		PolicyBindings:  stores.PolicyBinding,
+		RateLimits:      stores.RateLimit,
+		Budgets:         budget.NewStore(q),
+		Pools:           pool.NewStore(st.Pool()),
+		Accounts:        account.NewStore(q),
+		Credentials:     stores.HostKey,
+		Teams:           stores.Team,
+		Projects:        stores.Project,
+		ServiceAccounts: stores.ServiceAccount,
+		Users:           users,
+		Keys:            stores.Key,
+	}
+	if stores.Overlay != nil {
+		src.Overlays = plan.OverlaySource{Store: stores.Overlay}
+	}
+	plan.Register(pe.engine, pe.cells, src)
+	return pe
+}
+
+// load lists every kind and publishes the first plans; the request path refuses until it has.
+func (pe *planEngine) load(ctx context.Context) error {
+	start := time.Now()
+	if err := pe.engine.Load(ctx); err != nil {
+		return err
+	}
+	slog.Info("plans: loaded", "generation", pe.engine.View().Gen(), "duration", time.Since(start))
+	if pe.resync > 0 {
+		go pe.resyncEvery(ctx)
+	}
+	return nil
+}
+
+// resyncEvery lists every kind again on the interval until ctx ends, so a notification that never arrived is healed; nothing is published unless a row differs.
+func (pe *planEngine) resyncEvery(ctx context.Context) {
+	t := time.NewTicker(pe.resync)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := pe.engine.Resync(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("plans: periodic resync failed", "err", err)
+			}
+		}
+	}
+}
+
+// expireCells drops runtime state no plan has linked for the idle window, until ctx ends.
+func (pe *planEngine) expireCells(ctx context.Context) {
+	t := time.NewTicker(max(pe.idle/4, time.Second))
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			pe.cells.Expire(now)
+		}
+	}
+}

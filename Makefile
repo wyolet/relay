@@ -439,7 +439,7 @@ cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 		COVER_ENFORCE=$(COVER_ENFORCE) ./scripts/covcheck.sh $$profiles
 
 # Allocation gate. ns/op is not gated — too noisy on shared runners.
-BENCH_PKGS            := ./app/httpapi/inference ./auth/token ./app/policy ./app/catalog ./app/routing
+BENCH_PKGS            := ./app/httpapi/inference ./auth/token ./app/limits/lua ./app/catalog
 BENCH_BASELINE        := scripts/bench-baseline.txt
 BENCH_ALLOC_TOLERANCE ?= 0
 BENCH_COUNT           ?= 1

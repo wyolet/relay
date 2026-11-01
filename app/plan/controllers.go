@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
@@ -66,5 +67,14 @@ func (c *controllers) all() []*engine.Controller {
 	index := engine.NewController("key-plan-index", KindKeyPlanIndex, c.keyPlanIndex)
 	engine.Watch(index, toSingleton[KeyPlanShard])
 
-	return []*engine.Controller{catalog, expanded, rung, acct, slot, pl, owned, caller, kp, shard, index}
+	up := engine.NewController("user-plan", KindUserPlan, c.userPlan)
+	engine.Watch(up, func(u *user.User) []string { return []string{u.ID} })
+
+	users := engine.NewController("user-index", KindUserIndex, c.userIndex)
+	engine.Watch(users, toSingleton[UserPlan])
+
+	projects := engine.NewController("project-index", KindProjectIndex, c.projectIndex)
+	engine.Watch(projects, toSingleton[project.Project])
+
+	return []*engine.Controller{catalog, expanded, rung, acct, slot, pl, owned, caller, kp, shard, index, up, users, projects}
 }

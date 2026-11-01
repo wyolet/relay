@@ -41,7 +41,7 @@ func fuzzBearerSeeds(valid string) []string {
 func FuzzTokenPrincipal(f *testing.F) {
 	fx := newPrincipalFixture()
 	st := fx.stack(f)
-	snap := st.cat.Current()
+	root := st.plans.Root()
 
 	wantJTI := meta.NewID()
 	valid := fx.mint(f, func(c *crypto.TokenClaims) { c.Jti = wantJTI })
@@ -62,7 +62,7 @@ func FuzzTokenPrincipal(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, bearer string) {
 		w := httptest.NewRecorder()
-		p, ok := tokenPrincipal(w, snap, fx.tokens, bearer)
+		p, ok := tokenPrincipal(w, st.auth, root, bearer)
 		if !ok {
 			if p != nil {
 				t.Fatalf("rejected bearer %q still returned a principal", bearer)

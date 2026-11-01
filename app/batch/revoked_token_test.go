@@ -9,109 +9,53 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/binding"
-	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan/plantest"
+	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	"github.com/wyolet/relay/pkg/slug"
 	pkgrelay "github.com/wyolet/relay/sdk/v1"
 )
 
-type catSnapReader struct{ cat *appcatalog.Catalog }
-
-func (r catSnapReader) Policy(_ context.Context, id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
-}
-func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
-}
-
-// The fixture's one live credential: a personal key, and the user's token
-// version a token submission is checked against.
-const (
-	fixtureKeyHash = "fixture-key-hash"
-	fixtureUser    = "u-1"
-)
-
-type fixtureVersions map[string]int
-
-func (v fixtureVersions) TokenVersionsAndDisabled(context.Context) (map[string]int, map[string]struct{}, error) {
-	return v, nil, nil
+// fixture is a Runner over published plans: one model served at one host through a system-owned credential, one user and that user's key.
+type fixture struct {
+	rn      *Runner
+	revoked *revocation.List
+	userID  string
+	key     *key.Key
 }
 
 // keyAttr and tokenAttr are submissions by the fixture's key and its user.
-func keyAttr() Attribution {
-	return Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: fixtureUser, CredentialKind: inference.CredentialKey}
+func (f *fixture) keyAttr() Attribution {
+	return Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: f.userID, CredentialKind: inference.CredentialKey, CredentialID: f.key.Meta.ID}
 }
 
-func tokenAttr(teamID, jti string) Attribution {
-	return Attribution{TeamID: teamID, PrincipalKind: string(key.PrincipalUser), PrincipalID: fixtureUser,
-		CredentialKind: inference.CredentialToken, CredentialID: jti}
+func (f *fixture) tokenAttr(jti string) Attribution {
+	return Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: f.userID, CredentialKind: inference.CredentialToken, CredentialID: jti}
 }
 
-// runnerFixture wires a Runner over an in-memory catalog and a pipeline whose
-// reservation runs against kv.Mem, so a batch item reaches the same inbound
-// Reserve a live request does.
-func runnerFixture(t *testing.T) (*Runner, kv.Store, string) {
+// runnerFixture wires a Runner whose pipeline counts on kv.Mem, against a host at baseURL.
+func runnerFixture(t *testing.T, baseURL string) *fixture {
 	t.Helper()
-	provID, hostID, hkID, modID, polID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
-
-	prov := &provider.Provider{Meta: meta.Metadata{ID: provID, Name: "vendor", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	h := &host.Host{
-		Meta: meta.Metadata{ID: hostID, Name: "vendor", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: host.Spec{BaseURL: "http://upstream.invalid", NoAuth: true},
-	}
-	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: hkID, Name: "hk", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
-		Spec: hostkey.Spec{HostID: hostID, PolicyID: polID, Value: "sk-test", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
-	}
-	m := &model.Model{
-		Meta: meta.Metadata{ID: modID, Name: "test-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: slug.From("test-model")}}, Pointer: slug.From("test-model")},
-	}
-	b := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "test-model-binding", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
-	}
-	pol := &policy.Policy{
-		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
-		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
-	}
-
-	rk := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerUser, ID: fixtureUser}},
-		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: fixtureUser}, KeyHash: fixtureKeyHash},
-	}
-	cat := catalogtest.Catalog{
-		Providers: []*provider.Provider{prov},
-		Hosts:     []*host.Host{h},
-		Policies:  []*policy.Policy{pol},
-		Models:    []*model.Model{m},
-		HostKeys:  []*hostkey.HostKey{hk},
-		Keys:      []*key.Key{rk},
-		Bindings:  []*binding.Binding{b},
-	}.New()
-	cat.UseTokenVersions(fixtureVersions{fixtureUser: 0})
-	if err := cat.Reload(t.Context()); err != nil {
-		t.Fatalf("catalog reload: %v", err)
-	}
+	var w plantest.World
+	prov := w.Provider("vendor")
+	h := w.Host("vendor", baseURL)
+	m := w.Model(prov, "test-model")
+	w.Bind(m, h, adapters.OpenAI)
+	w.Credential(h, nil, plantest.System, "sk-test")
+	u := w.User()
+	k := w.UserKey(u, "rk-secret")
+	k.Meta.Name = "rk"
+	plans := w.Load(t)
 
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
-	svc := policy.NewService(catSnapReader{cat: cat}, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), nil))
+	pkgratelimit.RegisterScripts(mem)
+	revoked := revocation.New(mem)
 
 	spec := (&adapter.Spec{
 		Name:        adapters.OpenAI,
@@ -119,44 +63,44 @@ func runnerFixture(t *testing.T) (*Runner, kv.Store, string) {
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		Translator:  pkgrelay.IdentityTranslator{},
 	}).Build()
-
-	return &Runner{
-		Resolver: routing.New(cat),
-		Pipeline: &pipeline.Pipeline{Policy: svc, Logger: slog.Default()},
-		Specs:    adapter.NewRegistry(spec),
-		Catalog:  cat,
-	}, mem, polID
+	return &fixture{
+		rn: &Runner{
+			Auth: &inference.Auth{Plans: plans.Holder, Revoked: revoked.Set()},
+			Pipeline: &pipeline.Pipeline{
+				Limiter:  lua.New(pkgratelimit.New(mem, slog.Default(), nil)),
+				Selector: keypool.New(mem, slog.Default(), nil, nil),
+				Logger:   slog.Default(),
+			},
+			Specs: adapter.NewRegistry(spec),
+		},
+		revoked: revoked,
+		userID:  u.ID,
+		key:     k,
+	}
 }
 
-// TestRunRevokedTokenItemFails: a token revoked after submit must stop its
-// already-queued items, which only happens if the runner carries the jti the
-// inbound reservation checks.
+// A token revoked after submit stops its already-queued items, from the in-memory revoked set; an unrevoked token gets past authentication and only then fails on the unreachable upstream.
 func TestRunRevokedTokenItemFails(t *testing.T) {
-	rn, mem, policyID := runnerFixture(t)
-	const teamID, jti = "team-1", "jti-1"
+	f := runnerFixture(t, "http://upstream.invalid")
 	ctx := context.Background()
-	if err := mem.Set(ctx, policy.RevokedKey(teamID, jti), []byte("1"), time.Hour); err != nil {
+	if err := f.revoked.Revoke(ctx, "jti-1", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
+	body := []byte(`{"model":"test-model"}`)
 
-	_, _, err := rn.Run(ctx, "item-1", "", policyID, TokenClaims{JTI: jti}, tokenAttr(teamID, jti), adapters.OpenAI, []byte(`{"model":"test-model"}`))
-	if !errors.Is(err, pkgratelimit.ErrRevoked) {
-		t.Fatalf("err = %v, want ErrRevoked", err)
+	_, _, err := f.rn.Run(ctx, "item-1", "", TokenClaims{JTI: "jti-1"}, f.tokenAttr("jti-1"), adapters.OpenAI, body)
+	if !errors.Is(err, ErrCredentialInvalid) {
+		t.Fatalf("err = %v, want ErrCredentialInvalid", err)
 	}
-
-	// A live (unrevoked) token gets past the reservation and only then fails
-	// on the unreachable upstream — the check is that token's, not blanket.
-	_, _, err = rn.Run(ctx, "item-2", "", policyID, TokenClaims{JTI: "jti-live"}, tokenAttr(teamID, "jti-live"), adapters.OpenAI, []byte(`{"model":"test-model"}`))
-	if errors.Is(err, pkgratelimit.ErrRevoked) {
-		t.Fatalf("unrevoked token refused: %v", err)
+	_, _, err = f.rn.Run(ctx, "item-2", "", TokenClaims{JTI: "jti-live"}, f.tokenAttr("jti-live"), adapters.OpenAI, body)
+	if err == nil || errors.Is(err, ErrCredentialInvalid) {
+		t.Fatalf("unrevoked token: err = %v, want the upstream failure", err)
 	}
 }
 
-// A queued item runs under the credential that submitted it, so that
-// credential has to still be valid when the item runs — the same checks a
-// long-lived WebSocket repeats per frame.
+// A queued item runs under the credential that submitted it, so that credential has to still be valid when the item runs — the same checks a long-lived WebSocket repeats per frame.
 func TestRunRefusesItemsWhoseCredentialLapsed(t *testing.T) {
-	rn, _, policyID := runnerFixture(t)
+	f := runnerFixture(t, "http://upstream.invalid")
 	ctx := context.Background()
 	body := []byte(`{"model":"test-model"}`)
 	cases := map[string]struct {
@@ -164,16 +108,16 @@ func TestRunRefusesItemsWhoseCredentialLapsed(t *testing.T) {
 		tok  TokenClaims
 		attr Attribution
 	}{
-		"key no longer in the catalog": {hash: "gone-key-hash", attr: keyAttr()},
-		"token from before revoke-all": {tok: TokenClaims{JTI: "j", Version: 7}, attr: tokenAttr("", "j")},
-		"token past its expiry":        {tok: TokenClaims{JTI: "j", Expires: time.Now().Add(-time.Minute).Unix()}, attr: tokenAttr("", "j")},
+		"key no longer published":      {hash: "gone-key-hash", attr: f.keyAttr()},
+		"token from before revoke-all": {tok: TokenClaims{JTI: "j", Version: 7}, attr: f.tokenAttr("j")},
+		"token past its expiry":        {tok: TokenClaims{JTI: "j", Expires: time.Now().Add(-time.Minute).Unix()}, attr: f.tokenAttr("j")},
 	}
 	for name, tc := range cases {
-		if _, _, err := rn.Run(ctx, "item", tc.hash, policyID, tc.tok, tc.attr, adapters.OpenAI, body); !errors.Is(err, ErrCredentialInvalid) {
+		if _, _, err := f.rn.Run(ctx, "item", tc.hash, tc.tok, tc.attr, adapters.OpenAI, body); !errors.Is(err, ErrCredentialInvalid) {
 			t.Errorf("%s: err = %v, want ErrCredentialInvalid", name, err)
 		}
 	}
-	if _, _, err := rn.Run(ctx, "item", fixtureKeyHash, policyID, TokenClaims{}, keyAttr(), adapters.OpenAI, body); errors.Is(err, ErrCredentialInvalid) {
+	if _, _, err := f.rn.Run(ctx, "item", f.key.Spec.KeyHash, TokenClaims{}, f.keyAttr(), adapters.OpenAI, body); errors.Is(err, ErrCredentialInvalid) {
 		t.Errorf("live key refused: %v", err)
 	}
 }
