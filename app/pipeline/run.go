@@ -42,7 +42,7 @@ type runState struct {
 
 // Run orchestrates one request over req.Hops. Caller MUST Close the returned Result.Body to release the connection and trigger post-flight.
 //
-// A refusal on a caller counter ends the request; one on an upstream counter skips that credential (cooling its account when the account's counter refused) and the walk goes on. An upstream 429 on a credential in an account cools the account for the request's model, so the walk skips the account's other credentials. Reservations never reaching the upstream are released, ones that reached it and failed are settled with no usage, and the served one is settled in post-flight with the real tokens and cost.
+// A refusal on a caller counter ends the request; one on an upstream counter skips that credential (cooling its account when the account's counter refused) and the walk goes on. An upstream 429 on a credential in an explicit (not default) account cools the account for the request's model, so the walk skips the account's other credentials. Reservations never reaching the upstream are released, ones that reached it and failed are settled with no usage, and the served one is settled in post-flight with the real tokens and cost.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	st := &runState{}
 	defer func() {
@@ -284,9 +284,9 @@ const (
 	maxRateLimitCooldown = time.Minute
 )
 
-// coolAccountModel cools the slot's account for the model on an upstream rate limit and reports whether it did. An account's credentials share its capacity, so a sibling would meet the same 429; a credential with no account is left to its own breaker.
+// coolAccountModel cools the slot's account for the model on an upstream rate limit and reports whether it did. An explicit account's credentials share its capacity, so a sibling would meet the same 429. A credential with no account, or in its owner's default account (keys grouped by owner, not known to share capacity), is left to its own breaker so its siblings still fail over.
 func coolAccountModel(s *plan.KeySlot, modelID string, kind keypool.FailureKind, retryAfter time.Duration) bool {
-	if s.Account == nil || (kind != keypool.FailureRateLimitShort && kind != keypool.FailureRateLimitLong) {
+	if s.Account == nil || s.Account.Default || (kind != keypool.FailureRateLimitShort && kind != keypool.FailureRateLimitLong) {
 		return false
 	}
 	if retryAfter <= 0 {

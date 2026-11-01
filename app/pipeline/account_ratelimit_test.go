@@ -215,6 +215,39 @@ func TestUpstream429WithoutAccountTripsBreaker(t *testing.T) {
 	noBreakerRecord(t, p.Selector, "hash-b")
 }
 
+// A default account groups its owner's keys without declaring one provider org: a 429 on key a trips a's breaker, key b in the same account serves, and the account does not cool.
+func TestUpstream429InDefaultAccountTripsBreaker(t *testing.T) {
+	t.Parallel()
+	p := newPipeline()
+	adp := &statusAdapter{status: http.StatusTooManyRequests, retryAfter: 30 * time.Second,
+		failing: func(key, _ string) bool { return key == "a" }}
+	first, _ := accountRoute()
+	first.Slots[0].Account.Default = true
+	hops := []plan.RouteHop{first}
+
+	res, err := runModel(t, p, adp, hops, modelM)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := adp.take(); got != "a/m b/m" || res.KeyHash != "hash-b" {
+		t.Fatalf("calls %q served by %s, want a/m b/m served by hash-b", got, res.KeyHash)
+	}
+	if first.Slots[0].Account.Cooldown.Cooled(time.Now().UnixMilli(), modelM.Meta.ID) {
+		t.Fatal("the default account is cooling")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rec, found := p.Selector.ReadCircuit(context.Background(), "hash-a")
+		if found && rec.State == keypool.CircuitOpen && rec.Reason == keypool.ReasonUpstreamRateLimited {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("breaker of hash-a = %+v (found %v), want open for the rate limit", rec, found)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // Failures other than a rate limit never cool the account: a billing refusal (402) stops the request as before and the next one reaches key a again; a 403 moves on to key b in the same account.
 func TestNonRateLimitFailureDoesNotCoolAccount(t *testing.T) {
 	t.Parallel()
