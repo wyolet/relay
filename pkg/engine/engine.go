@@ -53,9 +53,10 @@ type state struct {
 
 // outState is what the engine remembers about one output between reconciles.
 type outState struct {
-	edges    []Edge
-	links    []cell.Key
-	failures int
+	edges     []Edge
+	links     []cell.Key
+	failures  int
+	retryNext bool // the last failure was ErrRetry: retry on the next drain too
 }
 
 // Options holds the knobs the composition root sets.
