@@ -68,6 +68,24 @@ app.kubernetes.io/part-of: relay
 {{- define "relay.postgresql.fullname" -}}{{ printf "%s-postgresql" (include "relay.fullname" .) }}{{- end -}}
 {{- define "relay.clickhouse.fullname" -}}{{ printf "%s-clickhouse" (include "relay.fullname" .) }}{{- end -}}
 {{- define "relay.valkey.fullname" -}}{{ printf "%s-valkey" (include "relay.fullname" .) }}{{- end -}}
+{{- define "relay.dragonfly.fullname" -}}{{ printf "%s-dragonfly" (include "relay.fullname" .) }}{{- end -}}
+
+{{/* Dragonfly threads: dragonfly.threads, else the whole CPUs of its CPU
+     limit (at least 1). Each thread needs 256 MiB of maxmemory. */}}
+{{- define "relay.dragonfly.threads" -}}
+{{- if .Values.dragonfly.threads -}}
+{{- .Values.dragonfly.threads -}}
+{{- else -}}
+{{- $cpu := toString (dig "limits" "cpu" "1" (.Values.dragonfly.resources | default dict)) -}}
+{{- $n := 0 -}}
+{{- if hasSuffix "m" $cpu -}}
+{{- $n = div (atoi (trimSuffix "m" $cpu)) 1000 -}}
+{{- else -}}
+{{- $n = int (floor (float64 $cpu)) -}}
+{{- end -}}
+{{- max 1 $n -}}
+{{- end -}}
+{{- end -}}
 
 {{/* Secret name (existing or chart-managed) */}}
 {{- define "relay.secretName" -}}
@@ -106,7 +124,11 @@ app.kubernetes.io/part-of: relay
 {{/* RELAY_REDIS_PASSWORD for the chart-managed Secret. Derived from the
      master key when unset so helm template / GitOps renders stay stable. */}}
 {{- define "relay.redisPassword" -}}
-{{- if .Values.valkey.enabled -}}
+{{- if .Values.dragonfly.enabled -}}
+{{- if .Values.dragonfly.auth.enabled -}}
+{{- .Values.dragonfly.auth.password | default (printf "relay-dragonfly:%s" .Values.secrets.masterKey | sha256sum) -}}
+{{- end -}}
+{{- else if .Values.valkey.enabled -}}
 {{- if .Values.valkey.auth.enabled -}}
 {{- .Values.valkey.auth.password | default (printf "relay-valkey:%s" .Values.secrets.masterKey | sha256sum) -}}
 {{- end -}}
@@ -141,7 +163,7 @@ app.kubernetes.io/part-of: relay
     secretKeyRef:
       name: {{ include "relay.secretName" . }}
       key: RELAY_PG_DSN
-# Optional: an existingSecret without the key keeps Valkey passwordless.
+# Optional: an existingSecret without the key keeps the store passwordless.
 - name: RELAY_REDIS_PASSWORD
   valueFrom:
     secretKeyRef:
@@ -169,9 +191,11 @@ app.kubernetes.io/part-of: relay
 {{- end }}
 {{- end -}}
 
-{{/* RELAY_REDIS_ADDR (bundled Valkey or external) */}}
+{{/* RELAY_REDIS_ADDR (bundled Dragonfly, bundled Valkey, or external) */}}
 {{- define "relay.redisAddr" -}}
-{{- if .Values.valkey.enabled -}}
+{{- if .Values.dragonfly.enabled -}}
+{{- printf "%s%s:6379" (include "relay.dragonfly.fullname" .) (include "relay.svcSuffix" .) -}}
+{{- else if .Values.valkey.enabled -}}
 {{- printf "%s%s:6379" (include "relay.valkey.fullname" .) (include "relay.svcSuffix" .) -}}
 {{- else -}}
 {{- .Values.external.redisAddr -}}

@@ -3,7 +3,7 @@ Relay {{ .Chart.AppVersion }} deployed as "{{ .Release.Name }}" in namespace "{{
 Data stores (relay owns these — NOT the shared platform Postgres):
   Postgres:   {{ if .Values.postgresql.enabled }}bundled ({{ include "relay.postgresql.fullname" . }}:5432){{ else }}external ({{ .Values.external.pgDsn | default "MISSING external.pgDsn" }}){{ end }}
   ClickHouse: {{ if .Values.clickhouse.enabled }}bundled ({{ include "relay.clickhouse.fullname" . }}:9000){{ else }}{{ .Values.external.chDsn | default "disabled" }}{{ end }}
-  Valkey:     {{ if .Values.valkey.enabled }}bundled ({{ include "relay.valkey.fullname" . }}:6379){{ else }}{{ .Values.external.redisAddr | default "disabled (state=memory)" }}{{ end }}
+  KV store:   {{ if .Values.dragonfly.enabled }}bundled Dragonfly ({{ include "relay.dragonfly.fullname" . }}:6379){{ else if .Values.valkey.enabled }}bundled Valkey ({{ include "relay.valkey.fullname" . }}:6379){{ else }}{{ .Values.external.redisAddr | default "disabled (state=memory)" }}{{ end }}
 
 {{ if and .Values.migrations.job.enabled .Release.IsUpgrade -}}
 Postgres was migrated by the {{ include "relay.fullname" . }}-migrate Job before the pods rolled; they start with RELAY_MIGRATE_ON_BOOT=off.

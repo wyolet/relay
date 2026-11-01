@@ -6,6 +6,8 @@ var ValidDistinct = []string{
 	"relay_key",
 	"principal_id",
 	"credential_id",
+	"pool_id",
+	"account_id",
 	"project_id",
 	"team_id",
 	"model_id",

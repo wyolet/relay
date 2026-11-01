@@ -3,7 +3,7 @@ name: relay
 description: |
   Wyolet Relay — high-throughput LLM router. Single self-migrating binary serving
   the inference (data) plane and the control plane, with its OWN bundled
-  PostgreSQL (config truth), ClickHouse (usage/payload events), and Valkey
+  PostgreSQL (config truth), ClickHouse (usage/payload events), and Dragonfly
   (hot state + rate-limit counters). Relay never shares the platform's managed
   Postgres — it provisions and owns its data stores.
 type: application

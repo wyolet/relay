@@ -19,16 +19,16 @@ Relay keys and host keys never meet on the wire: a caller presents a relay key, 
 Tenancy has three levels:
 
 - A **team** is the outer scope. It has no member list: a user belongs to a team through a role binding at team scope.
-- A **project** belongs to one team. Policies, rate limits, host keys, service accounts, policy bindings and service-account keys can be owned by a project.
+- A **project** belongs to one team. Policies, policy bindings, rate limits, budgets, host keys, accounts, pools, service accounts and service-account keys can be owned by a project. A team can own policies, policy bindings, rate limits, budgets, host keys, accounts and pools.
 - A **principal** is who a request acts as: a **user** (a person, from local config, [SSO](/concepts/sso) or [SCIM](/concepts/scim)) or a **service account** (a machine principal that lives in one project).
 
 A relay key is a credential of one principal, named in `spec.principal` (`{kind: serviceaccount | user, ...}`). Rotating, revoking or deleting a key leaves the principal and everything bound to it untouched.
 
 - A **service account's key** belongs to the account's project. Its requests are attributed to that project and team.
-- A **user's key** (a personal key) belongs to the user. It carries no project unless its own policy is owned by a project; then its requests carry that project's attribution and limits.
+- A **user's key** (a personal key) belongs to the user and carries no project.
 - An **inference token** is minted for a user in one project, and its requests are attributed to that project.
 
-The [policy](/concepts/policies) that governs a request is the credential's own `policyId`, else the service account's `policyId`, else the first of the project's policy bindings that names one of the principal's subjects, ordered by `priority` (lower wins, default `100`) and then by name. A project-scoped credential that resolves no policy is refused with `403`. A personal key with no project and no policy is served only under `RELAY_AUTHZ=single` with `allowMissingPolicy: true` in the `inference` settings section.
+Keys and tokens hold no policy. A request is governed by the [policy ladder](/concepts/policies#the-ladder): the policies bound to the principal, its project and its team on the caller side, and to the host, account and host key on the upstream side. A service account's key passes its project's and team's rungs; an inference token passes the rungs of the project it was minted for; a personal key passes only the user's own rung, through system-owned bindings. A principal with no caller policy still reaches the host keys its own scopes own; see [Reach without a caller policy](/concepts/policies#reach-without-a-caller-policy).
 
 Teams, projects, service accounts, keys and bindings are ordinary resources: create them through the [control API](/reference/control-api) or declare them as manifests and [apply them from git](/concepts/gitops).
 
@@ -98,6 +98,8 @@ A **host key** is an upstream credential, such as your OpenAI or Anthropic API k
 
 An env reference is read from the relay process's environment. Names starting with `RELAY_` or `WYOLET_` are refused, because a host key's value is sent to its host and those names hold Relay's own configuration.
 
+A host key names the provider [account](/concepts/key-pooling#accounts) it belongs to in `accountId`, so that the account's tier limits count across all of its keys; a key saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host. Policies reach host keys through [pools](/concepts/key-pooling#pools), through a direct link, or through ownership.
+
 A stored value is encrypted under a data key of the host key's owner, and the data keys are wrapped by `RELAY_MASTER_KEY`; only ciphertext reaches the database, and reads never return the value. `POST /api/host-keys/by-id/{id}/rotate` replaces a stored value. See [Stored secrets and key rotation](/concepts/secret-keys) for the scheme and the rotation procedures.
 
 <Warning>
@@ -147,7 +149,7 @@ Under `single`, OIDC with `registration: open` makes every user your identity pr
 
 Two rules need no binding:
 
-- **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every verb on it. Keys, policies, host keys and rate limits can be personal. Providers, hosts, models, host bindings and pricings are shared catalog data that no user, team or project can own: writing one takes `admin` or `catalog-editor`, and a request that names such an owner for one is refused with `400`.
+- **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every verb on it. Keys, policies, host keys, rate limits, budgets, accounts and pools can be personal. Providers, hosts, models, host bindings and pricings are shared catalog data that no user, team or project can own: writing one takes `admin` or `catalog-editor`, and a request that names such an owner for one is refused with `400`.
 - **Catalog reads.** Providers, hosts, models, host bindings, pricings and system rate limits are readable by any authenticated caller. Changing them needs a binding and still passes the governance settings.
 
 A row whose project or team is disabled or deleted falls back to `[global]`, so only an admin can reach it to repair it.
@@ -161,8 +163,8 @@ Seeded as system rows on boot. Bind them; they cannot be edited through the API.
 | `admin` | global | Every verb on every kind |
 | `auditor` | global | Read the audit log, usage and request logs |
 | `catalog-editor` | global | Change providers, hosts, models, host bindings, pricings and rate limits |
-| `team-admin` | team | Everything on the team's projects, policies, keys, service accounts, host keys, rate limits and bindings; update the team; mint and revoke tokens; `apply`; read usage and logs |
-| `project-admin` | project | Everything on the project's policies, keys, service accounts, host keys, rate limits and bindings; update or delete the project; mint and revoke tokens; read usage and logs |
+| `team-admin` | team | Everything on the team's projects, policies, keys, service accounts, host keys, rate limits, budgets, accounts, pools and bindings; update the team; mint and revoke tokens; `apply`; read usage and logs |
+| `project-admin` | project | Everything on the project's policies, keys, service accounts, host keys, rate limits, budgets, accounts, pools and bindings; update or delete the project; mint and revoke tokens; read usage and logs |
 | `developer` | project | Read the project's configuration; manage its keys and service accounts; mint tokens; read usage and logs |
 | `viewer` | project or team | Read-only, plus usage |
 
@@ -205,7 +207,7 @@ spec:
       verbs: [read]
 ```
 
-`kinds` are `audit debug groups host-bindings host-keys hosts keys license logs master-key models policies policy-bindings pricings projects providers rate-limits role-bindings roles scim-clients secret-keys service-accounts settings system teams tokens usage users`, plus `*`. `verbs` are `apply attach create delete destroy detach generate get health list mint read reload revoke rewrap rotate snapshot update`, plus `*`.
+`kinds` are `accounts audit budgets debug groups host-bindings host-keys hosts keys license logs master-key models policies policy-bindings pools pricings projects providers rate-limits role-bindings roles scim-clients secret-keys service-accounts settings system teams tokens usage users`, plus `*`. `verbs` are `apply attach create delete destroy detach generate get health list mint read reload revoke rewrap rotate snapshot update`, plus `*`.
 
 ### Groups
 

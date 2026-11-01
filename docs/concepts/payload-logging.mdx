@@ -18,11 +18,11 @@ Bodies hold prompts and completions, which are often sensitive. Turn capture on 
     `PUT /api/settings/payload-logging` with `enabled: true` and a backend. While `enabled` is false nothing is captured, whatever the policies say.
   </Step>
   <Step title="Opt in on the policy">
-    Set `payloadLoggingEnabled: true` on the [policy](/concepts/policies) that governs the traffic. The policy decides, whatever the relay key's own `payloadLoggingEnabled` says. Only a relay key that no policy governs opts in with its own flag.
+    Set `payloadLoggingEnabled: true` on the [policy](/concepts/policies) that governs the traffic. The policy decides, whatever the relay key's own `payloadLoggingEnabled` says. Only a relay key with no caller policy opts in with its own flag.
   </Step>
 </Steps>
 
-The governing policy is the one inference resolves: the relay key's own policy, else its service account's, else the first of the project's policy bindings, in priority order, that names the caller. The rule is the same for normal and [proxy-mode](/concepts/proxy-mode) requests and for WebSocket frames. To capture everything a policy governs, set the flag on that policy. To capture a single key's traffic, give that key a policy of its own with the flag set.
+The governing policy is the innermost caller policy on the [ladder](/concepts/policies#the-ladder): the one bound to the principal, else the project's, else the team's. The rule is the same for normal and [proxy-mode](/concepts/proxy-mode) requests and for WebSocket frames. To capture everything a policy governs, set the flag on that policy. To capture one service account's traffic, bind it a policy of its own with the flag set.
 
 ```bash
 # 1. Turn capture on and pick a backend.

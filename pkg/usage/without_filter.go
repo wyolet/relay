@@ -4,6 +4,8 @@ package usage
 var dimFilters = map[string]func(*EventQuery){
 	"relay_key_hash": func(q *EventQuery) { q.RelayKeyHash = nil },
 	"policy_id":      func(q *EventQuery) { q.PolicyID = nil },
+	"pool_id":        func(q *EventQuery) { q.PoolID = nil },
+	"account_id":     func(q *EventQuery) { q.AccountID = nil },
 	"model_id":       func(q *EventQuery) { q.ModelID = nil },
 	"host_id":        func(q *EventQuery) { q.HostID = nil },
 	"host_key_id":    func(q *EventQuery) { q.HostKeyID = nil },

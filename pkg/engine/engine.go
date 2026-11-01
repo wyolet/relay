@@ -21,8 +21,9 @@ type Engine struct {
 	mu        sync.Mutex // the write side: everything below until qmu
 	st        state
 	retries   map[Ref]time.Time // failed outputs and when to retry them
+	abandoned map[Ref]struct{}  // outputs an abandoned batch left dirty, for the next Resync
 	fetchWake time.Time
-	resyncDue bool
+	resyncAt  time.Time // when the loop runs a scheduled Resync; zero when none
 	stopped   bool
 
 	qmu   sync.Mutex
@@ -43,7 +44,7 @@ type Engine struct {
 // state is the working copy the drain goroutine edits; publish freezes it.
 type state struct {
 	objs   []shardWriter[string, obj]
-	names  []shardWriter[string, []string]
+	names  []shardWriter[string, map[string]struct{}] // name → ids holding it
 	graph  graph
 	issues issueStore
 	outs   map[Ref]*outState
@@ -52,9 +53,10 @@ type state struct {
 
 // outState is what the engine remembers about one output between reconciles.
 type outState struct {
-	edges    []Edge
-	links    []cell.Key
-	failures int
+	edges     []Edge
+	links     []cell.Key
+	failures  int
+	retryNext bool // the last failure was ErrRetry: retry on the next drain too
 }
 
 // Options holds the knobs the composition root sets.
@@ -63,7 +65,8 @@ type Options struct {
 	// on every event.
 	Debounce time.Duration
 	// MaxRounds bounds the fixpoint loop per drained batch (default 8); past
-	// it the remaining dirty outputs are abandoned and a Resync scheduled.
+	// it the batch publishes, the outputs still dirty keep their last output
+	// with an issue, and a Resync is scheduled to reconcile them again.
 	MaxRounds int
 	Hooks     Hooks
 	Cells     cell.Linker // the cell registry; nil disables Txn.Link
@@ -107,15 +110,16 @@ func New(o Options) *Engine {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{
-		opts:     o,
-		sch:      newSchema(),
-		retries:  map[Ref]time.Time{},
-		queue:    map[Ref]Event{},
-		wake:     make(chan struct{}, 1),
-		closing:  make(chan struct{}),
-		loopDone: make(chan struct{}),
-		ctx:      ctx,
-		cancel:   cancel,
+		opts:      o,
+		sch:       newSchema(),
+		retries:   map[Ref]time.Time{},
+		abandoned: map[Ref]struct{}{},
+		queue:     map[Ref]Event{},
+		wake:      make(chan struct{}, 1),
+		closing:   make(chan struct{}),
+		loopDone:  make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 	e.hooks.init()
 	e.view.Store(emptyView(e.sch))
@@ -179,7 +183,7 @@ func (e *Engine) reset() {
 	n := len(e.sch.kinds)
 	e.st = state{
 		objs:   make([]shardWriter[string, obj], n),
-		names:  make([]shardWriter[string, []string], n),
+		names:  make([]shardWriter[string, map[string]struct{}], n),
 		graph:  newGraph(),
 		issues: newIssueStore(),
 		outs:   map[Ref]*outState{},
@@ -187,7 +191,7 @@ func (e *Engine) reset() {
 	}
 	for i, k := range e.sch.kinds {
 		e.st.objs[i].cur = newShardMap[string, obj](k.shards)
-		e.st.names[i].cur = newShardMap[string, []string](k.shards)
+		e.st.names[i].cur = newShardMap[string, map[string]struct{}](k.shards)
 	}
 	for _, c := range e.sch.ctls {
 		clear(c.dirty)
@@ -196,6 +200,7 @@ func (e *Engine) reset() {
 		}
 	}
 	clear(e.retries)
+	clear(e.abandoned)
 	e.view.Store(emptyView(e.sch))
 }
 

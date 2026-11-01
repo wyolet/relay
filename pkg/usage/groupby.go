@@ -9,6 +9,8 @@ import "strings"
 var ValidGroupBy = []string{
 	"relay_key_hash",
 	"policy_id",
+	"pool_id",
+	"account_id",
 	"model_id",
 	"host_id",
 	"host_key_id",
@@ -102,6 +104,10 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.RelayKeyHash
 	case "policy_id":
 		return ev.PolicyID
+	case "pool_id":
+		return ev.PoolID
+	case "account_id":
+		return ev.AccountID
 	case "project_id":
 		return ev.ProjectID
 	case "team_id":
