@@ -1,9 +1,9 @@
 //go:build integration
 
 // store_integration_test.go covers the Policy store against a real Postgres:
-// Upsert fans a single row out across `policies`, `policy_models` and
-// `policy_host_keys` in one transaction, and the read path reassembles it.
-// There is no fake seam for that — the relational split is the behaviour.
+// Upsert fans a single row out across `policies` and the link junctions in
+// one transaction, and the read path reassembles it. There is no fake seam
+// for that — the relational split is the behaviour.
 // Run with: make test-integration.
 
 package policy_test
@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
@@ -24,13 +23,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-// storeFixture is the row graph a policy needs before it can reference
-// anything: a provider and host, two models, a host key, and a rate limit.
+// storeFixture is the row graph a policy needs before it can link anything:
+// a provider and host, a host key, and two rate limits.
 type storeFixture struct {
 	store          *policy.Store
 	db             storage.DB
 	hostID         string
-	models         []string
 	hostKeyID      string
 	rateLimitID    string
 	otherRateLimit string
@@ -53,17 +51,6 @@ func setupPolicyStore(t *testing.T) (storeFixture, context.Context) {
 		t.Fatalf("upsert host: %v", err)
 	}
 	f := storeFixture{store: policy.NewStore(pool), db: pool, hostID: hst.Meta.ID}
-	ms := model.NewStore(q)
-	for i := 0; i < 2; i++ {
-		md := &model.Model{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: "store-model-" + short(), Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
-			Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "s" + short()}}},
-		}
-		if err := ms.Upsert(ctx, md); err != nil {
-			t.Fatalf("upsert model %d: %v", i, err)
-		}
-		f.models = append(f.models, md.Meta.ID)
-	}
 	rls := ratelimit.NewStore(q)
 	for i, id := range []*string{&f.rateLimitID, &f.otherRateLimit} {
 		rl := &ratelimit.RateLimit{
@@ -78,14 +65,9 @@ func setupPolicyStore(t *testing.T) (storeFixture, context.Context) {
 		}
 		*id = rl.Meta.ID
 	}
-	// A host key needs a host-owned tier policy of its own.
-	tier := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "store-tier-" + short(), Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}}}
-	if err := f.store.Upsert(ctx, tier); err != nil {
-		t.Fatalf("upsert tier policy: %v", err)
-	}
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "store-key-" + short(), Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "STORE_TEST_KEY"}},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "store-key-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "STORE_TEST_KEY"}},
 	}
 	if err := hostkey.NewStore(pool, nil, nil).Upsert(ctx, hk); err != nil {
 		t.Fatalf("upsert host key: %v", err)
@@ -102,9 +84,9 @@ func short() string {
 	return id[len(id)-8:]
 }
 
-// A Policy's membership lists live in junction tables and its rate limit in
-// a column, so a round trip through the store has to reassemble all three —
-// and a rewrite has to replace them rather than accumulate.
+// A Policy's model grant lives in a column and its links in junctions, so a
+// round trip through the store has to reassemble both — and a rewrite has to
+// replace them rather than accumulate.
 func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	f, ctx := setupPolicyStore(t)
 
@@ -112,10 +94,8 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "store-policy-" + short(), DisplayName: "Store Policy", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{
 			Models:                []string{"acme/m", "acme"},
-			ModelIDs:              f.models,
-			HostKeyIDs:            []string{f.hostKeyID},
-			RateLimitID:           f.rateLimitID,
-			KeySelection:          policy.KeySelectionRoundRobin,
+			CredentialIDs:         []string{f.hostKeyID},
+			RateLimits:            []policy.RateLimitLink{{RateLimitID: f.rateLimitID}},
 			PayloadLoggingEnabled: true,
 		},
 	}
@@ -130,20 +110,14 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	if got.Meta.DisplayName != "Store Policy" || got.Meta.Owner.Kind != meta.OwnerUser {
 		t.Errorf("identity round trip = %+v", got.Meta)
 	}
-	if len(got.Spec.ModelIDs) != len(f.models) {
-		t.Errorf("modelIds = %v, want %v", got.Spec.ModelIDs, f.models)
+	if len(got.Spec.CredentialIDs) != 1 || got.Spec.CredentialIDs[0] != f.hostKeyID {
+		t.Errorf("credentialIds = %v, want [%s]", got.Spec.CredentialIDs, f.hostKeyID)
 	}
-	if len(got.Spec.HostKeyIDs) != 1 || got.Spec.HostKeyIDs[0] != f.hostKeyID {
-		t.Errorf("hostKeyIds = %v, want [%s]", got.Spec.HostKeyIDs, f.hostKeyID)
+	if len(got.Spec.RateLimits) != 1 || got.Spec.RateLimits[0].RateLimitID != f.rateLimitID {
+		t.Errorf("rateLimits = %+v", got.Spec.RateLimits)
 	}
-	if got.Spec.RateLimitID != f.rateLimitID {
-		t.Errorf("rateLimitId = %q, want %q", got.Spec.RateLimitID, f.rateLimitID)
-	}
-	if len(got.Spec.Models) != 2 {
-		t.Errorf("models = %v, want the two grants", got.Spec.Models)
-	}
-	if got.Spec.KeySelection != policy.KeySelectionRoundRobin || !got.Spec.PayloadLoggingEnabled {
-		t.Errorf("spec knobs = %+v", got.Spec)
+	if len(got.Spec.Models) != 2 || !got.Spec.PayloadLoggingEnabled {
+		t.Errorf("spec = %+v", got.Spec)
 	}
 	// The stored row must satisfy its own Validate, or the next PUT of it
 	// fails on a value the store itself produced.
@@ -165,18 +139,14 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	if listed == nil {
 		t.Fatal("the policy is missing from List")
 	}
-	if len(listed.Spec.ModelIDs) != len(got.Spec.ModelIDs) || len(listed.Spec.HostKeyIDs) != len(got.Spec.HostKeyIDs) {
+	if len(listed.Spec.CredentialIDs) != 1 || len(listed.Spec.RateLimits) != 1 || len(listed.Spec.Models) != 2 {
 		t.Errorf("List hydration = %+v, want the same as Get %+v", listed.Spec, got.Spec)
 	}
-	if listed.Spec.RateLimitID != f.rateLimitID {
-		t.Errorf("List rateLimitId = %q, want %q", listed.Spec.RateLimitID, f.rateLimitID)
-	}
 
-	// Rewriting with narrower membership replaces the junction rows.
-	p.Spec.ModelIDs = f.models[:1]
-	p.Spec.HostKeyIDs = nil
-	p.Spec.RateLimitID = ""
-	p.Spec.RLBindings = []policy.RLBinding{{Models: []string{"acme/m"}, RateLimitID: f.otherRateLimit}}
+	// Rewriting with other links replaces the junction rows.
+	p.Spec.Models = []string{"acme/m"}
+	p.Spec.CredentialIDs = nil
+	p.Spec.RateLimits = []policy.RateLimitLink{{RateLimitID: f.otherRateLimit, Models: []string{"acme/m"}}}
 	if err := f.store.Upsert(ctx, p); err != nil {
 		t.Fatalf("second Upsert: %v", err)
 	}
@@ -184,17 +154,11 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get after rewrite: %v", err)
 	}
-	if len(got.Spec.ModelIDs) != 1 || got.Spec.ModelIDs[0] != f.models[0] {
-		t.Errorf("modelIds = %v, want only the first model", got.Spec.ModelIDs)
+	if len(got.Spec.Models) != 1 || len(got.Spec.CredentialIDs) != 0 {
+		t.Errorf("spec = %+v, want one model and no credentials", got.Spec)
 	}
-	if len(got.Spec.HostKeyIDs) != 0 {
-		t.Errorf("hostKeyIds = %v, want none", got.Spec.HostKeyIDs)
-	}
-	if got.Spec.RateLimitID != "" {
-		t.Errorf("rateLimitId = %q, want it cleared", got.Spec.RateLimitID)
-	}
-	if len(got.Spec.RLBindings) != 1 || got.Spec.RLBindings[0].RateLimitID != f.otherRateLimit {
-		t.Errorf("rlBindings = %+v, want the per-model binding", got.Spec.RLBindings)
+	if len(got.Spec.RateLimits) != 1 || got.Spec.RateLimits[0].RateLimitID != f.otherRateLimit {
+		t.Errorf("rateLimits = %+v, want only the scoped link", got.Spec.RateLimits)
 	}
 
 	if err := f.store.Delete(ctx, p.Meta.ID); err != nil {

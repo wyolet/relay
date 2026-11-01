@@ -245,24 +245,6 @@ func (q *Queries) DeletePolicyCredentials(ctx context.Context, policyID string) 
 	return err
 }
 
-const deletePolicyHostKeys = `-- name: DeletePolicyHostKeys :exec
-DELETE FROM policy_host_keys WHERE policy_id = $1
-`
-
-func (q *Queries) DeletePolicyHostKeys(ctx context.Context, policyID string) error {
-	_, err := q.db.Exec(ctx, deletePolicyHostKeys, policyID)
-	return err
-}
-
-const deletePolicyModels = `-- name: DeletePolicyModels :exec
-DELETE FROM policy_models WHERE policy_id = $1
-`
-
-func (q *Queries) DeletePolicyModels(ctx context.Context, policyID string) error {
-	_, err := q.db.Exec(ctx, deletePolicyModels, policyID)
-	return err
-}
-
 const deletePolicyPools = `-- name: DeletePolicyPools :exec
 DELETE FROM policy_pools WHERE policy_id = $1
 `
@@ -554,7 +536,7 @@ func (q *Queries) GetOverlay(ctx context.Context, arg GetOverlayParams) (Overlay
 }
 
 const getPolicy = `-- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies WHERE id = $1
+SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies WHERE id = $1
 `
 
 type GetPolicyRow struct {
@@ -563,7 +545,6 @@ type GetPolicyRow struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
-	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
 	Models          []byte             `db:"models" json:"models"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
@@ -579,7 +560,6 @@ func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error
 		&i.DisplayName,
 		&i.Metadata,
 		&i.Spec,
-		&i.RateLimitID,
 		&i.Models,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -690,54 +670,6 @@ func (q *Queries) GetPolicyCredentials(ctx context.Context, policyID string) ([]
 	for rows.Next() {
 		var i PolicyCredential
 		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getPolicyHostKeys = `-- name: GetPolicyHostKeys :many
-SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position
-`
-
-func (q *Queries) GetPolicyHostKeys(ctx context.Context, policyID string) ([]PolicyHostKey, error) {
-	rows, err := q.db.Query(ctx, getPolicyHostKeys, policyID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PolicyHostKey
-	for rows.Next() {
-		var i PolicyHostKey
-		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getPolicyModels = `-- name: GetPolicyModels :many
-SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position
-`
-
-func (q *Queries) GetPolicyModels(ctx context.Context, policyID string) ([]PolicyModel, error) {
-	rows, err := q.db.Query(ctx, getPolicyModels, policyID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PolicyModel
-	for rows.Next() {
-		var i PolicyModel
-		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1234,36 +1166,6 @@ type InsertPolicyCredentialParams struct {
 
 func (q *Queries) InsertPolicyCredential(ctx context.Context, arg InsertPolicyCredentialParams) error {
 	_, err := q.db.Exec(ctx, insertPolicyCredential, arg.PolicyID, arg.HostKeyID, arg.Position)
-	return err
-}
-
-const insertPolicyHostKey = `-- name: InsertPolicyHostKey :exec
-INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3)
-`
-
-type InsertPolicyHostKeyParams struct {
-	PolicyID  string `db:"policy_id" json:"policy_id"`
-	HostKeyID string `db:"host_key_id" json:"host_key_id"`
-	Position  int32  `db:"position" json:"position"`
-}
-
-func (q *Queries) InsertPolicyHostKey(ctx context.Context, arg InsertPolicyHostKeyParams) error {
-	_, err := q.db.Exec(ctx, insertPolicyHostKey, arg.PolicyID, arg.HostKeyID, arg.Position)
-	return err
-}
-
-const insertPolicyModel = `-- name: InsertPolicyModel :exec
-INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, $3)
-`
-
-type InsertPolicyModelParams struct {
-	PolicyID string `db:"policy_id" json:"policy_id"`
-	ModelID  string `db:"model_id" json:"model_id"`
-	Position int32  `db:"position" json:"position"`
-}
-
-func (q *Queries) InsertPolicyModel(ctx context.Context, arg InsertPolicyModelParams) error {
-	_, err := q.db.Exec(ctx, insertPolicyModel, arg.PolicyID, arg.ModelID, arg.Position)
 	return err
 }
 
@@ -1927,7 +1829,7 @@ func (q *Queries) ListOverlays(ctx context.Context) ([]Overlay, error) {
 }
 
 const listPolicies = `-- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies ORDER BY name
 `
 
 type ListPoliciesRow struct {
@@ -1936,6 +1838,7 @@ type ListPoliciesRow struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
+	Models          []byte             `db:"models" json:"models"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
@@ -1956,53 +1859,6 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ResourceVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPoliciesWithRateLimit = `-- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies ORDER BY name
-`
-
-type ListPoliciesWithRateLimitRow struct {
-	ID              string             `db:"id" json:"id"`
-	Name            string             `db:"name" json:"name"`
-	DisplayName     string             `db:"display_name" json:"display_name"`
-	Metadata        []byte             `db:"metadata" json:"metadata"`
-	Spec            []byte             `db:"spec" json:"spec"`
-	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
-	Models          []byte             `db:"models" json:"models"`
-	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
-}
-
-func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPoliciesWithRateLimitRow, error) {
-	rows, err := q.db.Query(ctx, listPoliciesWithRateLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListPoliciesWithRateLimitRow
-	for rows.Next() {
-		var i ListPoliciesWithRateLimitRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.Metadata,
-			&i.Spec,
-			&i.RateLimitID,
 			&i.Models,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -2135,54 +1991,6 @@ func (q *Queries) ListPolicyCredentials(ctx context.Context) ([]PolicyCredential
 	for rows.Next() {
 		var i PolicyCredential
 		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPolicyHostKeys = `-- name: ListPolicyHostKeys :many
-SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position
-`
-
-func (q *Queries) ListPolicyHostKeys(ctx context.Context) ([]PolicyHostKey, error) {
-	rows, err := q.db.Query(ctx, listPolicyHostKeys)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PolicyHostKey
-	for rows.Next() {
-		var i PolicyHostKey
-		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPolicyModels = `-- name: ListPolicyModels :many
-SELECT policy_id, model_id, position FROM policy_models ORDER BY policy_id, position
-`
-
-func (q *Queries) ListPolicyModels(ctx context.Context) ([]PolicyModel, error) {
-	rows, err := q.db.Query(ctx, listPolicyModels)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PolicyModel
-	for rows.Next() {
-		var i PolicyModel
-		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3092,20 +2900,6 @@ type SetPolicyModelsParams struct {
 
 func (q *Queries) SetPolicyModels(ctx context.Context, arg SetPolicyModelsParams) error {
 	_, err := q.db.Exec(ctx, setPolicyModels, arg.ID, arg.Models)
-	return err
-}
-
-const setPolicyRateLimit = `-- name: SetPolicyRateLimit :exec
-UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1
-`
-
-type SetPolicyRateLimitParams struct {
-	ID          string      `db:"id" json:"id"`
-	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
-}
-
-func (q *Queries) SetPolicyRateLimit(ctx context.Context, arg SetPolicyRateLimitParams) error {
-	_, err := q.db.Exec(ctx, setPolicyRateLimit, arg.ID, arg.RateLimitID)
 	return err
 }
 

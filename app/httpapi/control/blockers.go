@@ -135,7 +135,7 @@ func (d Deps) droppedLinks(ctx context.Context, kind, id string) (*droppedLinks,
 	}
 	dl := &droppedLinks{groups: groupBlockers(ctx, d.Authz, items)}
 	for _, it := range items {
-		dl.rows = append(dl.rows, audit.Row{Action: "policies.update", Fields: []string{it.Via}, Resource: d.auditResource(it.Kind, it.ID, it.Name, it.owner)})
+		dl.rows = append(dl.rows, audit.Row{Action: authz.Plural(it.Kind) + ".update", Fields: []string{it.Via}, Resource: d.auditResource(it.Kind, it.ID, it.Name, it.owner)})
 	}
 	return dl, nil
 }

@@ -61,7 +61,7 @@ func TestIntegration_DeletedPoolNarrowsAfterReload(t *testing.T) {
 	t.Setenv("LINKS_KEY_VALUE", "sk-links")
 	cred := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "links-key", Owner: system},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "LINKS_KEY_VALUE"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "LINKS_KEY_VALUE"}},
 	}
 	must("upsert credential", stores.HostKey.Upsert(ctx, cred))
 	pl := &pool.Pool{Meta: meta.Metadata{ID: meta.NewID(), Name: "links-pool", Owner: system}, Spec: pool.Spec{HostID: hst.Meta.ID, CredentialIDs: []string{cred.Meta.ID}}}

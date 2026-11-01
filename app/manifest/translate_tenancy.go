@@ -38,7 +38,7 @@ func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 	}
 }
 
-func toBudget(b *BudgetDTO) *team.Budget {
+func toBudget(b *ScopeBudgetDTO) *team.Budget {
 	if b == nil {
 		return nil
 	}
@@ -47,11 +47,11 @@ func toBudget(b *BudgetDTO) *team.Budget {
 	return out
 }
 
-func fromBudget(b *team.Budget) *BudgetDTO {
+func fromBudget(b *team.Budget) *ScopeBudgetDTO {
 	if b == nil {
 		return nil
 	}
-	return &BudgetDTO{Amount: b.Amount, Period: b.Period}
+	return &ScopeBudgetDTO{Amount: b.Amount, Period: b.Period}
 }
 
 // ToTeam translates through the auth module, which makes every team system-owned: a user-owned one would let its author inherit every binding made at its scope.

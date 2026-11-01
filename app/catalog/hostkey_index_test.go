@@ -21,7 +21,7 @@ func TestHostKeysForHostUsesIndex(t *testing.T) {
 		return &hostkey.HostKey{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
 			Spec: hostkey.Spec{
-				HostID: hostID, PolicyID: tier.Meta.ID, Value: "sk", Enabled: enabled,
+				HostID: hostID, Value: "sk", Enabled: enabled,
 				ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored},
 			},
 		}
@@ -63,7 +63,7 @@ func BenchmarkHostKeysForHost(b *testing.B) {
 	for i := 0; i < 64; i++ {
 		keys = append(keys, &hostkey.HostKey{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: string(rune('a'+i%26)) + meta.NewID(), Owner: meta.Owner{Kind: meta.OwnerSystem}},
-			Spec: hostkey.Spec{HostID: hostID, PolicyID: tier.Meta.ID, Value: "sk", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
+			Spec: hostkey.Spec{HostID: hostID, Value: "sk", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
 		})
 	}
 	c := New(provList{}, hostList{h}, polList{tier}, modList{}, keyList(keys), rlList{},

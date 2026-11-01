@@ -141,15 +141,3 @@ func refErr(err error) error {
 	}
 	return err
 }
-
-func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
-	return refErr(refs(d).PolicyRef(ctx, policyID, refOwner))
-}
-
-func checkRateLimitRefVisible(ctx context.Context, d Deps, rateLimitID string, refOwner meta.Owner) error {
-	return refErr(refs(d).RateLimitRef(ctx, rateLimitID, refOwner))
-}
-
-func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string, refOwner meta.Owner) error {
-	return refErr(refs(d).HostKeyRefs(ctx, keyIDs, refOwner))
-}

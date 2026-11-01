@@ -185,7 +185,7 @@ func TestStoreUpsertComparesVersionAtomically(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 
 	pol := f.policy(t, ctx, "versioned-policy", f.projectOwner())
-	hk := f.hostKey(t, ctx, "versioned-host-key", "")
+	hk := f.hostKey(t, ctx, "versioned-host-key")
 	g := &group.Group{Meta: meta.Metadata{ID: meta.NewID(), Name: "versioned-group", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: group.Spec{MemberIDs: []string{f.alice.ID}}}
 	must(t, "upsert group", f.stores.Group.Upsert(ctx, g))
@@ -193,16 +193,16 @@ func TestStoreUpsertComparesVersionAtomically(t *testing.T) {
 	t.Run("policy", func(t *testing.T) {
 		stale, _ := f.stores.Policy.Get(ctx, pol.Meta.ID)
 		fresh, _ := f.stores.Policy.Get(ctx, pol.Meta.ID)
-		fresh.Spec.HostKeyIDs = []string{hk.Meta.ID}
+		fresh.Spec.CredentialIDs = []string{hk.Meta.ID}
 		must(t, "fresh upsert", f.stores.Policy.Upsert(ctx, fresh))
-		stale.Spec.HostKeyIDs = nil
+		stale.Spec.CredentialIDs = nil
 		stale.Spec.Enabled = new(bool)
 		if err := f.stores.Policy.Upsert(ctx, stale); !errors.Is(err, meta.ErrStaleResourceVersion) {
 			t.Fatalf("stale upsert err = %v, want ErrStaleResourceVersion", err)
 		}
 		got, _ := f.stores.Policy.Get(ctx, pol.Meta.ID)
-		if len(got.Spec.HostKeyIDs) != 1 || !got.IsEnabled() {
-			t.Fatalf("stale upsert changed the policy: hostKeyIds=%v enabled=%v", got.Spec.HostKeyIDs, got.IsEnabled())
+		if len(got.Spec.CredentialIDs) != 1 || !got.IsEnabled() {
+			t.Fatalf("stale upsert changed the policy: credentialIds=%v enabled=%v", got.Spec.CredentialIDs, got.IsEnabled())
 		}
 	})
 
@@ -294,21 +294,20 @@ func TestEveryWritePathChangesTheVersion(t *testing.T) {
 	})
 
 	t.Run("detach", func(t *testing.T) {
-		pol := f.policy(t, ctx, "detach-version-policy", f.projectOwner())
-		k := f.projectKey(t, ctx, "detach-key-c", pol.Meta.ID)
-		before := f.keyPolicy(t, ctx, k.Meta.ID)
-		decodeDetach(t, f.detachRow(t, "policies", pol.Meta.ID, false))
-		after := f.keyPolicy(t, ctx, k.Meta.ID)
-		if after.Spec.PolicyID != "" {
-			t.Fatalf("detach left the key on the policy")
+		tier := f.tierOnHost(t, ctx, "detach-version-tier")
+		before, _ := f.stores.Host.Get(ctx, f.host.Meta.ID)
+		decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
+		after, _ := f.stores.Host.Get(ctx, f.host.Meta.ID)
+		if len(after.Spec.Policies) != 0 {
+			t.Fatalf("detach left the tier in the host menu")
 		}
 		if storedVersion(t, after.Meta) == storedVersion(t, before.Meta) {
-			t.Fatalf("detach left the key's version at %s", after.Meta.ResourceVersion)
+			t.Fatalf("detach left the host's version at %s", after.Meta.ResourceVersion)
 		}
 	})
 
 	t.Run("credential status", func(t *testing.T) {
-		hk := f.hostKey(t, ctx, "status-host-key", "")
+		hk := f.hostKey(t, ctx, "status-host-key")
 		before, _ := f.stores.HostKey.Get(ctx, hk.Meta.ID)
 		must(t, "set status", f.stores.HostKey.SetCredentialStatus(ctx, hk.Meta.ID, hostkey.CredentialStatus{}))
 		after, _ := f.stores.HostKey.Get(ctx, hk.Meta.ID)

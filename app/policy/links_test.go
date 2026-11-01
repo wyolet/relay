@@ -51,18 +51,6 @@ func TestValidateLinks(t *testing.T) {
 		{name: "unparseable model scope", edit: func(p *Policy) {
 			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl, Models: []string{"openai/"}}}
 		}, want: "rateLimits[0]"},
-		{name: "rateLimits beside rateLimitId", edit: func(p *Policy) {
-			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl}}
-			p.Spec.RateLimitID = meta.NewID()
-		}, want: "rateLimits replaces"},
-		{name: "rateLimits beside rlBindings", edit: func(p *Policy) {
-			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl}}
-			p.Spec.RLBindings = []RLBinding{{Models: []string{"openai/gpt-4o"}, RateLimitID: meta.NewID()}}
-		}, want: "rateLimits replaces"},
-		{name: "credentialIds beside hostKeyIds", edit: func(p *Policy) {
-			p.Spec.CredentialIDs = []string{meta.NewID()}
-			p.Spec.HostKeyIDs = []string{meta.NewID()}
-		}, want: "credentialIds replaces"},
 		{name: "host tier with pools", edit: func(p *Policy) {
 			p.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}
 			p.Spec.PoolIDs = []string{meta.NewID()}

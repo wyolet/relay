@@ -10,8 +10,8 @@ import (
 )
 
 func TestChannel(t *testing.T) {
-	if got := Channel(); got != "v1alpha2" {
-		t.Fatalf("Channel() = %q, want v1alpha2", got)
+	if got := Channel(); got != "v1alpha3" {
+		t.Fatalf("Channel() = %q, want v1alpha3", got)
 	}
 }
 

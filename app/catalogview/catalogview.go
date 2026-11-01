@@ -24,8 +24,8 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
@@ -62,6 +62,9 @@ type (
 	hostKeyStore interface {
 		List(context.Context) ([]*hostkey.HostKey, error)
 	}
+	poolStore interface {
+		List(context.Context) ([]*pool.Pool, error)
+	}
 )
 
 // Service composes the store reads into views. Construct once with the
@@ -75,6 +78,10 @@ type Service struct {
 	RateLimits rateLimitStore
 	Providers  providerStore
 	HostKeys   hostKeyStore
+	// Pools is optional: without it a policy's pools reach no host.
+	Pools poolStore
+	// Accounts is optional: without it every account projection is a 404.
+	Accounts accountStore
 
 	// Visible optionally scopes rows per owner: policy-rooted projections
 	// 404 on a policy the caller may not see, and host-key / policy rows
@@ -178,7 +185,7 @@ type ModelPriceRow struct {
 
 // ModelPolicyRow — flat: a policy that grants this model. Host-tier policies
 // name their host via Owner; user policies grant across hosts (Owner.Kind
-// "user"). Limits are the rules selected for THIS model (RLBinding/flat).
+// "user"). Limits are the rules every rate limit linked for THIS model adds.
 type ModelPolicyRow struct {
 	ID     string   `json:"id"`
 	Name   string   `json:"name"`
@@ -233,11 +240,10 @@ func (s *Service) ModelPricing(ctx context.Context, ref string) (ModelRef, []Mod
 	return modelRefOf(m), rows, nil
 }
 
-// ModelPolicies returns the policies that grant this model, flat. A policy
-// grants the model when its id is in ModelIDs, it's an implicit wildcard, or
-// a Models DSL ref matches on any host the model is bound to. Limits are the
-// rules SelectRateLimitID picks for the model (resolved to numbers, so this
-// is unaffected by a future limits-table removal).
+// ModelPolicies returns the policies that grant this model, flat: on a host
+// the model is bound to and the policy reaches, its model list is empty or
+// matches. Limits are the rules of every linked rate limit that applies to
+// the model there, resolved to numbers.
 func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []ModelPolicyRow, error) {
 	m, idx, err := s.load(ctx, ref)
 	if err != nil {
@@ -255,12 +261,11 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 		if !granted {
 			continue
 		}
-		rlID, _ := p.SelectRateLimitID(provSlug, m.Meta.Name, hostSlug)
 		rows = append(rows, ModelPolicyRow{
 			ID:     p.Meta.ID,
 			Name:   p.Meta.Name,
 			Owner:  idx.ownerRefOf(p.Meta.Owner),
-			Limits: idx.limitsOf(rlID),
+			Limits: idx.limitsFor(p, provSlug, m.Meta.Name, hostSlug),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
@@ -303,83 +308,4 @@ func (s *Service) HostModels(ctx context.Context, ref string) (HostRef, []HostMo
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Model.Name < rows[j].Model.Name })
 	return hostRefOf(h), rows, nil
-}
-
-// policyGrantsModel mirrors routing's reachability rules so the view shows
-// exactly the policies that could serve this model — not every wildcard.
-//
-//   - explicit ModelIDs grant short-circuits (binding/coverage-agnostic).
-//   - host-tier policies (Owner.Kind=host) apply only to their own host, and
-//     only when that host serves the model.
-//   - customer policies apply only on hosts their hostkeys actually reach
-//     (the coverage gate routing.PolicyAllows enforces).
-//   - wildcard (no ModelIDs/Models) grants non-deprecated models on a
-//     candidate host (deprecated unless IncludeDeprecated); otherwise the
-//     Models DSL must match (provider, model, host).
-//
-// Returns the host slug that satisfied the grant (for per-model RL selection)
-// and, when the grant fails, a human-readable reason (for the ?debug view).
-func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug string, modelHosts map[string]string) (string, bool, string) {
-	// Explicit literal grant — no host/coverage needed (matches PolicyAllows).
-	for _, id := range p.Spec.ModelIDs {
-		if id == m.Meta.ID {
-			return "", true, ""
-		}
-	}
-
-	wildcard := len(p.Spec.ModelIDs) == 0 && len(p.Spec.Models) == 0
-	hideDeprecated := modelDeprecated(m) && !p.Spec.IncludeDeprecated
-
-	// Candidate (host id → slug) set this policy is even allowed to serve on.
-	candidates := map[string]string{}
-	if p.Meta.Owner.Kind == meta.OwnerHost {
-		// Host-tier policy: only its own host, and only if it serves the model.
-		if slug, ok := modelHosts[p.Meta.Owner.ID]; ok {
-			candidates[p.Meta.Owner.ID] = slug
-		}
-	} else {
-		// Customer policy: hosts the model is bound to AND the policy's keys reach.
-		keyHosts := idx.policyKeyHosts(p)
-		for hostID, slug := range modelHosts {
-			if _, ok := keyHosts[hostID]; ok {
-				candidates[hostID] = slug
-			}
-		}
-	}
-
-	if len(candidates) == 0 {
-		if p.Meta.Owner.Kind == meta.OwnerHost {
-			return "", false, "host-tier policy's host has no binding for this model"
-		}
-		return "", false, "policy's host-keys reach no host that binds this model"
-	}
-
-	for _, slug := range candidates {
-		if wildcard {
-			if !hideDeprecated {
-				return slug, true, ""
-			}
-			continue
-		}
-		if modelref.MatchAny(p.Spec.Models, provSlug, m.Meta.Name, slug) {
-			return slug, true, ""
-		}
-	}
-	if wildcard { // every candidate was filtered by the deprecation gate
-		return "", false, "model is deprecated and policy lacks includeDeprecated"
-	}
-	return "", false, "policy's Models grant matches this model on no reachable host"
-}
-
-// modelDeprecated mirrors routing.isDeprecated — deprecated/sunset models are
-// hidden from wildcard grants.
-func modelDeprecated(m *model.Model) bool {
-	if m.Spec.Deprecation == nil {
-		return false
-	}
-	switch m.Spec.Deprecation.Status {
-	case model.DeprecationDeprecated, model.DeprecationSunset:
-		return true
-	}
-	return false
 }

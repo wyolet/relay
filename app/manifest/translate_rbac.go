@@ -29,50 +29,77 @@ func FromRole(r *role.Role, rev ReverseResolver) RoleDTO {
 	return dto
 }
 
-// toSubjects resolves named subjects to the form the snapshot indexes:
-// users and service accounts by id, groups by name.
-func toSubjects(name string, subjects []SubjectDTO, idx Resolver) ([]rolebinding.Subject, error) {
+// subjectIDs returns the name→id lookup and the wording for each id-bearing
+// policy-binding subject kind; groups carry a name and have none.
+func subjectIDs(idx Resolver, kind rolebinding.SubjectKind) (func(string) (string, bool), string) {
+	switch kind {
+	case rolebinding.SubjectUser:
+		return idx.UserID, "user"
+	case rolebinding.SubjectServiceAccount:
+		return idx.ServiceAccountID, "service account"
+	case policybinding.SubjectHost:
+		return idx.HostID, "host"
+	case policybinding.SubjectAccount:
+		return idx.AccountID, "account"
+	case policybinding.SubjectCredential:
+		return idx.HostKeyID, "credential"
+	case policybinding.SubjectTeam:
+		return idx.TeamID, "team"
+	case policybinding.SubjectProject:
+		return idx.ProjectID, "project"
+	}
+	return nil, ""
+}
+
+func subjectNames(rev ReverseResolver, kind rolebinding.SubjectKind) func(string) (string, bool) {
+	switch kind {
+	case rolebinding.SubjectUser:
+		return rev.Username
+	case rolebinding.SubjectServiceAccount:
+		return rev.ServiceAccountName
+	case policybinding.SubjectHost:
+		return rev.HostName
+	case policybinding.SubjectAccount:
+		return rev.AccountName
+	case policybinding.SubjectCredential:
+		return rev.HostKeyName
+	case policybinding.SubjectTeam:
+		return rev.TeamName
+	case policybinding.SubjectProject:
+		return rev.ProjectName
+	}
+	return nil
+}
+
+// toSubjects resolves named subjects to the form the snapshot indexes: every
+// kind by id except groups, which keep their name.
+func toSubjects(name string, subjects []PolicySubjectDTO, idx Resolver) ([]rolebinding.Subject, error) {
 	out := make([]rolebinding.Subject, 0, len(subjects))
 	for _, sub := range subjects {
-		switch rolebinding.SubjectKind(sub.Kind) {
-		case rolebinding.SubjectGroup:
-			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: sub.Name})
-		case rolebinding.SubjectUser:
-			id, ok := idx.UserID(sub.Name)
-			if !ok {
-				return nil, refNotFound("binding %q: user %q not found", name, sub.Name)
-			}
-			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: id})
-		case rolebinding.SubjectServiceAccount:
-			id, ok := idx.ServiceAccountID(sub.Name)
-			if !ok {
-				return nil, refNotFound("binding %q: service account %q not found", name, sub.Name)
-			}
-			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id})
-		default:
-			return nil, fmt.Errorf("binding %q: subject.kind must be user, group, or serviceaccount, got %q", name, sub.Kind)
+		kind := rolebinding.SubjectKind(sub.Kind)
+		if kind == rolebinding.SubjectGroup {
+			out = append(out, rolebinding.Subject{Kind: kind, Name: sub.Name})
+			continue
 		}
+		lookup, what := subjectIDs(idx, kind)
+		if lookup == nil {
+			return nil, fmt.Errorf("binding %q: subject.kind must be one of %v, got %q", name, policybinding.SubjectKinds, sub.Kind)
+		}
+		id, ok := lookup(sub.Name)
+		if !ok {
+			return nil, refNotFound("binding %q: %s %q not found", name, what, sub.Name)
+		}
+		out = append(out, rolebinding.Subject{Kind: kind, ID: id})
 	}
 	return out, nil
 }
 
-func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []SubjectDTO {
-	out := make([]SubjectDTO, 0, len(subjects))
+func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []PolicySubjectDTO {
+	out := make([]PolicySubjectDTO, 0, len(subjects))
 	for _, sub := range subjects {
-		wire := SubjectDTO{Kind: string(sub.Kind), Name: sub.Name}
-		switch sub.Kind {
-		case rolebinding.SubjectUser:
-			if n, ok := rev.Username(sub.ID); ok {
-				wire.Name = n
-			} else {
-				wire.Name = sub.ID
-			}
-		case rolebinding.SubjectServiceAccount:
-			if n, ok := rev.ServiceAccountName(sub.ID); ok {
-				wire.Name = n
-			} else {
-				wire.Name = sub.ID
-			}
+		wire := PolicySubjectDTO{Kind: string(sub.Kind), Name: sub.Name}
+		if names := subjectNames(rev, sub.Kind); names != nil {
+			wire.Name = nameOr(names, sub.ID)
 		}
 		out = append(out, wire)
 	}

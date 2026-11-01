@@ -16,7 +16,6 @@ func fix(name string, kind ValueKind) *HostKey {
 		},
 		Spec: Spec{
 			HostID:    meta.NewID(),
-			PolicyID:  meta.NewID(),
 			ValueFrom: ValueFrom{Kind: kind},
 		},
 	}
@@ -70,11 +69,6 @@ func TestValidate(t *testing.T) {
 			name: "missing host id",
 			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.HostID = ""; return k }(),
 			want: "HostID",
-		},
-		{
-			name: "missing policy id",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.PolicyID = ""; return k }(),
-			want: "PolicyID",
 		},
 		{
 			name: "account must be an id",

@@ -92,16 +92,11 @@ func (s *stack) seedUnresolvableHostKey(t *testing.T) (*hostkey.HostKey, string)
 	if !ok {
 		t.Fatal("the happy path host is missing")
 	}
-	tier, ok := snap.PolicyByName("test-host-tier")
-	if !ok {
-		t.Fatal("the host tier policy is missing")
-	}
 	envName := uniqueEnvName("HK_UNSET_")
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "broken-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  tier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}

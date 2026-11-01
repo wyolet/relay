@@ -224,31 +224,6 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 	return c.linkable(ctx, "rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
 }
 
-// HostKeyRefs checks the host keys a policy spends. Missing ids pass: the
-// inference path skips a key it cannot find.
-func (c Checker) HostKeyRefs(ctx context.Context, keyIDs []string, refOwner meta.Owner) error {
-	if c.Rows.HostKey == nil {
-		return nil
-	}
-	_, scoped := c.Authz.(authz.Scoper)
-	for _, id := range keyIDs {
-		k := c.Rows.HostKey(ctx, id)
-		if k == nil {
-			continue
-		}
-		if !Visible(ctx, c.Authz, "host-key", k.Meta.ID, k.Meta.Owner) {
-			return notVisible("host-key", id)
-		}
-		if scoped && refOwner.Kind == meta.OwnerUser && k.Meta.Owner.Kind == meta.OwnerProject {
-			return badRequest("personal rows cannot reference project resources")
-		}
-		if err := c.linkable(ctx, "host-key", k.Meta.Name, k.Meta.Owner, refOwner); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (c Checker) projectRef(ctx context.Context, projectID string) error {
 	if c.Rows.Project == nil {
 		return nil
@@ -355,13 +330,9 @@ func (c Checker) subjectsExist(ctx context.Context, subjects []rolebinding.Subje
 	return nil
 }
 
-// Key derives the key's owner from its principal and checks the policy it
-// carries.
+// Key derives the key's owner from its principal.
 func (c Checker) Key(ctx context.Context, k *key.Key) error {
-	if err := c.KeyOwner(ctx, k); err != nil {
-		return err
-	}
-	return c.PolicyRef(ctx, k.Spec.PolicyID, k.Meta.Owner)
+	return c.KeyOwner(ctx, k)
 }
 
 // KeyOwner derives the key's owner from its principal — a service account's
@@ -397,13 +368,10 @@ func (c Checker) KeyOwner(ctx context.Context, k *key.Key) error {
 }
 
 // ServiceAccount re-derives the owner from spec.projectId and checks the
-// project and policy it names.
+// project.
 func (c Checker) ServiceAccount(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
 	sa.StampOwner()
-	if err := c.projectRef(ctx, sa.Spec.ProjectID); err != nil {
-		return err
-	}
-	return c.PolicyRef(ctx, sa.Spec.PolicyID, sa.Meta.Owner)
+	return c.projectRef(ctx, sa.Spec.ProjectID)
 }
 
 // Project re-derives the owner from spec.teamId and checks the team.
@@ -428,19 +396,8 @@ func (c Checker) Group(ctx context.Context, g *group.Group) error {
 	return nil
 }
 
-// Policy checks the host keys, pools, credentials, rate limits and budgets a policy draws on.
+// Policy checks the pools, credentials, rate limits and budgets a policy draws on.
 func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
-	if err := c.HostKeyRefs(ctx, p.Spec.HostKeyIDs, p.Meta.Owner); err != nil {
-		return err
-	}
-	if err := c.RateLimitRef(ctx, p.Spec.RateLimitID, p.Meta.Owner); err != nil {
-		return err
-	}
-	for _, b := range p.Spec.RLBindings {
-		if err := c.RateLimitRef(ctx, b.RateLimitID, p.Meta.Owner); err != nil {
-			return err
-		}
-	}
 	if err := c.poolRefs(ctx, p.Spec.PoolIDs, p.Meta.Owner); err != nil {
 		return err
 	}
@@ -468,9 +425,8 @@ func (c Checker) Pool(ctx context.Context, p *pool.Pool) error {
 	return c.credentialRefs(ctx, p.Spec.CredentialIDs, p.Meta.Owner, p.Spec.HostID)
 }
 
-// HostKey requires the key's tier policy to be host-owned by the key's own
-// host; a mismatched key drops out of the snapshot and answers no_keys. An
-// account, when named, must be held at the key's host.
+// HostKey checks the host the key authenticates to and, when named, its
+// account, which must be held at that host.
 func (c Checker) HostKey(ctx context.Context, k *hostkey.HostKey) error {
 	// An env reference reads the relay's own environment; through the key's
 	// health probe it would answer for any variable the caller names.
@@ -479,21 +435,10 @@ func (c Checker) HostKey(ctx context.Context, k *hostkey.HostKey) error {
 			return err
 		}
 	}
-	if err := c.accountRef(ctx, k); err != nil {
+	if err := c.hostRef(ctx, k.Spec.HostID); err != nil {
 		return err
 	}
-	if c.Rows.Policy == nil {
-		return nil
-	}
-	pol := c.Rows.Policy(ctx, k.Spec.PolicyID)
-	if pol == nil {
-		return badRequest("policy %q does not exist", k.Spec.PolicyID)
-	}
-	if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != k.Spec.HostID {
-		return badRequest("policy %q is not host-owned by host %q (owner=%s/%s)",
-			pol.Meta.Name, k.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
-	}
-	return nil
+	return c.accountRef(ctx, k)
 }
 
 // RoleBinding re-derives the owner from spec.scope and checks the role, the

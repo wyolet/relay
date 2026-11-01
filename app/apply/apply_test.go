@@ -81,7 +81,7 @@ func TestChangedFieldsIgnoresServerOwnedState(t *testing.T) {
 // must never register as drift — only the spec the manifest authors does.
 func TestChangedFieldsIgnoresDerivedHostKeyState(t *testing.T) {
 	const kind = "HostKey"
-	spec := hostkey.Spec{HostID: "h-1", PolicyID: "p-1"}
+	spec := hostkey.Spec{HostID: "h-1", AccountID: "0195f8a0-0000-7000-8000-000000000001"}
 	stored := &hostkey.HostKey{
 		Meta:     meta.Metadata{ID: "k-1", Name: "openai-main"},
 		Spec:     spec,

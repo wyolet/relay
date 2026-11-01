@@ -47,8 +47,8 @@ type principalFixture struct {
 	group   *group.Group
 	user    string
 
-	// saPol is the service account's own policy; the others exist so a test
-	// can attach them to a key or a binding and pin the resolution order.
+	// saPol, keyPol and boundPol are project policies a test can bind to the
+	// service account, the key's principal or the project.
 	saPol, keyPol, boundPol *policy.Policy
 	bindings                []*policybinding.PolicyBinding
 	versions                stubVersions
@@ -88,7 +88,6 @@ func newPrincipalFixture() principalFixture {
 		Spec: group.Spec{MemberIDs: []string{user}},
 	}
 	saPol := testPolicy("sa-pol", proj.Meta.ID)
-	sa.Spec.PolicyID = saPol.Meta.ID
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		panic(err)

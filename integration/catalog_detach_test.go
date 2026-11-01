@@ -13,19 +13,19 @@ import (
 	"github.com/wyolet/relay/app/seed"
 )
 
-const detachCatalog = `apiVersion: relay.wyolet.dev/v1alpha2
+const detachCatalog = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Provider
 metadata: {name: acme}
 spec: {homepageURL: "https://acme.test"}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Host
 metadata: {name: acme}
 spec: {baseURL: "https://api.acme.test"}
 `
 
 const detachTier = `---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: acme-tier-2, displayName: Tier 2, owner: {kind: host, name: acme}}
 spec: {}

@@ -46,12 +46,15 @@ type debugSnapshotCounts struct {
 	Pricings   int `json:"pricings"`
 }
 
+// debugPolicyJoin counts a policy's model refs and links, as stored.
 type debugPolicyJoin struct {
 	PolicyID    string `json:"policyId"`
 	PolicyName  string `json:"policyName"`
 	Models      int    `json:"models"`
-	HostKeys    int    `json:"hostKeys"`
-	RateLimited bool   `json:"rateLimited"`
+	Pools       int    `json:"pools"`
+	Credentials int    `json:"credentials"`
+	RateLimits  int    `json:"rateLimits"`
+	Budgets     int    `json:"budgets"`
 }
 
 type debugSnapshotBody struct {
@@ -107,9 +110,11 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 			out.Body.PolicyJoins = append(out.Body.PolicyJoins, debugPolicyJoin{
 				PolicyID:    p.Meta.ID,
 				PolicyName:  p.Meta.Name,
-				Models:      len(snap.ModelsInPolicy(p.Meta.ID)),
-				HostKeys:    len(snap.HostKeysInPolicy(p.Meta.ID)),
-				RateLimited: snap.RateLimitOfPolicy(p.Meta.ID) != nil,
+				Models:      len(p.Spec.Models),
+				Pools:       len(p.Spec.PoolIDs),
+				Credentials: len(p.Spec.CredentialIDs),
+				RateLimits:  len(p.Spec.RateLimits),
+				Budgets:     len(p.Spec.BudgetIDs),
 			})
 		}
 

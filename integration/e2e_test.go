@@ -359,13 +359,6 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	}
 	mustUpsert(s.t, s.stores.Host.Upsert(ctx, hst), "host")
 
-	// Host-owned tier policy the hostkey will mirror. Empty rules =
-	// no relay-side cap for this test.
-	hostTier := &policy.Policy{
-		Meta: meta.Metadata{ID: ids.New(), Name: "test-host-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
-	}
-	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, hostTier), "host-tier")
-
 	// Use stored-mode for the host key so we get a cleartext Value
 	// round-tripped through the encryption + the snapshot. The
 	// integration is the point.
@@ -379,7 +372,6 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  hostTier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}
@@ -405,9 +397,8 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: policy.Spec{
-			ModelIDs:     []string{mdl.Meta.ID},
-			HostKeyIDs:   []string{hk.Meta.ID},
-			KeySelection: policy.KeySelectionPrioritized,
+			Models:        []string{prov.Meta.Name + "/" + mdl.Meta.Name},
+			CredentialIDs: []string{hk.Meta.ID},
 		},
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
@@ -419,7 +410,6 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-key", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
-			PolicyID:  pol.Meta.ID,
 			KeyHash:   relayKeyHash,
 			Prefix:    "rk_test",
 		},
@@ -796,8 +786,9 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 	// across the rename to HostKey at the domain layer).
 	const stmt = `TRUNCATE TABLE
 		pricing_models, pricings,
-		policy_models, policy_host_keys, policies,
+		policy_pools, policy_credentials, policy_rate_limits, policy_budgets, policies,
 		relay_keys,
+		pool_credentials, pools, accounts, budgets,
 		secrets,
 		models,
 		hosts,
@@ -1038,14 +1029,7 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string
 	}
 	mustUpsert(s.t, s.stores.Binding.Upsert(ctx, bnd), "binding")
 
-	// The key's policy grants every model; proxy mode needs no host key.
-	pol := &policy.Policy{
-		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-policy",
-			Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{KeySelection: policy.KeySelectionPrioritized},
-	}
-	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
-
+	// Proxy mode needs no host key.
 	const keyPlain = "rk_test_proxy_secret"
 	userID := s.seedUser("proxy-owner")
 	rk := &key.Key{
@@ -1053,7 +1037,6 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string
 			Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
 		Spec: key.Spec{
 			Principal:          key.Principal{Kind: key.PrincipalUser, ID: userID},
-			PolicyID:           pol.Meta.ID,
 			KeyHash:            sha256Hex(keyPlain),
 			Prefix:             "rk_test",
 			PassthroughAllowed: true,
@@ -1205,7 +1188,7 @@ func TestE2E_KeyRotate(t *testing.T) {
 	}
 	keyID := keys[0].Meta.ID
 	oldHash := keys[0].Spec.KeyHash
-	policyID := keys[0].Spec.PolicyID
+	principal := keys[0].Spec.Principal
 
 	infer := func(bearer string) int {
 		req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions",
@@ -1252,8 +1235,8 @@ func TestE2E_KeyRotate(t *testing.T) {
 	if rot.Key.Spec.KeyHash != sha256Hex(rot.Plaintext) {
 		t.Fatalf("KeyHash does not match sha256(plaintext)")
 	}
-	if rot.Key.Spec.PolicyID != policyID {
-		t.Fatalf("rotation must not change PolicyID: want %q, got %q", policyID, rot.Key.Spec.PolicyID)
+	if rot.Key.Spec.Principal != principal {
+		t.Fatalf("rotation must not change the principal: want %+v, got %+v", principal, rot.Key.Spec.Principal)
 	}
 
 	// Force a rebuild rather than racing the NOTIFY debouncer.

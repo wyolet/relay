@@ -7,12 +7,12 @@ import (
 	"github.com/wyolet/relay/app/manifest"
 )
 
-func serviceAccountDoc(name, projectName, policyName string) manifest.Document {
+func serviceAccountDoc(name, projectName string) manifest.Document {
 	return manifest.Document{ServiceAccount: &manifest.ServiceAccountDTO{
-		APIVersion: "v1alpha2",
+		APIVersion: "v1alpha3",
 		Kind:       "ServiceAccount",
 		Metadata:   manifest.WireMeta{Name: name, Owner: manifest.WireOwner{Kind: "project", Name: projectName}},
-		Spec:       manifest.ServiceAccountSpec{Project: projectName, Policy: policyName},
+		Spec:       manifest.ServiceAccountSpec{Project: projectName},
 	}}
 }
 
@@ -29,28 +29,21 @@ func keyDoc(name, principalKind, principalName string) manifest.Document {
 
 func TestValidateGraph_ServiceAccountRefs(t *testing.T) {
 	docs := append(fixture(), teamDoc("platform"), projectDoc("ml-search", "platform"),
-		serviceAccountDoc("indexer", "ml-search", ""))
+		serviceAccountDoc("indexer", "ml-search"))
 	if issues := ValidateGraph(docs); HasErrors(issues) {
 		t.Fatalf("service account with a present project should be clean, got:\n%s", Format(issues))
 	}
 
-	docs = append(fixture(), teamDoc("platform"), serviceAccountDoc("indexer", "ml-search", ""))
+	docs = append(fixture(), teamDoc("platform"), serviceAccountDoc("indexer", "ml-search"))
 	issues := ValidateGraph(docs)
 	if !HasErrors(issues) || !strings.Contains(Format(issues), `project "ml-search" not found`) {
 		t.Errorf("missing project should error, got:\n%s", Format(issues))
-	}
-
-	docs = append(fixture(), teamDoc("platform"), projectDoc("ml-search", "platform"),
-		serviceAccountDoc("indexer", "ml-search", "no-such-policy"))
-	issues = ValidateGraph(docs)
-	if !HasErrors(issues) || !strings.Contains(Format(issues), `policy "no-such-policy" not found`) {
-		t.Errorf("missing policy override should error, got:\n%s", Format(issues))
 	}
 }
 
 func TestValidateGraph_KeyPrincipalRef(t *testing.T) {
 	base := append(fixture(), teamDoc("platform"), projectDoc("ml-search", "platform"),
-		serviceAccountDoc("indexer", "ml-search", ""))
+		serviceAccountDoc("indexer", "ml-search"))
 
 	docs := append(base, keyDoc("indexer-prod", "serviceaccount", "indexer"))
 	if issues := ValidateGraph(docs); HasErrors(issues) {

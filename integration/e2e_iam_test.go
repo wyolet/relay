@@ -375,9 +375,8 @@ func (f *tokenFixture) seedPolicyForModel(t *testing.T, policyName, modelName st
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: policyName, Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: policy.Spec{
-			ModelIDs:     []string{mdl.Meta.ID},
-			HostKeyIDs:   base.Spec.HostKeyIDs,
-			KeySelection: policy.KeySelectionPrioritized,
+			Models:        []string{prov.Meta.Name + "/" + mdl.Meta.Name},
+			CredentialIDs: base.Spec.CredentialIDs,
 		},
 	}
 	mustUpsert(t, f.stores.Policy.Upsert(ctx, pol), "policy")

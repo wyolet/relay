@@ -261,6 +261,9 @@ func applyStores(d Deps) *apply.Stores {
 		Key:         d.Stores.Key,
 		Team:        d.Stores.Team,
 		Project:     d.Stores.Project,
+		Account:     d.Stores.Account,
+		Pool:        d.Stores.Pool,
+		Budget:      d.Stores.Budget,
 
 		ServiceAccount: d.Stores.ServiceAccount,
 		Group:          d.Stores.Group,

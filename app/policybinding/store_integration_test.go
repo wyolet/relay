@@ -53,7 +53,7 @@ func TestIntegration_SubjectsOfEveryKindRoundTripAndDropOut(t *testing.T) {
 	keys := hostkey.NewStore(db, reg, nil)
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb-key", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
 	}
 	if err := keys.Upsert(ctx, hk); err != nil {
 		t.Fatalf("upsert host key: %v", err)

@@ -349,28 +349,28 @@ func TestIntegration_BindingCascades(t *testing.T) {
 
 // ── seed ordering ────────────────────────────────────────────────────────
 
-const seedRBACYAML = `apiVersion: relay.wyolet.dev/v1alpha2
+const seedRBACYAML = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata:
   name: platform
   owner: {kind: system}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata:
   name: ml-search
 spec:
   team: platform
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: ml-search-pol
   owner: {kind: project, name: ml-search}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Group
 metadata:
   name: data-science
@@ -378,15 +378,14 @@ metadata:
 spec:
   members: [alice]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
 metadata:
   name: search-indexer
 spec:
   project: ml-search
-  policy: ml-search-pol
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Role
 metadata:
   name: release-manager
@@ -396,7 +395,7 @@ spec:
     - kinds: [keys, service-accounts]
       verbs: [get, list, create]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: platform-releases
@@ -408,7 +407,7 @@ spec:
     - {kind: user, name: alice}
     - {kind: serviceaccount, name: search-indexer}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: ml-search-everyone

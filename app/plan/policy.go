@@ -64,15 +64,11 @@ func (p *ExpandedPolicy) links() bool {
 // Grant is a policy's model list, parsed once. An entry that cannot match is dropped, so a list of only such entries grants nothing rather than everything.
 type Grant struct {
 	refs              []modelref.Ref
-	ids               map[string]struct{} // literal model ids from the older grant field
 	includeDeprecated bool
 }
 
 // Allows reports whether the grant covers model m of provider providerSlug served at host hostSlug. Wildcards skip deprecated models unless the policy includes them; a ref naming the model grants it either way.
 func (g *Grant) Allows(providerSlug string, m *model.Model, hostSlug string) bool {
-	if _, ok := g.ids[m.Meta.ID]; ok {
-		return true
-	}
 	return appcatalog.RefsGrant(g.refs, providerSlug, m.Meta.Name, hostSlug, appcatalog.ModelDeprecated(m) && !g.includeDeprecated)
 }
 
@@ -104,15 +100,8 @@ func (c *controllers) expandedPolicy(tx *engine.Txn, id string) error {
 	src := engine.Ref{Kind: KindPolicy, ID: id}
 	ep := &ExpandedPolicy{Policy: p}
 	in := inputs{p}
-	if len(p.Spec.Models) > 0 || len(p.Spec.ModelIDs) > 0 {
-		g := &Grant{includeDeprecated: p.Spec.IncludeDeprecated, refs: parseRefs(tx, src, "spec.models", p.Spec.Models)}
-		if len(p.Spec.ModelIDs) > 0 {
-			g.ids = make(map[string]struct{}, len(p.Spec.ModelIDs))
-			for _, mid := range p.Spec.ModelIDs {
-				g.ids[mid] = struct{}{}
-			}
-		}
-		ep.Grant = g
+	if len(p.Spec.Models) > 0 {
+		ep.Grant = &Grant{includeDeprecated: p.Spec.IncludeDeprecated, refs: parseRefs(tx, src, "spec.models", p.Spec.Models)}
 	}
 	for i, l := range p.Spec.RateLimits {
 		field := fmt.Sprintf("spec.rateLimits[%d]", i)

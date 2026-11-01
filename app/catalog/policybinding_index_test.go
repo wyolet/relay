@@ -29,22 +29,3 @@ func TestPolicyBindingSubjectKeysArePrecomputed(t *testing.T) {
 		t.Fatalf("SubjectKeys = %v, want %q", got[0].SubjectKeys, b.Spec.Subjects[0].Key())
 	}
 }
-
-// A policy binding write must not disturb the allowed-combo sets — it names
-// no provider, host or model.
-func TestPolicyBindingWriteLeavesGrantsAlone(t *testing.T) {
-	c, _, proj, pol := tenancySnap(t)
-	before := c.Current().allowedCombosByPolicy[pol.Meta.ID]
-
-	b := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}}
-	b.Spec.ProjectID = proj.Meta.ID
-	b.Spec.PolicyID = pol.Meta.ID
-	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "g"}}
-	b.StampOwner()
-	if err := c.ApplyPolicyBindingUpsert(b); err != nil {
-		t.Fatalf("apply binding: %v", err)
-	}
-	if got := c.Current().allowedCombosByPolicy[pol.Meta.ID]; len(got) != len(before) {
-		t.Fatalf("allowed combos changed on a policy-binding write: %d → %d", len(before), len(got))
-	}
-}

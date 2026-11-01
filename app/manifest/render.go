@@ -76,6 +76,12 @@ func (d Document) Meta() *WireMeta {
 		return &v.Metadata
 	case *PolicyDTO:
 		return &v.Metadata
+	case *AccountDTO:
+		return &v.Metadata
+	case *PoolDTO:
+		return &v.Metadata
+	case *BudgetDTO:
+		return &v.Metadata
 	case *RateLimitDTO:
 		return &v.Metadata
 	case *KeyDTO:
@@ -119,6 +125,12 @@ func (d Document) Payload() any {
 		return d.HostKey
 	case d.Policy != nil:
 		return d.Policy
+	case d.Account != nil:
+		return d.Account
+	case d.Pool != nil:
+		return d.Pool
+	case d.Budget != nil:
+		return d.Budget
 	case d.RateLimit != nil:
 		return d.RateLimit
 	case d.Key != nil:

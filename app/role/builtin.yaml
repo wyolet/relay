@@ -44,7 +44,7 @@ metadata:
 spec:
   rules:
     - kinds: [projects, role-bindings, policy-bindings, policies, keys,
-              service-accounts, host-keys, rate-limits]
+              service-accounts, host-keys, rate-limits, accounts, pools, budgets]
       verbs: ["*"]
     - kinds: [teams]
       verbs: [get, list, update]
@@ -65,7 +65,7 @@ metadata:
 spec:
   rules:
     - kinds: [policies, keys, service-accounts, host-keys, rate-limits,
-              role-bindings, policy-bindings]
+              role-bindings, policy-bindings, accounts, pools, budgets]
       verbs: ["*"]
     - kinds: [projects]
       verbs: [get, list, update, delete]
@@ -83,7 +83,8 @@ metadata:
   owner: {kind: system}
 spec:
   rules:
-    - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits]
+    - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits,
+              accounts, pools, budgets]
       verbs: [get, list]
     - kinds: [projects, teams]
       verbs: [get, list]
@@ -104,7 +105,7 @@ metadata:
 spec:
   rules:
     - kinds: [policies, keys, service-accounts, policy-bindings, host-keys,
-              rate-limits, role-bindings, projects, teams]
+              rate-limits, role-bindings, projects, teams, accounts, pools, budgets]
       verbs: [get, list]
     - kinds: [usage]
       verbs: [get, read]

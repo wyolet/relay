@@ -27,14 +27,6 @@ func TestValidate(t *testing.T) {
 			sa:   fix("indexer"),
 		},
 		{
-			name: "policy override",
-			sa: func() *ServiceAccount {
-				sa := fix("indexer")
-				sa.Spec.PolicyID = meta.NewID()
-				return sa
-			}(),
-		},
-		{
 			name: "missing projectId",
 			sa: func() *ServiceAccount {
 				sa := fix("indexer")
@@ -61,15 +53,6 @@ func TestValidate(t *testing.T) {
 				return sa
 			}(),
 			want: "does not match spec.projectId",
-		},
-		{
-			name: "policyId must be a uuid",
-			sa: func() *ServiceAccount {
-				sa := fix("indexer")
-				sa.Spec.PolicyID = "ml-pol"
-				return sa
-			}(),
-			want: "PolicyID",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

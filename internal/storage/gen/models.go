@@ -145,7 +145,6 @@ type Policy struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ID              string             `db:"id" json:"id"`
 	DisplayName     string             `db:"display_name" json:"display_name"`
-	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
 	Models          []byte             `db:"models" json:"models"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
@@ -191,18 +190,6 @@ type PolicyCredential struct {
 	PolicyID  string `db:"policy_id" json:"policy_id"`
 	HostKeyID string `db:"host_key_id" json:"host_key_id"`
 	Position  int32  `db:"position" json:"position"`
-}
-
-type PolicyHostKey struct {
-	PolicyID  string `db:"policy_id" json:"policy_id"`
-	HostKeyID string `db:"host_key_id" json:"host_key_id"`
-	Position  int32  `db:"position" json:"position"`
-}
-
-type PolicyModel struct {
-	PolicyID string `db:"policy_id" json:"policy_id"`
-	ModelID  string `db:"model_id" json:"model_id"`
-	Position int32  `db:"position" json:"position"`
 }
 
 type PolicyPool struct {

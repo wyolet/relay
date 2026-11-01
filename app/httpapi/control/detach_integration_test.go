@@ -18,8 +18,8 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
@@ -66,43 +66,34 @@ func wantGroups(t *testing.T, what string, groups []blockerGroup, want ...wantGr
 	}
 }
 
-func (f policyDeleteFixture) keyPolicy(t *testing.T, ctx context.Context, id string) *key.Key {
+// tierOnHost is a tier policy of f.host that the host lists in its menu.
+func (f policyDeleteFixture) tierOnHost(t *testing.T, ctx context.Context, name string) *policy.Policy {
 	t.Helper()
-	k, err := f.stores.Key.Get(ctx, id)
-	if err != nil || k == nil {
-		t.Fatalf("get key %s: %v", id, err)
-	}
-	return k
+	tier := f.policy(t, ctx, name, meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
+	f.host.Spec.Policies = []string{tier.Meta.ID}
+	f.host.Spec.DefaultPolicy = tier.Meta.ID
+	must(t, "upsert host", f.stores.Host.Upsert(ctx, f.host))
+	return tier
 }
 
-func TestDetachPolicy_ReleasesKeysAndKeepsTierHostKey(t *testing.T) {
+// The host lets go of a tier from its menu; the binding using the tier can't
+// let go of its policy and keeps refusing the delete.
+func TestDetachPolicy_ReleasesTheHostMenuAndKeepsBindings(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "detach-policy", f.projectOwner())
-	ka := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
-	kb := f.projectKey(t, ctx, "key-b", pol.Meta.ID)
-	hk := f.hostKey(t, ctx, "detach-host-key", pol.Meta.ID)
+	tier := f.tierOnHost(t, ctx, "detach-tier")
+	f.policyBinding(t, ctx, "tier-binding", tier.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	f.allowCatalogDeletes(t, ctx, "governance:policy")
 
-	body := decodeDetach(t, f.detachRow(t, "policies", pol.Meta.ID, false))
-	wantGroups(t, "detached", body.Detached, wantGroup{"key", "spec.policyId", true, 2})
-	wantGroups(t, "blockers", body.Blockers, wantGroup{"host-key", "spec.policyId", false, 1})
+	body := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
+	wantGroups(t, "detached", body.Detached, wantGroup{"host", "spec.policies", true, 1})
+	wantGroups(t, "blockers", body.Blockers, wantGroup{"policy-binding", "spec.policyId", false, 1})
 
-	for _, k := range []*key.Key{ka, kb} {
-		got := f.keyPolicy(t, ctx, k.Meta.ID)
-		if got.Spec.PolicyID != "" || !got.Meta.Dirty {
-			t.Fatalf("key %s after detach: policyId=%q dirty=%v, want cleared and dirty", k.Meta.Name, got.Spec.PolicyID, got.Meta.Dirty)
-		}
+	h, err := f.stores.Host.Get(ctx, f.host.Meta.ID)
+	must(t, "get host", err)
+	if len(h.Spec.Policies) != 0 || h.Spec.DefaultPolicy != "" || !h.Meta.Dirty {
+		t.Fatalf("host after detach = %+v (dirty %v), want the menu cleared and the row dirty", h.Spec, h.Meta.Dirty)
 	}
-	gotHK, err := f.stores.HostKey.Get(ctx, hk.Meta.ID)
-	must(t, "get host key", err)
-	if gotHK.Spec.PolicyID != pol.Meta.ID || gotHK.Meta.Dirty {
-		t.Fatalf("host key after detach = %+v, want untouched", gotHK.Spec)
-	}
-
-	wantBlockers(t, f.deletePolicy(t, pol.Meta.ID, false), wantGroup{"host-key", "spec.policyId", false, 1})
-	other := f.policy(t, ctx, "other-tier", f.projectOwner())
-	gotHK.Spec.PolicyID = other.Meta.ID
-	must(t, "reassign host key", f.stores.HostKey.Upsert(ctx, gotHK))
-	wantStatus(t, f.deletePolicy(t, pol.Meta.ID, false), http.StatusNoContent)
+	wantBlockers(t, f.deletePolicy(t, tier.Meta.ID, false), wantGroup{"policy-binding", "spec.policyId", false, 1})
 }
 
 // A list that needs an entry lets go of the model only while it holds another.
@@ -113,15 +104,9 @@ func TestDetachModel_PricingKeepsItsLastModel(t *testing.T) {
 	other := f.model(t, ctx, "vendor-other", prov.Meta.ID)
 	shared := f.pricing(t, ctx, "shared-rates", m.Meta.ID, other.Meta.ID)
 	only := f.pricing(t, ctx, "only-rates", m.Meta.ID)
-	pol := f.policy(t, ctx, "model-policy", f.projectOwner())
-	pol.Spec.ModelIDs = []string{m.Meta.ID, other.Meta.ID}
-	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, pol))
 
 	body := decodeDetach(t, f.detachRow(t, "models", m.Meta.ID, false))
-	wantGroups(t, "detached", body.Detached,
-		wantGroup{"policy", "spec.modelIds", true, 1},
-		wantGroup{"pricing", "spec.targetModels", true, 1},
-	)
+	wantGroups(t, "detached", body.Detached, wantGroup{"pricing", "spec.targetModels", true, 1})
 	wantGroups(t, "blockers", body.Blockers, wantGroup{"pricing", "spec.targetModels", false, 1})
 	got, err := f.stores.Pricing.Get(ctx, shared.Meta.ID)
 	must(t, "get shared pricing", err)
@@ -133,22 +118,12 @@ func TestDetachModel_PricingKeepsItsLastModel(t *testing.T) {
 	if !slices.Equal(got.Spec.TargetModelIDs, []string{m.Meta.ID}) || got.Meta.Dirty {
 		t.Fatalf("single-model pricing = %+v, want untouched", got.Spec.TargetModelIDs)
 	}
-	p, err := f.stores.Policy.Get(ctx, pol.Meta.ID)
-	must(t, "get policy", err)
-	if !slices.Equal(p.Spec.ModelIDs, []string{other.Meta.ID}) {
-		t.Fatalf("policy models = %v, want only the other model", p.Spec.ModelIDs)
-	}
 }
 
 // A binding lets go of the account only while it names another subject.
 func TestDetachServiceAccount_BindingKeepsItsLastSubject(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	second := &serviceaccount.ServiceAccount{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "second-account"},
-		Spec: serviceaccount.Spec{ProjectID: f.proj.Meta.ID},
-	}
-	second.StampOwner()
-	must(t, "upsert second account", f.stores.ServiceAccount.Upsert(ctx, second))
+	second := f.secondAccount(t, ctx)
 	acct := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}
 	other := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: second.Meta.ID}
 	r := f.customRole(t, ctx, "key-reader")
@@ -171,14 +146,36 @@ func TestDetachServiceAccount_BindingKeepsItsLastSubject(t *testing.T) {
 	}
 }
 
+func (f policyDeleteFixture) secondAccount(t *testing.T, ctx context.Context) *serviceaccount.ServiceAccount {
+	t.Helper()
+	second := &serviceaccount.ServiceAccount{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "second-account"},
+		Spec: serviceaccount.Spec{ProjectID: f.proj.Meta.ID},
+	}
+	second.StampOwner()
+	must(t, "upsert second account", f.stores.ServiceAccount.Upsert(ctx, second))
+	return second
+}
+
+// twoBindingsOnTheAccount binds f.account in two role bindings, each beside
+// another subject so both can let go of it; "aa-binding" is written first.
+func (f policyDeleteFixture) twoBindingsOnTheAccount(t *testing.T, ctx context.Context) (*rolebinding.RoleBinding, *rolebinding.RoleBinding) {
+	t.Helper()
+	second := f.secondAccount(t, ctx)
+	acct := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}
+	other := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: second.Meta.ID}
+	r := f.customRole(t, ctx, "key-reader")
+	return f.roleBinding(t, ctx, "aa-binding", r.Meta.ID, f.projectOwner(), acct, other),
+		f.roleBinding(t, ctx, "zz-binding", r.Meta.ID, f.projectOwner(), acct, other)
+}
+
 func TestDetach_SecondCallChangesNothing(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "twice-policy", f.projectOwner())
-	f.projectKey(t, ctx, "key-a", pol.Meta.ID)
-	f.hostKey(t, ctx, "twice-host-key", pol.Meta.ID)
+	tier := f.tierOnHost(t, ctx, "twice-tier")
+	f.policyBinding(t, ctx, "twice-binding", tier.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
 
-	first := decodeDetach(t, f.detachRow(t, "policies", pol.Meta.ID, false))
-	second := decodeDetach(t, f.detachRow(t, "policies", pol.Meta.ID, false))
+	first := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
+	second := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
 	wantGroups(t, "second detached", second.Detached)
 	if !slices.EqualFunc(first.Blockers, second.Blockers, func(a, b blockerGroup) bool {
 		return a.Kind == b.Kind && a.Field == b.Field && a.Count == b.Count && slices.Equal(a.Items, b.Items)
@@ -227,21 +224,13 @@ func TestDetachRole_LeavesOneAdmin(t *testing.T) {
 	}
 }
 
-// Alice may edit her own key but neither the shared host nor the project's
-// key, which she cannot even see.
+// Alice may see the shared host but not update it, and cannot see the
+// project's binding at all: neither lets go, and the binding is counted, not
+// named.
 func TestDetach_LeavesRowsTheCallerCannotUpdate(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "alice-policy", meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID})
-	own := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-key", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID}},
-		Spec: key.Spec{
-			Principal: key.Principal{Kind: key.PrincipalUser, ID: f.alice.ID},
-			PolicyID:  pol.Meta.ID,
-			KeyHash:   strings.Repeat("c", 64), Prefix: "sk-alice",
-		},
-	}
-	must(t, "upsert alice key", f.stores.Key.Upsert(ctx, own))
-	hidden := f.projectKey(t, ctx, "key-h", pol.Meta.ID)
+	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
 	f.host.Spec.Policies = []string{pol.Meta.ID}
 	must(t, "upsert host", f.stores.Host.Upsert(ctx, f.host))
 
@@ -250,20 +239,13 @@ func TestDetach_LeavesRowsTheCallerCannotUpdate(t *testing.T) {
 	if strings.Contains(w.Body.String(), hidden.Meta.Name) || strings.Contains(w.Body.String(), hidden.Meta.ID) {
 		t.Fatalf("detach body names a row the caller may not see: %s", w.Body.String())
 	}
-	wantGroups(t, "detached", body.Detached, wantGroup{"key", "spec.policyId", true, 1})
+	wantGroups(t, "detached", body.Detached)
 	wantGroups(t, "blockers", body.Blockers,
 		wantGroup{"host", "spec.policies", true, 1},
-		wantGroup{"key", "spec.policyId", true, 1},
+		wantGroup{"policy-binding", "spec.policyId", false, 1},
 	)
 	if g := body.Blockers[1]; g.Hidden != 1 || len(g.Items) != 0 {
-		t.Fatalf("key blocker = %+v, want one hidden row and no items", g)
-	}
-
-	if got := f.keyPolicy(t, ctx, own.Meta.ID); got.Spec.PolicyID != "" {
-		t.Fatalf("alice's key still on the policy")
-	}
-	if got := f.keyPolicy(t, ctx, hidden.Meta.ID); got.Spec.PolicyID != pol.Meta.ID || got.Meta.Dirty {
-		t.Fatalf("hidden key after detach = %+v, want untouched", got)
+		t.Fatalf("binding blocker = %+v, want one hidden row and no items", g)
 	}
 	h, err := f.stores.Host.Get(ctx, f.host.Meta.ID)
 	must(t, "get host", err)
@@ -272,33 +254,27 @@ func TestDetach_LeavesRowsTheCallerCannotUpdate(t *testing.T) {
 	}
 }
 
-// A write that fails partway rolls back the ones before it: keys are written
-// before service accounts, and the service-account update is made to fail.
+// A write that fails partway rolls back the ones before it: the second role
+// binding's update is made to fail.
 func TestDetach_FailedWriteRollsEverythingBack(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "rollback-policy", f.projectOwner())
-	k := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
-	f.account.Spec.PolicyID = pol.Meta.ID
-	must(t, "upsert service account", f.stores.ServiceAccount.Upsert(ctx, f.account))
+	first, _ := f.twoBindingsOnTheAccount(t, ctx)
 	_, err := f.pool.Exec(ctx, `
 		CREATE FUNCTION fail_write() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'write refused by test'; END $$;
-		CREATE TRIGGER fail_write BEFORE UPDATE ON service_accounts
+		BEGIN IF NEW.name = 'zz-binding' THEN RAISE EXCEPTION 'write refused by test'; END IF; RETURN NEW; END $$;
+		CREATE TRIGGER fail_write BEFORE UPDATE ON role_bindings
 		FOR EACH ROW EXECUTE FUNCTION fail_write();`)
 	must(t, "install failing trigger", err)
 
-	w := f.detachRow(t, "policies", pol.Meta.ID, false)
+	w := f.detachRow(t, "service-accounts", f.account.Meta.ID, false)
 	wantStatus(t, w, http.StatusInternalServerError)
 	if !strings.Contains(w.Body.String(), "write refused by test") {
 		t.Fatalf("detach failed for another reason: %s", w.Body.String())
 	}
-	if got := f.keyPolicy(t, ctx, k.Meta.ID); got.Spec.PolicyID != pol.Meta.ID || got.Meta.Dirty {
-		t.Fatalf("key after failed detach = %+v, want untouched", got)
-	}
-	sa, err := f.stores.ServiceAccount.Get(ctx, f.account.Meta.ID)
-	must(t, "get service account", err)
-	if sa.Spec.PolicyID != pol.Meta.ID {
-		t.Fatalf("service account after failed detach = %+v, want untouched", sa.Spec)
+	rb, err := f.stores.RoleBinding.Get(ctx, first.Meta.ID)
+	must(t, "get first binding", err)
+	if len(rb.Spec.Subjects) != 2 || rb.Meta.Dirty {
+		t.Fatalf("first binding after failed detach = %+v, want untouched", rb.Spec.Subjects)
 	}
 }
 
@@ -306,76 +282,72 @@ func TestDetach_FailedWriteRollsEverythingBack(t *testing.T) {
 // The trigger raises the serialization failure a racing writer would cause.
 func TestDetach_ConcurrentChangeIsConflict(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "conflict-policy", f.projectOwner())
-	k := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
-	f.account.Spec.PolicyID = pol.Meta.ID
-	must(t, "upsert service account", f.stores.ServiceAccount.Upsert(ctx, f.account))
+	first, _ := f.twoBindingsOnTheAccount(t, ctx)
 	_, err := f.pool.Exec(ctx, `
 		CREATE FUNCTION fail_serialization() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'concurrent update' USING ERRCODE = 'serialization_failure'; END $$;
-		CREATE TRIGGER fail_serialization BEFORE UPDATE ON service_accounts
+		BEGIN IF NEW.name = 'zz-binding' THEN RAISE EXCEPTION 'concurrent update' USING ERRCODE = 'serialization_failure'; END IF; RETURN NEW; END $$;
+		CREATE TRIGGER fail_serialization BEFORE UPDATE ON role_bindings
 		FOR EACH ROW EXECUTE FUNCTION fail_serialization();`)
 	must(t, "install conflicting trigger", err)
 
-	w := f.detachRow(t, "policies", pol.Meta.ID, false)
+	w := f.detachRow(t, "service-accounts", f.account.Meta.ID, false)
 	wantStatus(t, w, http.StatusConflict)
 	var body inUseResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error.Code != "conflict" {
 		t.Fatalf("409 body = %s, want error.code conflict", w.Body.String())
 	}
-	if got := f.keyPolicy(t, ctx, k.Meta.ID); got.Spec.PolicyID != pol.Meta.ID || got.Meta.Dirty {
-		t.Fatalf("key after conflicting detach = %+v, want untouched", got)
+	rb, err := f.stores.RoleBinding.Get(ctx, first.Meta.ID)
+	must(t, "get first binding", err)
+	if len(rb.Spec.Subjects) != 2 || rb.Meta.Dirty {
+		t.Fatalf("first binding after conflicting detach = %+v, want untouched", rb.Spec.Subjects)
 	}
 }
 
 func TestDetach_AuditsEachModifiedRow(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "audited-policy", f.projectOwner())
-	ka := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
-	kb := f.projectKey(t, ctx, "key-b", pol.Meta.ID)
+	a, z := f.twoBindingsOnTheAccount(t, ctx)
 
-	decodeDetach(t, f.detachRow(t, "policies", pol.Meta.ID, false))
+	decodeDetach(t, f.detachRow(t, "service-accounts", f.account.Meta.ID, false))
 	f.emitter.Close()
 
 	updated := map[string][]string{}
 	detached := 0
 	for _, ev := range f.sink.all() {
 		switch {
-		case ev.Action == "keys.update" && ev.Change != nil:
+		case ev.Action == "role-bindings.update" && ev.Change != nil:
 			updated[ev.Resource.ID] = ev.Change.Fields
-		case ev.Action == "policies.detach" && ev.Resource.ID == pol.Meta.ID:
+		case ev.Action == "service-accounts.detach" && ev.Resource.ID == f.account.Meta.ID:
 			detached++
 		}
 	}
-	for _, k := range []*key.Key{ka, kb} {
-		if !slices.Equal(updated[k.Meta.ID], []string{"spec.policyId"}) {
-			t.Fatalf("audit for key %s = %v, want [spec.policyId]; all: %v", k.Meta.Name, updated[k.Meta.ID], updated)
+	for _, rb := range []*rolebinding.RoleBinding{a, z} {
+		if !slices.Equal(updated[rb.Meta.ID], []string{"spec.subjects"}) {
+			t.Fatalf("audit for binding %s = %v, want [spec.subjects]; all: %v", rb.Meta.Name, updated[rb.Meta.ID], updated)
 		}
 	}
 	if len(updated) != 2 || detached != 1 {
-		t.Fatalf("audit rows: %d key updates and %d detach rows, want 2 and 1", len(updated), detached)
+		t.Fatalf("audit rows: %d binding updates and %d detach rows, want 2 and 1", len(updated), detached)
 	}
 }
 
 func TestDetach_SnapshotFollows(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "snapshot-policy", f.projectOwner())
-	k := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
+	tier := f.tierOnHost(t, ctx, "snapshot-tier")
 	listener, err := f.cat.Hydrate(ctx, f.stores, appcatalog.BootstrapOptions{Pool: f.pool})
 	must(t, "hydrate", err)
 	runCatalogListener(t, ctx, f.cat, listener)
-	if got, ok := f.cat.Current().Key(k.Meta.ID); !ok || got.Spec.PolicyID != pol.Meta.ID {
-		t.Fatalf("snapshot key before detach = %+v (found %v), want it on the policy", got, ok)
+	if h, ok := f.cat.Current().Host(f.host.Meta.ID); !ok || !slices.Contains(h.Spec.Policies, tier.Meta.ID) {
+		t.Fatalf("snapshot host before detach = %+v (found %v), want the tier in its menu", h, ok)
 	}
 
-	decodeDetach(t, f.detachRow(t, "policies", pol.Meta.ID, false))
+	decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if got, ok := f.cat.Current().Key(k.Meta.ID); ok && got.Spec.PolicyID == "" {
+		if h, ok := f.cat.Current().Host(f.host.Meta.ID); ok && len(h.Spec.Policies) == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("snapshot did not drop the key's policy within 5s")
+			t.Fatal("snapshot did not drop the tier from the host menu within 5s")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

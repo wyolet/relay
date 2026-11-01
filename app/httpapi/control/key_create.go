@@ -27,7 +27,6 @@ type createKeyInput struct {
 		} `json:"metadata"`
 		Spec struct {
 			Principal             key.Principal `json:"principal"`
-			PolicyID              string        `json:"policyId,omitempty"`
 			ExpiresAt             *time.Time    `json:"expiresAt,omitempty"`
 			Enabled               *bool         `json:"enabled,omitempty"`
 			PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"`
@@ -86,11 +85,6 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := checkPolicyRefVisible(ctx, d, in.Body.Spec.PolicyID, k.Meta.Owner); err != nil {
-			return nil, err
-		}
-
-		k.Spec.PolicyID = in.Body.Spec.PolicyID
 		k.Spec.ExpiresAt = in.Body.Spec.ExpiresAt
 		k.Spec.Enabled = in.Body.Spec.Enabled
 		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed

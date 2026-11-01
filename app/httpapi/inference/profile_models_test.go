@@ -43,11 +43,11 @@ func entriesFixture(t *testing.T, grants ...string) (*catalog.Snapshot, *policy.
 	}
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: hkID, Name: "k", Owner: meta.Owner{Kind: meta.OwnerHost, ID: pricedHostID}},
-		Spec: hostkey.Spec{HostID: pricedHostID, PolicyID: polID, Value: "sk-test", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
+		Spec: hostkey.Spec{HostID: pricedHostID, Value: "sk-test", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
 	}
 	pol := &policy.Policy{
-		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: pricedHostID}},
-		Spec: policy.Spec{Models: grants, HostKeyIDs: []string{hkID}},
+		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: policy.Spec{Models: grants, CredentialIDs: []string{hkID}},
 	}
 	price := &pricing.Pricing{
 		Meta: meta.Metadata{ID: priceID, Name: "big-model-rates", Owner: meta.Owner{Kind: meta.OwnerHost, ID: pricedHostID}},

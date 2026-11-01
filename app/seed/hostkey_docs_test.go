@@ -8,13 +8,12 @@ import (
 	"github.com/wyolet/relay/app/manifest"
 )
 
-const envHostKeyTree = `apiVersion: relay.wyolet.dev/v1alpha2
+const envHostKeyTree = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
 metadata:
   name: tree-key
 spec:
   hostId: tree-host
-  policyId: tree-tier
   valueFrom:
     kind: env
     env: TREE_UPSTREAM_KEY

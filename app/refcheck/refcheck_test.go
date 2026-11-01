@@ -28,10 +28,10 @@ func TestProjectPolicyCannotSpendAnotherProjectsHostKey(t *testing.T) {
 	c := Checker{Rows: Lookup{HostKey: func(_ context.Context, id string) *hostkey.HostKey { return keys[id] }}}
 	ref := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
 	ctx := context.Background()
-	if err := c.HostKeyRefs(ctx, []string{"hk-own", "hk-shared"}, ref); err != nil {
+	if err := c.CredentialRefs(ctx, []string{"hk-own", "hk-shared"}, ref); err != nil {
 		t.Fatalf("own and shared keys: %v", err)
 	}
-	if err := c.HostKeyRefs(ctx, []string{"hk-other"}, ref); err == nil {
+	if err := c.CredentialRefs(ctx, []string{"hk-other"}, ref); err == nil {
 		t.Fatal("project p-1's policy accepted project p-2's host key")
 	}
 }
@@ -47,11 +47,10 @@ func (scopingAuthz) Visible(context.Context, string, string, meta.Owner) bool {
 // operator may write one; anyone else could read any variable through the
 // key's health probe.
 func TestEnvSourcedHostKeyNeedsAnAdmin(t *testing.T) {
-	tier := &policy.Policy{Meta: meta.Metadata{ID: "tier", Name: "tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}}}
-	c := Checker{Authz: scopingAuthz{}, Rows: Lookup{Policy: func(context.Context, string) *policy.Policy { return tier }}}
+	c := Checker{Authz: scopingAuthz{}}
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}},
-		Spec: hostkey.Spec{HostID: "h-1", PolicyID: "tier", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "HOME"}},
+		Spec: hostkey.Spec{HostID: "h-1", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "HOME"}},
 	}
 	member := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
 	if err := c.HostKey(member, k); err == nil {
@@ -185,7 +184,7 @@ func TestProjectPolicyHostKeyScope(t *testing.T) {
 		{"other", false},
 		{"personal", false},
 	} {
-		if err := c.HostKeyRefs(ctx, []string{tc.key}, project); (err == nil) != tc.ok {
+		if err := c.CredentialRefs(ctx, []string{tc.key}, project); (err == nil) != tc.ok {
 			t.Errorf("project policy -> %s host key: err=%v, want ok=%v", tc.key, err, tc.ok)
 		}
 	}

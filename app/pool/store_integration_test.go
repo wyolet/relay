@@ -38,7 +38,7 @@ func TestIntegration_PoolStoreRoundTrip(t *testing.T) {
 	for _, name := range []string{"key-a", "key-b", "key-c"} {
 		k := &hostkey.HostKey{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
-			Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
+			Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
 		}
 		if err := keys.Upsert(ctx, k); err != nil {
 			t.Fatalf("upsert host key %s: %v", name, err)

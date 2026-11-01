@@ -5,14 +5,14 @@ import (
 	"github.com/wyolet/relay/app/policy"
 )
 
-func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls, projects idSet) {
+func (s *Snapshot) addPolicies(pols []*policy.Policy, projects idSet) {
 	for _, p := range pols {
-		clean, keep := sanitizePolicy(p, models, keys, rls, projects)
+		clean, keep := sanitizePolicy(p, projects)
 		if !keep {
 			continue
 		}
 		if !clean.IsEnabled() {
-			// Kept outside the routing indices so its dependents answer
+			// Kept outside the enabled indices so its dependents answer
 			// policy_disabled; outbound refs stay registered so losing its
 			// project still evicts it.
 			s.disabledPoliciesByID[clean.Meta.ID] = clean
@@ -21,10 +21,6 @@ func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls, project
 		}
 		s.policiesByID[clean.Meta.ID] = clean
 		s.policiesByName[clean.Meta.Name] = clean
-		// Refs mirror the stored (sanitized) row so incremental delete/replace
-		// unregisters exactly what was registered. Re-appearance of a missing
-		// dependency is handled by the absent-id full reload in reconcile, not
-		// by ref-web reattachment.
 		s.registerRefs(refKey{Kind: refPolicy, ID: clean.Meta.ID}, outboundPolicyRefs(clean))
 	}
 }
@@ -38,9 +34,7 @@ func (s *Snapshot) policyResolvable(id string) bool {
 }
 
 // policyLookup returns the policy behind an id whether or not it is enabled.
-// The rows that survive a disable resolve through it: a Key, ServiceAccount
-// or PolicyBinding naming the policy, and a host key's tier policy, which
-// comes back intact when the tier is switched on again.
+// A PolicyBinding naming a disabled policy resolves through it.
 func (s *Snapshot) policyLookup(id string) (*policy.Policy, bool) {
 	if p, ok := s.policiesByID[id]; ok {
 		return p, true
@@ -49,60 +43,13 @@ func (s *Snapshot) policyLookup(id string) (*policy.Policy, bool) {
 	return p, ok
 }
 
-// computePolicyReverseJoins must run after policies, models, hostkeys, and
-// ratelimits are all in the snapshot, since the joins read those maps.
-func (s *Snapshot) computePolicyReverseJoins() {
-	for _, p := range s.policiesByID {
-		for _, id := range p.Spec.ModelIDs {
-			if m, ok := s.modelsByID[id]; ok {
-				s.modelsByPolicy[p.Meta.ID] = append(s.modelsByPolicy[p.Meta.ID], m)
-			}
-		}
-		for _, id := range p.Spec.HostKeyIDs {
-			if k, ok := s.hostKeysByID[id]; ok {
-				s.hostKeysByPolicy[p.Meta.ID] = append(s.hostKeysByPolicy[p.Meta.ID], k)
-			}
-		}
-		if p.Spec.RateLimitID != "" {
-			if r, ok := s.rateLimitsByID[p.Spec.RateLimitID]; ok {
-				s.rateLimitByPolicy[p.Meta.ID] = r
-			}
-		}
-	}
-}
-
-// sanitizePolicy drops Spec refs (ModelIDs, HostKeyIDs, RateLimitID,
-// RLBindings) whose targets aren't in the enabled-id sets. The original
-// Spec stays in PG; only the snapshot copy is filtered. The owning
-// Project is the one hard ref: without it the whole row is dropped.
-func sanitizePolicy(p *policy.Policy, models, keys, rls, projects idSet) (*policy.Policy, bool) {
-	if p.Meta.Owner.Kind == meta.OwnerProject {
-		if !projects(p.Meta.Owner.ID) {
-			return nil, false
-		}
+// sanitizePolicy drops a project-owned policy whose project is missing. Its
+// links are kept as stored: the plan builder reports a link to a missing
+// row rather than the snapshot hiding it.
+func sanitizePolicy(p *policy.Policy, projects idSet) (*policy.Policy, bool) {
+	if p.Meta.Owner.Kind == meta.OwnerProject && !projects(p.Meta.Owner.ID) {
+		return nil, false
 	}
 	clean := *p
-	clean.Spec = p.Spec
-	clean.Spec.ModelIDs = filterIDs(p.Spec.ModelIDs, models)
-	clean.Spec.HostKeyIDs = filterIDs(p.Spec.HostKeyIDs, keys)
-	if p.Spec.RateLimitID != "" {
-		if !rls(p.Spec.RateLimitID) {
-			clean.Spec.RateLimitID = ""
-		}
-	}
-	if len(p.Spec.RLBindings) > 0 {
-		bs := make([]policy.RLBinding, 0, len(p.Spec.RLBindings))
-		for _, b := range p.Spec.RLBindings {
-			if !rls(b.RateLimitID) {
-				continue
-			}
-			bs = append(bs, b)
-		}
-		if len(bs) == 0 {
-			clean.Spec.RLBindings = nil
-		} else {
-			clean.Spec.RLBindings = bs
-		}
-	}
 	return &clean, true
 }

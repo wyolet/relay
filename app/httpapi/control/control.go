@@ -205,7 +205,6 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerHostKeyHealth(api, d, protect)
 	registerReferences(api, d, protect)
 	registerDetach(api, d, protect)
-	registerPolicyKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models

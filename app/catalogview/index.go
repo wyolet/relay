@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
@@ -27,6 +28,7 @@ type index struct {
 	rlByID             map[string]*ratelimit.RateLimit
 	providerByID       map[string]*provider.Provider
 	hostkeyByID        map[string]*hostkey.HostKey
+	poolByID           map[string]*pool.Pool
 	providerSlug       string // the resolved model's provider slug, for DSL/RL matching
 }
 
@@ -82,6 +84,7 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		rls      []*ratelimit.RateLimit
 		provs    []*provider.Provider
 		keys     []*hostkey.HostKey
+		pools    []*pool.Pool
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(indexConcurrency)
@@ -120,6 +123,13 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		keys, err = s.HostKeys.List(gctx)
 		return err
 	})
+	if s.Pools != nil {
+		g.Go(func() error {
+			var err error
+			pools, err = s.Pools.List(gctx)
+			return err
+		})
+	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
@@ -133,9 +143,13 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		rlByID:             make(map[string]*ratelimit.RateLimit, len(rls)),
 		providerByID:       make(map[string]*provider.Provider, len(provs)),
 		hostkeyByID:        make(map[string]*hostkey.HostKey, len(keys)),
+		poolByID:           make(map[string]*pool.Pool, len(pools)),
 	}
 	for _, k := range keys {
 		idx.hostkeyByID[k.Meta.ID] = k
+	}
+	for _, p := range pools {
+		idx.poolByID[p.Meta.ID] = p
 	}
 	for _, h := range hosts {
 		idx.hostByID[h.Meta.ID] = h
@@ -186,18 +200,6 @@ func (idx *index) modelHostSet(modelID string) map[string]string {
 	for _, b := range idx.bindingsByModel[modelID] {
 		if h, ok := idx.hostByID[b.Spec.HostID]; ok {
 			out[h.Meta.ID] = h.Meta.Name
-		}
-	}
-	return out
-}
-
-// policyKeyHosts is the set of host ids the policy's hostkeys authenticate to
-// — the coverage gate for customer-policy reachability.
-func (idx *index) policyKeyHosts(p *policy.Policy) map[string]struct{} {
-	out := make(map[string]struct{}, len(p.Spec.HostKeyIDs))
-	for _, id := range p.Spec.HostKeyIDs {
-		if k, ok := idx.hostkeyByID[id]; ok {
-			out[k.Spec.HostID] = struct{}{}
 		}
 	}
 	return out

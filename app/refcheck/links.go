@@ -74,7 +74,7 @@ func (c Checker) budgetRefs(ctx context.Context, ids []string, refOwner meta.Own
 	return nil
 }
 
-// credentialRefs checks host keys linked by a policy or a pool. Unlike HostKeyRefs a missing key is refused. A non-empty hostID requires every key to authenticate to that host.
+// credentialRefs checks host keys linked by a policy or a pool; a missing key is refused. A non-empty hostID requires every key to authenticate to that host.
 func (c Checker) credentialRefs(ctx context.Context, ids []string, refOwner meta.Owner, hostID string) error {
 	if c.Rows.HostKey == nil {
 		return nil
@@ -99,6 +99,33 @@ func (c Checker) credentialRefs(ctx context.Context, ids []string, refOwner meta
 		}
 	}
 	return nil
+}
+
+// CredentialRefs checks host keys a policy owned by refOwner links.
+func (c Checker) CredentialRefs(ctx context.Context, ids []string, refOwner meta.Owner) error {
+	return c.credentialRefs(ctx, ids, refOwner, "")
+}
+
+// AccountRef checks that a host key owned by refOwner may name the account.
+func (c Checker) AccountRef(ctx context.Context, id string, refOwner meta.Owner) error {
+	if c.Rows.Account == nil {
+		return nil
+	}
+	a := c.Rows.Account(ctx, id)
+	if a == nil {
+		return badRequest("account %q does not exist", id)
+	}
+	return c.linkRef(ctx, "account", id, a.Meta, refOwner)
+}
+
+// PoolRefs checks pools a policy owned by refOwner links.
+func (c Checker) PoolRefs(ctx context.Context, ids []string, refOwner meta.Owner) error {
+	return c.poolRefs(ctx, ids, refOwner)
+}
+
+// BudgetRefs checks budgets a policy owned by refOwner links.
+func (c Checker) BudgetRefs(ctx context.Context, ids []string, refOwner meta.Owner) error {
+	return c.budgetRefs(ctx, ids, refOwner)
 }
 
 // linkRef applies the shared rules to one linked row: the caller sees it, and it lives in a scope the referrer may draw on.

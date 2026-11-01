@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// After a host delete, every model index (modelsByName, snapshotsByName,
-// modelsByPolicy) must serve the same row pointer as modelsByID.
+// After a host delete, every model index (modelsByName, snapshotsByName)
+// must serve the same row pointer as modelsByID.
 func TestApply_HostDeleteKeepsModelIndicesCoherent(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
@@ -15,7 +15,6 @@ func TestApply_HostDeleteKeepsModelIndicesCoherent(t *testing.T) {
 	}
 
 	m := models[0]
-	pol := pols[0]
 
 	if err := c.ApplyHostDelete(hosts[0].Meta.ID); err != nil {
 		t.Fatalf("ApplyHostDelete: %v", err)
@@ -41,12 +40,5 @@ func TestApply_HostDeleteKeepsModelIndicesCoherent(t *testing.T) {
 	}
 	if snapM != byID {
 		t.Errorf("snapshotsByName serves a different row copy than modelsByID for %q", m.Spec.Snapshots[0].Name)
-	}
-
-	inPolicy := s.ModelsInPolicy(pol.Meta.ID)
-	for _, mm := range inPolicy {
-		if mm.Meta.ID == m.Meta.ID && mm != byID {
-			t.Errorf("modelsByPolicy serves a different row copy than modelsByID for %q", m.Meta.ID)
-		}
 	}
 }
