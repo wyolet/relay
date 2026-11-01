@@ -34,8 +34,8 @@ type Spec struct {
 	// Models is the catalog grant — a list of ref strings parsed by
 	// app/modelref. See its package doc for the grammar. Each entry can
 	// match a single binding ("anthropic/claude-opus-4-7@bedrock"), all
-	// hosts for a model ("anthropic/claude-opus-4-7" or trailing @*),
-	// or every model under a provider ("anthropic" or "anthropic/*").
+	// hosts for a model ("anthropic/claude-opus-4-7"), or every model
+	// under a provider ("anthropic" or "anthropic/*").
 	//
 	// Patterns expand against the live catalog at plan build time, so a
 	// wildcard automatically includes models added later. Empty does not

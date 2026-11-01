@@ -91,6 +91,30 @@ func TestRoute_CallerGrantRefusalNamesRungAndPolicy(t *testing.T) {
 	}
 }
 
+// A provider wildcard ("acme/*") grants every model of that provider and no other, in the grant and in a rate limit's models scope, even stored as written.
+func TestRoute_ProviderWildcardGrantsTheProvidersModels(t *testing.T) {
+	b := newBasic()
+	beta := b.w.provider("beta")
+	x := b.w.model(beta, "x")
+	b.w.bind(x, b.hostA)
+	b.w.price(x, b.hostA)
+	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
+	tier := b.w.policy("acme-tier", policy.Spec{Models: []string{"acme/*", "beta/*"}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID, Models: []string{"acme/*"}}}})
+	b.w.bindPolicy(tier, subject(policybinding.SubjectHost, b.hostA.Meta.ID))
+	p := b.w.policy("acme-only", policy.Spec{Models: []string{"acme/*"}})
+	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	h := b.w.start(t)
+
+	if r := h.route(b.key, "acme/m1@host-a"); r.Refused != nil || len(r.Hops) == 0 {
+		t.Fatalf("acme/m1 under acme/* = %+v, want served", r.Refused)
+	}
+	wantRefused(t, h.route(b.key, "beta/x"), CodeModelNotAllowed, limits.RungProject)
+	byModel := get[HostRungs](h, "").Of(b.hostA.Meta.ID).ByModel
+	if len(byModel[b.m1.Meta.ID]) != 1 || len(byModel[x.Meta.ID]) != 0 {
+		t.Fatalf("scoped host counters by model = %v, want one for m1 and none for x", byModel)
+	}
+}
+
 // C19: a disabled policy refuses on its rung, never falls through to a broader one, keeps its dependents and serves again once re-enabled.
 func TestRoute_DisabledPolicyRefusesOnItsRungWithoutFallThrough(t *testing.T) {
 	b := newBasic()

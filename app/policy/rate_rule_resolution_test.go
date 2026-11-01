@@ -74,15 +74,14 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 			}(),
 		},
 		{
-			// A literal "*" is not the wildcard spelling — an absent
-			// segment is — so it is refused rather than granting everything.
-			name: "a literal star in the model position",
+			// A model of "*" is every model of the provider, as leaving the model out is.
+			name: "a provider wildcard in models and in a rate-limit scope",
 			p: func() *Policy {
 				p := fix("p")
 				p.Spec.Models = []string{"acme/*"}
+				p.Spec.RateLimits = []RateLimitLink{{Models: []string{"acme/*"}, RateLimitID: meta.NewID()}}
 				return p
 			}(),
-			want: "slug-compatible",
 		},
 		{
 			// Normalizing would drop the star and keep a prefix that grants nothing.
@@ -123,19 +122,19 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 // apply reports an update forever against a row the API just normalised.
 func TestCanonicalizeSpecModelRefs_RewritesEveryGrantList(t *testing.T) {
 	p := fix("p")
-	p.Spec.Models = []string{"Acme/GPT-5.5", "acme/gpt-5-5", "Acme"}
+	p.Spec.Models = []string{"Acme/GPT-5.5", "acme/gpt-5-5", "Acme", "acme/*"}
 	p.Spec.RateLimits = []RateLimitLink{
-		{Models: []string{"Acme/GPT-5.5@Host"}, RateLimitID: meta.NewID()},
+		{Models: []string{"Acme/GPT-5.5@Host", "acme/*@host"}, RateLimitID: meta.NewID()},
 	}
 	if err := p.CanonicalizeSpecModelRefs(); err != nil {
 		t.Fatalf("CanonicalizeSpecModelRefs: %v", err)
 	}
-	// The two spellings of one grant collapse to a single canonical entry.
+	// The spellings of one grant collapse to a single canonical entry; a provider wildcard is stored as the provider.
 	if want := []string{"acme/gpt-5-5", "acme"}; !slices.Equal(p.Spec.Models, want) {
 		t.Errorf("models = %v, want %v", p.Spec.Models, want)
 	}
-	if got := p.Spec.RateLimits[0].Models; len(got) != 1 || got[0] != "acme/gpt-5-5@host" {
-		t.Errorf("rateLimits models = %v, want [acme/gpt-5-5@host]", got)
+	if got, want := p.Spec.RateLimits[0].Models, []string{"acme/gpt-5-5@host", "acme@host"}; !slices.Equal(got, want) {
+		t.Errorf("rateLimits models = %v, want %v", got, want)
 	}
 	// Canonicalizing twice is a no-op: the second pass is what apply's diff
 	// compares against.
