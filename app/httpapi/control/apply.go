@@ -36,9 +36,9 @@ type applyInput struct {
 
 type applyOutput struct {
 	Body struct {
-		Plan    []apply.Entry `json:"plan"`
+		Plan    []apply.Entry `json:"plan"    doc:"One entry per document, with the action taken or planned."`
 		Applied bool          `json:"applied" doc:"False for a dry run."`
-		Counts  apply.Counts  `json:"counts"`
+		Counts  apply.Counts  `json:"counts"  doc:"How many entries took each action."`
 	}
 }
 

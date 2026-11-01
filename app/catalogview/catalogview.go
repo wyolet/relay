@@ -101,96 +101,96 @@ func (s *Service) visible(kind, id string, owner meta.Owner) bool {
 // ── view shapes ─────────────────────────────────────────────────────────────
 
 type HostRef struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
-	BaseURL     string `json:"baseURL,omitempty"`
+	ID          string `json:"id"                    doc:"Host id."`
+	Name        string `json:"name"                  doc:"Host slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
+	BaseURL     string `json:"baseURL,omitempty"     doc:"Upstream root URL."`
 	// Enabled + Icon are intrinsic host properties, carried on every HostRef
 	// so "host off" flags and real logos render everywhere a host appears.
-	Enabled bool      `json:"enabled"`
-	Icon    *IconView `json:"icon,omitempty"`
+	Enabled bool      `json:"enabled"        doc:"Whether the host is enabled."`
+	Icon    *IconView `json:"icon,omitempty" doc:"Host icon."`
 }
 type IconView struct {
-	Path string `json:"path,omitempty"`
+	Path string `json:"path,omitempty" doc:"Icon asset path."`
 }
 type ModelRef struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
+	ID          string `json:"id"                    doc:"Model id."`
+	Name        string `json:"name"                  doc:"Model slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
 	// Capabilities/context/deprecation are intrinsic model properties, so
 	// they ride along on every ModelRef — the policy, host, and model tabs
 	// all render the same capability icons + context window from one shape.
-	Capabilities       []string         `json:"capabilities,omitempty"`
-	ContextWindowTotal int              `json:"contextWindowTotal,omitempty"`
-	ContextWindowInput int              `json:"contextWindowInput,omitempty"`
-	Deprecation        *DeprecationView `json:"deprecation,omitempty"`
+	Capabilities       []string         `json:"capabilities,omitempty"       doc:"Names of the capabilities the model has, such as chat, tools, vision."`
+	ContextWindowTotal int              `json:"contextWindowTotal,omitempty" doc:"Context window in tokens."`
+	ContextWindowInput int              `json:"contextWindowInput,omitempty" doc:"Published input cap in tokens."`
+	Deprecation        *DeprecationView `json:"deprecation,omitempty"        doc:"Lifecycle state; absent means active."`
 }
 type ProviderRef struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
+	ID          string `json:"id"                    doc:"Provider id."`
+	Name        string `json:"name"                  doc:"Provider slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
 }
 type DeprecationView struct {
-	Status      string `json:"status"`
-	SunsetDate  string `json:"sunsetDate,omitempty"`
-	Replacement string `json:"replacement,omitempty"`
+	Status      string `json:"status"                enum:"active,deprecated,sunset" doc:"Lifecycle state."`
+	SunsetDate  string `json:"sunsetDate,omitempty"  doc:"Date the vendor stops serving the model, YYYY-MM-DD."`
+	Replacement string `json:"replacement,omitempty" doc:"Id of the replacement model."`
 }
 type OwnerRef struct {
-	Kind string `json:"kind"`         // "user" | "host" | "system" | …
-	ID   string `json:"id,omitempty"` // for host-tier policies, the host id
-	Name string `json:"name,omitempty"`
+	Kind string `json:"kind"           doc:"Owner kind: system, host, user, team or project."` // "user" | "host" | "system" | …
+	ID   string `json:"id,omitempty"   doc:"Owner id; for a host's tier preset, the host id."` // for host-tier policies, the host id
+	Name string `json:"name,omitempty" doc:"Owner slug, when it has one."`
 }
 type BindingView struct {
-	ID           string   `json:"id"`
-	Adapter      string   `json:"adapter"`
-	UpstreamName string   `json:"upstreamName,omitempty"`
-	Enabled      bool     `json:"enabled"`
-	Snapshots    []string `json:"snapshots,omitempty"`
+	ID           string   `json:"id"                     doc:"Host binding id."`
+	Adapter      string   `json:"adapter"                doc:"Wire shape relay speaks to the host for the model."`
+	UpstreamName string   `json:"upstreamName,omitempty" doc:"Model name sent upstream, when it differs."`
+	Enabled      bool     `json:"enabled"                doc:"Whether the binding is enabled."`
+	Snapshots    []string `json:"snapshots,omitempty"    doc:"Snapshots the host serves; empty means all."`
 }
 type Rate struct {
-	Meter       string  `json:"meter"`
-	Unit        string  `json:"unit"`
-	Amount      float64 `json:"amount"`
-	AboveTokens int     `json:"aboveTokens,omitempty"`
-	ServiceTier string  `json:"serviceTier,omitempty"`
+	Meter       string  `json:"meter"                 doc:"Usage counter the rate prices."`
+	Unit        string  `json:"unit"                  enum:"per_million,per_unit" doc:"Unit the amount prices."`
+	Amount      float64 `json:"amount"                doc:"Price per unit."`
+	AboveTokens int     `json:"aboveTokens,omitempty" doc:"Context tier threshold in prompt tokens; 0 is the base tier."`
+	ServiceTier string  `json:"serviceTier,omitempty" doc:"Upstream service tier the rate applies to; empty is the base rate."`
 }
 type PricingView struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Currency string `json:"currency"`
-	Rates    []Rate `json:"rates"`
+	ID       string `json:"id"       doc:"Pricing id."`
+	Name     string `json:"name"     doc:"Pricing slug."`
+	Currency string `json:"currency" doc:"Currency of the amounts."`
+	Rates    []Rate `json:"rates"    doc:"The sheet's rates."`
 }
 type Limit struct {
-	Meter    string `json:"meter"`
-	Amount   int64  `json:"amount"`
-	Window   string `json:"window"`
-	Strategy string `json:"strategy"`
+	Meter    string `json:"meter"    doc:"What the rule counts."`
+	Amount   int64  `json:"amount"   doc:"How much of the meter the window allows."`
+	Window   string `json:"window"   doc:"The window as a duration string, such as 1m0s."`
+	Strategy string `json:"strategy" doc:"Counting algorithm."`
 }
 
 // ModelHostRow — one host serving the model, with its binding + pricing.
 type ModelHostRow struct {
-	Host    HostRef      `json:"host"`
-	Binding BindingView  `json:"binding"`
-	Pricing *PricingView `json:"pricing"`
+	Host    HostRef      `json:"host"    doc:"The host."`
+	Binding BindingView  `json:"binding" doc:"The binding of the model at the host."`
+	Pricing *PricingView `json:"pricing" doc:"The binding's pricing; null when unpriced."`
 }
 
 // ModelPriceRow — flat: one host that prices this model (host inline).
 type ModelPriceRow struct {
-	Host     HostRef `json:"host"`
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	Currency string  `json:"currency"`
-	Rates    []Rate  `json:"rates"`
+	Host     HostRef `json:"host"     doc:"The pricing host."`
+	ID       string  `json:"id"       doc:"Pricing id."`
+	Name     string  `json:"name"     doc:"Pricing slug."`
+	Currency string  `json:"currency" doc:"Currency of the amounts."`
+	Rates    []Rate  `json:"rates"    doc:"The sheet's rates."`
 }
 
 // ModelPolicyRow — flat: a policy that grants this model. Host-tier policies
 // name their host via Owner; user policies grant across hosts (Owner.Kind
 // "user"). Limits are the rules every rate limit linked for THIS model adds.
 type ModelPolicyRow struct {
-	ID     string   `json:"id"`
-	Name   string   `json:"name"`
-	Owner  OwnerRef `json:"owner"`
-	Limits []Limit  `json:"limits"`
+	ID     string   `json:"id"     doc:"Policy id."`
+	Name   string   `json:"name"   doc:"Policy slug."`
+	Owner  OwnerRef `json:"owner"  doc:"The policy's owner; a host for a tier preset."`
+	Limits []Limit  `json:"limits" doc:"Rules of every rate limit the policy applies to this model."`
 }
 
 // ── projections ─────────────────────────────────────────────────────────────
@@ -274,9 +274,9 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 
 // HostModelRow — one model served by a host, with its binding + pricing.
 type HostModelRow struct {
-	Model   ModelRef     `json:"model"`
-	Binding BindingView  `json:"binding"`
-	Pricing *PricingView `json:"pricing"`
+	Model   ModelRef     `json:"model"   doc:"The model."`
+	Binding BindingView  `json:"binding" doc:"The binding of the model at the host."`
+	Pricing *PricingView `json:"pricing" doc:"The binding's pricing; null when unpriced."`
 }
 
 // HostModels returns the models a host serves (by id or slug).

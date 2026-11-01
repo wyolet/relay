@@ -13,17 +13,17 @@ import (
 
 // SummaryPrevious is one summary row's numbers over the previous window, with the same meaning as the SummaryRow fields of the same name.
 type SummaryPrevious struct {
-	Requests   int64            `json:"requests"`
-	ErrorCount int64            `json:"error_count"`
-	Errors4xx  int64            `json:"errors_4xx"`
-	Errors5xx  int64            `json:"errors_5xx"`
-	Throttled  int64            `json:"throttled"`
-	Tokens     map[string]int64 `json:"tokens"`
-	CostNanos  int64            `json:"cost_nanos"`
-	Unpriced   int64            `json:"unpriced"`
-	DurationMs DurationStats    `json:"duration_ms"`
-	TTFTMs     *DurationStats   `json:"ttft_ms,omitempty"`
-	Distinct   *int64           `json:"distinct,omitempty"`
+	Requests   int64            `json:"requests"           doc:"Requests in the previous window."`
+	ErrorCount int64            `json:"error_count"        doc:"Requests with status 400 or above."`
+	Errors4xx  int64            `json:"errors_4xx"         doc:"Requests with a 4xx status."`
+	Errors5xx  int64            `json:"errors_5xx"         doc:"Requests with a status of 500 or above."`
+	Throttled  int64            `json:"throttled"          doc:"Requests answered 429; part of errors_4xx."`
+	Tokens     map[string]int64 `json:"tokens"             doc:"Token sums by kind."`
+	CostNanos  int64            `json:"cost_nanos"         doc:"Cost of the priced requests, in nano-USD."`
+	Unpriced   int64            `json:"unpriced"           doc:"Requests with no cost, left out of cost_nanos."`
+	DurationMs DurationStats    `json:"duration_ms"        doc:"Request duration statistics in milliseconds."`
+	TTFTMs     *DurationStats   `json:"ttft_ms,omitempty"  doc:"Upstream time-to-first-byte statistics in milliseconds; absent when no request carried upstream timing."`
+	Distinct   *int64           `json:"distinct,omitempty" doc:"Distinct non-empty values of the distinct dimension. Present only with distinct set."`
 }
 
 // ErrNoPreviousWindow rejects a comparison whose window has no lower bound or ends before it starts: neither has a previous window of equal length.

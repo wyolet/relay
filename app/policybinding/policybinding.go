@@ -59,11 +59,11 @@ func (b *PolicyBinding) IndexSubjects() {
 // Spec carries the project, the policy, the subjects, and the enabled flag.
 type Spec struct {
 	// ProjectID is the owning project; empty when a team or the system owns the binding.
-	ProjectID string `json:"projectId,omitempty" yaml:"projectId,omitempty" validate:"omitempty,uuid"`
-	PolicyID  string `json:"policyId"  yaml:"policyId"  validate:"required,uuid"`
+	ProjectID string `json:"projectId,omitempty" yaml:"projectId,omitempty" validate:"omitempty,uuid" doc:"Id of the owning project; set it for a project-owned binding (the owner follows it). Empty when a team or the system owns the binding."`
+	PolicyID  string `json:"policyId"  yaml:"policyId"  validate:"required,uuid" doc:"Id of the policy the subjects are bound to."`
 	// Subjects are not dived into: rolebinding.Subject's own tags admit only the RoleBinding kinds, so Validate checks each one against SubjectKinds.
-	Subjects []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1"`
-	Enabled  *bool                 `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Subjects []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1" doc:"Rungs the policy governs, each inside the binding owner's scope. A subject is held by at most one binding (a user once per scope); a second answers 409 duplicate_binding. Only a system-owned binding may name a host."`
+	Enabled  *bool                 `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops the binding from governing its subjects. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

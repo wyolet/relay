@@ -28,10 +28,10 @@ type Project struct {
 // Spec carries the parent Team and the enabled flag. A project's spend cap is a Budget its bound policy links.
 type Spec struct {
 	// TeamID is the owning Team. Required; mirrors Meta.Owner.ID.
-	TeamID string `json:"teamId" yaml:"teamId" validate:"required,uuid"`
+	TeamID string `json:"teamId" yaml:"teamId" validate:"required,uuid" doc:"Id of the team the project belongs to. The project's owner follows it."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference from inside the project with 403 subject_disabled. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

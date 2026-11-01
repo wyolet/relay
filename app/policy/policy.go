@@ -41,40 +41,40 @@ type Spec struct {
 	// wildcard automatically includes models added later. Empty does not
 	// constrain this rung: the parent's grant applies. Deprecated models
 	// are hidden from wildcards unless Spec.IncludeDeprecated.
-	Models []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1"`
+	Models []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1" doc:"Model references this policy allows, in the model-reference grammar: provider/model@host for one binding, provider/model for every host serving it, provider or provider/* for every model of a provider. Wildcards expand against the live catalog. Empty does not constrain this rung: the request is held to the other rungs' lists."`
 
 	// IncludeDeprecated controls whether wildcard Models entries expand
 	// to models whose Spec.Deprecation.Status is "deprecated" or
 	// "sunset". Default false (deprecated models excluded). Literal
 	// grants in Models always resolve regardless — if you explicitly
 	// name a deprecated model by slug, you mean to grant it.
-	IncludeDeprecated bool `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
+	IncludeDeprecated bool `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty" doc:"Let wildcard entries in models match deprecated and sunset models. Models named literally always match."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses every request this policy governs with policy_disabled. Omitted means true."`
 
 	// PayloadLoggingEnabled decides whether the request/response bodies of
 	// every request this policy governs are captured, overriding the
 	// credential's own flag either way (see CapturesPayload). Off by default.
-	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of every request this policy governs, overriding the key's own flag."`
 
 	// PoolIDs are the pools this policy draws keys from, tried in order, so a later pool is the failover for an earlier one. Host-owned policies list none.
-	PoolIDs []string `json:"poolIds,omitempty" yaml:"poolIds,omitempty" validate:"omitempty,dive,uuid"`
+	PoolIDs []string `json:"poolIds,omitempty" yaml:"poolIds,omitempty" validate:"omitempty,dive,uuid" doc:"Ids of the pools requests draw host keys from, tried in this order: a later pool is the failover for an earlier one. Only on policies bound to a team, project, user or service account."`
 
 	// CredentialIDs are host keys linked directly, each one a pool of one. Host-owned policies list none.
-	CredentialIDs []string `json:"credentialIds,omitempty" yaml:"credentialIds,omitempty" validate:"omitempty,dive,uuid"`
+	CredentialIDs []string `json:"credentialIds,omitempty" yaml:"credentialIds,omitempty" validate:"omitempty,dive,uuid" doc:"Ids of host keys linked directly, each one a pool of one, tried after poolIds. Only on policies bound to a team, project, user or service account."`
 
 	// RateLimits are the rate limits a request under this policy must fit.
-	RateLimits []RateLimitLink `json:"rateLimits,omitempty" yaml:"rateLimits,omitempty" validate:"omitempty,dive"`
+	RateLimits []RateLimitLink `json:"rateLimits,omitempty" yaml:"rateLimits,omitempty" validate:"omitempty,dive" doc:"Rate limits every request under this policy must fit."`
 
 	// BudgetIDs are the budgets a request under this policy must fit.
-	BudgetIDs []string `json:"budgetIds,omitempty" yaml:"budgetIds,omitempty" validate:"omitempty,dive,uuid"`
+	BudgetIDs []string `json:"budgetIds,omitempty" yaml:"budgetIds,omitempty" validate:"omitempty,dive,uuid" doc:"Ids of the budgets every request under this policy must fit. Unpriced models are refused under a budget."`
 }
 
 // RateLimitLink applies one RateLimit to a policy's requests: to every model when Models is empty, otherwise only to requests for a model matching one of Models (app/modelref grammar). One rate limit may be linked more than once with different Models.
 type RateLimitLink struct {
-	RateLimitID string   `json:"rateLimitId"      yaml:"rateLimitId"      validate:"required,uuid"`
-	Models      []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1"`
+	RateLimitID string   `json:"rateLimitId"      yaml:"rateLimitId"      validate:"required,uuid"    doc:"Id of the linked rate limit."`
+	Models      []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1" doc:"Model references the limit applies to; empty applies it to every request. Only policies bound to a host, account or host key may scope a limit to models."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

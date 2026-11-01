@@ -11,7 +11,7 @@ type Inference struct {
 	// KeyRotateMaxGrace caps, in seconds, how long a rotated key's previous
 	// hash keeps authenticating. Zero means the default below; rotation
 	// requests above the cap are rejected.
-	KeyRotateMaxGrace int `json:"keyRotateMaxGrace"`
+	KeyRotateMaxGrace int `json:"keyRotateMaxGrace" doc:"Longest graceSeconds a key rotation may ask for; 0 means the default of one day."`
 }
 
 // DefaultKeyRotateMaxGrace is the cap applied when the section leaves

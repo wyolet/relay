@@ -301,11 +301,11 @@ type usageEventsInput struct {
 
 type usageEventsOutput struct {
 	Body struct {
-		Events []usagelog.Event `json:"events"`
+		Events []usagelog.Event `json:"events" doc:"Matching events, newest first."`
 		// NextCursor is set when a full page was returned (more may exist);
 		// pass it back as ?cursor= to fetch the next page. Empty on the
 		// last page.
-		NextCursor string `json:"next_cursor,omitempty"`
+		NextCursor string `json:"next_cursor,omitempty" doc:"Pass back as ?cursor= for the next page; absent on the last page."`
 	}
 }
 

@@ -22,10 +22,10 @@ type ServiceAccount struct {
 // holds no policy: a PolicyBinding binds it.
 type Spec struct {
 	// ProjectID is the owning Project. Required; mirrors Meta.Owner.ID.
-	ProjectID string `json:"projectId" yaml:"projectId" validate:"required,uuid"`
+	ProjectID string `json:"projectId" yaml:"projectId" validate:"required,uuid" doc:"Id of the project the service account belongs to. The owner follows it."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference with the service account's keys (403 subject_disabled). Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

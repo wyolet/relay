@@ -35,15 +35,17 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 					Method:      http.MethodPost,
 					Path:        path.Path,
 					Summary:     path.Summary,
+					Description: generationDescription(spec),
 					Tags:        []string{"inference"},
 					Middlewares: specMW,
-					Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
+					Responses:   generationResponses(api, spec),
 				}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 					return &huma.StreamResponse{Body: func(hctx huma.Context) {
 						r, w := humachi.Unwrap(hctx)
 						handleShape(spec, d, w, r)
 					}}, nil
 				})
+				documentRequestBody(api, path.Path, spec)
 				mountProfileAliases(api, d, specMW, spec, path)
 			}
 		}

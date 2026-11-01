@@ -26,18 +26,18 @@ import (
 
 // PolicyRef identifies the policy a sub-resource response belongs to.
 type PolicyRef struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	DisplayName string   `json:"displayName,omitempty"`
-	Owner       OwnerRef `json:"owner"`
-	Enabled     bool     `json:"enabled"`
+	ID          string   `json:"id"                    doc:"Policy id."`
+	Name        string   `json:"name"                  doc:"Policy slug."`
+	DisplayName string   `json:"displayName,omitempty" doc:"Display name."`
+	Owner       OwnerRef `json:"owner"                 doc:"The policy's owner."`
+	Enabled     bool     `json:"enabled"               doc:"Whether the policy is enabled."`
 }
 
 type HostKeyRef struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Enabled               bool   `json:"enabled"`
-	SharedWithPolicyCount int    `json:"sharedWithPolicyCount"` // # of OTHER policies linking this key, directly or through a pool
+	ID                    string `json:"id"                    doc:"Host key id."`
+	Name                  string `json:"name"                  doc:"Host key slug."`
+	Enabled               bool   `json:"enabled"               doc:"Whether the key is enabled."`
+	SharedWithPolicyCount int    `json:"sharedWithPolicyCount" doc:"How many other policies link this key, directly or through a pool."` // # of OTHER policies linking this key, directly or through a pool
 }
 
 // PolicyBindingRow — one concrete (provider, model, host) binding this policy
@@ -47,20 +47,20 @@ type HostKeyRef struct {
 // empty model list) — the one fact the client can't recompute. Limits are
 // resolved for THIS exact triple.
 type PolicyBindingRow struct {
-	Provider  ProviderRef `json:"provider"`
-	Host      HostRef     `json:"host"`
-	Model     ModelRef    `json:"model"`
-	Binding   BindingView `json:"binding"`
-	MatchedBy []string    `json:"matchedBy"`
-	Limits    []Limit     `json:"limits"`
+	Provider  ProviderRef `json:"provider"  doc:"The model's provider."`
+	Host      HostRef     `json:"host"      doc:"The serving host."`
+	Model     ModelRef    `json:"model"     doc:"The model."`
+	Binding   BindingView `json:"binding"   doc:"The binding of the model at the host."`
+	MatchedBy []string    `json:"matchedBy" doc:"The policy's model entries that allow this binding; * when the policy lists no models."`
+	Limits    []Limit     `json:"limits"    doc:"Rules of every rate limit the policy applies to this binding."`
 }
 
 // PolicyModelExclusion — a model this policy does NOT grant, with why. Surfaced
 // by PolicyModelExclusions (the ?debug view) to make an empty grant diagnosable
 // — e.g. a host-tier policy whose host has no bindings post-migration.
 type PolicyModelExclusion struct {
-	Model  ModelRef `json:"model"`
-	Reason string   `json:"reason"`
+	Model  ModelRef `json:"model"  doc:"The model."`
+	Reason string   `json:"reason" doc:"Why the policy does not allow it, such as no matching entry, deprecated, or no host the policy reaches."`
 }
 
 // PolicyHostRow — a host this policy can reach, with the host-keys that reach
@@ -69,9 +69,9 @@ type PolicyModelExclusion struct {
 // the policy grants (losing its key would drop that model), else "optional" —
 // a sibling reachable host covers everything it does.
 type PolicyHostRow struct {
-	Host        HostRef      `json:"host"`
-	HostKeys    []HostKeyRef `json:"hostKeys"`
-	Requirement string       `json:"requirement"` // "required" | "optional"
+	Host        HostRef      `json:"host"        doc:"The host."`
+	HostKeys    []HostKeyRef `json:"hostKeys"    doc:"Host keys reaching it through the policy's pools and keys; empty for a tier preset's own host."`
+	Requirement string       `json:"requirement" enum:"required,optional" doc:"required when the host alone serves some allowed model, so losing its keys would drop that model; optional when other hosts cover everything it serves."` // "required" | "optional"
 }
 
 // loadPolicy resolves the policy {ref} (id or slug) and builds the index.

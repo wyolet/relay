@@ -233,6 +233,11 @@ func Mount(r chi.Router, d Deps) huma.API {
 	patchProp(api, "RateLimitRule", "window", func(s *huma.Schema) {
 		s.Description = "Measurement period, in whole seconds."
 	})
+	documentDomainSchemas(api)
+	policyBindingSubject(api)
+	entityEnvelope(api)
+	describeErrors(api)
+	api.OpenAPI().Tags = controlTags
 
 	// The control API is mounted in front of the SPA's NotFound fallback,
 	// which answers HTML. A client calling a renamed or removed endpoint

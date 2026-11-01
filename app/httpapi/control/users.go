@@ -25,17 +25,17 @@ import (
 
 // userRow is the projection returned by GET /users.
 type userRow struct {
-	ID       string   `json:"id"`
-	Username string   `json:"username"`
-	Email    string   `json:"email,omitempty"`
-	Roles    []string `json:"roles,omitempty"`
-	Disabled bool     `json:"disabled"`
+	ID       string   `json:"id"              doc:"User id."`
+	Username string   `json:"username"        doc:"Sign-in name."`
+	Email    string   `json:"email,omitempty" doc:"Email address, when known."`
+	Roles    []string `json:"roles,omitempty" doc:"Names of the roles bound to the user."`
+	Disabled bool     `json:"disabled"        doc:"A disabled user cannot sign in and its tokens and keys stop authenticating."`
 }
 
 type usersListOutput struct {
 	Body struct {
-		Items []userRow `json:"items"`
-		Total int       `json:"total"`
+		Items []userRow `json:"items" doc:"The page of users."`
+		Total int       `json:"total" doc:"Users matching before limit and offset apply."`
 	}
 }
 
@@ -88,7 +88,7 @@ type userWriter interface {
 }
 
 type userUpdateInput struct {
-	ID   string `path:"id"`
+	ID   string `path:"id" doc:"User id."`
 	Body struct {
 		Disabled *bool     `json:"disabled,omitempty" doc:"Disable or re-enable the account. Disabling also invalidates every inference token the user holds."`
 		Roles    *[]string `json:"roles,omitempty" doc:"Replace the account's roles. Omit to leave them unchanged."`

@@ -43,9 +43,9 @@ type Budget struct {
 // Spec carries the cap, its period and its mode.
 type Spec struct {
 	// AmountUSD is a decimal string with at most two fractional digits, so money never round-trips through a float.
-	AmountUSD string `json:"amountUsd"        yaml:"amountUsd"        validate:"required,budgetamount"`
-	Period    Period `json:"period,omitempty" yaml:"period,omitempty" validate:"omitempty,oneof=day week month"`
-	Mode      Mode   `json:"mode,omitempty"   yaml:"mode,omitempty"   validate:"omitempty,oneof=hard alert"`
+	AmountUSD string `json:"amountUsd"        yaml:"amountUsd"        validate:"required,budgetamount" pattern:"^\\d+(\\.\\d{1,2})?$" doc:"Spend cap in USD per period, as a decimal string with at most two fractional digits, such as \"2000\" or \"49.50\"."`
+	Period    Period `json:"period,omitempty" yaml:"period,omitempty" validate:"omitempty,oneof=day week month" enum:"day,week,month" doc:"Calendar period the cap covers, in UTC. Omitted means month."`
+	Mode      Mode   `json:"mode,omitempty"   yaml:"mode,omitempty"   validate:"omitempty,oneof=hard alert"     enum:"hard,alert"      doc:"hard refuses requests once the cap is spent (429 budget_exceeded); alert reports the overrun and lets them through. Omitted means hard."`
 }
 
 // Default fills the fields a wire form may omit, so a stored row and the manifest that declared it converge instead of differing by an empty period or mode forever. Nil receiver is a no-op.
