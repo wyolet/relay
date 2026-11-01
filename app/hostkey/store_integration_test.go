@@ -143,6 +143,17 @@ func TestIntegration_SavedKeyAlwaysHasAnAccount(t *testing.T) {
 		t.Fatalf("default account = %+v, %v", def, err)
 	}
 
+	// A team's keys join the team's own default account.
+	platform := meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
+	e := save("key-e", platform, "")
+	f := save("key-f", platform, "")
+	if e.Spec.AccountID != f.Spec.AccountID || e.Spec.AccountID == a.Spec.AccountID || e.Spec.AccountID == c.Spec.AccountID {
+		t.Errorf("team keys joined %q and %q, want one account of the team's own", e.Spec.AccountID, f.Spec.AccountID)
+	}
+	if got, err := account.NewStore(q).Get(ctx, e.Spec.AccountID); err != nil || got == nil || !got.Spec.Default || got.Meta.Owner != platform {
+		t.Fatalf("team default account = %+v, %v", got, err)
+	}
+
 	// An update that drops the account joins the default again.
 	d.Spec.AccountID = ""
 	if err := store.Upsert(ctx, d); err != nil {

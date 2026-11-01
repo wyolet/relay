@@ -47,6 +47,13 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
+	t.Run("ok team-owned", func(t *testing.T) {
+		k := fix("k", ValueKindEnv)
+		k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
+		if err := k.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
 	t.Run("ok with account", func(t *testing.T) {
 		k := fix("k", ValueKindEnv)
 		k.Spec.AccountID = meta.NewID()
@@ -63,7 +70,16 @@ func TestValidate(t *testing.T) {
 		{
 			name: "host owner rejected",
 			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerHost; return k }(),
-			want: "owner.kind must be user, system or project",
+			want: "owner.kind must be user, system, team or project",
+		},
+		{
+			name: "team owner without id",
+			k: func() *HostKey {
+				k := fix("k", ValueKindEnv)
+				k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam}
+				return k
+			}(),
+			want: "a team owner needs the team's id",
 		},
 		{
 			name: "missing host id",

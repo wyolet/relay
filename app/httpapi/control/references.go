@@ -343,6 +343,24 @@ func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "metadata.owner.id", owner: b.Meta.Owner})
 		}
 	}
+	keys, err := d.Stores.HostKey.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list host-keys: %w", err)
+	}
+	for _, k := range keys {
+		if ownedBy(k.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+		}
+	}
+	rls, err := d.Stores.RateLimit.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list rate-limits: %w", err)
+	}
+	for _, r := range rls {
+		if ownedBy(r.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "rate-limit", ID: r.Meta.ID, Name: r.Meta.Name, Via: "metadata.owner.id", owner: r.Meta.Owner})
+		}
+	}
 	scoped, err := scanRoleBindingsScopedTo(ctx, d, meta.OwnerTeam, id)
 	if err != nil {
 		return nil, err

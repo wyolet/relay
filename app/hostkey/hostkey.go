@@ -171,8 +171,8 @@ func reservedEnv(name string) bool {
 func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind must be user or system (the actor that created the key);
-//     keys are not owned by the Host they authenticate to.
+//   - Owner.Kind must be user, system, team or project, a team owner with its
+//     id; keys are not owned by the Host they authenticate to.
 //   - Spec.HostID is required; it points at the Host this key targets.
 //   - ValueKindEnv requires Spec.ValueFrom.Env outside the reserved RELAY_*/WYOLET_* names; cleartext Value must be empty.
 //   - ValueKindStored requires non-empty cleartext Spec.Value at write time;
@@ -186,8 +186,12 @@ func (k *HostKey) Validate() error {
 	}
 	switch k.Meta.Owner.Kind {
 	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
+	case meta.OwnerTeam:
+		if k.Meta.Owner.ID == "" {
+			return fmt.Errorf("hostkey %q: a team owner needs the team's id", k.Meta.Name)
+		}
 	default:
-		return fmt.Errorf("hostkey %q: owner.kind must be user, system or project, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+		return fmt.Errorf("hostkey %q: owner.kind must be user, system, team or project, got %q", k.Meta.Name, k.Meta.Owner.Kind)
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
