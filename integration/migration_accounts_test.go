@@ -235,7 +235,7 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// The upgrade logs, by name, each pre-0.20 link it drops: a key's or host key's policy, and a policy's host keys, models, rate limit and per-model rate limits. A link to a row that is gone is named by id.
+// The upgrade logs, by name, each pre-0.20 link it drops: a key's, service account's or host key's policy, and a policy's host keys, models, rate limit and per-model rate limits; and each binding that stops governing as before: group subjects, and users under a project's binding. A link to a row that is gone is named by id.
 // Not parallel: it reads the process-wide default logger.
 func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
 	ctx := context.Background()
@@ -247,6 +247,7 @@ func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
 	system := `{"owner":{"kind":"system"}}`
 	userID, hostID, modelID, rlID, rlModelsID, tierID, gone := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
 	hostKeyID := meta.NewID()
+	teamID, projectID, plainID, bindingID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
 	for _, stmt := range []struct {
 		what, sql string
 		args      []any
@@ -273,6 +274,17 @@ func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
 		{"key without a policy", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'plain-key', 'cc33', $2, $3, '{}')`, []any{
 			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`,
 		}},
+		{"team", `INSERT INTO teams (id, name, metadata, spec) VALUES ($1, 'link-team', $2, '{}')`, []any{teamID, system}},
+		{"project", `INSERT INTO projects (id, name, team_id, metadata, spec) VALUES ($1, 'link-project', $2, $3, '{}')`, []any{projectID, teamID, `{"owner":{"kind":"team","id":"` + teamID + `"}}`}},
+		{"plain policy", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'plain-policy', $2, '{}')`, []any{plainID, system}},
+		{"service account with a policy", `INSERT INTO service_accounts (id, name, project_id, metadata, spec) VALUES ($1, 'link-sa', $2, $3, $4)`, []any{
+			meta.NewID(), projectID, `{"owner":{"kind":"project","id":"` + projectID + `"}}`, `{"projectId":"` + projectID + `","policyId":"` + plainID + `"}`,
+		}},
+		{"binding", `INSERT INTO policy_bindings (id, name, project_id, policy_id, metadata, spec) VALUES ($1, 'link-binding', $2, $3, $4, '{}')`, []any{
+			bindingID, projectID, plainID, `{"owner":{"kind":"project","id":"` + projectID + `"}}`,
+		}},
+		{"group subject", `INSERT INTO policy_binding_subjects (binding_id, kind, subject_name, position, owner_scope) VALUES ($1, 'group', 'system:authenticated', 0, $2)`, []any{bindingID, "project:" + projectID}},
+		{"user subject", `INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_user_id, position, owner_scope) VALUES ($1, 'user', $2, $2, 1, $3)`, []any{bindingID, userID, "project:" + projectID}},
 	} {
 		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("insert %s: %v", stmt.what, err)
@@ -302,6 +314,9 @@ func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
 		`000036: dropping link: key "link-key" -> policy "tier-one"`,
 		`000036: dropping link: key "stale-key" -> policy "` + gone + `"`,
 		`000036: dropping link: host key "link-host-key" -> tier policy "tier-one"`,
+		`000036: dropping link: service account "link-sa" -> policy "plain-policy"`,
+		`000036: binding no longer applies: policy binding "link-binding" (policy "plain-policy") -> group "system:authenticated"`,
+		`000036: binding narrows to project tokens: policy binding "link-binding" (policy "plain-policy") -> user "link-user" governs only tokens in project "link-project", not personal keys`,
 		`000036: dropping link: policy "tier-one" -> host key "link-host-key"`,
 		`000036: dropping link: policy "tier-one" -> model "link-model"`,
 		`000036: dropping link: policy "tier-one" -> rate limit "tier-rpm"`,

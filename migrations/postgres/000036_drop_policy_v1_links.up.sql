@@ -2,7 +2,7 @@
 --
 -- Moving data to the new shape is manual, so nothing is converted: the legacy model-id and host-key junctions, the single rate-limit column, the binding priority, and the old fields inside the spec documents are removed.
 
--- Each link removed below is reported by name first, so the operator running the upgrade can re-create the ones still wanted. A target whose row is gone is reported by id.
+-- Each link removed below, and each binding that stops governing what it governed, is reported by name first, so the operator running the upgrade can re-create the ones still wanted. A target whose row is gone is reported by id.
 DO $$
 DECLARE
     r RECORD;
@@ -22,6 +22,32 @@ BEGIN
         ORDER BY 1, 2
     LOOP
         RAISE NOTICE '000036: dropping link: host key "%" -> tier policy "%"', r.src, r.dst;
+    END LOOP;
+    FOR r IN
+        SELECT sa.name AS src, COALESCE(p.name, sa.spec->>'policyId') AS dst
+        FROM service_accounts sa LEFT JOIN policies p ON p.id = sa.spec->>'policyId'
+        WHERE COALESCE(sa.spec->>'policyId', '') <> ''
+        ORDER BY 1, 2
+    LOOP
+        RAISE NOTICE '000036: dropping link: service account "%" -> policy "%"', r.src, r.dst;
+    END LOOP;
+    -- Bindings stay, but a group subject (system:authenticated included) binds nothing now, and a project's binding on a user governs only that user's tokens in the project, no longer the user's personal keys.
+    FOR r IN
+        SELECT b.name AS src, p.name AS pol, s.subject_name AS grp
+        FROM policy_binding_subjects s JOIN policy_bindings b ON b.id = s.binding_id JOIN policies p ON p.id = b.policy_id
+        WHERE s.kind = 'group'
+        ORDER BY 1, s.position
+    LOOP
+        RAISE NOTICE '000036: binding no longer applies: policy binding "%" (policy "%") -> group "%"', r.src, r.pol, r.grp;
+    END LOOP;
+    FOR r IN
+        SELECT b.name AS src, p.name AS pol, COALESCE(u.username, s.subject_id) AS usr, pr.name AS proj
+        FROM policy_binding_subjects s JOIN policy_bindings b ON b.id = s.binding_id JOIN policies p ON p.id = b.policy_id
+        JOIN projects pr ON pr.id = b.project_id LEFT JOIN users u ON u.id = s.subject_id
+        WHERE s.kind = 'user'
+        ORDER BY 1, s.position
+    LOOP
+        RAISE NOTICE '000036: binding narrows to project tokens: policy binding "%" (policy "%") -> user "%" governs only tokens in project "%", not personal keys', r.src, r.pol, r.usr, r.proj;
     END LOOP;
     FOR r IN
         SELECT p.name AS src, COALESCE(s.name, phk.host_key_id) AS dst
