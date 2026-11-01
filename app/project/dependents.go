@@ -20,7 +20,8 @@ import (
 // would cascade through the foreign keys to its service accounts, their
 // keys and its policy bindings, and leave its policies, host keys, rate
 // limits, accounts, pools and budgets owned by a project that no longer
-// exists — so apply's prune refuses while any remain.
+// exists — so apply's prune refuses while any remain. A default account no
+// key names is the exception: the delete takes it along.
 type Rows struct {
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Keys            []*key.Key
@@ -69,8 +70,15 @@ func (r Rows) Dependents(id string, gone Gone, visible Visible) (named []string,
 	for _, x := range r.RateLimits {
 		add("RateLimit", x.Meta, x.Meta.Owner == owned)
 	}
+	// A default account no remaining key names goes with the project.
+	held := map[string]bool{}
+	for _, k := range r.HostKeys {
+		if gone == nil || !gone("HostKey", k.Meta.ID) {
+			held[k.Spec.AccountID] = true
+		}
+	}
 	for _, x := range r.Accounts {
-		add("Account", x.Meta, x.Meta.Owner == owned)
+		add("Account", x.Meta, x.Meta.Owner == owned && (!x.Spec.Default || held[x.Meta.ID]))
 	}
 	for _, x := range r.Pools {
 		add("Pool", x.Meta, x.Meta.Owner == owned)

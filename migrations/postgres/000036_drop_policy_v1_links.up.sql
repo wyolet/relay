@@ -20,6 +20,19 @@ UPDATE projects SET spec = spec - 'budget' WHERE spec ? 'budget';
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS default_owner TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_one_default ON accounts (host_id, default_owner);
 
+-- A default account no key names goes with its team or project in the same transaction, as it goes with its host through host_id; one a key still names stays, and the delete paths refuse while it does.
+CREATE OR REPLACE FUNCTION accounts_drop_keyless_defaults() RETURNS trigger AS $$
+BEGIN
+    DELETE FROM accounts a
+    WHERE a.default_owner = TG_ARGV[0] || ':' || OLD.id
+      AND NOT EXISTS (SELECT 1 FROM secrets s WHERE s.spec->>'accountId' = a.id);
+    RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER teams_drop_keyless_default_accounts AFTER DELETE ON teams
+    FOR EACH ROW EXECUTE FUNCTION accounts_drop_keyless_defaults('team');
+CREATE TRIGGER projects_drop_keyless_default_accounts AFTER DELETE ON projects
+    FOR EACH ROW EXECUTE FUNCTION accounts_drop_keyless_defaults('project');
+
 -- Existing keys without an account join their owner's default account the same way. Its name is the host's, suffixed -2, -3, … when taken. An owner without a kind, or a user without an id, is the system, as the write paths stamp it. Keys whose host is gone stay as they are.
 DO $$
 DECLARE
