@@ -60,6 +60,10 @@ func buildPlanEngine(cfg *config.Config, stores *appcatalog.Stores, users *user.
 		ServiceAccounts: stores.ServiceAccount,
 		Users:           users,
 		Keys:            stores.Key,
+		Roles:           stores.Role,
+		RoleBindings:    stores.RoleBinding,
+		Groups:          stores.Group,
+		RBAC:            cfg.Authz == config.AuthzRBAC,
 	}
 	if stores.Overlay != nil {
 		src.Overlays = plan.OverlaySource{Store: stores.Overlay}

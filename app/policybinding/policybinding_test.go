@@ -61,14 +61,44 @@ func TestValidate(t *testing.T) {
 			want: "spec.projectId must be empty",
 		},
 		{
-			name: "user owner rejected",
+			name: "user owner binding itself",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: b.Spec.Subjects[0].ID}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+		},
+		{
+			name: "user owner binding another user",
 			b: func() *PolicyBinding {
 				b := fix()
 				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
 				b.Spec.ProjectID = ""
 				return b
 			}(),
-			want: "owner.kind must be system, team or project",
+			want: "has one subject, its owner",
+		},
+		{
+			name: "user owner binding itself and more",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: b.Spec.Subjects[0].ID}
+				b.Spec.ProjectID = ""
+				b.Spec.Subjects = append(b.Spec.Subjects, rolebinding.Subject{Kind: SubjectTeam, ID: meta.NewID()})
+				return b
+			}(),
+			want: "has one subject, its owner",
+		},
+		{
+			name: "host owner rejected",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+			want: "owner.kind must be system, team, project or user",
 		},
 		{
 			name: "owner id drifted from projectId",

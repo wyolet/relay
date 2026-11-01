@@ -551,21 +551,22 @@ DELETE FROM audit_events WHERE ts < $1;
 -- ── policy bindings (migration 0027) ─────────────────────────────────────────
 
 -- name: ListPolicyBindings :many
-SELECT id, name, display_name, project_id, policy_id, metadata, spec, created_at, updated_at, resource_version, team_id
+SELECT id, name, display_name, project_id, policy_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id
 FROM policy_bindings ORDER BY name;
 
 -- name: GetPolicyBinding :one
-SELECT id, name, display_name, project_id, policy_id, metadata, spec, created_at, updated_at, resource_version, team_id
+SELECT id, name, display_name, project_id, policy_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id
 FROM policy_bindings WHERE id = $1;
 
 -- name: UpsertPolicyBinding :execrows
-INSERT INTO policy_bindings (id, name, display_name, project_id, team_id, policy_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+INSERT INTO policy_bindings (id, name, display_name, project_id, team_id, user_id, policy_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name         = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     project_id   = EXCLUDED.project_id,
     team_id      = EXCLUDED.team_id,
+    user_id      = EXCLUDED.user_id,
     policy_id    = EXCLUDED.policy_id,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,

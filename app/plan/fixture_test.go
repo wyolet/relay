@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -25,6 +26,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
@@ -74,6 +76,10 @@ type world struct {
 	sas       []*serviceaccount.ServiceAccount
 	users     []*user.User
 	keys      []*key.Key
+	roles     []*role.Role
+	rbs       []*rolebinding.RoleBinding
+	groups    []*group.Group
+	rbac      bool
 }
 
 var nameSeq atomic.Uint64
@@ -248,6 +254,10 @@ func (w *world) sources() Sources {
 		ServiceAccounts: src(w.sas, func(r *serviceaccount.ServiceAccount) meta.Metadata { return r.Meta }),
 		Users:           rows[user.User]{list: w.users, id: func(u *user.User) string { return u.ID }},
 		Keys:            src(w.keys, func(r *key.Key) meta.Metadata { return r.Meta }),
+		Roles:           src(w.roles, func(r *role.Role) meta.Metadata { return r.Meta }),
+		RoleBindings:    src(w.rbs, func(r *rolebinding.RoleBinding) meta.Metadata { return r.Meta }),
+		Groups:          src(w.groups, func(r *group.Group) meta.Metadata { return r.Meta }),
+		RBAC:            w.rbac,
 	}
 }
 

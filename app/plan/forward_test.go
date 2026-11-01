@@ -20,7 +20,8 @@ func TestNotifyRefMapsCatalogKinds(t *testing.T) {
 		{"pool", "p1", engine.Ref{Kind: KindPool, ID: "p1"}, true},
 		{"user", "u1", engine.Ref{Kind: KindUser, ID: "u1"}, true},
 		{"settings", "governance:policy", engine.Ref{}, false},
-		{"role", "r1", engine.Ref{}, false},
+		{"role", "r1", engine.Ref{Kind: KindRole, ID: "r1"}, true},
+		{"secretkey", "s1", engine.Ref{}, false},
 	} {
 		got, ok := NotifyRef(tc.kind, tc.id)
 		if got != tc.want || ok != tc.ok {
@@ -29,7 +30,7 @@ func TestNotifyRefMapsCatalogKinds(t *testing.T) {
 	}
 	// Every input kind the plans register must be reachable from some notification.
 	for _, k := range []engine.Kind{KindProvider, KindHost, KindModel, KindPricing, KindPolicy, KindPolicyBinding,
-		KindRateLimit, KindBudget, KindAccount, KindTeam, KindProject, KindServiceAccount} {
+		KindRateLimit, KindBudget, KindAccount, KindTeam, KindProject, KindServiceAccount, KindRole, KindRoleBinding, KindGroup} {
 		if got, ok := NotifyRef(string(k), "x"); !ok || got.Kind != k {
 			t.Errorf("kind %s is not forwarded", k)
 		}

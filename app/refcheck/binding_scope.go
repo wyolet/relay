@@ -1,4 +1,4 @@
-// Scope rules for a policy binding: it is owned by the system, a team or a project, it binds only subjects inside that scope, and it uses a policy of that scope, an ancestor of it, the system, or a host, whose linked pools and credentials that scope may use.
+// Scope rules for a policy binding: it is owned by the system, a team, a project or a user (who binds only themselves), it binds only subjects inside that scope, and it uses a policy of that scope, an ancestor of it, the system, a host, or a user who may manage policy bindings there, whose linked pools and credentials that scope may use.
 
 package refcheck
 
@@ -13,7 +13,7 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 )
 
-// BindablePolicy checks the policy a binding owned by scope uses. A host's tier preset is shared like a system policy (a team binds the provider's tier to its own account); a personal policy belongs to no scope a binding can have.
+// BindablePolicy checks the policy a binding owned by scope uses. A host's tier preset is shared like a system policy (a team binds the provider's tier to its own account). A personal policy is bound by its owner: to themselves, or from a team or project where its owner may manage policy bindings.
 func (c Checker) BindablePolicy(ctx context.Context, policyID string, scope meta.Owner) error {
 	if policyID == "" || c.Rows.Policy == nil {
 		return nil
@@ -25,10 +25,39 @@ func (c Checker) BindablePolicy(ctx context.Context, policyID string, scope meta
 	if !Visible(ctx, c.Authz, "policy", p.Meta.ID, p.Meta.Owner) {
 		return notVisible("policy", policyID)
 	}
-	if p.Meta.Owner.Kind != meta.OwnerHost && !c.containsScope(ctx, p.Meta.Owner, scope) {
-		return badRequest("policy %q is owned by %s; a binding owned by %s may use a policy of its own scope, an ancestor of it, the system, or a host", p.Meta.Name, ownerText(p.Meta.Owner), ownerText(scope))
+	switch {
+	case p.Meta.Owner.Kind == meta.OwnerUser:
+		if err := c.personalPolicyBindableIn(ctx, p, scope); err != nil {
+			return err
+		}
+	case p.Meta.Owner.Kind != meta.OwnerHost && !c.containsScope(ctx, p.Meta.Owner, scope):
+		return badRequest("policy %q is owned by %s; a binding owned by %s may use a policy of its own scope, an ancestor of it, the system, a host, or a user who may manage policy bindings there", p.Meta.Name, ownerText(p.Meta.Owner), ownerText(scope))
 	}
 	return c.linksUsableIn(ctx, p, scope)
+}
+
+// personalPolicyBindableIn refuses a user's policy bound outside what that user controls: their own binding of themselves, or a team or project where they may manage policy bindings. Without a permission lookup (a loader running as the deployment) a team or project may bind it; the plans re-check.
+func (c Checker) personalPolicyBindableIn(ctx context.Context, p *policy.Policy, scope meta.Owner) error {
+	owner := p.Meta.Owner
+	switch scope.Kind {
+	case meta.OwnerUser:
+		if scope.ID == owner.ID {
+			return nil
+		}
+	case meta.OwnerTeam, meta.OwnerProject:
+		if c.Rows.UserMayBindIn == nil {
+			return nil
+		}
+		ok, err := c.Rows.UserMayBindIn(ctx, owner.ID, scope)
+		if err != nil {
+			return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+		}
+		if ok {
+			return nil
+		}
+		return badRequest("policy %q is owned by %s, who may not manage policy bindings in %s", p.Meta.Name, ownerText(owner), ownerText(scope))
+	}
+	return badRequest("policy %q is owned by %s; a binding owned by %s cannot use it: a personal policy is bound by its owner to themselves, or by a team or project where its owner may manage policy bindings", p.Meta.Name, ownerText(owner), ownerText(scope))
 }
 
 // linksUsableIn refuses a policy linking a pool or credential, directly or inside a linked pool, that scope may not use: binding the policy would hand the scope's subjects another scope's credentials. A missing link is left to the plan, where it narrows.
@@ -88,7 +117,7 @@ func (c Checker) linksOnPolicy(ctx context.Context, p *policy.Policy) error {
 	return nil
 }
 
-// subjectsInScope refuses a subject outside the binding owner's scope. A project binds itself, its service accounts, the accounts and credentials it owns, and its members; a team the same for itself and each of its projects; the system anything, and only the system binds a host. Group subjects are not rungs and are not checked.
+// subjectsInScope refuses a subject outside the binding owner's scope. A project binds itself, its service accounts, the accounts and credentials it owns, and its members; a team the same for itself and each of its projects; a user only themselves; the system anything, and only the system binds a host. Group subjects are not rungs and are not checked.
 func (c Checker) subjectsInScope(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	owner := pb.Meta.Owner
 	for i := range pb.Spec.Subjects {
@@ -146,8 +175,14 @@ func (c Checker) subjectsInScope(ctx context.Context, pb *policybinding.PolicyBi
 	return nil
 }
 
-// userInScope refuses a user who is not a member of a team or project owning the binding. Without a membership lookup the check is skipped.
+// userInScope refuses a user who is not a member of a team or project owning the binding, and any user but the owner of a user-owned one. Without a membership lookup the team and project check is skipped.
 func (c Checker) userInScope(ctx context.Context, i int, userID string, owner meta.Owner) error {
+	if owner.Kind == meta.OwnerUser {
+		if userID != owner.ID {
+			return badRequest("subjects[%d]: a binding owned by %s binds only that user", i, ownerText(owner))
+		}
+		return nil
+	}
 	if owner.Kind == meta.OwnerSystem || c.Rows.UserActsIn == nil {
 		return nil
 	}

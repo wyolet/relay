@@ -35,7 +35,7 @@ func scopedBindingDoc(name string, owner manifest.WireOwner, pol string, subject
 
 // The graph linter mirrors the control-plane rule: a binding uses a policy of
 // its own scope, an ancestor of it, the system, or a host (a tier preset);
-// a personal policy is never bindable, and only a system binding binds a host.
+// a personal policy is bound by its owner or a team or project, and only a system binding binds a host.
 func TestValidateGraph_BindsOnlyPoliciesOfItsScope(t *testing.T) {
 	base := func(extra ...manifest.Document) []manifest.Document {
 		docs := append(fixture(),
@@ -69,8 +69,15 @@ func TestValidateGraph_BindsOnlyPoliciesOfItsScope(t *testing.T) {
 		{"another team's policy", policyBindingDoc("pb-other-team", "ml-search", "other-team-pol"),
 			`policy "other-team-pol" belongs to team "other-team"`},
 		{"operator's ownerless shared policy", policyBindingDoc("pb-operator", "ml-search", "operator"), ""},
-		{"another person's personal policy", policyBindingDoc("pb-personal", "ml-search", "personal"),
-			`policy "personal" is personal and cannot be bound`},
+		{"a project binding a person's policy", policyBindingDoc("pb-personal", "ml-search", "personal"), ""},
+		{"a system binding a person's policy", scopedBindingDoc("pb-personal-system", manifest.WireOwner{Kind: "system"}, "personal"),
+			`policy "personal" is personal`},
+		{"a person binding their own policy", scopedBindingDoc("pb-alice", manifest.WireOwner{Kind: "user", Name: "alice"}, "personal",
+			manifest.PolicySubjectDTO{Kind: "user", Name: "alice"}), ""},
+		{"a person binding another's policy", scopedBindingDoc("pb-bob", manifest.WireOwner{Kind: "user", Name: "bob"}, "personal",
+			manifest.PolicySubjectDTO{Kind: "user", Name: "bob"}), `policy "personal" is personal`},
+		{"a person binding a team", scopedBindingDoc("pb-alice-team", manifest.WireOwner{Kind: "user", Name: "alice"}, "personal",
+			manifest.PolicySubjectDTO{Kind: "team", Name: "platform"}), "has one subject, its owner"},
 		{"team binding on its own policy", scopedBindingDoc("pb-team-own", manifest.WireOwner{Kind: "team", Name: "platform"}, "team-pol"), ""},
 		{"system binding on a host", scopedBindingDoc("pb-host", manifest.WireOwner{Kind: "system"}, "tier",
 			manifest.PolicySubjectDTO{Kind: "host", Name: "openai-host"}), ""},

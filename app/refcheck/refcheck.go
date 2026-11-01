@@ -87,6 +87,8 @@ type Lookup struct {
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
 	// UserActsIn reports whether a user is a member of a team or project scope: one whose requests can fall inside it.
 	UserActsIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
+	// UserMayBindIn reports whether a user may manage policy bindings in a team or project scope.
+	UserMayBindIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
 }
 
 // Checker applies the rules for the caller in ctx. A nil Authz is a loader
@@ -526,7 +528,7 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 // CodeDuplicateBinding is the error code of a binding naming a subject another binding already holds.
 const CodeDuplicateBinding = "duplicate_binding"
 
-// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. A user may be bound once per scope, since a binding governs only the requests inside its owner's scope; two scopes where one holds the other (the system and anything, a team and its projects) would both govern one request, so they conflict. Group subjects are not policy rungs and may repeat.
+// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. A user may be bound once per scope, since a binding governs only the requests inside its owner's scope; two scopes where one holds the other (the system and anything, a team and its projects) would both govern one request, so they conflict. A user's own binding governs the requests outside any project, so only a system-owned binding conflicts with it. Group subjects are not policy rungs and may repeat.
 func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	if c.Rows.PolicyBindings == nil {
 		return nil
@@ -545,7 +547,7 @@ func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBi
 					continue
 				}
 				user := sub.Kind == rolebinding.SubjectUser
-				if user && !c.containsScope(ctx, pb.Meta.Owner, other.Meta.Owner) && !c.containsScope(ctx, other.Meta.Owner, pb.Meta.Owner) {
+				if user && !c.userScopesOverlap(ctx, pb.Meta.Owner, other.Meta.Owner) {
 					continue
 				}
 				by := "another policy binding"
@@ -561,4 +563,9 @@ func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBi
 		}
 	}
 	return nil
+}
+
+// userScopesOverlap reports whether bindings of one user owned by a and b would both govern one of that user's requests: one scope holds the other, the system holding the user's own.
+func (c Checker) userScopesOverlap(ctx context.Context, a, b meta.Owner) bool {
+	return c.containsScope(ctx, a, b) || c.containsScope(ctx, b, a)
 }

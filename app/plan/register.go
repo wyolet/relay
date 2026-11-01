@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -20,6 +21,8 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
@@ -47,6 +50,9 @@ const (
 	KindServiceAccount engine.Kind = "serviceaccount"
 	KindUser           engine.Kind = "user"
 	KindKey            engine.Kind = "key"
+	KindRole           engine.Kind = "role"
+	KindRoleBinding    engine.Kind = "rolebinding"
+	KindGroup          engine.Kind = "group"
 )
 
 // Derived kinds, built by the controllers.
@@ -89,6 +95,12 @@ type Sources struct {
 	ServiceAccounts engine.Source[serviceaccount.ServiceAccount]
 	Users           engine.Source[user.User]
 	Keys            engine.Source[key.Key]
+	// Roles, RoleBindings and Groups feed the RBAC re-check of personal policies bound by a team or project; read only when RBAC is set.
+	Roles        engine.Source[role.Role]
+	RoleBindings engine.Source[rolebinding.RoleBinding]
+	Groups       engine.Source[group.Group]
+	// RBAC is set under the role-based authorizer. Without it every user may manage every policy binding, so the plans do not re-check.
+	RBAC bool
 }
 
 // Register declares every input kind with its source, the derived kinds, and their controllers on e. cells must be the registry passed as e's Options.Cells, so the cells the controllers acquire are kept alive by the plans that link them. Call before e.Load.
@@ -114,6 +126,12 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 		return engine.Meta{ID: u.ID, Name: u.Username, Version: version(u.ResourceVersion)}
 	}, 64)
 	input(e, KindKey, src.Keys, metaOf(func(r *key.Key) meta.Metadata { return r.Meta }), 256)
+	if !src.RBAC {
+		src.Roles, src.RoleBindings, src.Groups = nil, nil, nil
+	}
+	input(e, KindRole, src.Roles, metaOf(func(r *role.Role) meta.Metadata { return r.Meta }), 1)
+	input(e, KindRoleBinding, src.RoleBindings, metaOf(func(r *rolebinding.RoleBinding) meta.Metadata { return r.Meta }), 1)
+	input(e, KindGroup, src.Groups, metaOf(func(r *group.Group) meta.Metadata { return r.Meta }), 1)
 
 	derived[CatalogIndex](e, KindCatalogIndex, 1)
 	derived[ExpandedPolicy](e, KindExpandedPolicy, 16)
@@ -132,7 +150,7 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[ProjectPlan](e, KindProjectPlan, 16)
 	derived[ProjectIndex](e, KindProjectIndex, 1)
 
-	c := &controllers{cells: cells}
+	c := &controllers{cells: cells, rbac: src.RBAC}
 	for _, ctl := range c.all() {
 		e.Register(ctl)
 	}
@@ -206,4 +224,7 @@ var (
 	_ engine.Source[serviceaccount.ServiceAccount] = (*serviceaccount.Store)(nil)
 	_ engine.Source[user.User]                     = (*user.Store)(nil)
 	_ engine.Source[key.Key]                       = (*key.Store)(nil)
+	_ engine.Source[role.Role]                     = (*role.Store)(nil)
+	_ engine.Source[rolebinding.RoleBinding]       = (*rolebinding.Store)(nil)
+	_ engine.Source[group.Group]                   = (*group.Store)(nil)
 )

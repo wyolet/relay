@@ -1,8 +1,9 @@
 // Package policybinding is the domain layer for the PolicyBinding entity —
 // it points a set of subjects inside its owner's scope (the system, a team or
-// a project) at one Policy. A subject with an id is held by at most one
-// binding, except a user, who may be bound once per scope. Subjects may also
-// name a host, an account, a credential, a team or a project.
+// a project) at one Policy; a user may also own a binding whose only subject
+// is that user. A subject with an id is held by at most one binding, except a
+// user, who may be bound once per scope. Subjects may also name a host, an
+// account, a credential, a team or a project.
 //
 // Authorization and the cross-row scope rules are app/authz's and
 // app/refcheck's concern; this package validates shape only.
@@ -58,8 +59,8 @@ func (b *PolicyBinding) IndexSubjects() {
 
 // Spec carries the project, the policy, the subjects, and the enabled flag.
 type Spec struct {
-	// ProjectID is the owning project; empty when a team or the system owns the binding.
-	ProjectID string `json:"projectId,omitempty" yaml:"projectId,omitempty" validate:"omitempty,uuid" doc:"Id of the owning project; set it for a project-owned binding (the owner follows it). Empty when a team or the system owns the binding."`
+	// ProjectID is the owning project; empty when a team, a user or the system owns the binding.
+	ProjectID string `json:"projectId,omitempty" yaml:"projectId,omitempty" validate:"omitempty,uuid" doc:"Id of the owning project; set it for a project-owned binding (the owner follows it). Empty when a team, a user or the system owns the binding."`
 	PolicyID  string `json:"policyId"  yaml:"policyId"  validate:"required,uuid" doc:"Id of the policy the subjects are bound to."`
 	// Subjects are not dived into: rolebinding.Subject's own tags admit only the RoleBinding kinds, so Validate checks each one against SubjectKinds.
 	Subjects []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1" doc:"Rungs the policy governs, each inside the binding owner's scope. A subject is held by at most one binding (a user once per scope); a second answers 409 duplicate_binding. Only a system-owned binding may name a host."`
@@ -82,7 +83,7 @@ func (b *PolicyBinding) StampOwner() {
 	}
 }
 
-// ScopeKey names the owner scope the way subjects are keyed ("team:<id>", "project:<id>"), "" for the system.
+// ScopeKey names the owner scope the way subjects are keyed ("team:<id>", "project:<id>", "user:<id>"), "" for the system.
 func (b *PolicyBinding) ScopeKey() string {
 	if b.Meta.Owner.Kind == meta.OwnerSystem {
 		return ""
@@ -91,8 +92,9 @@ func (b *PolicyBinding) ScopeKey() string {
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is system, team or project; a project owner equals
-//     Spec.ProjectID, which is empty for the other two.
+//   - Owner.Kind is system, team, project or user; a project owner equals
+//     Spec.ProjectID, which is empty for the others.
+//   - a user-owned binding has one subject, its owner.
 //   - every subject has one of SubjectKinds, and an id-bearing one a UUID.
 //   - the subject rules shared with RoleBinding.
 func (b *PolicyBinding) Validate() error {
@@ -117,8 +119,18 @@ func (b *PolicyBinding) Validate() error {
 		if b.Spec.ProjectID != "" {
 			return fmt.Errorf("policybinding %q: spec.projectId must be empty for a %s-owned binding", b.Meta.Name, o.Kind)
 		}
+	case meta.OwnerUser:
+		if meta.Validator.Var(o.ID, "required,uuid") != nil {
+			return fmt.Errorf("policybinding %q: a user owner needs the user's id, got %q", b.Meta.Name, o.ID)
+		}
+		if b.Spec.ProjectID != "" {
+			return fmt.Errorf("policybinding %q: spec.projectId must be empty for a user-owned binding", b.Meta.Name)
+		}
+		if s := b.Spec.Subjects; len(s) != 1 || s[0].Kind != rolebinding.SubjectUser || s[0].ID != o.ID {
+			return fmt.Errorf("policybinding %q: a user-owned binding has one subject, its owner (user %s)", b.Meta.Name, o.ID)
+		}
 	default:
-		return fmt.Errorf("policybinding %q: owner.kind must be system, team or project, got %q", b.Meta.Name, o.Kind)
+		return fmt.Errorf("policybinding %q: owner.kind must be system, team, project or user, got %q", b.Meta.Name, o.Kind)
 	}
 	for i := range b.Spec.Subjects {
 		s := &b.Spec.Subjects[i]

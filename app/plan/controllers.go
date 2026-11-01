@@ -19,7 +19,10 @@ import (
 	"github.com/wyolet/relay/pkg/engine/cell"
 )
 
-type controllers struct{ cells *cell.Registry }
+type controllers struct {
+	cells *cell.Registry
+	rbac  bool // re-check personal policies bound by a team or project (personal_policy.go)
+}
 
 // singleton is the Watch key of a kind with one output, id "".
 var singleton = []string{""}

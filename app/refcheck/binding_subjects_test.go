@@ -46,7 +46,7 @@ func TestPolicyBindingRefusesASubjectAnotherBindingHolds(t *testing.T) {
 	}
 }
 
-// A user is bound once per scope: two projects, two teams, or a team and another team's project may each bind the same user, because no request is inside both. The system and any scope, or a team and its own project, overlap and conflict. Other subjects stay at one binding whatever the owners.
+// A user is bound once per scope: two projects, two teams, or a team and another team's project may each bind the same user, because no request is inside both. The user's own binding governs only requests outside any project, so it stands beside a team's or a project's. The system and any scope, including the user's own, or a team and its own project, overlap and conflict. Other subjects stay at one binding whatever the owners.
 func TestPolicyBindingBindsAUserOncePerScope(t *testing.T) {
 	teamA, teamB := meta.NewID(), meta.NewID()
 	inA, alsoInA, inB := meta.NewID(), meta.NewID(), meta.NewID()
@@ -56,6 +56,7 @@ func TestPolicyBindingBindsAUserOncePerScope(t *testing.T) {
 	proj := func(id string) meta.Owner { return meta.Owner{Kind: meta.OwnerProject, ID: id} }
 	alice := rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: meta.NewID()}
 	sa := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: meta.NewID()}
+	own := meta.Owner{Kind: meta.OwnerUser, ID: alice.ID}
 
 	bindingOf := func(owner meta.Owner, sub rolebinding.Subject) *policybinding.PolicyBinding {
 		b := &policybinding.PolicyBinding{
@@ -79,6 +80,12 @@ func TestPolicyBindingBindsAUserOncePerScope(t *testing.T) {
 		{"user in the system and a project", sys, proj(inA), alice, true},
 		{"user in a project and the system", proj(inA), sys, alice, true},
 		{"user twice in one project", proj(inA), proj(inA), alice, true},
+		{"user's own binding and a project", own, proj(inA), alice, false},
+		{"a project and the user's own binding", proj(inB), own, alice, false},
+		{"user's own binding and a team", own, team(teamA), alice, false},
+		{"user's own binding and the system", own, sys, alice, true},
+		{"the system and the user's own binding", sys, own, alice, true},
+		{"user's own binding twice", own, own, alice, true},
 		{"service account in two scopes", proj(inA), team(teamA), sa, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

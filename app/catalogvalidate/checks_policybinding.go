@@ -7,10 +7,11 @@ import (
 )
 
 // checkPolicyBindingRefs validates PolicyBinding outbound refs:
-//   - the owner scope (spec.project, else a team or system metadata.owner)
-//     exists
+//   - the owner scope (spec.project, else a team, user or system
+//     metadata.owner) exists
 //   - spec.policy exists and is bindable from that scope
-//   - every catalog-held subject exists; only a system binding binds a host
+//   - every catalog-held subject exists; only a system binding binds a host,
+//     and a user's binding binds only that user
 func checkPolicyBindingRefs(g *graph) []Issue {
 	var out []Issue
 	for _, b := range g.PolicyBindings {
@@ -29,10 +30,17 @@ func checkPolicyBindingRefs(g *graph) []Issue {
 				out = append(out, refMissing(src, "metadata.owner", "Team", name))
 			}
 		case "system":
+		case "user":
+			// The owner may be named by id and the subject by name, so the server checks they are one user.
+			if s := b.Spec.Subjects; name == "" || len(s) != 1 || s[0].Kind != "user" {
+				out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant,
+					Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.subjects"},
+					Message: "a user-owned policy binding has one subject, its owner"})
+			}
 		default:
 			out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
 				Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "metadata.owner"},
-				Message: "a policy binding names spec.project, or a team or system owner"})
+				Message: "a policy binding names spec.project, or a team, user or system owner"})
 		}
 		if b.Spec.Policy == "" {
 			out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
@@ -50,8 +58,9 @@ func checkPolicyBindingRefs(g *graph) []Issue {
 
 // checkPolicyBindable mirrors the control-plane rule: a binding uses a policy
 // of its own scope, an ancestor of it, the system, or a host (a tier
-// preset). A personal policy belongs to no scope a binding can have; an
-// ownerless user row is the operator's shared row and stays bindable.
+// preset). A personal policy is bound by its owner's own binding or by a team
+// or project binding, where the server checks the owner may manage bindings;
+// an ownerless user row is the operator's shared row and stays bindable.
 func checkPolicyBindable(g *graph, src Ref, p *manifest.PolicyDTO, scope, scopeName string) []Issue {
 	field := Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"}
 	target := Ref{Kind: "Policy", Name: p.Metadata.Name}
@@ -74,8 +83,11 @@ func checkPolicyBindable(g *graph, src Ref, p *manifest.PolicyDTO, scope, scopeN
 			return refuse(fmt.Sprintf("policy %q belongs to team %q, outside this binding's %s scope", p.Metadata.Name, name, scope))
 		}
 	case "user":
-		if name != "" {
-			return refuse(fmt.Sprintf("policy %q is personal and cannot be bound", p.Metadata.Name))
+		switch {
+		case name == "", scope == "team", scope == "project":
+		case scope == "user" && scopeName == name:
+		default:
+			return refuse(fmt.Sprintf("policy %q is personal: its owner binds it to themselves, or a team or project binds it", p.Metadata.Name))
 		}
 	}
 	return nil

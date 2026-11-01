@@ -257,3 +257,64 @@ func TestIntegration_UserHeldByOneBindingPerScope(t *testing.T) {
 		t.Fatalf("first project binds alice twice: err = %v, want ErrSubjectBound", err)
 	}
 }
+
+// A user-owned binding round-trips with its owner, holds the user once in the user's own scope beside a project's binding of the same user, and goes when the user is deleted.
+func TestIntegration_UserOwnedBinding(t *testing.T) {
+	ctx := context.Background()
+	db := storagetest.Pool(t)
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "own-scope", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := team.NewStore(db).Upsert(ctx, tm); err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+	prj := &project.Project{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "own-scope", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}},
+		Spec: project.Spec{TeamID: tm.Meta.ID},
+	}
+	if err := project.NewStore(db).Upsert(ctx, prj); err != nil {
+		t.Fatalf("upsert project: %v", err)
+	}
+	users := user.NewStore(db)
+	u := &user.User{ID: meta.NewID(), Username: "own-scope-alice"}
+	if err := users.Upsert(ctx, u); err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "own-scope", Owner: meta.Owner{Kind: meta.OwnerUser, ID: u.ID}}}
+	if err := policy.NewStore(db).Upsert(ctx, pol); err != nil {
+		t.Fatalf("upsert policy: %v", err)
+	}
+	store := policybinding.NewStore(db)
+	alice := rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: u.ID}
+	own := func(name string) *policybinding.PolicyBinding {
+		return &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerUser, ID: u.ID}},
+			Spec: policybinding.Spec{PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{alice}},
+		}
+	}
+	mine := own("alice-own")
+	if err := store.Upsert(ctx, mine); err != nil {
+		t.Fatalf("upsert user-owned: %v", err)
+	}
+	got, err := store.Get(ctx, mine.Meta.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get user-owned: %v (row %v)", err, got)
+	}
+	if got.Meta.Owner != mine.Meta.Owner || got.Spec.ProjectID != "" {
+		t.Fatalf("user-owned read back as owner %+v projectId %q", got.Meta.Owner, got.Spec.ProjectID)
+	}
+	if err := store.Upsert(ctx, own("alice-own-again")); !errors.Is(err, policybinding.ErrSubjectBound) {
+		t.Fatalf("second user-owned binding of alice: err = %v, want ErrSubjectBound", err)
+	}
+	// The index holds one per scope, so a project's binding of alice stands beside her own.
+	if err := store.Upsert(ctx, &policybinding.PolicyBinding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-in-project"},
+		Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{alice}},
+	}); err != nil {
+		t.Fatalf("project binds alice beside her own binding: %v", err)
+	}
+	if err := users.Delete(ctx, u.ID); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+	if got, err := store.Get(ctx, mine.Meta.ID); err != nil || got != nil {
+		t.Fatalf("user-owned binding after its user was deleted = %v (err %v), want gone", got, err)
+	}
+}

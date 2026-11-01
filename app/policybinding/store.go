@@ -88,9 +88,9 @@ func (s *Store) Get(ctx context.Context, id string) (*PolicyBinding, error) {
 func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	b.StampOwner()
 	switch b.Meta.Owner.Kind {
-	case meta.OwnerSystem, meta.OwnerTeam, meta.OwnerProject:
+	case meta.OwnerSystem, meta.OwnerTeam, meta.OwnerProject, meta.OwnerUser:
 	default:
-		return fmt.Errorf("policybinding.Upsert: owner.kind must be system, team or project, got %q", b.Meta.Owner.Kind)
+		return fmt.Errorf("policybinding.Upsert: owner.kind must be system, team, project or user, got %q", b.Meta.Owner.Kind)
 	}
 	params, err := toUpsertParams(b)
 	if err != nil {
@@ -185,6 +185,8 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 		md.Owner = meta.Owner{Kind: meta.OwnerProject, ID: r.ProjectID.String}
 	case r.TeamID.Valid:
 		md.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: r.TeamID.String}
+	case r.UserID.Valid:
+		md.Owner = meta.Owner{Kind: meta.OwnerUser, ID: r.UserID.String}
 	default:
 		md.Owner = meta.Owner{Kind: meta.OwnerSystem}
 	}
@@ -210,9 +212,12 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, err
 	}
-	var teamID string
-	if b.Meta.Owner.Kind == meta.OwnerTeam {
+	var teamID, userID string
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerTeam:
 		teamID = b.Meta.Owner.ID
+	case meta.OwnerUser:
+		userID = b.Meta.Owner.ID
 	}
 	return gen.UpsertPolicyBindingParams{
 		ID:              b.Meta.ID,
@@ -220,6 +225,7 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 		DisplayName:     b.Meta.DisplayName,
 		ProjectID:       text(b.Spec.ProjectID),
 		TeamID:          text(teamID),
+		UserID:          text(userID),
 		PolicyID:        b.Spec.PolicyID,
 		Metadata:        metaJSON,
 		Spec:            specJSON,
