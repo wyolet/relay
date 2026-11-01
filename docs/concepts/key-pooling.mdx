@@ -112,6 +112,27 @@ A `401` can mean the value Relay holds is stale, for example after a stored key 
 - **It was the last candidate:** the request waits for one re-read and retries the same key if the value changed.
 - **The value is unchanged:** the key is treated as revoked, the caller gets the upstream error, and the key is probed again after each cooldown.
 
+## Detect a key's account
+
+Keys of one provider organization share that organization's rate limits, so they belong in one account. To find out which organization a key belongs to, ask its host:
+
+```bash
+curl -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/host-keys/by-id/<id>/detect-account
+```
+
+Relay makes one models-list request to the key's host with that key and reads the organization id from the response header: `openai-organization` on OpenAI, `anthropic-organization-id` on Anthropic. Hosts that send no such header (Gemini, most OpenAI-compatible hosts) answer `422`; a key the host refuses answers `502` with the host's status.
+
+```json
+{ "orgId": "org-abc123", "currentAccountId": "<account id>", "matchingAccountId": "<account id>" }
+```
+
+`matchingAccountId` is the account of the key's owner at the same host whose `orgId` is the detected one; it is absent when there is none. The call never moves the key. To move it, update the key with `spec.accountId` set to that account, or create an account with the detected `orgId` first.
+
+When the key's current account has no `orgId` and no other account of the owner at the host claims the organization, Relay fills it in, but only after asking every other key of that account (up to 8) and getting the same organization from each. The answer then names the current account as the match.
+
+Relay also reads the same header on live responses and remembers, per pod, the organization each key last named. When two keys of one account name different organizations, it logs a warning naming both keys and counts [`relay_account_org_mismatch_total`](/reference/metrics). It never moves a key on its own.
+
 ## Inspecting and recovering keys
 
 Read a key's breaker state:

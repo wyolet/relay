@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
+	"github.com/wyolet/relay/app/orgwatch"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/proxy"
@@ -63,6 +64,7 @@ func buildPipeline(lim limits.Limiter, selector *keypool.Selector, postFlight po
 		// candidates exist and parking only when this key is the last resort.
 		KeyAgent:   appsecret.NewAgent(keyRefresher{store: credentials, plans: plans.engine, cat: cat}, 0, slog.Default()),
 		HostHealth: postFlight.hostHealth,
+		Orgs:       orgwatch.New(slog.Default()),
 	}
 	return pl, lifecycleReg
 }

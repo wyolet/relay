@@ -207,6 +207,7 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			call.accepted.Store(true)
 			st.cur.reached, st.callerReached = true, true
+			p.observeOrg(req.Adapter, slot, resp.Header)
 			out.result = p.makeResult(req, st, resp, call)
 			return actStop, out
 		}
@@ -248,6 +249,20 @@ func (p *Pipeline) callSlot(ctx context.Context, req *Request, st *runState, hop
 			out.err = err
 		}
 		return action, out
+	}
+}
+
+// observeOrg hands Orgs the organization a served response names for the slot's credential. A credential outside any account has no siblings to disagree with.
+func (p *Pipeline) observeOrg(a Adapter, s *plan.KeySlot, h http.Header) {
+	if p.Orgs == nil || s.Account == nil {
+		return
+	}
+	r, ok := a.(OrgReader)
+	if !ok {
+		return
+	}
+	if org := r.OrgID(h); org != "" {
+		p.Orgs.ObserveOrg(s.Account.Account.Meta.ID, s.Credential.Meta.ID, org)
 	}
 }
 

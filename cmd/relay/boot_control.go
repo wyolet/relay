@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -35,7 +36,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	idStore *identity.Store, usersStore *user.Store, tokenSigner *control.TokenSigner, tokenVerifier *inference.TokenVerifier,
 	kvStore kv.Store, limiter *pkgratelimit.Limiter, sessMgr *session.Manager, licenseSvc *license.Service, cookieSecure bool,
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
-	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List) (*http.Server, <-chan error) {
+	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List, specs *adapter.Registry) (*http.Server, <-chan error) {
 	ctrlRouter := chi.NewRouter()
 	ctrlRouter.Use(httpmw.SecurityHeaders)
 	if len(cfg.ControlAllowOrigins) > 0 {
@@ -80,6 +81,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		AllowOrigins:   cfg.ControlAllowOrigins,
 		PayloadReader:  payloadReader,
 		Selector:       selector,
+		Adapters:       specs,
 		HostHealth:     hostHealth,
 		PublicURL:      cfg.PublicURL,
 		RuntimeConfig:  runtimeConfig(cfg),
