@@ -1,56 +1,40 @@
 {
   "$defs": {
-    "PolicyBindingSpec": {
+    "HostBindingSpec": {
       "additionalProperties": false,
       "properties": {
+        "adapter": {
+          "type": "string"
+        },
         "enabled": {
           "type": "boolean"
         },
-        "policy": {
+        "host": {
           "type": "string"
         },
-        "priority": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "project": {
+        "model": {
           "type": "string"
         },
-        "subjects": {
+        "pricing": {
+          "type": "string"
+        },
+        "snapshots": {
           "items": {
-            "$ref": "#/$defs/SubjectDTO"
+            "type": "string"
           },
-          "minItems": 1,
           "type": [
             "array",
             "null"
           ]
-        }
-      },
-      "required": [
-        "policy",
-        "subjects"
-      ],
-      "type": "object"
-    },
-    "SubjectDTO": {
-      "additionalProperties": false,
-      "properties": {
-        "kind": {
-          "enum": [
-            "user",
-            "serviceaccount",
-            "group"
-          ],
-          "type": "string"
         },
-        "name": {
+        "upstreamName": {
           "type": "string"
         }
       },
       "required": [
-        "kind",
-        "name"
+        "model",
+        "host",
+        "adapter"
       ],
       "type": "object"
     },
@@ -114,7 +98,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/PolicyBinding.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/HostBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -128,7 +112,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/PolicyBindingSpec"
+      "$ref": "#/$defs/HostBindingSpec"
     }
   },
   "required": [
@@ -137,6 +121,6 @@
     "metadata",
     "spec"
   ],
-  "title": "PolicyBinding",
+  "title": "HostBinding",
   "type": "object"
 }

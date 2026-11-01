@@ -1,52 +1,9 @@
 {
   "$defs": {
-    "PricingRateDTO": {
+    "PolicyRateLimitDTO": {
       "additionalProperties": false,
       "properties": {
-        "aboveTokens": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "amount": {
-          "format": "double",
-          "type": "number"
-        },
-        "meter": {
-          "type": "string"
-        },
-        "serviceTier": {
-          "type": "string"
-        },
-        "unit": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "meter",
-        "unit",
-        "amount"
-      ],
-      "type": "object"
-    },
-    "PricingSpec": {
-      "additionalProperties": false,
-      "properties": {
-        "currency": {
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "rates": {
-          "items": {
-            "$ref": "#/$defs/PricingRateDTO"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "targetModels": {
+        "models": {
           "items": {
             "type": "string"
           },
@@ -54,13 +11,74 @@
             "array",
             "null"
           ]
+        },
+        "ref": {
+          "type": "string"
         }
       },
       "required": [
-        "currency",
-        "targetModels",
-        "rates"
+        "ref"
       ],
+      "type": "object"
+    },
+    "PolicySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "budgets": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "credentials": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "includeDeprecated": {
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "payloadLoggingEnabled": {
+          "type": "boolean"
+        },
+        "pools": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "rateLimits": {
+          "items": {
+            "$ref": "#/$defs/PolicyRateLimitDTO"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "WireMeta": {
@@ -123,7 +141,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Pricing.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Policy.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -137,7 +155,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/PricingSpec"
+      "$ref": "#/$defs/PolicySpec"
     }
   },
   "required": [
@@ -146,6 +164,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Pricing",
+  "title": "Policy",
   "type": "object"
 }

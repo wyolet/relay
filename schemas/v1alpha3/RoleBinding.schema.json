@@ -1,20 +1,53 @@
 {
   "$defs": {
-    "ServiceAccountSpec": {
+    "RoleBindingSpec": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean"
         },
-        "policy": {
+        "role": {
           "type": "string"
         },
-        "project": {
+        "scope": {
+          "$ref": "#/$defs/WireOwner"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/SubjectDTO"
+          },
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "scope",
+        "subjects"
+      ],
+      "type": "object"
+    },
+    "SubjectDTO": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "user",
+            "serviceaccount",
+            "group"
+          ],
+          "type": "string"
+        },
+        "name": {
           "type": "string"
         }
       },
       "required": [
-        "project"
+        "kind",
+        "name"
       ],
       "type": "object"
     },
@@ -78,7 +111,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/ServiceAccount.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/RoleBinding.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -92,7 +125,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/ServiceAccountSpec"
+      "$ref": "#/$defs/RoleBindingSpec"
     }
   },
   "required": [
@@ -101,6 +134,6 @@
     "metadata",
     "spec"
   ],
-  "title": "ServiceAccount",
+  "title": "RoleBinding",
   "type": "object"
 }

@@ -1,37 +1,14 @@
 {
   "$defs": {
-    "RateLimitRule": {
-      "additionalProperties": false,
-      "properties": {
-        "amount": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "meter": {
-          "type": "string"
-        },
-        "strategy": {
-          "type": "string"
-        },
-        "window": {}
-      },
-      "required": [
-        "meter",
-        "amount",
-        "window",
-        "strategy"
-      ],
-      "type": "object"
-    },
-    "RateLimitSpec": {
+    "GroupSpec": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean"
         },
-        "rules": {
+        "members": {
           "items": {
-            "$ref": "#/$defs/RateLimitRule"
+            "type": "string"
           },
           "type": [
             "array",
@@ -39,9 +16,6 @@
           ]
         }
       },
-      "required": [
-        "rules"
-      ],
       "type": "object"
     },
     "WireMeta": {
@@ -104,7 +78,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/RateLimit.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Group.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -118,7 +92,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/RateLimitSpec"
+      "$ref": "#/$defs/GroupSpec"
     }
   },
   "required": [
@@ -127,6 +101,6 @@
     "metadata",
     "spec"
   ],
-  "title": "RateLimit",
+  "title": "Group",
   "type": "object"
 }

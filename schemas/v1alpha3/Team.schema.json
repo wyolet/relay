@@ -1,60 +1,35 @@
 {
   "$defs": {
-    "KeySpec": {
+    "ScopeBudgetDTO": {
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "expiresAt": {
+        "amount": {
           "type": "string"
         },
-        "keyHash": {
-          "type": "string"
-        },
-        "passthroughAllowed": {
-          "type": "boolean"
-        },
-        "payloadLoggingEnabled": {
-          "type": "boolean"
-        },
-        "policy": {
-          "type": "string"
-        },
-        "prefix": {
-          "type": "string"
-        },
-        "principal": {
-          "$ref": "#/$defs/PrincipalDTO"
-        },
-        "revokedAt": {
+        "period": {
+          "enum": [
+            "month",
+            "week",
+            "day"
+          ],
           "type": "string"
         }
       },
       "required": [
-        "principal",
-        "keyHash"
+        "amount"
       ],
       "type": "object"
     },
-    "PrincipalDTO": {
+    "TeamSpec": {
       "additionalProperties": false,
       "properties": {
-        "kind": {
-          "enum": [
-            "serviceaccount",
-            "user"
-          ],
-          "type": "string"
+        "budget": {
+          "$ref": "#/$defs/ScopeBudgetDTO"
         },
-        "name": {
-          "type": "string"
+        "enabled": {
+          "type": "boolean"
         }
       },
-      "required": [
-        "kind",
-        "name"
-      ],
       "type": "object"
     },
     "WireMeta": {
@@ -117,7 +92,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Key.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Team.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -131,7 +106,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/KeySpec"
+      "$ref": "#/$defs/TeamSpec"
     }
   },
   "required": [
@@ -140,6 +115,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Key",
+  "title": "Team",
   "type": "object"
 }

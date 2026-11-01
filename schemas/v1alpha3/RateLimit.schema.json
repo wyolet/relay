@@ -1,88 +1,29 @@
 {
   "$defs": {
-    "RoleRuleDTO": {
+    "RateLimitRule": {
       "additionalProperties": false,
       "properties": {
-        "kinds": {
-          "items": {
-            "enum": [
-              "*",
-              "audit",
-              "debug",
-              "groups",
-              "host-bindings",
-              "host-keys",
-              "hosts",
-              "keys",
-              "license",
-              "logs",
-              "master-key",
-              "models",
-              "policies",
-              "policy-bindings",
-              "pricings",
-              "projects",
-              "providers",
-              "rate-limits",
-              "role-bindings",
-              "roles",
-              "scim-clients",
-              "secret-keys",
-              "service-accounts",
-              "settings",
-              "system",
-              "teams",
-              "tokens",
-              "usage",
-              "users"
-            ],
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": [
-            "array",
-            "null"
-          ]
+        "amount": {
+          "format": "int64",
+          "type": "integer"
         },
-        "verbs": {
-          "items": {
-            "enum": [
-              "*",
-              "apply",
-              "attach",
-              "create",
-              "delete",
-              "destroy",
-              "detach",
-              "generate",
-              "get",
-              "health",
-              "list",
-              "mint",
-              "read",
-              "reload",
-              "revoke",
-              "rewrap",
-              "rotate",
-              "snapshot",
-              "update"
-            ],
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": [
-            "array",
-            "null"
-          ]
-        }
+        "meter": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "window": {}
       },
       "required": [
-        "kinds",
-        "verbs"
+        "meter",
+        "amount",
+        "window",
+        "strategy"
       ],
       "type": "object"
     },
-    "RoleSpec": {
+    "RateLimitSpec": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -90,9 +31,8 @@
         },
         "rules": {
           "items": {
-            "$ref": "#/$defs/RoleRuleDTO"
+            "$ref": "#/$defs/RateLimitRule"
           },
-          "minItems": 1,
           "type": [
             "array",
             "null"
@@ -164,7 +104,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Role.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/RateLimit.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -178,7 +118,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/RoleSpec"
+      "$ref": "#/$defs/RateLimitSpec"
     }
   },
   "required": [
@@ -187,6 +127,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Role",
+  "title": "RateLimit",
   "type": "object"
 }

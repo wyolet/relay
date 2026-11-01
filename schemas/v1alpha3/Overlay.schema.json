@@ -1,21 +1,20 @@
 {
   "$defs": {
-    "GroupSpec": {
+    "OverlaySpec": {
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
+        "patch": {
+          "additionalProperties": {},
+          "type": "object"
         },
-        "members": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "target": {
+          "type": "string"
         }
       },
+      "required": [
+        "target",
+        "patch"
+      ],
       "type": "object"
     },
     "WireMeta": {
@@ -78,7 +77,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Group.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Overlay.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -92,7 +91,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/GroupSpec"
+      "$ref": "#/$defs/OverlaySpec"
     }
   },
   "required": [
@@ -101,6 +100,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Group",
+  "title": "Overlay",
   "type": "object"
 }

@@ -296,7 +296,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Model.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Model.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {

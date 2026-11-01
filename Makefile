@@ -492,8 +492,8 @@ check: ## the light CI tier locally: gofmt, codebase rules, golangci-lint, unit 
 chart-lint: ## helm lint chart/
 	helm lint chart
 
-schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha2/ (relay) and schemas/v1alpha1/ (auth module)
-	go run ./cmd/catalog-schemas schemas/v1alpha2
+schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha3/ (relay) and schemas/v1alpha1/ (auth module)
+	go run ./cmd/catalog-schemas schemas/v1alpha3
 	go run ./cmd/auth-schemas schemas/v1alpha1
 
 catalog-validate: ## graph-lint and seed-check the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)

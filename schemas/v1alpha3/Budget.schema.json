@@ -1,72 +1,29 @@
 {
   "$defs": {
-    "PolicySpec": {
+    "BudgetSpec": {
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "hostKeys": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "includeDeprecated": {
-          "type": "boolean"
-        },
-        "keySelection": {
+        "amountUsd": {
           "type": "string"
         },
-        "models": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "payloadLoggingEnabled": {
-          "type": "boolean"
-        },
-        "rateLimit": {
+        "mode": {
+          "enum": [
+            "hard",
+            "alert"
+          ],
           "type": "string"
         },
-        "rlBindings": {
-          "items": {
-            "$ref": "#/$defs/RLBindingDTO"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "RLBindingDTO": {
-      "additionalProperties": false,
-      "properties": {
-        "models": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "rateLimit": {
+        "period": {
+          "enum": [
+            "day",
+            "week",
+            "month"
+          ],
           "type": "string"
         }
       },
       "required": [
-        "models",
-        "rateLimit"
+        "amountUsd"
       ],
       "type": "object"
     },
@@ -130,7 +87,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Policy.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Budget.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -144,7 +101,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/PolicySpec"
+      "$ref": "#/$defs/BudgetSpec"
     }
   },
   "required": [
@@ -153,6 +110,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Policy",
+  "title": "Budget",
   "type": "object"
 }

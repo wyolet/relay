@@ -1,35 +1,66 @@
 {
   "$defs": {
-    "BudgetDTO": {
+    "PricingRateDTO": {
       "additionalProperties": false,
       "properties": {
+        "aboveTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
         "amount": {
+          "format": "double",
+          "type": "number"
+        },
+        "meter": {
           "type": "string"
         },
-        "period": {
-          "enum": [
-            "month",
-            "week",
-            "day"
-          ],
+        "serviceTier": {
+          "type": "string"
+        },
+        "unit": {
           "type": "string"
         }
       },
       "required": [
+        "meter",
+        "unit",
         "amount"
       ],
       "type": "object"
     },
-    "TeamSpec": {
+    "PricingSpec": {
       "additionalProperties": false,
       "properties": {
-        "budget": {
-          "$ref": "#/$defs/BudgetDTO"
+        "currency": {
+          "type": "string"
         },
         "enabled": {
           "type": "boolean"
+        },
+        "rates": {
+          "items": {
+            "$ref": "#/$defs/PricingRateDTO"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "targetModels": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
+      "required": [
+        "currency",
+        "targetModels",
+        "rates"
+      ],
       "type": "object"
     },
     "WireMeta": {
@@ -92,7 +123,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Team.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Pricing.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -106,7 +137,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/TeamSpec"
+      "$ref": "#/$defs/PricingSpec"
     }
   },
   "required": [
@@ -115,6 +146,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Team",
+  "title": "Pricing",
   "type": "object"
 }

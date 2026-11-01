@@ -1,40 +1,17 @@
 {
   "$defs": {
-    "HostBindingSpec": {
+    "AccountSpec": {
       "additionalProperties": false,
       "properties": {
-        "adapter": {
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
         "host": {
           "type": "string"
         },
-        "model": {
-          "type": "string"
-        },
-        "pricing": {
-          "type": "string"
-        },
-        "snapshots": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "upstreamName": {
+        "orgId": {
           "type": "string"
         }
       },
       "required": [
-        "model",
-        "host",
-        "adapter"
+        "host"
       ],
       "type": "object"
     },
@@ -98,7 +75,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/HostBinding.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Account.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -112,7 +89,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/HostBindingSpec"
+      "$ref": "#/$defs/AccountSpec"
     }
   },
   "required": [
@@ -121,6 +98,6 @@
     "metadata",
     "spec"
   ],
-  "title": "HostBinding",
+  "title": "Account",
   "type": "object"
 }

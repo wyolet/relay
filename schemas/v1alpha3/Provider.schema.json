@@ -1,60 +1,33 @@
 {
   "$defs": {
-    "HostKeySpec": {
+    "Icon": {
       "additionalProperties": false,
       "properties": {
-        "defaultTier": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ProviderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "docsURL": {
           "type": "string"
         },
         "enabled": {
           "type": "boolean"
         },
-        "hostId": {
+        "homepageURL": {
           "type": "string"
         },
-        "policyId": {
-          "type": "string"
+        "icon": {
+          "$ref": "#/$defs/Icon"
         },
-        "pricingStrategy": {
-          "type": "string"
-        },
-        "valueFrom": {
-          "$ref": "#/$defs/HostKeyValueFrom"
-        }
-      },
-      "required": [
-        "hostId",
-        "policyId",
-        "valueFrom"
-      ],
-      "type": "object"
-    },
-    "HostKeyValueFrom": {
-      "additionalProperties": false,
-      "properties": {
-        "env": {
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "env",
-            "stored",
-            "aws",
-            "azure",
-            "gcp",
-            "bitwarden",
-            "onepassword",
-            "oauth"
-          ],
-          "type": "string"
-        },
-        "provider": {
+        "statusPageURL": {
           "type": "string"
         }
       },
-      "required": [
-        "kind"
-      ],
       "type": "object"
     },
     "WireMeta": {
@@ -117,7 +90,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/HostKey.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Provider.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -131,7 +104,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/HostKeySpec"
+      "$ref": "#/$defs/ProviderSpec"
     }
   },
   "required": [
@@ -140,6 +113,6 @@
     "metadata",
     "spec"
   ],
-  "title": "HostKey",
+  "title": "Provider",
   "type": "object"
 }

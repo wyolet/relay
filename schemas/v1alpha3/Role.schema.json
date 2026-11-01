@@ -1,75 +1,110 @@
 {
   "$defs": {
-    "HostSpec": {
+    "RoleRuleDTO": {
       "additionalProperties": false,
       "properties": {
-        "backend": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "baseURL": {
-          "type": "string"
-        },
-        "consoleURL": {
-          "type": "string"
-        },
-        "defaultPolicy": {
-          "type": "string"
-        },
-        "docsURL": {
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "homepageURL": {
-          "type": "string"
-        },
-        "icon": {
-          "$ref": "#/$defs/Icon"
-        },
-        "noAuth": {
-          "type": "boolean"
-        },
-        "path": {
-          "type": "string"
-        },
-        "policies": {
+        "kinds": {
           "items": {
+            "enum": [
+              "*",
+              "accounts",
+              "audit",
+              "budgets",
+              "debug",
+              "groups",
+              "host-bindings",
+              "host-keys",
+              "hosts",
+              "keys",
+              "license",
+              "logs",
+              "master-key",
+              "models",
+              "policies",
+              "policy-bindings",
+              "pools",
+              "pricings",
+              "projects",
+              "providers",
+              "rate-limits",
+              "role-bindings",
+              "roles",
+              "scim-clients",
+              "secret-keys",
+              "service-accounts",
+              "settings",
+              "system",
+              "teams",
+              "tokens",
+              "usage",
+              "users"
+            ],
             "type": "string"
           },
+          "minItems": 1,
           "type": [
             "array",
             "null"
           ]
         },
-        "pricingStrategies": {
+        "verbs": {
           "items": {
+            "enum": [
+              "*",
+              "apply",
+              "attach",
+              "create",
+              "delete",
+              "destroy",
+              "detach",
+              "generate",
+              "get",
+              "health",
+              "list",
+              "mint",
+              "read",
+              "reload",
+              "revoke",
+              "rewrap",
+              "rotate",
+              "snapshot",
+              "update"
+            ],
             "type": "string"
           },
+          "minItems": 1,
           "type": [
             "array",
             "null"
           ]
-        },
-        "statusPageURL": {
-          "type": "string"
         }
       },
       "required": [
-        "baseURL"
+        "kinds",
+        "verbs"
       ],
       "type": "object"
     },
-    "Icon": {
+    "RoleSpec": {
       "additionalProperties": false,
       "properties": {
-        "path": {
-          "type": "string"
+        "enabled": {
+          "type": "boolean"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/RoleRuleDTO"
+          },
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
+      "required": [
+        "rules"
+      ],
       "type": "object"
     },
     "WireMeta": {
@@ -132,7 +167,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Host.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Role.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -146,7 +181,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/HostSpec"
+      "$ref": "#/$defs/RoleSpec"
     }
   },
   "required": [
@@ -155,6 +190,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Host",
+  "title": "Role",
   "type": "object"
 }

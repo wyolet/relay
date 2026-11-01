@@ -1,40 +1,56 @@
 {
   "$defs": {
-    "BudgetDTO": {
+    "KeySpec": {
       "additionalProperties": false,
       "properties": {
-        "amount": {
-          "type": "string"
-        },
-        "period": {
-          "enum": [
-            "month",
-            "week",
-            "day"
-          ],
-          "type": "string"
-        }
-      },
-      "required": [
-        "amount"
-      ],
-      "type": "object"
-    },
-    "ProjectSpec": {
-      "additionalProperties": false,
-      "properties": {
-        "budget": {
-          "$ref": "#/$defs/BudgetDTO"
-        },
         "enabled": {
           "type": "boolean"
         },
-        "team": {
+        "expiresAt": {
+          "type": "string"
+        },
+        "keyHash": {
+          "type": "string"
+        },
+        "passthroughAllowed": {
+          "type": "boolean"
+        },
+        "payloadLoggingEnabled": {
+          "type": "boolean"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/$defs/PrincipalDTO"
+        },
+        "revokedAt": {
           "type": "string"
         }
       },
       "required": [
-        "team"
+        "principal",
+        "keyHash"
+      ],
+      "type": "object"
+    },
+    "PrincipalDTO": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "serviceaccount",
+            "user"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
       ],
       "type": "object"
     },
@@ -98,7 +114,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Project.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Key.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -112,7 +128,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/ProjectSpec"
+      "$ref": "#/$defs/KeySpec"
     }
   },
   "required": [
@@ -121,6 +137,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Project",
+  "title": "Key",
   "type": "object"
 }

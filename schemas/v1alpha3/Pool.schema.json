@@ -1,33 +1,32 @@
 {
   "$defs": {
-    "Icon": {
+    "PoolSpec": {
       "additionalProperties": false,
       "properties": {
-        "path": {
+        "credentials": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "host": {
+          "type": "string"
+        },
+        "selection": {
+          "enum": [
+            "prioritized",
+            "round-robin",
+            "least-recently-used"
+          ],
           "type": "string"
         }
       },
-      "type": "object"
-    },
-    "ProviderSpec": {
-      "additionalProperties": false,
-      "properties": {
-        "docsURL": {
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "homepageURL": {
-          "type": "string"
-        },
-        "icon": {
-          "$ref": "#/$defs/Icon"
-        },
-        "statusPageURL": {
-          "type": "string"
-        }
-      },
+      "required": [
+        "host"
+      ],
       "type": "object"
     },
     "WireMeta": {
@@ -90,7 +89,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Provider.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Pool.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -104,7 +103,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/ProviderSpec"
+      "$ref": "#/$defs/PoolSpec"
     }
   },
   "required": [
@@ -113,6 +112,6 @@
     "metadata",
     "spec"
   ],
-  "title": "Provider",
+  "title": "Pool",
   "type": "object"
 }
