@@ -57,7 +57,7 @@ That is why tier limits belong on the account. Bind a [tier preset](/concepts/po
 Two cooldowns skip a whole account. Both live in each pod and are learned from that pod's own requests:
 
 - **An account-wide limit refuses.** When the account's own request or token window is spent, the account is skipped for every model until the window has room.
-- **The provider answers `429`.** A `429` from a key of an account cools the account for the requested model only, since providers limit each model separately within an organization. The cooldown lasts for the response's `Retry-After`, 5 seconds when it has none, and at most 60 seconds; after it, one request learns whether the limit still holds. The key's breaker is not written. A key that names no account has no account cooldown, and a `429` goes to its breaker as in the table below.
+- **The provider answers `429`.** A `429` from a key of an account you created cools the account for the requested model only, since providers limit each model separately within an organization. The cooldown lasts for the response's `Retry-After`, 5 seconds when it has none, and at most 60 seconds; after it, one request learns whether the limit still holds. The key's breaker is not written. A key in its owner's default account, or with no account, has no `429` cooldown on the account: the `429` goes to the key's breaker as in the table below, and the request fails over to the next key.
 
 When every key of the route is over a limit or cooling, the request fails with `429 rate_limit_exceeded` and a `Retry-After` for the first one that frees up.
 
@@ -68,6 +68,8 @@ Deleting an account that host keys still name is refused with `409`. Read an acc
 A host key saved without `accountId` joins its owner's default account at its host, so keys of one owner at one host share their account rung unless you split them. Relay creates the default account with the first such key, owned like the key and named after the host (`openai`, then `openai-2`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account.
 
 Each owner has at most one default account per host; marking a second one `default` answers `409`. To group keys by real provider organizations instead, create the accounts and name one on each key.
+
+A default account groups keys by owner, not by provider organization, so Relay does not assume its keys share capacity: a provider `429` on one of them goes to that key's breaker and the request fails over to the next key, so independent keys pooled at one host keep failing over for each other. Limits bound to a default account still count across all of its keys. To have a `429` cool every key of one provider organization for the model, put those keys into an account you create.
 
 A default account no host key names never blocks a delete: deleting its host, its team or its project takes it along. One that keys still name blocks like any other account.
 
@@ -80,9 +82,9 @@ Each key has its own breaker, keyed by a hash of the key's value. The upstream r
 | `401` | Opens | 30 s, then 1 min, 5 min, 15 min, and 1 h for every further failure |
 | `403` | Opens | 1 s, doubling per repeated failure up to 60 s |
 | `5xx`, or a network error after the connection was made | Opens after 5 such errors within 30 s with no success between them | 1 s, doubling per repeated failure up to 60 s |
-| `429` from a key in an account | Unchanged | The account cools for the model, see [Accounts](#accounts) |
-| `429` with `Retry-After` of 5 s or less, from a key with no account | Stays closed | None; the request moves to the next key |
-| `429` with `Retry-After` over 5 s, from a key with no account | Opens | The `Retry-After` duration |
+| `429` from a key in an account you created | Unchanged | The account cools for the model, see [Accounts](#accounts) |
+| `429` with `Retry-After` of 5 s or less, from a key in a default account or with no account | Stays closed | None; the request moves to the next key |
+| `429` with `Retry-After` over 5 s, from a key in a default account or with no account | Opens | The `Retry-After` duration |
 | Connection could not be established (refused, DNS, TLS) | Unchanged | None; this is a host problem, see below |
 | The caller disconnected or cancelled during the call | Unchanged | None; the request stops without trying another key |
 
