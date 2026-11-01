@@ -495,9 +495,9 @@ func (c Checker) Role(ctx context.Context, r *role.Role) error {
 	return nil
 }
 
-// PolicyBinding re-derives the owner from spec.projectId and checks the
-// owning scope, the policy, and the subjects, each of which must sit inside
-// that scope.
+// PolicyBinding re-derives the owner from spec.projectId, turns each host-key
+// subject into its account, and checks the owning scope, the policy, and the
+// subjects, each of which must sit inside that scope.
 func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	pb.StampOwner()
 	switch pb.Meta.Owner.Kind {
@@ -515,6 +515,14 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 	}
 	if err := c.subjectsExist(ctx, pb.Spec.Subjects); err != nil {
 		return err
+	}
+	if c.Rows.HostKey != nil {
+		pb.BindAccounts(func(id string) string {
+			if k := c.Rows.HostKey(ctx, id); k != nil {
+				return k.Spec.AccountID
+			}
+			return ""
+		})
 	}
 	if err := c.subjectsInScope(ctx, pb); err != nil {
 		return err
