@@ -56,6 +56,17 @@ migration 000035: a subject may be bound by one policy binding (a user by one pe
 
 **Migration 36** drops the `policy_models` and `policy_host_keys` tables, the `policies.rate_limit_id` column and the `policy_bindings.priority` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, `policyId` from every relay key, service account and host key, `policies` and `defaultPolicy` from every host, and `budget` from every team and project. Policies keep their name, owner, `models`, `includeDeprecated`, `payloadLoggingEnabled` and `enabled`. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
 
+Before it drops them, it logs each link it removes by the names of both ends, on boot and in `relay migrate up`: one log entry per link, with the message `migrate: postgres notice` and the line below in its `notice` field. A target whose row no longer exists is named by its id:
+
+```
+000036: dropping link: key "ci-runner" -> policy "ci"
+000036: dropping link: host key "anthropic-main" -> tier policy "anthropic-start"
+000036: dropping link: policy "ci" -> host key "anthropic-main"
+000036: dropping link: policy "ci" -> model "claude-haiku-4-5"
+000036: dropping link: policy "ci" -> rate limit "ci-rpm"
+000036: dropping link: policy "anthropic-start" -> rate limit "anthropic-start-rl" for models anthropic/claude-opus-5-5, anthropic/claude-sonnet-5-5
+```
+
 It then gives every host key without an account its owner's default account at the key's host, creating one account per owner and host, named after the host (suffixed `-2`, `-3`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account. Keys whose host no longer exists are left without one.
 
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
@@ -68,9 +79,44 @@ The catalog's tier policies lose their rate limits with this migration. They get
    relay export --include-system -o before-0.20.yaml
    ```
 
-2. **Back up Postgres.** Rolling back needs it; see [Rolling back](#rolling-back).
+2. **Export the links migration 36 drops**, by name. The query only reads; run it against the 0.11 database and keep the result for [Re-creating the dropped links](#re-creating-the-dropped-links):
 
-3. **Find subjects bound twice**, which would stop migration 35. Run this against the 0.11 database; it lists what the migration would refuse:
+   ```sql
+   SELECT 'key -> policy' AS link, k.name AS source, COALESCE(p.name, k.spec->>'policyId') AS target, NULL AS models
+   FROM relay_keys k LEFT JOIN policies p ON p.id = k.spec->>'policyId'
+   WHERE COALESCE(k.spec->>'policyId', '') <> ''
+   UNION ALL
+   SELECT 'host key -> tier policy', s.name, COALESCE(p.name, s.spec->>'policyId'), NULL
+   FROM secrets s LEFT JOIN policies p ON p.id = s.spec->>'policyId'
+   WHERE COALESCE(s.spec->>'policyId', '') <> ''
+   UNION ALL
+   SELECT 'policy -> host key', p.name, s.name, NULL
+   FROM policy_host_keys l JOIN policies p ON p.id = l.policy_id JOIN secrets s ON s.id = l.host_key_id
+   UNION ALL
+   SELECT 'policy -> model', p.name, m.name, NULL
+   FROM policy_models l JOIN policies p ON p.id = l.policy_id JOIN models m ON m.id = l.model_id
+   UNION ALL
+   SELECT 'policy -> rate limit', p.name, rl.name, NULL
+   FROM policies p JOIN rate_limits rl ON rl.id = p.rate_limit_id
+   UNION ALL
+   SELECT 'policy -> rate limit for models', p.name, COALESCE(rl.name, b->>'rateLimitId'), b->>'models'
+   FROM policies p
+   CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(p.spec->'rlBindings') = 'array' THEN p.spec->'rlBindings' ELSE '[]' END) AS b
+   LEFT JOIN rate_limits rl ON rl.id = b->>'rateLimitId'
+   ORDER BY 1, 2, 3;
+   ```
+
+   With the query saved as `dropped-links.sql`:
+
+   ```bash
+   psql "$RELAY_PG_DSN" --csv -f dropped-links.sql > dropped-links.csv
+   ```
+
+   Host keys are the rows of the `secrets` table. The migration logs the same links as it drops them.
+
+3. **Back up Postgres.** Rolling back needs it; see [Rolling back](#rolling-back).
+
+4. **Find subjects bound twice**, which would stop migration 35. Run this against the 0.11 database; it lists what the migration would refuse:
 
    ```sql
    SELECT s.kind, s.subject_id, string_agg(b.name, ', ' ORDER BY b.name) AS bindings
@@ -83,7 +129,7 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
    For each row, decide which binding keeps the subject and remove it from the others, on 0.11, before upgrading.
 
-4. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the export:
+5. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the exports; [Re-creating the dropped links](#re-creating-the-dropped-links) maps each dropped link to its replacement:
 
    - An `Account` for each provider organization, and `account` on each of its host keys. A key you leave without one stays in the default account migration 36 gave it.
    - A `PolicyBinding` of a tier preset (or your own tier policy) on each account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
@@ -95,13 +141,13 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
    [Policy examples](/policy-examples) shows each of these.
 
-5. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
+6. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
 
 ## Upgrade steps
 
 1. Keep callers off the inference port until step 5. Between the migration and your new bindings, principals reach what their scopes own, which may be more than before.
 2. Stop every 0.11 pod: scale the deployment to 0, as in [Stop-and-start upgrades](/concepts/upgrade#stop-and-start-upgrades).
-3. Deploy 0.20 with the new `RELAY_CATALOG_VERSION`. Migrations 35 and 36 run, and the catalog release is seeded. If migration 35 stops on a subject bound twice, it applies nothing but leaves version 35 marked dirty: run `relay migrate force 34` (see [Recovering from a dirty schema version](/concepts/upgrade#recovering-from-a-dirty-schema-version)), start the 0.11 image again, fix the bindings, and repeat.
+3. Deploy 0.20 with the new `RELAY_CATALOG_VERSION`. Migrations 35 and 36 run, and the catalog release is seeded. Keep the log of the pod that ran the migrations, or of `relay migrate up` if you migrate in a step of its own: it holds the `000036: dropping link` lines. If migration 35 stops on a subject bound twice, it applies nothing but leaves version 35 marked dirty: run `relay migrate force 34` (see [Recovering from a dirty schema version](/concepts/upgrade#recovering-from-a-dirty-schema-version)), start the 0.11 image again, fix the bindings, and repeat.
 4. Apply the manifests with the 0.20 CLI, dry run first:
 
    ```bash
@@ -119,6 +165,136 @@ The catalog's tier policies lose their rate limits with this migration. They get
    Watch `relay_inference_auth_rejected_total` and the `403` and `503` codes in the [usage events](/concepts/usage#failed-requests) for refusals you did not expect.
 
 6. Re-run token revocations, see [The state store](#the-state-store).
+
+## Re-creating the dropped links
+
+Each row of the export, and each `000036: dropping link` line, has a replacement in 0.20:
+
+| Dropped link | In 0.20 |
+| --- | --- |
+| key → policy | A policy binding of the policy on the key's principal. |
+| host key → tier policy | A policy binding of the tier on the key's account. |
+| policy → host key | `credentials`, or a pool in `pools`, on the policy. |
+| policy → model | `models` on the policy, as model references (`provider/model`). |
+| policy → rate limit | `rateLimits: [{ref}]` on the policy. |
+| policy → rate limit for models | `rateLimits: [{ref, models}]` on the policy, which may then be bound only to a host, an account or a host key. |
+
+The catalog's tier policies, owned by their host, get their rate limits back when the v1alpha3 catalog release is seeded, so their `policy → rate limit` rows need nothing from you, unless you edited those policies.
+
+### A host key's tier
+
+Migration 36 put each host key in its owner's default account at its host, named after the host. List the accounts with `GET /api/accounts` and an account's keys with `GET /api/accounts/{ref}/keys`. Bind the tier to the account with a binding owned by the system:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: PolicyBinding
+metadata:
+  name: anthropic-tier
+  owner: {kind: system}
+spec:
+  policy: anthropic-start
+  subjects:
+    - {kind: account, name: anthropic}
+```
+
+An account has one policy. Host keys of one owner at one host share a default account, so if they had different tiers, they belong to different provider organizations: create an account for each, name it on its keys, and bind each tier to its own account:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
+metadata:
+  name: openai-build-org
+  owner: {kind: system}
+spec:
+  host: openai
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: HostKey
+metadata:
+  name: openai-build-key
+  owner: {kind: system}
+spec:
+  hostId: openai
+  account: openai-build-org
+  valueFrom: {kind: env, env: OPENAI_BUILD_KEY}
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: PolicyBinding
+metadata:
+  name: openai-build-org-tier
+  owner: {kind: system}
+spec:
+  policy: openai-build
+  subjects:
+    - {kind: account, name: openai-build-org}
+```
+
+Accounts you create cool on a provider `429`, unlike default accounts; see [Accounts](/concepts/key-pooling#accounts).
+
+### A relay key's policy
+
+A policy now reaches a relay key through the key's principal, the service account or user the key belongs to. Every key of a principal has the principal's policy, and a subject has one binding, so keys of one principal that pointed at different policies need either one policy for all of them or a principal each, such as a service account per use.
+
+For a service account's key, bind the policy with a binding owned by the service account's project. The policy may be owned by that project, its team or the system. Keys created without a user before service accounts existed belong to generated service accounts in the `legacy` project, named `legacy-<key name>-` and the last 8 characters of the key's id:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Policy
+metadata:
+  name: ci
+  owner: {kind: project, name: legacy}
+spec:
+  models: [anthropic/claude-haiku-4-5]
+  credentials: [anthropic-main]
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: PolicyBinding
+metadata:
+  name: ci-runner
+spec:
+  project: legacy
+  policy: ci
+  subjects:
+    - {kind: serviceaccount, name: legacy-ci-runner-0d9f1a2b}
+```
+
+For a user's own key, bind a system-owned policy with a binding owned by the system:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: RateLimit
+metadata:
+  name: alice-rpm
+  owner: {kind: system}
+spec:
+  rules:
+    - {meter: requests, amount: 60, window: 1m, strategy: sliding-window}
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Policy
+metadata:
+  name: alice
+  owner: {kind: system}
+spec:
+  models: [anthropic/*]
+  rateLimits:
+    - ref: alice-rpm
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: PolicyBinding
+metadata:
+  name: alice
+  owner: {kind: system}
+spec:
+  policy: alice
+  subjects:
+    - {kind: user, name: alice}
+```
+
+Two limits of this version apply here:
+
+- A policy owned by a user cannot be bound: users own no bindings, and a system binding uses only system- or host-owned policies. Re-create a user's policy as a system-owned one, as above. A binding owned by a project may name the user, but it governs only the inference tokens the user mints for that project, not the user's relay keys.
+- A policy bound to a user, a service account, a team or a project cannot scope a rate limit to models: its rate limits count every model together, and saving one with `models` is refused. Per-model limits belong in a policy bound to a host, an account or a host key.
 
 ## The state store
 
