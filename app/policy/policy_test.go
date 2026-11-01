@@ -30,16 +30,6 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
-	t.Run("ok with rlBindings", func(t *testing.T) {
-		p := fix("p")
-		p.Spec.RLBindings = []RLBinding{
-			{Models: []string{"gpt-4o", "o1"}, RateLimitID: meta.NewID()},
-			{Models: []string{"gpt-4o-mini"}, RateLimitID: meta.NewID()},
-		}
-		if err := p.Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
-		}
-	})
 
 	for _, tc := range []struct {
 		name string
@@ -50,53 +40,6 @@ func TestValidate(t *testing.T) {
 			name: "missing name",
 			p:    func() *Policy { p := fix("x"); p.Meta.Name = ""; return p }(),
 			want: "Name",
-		},
-		{
-			name: "hostKeyIds non-uuid",
-			p: func() *Policy {
-				p := fix("x")
-				p.Spec.HostKeyIDs = []string{"not-a-uuid"}
-				return p
-			}(),
-			want: "HostKeyIDs",
-		},
-		{
-			name: "modelIds non-uuid",
-			p: func() *Policy {
-				p := fix("x")
-				p.Spec.ModelIDs = []string{"not-a-uuid"}
-				return p
-			}(),
-			want: "ModelIDs",
-		},
-		{
-			name: "duplicate hostKeyIds",
-			p: func() *Policy {
-				p := fix("x")
-				id := meta.NewID()
-				p.Spec.HostKeyIDs = []string{id, id}
-				return p
-			}(),
-			want: "duplicate hostKeyIds",
-		},
-		{
-			name: "duplicate modelIds",
-			p: func() *Policy {
-				p := fix("x")
-				id := meta.NewID()
-				p.Spec.ModelIDs = []string{id, id}
-				return p
-			}(),
-			want: "duplicate modelIds",
-		},
-		{
-			name: "bad key selection",
-			p: func() *Policy {
-				p := fix("x")
-				p.Spec.KeySelection = "bogus"
-				return p
-			}(),
-			want: "KeySelection",
 		},
 		{
 			name: "provider owner rejected",
@@ -113,67 +56,20 @@ func TestValidate(t *testing.T) {
 			want: "owner.kind required",
 		},
 		{
-			name: "flat RL and bindings are mutually exclusive",
-			p: func() *Policy {
-				p := fix("x")
-				p.Spec.RateLimitID = meta.NewID()
-				p.Spec.RLBindings = []RLBinding{{
-					Models:      []string{"gpt-4o"},
-					RateLimitID: meta.NewID(),
-				}}
-				return p
-			}(),
-			want: "mutually exclusive",
+			name: "host owner needs its host",
+			p:    func() *Policy { p := fix("x"); p.Meta.Owner = meta.Owner{Kind: meta.OwnerHost}; return p }(),
+			want: "owner.id is required",
 		},
 		{
-			name: "rlBinding without models rejected",
-			p: func() *Policy {
-				p := fix("x")
-				p.Spec.RLBindings = []RLBinding{{
-					Models:      nil,
-					RateLimitID: meta.NewID(),
-				}}
-				return p
-			}(),
-			want: "Models",
-		},
-		{
-			name: "rlBinding without rateLimitId rejected",
-			p: func() *Policy {
-				p := fix("x")
-				p.Spec.RLBindings = []RLBinding{{
-					Models:      []string{"gpt-4o"},
-					RateLimitID: "",
-				}}
-				return p
-			}(),
-			want: "RateLimitID",
+			name: "unparseable model ref",
+			p:    func() *Policy { p := fix("x"); p.Spec.Models = []string{"a/b/c@"}; return p }(),
+			want: "policy \"x\"",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.p.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want substring %q", err, tc.want)
-			}
-		})
-	}
-}
-
-func TestEffectiveKeySelection(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ks   KeySelection
-		want KeySelection
-	}{
-		{"unset defaults to prioritized", "", KeySelectionPrioritized},
-		{"round-robin keeps", KeySelectionRoundRobin, KeySelectionRoundRobin},
-		{"lru keeps", KeySelectionLeastRecentlyUsed, KeySelectionLeastRecentlyUsed},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := fix("p")
-			p.Spec.KeySelection = tc.ks
-			if got := p.EffectiveKeySelection(); got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}

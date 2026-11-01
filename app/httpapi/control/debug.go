@@ -36,35 +36,38 @@ type debugSnapshotInput struct {
 }
 
 type debugSnapshotCounts struct {
-	Providers  int `json:"providers"`
-	Hosts      int `json:"hosts"`
-	Models     int `json:"models"`
-	Policies   int `json:"policies"`
-	HostKeys   int `json:"hostKeys"`
-	Keys       int `json:"keys"`
-	RateLimits int `json:"rateLimits"`
-	Pricings   int `json:"pricings"`
+	Providers  int `json:"providers"  doc:"Providers in the snapshot."`
+	Hosts      int `json:"hosts"      doc:"Hosts in the snapshot."`
+	Models     int `json:"models"     doc:"Models in the snapshot."`
+	Policies   int `json:"policies"   doc:"Policies in the snapshot."`
+	HostKeys   int `json:"hostKeys"   doc:"Host keys in the snapshot."`
+	Keys       int `json:"keys"       doc:"Relay keys in the snapshot."`
+	RateLimits int `json:"rateLimits" doc:"Rate limits in the snapshot."`
+	Pricings   int `json:"pricings"   doc:"Pricing sheets in the snapshot."`
 }
 
+// debugPolicyJoin counts a policy's model refs and links, as stored.
 type debugPolicyJoin struct {
-	PolicyID    string `json:"policyId"`
-	PolicyName  string `json:"policyName"`
-	Models      int    `json:"models"`
-	HostKeys    int    `json:"hostKeys"`
-	RateLimited bool   `json:"rateLimited"`
+	PolicyID    string `json:"policyId"    doc:"Policy id."`
+	PolicyName  string `json:"policyName"  doc:"Policy slug."`
+	Models      int    `json:"models"      doc:"Model references the policy lists."`
+	Pools       int    `json:"pools"       doc:"Pools it links."`
+	Credentials int    `json:"credentials" doc:"Host keys it links directly."`
+	RateLimits  int    `json:"rateLimits"  doc:"Rate-limit links."`
+	Budgets     int    `json:"budgets"     doc:"Budgets it links."`
 }
 
 type debugSnapshotBody struct {
-	Counts      debugSnapshotCounts    `json:"counts"`
-	PolicyJoins []debugPolicyJoin      `json:"policyJoins,omitempty"`
-	Providers   []*provider.Provider   `json:"providers,omitempty"`
-	Hosts       []*host.Host           `json:"hosts,omitempty"`
-	Models      []*model.Model         `json:"models,omitempty"`
-	Policies    []*policy.Policy       `json:"policies,omitempty"`
-	HostKeys    []*hostkey.HostKey     `json:"hostKeys,omitempty"`
-	Keys        []*key.Key             `json:"keys,omitempty"`
-	RateLimits  []*ratelimit.RateLimit `json:"rateLimits,omitempty"`
-	Pricings    []*pricing.Pricing     `json:"pricings,omitempty"`
+	Counts      debugSnapshotCounts    `json:"counts"                doc:"Row counts per kind."`
+	PolicyJoins []debugPolicyJoin      `json:"policyJoins,omitempty" doc:"Per-policy link counts."`
+	Providers   []*provider.Provider   `json:"providers,omitempty"   doc:"Providers. Full dump only."`
+	Hosts       []*host.Host           `json:"hosts,omitempty"       doc:"Hosts. Full dump only."`
+	Models      []*model.Model         `json:"models,omitempty"      doc:"Models. Full dump only."`
+	Policies    []*policy.Policy       `json:"policies,omitempty"    doc:"Policies. Full dump only."`
+	HostKeys    []*hostkey.HostKey     `json:"hostKeys,omitempty"    doc:"Host keys, secret-free. Full dump only."`
+	Keys        []*key.Key             `json:"keys,omitempty"        doc:"Relay keys. Full dump only."`
+	RateLimits  []*ratelimit.RateLimit `json:"rateLimits,omitempty"  doc:"Rate limits. Full dump only."`
+	Pricings    []*pricing.Pricing     `json:"pricings,omitempty"    doc:"Pricing sheets. Full dump only."`
 }
 
 type debugSnapshotOutput struct {
@@ -107,9 +110,11 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 			out.Body.PolicyJoins = append(out.Body.PolicyJoins, debugPolicyJoin{
 				PolicyID:    p.Meta.ID,
 				PolicyName:  p.Meta.Name,
-				Models:      len(snap.ModelsInPolicy(p.Meta.ID)),
-				HostKeys:    len(snap.HostKeysInPolicy(p.Meta.ID)),
-				RateLimited: snap.RateLimitOfPolicy(p.Meta.ID) != nil,
+				Models:      len(p.Spec.Models),
+				Pools:       len(p.Spec.PoolIDs),
+				Credentials: len(p.Spec.CredentialIDs),
+				RateLimits:  len(p.Spec.RateLimits),
+				Budgets:     len(p.Spec.BudgetIDs),
 			})
 		}
 

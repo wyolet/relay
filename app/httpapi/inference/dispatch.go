@@ -27,7 +27,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -101,7 +101,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	if namer, ok := profile.(clientprofile.ModelNamer); ok {
 		in.ModelName = namer.Inbound(in.ModelName)
 	}
-	lc := mintLifecycle(ctx, d.Catalog, sourceForMode(cls.Mode), cls.ClientIP)
+	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	applyProfile(lc, profile, r.Header)
@@ -164,18 +164,11 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		modelRef = modelRef + "@" + uh
 	}
 
-	plan, err := d.Resolver.Resolve(routing.Request{
-		ModelName:    modelRef,
-		RawModelName: in.ModelName,
-		Policy:       principal.Policy,
-		UserID:       principal.UserID,
-		Snapshot:     SnapshotFrom(ctx),
-	})
-	if err != nil {
-		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
-		mapRoutingErr(w, err, modelRef, principal.PolicyID())
+	route, ok := d.resolveRoute(ctx, w, principal, modelRef)
+	if !ok {
 		return
 	}
+	first := &route.Hops[0]
 	lc.PayloadLog = principal.CapturesPayload()
 	if lc.PayloadLog {
 		lc.RequestBody = in.Body
@@ -202,21 +195,23 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// Embeddings inbound requires an OpenAI-compatible upstream adapter.
 		// Anthropic hosts don't expose /v1/embeddings. This guard is permanent
 		// (Anthropic has no embeddings API to translate to).
-		if plan.HostBinding.Spec.Adapter != adapters.OpenAI {
+		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == adapters.OpenAI })
+		if len(hops) == 0 {
 			d.fireUsageFailure(ctx, "embeddings_unsupported_host", "host does not support OpenAI-compatible embeddings")
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "embeddings_unsupported_host",
-				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
-					" (adapter="+string(plan.HostBinding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
+				"model "+in.ModelName+" is on host "+first.Host.Meta.Name+
+					" (adapter="+string(first.Binding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec)
+		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
 
-	// Native-path check: does the resolved host natively speak this inbound
+	// Native-path check: does the first hop's host natively speak this inbound
 	// shape? If so, byte-pass using the inbound spec's own adapter (which
-	// posts to the correct upstream path, e.g. /v1/responses).
-	if inboundSpec.IsNativePath != nil && inboundSpec.IsNativePath(plan) {
+	// posts to the correct upstream path, e.g. /v1/responses), over the hops
+	// that speak it too.
+	if native := inboundSpec.IsNativePath; native != nil && native(first.Binding, first.Host) {
 		upstreamAdapter := d.Specs.PipelineAdapter(in.Inbound)
 		if upstreamAdapter == nil {
 			d.fireUsageFailure(ctx, "no_adapter", "no adapter registered for "+string(in.Inbound))
@@ -224,32 +219,34 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec)
+		hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return native(h.Binding, h.Host) })
+		runBytePass(d, w, r, in, route, hops, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
 
 	// Standard dispatch: look up the upstream spec and determine whether
 	// this is a same-shape pass (inbound == upstream adapter) or a cross-
-	// shape canonical translation.
-	upstreamSpec := d.Specs.Spec(plan.HostBinding.Spec.Adapter)
+	// shape canonical translation. The body is built once, so failover
+	// keeps to the hops whose binding speaks the first hop's shape.
+	upstreamName := first.Binding.Spec.Adapter
+	upstreamSpec := d.Specs.Spec(upstreamName)
 	if upstreamSpec == nil {
-		d.fireUsageFailure(ctx, "no_spec", "no adapter spec registered for upstream "+string(plan.HostBinding.Spec.Adapter))
+		d.fireUsageFailure(ctx, "no_spec", "no adapter spec registered for upstream "+string(upstreamName))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_spec",
-			"no adapter spec registered for upstream "+string(plan.HostBinding.Spec.Adapter))
+			"no adapter spec registered for upstream "+string(upstreamName))
 		return
 	}
-	upstreamAdapter := d.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter)
+	upstreamAdapter := d.Specs.PipelineAdapter(upstreamName)
 	if upstreamAdapter == nil {
-		d.fireUsageFailure(ctx, "no_adapter", "no adapter registered for "+string(plan.HostBinding.Spec.Adapter))
+		d.fireUsageFailure(ctx, "no_adapter", "no adapter registered for "+string(upstreamName))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
-			"no adapter registered for "+string(plan.HostBinding.Spec.Adapter))
+			"no adapter registered for "+string(upstreamName))
 		return
 	}
+	hops := keepHops(route.Hops, func(h *plan.RouteHop) bool { return h.Binding.Spec.Adapter == upstreamName })
 
-	sameShape := in.Inbound == plan.HostBinding.Spec.Adapter
-
-	if sameShape {
-		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator, inboundSpec)
+	if in.Inbound == upstreamName {
+		runBytePass(d, w, r, in, route, hops, upstreamAdapter, upstreamSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -257,13 +254,13 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	inboundV1 := inboundSpec.Translator
 	upstreamV1 := upstreamSpec.Translator
 	if inboundV1 == nil || upstreamV1 == nil {
-		d.fireUsageFailure(ctx, "no_translator", "missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Spec.Adapter))
+		d.fireUsageFailure(ctx, "no_translator", "missing canonical translator for "+string(in.Inbound)+" or "+string(upstreamName))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_translator",
-			"missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Spec.Adapter))
+			"missing canonical translator for "+string(in.Inbound)+" or "+string(upstreamName))
 		return
 	}
 
-	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
+	dispatchCanonical(d, w, r, in, route, hops, upstreamAdapter, inboundV1, upstreamV1)
 }
 
 // runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request in inbound's shape whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. A shed is the one false return with no Finalize. On false the response is written.
@@ -295,7 +292,7 @@ func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifec
 // and stream or buffer the response back. paramPaths is the inbound spec's
 // param→JSON-path map (the body stays inbound-shaped on every byte-pass
 // variant), used to strip params the routed model declares unsupported.
-func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
 	ctx := r.Context()
 
 	wireBody, usageRequested := in.Body, false
@@ -312,39 +309,20 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 				usageRequested = true
 			}
 		}
-		if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
+		if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
 			var dropped []string
 			edits, dropped = req.stripParams(edits, u, inboundSpec.ParamPaths)
-			surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
+			surfaceDroppedParams(w, route.Model.Meta.Name, dropped)
 		}
-		wireBody = req.upstreamBody(plan.UpstreamModel(), edits)
+		wireBody = req.upstreamBody(route.UpstreamModel, edits)
 	}
 
-	teamID, tokenJTI := reserveIdentity(ctx)
 	lc := lifecycle.FromContext(ctx)
-	applyPlanIdentity(lc, plan)
+	applyRouteIdentity(lc, route, hops, PrincipalFrom(ctx))
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	preq := &pipeline.Request{
-		Body:          wireBody,
-		Headers:       forwardHeaders(r.Header),
-		HostBaseURL:   plan.Host.Spec.BaseURL,
-		Adapter:       upstreamAdapter,
-		Policy:        plan.Policy,
-		Model:         plan.Model,
-		Host:          plan.Host,
-		Provider:      plan.Provider,
-		Keys:          plan.Keys,
-		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.UpstreamModel(),
-		Stream:        in.Stream,
-		TeamID:        teamID,
-		TokenJTI:      tokenJTI,
-		Lifecycle:     lc,
-	}
-
-	result, err := d.Pipeline.Run(ctx, preq)
+	result, err := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, lc))
 	if err != nil {
 		mapRunErr(w, inboundSpec, err)
 		return
@@ -432,7 +410,7 @@ func effectiveModelOpts(req *v1.Request) *v1.ModelOpts {
 	return o
 }
 
-func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, inboundV1, upstreamV1 v1.Translator) {
+func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, route *plan.Route, hops []plan.RouteHop, upstreamAdapter pipeline.Adapter, inboundV1, upstreamV1 v1.Translator) {
 	ctx := r.Context()
 
 	canonReq, err := inboundV1.ParseRequest(in.Body)
@@ -441,10 +419,10 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 		return
 	}
-	canonReq.Model = v1.ModelRefs{plan.UpstreamModel()}
-	applyOutputDefaults(canonReq, plan.Model.Spec.MaxOutputTokens)
-	if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
-		surfaceDroppedParams(w, plan.Model.Meta.Name, stripCanonicalParams(canonReq, u))
+	canonReq.Model = v1.ModelRefs{route.UpstreamModel}
+	applyOutputDefaults(canonReq, route.Model.Spec.MaxOutputTokens)
+	if u := route.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
+		surfaceDroppedParams(w, route.Model.Meta.Name, stripCanonicalParams(canonReq, u))
 	}
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
@@ -454,31 +432,12 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		return
 	}
 
-	teamID, tokenJTI := reserveIdentity(ctx)
 	lc := lifecycle.FromContext(ctx)
-	applyPlanIdentity(lc, plan)
+	applyRouteIdentity(lc, route, hops, PrincipalFrom(ctx))
 	if lc != nil {
 		lc.Translator = upstreamV1
 	}
-	preq := &pipeline.Request{
-		Body:          wireBody,
-		Headers:       forwardHeaders(r.Header),
-		HostBaseURL:   plan.Host.Spec.BaseURL,
-		Adapter:       upstreamAdapter,
-		Policy:        plan.Policy,
-		Model:         plan.Model,
-		Host:          plan.Host,
-		Provider:      plan.Provider,
-		Keys:          plan.Keys,
-		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.UpstreamModel(),
-		Stream:        in.Stream,
-		TeamID:        teamID,
-		TokenJTI:      tokenJTI,
-		Lifecycle:     lc,
-	}
-
-	result, pErr := d.Pipeline.Run(ctx, preq)
+	result, pErr := d.Pipeline.Run(ctx, pipelineRequest(r, in, route, hops, upstreamAdapter, wireBody, lc))
 	if pErr != nil {
 		mapRunErr(w, d.Specs.Spec(in.Inbound), pErr)
 		return
@@ -520,7 +479,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		w.WriteHeader(result.Status)
 		dst, stop := keepAliveWriter(d, w, r, in)
 		defer stop()
-		shapes := streamShapes{upstream: plan.HostBinding.Spec.Adapter, inbound: in.Inbound}
+		shapes := streamShapes{upstream: hops[0].Binding.Spec.Adapter, inbound: in.Inbound}
 		streamCanonical(d, dst, r, result.Body, echo, trackReasoning, shapes, upstreamV1.NewToCanonicalStream(), fromCanonicalStream(inboundV1, canonReq))
 		return
 	}

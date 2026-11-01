@@ -94,7 +94,7 @@ func (b *builder) checkKeyCreate(*key.Key) error {
 	return fmt.Errorf("%w: only an admin may create a key from a document's keyHash; create it with POST /api/keys", authz.ErrForbidden)
 }
 
-// checkPrunedTenancy refuses pruning a team, project or service account with rows still under it, as the control API's delete does. Rows this run prunes too are deleted explicitly, children first, so they are not in the way.
+// checkPrunedTenancy refuses pruning a team, project or service account with rows still under it or owned by it, as the control API's delete does. Rows this run prunes too are deleted explicitly, children first, so they are not in the way.
 func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	pruned := map[string]bool{}
 	for _, kind := range b.deletes {
@@ -107,6 +107,7 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	under := project.Rows{
 		ServiceAccounts: b.rows.ServiceAccounts, Keys: b.rows.Keys, Policies: b.rows.Policies,
 		HostKeys: b.rows.HostKeys, RateLimits: b.rows.RateLimits, PolicyBindings: b.rows.PolicyBindings,
+		Accounts: b.rows.Accounts, Pools: b.rows.Pools, Budgets: b.rows.Budgets,
 	}
 	for _, kind := range b.deletes {
 		for _, e := range kind {
@@ -114,7 +115,7 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 			var hidden int
 			switch e.Kind {
 			case "Team":
-				deps, hidden = project.OfTeam(e.ID, b.rows.Projects, gone, visible)
+				deps, hidden = under.TeamDependents(e.ID, b.rows.Projects, gone, visible)
 			case "Project":
 				deps, hidden = under.Dependents(e.ID, gone, visible)
 			case "ServiceAccount":
@@ -224,7 +225,7 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 			if gone[e.owner] {
 				err = authmanifest.ErrScopePruned
 			}
-		case "Policy", "HostKey", "RateLimit":
+		case "Policy", "HostKey", "RateLimit", "Account", "Pool", "Budget":
 			if gone[e.owner] {
 				err = errOwnerPruned
 			}
@@ -239,7 +240,7 @@ func (b *builder) checkDocsAtPrunedScopes(ctx context.Context) error {
 				}
 			}
 		case "PolicyBinding":
-			if pb, _ := b.declared[e.ID].(*policybinding.PolicyBinding); pb != nil && gone[meta.Owner{Kind: meta.OwnerProject, ID: pb.Spec.ProjectID}] {
+			if pb, _ := b.declared[e.ID].(*policybinding.PolicyBinding); pb != nil && gone[pb.Meta.Owner] {
 				err = authmanifest.ErrScopePruned
 			}
 		}

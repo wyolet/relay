@@ -12,14 +12,14 @@ const SectionProxyMode = "proxy-mode"
 type ProxyMode struct {
 	// Enabled turns the proxy flow on. When false, requests without a
 	// valid relay key get 401, regardless of any other field below.
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" doc:"Accept requests that carry the caller's own upstream credential; while off they are refused with 403 proxy_disabled."`
 
 	// AllowUnauthenticated lets proxy callers reach the upstream with
 	// no relay-side auth — the inbound Authorization header is forwarded
 	// as-is. When false, the proxy flow still requires a relay key
 	// (proxied traffic gets logged against that key) but the upstream
 	// credential comes from the caller.
-	AllowUnauthenticated bool `json:"allowUnauthenticated"`
+	AllowUnauthenticated bool `json:"allowUnauthenticated" doc:"Let proxy callers through without a relay key, forwarding their Authorization header as is. False still requires a relay key, with the upstream credential from the caller."`
 }
 
 func (p *ProxyMode) Validate() error { return nil }

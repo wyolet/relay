@@ -1,0 +1,47 @@
+// Package account is the domain layer for the Account entity: one provider organization at one host. Upstream tier limits are counted per account, so several host keys of one organization share its capacity; adding a key adds failover and rotation, not throughput.
+//
+// This package validates one row's shape, stores it, and creates an owner's default account at a host on first use (Store.EnsureDefault). Out of scope: learning org ids from upstream responses and applying an account's tier policy to requests.
+package account
+
+import (
+	"fmt"
+
+	"github.com/wyolet/relay/app/meta"
+)
+
+// Account is one provider organization at one host.
+type Account struct {
+	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
+	Spec Spec          `json:"spec"     yaml:"spec"`
+}
+
+// Spec names the host and, once known, the provider's organization id.
+type Spec struct {
+	// HostID is the host this account is held at.
+	HostID string `json:"hostId" yaml:"hostId" validate:"required,uuid" doc:"Id of the host this account is held at."`
+
+	// OrgID is the provider's organization id: the org, never a person or an email, since one login can belong to several orgs with separate limits. Empty until known.
+	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty" doc:"The provider's organization id (the org, never a person or an email). Empty until known."`
+
+	// Default marks the account a host key of the same owner at HostID joins when it names none. An owner has at most one per host.
+	Default bool `json:"default,omitempty" yaml:"default,omitempty" doc:"The account a host key of the same owner at this host joins when it names none. Created on first use; an owner has at most one per host, and a second answers 409."`
+}
+
+// Validate runs intra-row rules via the shared meta.Validator and requires an owner of kind system, team, project or user; team and project owners carry an id.
+//
+// Cross-row checks (the host exists) live in app/refcheck.
+func (a *Account) Validate() error {
+	if err := meta.Validator.Struct(a); err != nil {
+		return err
+	}
+	switch a.Meta.Owner.Kind {
+	case meta.OwnerSystem, meta.OwnerUser:
+	case meta.OwnerTeam, meta.OwnerProject:
+		if a.Meta.Owner.ID == "" {
+			return fmt.Errorf("account %q: owner.kind %q requires an id", a.Meta.Name, a.Meta.Owner.Kind)
+		}
+	default:
+		return fmt.Errorf("account %q: owner.kind must be system, team, project or user, got %q", a.Meta.Name, a.Meta.Owner.Kind)
+	}
+	return nil
+}

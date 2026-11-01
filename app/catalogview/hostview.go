@@ -7,7 +7,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 )
 
 // hostview.go is the host-detail mirror of the model/policy projections. A Host
@@ -22,20 +21,20 @@ import (
 // HostKeyView — one upstream credential targeting this host. Secret-free:
 // only the value-mode discriminator and non-sensitive config.
 type HostKeyView struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"` // "env" | "stored"
-	DefaultTier string `json:"defaultTier,omitempty"`
-	Enabled     bool   `json:"enabled"`
+	ID          string `json:"id"                    doc:"Host key id."`
+	Name        string `json:"name"                  doc:"Host key slug."`
+	Kind        string `json:"kind"                  enum:"env,stored,oauth" doc:"Where the secret comes from; the secret itself is never shown."` // "env" | "stored"
+	DefaultTier string `json:"defaultTier,omitempty" deprecated:"true" doc:"Stored but not applied to requests."`
+	Enabled     bool   `json:"enabled"               doc:"Whether the key is enabled."`
 }
 
 // HostPolicyRow — a host-tier policy this host owns, with its rate-limit rule
-// sets (per-model RLBindings + the flat default).
+// sets (model-scoped and unscoped links alike).
 type HostPolicyRow struct {
-	ID         string               `json:"id"`
-	Name       string               `json:"name"`
-	Enabled    bool                 `json:"enabled"`
-	RateLimits []PolicyRateLimitRow `json:"rateLimits"`
+	ID         string               `json:"id"         doc:"Policy id."`
+	Name       string               `json:"name"       doc:"Policy slug."`
+	Enabled    bool                 `json:"enabled"    doc:"Whether the policy is enabled."`
+	RateLimits []PolicyRateLimitRow `json:"rateLimits" doc:"The rate limits the preset links, model-scoped and unscoped."`
 }
 
 // loadHost resolves the host {ref} (id or slug) and builds the index.
@@ -66,13 +65,7 @@ func (s *Service) HostKeyList(ctx context.Context, ref string) (HostRef, []HostK
 		if !s.visible("host-key", k.Meta.ID, k.Meta.Owner) {
 			continue
 		}
-		rows = append(rows, HostKeyView{
-			ID:          k.Meta.ID,
-			Name:        k.Meta.Name,
-			Kind:        string(k.Spec.ValueFrom.Kind),
-			DefaultTier: k.Spec.DefaultTier,
-			Enabled:     hostKeyEnabled(k),
-		})
+		rows = append(rows, hostKeyView(k))
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	return hostRefOf(h), rows, nil
@@ -102,17 +95,4 @@ func (s *Service) HostPolicies(ctx context.Context, ref string) (HostRef, []Host
 
 func hostKeyEnabled(k *hostkey.HostKey) bool {
 	return k.Spec.Enabled == nil || *k.Spec.Enabled
-}
-
-// policyRateLimitRows is shared by PolicyRateLimits and HostPolicies: each
-// per-model RLBinding in declared order, then the flat default last.
-func (idx *index) policyRateLimitRows(p *policy.Policy) []PolicyRateLimitRow {
-	rows := []PolicyRateLimitRow{}
-	for _, b := range p.Spec.RLBindings {
-		rows = append(rows, idx.rlRow(b.RateLimitID, b.Models, false))
-	}
-	if p.Spec.RateLimitID != "" {
-		rows = append(rows, idx.rlRow(p.Spec.RateLimitID, nil, true))
-	}
-	return rows
 }

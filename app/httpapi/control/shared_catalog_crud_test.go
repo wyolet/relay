@@ -207,7 +207,7 @@ func TestPersonalKindsStillCreatedAsCallersOwn(t *testing.T) {
 	for _, tc := range []struct {
 		plural, body string
 	}{
-		{"host-keys", fmt.Sprintf(`{"metadata":{"name":"my-key"},"spec":{"hostId":%q,"policyId":%q,"valueFrom":{"kind":"stored"},"value":"sk-test"}}`, ids.New(), ids.New())},
+		{"host-keys", fmt.Sprintf(`{"metadata":{"name":"my-key"},"spec":{"hostId":%q,"valueFrom":{"kind":"stored"},"value":"sk-test"}}`, ids.New())},
 		{"rate-limits", `{"metadata":{"name":"my-limit"},"spec":{"rules":[{"meter":"requests","amount":10,"window":60,"strategy":"token-bucket"}]}}`},
 		{"policies", `{"metadata":{"name":"my-policy"},"spec":{}}`},
 	} {

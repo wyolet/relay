@@ -1,0 +1,466 @@
+package plan
+
+import (
+	"hash/maphash"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/wyolet/relay/app/binding"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/pricing"
+)
+
+// Route-table bounds: shards keep fills of different refs from waiting on each other, and the per-shard cap bounds what unknown model names can fill.
+const (
+	routeShards    = 16
+	routesPerShard = 256
+)
+
+// RouteTable maps a caller's model ref to its Route, filling on first use from the catalog index and pools its CallerPlan holds. A table is never filled against newer inputs: any change replaces the CallerPlan and with it the table.
+type RouteTable struct {
+	caller *CallerPlan
+	idx    *CatalogIndex
+	seed   maphash.Seed
+	shards [routeShards]routeShard
+	misses atomic.Uint64
+}
+
+// routeShard allocates on its first fill: most principals touch a few models, and a table exists per principal.
+type routeShard struct {
+	mu     sync.RWMutex
+	routes map[string]*Route
+	order  []string // ring of filled refs, oldest dropped first
+	next   int
+}
+
+func newRouteTable(cp *CallerPlan, idx *CatalogIndex) *RouteTable {
+	return &RouteTable{caller: cp, idx: idx, seed: maphash.MakeSeed()}
+}
+
+// Route is where one model ref goes for one caller: the model, and the hops (pool by pool, the failover order) with the slots that may serve it. Refused is set when no hop remains, naming what emptied the route.
+type Route struct {
+	Model    *model.Model
+	Snapshot *model.Snapshot
+	Provider string
+	// UpstreamModel is the wire model name: the alias's override when one matched, else the snapshot's upstream name. ResolvedVia tags an alias match for usage rows.
+	UpstreamModel string
+	ResolvedVia   string
+	Hops          []RouteHop
+	Refused       *Refusal
+}
+
+// RouteHop is one pool's slots that may serve the route, with the binding and pricing at the pool's host. Counters[i] is everything slot i's request must fit: the caller rungs' counters, then the slot's upstream ones.
+type RouteHop struct {
+	Pool    *PoolPlan
+	Binding *binding.Binding
+	Host    *host.Host
+	Pricing *pricing.Pricing
+	Priced  bool
+	Slots   []*KeySlot
+	// Credentials is each slot's credential, in slot order, so a pick over the whole hop builds no slice.
+	Credentials []*hostkey.HostKey
+	Counters    [][]limits.Counter
+	// CallerN is how many leading counters of each Counters[i] are the caller's; they are the same for every slot of the hop, so a failover inside it keeps the caller's hold.
+	CallerN int
+}
+
+// CallerCounters returns the caller rungs' counters of this hop.
+func (h *RouteHop) CallerCounters() []limits.Counter {
+	if len(h.Counters) == 0 {
+		return nil
+	}
+	return h.Counters[0][:h.CallerN]
+}
+
+// UpstreamCounters returns the upstream rungs' counters of slot i.
+func (h *RouteHop) UpstreamCounters(i int) []limits.Counter { return h.Counters[i][h.CallerN:] }
+
+// Get returns the route for ref, filling it on first use; never nil. A hit is one read-locked map lookup.
+func (t *RouteTable) Get(ref string) *Route {
+	sh := &t.shards[maphash.String(t.seed, ref)%routeShards]
+	sh.mu.RLock()
+	r := sh.routes[ref]
+	sh.mu.RUnlock()
+	if r != nil {
+		return r
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if r = sh.routes[ref]; r != nil {
+		return r
+	}
+	t.misses.Add(1)
+	r = t.fill(ref)
+	if sh.routes == nil {
+		sh.routes = make(map[string]*Route)
+		sh.order = make([]string, routesPerShard)
+	}
+	if old := sh.order[sh.next]; old != "" {
+		delete(sh.routes, old)
+	}
+	sh.order[sh.next] = ref
+	sh.next = (sh.next + 1) % routesPerShard
+	sh.routes[ref] = r
+	return r
+}
+
+// Misses counts fills, for a gauge.
+func (t *RouteTable) Misses() uint64 { return t.misses.Load() }
+
+// Models lists the models the caller can reach, by running the route fill per model: the listing cannot advertise what a request would be refused.
+func (t *RouteTable) Models() []*model.Model {
+	var out []*model.Model
+	for _, l := range t.Listing() {
+		out = append(out, l.Model)
+	}
+	return out
+}
+
+// Listed is one reachable model and the bindings its route would use, one per hop.
+type Listed struct {
+	Model    *model.Model
+	Provider string
+	Bindings []*binding.Binding
+}
+
+// Listing runs the route fill for every model, uncached, and keeps those with a hop; a snapshot name is reachable when one of its bindings serves it. The fill skips nothing a request for a named snapshot would not, so the list never advertises a refusal.
+func (t *RouteTable) Listing() []Listed {
+	if t.caller.Refused != nil || t.idx == nil {
+		return nil
+	}
+	var out []Listed
+	for _, m := range t.idx.Snap.AllModels() {
+		r := t.route([]*model.Model{m}, nil, "")
+		if len(r.Hops) == 0 {
+			continue
+		}
+		l := Listed{Model: m, Provider: r.Provider, Bindings: make([]*binding.Binding, 0, len(r.Hops))}
+		for i := range r.Hops {
+			l.Bindings = append(l.Bindings, r.Hops[i].Binding)
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// Unkeyed is where a model ref goes when the caller brings its own upstream key: the first binding the caller's and the host's grants allow, whatever credentials it reaches. Refused is set when none does.
+type Unkeyed struct {
+	Model         *model.Model
+	Provider      string
+	Binding       *binding.Binding
+	Host          *host.Host
+	Pricing       *pricing.Pricing
+	UpstreamModel string
+	ResolvedVia   string
+	// Counters are what the request must fit: the caller rungs' counters, then the host rung's.
+	Counters []limits.Counter
+	Refused  *Refusal
+}
+
+// ResolveUnkeyed resolves ref without credentials, uncached. The host rung applies as on a routed request; the account rung does not, as no relay credential serves. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
+func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
+	cp := t.caller
+	if cp.Refused != nil {
+		return &Unkeyed{Refused: cp.Refused}
+	}
+	notFound := &Unkeyed{Refused: &Refusal{Code: CodeModelNotFound, Message: "no model named " + ref}}
+	if t.idx == nil {
+		return notFound
+	}
+	snap := t.idx.Snap
+	res := snap.ResolveModelRef(ref)
+	if len(res.Models) == 0 {
+		return notFound
+	}
+	best := refusalAt{r: &Refusal{Code: CodeModelDisabled, Message: "the model is disabled"}}
+	for _, m := range res.Models {
+		if !m.IsEnabled() {
+			continue
+		}
+		prov, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+		for _, b := range snap.BindingsForModel(m.Meta.ID) {
+			if !b.IsEnabled() || (res.PinHostID != "" && b.Spec.HostID != res.PinHostID) || (res.Snapshot != nil && !b.Serves(res.Snapshot.Name)) {
+				continue
+			}
+			h, ok := snap.Host(b.Spec.HostID)
+			if !ok || !h.Routable() {
+				continue
+			}
+			if i := cp.Allow.rejects(prov, m, h.Meta.Name); i >= 0 {
+				best.note(stepModelNotAllowed, cp.notAllowed(i))
+				continue
+			}
+			if h.Spec.NoAuth && !cp.ReachesHost(h.Meta.ID) {
+				best.note(stepNoCredentials, &Refusal{Code: CodeNoCredentials, Message: "host " + h.Meta.Name + " needs no key and is reached only through a pool"})
+				continue
+			}
+			pr, _ := snap.PricingForBinding(b)
+			if r := cp.unpriced(b, pr != nil); r != nil {
+				best.note(stepUnpriced, r)
+				continue
+			}
+			hr := cp.hosts.Of(h.Meta.ID)
+			if step, r := hr.refuses(prov, m, b, h.Meta.Name, pr != nil); r != nil {
+				best.note(step, r)
+				continue
+			}
+			u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h, Pricing: pr}
+			u.Counters, _ = t.counters(hr, prov, m, h.Meta.Name)
+			u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
+			if u.UpstreamModel == "" && res.Snapshot != nil {
+				u.UpstreamModel = res.Snapshot.Upstream()
+			}
+			return u
+		}
+		best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
+	}
+	return &Unkeyed{Refused: best.r}
+}
+
+// ResolveAtHost is what governs a request that brings its own upstream key and names no caller, as anonymous proxy traffic does: the host's own rung, for the model ref at host h. A model the catalog does not serve at h has Model unset and only the host's whole-policy counters; it is refused when the host's policy names models or carries a budget, since neither can be checked for it.
+func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
+	hr := r.Hosts.Of(h.Meta.ID)
+	if hr.Refused != nil {
+		return &Unkeyed{Refused: hr.Refused}
+	}
+	if ref != "" && !strings.Contains(ref, "@") {
+		ref += "@" + h.Meta.Name
+	}
+	if ref != "" && r.Catalog != nil {
+		snap := r.Catalog.Snap
+		res := snap.ResolveModelRef(ref)
+		for _, m := range res.Models {
+			if !m.IsEnabled() {
+				continue
+			}
+			prov, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+			for _, b := range snap.BindingsForModel(m.Meta.ID) {
+				if !b.IsEnabled() || b.Spec.HostID != h.Meta.ID || (res.Snapshot != nil && !b.Serves(res.Snapshot.Name)) {
+					continue
+				}
+				pr, _ := snap.PricingForBinding(b)
+				if _, refused := hr.refuses(prov, m, b, h.Meta.Name, pr != nil); refused != nil {
+					return &Unkeyed{Refused: refused}
+				}
+				u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h, Pricing: pr}
+				u.Counters = append(append(make([]limits.Counter, 0, len(hr.Whole)+len(hr.ByModel[m.Meta.ID])), hr.Whole...), hr.ByModel[m.Meta.ID]...)
+				u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
+				if u.UpstreamModel == "" && res.Snapshot != nil {
+					u.UpstreamModel = res.Snapshot.Upstream()
+				}
+				return u
+			}
+		}
+	}
+	rung := &hr.Upstream[0]
+	if p := rung.Policy; p != nil && p.Grant != nil {
+		return &Unkeyed{Refused: rungRefusal(CodeModelNotAllowed, rung, p.Policy.Meta.ID, "the catalog has no "+ref+" and the host policy names the models it allows")}
+	}
+	if hr.hasBudget {
+		br := &hr.Upstream[hr.budgetAt]
+		return &Unkeyed{Refused: rungRefusal(CodeUnpricedUnderBudget, br, br.Policy.Policy.Meta.ID, "the catalog has no pricing for "+ref+" and a budget applies")}
+	}
+	return &Unkeyed{Host: h, Counters: hr.Whole}
+}
+
+// AtHostNeedsModel reports whether the host's own rung decides by model (a model list, a budget, or per-model limits), so ResolveAtHost needs the request's model; otherwise the request may stream before its model is read.
+func (r *Root) AtHostNeedsModel(hostID string) bool {
+	hr := r.Hosts.Of(hostID)
+	p := hr.Upstream[0].Policy
+	return hr.Refused == nil && p != nil && (p.Grant != nil || hr.hasBudget || len(hr.ByModel) > 0)
+}
+
+// ReachesHost reports whether one of the caller's pools is at the host.
+func (p *CallerPlan) ReachesHost(hostID string) bool {
+	for _, pp := range p.Pools {
+		if pp.Host.Meta.ID == hostID {
+			return true
+		}
+	}
+	return false
+}
+
+// Catalog is the catalog snapshot this table resolves against, for projecting what it lists.
+func (t *RouteTable) Catalog() *appcatalog.Snapshot {
+	if t.idx == nil {
+		return nil
+	}
+	return t.idx.Snap
+}
+
+func (t *RouteTable) fill(ref string) *Route {
+	if t.caller.Refused != nil {
+		return &Route{Refused: t.caller.Refused}
+	}
+	if t.idx == nil {
+		return &Route{Refused: &Refusal{Code: CodeModelNotFound, Message: "no model named " + ref}}
+	}
+	res := t.idx.Snap.ResolveModelRef(ref)
+	if len(res.Models) == 0 {
+		return &Route{Refused: &Refusal{Code: CodeModelNotFound, Message: "no model named " + ref}}
+	}
+	r := t.route(res.Models, res.Snapshot, res.PinHostID)
+	r.Snapshot = res.Snapshot
+	r.ResolvedVia, r.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
+	if r.UpstreamModel == "" && res.Snapshot != nil {
+		r.UpstreamModel = res.Snapshot.Upstream()
+	}
+	return r
+}
+
+// Refusal steps, in the order a fill passes them; when no hop remains the refusal from the furthest step reached is the one reported.
+const (
+	stepModelDisabled = iota
+	stepNoBinding
+	stepModelNotAllowed
+	stepNoCredentials
+	stepUpstream
+	stepUnpriced
+)
+
+type refusalAt struct {
+	step int
+	r    *Refusal
+}
+
+func (b *refusalAt) note(step int, r *Refusal) {
+	if b.r == nil || step > b.step {
+		b.step, b.r = step, r
+	}
+}
+
+// served is one binding that can serve the model, at its effective host.
+type served struct {
+	b       *binding.Binding
+	h       *host.Host
+	pricing *pricing.Pricing
+}
+
+// route walks the candidate models in order and returns the first with a hop. sn narrows bindings to those serving the snapshot; pinHostID to one host.
+func (t *RouteTable) route(models []*model.Model, sn *model.Snapshot, pinHostID string) *Route {
+	cp, snap := t.caller, t.idx.Snap
+	best := refusalAt{r: &Refusal{Code: CodeModelDisabled, Message: "the model is disabled"}}
+	for _, m := range models {
+		if !m.IsEnabled() {
+			continue
+		}
+		prov, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+		var cands []served
+		for _, b := range snap.BindingsForModel(m.Meta.ID) {
+			if !b.IsEnabled() || (pinHostID != "" && b.Spec.HostID != pinHostID) || (sn != nil && !b.Serves(sn.Name)) {
+				continue
+			}
+			h, ok := snap.Host(b.Spec.HostID)
+			if !ok || !h.Routable() {
+				continue
+			}
+			if i := cp.Allow.rejects(prov, m, h.Meta.Name); i >= 0 {
+				best.note(stepModelNotAllowed, cp.notAllowed(i))
+				continue
+			}
+			pr, _ := snap.PricingForBinding(b)
+			cands = append(cands, served{b: b, h: h, pricing: pr})
+		}
+		if len(cands) == 0 {
+			best.note(stepNoBinding, &Refusal{Code: CodeNoBinding, Message: "no enabled binding serves " + m.Meta.Name})
+			continue
+		}
+		if hops := t.hops(m, prov, cands, &best); len(hops) > 0 {
+			return &Route{Model: m, Provider: prov, Hops: hops}
+		}
+	}
+	return &Route{Refused: best.r}
+}
+
+// hops walks the caller's pools in order and keeps, per pool at a candidate host, the slots whose upstream rungs allow the model.
+func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *refusalAt) []RouteHop {
+	cp := t.caller
+	var hops []RouteHop
+	seen := map[*KeySlot]struct{}{}
+	reached := false
+	for _, p := range cp.Pools {
+		var sv *served
+		for i := range cands {
+			if cands[i].b.Spec.HostID == p.Host.Meta.ID {
+				sv = &cands[i]
+				break
+			}
+		}
+		if sv == nil {
+			continue
+		}
+		reached = true
+		priced := sv.pricing != nil
+		if r := cp.unpriced(sv.b, priced); r != nil {
+			best.note(stepUnpriced, r)
+			continue
+		}
+		hop := RouteHop{Pool: p, Binding: sv.b, Host: sv.h, Pricing: sv.pricing, Priced: priced}
+		for _, s := range p.Slots {
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			if step, r := s.refuses(prov, m, sv.b, sv.h.Meta.Name, priced); r != nil {
+				best.note(step, r)
+				continue
+			}
+			seen[s] = struct{}{}
+			hop.Slots = append(hop.Slots, s)
+			hop.Credentials = append(hop.Credentials, s.Credential)
+			cs, callerN := t.counters(s, prov, m, sv.h.Meta.Name)
+			hop.Counters = append(hop.Counters, cs)
+			hop.CallerN = callerN
+		}
+		if len(hop.Slots) > 0 {
+			hops = append(hops, hop)
+		}
+	}
+	if !reached {
+		r := &Refusal{Code: CodeNoCredentials, Message: "no reachable pool serves " + m.Meta.Name}
+		if cp.linkedAt >= 0 {
+			rg := &cp.Rungs[cp.linkedAt]
+			r = rungRefusal(CodeNoCredentials, rg, rg.Policy.Policy.Meta.ID, r.Message)
+		}
+		best.note(stepNoCredentials, r)
+	}
+	return hops
+}
+
+// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing, and how many of them lead as the caller's.
+func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug string) ([]limits.Counter, int) {
+	cp := t.caller
+	byModel := s.ByModel[m.Meta.ID]
+	out := make([]limits.Counter, 0, len(cp.Counters)+len(s.Whole)+len(byModel))
+	out = append(out, cp.Counters...)
+	for _, sc := range cp.scoped {
+		if sc.scope.matches(prov, m.Meta.Name, hostSlug) {
+			out = append(out, sc.counters...)
+		}
+	}
+	callerN := len(out)
+	out = append(out, s.Whole...)
+	return append(out, byModel...), callerN
+}
+
+// unpriced is the caller's refusal of a binding with no pricing while a caller budget applies; nil otherwise.
+func (cp *CallerPlan) unpriced(b *binding.Binding, priced bool) *Refusal {
+	if priced || cp.budgetAt < 0 {
+		return nil
+	}
+	r := &cp.Rungs[cp.budgetAt]
+	return rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
+}
+
+// notAllowed names the caller rung that refused a model.
+func (cp *CallerPlan) notAllowed(i int) *Refusal {
+	if i == noGrant {
+		return &Refusal{Code: CodeModelNotAllowed, Message: "deprecated models need a policy that names them or includes deprecated models"}
+	}
+	r := &cp.Rungs[i]
+	return rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, "the model is not allowed by the "+string(r.Kind)+" policy")
+}

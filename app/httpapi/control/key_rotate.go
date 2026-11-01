@@ -23,7 +23,7 @@ import (
 type rotateKeyBody struct {
 	// GraceSeconds keeps the previous plaintext valid for this long.
 	// 0 (the default) cuts over immediately.
-	GraceSeconds int `json:"graceSeconds,omitempty"`
+	GraceSeconds int `json:"graceSeconds,omitempty" doc:"Seconds the previous plaintext keeps authenticating, from 0 up to inference.keyRotateMaxGrace (default one day). 0 cuts over immediately."`
 }
 
 type rotateKeyInput struct {
@@ -36,8 +36,8 @@ type rotateKeyResponse struct {
 	Body struct {
 		// Plaintext is the new bearer token. Returned exactly once —
 		// never retrievable again.
-		Plaintext string   `json:"plaintext"`
-		Key       *key.Key `json:"key"`
+		Plaintext string   `json:"plaintext" doc:"The new bearer token. Returned only here; store it now."`
+		Key       *key.Key `json:"key"       doc:"The rotated key."`
 	}
 }
 

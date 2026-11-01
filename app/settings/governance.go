@@ -13,8 +13,8 @@ import "fmt"
 // Deleting is the click-around risk, so AllowDelete defaults false and an
 // operator flips it on when they actually mean to prune.
 type Governance struct {
-	AllowEdit   bool `json:"allowEdit"`
-	AllowDelete bool `json:"allowDelete"`
+	AllowEdit   bool `json:"allowEdit"   doc:"Allow API edits of the kind's catalog-owned rows. Default true."`
+	AllowDelete bool `json:"allowDelete" doc:"Allow API deletes of the kind's catalog-owned rows. Default false."`
 }
 
 func (g *Governance) Validate() error { return nil }

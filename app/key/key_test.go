@@ -19,7 +19,6 @@ func fix(name string) *Key {
 		},
 		Spec: Spec{
 			Principal: Principal{Kind: PrincipalServiceAccount, ID: meta.NewID()},
-			PolicyID:  meta.NewID(),
 			KeyHash:   validHash,
 			Prefix:    "rk_test",
 		},
@@ -44,14 +43,6 @@ func TestValidate(t *testing.T) {
 	t.Run("user principal owned by that user", func(t *testing.T) {
 		if err := userKey("k").Validate(); err != nil {
 			t.Fatalf("unexpected: %v", err)
-		}
-	})
-
-	t.Run("empty policyId is allowed (policy-less key)", func(t *testing.T) {
-		k := fix("k")
-		k.Spec.PolicyID = ""
-		if err := k.Validate(); err != nil {
-			t.Fatalf("policy-less should validate, got %v", err)
 		}
 	})
 
@@ -96,11 +87,6 @@ func TestValidate(t *testing.T) {
 				return k
 			}(),
 			want: "must be owned by a project",
-		},
-		{
-			name: "policyId not uuid",
-			k:    func() *Key { k := fix("k"); k.Spec.PolicyID = "not-a-uuid"; return k }(),
-			want: "PolicyID",
 		},
 		{
 			name: "missing keyhash",

@@ -3,7 +3,7 @@ package catalogvalidate
 // checkOrphans surfaces curation hints (warnings, not errors):
 //   - Provider with zero Models
 //   - Model with zero enabled host bindings
-//   - HostKey not referenced by any routable Policy (unreachable)
+//   - HostKey not linked by any routable Policy, directly or through a Pool
 //   - RateLimit not referenced by any Policy
 //
 // Errors-by-orphaning would be too strict — operators may legitimately
@@ -56,8 +56,8 @@ func checkOrphans(g *graph) []Issue {
 		})
 	}
 
-	// HostKey → at least one Policy a caller can route through. Team- and
-	// project-owned policies count too, or a referenced key reads as
+	// HostKey → linked by a caller policy, directly or through a pool. Team-
+	// and project-owned policies count too, or a linked key reads as
 	// unreachable.
 	keyReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
@@ -66,8 +66,15 @@ func checkOrphans(g *graph) []Issue {
 		default:
 			continue
 		}
-		for _, hk := range pol.Spec.HostKeys {
+		for _, hk := range pol.Spec.Credentials {
 			keyReferenced[hk] = true
+		}
+		for _, name := range pol.Spec.Pools {
+			if p, ok := g.Pools[name]; ok {
+				for _, hk := range p.Spec.Credentials {
+					keyReferenced[hk] = true
+				}
+			}
 		}
 	}
 	for name := range g.HostKeys {
@@ -76,7 +83,7 @@ func checkOrphans(g *graph) []Issue {
 				Severity: SeverityWarning,
 				Kind:     KindOrphan,
 				Source:   Ref{Kind: "HostKey", Name: name},
-				Message:  "hostkey not referenced by any routable policy; underlying models won't appear in /v1/models",
+				Message:  "hostkey not linked by any routable policy or its pools; reachable only through its owner's scope",
 			})
 		}
 	}
@@ -84,12 +91,9 @@ func checkOrphans(g *graph) []Issue {
 	// RateLimit → at least one Policy reference.
 	rlReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
-		if pol.Spec.RateLimit != "" {
-			rlReferenced[pol.Spec.RateLimit] = true
-		}
-		for _, b := range pol.Spec.RLBindings {
-			if b.RateLimit != "" {
-				rlReferenced[b.RateLimit] = true
+		for _, l := range pol.Spec.RateLimits {
+			if l.Ref != "" {
+				rlReferenced[l.Ref] = true
 			}
 		}
 	}

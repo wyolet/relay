@@ -11,15 +11,16 @@
 // catalogvalidate fills the remaining gap: relational and graph-completeness
 // checks across the whole catalog. Examples:
 //
-//   - policy.spec.hostKeys names a HostKey that doesn't exist
-//   - hostkey.spec.policyId names a host-owned Policy whose owner is a
-//     different host than hostkey.spec.hostId
+//   - policy.spec.pools names a Pool that doesn't exist
+//   - a host-owned tier policy links pools or credentials, or scopes a rate
+//     limit to a model its host does not serve
+//   - hostkey.spec.account names an Account held at a different host
 //   - hostBinding.snapshots[] references a snapshot name not in
 //     Model.spec.snapshots[]
 //   - duplicate names within a kind
 //   - (warn) Model with zero enabled host bindings — won't surface
-//   - (warn) HostKey with no user-owned Policy listing it — relay can't
-//     reach the underlying models
+//   - (warn) HostKey no routable Policy or Pool links — relay can't reach
+//     the underlying models
 //
 // The output is a list of Issues, never an early-fail. Catalog CI dumps all
 // at once so authors fix everything in one pass instead of iteratively
@@ -83,7 +84,7 @@ const (
 type Ref struct {
 	Kind  string
 	Name  string
-	Field string // optional, like "spec.hostKeys[2]"
+	Field string // optional, like "spec.credentials[2]"
 }
 
 func (r Ref) String() string {
@@ -119,6 +120,9 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 	issues = append(issues, checkHostRefs(g)...)
 	issues = append(issues, checkModelRefs(g)...)
 	issues = append(issues, checkHostKeyRefs(g)...)
+	issues = append(issues, checkAccountRefs(g)...)
+	issues = append(issues, checkPoolRefs(g)...)
+	issues = append(issues, checkBudgetRefs(g)...)
 	issues = append(issues, checkPolicyRefs(g)...)
 	issues = append(issues, checkPricingRefs(g)...)
 	issues = append(issues, checkBindingRefs(g)...)
@@ -135,166 +139,6 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 
 	sortIssues(issues)
 	return issues
-}
-
-// graph indexes docs by kind+name for O(1) ref lookup during checks.
-// Slices of issues are intentionally separate from the lookup index so
-// checks can be added without touching the indexing code.
-type graph struct {
-	Providers    map[string]*manifest.ProviderDTO
-	Hosts        map[string]*manifest.HostDTO
-	Models       map[string]*manifest.ModelDTO
-	HostKeys     map[string]*manifest.HostKeyDTO
-	Policies     map[string]*manifest.PolicyDTO
-	RateLimits   map[string]*manifest.RateLimitDTO
-	Keys         map[string]*manifest.KeyDTO
-	Pricings     map[string]*manifest.PricingDTO
-	HostBindings map[string]*manifest.HostBindingDTO
-	Teams        map[string]*manifest.TeamDTO
-	Projects     map[string]*manifest.ProjectDTO
-
-	ServiceAccounts map[string]*manifest.ServiceAccountDTO
-	Groups          map[string]*manifest.GroupDTO
-	Roles           map[string]*manifest.RoleDTO
-	RoleBindings    map[string]*manifest.RoleBindingDTO
-	PolicyBindings  map[string]*manifest.PolicyBindingDTO
-
-	// duplicates tracks names that appeared more than once within a kind.
-	// Each entry holds the kind + name; checkDuplicateNames emits issues.
-	duplicates []Ref
-}
-
-func buildGraph(docs []manifest.Document) *graph {
-	g := &graph{
-		Providers:    map[string]*manifest.ProviderDTO{},
-		Hosts:        map[string]*manifest.HostDTO{},
-		Models:       map[string]*manifest.ModelDTO{},
-		HostKeys:     map[string]*manifest.HostKeyDTO{},
-		Policies:     map[string]*manifest.PolicyDTO{},
-		RateLimits:   map[string]*manifest.RateLimitDTO{},
-		Keys:         map[string]*manifest.KeyDTO{},
-		Pricings:     map[string]*manifest.PricingDTO{},
-		HostBindings: map[string]*manifest.HostBindingDTO{},
-		Teams:        map[string]*manifest.TeamDTO{},
-		Projects:     map[string]*manifest.ProjectDTO{},
-
-		ServiceAccounts: map[string]*manifest.ServiceAccountDTO{},
-		Groups:          map[string]*manifest.GroupDTO{},
-		Roles:           map[string]*manifest.RoleDTO{},
-		RoleBindings:    map[string]*manifest.RoleBindingDTO{},
-		PolicyBindings:  map[string]*manifest.PolicyBindingDTO{},
-	}
-	for i := range docs {
-		d := &docs[i]
-		switch {
-		case d.Provider != nil:
-			indexOne(g, "Provider", d.Provider.Metadata.Name, func() bool {
-				_, dup := g.Providers[d.Provider.Metadata.Name]
-				g.Providers[d.Provider.Metadata.Name] = d.Provider
-				return dup
-			})
-		case d.Host != nil:
-			indexOne(g, "Host", d.Host.Metadata.Name, func() bool {
-				_, dup := g.Hosts[d.Host.Metadata.Name]
-				g.Hosts[d.Host.Metadata.Name] = d.Host
-				return dup
-			})
-		case d.Model != nil:
-			indexOne(g, "Model", d.Model.Metadata.Name, func() bool {
-				_, dup := g.Models[d.Model.Metadata.Name]
-				g.Models[d.Model.Metadata.Name] = d.Model
-				return dup
-			})
-		case d.HostKey != nil:
-			indexOne(g, "HostKey", d.HostKey.Metadata.Name, func() bool {
-				_, dup := g.HostKeys[d.HostKey.Metadata.Name]
-				g.HostKeys[d.HostKey.Metadata.Name] = d.HostKey
-				return dup
-			})
-		case d.Policy != nil:
-			indexOne(g, "Policy", d.Policy.Metadata.Name, func() bool {
-				_, dup := g.Policies[d.Policy.Metadata.Name]
-				g.Policies[d.Policy.Metadata.Name] = d.Policy
-				return dup
-			})
-		case d.RateLimit != nil:
-			indexOne(g, "RateLimit", d.RateLimit.Metadata.Name, func() bool {
-				_, dup := g.RateLimits[d.RateLimit.Metadata.Name]
-				g.RateLimits[d.RateLimit.Metadata.Name] = d.RateLimit
-				return dup
-			})
-		case d.Key != nil:
-			indexOne(g, "Key", d.Key.Metadata.Name, func() bool {
-				_, dup := g.Keys[d.Key.Metadata.Name]
-				g.Keys[d.Key.Metadata.Name] = d.Key
-				return dup
-			})
-		case d.Pricing != nil:
-			indexOne(g, "Pricing", d.Pricing.Metadata.Name, func() bool {
-				_, dup := g.Pricings[d.Pricing.Metadata.Name]
-				g.Pricings[d.Pricing.Metadata.Name] = d.Pricing
-				return dup
-			})
-		case d.Team != nil:
-			indexOne(g, "Team", d.Team.Metadata.Name, func() bool {
-				_, dup := g.Teams[d.Team.Metadata.Name]
-				g.Teams[d.Team.Metadata.Name] = d.Team
-				return dup
-			})
-		case d.Project != nil:
-			indexOne(g, "Project", d.Project.Metadata.Name, func() bool {
-				_, dup := g.Projects[d.Project.Metadata.Name]
-				g.Projects[d.Project.Metadata.Name] = d.Project
-				return dup
-			})
-		case d.ServiceAccount != nil:
-			indexOne(g, "ServiceAccount", d.ServiceAccount.Metadata.Name, func() bool {
-				_, dup := g.ServiceAccounts[d.ServiceAccount.Metadata.Name]
-				g.ServiceAccounts[d.ServiceAccount.Metadata.Name] = d.ServiceAccount
-				return dup
-			})
-		case d.Group != nil:
-			indexOne(g, "Group", d.Group.Metadata.Name, func() bool {
-				_, dup := g.Groups[d.Group.Metadata.Name]
-				g.Groups[d.Group.Metadata.Name] = d.Group
-				return dup
-			})
-		case d.Role != nil:
-			indexOne(g, "Role", d.Role.Metadata.Name, func() bool {
-				_, dup := g.Roles[d.Role.Metadata.Name]
-				g.Roles[d.Role.Metadata.Name] = d.Role
-				return dup
-			})
-		case d.RoleBinding != nil:
-			indexOne(g, "RoleBinding", d.RoleBinding.Metadata.Name, func() bool {
-				_, dup := g.RoleBindings[d.RoleBinding.Metadata.Name]
-				g.RoleBindings[d.RoleBinding.Metadata.Name] = d.RoleBinding
-				return dup
-			})
-		case d.PolicyBinding != nil:
-			indexOne(g, "PolicyBinding", d.PolicyBinding.Metadata.Name, func() bool {
-				_, dup := g.PolicyBindings[d.PolicyBinding.Metadata.Name]
-				g.PolicyBindings[d.PolicyBinding.Metadata.Name] = d.PolicyBinding
-				return dup
-			})
-		case d.HostBinding != nil:
-			indexOne(g, "HostBinding", d.HostBinding.Metadata.Name, func() bool {
-				_, dup := g.HostBindings[d.HostBinding.Metadata.Name]
-				g.HostBindings[d.HostBinding.Metadata.Name] = d.HostBinding
-				return dup
-			})
-		}
-	}
-	return g
-}
-
-func indexOne(g *graph, kind, name string, insertReportDup func() bool) {
-	if name == "" {
-		return
-	}
-	if insertReportDup() {
-		g.duplicates = append(g.duplicates, Ref{Kind: kind, Name: name})
-	}
 }
 
 // sortIssues orders findings by severity (errors first) then source.

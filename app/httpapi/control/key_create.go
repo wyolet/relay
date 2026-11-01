@@ -19,20 +19,23 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
+type createKeyMetadata struct {
+	Name        string `json:"name,omitempty"        doc:"Slug for the key; derived from displayName when omitted."`
+	DisplayName string `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
+}
+
+type createKeySpec struct {
+	Principal             key.Principal `json:"principal"                       doc:"The service account or user the key acts as. Its owner becomes the key's owner."`
+	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"             doc:"When the key stops authenticating. Omitted never expires."`
+	Enabled               *bool         `json:"enabled,omitempty"               doc:"False creates the key disabled. Omitted means true."`
+	PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"    doc:"Let the key send its own upstream credential in proxy mode."`
+	PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. A governing policy's flag overrides it."`
+}
+
 type createKeyInput struct {
 	Body struct {
-		Metadata struct {
-			Name        string `json:"name,omitempty"`
-			DisplayName string `json:"displayName,omitempty"`
-		} `json:"metadata"`
-		Spec struct {
-			Principal             key.Principal `json:"principal"`
-			PolicyID              string        `json:"policyId,omitempty"`
-			ExpiresAt             *time.Time    `json:"expiresAt,omitempty"`
-			Enabled               *bool         `json:"enabled,omitempty"`
-			PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"`
-			PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty"`
-		} `json:"spec"`
+		Metadata createKeyMetadata `json:"metadata" doc:"Name of the new key."`
+		Spec     createKeySpec     `json:"spec"     doc:"The new key's principal and flags."`
 	} `json:"body"`
 }
 
@@ -42,8 +45,8 @@ type createKeyResponse struct {
 		// inbound API key. Returned exactly once on create — never
 		// retrievable again. Persist this on the client side
 		// immediately.
-		Plaintext string   `json:"plaintext"`
-		Key       *key.Key `json:"key"`
+		Plaintext string   `json:"plaintext" doc:"The bearer token to send as Authorization: Bearer. Returned only here; store it now."`
+		Key       *key.Key `json:"key"       doc:"The stored key."`
 	}
 }
 
@@ -86,11 +89,6 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := checkPolicyRefVisible(ctx, d, in.Body.Spec.PolicyID, k.Meta.Owner); err != nil {
-			return nil, err
-		}
-
-		k.Spec.PolicyID = in.Body.Spec.PolicyID
 		k.Spec.ExpiresAt = in.Body.Spec.ExpiresAt
 		k.Spec.Enabled = in.Body.Spec.Enabled
 		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed

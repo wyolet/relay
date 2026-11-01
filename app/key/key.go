@@ -30,8 +30,8 @@ const (
 // Principal is the subject a Key authenticates as. ID is a
 // ServiceAccount id or a User id, per Kind.
 type Principal struct {
-	Kind PrincipalKind `json:"kind" yaml:"kind" validate:"required,oneof=serviceaccount user"`
-	ID   string        `json:"id"   yaml:"id"   validate:"required,uuid"`
+	Kind PrincipalKind `json:"kind" yaml:"kind" validate:"required,oneof=serviceaccount user" enum:"serviceaccount,user" doc:"Whether the key acts as a service account or a user."`
+	ID   string        `json:"id"   yaml:"id"   validate:"required,uuid" doc:"Id of the service account or user."`
 }
 
 // Key is an inbound bearer credential.
@@ -45,52 +45,43 @@ type Key struct {
 // stored anywhere.
 type Spec struct {
 	// Principal is the subject this key authenticates as. Required.
-	Principal Principal `json:"principal" yaml:"principal" validate:"required"`
-
-	// PolicyID is the Policy this Key serves under. **Optional** —
-	// when empty, the key is "policy-less" and the relay's behavior is
-	// controlled by the inference settings section
-	// (AllowMissingPolicy). A policy-less key with that flag on is
-	// allowed to reach any model served by any host the relay has
-	// hostkeys for, with no policy-level rate limits. With the flag off,
-	// such requests are rejected.
-	PolicyID string `json:"policyId,omitempty" yaml:"policyId,omitempty" validate:"omitempty,uuid"`
+	Principal Principal `json:"principal" yaml:"principal" validate:"required" doc:"The service account or user the key authenticates as; its policies govern the key's requests. Fixed at create."`
 
 	// KeyHash is sha256(plaintext) hex. Required and immutable after create.
-	KeyHash string `json:"keyHash" yaml:"keyHash" validate:"required,len=64,hexadecimal"`
+	KeyHash string `json:"keyHash" yaml:"keyHash" validate:"required,len=64,hexadecimal" readOnly:"true" doc:"Hex SHA-256 of the plaintext key. Server-managed; an update cannot change it."`
 
 	// Prefix is the leading visible portion of the token (e.g. "rk_a8b3f2")
 	// retained so the UI can show a recognisable identifier without ever
 	// holding the plaintext.
-	Prefix string `json:"prefix,omitempty" yaml:"prefix,omitempty"`
+	Prefix string `json:"prefix,omitempty" yaml:"prefix,omitempty" readOnly:"true" doc:"Leading characters of the plaintext, for recognising the key. Server-managed."`
 
 	// PreviousKeyHash is the hash rotation replaced. Server-set; accepted
 	// alongside KeyHash until GraceUntil passes.
-	PreviousKeyHash string `json:"previousKeyHash,omitempty" yaml:"-" validate:"omitempty,len=64,hexadecimal"`
+	PreviousKeyHash string `json:"previousKeyHash,omitempty" yaml:"-" validate:"omitempty,len=64,hexadecimal" readOnly:"true" doc:"Hash of the plaintext the last rotation replaced; it still authenticates until graceUntil. Server-managed."`
 
 	// GraceUntil bounds how long PreviousKeyHash still authenticates.
 	// Server-set by rotate.
-	GraceUntil *time.Time `json:"graceUntil,omitempty" yaml:"-"`
+	GraceUntil *time.Time `json:"graceUntil,omitempty" yaml:"-" readOnly:"true" doc:"Until when the pre-rotation plaintext still authenticates. Server-managed."`
 
 	// ExpiresAt, when non-nil, stops the key authenticating once passed.
-	ExpiresAt *time.Time `json:"expiresAt,omitempty" yaml:"expiresAt,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty" yaml:"expiresAt,omitempty" doc:"When the key stops authenticating. Omitted never expires."`
 
 	// RevokedAt, when non-nil, marks the key as rejected at auth time.
-	RevokedAt *time.Time `json:"revokedAt,omitempty" yaml:"revokedAt,omitempty"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty" yaml:"revokedAt,omitempty" doc:"When the key was revoked; a revoked key never authenticates again."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops the key authenticating (401) until re-enabled. Omitted means true."`
 
 	// PassthroughAllowed, when true, permits this key to forward an upstream
 	// Authorization header verbatim to the provider. Gated by the relay's
 	// global passthrough mode — when that mode is off the flag is moot.
-	PassthroughAllowed bool `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
+	PassthroughAllowed bool `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty" doc:"Let the key send its own upstream credential in proxy mode. Needs proxy mode enabled in settings."`
 
 	// PayloadLoggingEnabled opts requests authenticated by this key into
 	// full request/response body capture by the payloadlog observer. Off
 	// by default. Ignored while a policy governs the key: the policy's own
 	// flag decides then (policy.CapturesPayload).
-	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. A governing policy's flag overrides it."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

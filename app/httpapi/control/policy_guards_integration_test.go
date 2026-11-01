@@ -2,12 +2,12 @@
 
 // policy_guards_integration_test.go covers the policy-reference guards
 // against a real Postgres: they read through concrete *policy.Store /
-// *hostkey.Store / *ratelimit.Store, which have no fake seam.
+// *ratelimit.Store, which have no fake seam.
 
 package control
 
 import (
-	"errors"
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -15,15 +15,18 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/serviceaccount"
-	"github.com/wyolet/relay/app/team"
 )
+
+func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
+	return refErr(refs(d).PolicyRef(ctx, policyID, refOwner))
+}
+
+func checkRateLimitRefVisible(ctx context.Context, d Deps, rateLimitID string, refOwner meta.Owner) error {
+	return refErr(refs(d).RateLimitRef(ctx, rateLimitID, refOwner))
+}
 
 // A binder may name only its own project's policy or a system-owned shared
 // one; another project's policy and a host tier policy are both refused,
@@ -72,7 +75,7 @@ func TestCheckPolicyRefVisible_OwnProjectOrSharedOnly(t *testing.T) {
 	}
 }
 
-// A policyId naming no row is a bad request, not a silently dropped
+// A policy id naming no row is a bad request, not a silently dropped
 // reference the caller never hears about.
 func TestCheckPolicyRefVisible_DanglingIsA400(t *testing.T) {
 	pool, ctx := setupPolicyRefDB(t)
@@ -138,133 +141,5 @@ func TestCheckRateLimitRefVisible_OwnProjectOrSharedOnly(t *testing.T) {
 	} else if got := err.Error(); !strings.Contains(got, "personal rows cannot reference project resources") &&
 		!strings.Contains(got, "not found") {
 		t.Errorf("err = %q, want the reference refused", got)
-	}
-}
-
-// Deleting a policy host keys mirror as their tier is refused with a 409
-// listing them as not detachable: clearing the ref would leave every one
-// invalid.
-func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
-	pool, ctx := setupPolicyRefDB(t)
-	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
-	if err != nil {
-		t.Fatalf("BootstrapStores: %v", err)
-	}
-	d := Deps{Authz: testRBAC(), Stores: stores}
-	ctx = visibleCtx(ctx)
-	t.Setenv("TIER_HOSTKEY_VALUE", "sk-test-value")
-
-	hst := &host.Host{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: host.Spec{BaseURL: "https://api.example.com"},
-	}
-	if err := stores.Host.Upsert(ctx, hst); err != nil {
-		t.Fatalf("upsert host: %v", err)
-	}
-	tier := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-in-use", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}}}
-	unused := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-unused", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	for _, p := range []*policy.Policy{tier, unused} {
-		if err := stores.Policy.Upsert(ctx, p); err != nil {
-			t.Fatalf("upsert policy %s: %v", p.Meta.Name, err)
-		}
-	}
-	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-key", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "TIER_HOSTKEY_VALUE"}},
-	}
-	if err := stores.HostKey.Upsert(ctx, hk); err != nil {
-		t.Fatalf("upsert host-key: %v", err)
-	}
-
-	err = d.refuseInUse(ctx, "policy", tier.Meta.ID, tier.Meta.Name)
-	var inUse *resourceInUseError
-	if !errors.As(err, &inUse) || statusOf(t, err) != 409 {
-		t.Fatalf("err = %v, want a 409 resource_in_use", err)
-	}
-	if len(inUse.Blockers) != 1 || inUse.Blockers[0].Kind != "host-key" || inUse.Blockers[0].Detachable ||
-		len(inUse.Blockers[0].Items) != 1 || inUse.Blockers[0].Items[0].Name != hk.Meta.Name {
-		t.Fatalf("blockers = %+v, want host key %q, not detachable", inUse.Blockers, hk.Meta.Name)
-	}
-	if err := d.refuseInUse(ctx, "policy", unused.Meta.ID, unused.Meta.Name); err != nil {
-		t.Fatalf("deleting a policy no host key mirrors was refused: %v", err)
-	}
-}
-
-// Attaching a key through the policy sub-resource runs the same guard,
-// Validate and dirty flag a PUT on the key runs.
-func TestWriteKeyPolicy_RunsTheGuardAndMarksDirty(t *testing.T) {
-	pool, ctx := setupPolicyRefDB(t)
-	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
-	if err != nil {
-		t.Fatalf("BootstrapStores: %v", err)
-	}
-	d := Deps{Authz: testRBAC(), Stores: stores}
-	ctx = visibleCtx(ctx)
-
-	hst := &host.Host{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: host.Spec{BaseURL: "https://api.example.com"},
-	}
-	if err := stores.Host.Upsert(ctx, hst); err != nil {
-		t.Fatalf("upsert host: %v", err)
-	}
-	tier := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}}}
-	shared := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-shared", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	for _, p := range []*policy.Policy{tier, shared} {
-		if err := stores.Policy.Upsert(ctx, p); err != nil {
-			t.Fatalf("upsert policy %s: %v", p.Meta.Name, err)
-		}
-	}
-	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	if err := stores.Team.Upsert(ctx, tm); err != nil {
-		t.Fatalf("upsert team: %v", err)
-	}
-	proj := &project.Project{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-project"},
-		Spec: project.Spec{TeamID: tm.Meta.ID},
-	}
-	proj.StampOwner()
-	if err := stores.Project.Upsert(ctx, proj); err != nil {
-		t.Fatalf("upsert project: %v", err)
-	}
-	sa := &serviceaccount.ServiceAccount{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-account"},
-		Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID},
-	}
-	sa.StampOwner()
-	if err := stores.ServiceAccount.Upsert(ctx, sa); err != nil {
-		t.Fatalf("upsert service account: %v", err)
-	}
-	k := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-key", Owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}},
-		Spec: key.Spec{
-			Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID},
-			KeyHash:   strings.Repeat("a", 64), Prefix: "sk-attach",
-		},
-	}
-	if err := stores.Key.Upsert(ctx, k); err != nil {
-		t.Fatalf("upsert key: %v", err)
-	}
-
-	// A tier policy is not bindable through this endpoint either.
-	k.Spec.PolicyID = tier.Meta.ID
-	if err := writeKeyPolicy(ctx, d, k); statusOf(t, err) != 400 {
-		t.Fatalf("attaching a tier policy: err = %v, want a 400", err)
-	}
-
-	k.Spec.PolicyID = shared.Meta.ID
-	k.Meta.Dirty = false
-	if err := writeKeyPolicy(ctx, d, k); err != nil {
-		t.Fatalf("writeKeyPolicy: %v", err)
-	}
-	got, err := stores.Key.Get(ctx, k.Meta.ID)
-	if err != nil || got == nil {
-		t.Fatalf("read back key: %v", err)
-	}
-	if got.Spec.PolicyID != shared.Meta.ID {
-		t.Fatalf("policyId = %q, want %q", got.Spec.PolicyID, shared.Meta.ID)
-	}
-	if !got.Meta.Dirty {
-		t.Fatal("the attach did not mark the row hand-edited; apply would overwrite it silently")
 	}
 }

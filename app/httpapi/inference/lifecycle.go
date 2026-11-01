@@ -5,9 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/clientprofile"
@@ -28,7 +26,7 @@ import (
 // auth middleware resolved plus at most three snapshot map reads for the
 // project/team/service-account slugs. Post-flight observers must never
 // re-resolve them — the row they name may be gone by then.
-func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientIP string) *lifecycle.Context {
+func mintLifecycle(ctx context.Context, source, clientIP string) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), source, time.Now())
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP
@@ -41,45 +39,38 @@ func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientI
 		// presents no key. Re-hashing the bearer here would record a hash on
 		// token traffic that matches no key row.
 		lc.RelayKeyHash = p.KeyHash
-		// The snapshot the credential resolved against, so the slugs named
-		// here describe the same rows the principal was built from.
-		snap := SnapshotFrom(ctx)
-		if snap == nil && cat != nil {
-			snap = cat.Current()
-		}
-		if snap != nil {
-			applyPrincipalIdentity(lc, snap, p)
-		}
+		applyPrincipalIdentity(lc, p)
 	}
 	return lc
 }
 
 // StampPrincipal copies the authenticated caller's key hash, principal and tenancy onto lc, for handlers outside Dispatch that record events against the caller. A request with no principal leaves lc untouched.
 func StampPrincipal(ctx context.Context, lc *lifecycle.Context) {
-	p, snap := PrincipalFrom(ctx), SnapshotFrom(ctx)
-	if p == nil || snap == nil {
+	p := PrincipalFrom(ctx)
+	if p == nil {
 		return
 	}
 	lc.RelayKeyHash = p.KeyHash
-	applyPrincipalIdentity(lc, snap, p)
+	applyPrincipalIdentity(lc, p)
 }
 
 // applyPrincipalIdentity fills the tenancy + principal fields from the
-// resolved Principal, resolving the three slugs against snapshot rows the
-// ids already point at. A user principal carries no slug: users are not in
-// the snapshot and looking one up would be a Postgres call on the hot path.
-func applyPrincipalIdentity(lc *lifecycle.Context, snap *appcatalog.Snapshot, p *Principal) {
+// resolved Principal; the slugs come from its caller plan, which read those
+// rows when it was built. A user principal carries no slug, and a token's
+// project names only its id: neither is on the plan.
+func applyPrincipalIdentity(lc *lifecycle.Context, p *Principal) {
 	lc.CredentialKind = p.CredentialKind
 	lc.CredentialID = p.CredentialID
 	if p.Key != nil {
 		lc.RelayKeyName = p.Key.Meta.Name
 	}
+	cp := p.Caller
 	switch {
 	case p.ServiceAccountID != "":
 		lc.PrincipalKind = string(key.PrincipalServiceAccount)
 		lc.PrincipalID = p.ServiceAccountID
-		if sa, ok := snap.ServiceAccount(p.ServiceAccountID); ok {
-			lc.PrincipalName = sa.Meta.Name
+		if cp != nil {
+			lc.PrincipalName = cp.PrincipalRung().Name
 		}
 	case p.UserID != "":
 		lc.PrincipalKind = string(key.PrincipalUser)
@@ -87,14 +78,14 @@ func applyPrincipalIdentity(lc *lifecycle.Context, snap *appcatalog.Snapshot, p 
 	}
 	if p.ProjectID != "" {
 		lc.ProjectID = p.ProjectID
-		if proj, ok := snap.Project(p.ProjectID); ok {
-			lc.ProjectName = proj.Meta.Name
+		if cp != nil && cp.Project().ID() == p.ProjectID {
+			lc.ProjectName = cp.Project().Name
 		}
 	}
 	if p.TeamID != "" {
 		lc.TeamID = p.TeamID
-		if t, ok := snap.Team(p.TeamID); ok {
-			lc.TeamName = t.Meta.Name
+		if cp != nil && cp.Team().ID() == p.TeamID {
+			lc.TeamName = cp.Team().Name
 		}
 	}
 }
@@ -173,37 +164,6 @@ func sourceForMode(m Mode) string {
 		return "proxy"
 	}
 	return "pipeline"
-}
-
-// applyPlanIdentity fills the routing-identity fields once a Plan resolves.
-// Nil-safe in both arguments so partial-resolution paths (anonymous proxy,
-// header-pinned host) can call it unconditionally.
-func applyPlanIdentity(lc *lifecycle.Context, plan *routing.Plan) {
-	if lc == nil || plan == nil {
-		return
-	}
-	if plan.Policy != nil {
-		lc.PolicyID = plan.Policy.Meta.ID
-		lc.PolicyName = plan.Policy.Meta.Name
-	}
-	if plan.Model != nil {
-		lc.ModelID = plan.Model.Meta.ID
-		lc.ModelName = plan.Model.Meta.Name
-	}
-	if plan.Host != nil {
-		lc.HostID = plan.Host.Meta.ID
-		lc.HostName = plan.Host.Meta.Name
-	}
-	if plan.Provider != "" {
-		lc.ProviderName = plan.Provider
-	}
-	if plan.Pricing != nil {
-		lc.PricingID = plan.Pricing.Meta.ID
-		lc.PricingName = plan.Pricing.Meta.Name
-	}
-	if plan.ResolvedVia != "" {
-		lc.Metadata["resolved_via"] = plan.ResolvedVia
-	}
 }
 
 // fireUsageFailure emits a failure post-flight observer event for a request

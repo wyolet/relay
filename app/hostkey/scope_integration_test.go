@@ -36,7 +36,7 @@ func storedKey(owner meta.Owner, kind hostkey.ValueKind, value string) *hostkey.
 	id := meta.NewID()
 	return &hostkey.HostKey{
 		Meta: meta.Metadata{ID: id, Name: "key-" + id[len(id)-8:], Owner: owner},
-		Spec: hostkey.Spec{HostID: meta.NewID(), PolicyID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: kind, Provider: "acme"}, Value: value},
+		Spec: hostkey.Spec{HostID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: kind, Provider: "acme"}, Value: value},
 	}
 }
 

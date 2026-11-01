@@ -89,17 +89,25 @@ var policyFilter = filter.Schema[policy.Policy]{
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return enabledTrue(p.Spec.Enabled) }},
 		{Name: "payload_logging", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return p.Spec.PayloadLoggingEnabled }},
 		{Name: "include_deprecated", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return p.Spec.IncludeDeprecated }},
-		{Name: "rate_limit_id", Kind: filter.String, Get: func(p *policy.Policy) string { return p.Spec.RateLimitID }},
-		{Name: "key_selection", Kind: filter.String, Get: func(p *policy.Policy) string { return string(p.Spec.KeySelection) }},
 		{Name: "owner", Kind: filter.String, Get: func(p *policy.Policy) string { return string(p.Meta.Owner.Kind) }},
-		{Name: "model_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.ModelIDs }},
-		{Name: "host_key_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.HostKeyIDs }},
+		{Name: "pool_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.PoolIDs }},
+		{Name: "credential_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.CredentialIDs }},
+		{Name: "rate_limit_id", Kind: filter.String, Repeat: true, GetMulti: policyRateLimitIDs},
+		{Name: "budget_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.BudgetIDs }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(p *policy.Policy) time.Time { return p.Meta.CreatedAt }},
 		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(p *policy.Policy) time.Time { return p.Meta.UpdatedAt }},
 	},
 	Q:           func(p *policy.Policy) []string { return []string{p.Meta.Name, p.Meta.DisplayName, p.Meta.Description} },
 	Labels:      func(p *policy.Policy) map[string]string { return labelsOf(p.Meta) },
 	DefaultSort: "name",
+}
+
+func policyRateLimitIDs(p *policy.Policy) []string {
+	out := make([]string, 0, len(p.Spec.RateLimits))
+	for _, l := range p.Spec.RateLimits {
+		out = append(out, l.RateLimitID)
+	}
+	return out
 }
 
 var modelFilter = filter.Schema[model.Model]{
@@ -140,9 +148,6 @@ var hostFilter = filter.Schema[host.Host]{
 	Fields: []filter.Field[host.Host]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(h *host.Host) string { return h.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(h *host.Host) bool { return enabledTrue(h.Spec.Enabled) }},
-		{Name: "has_default_policy", Kind: filter.Bool, GetBool: func(h *host.Host) bool { return h.Spec.DefaultPolicy != "" }},
-		{Name: "default_policy", Kind: filter.String, Get: func(h *host.Host) string { return h.Spec.DefaultPolicy }},
-		{Name: "policy_id", Kind: filter.String, Repeat: true, GetMulti: func(h *host.Host) []string { return h.Spec.Policies }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(h *host.Host) time.Time { return h.Meta.CreatedAt }},
 		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(h *host.Host) time.Time { return h.Meta.UpdatedAt }},
 	},
@@ -156,7 +161,7 @@ var hostKeyFilter = filter.Schema[hostkey.HostKey]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(k *hostkey.HostKey) string { return k.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(k *hostkey.HostKey) bool { return enabledTrue(k.Spec.Enabled) }},
 		{Name: "host_id", Kind: filter.String, Repeat: true, Get: func(k *hostkey.HostKey) string { return k.Spec.HostID }},
-		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(k *hostkey.HostKey) string { return k.Spec.PolicyID }},
+		{Name: "account_id", Kind: filter.String, Repeat: true, Get: func(k *hostkey.HostKey) string { return k.Spec.AccountID }},
 		{Name: "default_tier", Kind: filter.String, Get: func(k *hostkey.HostKey) string { return k.Spec.DefaultTier }},
 		{Name: "value_kind", Kind: filter.String, Enum: []string{"env", "stored"}, Get: func(k *hostkey.HostKey) string { return string(k.Spec.ValueFrom.Kind) }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(k *hostkey.HostKey) time.Time { return k.Meta.CreatedAt }},
@@ -254,7 +259,6 @@ var keyFilter = filter.Schema[key.Key]{
 		{Name: "revoked", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.RevokedAt != nil }},
 		{Name: "passthrough", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.PassthroughAllowed }},
 		{Name: "payload_logging", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.PayloadLoggingEnabled }},
-		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Spec.PolicyID }},
 		{Name: "principal_kind", Kind: filter.String, Repeat: true, Enum: []string{"serviceaccount", "user"},
 			Get: func(k *key.Key) string { return string(k.Spec.Principal.Kind) }},
 		{Name: "principal_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Spec.Principal.ID }},
@@ -298,7 +302,6 @@ var serviceAccountFilter = filter.Schema[serviceaccount.ServiceAccount]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(sa *serviceaccount.ServiceAccount) bool { return enabledTrue(sa.Spec.Enabled) }},
 		{Name: "project_id", Kind: filter.String, Repeat: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Spec.ProjectID }},
-		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Spec.PolicyID }},
 	},
 	Q: func(sa *serviceaccount.ServiceAccount) []string {
 		return []string{sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Description}

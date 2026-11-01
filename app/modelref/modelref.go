@@ -1,11 +1,11 @@
 // Package modelref parses the catalog reference DSL used by Policy
 // grants and the /catalog/resolve admin endpoint.
 //
-// Grammar — five shapes, no wildcards in the wire form. Absence of a
-// segment is the wildcard:
+// Grammar — five shapes. Absence of a segment is the wildcard; the one
+// pattern spelling is a model of "*", the same as leaving the model out:
 //
-//	ref ::= provider                         "anthropic"                          all anthropic models, all hosts
-//	      | provider "@" host                "anthropic@bedrock"                  all anthropic models, only on bedrock
+//	ref ::= provider ["/*"]                  "anthropic", "anthropic/*"           all anthropic models, all hosts
+//	      | provider ["/*"] "@" host         "anthropic@bedrock"                  all anthropic models, only on bedrock
 //	      | provider "/" model               "anthropic/claude-opus-4-7"          this model on any host
 //	      | provider "/" model "@" host      "anthropic/claude-opus-4-7@bedrock"  this exact binding only
 //	      | "@" host                         "@bedrock"                           every model on this host
@@ -164,6 +164,9 @@ func Parse(s string) (Ref, error) {
 		rawModel = s[slash+1:]
 		if rawModel == "" {
 			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing / requires a model"}
+		}
+		if rawModel == "*" {
+			ref.ModelWildcard = true
 		}
 	}
 

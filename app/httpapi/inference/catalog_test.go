@@ -27,8 +27,11 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/rolebinding"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
@@ -38,35 +41,26 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 	provA, provB := meta.NewID(), meta.NewID()
 	alphaID, betaID := meta.NewID(), meta.NewID()
 	bigID, smallID := meta.NewID(), meta.NewID()
-	hkAlpha, hkBeta, polID := meta.NewID(), meta.NewID(), meta.NewID()
 	path := "/v9/chat"
 
-	// Each key mirrors an implicit-wildcard tier of its own host, so the customer policy alone decides the grant.
-	var tiers []*policy.Policy
-	hk := func(id, hostID string) *hostkey.HostKey {
-		tier := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-" + id[len(id)-6:], Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}}
-		tiers = append(tiers, tier)
-		return &hostkey.HostKey{
-			Meta: meta.Metadata{ID: id, Name: "k-" + id[len(id)-6:], Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
-			Spec: hostkey.Spec{HostID: hostID, PolicyID: tier.Meta.ID, Value: "sk-test", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
-		}
+	// One system-owned credential per host, so the caller policy alone decides the grant.
+	var w plantest.World
+	hostKeys := []*hostkey.HostKey{
+		w.Credential(&host.Host{Meta: meta.Metadata{ID: alphaID}}, nil, plantest.System, "sk-alpha"),
+		w.Credential(&host.Host{Meta: meta.Metadata{ID: betaID}}, nil, plantest.System, "sk-beta"),
 	}
-	hostKeys := []*hostkey.HostKey{hk(hkAlpha, alphaID), hk(hkBeta, betaID)}
 	bind := func(name, modID, hostID string, snapshots ...string) *binding.Binding {
 		return &binding.Binding{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
 			Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI, Snapshots: snapshots},
 		}
 	}
-	pol := &policy.Policy{
-		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: alphaID}},
-		Spec: policy.Spec{Models: grants, HostKeyIDs: []string{hkAlpha, hkBeta}},
-	}
-	k := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: key.Spec{PolicyID: polID, KeyHash: "catalog-route-hash"},
-	}
-	cat := catalogtest.Catalog{
+	u := w.User()
+	k := w.UserKey(u, "catalog-route-secret")
+	k.Meta.Name = "rk"
+	pol := w.Policy("p", policy.Spec{Models: grants})
+	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
+	c := catalogtest.Catalog{
 		Providers: []*provider.Provider{
 			{Meta: meta.Metadata{ID: provA, Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}},
 			{Meta: meta.Metadata{ID: provB, Name: "other-prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}},
@@ -81,7 +75,6 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 				Spec: host.Spec{BaseURL: "http://beta.internal"},
 			},
 		},
-		Policies: append(tiers, pol),
 		Models: []*model.Model{
 			{
 				Meta: meta.Metadata{ID: bigID, Name: "big-model", DisplayName: "Big", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provA}},
@@ -104,12 +97,20 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 			bind("big-on-beta", bigID, betaID, "big-model-2026"),
 			bind("small-on-beta", smallID, betaID),
 		},
-	}.Load(t)
-	snapPol, ok := cat.Current().Policy(polID)
-	if !ok {
-		t.Fatal("policy missing from snapshot")
 	}
-	return cat, &Principal{CredentialKind: CredentialKey, CredentialID: k.Meta.ID, KeyHash: k.Spec.KeyHash, Key: k, Policy: snapPol}
+	cat := c.Load(t)
+	w.Providers, w.Hosts, w.Models, w.Bindings = c.Providers, c.Hosts, c.Models, c.Bindings
+	f := &dispatchFixture{plans: w.Load(t), key: k}
+	f.principal = f.resolve(t)
+	fixturesMu.Lock()
+	fixtures[cat] = f
+	fixturesMu.Unlock()
+	t.Cleanup(func() {
+		fixturesMu.Lock()
+		delete(fixtures, cat)
+		fixturesMu.Unlock()
+	})
+	return cat, f.principal
 }
 
 func catalogRouter(d Deps) http.Handler {
@@ -161,7 +162,7 @@ func catalogSlugs(c *sdkcatalog.Catalog) []string {
 func listedIDs(t *testing.T, d Deps, p *Principal) []string {
 	t.Helper()
 	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, p)
-	out, err := listModels(ctx, d, "")
+	out, err := listModels(ctx, "")
 	if err != nil {
 		t.Fatalf("listModels: %v", err)
 	}
@@ -300,10 +301,9 @@ func TestCatalog_ETagStableAcrossRendersAndChangedByContent(t *testing.T) {
 		}
 	}
 	big.Meta.DisplayName = "Bigger"
-	if err := cat.ApplyModelUpsert(big); err != nil {
-		t.Fatalf("model upsert: %v", err)
-	}
-	pr.Policy, _ = cat.Current().Policy(pr.Policy.Meta.ID)
+	f := fixtureOf(t, cat)
+	plantest.Apply(t, f.plans, big)
+	*pr = *f.resolve(t)
 	after := getCatalog(t, h, pr)
 	if after.Header().Get("ETag") == first.Header().Get("ETag") {
 		t.Fatal("ETag unchanged after a catalog change")
@@ -388,25 +388,17 @@ func TestCatalog_RejectsMissingKey(t *testing.T) {
 	}
 }
 
-// With policy-less traffic switched off (the default) a key without a policy is refused, as /v1/models refuses it.
-func TestCatalog_RejectsPolicylessWhenDisabled(t *testing.T) {
-	cat, pr := catalogRouteFixture(t, "prov/big-model")
-	policyless := &Principal{CredentialKind: CredentialKey, CredentialID: pr.CredentialID, Key: pr.Key, UserID: meta.NewID()}
-	if rec := getCatalog(t, catalogRouter(buildDeps(t, cat)), policyless); rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-}
-
-func TestCatalogCache_GenerationAndVersionInvalidate(t *testing.T) {
+func TestCatalogCache_TableAndVersionInvalidate(t *testing.T) {
 	c := newCatalogCache()
-	c.put("p", &catalogEntry{gen: 1, version: "deployment@v1", etag: "x"})
-	if _, ok := c.get("p", 1, "deployment@v1"); !ok {
+	t1, t2 := &plan.RouteTable{}, &plan.RouteTable{}
+	c.put("p", &catalogEntry{table: t1, version: "deployment@v1", etag: "x"})
+	if _, ok := c.get("p", t1, "deployment@v1"); !ok {
 		t.Fatal("hit expected")
 	}
-	if _, ok := c.get("p", 2, "deployment@v1"); ok {
-		t.Error("an entry from an older snapshot must miss")
+	if _, ok := c.get("p", t2, "deployment@v1"); ok {
+		t.Error("an entry from a replaced route table must miss")
 	}
-	if _, ok := c.get("p", 1, "deployment@v2"); ok {
+	if _, ok := c.get("p", t1, "deployment@v2"); ok {
 		t.Error("an entry from an older seeded catalog must miss")
 	}
 }
@@ -414,9 +406,9 @@ func TestCatalogCache_GenerationAndVersionInvalidate(t *testing.T) {
 func TestCatalogCache_ResetsPastTheCap(t *testing.T) {
 	c := newCatalogCache()
 	for i := 0; i < catalogCacheMax; i++ {
-		c.put(meta.NewID(), &catalogEntry{gen: 1})
+		c.put(meta.NewID(), &catalogEntry{})
 	}
-	c.put("first-over", &catalogEntry{gen: 1})
+	c.put("first-over", &catalogEntry{})
 	if len(c.entries) != 1 {
 		t.Fatalf("entries = %d after overflow, want the map reset to the new entry", len(c.entries))
 	}

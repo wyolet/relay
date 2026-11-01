@@ -63,12 +63,8 @@ type Config struct {
 	RedisPostFlightPoolSize    int
 	RedisPostFlightPoolTimeout time.Duration
 	RedisPostFlightReadTimeout time.Duration
-	// RELAY_REDIS_POSTFLIGHT_{BATCH_SIZE,BATCH_DELAY_MS,QUEUE_SIZE}: the queue that coalesces served requests' settles into shared round trips on that client; a queue size of 0 turns it off.
-	RedisPostFlightBatchSize  int
-	RedisPostFlightBatchDelay time.Duration
-	RedisPostFlightQueueSize  int
-	CHDSN                     string
-	OTLPEndpoint              string
+	CHDSN                      string
+	OTLPEndpoint               string
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema
@@ -129,6 +125,12 @@ type Config struct {
 	// KeyBreakerThreshold and KeyBreakerWindow set how many upstream server or network errors within the window open a host key's breaker (RELAY_KEY_BREAKER_THRESHOLD, RELAY_KEY_BREAKER_WINDOW_S); 0 = keypool defaults. 401 and 403 open it at once.
 	KeyBreakerThreshold int
 	KeyBreakerWindow    time.Duration
+
+	// PlanCellIdle is how long runtime state no published plan links any more (a rotated credential's breaker copy, a deleted pool's rotation) is kept before it is dropped (RELAY_PLAN_CELL_IDLE_S, default 600). A plan that links it again within the window gets it back.
+	PlanCellIdle time.Duration
+
+	// PlanResync is how often the plans are listed again from Postgres and compared with what they hold (RELAY_PLAN_RESYNC_S, default 600; 0 disables), the safety net for a catalog notification that never arrived. It publishes only when a row differs.
+	PlanResync time.Duration
 
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
@@ -450,6 +452,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_KEY_BREAKER_WINDOW_S must be >= 0")
 	} else {
 		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_PLAN_CELL_IDLE_S", 600); v < 1 {
+		return nil, fmt.Errorf("RELAY_PLAN_CELL_IDLE_S must be >= 1")
+	} else {
+		cfg.PlanCellIdle = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_PLAN_RESYNC_S", 600); v < 0 {
+		return nil, fmt.Errorf("RELAY_PLAN_RESYNC_S must be >= 0")
+	} else {
+		cfg.PlanResync = time.Duration(v) * time.Second
 	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.

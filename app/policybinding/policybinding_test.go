@@ -1,6 +1,7 @@
 package policybinding
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ func fix() *PolicyBinding {
 			ProjectID: meta.NewID(),
 			PolicyID:  meta.NewID(),
 			Subjects: []rolebinding.Subject{
-				{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"},
+				{Kind: rolebinding.SubjectUser, ID: meta.NewID()},
 			},
 		},
 	}
@@ -34,32 +35,71 @@ func TestValidate(t *testing.T) {
 			b:    fix(),
 		},
 		{
-			name: "explicit priority",
+			name: "team owner without a project",
 			b: func() *PolicyBinding {
 				b := fix()
-				fifty := 50
-				b.Spec.Priority = &fifty
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
+				b.Spec.ProjectID = ""
 				return b
 			}(),
 		},
 		{
-			name: "priority above the ceiling",
+			name: "system owner without a project",
 			b: func() *PolicyBinding {
 				b := fix()
-				overCeiling := 10001
-				b.Spec.Priority = &overCeiling
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
+				b.Spec.ProjectID = ""
 				return b
 			}(),
-			want: "Priority",
 		},
 		{
-			name: "team owner rejected",
+			name: "team owner with a projectId",
 			b: func() *PolicyBinding {
 				b := fix()
 				b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
 				return b
 			}(),
-			want: "owner.kind must be project",
+			want: "spec.projectId must be empty",
+		},
+		{
+			name: "user owner binding itself",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: b.Spec.Subjects[0].ID}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+		},
+		{
+			name: "user owner binding another user",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+			want: "has one subject, its owner",
+		},
+		{
+			name: "user owner binding itself and more",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: b.Spec.Subjects[0].ID}
+				b.Spec.ProjectID = ""
+				b.Spec.Subjects = append(b.Spec.Subjects, rolebinding.Subject{Kind: SubjectTeam, ID: meta.NewID()})
+				return b
+			}(),
+			want: "has one subject, its owner",
+		},
+		{
+			name: "host owner rejected",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}
+				b.Spec.ProjectID = ""
+				return b
+			}(),
+			want: "owner.kind must be system, team, project or user",
 		},
 		{
 			name: "owner id drifted from projectId",
@@ -71,13 +111,75 @@ func TestValidate(t *testing.T) {
 			want: "does not match spec.projectId",
 		},
 		{
-			name: "group subject carrying an id",
+			name: "every subject kind",
 			b: func() *PolicyBinding {
 				b := fix()
-				b.Spec.Subjects[0].ID = meta.NewID()
+				b.Spec.Subjects = []rolebinding.Subject{
+					{Kind: SubjectHost, ID: meta.NewID()},
+					{Kind: SubjectAccount, ID: meta.NewID()},
+					{Kind: SubjectCredential, ID: meta.NewID()},
+					{Kind: SubjectTeam, ID: meta.NewID()},
+					{Kind: SubjectProject, ID: meta.NewID()},
+					{Kind: rolebinding.SubjectUser, ID: meta.NewID()},
+					{Kind: rolebinding.SubjectServiceAccount, ID: meta.NewID()},
+				}
 				return b
 			}(),
-			want: "group subject names a group",
+		},
+		{
+			name: "a relay key is never a subject",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: "key", ID: meta.NewID()}}
+				return b
+			}(),
+			want: `kind "key" is not one of`,
+		},
+		{
+			name: "missing subject kind",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{ID: meta.NewID()}}
+				return b
+			}(),
+			want: "is not one of",
+		},
+		{
+			name: "host subject id must be a UUID",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: SubjectHost, ID: "openai"}}
+				return b
+			}(),
+			want: "is not a UUID",
+		},
+		{
+			name: "account subject carries an id, not a name",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: SubjectAccount, Name: "acme-openai"}}
+				return b
+			}(),
+			want: "account subject carries an id",
+		},
+		{
+			name: "same credential twice",
+			b: func() *PolicyBinding {
+				b := fix()
+				id := meta.NewID()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: SubjectCredential, ID: id}, {Kind: SubjectCredential, ID: id}}
+				return b
+			}(),
+			want: "duplicate subject",
+		},
+		{
+			name: "a group is never a subject",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = append(b.Spec.Subjects, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"})
+				return b
+			}(),
+			want: "groups are not policy subjects in this version",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,27 +196,32 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestEffectivePriority(t *testing.T) {
-	b := fix()
-	if got := b.EffectivePriority(); got != DefaultPriority {
-		t.Errorf("unset priority = %d, want %d", got, DefaultPriority)
-	}
-	ten := 10
-	b.Spec.Priority = &ten
-	if got := b.EffectivePriority(); got != 10 {
-		t.Errorf("explicit priority = %d, want 10", got)
-	}
-}
-
-// 0 is the highest-winning priority; it must not read as "not set".
-func TestEffectivePriorityKeepsExplicitZero(t *testing.T) {
-	b := fix()
-	zero := 0
-	b.Spec.Priority = &zero
-	if got := b.EffectivePriority(); got != 0 {
-		t.Errorf("explicit priority 0 = %d, want 0", got)
-	}
-	if err := b.Validate(); err != nil {
-		t.Errorf("priority 0: %v", err)
+// A credential subject becomes its account; an account reached through two keys, or a key and the account itself, is kept once, while a subject written twice is left for Validate.
+func TestBindAccounts(t *testing.T) {
+	acctA, acctB := meta.NewID(), meta.NewID()
+	k1, k2, k3, lost := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	accounts := map[string]string{k1: acctA, k2: acctA, k3: acctB}
+	cred := func(id string) rolebinding.Subject { return rolebinding.Subject{Kind: SubjectCredential, ID: id} }
+	acct := func(id string) rolebinding.Subject { return rolebinding.Subject{Kind: SubjectAccount, ID: id} }
+	team := rolebinding.Subject{Kind: SubjectTeam, ID: meta.NewID()}
+	for _, tc := range []struct {
+		name     string
+		in, want []rolebinding.Subject
+	}{
+		{"a key", []rolebinding.Subject{cred(k1)}, []rolebinding.Subject{acct(acctA)}},
+		{"two keys of one account", []rolebinding.Subject{cred(k1), cred(k2), team}, []rolebinding.Subject{acct(acctA), team}},
+		{"a key and its account", []rolebinding.Subject{acct(acctA), cred(k1)}, []rolebinding.Subject{acct(acctA)}},
+		{"its account after a key", []rolebinding.Subject{cred(k1), acct(acctA)}, []rolebinding.Subject{acct(acctA)}},
+		{"keys of two accounts", []rolebinding.Subject{cred(k1), cred(k3)}, []rolebinding.Subject{acct(acctA), acct(acctB)}},
+		{"an account written twice", []rolebinding.Subject{acct(acctA), acct(acctA)}, []rolebinding.Subject{acct(acctA), acct(acctA)}},
+		{"a key with no account", []rolebinding.Subject{cred(lost)}, []rolebinding.Subject{cred(lost)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &PolicyBinding{Spec: Spec{Subjects: tc.in}}
+			b.BindAccounts(func(id string) string { return accounts[id] })
+			if !slices.Equal(b.Spec.Subjects, tc.want) {
+				t.Fatalf("subjects = %+v, want %+v", b.Spec.Subjects, tc.want)
+			}
+		})
 	}
 }

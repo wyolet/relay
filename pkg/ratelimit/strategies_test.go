@@ -461,13 +461,12 @@ func TestFixedWindow_RetryAfterToBoundary(t *testing.T) {
 	within(t, "retry_after", ee.RetryAfter, 30*time.Second, 100*time.Millisecond)
 }
 
-// TestFixedWindow_RefundIsNoop: fixed-window does not refund cancelled slots.
-// Cancel doesn't increase available capacity.
-func TestFixedWindow_RefundIsNoop(t *testing.T) {
+// TestFixedWindow_RefundOnCancel: a cancelled slot is given back to its window.
+func TestFixedWindow_RefundOnCancel(t *testing.T) {
 	start := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 	l, _ := newScopedLimiter(t, start)
 	rule := Rule{
-		Key:      "Route:fw-noop:rl-fw",
+		Key:      "Route:fw-refund:rl-fw",
 		Name:     "requests",
 		Meter:    "requests",
 		Strategy: StrategyFixedWindow,
@@ -476,19 +475,19 @@ func TestFixedWindow_RefundIsNoop(t *testing.T) {
 	}
 	rules := []Rule{rule}
 
-	// Reserve 3, cancel all 3.
+	// Reserve 3, cancel all 3: the window is empty again.
 	var reservations [3]*Reservation
 	for i := 0; i < 3; i++ {
-		reservations[i] = mustReserve(t, l, "fw-noop", rules)
+		reservations[i] = mustReserve(t, l, "fw-refund", rules)
 	}
 	for _, res := range reservations {
 		mustCommit(t, l, res, Observations{Cancelled: true})
 	}
 
-	// Fixed-window has no cancel refund path — the counter was incremented and
-	// there is no decrement on cancel. 4th should still fail.
-	// (token-bucket/leaky/session-window have refund; fixed-window does not.)
-	_ = mustExceed(t, l, "fw-noop", rules)
+	for i := 0; i < 3; i++ {
+		mustCommit(t, l, mustReserve(t, l, "fw-refund", rules), Observations{})
+	}
+	_ = mustExceed(t, l, "fw-refund", rules)
 }
 
 // ── LEAKY BUCKET ─────────────────────────────────────────────────────────────

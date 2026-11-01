@@ -23,7 +23,6 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
@@ -133,13 +132,12 @@ func (f policyDeleteFixture) policy(t *testing.T, ctx context.Context, name stri
 	return p
 }
 
-func (f policyDeleteFixture) projectKey(t *testing.T, ctx context.Context, name, policyID string) *key.Key {
+func (f policyDeleteFixture) projectKey(t *testing.T, ctx context.Context, name string) *key.Key {
 	t.Helper()
 	k := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.proj.Meta.ID}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: f.account.Meta.ID},
-			PolicyID:  policyID,
 			KeyHash:   strings.Repeat(name[len(name)-1:], 64), Prefix: "sk-" + name,
 		},
 	}
@@ -189,69 +187,15 @@ func (f policyDeleteFixture) policyExists(t *testing.T, ctx context.Context, id 
 	return err == nil && p != nil
 }
 
-func TestDeletePolicy_ReferencedByKeyIsRefusedAsDetachable(t *testing.T) {
+// A host's tier policy that nothing binds deletes: the host itself holds no reference to it.
+func TestDeletePolicy_UnboundHostTierDeletes(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "used-by-key", meta.Owner{Kind: meta.OwnerProject, ID: f.proj.Meta.ID})
-	k := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
+	pol := f.policy(t, ctx, "unbound-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
+	f.allowCatalogDeletes(t, ctx, "governance:policy")
 
-	body := decodeInUse(t, f.deletePolicy(t, pol.Meta.ID, false))
-	if len(body.Blockers) != 1 {
-		t.Fatalf("blockers = %+v, want one group", body.Blockers)
-	}
-	g := body.Blockers[0]
-	if g.Kind != "key" || g.Field != "spec.policyId" || !g.Detachable || g.Count != 1 || g.Hidden != 0 {
-		t.Fatalf("group = %+v, want one detachable key via spec.policyId", g)
-	}
-	if len(g.Items) != 1 || g.Items[0].ID != k.Meta.ID || g.Items[0].Name != k.Meta.Name {
-		t.Fatalf("items = %+v, want key %q", g.Items, k.Meta.Name)
-	}
-
-	if !f.policyExists(t, ctx, pol.Meta.ID) {
-		t.Fatal("the refused delete removed the policy")
-	}
-	got, err := f.stores.Key.Get(ctx, k.Meta.ID)
-	if err != nil || got == nil || got.Spec.PolicyID != pol.Meta.ID {
-		t.Fatalf("key after refused delete = %+v (err %v), want it still on the policy", got, err)
-	}
-
-	f.emitter.Close()
-	var found bool
-	for _, ev := range f.sink.all() {
-		if ev.Action == "policies.delete" && ev.Resource.ID == pol.Meta.ID {
-			found = true
-			if ev.Outcome.Code != http.StatusConflict || ev.Change != nil {
-				t.Fatalf("audit event = %+v, want code 409 and no change", ev)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("the refused delete left no audit row")
-	}
-}
-
-func TestDeletePolicy_TierOfHostKeyIsRefusedNotDetachable(t *testing.T) {
-	f, ctx := newPolicyDeleteFixture(t)
-	t.Setenv("DEL_HOSTKEY_VALUE", "sk-test-value")
-	pol := f.policy(t, ctx, "tier-of-host-key", meta.Owner{Kind: meta.OwnerProject, ID: f.proj.Meta.ID})
-	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-host-key", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: f.host.Meta.ID, PolicyID: pol.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "DEL_HOSTKEY_VALUE"}},
-	}
-	if err := f.stores.HostKey.Upsert(ctx, hk); err != nil {
-		t.Fatalf("upsert host key: %v", err)
-	}
-
-	body := decodeInUse(t, f.deletePolicy(t, pol.Meta.ID, false))
-	if len(body.Blockers) != 1 {
-		t.Fatalf("blockers = %+v, want one group", body.Blockers)
-	}
-	g := body.Blockers[0]
-	if g.Kind != "host-key" || g.Field != "spec.policyId" || g.Detachable || g.Count != 1 {
-		t.Fatalf("group = %+v, want one non-detachable host-key via spec.policyId", g)
-	}
-	got, err := f.stores.HostKey.Get(ctx, hk.Meta.ID)
-	if err != nil || got == nil || got.Spec.PolicyID != pol.Meta.ID {
-		t.Fatalf("host key after refused delete = %+v (err %v), want it still on the policy", got, err)
+	wantStatus(t, f.deletePolicy(t, pol.Meta.ID, false), http.StatusNoContent)
+	if f.policyExists(t, ctx, pol.Meta.ID) {
+		t.Fatal("the policy is still stored")
 	}
 }
 
@@ -285,45 +229,12 @@ func TestDeletePolicy_BoundByPolicyBindingIsRefusedNotDetachable(t *testing.T) {
 	}
 }
 
-func TestDeletePolicy_ServiceAccountOverrideIsRefusedAsDetachable(t *testing.T) {
-	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "account-override", meta.Owner{Kind: meta.OwnerProject, ID: f.proj.Meta.ID})
-	f.account.Spec.PolicyID = pol.Meta.ID
-	if err := f.stores.ServiceAccount.Upsert(ctx, f.account); err != nil {
-		t.Fatalf("upsert service account: %v", err)
-	}
-
-	body := decodeInUse(t, f.deletePolicy(t, pol.Meta.ID, false))
-	if len(body.Blockers) != 1 {
-		t.Fatalf("blockers = %+v, want one group", body.Blockers)
-	}
-	g := body.Blockers[0]
-	if g.Kind != "service-account" || g.Field != "spec.policyId" || !g.Detachable || g.Count != 1 {
-		t.Fatalf("group = %+v, want one detachable service-account via spec.policyId", g)
-	}
-	got, err := f.stores.ServiceAccount.Get(ctx, f.account.Meta.ID)
-	if err != nil || got == nil || got.Spec.PolicyID != pol.Meta.ID {
-		t.Fatalf("service account after refused delete = %+v (err %v), want it still on the policy", got, err)
-	}
-}
-
 // A referencing row the caller may not see still blocks, but is reported as
 // a count only.
 func TestDeletePolicy_HiddenReferenceBlocksWithoutItsName(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "alice-policy", meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID})
-	hidden := f.projectKey(t, ctx, "key-b", pol.Meta.ID)
-	own := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-key", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID}},
-		Spec: key.Spec{
-			Principal: key.Principal{Kind: key.PrincipalUser, ID: f.alice.ID},
-			PolicyID:  pol.Meta.ID,
-			KeyHash:   strings.Repeat("c", 64), Prefix: "sk-alice",
-		},
-	}
-	if err := f.stores.Key.Upsert(ctx, own); err != nil {
-		t.Fatalf("upsert key: %v", err)
-	}
+	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
 
 	w := f.deletePolicy(t, pol.Meta.ID, true)
 	body := decodeInUse(t, w)
@@ -334,11 +245,8 @@ func TestDeletePolicy_HiddenReferenceBlocksWithoutItsName(t *testing.T) {
 		t.Fatalf("blockers = %+v, want one group", body.Blockers)
 	}
 	g := body.Blockers[0]
-	if g.Kind != "key" || g.Count != 2 || g.Hidden != 1 {
-		t.Fatalf("group = %+v, want two keys, one of them hidden", g)
-	}
-	if len(g.Items) != 1 || g.Items[0].ID != own.Meta.ID {
-		t.Fatalf("items = %+v, want only alice's own key", g.Items)
+	if g.Kind != "policy-binding" || g.Count != 1 || g.Hidden != 1 || len(g.Items) != 0 {
+		t.Fatalf("group = %+v, want one hidden binding and no items", g)
 	}
 	if !f.policyExists(t, ctx, pol.Meta.ID) {
 		t.Fatal("the refused delete removed the policy")

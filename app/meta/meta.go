@@ -68,27 +68,27 @@ func isBudgetAmount(fl validator.FieldLevel) bool {
 //     are omitted from YAML manifests (yaml:"-") since seed/apply must not
 //     set them; the store stamps them on read.
 type Metadata struct {
-	ID          string            `json:"id,omitempty"          yaml:"id,omitempty"          validate:"omitempty,uuid"`
-	Name        string            `json:"name"                  yaml:"name"                  validate:"required,slug"`
-	DisplayName string            `json:"displayName,omitempty" yaml:"displayName,omitempty"`
-	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
-	Owner       Owner             `json:"owner,omitempty"       yaml:"owner,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
-	CreatedAt   time.Time         `json:"createdAt,omitempty"   yaml:"-"`
-	UpdatedAt   time.Time         `json:"updatedAt,omitempty"   yaml:"-"`
+	ID          string            `json:"id,omitempty"          yaml:"id,omitempty"          validate:"omitempty,uuid" readOnly:"true" doc:"Immutable UUIDv7 id, stamped by the server on create; ignored in create bodies. Cross-references in spec fields hold this id."`
+	Name        string            `json:"name"                  yaml:"name"                  validate:"required,slug"  doc:"DNS-1123 slug, unique per kind. Derived from displayName on create when omitted; may change on update. Used in URLs and manifests."`
+	DisplayName string            `json:"displayName,omitempty" yaml:"displayName,omitempty"  doc:"Free-text name shown in the UI. Nothing references it."`
+	Description string            `json:"description,omitempty" yaml:"description,omitempty"  doc:"Free-text description of the row."`
+	Owner       Owner             `json:"owner,omitempty"       yaml:"owner,omitempty"        doc:"Scope that owns the row. Each kind defaults it on create when omitted; an omitted owner on update keeps the stored one."`
+	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"       doc:"Key/value selectors; list endpoints filter on them with ?label=key=value."`
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"  doc:"Free-form key/value notes; never filtered on."`
+	CreatedAt   time.Time         `json:"createdAt,omitempty"   yaml:"-"                      readOnly:"true" doc:"When the row was created. Server-managed; ignored on write."`
+	UpdatedAt   time.Time         `json:"updatedAt,omitempty"   yaml:"-"                      readOnly:"true" doc:"When the row last changed. Server-managed; ignored on write."`
 
 	// Dirty marks a row an operator has edited via the control API. Seed skips
 	// dirty rows so re-seeding never clobbers operator changes (unless the run
 	// is told to clear them). Server-authoritative: stamped on edit, never read
 	// from manifest YAML.
-	Dirty bool `json:"dirty,omitempty" yaml:"-"`
+	Dirty bool `json:"dirty,omitempty" yaml:"-" readOnly:"true" doc:"True once the row was edited through the API; a catalog re-seed leaves it alone. Server-managed; ignored on write."`
 
 	// CatalogDetachedAt is when a catalog upgrade stopped shipping this row.
 	// The row stays in place and is the operator's from then on. Server-
 	// authoritative like Dirty: only the versioned catalog reseed sets or
 	// clears it.
-	CatalogDetachedAt *time.Time `json:"catalogDetachedAt,omitempty" yaml:"-" doc:"Set when the catalog version this relay seeds no longer ships the row. The row keeps working and is governed as the operator's own. Server-managed; ignored on write."`
+	CatalogDetachedAt *time.Time `json:"catalogDetachedAt,omitempty" yaml:"-" readOnly:"true" doc:"Set when the catalog version this relay seeds no longer ships the row. The row keeps working and is governed as the operator's own. Server-managed; ignored on write."`
 
 	// ResourceVersion is an opaque token that changes on every write to the
 	// row. An update carrying it only applies while the stored row still has
@@ -147,8 +147,8 @@ func NewID() string { return ids.New() }
 // Owner describes who created / manages a row. Kind=provider requires ID;
 // the other kinds leave ID empty.
 type Owner struct {
-	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty"`
-	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"`
+	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,provider,host,user,team,project" doc:"Owning scope: system (the deployment), provider or host (catalog rows), user, team or project."`
+	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"   doc:"Id of the owning provider, host, user, team or project; empty for system. Defaults to the caller for user-owned rows."`
 }
 
 // Tenant reports whether the owner is a user, team or project rather than
@@ -166,7 +166,7 @@ func (o Owner) Tenant() bool {
 // frontend prefixes its own asset-base URL at render time. Relay does
 // not serve the asset; this field is operator metadata.
 type Icon struct {
-	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+	Path string `json:"path,omitempty" yaml:"path,omitempty" doc:"Asset path relative to the UI's asset base, such as /provider/anthropic.svg."`
 }
 
 // OwnerKind enumerates provenance categories.

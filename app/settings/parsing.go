@@ -17,7 +17,7 @@ type Parsing struct {
 	//
 	// Default true. Hot-swappable: a change takes effect on the next
 	// request within a reconcile interval, no restart.
-	RichParsing bool `json:"richParsing"`
+	RichParsing bool `json:"richParsing" doc:"Extract per-request metadata and messages for attribution and logs; false reads only the routing fields. Default true."`
 }
 
 func (p *Parsing) Validate() error { return nil }

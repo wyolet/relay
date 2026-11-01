@@ -60,7 +60,9 @@
                 "items": {
                   "enum": [
                     "*",
+                    "accounts",
                     "audit",
+                    "budgets",
                     "debug",
                     "groups",
                     "host-bindings",
@@ -73,6 +75,7 @@
                     "models",
                     "policies",
                     "policy-bindings",
+                    "pools",
                     "pricings",
                     "projects",
                     "providers",

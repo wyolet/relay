@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/usage"
@@ -32,19 +31,14 @@ func TestRun_UpstreamErrorStatusIsStoredAsUpstreamError(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"rejected"}}`))
 		}))
 
-		rn, _, policyID := runnerFixture(t)
-		h := *rn.Catalog.Current().Hosts()[0]
-		h.Spec = host.Spec{BaseURL: up.URL, NoAuth: true}
-		if err := rn.Catalog.ApplyHostUpsert(&h); err != nil {
-			t.Fatalf("host upsert: %v", err)
-		}
+		f := runnerFixture(t, up.URL)
 		events := make(usageCapture, 1)
 		reg := lifecycle.New()
 		reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
 		reg.RegisterCollector(events)
-		rn.Pipeline.Lifecycle = reg
+		f.rn.Pipeline.Lifecycle = reg
 
-		got, _, err := rn.Run(context.Background(), "item", fixtureKeyHash, policyID, TokenClaims{}, keyAttr(), adapters.OpenAI, []byte(`{"model":"test-model"}`))
+		got, _, err := f.rn.Run(context.Background(), "item", f.key.Spec.KeyHash, TokenClaims{}, f.keyAttr(), adapters.OpenAI, []byte(`{"model":"test-model"}`))
 		if status == http.StatusBadRequest && (err != nil || got != status) {
 			t.Fatalf("status %d: Run = %d, %v; want the status as the item result", status, got, err)
 		}

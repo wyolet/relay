@@ -32,38 +32,38 @@ type Model struct {
 // Per-Host serving info (which Hosts can serve this Model) lives in
 // standalone HostBinding entities (app/binding), not in Spec.
 type Spec struct {
-	Family string `json:"family,omitempty" yaml:"family,omitempty"`
+	Family string `json:"family,omitempty" yaml:"family,omitempty" doc:"Model family, such as claude or gpt."`
 	// ProductLine is the vendor's named tier or variant inside Family (opus, flash-lite); never a version or size. Allowed values are checked by the catalog validator, not here.
-	ProductLine string `json:"productLine,omitempty" yaml:"productLine,omitempty"`
-	Version     string `json:"version,omitempty"     yaml:"version,omitempty"`
+	ProductLine string `json:"productLine,omitempty" yaml:"productLine,omitempty" doc:"The vendor's named variant inside the family, such as opus or flash-lite; never a version or size."`
+	Version     string `json:"version,omitempty"     yaml:"version,omitempty"     doc:"Version label inside the product line."`
 
-	Capabilities Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
-	Modalities   Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"`
+	Capabilities Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty" doc:"What the model supports."`
+	Modalities   Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"   doc:"Input and output modalities."`
 
 	// Context window split. ContextWindowTotal is canonical; the Input/Output
 	// pair is informational for models that publish a soft cap.
-	ContextWindowInput  int `json:"contextWindowInput,omitempty"  yaml:"contextWindowInput,omitempty"  validate:"omitempty,gte=0"`
-	ContextWindowOutput int `json:"contextWindowOutput,omitempty" yaml:"contextWindowOutput,omitempty" validate:"omitempty,gte=0"`
-	ContextWindowTotal  int `json:"contextWindowTotal,omitempty"  yaml:"contextWindowTotal,omitempty"  validate:"omitempty,gte=0"`
-	MaxOutputTokens     int `json:"maxOutputTokens,omitempty"     yaml:"maxOutputTokens,omitempty"     validate:"omitempty,gte=0"`
+	ContextWindowInput  int `json:"contextWindowInput,omitempty"  yaml:"contextWindowInput,omitempty"  validate:"omitempty,gte=0" doc:"Published input cap in tokens, for models that have one. Informational."`
+	ContextWindowOutput int `json:"contextWindowOutput,omitempty" yaml:"contextWindowOutput,omitempty" validate:"omitempty,gte=0" doc:"Published output share of the context window in tokens. Informational."`
+	ContextWindowTotal  int `json:"contextWindowTotal,omitempty"  yaml:"contextWindowTotal,omitempty"  validate:"omitempty,gte=0" doc:"Context window in tokens."`
+	MaxOutputTokens     int `json:"maxOutputTokens,omitempty"     yaml:"maxOutputTokens,omitempty"     validate:"omitempty,gte=0" doc:"Most tokens one response may generate."`
 
-	KnowledgeCutoff string       `json:"knowledgeCutoff,omitempty" yaml:"knowledgeCutoff,omitempty"`
-	ReleaseDate     string       `json:"releaseDate,omitempty"     yaml:"releaseDate,omitempty"`
-	DeprecationDate string       `json:"deprecationDate,omitempty" yaml:"deprecationDate,omitempty"`
-	Deprecation     *Deprecation `json:"deprecation,omitempty"     yaml:"deprecation,omitempty"`
+	KnowledgeCutoff string       `json:"knowledgeCutoff,omitempty" yaml:"knowledgeCutoff,omitempty" doc:"Training-data cutoff, YYYY-MM or YYYY-MM-DD."`
+	ReleaseDate     string       `json:"releaseDate,omitempty"     yaml:"releaseDate,omitempty"     doc:"Release date, YYYY-MM-DD."`
+	DeprecationDate string       `json:"deprecationDate,omitempty" yaml:"deprecationDate,omitempty" doc:"Date the vendor deprecated the model, YYYY-MM-DD."`
+	Deprecation     *Deprecation `json:"deprecation,omitempty"     yaml:"deprecation,omitempty"     doc:"Lifecycle state. Absent means active."`
 
-	Tags                 []string `json:"tags,omitempty"                 yaml:"tags,omitempty"`
-	Documentation        string   `json:"documentation,omitempty"        yaml:"documentation,omitempty"`
-	License              string   `json:"license,omitempty"              yaml:"license,omitempty"`
-	ProviderModelPageURL string   `json:"providerModelPageURL,omitempty" yaml:"providerModelPageURL,omitempty" validate:"omitempty,http_url"`
+	Tags                 []string `json:"tags,omitempty"                 yaml:"tags,omitempty"                 doc:"Free-form tags; list endpoints filter on them with ?tag=."`
+	Documentation        string   `json:"documentation,omitempty"        yaml:"documentation,omitempty"        doc:"Link to the model's documentation."`
+	License              string   `json:"license,omitempty"              yaml:"license,omitempty"              doc:"License the weights are published under, for open models."`
+	ProviderModelPageURL string   `json:"providerModelPageURL,omitempty" yaml:"providerModelPageURL,omitempty" validate:"omitempty,http_url" doc:"The provider's page for the model."`
 
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops routing to the model (403 model_disabled). Omitted means true."` // nil = true
 
 	// Snapshots are the dated checkpoints this Model exposes. Every Model has
 	// at least one. Pointer names the snapshot the bare Model name resolves
 	// to at request time.
-	Snapshots []Snapshot `json:"snapshots" yaml:"snapshots" validate:"required,min=1,dive"`
-	Pointer   string     `json:"pointer"   yaml:"pointer"   validate:"required"`
+	Snapshots []Snapshot `json:"snapshots" yaml:"snapshots" validate:"required,min=1,dive" doc:"Dated checkpoints of the model; at least one."`
+	Pointer   string     `json:"pointer"   yaml:"pointer"   validate:"required" doc:"Name of the snapshot the bare model name resolves to."`
 
 	// Aliases are resolution-only, last-priority matchers. A request whose
 	// model string matches no catalog name (snapshot names + their
@@ -75,7 +75,7 @@ type Spec struct {
 	// in policy grants, modelref, admin URLs, or the usage `model` slug.
 	// Matching runs on the slug-normalized form ("claude-fable-5[1m]" ≡
 	// "claude-fable-5-1m").
-	Aliases []string `json:"aliases,omitempty" yaml:"aliases,omitempty"`
+	Aliases []string `json:"aliases,omitempty" yaml:"aliases,omitempty" doc:"Extra request names that resolve to this model's pointer snapshot when no catalog name matches; the caller's string goes upstream unchanged. One * wildcard with a literal prefix is allowed, such as claude-opus-5[*]. Never usable in policies."`
 }
 
 // Snapshot is a dated checkpoint of a Model. Name is the customer-facing
@@ -84,9 +84,9 @@ type Spec struct {
 // defaults to Name — the common case where the slug-safe name already
 // matches what the provider expects.
 type Snapshot struct {
-	Name         string `json:"name"                   yaml:"name"                   validate:"required,hostname_rfc1123"`
-	ReleasedAt   string `json:"releasedAt,omitempty"   yaml:"releasedAt,omitempty"`
-	OriginalName string `json:"originalName,omitempty" yaml:"originalName,omitempty"`
+	Name         string `json:"name"                   yaml:"name"                   validate:"required,hostname_rfc1123" doc:"Snapshot slug, usable as a model name in requests."`
+	ReleasedAt   string `json:"releasedAt,omitempty"   yaml:"releasedAt,omitempty"   doc:"Snapshot release date, YYYY-MM-DD."`
+	OriginalName string `json:"originalName,omitempty" yaml:"originalName,omitempty" doc:"The vendor's own name for the snapshot when it differs from name."`
 }
 
 // Upstream returns the wire name to send to the provider — OriginalName
@@ -140,32 +140,32 @@ type Capabilities struct {
 	// models carry it. The pipeline strips listed params pre-upstream and
 	// surfaces the drop; unknown names are inert, so catalog data may flag
 	// params an older relay doesn't yet gate.
-	UnsupportedParams []string `json:"unsupportedParams,omitempty" yaml:"unsupportedParams,omitempty"`
-	Chat              bool     `json:"chat,omitempty"              yaml:"chat,omitempty"`
-	Embeddings        bool     `json:"embeddings,omitempty"        yaml:"embeddings,omitempty"`
-	Streaming         bool     `json:"streaming,omitempty"         yaml:"streaming,omitempty"`
-	Tools             bool     `json:"tools,omitempty"             yaml:"tools,omitempty"`
-	ParallelTools     bool     `json:"parallelTools,omitempty"     yaml:"parallelTools,omitempty"`
-	Vision            bool     `json:"vision,omitempty"            yaml:"vision,omitempty"`
-	Audio             bool     `json:"audio,omitempty"             yaml:"audio,omitempty"`
-	PromptCache       bool     `json:"promptCache,omitempty"       yaml:"promptCache,omitempty"`
-	Reasoning         bool     `json:"reasoning,omitempty"         yaml:"reasoning,omitempty"`
-	JSONMode          bool     `json:"jsonMode,omitempty"          yaml:"jsonMode,omitempty"`
-	StructuredOutputs bool     `json:"structuredOutputs,omitempty" yaml:"structuredOutputs,omitempty"`
-	Batch             bool     `json:"batch,omitempty"             yaml:"batch,omitempty"`
-	ComputerUse       bool     `json:"computerUse,omitempty"       yaml:"computerUse,omitempty"`
-	WebSearch         bool     `json:"webSearch,omitempty"         yaml:"webSearch,omitempty"`
-	FileInput         bool     `json:"fileInput,omitempty"         yaml:"fileInput,omitempty"`
-	AudioInput        bool     `json:"audioInput,omitempty"        yaml:"audioInput,omitempty"`
-	AudioOutput       bool     `json:"audioOutput,omitempty"       yaml:"audioOutput,omitempty"`
-	SystemMessages    bool     `json:"systemMessages,omitempty"    yaml:"systemMessages,omitempty"`
-	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"  yaml:"assistantPrefill,omitempty"`
+	UnsupportedParams []string `json:"unsupportedParams,omitempty" yaml:"unsupportedParams,omitempty" doc:"Request parameters (canonical sampling names such as temperature, top_p, top_k) the upstream rejects for this model; relay strips them before sending and reports the drop."`
+	Chat              bool     `json:"chat,omitempty"              yaml:"chat,omitempty"              doc:"Generates chat or text responses."`
+	Embeddings        bool     `json:"embeddings,omitempty"        yaml:"embeddings,omitempty"        doc:"Produces embeddings."`
+	Streaming         bool     `json:"streaming,omitempty"         yaml:"streaming,omitempty"         doc:"Streams responses."`
+	Tools             bool     `json:"tools,omitempty"             yaml:"tools,omitempty"             doc:"Calls tools."`
+	ParallelTools     bool     `json:"parallelTools,omitempty"     yaml:"parallelTools,omitempty"     doc:"Calls several tools in one turn."`
+	Vision            bool     `json:"vision,omitempty"            yaml:"vision,omitempty"            doc:"Accepts image input."`
+	Audio             bool     `json:"audio,omitempty"             yaml:"audio,omitempty"             doc:"Handles audio, in either direction."`
+	PromptCache       bool     `json:"promptCache,omitempty"       yaml:"promptCache,omitempty"       doc:"Supports prompt caching."`
+	Reasoning         bool     `json:"reasoning,omitempty"         yaml:"reasoning,omitempty"         doc:"Produces reasoning before answering."`
+	JSONMode          bool     `json:"jsonMode,omitempty"          yaml:"jsonMode,omitempty"          doc:"Supports JSON output mode."`
+	StructuredOutputs bool     `json:"structuredOutputs,omitempty" yaml:"structuredOutputs,omitempty" doc:"Follows a supplied JSON schema for its output."`
+	Batch             bool     `json:"batch,omitempty"             yaml:"batch,omitempty"             doc:"Available through the provider's batch API."`
+	ComputerUse       bool     `json:"computerUse,omitempty"       yaml:"computerUse,omitempty"       doc:"Supports computer-use tools."`
+	WebSearch         bool     `json:"webSearch,omitempty"         yaml:"webSearch,omitempty"         doc:"Supports the provider's web search tool."`
+	FileInput         bool     `json:"fileInput,omitempty"         yaml:"fileInput,omitempty"         doc:"Accepts file input, such as PDFs."`
+	AudioInput        bool     `json:"audioInput,omitempty"        yaml:"audioInput,omitempty"        doc:"Accepts audio input."`
+	AudioOutput       bool     `json:"audioOutput,omitempty"       yaml:"audioOutput,omitempty"       doc:"Produces audio output."`
+	SystemMessages    bool     `json:"systemMessages,omitempty"    yaml:"systemMessages,omitempty"    doc:"Accepts system instructions."`
+	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"  yaml:"assistantPrefill,omitempty"  doc:"Continues from a prefilled assistant message."`
 
 	// ReasoningEfforts lists the effort levels the model accepts, ordered
 	// low→high, from ReasoningEffortLevels. Empty means the model has no
 	// effort control. Both fields require Reasoning.
-	ReasoningEfforts       []string `json:"reasoningEfforts,omitempty"       yaml:"reasoningEfforts,omitempty"`
-	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty" yaml:"defaultReasoningEffort,omitempty"`
+	ReasoningEfforts       []string `json:"reasoningEfforts,omitempty"       yaml:"reasoningEfforts,omitempty"       enum:"none,minimal,low,medium,high,xhigh,max" doc:"Reasoning effort levels the model accepts, low to high. Empty means no effort control. Needs reasoning."`
+	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty" yaml:"defaultReasoningEffort,omitempty" enum:"none,minimal,low,medium,high,xhigh,max" doc:"Effort level used when a request names none; one of reasoningEfforts."`
 }
 
 // ReasoningEffortLevels is the canonical effort set, ordered low→high.
@@ -173,15 +173,15 @@ var ReasoningEffortLevels = []string{"none", "minimal", "low", "medium", "high",
 
 // Modalities lists input/output media types ("text", "image", "audio", ...).
 type Modalities struct {
-	Input  []string `json:"input,omitempty"  yaml:"input,omitempty"`
-	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
+	Input  []string `json:"input,omitempty"  yaml:"input,omitempty"  doc:"Media the model accepts, such as text, image, audio, video, pdf."`
+	Output []string `json:"output,omitempty" yaml:"output,omitempty" doc:"Media the model produces."`
 }
 
 // Deprecation describes the lifecycle state of a Model.
 type Deprecation struct {
-	Status      DeprecationStatus `json:"status,omitempty"      yaml:"status,omitempty"      validate:"omitempty,oneof=active deprecated sunset"`
-	SunsetDate  string            `json:"sunsetDate,omitempty"  yaml:"sunsetDate,omitempty"`
-	Replacement string            `json:"replacement,omitempty" yaml:"replacement,omitempty" validate:"omitempty,uuid"`
+	Status      DeprecationStatus `json:"status,omitempty"      yaml:"status,omitempty"      validate:"omitempty,oneof=active deprecated sunset" enum:"active,deprecated,sunset" doc:"active, deprecated (still served, left out of policy wildcards) or sunset (retired by the vendor)."`
+	SunsetDate  string            `json:"sunsetDate,omitempty"  yaml:"sunsetDate,omitempty"  doc:"Date the vendor stops serving the model, YYYY-MM-DD."`
+	Replacement string            `json:"replacement,omitempty" yaml:"replacement,omitempty" validate:"omitempty,uuid" doc:"Id of the model that replaces this one."`
 }
 
 // DeprecationStatus enumerates the lifecycle states.

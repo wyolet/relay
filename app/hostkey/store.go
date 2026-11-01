@@ -8,6 +8,10 @@
 // One Upsert routes to the env or stored path based on Spec.ValueFrom.Kind.
 // List/Get reconstruct Spec from JSONB and populate the runtime-only
 // Resolved/KeyHash fields by resolving the secret Ref.
+//
+// Upsert is the one write path every caller (control API, apply, seed)
+// shares, so it is where a key saved without an account keeps the one it has
+// or joins its owner's default account at its host.
 
 package hostkey
 
@@ -22,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/storage"
@@ -37,12 +42,14 @@ type Store struct {
 	q        *gen.Queries
 	resolver *secret.Registry
 	stored   *stored.Backend
+	accounts *account.Store
 }
 
 // NewStore constructs a Store over db. Pass the shared secret Registry + the
 // stored backend (see app/secret.Wire); backend may be nil to run env-only.
 func NewStore(db storage.DB, resolver *secret.Registry, backend *stored.Backend) *Store {
-	return &Store{db: db, q: gen.New(db), resolver: resolver, stored: backend}
+	q := gen.New(db)
+	return &Store{db: db, q: q, resolver: resolver, stored: backend, accounts: account.NewStore(q)}
 }
 
 // SecretScope is the scope a key's stored value is sealed under: its owner.
@@ -70,8 +77,18 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 // Upsert writes k. env rows store the var name; stored rows encrypt the
 // cleartext into secret_values (via the stored resolver) and persist a
 // ciphertext-free secrets row. Cleartext Spec.Value never reaches the
-// secrets table and is cleared after a successful stored write.
+// secrets table and is cleared after a successful stored write. A key
+// saved without an account keeps the one it has, or else gets its owner's
+// default account at its host, created on first use; a key whose host does
+// not exist keeps none.
 func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
+	if k.Spec.AccountID == "" && k.Spec.HostID != "" {
+		id, err := s.accountFor(ctx, k)
+		if err != nil {
+			return fmt.Errorf("hostkey.Upsert: %w", err)
+		}
+		k.Spec.AccountID = id
+	}
 	metaJSON, err := meta.MarshalJSONB(k.Meta)
 	if err != nil {
 		return fmt.Errorf("hostkey.Upsert metadata: %w", err)
@@ -159,6 +176,28 @@ func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
 		return nil, fmt.Errorf("hostkey.Get: %w", err)
 	}
 	return k, nil
+}
+
+// accountFor is the account k joins when saved without one: on an update that keeps its owner and host, the account it already has, as the stored secret is kept; else its owner's default account at its host. An account belongs to one owner and host, so a key moved to another leaves it.
+func (s *Store) accountFor(ctx context.Context, k *HostKey) (string, error) {
+	r, err := s.q.GetSecret(ctx, k.Meta.ID)
+	switch {
+	case err == nil:
+		md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+		if err != nil {
+			return "", err
+		}
+		var spec Spec
+		if err := json.Unmarshal(r.Spec, &spec); err != nil {
+			return "", fmt.Errorf("spec: %w", err)
+		}
+		if spec.AccountID != "" && spec.HostID == k.Spec.HostID && md.Owner == k.Meta.Owner {
+			return spec.AccountID, nil
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return "", err
+	}
+	return s.accounts.EnsureDefault(ctx, k.Meta.Owner, k.Spec.HostID)
 }
 
 // Delete removes a HostKey by id, plus its stored secret value (best-effort

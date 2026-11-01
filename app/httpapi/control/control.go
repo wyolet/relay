@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -53,9 +54,9 @@ type Deps struct {
 	// signer) disables minting and revoke-by-token.
 	TokenSigner *TokenSigner
 
-	// TokenDenylist is where a revoked token's jti is written for the data
-	// plane to read. nil disables per-token revocation (the token-version
-	// bump still works).
+	// TokenDenylist records a revoked token's jti for the data plane to
+	// refuse. nil disables per-token revocation (the token-version bump
+	// still works).
 	TokenDenylist TokenDenylist
 
 	// MintLimiter caps how often one user may mint an inference token.
@@ -123,6 +124,9 @@ type Deps struct {
 	// plane. The host-key health endpoint reads per-key breaker state through
 	// it. nil disables that endpoint.
 	Selector *keypool.Selector
+
+	// Adapters is the wire-shape registry; detecting a host key's account probes the key's host through it. nil answers that detection with 422.
+	Adapters *adapter.Registry
 
 	// HostHealth reads per-host runtime reachability (observed state), shared
 	// with the data plane. Overlays host.Status on host reads. nil disables
@@ -203,9 +207,9 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerHostKeyRotate(api, d, protect)
 	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
+	registerHostKeyDetectAccount(api, d, protect)
 	registerReferences(api, d, protect)
 	registerDetach(api, d, protect)
-	registerPolicyKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
@@ -234,6 +238,11 @@ func Mount(r chi.Router, d Deps) huma.API {
 	patchProp(api, "RateLimitRule", "window", func(s *huma.Schema) {
 		s.Description = "Measurement period, in whole seconds."
 	})
+	documentDomainSchemas(api)
+	policyBindingSubject(api)
+	entityEnvelope(api)
+	describeErrors(api)
+	api.OpenAPI().Tags = controlTags
 
 	// The control API is mounted in front of the SPA's NotFound fallback,
 	// which answers HTML. A client calling a renamed or removed endpoint

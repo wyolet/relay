@@ -35,15 +35,17 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 					Method:      http.MethodPost,
 					Path:        path.Path,
 					Summary:     path.Summary,
+					Description: generationDescription(spec),
 					Tags:        []string{"inference"},
 					Middlewares: specMW,
-					Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
+					Responses:   generationResponses(api, spec),
 				}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 					return &huma.StreamResponse{Body: func(hctx huma.Context) {
 						r, w := humachi.Unwrap(hctx)
 						handleShape(spec, d, w, r)
 					}}, nil
 				})
+				documentRequestBody(api, path.Path, spec)
 				mountProfileAliases(api, d, specMW, spec, path)
 			}
 		}
@@ -140,8 +142,8 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 // handleProxyShape is handleShape for proxy mode: the body is read only until its model is known, and the rest streams upstream as it arrives, checked on the way (scannedBody). The stream flag is not needed: the proxy path takes it from the response's Content-Type.
 func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
 	cls := ClassificationFrom(r.Context())
-	// An anonymous pinned request is routed and metered without its model, so nothing waits for it.
-	needModel := cls.Mode == ModeProxyAuthed || cls.UpstreamHost == ""
+	// An anonymous pinned request is routed and metered without its model, so nothing waits for it unless the host's policy decides by model.
+	needModel := cls.Mode == ModeProxyAuthed || cls.UpstreamHost == "" || anonymousHostNeedsModel(d, cls.UpstreamHost)
 	src := io.Reader(r.Body)
 	if d.ProxyBodyIdle > 0 {
 		idle := &idleDeadlineBody{body: r.Body, rc: http.NewResponseController(w), idle: d.ProxyBodyIdle}
@@ -157,6 +159,16 @@ func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http
 	// Any answer before the forward reads the body to its end (a shed, a routing refusal) leaves a remainder on the wire.
 	markConnection(w, body)
 	Dispatch(d, w, r, DispatchInput{Inbound: spec.Name, Body: held, ModelName: body.scan.model, ProxyBody: body})
+}
+
+// anonymousHostNeedsModel reports whether the pinned host's own policy needs the body's model to admit a request naming no caller.
+func anonymousHostNeedsModel(d Deps, hostName string) bool {
+	root := d.planRoot()
+	if root == nil || d.Catalog == nil {
+		return false
+	}
+	h, ok := d.Catalog.Current().HostByName(hostName)
+	return ok && root.AtHostNeedsModel(h.Meta.ID)
 }
 
 // maxUpfrontBodyBytes caps what a declared Content-Length allocates before the bytes arrive, so a caller cannot reserve memory it never sends.

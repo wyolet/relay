@@ -1,6 +1,6 @@
 # Wyolet Relay — convenience stack for self-hosting.
 #
-# The lean relay image wired to its own Postgres + Valkey, with volumes and
+# The lean relay image wired to its own Postgres + Dragonfly, with volumes and
 # all environment configured. One command:
 #
 #   echo "RELAY_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> .env
@@ -22,7 +22,7 @@ name: relay
 
 volumes:
   pg-data:
-  valkey-data:
+  dragonfly-data:
 
 # Inline admin user mounted into the relay's config dir, so UI login works
 # with no external files. The password resolves from RELAY_ADMIN_PASSWORD.
@@ -55,14 +55,17 @@ services:
       timeout: 5s
       retries: 10
 
-  valkey:
-    image: valkey/valkey:8-alpine
-    container_name: relay-valkey
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2
+    container_name: relay-dragonfly
     restart: unless-stopped
+    command: ["--cluster_mode=emulated", "--lock_on_hashtags", "--proactor_threads=2", "--dbfilename=dump", "--snapshot_cron=* * * * *"]
+    ulimits:
+      memlock: -1
     volumes:
-      - valkey-data:/data
+      - dragonfly-data:/data
     healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       timeout: 5s
       retries: 10
@@ -73,14 +76,14 @@ services:
     restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
-      valkey: {condition: service_healthy}
+      dragonfly: {condition: service_healthy}
     configs:
       - source: relay-admin-user
         target: /config/users/admin.yaml
     environment:
       RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
       RELAY_STATE_BACKEND: redis
-      RELAY_REDIS_ADDR: valkey:6379
+      RELAY_REDIS_ADDR: dragonfly:6379
       RELAY_CONFIG_DIR: /config
       RELAY_AUTO_SEED_IF_EMPTY: "1"
       RELAY_CONTROL_PORT: "8081"

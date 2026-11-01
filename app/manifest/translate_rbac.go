@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -28,50 +29,77 @@ func FromRole(r *role.Role, rev ReverseResolver) RoleDTO {
 	return dto
 }
 
-// toSubjects resolves named subjects to the form the snapshot indexes:
-// users and service accounts by id, groups by name.
-func toSubjects(name string, subjects []SubjectDTO, idx Resolver) ([]rolebinding.Subject, error) {
+// subjectIDs returns the name→id lookup and the wording for each id-bearing
+// policy-binding subject kind; groups carry a name and have none.
+func subjectIDs(idx Resolver, kind rolebinding.SubjectKind) (func(string) (string, bool), string) {
+	switch kind {
+	case rolebinding.SubjectUser:
+		return idx.UserID, "user"
+	case rolebinding.SubjectServiceAccount:
+		return idx.ServiceAccountID, "service account"
+	case policybinding.SubjectHost:
+		return idx.HostID, "host"
+	case policybinding.SubjectAccount:
+		return idx.AccountID, "account"
+	case policybinding.SubjectCredential:
+		return idx.HostKeyID, "credential"
+	case policybinding.SubjectTeam:
+		return idx.TeamID, "team"
+	case policybinding.SubjectProject:
+		return idx.ProjectID, "project"
+	}
+	return nil, ""
+}
+
+func subjectNames(rev ReverseResolver, kind rolebinding.SubjectKind) func(string) (string, bool) {
+	switch kind {
+	case rolebinding.SubjectUser:
+		return rev.Username
+	case rolebinding.SubjectServiceAccount:
+		return rev.ServiceAccountName
+	case policybinding.SubjectHost:
+		return rev.HostName
+	case policybinding.SubjectAccount:
+		return rev.AccountName
+	case policybinding.SubjectCredential:
+		return rev.HostKeyName
+	case policybinding.SubjectTeam:
+		return rev.TeamName
+	case policybinding.SubjectProject:
+		return rev.ProjectName
+	}
+	return nil
+}
+
+// toSubjects resolves named subjects to the form the snapshot indexes: every
+// kind by id except groups, which keep their name.
+func toSubjects(name string, subjects []PolicySubjectDTO, idx Resolver) ([]rolebinding.Subject, error) {
 	out := make([]rolebinding.Subject, 0, len(subjects))
 	for _, sub := range subjects {
-		switch rolebinding.SubjectKind(sub.Kind) {
-		case rolebinding.SubjectGroup:
-			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: sub.Name})
-		case rolebinding.SubjectUser:
-			id, ok := idx.UserID(sub.Name)
-			if !ok {
-				return nil, refNotFound("binding %q: user %q not found", name, sub.Name)
-			}
-			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: id})
-		case rolebinding.SubjectServiceAccount:
-			id, ok := idx.ServiceAccountID(sub.Name)
-			if !ok {
-				return nil, refNotFound("binding %q: service account %q not found", name, sub.Name)
-			}
-			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id})
-		default:
-			return nil, fmt.Errorf("binding %q: subject.kind must be user, group, or serviceaccount, got %q", name, sub.Kind)
+		kind := rolebinding.SubjectKind(sub.Kind)
+		if kind == rolebinding.SubjectGroup {
+			out = append(out, rolebinding.Subject{Kind: kind, Name: sub.Name})
+			continue
 		}
+		lookup, what := subjectIDs(idx, kind)
+		if lookup == nil {
+			return nil, fmt.Errorf("binding %q: subject.kind must be one of %v, got %q", name, policybinding.SubjectKinds, sub.Kind)
+		}
+		id, ok := lookup(sub.Name)
+		if !ok {
+			return nil, refNotFound("binding %q: %s %q not found", name, what, sub.Name)
+		}
+		out = append(out, rolebinding.Subject{Kind: kind, ID: id})
 	}
 	return out, nil
 }
 
-func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []SubjectDTO {
-	out := make([]SubjectDTO, 0, len(subjects))
+func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []PolicySubjectDTO {
+	out := make([]PolicySubjectDTO, 0, len(subjects))
 	for _, sub := range subjects {
-		wire := SubjectDTO{Kind: string(sub.Kind), Name: sub.Name}
-		switch sub.Kind {
-		case rolebinding.SubjectUser:
-			if n, ok := rev.Username(sub.ID); ok {
-				wire.Name = n
-			} else {
-				wire.Name = sub.ID
-			}
-		case rolebinding.SubjectServiceAccount:
-			if n, ok := rev.ServiceAccountName(sub.ID); ok {
-				wire.Name = n
-			} else {
-				wire.Name = sub.ID
-			}
+		wire := PolicySubjectDTO{Kind: string(sub.Kind), Name: sub.Name}
+		if names := subjectNames(rev, sub.Kind); names != nil {
+			wire.Name = nameOr(names, sub.ID)
 		}
 		out = append(out, wire)
 	}
@@ -97,13 +125,20 @@ func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindin
 	return dto
 }
 
-// ToPolicyBinding resolves the project, the policy, and the subjects. Owner
-// mirrors spec.project.
+// ToPolicyBinding resolves the owner, the project, the policy, and the
+// subjects. A spec.project makes the binding that project's; without one,
+// metadata.owner names a team or the system.
 func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBinding, error) {
-	projectID, ok := idx.ProjectID(d.Spec.Project)
-	if !ok {
-		return nil, refNotFound("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+	var projectID string
+	if d.Spec.Project != "" {
+		id, ok := idx.ProjectID(d.Spec.Project)
+		if !ok {
+			return nil, refNotFound("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+		}
+		projectID = id
 	}
+	m := d.Metadata.toMeta()
+	resolveScopeOwner(&m.Owner, idx)
 	policyID, ok := idx.PolicyID(d.Spec.Policy)
 	if !ok {
 		return nil, refNotFound("policybinding %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
@@ -112,20 +147,11 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 	if err != nil {
 		return nil, err
 	}
-	priority := d.Spec.Priority
-	if priority == nil {
-		// The store and control API write this default, so an omitted
-		// priority must match or apply reports an update every run. An
-		// explicit 0 is a real priority and is kept.
-		def := policybinding.DefaultPriority
-		priority = &def
-	}
 	b := &policybinding.PolicyBinding{
-		Meta: d.Metadata.toMeta(),
+		Meta: m,
 		Spec: policybinding.Spec{
 			ProjectID: projectID,
 			PolicyID:  policyID,
-			Priority:  priority,
 			Subjects:  subjects,
 			Enabled:   d.Spec.Enabled,
 		},
@@ -135,17 +161,26 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 }
 
 func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) PolicyBindingDTO {
-	projectName, _ := rev.ProjectName(b.Spec.ProjectID)
-	if projectName == "" {
-		projectName = b.Spec.ProjectID
+	var projectName string
+	if b.Spec.ProjectID != "" {
+		projectName, _ = rev.ProjectName(b.Spec.ProjectID)
+		if projectName == "" {
+			projectName = b.Spec.ProjectID
+		}
 	}
 	policyName, _ := rev.PolicyName(b.Spec.PolicyID)
 	if policyName == "" {
 		policyName = b.Spec.PolicyID
 	}
 	wm := metaToWire(b.Meta)
-	wm.Owner.Name = projectName
-	effectivePriority := b.EffectivePriority()
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		wm.Owner.Name = projectName
+	case meta.OwnerTeam:
+		if name, ok := rev.TeamName(b.Meta.Owner.ID); ok {
+			wm.Owner.Name = name
+		}
+	}
 	return PolicyBindingDTO{
 		APIVersion: APIVersion,
 		Kind:       "PolicyBinding",
@@ -153,7 +188,6 @@ func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) Poli
 		Spec: PolicyBindingSpec{
 			Project:  projectName,
 			Policy:   policyName,
-			Priority: &effectivePriority,
 			Subjects: fromSubjects(b.Spec.Subjects, rev),
 			Enabled:  b.Spec.Enabled,
 		},

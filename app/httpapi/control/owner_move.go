@@ -20,13 +20,22 @@ import (
 // referencing row. Counted like delete blockers: rows the caller can't see
 // still refuse the move, unnamed.
 func refuseStrandingMove(ctx context.Context, d Deps, kind, id, name string, owner meta.Owner, stays func(referenceItem) bool) error {
-	scan, ok := referenceScans[kind]
-	if !ok || d.Stores == nil {
+	if d.Stores == nil {
 		return nil
 	}
-	items, err := scan(ctx, d, id)
-	if err != nil {
-		return huma.Error500InternalServerError(err.Error())
+	var items []referenceItem
+	// A link a delete would take still strands on a move: the policy keeps
+	// pointing at a row it may no longer draw on.
+	for _, scans := range []map[string]func(context.Context, Deps, string) ([]referenceItem, error){referenceScans, droppedLinkScans} {
+		scan, ok := scans[kind]
+		if !ok {
+			continue
+		}
+		more, err := scan(ctx, d, id)
+		if err != nil {
+			return huma.Error500InternalServerError(err.Error())
+		}
+		items = append(items, more...)
 	}
 	var stranded []referenceItem
 	for _, it := range items {
@@ -50,18 +59,13 @@ func refuseStrandingMove(ctx context.Context, d Deps, kind, id, name string, own
 	}
 }
 
-// refusePolicyMove keeps keys, service accounts and policy bindings on a
-// policy they may still reference. Host keys and hosts take only their own
-// host's tier policy, so any move strands them.
+// refusePolicyMove keeps policy bindings on a policy they may still use.
+// Hosts list only their own tier policies, so any move strands them.
 func refusePolicyMove(ctx context.Context, d Deps, moved *policy.Policy) error {
 	c := refs(d)
 	c.Rows.Policy = func(context.Context, string) *policy.Policy { return moved }
 	return refuseStrandingMove(ctx, d, "policy", moved.Meta.ID, moved.Meta.Name, moved.Meta.Owner, func(it referenceItem) bool {
-		switch it.Kind {
-		case "key", "service-account", "policy-binding":
-			return c.PolicyRef(ctx, moved.Meta.ID, it.owner) == nil
-		}
-		return false
+		return it.Kind == "policy-binding" && c.BindablePolicy(ctx, moved.Meta.ID, it.owner) == nil
 	})
 }
 
@@ -80,8 +84,8 @@ func refuseHostKeyMove(ctx context.Context, d Deps, moved *hostkey.HostKey) erro
 	c.Rows.HostKey = func(context.Context, string) *hostkey.HostKey { return moved }
 	return refuseStrandingMove(ctx, d, "host-key", moved.Meta.ID, moved.Meta.Name, moved.Meta.Owner, func(it referenceItem) bool {
 		switch it.Kind {
-		case "policy":
-			return c.HostKeyRefs(ctx, []string{moved.Meta.ID}, it.owner) == nil
+		case "policy", "pool":
+			return c.CredentialRefs(ctx, []string{moved.Meta.ID}, it.owner) == nil
 		case "settings":
 			return true
 		}

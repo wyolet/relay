@@ -3,9 +3,14 @@ package apply
 import (
 	"context"
 
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
+	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/refcheck"
@@ -25,6 +30,10 @@ func (b *builder) refs() refcheck.Checker {
 			Policy:         lookup(b, b.rows.Policies, func(x *policy.Policy) *meta.Metadata { return &x.Meta }),
 			RateLimit:      lookup(b, b.rows.RateLimits, func(x *ratelimit.RateLimit) *meta.Metadata { return &x.Meta }),
 			HostKey:        lookup(b, b.rows.HostKeys, func(x *hostkey.HostKey) *meta.Metadata { return &x.Meta }),
+			Host:           lookup(b, b.rows.Hosts, func(x *host.Host) *meta.Metadata { return &x.Meta }),
+			Account:        lookup(b, b.rows.Accounts, func(x *account.Account) *meta.Metadata { return &x.Meta }),
+			Pool:           lookup(b, b.rows.Pools, func(x *apppool.Pool) *meta.Metadata { return &x.Meta }),
+			Budget:         lookup(b, b.rows.Budgets, func(x *budget.Budget) *meta.Metadata { return &x.Meta }),
 			Project:        lookup(b, b.rows.Projects, func(x *project.Project) *meta.Metadata { return &x.Meta }),
 			Team:           lookup(b, b.rows.Teams, func(x *team.Team) *meta.Metadata { return &x.Meta }),
 			Role:           lookup(b, b.rows.Roles, func(x *role.Role) *meta.Metadata { return &x.Meta }),
@@ -35,6 +44,15 @@ func (b *builder) refs() refcheck.Checker {
 				for _, rb := range b.rows.RoleBindings {
 					if rb.Spec.RoleID == roleID {
 						out = append(out, rb)
+					}
+				}
+				return out, nil
+			},
+			PolicyBindingsFor: func(_ context.Context, policyID string) ([]*policybinding.PolicyBinding, error) {
+				var out []*policybinding.PolicyBinding
+				for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
+					if pb.Spec.PolicyID == policyID {
+						out = append(out, pb)
 					}
 				}
 				return out, nil

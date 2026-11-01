@@ -33,13 +33,14 @@ func registerCatalog(api huma.API, d Deps, mw huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/v1/catalog",
 		Summary:     "Catalog of the models, hosts and prices the caller can use",
+		Description: "The SDK catalog document cut down to the bindings this caller can route to, without upstream addresses. Carries an ETag; a matching If-None-Match answers 304.",
 		Tags:        []string{"inference"},
 		Middlewares: mw,
 		Responses: map[string]*huma.Response{
-			"200": {Description: "OK", Content: map[string]*huma.MediaType{"application/json": {Schema: schema}}},
-			"304": {Description: "Not Modified"},
+			"200": {Description: "The caller's catalog.", Content: map[string]*huma.MediaType{"application/json": {Schema: schema}}},
+			"304": {Description: "Unchanged since the If-None-Match ETag."},
 		},
-		Errors: []int{401, 403, 500},
+		Errors: []int{401, 403, 500, 503},
 	}, func(ctx context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 		entry, err := scopedCatalog(ctx, d, cache)
 		if err != nil {
@@ -52,27 +53,26 @@ func registerCatalog(api huma.API, d Deps, mw huma.Middlewares) {
 	})
 }
 
-// scopedCatalog returns the caller's rendered document, from the cache while the snapshot and the seeded catalog version are unchanged.
+// scopedCatalog returns the caller's rendered document, from the cache while the caller's route table and the seeded catalog version are unchanged.
 func scopedCatalog(ctx context.Context, d Deps, cache *catalogCache) (*catalogEntry, error) {
-	snap, principal, models, err := visibleModels(ctx, d, "")
-	if err != nil {
-		return nil, err
+	principal := PrincipalFrom(ctx)
+	if principal == nil {
+		return nil, huma.Error401Unauthorized("missing relay key")
 	}
-	scope := "policyless|" + principal.UserID
-	if principal.Policy != nil {
-		scope = principal.Policy.Meta.ID
-	}
+	table := principal.Caller.Routes
+	scope := principal.Caller.Principal
 	version := deploymentCatalogVersion(d.Catalog)
-	gen := snap.Generation()
-	if e, ok := cache.get(scope, gen, version); ok {
+	if e, ok := cache.get(scope, table, version); ok {
 		return e, nil
 	}
 
-	visible := make(map[string]struct{}, len(models))
+	snap := table.Catalog()
+	listing := table.Listing()
+	visible := make(map[string]struct{}, len(listing))
 	granted := map[string]struct{}{}
-	for _, m := range models {
-		visible[m.Meta.ID] = struct{}{}
-		for _, b := range grantedBindings(d.Resolver, snap, principal.Policy, principal.UserID, m, "") {
+	for _, l := range listing {
+		visible[l.Model.Meta.ID] = struct{}{}
+		for _, b := range l.Bindings {
 			granted[b.Meta.ID] = struct{}{}
 		}
 	}
@@ -87,7 +87,7 @@ func scopedCatalog(ctx context.Context, d Deps, cache *catalogCache) (*catalogEn
 	if err != nil {
 		return nil, huma.Error500InternalServerError("render catalog", err)
 	}
-	e.gen = gen
+	e.table = table
 	cache.put(scope, e)
 	return e, nil
 }

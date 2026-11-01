@@ -44,7 +44,7 @@ type referenceItem struct {
 
 type referencesOutput struct {
 	Body struct {
-		Items []referenceItem `json:"items"`
+		Items []referenceItem `json:"items" doc:"Rows the caller may see that reference the target, including links a delete would take without refusing."`
 	}
 }
 
@@ -68,12 +68,16 @@ var referenceScans = map[string]func(ctx context.Context, d Deps, id string) ([]
 	"service-account": scanServiceAccountRefs,
 	"group":           scanGroupRefs,
 	"role":            scanRoleRefs,
+	"account":         scanAccountRefs,
+	"pool":            scanPoolRefs,
+	"budget":          scanBudgetRefs,
 }
 
 // referencedPlurals are the kinds with a references scan, in API plural form.
 var referencedPlurals = []string{
 	"providers", "hosts", "models", "pricings", "policies", "host-keys",
 	"rate-limits", "teams", "projects", "service-accounts", "groups", "roles",
+	"accounts", "pools", "budgets",
 }
 
 // registerReferences installs the per-kind references endpoints.
@@ -86,6 +90,7 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			Method:      http.MethodGet,
 			Path:        "/" + plural + "/by-id/{id}/references",
 			Summary:     "List rows that reference this " + singular,
+			Description: "Every row that points at the " + singular + " through one of its fields, as delete would see them: blockers, and links a delete would take without refusing. Rows the caller may not see are left out. An unknown id answers an empty list.",
 			Tags:        []string{plural},
 			Middlewares: protect,
 			Errors:      []int{401, 500},
@@ -93,6 +98,14 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			items, err := scan(ctx, d, in.ID)
 			if err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
+			}
+			// Links a delete would take without refusing are references too.
+			if dropped, ok := droppedLinkScans[singular]; ok {
+				more, err := dropped(ctx, d, in.ID)
+				if err != nil {
+					return nil, huma.Error500InternalServerError(err.Error())
+				}
+				items = append(items, more...)
 			}
 			// Drop referencing rows the caller may not see — "in use by" must
 			// not leak other users' rows.
@@ -182,7 +195,11 @@ func scanHostRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	if err != nil {
 		return nil, err
 	}
-	return append(out, owned...), nil
+	held, err := scanUpstreamAtHost(ctx, d, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, owned...), held...), nil
 }
 
 // scanRateLimitsOwnedBy returns the rate limits a provider or host publishes
@@ -203,18 +220,6 @@ func scanRateLimitsOwnedBy(ctx context.Context, d Deps, kind meta.OwnerKind, id 
 
 func scanModelRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	for _, p := range pols {
-		for _, mid := range p.Spec.ModelIDs {
-			if mid == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.modelIds", owner: p.Meta.Owner, detachable: true})
-				break
-			}
-		}
-	}
 	pricings, err := d.Stores.Pricing.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list pricings: %w", err)
@@ -273,33 +278,6 @@ func scanPricingRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 
 func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	rks, err := d.Stores.Key.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list keys: %w", err)
-	}
-	for _, k := range rks {
-		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner, detachable: true})
-		}
-	}
-	sas, err := d.Stores.ServiceAccount.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list service-accounts: %w", err)
-	}
-	for _, sa := range sas {
-		if sa.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "service-account", ID: sa.Meta.ID, Name: sa.Meta.Name, Via: "spec.policyId", owner: sa.Meta.Owner, detachable: true})
-		}
-	}
-	keys, err := d.Stores.HostKey.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list host-keys: %w", err)
-	}
-	for _, k := range keys {
-		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
-		}
-	}
 	pbs, err := d.Stores.PolicyBinding.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list policy-bindings: %w", err)
@@ -309,40 +287,11 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.policyId", owner: b.Meta.Owner})
 		}
 	}
-	hosts, err := d.Stores.Host.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list hosts: %w", err)
-	}
-	for _, h := range hosts {
-		matched := false
-		for _, pid := range h.Spec.Policies {
-			if pid == id {
-				out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.policies", owner: h.Meta.Owner, detachable: true})
-				matched = true
-				break
-			}
-		}
-		if !matched && h.Spec.DefaultPolicy == id {
-			out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.defaultPolicy", owner: h.Meta.Owner, detachable: true})
-		}
-	}
 	return out, nil
 }
 
 func scanHostKeyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	for _, p := range pols {
-		for _, kid := range p.Spec.HostKeyIDs {
-			if kid == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.hostKeyIds", owner: p.Meta.Owner, detachable: true})
-				break
-			}
-		}
-	}
 	// A host key's delete removes the stored secret kept under its id, so a
 	// settings section naming that secret is a reference too. Settings are
 	// reconfigured by the operator, never detached.
@@ -360,25 +309,10 @@ func scanHostKeyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	return out, nil
 }
 
-func scanRateLimitRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
-	out := []referenceItem{}
-	pols, err := d.Stores.Policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list policies: %w", err)
-	}
-	for _, p := range pols {
-		if p.Spec.RateLimitID == id {
-			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rateLimitId", owner: p.Meta.Owner, detachable: true})
-			continue
-		}
-		for _, b := range p.Spec.RLBindings {
-			if b.RateLimitID == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rlBindings[].rateLimitId", owner: p.Meta.Owner, detachable: true})
-				break
-			}
-		}
-	}
-	return out, nil
+// scanRateLimitRefs finds nothing that blocks a rate limit's delete: the
+// policies linking it lose the link (droppedLinkScans).
+func scanRateLimitRefs(context.Context, Deps, string) ([]referenceItem, error) {
+	return []referenceItem{}, nil
 }
 
 func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
@@ -392,11 +326,51 @@ func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 			out = append(out, referenceItem{Kind: "project", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.teamId", owner: p.Meta.Owner})
 		}
 	}
+	pols, err := d.Stores.Policy.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	for _, p := range pols {
+		if ownedBy(p.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id", owner: p.Meta.Owner})
+		}
+	}
+	pbs, err := d.Stores.PolicyBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policy-bindings: %w", err)
+	}
+	for _, b := range pbs {
+		if ownedBy(b.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "metadata.owner.id", owner: b.Meta.Owner})
+		}
+	}
+	keys, err := d.Stores.HostKey.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list host-keys: %w", err)
+	}
+	for _, k := range keys {
+		if ownedBy(k.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+		}
+	}
+	rls, err := d.Stores.RateLimit.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list rate-limits: %w", err)
+	}
+	for _, r := range rls {
+		if ownedBy(r.Meta.Owner, meta.OwnerTeam, id) {
+			out = append(out, referenceItem{Kind: "rate-limit", ID: r.Meta.ID, Name: r.Meta.Name, Via: "metadata.owner.id", owner: r.Meta.Owner})
+		}
+	}
 	scoped, err := scanRoleBindingsScopedTo(ctx, d, meta.OwnerTeam, id)
 	if err != nil {
 		return nil, err
 	}
-	return append(out, scoped...), nil
+	upstream, err := scanUpstreamOwnedBy(ctx, d, meta.OwnerTeam, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, scoped...), upstream...), nil
 }
 
 func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
@@ -459,7 +433,11 @@ func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	if err != nil {
 		return nil, err
 	}
-	return append(out, scoped...), nil
+	upstream, err := scanUpstreamOwnedBy(ctx, d, meta.OwnerProject, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, scoped...), upstream...), nil
 }
 
 func scanServiceAccountRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {

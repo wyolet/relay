@@ -12,7 +12,7 @@ import (
 	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
-const docHeader = "apiVersion: relay.wyolet.dev/v1alpha2\n"
+const docHeader = "apiVersion: relay.wyolet.dev/v1alpha3\n"
 
 // prunedScopeRows is tenancyRows with its service account pruned as well; the run prunes the project and, when teamPruned, its team.
 func prunedScopeRows(teamPruned bool) *Rows {
@@ -59,7 +59,7 @@ func TestPruneRefusesAPolicyBindingInAPrunedProject(t *testing.T) {
 	rows := prunedScopeRows(false)
 	rows.Policies = []*policy.Policy{{Meta: meta.Metadata{ID: meta.NewID(), Name: "shared-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}}}}
 	doc := "kind: PolicyBinding\nmetadata: {name: ml-binding, owner: {kind: project, name: ml-search}}\n" +
-		"spec: {project: ml-search, policy: shared-policy, subjects: [{kind: group, name: eng}]}\n"
+		"spec: {project: ml-search, policy: shared-policy, subjects: [{kind: project, name: ml-search}]}\n"
 	wantRefused(t, planPruned(t, rows, doc), "PolicyBinding", "ml-binding", authmanifest.ErrScopePruned)
 }
 
@@ -80,10 +80,29 @@ func TestPruneRefusesAHostKeyOwnedByAPrunedProject(t *testing.T) {
 	rows := prunedScopeRows(false)
 	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://acme.example.com"}}
 	rows.Hosts = []*host.Host{h}
-	rows.Policies = []*policy.Policy{{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}}
 	doc := "kind: HostKey\nmetadata: {name: ml-key, owner: {kind: project, name: ml-search}}\n" +
-		"spec: {hostId: acme-api, policyId: acme-tier, valueFrom: {kind: env, env: ML_KEY}}\n"
+		"spec: {hostId: acme-api, valueFrom: {kind: env, env: ML_KEY}}\n"
 	wantRefused(t, planPruned(t, rows, doc), "HostKey", "ml-key", errOwnerPruned)
+}
+
+// Accounts, pools and budgets outlive their project the same way.
+func TestPruneRefusesUpstreamRowsOwnedByAPrunedProject(t *testing.T) {
+	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://acme.example.com"}}
+	for kind, doc := range map[string]string{
+		"Account": "kind: Account\nmetadata: {name: ml-acct, owner: {kind: project, name: ml-search}}\nspec: {host: acme-api}\n",
+		"Pool":    "kind: Pool\nmetadata: {name: ml-pool, owner: {kind: project, name: ml-search}}\nspec: {host: acme-api}\n",
+		"Budget":  "kind: Budget\nmetadata: {name: ml-budget, owner: {kind: project, name: ml-search}}\nspec: {amountUsd: \"10\"}\n",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			rows := prunedScopeRows(false)
+			rows.Hosts = []*host.Host{h}
+			err := planPruned(t, rows, doc)
+			var invalid *InvalidError
+			if !errors.As(err, &invalid) || invalid.Kind != kind || !errors.Is(err, errOwnerPruned) {
+				t.Fatalf("err = %v, want %s refused with %q", err, kind, errOwnerPruned)
+			}
+		})
+	}
 }
 
 // A rate limit cannot be team-owned; pruning the team still takes its project's.

@@ -1,13 +1,11 @@
 package catalogview
 
 import (
-	"sort"
-
 	"context"
+	"sort"
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
@@ -21,50 +19,48 @@ import (
 //   - models      — the models this policy grants, with the limits it applies
 //                    to each (the inverse of ModelPolicies, same grant rules).
 //   - hosts       — the hosts this policy can reach, each with the host-keys
-//                    that reach it (host-keys are folded into hosts, never a
-//                    surface of their own; credential values never exposed).
-//   - rate-limits — the rate-limit rule sets the policy references: each
-//                    RLBinding (per-model) plus the flat default, resolved to
-//                    limits.
+//                    that reach it through its pools and credentials
+//                    (credential values never exposed).
+//   - rate-limits — the rate-limit rule sets the policy links, each with its
+//                    model scope (policy_ratelimits.go).
 
 // PolicyRef identifies the policy a sub-resource response belongs to.
 type PolicyRef struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	DisplayName string   `json:"displayName,omitempty"`
-	Owner       OwnerRef `json:"owner"`
-	Enabled     bool     `json:"enabled"`
+	ID          string   `json:"id"                    doc:"Policy id."`
+	Name        string   `json:"name"                  doc:"Policy slug."`
+	DisplayName string   `json:"displayName,omitempty" doc:"Display name."`
+	Owner       OwnerRef `json:"owner"                 doc:"The policy's owner."`
+	Enabled     bool     `json:"enabled"               doc:"Whether the policy is enabled."`
 }
 
 type HostKeyRef struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Enabled               bool   `json:"enabled"`
-	SharedWithPolicyCount int    `json:"sharedWithPolicyCount"` // # of OTHER policies referencing this key
+	ID                    string `json:"id"                    doc:"Host key id."`
+	Name                  string `json:"name"                  doc:"Host key slug."`
+	Enabled               bool   `json:"enabled"               doc:"Whether the key is enabled."`
+	SharedWithPolicyCount int    `json:"sharedWithPolicyCount" doc:"How many other policies link this key, directly or through a pool."` // # of OTHER policies linking this key, directly or through a pool
 }
 
 // PolicyBindingRow — one concrete (provider, model, host) binding this policy
 // grants, fully pre-joined. Mirrors ModelHostRow: the frontend renders rows
 // and groups by host client-side, no catalog round-trip. MatchedBy carries the
-// grant ref(s) that produced this row (raw Spec.Models entries, "*" for the
-// implicit wildcard, or the model's canonical ref for an explicit ModelIDs
-// grant) — the one fact the client can't recompute. Limits are resolved for
-// THIS exact triple.
+// grant ref(s) that produced this row (raw Spec.Models entries, or "*" for an
+// empty model list) — the one fact the client can't recompute. Limits are
+// resolved for THIS exact triple.
 type PolicyBindingRow struct {
-	Provider  ProviderRef `json:"provider"`
-	Host      HostRef     `json:"host"`
-	Model     ModelRef    `json:"model"`
-	Binding   BindingView `json:"binding"`
-	MatchedBy []string    `json:"matchedBy"`
-	Limits    []Limit     `json:"limits"`
+	Provider  ProviderRef `json:"provider"  doc:"The model's provider."`
+	Host      HostRef     `json:"host"      doc:"The serving host."`
+	Model     ModelRef    `json:"model"     doc:"The model."`
+	Binding   BindingView `json:"binding"   doc:"The binding of the model at the host."`
+	MatchedBy []string    `json:"matchedBy" doc:"The policy's model entries that allow this binding; * when the policy lists no models."`
+	Limits    []Limit     `json:"limits"    doc:"Rules of every rate limit the policy applies to this binding."`
 }
 
 // PolicyModelExclusion — a model this policy does NOT grant, with why. Surfaced
 // by PolicyModelExclusions (the ?debug view) to make an empty grant diagnosable
 // — e.g. a host-tier policy whose host has no bindings post-migration.
 type PolicyModelExclusion struct {
-	Model  ModelRef `json:"model"`
-	Reason string   `json:"reason"`
+	Model  ModelRef `json:"model"  doc:"The model."`
+	Reason string   `json:"reason" doc:"Why the policy does not allow it, such as no matching entry, deprecated, or no host the policy reaches."`
 }
 
 // PolicyHostRow — a host this policy can reach, with the host-keys that reach
@@ -73,20 +69,9 @@ type PolicyModelExclusion struct {
 // the policy grants (losing its key would drop that model), else "optional" —
 // a sibling reachable host covers everything it does.
 type PolicyHostRow struct {
-	Host        HostRef      `json:"host"`
-	HostKeys    []HostKeyRef `json:"hostKeys"`
-	Requirement string       `json:"requirement"` // "required" | "optional"
-}
-
-// PolicyRateLimitRow — one rate-limit rule set the policy references. Default
-// is the flat Spec.RateLimitID; the others are per-model RLBindings carrying
-// their Models DSL.
-type PolicyRateLimitRow struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Default bool     `json:"default"`
-	Models  []string `json:"models,omitempty"`
-	Limits  []Limit  `json:"limits"`
+	Host        HostRef      `json:"host"        doc:"The host."`
+	HostKeys    []HostKeyRef `json:"hostKeys"    doc:"Host keys reaching it through the policy's pools and keys; empty for a tier preset's own host."`
+	Requirement string       `json:"requirement" enum:"required,optional" doc:"required when the host alone serves some allowed model, so losing its keys would drop that model; optional when other hosts cover everything it serves."` // "required" | "optional"
 }
 
 // loadPolicy resolves the policy {ref} (id or slug) and builds the index.
@@ -109,10 +94,7 @@ func (s *Service) loadPolicy(ctx context.Context, ref string) (*policy.Policy, *
 }
 
 // PolicyModels returns one row per concrete (model, host) binding this policy
-// grants. Resolution mirrors routing: an explicit ModelIDs grant is host- and
-// coverage-agnostic (emits on every binding of the model); wildcard and Models
-// DSL grants emit only on hosts the policy actually reaches (host-tier: its own
-// host; customer: hosts its host-keys cover). Limits are resolved per triple.
+// grants, on the hosts it reaches. Limits are resolved per triple.
 func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []PolicyBindingRow, error) {
 	p, idx, err := s.loadPolicy(ctx, ref)
 	if err != nil {
@@ -124,14 +106,13 @@ func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []Po
 	}
 	rows := []PolicyBindingRow{}
 	for _, gb := range idx.grantedBindings(p, models) {
-		rlID, _ := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
 		rows = append(rows, PolicyBindingRow{
 			Provider:  providerRefOf(gb.prov),
 			Host:      hostRefOf(gb.host),
 			Model:     modelRefOf(gb.model),
 			Binding:   bindingViewOf(gb.binding),
 			MatchedBy: gb.matchedBy,
-			Limits:    idx.limitsOf(rlID),
+			Limits:    idx.limitsFor(p, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -180,53 +161,28 @@ func (idx *index) grantedBindings(p *policy.Policy, models []*model.Model) []gra
 }
 
 // bindingGrantRefs returns the grant ref(s) by which the policy grants this
-// model on this specific host, or empty when it doesn't. Explicit ModelIDs are
-// coverage-agnostic; wildcard/DSL require the host to be policy-reachable.
+// model on this specific host, or empty when it doesn't.
 func (idx *index) bindingGrantRefs(p *policy.Policy, m *model.Model, provSlug, hostID, hostSlug string) []string {
 	refs := []string{}
-	for _, id := range p.Spec.ModelIDs {
-		if id == m.Meta.ID {
-			refs = append(refs, canonicalRef(provSlug, m.Meta.Name))
-			break
-		}
+	if !idx.policyCoversHost(p, hostID) {
+		return refs
 	}
-	if idx.policyCoversHost(p, hostID) {
-		wildcard := len(p.Spec.ModelIDs) == 0 && len(p.Spec.Models) == 0
-		if wildcard {
-			if !(modelDeprecated(m) && !p.Spec.IncludeDeprecated) {
-				refs = append(refs, "*")
-			}
-		} else {
-			for _, raw := range p.Spec.Models {
-				r, err := modelref.Parse(raw)
-				if err != nil {
-					continue
-				}
-				if r.Matches(provSlug, m.Meta.Name, hostSlug) {
-					refs = append(refs, raw)
-				}
-			}
+	if len(p.Spec.Models) == 0 {
+		if !(modelDeprecated(m) && !p.Spec.IncludeDeprecated) {
+			refs = append(refs, "*")
+		}
+		return refs
+	}
+	for _, raw := range p.Spec.Models {
+		r, err := modelref.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if r.Matches(provSlug, m.Meta.Name, hostSlug) {
+			refs = append(refs, raw)
 		}
 	}
 	return refs
-}
-
-// policyCoversHost reports whether the policy is allowed to serve on a host:
-// a host-tier policy serves only its own host; a customer policy serves the
-// hosts its host-keys authenticate to.
-func (idx *index) policyCoversHost(p *policy.Policy, hostID string) bool {
-	if p.Meta.Owner.Kind == meta.OwnerHost {
-		return p.Meta.Owner.ID == hostID
-	}
-	_, ok := idx.policyKeyHosts(p)[hostID]
-	return ok
-}
-
-func canonicalRef(provSlug, modelSlug string) string {
-	if provSlug == "" {
-		return modelSlug
-	}
-	return provSlug + "/" + modelSlug
 }
 
 // PolicyModelExclusions returns the models this policy does NOT grant, each with
@@ -257,9 +213,9 @@ func (s *Service) PolicyModelExclusions(ctx context.Context, ref string) (Policy
 	return policyRefOf(p, idx), out, nil
 }
 
-// PolicyHosts returns the hosts this policy can reach. Customer policies reach
-// the hosts their host-keys authenticate to (keys folded in per host); a
-// host-tier policy also reaches its own host.
+// PolicyHosts returns the hosts this policy can reach: the hosts of its
+// pools and credentials (keys folded in per host), and a host-tier policy's
+// own host. A policy linking neither lists only the hosts it grants models on.
 func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []PolicyHostRow, error) {
 	p, idx, err := s.loadPolicy(ctx, ref)
 	if err != nil {
@@ -286,7 +242,7 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 
 	keysByHost := map[string][]HostKeyRef{}
 	hostIDs := map[string]struct{}{}
-	for _, id := range p.Spec.HostKeyIDs {
+	for _, id := range idx.policyCredentials(p) {
 		k, ok := idx.hostkeyByID[id]
 		if !ok {
 			continue
@@ -299,8 +255,13 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 			SharedWithPolicyCount: idx.keyShareCount(k.Meta.ID, p.Meta.ID),
 		})
 	}
-	if p.Meta.Owner.Kind == meta.OwnerHost {
-		hostIDs[p.Meta.Owner.ID] = struct{}{}
+	for hid := range idx.policyReachHosts(p) {
+		hostIDs[hid] = struct{}{}
+	}
+	if len(p.Spec.PoolIDs) == 0 && len(p.Spec.CredentialIDs) == 0 {
+		for hid := range hostModels {
+			hostIDs[hid] = struct{}{}
+		}
 	}
 	rows := []PolicyHostRow{}
 	for hid := range hostIDs {
@@ -333,15 +294,15 @@ func requirementOf(served map[string]struct{}, modelHostCount map[string]int) st
 	return "optional"
 }
 
-// keyShareCount counts policies OTHER than excludeID whose HostKeyIDs include
-// the given key.
+// keyShareCount counts policies OTHER than excludeID that link the given
+// key, directly or through a pool.
 func (idx *index) keyShareCount(keyID, excludeID string) int {
 	n := 0
 	for _, p := range idx.policies {
 		if p.Meta.ID == excludeID {
 			continue
 		}
-		for _, id := range p.Spec.HostKeyIDs {
+		for _, id := range idx.policyCredentials(p) {
 			if id == keyID {
 				n++
 				break
@@ -349,98 +310,6 @@ func (idx *index) keyShareCount(keyID, excludeID string) int {
 		}
 	}
 	return n
-}
-
-// UnthrottledModel — a model the policy grants on which no rate-limit applies
-// (every granted binding of it resolves to an empty limit set).
-type UnthrottledModel struct {
-	Model ModelRef `json:"model"`
-}
-
-// RateLimitOverlap — a binding claimed by more than one RLBinding. Winner is
-// the rate-limit that actually applies (first declared match); losers are the
-// ones it shadowed on that binding. All ids match PolicyRateLimitRow.ID.
-type RateLimitOverlap struct {
-	Provider string   `json:"provider"`
-	Model    string   `json:"model"`
-	Host     string   `json:"host"`
-	Winner   string   `json:"winner"`
-	Losers   []string `json:"losers"`
-}
-
-// PolicyRateLimitsView is the rate-limits tab payload: the referenced rule sets
-// plus the two derivations the server now owns — models that slip through
-// uncapped, and bindings where RLBindings overlap.
-type PolicyRateLimitsView struct {
-	RateLimits  []PolicyRateLimitRow `json:"rateLimits"`
-	Unthrottled []UnthrottledModel   `json:"unthrottled"`
-	Overlaps    []RateLimitOverlap   `json:"overlaps"`
-}
-
-// PolicyRateLimits returns the rate-limit rule sets the policy references — each
-// per-model RLBinding in declared order, then the flat default last — plus the
-// unthrottled-models and overlapping-binding derivations.
-func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, PolicyRateLimitsView, error) {
-	p, idx, err := s.loadPolicy(ctx, ref)
-	if err != nil {
-		return PolicyRef{}, PolicyRateLimitsView{}, err
-	}
-	models, err := s.Models.List(ctx)
-	if err != nil {
-		return PolicyRef{}, PolicyRateLimitsView{}, err
-	}
-	view := PolicyRateLimitsView{
-		RateLimits:  idx.policyRateLimitRows(p),
-		Unthrottled: []UnthrottledModel{},
-		Overlaps:    []RateLimitOverlap{},
-	}
-
-	capped := map[string]bool{} // modelID → has a non-empty limit on some binding
-	uncapped := map[string]*model.Model{}
-	for _, gb := range idx.grantedBindings(p, models) {
-		// Overlap: every RLBinding (in declared order) that matches this triple.
-		var matching []string
-		for _, rb := range p.Spec.RLBindings {
-			if modelref.MatchAny(rb.Models, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name) {
-				matching = append(matching, rb.RateLimitID)
-			}
-		}
-		if len(matching) > 1 {
-			view.Overlaps = append(view.Overlaps, RateLimitOverlap{
-				Provider: gb.provSlug, Model: gb.model.Meta.Name, Host: gb.host.Meta.Name,
-				Winner: matching[0], Losers: matching[1:],
-			})
-		}
-		// Unthrottled bookkeeping: a model is capped if ANY granted binding
-		// resolves to a non-empty limit set.
-		rlID, _ := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
-		if len(idx.limitsOf(rlID)) > 0 {
-			capped[gb.model.Meta.ID] = true
-		} else {
-			uncapped[gb.model.Meta.ID] = gb.model
-		}
-	}
-	for id, m := range uncapped {
-		if !capped[id] {
-			view.Unthrottled = append(view.Unthrottled, UnthrottledModel{Model: modelRefOf(m)})
-		}
-	}
-	sort.Slice(view.Unthrottled, func(i, j int) bool { return view.Unthrottled[i].Model.Name < view.Unthrottled[j].Model.Name })
-	sort.Slice(view.Overlaps, func(i, j int) bool {
-		if view.Overlaps[i].Model != view.Overlaps[j].Model {
-			return view.Overlaps[i].Model < view.Overlaps[j].Model
-		}
-		return view.Overlaps[i].Host < view.Overlaps[j].Host
-	})
-	return policyRefOf(p, idx), view, nil
-}
-
-func (idx *index) rlRow(rlID string, models []string, isDefault bool) PolicyRateLimitRow {
-	row := PolicyRateLimitRow{ID: rlID, Default: isDefault, Models: models, Limits: idx.limitsOf(rlID)}
-	if rl, ok := idx.rlByID[rlID]; ok {
-		row.Name = rl.Meta.Name
-	}
-	return row
 }
 
 func policyRefOf(p *policy.Policy, idx *index) PolicyRef {

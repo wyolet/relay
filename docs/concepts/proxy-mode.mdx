@@ -3,7 +3,7 @@ title: "Proxy Mode"
 description: "Forward requests with the caller's own upstream key, without the key pool"
 ---
 
-In normal mode Relay picks a host key from a pool for each request. In **proxy mode** the caller sends its **own upstream credential**, and Relay forwards the request body unchanged to the host with that credential attached. Relay still authenticates the relay key, applies its policy's rate limits, and records usage, cost and (if enabled) payloads.
+In normal mode Relay picks a host key from a pool for each request. In **proxy mode** the caller sends its **own upstream credential**, and Relay forwards the request body unchanged to the host with that credential attached. Relay still authenticates the relay key, applies the caller's model grants, rate limits and budgets, and records usage, cost and (if enabled) payloads.
 
 Use it when the credential belongs to the caller, for example a developer's own provider subscription, but you still want one endpoint, rate limits and usage records in front of the traffic. [Claude Code](/claude-code) uses it this way.
 
@@ -11,11 +11,11 @@ Use it when the credential belongs to the caller, for example a developer's own 
 
 | | Normal mode | Proxy mode |
 | --- | --- | --- |
-| Upstream credential | A host key from the policy's pool | The caller's `Authorization` header, forwarded as-is |
-| Host selection | Policy grants, then the model's host bindings | The `X-WR-Upstream-Host` header, or the policy's grants when the header is absent |
+| Upstream credential | A host key from the caller's pools | The caller's `Authorization` header, forwarded as-is |
+| Host selection | The caller's pools, in order, at hosts serving the model | The `X-WR-Upstream-Host` header, or the first host binding the caller's grants allow when the header is absent |
 | Request body | Model name rewritten; translated across shapes when needed | Forwarded byte for byte, no translation |
 | Key pooling and failover | Yes | No. One attempt |
-| Policy rate limits | Yes | Yes, for authenticated requests |
+| Policy ladder | Every rung | The caller rungs and the host rung, for authenticated requests. No account rung, since no host key serves |
 | Usage, cost, payload capture | Yes | Yes |
 
 ## Enabling it
@@ -75,10 +75,10 @@ Relay removes its own headers (`X-WR-*`) and hop-by-hop headers, sets `Authoriza
 
 With a relay key:
 
-- **Host.** If `X-WR-Upstream-Host` is set, Relay forwards to that host. If it is absent, Relay reads `model` from the body and picks the host through the governing policy's grants and the model's bindings, as normal routing does, without requiring a host key.
-- **Grants.** A pinned request reaches only a model the governing policy grants on the pinned host, as normal routing does, and its usage is priced from that binding. The caller's own credential does not widen the grant. A model that does not route there is refused with the same errors as normal mode (`model_not_found`, `model_not_allowed`), and an `@host` in the model that names a different host than `X-WR-Upstream-Host` gets `400 upstream_host_conflict`. A keyless (`noAuth`) host such as a self-hosted Ollama additionally needs a policy that explicitly grants that host. A key with no governing policy has no grant to check: a model that does not route at the pin is forwarded unpriced.
-- **Rate limits.** The governing policy's rate limit is reserved and committed as in normal mode. The `inference-api-proxy` rate limit is applied on top as a per-credential ceiling. It ships disabled with no rules; add rules and enable it to cap every relay key's proxy traffic. A key with no governing policy gets only that ceiling.
-- **Attribution.** The request is recorded against the relay key, its principal, project and policy.
+- **Host.** If `X-WR-Upstream-Host` is set, Relay forwards to that host. If it is absent, Relay reads `model` from the body and picks the first of the model's host bindings that the caller's rungs and the host's rung allow, without requiring a host key.
+- **Grants.** A pinned request reaches only a model the caller's rungs allow on the pinned host, as normal routing does, and its usage is priced from that binding. The caller's own credential does not widen the grant. A model that is not in the catalog or does not route there is refused with the same errors as normal mode (`model_not_found`, `model_not_allowed`), and an `@host` in the model that names a different host than `X-WR-Upstream-Host` gets `400 upstream_host_conflict`. A keyless (`noAuth`) host such as a self-hosted Ollama is reachable only when one of the caller's pools is at that host. An unpriced binding is refused with `unpriced_under_budget` while a budget applies.
+- **Limits.** The caller rungs' rate limits and budgets, and the host rung's, are reserved and committed as in normal mode. The `inference-api-proxy` rate limit is applied on top as a per-credential ceiling. It ships disabled with no rules; add rules and enable it to cap every relay key's proxy traffic.
+- **Attribution.** The request is recorded against the relay key, its principal, project and innermost caller policy.
 
 ### Anonymous requests
 
@@ -95,21 +95,21 @@ curl http://localhost:8080/v1/proxy/hosts \
   -H "X-WR-API-Key: <your-relay-key>"
 ```
 
-Keyless hosts appear only when the caller's policy grants them.
+Keyless hosts appear only when one of the caller's pools is at that host.
 
 ## Errors
 
 | Status | Code | Meaning |
 | --- | --- | --- |
 | `400` | `bad_request` | `X-WR-Proxy-Mode` has a value other than `Proxy` or `No-Proxy`, or `Authorization` is missing. |
-| `400` | `unknown_upstream_host` | `X-WR-Upstream-Host` names no host, or a keyless host the policy does not grant. |
+| `400` | `unknown_upstream_host` | `X-WR-Upstream-Host` names no host, or a keyless host none of the caller's pools is at. |
 | `400` | `missing_upstream_host` | Anonymous request without `X-WR-Upstream-Host`. |
 | `400` | `upstream_host_conflict` | The model's `@host` names a different host than `X-WR-Upstream-Host`. |
-| `403`, `404` | `model_not_allowed`, `model_not_found` | A pinned request for a model the policy does not grant on that host, or that is not in the catalog. |
+| `403`, `404` | `model_not_allowed`, `model_not_found` | A model a rung does not allow on that host, or one that is not in the catalog. |
 | `401` | `unauthenticated` | Anonymous request while `allowUnauthenticated` is off, or an unknown relay key. |
 | `403` | `proxy_disabled` | Proxy mode is off. |
 | `403` | `passthrough_forbidden` | The relay key lacks `passthroughAllowed`, or the credential is an inference token. |
-| `403` | `policy_disabled`, `no_policy` | The governing policy is disabled, or a project-scoped key resolves no policy. |
-| `429` | `rate_limit_exceeded` | Over the policy's rate limit or a proxy rate limit. `Retry-After` gives the wait in seconds. |
+| `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding`, `unpriced_under_budget` | A [policy refusal](/reference/inference-api#policy-refusals) on a caller rung or the host rung. |
+| `429` | `rate_limit_exceeded`, `budget_exceeded` | Over a rate limit or budget on the caller or host rung, or a proxy rate limit. `Retry-After` gives the wait in seconds. |
 
 An upstream error is returned as the upstream sent it.

@@ -19,13 +19,10 @@ type Team struct {
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec carries the enabled flag and the team-wide spend cap.
+// Spec carries the enabled flag. A team's spend cap is a Budget its bound policy links.
 type Spec struct {
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-
-	// Budget caps spend across every Project in the team.
-	Budget *Budget `json:"budget,omitempty" yaml:"budget,omitempty" validate:"omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference from inside the team with 403 subject_disabled. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

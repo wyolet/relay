@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/team"
 )
 
 // LegacyID is the id of the `legacy` project the tenancy migration creates
@@ -26,16 +25,13 @@ type Project struct {
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec carries the parent Team, the enabled flag, and the spend cap.
+// Spec carries the parent Team and the enabled flag. A project's spend cap is a Budget its bound policy links.
 type Spec struct {
 	// TeamID is the owning Team. Required; mirrors Meta.Owner.ID.
-	TeamID string `json:"teamId" yaml:"teamId" validate:"required,uuid"`
+	TeamID string `json:"teamId" yaml:"teamId" validate:"required,uuid" doc:"Id of the team the project belongs to. The project's owner follows it."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-
-	// Budget caps spend for this project alone.
-	Budget *team.Budget `json:"budget,omitempty" yaml:"budget,omitempty" validate:"omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses inference from inside the project with 403 subject_disabled. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

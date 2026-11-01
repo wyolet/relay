@@ -11,7 +11,7 @@ const SectionAudit = "audit"
 type Audit struct {
 	// RetentionDays is how long audit rows are kept. 0 disables pruning —
 	// deliberate, for deployments that archive the table externally.
-	RetentionDays int `json:"retentionDays"`
+	RetentionDays int `json:"retentionDays" doc:"Days audit rows are kept; 0 keeps them forever."`
 }
 
 // Validate is enforced before any write.

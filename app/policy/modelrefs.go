@@ -55,19 +55,20 @@ func CanonicalModelRef(r modelref.Ref) string {
 }
 
 // CanonicalizeSpecModelRefs rewrites every grant list on the spec in place:
-// Spec.Models and each RLBinding's Models. Errors name the offending field.
+// Spec.Models and each RateLimitLink's Models.
+// Errors name the offending field.
 func (p *Policy) CanonicalizeSpecModelRefs() error {
 	norm, err := CanonicalizeModelRefs(p.Spec.Models)
 	if err != nil {
 		return fmt.Errorf("policy %q: models: %w", p.Meta.Name, err)
 	}
 	p.Spec.Models = norm
-	for i := range p.Spec.RLBindings {
-		norm, err := CanonicalizeModelRefs(p.Spec.RLBindings[i].Models)
+	for i := range p.Spec.RateLimits {
+		norm, err := CanonicalizeModelRefs(p.Spec.RateLimits[i].Models)
 		if err != nil {
-			return fmt.Errorf("policy %q: rlBindings: %w", p.Meta.Name, err)
+			return fmt.Errorf("policy %q: rateLimits: %w", p.Meta.Name, err)
 		}
-		p.Spec.RLBindings[i].Models = norm
+		p.Spec.RateLimits[i].Models = norm
 	}
 	return nil
 }

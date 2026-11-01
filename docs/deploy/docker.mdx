@@ -1,13 +1,13 @@
 ---
 title: "Docker"
-description: "Run Relay with the standalone image, the Compose stack, or the lean image against your own Postgres and Valkey"
+description: "Run Relay with the standalone image, the Compose stack, or the lean image against your own Postgres and Dragonfly"
 ---
 
 Relay ships two images, both published to Docker Hub (`wyolet/relay`) and GHCR (`ghcr.io/wyolet/relay`), both built for `linux/amd64` only.
 
 | Image | Tags | Contents | Use it for |
 | --- | --- | --- | --- |
-| Lean | `<version>`, `latest` | The relay binary with the admin UI and the catalog bundled. Distroless, runs as UID 65532. | Production, with an external Postgres (and Valkey for more than one replica). |
+| Lean | `<version>`, `latest` | The relay binary with the admin UI and the catalog bundled. Distroless, runs as UID 65532. | Production, with an external Postgres (and Dragonfly for more than one replica). |
 | Standalone | `standalone`, `<version>-standalone` | The same binary plus Postgres 16 in one container. Generates its own credentials on first boot. | Trying Relay out, single-node installs. |
 
 Version tags drop the leading `v`: release `v0.11.6` is `wyolet/relay:0.11.6`. Pin a version anywhere you care about what runs; `latest` and `standalone` move with every release.
@@ -103,7 +103,7 @@ The image's defaults assume `localhost`. Behind a TLS-terminating proxy, set `RE
 
 ## Compose stack
 
-The repository's root [`docker-compose.yml`](https://github.com/wyolet/relay/blob/main/docker-compose.yml) runs the lean image with its own Postgres 16 and Valkey 8, each on a named volume (`pg-data`, `valkey-data`):
+The repository's root [`docker-compose.yml`](https://github.com/wyolet/relay/blob/main/docker-compose.yml) runs the lean image with its own Postgres 16 and Dragonfly, each on a named volume (`pg-data`, `dragonfly-data`):
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/wyolet/relay/main/docker-compose.yml
@@ -123,7 +123,7 @@ Sign in at [localhost:8081](http://localhost:8081) as `admin` with `RELAY_ADMIN_
 | `RELAY_BIND_ADDR` | `127.0.0.1` | Host address the two ports are published on. `0.0.0.0` exposes them to the network. |
 | `RELAY_IMAGE` | `wyolet/relay:latest` | Relay image. Set a version tag, for example `wyolet/relay:0.11.6`. |
 
-The stack runs relay with `RELAY_STATE_BACKEND=redis` against the bundled Valkey, so sessions, rate-limit counters and breaker state survive a relay restart. As with the standalone image, usage events go to a file inside the relay container until you switch the [`usage-logging`](/reference/settings#usage-logging) section to `postgres`.
+The stack runs relay with `RELAY_STATE_BACKEND=redis` against the bundled Dragonfly, so sessions, rate-limit counters and breaker state survive a relay restart. Dragonfly snapshots them to its volume every minute and when it stops. As with the standalone image, usage events go to a file inside the relay container until you switch the [`usage-logging`](/reference/settings#usage-logging) section to `postgres`.
 
 `docker compose down` keeps the volumes; `docker compose down -v` deletes them, and with them the catalog, your configuration and every stored host key.
 
@@ -135,15 +135,15 @@ docker run -p 8080:8080 -p 8081:8081 \
   -e RELAY_MASTER_KEY="<your master key>" \
   -e RELAY_ADMIN_TOKEN="<your admin token>" \
   -e RELAY_STATE_BACKEND=redis \
-  -e RELAY_REDIS_ADDR="valkey.example.com:6379" \
-  -e RELAY_REDIS_PASSWORD="<valkey password>" \
+  -e RELAY_REDIS_ADDR="dragonfly.example.com:6379" \
+  -e RELAY_REDIS_PASSWORD="<dragonfly password>" \
   -e RELAY_INFERENCE_API_URL="https://api.relay.example.com" \
   wyolet/relay:0.11.6
 ```
 
 - `RELAY_PG_DSN` is the only required variable. Give relay a database of its own. Pending migrations run at boot under a Postgres advisory lock, so several replicas can start at once; see [Upgrading](/concepts/upgrade).
 - `RELAY_MASTER_KEY` must be the same on every replica and stable across restarts.
-- With more than one replica, set `RELAY_STATE_BACKEND=redis`. With the default `memory`, every process keeps its own sessions, rate-limit counters and breaker state. Catalog changes reach every replica through Postgres `LISTEN`/`NOTIFY` without further configuration, usually within about a second.
+- With more than one replica, set `RELAY_STATE_BACKEND=redis` and run Dragonfly with `--cluster_mode=emulated --lock_on_hashtags` (the variables say `REDIS` because Dragonfly speaks the Redis protocol). With the default `memory`, every process keeps its own sessions, rate-limit counters and breaker state. Catalog changes reach every replica through Postgres `LISTEN`/`NOTIFY` without further configuration, usually within about a second.
 - Batch payloads are files under `RELAY_BATCH_PAYLOAD_DIR`. Any replica may run a batch item or serve its results, so with more than one replica that directory must be storage every replica shares.
 - Keep the control port off the public network: publish only `8080`, or bind the control listener to a private address with `RELAY_CONTROL_LISTEN_HOST`.
 - Probe `/livez` for liveness and `/healthz` for readiness on the inference port. `/healthz` answers `503` until Postgres responds and the catalog has loaded.

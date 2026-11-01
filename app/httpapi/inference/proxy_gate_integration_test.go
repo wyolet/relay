@@ -89,7 +89,7 @@ func TestIntegration_AnonymousProxyRefusedBeforeTheBody(t *testing.T) {
 func TestIntegration_ProxyModeOffRefusesTheNextFrame(t *testing.T) {
 	cat, set := proxyModeCatalog(t, settings.ProxyMode{Enabled: true, AllowUnauthenticated: true})
 	d := buildDeps(t, cat)
-	srv := httptest.NewServer(ClassifyMiddleware()(PrincipalMiddleware(cat, nil)(wsHandler(d))))
+	srv := httptest.NewServer(ClassifyMiddleware()(PrincipalMiddleware(d.Auth())(wsHandler(d))))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

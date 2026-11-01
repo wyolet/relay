@@ -1,5 +1,5 @@
 // Subjects live in the policy_binding_subjects junction, where a subject with
-// an id also fills the matching FK column so a deleted principal drops out.
+// an id also fills the matching FK column so a deleted row drops out.
 
 package policybinding
 
@@ -15,6 +15,15 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
+)
+
+// ErrSubjectBound is a write naming a subject another binding already holds: a subject is bound to at most one policy.
+var ErrSubjectBound = errors.New("policybinding: subject is already bound by another policy binding")
+
+// The unique indexes holding a subject to one binding, and a user to one binding per owner scope.
+const (
+	oneBindingIndex     = "policy_binding_subjects_one_binding"
+	oneUserBindingIndex = "policy_binding_subjects_one_user_binding"
 )
 
 // Store holds a DB rather than Queries so Upsert can run a multi-table
@@ -75,9 +84,14 @@ func (s *Store) Get(ctx context.Context, id string) (*PolicyBinding, error) {
 	return b, nil
 }
 
-// Upsert re-derives Owner from ProjectID.
+// Upsert re-derives Owner from ProjectID when the owner is a project, and stores a credential subject as its account.
 func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	b.StampOwner()
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerSystem, meta.OwnerTeam, meta.OwnerProject, meta.OwnerUser:
+	default:
+		return fmt.Errorf("policybinding.Upsert: owner.kind must be system, team, project or user, got %q", b.Meta.Owner.Kind)
+	}
 	params, err := toUpsertParams(b)
 	if err != nil {
 		return fmt.Errorf("policybinding.Upsert: %w", err)
@@ -89,28 +103,62 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
+	if err := bindAccounts(ctx, q, b); err != nil {
+		return fmt.Errorf("policybinding.Upsert: %w", err)
+	}
 	if err := meta.StaleIfNoRows(q.UpsertPolicyBinding(ctx, params)); err != nil {
 		return fmt.Errorf("policybinding.Upsert: policy_bindings: %w", err)
 	}
 	if err := q.DeletePolicyBindingSubjects(ctx, b.Meta.ID); err != nil {
 		return fmt.Errorf("policybinding.Upsert: clear subjects: %w", err)
 	}
+	scope := b.ScopeKey()
 	for i := range b.Spec.Subjects {
 		sub := &b.Spec.Subjects[i]
 		if err := q.InsertPolicyBindingSubject(ctx, gen.InsertPolicyBindingSubjectParams{
-			BindingID:     b.Meta.ID,
-			Kind:          string(sub.Kind),
-			SubjectID:     text(sub.ID),
-			SubjectName:   text(sub.Name),
-			SubjectUserID: text(subjectFK(sub, rolebinding.SubjectUser)),
-			SubjectSaID:   text(subjectFK(sub, rolebinding.SubjectServiceAccount)),
-			Position:      int32(i),
+			BindingID:           b.Meta.ID,
+			Kind:                string(sub.Kind),
+			SubjectID:           text(sub.ID),
+			SubjectName:         text(sub.Name),
+			SubjectUserID:       text(subjectFK(sub, rolebinding.SubjectUser)),
+			SubjectSaID:         text(subjectFK(sub, rolebinding.SubjectServiceAccount)),
+			SubjectHostID:       text(subjectFK(sub, SubjectHost)),
+			SubjectAccountID:    text(subjectFK(sub, SubjectAccount)),
+			SubjectCredentialID: text(subjectFK(sub, SubjectCredential)),
+			SubjectTeamID:       text(subjectFK(sub, SubjectTeam)),
+			SubjectProjectID:    text(subjectFK(sub, SubjectProject)),
+			Position:            int32(i),
+			OwnerScope:          scope,
 		}); err != nil {
+			if storage.IsUniqueViolation(err, oneBindingIndex) || storage.IsUniqueViolation(err, oneUserBindingIndex) {
+				return fmt.Errorf("%w: %s", ErrSubjectBound, sub.Key())
+			}
 			return fmt.Errorf("policybinding.Upsert: insert subject %s: %w", sub.Key(), err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("policybinding.Upsert: commit: %w", err)
+	}
+	return nil
+}
+
+// bindAccounts stores each credential subject as its host key's account, on every write path, so no stored binding names a credential.
+func bindAccounts(ctx context.Context, q *gen.Queries, b *PolicyBinding) error {
+	var lookupErr error
+	b.BindAccounts(func(id string) string {
+		acc, err := q.GetSecretAccountID(ctx, id)
+		if err != nil && lookupErr == nil {
+			lookupErr = fmt.Errorf("host key %s: %w", id, err)
+		}
+		return acc
+	})
+	if lookupErr != nil {
+		return lookupErr
+	}
+	for _, s := range b.Spec.Subjects {
+		if s.Kind == SubjectCredential {
+			return fmt.Errorf("host key %s has no account to bind", s.ID)
+		}
 	}
 	return nil
 }
@@ -152,14 +200,21 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	if err := json.Unmarshal(r.Spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	sp.ProjectID = r.ProjectID
+	sp.ProjectID = r.ProjectID.String
 	sp.PolicyID = r.PolicyID
-	prio := int(r.Priority)
-	sp.Priority = &prio
 	sp.Subjects = nil
-	b := &PolicyBinding{Meta: md, Spec: sp}
-	b.StampOwner()
-	return b, nil
+	// The owner columns are the truth; the metadata copy is ignored.
+	switch {
+	case r.ProjectID.Valid:
+		md.Owner = meta.Owner{Kind: meta.OwnerProject, ID: r.ProjectID.String}
+	case r.TeamID.Valid:
+		md.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: r.TeamID.String}
+	case r.UserID.Valid:
+		md.Owner = meta.Owner{Kind: meta.OwnerUser, ID: r.UserID.String}
+	default:
+		md.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	}
+	return &PolicyBinding{Meta: md, Spec: sp}, nil
 }
 
 func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
@@ -172,7 +227,6 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	stored := b.Spec
 	stored.ProjectID = ""
 	stored.PolicyID = ""
-	stored.Priority = nil
 	stored.Subjects = nil
 	specJSON, err := json.Marshal(stored)
 	if err != nil {
@@ -182,13 +236,21 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, err
 	}
+	var teamID, userID string
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerTeam:
+		teamID = b.Meta.Owner.ID
+	case meta.OwnerUser:
+		userID = b.Meta.Owner.ID
+	}
 	return gen.UpsertPolicyBindingParams{
 		ID:              b.Meta.ID,
 		Name:            b.Meta.Name,
 		DisplayName:     b.Meta.DisplayName,
-		ProjectID:       b.Spec.ProjectID,
+		ProjectID:       text(b.Spec.ProjectID),
+		TeamID:          text(teamID),
+		UserID:          text(userID),
 		PolicyID:        b.Spec.PolicyID,
-		Priority:        int32(b.EffectivePriority()),
 		Metadata:        metaJSON,
 		Spec:            specJSON,
 		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},

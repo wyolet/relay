@@ -35,17 +35,23 @@ func applyQ[T any](t *testing.T, s filter.Schema[T], q string, items []*T) ([]*T
 func TestPolicyFilter(t *testing.T) {
 	on, off := true, false
 	items := []*policy.Policy{
-		{Meta: meta.Metadata{Name: "a"}, Spec: policy.Spec{Enabled: &on, ModelIDs: []string{"m1", "m2"}, PayloadLoggingEnabled: true}},
-		{Meta: meta.Metadata{Name: "b"}, Spec: policy.Spec{Enabled: &off, ModelIDs: []string{"m3"}}},
-		{Meta: meta.Metadata{Name: "c"}, Spec: policy.Spec{ModelIDs: []string{"m2"}}}, // nil Enabled => enabled
+		{Meta: meta.Metadata{Name: "a"}, Spec: policy.Spec{Enabled: &on, PoolIDs: []string{"p1", "p2"}, PayloadLoggingEnabled: true,
+			RateLimits: []policy.RateLimitLink{{RateLimitID: "rl1"}}}},
+		{Meta: meta.Metadata{Name: "b"}, Spec: policy.Spec{Enabled: &off, PoolIDs: []string{"p3"}, BudgetIDs: []string{"b1"}}},
+		{Meta: meta.Metadata{Name: "c"}, Spec: policy.Spec{PoolIDs: []string{"p2"}, CredentialIDs: []string{"k1"}}}, // nil Enabled => enabled
 	}
 	got, total := applyQ(t, policyFilter, "enabled=true", items)
 	if total != 2 { // a (explicit) + c (nil=true)
 		t.Fatalf("enabled=true total=%d, want 2 (got %v)", total, names(got))
 	}
-	got, _ = applyQ(t, policyFilter, "model_id=m2", items)
+	got, _ = applyQ(t, policyFilter, "pool_id=p2", items)
 	if len(got) != 2 {
-		t.Fatalf("model_id=m2 => %v, want a,c", names(got))
+		t.Fatalf("pool_id=p2 => %v, want a,c", names(got))
+	}
+	for q, want := range map[string]string{"credential_id=k1": "c", "rate_limit_id=rl1": "a", "budget_id=b1": "b"} {
+		if got, _ := applyQ(t, policyFilter, q, items); len(got) != 1 || got[0].Meta.Name != want {
+			t.Fatalf("%s => %v, want [%s]", q, names(got), want)
+		}
 	}
 	got, _ = applyQ(t, policyFilter, "payload_logging=true", items)
 	if len(got) != 1 || got[0].Meta.Name != "a" {
@@ -153,8 +159,11 @@ func TestModelFilter_Provider(t *testing.T) {
 
 func TestHostKeyFilter(t *testing.T) {
 	items := []*hostkey.HostKey{
-		{Meta: meta.Metadata{Name: "envkey"}, Spec: hostkey.Spec{HostID: "h1", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv}}},
+		{Meta: meta.Metadata{Name: "envkey"}, Spec: hostkey.Spec{HostID: "h1", AccountID: "a1", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv}}},
 		{Meta: meta.Metadata{Name: "storedkey"}, Spec: hostkey.Spec{HostID: "h2", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}},
+	}
+	if got, _ := applyQ(t, hostKeyFilter, "account_id=a1", items); len(got) != 1 || got[0].Meta.Name != "envkey" {
+		t.Fatalf("account_id=a1 => %v, want [envkey]", names(got))
 	}
 	got, _ := applyQ(t, hostKeyFilter, "value_kind=stored", items)
 	if len(got) != 1 || got[0].Meta.Name != "storedkey" {
@@ -198,14 +207,13 @@ func TestLabelAcrossKinds(t *testing.T) {
 
 func TestHostFilter(t *testing.T) {
 	items := []*host.Host{
-		{Meta: meta.Metadata{Name: "openai"}, Spec: host.Spec{BaseURL: "https://api.openai.com", Policies: []string{"p1", "p2"}}},
-		{Meta: meta.Metadata{Name: "bedrock"}, Spec: host.Spec{BaseURL: "https://bedrock.aws", Policies: []string{"p3"}}},
+		{Meta: meta.Metadata{Name: "openai"}, Spec: host.Spec{BaseURL: "https://api.openai.com"}},
+		{Meta: meta.Metadata{Name: "bedrock"}, Spec: host.Spec{BaseURL: "https://bedrock.aws"}},
 	}
-	got, _ := applyQ(t, hostFilter, "policy_id=p2", items)
-	if len(got) != 1 || got[0].Meta.Name != "openai" {
-		t.Fatalf("policy_id=p2 => %v, want [openai]", names(got))
+	if _, err := hostFilter.Parse(url.Values{"policy_id": {"p1"}}); err == nil {
+		t.Fatal("a host lists no policies, so policy_id must 400")
 	}
-	got, _ = applyQ(t, hostFilter, "q=aws", items)
+	got, _ := applyQ(t, hostFilter, "q=aws", items)
 	if len(got) != 1 || got[0].Meta.Name != "bedrock" {
 		t.Fatalf("q=aws (baseURL) => %v, want [bedrock]", names(got))
 	}
@@ -214,17 +222,16 @@ func TestHostFilter(t *testing.T) {
 func TestKeyFilter(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	items := []*key.Key{
-		{Meta: meta.Metadata{Name: "live"}, Spec: key.Spec{PolicyID: "p1"}},
-		{Meta: meta.Metadata{Name: "dead"}, Spec: key.Spec{PolicyID: "p1", RevokedAt: &now}},
-		{Meta: meta.Metadata{Name: "other"}, Spec: key.Spec{PolicyID: "p2"}},
+		{Meta: meta.Metadata{Name: "live"}},
+		{Meta: meta.Metadata{Name: "dead"}, Spec: key.Spec{RevokedAt: &now}},
+		{Meta: meta.Metadata{Name: "other"}},
 	}
 	got, _ := applyQ(t, keyFilter, "revoked=true", items)
 	if len(got) != 1 || got[0].Meta.Name != "dead" {
 		t.Fatalf("revoked=true => %v, want [dead]", names(got))
 	}
-	got, _ = applyQ(t, keyFilter, "policy_id=p1", items)
-	if want := []string{"dead", "live"}; !eqNames(got, want) { // default sort=name
-		t.Fatalf("policy_id=p1 => %v, want %v", names(got), want)
+	if _, err := keyFilter.Parse(url.Values{"policy_id": {"p1"}}); err == nil {
+		t.Fatal("a key holds no policy, so policy_id must 400")
 	}
 }
 
@@ -341,17 +348,13 @@ func TestKeyFilter_PrincipalAndExpiry(t *testing.T) {
 func TestServiceAccountAndGroupFilters(t *testing.T) {
 	off := false
 	sas := []*serviceaccount.ServiceAccount{
-		{Meta: meta.Metadata{Name: "indexer", Labels: map[string]string{"env": "prod"}}, Spec: serviceaccount.Spec{ProjectID: "p1", PolicyID: "pol1"}},
+		{Meta: meta.Metadata{Name: "indexer", Labels: map[string]string{"env": "prod"}}, Spec: serviceaccount.Spec{ProjectID: "p1"}},
 		{Meta: meta.Metadata{Name: "ranker"}, Spec: serviceaccount.Spec{ProjectID: "p1", Enabled: &off}},
 		{Meta: meta.Metadata{Name: "lab-bot"}, Spec: serviceaccount.Spec{ProjectID: "p2"}},
 	}
 	got, _ := applyQ(t, serviceAccountFilter, "project_id=p1&enabled=true", sas)
 	if len(got) != 1 || got[0].Meta.Name != "indexer" {
 		t.Fatalf("project_id=p1&enabled=true => %v, want [indexer]", names(got))
-	}
-	got, _ = applyQ(t, serviceAccountFilter, "policy_id=pol1", sas)
-	if len(got) != 1 || got[0].Meta.Name != "indexer" {
-		t.Fatalf("policy_id=pol1 => %v, want [indexer]", names(got))
 	}
 	got, _ = applyQ(t, serviceAccountFilter, "label=env%3Dprod", sas)
 	if len(got) != 1 || got[0].Meta.Name != "indexer" {

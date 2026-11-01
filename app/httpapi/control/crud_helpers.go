@@ -8,9 +8,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/auth/directory"
 )
@@ -86,6 +88,16 @@ func mapWriteErr(kind, id string, err error) error {
 	}
 	if refused := grantRefusal(err); refused != nil {
 		return refused
+	}
+	// The save-time check already refuses this; the store's constraint answers the write that raced it.
+	if errors.Is(err, policybinding.ErrSubjectBound) {
+		return &httpapi.APIError{
+			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: refcheck.CodeDuplicateBinding, Message: err.Error()},
+			HTTPStatus: http.StatusConflict,
+		}
+	}
+	if errors.Is(err, account.ErrDefaultTaken) {
+		return huma.Error409Conflict(err.Error())
 	}
 	return huma.Error500InternalServerError(err.Error())
 }

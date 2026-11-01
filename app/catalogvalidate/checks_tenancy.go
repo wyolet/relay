@@ -59,9 +59,7 @@ func checkOwnerProject(g *graph, kind, name string, owner manifest.WireOwner) []
 	}}
 }
 
-// checkServiceAccountRefs validates ServiceAccount outbound refs:
-//   - spec.project → Project name must exist
-//   - spec.policy → Policy name must exist when set
+// checkServiceAccountRefs validates that a ServiceAccount's project exists.
 func checkServiceAccountRefs(g *graph) []Issue {
 	var out []Issue
 	for _, sa := range g.ServiceAccounts {
@@ -82,59 +80,12 @@ func checkServiceAccountRefs(g *graph) []Issue {
 				Message:  fmt.Sprintf("project %q not found", sa.Spec.Project),
 			})
 		}
-		if sa.Spec.Policy != "" {
-			if p, ok := g.Policies[sa.Spec.Policy]; !ok {
-				out = append(out, Issue{
-					Severity: SeverityError,
-					Kind:     KindRefMissing,
-					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"},
-					Target:   Ref{Kind: "Policy", Name: sa.Spec.Policy},
-					Message:  fmt.Sprintf("policy %q not found", sa.Spec.Policy),
-				})
-			} else {
-				out = append(out, checkPolicyBindable(src, p, sa.Spec.Project)...)
-			}
-		}
 	}
 	return out
 }
 
-// checkPolicyBindable mirrors the control-plane rule: only a policy of the
-// binder's own project, or a system-owned shared one, may be bound. A
-// host-owned policy is an upstream tier definition carrying no inbound
-// grants, so binding one resolves a principal to a policy with no keys.
-func checkPolicyBindable(src Ref, p *manifest.PolicyDTO, project string) []Issue {
-	field := Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"}
-	target := Ref{Kind: "Policy", Name: p.Metadata.Name}
-	owner := p.Metadata.Owner
-	switch owner.Kind {
-	case "host":
-		return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field, Target: target,
-			Message: fmt.Sprintf("policy %q is a host tier policy and cannot be bound", p.Metadata.Name)}}
-	case "project":
-		name := owner.Name
-		if name == "" {
-			name = owner.ID
-		}
-		if name != project {
-			return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field, Target: target,
-				Message: fmt.Sprintf("policy %q belongs to project %q, not %q", p.Metadata.Name, name, project)}}
-		}
-	case "user":
-		// An ownerless user row is the operator's shared row and stays
-		// bindable; one naming a person is that person's alone.
-		if owner.Name != "" || owner.ID != "" {
-			return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field, Target: target,
-				Message: fmt.Sprintf("policy %q is personal and cannot be bound from a project", p.Metadata.Name)}}
-		}
-	}
-	return nil
-}
-
-// checkKeyRefs validates Key outbound refs:
-//   - spec.principal → a ServiceAccount must exist (user principals are
-//     unchecked: users are not catalog documents)
-//   - spec.policy → Policy name must exist
+// checkKeyRefs validates that a Key's service-account principal exists;
+// user principals are unchecked (users are not catalog documents).
 func checkKeyRefs(g *graph) []Issue {
 	var out []Issue
 	for _, rk := range g.Keys {
@@ -149,18 +100,6 @@ func checkKeyRefs(g *graph) []Issue {
 					Message:  fmt.Sprintf("service account %q not found", rk.Spec.Principal.Name),
 				})
 			}
-		}
-		if rk.Spec.Policy == "" {
-			continue
-		}
-		if _, ok := g.Policies[rk.Spec.Policy]; !ok {
-			out = append(out, Issue{
-				Severity: SeverityError,
-				Kind:     KindRefMissing,
-				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"},
-				Target:   Ref{Kind: "Policy", Name: rk.Spec.Policy},
-				Message:  fmt.Sprintf("policy %q not found", rk.Spec.Policy),
-			})
 		}
 	}
 	return out

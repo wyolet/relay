@@ -47,10 +47,10 @@ type entityStore[T any] interface {
 // inside the generic function produces local types whose Name() is
 // unstable, breaking $ref resolution for downstream codegen tools.
 type listBody[T any] struct {
-	Items []*T `json:"items"`
+	Items []*T `json:"items" doc:"The page of matching rows the caller may see."`
 	// Total is the match count before any limit/offset window — for "N of M"
 	// displays. Equals len(Items) when the list isn't paginated.
-	Total int `json:"total"`
+	Total int `json:"total" doc:"Matching rows before limit and offset apply."`
 }
 type listResponse[T any] struct {
 	Body listBody[T]
@@ -73,7 +73,6 @@ type refInput struct {
 type idInput struct {
 	ID string `path:"id" doc:"Resource id (UUIDv7)."`
 }
-type emptyResponse struct{}
 
 var errSlugNotFound = errors.New("not found")
 
@@ -121,9 +120,10 @@ type enrichFn[T any] func(ctx context.Context, t *T)
 type enrichListFn[T any] func(ctx context.Context, items []*T)
 
 // inUseFn refuses deleting a row anything still references (see
-// Deps.refuseInUse). It runs last before store.Delete, once the caller is
-// known to be allowed to delete the row.
-type inUseFn func(ctx context.Context, kind, id, name string) error
+// Deps.refuseInUse), and otherwise returns the links the delete takes from
+// rows that stay, nil for none. It runs last before store.Delete, once the
+// caller is known to be allowed to delete the row.
+type inUseFn func(ctx context.Context, kind, id, name string) (*droppedLinks, error)
 
 // mergeOnUpdateFn copies fields the API allows to be omitted on update from
 // the existing row onto the incoming body, before validate/upsert run.
@@ -190,6 +190,7 @@ func registerKind[T any](
 		Method:      http.MethodGet,
 		Path:        base,
 		Summary:     "List " + plural,
+		Description: "Lists the " + plural + " the caller may see. The query parameters filter, sort and page the list; an unknown or malformed parameter answers 400. total counts the matches before limit and offset.",
 		Tags:        []string{tag},
 		Middlewares: listMW,
 		Parameters:  listParams,
@@ -252,6 +253,7 @@ func registerKind[T any](
 		Method:      http.MethodGet,
 		Path:        base + "/{ref}",
 		Summary:     "Get " + singular + " by slug or id",
+		Description: "Reads one " + singular + " by metadata.name or metadata.id; a UUID matches the id first. A row the caller may not see answers 404, as a missing one does.",
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
@@ -284,10 +286,12 @@ func registerKind[T any](
 			Method:        http.MethodPost,
 			Path:          base,
 			Summary:       "Create " + singular,
+			Description:   "Creates a " + singular + ". The server stamps metadata.id and, when metadata.name is omitted, derives it from displayName. An omitted metadata.owner takes the kind's default scope. A referenced row the caller may not see answers 404; a body that breaks a cross-row rule answers 400.",
 			Tags:          []string{tag},
 			Middlewares:   protect,
 			DefaultStatus: http.StatusCreated,
-			Errors:        []int{400, 401, 403, 500},
+			Errors:        []int{400, 401, 403, 404, 500},
+			Responses:     map[string]*huma.Response{"409": conflictResponse(api, createConflicts)},
 		}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
 			v := &in.Body
 			m := metaOf(v)
@@ -305,9 +309,10 @@ func registerKind[T any](
 			}
 			// system is reserved for seed paths, except where it is the kind's
 			// default (a personal Team, Group or Role would inherit whatever binds
-			// to its name) and role-bindings, whose owner mirrors spec.scope.
+			// to its name), role-bindings, whose owner mirrors spec.scope, and
+			// policy-bindings, which a system owner lets reach every scope.
 			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem &&
-				singular != "role-binding" {
+				singular != "role-binding" && singular != "policy-binding" {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
@@ -350,10 +355,7 @@ func registerKind[T any](
 				create = w.Create
 			}
 			if err := create(ctx, v); err != nil {
-				if refused := grantRefusal(err); refused != nil {
-					return nil, refused
-				}
-				return nil, huma.Error500InternalServerError(err.Error())
+				return nil, mapWriteErr(singular, m.ID, err)
 			}
 			created, err := store.Get(ctx, m.ID)
 			if err != nil {
@@ -375,7 +377,8 @@ func registerKind[T any](
 		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional. A metadata.owner different from the stored one moves the row to that scope: it needs create permission there, and fails with 409 resource_in_use while rows that reference it could not do so from the new scope. An omitted owner keeps the stored one; kinds whose owner follows a spec field (spec.projectId, spec.teamId, spec.scope) take it from that field.",
 		Tags:        []string{tag},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 403, 404, 409, 500},
+		Errors:      []int{400, 401, 403, 404, 500},
+		Responses:   map[string]*huma.Response{"409": conflictResponse(api, updateConflicts)},
 	}, func(ctx context.Context, in *updateRequest[T]) (*itemResponse[T], error) {
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
@@ -465,11 +468,17 @@ func registerKind[T any](
 		Method:        http.MethodDelete,
 		Path:          base + "/by-id/{id}",
 		Summary:       "Delete " + singular + " by id",
+		Description:   "Deletes the " + singular + ". Answers 204, or 200 with {\"detached\": [...]} grouped like blockers when the delete took links from rows that stay: a policy that loses a rate limit or budget, or narrows to the pools and credentials it still links. While other rows still reference it, answers 409 resource_in_use with the blockers.",
 		Tags:          []string{tag},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusNoContent,
-		Errors:        []int{401, 403, 404, 409, 500},
-	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
+		Errors:        []int{401, 403, 404, 500},
+		Responses: map[string]*huma.Response{
+			"204": {Description: "The row is deleted and no other row lost a link."},
+			"200": jsonResponse(api, "The row is deleted; the body lists the links it took from rows that stay.", deleteDetachedBody{}),
+			"409": conflictResponse(api, deleteConflicts),
+		},
+	}, func(ctx context.Context, in *idInput) (*deleteOutput, error) {
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
@@ -488,8 +497,9 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		var dropped *droppedLinks
 		if refuseInUse != nil {
-			if err := refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
+			if dropped, err = refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
 				return nil, err
 			}
 		}
@@ -500,7 +510,7 @@ func registerKind[T any](
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
-		return &emptyResponse{}, nil
+		return dropped.answer(ctx), nil
 	})
 
 	return kindRows{

@@ -155,21 +155,21 @@ func TestIntegration_TeamProjectCRUD(t *testing.T) {
 	}
 }
 
-const seedTeamYAML = `apiVersion: relay.wyolet.dev/v1alpha2
+const seedTeamYAML = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata:
   name: platform
   owner: {kind: system}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata:
   name: ml-search
 spec:
   team: platform
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: ml-search-pol
@@ -485,28 +485,28 @@ func TestIntegration_Groups(t *testing.T) {
 
 // ── seed ordering ────────────────────────────────────────────────────────
 
-const seedSubjectsYAML = `apiVersion: relay.wyolet.dev/v1alpha2
+const seedSubjectsYAML = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata:
   name: platform
   owner: {kind: system}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata:
   name: ml-search
 spec:
   team: platform
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: ml-search-pol
   owner: {kind: project, name: ml-search}
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Group
 metadata:
   name: data-science
@@ -514,22 +514,20 @@ metadata:
 spec:
   members: [alice]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
 metadata:
   name: search-indexer
 spec:
   project: ml-search
-  policy: ml-search-pol
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Key
 metadata:
   name: search-indexer-prod
   owner: {kind: project, name: ml-search}
 spec:
   principal: {kind: serviceaccount, name: search-indexer}
-  policy: ml-search-pol
   keyHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 `
 

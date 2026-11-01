@@ -19,7 +19,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/host"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -86,6 +87,9 @@ type Spec struct {
 	// Unlike DefaultPath it is not overridable per host — Host.Spec.Path rewrites the generation path only — so on a host that relocates the whole API the count request still goes to the shape's own location, and the mismatch surfaces as an upstream error rather than as a wrong number.
 	CountPath string
 
+	// Org is how this shape's upstream names the organization a credential belongs to. Nil when the upstream names none.
+	Org *OrgProbe
+
 	// Auth configures how the upstream is authenticated with an API-key
 	// credential (the default).
 	Auth AuthStrategy
@@ -136,7 +140,7 @@ type Spec struct {
 	// dispatch code.
 	ParamPaths map[string]string
 
-	// IsNativePath reports whether the resolved routing plan implies that the
+	// IsNativePath reports whether a route hop's binding and host imply that the
 	// upstream host natively speaks this inbound shape — making byte-pass to
 	// this spec's UpstreamPath the correct strategy, regardless of whether
 	// the host's HostBinding.Adapter matches the inbound shape Name.
@@ -150,7 +154,7 @@ type Spec struct {
 	//
 	// For shapes where the inbound Name equals the binding Adapter (CC, Anthropic,
 	// Embeddings), this field is nil — the standard Name-equality check handles it.
-	IsNativePath func(plan *routing.Plan) bool
+	IsNativePath func(b *binding.Binding, h *host.Host) bool
 
 	// Overloaded is how this shape's callers expect to be told the server is overloaded, sent when relay refuses a request for its own lack of capacity (the in-flight cap, an unreachable state store). Nil means 503 in relay's error envelope.
 	Overloaded *ErrorResponse
@@ -162,6 +166,10 @@ type Spec struct {
 	// syncTimeout caps a non-streamed call end to end; idleTimeout is the silence budget on a streamed body (0 = none). Both are snapshotted by Build so the hot path reads an immutable field, matching how the transport reads its pooling knob.
 	syncTimeout time.Duration
 	idleTimeout time.Duration
+
+	// orgHeader and orgNameHeader are Org's header names in canonical form, so a response's header map is indexed without canonicalizing per call; empty without Org.
+	orgHeader     string
+	orgNameHeader string
 }
 
 // InboundPath describes one inbound HTTP route for a spec.
@@ -199,5 +207,9 @@ func (s *Spec) Build() *Spec {
 	s.syncTimeout = defaultTimeout
 	s.idleTimeout = streamIdleTimeout
 	s.client = &http.Client{Transport: NewUpstreamTransport(s.UseHTTP1)}
+	if s.Org != nil {
+		s.orgHeader = http.CanonicalHeaderKey(s.Org.OrgHeader)
+		s.orgNameHeader = http.CanonicalHeaderKey(s.Org.NameHeader)
+	}
 	return s
 }

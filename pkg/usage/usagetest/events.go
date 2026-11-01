@@ -46,6 +46,24 @@ var eventsCases = []eventsCase{
 		want: []string{"r03", "r02", "r01", "r00"},
 	},
 	{
+		name: "pool_id filter",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.PoolID = []string{"pool-a"}
+			return q
+		}(),
+		want: []string{"r02", "r01"},
+	},
+	{
+		name: "account_id filter",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.AccountID = []string{"acct-b"}
+			return q
+		}(),
+		want: []string{"r03"},
+	},
+	{
 		name: "before is an exclusive upper bound",
 		q: func() usage.EventQuery {
 			q := Window()
@@ -70,4 +88,16 @@ func runEvents(t *testing.T, r usage.Reader) {
 			assertEqual(t, "events", got, tc.want)
 		})
 	}
+	t.Run("pool and account ids read back", func(t *testing.T) {
+		q := Window()
+		q.RequestID = "r03"
+		events, err := r.Events(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("Events: got %d events, want 1", len(events))
+		}
+		assertEqual(t, "pool and account", [2]string{events[0].PoolID, events[0].AccountID}, [2]string{"pool-b", "acct-b"})
+	})
 }

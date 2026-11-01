@@ -11,14 +11,10 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 )
 
@@ -29,40 +25,6 @@ import (
 func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*releasedRow, error) {
 	s := d.Stores
 	switch it.Kind {
-	case "key":
-		return rowEdit[key.Key]{
-			plural: "keys", store: s.Key, validate: (*key.Key).Validate, guard: guardKeyPolicy(d),
-			metaOf: func(k *key.Key) *meta.Metadata { return &k.Meta },
-			drop:   func(k *key.Key) bool { return clearID(&k.Spec.PolicyID, t.id) },
-		}.apply(ctx, d, it)
-	case "service-account":
-		return rowEdit[serviceaccount.ServiceAccount]{
-			plural: "service-accounts", store: s.ServiceAccount, validate: (*serviceaccount.ServiceAccount).Validate, guard: guardServiceAccount(d),
-			metaOf: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
-			drop:   func(sa *serviceaccount.ServiceAccount) bool { return clearID(&sa.Spec.PolicyID, t.id) },
-		}.apply(ctx, d, it)
-	case "host":
-		return rowEdit[host.Host]{
-			plural: "hosts", store: s.Host, validate: (*host.Host).Validate,
-			metaOf: func(h *host.Host) *meta.Metadata { return &h.Meta },
-			drop: func(h *host.Host) bool {
-				listed := dropEntries(&h.Spec.Policies, is(t.id))
-				isDefault := clearID(&h.Spec.DefaultPolicy, t.id)
-				return listed || isDefault
-			},
-		}.apply(ctx, d, it)
-	case "policy":
-		return rowEdit[policy.Policy]{
-			plural: "policies", store: s.Policy, validate: (*policy.Policy).Validate, guard: guardPolicyModels(d),
-			metaOf: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
-			drop: func(p *policy.Policy) bool {
-				models := dropEntries(&p.Spec.ModelIDs, is(t.id))
-				hostKeys := dropEntries(&p.Spec.HostKeyIDs, is(t.id))
-				limit := clearID(&p.Spec.RateLimitID, t.id)
-				limits := dropEntries(&p.Spec.RLBindings, func(b policy.RLBinding) bool { return b.RateLimitID == t.id })
-				return models || hostKeys || limit || limits
-			},
-		}.apply(ctx, d, it)
 	case "pricing":
 		return rowEdit[pricing.Pricing]{
 			plural: "pricings", store: s.Pricing, validate: (*pricing.Pricing).Validate,

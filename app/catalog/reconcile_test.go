@@ -59,14 +59,14 @@ func TestApply_UpsertNew(t *testing.T) {
 	}
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-hk", Owner: meta.Owner{Kind: meta.OwnerUser}},
-		Spec: hostkey.Spec{HostID: hostID, PolicyID: hostTier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K_NEW"}},
+		Spec: hostkey.Spec{HostID: hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K_NEW"}},
 	}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-pol", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{
-			ModelIDs:    []string{m.Meta.ID},
-			HostKeyIDs:  []string{hk.Meta.ID},
-			RateLimitID: rl.Meta.ID,
+			Models:        []string{"new-prov/gpt-x"},
+			CredentialIDs: []string{hk.Meta.ID},
+			RateLimits:    []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
 		},
 	}
 
@@ -114,8 +114,8 @@ func TestApply_UpsertNew(t *testing.T) {
 	if _, ok := s.Policy(pol.Meta.ID); !ok {
 		t.Error("policy missing")
 	}
-	if got := len(s.ModelsInPolicy(pol.Meta.ID)); got != 1 {
-		t.Errorf("ModelsInPolicy: got %d, want 1", got)
+	if _, ok := s.HostKey(hk.Meta.ID); !ok {
+		t.Error("host key missing")
 	}
 }
 
@@ -269,33 +269,25 @@ func TestApply_DeleteCascadesToPricing(t *testing.T) {
 	}
 }
 
-// Deleting a Model used to cascade-delete its referencing Policy. Now the
-// Policy survives with the dead modelID silently stripped from its
-// snapshot Spec — PG retains the original list.
-func TestApply_DeleteModelStripsFromPolicy(t *testing.T) {
+// A policy names models by ref, not by id, so deleting a model leaves the
+// policy and its grant as they were.
+func TestApply_DeleteModelKeepsThePolicy(t *testing.T) {
 	c := catalogFromFixture(t)
-	s0 := c.Current()
-
-	pol, _ := s0.PolicyByName("cheap-tier")
-	models := s0.ModelsInPolicy(pol.Meta.ID)
-	if len(models) == 0 {
-		t.Fatal("no models in policy")
+	pol, _ := c.Current().PolicyByName("cheap-tier")
+	var gone string
+	for id := range c.Current().modelsByID {
+		gone = id
+		break
 	}
-	gone := models[0].Meta.ID
-
 	if err := c.ApplyModelDelete(gone); err != nil {
 		t.Fatalf("ApplyModelDelete: %v", err)
 	}
-
-	s := c.Current()
-	got, ok := s.Policy(pol.Meta.ID)
+	got, ok := c.Current().Policy(pol.Meta.ID)
 	if !ok {
-		t.Fatal("policy should survive a soft-ref parent delete")
+		t.Fatal("policy should survive a model delete")
 	}
-	for _, id := range got.Spec.ModelIDs {
-		if id == gone {
-			t.Errorf("deleted model %q still in policy.Spec.ModelIDs", gone)
-		}
+	if len(got.Spec.Models) != len(pol.Spec.Models) {
+		t.Errorf("models = %v, want the grant kept as stored", got.Spec.Models)
 	}
 }
 
@@ -449,9 +441,6 @@ func emptySnap() *Snapshot {
 		rateLimitsByID:     map[string]*ratelimit.RateLimit{},
 		keysByID:           map[string]*key.Key{},
 		keysByHash:         map[string]*key.Key{},
-		modelsByPolicy:     map[string][]*model.Model{},
-		hostKeysByPolicy:   map[string][]*hostkey.HostKey{},
-		rateLimitByPolicy:  map[string]*ratelimit.RateLimit{},
 		pricingsByID:       map[string]*pricing.Pricing{},
 		pricingByModelHost: map[string]*pricing.Pricing{},
 		refsByProvider:     map[string]refSet{},

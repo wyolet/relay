@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
@@ -48,7 +49,7 @@ func fixture() (*Service, string) {
 		Models:     fModels{{Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}}},
 		Bindings:   fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-4o-on-openai"}, Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI, PricingID: pricingID}}},
 		Pricings:   fPricings{{Meta: meta.Metadata{ID: pricingID, Name: "openai-gpt-4o", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: pricing.Spec{Currency: "USD", TargetModelIDs: []string{modID}, Rates: []pricing.Rate{{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 2.5}}}}},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{ModelIDs: []string{modID}, RateLimitID: rlID}}},
+		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai/gpt-4o"}, RateLimits: []policy.RateLimitLink{{RateLimitID: rlID}}}}},
 		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 100, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}}},
 		HostKeys:   fHostKeys{},
 	}
@@ -124,7 +125,7 @@ func TestModelPolicies_Filtering(t *testing.T) {
 		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}}},
 		Policies: fPolicies{
 			// wildcard customer policy whose only key is on hostB → cannot reach the model → EXCLUDE
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "unreachable-wildcard", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyB}}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "unreachable-wildcard", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyB}}},
 			// host-tier wildcard on hostA (serves the model) → INCLUDE
 			{Meta: meta.Metadata{ID: meta.NewID(), Name: "hostA-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{}},
 			// host-tier wildcard on hostB (does NOT serve the model) → EXCLUDE
@@ -207,7 +208,7 @@ func TestPolicyHosts_KeysFoldedIn(t *testing.T) {
 		Bindings:   fBindings{},
 		Pricings:   fPricings{},
 		HostKeys:   fHostKeys{{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA}}},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA}}}},
+		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyA}}}},
 		RateLimits: fRLs{},
 	}
 	_, rows, err := svc.PolicyHosts(context.Background(), "cust")
@@ -301,7 +302,7 @@ func TestHostPolicies_OwnTierOnly(t *testing.T) {
 		HostKeys:   fHostKeys{},
 		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 50, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}}},
 		Policies: fPolicies{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "ht", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{RateLimitID: rlID}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "ht", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rlID}}}},
 			{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{}},
 		},
 	}
@@ -329,7 +330,7 @@ func TestPolicyModels_DSLMatchedByAndCaps(t *testing.T) {
 		Pricings: fPricings{},
 		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
 		// customer policy, DSL grant "openai/*", key reaches the host
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "dsl", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai"}, HostKeyIDs: []string{keyID}}}},
+		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "dsl", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai"}, CredentialIDs: []string{keyID}}}},
 		RateLimits: fRLs{},
 	}
 	_, rows, err := svc.PolicyModels(context.Background(), "dsl")
@@ -375,9 +376,9 @@ func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
 			{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}},
 		},
 		Policies: fPolicies{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA, keyB}}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyA, keyB}}},
 			// a second policy that also uses keyA → sharedWithPolicyCount = 1
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA}}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyA}}},
 		},
 		RateLimits: fRLs{},
 	}
@@ -401,7 +402,9 @@ func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
 	}
 }
 
-func TestPolicyRateLimits_OverlapsAndUnthrottled(t *testing.T) {
+// Every link whose scope matches applies, so a model two links cover gets
+// both caps, and a model none covers is reported unthrottled.
+func TestPolicyRateLimits_EveryMatchingLinkApplies(t *testing.T) {
 	provID, hostID := meta.NewID(), meta.NewID()
 	modA, modFree := meta.NewID(), meta.NewID()
 	keyID := meta.NewID()
@@ -423,12 +426,12 @@ func TestPolicyRateLimits_OverlapsAndUnthrottled(t *testing.T) {
 			{Meta: meta.Metadata{ID: rl1, Name: "rl1"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
 			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
 		},
-		// two RLBindings both matching gpt-4o (overlap); free-model matched by neither (unthrottled)
+		// two links both scoped to gpt-4o; free-model matched by neither (unthrottled)
 		Policies: fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{
-			HostKeyIDs: []string{keyID},
-			RLBindings: []policy.RLBinding{
+			CredentialIDs: []string{keyID},
+			RateLimits: []policy.RateLimitLink{
 				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl1},
-				{Models: []string{"openai"}, RateLimitID: rl2},
+				{Models: []string{"openai/gpt-4o@openai"}, RateLimitID: rl2},
 			},
 		}}},
 	}
@@ -436,17 +439,47 @@ func TestPolicyRateLimits_OverlapsAndUnthrottled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Overlaps) != 1 {
-		t.Fatalf("overlaps = %+v", view.Overlaps)
+	if len(view.RateLimits) != 2 || view.RateLimits[0].Default || view.RateLimits[0].Name != "rl1" {
+		t.Fatalf("rateLimits = %+v", view.RateLimits)
 	}
-	o := view.Overlaps[0]
-	if o.Model != "gpt-4o" || o.Winner != rl1 || len(o.Losers) != 1 || o.Losers[0] != rl2 {
-		t.Errorf("overlap = %+v", o)
+	if len(view.Unthrottled) != 1 || view.Unthrottled[0].Model.Name != "free-model" {
+		t.Errorf("unthrottled = %+v, want free-model only", view.Unthrottled)
 	}
-	// free-model is matched by the "openai" RLBinding too, so it's capped — NOT unthrottled.
-	for _, u := range view.Unthrottled {
-		if u.Model.Name == "gpt-4o" {
-			t.Errorf("gpt-4o should be capped, not unthrottled")
+	_, rows, err := svc.PolicyModels(context.Background(), "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.Model.Name == "gpt-4o" && len(r.Limits) != 2 {
+			t.Errorf("gpt-4o limits = %+v, want both links' rules", r.Limits)
 		}
+	}
+}
+
+type fPools []*pool.Pool
+
+func (f fPools) List(context.Context) ([]*pool.Pool, error) { return f, nil }
+
+// A policy linking a pool reaches the pool's host and its keys.
+func TestPolicyHosts_ThroughAPool(t *testing.T) {
+	hostA, hostB, keyA := meta.NewID(), meta.NewID(), meta.NewID()
+	poolID := meta.NewID()
+	svc := &Service{
+		Providers:  fProviders{},
+		Hosts:      fHosts{{Meta: meta.Metadata{ID: hostA, Name: "host-a"}}, {Meta: meta.Metadata{ID: hostB, Name: "host-b"}}},
+		Models:     fModels{},
+		Bindings:   fBindings{},
+		Pricings:   fPricings{},
+		HostKeys:   fHostKeys{{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA}}},
+		Pools:      fPools{{Meta: meta.Metadata{ID: poolID, Name: "pa"}, Spec: pool.Spec{HostID: hostA, CredentialIDs: []string{keyA}}}},
+		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{poolID}}}},
+		RateLimits: fRLs{},
+	}
+	_, rows, err := svc.PolicyHosts(context.Background(), "cust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Host.Name != "host-a" || len(rows[0].HostKeys) != 1 || rows[0].HostKeys[0].Name != "ka" {
+		t.Fatalf("rows = %+v", rows)
 	}
 }

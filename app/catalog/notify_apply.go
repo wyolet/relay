@@ -247,6 +247,10 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return nil
 		}
 		return l.stores.secretKeys.KeyChanged(ctx, e.ID)
+
+	case "account", "pool", "budget":
+		// Stored and announced, but the snapshot does not hold these kinds yet.
+		return nil
 	}
 	// parseEvent already refused anything not in validKinds, so reaching
 	// here means a kind was added there without a case below — which would

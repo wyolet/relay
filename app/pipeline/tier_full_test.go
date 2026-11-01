@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/plan"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
@@ -36,85 +38,78 @@ func (a keyRecordingAdapter) Call(_ context.Context, _ string, _ *string, key st
 
 type tierFullHarness struct {
 	p     *Pipeline
-	snap  *reservationTestSnapshot
 	store *kvtest.Recording
 	keys  []*hostkey.HostKey
+	full  int
+	hops  []plan.RouteHop
 	used  []string
 	done  hostReached
 }
 
-// newTierFullHarness builds n prioritized keys. The first full keys sit on a
-// tier that allows one request a minute; the rest on a tier with room and a
-// token meter, so a served request also commits post-flight.
+// newTierFullHarness builds n prioritized keys. The first full keys share one account whose tier allows one request a minute; the rest share an account with room and a token meter, so a served request also settles post-flight.
 func newTierFullHarness(t *testing.T, n, full int) *tierFullHarness {
 	t.Helper()
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
 	pkgratelimit.RegisterScripts(mem)
 	keypool.RegisterScripts(mem)
-	store := kvtest.NewRecording(mem)
-
-	minute := appratelimit.Window(time.Minute)
-	small := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-small", Name: "small"}, Spec: appratelimit.Spec{Rules: []appratelimit.Rule{
-		{Meter: appratelimit.MeterRequests, Amount: 1, Window: minute, Strategy: appratelimit.StrategyFixedWindow},
-	}}}
-	big := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-big", Name: "big"}, Spec: appratelimit.Spec{Rules: []appratelimit.Rule{
-		{Meter: appratelimit.MeterRequests, Amount: 1000, Window: minute, Strategy: appratelimit.StrategyFixedWindow},
-		{Meter: appratelimit.MeterTokens, Amount: 1 << 20, Window: minute, Strategy: appratelimit.StrategySlidingWindow},
-	}}}
-	inbound := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-inbound", Name: "inbound"}, Spec: appratelimit.Spec{Rules: []appratelimit.Rule{
-		{Meter: appratelimit.MeterRequests, Amount: 1000, Window: minute, Strategy: appratelimit.StrategyFixedWindow},
-	}}}
-	tierSmall := &policy.Policy{Meta: meta.Metadata{ID: "pol-small", Name: "tier-small"}, Spec: policy.Spec{RateLimitID: small.Meta.ID}}
-	tierBig := &policy.Policy{Meta: meta.Metadata{ID: "pol-big", Name: "tier-big"}, Spec: policy.Spec{RateLimitID: big.Meta.ID}}
-	snap := &reservationTestSnapshot{
-		policies:   map[string]*policy.Policy{tierSmall.Meta.ID: tierSmall, tierBig.Meta.ID: tierBig},
-		rateLimits: map[string]*appratelimit.RateLimit{small.Meta.ID: small, big.Meta.ID: big, inbound.Meta.ID: inbound},
-	}
-	h := &tierFullHarness{snap: snap, store: store, done: make(hostReached, 16)}
+	h := &tierFullHarness{store: kvtest.NewRecording(mem), full: full, done: make(hostReached, 16)}
 	for i := range n {
-		id := "key-" + string(rune('1'+i))
-		tier := tierBig.Meta.ID
-		if i < full {
-			tier = tierSmall.Meta.ID
-		}
-		h.keys = append(h.keys, &hostkey.HostKey{
-			Meta: meta.Metadata{ID: id, Name: id}, Spec: hostkey.Spec{PolicyID: tier},
-			Resolved: "sk-" + id, KeyHash: "hash-" + id,
-		})
+		h.keys = append(h.keys, testKey("key-"+string(rune('1'+i))))
 	}
 	h.p = h.newPipeline()
+	h.hops = h.newHops()
 	return h
 }
 
-// newPipeline is a pod of its own: same kv, nothing remembered.
+// newHops is one pod's plans: the account cooldowns live on them, so a pod built with its own has seen nothing.
+func (h *tierFullHarness) newHops() []plan.RouteHop {
+	small := perMinute("rl-small", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 1)
+	big := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-big", Name: "big"}, Spec: appratelimit.Spec{Rules: []appratelimit.Rule{
+		{Meter: appratelimit.MeterRequests, Amount: 1000, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow},
+		{Meter: appratelimit.MeterTokens, Amount: 1 << 20, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategySlidingWindow},
+	}}}
+	inbound := perMinute("rl-inbound", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 1000)
+	accSmall, accBig := accountPlan("acct-small"), accountPlan("acct-big")
+	var slots []testSlot
+	for i, k := range h.keys {
+		s := testSlot{key: k, acc: accBig, upstream: accountCounters("acct-big", big)}
+		if i < h.full {
+			s = testSlot{key: k, acc: accSmall, upstream: accountCounters("acct-small", small)}
+		}
+		slots = append(slots, s)
+	}
+	return []plan.RouteHop{buildHop(keypool.KeySelectionPrioritized, callerCounter(inbound), slots...)}
+}
+
+// newPipeline is a pod's pipeline over the shared kv.
 func (h *tierFullHarness) newPipeline() *Pipeline {
 	return &Pipeline{
-		Policy:     policy.NewService(h.snap, keypool.New(h.store, slog.Default(), nil, nil), pkgratelimit.New(h.store, slog.Default(), nil)),
+		Limiter:    lua.New(pkgratelimit.New(h.store, slog.Default(), nil)),
+		Selector:   keypool.New(h.store, slog.Default(), nil, nil),
 		Logger:     slog.Default(),
 		HostHealth: h.done,
 	}
 }
 
-func (h *tierFullHarness) run(t *testing.T) (*lifecycle.Context, error) {
-	t.Helper()
-	return h.runOn(t, h.p)
+func (h *tierFullHarness) request(lc *lifecycle.Context, hops []plan.RouteHop) *Request {
+	return &Request{
+		Adapter:   keyRecordingAdapter{used: &h.used},
+		Hops:      hops,
+		Model:     &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}},
+		Lifecycle: lc,
+	}
 }
 
-func (h *tierFullHarness) runOn(t *testing.T, p *Pipeline) (*lifecycle.Context, error) {
+func (h *tierFullHarness) run(t *testing.T) (*lifecycle.Context, error) {
+	t.Helper()
+	return h.runOn(t, h.p, h.hops)
+}
+
+func (h *tierFullHarness) runOn(t *testing.T, p *Pipeline, hops []plan.RouteHop) (*lifecycle.Context, error) {
 	t.Helper()
 	lc := lifecycle.NewContext("req", "pipeline", time.Now())
-	res, err := p.Run(context.Background(), &Request{
-		Adapter: keyRecordingAdapter{used: &h.used},
-		Keys:    h.keys,
-		Policy: &policy.Policy{
-			Meta: meta.Metadata{ID: "pol-caller", Name: "caller"},
-			Spec: policy.Spec{RateLimitID: "rl-inbound", KeySelection: policy.KeySelectionPrioritized},
-		},
-		Model:     &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}},
-		Host:      &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}},
-		Lifecycle: lc,
-	})
+	res, err := p.Run(context.Background(), h.request(lc, hops))
 	if err != nil {
 		return lc, err
 	}
@@ -127,29 +122,22 @@ func (h *tierFullHarness) runOn(t *testing.T, p *Pipeline) (*lifecycle.Context, 
 	return lc, nil
 }
 
-// fill spends the one request the small tier allows on each of the first
-// full keys, from another pod, so h.p has not seen them refuse.
-func (h *tierFullHarness) fill(t *testing.T, full int) {
+// fill spends the small account's one request from another pod, so h.p has not seen it refuse.
+func (h *tierFullHarness) fill(t *testing.T) {
 	t.Helper()
-	other := h.newPipeline()
-	for i := range full {
-		if _, err := h.runOn(t, other); err != nil {
-			t.Fatalf("fill request %d: %v", i, err)
-		}
+	if _, err := h.runOn(t, h.newPipeline(), h.newHops()); err != nil {
+		t.Fatalf("fill request: %v", err)
 	}
-	if len(h.used) != full || h.used[full-1] != h.keys[full-1].Resolved {
-		t.Fatalf("fill used %v, want the first %d keys", h.used, full)
+	if len(h.used) != 1 || h.used[0] != h.keys[0].Resolved {
+		t.Fatalf("fill used %v, want the first key", h.used)
 	}
 	h.used = nil
 }
 
-// With the first three prioritized keys over their tier, the request is served
-// on the fourth in one attempt: refused tier reserves spend no attempt, so the
-// default budget of three no longer runs out on keys that never reached the
-// upstream. The next request skips the full keys without asking kv about them.
-func TestRunServesPastFullTiers(t *testing.T) {
+// With the first three prioritized keys in a full account, the request is served on the fourth in one attempt: the account's refusal spends no attempt and cools the account, so its other keys are skipped without asking kv. The next request goes straight to key-4.
+func TestRunServesPastFullAccount(t *testing.T) {
 	h := newTierFullHarness(t, 5, 3)
-	h.fill(t, 3)
+	h.fill(t)
 	reservesBefore := len(h.store.Named("limit.reserve"))
 
 	lc, err := h.run(t)
@@ -159,15 +147,14 @@ func TestRunServesPastFullTiers(t *testing.T) {
 	if len(h.used) != 1 || h.used[0] != "sk-key-4" {
 		t.Fatalf("upstream calls used %v, want one on key-4", h.used)
 	}
-	if lc.Attempts != 1 {
-		t.Fatalf("attempts = %d, want 1", lc.Attempts)
+	if lc.Attempts != 1 || lc.AccountID != "acct-big" {
+		t.Fatalf("attempts = %d, account %q; want 1 on acct-big", lc.Attempts, lc.AccountID)
 	}
-	if got := len(h.store.Named("limit.reserve")) - reservesBefore; got != 5 {
-		t.Fatalf("reserve scripts = %d, want 5 (inbound, three refused, key-4's)", got)
+	if got := len(h.store.Named("limit.reserve")) - reservesBefore; got != 3 {
+		t.Fatalf("reserve scripts = %d, want 3 (caller, the full account's refusal, key-4's account)", got)
 	}
 
-	// Learned: the next request goes straight to key-4 in the healthy count of
-	// trips: the admit batch, key-4's tier reserve, the post-flight commit.
+	// The cooled account costs nothing: the caller hold, key-4's breaker read, its account hold, then the post-flight settle of the token meter.
 	before := h.store.RoundTrips()
 	h.used = nil
 	if _, err := h.run(t); err != nil {
@@ -176,25 +163,51 @@ func TestRunServesPastFullTiers(t *testing.T) {
 	if len(h.used) != 1 || h.used[0] != "sk-key-4" {
 		t.Fatalf("second request used %v, want key-4", h.used)
 	}
-	if trips := h.store.RoundTrips() - before; trips != 3 {
-		t.Fatalf("kv round trips = %d, want 3 (%v)", trips, h.store.Batches())
+	if trips := h.store.RoundTrips() - before; trips != 4 {
+		t.Fatalf("kv round trips = %d, want 4 (%v)", trips, h.store.Batches())
 	}
 }
 
-// With every key over its tier the request is refused as rate limited, with
-// the earliest time a key has room, and never reaches the upstream.
-func TestRunAllTiersFull(t *testing.T) {
+// Only an account-wide request or token window cools the account: a model-scoped rule would block other models, a concurrency lease frees when its request ends, and a budget answers to a raised cap, so those refusals are asked again on the next request.
+func TestCoolAccountOnlyForAccountWideWindows(t *testing.T) {
+	requests := perMinute("rl-req", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 1)
+	tokens := perMinute("rl-tok", appratelimit.MeterTokens, appratelimit.StrategySlidingWindow, 1)
+	leases := perMinute("rl-conc", appratelimit.MeterConcurrency, appratelimit.StrategySlidingWindow, 1)
+	scoped := limits.UpstreamRule(limits.RungAccount, requests, requests.Spec.Rules[0], "pol-tier", "account:a", "model-a", "account:a")
+	bud := &budget.Budget{Meta: meta.Metadata{ID: "b"}, Spec: budget.Spec{AmountUSD: "1", Period: budget.PeriodMonth}}
+	for _, tc := range []struct {
+		name  string
+		c     limits.Counter
+		cools bool
+	}{
+		{"request window", accountCounters("a", requests)[0], true},
+		{"token window", accountCounters("a", tokens)[0], true},
+		{"concurrency", accountCounters("a", leases)[0], false},
+		{"model-scoped", scoped, false},
+		{"budget", limits.BudgetCounter(limits.RungAccount, bud, "pol-tier", "account:a", "account:a"), false},
+		{"host rung", limits.UpstreamRule(limits.RungHost, requests, requests.Spec.Rules[0], "pol-host", "host:h", "", "host:h"), false},
+	} {
+		slot := &plan.KeySlot{Account: accountPlan("a")}
+		coolAccount(slot, &limits.Refused{Counter: &tc.c, RetryAfter: time.Minute})
+		if got := slot.Account.Cooldown.Cooled(time.Now().UnixMilli(), "model-a"); got != tc.cools {
+			t.Errorf("%s: account cooled = %v, want %v", tc.name, got, tc.cools)
+		}
+	}
+}
+
+// With every key in the full account the request is refused as rate limited, with the earliest time the account has room, and never reaches the upstream.
+func TestRunAllAccountsFull(t *testing.T) {
 	h := newTierFullHarness(t, 3, 3)
-	h.fill(t, 3)
+	h.fill(t)
 
 	for i := range 2 {
 		_, err := h.run(t)
-		var exceeded *pkgratelimit.KeyQuotaExhausted
-		if !errors.Is(err, policy.ErrKeyTiersFull) || !errors.As(err, &exceeded) {
-			t.Fatalf("request %d: err = %v, want ErrKeyTiersFull carrying the refusal", i, err)
+		var limited *UpstreamLimitedError
+		if !errors.As(err, &limited) {
+			t.Fatalf("request %d: err = %v, want UpstreamLimitedError", i, err)
 		}
-		if exceeded.RetryAfter <= 0 || exceeded.RetryAfter > time.Minute {
-			t.Fatalf("request %d: retry after %v, want within the window", i, exceeded.RetryAfter)
+		if limited.RetryAfter <= 0 || limited.RetryAfter > time.Minute {
+			t.Fatalf("request %d: retry after %v, want within the window", i, limited.RetryAfter)
 		}
 		if kind, status := classifyFailure(err); kind != "rate_limited" || status != 0 {
 			t.Fatalf("request %d: usage kind %q status %d, want a refusal (rate_limited, 0)", i, kind, status)
@@ -202,5 +215,23 @@ func TestRunAllTiersFull(t *testing.T) {
 	}
 	if len(h.used) != 0 {
 		t.Fatalf("upstream was called with %v", h.used)
+	}
+}
+
+// A pick over accounts that cool other models reads the cooldowns without allocating.
+func TestPickOverModelCooldownsAllocatesNothing(t *testing.T) {
+	acc := accountPlan("a")
+	acc.Cooldown.ExtendModel("model-other", time.Now().Add(time.Minute).UnixMilli(), time.Now().UnixMilli())
+	hop := buildHop(keypool.KeySelectionPrioritized, nil, testSlot{key: testKey("k1"), acc: acc}, testSlot{key: testKey("k2"), acc: acc})
+	p := &Pipeline{}
+	excluded := make([]bool, len(hop.Slots))
+	var lim *UpstreamLimitedError
+	allocs := testing.AllocsPerRun(100, func() {
+		if i, _, _ := p.pick(context.Background(), &hop, "model-1", excluded, &lim); i != 0 {
+			t.Fatalf("picked %d, want 0", i)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("pick allocates %v times", allocs)
 	}
 }

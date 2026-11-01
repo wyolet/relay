@@ -44,15 +44,13 @@ func newTenantPair(t *testing.T) tenantPair {
 		Spec: host.Spec{BaseURL: "http://upstream.invalid"},
 	}
 	mustUpsert(t, st.stores.Host.Upsert(ctx, hst), "host")
-	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "shared-host-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}}}
-	mustUpsert(t, st.stores.Policy.Upsert(ctx, tier), "tier")
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "victim-hk", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "VICTIM_HK"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "VICTIM_HK"}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "victim host key")
 	vpol := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "victim-pol", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}},
-		Spec: policy.Spec{HostKeyIDs: []string{hk.Meta.ID}}}
+		Spec: policy.Spec{CredentialIDs: []string{hk.Meta.ID}}}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, vpol), "victim policy")
 
 	p.callerID = st.seedLogin(t, "mallory", "pw-mallory")
@@ -75,10 +73,10 @@ func TestIntegration_ApplyNeedsSystemApply(t *testing.T) {
 	if err := p.st.cat.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	personal := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: RateLimit\n" +
+	personal := "apiVersion: relay.wyolet.dev/v1alpha3\nkind: RateLimit\n" +
 		"metadata: {name: mine, owner: {kind: user}}\n" +
 		"spec: {rules: [{meter: requests, amount: 1, window: 1m, strategy: token-bucket}]}\n"
-	projectKey := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: ServiceAccount\n" +
+	projectKey := "apiVersion: relay.wyolet.dev/v1alpha3\nkind: ServiceAccount\n" +
 		"metadata: {name: dev-sa}\nspec: {project: own-proj}\n"
 	for who, bundle := range map[string]string{"nobody": personal, "dev": projectKey} {
 		u := p.st.login(t, who, "pw-"+who)
@@ -102,23 +100,23 @@ func TestIntegration_ApplyRefusesForeignReferences(t *testing.T) {
 	t.Parallel()
 	p := newTenantPair(t)
 	caller := p.st.login(t, "mallory", "pw-mallory")
-	header := "apiVersion: relay.wyolet.dev/v1alpha2\n"
+	header := "apiVersion: relay.wyolet.dev/v1alpha3\n"
 	cases := map[string]string{
 		"policy spending another project's host key": header + `kind: Policy
 metadata: {name: stolen-keys, owner: {kind: project, name: own-proj}}
-spec: {hostKeys: [victim-hk]}
+spec: {credentials: [victim-hk]}
 `,
 		"key acting as another project's service account": header + `kind: Key
 metadata: {name: stolen-sa, owner: {kind: project, name: own-proj}}
 spec: {principal: {kind: serviceaccount, name: victim-sa}, keyHash: "` + sha256Hex("stolen") + `"}
 `,
-		"service account bound to another project's policy": header + `kind: ServiceAccount
-metadata: {name: stolen-pol}
-spec: {project: own-proj, policy: victim-pol}
+		"service account bound to another project's policy": header + `kind: PolicyBinding
+metadata: {name: stolen-pol, owner: {kind: project, name: own-proj}}
+spec: {project: own-proj, policy: victim-pol, subjects: [{kind: project, name: own-proj}]}
 `,
 		"non-admin host key reading the relay's environment": header + `kind: HostKey
 metadata: {name: env-probe, owner: {kind: project, name: own-proj}}
-spec: {hostId: shared-host, policyId: shared-host-tier, valueFrom: {kind: env, env: ACME_API_KEY}}
+spec: {hostId: shared-host, valueFrom: {kind: env, env: ACME_API_KEY}}
 `,
 	}
 	for name, bundle := range cases {

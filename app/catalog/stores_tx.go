@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
@@ -12,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
@@ -44,6 +47,9 @@ func rowStores(db storage.DB) *Stores {
 		Settings:  settings.NewStore(q),
 		Team:      team.NewStore(db),
 		Project:   project.NewStore(db),
+		Account:   account.NewStore(q),
+		Pool:      pool.NewStore(db),
+		Budget:    budget.NewStore(q),
 
 		ServiceAccount: serviceaccount.NewStore(db),
 		Group:          group.NewStore(db),

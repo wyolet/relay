@@ -14,7 +14,6 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
@@ -31,20 +30,19 @@ func entryFor(t *testing.T, b *builder, kind, name string) Entry {
 	return Entry{}
 }
 
-// storedHostKeyRows is a host, its tier policy, and a host key whose secret
-// lives encrypted in the database.
+// storedHostKeyRows is a host and a host key whose secret lives encrypted in
+// the database.
 func storedHostKeyRows(kind hostkey.ValueKind) (*Rows, *hostkey.HostKey) {
 	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	tier := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
 	hk := &hostkey.HostKey{
 		Meta:     meta.Metadata{ID: meta.NewID(), Name: "acme-key", DisplayName: "Acme", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec:     hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: kind}},
+		Spec:     hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: kind}},
 		Resolved: "sk-stored-secret",
 	}
 	if kind == hostkey.ValueKindOAuth {
 		hk.Spec.ValueFrom.Provider = "acme"
 	}
-	return &Rows{Hosts: []*host.Host{h}, Policies: []*policy.Policy{tier}, HostKeys: []*hostkey.HostKey{hk}}, hk
+	return &Rows{Hosts: []*host.Host{h}, HostKeys: []*hostkey.HostKey{hk}}, hk
 }
 
 // An exported stored or oauth host key carries no value. Applying it back
@@ -58,7 +56,7 @@ func TestApplyUpdatesAStoredHostKeyWithoutItsValue(t *testing.T) {
 			doc.Metadata.Name = hk.Meta.Name
 			doc.Metadata.DisplayName = "Acme (renamed)"
 			doc.Spec = manifest.HostKeySpec{
-				HostID: "acme-api", PolicyID: "acme-tier",
+				HostID:    "acme-api",
 				ValueFrom: manifest.HostKeyValueFrom{Kind: string(kind), Provider: hk.Spec.ValueFrom.Provider},
 			}
 			b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows)}

@@ -8,6 +8,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Account struct {
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	HostID          string             `db:"host_id" json:"host_id"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	DefaultOwner    pgtype.Text        `db:"default_owner" json:"default_owner"`
+}
+
 type AuditEvent struct {
 	ID            string             `db:"id" json:"id"`
 	Ts            pgtype.Timestamptz `db:"ts" json:"ts"`
@@ -52,6 +65,17 @@ type BatchItem struct {
 	BatchID string `db:"batch_id" json:"batch_id"`
 	Idx     int32  `db:"idx" json:"idx"`
 	JobID   string `db:"job_id" json:"job_id"`
+}
+
+type Budget struct {
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type Group struct {
@@ -122,7 +146,6 @@ type Policy struct {
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ID              string             `db:"id" json:"id"`
 	DisplayName     string             `db:"display_name" json:"display_name"`
-	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
 	Models          []byte             `db:"models" json:"models"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
@@ -131,9 +154,63 @@ type PolicyBinding struct {
 	ID              string             `db:"id" json:"id"`
 	Name            string             `db:"name" json:"name"`
 	DisplayName     string             `db:"display_name" json:"display_name"`
-	ProjectID       string             `db:"project_id" json:"project_id"`
+	ProjectID       pgtype.Text        `db:"project_id" json:"project_id"`
 	PolicyID        string             `db:"policy_id" json:"policy_id"`
-	Priority        int32              `db:"priority" json:"priority"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	TeamID          pgtype.Text        `db:"team_id" json:"team_id"`
+	UserID          pgtype.Text        `db:"user_id" json:"user_id"`
+}
+
+type PolicyBindingSubject struct {
+	BindingID           string      `db:"binding_id" json:"binding_id"`
+	Kind                string      `db:"kind" json:"kind"`
+	SubjectID           pgtype.Text `db:"subject_id" json:"subject_id"`
+	SubjectName         pgtype.Text `db:"subject_name" json:"subject_name"`
+	SubjectUserID       pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
+	SubjectSaID         pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
+	Position            int32       `db:"position" json:"position"`
+	SubjectHostID       pgtype.Text `db:"subject_host_id" json:"subject_host_id"`
+	SubjectAccountID    pgtype.Text `db:"subject_account_id" json:"subject_account_id"`
+	SubjectCredentialID pgtype.Text `db:"subject_credential_id" json:"subject_credential_id"`
+	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
+	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
+	OwnerScope          string      `db:"owner_scope" json:"owner_scope"`
+}
+
+type PolicyBudget struct {
+	PolicyID string `db:"policy_id" json:"policy_id"`
+	BudgetID string `db:"budget_id" json:"budget_id"`
+	Position int32  `db:"position" json:"position"`
+}
+
+type PolicyCredential struct {
+	PolicyID  string `db:"policy_id" json:"policy_id"`
+	HostKeyID string `db:"host_key_id" json:"host_key_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+type PolicyPool struct {
+	PolicyID string `db:"policy_id" json:"policy_id"`
+	PoolID   string `db:"pool_id" json:"pool_id"`
+	Position int32  `db:"position" json:"position"`
+}
+
+type PolicyRateLimit struct {
+	PolicyID    string `db:"policy_id" json:"policy_id"`
+	RateLimitID string `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte `db:"models" json:"models"`
+	Position    int32  `db:"position" json:"position"`
+}
+
+type Pool struct {
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	HostID          string             `db:"host_id" json:"host_id"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
@@ -141,26 +218,10 @@ type PolicyBinding struct {
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
-type PolicyBindingSubject struct {
-	BindingID     string      `db:"binding_id" json:"binding_id"`
-	Kind          string      `db:"kind" json:"kind"`
-	SubjectID     pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName   pgtype.Text `db:"subject_name" json:"subject_name"`
-	SubjectUserID pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
-	SubjectSaID   pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
-	Position      int32       `db:"position" json:"position"`
-}
-
-type PolicyHostKey struct {
-	PolicyID  string `db:"policy_id" json:"policy_id"`
+type PoolCredential struct {
+	PoolID    string `db:"pool_id" json:"pool_id"`
 	HostKeyID string `db:"host_key_id" json:"host_key_id"`
 	Position  int32  `db:"position" json:"position"`
-}
-
-type PolicyModel struct {
-	PolicyID string `db:"policy_id" json:"policy_id"`
-	ModelID  string `db:"model_id" json:"model_id"`
-	Position int32  `db:"position" json:"position"`
 }
 
 type Pricing struct {

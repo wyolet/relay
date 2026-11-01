@@ -19,26 +19,26 @@ const SectionUsageLogging = "usage-logging"
 type UsageLogging struct {
 	// Backend selects the sink+reader: "file" (default), "clickhouse",
 	// "postgres", or "valkey".
-	Backend string `json:"backend"`
+	Backend string `json:"backend" enum:",file,clickhouse,postgres,valkey" doc:"Where usage events are written and read. Empty means file."`
 
 	// RetentionDays bounds how long usage events are kept by the clickhouse
 	// and postgres backends; 0 keeps them forever. Applied to the existing
 	// table on change, so shortening it deletes history.
-	RetentionDays int `json:"retentionDays"`
+	RetentionDays int `json:"retentionDays" doc:"Days the clickhouse and postgres backends keep events; 0 keeps them forever. Shortening it deletes older events."`
 
-	File UsageFile       `json:"file"`
-	CH   UsageClickHouse `json:"clickhouse"`
+	File UsageFile       `json:"file"       doc:"File backend settings."`
+	CH   UsageClickHouse `json:"clickhouse" doc:"ClickHouse backend settings."`
 }
 
 // UsageFile configures the JSONL file backend.
 type UsageFile struct {
-	Path string `json:"path,omitempty"`
+	Path string `json:"path,omitempty" doc:"JSONL file path; empty uses the boot default."`
 }
 
 // UsageClickHouse holds the safe-to-hot-swap CH knobs. The DSN reuses the
 // boot CH connection (bootstrap-tier), so no credentials live in this row.
 type UsageClickHouse struct {
-	WALDir string `json:"walDir,omitempty"`
+	WALDir string `json:"walDir,omitempty" doc:"Local write-ahead-log directory; empty uses the boot default."`
 }
 
 // Validate enforces the backend enum + non-negative knobs.
