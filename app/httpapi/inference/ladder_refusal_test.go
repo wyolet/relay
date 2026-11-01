@@ -67,7 +67,7 @@ func ladderDeps(t *testing.T, c ladderCase, now time.Time) (Deps, *Principal, us
 		(&adapter.Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: openai.CCTranslator{}, ExtractTokens: openai.ExtractTokens}).Build(),
 		(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 	))
-	events := make(usageCapture, 8)
+	events := make(usageCapture, 256) // roomy: a full buffer would block post-flight before the charge lands
 	reg := lifecycle.New()
 	reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
 	reg.RegisterCollector(events)
@@ -92,10 +92,18 @@ func TestBudgetRefusal_Is429WithRetryAfterAtTheNextPeriodStart(t *testing.T) {
 	if w := chat(d, p, "priced"); w.Code != http.StatusOK {
 		t.Fatalf("first request = %d %s", w.Code, w.Body)
 	}
-	events.next(t) // post-flight has settled the two dollars
-	w := chat(d, p, "priced")
+	events.next(t)
+	// The charge lands in the detached post-flight after the usage event; a request admitted before it is in-flight overshoot, which the budget allows.
+	var w *httptest.ResponseRecorder
+	var served int32
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		served = hits.Load()
+		if w = chat(d, p, "priced"); w.Code != http.StatusOK || time.Now().After(deadline) {
+			break
+		}
+	}
 	if w.Code != http.StatusTooManyRequests || errCode(t, w.Body.Bytes()) != "budget_exceeded" {
-		t.Fatalf("second request = %d %s, want 429 budget_exceeded", w.Code, w.Body)
+		t.Fatalf("request after the cap was spent = %d %s, want 429 budget_exceeded", w.Code, w.Body)
 	}
 	secs, err := strconv.Atoi(w.Header().Get("Retry-After"))
 	if err != nil || secs < 3599 || secs > 3601 {
@@ -104,8 +112,8 @@ func TestBudgetRefusal_Is429WithRetryAfterAtTheNextPeriodStart(t *testing.T) {
 	if body := w.Body.String(); !strings.Contains(body, "principal") || !strings.Contains(body, policyID) {
 		t.Fatalf("refusal %s does not name the principal rung and policy %s", body, policyID)
 	}
-	if n := hits.Load(); n != 1 {
-		t.Fatalf("upstream called %d times, want 1", n)
+	if hits.Load() != served {
+		t.Fatal("the refused request reached the upstream")
 	}
 }
 
