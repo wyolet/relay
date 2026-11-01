@@ -55,3 +55,26 @@ func TestIntegration_StoredReservedEnvRefDoesNotResolve(t *testing.T) {
 		})
 	}
 }
+
+// The account link rides in the spec JSONB beside the tier policy.
+func TestIntegration_AccountIDRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	reg := secret.NewRegistry()
+	reg.Register(secret.KindEnv, secret.EnvResolver{})
+	store := hostkey.NewStore(storagetest.Pool(t), reg, nil)
+	t.Setenv("ACME_API_KEY", "sk-acme")
+	k := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "account-key", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: hostkey.Spec{HostID: meta.NewID(), PolicyID: meta.NewID(), AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
+	}
+	if err := store.Upsert(ctx, k); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	got, err := store.Get(ctx, k.Meta.ID)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %v (row %v)", err, got)
+	}
+	if got.Spec.AccountID != k.Spec.AccountID {
+		t.Fatalf("accountId = %q, want %q", got.Spec.AccountID, k.Spec.AccountID)
+	}
+}

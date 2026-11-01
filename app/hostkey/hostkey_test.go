@@ -48,6 +48,13 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
+	t.Run("ok with account", func(t *testing.T) {
+		k := fix("k", ValueKindEnv)
+		k.Spec.AccountID = meta.NewID()
+		if err := k.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
 
 	for _, tc := range []struct {
 		name string
@@ -68,6 +75,11 @@ func TestValidate(t *testing.T) {
 			name: "missing policy id",
 			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.PolicyID = ""; return k }(),
 			want: "PolicyID",
+		},
+		{
+			name: "account must be an id",
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.AccountID = "acme-openai"; return k }(),
+			want: "AccountID",
 		},
 		{
 			name: "env mode missing env",

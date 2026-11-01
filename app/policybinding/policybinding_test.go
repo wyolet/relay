@@ -71,6 +71,68 @@ func TestValidate(t *testing.T) {
 			want: "does not match spec.projectId",
 		},
 		{
+			name: "every subject kind",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{
+					{Kind: SubjectHost, ID: meta.NewID()},
+					{Kind: SubjectAccount, ID: meta.NewID()},
+					{Kind: SubjectCredential, ID: meta.NewID()},
+					{Kind: SubjectTeam, ID: meta.NewID()},
+					{Kind: SubjectProject, ID: meta.NewID()},
+					{Kind: rolebinding.SubjectUser, ID: meta.NewID()},
+					{Kind: rolebinding.SubjectServiceAccount, ID: meta.NewID()},
+				}
+				return b
+			}(),
+		},
+		{
+			name: "a relay key is never a subject",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: "key", ID: meta.NewID()}}
+				return b
+			}(),
+			want: `kind "key" is not one of`,
+		},
+		{
+			name: "missing subject kind",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{ID: meta.NewID()}}
+				return b
+			}(),
+			want: "is not one of",
+		},
+		{
+			name: "host subject id must be a UUID",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: SubjectHost, ID: "openai"}}
+				return b
+			}(),
+			want: "is not a UUID",
+		},
+		{
+			name: "account subject carries an id, not a name",
+			b: func() *PolicyBinding {
+				b := fix()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: SubjectAccount, Name: "acme-openai"}}
+				return b
+			}(),
+			want: "account subject carries an id",
+		},
+		{
+			name: "same credential twice",
+			b: func() *PolicyBinding {
+				b := fix()
+				id := meta.NewID()
+				b.Spec.Subjects = []rolebinding.Subject{{Kind: SubjectCredential, ID: id}, {Kind: SubjectCredential, ID: id}}
+				return b
+			}(),
+			want: "duplicate subject",
+		},
+		{
 			name: "group subject carrying an id",
 			b: func() *PolicyBinding {
 				b := fix()

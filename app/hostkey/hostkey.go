@@ -105,7 +105,11 @@ type Spec struct {
 	// owned (Owner.Kind=host) AND its Owner.ID must equal HostID — i.e.
 	// a key can only mirror a policy belonging to its own host. Cross-
 	// entity validation lives in the composition layer.
-	PolicyID    string    `json:"policyId" yaml:"policyId" validate:"required"`
+	PolicyID string `json:"policyId" yaml:"policyId" validate:"required"`
+
+	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits. Optional. The account must be at HostID, a cross-row check in app/refcheck.
+	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid"`
+
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
 	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
 	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true

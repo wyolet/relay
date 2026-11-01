@@ -74,6 +74,12 @@ func newUpgradeDB(t *testing.T) *upgradeDB {
 			t.Fatalf("add resource_version to %s: %v", table, err)
 		}
 	}
+	// The policy store also rewrites its pool, credential, rate-limit and budget links; scratch tables take those writes until upgrade drops them for the real migration.
+	for _, ddl := range policyLinkScratchTables {
+		if _, err := pool.Exec(ctx, ddl); err != nil {
+			t.Fatalf("scratch policy link table: %v", err)
+		}
+	}
 	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
 		t.Fatalf("stores: %v", err)
@@ -81,8 +87,18 @@ func newUpgradeDB(t *testing.T) *upgradeDB {
 	return &upgradeDB{dsn: dsn, pool: pool, cat: cat, stores: stores}
 }
 
+var policyLinkScratchTables = []string{
+	"CREATE TABLE policy_pools (policy_id TEXT, pool_id TEXT, position INT)",
+	"CREATE TABLE policy_credentials (policy_id TEXT, host_key_id TEXT, position INT)",
+	"CREATE TABLE policy_rate_limits (policy_id TEXT, rate_limit_id TEXT, models JSONB, position INT)",
+	"CREATE TABLE policy_budgets (policy_id TEXT, budget_id TEXT, position INT)",
+}
+
 func (u *upgradeDB) upgrade(t *testing.T) {
 	t.Helper()
+	if _, err := u.pool.Exec(context.Background(), "DROP TABLE policy_pools, policy_credentials, policy_rate_limits, policy_budgets"); err != nil {
+		t.Fatalf("drop scratch policy link tables: %v", err)
+	}
 	if err := storagemod.MigrateUp(u.dsn); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}

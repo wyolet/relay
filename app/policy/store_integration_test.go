@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
@@ -27,6 +28,8 @@ import (
 // anything: a provider and host, two models, a host key, and a rate limit.
 type storeFixture struct {
 	store          *policy.Store
+	db             storage.DB
+	hostID         string
 	models         []string
 	hostKeyID      string
 	rateLimitID    string
@@ -49,7 +52,7 @@ func setupPolicyStore(t *testing.T) (storeFixture, context.Context) {
 	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
-	f := storeFixture{store: policy.NewStore(pool)}
+	f := storeFixture{store: policy.NewStore(pool), db: pool, hostID: hst.Meta.ID}
 	ms := model.NewStore(q)
 	for i := 0; i < 2; i++ {
 		md := &model.Model{

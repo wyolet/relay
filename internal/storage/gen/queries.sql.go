@@ -141,6 +141,24 @@ func (q *Queries) CreateBatchItem(ctx context.Context, arg CreateBatchItemParams
 	return err
 }
 
+const deleteAccount = `-- name: DeleteAccount :exec
+DELETE FROM accounts WHERE id = $1
+`
+
+func (q *Queries) DeleteAccount(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteAccount, id)
+	return err
+}
+
+const deleteBudget = `-- name: DeleteBudget :exec
+DELETE FROM budgets WHERE id = $1
+`
+
+func (q *Queries) DeleteBudget(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteBudget, id)
+	return err
+}
+
 const deleteHost = `-- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1
 `
@@ -209,6 +227,24 @@ func (q *Queries) DeletePolicyBindingSubjects(ctx context.Context, bindingID str
 	return err
 }
 
+const deletePolicyBudgets = `-- name: DeletePolicyBudgets :exec
+DELETE FROM policy_budgets WHERE policy_id = $1
+`
+
+func (q *Queries) DeletePolicyBudgets(ctx context.Context, policyID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyBudgets, policyID)
+	return err
+}
+
+const deletePolicyCredentials = `-- name: DeletePolicyCredentials :exec
+DELETE FROM policy_credentials WHERE policy_id = $1
+`
+
+func (q *Queries) DeletePolicyCredentials(ctx context.Context, policyID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyCredentials, policyID)
+	return err
+}
+
 const deletePolicyHostKeys = `-- name: DeletePolicyHostKeys :exec
 DELETE FROM policy_host_keys WHERE policy_id = $1
 `
@@ -224,6 +260,42 @@ DELETE FROM policy_models WHERE policy_id = $1
 
 func (q *Queries) DeletePolicyModels(ctx context.Context, policyID string) error {
 	_, err := q.db.Exec(ctx, deletePolicyModels, policyID)
+	return err
+}
+
+const deletePolicyPools = `-- name: DeletePolicyPools :exec
+DELETE FROM policy_pools WHERE policy_id = $1
+`
+
+func (q *Queries) DeletePolicyPools(ctx context.Context, policyID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyPools, policyID)
+	return err
+}
+
+const deletePolicyRateLimits = `-- name: DeletePolicyRateLimits :exec
+DELETE FROM policy_rate_limits WHERE policy_id = $1
+`
+
+func (q *Queries) DeletePolicyRateLimits(ctx context.Context, policyID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyRateLimits, policyID)
+	return err
+}
+
+const deletePool = `-- name: DeletePool :exec
+DELETE FROM pools WHERE id = $1
+`
+
+func (q *Queries) DeletePool(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deletePool, id)
+	return err
+}
+
+const deletePoolCredentials = `-- name: DeletePoolCredentials :exec
+DELETE FROM pool_credentials WHERE pool_id = $1
+`
+
+func (q *Queries) DeletePoolCredentials(ctx context.Context, poolID string) error {
+	_, err := q.db.Exec(ctx, deletePoolCredentials, poolID)
 	return err
 }
 
@@ -317,6 +389,27 @@ func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) erro
 	return err
 }
 
+const getAccount = `-- name: GetAccount :one
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM accounts WHERE id = $1
+`
+
+func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccount, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.HostID,
+		&i.Metadata,
+		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ResourceVersion,
+	)
+	return i, err
+}
+
 const getBatch = `-- name: GetBatch :one
 SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
        project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
@@ -341,6 +434,26 @@ func (q *Queries) GetBatch(ctx context.Context, id string) (Batch, error) {
 		&i.PrincipalID,
 		&i.CredentialKind,
 		&i.CredentialID,
+	)
+	return i, err
+}
+
+const getBudget = `-- name: GetBudget :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM budgets WHERE id = $1
+`
+
+func (q *Queries) GetBudget(ctx context.Context, id string) (Budget, error) {
+	row := q.db.QueryRow(ctx, getBudget, id)
+	var i Budget
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -538,6 +651,54 @@ func (q *Queries) GetPolicyBindingSubjects(ctx context.Context, bindingID string
 	return items, nil
 }
 
+const getPolicyBudgets = `-- name: GetPolicyBudgets :many
+SELECT policy_id, budget_id, position FROM policy_budgets WHERE policy_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPolicyBudgets(ctx context.Context, policyID string) ([]PolicyBudget, error) {
+	rows, err := q.db.Query(ctx, getPolicyBudgets, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyBudget
+	for rows.Next() {
+		var i PolicyBudget
+		if err := rows.Scan(&i.PolicyID, &i.BudgetID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPolicyCredentials = `-- name: GetPolicyCredentials :many
+SELECT policy_id, host_key_id, position FROM policy_credentials WHERE policy_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPolicyCredentials(ctx context.Context, policyID string) ([]PolicyCredential, error) {
+	rows, err := q.db.Query(ctx, getPolicyCredentials, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyCredential
+	for rows.Next() {
+		var i PolicyCredential
+		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPolicyHostKeys = `-- name: GetPolicyHostKeys :many
 SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position
 `
@@ -576,6 +737,104 @@ func (q *Queries) GetPolicyModels(ctx context.Context, policyID string) ([]Polic
 	for rows.Next() {
 		var i PolicyModel
 		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPolicyPools = `-- name: GetPolicyPools :many
+SELECT policy_id, pool_id, position FROM policy_pools WHERE policy_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPolicyPools(ctx context.Context, policyID string) ([]PolicyPool, error) {
+	rows, err := q.db.Query(ctx, getPolicyPools, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyPool
+	for rows.Next() {
+		var i PolicyPool
+		if err := rows.Scan(&i.PolicyID, &i.PoolID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPolicyRateLimits = `-- name: GetPolicyRateLimits :many
+SELECT policy_id, rate_limit_id, models, position FROM policy_rate_limits WHERE policy_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPolicyRateLimits(ctx context.Context, policyID string) ([]PolicyRateLimit, error) {
+	rows, err := q.db.Query(ctx, getPolicyRateLimits, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyRateLimit
+	for rows.Next() {
+		var i PolicyRateLimit
+		if err := rows.Scan(
+			&i.PolicyID,
+			&i.RateLimitID,
+			&i.Models,
+			&i.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPool = `-- name: GetPool :one
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pools WHERE id = $1
+`
+
+func (q *Queries) GetPool(ctx context.Context, id string) (Pool, error) {
+	row := q.db.QueryRow(ctx, getPool, id)
+	var i Pool
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.HostID,
+		&i.Metadata,
+		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ResourceVersion,
+	)
+	return i, err
+}
+
+const getPoolCredentials = `-- name: GetPoolCredentials :many
+SELECT pool_id, host_key_id, position FROM pool_credentials WHERE pool_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPoolCredentials(ctx context.Context, poolID string) ([]PoolCredential, error) {
+	rows, err := q.db.Query(ctx, getPoolCredentials, poolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PoolCredential
+	for rows.Next() {
+		var i PoolCredential
+		if err := rows.Scan(&i.PoolID, &i.HostKeyID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -907,18 +1166,24 @@ type InsertAuditEventParams struct {
 
 const insertPolicyBindingSubject = `-- name: InsertPolicyBindingSubject :exec
 INSERT INTO policy_binding_subjects
-    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id,
+     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 type InsertPolicyBindingSubjectParams struct {
-	BindingID     string      `db:"binding_id" json:"binding_id"`
-	Kind          string      `db:"kind" json:"kind"`
-	SubjectID     pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName   pgtype.Text `db:"subject_name" json:"subject_name"`
-	SubjectUserID pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
-	SubjectSaID   pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
-	Position      int32       `db:"position" json:"position"`
+	BindingID           string      `db:"binding_id" json:"binding_id"`
+	Kind                string      `db:"kind" json:"kind"`
+	SubjectID           pgtype.Text `db:"subject_id" json:"subject_id"`
+	SubjectName         pgtype.Text `db:"subject_name" json:"subject_name"`
+	SubjectUserID       pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
+	SubjectSaID         pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
+	SubjectHostID       pgtype.Text `db:"subject_host_id" json:"subject_host_id"`
+	SubjectAccountID    pgtype.Text `db:"subject_account_id" json:"subject_account_id"`
+	SubjectCredentialID pgtype.Text `db:"subject_credential_id" json:"subject_credential_id"`
+	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
+	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
+	Position            int32       `db:"position" json:"position"`
 }
 
 func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPolicyBindingSubjectParams) error {
@@ -929,8 +1194,43 @@ func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPoli
 		arg.SubjectName,
 		arg.SubjectUserID,
 		arg.SubjectSaID,
+		arg.SubjectHostID,
+		arg.SubjectAccountID,
+		arg.SubjectCredentialID,
+		arg.SubjectTeamID,
+		arg.SubjectProjectID,
 		arg.Position,
 	)
+	return err
+}
+
+const insertPolicyBudget = `-- name: InsertPolicyBudget :exec
+INSERT INTO policy_budgets (policy_id, budget_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPolicyBudgetParams struct {
+	PolicyID string `db:"policy_id" json:"policy_id"`
+	BudgetID string `db:"budget_id" json:"budget_id"`
+	Position int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyBudget(ctx context.Context, arg InsertPolicyBudgetParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyBudget, arg.PolicyID, arg.BudgetID, arg.Position)
+	return err
+}
+
+const insertPolicyCredential = `-- name: InsertPolicyCredential :exec
+INSERT INTO policy_credentials (policy_id, host_key_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPolicyCredentialParams struct {
+	PolicyID  string `db:"policy_id" json:"policy_id"`
+	HostKeyID string `db:"host_key_id" json:"host_key_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyCredential(ctx context.Context, arg InsertPolicyCredentialParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyCredential, arg.PolicyID, arg.HostKeyID, arg.Position)
 	return err
 }
 
@@ -961,6 +1261,57 @@ type InsertPolicyModelParams struct {
 
 func (q *Queries) InsertPolicyModel(ctx context.Context, arg InsertPolicyModelParams) error {
 	_, err := q.db.Exec(ctx, insertPolicyModel, arg.PolicyID, arg.ModelID, arg.Position)
+	return err
+}
+
+const insertPolicyPool = `-- name: InsertPolicyPool :exec
+INSERT INTO policy_pools (policy_id, pool_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPolicyPoolParams struct {
+	PolicyID string `db:"policy_id" json:"policy_id"`
+	PoolID   string `db:"pool_id" json:"pool_id"`
+	Position int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyPool(ctx context.Context, arg InsertPolicyPoolParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyPool, arg.PolicyID, arg.PoolID, arg.Position)
+	return err
+}
+
+const insertPolicyRateLimit = `-- name: InsertPolicyRateLimit :exec
+INSERT INTO policy_rate_limits (policy_id, rate_limit_id, models, position) VALUES ($1, $2, $3, $4)
+`
+
+type InsertPolicyRateLimitParams struct {
+	PolicyID    string `db:"policy_id" json:"policy_id"`
+	RateLimitID string `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte `db:"models" json:"models"`
+	Position    int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyRateLimit(ctx context.Context, arg InsertPolicyRateLimitParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyRateLimit,
+		arg.PolicyID,
+		arg.RateLimitID,
+		arg.Models,
+		arg.Position,
+	)
+	return err
+}
+
+const insertPoolCredential = `-- name: InsertPoolCredential :exec
+INSERT INTO pool_credentials (pool_id, host_key_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPoolCredentialParams struct {
+	PoolID    string `db:"pool_id" json:"pool_id"`
+	HostKeyID string `db:"host_key_id" json:"host_key_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPoolCredential(ctx context.Context, arg InsertPoolCredentialParams) error {
+	_, err := q.db.Exec(ctx, insertPoolCredential, arg.PoolID, arg.HostKeyID, arg.Position)
 	return err
 }
 
@@ -1203,6 +1554,42 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 	return i, err
 }
 
+const listAccounts = `-- name: ListAccounts :many
+
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM accounts ORDER BY name
+`
+
+// ── accounts, pools, budgets (migration 0035) ────────────────────────────────
+func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
+	rows, err := q.db.Query(ctx, listAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Account
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.HostID,
+			&i.Metadata,
+			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ResourceVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditEvents = `-- name: ListAuditEvents :many
 SELECT id, ts, actor_kind, actor_id, actor_name, session_id, ip,
        action, resource_kind, resource_id, resource_name, owner_kind, owner_id,
@@ -1346,6 +1733,39 @@ func (q *Queries) ListBatchesByRelayKey(ctx context.Context, relayKeyHash string
 			&i.PrincipalID,
 			&i.CredentialKind,
 			&i.CredentialID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBudgets = `-- name: ListBudgets :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM budgets ORDER BY name
+`
+
+func (q *Queries) ListBudgets(ctx context.Context) ([]Budget, error) {
+	rows, err := q.db.Query(ctx, listBudgets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Budget
+	for rows.Next() {
+		var i Budget
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1673,6 +2093,54 @@ func (q *Queries) ListPolicyBindings(ctx context.Context) ([]PolicyBinding, erro
 	return items, nil
 }
 
+const listPolicyBudgets = `-- name: ListPolicyBudgets :many
+SELECT policy_id, budget_id, position FROM policy_budgets ORDER BY policy_id, position
+`
+
+func (q *Queries) ListPolicyBudgets(ctx context.Context) ([]PolicyBudget, error) {
+	rows, err := q.db.Query(ctx, listPolicyBudgets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyBudget
+	for rows.Next() {
+		var i PolicyBudget
+		if err := rows.Scan(&i.PolicyID, &i.BudgetID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPolicyCredentials = `-- name: ListPolicyCredentials :many
+SELECT policy_id, host_key_id, position FROM policy_credentials ORDER BY policy_id, position
+`
+
+func (q *Queries) ListPolicyCredentials(ctx context.Context) ([]PolicyCredential, error) {
+	rows, err := q.db.Query(ctx, listPolicyCredentials)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyCredential
+	for rows.Next() {
+		var i PolicyCredential
+		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPolicyHostKeys = `-- name: ListPolicyHostKeys :many
 SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position
 `
@@ -1711,6 +2179,117 @@ func (q *Queries) ListPolicyModels(ctx context.Context) ([]PolicyModel, error) {
 	for rows.Next() {
 		var i PolicyModel
 		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPolicyPools = `-- name: ListPolicyPools :many
+SELECT policy_id, pool_id, position FROM policy_pools ORDER BY policy_id, position
+`
+
+func (q *Queries) ListPolicyPools(ctx context.Context) ([]PolicyPool, error) {
+	rows, err := q.db.Query(ctx, listPolicyPools)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyPool
+	for rows.Next() {
+		var i PolicyPool
+		if err := rows.Scan(&i.PolicyID, &i.PoolID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPolicyRateLimits = `-- name: ListPolicyRateLimits :many
+SELECT policy_id, rate_limit_id, models, position FROM policy_rate_limits ORDER BY policy_id, position
+`
+
+func (q *Queries) ListPolicyRateLimits(ctx context.Context) ([]PolicyRateLimit, error) {
+	rows, err := q.db.Query(ctx, listPolicyRateLimits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyRateLimit
+	for rows.Next() {
+		var i PolicyRateLimit
+		if err := rows.Scan(
+			&i.PolicyID,
+			&i.RateLimitID,
+			&i.Models,
+			&i.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPoolCredentials = `-- name: ListPoolCredentials :many
+SELECT pool_id, host_key_id, position FROM pool_credentials ORDER BY pool_id, position
+`
+
+func (q *Queries) ListPoolCredentials(ctx context.Context) ([]PoolCredential, error) {
+	rows, err := q.db.Query(ctx, listPoolCredentials)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PoolCredential
+	for rows.Next() {
+		var i PoolCredential
+		if err := rows.Scan(&i.PoolID, &i.HostKeyID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPools = `-- name: ListPools :many
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pools ORDER BY name
+`
+
+func (q *Queries) ListPools(ctx context.Context) ([]Pool, error) {
+	rows, err := q.db.Query(ctx, listPools)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Pool
+	for rows.Next() {
+		var i Pool
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.HostID,
+			&i.Metadata,
+			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ResourceVersion,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2714,6 +3293,81 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 	return i, err
 }
 
+const upsertAccount = `-- name: UpsertAccount :execrows
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    host_id      = EXCLUDED.host_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+WHERE $7::bigint IS NULL OR accounts.resource_version = $7::bigint
+`
+
+type UpsertAccountParams struct {
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	HostID          string      `db:"host_id" json:"host_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
+}
+
+func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertAccount,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.HostID,
+		arg.Metadata,
+		arg.Spec,
+		arg.ExpectedVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertBudget = `-- name: UpsertBudget :execrows
+INSERT INTO budgets (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+WHERE $6::bigint IS NULL OR budgets.resource_version = $6::bigint
+`
+
+type UpsertBudgetParams struct {
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
+}
+
+func (q *Queries) UpsertBudget(ctx context.Context, arg UpsertBudgetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertBudget,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+		arg.ExpectedVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertHost = `-- name: UpsertHost :execrows
 INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -2924,6 +3578,45 @@ func (q *Queries) UpsertPolicyBinding(ctx context.Context, arg UpsertPolicyBindi
 		arg.ProjectID,
 		arg.PolicyID,
 		arg.Priority,
+		arg.Metadata,
+		arg.Spec,
+		arg.ExpectedVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertPool = `-- name: UpsertPool :execrows
+INSERT INTO pools (id, name, display_name, host_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    host_id      = EXCLUDED.host_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+WHERE $7::bigint IS NULL OR pools.resource_version = $7::bigint
+`
+
+type UpsertPoolParams struct {
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	HostID          string      `db:"host_id" json:"host_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
+}
+
+func (q *Queries) UpsertPool(ctx context.Context, arg UpsertPoolParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertPool,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.HostID,
 		arg.Metadata,
 		arg.Spec,
 		arg.ExpectedVersion,
