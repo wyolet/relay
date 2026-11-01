@@ -154,12 +154,23 @@ func TestIntegration_SavedKeyAlwaysHasAnAccount(t *testing.T) {
 		t.Fatalf("team default account = %+v, %v", got, err)
 	}
 
-	// An update that drops the account joins the default again.
+	// An update that omits the account keeps the one the key has, as an omitted secret is kept.
 	d.Spec.AccountID = ""
+	d.Meta.DisplayName = "renamed"
 	if err := store.Upsert(ctx, d); err != nil {
 		t.Fatalf("Upsert without account: %v", err)
 	}
-	if got, _ := store.Get(ctx, d.Meta.ID); got == nil || got.Spec.AccountID != a.Spec.AccountID {
-		t.Fatalf("key-d after dropping its account = %+v, want the default account", got)
+	d, _ = store.Get(ctx, d.Meta.ID)
+	if d == nil || d.Spec.AccountID != named.Meta.ID {
+		t.Fatalf("key-d after an update omitting its account = %+v, want %q kept", d, named.Meta.ID)
+	}
+
+	// A key moved to another owner leaves its account for the new owner's default.
+	d.Spec.AccountID, d.Meta.Owner = "", platform
+	if err := store.Upsert(ctx, d); err != nil {
+		t.Fatalf("Upsert moved key: %v", err)
+	}
+	if got, _ := store.Get(ctx, d.Meta.ID); got == nil || got.Spec.AccountID != e.Spec.AccountID {
+		t.Fatalf("key-d moved to the team = %+v, want the team's default %q", got, e.Spec.AccountID)
 	}
 }

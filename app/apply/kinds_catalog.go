@@ -84,7 +84,7 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
 		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error {
 			keepHostKeySecret(prev, next)
-			keepDefaultAccount(b.rows.Accounts, prev, next)
+			keepAccount(prev, next)
 			return nil
 		},
 	}); err != nil {
@@ -128,20 +128,13 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	})
 }
 
-// keepDefaultAccount keeps the default account a key declared without one
-// joined on an earlier save, so the diff does not report the fill as drift.
-// A key moved off a non-default account still reports the change.
-func keepDefaultAccount(accounts []*account.Account, prev, next *hostkey.HostKey) {
-	if next.Spec.AccountID != "" || prev.Spec.AccountID == "" {
-		return
-	}
-	for _, a := range accounts {
-		if a.Meta.ID == prev.Spec.AccountID {
-			if a.Spec.Default && a.Spec.HostID == next.Spec.HostID && a.Meta.Owner == next.Meta.Owner {
-				next.Spec.AccountID = a.Meta.ID
-			}
-			return
-		}
+// keepAccount keeps the account of a key declared without one, as
+// hostkey.Store.Upsert does, so the diff shows what the save writes. A key
+// moved to another owner or host leaves its account for the new owner's
+// default, which the save fills.
+func keepAccount(prev, next *hostkey.HostKey) {
+	if next.Spec.AccountID == "" && prev.Spec.HostID == next.Spec.HostID && prev.Meta.Owner == next.Meta.Owner {
+		next.Spec.AccountID = prev.Spec.AccountID
 	}
 }
 
