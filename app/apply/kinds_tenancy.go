@@ -94,7 +94,7 @@ func (b *builder) checkKeyCreate(*key.Key) error {
 	return fmt.Errorf("%w: only an admin may create a key from a document's keyHash; create it with POST /api/keys", authz.ErrForbidden)
 }
 
-// checkPrunedTenancy refuses pruning a team, project or service account with rows still under it, as the control API's delete does. Rows this run prunes too are deleted explicitly, children first, so they are not in the way.
+// checkPrunedTenancy refuses pruning a team, project or service account with rows still under it or owned by it, as the control API's delete does. Rows this run prunes too are deleted explicitly, children first, so they are not in the way.
 func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	pruned := map[string]bool{}
 	for _, kind := range b.deletes {
@@ -115,7 +115,7 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 			var hidden int
 			switch e.Kind {
 			case "Team":
-				deps, hidden = project.OfTeam(e.ID, b.rows.Projects, gone, visible)
+				deps, hidden = under.TeamDependents(e.ID, b.rows.Projects, gone, visible)
 			case "Project":
 				deps, hidden = under.Dependents(e.ID, gone, visible)
 			case "ServiceAccount":

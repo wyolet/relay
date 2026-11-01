@@ -16,12 +16,13 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
-// Rows are the rows that can live under a project. Deleting the project
-// would cascade through the foreign keys to its service accounts, their
-// keys and its policy bindings, and leave its policies, host keys, rate
-// limits, accounts, pools and budgets owned by a project that no longer
-// exists — so apply's prune refuses while any remain. A default account no
-// key names is the exception: the delete takes it along.
+// Rows are the rows that can live under a team or project. Deleting the
+// owner would cascade through the foreign keys to its projects, service
+// accounts, their keys and its policy bindings, and leave its policies, host
+// keys, rate limits, accounts, pools and budgets owned by a team or project
+// that no longer exists — so apply's prune refuses while any remain, as the
+// control API's delete does. A default account no key names is the
+// exception: the delete takes it along.
 type Rows struct {
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Keys            []*key.Key
@@ -42,69 +43,85 @@ type Gone func(kind, id string) bool
 // every row.
 type Visible func(kind string, m meta.Metadata) bool
 
+type dependents struct {
+	gone    Gone
+	visible Visible
+	named   []string
+	hidden  int
+}
+
+func (d *dependents) add(kind string, m meta.Metadata, under bool) {
+	switch {
+	case !under || (d.gone != nil && d.gone(kind, m.ID)):
+	case d.visible != nil && !d.visible(kind, m):
+		d.hidden++
+	default:
+		d.named = append(d.named, kind+"/"+m.Name)
+	}
+}
+
 // Dependents names, as "Kind/name", every row in rows under project id the
 // caller may see, and counts the rest.
 func (r Rows) Dependents(id string, gone Gone, visible Visible) (named []string, hidden int) {
-	add := func(kind string, m meta.Metadata, under bool) {
-		switch {
-		case !under || (gone != nil && gone(kind, m.ID)):
-		case visible != nil && !visible(kind, m):
-			hidden++
-		default:
-			named = append(named, kind+"/"+m.Name)
-		}
-	}
-	owned := meta.Owner{Kind: meta.OwnerProject, ID: id}
+	d := &dependents{gone: gone, visible: visible}
+	owner := meta.Owner{Kind: meta.OwnerProject, ID: id}
 	for _, x := range r.ServiceAccounts {
-		add("ServiceAccount", x.Meta, x.Spec.ProjectID == id)
+		d.add("ServiceAccount", x.Meta, x.Spec.ProjectID == id)
 	}
 	for _, x := range r.Keys {
-		add("Key", x.Meta, x.Meta.Owner == owned)
+		d.add("Key", x.Meta, x.Meta.Owner == owner)
 	}
+	r.addOwned(d, owner)
+	for _, x := range r.PolicyBindings {
+		d.add("PolicyBinding", x.Meta, x.Spec.ProjectID == id)
+	}
+	return d.named, d.hidden
+}
+
+// TeamDependents names, as "Kind/name", every project in projects under team
+// id and every row in rows the team owns that the caller may see, and counts
+// the rest.
+func (r Rows) TeamDependents(id string, projects []*Project, gone Gone, visible Visible) (named []string, hidden int) {
+	d := &dependents{gone: gone, visible: visible}
+	owner := meta.Owner{Kind: meta.OwnerTeam, ID: id}
+	for _, x := range projects {
+		d.add("Project", x.Meta, x.Spec.TeamID == id)
+	}
+	r.addOwned(d, owner)
+	for _, x := range r.PolicyBindings {
+		d.add("PolicyBinding", x.Meta, x.Meta.Owner == owner)
+	}
+	return d.named, d.hidden
+}
+
+// addOwned adds the rows whose owner lives only in metadata, which no delete
+// takes along.
+func (r Rows) addOwned(d *dependents, owner meta.Owner) {
 	for _, x := range r.Policies {
-		add("Policy", x.Meta, x.Meta.Owner == owned)
+		d.add("Policy", x.Meta, x.Meta.Owner == owner)
 	}
 	for _, x := range r.HostKeys {
-		add("HostKey", x.Meta, x.Meta.Owner == owned)
+		d.add("HostKey", x.Meta, x.Meta.Owner == owner)
 	}
 	for _, x := range r.RateLimits {
-		add("RateLimit", x.Meta, x.Meta.Owner == owned)
+		d.add("RateLimit", x.Meta, x.Meta.Owner == owner)
 	}
-	// A default account no remaining key names goes with the project.
+	// A default account no remaining key names goes with its owner.
 	held := map[string]bool{}
 	for _, k := range r.HostKeys {
-		if gone == nil || !gone("HostKey", k.Meta.ID) {
+		if d.gone == nil || !d.gone("HostKey", k.Meta.ID) {
 			held[k.Spec.AccountID] = true
 		}
 	}
 	for _, x := range r.Accounts {
-		add("Account", x.Meta, x.Meta.Owner == owned && (!x.Spec.Default || held[x.Meta.ID]))
+		d.add("Account", x.Meta, x.Meta.Owner == owner && (!x.Spec.Default || held[x.Meta.ID]))
 	}
 	for _, x := range r.Pools {
-		add("Pool", x.Meta, x.Meta.Owner == owned)
+		d.add("Pool", x.Meta, x.Meta.Owner == owner)
 	}
 	for _, x := range r.Budgets {
-		add("Budget", x.Meta, x.Meta.Owner == owned)
+		d.add("Budget", x.Meta, x.Meta.Owner == owner)
 	}
-	for _, x := range r.PolicyBindings {
-		add("PolicyBinding", x.Meta, x.Spec.ProjectID == id)
-	}
-	return named, hidden
-}
-
-// OfTeam names, as "Project/name", every project in projects under team id
-// the caller may see, and counts the rest.
-func OfTeam(teamID string, projects []*Project, gone Gone, visible Visible) (named []string, hidden int) {
-	for _, p := range projects {
-		switch {
-		case p.Spec.TeamID != teamID || (gone != nil && gone("Project", p.Meta.ID)):
-		case visible != nil && !visible("Project", p.Meta):
-			hidden++
-		default:
-			named = append(named, "Project/"+p.Meta.Name)
-		}
-	}
-	return named, hidden
 }
 
 // DependentsError refuses deleting a team or project that still has rows
