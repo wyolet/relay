@@ -16,9 +16,9 @@ type accountStore interface {
 
 // UpstreamRef names the pool or account a key list belongs to.
 type UpstreamRef struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	HostID string `json:"hostId"`
+	ID     string `json:"id"     doc:"Pool or account id."`
+	Name   string `json:"name"   doc:"Pool or account slug."`
+	HostID string `json:"hostId" doc:"Id of the host its keys authenticate to."`
 }
 
 // PoolKeys returns the pool's keys in pool order, the preference a

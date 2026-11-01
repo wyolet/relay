@@ -35,8 +35,8 @@ type logsListInput struct {
 
 type logsListOutput struct {
 	Body struct {
-		Logs        []usagelog.Event `json:"logs"`
-		NextCursor  string           `json:"next_cursor,omitempty"`
+		Logs        []usagelog.Event `json:"logs"                  doc:"Matching log records, newest first."`
+		NextCursor  string           `json:"next_cursor,omitempty" doc:"Pass back as ?cursor= for the next page; absent on the last page."`
 		Total       *int64           `json:"total,omitempty" doc:"Number of records matching the filters across all pages, capped at 10000. Present only with count=true."`
 		TotalCapped *bool            `json:"total_capped,omitempty" doc:"True when more than 10000 records match, so total is the cap rather than the exact count. Present only with count=true."`
 	}
@@ -51,18 +51,18 @@ type logGetInput struct {
 // logPayload is the captured-body half of a log record, nil when payload
 // logging wasn't opted in (or the capture aged out).
 type logPayload struct {
-	RequestBody       string `json:"request_body,omitempty"`
-	ResponseBody      string `json:"response_body,omitempty"`
-	RequestTruncated  bool   `json:"request_truncated,omitempty"`
-	ResponseTruncated bool   `json:"response_truncated,omitempty"`
+	RequestBody       string `json:"request_body,omitempty"       doc:"The captured request body."`
+	ResponseBody      string `json:"response_body,omitempty"      doc:"The captured response body; for a stream, the raw stream."`
+	RequestTruncated  bool   `json:"request_truncated,omitempty"  doc:"The request body was cut at the capture size cap."`
+	ResponseTruncated bool   `json:"response_truncated,omitempty" doc:"The response body was cut at the capture size cap."`
 }
 
 type logGetOutput struct {
 	Body struct {
-		Log usagelog.Event `json:"log"`
+		Log usagelog.Event `json:"log" doc:"The request's usage record."`
 		// Payload carries the captured bodies; nil/absent means the request
 		// ran without payload logging (or the body has aged out).
-		Payload *logPayload `json:"payload,omitempty"`
+		Payload *logPayload `json:"payload,omitempty" doc:"The captured bodies; absent when payload logging was off for the request or the capture has aged out."`
 	}
 }
 

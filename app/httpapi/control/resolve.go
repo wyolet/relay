@@ -21,46 +21,46 @@ type resolveQuery struct {
 // the deduplicated union across all refs (Models/Hosts/Bindings/Expanded).
 type resolveOutput struct {
 	Body struct {
-		Refs []string `json:"refs"`
+		Refs []string `json:"refs" doc:"The input references, in request order."`
 		// Results is the per-ref expansion, in request order — each input
 		// ref mapped to exactly what it covers. Consumers that classify or
 		// count per individual ref (host-requirement grouping, diagnostics,
 		// dead-ref detection) read this; the union fields below are the
 		// flattened convenience view.
-		Results []refResult `json:"results"`
+		Results []refResult `json:"results" doc:"Each input reference's own expansion, in request order."`
 		// Unresolved lists the input refs that expanded to nothing (no
 		// enabled binding matched) — dead refs.
-		Unresolved []string            `json:"unresolved"`
-		Models     []resolveEntity     `json:"models"`
-		Hosts      []resolveEntity     `json:"hosts"`
-		Bindings   []resolveBindingRef `json:"bindings"`
+		Unresolved []string            `json:"unresolved" doc:"Input references that match no enabled binding."`
+		Models     []resolveEntity     `json:"models"     doc:"Every matched model, deduplicated across references."`
+		Hosts      []resolveEntity     `json:"hosts"      doc:"Every matched host, deduplicated across references."`
+		Bindings   []resolveBindingRef `json:"bindings"   doc:"Every matched (model, host) binding, deduplicated."`
 		// Expanded is the canonical "provider/model@host" string for
 		// every matched binding. Sorted, deduplicated. The UI uses this
 		// as the authoritative "what does this picker grant" list.
-		Expanded []string `json:"expanded"`
+		Expanded []string `json:"expanded" doc:"provider/model@host for every matched binding, sorted and deduplicated."`
 	}
 }
 
 // refResult is one input ref's own expansion. Bindings within a ref are
 // unique by construction; Expanded is sorted. Empty Expanded ⇒ dead ref.
 type refResult struct {
-	Ref      string              `json:"ref"`
-	Expanded []string            `json:"expanded"`
-	ModelIDs []string            `json:"modelIds"`
-	HostIDs  []string            `json:"hostIds"`
-	Bindings []resolveBindingRef `json:"bindings"`
+	Ref      string              `json:"ref"      doc:"The input reference."`
+	Expanded []string            `json:"expanded" doc:"provider/model@host for each binding it matches, sorted; empty for a dead reference."`
+	ModelIDs []string            `json:"modelIds" doc:"Ids of the models it matches."`
+	HostIDs  []string            `json:"hostIds"  doc:"Ids of the hosts it matches."`
+	Bindings []resolveBindingRef `json:"bindings" doc:"The (model, host) bindings it matches."`
 }
 
 type resolveEntity struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
-	Deprecated  string `json:"deprecated,omitempty"`
+	ID          string `json:"id"                    doc:"Row id."`
+	Name        string `json:"name"                  doc:"Row slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
+	Deprecated  string `json:"deprecated,omitempty"  doc:"The model's deprecation status, when not active."`
 }
 
 type resolveBindingRef struct {
-	ModelID string `json:"modelId"`
-	HostID  string `json:"hostId"`
+	ModelID string `json:"modelId" doc:"Model id."`
+	HostID  string `json:"hostId"  doc:"Host id."`
 }
 
 // registerResolve installs GET /catalog/resolve. Each request resolves
@@ -81,6 +81,7 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      "GET",
 		Path:        "/catalog/resolve",
 		Summary:     "Resolve one or more modelrefs into matched catalog rows",
+		Description: "Expands each model reference (provider, provider/model, provider/model@host, with wildcards) against what the data plane serves now: per reference, and as a deduplicated union. A malformed reference answers 400; one that matches nothing is listed in unresolved.",
 		Tags:        []string{"catalog"},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},

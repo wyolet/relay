@@ -38,21 +38,21 @@ type overlayPutInput struct {
 }
 
 type overlayView struct {
-	Kind       string `json:"kind"`
-	ResourceID string `json:"resourceId"`
+	Kind       string `json:"kind"       doc:"Kind of the overlaid row; model."`
+	ResourceID string `json:"resourceId" doc:"Id of the overlaid row."`
 	// Patch is the stored user patch; null when no overlay exists.
-	Patch json.RawMessage `json:"patch,omitempty"`
+	Patch json.RawMessage `json:"patch,omitempty" doc:"The stored sparse spec patch; absent when the model has no overlay."`
 	// Template is the pristine catalog spec (what re-seed maintains).
-	Template model.Spec `json:"template"`
+	Template model.Spec `json:"template" doc:"The catalog's own spec, which a re-seed keeps current."`
 	// Effective is the merged spec the snapshot serves. Equals Template
 	// when no overlay exists or the overlay is quarantined.
-	Effective model.Spec `json:"effective"`
+	Effective model.Spec `json:"effective" doc:"The template with the patch merged: what requests are served from. Equals template without an overlay or while it is quarantined."`
 	// Quarantined means the patch no longer merges into a valid row
 	// (usually after a template change); the pristine template is being
 	// served. Fix or delete the patch.
-	Quarantined      bool      `json:"quarantined,omitempty"`
-	QuarantineReason string    `json:"quarantineReason,omitempty"`
-	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
+	Quarantined      bool      `json:"quarantined,omitempty"      doc:"The patch no longer merges into a valid spec (usually after a template change), so the template is served. Fix or delete the patch."`
+	QuarantineReason string    `json:"quarantineReason,omitempty" doc:"Why the patch is quarantined."`
+	UpdatedAt        time.Time `json:"updatedAt,omitempty"        doc:"When the patch last changed."`
 }
 
 type overlayOut struct {
@@ -61,7 +61,7 @@ type overlayOut struct {
 
 type overlayDeleteOut struct {
 	Body struct {
-		Deleted bool `json:"deleted"`
+		Deleted bool `json:"deleted" doc:"True when an overlay existed and was removed."`
 	}
 }
 
@@ -101,8 +101,9 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "model_overlay_get", Method: "GET", Path: "/models/by-id/{id}/overlay",
-		Summary: "Read this model's overlay: patch, pristine template, effective spec, quarantine state",
-		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
+		Summary:     "Read this model's overlay: patch, pristine template, effective spec, quarantine state",
+		Description: "An overlay is the operator's sparse patch over a catalog model's spec; it survives catalog re-seeds. Returns the patch, the catalog template, and the merged spec requests are served from.",
+		Tags:        []string{"models"}, Middlewares: protect, Errors: []int{401, 403, 404},
 	}, func(ctx context.Context, in *overlayIDInput) (*overlayOut, error) {
 		if err := d.Authz.Authorize(ctx, "models.overlay.get", authz.Resource{Kind: "model", ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
@@ -120,8 +121,9 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "model_overlay_put", Method: "PUT", Path: "/models/by-id/{id}/overlay",
-		Summary: "Set (replace) this model's overlay patch",
-		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{400, 401, 403, 404, 500},
+		Summary:     "Set (replace) this model's overlay patch",
+		Description: "Replaces the patch. A patch that does not merge into a valid spec answers 400. Governed like an edit of the model.",
+		Tags:        []string{"models"}, Middlewares: protect, Errors: []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *overlayPutInput) (*overlayOut, error) {
 		if err := d.Authz.Authorize(ctx, "models.overlay.update", authz.Resource{Kind: "model", ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
@@ -157,8 +159,9 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "model_overlay_delete", Method: "DELETE", Path: "/models/by-id/{id}/overlay",
-		Summary: "Delete this model's overlay (factory reset to the pristine template)",
-		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 403, 404, 500},
+		Summary:     "Delete this model's overlay (factory reset to the pristine template)",
+		Description: "Removes the patch so the model is served from the catalog template again. Answers deleted false when there was none.",
+		Tags:        []string{"models"}, Middlewares: protect, Errors: []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *overlayIDInput) (*overlayDeleteOut, error) {
 		if err := d.Authz.Authorize(ctx, "models.overlay.delete", authz.Resource{Kind: "model", ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)

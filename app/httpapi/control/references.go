@@ -44,7 +44,7 @@ type referenceItem struct {
 
 type referencesOutput struct {
 	Body struct {
-		Items []referenceItem `json:"items"`
+		Items []referenceItem `json:"items" doc:"Rows the caller may see that reference the target, including links a delete would take without refusing."`
 	}
 }
 
@@ -90,6 +90,7 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			Method:      http.MethodGet,
 			Path:        "/" + plural + "/by-id/{id}/references",
 			Summary:     "List rows that reference this " + singular,
+			Description: "Every row that points at the " + singular + " through one of its fields, as delete would see them: blockers, and links a delete would take without refusing. Rows the caller may not see are left out. An unknown id answers an empty list.",
 			Tags:        []string{plural},
 			Middlewares: protect,
 			Errors:      []int{401, 500},

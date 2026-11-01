@@ -22,7 +22,7 @@ type hostKeyHealthInput struct {
 }
 
 type hostKeyHealth struct {
-	State                    string     `json:"state" doc:"closed | open | half_open | unknown."`
+	State                    string     `json:"state" enum:"closed,open,half_open,unknown" doc:"Breaker state."`
 	Reason                   string     `json:"reason,omitempty" doc:"Why the circuit opened (cooldown reason), when open."`
 	Indefinite               bool       `json:"indefinite,omitempty" doc:"Open with no expiry (auth failure) until the key heals or rotates."`
 	OpenUntil                *time.Time `json:"open_until,omitempty" doc:"When a timed cooldown expires; absent when closed or indefinite."`
@@ -42,6 +42,7 @@ func registerHostKeyHealth(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/host-keys/by-id/{id}/health",
 		Summary:     "Read a HostKey's circuit-breaker state",
+		Description: "Reports why requests skip the key: open indefinitely after an auth failure until the key heals or rotates, or for a timed cooldown after rate limits and server errors.",
 		Tags:        []string{"host-keys"},
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},

@@ -44,50 +44,50 @@ type accessReviewInput struct {
 	Body struct {
 		Subject  *reviewSubjectInput `json:"subject,omitempty" doc:"Who to check. Omit to check yourself; anyone else takes an admin."`
 		Action   string              `json:"action" minLength:"1" doc:"The action a handler authorizes, e.g. keys.get. A bare verb takes the resource kind's plural."`
-		Resource reviewResourceInput `json:"resource"`
+		Resource reviewResourceInput `json:"resource" doc:"What to check the action against."`
 	}
 }
 
 type namedRef struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Kind string `json:"kind"           doc:"Kind of the named row, such as user, group, role, team, project or system."`
+	ID   string `json:"id,omitempty"   doc:"Row id, when it has one."`
+	Name string `json:"name,omitempty" doc:"Row slug or group name."`
 }
 
 type reviewedSubject struct {
 	Kind     string   `json:"kind" doc:"user, serviceaccount or admin-token."`
-	ID       string   `json:"id,omitempty"`
-	Name     string   `json:"name,omitempty"`
+	ID       string   `json:"id,omitempty"   doc:"Id of the user or service account."`
+	Name     string   `json:"name,omitempty" doc:"Username or service-account slug."`
 	Admin    bool     `json:"admin" doc:"Holds relay's admin identity, which passes every rule and binding."`
 	Disabled bool     `json:"disabled,omitempty" doc:"The account is disabled and cannot sign in; the decision is what it would hold if enabled."`
 	Subjects []string `json:"subjects,omitempty" doc:"Binding subjects the decision was evaluated under."`
 }
 
 type reviewedResource struct {
-	Kind  string    `json:"kind"`
-	ID    string    `json:"id,omitempty"`
-	Name  string    `json:"name,omitempty"`
-	Owner *namedRef `json:"owner,omitempty"`
+	Kind  string    `json:"kind"            doc:"Resource kind, as an API singular."`
+	ID    string    `json:"id,omitempty"    doc:"Resource id, when a row was named."`
+	Name  string    `json:"name,omitempty"  doc:"Resource slug, when a row was named."`
+	Owner *namedRef `json:"owner,omitempty" doc:"The row's owner, when the decision read it."`
 }
 
 type reviewedBinding struct {
-	ID      string   `json:"id,omitempty"`
-	Name    string   `json:"name,omitempty"`
+	ID      string   `json:"id,omitempty"   doc:"Role binding id."`
+	Name    string   `json:"name,omitempty" doc:"Role binding slug."`
 	Subject namedRef `json:"subject" doc:"The binding subject the caller matched."`
-	Role    namedRef `json:"role"`
-	Scope   namedRef `json:"scope"`
+	Role    namedRef `json:"role"    doc:"The granted role."`
+	Scope   namedRef `json:"scope"   doc:"The scope the grant applies at."`
 }
 
 type accessReview struct {
-	Allowed          bool             `json:"allowed"`
+	Allowed          bool             `json:"allowed" doc:"Whether the subject may perform the action."`
 	Reason           string           `json:"reason" enum:"admin,rule,binding,credential,none" doc:"What decided. Only the first match is reported."`
 	Rule             string           `json:"rule,omitempty" doc:"The relay rule that decided: personal-row, catalog-read, shared-policy-read, system-role-read, scoped-list or parent-team-read."`
 	Binding          *reviewedBinding `json:"binding,omitempty" doc:"The role binding that granted the action."`
 	CredentialDenied bool             `json:"credentialDenied,omitempty" doc:"The subject holds the permission but the credential's limits refuse it."`
 	Chain            []namedRef       `json:"chain,omitempty" doc:"The resource's scope chain, most specific first, when the decision read it."`
-	Subject          reviewedSubject  `json:"subject"`
-	Action           string           `json:"action"`
-	Resource         reviewedResource `json:"resource"`
+	Subject          reviewedSubject  `json:"subject"  doc:"Who was checked."`
+	Action           string           `json:"action"   doc:"The checked action, such as policies.update."`
+	Resource         reviewedResource `json:"resource" doc:"What it was checked against."`
 }
 
 type accessReviewOutput struct {

@@ -17,47 +17,47 @@ import (
 // (RFC 8414 / OpenID discovery) works. The client secret is referenced by
 // env var name, never stored in the section value.
 type AuthOIDC struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" doc:"Offer OIDC sign-in on the control plane."`
 
 	// Issuer is the provider's issuer URL; endpoints are discovered from
 	// its metadata document.
-	Issuer   string `json:"issuer,omitempty"`
-	ClientID string `json:"clientId,omitempty"`
+	Issuer   string `json:"issuer,omitempty"   doc:"The provider's https issuer URL; endpoints are discovered from it."`
+	ClientID string `json:"clientId,omitempty" doc:"OAuth client id registered with the provider."`
 
 	// ClientSecretEnv names the env var holding the client secret; it must
 	// start with RELAY_OIDC_ (or WYOLET_OIDC_). Indirection keeps the secret
 	// out of the settings row (world-readable to any authenticated operator).
-	ClientSecretEnv string `json:"clientSecretEnv,omitempty"`
+	ClientSecretEnv string `json:"clientSecretEnv,omitempty" doc:"Environment variable holding the client secret; must start with RELAY_OIDC_ or WYOLET_OIDC_."`
 
 	// RedirectURL is this relay's public callback,
 	// e.g. https://relay.example.com/api/auth/oidc/callback.
-	RedirectURL string `json:"redirectUrl,omitempty"`
+	RedirectURL string `json:"redirectUrl,omitempty" doc:"This relay's public callback URL, registered with the provider. Required when enabled."`
 
 	// Scopes defaults to ["openid", "profile", "email"].
-	Scopes []string `json:"scopes,omitempty"`
+	Scopes []string `json:"scopes,omitempty" doc:"Scopes requested at sign-in. Omitted means openid, profile, email."`
 
 	// AuthParams are extra authorization-URL query params some providers
 	// require beyond the OIDC standard set (e.g. WorkOS AuthKit needs
 	// {"provider": "authkit"}). Provider-specific values live here in
 	// config, never in code.
-	AuthParams map[string]string `json:"authParams,omitempty"`
+	AuthParams map[string]string `json:"authParams,omitempty" doc:"Extra query parameters some providers require on the authorization URL."`
 
 	// GroupsClaim names the id-token claim carrying the user's IdP groups
 	// (default "groups"); empty after an explicit "" write means the
 	// provider asserts none.
-	GroupsClaim *string `json:"groupsClaim,omitempty"`
+	GroupsClaim *string `json:"groupsClaim,omitempty" doc:"id_token claim carrying the user's groups. Omitted means groups; an empty string means the provider asserts none."`
 
 	// Registration gates first-login auto-provisioning: "open" creates a
 	// user row on first successful OIDC login; "closed" (default) rejects
 	// subjects with no existing user row.
-	Registration string `json:"registration,omitempty"`
+	Registration string `json:"registration,omitempty" enum:"open,closed" doc:"open creates a user on first sign-in; closed refuses subjects without a user. Omitted means closed."`
 
 	// PostLoginURL is where the callback sends the browser after minting
 	// the session. Empty means "/" — correct when the admin UI is embedded
 	// (same origin as the callback). Set it to the UI's origin when the UI
 	// is served from a different hostname than the control API, so a login
 	// doesn't strand the user on the API origin.
-	PostLoginURL string `json:"postLoginUrl,omitempty"`
+	PostLoginURL string `json:"postLoginUrl,omitempty" doc:"Where the browser goes after sign-in; set it when the UI is served from another origin. Omitted means /."`
 }
 
 // EffectiveScopes returns Scopes or the OIDC default set.

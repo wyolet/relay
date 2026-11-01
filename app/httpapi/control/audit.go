@@ -29,8 +29,8 @@ type auditListInput struct {
 
 type auditListOutput struct {
 	Body struct {
-		Events     []audit.Event `json:"events"`
-		NextCursor string        `json:"next_cursor,omitempty"`
+		Events     []audit.Event `json:"events"                doc:"Matching audit events, newest first."`
+		NextCursor string        `json:"next_cursor,omitempty" doc:"Pass back as ?cursor= for the next page; absent on the last page."`
 	}
 }
 

@@ -26,9 +26,9 @@ type loginInput struct {
 // authResponse is shared by /auth/login and /auth/whoami.
 type authResponse struct {
 	Body struct {
-		UserID   string   `json:"user_id"`
-		Username string   `json:"username"`
-		Roles    []string `json:"roles,omitempty"`
+		UserID   string   `json:"user_id"         doc:"The caller's user id; empty for the admin token."`
+		Username string   `json:"username"        doc:"The caller's username."`
+		Roles    []string `json:"roles,omitempty" doc:"Names of the roles bound to the caller."`
 		Subjects []string `json:"subjects,omitempty" doc:"RBAC subject strings this caller acts under."`
 		Scopes   []string `json:"scopes,omitempty"   doc:"Scopes the caller holds a role binding at, as \"team:<id>\" / \"project:<id>\"."`
 	}
@@ -72,6 +72,7 @@ func registerAuth(api huma.API, d Deps) {
 		Method:      "POST",
 		Path:        "/auth/login",
 		Summary:     "Exchange username + password for a session cookie",
+		Description: "Checks the password against the user store, then the bootstrap identity file, and sets the relay_session cookie. A wrong username or password answers 401 invalid credentials; a disabled account answers 401 account_disabled, only once the password verified.",
 		Tags:        []string{"auth"},
 		Errors:      []int{401, 503},
 	}, func(ctx context.Context, in *loginInput) (*authResponse, error) {
@@ -159,6 +160,7 @@ func registerAuth(api huma.API, d Deps) {
 		Method:      "POST",
 		Path:        "/auth/logout",
 		Summary:     "Destroy the current session",
+		Description: "Destroys the session server-side and clears the cookie. Succeeds without a session too.",
 		Tags:        []string{"auth"},
 		Errors:      []int{},
 	}, func(ctx context.Context, _ *struct{}) (*emptyOutput, error) {
@@ -173,6 +175,7 @@ func registerAuth(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/auth/whoami",
 		Summary:     "Return the authenticated caller, if any",
+		Description: "Returns the caller behind the session cookie or bearer token, with the subjects and scopes its role bindings apply under. 401 when not signed in.",
 		Tags:        []string{"auth"},
 		Errors:      []int{401},
 	}, func(ctx context.Context, _ *struct{}) (*authResponse, error) {
