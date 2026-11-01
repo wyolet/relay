@@ -350,3 +350,55 @@ func TestIntegration_EnsureSchemaAddsRelayKey(t *testing.T) {
 		t.Fatalf("old row: credential_id=%q relay_key=%q, want k1 and empty", got[0].CredentialID, got[0].RelayKey)
 	}
 }
+
+// A table from before pool_id and account_id is upgraded in place by New: its rows read back without them, and new rows carry and filter on both.
+func TestIntegration_EnsureSchemaAddsPoolAndAccount(t *testing.T) {
+	dsn := os.Getenv("RELAY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_TEST_PG_DSN unset; skipping live PostgreSQL schema check")
+	}
+	ctx := context.Background()
+	table := fmt.Sprintf("usage_events_pool_upgrade_%d", time.Now().UnixNano())
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	defer func() { _, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS "+table) }()
+
+	withoutPool := strings.SplitN(fmt.Sprintf(createTableSQL, table), ",\n    pool_id ", 2)[0] + "\n)"
+	if _, err := pool.Exec(ctx, withoutPool); err != nil {
+		t.Fatalf("create table without pool_id: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (request_id, ts, policy_id) VALUES ('old-1', $1, 'p1')`, table), now); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	s, err := New(ctx, Config{DSN: dsn, FlushInterval: 200 * time.Millisecond, Table: table})
+	if err != nil {
+		t.Fatalf("New on a table without pool_id: %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.Events(ctx, usage.EventQuery{RequestID: "old-1"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Events: err=%v rows=%+v", err, got)
+	}
+	if got[0].PolicyID != "p1" || got[0].PoolID != "" || got[0].AccountID != "" {
+		t.Fatalf("old row: policy_id=%q pool_id=%q account_id=%q, want p1 and empty", got[0].PolicyID, got[0].PoolID, got[0].AccountID)
+	}
+
+	ev := usage.Event{RequestID: "new-1", Timestamp: now.Add(time.Second), PolicyID: "p1", PoolID: "pool-1", AccountID: "acct-1"}
+	if err := s.insertBatch([]usage.Event{ev}); err != nil {
+		t.Fatalf("insertBatch: %v", err)
+	}
+	got, err = s.Events(ctx, usage.EventQuery{PoolID: []string{"pool-1"}, AccountID: []string{"acct-1"}})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Events by pool and account: err=%v rows=%+v", err, got)
+	}
+	if got[0].RequestID != "new-1" || got[0].PoolID != "pool-1" || got[0].AccountID != "acct-1" {
+		t.Fatalf("new row: %+v", got[0])
+	}
+}

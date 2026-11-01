@@ -81,6 +81,7 @@ var expectedColumns = []string{
 	"principal_kind", "principal_id", "principal",
 	"credential_kind", "credential_id",
 	"relay_key",
+	"pool_id", "account_id",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -124,7 +125,9 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     principal                text         NOT NULL DEFAULT '',
     credential_kind          text         NOT NULL DEFAULT '',
     credential_id            text         NOT NULL DEFAULT '',
-    relay_key                text         NOT NULL DEFAULT ''
+    relay_key                text         NOT NULL DEFAULT '',
+    pool_id                  text         NOT NULL DEFAULT '',
+    account_id               text         NOT NULL DEFAULT ''
 )`
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -150,6 +153,8 @@ var alterTableSQL = []string{
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_kind text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS relay_key text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS pool_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT ''`,
 }
 
 const createIndexSQL = `
@@ -454,6 +459,8 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.CredentialKind,
 			ev.CredentialID,
 			ev.RelayKey,
+			ev.PoolID,
+			ev.AccountID,
 		})
 	}
 
@@ -490,7 +497,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        provider, cost_nanos, cost_breakdown, pricing,
 		        project_id, project, team_id, team,
 		        principal_kind, principal_id, principal,
-		        credential_kind, credential_id, relay_key
+		        credential_kind, credential_id, relay_key,
+		        pool_id, account_id
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -556,6 +564,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.CredentialKind,
 			&ev.CredentialID,
 			&ev.RelayKey,
+			&ev.PoolID,
+			&ev.AccountID,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -667,6 +677,8 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	any("relay_key_hash", q.RelayKeyHash)
 	any("policy_id", q.PolicyID)
+	any("pool_id", q.PoolID)
+	any("account_id", q.AccountID)
 	any("project_id", q.ProjectID)
 	any("team_id", q.TeamID)
 	any("principal_id", q.PrincipalID)

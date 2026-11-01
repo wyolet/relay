@@ -81,3 +81,19 @@ func TestUsageTimeSeriesPassesDistinctToTheStore(t *testing.T) {
 		t.Fatalf("store got distinct %q, want principal_id", reader.distinct)
 	}
 }
+
+func TestUsageDistinctAcceptsPoolAndAccount(t *testing.T) {
+	for _, dim := range []string{"pool_id", "account_id"} {
+		for _, path := range []string{"/usage/summary?group_by=none&distinct=" + dim, "/usage/timeseries?interval=1h&distinct=" + dim} {
+			reader := &fakeUsageReader{}
+			h := newUsageHarness(t, testRBAC(), reader)
+			w := scopeReq(t, h, "root", http.MethodGet, path, "")
+			if w.Code != 200 {
+				t.Fatalf("%s: status = %d: %s", path, w.Code, w.Body)
+			}
+			if reader.distinct != dim {
+				t.Fatalf("%s: store got distinct %q, want %s", path, reader.distinct, dim)
+			}
+		}
+	}
+}
