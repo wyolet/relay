@@ -1,0 +1,139 @@
+---
+title: "Upgrading to 0.20"
+description: "Moving a 0.11 deployment to the policy ladder: what the migrations drop, the checks to run first, and the steps in order"
+---
+
+0.20 replaces how policies reach host keys and limits. A policy now links pools, host keys, rate limits and budgets, policy bindings attach it to any rung of the [policy ladder](/concepts/policies#the-ladder), and relay keys, service accounts and host keys no longer hold a policy. The upgrade is a manual migration: you rewrite your policies and bindings in the new shape, and nothing is converted for you.
+
+<Warning>
+**The migration drops the old policy links.** Migration 36 deletes every policy's host keys, model ids and rate limit, every relay key's and service account's policy, and every host key's tier policy. They are not converted and not restored by a down-migration. Export your configuration and back up Postgres before you upgrade.
+</Warning>
+
+This is a [stop-and-start upgrade](/concepts/upgrade#stop-and-start-upgrades): a 0.11 pod cannot serve against the new schema. Schema version goes from 34 to 36.
+
+## What changes
+
+| 0.11 | 0.20 |
+| --- | --- |
+| Policy `hostKeyIds` (`hostKeys` in manifests) | `poolIds` / `credentialIds` (`pools` / `credentials`). See [Pools](/concepts/key-pooling#pools). |
+| Policy `keySelection` | A pool's `selection`. |
+| Policy `rateLimitId` (`rateLimit`) | `rateLimits: [{rateLimitId}]` (`[{ref}]`). |
+| Policy `rlBindings` | `rateLimits` entries with `models`. |
+| Policy `modelIds` | `models` (model references). |
+| Relay key `policyId`, service account `policyId` | A policy binding on the key's principal. |
+| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [account](/concepts/key-pooling#accounts). |
+| Policy binding `priority`, several bindings per subject | One binding per subject. `priority` is still accepted and has no effect. |
+| Group subjects in policy bindings, `system:authenticated` as a project default | Group subjects bind nothing. Bind the team or the project instead. |
+| `allowMissingPolicy` in the `inference` settings section | Gone. A principal with no caller policy reaches the host keys its own scopes own, and system-owned ones. |
+| `relay.wyolet.dev/v1alpha2` for `Policy`, `HostKey`, `Key`, `PolicyBinding` | `relay.wyolet.dev/v1alpha3`. The old shape is refused with a pointer to the new one; other kinds still accept v1alpha2. |
+| `POST`/`DELETE /api/policies/by-id/{id}/keys/{keyId}` | Removed. Bind a policy to the key's principal. |
+| `/api/schemas/v1alpha2/...` | `/api/schemas/v1alpha3/...`. |
+
+New kinds: `Account`, `Pool` and `Budget`, with their CRUD routes (`/api/accounts`, `/api/pools`, `/api/budgets`) and RBAC kinds (`accounts`, `pools`, `budgets`, granted by the built-in roles).
+
+Behaviour that changes at request time:
+
+- **Reach without a policy widens.** In 0.11 a project-scoped credential that resolved no policy was refused with `no_policy`. In 0.20 it reaches the host keys owned by its project, its team and the system. Host keys created with the admin token are system-owned, so every principal without a caller policy that links pools can use them. To keep a team or project on specific keys, bind it a policy that links the pools it should use; see [Reach without a caller policy](/concepts/policies#reach-without-a-caller-policy).
+- **Project bindings on users govern only that project's tokens.** A binding owned by a project, naming a user, applies to the inference tokens that user mints for the project. The user's own relay keys see only system-owned bindings, and no longer take a project's attribution or limits from a project-owned policy.
+- **Usage `policy_id`** records the innermost caller policy: the principal's, else the project's, else the team's.
+- **Proxy mode** refuses a model that is not in the catalog, also for a key that had no policy, instead of forwarding it unpriced.
+- **Batch items** run under the ladder as it is when each item runs, not as it was at submission.
+- **Error codes.** `no_policy`, `policy_not_found` and `policyless_disabled` are gone; `subject_disabled`, `duplicate_binding`, `unpriced_under_budget` and `budget_exceeded` are new. A disabled, revoked, expired or rotated-out relay key answers `401 invalid api key`. See [Policy refusals](/reference/inference-api#policy-refusals).
+
+## What the migrations do
+
+**Migration 35** adds the `accounts`, `pools`, `pool_credentials` and `budgets` tables and the junctions linking a policy to pools, host keys, rate limits and budgets. Policy bindings gain team and system owners and the host, account, credential, team and project subject kinds. Every existing binding stays owned by its project.
+
+It then enforces one binding per subject: a subject other than a user may appear in one binding, and a user in one binding per owning project. If the database holds a subject bound twice, the migration stops and nothing of it is applied:
+
+```
+migration 000035: a subject may be bound by one policy binding (a user by one per owner scope); remove the subject from all but one binding, then upgrade again: serviceaccount <id> in <binding>, <binding>
+```
+
+**Migration 36** drops the `policy_models` and `policy_host_keys` tables and the `policies.rate_limit_id` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, and `policyId` from every relay key, service account and host key. Policies keep their name, owner, `models`, `includeDeprecated`, `payloadLoggingEnabled` and `enabled`. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
+
+The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
+
+## Before you upgrade
+
+1. **Export the current configuration** with the 0.11 CLI, as the reference for the rewrite:
+
+   ```bash
+   relay export --include-system -o before-0.20.yaml
+   ```
+
+2. **Back up Postgres.** Rolling back needs it; see [Rolling back](#rolling-back).
+
+3. **Find subjects bound twice**, which would stop migration 35. Run this against the 0.11 database; it lists what the migration would refuse:
+
+   ```sql
+   SELECT s.kind, s.subject_id, string_agg(b.name, ', ' ORDER BY b.name) AS bindings
+   FROM policy_binding_subjects s
+   JOIN policy_bindings b ON b.id = s.binding_id
+   WHERE s.subject_id IS NOT NULL
+   GROUP BY s.kind, s.subject_id, CASE WHEN s.kind = 'user' THEN b.project_id END
+   HAVING count(*) > 1;
+   ```
+
+   For each row, decide which binding keeps the subject and remove it from the others, on 0.11, before upgrading.
+
+4. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the export:
+
+   - An `Account` for each provider organization, and `account` on each of its host keys.
+   - A `PolicyBinding` of a tier preset (or your own tier policy) on each account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
+   - A `Pool` for each set of host keys a policy listed, with the old `keySelection` as its `selection`.
+   - Each policy with `pools` (or `credentials`), `rateLimits` and, where you want spend caps, `budgets`.
+   - Policy bindings on the subjects the keys and service accounts pointed at, and on the team or project in place of group and `system:authenticated` subjects.
+
+   [Policy examples](/policy-examples) shows each of these.
+
+5. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
+
+## Upgrade steps
+
+1. Keep callers off the inference port until step 5. Between the migration and your new bindings, principals reach what their scopes own, which may be more than before.
+2. Stop every 0.11 pod: scale the deployment to 0, as in [Stop-and-start upgrades](/concepts/upgrade#stop-and-start-upgrades).
+3. Deploy 0.20 with the new `RELAY_CATALOG_VERSION`. Migrations 35 and 36 run, and the catalog release is seeded. If migration 35 stops on a subject bound twice, it applies nothing but leaves version 35 marked dirty: run `relay migrate force 34` (see [Recovering from a dirty schema version](/concepts/upgrade#recovering-from-a-dirty-schema-version)), start the 0.11 image again, fix the bindings, and repeat.
+4. Apply the manifests with the 0.20 CLI, dry run first:
+
+   ```bash
+   relay apply -f manifests/ --dry-run
+   relay apply -f manifests/
+   ```
+
+5. Check representative credentials, then let callers back in:
+
+   ```bash
+   curl http://localhost:8080/v1/models -H "Authorization: Bearer <relay key>"
+   curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" http://localhost:8081/api/policies/<policy>/models
+   ```
+
+   Watch `relay_inference_auth_rejected_total` and the `403` and `503` codes in the [usage events](/concepts/usage#failed-requests) for refusals you did not expect.
+
+6. Re-run token revocations, see [The state store](#the-state-store).
+
+## The state store
+
+The Helm chart and the Compose stack bundle Dragonfly as the state store in place of Valkey. Upgrading with the chart's defaults replaces the bundled Valkey with an empty Dragonfly, and the [chart README](https://github.com/wyolet/relay/blob/main/chart/README.md) has the values that keep Valkey. An external store run as Dragonfly needs `--cluster_mode=emulated --lock_on_hashtags`.
+
+An empty store at the cutover means:
+
+- Control-plane sessions end: users sign in again.
+- Rate-limit windows and key breaker state start fresh.
+- Revoked inference tokens are accepted again until they expire.
+
+Token revocation moves to one list in the store, the `{revoked}:tokens` key, which 0.11 did not have: tokens revoked one by one under 0.11 are accepted again after the upgrade, whether or not the store changes. Revoke them again with `DELETE /api/auth/token/{jti}`, or revoke all of a user's tokens with `POST /api/users/by-id/{id}/revoke-tokens`, which survives any store change because the user's token version is kept in Postgres. See [Revoking a token](/concepts/auth#revoking-a-token).
+
+When a 0.20 deployment later moves to another store, copy the revocation list across before switching. The key expires with the last token on it, so it is absent when no revoked token is still valid, and there is nothing to copy:
+
+```bash
+old="redis-cli -h <old store> -a <password>"
+new="redis-cli -h <new store> -a <password>"
+$new SET '{revoked}:tokens' "$($old --raw GET '{revoked}:tokens')" EX "$($old TTL '{revoked}:tokens')"
+```
+
+## Rolling back
+
+`relay migrate down 34` recreates the dropped tables and column empty and deletes what 0.20 added: accounts, pools, budgets, their links, team- and system-owned bindings, and binding subjects of the new kinds. It does not bring back the policy links migration 36 removed, so a 0.11 pod on that schema runs with no policy links at all.
+
+To return to 0.11, stop every pod, restore the Postgres backup taken before the upgrade, and deploy the 0.11 image. See [Rolling back](/concepts/upgrade#rolling-back) for the general procedure.

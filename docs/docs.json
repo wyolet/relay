@@ -58,7 +58,8 @@
               "configuration",
               "reference/settings",
               "concepts/gitops",
-              "concepts/upgrade"
+              "concepts/upgrade",
+              "concepts/upgrade-0-20"
             ]
           },
           {
