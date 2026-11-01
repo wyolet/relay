@@ -130,7 +130,9 @@ type scopedRead struct {
 // callerReads is everything a caller fold reads. The plan keeps it so a token's plan can fold the user's own rung under a project's and its team's (ProjectPlan.CallerFor) without the engine.
 type callerReads struct {
 	rungs [3]rungRead
-	// scoped are a user's rungs under team- and project-owned bindings, sorted by scope; the user's own plan folds none of them.
+	// everywhere is a user's rung under system-owned bindings alone, which every request of the user starts from.
+	everywhere rungRead
+	// scoped are a user's rungs under the user's own, team- and project-owned bindings, sorted by scope; the user's own plan folds only the user's own.
 	scoped []scopedRead
 	// owned holds what the principal's, the project's, the team's and the system's scopes own, the reach when no rung links; read only then.
 	owned [4]*OwnedCredentials
@@ -200,6 +202,11 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 			rd.scoped = readScoped(tx, rd.rungs[i], rp.Scoped, &rd.in)
 		}
 	}
+	if kind == "user" {
+		// The user's own plan serves the requests outside any project, which the user's own binding governs beside the system's.
+		rd.everywhere = rd.rungs[rungPrincipal]
+		rd.rungs[rungPrincipal] = rd.principalIn(principal)
+	}
 	if !rd.links() {
 		// A service account owns nothing; a user's own scope is its principal.
 		if kind == "user" {
@@ -260,6 +267,9 @@ func readScoped(tx *engine.Txn, own rungRead, scoped []ScopedRung, in *inputs) [
 	for _, s := range scoped {
 		r := own
 		r.rung.Policy, r.refused, r.linked, r.scope = s.Policy.Rung.Policy, s.Policy.Refused, nil, s.Scope
+		if s.Scope == own.rung.SubjectID {
+			r.scope = "" // the user's own binding counts in the user's own buckets
+		}
 		if r.rung.Policy.links() {
 			r.linked = linkedPools(tx, r.rung.Policy, s.Policy.unusable, in)
 		}
@@ -268,16 +278,16 @@ func readScoped(tx *engine.Txn, own rungRead, scoped []ScopedRung, in *inputs) [
 	return out
 }
 
-// principalIn is the user's rung for a request inside project, a project of team: the one binding whose owner holds the request (the system's, the team's or the project's). Two of them refuse the rung, since a subject has one policy per request and no scope outranks another.
-func (rd *callerReads) principalIn(project, team string) rungRead {
-	r := rd.rungs[rungPrincipal]
+// principalIn is the user's rung for a request inside scopes (a project and its team, or the user's own scope for the requests outside any project): the one binding whose owner holds the request (the system's, or one owned by a scope given). Two of them refuse the rung, since a subject has one policy per request and no scope outranks another.
+func (rd *callerReads) principalIn(scopes ...string) rungRead {
+	r := rd.everywhere
 	n := 0
 	if r.rung.Policy != nil || r.refused != nil {
 		n = 1
 	}
 	for i := range rd.scoped {
 		s := &rd.scoped[i]
-		if s.scope != project && s.scope != team {
+		if !slices.Contains(scopes, s.scope) {
 			continue
 		}
 		if n == 0 {
@@ -286,8 +296,12 @@ func (rd *callerReads) principalIn(project, team string) rungRead {
 		n++
 	}
 	if n > 1 {
+		where := "inside " + scopes[0]
+		if scopes[0] == r.rung.SubjectID {
+			where = "outside any project"
+		}
 		r.rung.Policy, r.linked, r.scope = nil, nil, ""
-		r.refused = rungRefusal(CodeDuplicateBinding, &r.rung, "", fmt.Sprintf("%d policy bindings govern %s inside %s", n, r.rung.SubjectID, project))
+		r.refused = rungRefusal(CodeDuplicateBinding, &r.rung, "", fmt.Sprintf("%d policy bindings govern %s %s", n, r.rung.SubjectID, where))
 	}
 	return r
 }
