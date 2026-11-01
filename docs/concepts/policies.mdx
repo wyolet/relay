@@ -36,7 +36,7 @@ Which caller rungs a request has depends on its credential:
 | A user's own relay key | None | The user, through system-owned bindings only |
 | Inference token | The project the token was minted for, and its team | The user, through the binding that governs inside that project |
 
-The upstream rungs are the host the request goes to, the account of the host key that serves it (when the key names one), and that host key.
+The upstream rungs are the host the request goes to, the account of the host key that serves it, and that host key. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
 
 ## How the rungs combine
 
@@ -71,7 +71,7 @@ To give a principal anything beyond this, or a different order, link pools or ho
 | `models` | `models` | Model references the rung allows. Empty does not narrow. See [Granting models](#granting-models). |
 | `poolIds` | `pools` (names) | Pools to draw host keys from, in failover order. Caller rungs only. See [Pools](/concepts/key-pooling#pools). |
 | `credentialIds` | `credentials` (names) | Host keys linked directly; each acts as a pool of one. Caller rungs only. |
-| `rateLimits` | `rateLimits` | A list of `{rateLimitId, models}` (`{ref, models}` in manifests). An entry without `models` covers every request; with `models` only requests for a matching model. See [Rate limits](/concepts/rate-limits#where-rate-limits-apply). |
+| `rateLimits` | `rateLimits` | A list of `{rateLimitId, models}` (`{ref, models}` in manifests). An entry without `models` covers every request; with `models` only requests for a matching model, and only on upstream rungs. See [Rate limits](/concepts/rate-limits#where-rate-limits-apply). |
 | `budgetIds` | `budgets` (names) | [Budgets](/concepts/budgets) every request must fit. |
 | `includeDeprecated` | `includeDeprecated` | Lets wildcard grants include deprecated and sunset models. Default `false`. |
 | `payloadLoggingEnabled` | `payloadLoggingEnabled` | Captures request and response bodies when [payload logging](/concepts/payload-logging) is on. The innermost caller policy decides, overriding the relay key's own flag in both directions. |
@@ -79,7 +79,9 @@ To give a principal anything beyond this, or a different order, link pools or ho
 
 A policy is owned by the system, a team, a project, a user or a host. Host-owned policies are the catalog's [tier presets](#tier-presets) and cannot link pools or host keys.
 
-A policy links only rows its scope may use. A system-owned row can be linked from any policy; a team's row from the team's policies and its projects' policies; a project's row from that project's policies. Pools, accounts, budgets and policies can be owned by a team; host keys and rate limits are owned by the system, a project or a user, so a team policy links system-owned ones. A linked row that is missing or out of scope is refused with `400`, and one the caller may not see with `404`.
+A policy links only rows its scope may use. A system-owned row can be linked from any policy; a team's row from the team's policies and its projects' policies; a project's row from that project's policies. Host keys, rate limits, pools, accounts, budgets and policies can all be owned by a team. A linked row that is missing or out of scope is refused with `400`, and one the caller may not see with `404`.
+
+A policy whose `rateLimits` has an entry with `models` can be bound only to a host, an account or a host key. Binding it to a team, project, user or service account is refused with `400`, and so is adding `models` to an entry of a policy already bound to one: a caller rung's limits cover the whole policy.
 
 ## Granting models
 
@@ -87,8 +89,8 @@ A policy links only rows its scope may use. A system-owned row can be linked fro
 
 | Reference | Example | Grants |
 | --- | --- | --- |
-| `provider` | `anthropic` | Every model from the provider, on every host |
-| `provider@host` | `anthropic@anthropic` | Every model from the provider, on that host only |
+| `provider` or `provider/*` | `anthropic` | Every model from the provider, on every host |
+| `provider@host` or `provider/*@host` | `anthropic@anthropic` | Every model from the provider, on that host only |
 | `provider/model` | `openai/gpt-4o-mini` | That model on every host |
 | `provider/model@host` | `openai/gpt-4o-mini@openai` | That model on that host only |
 | `@host` | `@ollama-self` | Every model on that host |
@@ -96,7 +98,7 @@ A policy links only rows its scope may use. A system-owned row can be linked fro
 Rules:
 
 - Names are normalized, so `openai/gpt-5.5` and `openai/gpt-5-5` are the same reference.
-- There are no patterns. A part containing `*`, such as `openai/gpt-*`, is refused with `400`; leave the part out to match everything.
+- `provider/*` is the only pattern, the same grant as `provider`, and is stored as `provider`. Any other `*`, such as `openai/gpt-*` or `@*`, is refused with `400`; leave the part out to match everything.
 - References with a missing part expand against the live catalog, so a model added later is covered without editing the policy.
 - Those wildcard references skip deprecated and sunset models unless `includeDeprecated` is set. A `provider/model` reference grants the model whatever its status.
 - There is no deny syntax. To exclude a model, list what you do want.
@@ -129,9 +131,9 @@ The owner decides which subjects a binding may name:
 | Team | The team, its projects, their service accounts, accounts and host keys owned by the team or one of its projects, and users who are members of the team. |
 | Project | The project, its service accounts, accounts and host keys it owns, and users who are members of the project. |
 
-A user is a member of a team or project when they may mint inference tokens there. A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A subject outside the owner's scope, or a policy it may not use, is refused with `400`.
+A user is a member of a team or project when they may mint inference tokens there. A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A subject outside the owner's scope, or a policy it may not use, is refused with `400`. If a subject later leaves the owner's scope, for example a project moved to another team, the binding stops applying to it.
 
-Group subjects are accepted for compatibility and bind nothing: a group is not a rung. Relay keys are never subjects.
+A group is not a rung, so a group subject is refused with `400`; bind the users, their team or their project instead. A binding stored with a group subject by an earlier version binds nothing through it and must drop the group before it can be saved again. Relay keys are never subjects.
 
 ### Bindings on users
 
@@ -172,8 +174,8 @@ The delete answers `200` with the links it took, grouped by the kind and field t
   "items": [{"id": "…", "name": "ml"}, {"id": "…", "name": "search"}]}]}
 ```
 
-`GET /api/{plural}/by-id/{id}/references` lists the same before you delete. Some deletes are refused with `409 resource_in_use` instead: a policy still used by a binding, an account still named by host keys, and a host that still has accounts or pools.
+`GET /api/{plural}/by-id/{id}/references` lists the same before you delete. Some deletes are refused with `409 resource_in_use` instead: a policy still used by a binding, an account still named by host keys, and a host that still has accounts or pools. A default account no host key names never blocks a delete; it goes with its host, team or project.
 
 ## Examples
 
-[Policy examples](/policy-examples) has manifests for a team policy with a pool, a budget and a model-scoped rate limit, for binding a tier preset to an account, and for per-project budgets. The control API routes are in [Control API](/reference/control-api#policies-and-policy-bindings).
+[Policy examples](/policy-examples) has manifests for a team policy with a pool, a budget and rate limits, for binding a tier preset or a model-scoped tier of your own to an account, and for per-project budgets. The control API routes are in [Control API](/reference/control-api#policies-and-policy-bindings).

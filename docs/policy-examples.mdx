@@ -1,6 +1,6 @@
 ---
 title: "Policy Examples"
-description: "Manifests for a team policy with a pool, a budget and a model-scoped rate limit, a provider tier on an account, and per-project budgets"
+description: "Manifests for a team policy with a pool, a budget and rate limits, a provider tier on an account, and per-project budgets"
 ---
 
 Each example is a `relay.wyolet.dev/v1alpha3` manifest bundle. Apply it with [`relay apply`](/concepts/gitops), dry run first:
@@ -12,9 +12,9 @@ relay apply -f policies/
 
 The examples build on each other: the second and third use the team, project and account the first one declares. The tier presets they bind (`openai-build`, `openai-grow`) ship in catalog releases with the v1alpha3 schema. How the pieces combine is on [Policies](/concepts/policies).
 
-## A team policy with a pool, a budget and a scoped rate limit
+## A team policy with a pool, a budget and rate limits
 
-An admin provisions the upstream side: one OpenAI organization as an account, its two keys, and a pool of them. The team gets a policy that draws on the pool, a monthly budget, a request limit for everything, and a token limit for one model.
+An admin provisions the upstream side: one OpenAI organization as an account, its two keys, and a pool of them. The team gets a policy that draws on the pool, a monthly budget, and request and token limits.
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -81,19 +81,11 @@ spec:
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: RateLimit
 metadata:
-  name: ml-requests
-  owner: {kind: system}
+  name: ml-limits
+  owner: {kind: team, name: ml}
 spec:
   rules:
     - {meter: requests, amount: 600, window: 1m, strategy: sliding-window}
----
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RateLimit
-metadata:
-  name: ml-gpt-5-5-tokens
-  owner: {kind: system}
-spec:
-  rules:
     - {meter: tokens, amount: 2000000, window: 1m, strategy: sliding-window}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -102,12 +94,10 @@ metadata:
   name: ml
   owner: {kind: team, name: ml}
 spec:
-  models: [openai]
+  models: [openai/*]
   pools: [openai-main]
   rateLimits:
-    - ref: ml-requests
-    - ref: ml-gpt-5-5-tokens
-      models: [openai/gpt-5-5]
+    - ref: ml-limits
   budgets: [ml-monthly]
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -124,11 +114,14 @@ spec:
 What this gives every request on the team's rung, which is every service-account key and inference token of every project in `ml`:
 
 - Only OpenAI models, and only through `openai-main`. The policy links a pool, so it decides reach: the team's members no longer fall back to the host keys their scopes own.
-- 600 requests a minute and $2,000 a month, each one counter shared by the whole team.
-- 2,000,000 tokens a minute for `gpt-5-5`, one counter across the team; other models are not limited by it.
+- 600 requests and 2,000,000 tokens a minute, and $2,000 a month, each one counter shared by the whole team across every model.
 - Unpriced OpenAI models are refused while the budget applies.
 
-The host keys, the account, the pool and the rate limits are system-owned because host keys and rate limits cannot be owned by a team, and a team's pool may hold only system-owned keys. The budget, the policy and the binding belong to the team, so a `team-admin` can change them.
+The account, the host keys and the pool are system-owned, so any team's policy can link the pool. The rate limit, the budget, the policy and the binding belong to the team, so a `team-admin` can change them. A team that brings its own OpenAI keys can own them, and a pool of them, the same way.
+
+The policy's rate limits carry no `models`: a team's limits cover the whole policy. Per-model limits belong on the account, as in the next example.
+
+Naming the account on each key is optional: a key saved without `account` joins its owner's [default account](/concepts/key-pooling#default-accounts) at the host, here the system's.
 
 ## Binding a tier to an account
 

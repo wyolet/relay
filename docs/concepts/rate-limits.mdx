@@ -24,7 +24,7 @@ A rule's counter is identified by its `meter`, `strategy` and `window`, so two r
 In a manifest, write `window` as a duration string. A bare integer there is read as nanoseconds, not seconds.
 </Warning>
 
-A rate limit is owned by the system, a project, a user, or (for the catalog's tier limits) a provider or a host. A team policy links system-owned or catalog rate limits.
+A rate limit is owned by the system, a team, a project, a user, or (for the catalog's tier limits) a provider or a host. A team's rate limits can be linked by the team's policies and its projects' policies.
 
 ### Meters
 
@@ -67,11 +67,13 @@ A [policy](/concepts/policies) lists rate limits in `rateLimits`. Each entry nam
 ```yaml
 rateLimits:
   - ref: ml-requests             # every request under the policy
-  - ref: ml-gpt-5-5-tokens       # only requests for these models
+  - ref: ml-gpt-5-5-tokens       # only requests for these models; upstream rungs only
     models: [openai/gpt-5-5]
 ```
 
 `models` takes the same references as a policy's [model grant](/concepts/policies#granting-models). One rate limit may be linked more than once with different `models`; linking it twice over the same models is refused on save. A disabled rate limit, or one the policy can no longer find, applies nothing.
+
+An entry with `models` counts per model, which only the upstream rungs do, so a policy with one can be bound only to a host, an account or a host key. Binding it to a team, project, user or service account is refused with `400`, and so is adding `models` to an entry of a policy already bound to one.
 
 Every rate limit on every rung of the ladder applies to a request. Who shares a counter depends on the side of the ladder the policy is bound on.
 
@@ -83,7 +85,7 @@ On the team, project and principal rungs, a counter belongs to one rule, one pol
 - A policy bound to a project, or to a principal, counts for that project or principal alone.
 - One policy bound to two subjects gives each its own counters. Binding a subject to another policy starts fresh ones.
 - A user bound by a project-owned binding is counted per project, so the same policy bound by two projects never shares a counter.
-- An entry with `models` keeps one counter for all the models it matches.
+- Every entry covers the whole policy: a caller policy's entries carry no `models`.
 
 To cap one relay key on its own, give it a service account of its own and bind a policy to that service account.
 
@@ -177,4 +179,4 @@ curl -X POST http://localhost:8081/api/rate-limits \
   }'
 ```
 
-Link it from a policy's `rateLimits` (`{rateLimitId}` through the API, `{ref: team-chat-rl}` in a manifest). `GET /api/policies/{ref}/rate-limits` shows the rate limits a policy links. [Policy examples](/policy-examples) has a complete policy with a model-scoped entry.
+Link it from a policy's `rateLimits` (`{rateLimitId}` through the API, `{ref: team-chat-rl}` in a manifest). `GET /api/policies/{ref}/rate-limits` shows the rate limits a policy links. [Policy examples](/policy-examples) has a complete team policy, and a tier policy with model-scoped entries bound to an account.

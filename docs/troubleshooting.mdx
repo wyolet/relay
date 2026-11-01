@@ -20,7 +20,7 @@ A `401` with `X-WR-Origin: upstream` is the provider rejecting a host key, not y
 
 | Code | Cause | Fix |
 | --- | --- | --- |
-| `model_not_allowed` | A policy on the caller's ladder does not allow the model; the message names the rung. | Add the model to that policy's `models`; see [Policies](/concepts/policies). |
+| `model_not_allowed` | A policy on the caller's ladder does not allow the model; the message names the rung and the policy. | Add the model to that policy's `models`; see [Policies](/concepts/policies). |
 | `model_disabled` | The model is disabled in the catalog. | Enable it, or use another model. |
 | `policy_disabled` | The policy bound on the rung the message names is disabled. | Enable the policy, or bind the subject to another one. |
 | `subject_disabled` | The caller's team, project or service account is disabled. | Enable it. |

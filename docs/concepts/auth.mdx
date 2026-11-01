@@ -19,7 +19,7 @@ Relay keys and host keys never meet on the wire: a caller presents a relay key, 
 Tenancy has three levels:
 
 - A **team** is the outer scope. It has no member list: a user belongs to a team through a role binding at team scope.
-- A **project** belongs to one team. Policies, policy bindings, rate limits, budgets, host keys, accounts, pools, service accounts and service-account keys can be owned by a project. A team can own policies, policy bindings, budgets, accounts and pools.
+- A **project** belongs to one team. Policies, policy bindings, rate limits, budgets, host keys, accounts, pools, service accounts and service-account keys can be owned by a project. A team can own policies, policy bindings, rate limits, budgets, host keys, accounts and pools.
 - A **principal** is who a request acts as: a **user** (a person, from local config, [SSO](/concepts/sso) or [SCIM](/concepts/scim)) or a **service account** (a machine principal that lives in one project).
 
 A relay key is a credential of one principal, named in `spec.principal` (`{kind: serviceaccount | user, ...}`). Rotating, revoking or deleting a key leaves the principal and everything bound to it untouched.
@@ -98,7 +98,7 @@ A **host key** is an upstream credential, such as your OpenAI or Anthropic API k
 
 An env reference is read from the relay process's environment. Names starting with `RELAY_` or `WYOLET_` are refused, because a host key's value is sent to its host and those names hold Relay's own configuration.
 
-A host key may name the provider [account](/concepts/key-pooling#accounts) it belongs to in `accountId`, so that the account's tier limits count across all of its keys. Policies reach host keys through [pools](/concepts/key-pooling#pools), through a direct link, or through ownership.
+A host key names the provider [account](/concepts/key-pooling#accounts) it belongs to in `accountId`, so that the account's tier limits count across all of its keys; a key saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host. Policies reach host keys through [pools](/concepts/key-pooling#pools), through a direct link, or through ownership.
 
 A stored value is encrypted under a data key of the host key's owner, and the data keys are wrapped by `RELAY_MASTER_KEY`; only ciphertext reaches the database, and reads never return the value. `POST /api/host-keys/by-id/{id}/rotate` replaces a stored value. See [Stored secrets and key rotation](/concepts/secret-keys) for the scheme and the rotation procedures.
 

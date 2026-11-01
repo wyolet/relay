@@ -125,14 +125,13 @@ A policy's links are ids in the API and names in manifests:
     "models": ["openai"],
     "poolIds": ["<pool-id>"],
     "credentialIds": [],
-    "rateLimits": [
-      { "rateLimitId": "<rate-limit-id>" },
-      { "rateLimitId": "<rate-limit-id>", "models": ["openai/gpt-5-5"] }
-    ],
+    "rateLimits": [{ "rateLimitId": "<rate-limit-id>" }],
     "budgetIds": ["<budget-id>"]
   }
 }
 ```
+
+A `rateLimits` entry may add `"models": [...]` to count per model; a policy with such an entry can be bound only to a host, an account or a host key.
 
 A policy binding is owned by the system, a team (`metadata.owner`) or a project (`spec.projectId`):
 
@@ -150,7 +149,7 @@ Subject kinds are `host`, `account`, `credential` (a host key), `team`, `project
 
 | Answer | When |
 | --- | --- |
-| `400` | A linked row does not exist or lives in a scope the policy may not use; a subject lies outside the binding owner's scope; the binding uses a policy its owner may not use; a host-owned policy links pools or host keys. |
+| `400` | A linked row does not exist or lives in a scope the policy may not use; a subject lies outside the binding owner's scope or is a group; the binding uses a policy its owner may not use; a host-owned policy links pools or host keys; a policy with a model-scoped rate limit would be bound to a team, project, user or service account, by a new binding or by adding `models` to a bound policy. |
 | `404` | A linked row exists but you may not see it. |
 | `409` `duplicate_binding` | A subject is already held by another binding (for a user: by a binding whose scope overlaps this one). |
 
@@ -163,7 +162,9 @@ GET /api/pools/{ref}/keys       the pool's host keys in pool order, without valu
 GET /api/accounts/{ref}/keys    the host keys that name the account, without values
 ```
 
-A pool's keys must authenticate to the pool's host, and an account named by a host key must be at that key's host. Deleting an account that host keys still name, or a host that still has accounts or pools, answers `409`.
+A pool's keys must authenticate to the pool's host, and an account named by a host key must be at that key's host. A host key saved without `accountId` gets its owner's default account at its host, created on first use; an owner has one default account per host, and marking a second `"default": true` answers `409`. See [Default accounts](/concepts/key-pooling#default-accounts).
+
+Deleting an account that host keys still name, or a host that still has accounts or pools, answers `409`. A default account no host key names does not block: it is deleted with its host, team or project. Deleting a team or project that still has rows under it or owned by it answers `409` and lists them as `blockers`.
 
 ### Model overlays
 

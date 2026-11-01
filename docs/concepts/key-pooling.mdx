@@ -22,7 +22,7 @@ A **pool** is an ordered set of host keys at one host, with the algorithm that p
 
 A caller [policy](/concepts/policies) links pools in `pools`, in the order they are tried. Many policies may link one pool and draw on it first come, first served: nothing in a pool is reserved for one of them, and to keep one caller from using all of it, cap each caller with its own [rate limits](/concepts/rate-limits) or [budgets](/concepts/budgets). A host key linked directly in a policy's `credentials` acts as a pool of one.
 
-Pools, accounts and budgets may be owned by the system, a team, a project or a user. Your callers never see which key served them.
+Host keys, pools, accounts and budgets may be owned by the system, a team, a project or a user. Your callers never see which key served them.
 
 ### Picking a key
 
@@ -42,12 +42,13 @@ A host marked `noAuth` (a self-hosted Ollama, for example) needs no host key: Re
 
 ## Accounts
 
-An **account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host. The account is optional.
+An **account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host.
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
 | `hostId` | `host` (name) | The host the organization is held at. |
 | `orgId` | `orgId` | The provider's organization id. Optional and informational. |
+| `default` | `default` | Marks the owner's default account at the host. See [Default accounts](#default-accounts). |
 
 An account is the organization, not a person: one login can belong to several organizations with separate limits, and each is its own account. Keys of one account share its capacity. Adding a second key to an account gives failover on key-level failures and lets you rotate without downtime (add the new key, then revoke the old one); it does not add throughput.
 
@@ -61,6 +62,14 @@ Two cooldowns skip a whole account. Both live in each pod and are learned from t
 When every key of the route is over a limit or cooling, the request fails with `429 rate_limit_exceeded` and a `Retry-After` for the first one that frees up.
 
 Deleting an account that host keys still name is refused with `409`. Read an account's keys with `GET /api/accounts/{ref}/keys` and a pool's with `GET /api/pools/{ref}/keys`.
+
+### Default accounts
+
+A host key saved without `accountId` joins its owner's default account at its host, so keys of one owner at one host share their account rung unless you split them. Relay creates the default account with the first such key, owned like the key and named after the host (`openai`, then `openai-2`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account.
+
+Each owner has at most one default account per host; marking a second one `default` answers `409`. To group keys by real provider organizations instead, create the accounts and name one on each key.
+
+A default account no host key names never blocks a delete: deleting its host, its team or its project takes it along. One that keys still name blocks like any other account.
 
 ## Circuit breakers
 

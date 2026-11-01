@@ -18,27 +18,31 @@ This is a [stop-and-start upgrade](/concepts/upgrade#stop-and-start-upgrades): a
 | Policy `hostKeyIds` (`hostKeys` in manifests) | `poolIds` / `credentialIds` (`pools` / `credentials`). See [Pools](/concepts/key-pooling#pools). |
 | Policy `keySelection` | A pool's `selection`. |
 | Policy `rateLimitId` (`rateLimit`) | `rateLimits: [{rateLimitId}]` (`[{ref}]`). |
-| Policy `rlBindings` | `rateLimits` entries with `models`. |
+| Policy `rlBindings` | `rateLimits` entries with `models`, in a policy bound to a host, an account or a host key. A policy bound to a team, project, user or service account cannot scope a rate limit to models: its limits cover every model. |
 | Policy `modelIds` | `models` (model references). |
 | Relay key `policyId`, service account `policyId` | A policy binding on the key's principal. |
-| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [account](/concepts/key-pooling#accounts). |
-| Policy binding `priority`, several bindings per subject | One binding per subject. `priority` is still accepted and has no effect. |
-| Group subjects in policy bindings, `system:authenticated` as a project default | Group subjects bind nothing. Bind the team or the project instead. |
+| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [account](/concepts/key-pooling#accounts). A key without an account joins its owner's [default account](/concepts/key-pooling#default-accounts). |
+| Policy binding `priority`, several bindings per subject | One binding per subject. `priority` is gone: the control API refuses it with `422` and manifests ignore it. |
+| Group subjects in policy bindings, `system:authenticated` as a project default | Group subjects are refused with `400` on save, and stored ones bind nothing. Bind the users, the team or the project instead. |
+| Host `policies` and `defaultPolicy` | Gone. A host's tier presets are the policies it owns (`GET /api/hosts/{host}/policies`), and one applies once it is bound to an account. The control API refuses the fields with `422`, manifests ignore them, and the hosts list filters `policy_id`, `default_policy` and `has_default_policy` answer `400`. |
+| Team and project `spec.budget`, which nothing enforced | A [budget](/concepts/budgets) linked by the policy bound to the team or project. A manifest that still carries `budget` is refused with a pointer to `Budget`. |
+| `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE`, `RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS`, `RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE`, the chart's `relay.redisPostFlightBatchSize`, `relay.redisPostFlightBatchDelayMs`, `relay.redisPostFlightQueueSize`, and the metrics `relay_settle_queue_full_total`, `relay_settle_retries_total` | Gone: each request settles its counters on store calls of its own. Leftover values are ignored. |
 | `allowMissingPolicy` in the `inference` settings section | Gone. A principal with no caller policy reaches the host keys its own scopes own, and system-owned ones. |
 | `relay.wyolet.dev/v1alpha2` for `Policy`, `HostKey`, `Key`, `PolicyBinding` | `relay.wyolet.dev/v1alpha3`. The old shape is refused with a pointer to the new one; other kinds still accept v1alpha2. |
 | `POST`/`DELETE /api/policies/by-id/{id}/keys/{keyId}` | Removed. Bind a policy to the key's principal. |
 | `/api/schemas/v1alpha2/...` | `/api/schemas/v1alpha3/...`. |
 
-New kinds: `Account`, `Pool` and `Budget`, with their CRUD routes (`/api/accounts`, `/api/pools`, `/api/budgets`) and RBAC kinds (`accounts`, `pools`, `budgets`, granted by the built-in roles).
+New kinds: `Account`, `Pool` and `Budget`, with their CRUD routes (`/api/accounts`, `/api/pools`, `/api/budgets`) and RBAC kinds (`accounts`, `pools`, `budgets`, granted by the built-in roles). Teams may now own host keys and rate limits as well.
 
 Behaviour that changes at request time:
 
 - **Reach without a policy widens.** In 0.11 a project-scoped credential that resolved no policy was refused with `no_policy`. In 0.20 it reaches the host keys owned by its project, its team and the system. Host keys created with the admin token are system-owned, so every principal without a caller policy that links pools can use them. To keep a team or project on specific keys, bind it a policy that links the pools it should use; see [Reach without a caller policy](/concepts/policies#reach-without-a-caller-policy).
 - **Project bindings on users govern only that project's tokens.** A binding owned by a project, naming a user, applies to the inference tokens that user mints for the project. The user's own relay keys see only system-owned bindings, and no longer take a project's attribution or limits from a project-owned policy.
+- **Every host key has an account.** Migration 36 puts each host key without one into its owner's default account at its host, and a key saved later without one joins it too. Keys of one owner at one host share that account, so a `429` from the provider cools the account for the requested model on all of them, and no longer goes to the one key's breaker. See [Accounts](/concepts/key-pooling#accounts).
 - **Usage `policy_id`** records the innermost caller policy: the principal's, else the project's, else the team's.
 - **Proxy mode** refuses a model that is not in the catalog, also for a key that had no policy, instead of forwarding it unpriced.
 - **Batch items** run under the ladder as it is when each item runs, not as it was at submission.
-- **Error codes.** `no_policy`, `policy_not_found` and `policyless_disabled` are gone; `subject_disabled`, `duplicate_binding`, `unpriced_under_budget` and `budget_exceeded` are new. A disabled, revoked, expired or rotated-out relay key answers `401 invalid api key`. See [Policy refusals](/reference/inference-api#policy-refusals).
+- **Error codes.** `no_policy`, `policy_not_found` and `policyless_disabled` are gone; `subject_disabled`, `duplicate_binding`, `unpriced_under_budget` and `budget_exceeded` are new. `model_not_allowed` names the rung and the policy that refused. A disabled, revoked, expired or rotated-out relay key answers `401 invalid api key`. See [Policy refusals](/reference/inference-api#policy-refusals).
 
 ## What the migrations do
 
@@ -50,7 +54,9 @@ It then enforces one binding per subject: a subject other than a user may appear
 migration 000035: a subject may be bound by one policy binding (a user by one per owner scope); remove the subject from all but one binding, then upgrade again: serviceaccount <id> in <binding>, <binding>
 ```
 
-**Migration 36** drops the `policy_models` and `policy_host_keys` tables and the `policies.rate_limit_id` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, and `policyId` from every relay key, service account and host key. Policies keep their name, owner, `models`, `includeDeprecated`, `payloadLoggingEnabled` and `enabled`. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
+**Migration 36** drops the `policy_models` and `policy_host_keys` tables, the `policies.rate_limit_id` column and the `policy_bindings.priority` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, `policyId` from every relay key, service account and host key, `policies` and `defaultPolicy` from every host, and `budget` from every team and project. Policies keep their name, owner, `models`, `includeDeprecated`, `payloadLoggingEnabled` and `enabled`. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
+
+It then gives every host key without an account its owner's default account at the key's host, creating one account per owner and host, named after the host (suffixed `-2`, `-3`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account. Keys whose host no longer exists are left without one.
 
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
 
@@ -79,11 +85,13 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
 4. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the export:
 
-   - An `Account` for each provider organization, and `account` on each of its host keys.
+   - An `Account` for each provider organization, and `account` on each of its host keys. A key you leave without one stays in the default account migration 36 gave it.
    - A `PolicyBinding` of a tier preset (or your own tier policy) on each account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
    - A `Pool` for each set of host keys a policy listed, with the old `keySelection` as its `selection`.
-   - Each policy with `pools` (or `credentials`), `rateLimits` and, where you want spend caps, `budgets`.
-   - Policy bindings on the subjects the keys and service accounts pointed at, and on the team or project in place of group and `system:authenticated` subjects.
+   - Each policy with `pools` (or `credentials`), `rateLimits` and, where you want spend caps, `budgets`. Only a policy bound to a host, an account or a host key may scope a rate limit to `models`.
+   - A `Budget` linked by the team's or project's policy in place of a team or project `budget`.
+   - Policy bindings on the subjects the keys and service accounts pointed at, and on the users, team or project in place of group and `system:authenticated` subjects. Remove group subjects from the bindings you keep: a binding that still has one is refused when it is saved again.
+   - No `priority` on bindings, and no `policies` or `defaultPolicy` on hosts.
 
    [Policy examples](/policy-examples) shows each of these.
 

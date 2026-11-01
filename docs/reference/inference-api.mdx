@@ -282,7 +282,7 @@ In Go, `client.Relay(...).Catalog(ctx)` fetches and revalidates it, and `Models(
 Relay writes errors in one envelope:
 
 ```json
-{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed: the model is not allowed by the team policy"}}
+{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed by the team policy <policy-id>"}}
 ```
 
 | Status | `code` | Cause |
@@ -337,7 +337,7 @@ A refusal by the [policy ladder](/concepts/policies#the-ladder) names the rung, 
 | `403` | `policy_disabled` | The policy bound on that rung is disabled. Relay does not fall back to another rule. | Enable the policy, or bind the subject to another one. |
 | `403` | `subject_disabled` | The caller's team, project or service account is disabled. A disabled user, or a key whose service account is disabled, gets `401` instead. | Enable the subject. |
 | `403` | `duplicate_binding` | Two policy bindings reach one subject on that rung. Saving such a binding is normally refused with `409`. | Remove the subject from all but one binding. |
-| `403` | `model_not_allowed` | A policy on the ladder does not allow the model at the host the request would go to. The message names the rung. A deprecated model also needs a caller policy that names it or sets `includeDeprecated`. | Add the model to that policy's `models`, or remove the list. |
+| `403` | `model_not_allowed` | A policy on the ladder does not allow the model at the host the request would go to. The message names the rung and the policy: `model "<model>" is not allowed by the <rung> policy <policy-id>`. A deprecated model also needs a caller policy that names it or sets `includeDeprecated`; that refusal names no policy. | Add the model to that policy's `models`, or remove the list. |
 | `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no pricing. | Add pricing for the binding. |
 | `429` | `budget_exceeded` | A hard budget on a caller rung is spent for this period. `Retry-After` is the time to the next period. | Raise the cap, or wait. |
 | `429` | `rate_limit_exceeded` | A rate limit on a caller rung is spent, or every host key is over an upstream limit or its account is cooling. | Wait for `Retry-After`. |
