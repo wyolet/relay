@@ -30,7 +30,9 @@ A dirty row the manifest matches is `unchanged` and nothing is written, so it st
 
 ## Account, tenancy and RBAC documents
 
-`Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha2`. Both write the same rows, and one file may mix them with the other kinds. Under `auth.wyolet.dev/v1alpha1` they are parsed strictly: an unknown field, a rule kind or verb outside the [role vocabulary](/concepts/auth#writing-bindings), `metadata.owner` (every owner of these kinds is derived), or a plain-text password fails the apply with the document's index and the field's path. Under `relay.wyolet.dev/v1alpha2` unknown fields and `metadata.owner` are ignored.
+`Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha3`. Both write the same rows, and one file may mix them with the other kinds. Under `auth.wyolet.dev/v1alpha1` they are parsed strictly: an unknown field, a rule kind or verb outside the [role vocabulary](/concepts/auth#writing-bindings), `metadata.owner` (every owner of these kinds is derived), or a plain-text password fails the apply with the document's index and the field's path. Under `relay.wyolet.dev/v1alpha3` unknown fields and `metadata.owner` are ignored.
+
+`relay.wyolet.dev/v1alpha2` is still read for the kinds whose shape did not change. `Policy`, `HostKey`, `Key` and `PolicyBinding` documents under it are refused with a pointer to the new shape. Under either version a field v1alpha3 removed is refused rather than ignored (`hostKeys`, `rateLimit`, `rlBindings`, `keySelection`, `modelIds` on a policy; `policyId` on a host key; `policy` on a key or service account), because ignoring a removed restriction would widen access. See [Upgrading to 0.20](/concepts/upgrade-0-20).
 
 `User` documents are accepted under `auth.wyolet.dev/v1alpha1` only; `metadata.name` is the username:
 
@@ -122,8 +124,8 @@ Secrets never leave: a `HostKey`'s `value` is always omitted, whatever its `valu
 Every document `export` renders is preceded by an editor directive:
 
 ```yaml
-# yaml-language-server: $schema=http://localhost:8081/api/schemas/v1alpha2/Policy.schema.json
-apiVersion: relay.wyolet.dev/v1alpha2
+# yaml-language-server: $schema=http://localhost:8081/api/schemas/v1alpha3/Policy.schema.json
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 ```
 

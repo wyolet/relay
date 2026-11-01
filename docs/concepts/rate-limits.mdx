@@ -1,9 +1,9 @@
 ---
 title: "Rate Limits"
-description: "Meters, strategies, where a rate limit applies, and what a limited caller sees"
+description: "Meters, strategies, the rungs a rate limit applies on, how counters are shared, and what a limited caller sees"
 ---
 
-A **rate limit** is a named list of rules. Each rule caps one meter over one window, and each rule keeps its own counter: a request is admitted only when every rule of every rate limit that applies to it has room. Rate limits are enforced by Relay before the request leaves for the upstream, with counters in the state backend.
+A **rate limit** is a named list of rules. Each rule caps one meter over one window, and each rule keeps its own counter: a request is admitted only when every rule of every rate limit that applies to it has room. A policy links rate limits, and the rung the policy is bound on decides who shares the counters. Rate limits are enforced by Relay before the request leaves for the upstream, with counters in the state backend.
 
 ## Rules
 
@@ -18,11 +18,13 @@ A rule has four fields, all required:
 
 A rate limit with `enabled: false` applies no rules. An enabled rate limit needs at least one rule.
 
-A rule's counter is identified by its `meter`, `strategy` and `window`, so two rules of one rate limit cannot share all three. Changing a rule's `amount` or moving it in the list keeps its counter; changing its `meter`, `strategy` or `window` starts a new one from zero. Renaming a policy keeps its counters.
+A rule's counter is identified by its `meter`, `strategy` and `window`, so two rules of one rate limit cannot share all three. Changing a rule's `amount` or moving it in the list keeps its counter; changing its `meter`, `strategy` or `window` starts a new one from zero. Renaming a policy or a rate limit keeps its counters.
 
 <Warning>
 In a manifest, write `window` as a duration string. A bare integer there is read as nanoseconds, not seconds.
 </Warning>
+
+A rate limit is owned by the system, a project, a user, or (for the catalog's tier limits) a provider or a host. A team policy links system-owned or catalog rate limits.
 
 ### Meters
 
@@ -39,7 +41,7 @@ In a manifest, write `window` as a duration string. A bare integer there is read
 | `tokens.server_tool_use_input` | Input tokens of server-side tool use. |
 | `tokens.server_tool_use_output` | Output tokens of server-side tool use. |
 
-Token counts come from the provider's response. Relay does not tokenize requests itself.
+Token counts come from the provider's response. Relay does not tokenize requests itself. Spend in dollars is capped by [budgets](/concepts/budgets), not by a meter.
 
 ### Strategies
 
@@ -60,22 +62,44 @@ Two meters ignore the strategy:
 
 ## Where rate limits apply
 
-### Inbound limits on a policy
+A [policy](/concepts/policies) lists rate limits in `rateLimits`. Each entry names one rate limit and, optionally, the models it covers:
 
-A [policy](/concepts/policies) carries either one rate limit (`rateLimitId`) that covers every model it grants with one set of counters, or per-model rate limits (`rlBindings`) where the first entry matching the requested model applies and counters are kept per model. A model no entry matches is not limited by the policy.
+```yaml
+rateLimits:
+  - ref: ml-requests             # every request under the policy
+  - ref: ml-gpt-5-5-tokens       # only requests for these models
+    models: [openai/gpt-5-5]
+```
 
-The counters belong to the policy, not to a credential:
+`models` takes the same references as a policy's [model grant](/concepts/policies#granting-models). One rate limit may be linked more than once with different `models`; linking it twice over the same models is refused on save. A disabled rate limit, or one the policy can no longer find, applies nothing.
 
-- Every relay key and inference token governed by the policy shares them. Callers in a project share them per team: two teams governed by the same policy have separate counters.
-- Relay keys carry no rate limit of their own. To cap one key on its own, give it its own policy.
+Every rate limit on every rung of the ladder applies to a request. Who shares a counter depends on the side of the ladder the policy is bound on.
 
-The policy's limit is reserved once per request, before a host key is picked, so failing over between host keys does not charge it again.
+### Caller rungs
 
-### Upstream limits per host key
+On the team, project and principal rungs, a counter belongs to one rule, one policy and one bound subject:
 
-Every host key names a tier policy owned by its host (see [Tier policies](/concepts/policies#tier-policies-on-host-keys)). If that tier policy has a rate limit, Relay reserves it per host key, so the counters for one key are shared by every policy and team that spends the key. The catalog's tier policies carry provider-published limits; edit them, or point the key at a different tier, to match your account.
+- A policy bound to a team gives the whole team one counter per rule, shared by its projects, service accounts and members' tokens.
+- A policy bound to a project, or to a principal, counts for that project or principal alone.
+- One policy bound to two subjects gives each its own counters. Binding a subject to another policy starts fresh ones.
+- A user bound by a project-owned binding is counted per project, so the same policy bound by two projects never shares a counter.
+- An entry with `models` keeps one counter for all the models it matches.
 
-When a key is over its upstream limit, Relay skips it without opening its circuit breaker and tries the next key in the pool. A skipped key does not count toward the three keys a request tries upstream. The pod remembers the refusal for that key and model until the limiter's retry time, so later requests skip the key without reserving it again. Each pod learns this from its own refusals. If every key is over its limit, the request fails with `429 rate_limit_exceeded`, and `Retry-After` says when the first key has room.
+To cap one relay key on its own, give it a service account of its own and bind a policy to that service account.
+
+The caller's counters are reserved once per request, before the first upstream attempt, so failing over between host keys or pools does not charge them again. A caller counter that has no room ends the request with `429`.
+
+### Upstream rungs
+
+On the host, account and credential rungs, a counter belongs to one rule and the rung's subject, and is shared by every caller that reaches it, across teams. It models a limit the provider enforces, so:
+
+- A rate limit on an account's tier policy counts once across every host key of the account.
+- An entry with `models` keeps a separate counter for each model it matches, as providers limit each model separately. A rule that two entries reach for one model counts once.
+- The policy is not part of the counter. Binding the account to another tier policy that links the same rate limit keeps the count.
+
+Upstream counters are reserved per attempt, after a host key is picked. A key over an upstream limit is skipped without touching its breaker and the next key is tried; a skipped key does not count toward the three keys a request tries upstream. An account-wide request or token window that refuses also cools the whole account on this pod until it has room. See [Accounts](/concepts/key-pooling#accounts). If every key is over its limits, the request fails with `429 rate_limit_exceeded`, and `Retry-After` says when the first key has room.
+
+The catalog's [tier presets](/concepts/policies#tier-presets) carry provider-published limits. Bind one to an account, or bind a tier policy of your own to match what the provider gives your organization.
 
 ### System rate limits
 
@@ -83,7 +107,7 @@ Relay ships a few rate limits of its own, owned by the system:
 
 | Name | Applies to | Counted per | Shipped as |
 | --- | --- | --- | --- |
-| `inference-api-proxy` | Authenticated [proxy mode](/concepts/proxy-mode) requests, as a ceiling on top of the policy's limit | Credential | Disabled, no rules |
+| `inference-api-proxy` | Authenticated [proxy mode](/concepts/proxy-mode) requests, as a ceiling on top of the caller's and the host's limits | Credential | Disabled, no rules |
 | `inference-api-proxy-anonymous` | Anonymous proxy mode requests | Client IP | Enabled: 60 requests and 5,000 tokens per minute, 10 concurrent |
 | `otlp-export` | Exports to the [OTLP receiver](/concepts/otlp-receiver) | Credential | Enabled: 1,200 requests per minute |
 
@@ -91,14 +115,14 @@ Each boot creates any of these that is missing and leaves an existing row unchan
 
 ## Reserve and commit
 
-Each request goes through two steps per applicable rate limit:
+Each request goes through two steps:
 
-1. **Reserve**, before the upstream call. All rules of the policy's limit are checked in one atomic script: `requests` and `concurrency` are counted, token meters are checked against what has already been counted. If any rule is over, nothing is counted and the request is refused.
+1. **Reserve**, before the upstream call. The counters are checked in atomic scripts, one per counter group (the caller's counters usually form one group, a host key's account and key counters another, the host's a third): `requests` and `concurrency` are counted, and token meters are checked against what has already been counted. If any rule is over, nothing stays counted: the groups already reserved are released before the refusal returns.
 2. **Commit**, after the response ends. The token counts from the provider's response are added to the token meters and the concurrency slot is released. This runs in the background once the caller has read the response.
 
-If a request fails before any attempt reaches the upstream, its reservation is cancelled: the concurrency slot is released and, for `token-bucket`, `leaky-bucket` and `session-window` rules, the request is refunded. Once an attempt may have reached the upstream, the request charge stands.
+If a request fails before any attempt reaches the upstream, its reservation is cancelled: the concurrency slot is released and, for `token-bucket`, `leaky-bucket` and `session-window` rules, the request is refunded. Once an attempt may have reached the upstream, the request charge stands. A store that cannot be reached refuses the request: limits fail closed.
 
-With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` (Valkey) to share counters across pods.
+With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` to share counters across pods.
 
 ## What a limited caller sees
 
@@ -109,8 +133,10 @@ X-Should-Retry: true
 X-WR-Origin: relay
 Content-Type: application/json
 
-{"error": {"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "<the rule that was exceeded>; try again in 12s"}}
+{"error": {"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "the rate limit of the team policy <policy-id> is exhausted; try again in 12s"}}
 ```
+
+The message names the rung and the policy whose limit refused, never the rule. A spent [budget](/concepts/budgets) answers the same way with the code `budget_exceeded`. When every host key is over an upstream limit, the message is `every credential for this model is over its upstream rate limit`.
 
 `Retry-After` is the wait in whole seconds until the refused rule has room, at least `1`. Relay does not send `X-RateLimit-*` headers for its own limits. When the upstream itself answers `429` and no other key can take the request, the upstream's response is forwarded, including its rate-limit headers.
 
@@ -121,7 +147,7 @@ A `503` with code `overloaded` (`529` `overloaded_error` on Anthropic-shaped rou
 A rate limit with three rules, as a manifest:
 
 ```yaml
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RateLimit
 metadata:
   name: team-chat-rl
@@ -151,4 +177,4 @@ curl -X POST http://localhost:8081/api/rate-limits \
   }'
 ```
 
-Attach it to a policy with `rateLimitId` (or `rateLimit: team-chat-rl` in a policy manifest). `GET /api/policies/{ref}/rate-limits` shows the rate limits a policy references.
+Link it from a policy's `rateLimits` (`{rateLimitId}` through the API, `{ref: team-chat-rl}` in a manifest). `GET /api/policies/{ref}/rate-limits` shows the rate limits a policy links. [Policy examples](/policy-examples) has a complete policy with a model-scoped entry.
