@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/secret"
@@ -208,5 +209,51 @@ func TestIntegration_SubjectHeldByOneBinding(t *testing.T) {
 	}
 	if err := bind("third", rolebinding.Subject{Kind: policybinding.SubjectTeam, ID: tm.Meta.ID}, group); err != nil {
 		t.Fatalf("another subject beside a repeated group: %v", err)
+	}
+}
+
+// A user is held by one binding per owner scope: a second project may bind the same user, the same project may not. Overlapping scopes (a team and its project) are refcheck's to refuse; the index sees only equal ones.
+func TestIntegration_UserHeldByOneBindingPerScope(t *testing.T) {
+	ctx := context.Background()
+	db := storagetest.Pool(t)
+	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "per-scope", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := team.NewStore(db).Upsert(ctx, tm); err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+	mkProject := func(name string) *project.Project {
+		p := &project.Project{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}},
+			Spec: project.Spec{TeamID: tm.Meta.ID},
+		}
+		if err := project.NewStore(db).Upsert(ctx, p); err != nil {
+			t.Fatalf("upsert project: %v", err)
+		}
+		return p
+	}
+	first, second := mkProject("per-scope-1"), mkProject("per-scope-2")
+	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "per-scope", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := policy.NewStore(db).Upsert(ctx, pol); err != nil {
+		t.Fatalf("upsert policy: %v", err)
+	}
+	u := &user.User{ID: meta.NewID(), Username: "per-scope-alice"}
+	if err := user.NewStore(db).Upsert(ctx, u); err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	store := policybinding.NewStore(db)
+	alice := rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: u.ID}
+	bind := func(name string, p *project.Project) error {
+		return store.Upsert(ctx, &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
+			Spec: policybinding.Spec{ProjectID: p.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{alice}},
+		})
+	}
+	if err := bind("alice-in-first", first); err != nil {
+		t.Fatalf("first project binds alice: %v", err)
+	}
+	if err := bind("alice-in-second", second); err != nil {
+		t.Fatalf("second project binds alice: %v", err)
+	}
+	if err := bind("alice-in-first-again", first); !errors.Is(err, policybinding.ErrSubjectBound) {
+		t.Fatalf("first project binds alice twice: err = %v, want ErrSubjectBound", err)
 	}
 }

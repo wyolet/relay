@@ -106,7 +106,11 @@ ALTER TABLE policy_bindings ADD COLUMN IF NOT EXISTS team_id TEXT REFERENCES tea
 ALTER TABLE policy_bindings DROP CONSTRAINT IF EXISTS policy_bindings_one_owner;
 ALTER TABLE policy_bindings ADD CONSTRAINT policy_bindings_one_owner CHECK (project_id IS NULL OR team_id IS NULL);
 CREATE INDEX IF NOT EXISTS policy_bindings_team_idx ON policy_bindings (team_id);
--- A subject is bound to at most one policy, across every binding. Group subjects carry a name, not an id, and are not policy rungs. Subjects already in two bindings stop the upgrade, listed, so the operator chooses which binding keeps them.
+-- owner_scope copies the binding's owner onto each subject ('' system, 'team:<id>', 'project:<id>') so the one-binding rule can be per scope for users. Every binding before this release is project-owned.
+ALTER TABLE policy_binding_subjects ADD COLUMN IF NOT EXISTS owner_scope TEXT NOT NULL DEFAULT '';
+UPDATE policy_binding_subjects s SET owner_scope = 'project:' || b.project_id
+FROM policy_bindings b WHERE b.id = s.binding_id AND b.project_id IS NOT NULL;
+-- A subject is bound to at most one policy, across every binding; a user at most once per owner scope, since a binding applies only to requests inside its scope. Group subjects carry a name, not an id, and are not policy rungs. Subjects already bound twice stop the upgrade, listed, so the operator chooses which binding keeps them.
 DO $$
 DECLARE
     dups TEXT;
@@ -116,14 +120,15 @@ BEGIN
         SELECT s.kind, s.subject_id, string_agg(b.name, ', ' ORDER BY b.name) AS bindings
         FROM policy_binding_subjects s JOIN policy_bindings b ON b.id = s.binding_id
         WHERE s.subject_id IS NOT NULL
-        GROUP BY s.kind, s.subject_id
+        GROUP BY s.kind, s.subject_id, CASE WHEN s.kind = 'user' THEN s.owner_scope END
         HAVING count(*) > 1
     ) d;
     IF dups IS NOT NULL THEN
-        RAISE EXCEPTION 'migration 000035: a subject may be bound by one policy binding; remove the subject from all but one binding, then upgrade again: %', dups;
+        RAISE EXCEPTION 'migration 000035: a subject may be bound by one policy binding (a user by one per owner scope); remove the subject from all but one binding, then upgrade again: %', dups;
     END IF;
 END $$;
-CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_binding ON policy_binding_subjects (kind, subject_id);
+CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_binding ON policy_binding_subjects (kind, subject_id) WHERE kind <> 'user';
+CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_user_binding ON policy_binding_subjects (subject_id, owner_scope) WHERE kind = 'user';
 
 CREATE TRIGGER accounts_notify AFTER INSERT OR UPDATE OR DELETE ON accounts
     FOR EACH ROW EXECUTE FUNCTION catalog_notify('account');

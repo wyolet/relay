@@ -1168,8 +1168,8 @@ type InsertAuditEventParams struct {
 const insertPolicyBindingSubject = `-- name: InsertPolicyBindingSubject :exec
 INSERT INTO policy_binding_subjects
     (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id,
-     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position, owner_scope)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type InsertPolicyBindingSubjectParams struct {
@@ -1185,6 +1185,7 @@ type InsertPolicyBindingSubjectParams struct {
 	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
 	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
 	Position            int32       `db:"position" json:"position"`
+	OwnerScope          string      `db:"owner_scope" json:"owner_scope"`
 }
 
 func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPolicyBindingSubjectParams) error {
@@ -1201,6 +1202,7 @@ func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPoli
 		arg.SubjectTeamID,
 		arg.SubjectProjectID,
 		arg.Position,
+		arg.OwnerScope,
 	)
 	return err
 }

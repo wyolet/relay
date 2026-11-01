@@ -20,8 +20,11 @@ import (
 // ErrSubjectBound is a write naming a subject another binding already holds: a subject is bound to at most one policy.
 var ErrSubjectBound = errors.New("policybinding: subject is already bound by another policy binding")
 
-// oneBindingIndex is the unique index holding a subject to one binding.
-const oneBindingIndex = "policy_binding_subjects_one_binding"
+// The unique indexes holding a subject to one binding, and a user to one binding per owner scope.
+const (
+	oneBindingIndex     = "policy_binding_subjects_one_binding"
+	oneUserBindingIndex = "policy_binding_subjects_one_user_binding"
+)
 
 // Store holds a DB rather than Queries so Upsert can run a multi-table
 // transaction.
@@ -106,6 +109,7 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	if err := q.DeletePolicyBindingSubjects(ctx, b.Meta.ID); err != nil {
 		return fmt.Errorf("policybinding.Upsert: clear subjects: %w", err)
 	}
+	scope := b.ScopeKey()
 	for i := range b.Spec.Subjects {
 		sub := &b.Spec.Subjects[i]
 		if err := q.InsertPolicyBindingSubject(ctx, gen.InsertPolicyBindingSubjectParams{
@@ -121,8 +125,9 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 			SubjectTeamID:       text(subjectFK(sub, SubjectTeam)),
 			SubjectProjectID:    text(subjectFK(sub, SubjectProject)),
 			Position:            int32(i),
+			OwnerScope:          scope,
 		}); err != nil {
-			if storage.IsUniqueViolation(err, oneBindingIndex) {
+			if storage.IsUniqueViolation(err, oneBindingIndex) || storage.IsUniqueViolation(err, oneUserBindingIndex) {
 				return fmt.Errorf("%w: %s", ErrSubjectBound, sub.Key())
 			}
 			return fmt.Errorf("policybinding.Upsert: insert subject %s: %w", sub.Key(), err)

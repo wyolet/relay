@@ -619,8 +619,8 @@ DELETE FROM policy_binding_subjects WHERE binding_id = $1;
 -- name: InsertPolicyBindingSubject :exec
 INSERT INTO policy_binding_subjects
     (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id,
-     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position, owner_scope)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 -- ── accounts, pools, budgets (migration 0035) ────────────────────────────────
 

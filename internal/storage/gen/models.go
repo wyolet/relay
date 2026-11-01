@@ -178,6 +178,7 @@ type PolicyBindingSubject struct {
 	SubjectCredentialID pgtype.Text `db:"subject_credential_id" json:"subject_credential_id"`
 	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
 	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
+	OwnerScope          string      `db:"owner_scope" json:"owner_scope"`
 }
 
 type PolicyBudget struct {
