@@ -73,7 +73,6 @@ func TestBindingOwner_SystemBindingOnUserGovernsEverywhere(t *testing.T) {
 
 // A binding takes effect only for requests inside its owner's scope: a project-owned binding naming another project's service account does not govern that account's requests.
 func TestBindingOwner_ProjectBindingOutsideItsScopeDoesNotApply(t *testing.T) {
-	t.Skip("spec mismatch: a project-owned binding on another project's service account governs that account; only user subjects are scoped to the owner")
 	o := newOrg()
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	other := o.w.Project(o.team)

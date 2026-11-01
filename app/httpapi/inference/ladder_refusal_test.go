@@ -161,7 +161,6 @@ func TestLadderRefusal_DisabledPolicyIsForbidden(t *testing.T) {
 
 // A model outside the grant is refused naming the rung and the policy that refused it.
 func TestLadderRefusal_ModelNotAllowedNamesRungAndPolicy(t *testing.T) {
-	t.Skip("spec mismatch: the model_not_allowed answer names the rung but not the policy that refused (budget and rate-limit refusals name both)")
 	d, p, _, hits, policyID := ladderDeps(t, ladderCase{models: []string{"openai/free"}}, time.Now())
 	w := chat(d, p, "priced")
 	if w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "model_not_allowed" {

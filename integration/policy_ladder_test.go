@@ -402,7 +402,6 @@ func TestIntegration_BindingOwnersForUpstreamSubjects(t *testing.T) {
 
 // Every object a policy links may be owned by a team: a team owns its rate limits and credentials beside its pools, budgets and accounts, and a team policy links them.
 func TestIntegration_TeamOwnsEveryLinkableKind(t *testing.T) {
-	t.Skip("spec mismatch: team-owned rate limits and host keys are refused on save (owner.kind must be system/provider/host/user/project), though budgets, accounts and pools take a team owner")
 	t.Parallel()
 	ls := newLadderStack(t)
 	teamID := ls.mkTeam(t, "ladder-owning-team")
