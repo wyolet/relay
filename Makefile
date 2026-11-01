@@ -113,7 +113,7 @@ help: ## Show this help
 	@echo '  make cover-check       per-package coverage vs scripts/coverage-tiers.txt'
 	@echo '  make bench-gate        allocs/op vs $(BENCH_BASELINE) (±$(BENCH_ALLOC_TOLERANCE)%)'
 	@echo '  make bench-baseline    regenerate $(BENCH_BASELINE)'
-	@echo '  make test-integration  integration tag, race, against ephemeral compose pg + valkey'
+	@echo '  make test-integration  integration tag, race, against ephemeral compose pg + dragonfly'
 	@echo '  make test-integration-run  the same against $$RELAY_TEST_PG_DSN + $$RELAY_TEST_REDIS_ADDR (no compose)'
 	@echo '  make smoke-mock        replay recorded fixtures through relay → RELAY_MOCK_BASE_URL'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
@@ -506,7 +506,7 @@ COMPOSE_TEST    := deploy/compose/docker-compose.test.yml
 TEST_PG_DSN     := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
 TEST_REDIS_ADDR := 127.0.0.1:6399
 
-test-integration: ## spin up ephemeral pg + valkey, run integration-tagged tests with -race, tear down
+test-integration: ## spin up ephemeral pg + dragonfly, run integration-tagged tests with -race, tear down
 	docker compose -f $(COMPOSE_TEST) up -d --wait
 	$(MAKE) --no-print-directory test-integration-run RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' RELAY_TEST_REDIS_ADDR='$(TEST_REDIS_ADDR)'; \
 		status=$$?; \

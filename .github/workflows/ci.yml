@@ -236,14 +236,14 @@ jobs:
           trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
             --skip-db-update --exit-code 1 .
 
-  # Integration-tagged tests against Postgres and Valkey services. Each test
+  # Integration-tagged tests against Postgres and Dragonfly services. Each test
   # gets a database of its own on both, so packages run in parallel.
   integration:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci-integration' || 'ubuntu-latest' }}
-    # The cluster pool runs Postgres and Valkey as pod sidecars on the same
-    # addresses. An empty image skips a service ('' is falsy, hence the order).
+    # The cluster pool runs Postgres and the kv store as pod sidecars on the
+    # same addresses. An empty image skips a service ('' is falsy, hence the order).
     services:
       postgres:
         image: ${{ needs.changes.outputs.cluster != 'true' && 'postgres:16-alpine' || '' }}
@@ -258,12 +258,18 @@ jobs:
           --health-interval 2s
           --health-timeout 2s
           --health-retries 30
-      valkey:
-        image: ${{ needs.changes.outputs.cluster != 'true' && 'valkey/valkey:8-alpine' || '' }}
+      # A service container takes no arguments; Dragonfly reads DFLY_<flag> from the environment.
+      dragonfly:
+        image: ${{ needs.changes.outputs.cluster != 'true' && 'docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2' || '' }}
+        env:
+          DFLY_cluster_mode: emulated
+          DFLY_lock_on_hashtags: 'true'
+          DFLY_proactor_threads: '2'
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "valkey-cli ping"
+          --ulimit memlock=-1
+          --health-cmd "redis-cli ping"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 30
