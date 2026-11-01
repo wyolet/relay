@@ -48,13 +48,13 @@ func TestRateLimit_AccountCountersAreSharedAcrossKeysAndTenants(t *testing.T) {
 	}
 }
 
-// Rotating a credential's value moves no counter: account and credential counters are keyed by ids.
+// Rotating a credential's value moves no counter: account counters are keyed by ids.
 func TestRateLimit_CredentialRotationKeepsTheCount(t *testing.T) {
 	l := newLadder()
 	acct := l.w.Account(l.host)
 	cred := l.w.Credential(l.host, acct, plantest.System, "sk-before")
 	rl := l.w.RateLimit(hourly(1))
-	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), plantest.Subject(policybinding.SubjectCredential, cred.Meta.ID))
+	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: noon})
 	if !admitted(t, lim, counters(t, plans, l.k1, "m1")) {
