@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/role"
@@ -211,9 +212,17 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 		t.Fatalf("POST with a non-user subject = %d: %s", code, raw)
 	}
 
+	// A group is no policy subject.
+	body = `{"metadata":{"name":"ml-search-group"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
+		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
+	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", body)
+	if code != http.StatusBadRequest || !strings.Contains(string(raw), "groups are not policy subjects") {
+		t.Fatalf("POST /api/policy-bindings naming a group = %d: %s, want 400", code, raw)
+	}
+
 	// A project's policy binding is owned by the project.
 	body = `{"metadata":{"name":"ml-search-everyone"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
-		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
+		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"project","id":"` + project.Metadata.ID + `"}]}}`
 	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", body)
 	if code != http.StatusCreated {
 		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
@@ -411,7 +420,7 @@ spec:
   project: ml-search
   policy: ml-search-pol
   subjects:
-    - {kind: group, name: system:authenticated}
+    - {kind: project, name: ml-search}
 `
 
 func TestIntegration_SeedRBAC(t *testing.T) {

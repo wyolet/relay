@@ -52,7 +52,7 @@ spec:
   project: ml-search
   policy: ml-search-default
   subjects:
-    - {kind: group, name: system:authenticated}
+    - {kind: project, name: ml-search}
 `
 
 const roleUUID = "0195f8a0-0000-7000-8000-000000000022"

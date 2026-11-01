@@ -9,6 +9,7 @@
 package policybinding
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -25,11 +26,14 @@ const (
 	SubjectProject    rolebinding.SubjectKind = "project"
 )
 
-// SubjectKinds is every kind a PolicyBinding subject may have.
+// SubjectKinds is every kind a PolicyBinding subject may have. A group is no rung of the ladder, so binding one would govern nobody.
 var SubjectKinds = []rolebinding.SubjectKind{
-	rolebinding.SubjectUser, rolebinding.SubjectGroup, rolebinding.SubjectServiceAccount,
+	rolebinding.SubjectUser, rolebinding.SubjectServiceAccount,
 	SubjectHost, SubjectAccount, SubjectCredential, SubjectTeam, SubjectProject,
 }
+
+// ErrGroupSubject refuses a group subject.
+var ErrGroupSubject = errors.New("groups are not policy subjects in this version; bind the users, their team or their project instead")
 
 // PolicyBinding attaches Spec.PolicyID to Spec.Subjects inside the scope Meta.Owner names.
 type PolicyBinding struct {
@@ -118,6 +122,9 @@ func (b *PolicyBinding) Validate() error {
 	}
 	for i := range b.Spec.Subjects {
 		s := &b.Spec.Subjects[i]
+		if s.Kind == rolebinding.SubjectGroup {
+			return fmt.Errorf("policybinding %q: subjects[%d] (group %q): %w", b.Meta.Name, i, s.Name, ErrGroupSubject)
+		}
 		if !slices.Contains(SubjectKinds, s.Kind) {
 			return fmt.Errorf("policybinding %q: subjects[%d].kind %q is not one of %v", b.Meta.Name, i, s.Kind, SubjectKinds)
 		}

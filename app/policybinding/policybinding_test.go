@@ -15,7 +15,7 @@ func fix() *PolicyBinding {
 			ProjectID: meta.NewID(),
 			PolicyID:  meta.NewID(),
 			Subjects: []rolebinding.Subject{
-				{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"},
+				{Kind: rolebinding.SubjectUser, ID: meta.NewID()},
 			},
 		},
 	}
@@ -142,13 +142,13 @@ func TestValidate(t *testing.T) {
 			want: "duplicate subject",
 		},
 		{
-			name: "group subject carrying an id",
+			name: "a group is never a subject",
 			b: func() *PolicyBinding {
 				b := fix()
-				b.Spec.Subjects[0].ID = meta.NewID()
+				b.Spec.Subjects = append(b.Spec.Subjects, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"})
 				return b
 			}(),
-			want: "group subject names a group",
+			want: "groups are not policy subjects in this version",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

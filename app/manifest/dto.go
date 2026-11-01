@@ -426,9 +426,9 @@ type PolicyBindingSpec struct {
 	Enabled  *bool              `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
 }
 
-// PolicySubjectDTO is a policy-binding subject, named: a principal, a group,
-// a tenancy scope, or an upstream rung (host, account, credential = host key).
+// PolicySubjectDTO is a policy-binding subject, named: a principal, a
+// tenancy scope, or an upstream rung (host, account, credential = host key).
 type PolicySubjectDTO struct {
-	Kind string `json:"kind" yaml:"kind" enum:"user,serviceaccount,group,host,account,credential,team,project"`
+	Kind string `json:"kind" yaml:"kind" enum:"user,serviceaccount,host,account,credential,team,project"`
 	Name string `json:"name" yaml:"name"`
 }
