@@ -114,6 +114,70 @@ func runSuite(t *testing.T, store newStore) {
 		held.Release()
 	})
 
+	windows := []ratelimit.Strategy{ratelimit.StrategyFixedWindow, ratelimit.StrategySlidingWindow}
+
+	t.Run("RefusalRefundsWindowCounts", func(t *testing.T) {
+		for _, strategy := range windows {
+			t.Run(string(strategy), func(t *testing.T) {
+				now := start
+				l := newLimiter(store(t), &now)
+				caller := callerCounter(rule(ratelimit.MeterRequests, strategy, 1), "project:x")
+				upA := upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "a")
+				upB := upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "b")
+				admit(t, l, upA).Settle(limits.Usage{})
+
+				if r := refused(t, l, caller, upA); r.Counter.ID != upA.ID {
+					t.Fatalf("refused by %s, want the full account %s", r.Counter.ID, upA.ID)
+				}
+				// The caller's one request a minute was reserved before the account refused; it must be back.
+				admit(t, l, caller, upB).Settle(limits.Usage{})
+				if r := refused(t, l, caller); r.Counter.ID != caller.ID {
+					t.Fatalf("refused by %s, want the caller %s", r.Counter.ID, caller.ID)
+				}
+			})
+		}
+	})
+
+	t.Run("ReleaseRefundsWindowCounts", func(t *testing.T) {
+		for _, strategy := range windows {
+			t.Run(string(strategy), func(t *testing.T) {
+				now := start
+				l := newLimiter(store(t), &now)
+				caller := callerCounter(rule(ratelimit.MeterRequests, strategy, 2), "project:x")
+				up := upstreamCounter(rule(ratelimit.MeterRequests, strategy, 2), "a")
+				for range 3 {
+					admit(t, l, caller, up).Release()
+				}
+				admit(t, l, caller, up)
+				admit(t, l, caller, up)
+				refused(t, l, caller, up)
+			})
+		}
+	})
+
+	t.Run("SettleKeepsWindowCounts", func(t *testing.T) {
+		for _, strategy := range windows {
+			t.Run(string(strategy), func(t *testing.T) {
+				now := start
+				l := newLimiter(store(t), &now)
+				caller := callerCounter(rule(ratelimit.MeterRequests, strategy, 1), "project:x")
+				admit(t, l, caller).Settle(limits.Usage{Tokens: usage.Tokens{"input": 5}})
+				refused(t, l, caller)
+			})
+		}
+	})
+
+	t.Run("ReleaseAfterRolloverIsNoop", func(t *testing.T) {
+		now := start
+		l := newLimiter(store(t), &now)
+		caller := callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "project:x")
+		old := admit(t, l, caller)
+		now = now.Add(time.Minute)
+		admit(t, l, caller)
+		old.Release()
+		refused(t, l, caller)
+	})
+
 	t.Run("SharedAndDistinctBuckets", func(t *testing.T) {
 		now := start
 		l := newLimiter(store(t), &now)
