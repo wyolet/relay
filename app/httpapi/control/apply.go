@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -129,7 +130,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 				status, msg := http.StatusInternalServerError, se.Error()
 				if me, ok := errors.AsType[*directory.ManagedError](err); ok {
 					status, msg = http.StatusConflict, managedMessage(me)
-				} else if errors.Is(err, directory.ErrStaleResourceVersion) {
+				} else if errors.Is(err, directory.ErrStaleResourceVersion) || errors.Is(err, account.ErrDefaultTaken) {
 					status = http.StatusConflict
 				} else if errors.Is(err, authz.ErrForbidden) {
 					status = http.StatusForbidden
@@ -180,7 +181,9 @@ func planFailure(ctx context.Context, a authz.Authorizer, err error) error {
 }
 
 // recordApplied audits each change that landed as its own row, plus the
-// write that failed, if any. Nothing landed leaves the request's single row.
+// write that failed, if any. A prune that took links from policies audits
+// each policy's update, as the control API's delete does. Nothing landed
+// leaves the request's single row.
 func recordApplied(ctx context.Context, d Deps, applied []apply.Entry, failed *apply.Entry) {
 	var snap *appcatalog.Snapshot
 	if d.Catalog != nil {
@@ -200,6 +203,9 @@ func recordApplied(ctx context.Context, d Deps, applied []apply.Entry, failed *a
 	rows := make([]audit.Row, 0, len(applied)+1)
 	for _, e := range applied {
 		rows = append(rows, row(e, audit.StatusAllowed))
+		for _, p := range e.DetachedPolicies() {
+			rows = append(rows, audit.Row{Action: authz.Plural("policy") + ".update", Fields: []string{p.Field}, Resource: d.auditResource("policy", p.ID, p.Name, p.Owner)})
+		}
 	}
 	if failed != nil {
 		rows = append(rows, row(*failed, audit.StatusError))

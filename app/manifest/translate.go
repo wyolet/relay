@@ -50,29 +50,13 @@ func FromProvider(p *provider.Provider, _ ReverseResolver) ProviderDTO {
 // Host
 // ---------------------------------------------------------------------------
 
-func ToHost(d HostDTO, idx Resolver) (*host.Host, error) {
-	policies := make([]string, 0, len(d.Spec.Policies))
-	for _, name := range d.Spec.Policies {
-		if id, ok := idx.PolicyID(name); ok {
-			policies = append(policies, id)
-		} else {
-			policies = append(policies, name)
-		}
-	}
-	defaultPolicy := d.Spec.DefaultPolicy
-	if defaultPolicy != "" {
-		if id, ok := idx.PolicyID(defaultPolicy); ok {
-			defaultPolicy = id
-		}
-	}
+func ToHost(d HostDTO, _ Resolver) (*host.Host, error) {
 	h := &host.Host{
 		Meta: d.Metadata.toMeta(),
 		Spec: host.Spec{
 			BaseURL:           d.Spec.BaseURL,
 			Path:              d.Spec.Path,
 			Backend:           d.Spec.Backend,
-			Policies:          policies,
-			DefaultPolicy:     defaultPolicy,
 			NoAuth:            d.Spec.NoAuth,
 			PricingStrategies: d.Spec.PricingStrategies,
 			Enabled:           d.Spec.Enabled,
@@ -90,21 +74,7 @@ func ToHost(d HostDTO, idx Resolver) (*host.Host, error) {
 	return h, nil
 }
 
-func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
-	policies := make([]string, 0, len(h.Spec.Policies))
-	for _, id := range h.Spec.Policies {
-		if name, ok := rev.PolicyName(id); ok {
-			policies = append(policies, name)
-		} else {
-			policies = append(policies, id)
-		}
-	}
-	defaultPolicy := h.Spec.DefaultPolicy
-	if defaultPolicy != "" {
-		if name, ok := rev.PolicyName(defaultPolicy); ok {
-			defaultPolicy = name
-		}
-	}
+func FromHost(h *host.Host, _ ReverseResolver) HostDTO {
 	return HostDTO{
 		APIVersion: APIVersion,
 		Kind:       "Host",
@@ -113,8 +83,6 @@ func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
 			BaseURL:           h.Spec.BaseURL,
 			Path:              h.Spec.Path,
 			Backend:           h.Spec.Backend,
-			Policies:          policies,
-			DefaultPolicy:     defaultPolicy,
 			NoAuth:            h.Spec.NoAuth,
 			PricingStrategies: h.Spec.PricingStrategies,
 			Enabled:           h.Spec.Enabled,

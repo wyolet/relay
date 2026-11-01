@@ -178,8 +178,6 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	}
 	sp.ProjectID = r.ProjectID.String
 	sp.PolicyID = r.PolicyID
-	prio := int(r.Priority)
-	sp.Priority = &prio
 	sp.Subjects = nil
 	// The owner columns are the truth; the metadata copy is ignored.
 	switch {
@@ -203,7 +201,6 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	stored := b.Spec
 	stored.ProjectID = ""
 	stored.PolicyID = ""
-	stored.Priority = nil
 	stored.Subjects = nil
 	specJSON, err := json.Marshal(stored)
 	if err != nil {
@@ -224,7 +221,6 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 		ProjectID:       text(b.Spec.ProjectID),
 		TeamID:          text(teamID),
 		PolicyID:        b.Spec.PolicyID,
-		Priority:        int32(b.EffectivePriority()),
 		Metadata:        metaJSON,
 		Spec:            specJSON,
 		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},

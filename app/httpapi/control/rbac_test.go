@@ -112,7 +112,7 @@ func TestGuardRoleBindingStampsOwner(t *testing.T) {
 	}
 }
 
-func TestGuardPolicyBindingDefaultsPriority(t *testing.T) {
+func TestGuardPolicyBindingStampsTheProjectOwner(t *testing.T) {
 	projectID := meta.NewID()
 	b := &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-search-everyone"},
@@ -124,9 +124,6 @@ func TestGuardPolicyBindingDefaultsPriority(t *testing.T) {
 	}
 	if err := guardPolicyBinding(Deps{})(context.Background(), "create", nil, b); err != nil {
 		t.Fatalf("guard: %v", err)
-	}
-	if b.Spec.Priority == nil || *b.Spec.Priority != policybinding.DefaultPriority {
-		t.Errorf("priority = %v, want %d", b.Spec.Priority, policybinding.DefaultPriority)
 	}
 	if b.Meta.Owner != (meta.Owner{Kind: meta.OwnerProject, ID: projectID}) {
 		t.Errorf("owner = %+v, want the project", b.Meta.Owner)

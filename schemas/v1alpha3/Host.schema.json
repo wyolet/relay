@@ -15,9 +15,6 @@
         "consoleURL": {
           "type": "string"
         },
-        "defaultPolicy": {
-          "type": "string"
-        },
         "docsURL": {
           "type": "string"
         },
@@ -35,15 +32,6 @@
         },
         "path": {
           "type": "string"
-        },
-        "policies": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
         },
         "pricingStrategies": {
           "items": {

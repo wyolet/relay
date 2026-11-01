@@ -280,15 +280,6 @@ func TestValidateGraph_PricingMissingTargetModel(t *testing.T) {
 	}
 }
 
-func TestValidateGraph_HostDefaultPolicyMissing(t *testing.T) {
-	docs := fixture()
-	docs[1].Host.Spec.DefaultPolicy = "ghost-policy"
-	issues := ValidateGraph(docs)
-	if !hasRefMissing(issues, "Policy", "ghost-policy") {
-		t.Fatalf("expected ref_missing → Policy/ghost-policy on Host.spec.defaultPolicy, got:\n%s", Format(issues))
-	}
-}
-
 func TestFormat_NoIssues(t *testing.T) {
 	got := Format(nil)
 	if !strings.Contains(got, "catalog ok") {

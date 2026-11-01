@@ -302,71 +302,6 @@ func TestReload_DuplicatePricingFails(t *testing.T) {
 	}
 }
 
-// hostOwnedPolicy builds a Policy owned by the given host id.
-func hostOwnedPolicy(name, hostID string) *policy.Policy {
-	return &policy.Policy{
-		Meta: meta.Metadata{
-			ID:    meta.NewID(),
-			Name:  name,
-			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
-		},
-	}
-}
-
-// TestReload_HostPoliciesMenu_OK accepts a host whose Spec.Policies all
-// resolve to host-owned policies of that same host, with DefaultPolicy
-// in the menu.
-func TestReload_HostPoliciesMenu_OK(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
-	hosts[0].Spec.Policies = []string{tier.Meta.ID}
-	hosts[0].Spec.DefaultPolicy = tier.Meta.ID
-	pols = append(pols, tier)
-
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-}
-
-// Unknown policy ids in a Host's menu are silently dropped from the
-// snapshot copy. PG retains the full list.
-func TestReload_HostPoliciesMenu_UnknownPolicyDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	bad := meta.NewID()
-	hosts[0].Spec.Policies = []string{bad}
-
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload should be tolerant, got %v", err)
-	}
-	h, _ := c.Current().HostByName(hosts[0].Meta.Name)
-	for _, id := range h.Spec.Policies {
-		if id == bad {
-			t.Errorf("dangling policy id %q still in host.Spec.Policies", bad)
-		}
-	}
-}
-
-// A menu entry whose Policy is owned by a different host is also dropped.
-func TestReload_HostPoliciesMenu_WrongOwnerDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	stray := hostOwnedPolicy("stray-tier", meta.NewID())
-	hosts[0].Spec.Policies = []string{stray.Meta.ID}
-	pols = append(pols, stray)
-
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload should be tolerant, got %v", err)
-	}
-	h, _ := c.Current().HostByName(hosts[0].Meta.Name)
-	for _, id := range h.Spec.Policies {
-		if id == stray.Meta.ID {
-			t.Errorf("wrong-owner policy id %q still in host.Spec.Policies", stray.Meta.ID)
-		}
-	}
-}
-
 // A HostKey whose host doesn't resolve is dropped from the snapshot (the ref
 // is required to function).
 func TestReload_HostKeyUnknownHostDrops(t *testing.T) {
@@ -380,24 +315,5 @@ func TestReload_HostKeyUnknownHostDrops(t *testing.T) {
 	}
 	if _, ok := c.Current().HostKey(bad); ok {
 		t.Errorf("hostkey with a dangling hostId should not be in snapshot")
-	}
-}
-
-// DefaultPolicy outside the menu is silently cleared in the snapshot copy.
-func TestReload_HostPoliciesMenu_DefaultNotInMenuClears(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
-	other := hostOwnedPolicy("openai-tier-y", hosts[0].Meta.ID)
-	hosts[0].Spec.Policies = []string{tier.Meta.ID}
-	hosts[0].Spec.DefaultPolicy = other.Meta.ID
-	pols = append(pols, tier, other)
-
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload should be tolerant, got %v", err)
-	}
-	h, _ := c.Current().HostByName(hosts[0].Meta.Name)
-	if h.Spec.DefaultPolicy != "" {
-		t.Errorf("defaultPolicy outside menu should be cleared in snapshot, got %q", h.Spec.DefaultPolicy)
 	}
 }

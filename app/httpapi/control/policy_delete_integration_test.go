@@ -187,45 +187,15 @@ func (f policyDeleteFixture) policyExists(t *testing.T, ctx context.Context, id 
 	return err == nil && p != nil
 }
 
-func TestDeletePolicy_ListedByAHostIsRefusedAsDetachable(t *testing.T) {
+// A host's tier policy that nothing binds deletes: the host itself holds no reference to it.
+func TestDeletePolicy_UnboundHostTierDeletes(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	pol := f.policy(t, ctx, "listed-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
-	f.host.Spec.Policies = []string{pol.Meta.ID}
-	must(t, "upsert host", f.stores.Host.Upsert(ctx, f.host))
+	pol := f.policy(t, ctx, "unbound-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
 	f.allowCatalogDeletes(t, ctx, "governance:policy")
 
-	body := decodeInUse(t, f.deletePolicy(t, pol.Meta.ID, false))
-	if len(body.Blockers) != 1 {
-		t.Fatalf("blockers = %+v, want one group", body.Blockers)
-	}
-	g := body.Blockers[0]
-	if g.Kind != "host" || g.Field != "spec.policies" || !g.Detachable || g.Count != 1 || g.Hidden != 0 {
-		t.Fatalf("group = %+v, want one detachable host via spec.policies", g)
-	}
-	if len(g.Items) != 1 || g.Items[0].ID != f.host.Meta.ID {
-		t.Fatalf("items = %+v, want host %q", g.Items, f.host.Meta.Name)
-	}
-
-	if !f.policyExists(t, ctx, pol.Meta.ID) {
-		t.Fatal("the refused delete removed the policy")
-	}
-	got, err := f.stores.Host.Get(ctx, f.host.Meta.ID)
-	if err != nil || got == nil || len(got.Spec.Policies) != 1 {
-		t.Fatalf("host after refused delete = %+v (err %v), want it still listing the policy", got, err)
-	}
-
-	f.emitter.Close()
-	var found bool
-	for _, ev := range f.sink.all() {
-		if ev.Action == "policies.delete" && ev.Resource.ID == pol.Meta.ID {
-			found = true
-			if ev.Outcome.Code != http.StatusConflict || ev.Change != nil {
-				t.Fatalf("audit event = %+v, want code 409 and no change", ev)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("the refused delete left no audit row")
+	wantStatus(t, f.deletePolicy(t, pol.Meta.ID, false), http.StatusNoContent)
+	if f.policyExists(t, ctx, pol.Meta.ID) {
+		t.Fatal("the policy is still stored")
 	}
 }
 

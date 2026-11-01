@@ -9,10 +9,6 @@
         "policy": {
           "type": "string"
         },
-        "priority": {
-          "format": "int64",
-          "type": "integer"
-        },
         "project": {
           "type": "string"
         },

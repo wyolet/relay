@@ -24,8 +24,8 @@ func benchKey(f principalFixture, plaintext string) *key.Key {
 func benchFixture() principalFixture {
 	f := newPrincipalFixture()
 	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
-		boundTo(f, "b-sa", 1, f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
+		boundTo(f, "b-project", f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
+		boundTo(f, "b-sa", f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
 	}
 	return f
 }

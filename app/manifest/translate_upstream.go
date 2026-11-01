@@ -21,7 +21,7 @@ func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 	resolveScopeOwner(&m.Owner, idx)
 	return &account.Account{
 		Meta: m,
-		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID},
+		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID, Default: d.Spec.Default},
 	}, nil
 }
 
@@ -30,7 +30,7 @@ func FromAccount(a *account.Account, rev ReverseResolver) AccountDTO {
 		APIVersion: APIVersion,
 		Kind:       "Account",
 		Metadata:   metaToWire(a.Meta),
-		Spec:       AccountSpec{Host: nameOr(rev.HostName, a.Spec.HostID), OrgID: a.Spec.OrgID},
+		Spec:       AccountSpec{Host: nameOr(rev.HostName, a.Spec.HostID), OrgID: a.Spec.OrgID, Default: a.Spec.Default},
 	}
 }
 

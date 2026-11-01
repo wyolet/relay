@@ -70,6 +70,8 @@ type Entry struct {
 	// prev is what the row looked like when this entry was planned. Execute
 	// re-reads and refuses the write if it no longer matches.
 	prev rowState
+	// detachedFrom names every policy behind Detached, hidden ones included.
+	detachedFrom []DetachedPolicy
 }
 
 // Counts summarises a plan.

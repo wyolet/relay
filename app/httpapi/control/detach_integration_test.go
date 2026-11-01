@@ -19,7 +19,6 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
@@ -66,33 +65,17 @@ func wantGroups(t *testing.T, what string, groups []blockerGroup, want ...wantGr
 	}
 }
 
-// tierOnHost is a tier policy of f.host that the host lists in its menu.
-func (f policyDeleteFixture) tierOnHost(t *testing.T, ctx context.Context, name string) *policy.Policy {
-	t.Helper()
-	tier := f.policy(t, ctx, name, meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
-	f.host.Spec.Policies = []string{tier.Meta.ID}
-	f.host.Spec.DefaultPolicy = tier.Meta.ID
-	must(t, "upsert host", f.stores.Host.Upsert(ctx, f.host))
-	return tier
-}
-
-// The host lets go of a tier from its menu; the binding using the tier can't
-// let go of its policy and keeps refusing the delete.
-func TestDetachPolicy_ReleasesTheHostMenuAndKeepsBindings(t *testing.T) {
+// A binding can't let go of its policy: detach releases nothing and the
+// binding keeps refusing the delete.
+func TestDetachPolicy_KeepsBindings(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	tier := f.tierOnHost(t, ctx, "detach-tier")
+	tier := f.policy(t, ctx, "detach-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
 	f.policyBinding(t, ctx, "tier-binding", tier.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
 	f.allowCatalogDeletes(t, ctx, "governance:policy")
 
 	body := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
-	wantGroups(t, "detached", body.Detached, wantGroup{"host", "spec.policies", true, 1})
+	wantGroups(t, "detached", body.Detached)
 	wantGroups(t, "blockers", body.Blockers, wantGroup{"policy-binding", "spec.policyId", false, 1})
-
-	h, err := f.stores.Host.Get(ctx, f.host.Meta.ID)
-	must(t, "get host", err)
-	if len(h.Spec.Policies) != 0 || h.Spec.DefaultPolicy != "" || !h.Meta.Dirty {
-		t.Fatalf("host after detach = %+v (dirty %v), want the menu cleared and the row dirty", h.Spec, h.Meta.Dirty)
-	}
 	wantBlockers(t, f.deletePolicy(t, tier.Meta.ID, false), wantGroup{"policy-binding", "spec.policyId", false, 1})
 }
 
@@ -171,11 +154,15 @@ func (f policyDeleteFixture) twoBindingsOnTheAccount(t *testing.T, ctx context.C
 
 func TestDetach_SecondCallChangesNothing(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	tier := f.tierOnHost(t, ctx, "twice-tier")
-	f.policyBinding(t, ctx, "twice-binding", tier.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	prov := f.provider(t, ctx, "twice-vendor")
+	m := f.model(t, ctx, "twice-model", prov.Meta.ID)
+	other := f.model(t, ctx, "twice-other", prov.Meta.ID)
+	f.pricing(t, ctx, "twice-shared", m.Meta.ID, other.Meta.ID)
+	f.pricing(t, ctx, "twice-only", m.Meta.ID)
 
-	first := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
-	second := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
+	first := decodeDetach(t, f.detachRow(t, "models", m.Meta.ID, false))
+	wantGroups(t, "first detached", first.Detached, wantGroup{"pricing", "spec.targetModels", true, 1})
+	second := decodeDetach(t, f.detachRow(t, "models", m.Meta.ID, false))
 	wantGroups(t, "second detached", second.Detached)
 	if !slices.EqualFunc(first.Blockers, second.Blockers, func(a, b blockerGroup) bool {
 		return a.Kind == b.Kind && a.Field == b.Field && a.Count == b.Count && slices.Equal(a.Items, b.Items)
@@ -224,15 +211,12 @@ func TestDetachRole_LeavesOneAdmin(t *testing.T) {
 	}
 }
 
-// Alice may see the shared host but not update it, and cannot see the
-// project's binding at all: neither lets go, and the binding is counted, not
-// named.
+// Alice cannot see the project's binding at all: it does not let go, and it
+// is counted, not named.
 func TestDetach_LeavesRowsTheCallerCannotUpdate(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "alice-policy", meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID})
 	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
-	f.host.Spec.Policies = []string{pol.Meta.ID}
-	must(t, "upsert host", f.stores.Host.Upsert(ctx, f.host))
 
 	w := f.detachRow(t, "policies", pol.Meta.ID, true)
 	body := decodeDetach(t, w)
@@ -240,17 +224,9 @@ func TestDetach_LeavesRowsTheCallerCannotUpdate(t *testing.T) {
 		t.Fatalf("detach body names a row the caller may not see: %s", w.Body.String())
 	}
 	wantGroups(t, "detached", body.Detached)
-	wantGroups(t, "blockers", body.Blockers,
-		wantGroup{"host", "spec.policies", true, 1},
-		wantGroup{"policy-binding", "spec.policyId", false, 1},
-	)
-	if g := body.Blockers[1]; g.Hidden != 1 || len(g.Items) != 0 {
+	wantGroups(t, "blockers", body.Blockers, wantGroup{"policy-binding", "spec.policyId", false, 1})
+	if g := body.Blockers[0]; g.Hidden != 1 || len(g.Items) != 0 {
 		t.Fatalf("binding blocker = %+v, want one hidden row and no items", g)
-	}
-	h, err := f.stores.Host.Get(ctx, f.host.Meta.ID)
-	must(t, "get host", err)
-	if !slices.Equal(h.Spec.Policies, []string{pol.Meta.ID}) || h.Meta.Dirty {
-		t.Fatalf("host after detach = %+v, want untouched", h.Spec)
 	}
 }
 
@@ -332,22 +308,25 @@ func TestDetach_AuditsEachModifiedRow(t *testing.T) {
 
 func TestDetach_SnapshotFollows(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	tier := f.tierOnHost(t, ctx, "snapshot-tier")
+	prov := f.provider(t, ctx, "snapshot-vendor")
+	m := f.model(t, ctx, "snapshot-model", prov.Meta.ID)
+	other := f.model(t, ctx, "snapshot-other", prov.Meta.ID)
+	rates := f.pricing(t, ctx, "snapshot-rates", m.Meta.ID, other.Meta.ID)
 	listener, err := f.cat.Hydrate(ctx, f.stores, appcatalog.BootstrapOptions{Pool: f.pool})
 	must(t, "hydrate", err)
 	runCatalogListener(t, ctx, f.cat, listener)
-	if h, ok := f.cat.Current().Host(f.host.Meta.ID); !ok || !slices.Contains(h.Spec.Policies, tier.Meta.ID) {
-		t.Fatalf("snapshot host before detach = %+v (found %v), want the tier in its menu", h, ok)
+	if p, ok := f.cat.Current().Pricing(rates.Meta.ID); !ok || !slices.Contains(p.Spec.TargetModelIDs, m.Meta.ID) {
+		t.Fatalf("snapshot pricing before detach = %+v (found %v), want the model in its targets", p, ok)
 	}
 
-	decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
+	decodeDetach(t, f.detachRow(t, "models", m.Meta.ID, false))
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if h, ok := f.cat.Current().Host(f.host.Meta.ID); ok && len(h.Spec.Policies) == 0 {
+		if p, ok := f.cat.Current().Pricing(rates.Meta.ID); ok && !slices.Contains(p.Spec.TargetModelIDs, m.Meta.ID) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("snapshot did not drop the tier from the host menu within 5s")
+			t.Fatal("snapshot did not drop the model from the pricing within 5s")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

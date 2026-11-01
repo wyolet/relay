@@ -33,9 +33,8 @@ type bindingRow struct {
 		} `json:"owner"`
 	} `json:"metadata"`
 	Spec struct {
-		RoleID   string `json:"roleId"`
-		Priority int    `json:"priority"`
-		Scope    struct {
+		RoleID string `json:"roleId"`
+		Scope  struct {
 			Kind string `json:"kind"`
 			ID   string `json:"id"`
 		} `json:"scope"`
@@ -212,7 +211,7 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 		t.Fatalf("POST with a non-user subject = %d: %s", code, raw)
 	}
 
-	// Policy binding without a priority takes the default.
+	// A project's policy binding is owned by the project.
 	body = `{"metadata":{"name":"ml-search-everyone"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
 		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
 	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", body)
@@ -222,9 +221,6 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 	var pb bindingRow
 	if err := json.Unmarshal(raw, &pb); err != nil {
 		t.Fatalf("decode policy binding: %v", err)
-	}
-	if pb.Spec.Priority != 100 {
-		t.Errorf("priority = %d, want the default 100", pb.Spec.Priority)
 	}
 	if pb.Metadata.Owner.Kind != "project" || pb.Metadata.Owner.ID != project.Metadata.ID {
 		t.Errorf("owner = %+v, want the project", pb.Metadata.Owner)
@@ -462,9 +458,6 @@ func TestIntegration_SeedRBAC(t *testing.T) {
 	pbs, err := st.stores.PolicyBinding.List(ctx)
 	if err != nil || len(pbs) != 1 {
 		t.Fatalf("list policy bindings: %v %d", err, len(pbs))
-	}
-	if pbs[0].EffectivePriority() != 100 {
-		t.Errorf("priority = %d, want 100", pbs[0].EffectivePriority())
 	}
 
 	// A second run over the same tree is a no-op for unchanged rows and

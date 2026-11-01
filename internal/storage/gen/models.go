@@ -18,6 +18,7 @@ type Account struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	DefaultOwner    pgtype.Text        `db:"default_owner" json:"default_owner"`
 }
 
 type AuditEvent struct {
@@ -155,7 +156,6 @@ type PolicyBinding struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	ProjectID       pgtype.Text        `db:"project_id" json:"project_id"`
 	PolicyID        string             `db:"policy_id" json:"policy_id"`
-	Priority        int32              `db:"priority" json:"priority"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`

@@ -26,26 +26,9 @@ func checkDuplicateNames(g *graph) []Issue {
 // Kept as a stub so adding refs later (e.g. parent-org) is one place.
 func checkProviderRefs(_ *graph) []Issue { return nil }
 
-// checkHostRefs validates Host outbound refs:
-//   - spec.defaultPolicy → Policy name (must exist if non-empty)
-func checkHostRefs(g *graph) []Issue {
-	var out []Issue
-	for _, h := range g.Hosts {
-		if h.Spec.DefaultPolicy == "" {
-			continue
-		}
-		if _, ok := g.Policies[h.Spec.DefaultPolicy]; !ok {
-			out = append(out, Issue{
-				Severity: SeverityError,
-				Kind:     KindRefMissing,
-				Source:   Ref{Kind: "Host", Name: h.Metadata.Name, Field: "spec.defaultPolicy"},
-				Target:   Ref{Kind: "Policy", Name: h.Spec.DefaultPolicy},
-				Message:  fmt.Sprintf("defaultPolicy %q not found", h.Spec.DefaultPolicy),
-			})
-		}
-	}
-	return out
-}
+// checkHostRefs validates Host outbound refs. Hosts carry none today; a
+// host's tier policies point at it through their owner instead.
+func checkHostRefs(_ *graph) []Issue { return nil }
 
 // checkModelRefs validates Model outbound refs and intra-model invariants:
 //   - metadata.owner.id / owner.name → Provider must exist when owner.kind = provider

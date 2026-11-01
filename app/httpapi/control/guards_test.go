@@ -136,38 +136,6 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	}
 }
 
-// The default is applied to an absent priority, never to an explicit one.
-func TestGuardPolicyBindingKeepsAnExplicitPriority(t *testing.T) {
-	mk := func(priority *int) *policybinding.PolicyBinding {
-		b := &policybinding.PolicyBinding{}
-		b.Meta = meta.Metadata{ID: meta.NewID(), Name: "pb"}
-		b.Spec.ProjectID = meta.NewID()
-		b.Spec.PolicyID = meta.NewID()
-		b.Spec.Priority = priority
-		return b
-	}
-	ptr := func(n int) *int { return &n }
-	for _, tc := range []struct {
-		name string
-		in   *int
-		want int
-	}{
-		{"absent", nil, policybinding.DefaultPriority},
-		// 0 is the highest-winning priority, not "not set".
-		{"explicit zero", ptr(0), 0},
-		{"explicit value", ptr(50), 50},
-		{"explicit default", ptr(policybinding.DefaultPriority), policybinding.DefaultPriority},
-	} {
-		b := mk(tc.in)
-		if err := guardPolicyBinding(Deps{})(context.Background(), "create", nil, b); err != nil {
-			t.Fatalf("guard: %v", err)
-		}
-		if b.Spec.Priority == nil || *b.Spec.Priority != tc.want {
-			t.Errorf("%s priority => %v, want %d", tc.name, b.Spec.Priority, tc.want)
-		}
-	}
-}
-
 // The built-in check runs before the license check, so an expired license
 // never masks the reason a built-in edit was refused.
 func TestGuardRoleProtectsExistingBuiltins(t *testing.T) {

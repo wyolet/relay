@@ -8,6 +8,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
@@ -94,6 +95,9 @@ func mapWriteErr(kind, id string, err error) error {
 			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: refcheck.CodeDuplicateBinding, Message: err.Error()},
 			HTTPStatus: http.StatusConflict,
 		}
+	}
+	if errors.Is(err, account.ErrDefaultTaken) {
+		return huma.Error409Conflict(err.Error())
 	}
 	return huma.Error500InternalServerError(err.Error())
 }

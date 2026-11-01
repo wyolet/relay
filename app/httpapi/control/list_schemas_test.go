@@ -207,14 +207,13 @@ func TestLabelAcrossKinds(t *testing.T) {
 
 func TestHostFilter(t *testing.T) {
 	items := []*host.Host{
-		{Meta: meta.Metadata{Name: "openai"}, Spec: host.Spec{BaseURL: "https://api.openai.com", Policies: []string{"p1", "p2"}}},
-		{Meta: meta.Metadata{Name: "bedrock"}, Spec: host.Spec{BaseURL: "https://bedrock.aws", Policies: []string{"p3"}}},
+		{Meta: meta.Metadata{Name: "openai"}, Spec: host.Spec{BaseURL: "https://api.openai.com"}},
+		{Meta: meta.Metadata{Name: "bedrock"}, Spec: host.Spec{BaseURL: "https://bedrock.aws"}},
 	}
-	got, _ := applyQ(t, hostFilter, "policy_id=p2", items)
-	if len(got) != 1 || got[0].Meta.Name != "openai" {
-		t.Fatalf("policy_id=p2 => %v, want [openai]", names(got))
+	if _, err := hostFilter.Parse(url.Values{"policy_id": {"p1"}}); err == nil {
+		t.Fatal("a host lists no policies, so policy_id must 400")
 	}
-	got, _ = applyQ(t, hostFilter, "q=aws", items)
+	got, _ := applyQ(t, hostFilter, "q=aws", items)
 	if len(got) != 1 || got[0].Meta.Name != "bedrock" {
 		t.Fatalf("q=aws (baseURL) => %v, want [bedrock]", names(got))
 	}

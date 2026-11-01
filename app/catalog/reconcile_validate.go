@@ -18,7 +18,7 @@ import (
 // "Required-ref" validators used by the COW reconciler. A required ref is
 // one whose absence makes the row unusable on the hot path — sanitize
 // drops the row entirely rather than leaving a dangling reference. Soft
-// refs (Host.Spec.Policies, Binding.Spec.PricingID, etc.) are filtered by
+// refs (Binding.Spec.PricingID, etc.) are filtered by
 // the per-kind sanitizers and never error here.
 //
 // Used both at upsert time (to decide whether the upsert lands or evicts)

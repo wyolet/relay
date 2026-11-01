@@ -81,16 +81,6 @@ type Spec struct {
 	// reads the keys it needs and ignores the rest. Optional.
 	Backend map[string]string `json:"backend,omitempty" yaml:"backend,omitempty"`
 
-	// Policies is the host's menu of upstream tier Policy ids a HostKey can
-	// mirror. Every entry must be a Policy with Meta.Owner = {kind:host, id:
-	// <this host's id>}. The composition layer enforces the menu invariant.
-	Policies []string `json:"policies,omitempty" yaml:"policies,omitempty"`
-
-	// DefaultPolicy is the Policy id from Policies a HostKey inherits when
-	// its Spec.PolicyID is empty. Must be one of Policies. Optional — if
-	// empty, HostKey.Spec.PolicyID becomes required.
-	DefaultPolicy string `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
-
 	// PricingStrategies is the menu of billing modes this upstream offers:
 	// "api" (per-token metered) and/or "sub" (flat-rate subscription). A
 	// HostKey's Spec.PricingStrategy must be one of these. Empty defaults to

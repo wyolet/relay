@@ -82,7 +82,11 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		Kind: "HostKey", Docs: d.hostKeys, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
-		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error { keepHostKeySecret(prev, next); return nil },
+		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error {
+			keepHostKeySecret(prev, next)
+			keepDefaultAccount(b.rows.Accounts, prev, next)
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -118,21 +122,26 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	return planKind(ctx, b, kindWiring[manifest.PolicyDTO, policy.Policy]{
 		Kind: "Policy", Docs: d.policies, Names: b.idx.Policies, Rows: b.rows.Policies,
 		To: manifest.ToPolicy, Meta: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
-		Upsert: s.Policy.Upsert, Delete: deletePolicyWithDetach(s),
+		// Bindings of a pruned policy go with it (foreign key).
+		Upsert: s.Policy.Upsert, Delete: s.Policy.Delete,
 		Check: refsFor(b, refcheck.Checker.Policy),
 	})
 }
 
-// deletePolicyWithDetach runs the reference cleanup the control API's delete
-// runs: a host listing the policy in its menu stops listing it. Bindings of
-// the policy go with it (foreign key).
-func deletePolicyWithDetach(s *Stores) func(context.Context, string) error {
-	refs := policy.DetachStores{Hosts: s.Host}
-	return func(ctx context.Context, id string) error {
-		if err := policy.Detach(ctx, refs, id); err != nil {
-			return err
+// keepDefaultAccount keeps the default account a key declared without one
+// joined on an earlier save, so the diff does not report the fill as drift.
+// A key moved off a non-default account still reports the change.
+func keepDefaultAccount(accounts []*account.Account, prev, next *hostkey.HostKey) {
+	if next.Spec.AccountID != "" || prev.Spec.AccountID == "" {
+		return
+	}
+	for _, a := range accounts {
+		if a.Meta.ID == prev.Spec.AccountID {
+			if a.Spec.Default && a.Spec.HostID == next.Spec.HostID && a.Meta.Owner == next.Meta.Owner {
+				next.Spec.AccountID = a.Meta.ID
+			}
+			return
 		}
-		return s.Policy.Delete(ctx, id)
 	}
 }
 
