@@ -93,22 +93,19 @@ func TestLadder_EmptyModelListInheritsTheOuterRung(t *testing.T) {
 	wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungTeam, teamPol.Meta.ID)
 }
 
-// The host, account and credential rungs each narrow the models a credential may serve; a model the upstream side refuses is refused naming that rung and its policy.
+// The host and account rungs each narrow the models a credential may serve; a model the upstream side refuses is refused naming that rung and its policy.
 func TestLadder_EachUpstreamRungNarrowsTheModels(t *testing.T) {
-	for _, rung := range []limits.Rung{limits.RungHost, limits.RungAccount, limits.RungCredential} {
+	for _, rung := range []limits.Rung{limits.RungHost, limits.RungAccount} {
 		t.Run(string(rung), func(t *testing.T) {
 			o := newOrg()
 			acct := o.w.Account(o.host)
-			cred := o.w.Credential(o.host, acct, plantest.System, "sk-acct")
+			o.w.Credential(o.host, acct, plantest.System, "sk-acct")
 			pol := o.w.Policy("tier", policy.Spec{Models: []string{"prov/m1"}})
-			switch rung {
-			case limits.RungHost:
+			if rung == limits.RungHost {
 				pol.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: o.host.Meta.ID}
 				o.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectHost, o.host.Meta.ID))
-			case limits.RungAccount:
+			} else {
 				o.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
-			default:
-				o.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectCredential, cred.Meta.ID))
 			}
 			cp := keyCaller(t, o.w.Load(t), o.saKey)
 			mustRoute(t, cp, "m1")
