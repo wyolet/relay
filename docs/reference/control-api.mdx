@@ -149,9 +149,10 @@ Subject kinds are `host`, `account`, `credential` (a host key), `team`, `project
 
 | Answer | When |
 | --- | --- |
-| `400` | A linked row does not exist or lives in a scope the policy may not use; a subject lies outside the binding owner's scope or is a group; the binding uses a policy its owner may not use; a host-owned policy links pools or host keys; a policy with a model-scoped rate limit would be bound to a team, project, user or service account, by a new binding or by adding `models` to a bound policy. |
+| `400` | A linked row does not exist or lives in a scope the policy may not use; a subject lies outside the binding owner's scope; the binding uses a policy its owner may not use; a host-owned policy links pools or host keys; a policy with a model-scoped rate limit would be bound to a team, project, user or service account, by a new binding or by adding `models` to a bound policy. |
 | `404` | A linked row exists but you may not see it. |
 | `409` `duplicate_binding` | A subject is already held by another binding (for a user: by a binding whose scope overlaps this one). |
+| `422` | The body does not match the schema, including a subject of kind `group`. |
 
 The rules behind each answer are on [Policies](/concepts/policies#policy-bindings).
 

@@ -133,7 +133,7 @@ The owner decides which subjects a binding may name:
 
 A user is a member of a team or project when they may mint inference tokens there. A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A policy owned by a user is bound by that user to themselves, or by a team or project binding where its owner may create policy bindings (a project admin binds their own policy to the project's service accounts). A subject outside the owner's scope, or a policy it may not use, is refused with `400`. If a subject later leaves the owner's scope, for example a project moved to another team, the binding stops applying to it, and so does a team or project binding of a user's policy once that user may no longer create policy bindings there.
 
-A group is not a rung, so a group subject is refused with `400`; bind the users, their team or their project instead. A binding stored with a group subject by an earlier version binds nothing through it and must drop the group before it can be saved again. Relay keys are never subjects.
+A group is not a rung, so a group subject is refused with `422`; bind the users, their team or their project instead. A binding stored with a group subject by an earlier version binds nothing through it and must drop the group before it can be saved again. Relay keys are never subjects.
 
 ### Bindings on users
 
