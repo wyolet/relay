@@ -3,8 +3,13 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
@@ -209,6 +214,101 @@ func TestMigrateUpDropsTeamAndProjectBudgets(t *testing.T) {
 		if spec != want {
 			t.Errorf("%s spec = %s, want %s", table, spec, want)
 		}
+	}
+}
+
+// lockedBuffer is a log sink safe to read while another goroutine may still write to it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// The upgrade logs, by name, each pre-0.20 link it drops: a key's or host key's policy, and a policy's host keys, models, rate limit and per-model rate limits. A link to a row that is gone is named by id.
+// Not parallel: it reads the process-wide default logger.
+func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	if err := storagemod.MigrateTo(dsn, 35); err != nil {
+		t.Fatalf("migrate to 35: %v", err)
+	}
+	conn := testPool(t, dsn)
+	system := `{"owner":{"kind":"system"}}`
+	userID, hostID, modelID, rlID, rlModelsID, tierID, gone := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	hostKeyID := meta.NewID()
+	for _, stmt := range []struct {
+		what, sql string
+		args      []any
+	}{
+		{"user", `INSERT INTO users (id, username) VALUES ($1, 'link-user')`, []any{userID}},
+		{"host", `INSERT INTO hosts (id, name, metadata, spec) VALUES ($1, 'link-host', $2, '{"baseUrl":"https://api.example.com"}')`, []any{hostID, system}},
+		{"model", `INSERT INTO models (id, name, metadata, spec) VALUES ($1, 'link-model', $2, '{}')`, []any{modelID, system}},
+		{"rate limit", `INSERT INTO rate_limits (id, name, metadata, spec) VALUES ($1, 'tier-rpm', $2, '{}')`, []any{rlID, system}},
+		{"model rate limit", `INSERT INTO rate_limits (id, name, metadata, spec) VALUES ($1, 'model-rpm', $2, '{}')`, []any{rlModelsID, system}},
+		{"policy", `INSERT INTO policies (id, name, metadata, spec, rate_limit_id) VALUES ($1, 'tier-one', $2, $3, $4)`, []any{
+			tierID, system, `{"rlBindings":[{"models":["acme/*","acme/big"],"rateLimitId":"` + rlModelsID + `"}]}`, rlID,
+		}},
+		{"host key", `INSERT INTO secrets (id, name, value_kind, value_from_env, metadata, spec) VALUES ($1, 'link-host-key', 'env', 'LINK_KEY', $2, $3)`, []any{
+			hostKeyID, system, `{"hostId":"` + hostID + `","policyId":"` + tierID + `"}`,
+		}},
+		{"policy host key", `INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, 0)`, []any{tierID, hostKeyID}},
+		{"policy model", `INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, 0)`, []any{tierID, modelID}},
+		{"key", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'link-key', 'aa11', $2, $3, $4)`, []any{
+			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`, `{"policyId":"` + tierID + `","principal":{"kind":"","id":""}}`,
+		}},
+		{"key to a deleted policy", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'stale-key', 'bb22', $2, $3, $4)`, []any{
+			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`, `{"policyId":"` + gone + `"}`,
+		}},
+		{"key without a policy", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'plain-key', 'cc33', $2, $3, '{}')`, []any{
+			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`,
+		}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("insert %s: %v", stmt.what, err)
+		}
+	}
+
+	logs := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+	slog.SetDefault(prev)
+
+	var got []string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if _, notice, ok := strings.Cut(line, "notice="); ok && strings.Contains(line, "000036") {
+			msg, err := strconv.Unquote(strings.TrimSuffix(notice, " severity=NOTICE"))
+			if err != nil {
+				t.Fatalf("notice %s: %v", notice, err)
+			}
+			got = append(got, msg)
+		}
+	}
+	want := []string{
+		`000036: dropping link: key "link-key" -> policy "tier-one"`,
+		`000036: dropping link: key "stale-key" -> policy "` + gone + `"`,
+		`000036: dropping link: host key "link-host-key" -> tier policy "tier-one"`,
+		`000036: dropping link: policy "tier-one" -> host key "link-host-key"`,
+		`000036: dropping link: policy "tier-one" -> model "link-model"`,
+		`000036: dropping link: policy "tier-one" -> rate limit "tier-rpm"`,
+		`000036: dropping link: policy "tier-one" -> rate limit "model-rpm" for models acme/*, acme/big`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("notices:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

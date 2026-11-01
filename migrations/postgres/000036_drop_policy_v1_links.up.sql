@@ -2,6 +2,61 @@
 --
 -- Moving data to the new shape is manual, so nothing is converted: the legacy model-id and host-key junctions, the single rate-limit column, the binding priority, and the old fields inside the spec documents are removed.
 
+-- Each link removed below is reported by name first, so the operator running the upgrade can re-create the ones still wanted. A target whose row is gone is reported by id.
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT k.name AS src, COALESCE(p.name, k.spec->>'policyId') AS dst
+        FROM relay_keys k LEFT JOIN policies p ON p.id = k.spec->>'policyId'
+        WHERE COALESCE(k.spec->>'policyId', '') <> ''
+        ORDER BY 1, 2
+    LOOP
+        RAISE NOTICE '000036: dropping link: key "%" -> policy "%"', r.src, r.dst;
+    END LOOP;
+    FOR r IN
+        SELECT s.name AS src, COALESCE(p.name, s.spec->>'policyId') AS dst
+        FROM secrets s LEFT JOIN policies p ON p.id = s.spec->>'policyId'
+        WHERE COALESCE(s.spec->>'policyId', '') <> ''
+        ORDER BY 1, 2
+    LOOP
+        RAISE NOTICE '000036: dropping link: host key "%" -> tier policy "%"', r.src, r.dst;
+    END LOOP;
+    FOR r IN
+        SELECT p.name AS src, COALESCE(s.name, phk.host_key_id) AS dst
+        FROM policy_host_keys phk JOIN policies p ON p.id = phk.policy_id LEFT JOIN secrets s ON s.id = phk.host_key_id
+        ORDER BY 1, phk.position
+    LOOP
+        RAISE NOTICE '000036: dropping link: policy "%" -> host key "%"', r.src, r.dst;
+    END LOOP;
+    FOR r IN
+        SELECT p.name AS src, COALESCE(m.name, pm.model_id) AS dst
+        FROM policy_models pm JOIN policies p ON p.id = pm.policy_id LEFT JOIN models m ON m.id = pm.model_id
+        ORDER BY 1, pm.position
+    LOOP
+        RAISE NOTICE '000036: dropping link: policy "%" -> model "%"', r.src, r.dst;
+    END LOOP;
+    FOR r IN
+        SELECT p.name AS src, COALESCE(rl.name, p.rate_limit_id) AS dst
+        FROM policies p LEFT JOIN rate_limits rl ON rl.id = p.rate_limit_id
+        WHERE p.rate_limit_id IS NOT NULL
+        ORDER BY 1
+    LOOP
+        RAISE NOTICE '000036: dropping link: policy "%" -> rate limit "%"', r.src, r.dst;
+    END LOOP;
+    FOR r IN
+        SELECT p.name AS src, COALESCE(rl.name, b.value->>'rateLimitId') AS dst,
+               COALESCE((SELECT string_agg(m, ', ') FROM jsonb_array_elements_text(COALESCE(b.value->'models', '[]'::jsonb)) AS m), '') AS models
+        FROM policies p
+        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(p.spec->'rlBindings') = 'array' THEN p.spec->'rlBindings' ELSE '[]'::jsonb END) WITH ORDINALITY AS b(value, n)
+        LEFT JOIN rate_limits rl ON rl.id = b.value->>'rateLimitId'
+        ORDER BY 1, b.n
+    LOOP
+        RAISE NOTICE '000036: dropping link: policy "%" -> rate limit "%" for models %', r.src, r.dst, r.models;
+    END LOOP;
+END $$;
+
 DROP TABLE IF EXISTS policy_models;
 DROP TABLE IF EXISTS policy_host_keys;
 ALTER TABLE policies DROP COLUMN IF EXISTS rate_limit_id;
