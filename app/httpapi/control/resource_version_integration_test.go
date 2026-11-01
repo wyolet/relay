@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -294,15 +295,18 @@ func TestEveryWritePathChangesTheVersion(t *testing.T) {
 	})
 
 	t.Run("detach", func(t *testing.T) {
-		tier := f.tierOnHost(t, ctx, "detach-version-tier")
-		before, _ := f.stores.Host.Get(ctx, f.host.Meta.ID)
-		decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
-		after, _ := f.stores.Host.Get(ctx, f.host.Meta.ID)
-		if len(after.Spec.Policies) != 0 {
-			t.Fatalf("detach left the tier in the host menu")
+		prov := f.provider(t, ctx, "detach-version-vendor")
+		m := f.model(t, ctx, "detach-version-model", prov.Meta.ID)
+		other := f.model(t, ctx, "detach-version-other", prov.Meta.ID)
+		rates := f.pricing(t, ctx, "detach-version-rates", m.Meta.ID, other.Meta.ID)
+		before, _ := f.stores.Pricing.Get(ctx, rates.Meta.ID)
+		decodeDetach(t, f.detachRow(t, "models", m.Meta.ID, false))
+		after, _ := f.stores.Pricing.Get(ctx, rates.Meta.ID)
+		if slices.Contains(after.Spec.TargetModelIDs, m.Meta.ID) {
+			t.Fatalf("detach left the model in the pricing")
 		}
 		if storedVersion(t, after.Meta) == storedVersion(t, before.Meta) {
-			t.Fatalf("detach left the host's version at %s", after.Meta.ResourceVersion)
+			t.Fatalf("detach left the pricing's version at %s", after.Meta.ResourceVersion)
 		}
 	})
 

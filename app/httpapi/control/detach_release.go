@@ -11,7 +11,6 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
@@ -26,16 +25,6 @@ import (
 func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*releasedRow, error) {
 	s := d.Stores
 	switch it.Kind {
-	case "host":
-		return rowEdit[host.Host]{
-			plural: "hosts", store: s.Host, validate: (*host.Host).Validate,
-			metaOf: func(h *host.Host) *meta.Metadata { return &h.Meta },
-			drop: func(h *host.Host) bool {
-				listed := dropEntries(&h.Spec.Policies, is(t.id))
-				isDefault := clearID(&h.Spec.DefaultPolicy, t.id)
-				return listed || isDefault
-			},
-		}.apply(ctx, d, it)
 	case "pricing":
 		return rowEdit[pricing.Pricing]{
 			plural: "pricings", store: s.Pricing, validate: (*pricing.Pricing).Validate,

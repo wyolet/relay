@@ -34,25 +34,6 @@ func TestValidate(t *testing.T) {
 			b:    fix(),
 		},
 		{
-			name: "explicit priority",
-			b: func() *PolicyBinding {
-				b := fix()
-				fifty := 50
-				b.Spec.Priority = &fifty
-				return b
-			}(),
-		},
-		{
-			name: "priority above the ceiling",
-			b: func() *PolicyBinding {
-				b := fix()
-				overCeiling := 10001
-				b.Spec.Priority = &overCeiling
-				return b
-			}(),
-			want: "Priority",
-		},
-		{
 			name: "team owner without a project",
 			b: func() *PolicyBinding {
 				b := fix()
@@ -181,30 +162,5 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("Validate() = %v, want error mentioning %q", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestEffectivePriority(t *testing.T) {
-	b := fix()
-	if got := b.EffectivePriority(); got != DefaultPriority {
-		t.Errorf("unset priority = %d, want %d", got, DefaultPriority)
-	}
-	ten := 10
-	b.Spec.Priority = &ten
-	if got := b.EffectivePriority(); got != 10 {
-		t.Errorf("explicit priority = %d, want 10", got)
-	}
-}
-
-// 0 is the highest-winning priority; it must not read as "not set".
-func TestEffectivePriorityKeepsExplicitZero(t *testing.T) {
-	b := fix()
-	zero := 0
-	b.Spec.Priority = &zero
-	if got := b.EffectivePriority(); got != 0 {
-		t.Errorf("explicit priority 0 = %d, want 0", got)
-	}
-	if err := b.Validate(); err != nil {
-		t.Errorf("priority 0: %v", err)
 	}
 }

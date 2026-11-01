@@ -46,7 +46,7 @@ func TestForbiddenRejectionsAreCountedByCode(t *testing.T) {
 	f := newPrincipalFixture()
 	fls := false
 	f.boundPol.Spec.Enabled = &fls
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "b", 1, f.boundPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID)}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "b", f.boundPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID)}
 	st := f.stack(t, saKey(f, "sk-wr-live"))
 
 	before := rejectionCount(t, "policy_disabled")
@@ -64,7 +64,7 @@ func TestForbiddenRejectionsAreCountedByCode(t *testing.T) {
 func TestSnapshotIsPinnedOnTheRequestContext(t *testing.T) {
 	f := newPrincipalFixture()
 	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
+		boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated"),
 	}
 	k := saKey(f, "sk-wr-live")
 

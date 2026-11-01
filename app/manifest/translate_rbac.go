@@ -147,20 +147,11 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 	if err != nil {
 		return nil, err
 	}
-	priority := d.Spec.Priority
-	if priority == nil {
-		// The store and control API write this default, so an omitted
-		// priority must match or apply reports an update every run. An
-		// explicit 0 is a real priority and is kept.
-		def := policybinding.DefaultPriority
-		priority = &def
-	}
 	b := &policybinding.PolicyBinding{
 		Meta: m,
 		Spec: policybinding.Spec{
 			ProjectID: projectID,
 			PolicyID:  policyID,
-			Priority:  priority,
 			Subjects:  subjects,
 			Enabled:   d.Spec.Enabled,
 		},
@@ -190,7 +181,6 @@ func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) Poli
 			wm.Owner.Name = name
 		}
 	}
-	effectivePriority := b.EffectivePriority()
 	return PolicyBindingDTO{
 		APIVersion: APIVersion,
 		Kind:       "PolicyBinding",
@@ -198,7 +188,6 @@ func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) Poli
 		Spec: PolicyBindingSpec{
 			Project:  projectName,
 			Policy:   policyName,
-			Priority: &effectivePriority,
 			Subjects: fromSubjects(b.Spec.Subjects, rev),
 			Enabled:  b.Spec.Enabled,
 		},

@@ -286,23 +286,6 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.policyId", owner: b.Meta.Owner})
 		}
 	}
-	hosts, err := d.Stores.Host.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list hosts: %w", err)
-	}
-	for _, h := range hosts {
-		matched := false
-		for _, pid := range h.Spec.Policies {
-			if pid == id {
-				out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.policies", owner: h.Meta.Owner, detachable: true})
-				matched = true
-				break
-			}
-		}
-		if !matched && h.Spec.DefaultPolicy == id {
-			out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.defaultPolicy", owner: h.Meta.Owner, detachable: true})
-		}
-	}
 	return out, nil
 }
 

@@ -98,11 +98,7 @@ type HostSpec struct {
 	// set; explicit "" appends nothing; absent keeps the shape default.
 	Path    *string           `json:"path,omitempty"        yaml:"path,omitempty"`
 	Backend map[string]string `json:"backend,omitempty"     yaml:"backend,omitempty"`
-	// Policies holds policy *names* (wire form), resolved to ids on parse.
-	Policies []string `json:"policies,omitempty"    yaml:"policies,omitempty"`
-	// DefaultPolicy is a policy *name* (wire form) referencing one of Policies.
-	DefaultPolicy string `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
-	NoAuth        bool   `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
+	NoAuth  bool              `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
 	// PricingStrategies is the host's menu of offered billing modes
 	// (api | sub). Empty defaults to ["api"].
 	PricingStrategies []string   `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty"`
@@ -426,7 +422,6 @@ type PolicyBindingDTO struct {
 type PolicyBindingSpec struct {
 	Project  string             `json:"project,omitempty"  yaml:"project,omitempty"`
 	Policy   string             `json:"policy"             yaml:"policy"`
-	Priority *int               `json:"priority,omitempty" yaml:"priority,omitempty"`
 	Subjects []PolicySubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
 	Enabled  *bool              `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
 }

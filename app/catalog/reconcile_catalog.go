@@ -76,7 +76,8 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	}
 	s := c.snap.Load().clone()
 
-	clean := sanitizeHost(h, s.policiesByID)
+	copied := *h
+	clean := &copied
 	renamed := false
 	if old, ok := s.hostsByID[h.Meta.ID]; ok {
 		renamed = old.Meta.Name != clean.Meta.Name

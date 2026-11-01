@@ -16,9 +16,6 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 )
 
-// DefaultPriority is applied to a binding that declares none. Lower wins.
-const DefaultPriority = 100
-
 // Subject kinds a PolicyBinding accepts beyond the RoleBinding ones: the upstream side (host, account, credential) and the tenancy scopes. A relay key is never a subject: it acts as its principal.
 const (
 	SubjectHost       rolebinding.SubjectKind = "host"
@@ -55,13 +52,11 @@ func (b *PolicyBinding) IndexSubjects() {
 	b.SubjectKeys = keys
 }
 
-// Spec carries the project, the policy, the tie-break priority, the
-// subjects, and the enabled flag.
+// Spec carries the project, the policy, the subjects, and the enabled flag.
 type Spec struct {
 	// ProjectID is the owning project; empty when a team or the system owns the binding.
 	ProjectID string `json:"projectId,omitempty" yaml:"projectId,omitempty" validate:"omitempty,uuid"`
 	PolicyID  string `json:"policyId"  yaml:"policyId"  validate:"required,uuid"`
-	Priority  *int   `json:"priority,omitempty" yaml:"priority,omitempty" validate:"omitempty,gte=0,lte=10000"`
 	// Subjects are not dived into: rolebinding.Subject's own tags admit only the RoleBinding kinds, so Validate checks each one against SubjectKinds.
 	Subjects []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1"`
 	Enabled  *bool                 `json:"enabled,omitempty" yaml:"enabled,omitempty"`
@@ -69,17 +64,6 @@ type Spec struct {
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (b *PolicyBinding) IsEnabled() bool { return b.Spec.Enabled == nil || *b.Spec.Enabled }
-
-// EffectivePriority reads an unset priority as the default, so a binding
-// authored without one still orders against explicit values. The field is a
-// pointer because 0 is a valid, highest-winning priority and must not read
-// as absent.
-func (b *PolicyBinding) EffectivePriority() int {
-	if b.Spec.Priority == nil {
-		return DefaultPriority
-	}
-	return *b.Spec.Priority
-}
 
 // StampOwner keeps Meta.Owner and Spec.ProjectID in step: a projectId makes
 // the binding that project's whatever the owner said, and a project owner

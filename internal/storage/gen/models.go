@@ -156,7 +156,6 @@ type PolicyBinding struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	ProjectID       pgtype.Text        `db:"project_id" json:"project_id"`
 	PolicyID        string             `db:"policy_id" json:"policy_id"`
-	Priority        int32              `db:"priority" json:"priority"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`

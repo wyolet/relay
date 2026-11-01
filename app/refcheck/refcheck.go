@@ -485,16 +485,11 @@ func (c Checker) Role(ctx context.Context, r *role.Role) error {
 	return nil
 }
 
-// PolicyBinding re-derives the owner from spec.projectId, fills in the
-// default priority, and checks the owning scope, the policy, and the
-// subjects, each of which must sit inside that scope.
+// PolicyBinding re-derives the owner from spec.projectId and checks the
+// owning scope, the policy, and the subjects, each of which must sit inside
+// that scope.
 func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	pb.StampOwner()
-	// Absent means the default; an explicit 0 is a real priority.
-	if pb.Spec.Priority == nil {
-		def := policybinding.DefaultPriority
-		pb.Spec.Priority = &def
-	}
 	switch pb.Meta.Owner.Kind {
 	case meta.OwnerProject:
 		if err := c.projectRef(ctx, pb.Meta.Owner.ID); err != nil {

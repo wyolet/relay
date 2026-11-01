@@ -44,7 +44,7 @@ func TestLooksLikeToken(t *testing.T) {
 // each way a token can fail, and the status the caller sees.
 func TestTokenPrincipal_Rejections(t *testing.T) {
 	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated")}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
 	_, otherPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -126,7 +126,7 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 // so its tokens stop resolving exactly like a deleted one's.
 func TestTokenPrincipal_DisabledProject(t *testing.T) {
 	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated")}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
 	disabled := false
 	f.project.Spec.Enabled = &disabled
 
@@ -140,7 +140,7 @@ func TestTokenPrincipal_DisabledProject(t *testing.T) {
 // key does, with the subject union the claims and the snapshot agree on.
 func TestPrincipalFrom_Token(t *testing.T) {
 	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated")}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
 	st := f.stack(t)
 
 	token := f.mint(t, func(c *crypto.TokenClaims) { c.Grp = []string{"platform-eng"} })
@@ -193,7 +193,7 @@ func TestTokenPrincipal_RevokedJTI(t *testing.T) {
 // TestTokenProxyMode: a token can never bring its own upstream key.
 func TestTokenProxyMode_Forbidden(t *testing.T) {
 	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated")}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
 	st := f.stack(t)
 
 	r := proxyRequest(f.mint(t, nil))
@@ -217,8 +217,8 @@ func TestCallerLadder(t *testing.T) {
 			name: "the service account's binding is the innermost",
 			setup: func(f *principalFixture) {
 				f.bindings = []*policybinding.PolicyBinding{
-					boundTo(*f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
-					boundTo(*f, "b-sa", 1, f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
+					boundTo(*f, "b-project", f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
+					boundTo(*f, "b-sa", f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
 				}
 			},
 			wantPolicy: func(f principalFixture) string { return f.keyPol.Meta.ID },
@@ -234,8 +234,8 @@ func TestCallerLadder(t *testing.T) {
 			setup: func(f *principalFixture) {
 				f.boundPol.Spec.Enabled = &fls
 				f.bindings = []*policybinding.PolicyBinding{
-					boundTo(*f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
-					boundTo(*f, "b-sa", 1, f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
+					boundTo(*f, "b-project", f.boundPol.Meta.ID, "project:"+f.project.Meta.ID),
+					boundTo(*f, "b-sa", f.keyPol.Meta.ID, "serviceaccount:"+f.sa.Meta.ID),
 				}
 			},
 			wantStatus: http.StatusForbidden,
@@ -319,10 +319,10 @@ func TestListModels_Token(t *testing.T) {
 }
 
 // boundTo builds a policy binding naming the given subject keys.
-func boundTo(f principalFixture, name string, priority int, policyID string, subjects ...string) *policybinding.PolicyBinding {
+func boundTo(f principalFixture, name string, policyID string, subjects ...string) *policybinding.PolicyBinding {
 	b := &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.project.Meta.ID}},
-		Spec: policybinding.Spec{ProjectID: f.project.Meta.ID, PolicyID: policyID, Priority: &priority},
+		Spec: policybinding.Spec{ProjectID: f.project.Meta.ID, PolicyID: policyID},
 	}
 	for _, s := range subjects {
 		b.Spec.Subjects = append(b.Spec.Subjects, subjectFrom(s))
@@ -351,7 +351,7 @@ func signedWith(t *testing.T, f principalFixture, priv ed25519.PrivateKey, kid s
 func TestSigningKeyRotationKeepsThePreviousKeyLive(t *testing.T) {
 	f := newPrincipalFixture()
 	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
+		boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated"),
 	}
 	oldPub := f.signer.Public().(ed25519.PublicKey)
 	old := signedWith(t, f, f.signer, authtoken.KeyID(oldPub))
@@ -387,7 +387,7 @@ func TestSigningKeyRotationKeepsThePreviousKeyLive(t *testing.T) {
 func TestTokenWithoutKidVerifiesAgainstTheCurrentKey(t *testing.T) {
 	f := newPrincipalFixture()
 	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated"),
+		boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated"),
 	}
 	bare := signedWith(t, f, f.signer, "")
 	if authtoken.HeaderKeyID(bare) != "" {
@@ -403,7 +403,7 @@ func TestTokenWithoutKidVerifiesAgainstTheCurrentKey(t *testing.T) {
 // the same claims under a JWT header pass.
 func TestAccessTokenTypIsRefused(t *testing.T) {
 	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", 10, f.boundPol.Meta.ID, "group:system:authenticated")}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
 	pub := f.signer.Public().(ed25519.PublicKey)
 	payload, err := json.Marshal(crypto.TokenClaims{
 		Iss: crypto.TokenIssuer, Sub: "user:" + f.user, Prj: f.project.Meta.ID, Ver: 1,
@@ -444,7 +444,7 @@ func TestUnknownKidIsRefused(t *testing.T) {
 func TestTokenActsInItsProject(t *testing.T) {
 	f := newPrincipalFixture()
 	off := false
-	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "b-project", 1, f.boundPol.Meta.ID, "project:"+f.project.Meta.ID)}
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "b-project", f.boundPol.Meta.ID, "project:"+f.project.Meta.ID)}
 	st := f.stack(t)
 	token := f.mint(t, nil)
 	if w := st.do(token); w.Code != http.StatusOK {

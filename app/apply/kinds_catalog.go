@@ -122,22 +122,10 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	return planKind(ctx, b, kindWiring[manifest.PolicyDTO, policy.Policy]{
 		Kind: "Policy", Docs: d.policies, Names: b.idx.Policies, Rows: b.rows.Policies,
 		To: manifest.ToPolicy, Meta: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
-		Upsert: s.Policy.Upsert, Delete: deletePolicyWithDetach(s),
+		// Bindings of a pruned policy go with it (foreign key).
+		Upsert: s.Policy.Upsert, Delete: s.Policy.Delete,
 		Check: refsFor(b, refcheck.Checker.Policy),
 	})
-}
-
-// deletePolicyWithDetach runs the reference cleanup the control API's delete
-// runs: a host listing the policy in its menu stops listing it. Bindings of
-// the policy go with it (foreign key).
-func deletePolicyWithDetach(s *Stores) func(context.Context, string) error {
-	refs := policy.DetachStores{Hosts: s.Host}
-	return func(ctx context.Context, id string) error {
-		if err := policy.Detach(ctx, refs, id); err != nil {
-			return err
-		}
-		return s.Policy.Delete(ctx, id)
-	}
 }
 
 // keepDefaultAccount keeps the default account a key declared without one

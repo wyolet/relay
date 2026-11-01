@@ -75,21 +75,13 @@ func build(
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
-	// A host's tier menu lists only enabled policies.
-	enabledPolByID := make(map[string]*policy.Policy, len(pols))
-	for _, p := range pols {
-		if p.IsEnabled() {
-			enabledPolByID[p.Meta.ID] = p
-		}
-	}
-
 	s.addProviders(provs)
 	// Tenancy first: every kind below can be project-owned and sanitizes
 	// against the project map.
 	s.addTeams(teams)
 	s.addProjects(projects, snapIDs(s.teamsByID))
 	s.addRateLimits(rls, snapIDs(s.projectsByID))
-	s.addHosts(hosts, enabledPolByID)
+	s.addHosts(hosts)
 	s.addModels(models, providerIDs)
 	// Overlays swap templates for effective rows BEFORE indexing, so
 	// aliases/refs below index the merged spec.

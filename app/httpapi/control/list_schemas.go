@@ -148,9 +148,6 @@ var hostFilter = filter.Schema[host.Host]{
 	Fields: []filter.Field[host.Host]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(h *host.Host) string { return h.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(h *host.Host) bool { return enabledTrue(h.Spec.Enabled) }},
-		{Name: "has_default_policy", Kind: filter.Bool, GetBool: func(h *host.Host) bool { return h.Spec.DefaultPolicy != "" }},
-		{Name: "default_policy", Kind: filter.String, Get: func(h *host.Host) string { return h.Spec.DefaultPolicy }},
-		{Name: "policy_id", Kind: filter.String, Repeat: true, GetMulti: func(h *host.Host) []string { return h.Spec.Policies }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(h *host.Host) time.Time { return h.Meta.CreatedAt }},
 		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(h *host.Host) time.Time { return h.Meta.UpdatedAt }},
 	},

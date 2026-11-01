@@ -121,7 +121,6 @@ func disablePolicy(s *Snapshot, p *policy.Policy) {
 	// Still a ref holder: losing its project has to evict it, or the rows
 	// naming it keep answering 403 against a policy nothing can reach.
 	s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	resanitizeHostsAfterPolicyChange(s)
 }
 
 func insertPolicy(s *Snapshot, p *policy.Policy) {
@@ -153,7 +152,6 @@ func deletePolicy(s *Snapshot, id string) {
 	delete(s.policiesByID, id)
 	delete(s.policiesByName, p.Meta.Name)
 	cascadeDelete(s, refPolicy, id)
-	resanitizeHostsAfterPolicyChange(s)
 }
 
 // ── Pricing ───────────────────────────────────────────────────────────────

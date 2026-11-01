@@ -127,14 +127,9 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 				if err != nil {
 					t.Fatalf("guard refused a bindable policy: %v", err)
 				}
-				// The guard re-derives the owner from the project and fills
-				// the default priority, so the row reads back ordering by the
-				// value it was stored with.
+				// The guard re-derives the owner from the project.
 				if b.Meta.Owner.Kind != meta.OwnerProject || b.Meta.Owner.ID != w.mine.Meta.ID {
 					t.Errorf("owner = %+v, want the binding's own project", b.Meta.Owner)
-				}
-				if b.Spec.Priority == nil || *b.Spec.Priority != policybinding.DefaultPriority {
-					t.Errorf("priority = %v, want the default set", b.Spec.Priority)
 				}
 				return
 			}
@@ -149,18 +144,6 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("an explicit priority is kept", func(t *testing.T) {
-		zero := 0
-		b := mkBinding(w.mine.Meta.ID, w.ownPol.Meta.ID)
-		b.Spec.Priority = &zero
-		if err := guard(ctx, "create", nil, b); err != nil {
-			t.Fatalf("guard: %v", err)
-		}
-		if b.Spec.Priority == nil || *b.Spec.Priority != 0 {
-			t.Fatalf("priority = %v, want the explicit zero kept", b.Spec.Priority)
-		}
-	})
 
 	t.Run("a project that does not exist", func(t *testing.T) {
 		b := mkBinding(meta.NewID(), w.shared.Meta.ID)

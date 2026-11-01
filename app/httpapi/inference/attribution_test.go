@@ -106,7 +106,7 @@ func TestMintLifecycle_PersonalKeyHasNoTenancy(t *testing.T) {
 func TestMintLifecycle_TokenCredential(t *testing.T) {
 	f := newPrincipalFixture()
 	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "token-binding", 1, f.boundPol.Meta.ID, "user:"+f.user),
+		boundTo(f, "token-binding", f.boundPol.Meta.ID, "user:"+f.user),
 	}
 	st := f.stack(t)
 	token := f.mint(t, nil)

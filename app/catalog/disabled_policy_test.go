@@ -49,11 +49,10 @@ func newDisabledPolicyFixture(enabled bool) disabledPolicyFixture {
 			KeyHash:   "hash-k",
 		},
 	}
-	prio := 10
 	f.binding = &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb"},
 		Spec: policybinding.Spec{
-			ProjectID: f.project.Meta.ID, PolicyID: f.pol.Meta.ID, Priority: &prio,
+			ProjectID: f.project.Meta.ID, PolicyID: f.pol.Meta.ID,
 			Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}},
 		},
 	}

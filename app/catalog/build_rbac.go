@@ -115,11 +115,5 @@ func sortRoleBindings(list []*rolebinding.RoleBinding) {
 }
 
 func sortPolicyBindings(list []*policybinding.PolicyBinding) {
-	sort.Slice(list, func(i, j int) bool {
-		pi, pj := list[i].EffectivePriority(), list[j].EffectivePriority()
-		if pi != pj {
-			return pi < pj
-		}
-		return list[i].Meta.Name < list[j].Meta.Name
-	})
+	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
 }
