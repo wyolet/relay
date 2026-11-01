@@ -84,7 +84,7 @@ func refuseHostKeyMove(ctx context.Context, d Deps, moved *hostkey.HostKey) erro
 	c.Rows.HostKey = func(context.Context, string) *hostkey.HostKey { return moved }
 	return refuseStrandingMove(ctx, d, "host-key", moved.Meta.ID, moved.Meta.Name, moved.Meta.Owner, func(it referenceItem) bool {
 		switch it.Kind {
-		case "policy":
+		case "policy", "pool":
 			return c.CredentialRefs(ctx, []string{moved.Meta.ID}, it.owner) == nil
 		case "settings":
 			return true

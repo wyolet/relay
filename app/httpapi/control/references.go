@@ -68,12 +68,16 @@ var referenceScans = map[string]func(ctx context.Context, d Deps, id string) ([]
 	"service-account": scanServiceAccountRefs,
 	"group":           scanGroupRefs,
 	"role":            scanRoleRefs,
+	"account":         scanAccountRefs,
+	"pool":            scanPoolRefs,
+	"budget":          scanBudgetRefs,
 }
 
 // referencedPlurals are the kinds with a references scan, in API plural form.
 var referencedPlurals = []string{
 	"providers", "hosts", "models", "pricings", "policies", "host-keys",
 	"rate-limits", "teams", "projects", "service-accounts", "groups", "roles",
+	"accounts", "pools", "budgets",
 }
 
 // registerReferences installs the per-kind references endpoints.
@@ -190,7 +194,11 @@ func scanHostRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	if err != nil {
 		return nil, err
 	}
-	return append(out, owned...), nil
+	held, err := scanUpstreamAtHost(ctx, d, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, owned...), held...), nil
 }
 
 // scanRateLimitsOwnedBy returns the rate limits a provider or host publishes
@@ -356,7 +364,11 @@ func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	if err != nil {
 		return nil, err
 	}
-	return append(out, scoped...), nil
+	upstream, err := scanUpstreamOwnedBy(ctx, d, meta.OwnerTeam, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, scoped...), upstream...), nil
 }
 
 func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
@@ -419,7 +431,11 @@ func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	if err != nil {
 		return nil, err
 	}
-	return append(out, scoped...), nil
+	upstream, err := scanUpstreamOwnedBy(ctx, d, meta.OwnerProject, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, scoped...), upstream...), nil
 }
 
 func scanServiceAccountRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {

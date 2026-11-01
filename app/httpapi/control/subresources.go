@@ -10,6 +10,8 @@
 //	GET /policies/{ref}/models       models this policy grants (+ per-model limits)
 //	GET /policies/{ref}/hosts        hosts this policy reaches (+ host-keys)
 //	GET /policies/{ref}/rate-limits  rate-limit rule sets this policy references
+//	GET /pools/{ref}/keys            the pool's keys in pool order (secret-free)
+//	GET /accounts/{ref}/keys         host keys belonging to this account
 //
 // All composition lives in app/catalogview (PG-backed, full state incl.
 // disabled rows). These handlers are thin: build the Service from the stores,
@@ -43,6 +45,7 @@ func viewService(ctx context.Context, d Deps) *catalogview.Service {
 		Providers:  d.Stores.Provider,
 		HostKeys:   d.Stores.HostKey,
 		Pools:      d.Stores.Pool,
+		Accounts:   d.Stores.Account,
 	}
 	if s, ok := d.Authz.(authz.Scoper); ok {
 		svc.Visible = func(kind, id string, owner meta.Owner) bool {
@@ -253,4 +256,5 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.RateLimits, out.Body.Unthrottled = view.RateLimits, view.Unthrottled
 		return out, nil
 	})
+	registerUpstreamSubresources(api, d, protect)
 }

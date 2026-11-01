@@ -173,6 +173,9 @@ var entityNameByPkg = map[string]string{
 	"github.com/wyolet/relay/app/role":           "Role",
 	"github.com/wyolet/relay/app/rolebinding":    "RoleBinding",
 	"github.com/wyolet/relay/app/policybinding":  "PolicyBinding",
+	"github.com/wyolet/relay/app/account":        "Account",
+	"github.com/wyolet/relay/app/pool":           "Pool",
+	"github.com/wyolet/relay/app/budget":         "Budget",
 
 	// Not a catalog entity, but its Event/Actor/Resource/Request names
 	// collide with usage.Event and authz.Resource in the shared registry.

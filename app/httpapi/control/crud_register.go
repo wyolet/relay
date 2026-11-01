@@ -312,5 +312,6 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		&keyFilter,
 	))
 	registerKeyCreate(api, d, protect)
+	registerUpstreamCRUD(api, d, protect, rows)
 	return rows
 }

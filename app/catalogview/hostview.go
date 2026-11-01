@@ -65,13 +65,7 @@ func (s *Service) HostKeyList(ctx context.Context, ref string) (HostRef, []HostK
 		if !s.visible("host-key", k.Meta.ID, k.Meta.Owner) {
 			continue
 		}
-		rows = append(rows, HostKeyView{
-			ID:          k.Meta.ID,
-			Name:        k.Meta.Name,
-			Kind:        string(k.Spec.ValueFrom.Kind),
-			DefaultTier: k.Spec.DefaultTier,
-			Enabled:     hostKeyEnabled(k),
-		})
+		rows = append(rows, hostKeyView(k))
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	return hostRefOf(h), rows, nil

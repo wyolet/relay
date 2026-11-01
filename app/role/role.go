@@ -21,9 +21,9 @@ const Wildcard = rbac.Wildcard
 // Kinds is the closed set a rule may name: the control-API plurals plus
 // the wildcard. Sorted — membership is a binary search.
 var Kinds = []string{
-	"*", "audit", "debug", "groups", "host-bindings", "host-keys", "hosts",
+	"*", "accounts", "audit", "budgets", "debug", "groups", "host-bindings", "host-keys", "hosts",
 	"keys", "license", "logs", "master-key", "models", "policies",
-	"policy-bindings", "pricings", "projects", "providers", "rate-limits",
+	"policy-bindings", "pools", "pricings", "projects", "providers", "rate-limits",
 	"role-bindings", "roles", "scim-clients", "secret-keys", "service-accounts", "settings",
 	"system", "teams", "tokens", "usage", "users",
 }

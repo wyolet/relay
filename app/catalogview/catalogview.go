@@ -80,6 +80,8 @@ type Service struct {
 	HostKeys   hostKeyStore
 	// Pools is optional: without it a policy's pools reach no host.
 	Pools poolStore
+	// Accounts is optional: without it every account projection is a 404.
+	Accounts accountStore
 
 	// Visible optionally scopes rows per owner: policy-rooted projections
 	// 404 on a policy the caller may not see, and host-key / policy rows

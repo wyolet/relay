@@ -106,6 +106,18 @@ func (c Checker) CredentialRefs(ctx context.Context, ids []string, refOwner meta
 	return c.credentialRefs(ctx, ids, refOwner, "")
 }
 
+// AccountRef checks that a host key owned by refOwner may name the account.
+func (c Checker) AccountRef(ctx context.Context, id string, refOwner meta.Owner) error {
+	if c.Rows.Account == nil {
+		return nil
+	}
+	a := c.Rows.Account(ctx, id)
+	if a == nil {
+		return badRequest("account %q does not exist", id)
+	}
+	return c.linkRef(ctx, "account", id, a.Meta, refOwner)
+}
+
 // PoolRefs checks pools a policy owned by refOwner links.
 func (c Checker) PoolRefs(ctx context.Context, ids []string, refOwner meta.Owner) error {
 	return c.poolRefs(ctx, ids, refOwner)
