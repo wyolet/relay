@@ -46,7 +46,7 @@ curl http://localhost:8080/v1/models \
 | `catalog_unavailable` | The process has not finished loading the catalog after start. | Retry after the `Retry-After` delay. `/healthz` reports `503` until it is ready. |
 | `no_host_binding` | The model has no enabled host binding. | Bind the model to a host, or enable the binding. |
 | `no_keys` | No usable host key: the policy lists none on the chosen host, or none is enabled. | Add a host key for that host and list it in the policy's `hostKeyIds`. |
-| `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), Valkey did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`, or `RELAY_REDIS_POOL_MAX_WAITERS` calls were already waiting for a Valkey connection. | Retry after 1 second. If it persists, add replicas, or check `relay_requests_shed_total` (`stage="kv_pool"` means the Valkey pool was the limit), `relay_kv_errors_total` and Valkey's load. |
+| `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), Dragonfly did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`, or `RELAY_REDIS_POOL_MAX_WAITERS` calls were already waiting for a Dragonfly connection. | Retry after 1 second. If it persists, add replicas, or check `relay_requests_shed_total` (`stage="kv_pool"` means the Dragonfly pool was the limit), `relay_kv_errors_total` and Dragonfly's load. |
 
 ## `502`: every key fails or is cooling down
 
@@ -63,10 +63,10 @@ To recover:
 
 1. Fix the cause: correct or rotate the upstream key, or check the host's `baseURL` for `upstream_unreachable`.
 2. Read a key's breaker state with `GET /api/host-keys/by-id/{id}/health` (`state`, `reason`, `cooldown_remaining_seconds`).
-3. Wait out the cooldown, or rotate the key's value, which gets a fresh breaker. With `RELAY_STATE_BACKEND=memory`, restarting relay clears every breaker. With Valkey, breaker records are the keys matching `secret_health:*`; deleting them clears them:
+3. Wait out the cooldown, or rotate the key's value, which gets a fresh breaker. With `RELAY_STATE_BACKEND=memory`, restarting relay clears every breaker. With Dragonfly, breaker records are the keys matching `secret_health:*`; deleting them clears them:
 
    ```bash
-   valkey-cli --scan --pattern 'secret_health:*' | xargs -r valkey-cli del
+   redis-cli --scan --pattern 'secret_health:*' | xargs -r redis-cli del
    ```
 
 ## `429`: slow down
@@ -155,7 +155,7 @@ curl http://localhost:8080/livez
 curl http://localhost:8081/api/version
 ```
 
-The control listener serves its own probes at `/api/healthz` (Postgres, and Valkey when `RELAY_STATE_BACKEND=redis`; not the catalog) and `/api/livez`.
+The control listener serves its own probes at `/api/healthz` (Postgres, and Dragonfly when `RELAY_STATE_BACKEND=redis`; not the catalog) and `/api/livez`.
 
 <Note>
 When asking for help, include the request, the full error body with its `X-WR-*` response headers, and the output of `/healthz` and `/api/version`.

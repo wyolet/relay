@@ -1,5 +1,5 @@
 # Dev overrides — `make dev` invokes this on top of docker-compose.yml.
-# Uses dev-stack for Postgres / ClickHouse / Jaeger; valkey stays local.
+# Uses dev-stack for Postgres / ClickHouse / Jaeger; dragonfly stays local.
 # Relay binaries built locally from source for fast iteration.
 #
 # The `dev-net` external network lives here (not in the base compose) so the

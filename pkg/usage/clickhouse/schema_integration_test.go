@@ -96,6 +96,7 @@ ORDER BY (ts, model_id, policy_id)`
 		"project_id", "project", "team_id", "team",
 		"principal_kind", "principal_id", "principal",
 		"credential_kind", "credential_id", "relay_key",
+		"pool_id", "account_id",
 	} {
 		if !have[c] {
 			t.Fatalf("column %q missing after ensureSchema", c)

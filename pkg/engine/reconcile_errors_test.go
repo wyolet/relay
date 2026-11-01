@@ -204,6 +204,97 @@ func TestCycleIsAbandonedAndReported(t *testing.T) {
 	on.Store(false)
 }
 
+func TestAbandonedBatchIsRepairedByResync(t *testing.T) {
+	r := newRig(t, engine.Options{MaxRounds: 4})
+	r.items.set(&item{ID: "i1", Ver: 1, Val: 1})
+	// While on, a is built from b and b from a, so the pair never settles; off, a copies the item and b = a+1.
+	var on atomic.Bool
+	a := engine.NewController("ping", kA, func(tx *engine.Txn, id string) error {
+		it := engine.Get[item](tx, id)
+		v := it.Val
+		if on.Load() {
+			if b := engine.Get[outB](tx, id); b != nil {
+				v = b.V + 1
+			}
+		}
+		if prev := engine.Get[outA](tx, id); prev != nil && prev.V == v {
+			engine.Put(tx, prev)
+			return nil
+		}
+		engine.Put(tx, &outA{V: v})
+		return nil
+	})
+	b := engine.NewController("pong", kB, func(tx *engine.Txn, id string) error {
+		v := engine.Get[outA](tx, id).V + 1
+		if prev := engine.Get[outB](tx, id); prev != nil && prev.V == v {
+			engine.Put(tx, prev)
+			return nil
+		}
+		engine.Put(tx, &outB{V: v})
+		return nil
+	})
+	engine.Watch(a, selfKey)
+	engine.Watch(b, selfKey)
+	r.e.Register(a)
+	r.e.Register(b)
+	r.load()
+
+	on.Store(true)
+	r.putItem(&item{ID: "i1", Ver: 2, Val: 10})
+	if !slices.Contains(issueCodes(r.view().AllIssues()), "batch_abandoned") {
+		t.Fatalf("issues = %v, want batch_abandoned", issueCodes(r.view().AllIssues()))
+	}
+
+	on.Store(false)
+	if err := r.e.Resync(t.Context()); err != nil {
+		t.Fatalf("Resync: %v", err)
+	}
+	v := r.view()
+	if ga, gb := viewA(v, "i1"), viewB(v, "i1"); ga == nil || gb == nil || ga.V != 10 || gb.V != 11 {
+		t.Fatalf("after Resync a = %+v, b = %+v, want 10 and 11", ga, gb)
+	}
+	if got := issueCodes(v.AllIssues()); len(got) != 0 {
+		t.Fatalf("issues after Resync = %v, want none", got)
+	}
+}
+
+func TestPermanentCycleIsNotRerunByUnrelatedWrites(t *testing.T) {
+	var abandoned atomic.Int32
+	r := newRig(t, engine.Options{MaxRounds: 4, Hooks: engine.Hooks{
+		OnBatchAbandoned: func(engine.Generation, int) { abandoned.Add(1) },
+	}})
+	r.items.set(&item{ID: "i1", Ver: 1})
+	a := engine.NewController("ping", kA, func(tx *engine.Txn, id string) error {
+		v := 0
+		if b := engine.Get[outB](tx, id); b != nil {
+			v = b.V + 1
+		}
+		engine.Put(tx, &outA{V: v})
+		return nil
+	})
+	b := engine.NewController("pong", kB, func(tx *engine.Txn, id string) error {
+		v := 0
+		if a := engine.Get[outA](tx, id); a != nil {
+			v = a.V + 1
+		}
+		engine.Put(tx, &outB{V: v})
+		return nil
+	})
+	engine.Watch(a, selfKey)
+	engine.Watch(b, selfKey)
+	r.e.Register(a)
+	r.e.Register(b)
+	r.load()
+	if n := abandoned.Load(); n != 1 {
+		t.Fatalf("OnBatchAbandoned calls after Load = %d, want 1", n)
+	}
+
+	r.putParent(&parent{ID: "p1", Ver: 1})
+	if n := abandoned.Load(); n != 1 {
+		t.Fatalf("OnBatchAbandoned calls after an unrelated Apply = %d, want 1", n)
+	}
+}
+
 var errReconcile = errors.New("upstream table unreadable")
 
 type errorLog struct {
@@ -353,7 +444,6 @@ func TestSecondPutInOneReconcileFailsIt(t *testing.T) {
 }
 
 func TestErrRetryIsRetriedOnTheNextDrain(t *testing.T) {
-	t.Skip("contract mismatch: an ErrRetry output is not retried in the next Apply drain, only by a later drain of its own")
 	r := newRig(t, engine.Options{})
 	r.parents.set(&parent{ID: "p1", Ver: 1, Val: 1}, &parent{ID: "p9", Ver: 1})
 	r.items.set(&item{ID: "i1", Ver: 1, Parent: "p1"})

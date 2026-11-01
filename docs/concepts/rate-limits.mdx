@@ -98,7 +98,7 @@ Each request goes through two steps per applicable rate limit:
 
 If a request fails before any attempt reaches the upstream, its reservation is cancelled: the concurrency slot is released and, for `token-bucket`, `leaky-bucket` and `session-window` rules, the request is refunded. Once an attempt may have reached the upstream, the request charge stands.
 
-With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` (Valkey) to share counters across pods.
+With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` (Dragonfly) to share counters across pods.
 
 ## What a limited caller sees
 

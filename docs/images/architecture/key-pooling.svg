@@ -24,7 +24,7 @@
   <rect x="250" y="130" width="200" height="100" rx="12" class="accent"/>
   <text x="270" y="158" class="h">Relay · key selector</text>
   <text x="270" y="180" class="t">pick healthy key</text>
-  <text x="270" y="197" class="t">atomic (1 Redis Lua)</text>
+  <text x="270" y="197" class="t">atomic (1 Lua script)</text>
   <text x="270" y="214" class="t">per-key circuit breaker</text>
 
   <!-- pool -->

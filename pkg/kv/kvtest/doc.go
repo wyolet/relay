@@ -1,5 +1,5 @@
 // Package kvtest holds kv fixtures for tests: a Recording store that pins
-// the scripts a caller runs, and (integration builds) a Redis/Valkey
+// the scripts a caller runs, and (integration builds) a Dragonfly
 // keyspace of its own per test on the server named by RELAY_TEST_REDIS_ADDR,
 // so test packages run in parallel against one server despite fixed key
 // names and prefix scans.
