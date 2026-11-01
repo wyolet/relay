@@ -12,17 +12,17 @@ import (
 // an unscoped link, applying to every model; the others carry the model refs
 // they are scoped to.
 type PolicyRateLimitRow struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Default bool     `json:"default"`
-	Models  []string `json:"models,omitempty"`
-	Limits  []Limit  `json:"limits"`
+	ID      string   `json:"id"               doc:"Rate limit id."`
+	Name    string   `json:"name"             doc:"Rate limit slug."`
+	Default bool     `json:"default"          doc:"The link has no model scope and applies to every model."`
+	Models  []string `json:"models,omitempty" doc:"Model references the link is scoped to."`
+	Limits  []Limit  `json:"limits"           doc:"The rate limit's rules."`
 }
 
 // UnthrottledModel — a model the policy grants on which no rate-limit applies
 // (every granted binding of it resolves to an empty limit set).
 type UnthrottledModel struct {
-	Model ModelRef `json:"model"`
+	Model ModelRef `json:"model" doc:"An allowed model no linked rate limit covers."`
 }
 
 // PolicyRateLimitsView is the rate-limits tab payload: the linked rule sets

@@ -11,28 +11,28 @@ import (
 
 // KeyStatus describes the key ring for operators. It never carries key material.
 type KeyStatus struct {
-	DataKeys []DataKeyStatus `json:"dataKeys"`
+	DataKeys []DataKeyStatus `json:"dataKeys" doc:"Every data key, with how many stored secrets it seals."`
 	// TargetKEK is the KEK new data keys are wrapped under; empty until the first data key exists.
-	TargetKEK string `json:"targetKek,omitempty"`
+	TargetKEK string `json:"targetKek,omitempty" doc:"Id of the master key (KEK) new data keys are wrapped under; empty until the first data key exists."`
 	// HeldKEKs are the KEKs this process was configured with, RELAY_MASTER_KEY first.
-	HeldKEKs []string `json:"heldKeks"`
+	HeldKEKs []string `json:"heldKeks" doc:"Ids of the master keys this process holds, RELAY_MASTER_KEY first."`
 	// LegacyRows are stored secrets still in the master-key shape.
-	LegacyRows int64 `json:"legacyRows"`
+	LegacyRows int64 `json:"legacyRows" doc:"Stored secrets still sealed directly under a master key, not yet under a data key."`
 	// UndecryptableRows are the ids of stored secrets the answering process cannot decrypt: legacy rows none of its master keys opens, and rows under a data key that is locked here, destroyed or unknown.
-	UndecryptableRows []string `json:"undecryptableRows"`
+	UndecryptableRows []string `json:"undecryptableRows" doc:"Ids of stored secrets this process cannot decrypt: legacy rows no held master key opens, and rows under a locked, destroyed or unknown data key."`
 }
 
 // DataKeyStatus is one data key and how many stored secrets it seals.
 type DataKeyStatus struct {
-	ID        string    `json:"id"`
-	Scope     string    `json:"scope"`
-	State     string    `json:"state"`
-	KEK       string    `json:"kek"`
-	CreatedAt time.Time `json:"createdAt"`
-	DemotedAt time.Time `json:"demotedAt,omitzero"`
-	Rows      int64     `json:"rows"`
+	ID        string    `json:"id"                 doc:"Data key id."`
+	Scope     string    `json:"scope"              doc:"Owner scope whose secrets the key seals."`
+	State     string    `json:"state"              enum:"primary,decrypt,destroyed" doc:"primary encrypts new secrets for its scope; decrypt only opens older ones; destroyed keeps a tombstone."`
+	KEK       string    `json:"kek"                doc:"Id of the master key the data key is wrapped under."`
+	CreatedAt time.Time `json:"createdAt"          doc:"When the key was created."`
+	DemotedAt time.Time `json:"demotedAt,omitzero" doc:"When the key stopped being primary."`
+	Rows      int64     `json:"rows"               doc:"Stored secrets sealed under the key."`
 	// Locked is a live key this process cannot unwrap, normally because it lacks the key's KEK.
-	Locked bool `json:"locked"`
+	Locked bool `json:"locked" doc:"A live key this process cannot unwrap, normally because it lacks the key's master key."`
 }
 
 // Status reads the key ring and the stored secrets' distribution over it, fresh from the database.

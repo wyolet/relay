@@ -49,20 +49,20 @@ const (
 
 // Entry is one planned row change.
 type Entry struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-	ID   string `json:"id,omitempty"`
+	Kind string `json:"kind"         doc:"Manifest kind of the document, such as Policy or HostKey."`
+	Name string `json:"name"         doc:"metadata.name of the row."`
+	ID   string `json:"id,omitempty" doc:"Id of the stored row, when one exists."`
 	// Action is what would happen (or happened) to this row.
-	Action Action `json:"action"`
+	Action Action `json:"action" enum:"create,update,unchanged,skip-dirty,delete,conflict,forbidden" doc:"What happens to the row: skip-dirty leaves an operator-edited row alone (force overrides), conflict means another writer changed it since the plan, forbidden means the caller may not read it."`
 	// ChangedFields lists the authorable JSON paths that differ, in the
 	// same vocabulary an audit row's change.fields uses.
-	ChangedFields []string `json:"changedFields,omitempty"`
+	ChangedFields []string `json:"changedFields,omitempty" doc:"JSON paths that differ from the stored row, named as in audit change.fields."`
 	// IDMismatch reports a metadata.id in the document that does not match
 	// the row its name resolved to. Ids stay server-owned: the document's
 	// id is ignored and the mismatch reported.
-	IDMismatch string `json:"idMismatch,omitempty"`
+	IDMismatch string `json:"idMismatch,omitempty" doc:"The document's metadata.id when it differs from the stored row's; ids stay server-owned, so it is ignored."`
 	// Detached is set on a delete that takes links from policies that stay.
-	Detached *DetachedLinks `json:"detached,omitempty"`
+	Detached *DetachedLinks `json:"detached,omitempty" doc:"On a delete: the policies that lose a link to the row."`
 
 	plural string
 	owner  meta.Owner
@@ -76,13 +76,13 @@ type Entry struct {
 
 // Counts summarises a plan.
 type Counts struct {
-	Create    int `json:"create"`
-	Update    int `json:"update"`
-	Unchanged int `json:"unchanged"`
-	SkipDirty int `json:"skipDirty"`
-	Delete    int `json:"delete"`
-	Conflict  int `json:"conflict"`
-	Forbidden int `json:"forbidden"`
+	Create    int `json:"create"    doc:"Rows created."`
+	Update    int `json:"update"    doc:"Rows updated."`
+	Unchanged int `json:"unchanged" doc:"Rows already matching."`
+	SkipDirty int `json:"skipDirty" doc:"Operator-edited rows left alone."`
+	Delete    int `json:"delete"    doc:"Rows deleted by prune."`
+	Conflict  int `json:"conflict"  doc:"Rows another writer changed since the plan."`
+	Forbidden int `json:"forbidden" doc:"Rows the caller may not read."`
 }
 
 // Result is the full ordered set of entries one apply would run — the plan.

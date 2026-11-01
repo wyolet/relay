@@ -21,20 +21,20 @@ import (
 // HostKeyView — one upstream credential targeting this host. Secret-free:
 // only the value-mode discriminator and non-sensitive config.
 type HostKeyView struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"` // "env" | "stored"
-	DefaultTier string `json:"defaultTier,omitempty"`
-	Enabled     bool   `json:"enabled"`
+	ID          string `json:"id"                    doc:"Host key id."`
+	Name        string `json:"name"                  doc:"Host key slug."`
+	Kind        string `json:"kind"                  enum:"env,stored,oauth" doc:"Where the secret comes from; the secret itself is never shown."` // "env" | "stored"
+	DefaultTier string `json:"defaultTier,omitempty" deprecated:"true" doc:"Stored but not applied to requests."`
+	Enabled     bool   `json:"enabled"               doc:"Whether the key is enabled."`
 }
 
 // HostPolicyRow — a host-tier policy this host owns, with its rate-limit rule
 // sets (model-scoped and unscoped links alike).
 type HostPolicyRow struct {
-	ID         string               `json:"id"`
-	Name       string               `json:"name"`
-	Enabled    bool                 `json:"enabled"`
-	RateLimits []PolicyRateLimitRow `json:"rateLimits"`
+	ID         string               `json:"id"         doc:"Policy id."`
+	Name       string               `json:"name"       doc:"Policy slug."`
+	Enabled    bool                 `json:"enabled"    doc:"Whether the policy is enabled."`
+	RateLimits []PolicyRateLimitRow `json:"rateLimits" doc:"The rate limits the preset links, model-scoped and unscoped."`
 }
 
 // loadHost resolves the host {ref} (id or slug) and builds the index.

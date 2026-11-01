@@ -36,7 +36,7 @@ The `model` field of an inference request resolves against the catalog. These fo
 
 Names are normalized before lookup, so dotted and hyphenated forms match (`gpt-5.5` and `gpt-5-5` are the same name). A dated snapshot name the model lists (for example `gpt-4o-2024-08-06`) selects that snapshot.
 
-When a model has bindings on several hosts and you don't pin one, Relay uses the first binding it finds that your policy grants and whose host has a usable host key in the policy. The order between hosts is not configurable, so pin a host when it matters, or grant only the host you want. Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policy doesn't give. See [Policies](/concepts/policies) for how grants are written.
+When a model has bindings on several hosts and you don't pin one, Relay tries the pools your caller policy links in their order (without one, the host keys your scopes own), keeping those at a host that serves the model, so that order decides the host order and later pools are the failover. See [Failover](/concepts/key-pooling#failover). Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policies don't give. See [Policies](/concepts/policies) for how grants are written.
 
 `GET /v1/models` lists the models your credential can reach. `GET /api/catalog/resolve?ref=<ref>` on the control API shows what a [policy grant](/concepts/policies#granting-models) such as `anthropic@anthropic` or `@ollama-self` expands to.
 
@@ -54,9 +54,9 @@ Every row has an **owner**, and the owner decides who may change it.
 | --- | --- | --- |
 | `system` | Providers, hosts and host bindings from the catalog, the shipped system rate limits, and rows the admin token creates | Admins only. A delete is refused while anything references the row |
 | `provider`, `host` | Catalog data: models are provider-owned; pricing, tier policies and their rate limits are host-owned | Edits are allowed and deletes refused by default. `governance:model` and `governance:policy` change that for models and tier policies (`allowEdit`, `allowDelete`); see [Settings](/reference/settings) |
-| `user`, `team`, `project` | Tenant rows: host keys, relay keys, policies and rate limits created by people, owned by a user or a project; projects are owned by their team. Team and project owners are what RBAC scopes on | The owner, subject to [RBAC](/concepts/auth#authorization) |
+| `user`, `team`, `project` | Tenant rows created by people: host keys, relay keys, policies, policy bindings, rate limits, budgets, accounts and pools. Projects are owned by their team. Team and project owners are what RBAC scopes on | The owner, subject to [RBAC](/concepts/auth#authorization) |
 
-Providers, hosts, models, host bindings and pricing are shared catalog data: no user, team or project owns one. Under `RELAY_AUTHZ=rbac`, writing them takes the `admin` or `catalog-editor` role, and system-owned rows stay admin-only. Host keys, relay keys, policies and rate limits can belong to a tenant.
+Providers, hosts, models, host bindings and pricing are shared catalog data: no user, team or project owns one. Under `RELAY_AUTHZ=rbac`, writing them takes the `admin` or `catalog-editor` role, and system-owned rows stay admin-only. The other kinds can belong to a tenant; [Policies](/concepts/policies#what-a-policy-holds) lists which owner kinds each accepts.
 
 An API edit to a catalog row marks it dirty (`metadata.dirty`), and catalog upgrades skip dirty rows from then on. To change a catalog model and keep receiving upstream updates to the fields you did not touch, use an [overlay](/concepts/overlays) instead.
 
@@ -76,7 +76,7 @@ curl -X PUT http://localhost:8081/api/hosts/by-id/<id> \
 
 The base URL is the server root; the binding's shape adds the path (`/v1/chat/completions` for `openai`). A host whose endpoint differs from the shape's default path can set `spec.path`; an explicit empty `path` means the base URL is the full endpoint.
 
-A `noAuth` host needs no host key, and Relay sends no auth header to it. Because no host key gates it, a policy reaches it only through an explicit grant such as `@ollama-self` or `<provider>/<model>@ollama-self`; a policy with an empty model list does not cover it.
+A `noAuth` host needs no host key, and Relay sends no auth header to it. Because no host key gates it, a caller reaches it only through a pool at that host linked by a caller policy; the pool needs no keys. See [Keyless hosts](/concepts/key-pooling#keyless-hosts).
 
 For any other OpenAI-compatible server, create your own `Host` with its `baseURL` (and `noAuth: true` if it takes no key), the `Model` rows, and a `HostBinding` per model with `adapter: openai`, through the control API or [`relay apply`](/concepts/gitops).
 

@@ -72,6 +72,8 @@ type Reservation struct {
 	swRules []Rule
 	// spendRules holds MeterSpend rules, charged at Commit.
 	spendRules []Rule
+	// reservedAt is the clock the reserve script ran with: it names the fixed- and sliding-window buckets that script added one to, which a cancelled Commit takes back.
+	reservedAt time.Time
 	// noCommit marks a reservation that metered nothing — a check-only
 	// Reserve. Committing it would be a second script call for no state.
 	noCommit bool
@@ -109,9 +111,10 @@ func (l *Limiter) reserve(ctx context.Context, runner kv.Scripter, scope string,
 				return nil, err
 			}
 		}
-		return newReservation(scope, rules, token), nil
+		return newReservation(scope, rules, token, time.Time{}), nil
 	}
-	call, err := l.buildReserveCall(scope, rules, token)
+	now := l.clock()
+	call, err := l.buildReserveCall(scope, rules, token, now)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +123,10 @@ func (l *Limiter) reserve(ctx context.Context, runner kv.Scripter, scope string,
 		l.releaseUnanswered(scope, rules, token, err)
 		return nil, reserveFailed(err)
 	}
-	return l.decodeReserve(ctx, scope, rules, token, raw)
+	return l.decodeReserve(ctx, scope, rules, token, now, raw)
 }
 
-func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string) (kv.ScriptCall, error) {
-	now := l.clock()
+func (l *Limiter) buildReserveCall(scope string, rules []Rule, token string, now time.Time) (kv.ScriptCall, error) {
 	keys, ruleArgs, err := buildReserveArgs(scope, rules, now)
 	if err != nil {
 		return kv.ScriptCall{}, err
@@ -157,7 +159,7 @@ func holdsLease(rules []Rule) bool {
 	return false
 }
 
-func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule, token string, raw []byte) (*Reservation, error) {
+func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule, token string, now time.Time, raw []byte) (*Reservation, error) {
 	var res reserveResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("limit: decode reserve result: %w", err)
@@ -186,17 +188,18 @@ func (l *Limiter) decodeReserve(ctx context.Context, scope string, rules []Rule,
 		return nil, exceeded
 	}
 
-	reservation := newReservation(scope, rules, token)
+	reservation := newReservation(scope, rules, token, now)
 	l.log.Debug("limit reserve", "request_id", reqid.From(ctx), "rules", len(rules), "decision", "granted")
 	return reservation, nil
 }
 
-// newReservation returns the reservation a granted reserve of rules holds, with the per-kind lists Commit reads.
-func newReservation(scope string, rules []Rule, token string) *Reservation {
+// newReservation returns the reservation a granted reserve of rules at now holds, with the per-kind lists Commit reads.
+func newReservation(scope string, rules []Rule, token string, now time.Time) *Reservation {
 	reservation := &Reservation{
-		ID:    token,
-		scope: scope,
-		rules: rules,
+		ID:         token,
+		scope:      scope,
+		rules:      rules,
+		reservedAt: now,
 	}
 	for _, rule := range rules {
 		strategy := rule.Strategy
@@ -228,7 +231,7 @@ func newReservation(scope string, rules []Rule, token string) *Reservation {
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
 //   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]
 //   - meter "tokens.<key>":  obs.Tokens["<key>"]
-//   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
+//   - meter "requests":      always 1 (counted at Reserve; not post-hoc), taken back when obs.Cancelled
 //   - meter "concurrency":   the reservation's lease released
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
 	if !res.needsCommit(obs) {
@@ -327,8 +330,14 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		}
 	}
 
-	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys, ...tbStateKeys, ...lbStateKeys, ...swStateKeys]
-	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules)+len(res.tbRules)+len(res.lbRules)+len(res.swRules))
+	// A cancelled commit also takes back the fixed- and sliding-window counts its reserve added, at most one per rule.
+	winCap := 0
+	if obs.Cancelled {
+		winCap = len(res.rules)
+	}
+
+	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys, ...tbStateKeys, ...lbStateKeys, ...swStateKeys, ...windowKeys]
+	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules)+len(res.tbRules)+len(res.lbRules)+len(res.swRules)+winCap)
 	keys = append(keys, guardKey)
 	keys = append(keys, res.conKeys...)
 
@@ -342,10 +351,10 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		}
 	}
 
-	// The four JSON arrays share one buffer, sized for the widest int64, and go to the store as sub-slices.
+	// The JSON arrays share one buffer, sized for the widest int64, and go to the store as sub-slices.
 	const maxInt = len("-9223372036854775808")
-	nRefund := len(res.tbRules) + len(res.lbRules) + len(res.swRules)
-	buf := make([]byte, 0, 8+len(tokAmounts)*(maxInt+1)+nRefund*(3*maxInt+5))
+	nRefund := len(res.tbRules) + len(res.lbRules) + len(res.swRules) + winCap
+	buf := make([]byte, 0, 10+len(tokAmounts)*(maxInt+1)+nRefund*(3*maxInt+5))
 
 	// tok_amounts: [amount, ...], one per tokRule.
 	buf = append(buf, '[')
@@ -382,6 +391,23 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		buf = append(appendRefund(buf, i, int64(len(keys)), 1), ']')
 	}
 	buf = append(buf, ']')
+	swEnd := len(buf)
+
+	// Window refunds [key_idx, count] name the bucket the reserve incremented, not the current one, so a refund after the window rolled over never takes from the new window's count.
+	nWin := 0
+	if obs.Cancelled {
+		buf = append(buf, '[')
+		for _, rule := range res.rules {
+			key, ok := windowCountKey(res.scope, rule, res.reservedAt)
+			if !ok {
+				continue
+			}
+			keys = append(keys, key)
+			buf = append(appendRefund(buf, nWin, int64(len(keys)), 1), ']')
+			nWin++
+		}
+		buf = append(buf, ']')
+	}
 
 	cancelledInt := int64(0)
 	if obs.Cancelled {
@@ -398,20 +424,26 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		cancelledInt,
 		buf[tokEnd:tbEnd:tbEnd],
 		buf[tbEnd:lbEnd:lbEnd],
-		buf[lbEnd:],
+		buf[lbEnd:swEnd:swEnd],
 	}
-	// Spend arguments ride only on reservations that hold spend rules, so every other commit sends what it always has.
-	if len(res.spendRules) > 0 {
-		var spends []byte
-		var err error
-		if spends, keys, err = appendSpends(make([]byte, 0, len(res.spendRules)*(3*maxInt+5)+2), keys, res, now); err != nil {
-			return kv.ScriptCall{}, err
+	// Spend arguments ride only on reservations that hold spend rules, or ahead of window refunds, so every other commit sends what it always has.
+	if len(res.spendRules) > 0 || nWin > 0 {
+		var spends any = "[]"
+		if len(res.spendRules) > 0 {
+			b, k, err := appendSpends(make([]byte, 0, len(res.spendRules)*(3*maxInt+5)+2), keys, res, now)
+			if err != nil {
+				return kv.ScriptCall{}, err
+			}
+			spends, keys = b, k
 		}
 		cost := obs.CostNanos
 		if obs.Cancelled {
 			cost = 0
 		}
 		args = append(args, spends, cost)
+	}
+	if nWin > 0 {
+		args = append(args, buf[swEnd:])
 	}
 
 	return kv.ScriptCall{

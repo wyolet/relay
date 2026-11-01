@@ -35,7 +35,7 @@ type HostKey struct {
 
 	// Status is observed state (see Status type) — API-visible, never
 	// round-tripped through YAML manifests.
-	Status Status `json:"status,omitzero" yaml:"-"`
+	Status Status `json:"status,omitzero" yaml:"-" readOnly:"true" doc:"Observed state of the credential. Ignored on write."`
 	Spec   Spec   `json:"spec"     yaml:"spec"`
 
 	// Resolved is the cleartext value reconstructed at load time (read from
@@ -48,7 +48,7 @@ type HostKey struct {
 	// snapshot; not stored and not loaded from YAML. Lists every Policy
 	// linking this HostKey in Spec.CredentialIDs, so the admin UI can show
 	// where a key is in use.
-	Policies []PolicyRef `json:"policies,omitempty" yaml:"-"`
+	Policies []PolicyRef `json:"policies,omitempty" yaml:"-" readOnly:"true" doc:"Policies that link this key, directly or through a pool. Derived on read; ignored on write."`
 }
 
 // AnonIDPrefix prefixes the synthetic anonymous key's id, KeyHash, and name so
@@ -88,8 +88,8 @@ func Anonymous(hostID, hostName string) *HostKey {
 // PolicyRef is the lightweight {id, name} pair used in derived reverse-ref
 // lists exposed by the control API.
 type PolicyRef struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   string `json:"id"   doc:"Policy id."`
+	Name string `json:"name" doc:"Policy slug."`
 }
 
 // Spec carries non-secret config and the value-mode discriminator. Cleartext
@@ -97,14 +97,14 @@ type PolicyRef struct {
 type Spec struct {
 	// HostID is the id of the Host this key authenticates to. Required.
 	// Replaces the pre-refactor Meta.Owner pointing at a Host.
-	HostID string `json:"hostId" yaml:"hostId" validate:"required"`
+	HostID string `json:"hostId" yaml:"hostId" validate:"required" doc:"Id of the host this key authenticates to."`
 
 	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits, and the account's bound tier policy caps them. Optional on write: Store.Upsert fills in the owner's default account at HostID. The account must be at HostID, a cross-row check in app/refcheck.
-	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid"`
+	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid" doc:"Id of the provider account (organization) the key belongs to. Keys of one account share its upstream limits, and the policy bound to the account caps them. The account must be at hostId and have the key's owner. Omitted on create joins the owner's default account at the host; omitted on update keeps the stored account."`
 
-	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
-	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
-	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
+	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required" doc:"Where the secret comes from."`
+	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug" deprecated:"true" doc:"Stored but not applied to requests. Upstream tier limits come from the policy bound to the key's account."`
+	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"     doc:"False stops routing requests to this key. Omitted means true."` // nil = true
 
 	// PricingStrategy selects how this credential's spend is accounted.
 	// "api": per-token metered — the cost is real spend and counts toward
@@ -114,14 +114,14 @@ type Spec struct {
 	// be one of the credential's Host.Spec.PricingStrategies (the host's
 	// menu of offered billing modes); that membership is a composition-layer
 	// invariant.
-	PricingStrategy string `json:"pricingStrategy,omitempty" yaml:"pricingStrategy,omitempty" validate:"omitempty,oneof=api sub"`
+	PricingStrategy string `json:"pricingStrategy,omitempty" yaml:"pricingStrategy,omitempty" validate:"omitempty,oneof=api sub" enum:"api,sub" doc:"How the key's spend is accounted: api is metered spend that counts toward budgets; sub is a flat-rate subscription whose computed cost is a reference figure only. Must be one of the host's pricingStrategies. Omitted means api."`
 
 	// Value is cleartext on the write path for ValueKindStored. Accepted
 	// from JSON and YAML inputs; never returned on reads — Store.Get
 	// never repopulates it, and marshalSpec strips it before any JSONB
 	// persistence. The `omitempty` tag combined with that read-side
 	// invariant keeps cleartext out of GET responses.
-	Value string `json:"value,omitempty" yaml:"value,omitempty"`
+	Value string `json:"value,omitempty" yaml:"value,omitempty" writeOnly:"true" doc:"The secret, for valueFrom.kind stored or oauth (an OAuth token blob). Sealed at rest and never returned. Set on create only: an update keeps the stored value and refuses a new one (use POST /host-keys/by-id/{id}/rotate)."`
 }
 
 // ValueFrom is the value-mode discriminator. For ValueKindEnv, Env names the
@@ -129,11 +129,11 @@ type Spec struct {
 // Provider names the oauth:<provider> settings section used to refresh the
 // token, and Spec.Value (on write) carries the initial token blob.
 type ValueFrom struct {
-	Kind ValueKind `json:"kind"          yaml:"kind"          validate:"required,oneof=env stored oauth"`
-	Env  string    `json:"env,omitempty" yaml:"env,omitempty"`
+	Kind ValueKind `json:"kind"          yaml:"kind"          validate:"required,oneof=env stored oauth" enum:"env,stored,oauth" doc:"env reads the secret from an environment variable; stored seals the value sent in spec.value; oauth stores an OAuth token blob from spec.value and refreshes it."`
+	Env  string    `json:"env,omitempty" yaml:"env,omitempty" doc:"Environment variable holding the secret, for kind env. RELAY_* and WYOLET_* names are refused."`
 	// Provider selects the oauth:<provider> settings section (refresh
 	// endpoints + client). Required for ValueKindOAuth, empty otherwise.
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"OAuth provider whose settings section refreshes the token, for kind oauth."`
 }
 
 // ValueKind enumerates the supported value-storage modes.
@@ -234,19 +234,19 @@ func (k *HostKey) Validate() error {
 type Status struct {
 	// Credential reports the OAuth credential's refresh lifecycle. Nil for
 	// api-key hostkeys and for oauth keys with no observation yet.
-	Credential *CredentialStatus `json:"credential,omitempty" yaml:"-"`
+	Credential *CredentialStatus `json:"credential,omitempty" yaml:"-" doc:"Refresh health of an oauth credential. Absent for other kinds and before the first renewal."`
 
 	// Unresolved is set at load time when the key's secret could not be
 	// read (an env-ref whose variable is unset, a stored value the master
 	// key cannot decrypt). The row still lists and edits so an operator can
 	// repair it; the snapshot drops it so no request picks a valueless key.
 	// Load-time only — never written to the status column.
-	Unresolved *UnresolvedStatus `json:"unresolved,omitempty" yaml:"-"`
+	Unresolved *UnresolvedStatus `json:"unresolved,omitempty" yaml:"-" doc:"Set when the secret could not be read at load; the key is not routed until repaired."`
 }
 
 // UnresolvedStatus explains why a key's value could not be resolved.
 type UnresolvedStatus struct {
-	Reason string `json:"reason"`
+	Reason string `json:"reason" doc:"Why the secret could not be read, such as an unset environment variable."`
 }
 
 // CredentialState classifies an OAuth credential's refresh health.
@@ -263,9 +263,9 @@ const (
 
 // CredentialStatus is one observation of the credential's refresh health.
 type CredentialStatus struct {
-	State     CredentialState `json:"state"               yaml:"-"`
-	ExpiresAt time.Time       `json:"expiresAt,omitempty" yaml:"-"`
-	RenewedAt time.Time       `json:"renewedAt,omitempty" yaml:"-"`
-	LastError string          `json:"lastError,omitempty" yaml:"-"`
-	At        time.Time       `json:"at"                  yaml:"-"`
+	State     CredentialState `json:"state"               yaml:"-" enum:"ok,revoked" doc:"ok after a successful renewal; revoked when the provider rejected the grant, until a new value is uploaded."`
+	ExpiresAt time.Time       `json:"expiresAt,omitempty" yaml:"-" doc:"When the current access token expires."`
+	RenewedAt time.Time       `json:"renewedAt,omitempty" yaml:"-" doc:"When the token was last renewed."`
+	LastError string          `json:"lastError,omitempty" yaml:"-" doc:"The last renewal error, when it failed."`
+	At        time.Time       `json:"at"                  yaml:"-" doc:"When this observation was recorded."`
 }

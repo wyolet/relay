@@ -33,6 +33,8 @@ Every pod holds an immutable in-memory snapshot of the catalog, credentials, pol
 
 A change made through the control API reaches every pod in about a second, with no restart and no manual reload. `POST /api/reload` rebuilds the snapshot from Postgres in full if you need it.
 
+From the same rows each pod folds the [policy ladder](/concepts/policies#the-ladder) into one plan per principal. A change rebuilds only the plans it touches, and every `RELAY_PLAN_RESYNC_S` seconds the rows are read again to heal a missed notification.
+
 <Frame caption="A control-plane write propagates to every pod's snapshot via Postgres NOTIFY/LISTEN.">
   <img className="block dark:hidden" src="/images/architecture/snapshot-fanout.svg" alt="Snapshot fan-out via NOTIFY/LISTEN" />
   <img className="hidden dark:block" src="/images/architecture/snapshot-fanout-dark.svg" alt="Snapshot fan-out via NOTIFY/LISTEN" />
@@ -49,14 +51,14 @@ A change made through the control API reaches every pod in about a second, with 
   <Step title="Authenticate">
     A relay key is hashed and looked up in the snapshot; an inference token is verified against the signing key. A miss, a disabled or expired key, or a bad token is a `401`.
   </Step>
-  <Step title="Resolve the policy">
-    The governing policy comes from the key, the service account, or the project's policy bindings. See [Policies](/concepts/policies#which-policy-governs-a-request).
+  <Step title="Read the plan">
+    The credential points at its principal's plan: the [policy ladder](/concepts/policies#the-ladder) folded ahead of time from the policies bound to the principal, its project and team, and the hosts, accounts and host keys it can reach. A disabled policy or subject on the way is a `403`.
   </Step>
   <Step title="Route">
-    The `model` resolves to a catalog model. Relay walks its enabled host bindings and picks the first one the policy grants whose host has a usable host key in the policy. The binding supplies the wire adapter (`openai`, `openai_responses`, `anthropic` or `gemini`) and the upstream model name.
+    The `model` resolves to a catalog model. Relay keeps the caller's pools, in order, that are at a host serving the model and whose rungs allow it; each becomes a hop. The binding at the hop's host supplies the wire adapter (`openai`, `openai_responses`, `anthropic` or `gemini`) and the upstream model name. Routes are cached per principal.
   </Step>
   <Step title="Reserve and pick a key">
-    The policy's rate limit is reserved in one script call to the state backend. A host key is then picked from the policy's keys for the chosen host, skipping keys whose circuit breaker is open, and the key's tier limit is reserved. See [Key pooling](/concepts/key-pooling) and [Rate limits](/concepts/rate-limits).
+    The caller's rate limits and budgets are reserved in the state backend. A host key is then picked from the first hop's pool, skipping keys whose circuit breaker is open or whose account is cooling, and the key's upstream limits are reserved. See [Key pooling](/concepts/key-pooling) and [Rate limits](/concepts/rate-limits).
   </Step>
   <Step title="Forward and stream">
     Relay calls the upstream and streams the response back. When the inbound and upstream shapes match, bytes pass through unchanged; otherwise each request and stream event is translated through Relay's canonical protocol.
@@ -67,13 +69,13 @@ A change made through the control API reaches every pod in about a second, with 
 </Steps>
 
 <Info>
-Failover happens only before the first response byte, and only across host keys of the chosen host. Relay does not switch to another host at request time, and once bytes flow an upstream error reaches the caller as-is. See [Key pooling](/concepts/key-pooling#failover-happens-before-the-first-byte).
+Failover happens only before the first response byte: across the keys of a pool, then to the next pool, which may be at another host. Once bytes flow an upstream error reaches the caller as-is. See [Failover](/concepts/key-pooling#failover).
 </Info>
 
 ## Design choices on the request path
 
-- **No Postgres queries.** Routing, authentication and policy resolution read the snapshot.
-- **A small, fixed number of state-backend calls.** The inbound rate-limit reservation and a token's revocation check share one script call; key selection reads each candidate key's breaker record; the key's tier reservation is one more script call; commits after the response are batched.
+- **No Postgres queries.** Routing, authentication and the policy ladder read in-memory state built from Postgres.
+- **A small, fixed number of state-backend calls.** The caller's rate limits and budgets are reserved in one script call per counter group; key selection reads each candidate key's breaker record; the key's upstream limits are one more script call per group; a token's revocation is checked against an in-memory list.
 - **Off-path emits.** Usage events, captured payloads and metrics go through bounded queues that drop on overflow and count the drops, so a slow sink cannot stall a request.
 - **Byte-pass when shapes match.** Same-shape requests are copied, not parsed and re-serialized.
 - **Horizontal scale.** Shared state lives in Postgres and the state backend, so pods are interchangeable; add pods to add capacity.
@@ -86,7 +88,7 @@ To see the time Relay itself adds to a request, watch the `relay_overhead_second
 | --- | --- | --- |
 | **Postgres** | Catalog, host keys, relay keys, policies, rate limits, tenancy, settings, audit log, batch jobs; usage events when that sink is selected | No. Only through the snapshot |
 | **In-memory snapshot** | Read-optimized copy of the Postgres rows routing needs | Yes, for every routing and auth decision |
-| **State backend** (`RELAY_STATE_BACKEND`: `memory` or `redis`, i.e. Valkey/Redis) | Rate-limit counters, circuit breakers, round-robin and LRU state, host reachability, token revocations, control-plane sessions | Yes. Use `redis` when you run more than one pod, or each pod keeps its own counters |
-| **Usage sink** | Usage events: local JSONL file (default), ClickHouse, Postgres, or Valkey. See [Usage](/concepts/usage) | No. Written after the response |
+| **State backend** (`RELAY_STATE_BACKEND`: `memory` or `redis`, i.e. Dragonfly) | Rate-limit counters, circuit breakers, round-robin and LRU state, host reachability, token revocations, control-plane sessions | Yes. Use `redis` when you run more than one pod, or each pod keeps its own counters |
+| **Usage sink** | Usage events: local JSONL file (default), ClickHouse, Postgres, or the state store. See [Usage](/concepts/usage) | No. Written after the response |
 | **Payload store** | Captured request and response bodies, when enabled: file, S3, or ClickHouse. See [Payload logging](/concepts/payload-logging) | No. Written after the response |
 | **Batch payload directory** (`RELAY_BATCH_PAYLOAD_DIR`) | Batch item bodies, as local files. See [Batch](/batch) | Only by batch workers |

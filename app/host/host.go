@@ -35,7 +35,7 @@ type Host struct {
 	// step from the host-health store. nil when no observation exists yet
 	// (no traffic since boot, or the record TTL'd out) — the UI shows
 	// "unknown". Never persisted and never loaded from YAML.
-	Status *Status `json:"status,omitempty" yaml:"-"`
+	Status *Status `json:"status,omitempty" yaml:"-" readOnly:"true" doc:"Reachability observed from live traffic. Absent until the host has been dialled. Ignored on write."`
 }
 
 // HostHealth is the observed reachability of a host's upstream.
@@ -56,7 +56,7 @@ const (
 // Status is runtime-observed health for a Host. Written by the data plane on
 // each request outcome, read by the admin API. Not persisted.
 type Status struct {
-	Health              HostHealth `json:"health" doc:"unknown | healthy | unreachable."`
+	Health              HostHealth `json:"health" enum:"healthy,unreachable" doc:"healthy after a successful dial, unreachable after dial failures."`
 	LastError           string     `json:"lastError,omitempty" doc:"Last dial-failure error excerpt; set while unreachable."`
 	ConsecutiveFailures int        `json:"consecutiveFailures,omitempty" doc:"Consecutive dial failures; 0 when healthy."`
 	LastTransition      time.Time  `json:"lastTransition,omitempty" doc:"When health was last recorded."`
@@ -68,18 +68,18 @@ type Spec struct {
 	// BaseURL is the upstream root. Empty is valid but leaves the host
 	// unroutable — a catalog may ship a self-hosted host for the operator to
 	// point at their own endpoint after install.
-	BaseURL string `json:"baseURL" yaml:"baseURL" validate:"omitempty,http_url"`
+	BaseURL string `json:"baseURL" yaml:"baseURL" validate:"omitempty,http_url" doc:"Upstream root URL. Empty is accepted but leaves the host unroutable until set."`
 
 	// Path overrides the adapter's shape-default upstream path (Spec.DefaultPath)
 	// when this host's endpoint doesn't follow the vendor-canonical layout.
 	// Used verbatim when set — an explicit "" means BaseURL is the complete
 	// endpoint URL and nothing is appended. Unset (nil) keeps the shape default.
-	Path *string `json:"path,omitempty" yaml:"path,omitempty"`
+	Path *string `json:"path,omitempty" yaml:"path,omitempty" doc:"Upstream path used instead of the wire shape's default. An empty string means baseURL is the complete endpoint; omitted keeps the default."`
 
 	// Backend is the free-form bag of backend-specific config (Bedrock region,
 	// Azure deployment, Vertex project/location, etc.). Each provider client
 	// reads the keys it needs and ignores the rest. Optional.
-	Backend map[string]string `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Backend map[string]string `json:"backend,omitempty" yaml:"backend,omitempty" doc:"Backend-specific settings, such as a region or deployment name; each adapter reads the keys it needs."`
 
 	// PricingStrategies is the menu of billing modes this upstream offers:
 	// "api" (per-token metered) and/or "sub" (flat-rate subscription). A
@@ -87,24 +87,24 @@ type Spec struct {
 	// ["api"]. Anthropic offers both (an API key or a Max subscription reach
 	// the same endpoint); Ollama Cloud is ["sub"] only; most hosts are
 	// ["api"]. Catalog-declared; the operator picks one per HostKey.
-	PricingStrategies []string `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty" validate:"omitempty,dive,oneof=api sub"`
+	PricingStrategies []string `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty" validate:"omitempty,dive,oneof=api sub" enum:"api,sub" doc:"Billing modes the host offers: api (per-token metered) and sub (flat-rate subscription). A host key picks one. Omitted means [api]."`
 
 	// NoAuth marks an upstream that needs no API key (a self-hosted Ollama on
 	// the operator's network). When set, routing injects a synthetic anonymous
 	// key for this host instead of requiring a real HostKey, and the adapter
 	// sends no Authorization header. Operator-managed (per-deployment), not a
 	// catalog-fixed property — Ollama Cloud still needs a key.
-	NoAuth bool `json:"noAuth,omitempty" yaml:"noAuth,omitempty"`
+	NoAuth bool `json:"noAuth,omitempty" yaml:"noAuth,omitempty" doc:"The upstream needs no API key (such as a self-hosted Ollama). Requests go out without credentials, reached through a pool that names the host."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops routing to the host. Omitted means true."`
 
 	// Display metadata — operator-set, optional.
-	HomepageURL   string     `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url"`
-	DocsURL       string     `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url"`
-	ConsoleURL    string     `json:"consoleURL,omitempty"    yaml:"consoleURL,omitempty"    validate:"omitempty,http_url"`
-	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url"`
-	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"`
+	HomepageURL   string     `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url" doc:"Host homepage."`
+	DocsURL       string     `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url" doc:"Host API documentation."`
+	ConsoleURL    string     `json:"consoleURL,omitempty"    yaml:"consoleURL,omitempty"    validate:"omitempty,http_url" doc:"Where keys for the host are managed."`
+	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url" doc:"Host status page."`
+	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"          doc:"Icon shown for the host."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

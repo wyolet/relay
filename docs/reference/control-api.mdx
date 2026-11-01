@@ -51,17 +51,21 @@ DELETE /api/{plural}/by-id/{id}      delete
 | --- | --- | --- |
 | `providers`, `hosts`, `models`, `host-bindings`, `pricings` | Catalog | [Catalog](/concepts/catalog) |
 | `host-keys` | Upstream credentials | [Authentication](/concepts/auth), [Key pooling](/concepts/key-pooling) |
-| `policies` | Grants, key pool, limits | [Policies](/concepts/policies) |
+| `accounts`, `pools` | Provider organizations; ordered sets of one host's keys | [Key pooling](/concepts/key-pooling) |
+| `policies`, `policy-bindings` | Model grants and links to pools, rate limits and budgets; who they govern | [Policies](/concepts/policies) |
 | `rate-limits` | Rule sets | [Rate limits](/concepts/rate-limits) |
+| `budgets` | Spend caps | [Budgets](/concepts/budgets) |
 | `keys` | Relay keys (create through [`POST /api/keys`](#relay-keys)) | [Authentication](/concepts/auth) |
 | `teams`, `projects`, `service-accounts`, `groups` | Tenancy | [Authentication](/concepts/auth) |
-| `roles`, `role-bindings`, `policy-bindings` | Access control | [Authentication](/concepts/auth) |
+| `roles`, `role-bindings` | Access control | [Authentication](/concepts/auth) |
 
 List endpoints accept `q` (free text), `sort`, `limit`, `offset`, `label=key=value` (repeatable), and per-kind field filters; an unknown filter answers `400`. The OpenAPI document lists each kind's filters.
 
 Every read returns `metadata.resourceVersion`, an opaque string that changes on every write to the row. Send it back unchanged in the PUT body to make the update conditional: if the row changed since you read it, the PUT fails with `409` and the code `stale_resource_version`, and nothing is written. A PUT without `resourceVersion` replaces the row unconditionally.
 
 Every write is applied to each pod's in-memory catalog within about a second; no reload is needed. Edits and deletes of catalog-owned rows are governed by the `governance:*` settings; see [Settings](/reference/settings).
+
+A `DELETE` answers `204`, or `200` with `{"detached": [...]}` when it took links from rows that stay: policies that lose a rate limit or budget, or that keep a deleted pool's or host key's id and narrow, and pools that lose a deleted host key. Each entry groups the rows by `kind` and `field`, with `count`, `hidden` (rows you may not see) and `items`. A row still referenced where the link cannot be dropped answers `409` with the code `resource_in_use` and the same groups as `blockers`.
 
 ### References and detach
 
@@ -70,7 +74,7 @@ GET  /api/{plural}/by-id/{id}/references   rows that reference this one, before 
 POST /api/{plural}/by-id/{id}/detach       clear every reference to this row the caller may edit; returns what still references it
 ```
 
-Available for `providers`, `hosts`, `models`, `pricings`, `policies`, `host-keys`, `rate-limits`, `teams`, `projects`, `service-accounts`, `groups` and `roles`. Detach deletes nothing.
+Available for `providers`, `hosts`, `models`, `pricings`, `policies`, `host-keys`, `rate-limits`, `teams`, `projects`, `service-accounts`, `groups`, `roles`, `accounts`, `pools` and `budgets`. For a pool, budget, rate limit or host key, `references` also lists the links a delete would take. Detach deletes nothing.
 
 ### Host keys
 
@@ -96,7 +100,6 @@ curl -X POST http://localhost:8081/api/keys \
     "metadata": { "displayName": "prod key" },
     "spec": {
       "principal": { "kind": "serviceaccount", "id": "<service-account-id>" },
-      "policyId": "<policy-id>",
       "expiresAt": "2027-01-01T00:00:00Z"
     }
   }'
@@ -109,14 +112,59 @@ curl -X POST http://localhost:8081/api/keys \
 }
 ```
 
-`spec.principal` is required. Optional fields: `policyId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal.
+`spec.principal` is required. Optional fields: `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. A key holds no policy: bind one to its principal instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal.
 
-### Policies
+### Policies and policy bindings
+
+A policy's links are ids in the API and names in manifests:
+
+```json
+{
+  "metadata": { "displayName": "ML team", "owner": { "kind": "team", "id": "<team-id>" } },
+  "spec": {
+    "models": ["openai"],
+    "poolIds": ["<pool-id>"],
+    "credentialIds": [],
+    "rateLimits": [{ "rateLimitId": "<rate-limit-id>" }],
+    "budgetIds": ["<budget-id>"]
+  }
+}
+```
+
+A `rateLimits` entry may add `"models": [...]` to count per model; a policy with such an entry can be bound only to a host, an account or a host key.
+
+A policy binding is owned by the system, a team (`metadata.owner`) or a project (`spec.projectId`):
+
+```json
+{
+  "metadata": { "displayName": "ML team", "owner": { "kind": "team", "id": "<team-id>" } },
+  "spec": {
+    "policyId": "<policy-id>",
+    "subjects": [{ "kind": "team", "id": "<team-id>" }]
+  }
+}
+```
+
+Subject kinds are `host`, `account`, `credential` (a host key), `team`, `project`, `user` and `serviceaccount`. On save:
+
+| Answer | When |
+| --- | --- |
+| `400` | A linked row does not exist or lives in a scope the policy may not use; a subject lies outside the binding owner's scope or is a group; the binding uses a policy its owner may not use; a host-owned policy links pools or host keys; a policy with a model-scoped rate limit would be bound to a team, project, user or service account, by a new binding or by adding `models` to a bound policy. |
+| `404` | A linked row exists but you may not see it. |
+| `409` `duplicate_binding` | A subject is already held by another binding (for a user: by a binding whose scope overlaps this one). |
+
+The rules behind each answer are on [Policies](/concepts/policies#policy-bindings).
+
+### Accounts and pools
 
 ```
-POST   /api/policies/by-id/{id}/keys/{keyId}   attach a relay key to the policy
-DELETE /api/policies/by-id/{id}/keys/{keyId}   detach it (409 if the key points at another policy)
+GET /api/pools/{ref}/keys       the pool's host keys in pool order, without values
+GET /api/accounts/{ref}/keys    the host keys that name the account, without values
 ```
+
+A pool's keys must authenticate to the pool's host, and an account named by a host key must be at that key's host. A host key saved without `accountId` gets its owner's default account at its host, created on first use; an owner has one default account per host, and marking a second `"default": true` answers `409`. See [Default accounts](/concepts/key-pooling#default-accounts).
+
+Deleting an account that host keys still name, or a host that still has accounts or pools, answers `409`. A default account no host key names does not block: it is deleted with its host, team or project. Deleting a team or project that still has rows under it or owned by it answers `409` and lists them as `blockers`.
 
 ### Model overlays
 
@@ -138,10 +186,10 @@ GET /api/models/{ref}/pricing        the model's pricing per host
 GET /api/models/{ref}/policies       policies granting the model, with the limits each applies
 GET /api/hosts/{ref}/models          models the host serves, with binding and pricing
 GET /api/hosts/{ref}/keys            the host's keys, without values
-GET /api/hosts/{ref}/policies        the host's tier policies, with limits
+GET /api/hosts/{ref}/policies        the host's tier presets, with limits
 GET /api/policies/{ref}/models       models the policy grants, with the limits it applies
-GET /api/policies/{ref}/hosts        hosts the policy can reach, with the keys that reach each
-GET /api/policies/{ref}/rate-limits  rate limits the policy references
+GET /api/policies/{ref}/hosts        hosts the policy's pools and host keys reach, with the keys at each
+GET /api/policies/{ref}/rate-limits  rate limits the policy links
 GET /api/catalog/resolve             expand model references into matching catalog rows
 GET /api/catalog/graph               providers, hosts, models and bindings, minimal
 GET /api/debug/snapshot              counts and joins of the in-memory catalog the inference plane reads

@@ -22,12 +22,12 @@ type Pool struct {
 // Spec names the host, its keys, and how a key is picked.
 type Spec struct {
 	// HostID is the one host every key in the pool authenticates to.
-	HostID string `json:"hostId" yaml:"hostId" validate:"required,uuid"`
+	HostID string `json:"hostId" yaml:"hostId" validate:"required,uuid" doc:"Id of the one host every key in the pool authenticates to."`
 
 	// CredentialIDs are the pool's host keys. Order is the preference for prioritized selection. Empty is valid: deleting a key removes it from every pool, which may leave one empty.
-	CredentialIDs []string `json:"credentialIds,omitempty" yaml:"credentialIds,omitempty" validate:"omitempty,dive,uuid"`
+	CredentialIDs []string `json:"credentialIds,omitempty" yaml:"credentialIds,omitempty" validate:"omitempty,dive,uuid" doc:"Ids of the pool's host keys, all at hostId. The order is the preference for prioritized selection. May be empty."`
 
-	Selection keypool.KeySelection `json:"selection,omitempty" yaml:"selection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used"`
+	Selection keypool.KeySelection `json:"selection,omitempty" yaml:"selection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used" enum:"prioritized,round-robin,least-recently-used" doc:"How a request picks a key: prioritized takes the first healthy key in order, round-robin rotates, least-recently-used takes the key idle longest. Omitted means prioritized."`
 }
 
 // Default fills the fields a wire form may omit, so a stored row and the manifest that declared it converge. Nil receiver is a no-op.

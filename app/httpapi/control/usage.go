@@ -111,6 +111,8 @@ type UsageFilterInput struct {
 	RequestID    string   `query:"request_id" doc:"Exact match on a single request id (deep-link one event)."`
 	RelayKeyHash []string `query:"relay_key_hash,explode" doc:"Match any of the given sha256 hashes of the inbound bearer."`
 	PolicyID     []string `query:"policy_id,explode" doc:"Match any of the given Policy.metadata.id values."`
+	PoolID       []string `query:"pool_id,explode" doc:"Match any of the given ids of the pool the serving credential was drawn from."`
+	AccountID    []string `query:"account_id,explode" doc:"Match any of the given ids of the provider account the serving credential belongs to."`
 	ProjectID    []string `query:"project_id,explode" doc:"Match any of the given Project.metadata.id values."`
 	TeamID       []string `query:"team_id,explode" doc:"Match any of the given Team.metadata.id values."`
 	PrincipalID  []string `query:"principal_id,explode" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
@@ -194,6 +196,8 @@ func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		RequestID:      f.RequestID,
 		RelayKeyHash:   f.RelayKeyHash,
 		PolicyID:       f.PolicyID,
+		PoolID:         f.PoolID,
+		AccountID:      f.AccountID,
 		ProjectID:      f.ProjectID,
 		TeamID:         f.TeamID,
 		PrincipalID:    f.PrincipalID,
@@ -297,11 +301,11 @@ type usageEventsInput struct {
 
 type usageEventsOutput struct {
 	Body struct {
-		Events []usagelog.Event `json:"events"`
+		Events []usagelog.Event `json:"events" doc:"Matching events, newest first."`
 		// NextCursor is set when a full page was returned (more may exist);
 		// pass it back as ?cursor= to fetch the next page. Empty on the
 		// last page.
-		NextCursor string `json:"next_cursor,omitempty"`
+		NextCursor string `json:"next_cursor,omitempty" doc:"Pass back as ?cursor= for the next page; absent on the last page."`
 	}
 }
 
@@ -309,12 +313,12 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy     string `query:"group_by" doc:"\"source\" (default) | \"none\" (one row over the whole filtered set, group {}) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	GroupBy     string `query:"group_by" doc:"\"source\" (default) | \"none\" (one row over the whole filtered set, group {}) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
 	Compare     string `query:"compare" doc:"\"previous\" (the only accepted value) adds each row's numbers over the window of equal length just before this one as previous, and that window's bounds as previous_from/previous_to (previous_to exclusive). Rows stay those of the requested window: a group without traffic in the previous window has no previous, and a group seen only there has no row. The window is resolved once (since counts back from the request time, an open to becomes that time); one with no start or a start after its end is a 400. Not combinable with compare_from/compare_to."`
 	CompareFrom string `query:"compare_from" doc:"Start (RFC3339, inclusive) of an explicit window to compare rows with, instead of compare=previous; needs compare_to. Rows gain previous exactly as with compare=previous, and previous_from/previous_to echo this window. Its length may differ from the requested window's and it may overlap it: the caller picks it."`
 	CompareTo   string `query:"compare_to" doc:"End (RFC3339, exclusive) of the explicit compare window; needs compare_from and must be after it."`
 
-	Distinct string `query:"distinct" doc:"Adds distinct to each row: the number of distinct non-empty values of this dimension among the row's events. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
+	Distinct string `query:"distinct" doc:"Adds distinct to each row: the number of distinct non-empty values of this dimension among the row's events. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
 }
 
 type usageSummaryOutput struct {
@@ -326,8 +330,8 @@ type usageSummaryOutput struct {
 type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
-	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series; \"none\" returns that series with group {}."`
-	Distinct string `query:"distinct" doc:"Adds distinct to each point: the number of distinct non-empty values of this dimension among the bucket's events. Per-bucket values cannot be summed across buckets (a value seen in two buckets counts in each); use /usage/summary for a window total. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" | \"relay_key\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series; \"none\" returns that series with group {}."`
+	Distinct string `query:"distinct" doc:"Adds distinct to each point: the number of distinct non-empty values of this dimension among the bucket's events. Per-bucket values cannot be summed across buckets (a value seen in two buckets counts in each); use /usage/summary for a window total. One of \"relay_key_hash\" | \"relay_key\" | \"principal_id\" | \"credential_id\" | \"pool_id\" | \"account_id\" | \"project_id\" | \"team_id\" | \"model_id\" | \"host_id\". Omitted means no distinct count."`
 }
 
 type usageTimeSeriesOutput struct {

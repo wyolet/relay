@@ -27,8 +27,9 @@ type Issue struct {
 	Message  string
 }
 
-// ErrRetry marks a transient reconcile failure: retried on the next drain
-// without backoff.
+// ErrRetry marks a transient reconcile failure: retried without backoff on
+// the next drain or after the retry base (Debounce, else 100 ms), whichever
+// comes first.
 var ErrRetry = errors.New("engine: retry")
 
 var errNoOutput = errors.New("engine: reconcile returned without Put or Drop")

@@ -28,17 +28,17 @@ type Group struct {
 
 // External names the provisioning source that manages a group and the source's own id for it.
 type External struct {
-	Source string `json:"source"`
-	ID     string `json:"id,omitempty"`
+	Source string `json:"source"       doc:"Name of the SCIM client that provisioned the group."`
+	ID     string `json:"id,omitempty" doc:"The group's id at that source."`
 }
 
 // Spec carries the member list and the enabled flag.
 type Spec struct {
 	// MemberIDs are User ids, in declaration order.
-	MemberIDs []string `json:"memberIds,omitempty" yaml:"memberIds,omitempty" validate:"omitempty,dive,uuid"`
+	MemberIDs []string `json:"memberIds,omitempty" yaml:"memberIds,omitempty" validate:"omitempty,dive,uuid" doc:"Ids of the member users."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops role bindings on the group from granting anything. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

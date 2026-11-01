@@ -140,7 +140,7 @@ When the inbound shape matches the upstream's, the response streams from the ups
 
 ## Models
 
-The `model` field is resolved against your catalog. A model is reachable only if the policy that governs your credential grants it **and** the model has an enabled host binding with a usable host key. List what your credential can reach:
+The `model` field is resolved against your catalog. A model is reachable only if every [policy on your ladder](/concepts/policies#the-ladder) allows it **and** one of the pools or host keys you reach is at a host with an enabled binding for it. List what your credential can reach:
 
 ```bash
 curl http://localhost:8080/v1/models \
@@ -264,7 +264,7 @@ A canonical system message can instead opt into full system authority with `"hoi
 
 ## Catalog
 
-`GET /v1/catalog` returns the catalog document the Go SDK reads (hosts with their model bindings and pricing, plus `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential without a policy gets the same `403` when policy-less traffic is off.
+`GET /v1/catalog` returns the catalog document the Go SDK reads (hosts with their model bindings and pricing, plus `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential whose caller ladder refuses (a disabled policy or subject, a subject bound twice) gets the same `403`.
 
 The document omits each host's `baseURL`, `path` and `consoleURL`, since calls go through Relay rather than to the upstream. `version` is `deployment@<tag>` when the catalog was seeded from a release tag, else `deployment`; `generatedAt` is when the document was rendered.
 
@@ -282,7 +282,7 @@ In Go, `client.Relay(...).Catalog(ctx)` fetches and revalidates it, and `Models(
 Relay writes errors in one envelope:
 
 ```json
-{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed by this policy"}}
+{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed by the team policy <policy-id>"}}
 ```
 
 | Status | `code` | Cause |
@@ -298,22 +298,22 @@ Relay writes errors in one envelope:
 | `400` | `missing_upstream_host`, `unknown_upstream_host` | Proxy mode: an anonymous request without `X-WR-Upstream-Host`, or a pinned host that does not exist or that the caller may not use. |
 | `401` | `unauthenticated` | Missing, unknown, disabled, expired, revoked or rotated-out relay key or inference token. |
 | `401` | `token_revoked` | The inference token was revoked. |
-| `403` | `no_policy`, `policy_not_found`, `policy_disabled` | No policy governs the credential, or the governing policy is missing or disabled. |
-| `403` | `policyless_disabled` | The relay key has no policy and policy-less traffic is off. |
-| `403` | `model_not_allowed`, `model_disabled` | The policy does not grant the model, or the model is disabled. |
+| `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding` | A rung of the caller's ladder refuses. See [Policy refusals](#policy-refusals). |
+| `403` | `model_not_allowed`, `model_disabled` | A policy on the ladder does not allow the model, or the model is disabled. |
+| `403` | `unpriced_under_budget` | The model's binding has no pricing and a budget applies. |
 | `403` | `project_unavailable` | The inference token's project no longer exists. |
 | `403` | `passthrough_forbidden`, `proxy_disabled` | Proxy mode: the relay key lacks `passthroughAllowed`, or proxy mode is off. |
 | `404` | `model_not_found` | No model matches the reference. |
 | `408` | `request_timeout` | Proxy mode: the request body sent no bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (default 30). |
 | `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), or in proxy mode has no top-level `model` in its first 32 MiB. |
-| `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent, or every host key for the model is over its tier limit. `Retry-After` says when it refills. |
+| `429` | `rate_limit_exceeded`, `budget_exceeded` | A rate limit or budget on a caller rung is spent, or every host key for the model is over an upstream limit or cooling. `Retry-After` says when it refills, or when the budget's next period starts. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
 | `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |
 | `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
 | `503` | `no_host_binding` | The model has no enabled host binding. |
-| `503` | `no_keys` | No usable host key for the chosen host. |
+| `503` | `no_keys` | None of the pools or host keys the caller reaches is at a host that serves the model, or none of them is usable. |
 | `503` | `catalog_unavailable` | The catalog is still loading. `Retry-After: 5`. |
-| `503`; `529` on Anthropic-shaped routes | `overloaded`; `overloaded_error` on Anthropic-shaped routes | Relay is out of capacity: the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`), or Valkey did not answer a rate-limit check in time. `Retry-After: 1`. `/anthropic/v1/messages` and profile routes in that shape answer like Anthropic's API, `529` with `{"type":"error","error":{"type":"overloaded_error","message":"..."}}`, so its SDKs retry it as an overload. |
+| `503`; `529` on Anthropic-shaped routes | `overloaded`; `overloaded_error` on Anthropic-shaped routes | Relay is out of capacity: the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`), or Dragonfly did not answer a rate-limit check in time. `Retry-After: 1`. `/anthropic/v1/messages` and profile routes in that shape answer like Anthropic's API, `529` with `{"type":"error","error":{"type":"overloaded_error","message":"..."}}`, so its SDKs retry it as an overload. |
 | upstream's | upstream's | The upstream rejected the request on every key. Relay returns the last upstream status and body unchanged. |
 
 When an upstream failure is forwarded, Relay keeps only `Retry-After` (rewritten to whole seconds), `X-Should-Retry`, `X-Request-Id`, `Content-Type` and the upstream's rate-limit headers (`Anthropic-Ratelimit-*`, `X-Ratelimit-*`), and adds `X-WR-Upstream-Status` with the upstream's status.
@@ -321,5 +321,26 @@ When an upstream failure is forwarded, Relay keeps only `Retry-After` (rewritten
 `X-WR-Origin` says who produced a response: `relay` when Relay wrote it, `upstream` when the status and body came from the provider. A `401` from Relay therefore means your relay key, while a `401` with `X-WR-Origin: upstream` means the provider rejected the host key or your own upstream key. Relay also sets `X-Should-Retry: true|false` on the errors it writes (`true` for `408`, `429` and `5xx`) unless the upstream already sent one. The `401` and `403` responses from the credential check carry neither header.
 
 <Warning>
-Relay does not fail over mid-stream. Failover across the keys of the chosen host happens **before the first byte** reaches you. Once bytes flow, an upstream error reaches you as the upstream sent it.
+Relay does not fail over mid-stream. Failover across the keys of a pool, and on to the next pool, happens **before the first byte** reaches you. Once bytes flow, an upstream error reaches you as the upstream sent it.
 </Warning>
+
+### Policy refusals
+
+A refusal by the [policy ladder](/concepts/policies#the-ladder) names the rung, the subject and the policy that decided it, so it can be traced to one binding. Codes without a fixed message carry it in this form:
+
+```
+<code>: <reason> (<rung> rung <kind>:<subject-id>, policy <policy-id>)
+```
+
+| Status | `code` | Cause | Fix |
+| --- | --- | --- | --- |
+| `403` | `policy_disabled` | The policy bound on that rung is disabled. Relay does not fall back to another rule. | Enable the policy, or bind the subject to another one. |
+| `403` | `subject_disabled` | The caller's team, project or service account is disabled. A disabled user, or a key whose service account is disabled, gets `401` instead. | Enable the subject. |
+| `403` | `duplicate_binding` | Two policy bindings reach one subject on that rung. Saving such a binding is normally refused with `409`. | Remove the subject from all but one binding. |
+| `403` | `model_not_allowed` | A policy on the ladder does not allow the model at the host the request would go to. The message names the rung and the policy: `model "<model>" is not allowed by the <rung> policy <policy-id>`. A deprecated model also needs a caller policy that names it or sets `includeDeprecated`; that refusal names no policy. | Add the model to that policy's `models`, or remove the list. |
+| `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no pricing. | Add pricing for the binding. |
+| `429` | `budget_exceeded` | A hard budget on a caller rung is spent for this period. `Retry-After` is the time to the next period. | Raise the cap, or wait. |
+| `429` | `rate_limit_exceeded` | A rate limit on a caller rung is spent, or every host key is over an upstream limit or its account is cooling. | Wait for `Retry-After`. |
+| `503` | `no_keys` | No pool or host key the caller reaches is at a host serving the model. When a caller policy links pools or host keys, its rung is the one named in the logs. | Link a pool at a serving host in the caller's policy, or give the caller's scope a host key there. |
+
+Model and binding refusals (`model_not_found`, `model_disabled`, `no_host_binding`) name no rung. The rung, subject and policy of every refusal are also written to Relay's log with the requested model.

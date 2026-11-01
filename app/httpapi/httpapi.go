@@ -90,12 +90,12 @@ func installErrorRewriter() {
 //
 // LLM client libraries already parse this shape.
 type APIErrorBody struct {
-	Type    string `json:"type"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message"`
+	Type    string `json:"type"           doc:"Error class, such as invalid_request_error (the request's fault), rate_limit_error, server_error or upstream_error."`
+	Code    string `json:"code,omitempty" doc:"Stable machine-readable code, such as not_found, resource_in_use, stale_resource_version, duplicate_binding, model_not_allowed, budget_exceeded."`
+	Message string `json:"message"        doc:"Human-readable explanation."`
 	// Details carries huma's per-field validation errors, which the flat
 	// OpenAI shape has no other place for.
-	Details []*huma.ErrorDetail `json:"details,omitempty"`
+	Details []*huma.ErrorDetail `json:"details,omitempty" doc:"Per-field failures of a 422 schema validation."`
 }
 
 // errorDetails projects the errors huma passed to NewError onto the detail
@@ -121,7 +121,7 @@ func errorDetails(errs []error) []*huma.ErrorDetail {
 //
 // The shape is compatible with what LLM client libraries already parse.
 type APIError struct {
-	Err        APIErrorBody `json:"error"`
+	Err        APIErrorBody `json:"error" doc:"The error."`
 	HTTPStatus int          `json:"-"`
 }
 
@@ -164,6 +164,7 @@ var entityNameByPkg = map[string]string{
 	"github.com/wyolet/relay/app/ratelimit": "RateLimit",
 	"github.com/wyolet/relay/app/policy":    "Policy",
 	"github.com/wyolet/relay/app/pricing":   "Pricing",
+	"github.com/wyolet/relay/app/binding":   "Binding",
 	"github.com/wyolet/relay/app/key":       "Key",
 	"github.com/wyolet/relay/app/team":      "Team",
 	"github.com/wyolet/relay/app/project":   "Project",
@@ -180,6 +181,8 @@ var entityNameByPkg = map[string]string{
 	// Not a catalog entity, but its Event/Actor/Resource/Request names
 	// collide with usage.Event and authz.Resource in the shared registry.
 	"github.com/wyolet/relay/app/audit": "Audit",
+	// Ref alone says nothing in a generated client.
+	"github.com/wyolet/relay/secret": "Secret",
 }
 
 func schemaNamer(t reflect.Type, hint string) string {

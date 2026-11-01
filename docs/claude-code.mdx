@@ -75,7 +75,6 @@ Two more are worth setting: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to match the contex
        "metadata": {"displayName": "claude-code-proxy"},
        "spec": {
          "principal": {"kind": "user", "id": "<user-id>"},
-         "policyId": "<policy-id>",
          "passthroughAllowed": true
        }
      }'
@@ -83,7 +82,7 @@ Two more are worth setting: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to match the contex
 
    or set it on an existing key with `PUT /api/keys/by-id/{id}`. Inference tokens never carry this flag, so proxy mode needs a relay key.
 
-3. **A policy that grants the Claude models** Claude Code uses (Sonnet, Opus, Haiku) on that key. Without an explicit host header, Relay reads the `model` from the request and picks the upstream host from the key's policy, so the models must be granted. The policy's rate limits apply to proxied requests too.
+3. **Access to the Claude models** Claude Code uses (Sonnet, Opus, Haiku) for the key's user. Without an explicit host header, Relay reads the `model` from the request and picks the upstream host from what the user's [policies](/concepts/policies) allow, so no policy on the ladder may exclude those models. The rate limits and budgets on the user's rungs and the host's rung apply to proxied requests too.
 
 4. *(Optional)* **Payload logging** turned on, if you want to capture the full request and response bodies. See [Payload logging](/concepts/payload-logging).
 

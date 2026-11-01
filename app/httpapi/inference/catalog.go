@@ -33,13 +33,14 @@ func registerCatalog(api huma.API, d Deps, mw huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/v1/catalog",
 		Summary:     "Catalog of the models, hosts and prices the caller can use",
+		Description: "The SDK catalog document cut down to the bindings this caller can route to, without upstream addresses. Carries an ETag; a matching If-None-Match answers 304.",
 		Tags:        []string{"inference"},
 		Middlewares: mw,
 		Responses: map[string]*huma.Response{
-			"200": {Description: "OK", Content: map[string]*huma.MediaType{"application/json": {Schema: schema}}},
-			"304": {Description: "Not Modified"},
+			"200": {Description: "The caller's catalog.", Content: map[string]*huma.MediaType{"application/json": {Schema: schema}}},
+			"304": {Description: "Unchanged since the If-None-Match ETag."},
 		},
-		Errors: []int{401, 403, 500},
+		Errors: []int{401, 403, 500, 503},
 	}, func(ctx context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 		entry, err := scopedCatalog(ctx, d, cache)
 		if err != nil {

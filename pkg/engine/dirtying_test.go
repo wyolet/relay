@@ -193,6 +193,30 @@ func TestDuplicateNameResolvesToNeitherAndFlagsBothRows(t *testing.T) {
 	}
 }
 
+func TestNameHoldersOfAnOldViewDoNotChange(t *testing.T) {
+	r := newRig(t, engine.Options{})
+	r.parents.set(&parent{ID: "p2", Name: "dup", Ver: 1, Val: 2})
+	r.load()
+	old := r.view()
+
+	r.putParent(&parent{ID: "p3", Name: "dup", Ver: 1, Val: 3})
+	r.putParent(&parent{ID: "p1", Name: "dup", Ver: 1, Val: 1})
+	if got := engine.ByNameOf[parent](old, "dup"); got == nil || got.ID != "p2" {
+		t.Fatalf("old view resolves dup to %+v, want p2", got)
+	}
+	v := r.view()
+	if engine.ByNameOf[parent](v, "dup") != nil {
+		t.Fatal("duplicate name resolved")
+	}
+	// Each row's issue names the lowest other holder.
+	for id, other := range map[string]string{"p1": "p2", "p2": "p1", "p3": "p1"} {
+		is := v.Issues(refOf(kParent, id))
+		if len(is) != 1 || is[0].Code != "duplicate_name" || is[0].Target != refOf(kParent, other) {
+			t.Fatalf("issues on %s = %+v, want duplicate_name targeting %s", id, is, other)
+		}
+	}
+}
+
 func TestAnyReaderRebuildsOnEveryRowOfTheKind(t *testing.T) {
 	r := newRig(t, engine.Options{})
 	r.items.set(&item{ID: "i1", Ver: 1})

@@ -27,8 +27,8 @@ import (
 //
 // Strategies per-rule (r.strategy):
 //
-//	"sliding-window"  — two-bucket weighted interpolation (legacy default)
-//	"fixed-window"    — single counter per floor(now/window) bucket
+//	"sliding-window"  — two-bucket weighted interpolation (legacy default); refund on cancel
+//	"fixed-window"    — single counter per floor(now/window) bucket; refund on cancel
 //	"token-bucket"    — lazy-refill hash {tokens, last_ms}; refund on cancel
 //	"leaky-bucket"    — lazy-drain hash {level, last_ms}; refund on cancel
 //	"session-window"  — anchored hash {count, anchor_ms}; refund on cancel
@@ -291,6 +291,8 @@ return cjson.encode({exceeded=false, token=tok})
 //	KEYS[...]           = token bucket cur keys (post-hoc increment for tokens meter)
 //	KEYS[...]           = token-bucket state hash keys (refund on cancel)
 //	KEYS[...]           = leaky-bucket state hash keys (refund on cancel)
+//	KEYS[...]           = session-window state hash keys (refund on cancel)
+//	KEYS[...]           = fixed- and sliding-window counters the reserve incremented (refund on cancel)
 //	ARGV[1] = reservation token
 //	ARGV[2] = guard_ttl_ms
 //	ARGV[3] = n_con
@@ -301,8 +303,9 @@ return cjson.encode({exceeded=false, token=tok})
 //	ARGV[8]  = tb_refunds_json  — array of {key_idx, cost_scaled, burst} for token-bucket refunds
 //	ARGV[9]  = lb_refunds_json  — array of {key_idx, cost_scaled} for leaky-bucket refunds
 //	ARGV[10] = sw_refunds_json  — array of {key_idx, count} for session-window refunds
-//	ARGV[11] = spends_json      — optional: array of {key_idx, ttl_ms, cap} for spend charges
+//	ARGV[11] = spends_json      — optional: array of {key_idx, ttl_ms, cap} for spend charges ("[]" ahead of ARGV[13])
 //	ARGV[12] = cost nanos       — with ARGV[11]: the charge, 0 when cancelled
+//	ARGV[13] = window_refunds_json — optional, cancelled commits only: array of {key_idx, count} for fixed- and sliding-window refunds
 //
 // Returns "ok", "ok:<i>,<j>" naming the spends (1-based) whose cap the charge reached, or "noop" (duplicate).
 const commitLuaScript = `
@@ -373,6 +376,16 @@ if cancelled then
       local new_c = cur_i - cost
       if new_c < 0 then new_c = 0 end
       redis.call('HSET', KEYS[key_idx], 'count', new_c)
+    end
+  end
+
+  -- window counters: take back what the reserve added, never below zero; DECRBY keeps the TTL, and a counter already gone stays gone
+  if ARGV[13] then
+    for _, entry in ipairs(cjson.decode(ARGV[13])) do
+      local key = KEYS[tonumber(entry[1])]
+      local cur = tonumber(redis.call('GET', key) or "0") or 0
+      local n = math.min(cur, tonumber(entry[2]))
+      if n > 0 then redis.call('DECRBY', key, n) end
     end
   end
 end
@@ -489,8 +502,7 @@ func buildReserveArgs(scope string, rules []Rule, now time.Time) (keys []string,
 		default:
 			switch Strategy(strategy) {
 			case StrategyFixedWindow:
-				bucketStartMs := (now.UnixMilli() / w.Milliseconds()) * w.Milliseconds()
-				ra.FwKeyIdx = addKey(fixedWindowKey(scope, rule, bucketStartMs))
+				ra.FwKeyIdx = addKey(fixedWindowKey(scope, rule, fixedWindowStartMs(now, w)))
 			case StrategyTokenBucket:
 				ra.TbKeyIdx = addKey(tbStateKey(scope, rule))
 			case StrategyLeakyBucket:
@@ -1001,6 +1013,10 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 			return nil, fmt.Errorf("limit.commit: arg[11] cost: %w", err)
 		}
 	}
+	winRefunds, err := memWindowRefunds(args)
+	if err != nil {
+		return nil, err
+	}
 
 	guardKey := keys[0]
 	guardTTL := time.Duration(guardTTLMs) * time.Millisecond
@@ -1079,6 +1095,19 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 					_ = store.HSet(ctx, stateKey, "count", []byte(strconv.FormatInt(newC, 10)), 0)
 				}
 			}
+			// winRefunds: [key_idx, count]; Incr keeps the counter's TTL, and a counter already gone stays gone.
+			for _, entry := range winRefunds {
+				key := keys[entry[0]-1]
+				cur, err := memReadCounter(ctx, store, key)
+				if err != nil {
+					return err
+				}
+				if n := min(cur, entry[1]); n > 0 {
+					if _, err := store.Incr(ctx, key, -n); err != nil {
+						return err
+					}
+				}
+			}
 		}
 
 		result = []byte("ok")
@@ -1105,6 +1134,22 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 		return nil, lockErr
 	}
 	return result, nil
+}
+
+// memWindowRefunds parses the commit's window refunds, [[key_idx, count], ...], present only on cancelled commits that hold fixed- or sliding-window rules. Parsed apart from memCommitImpl so a commit without them allocates nothing for them.
+func memWindowRefunds(args []any) ([][2]int64, error) {
+	if len(args) < 13 {
+		return nil, nil
+	}
+	raw, ok := toBytes(args[12])
+	if !ok {
+		return nil, fmt.Errorf("limit.commit: arg[12] window_refunds_json must be string")
+	}
+	var out [][2]int64
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("limit.commit: parse window refunds: %w", err)
+	}
+	return out, nil
 }
 
 // toBytes reads a string argument as Redis receives it: a string and a []byte are the same bulk string.

@@ -76,20 +76,20 @@ func withFeatures(rc RuntimeConfig, d Deps) RuntimeConfig {
 // so the UI prompts rather than guessing. The object is additive — the UI
 // reads keys it knows and ignores the rest.
 type RuntimeConfig struct {
-	ControlAPIURL   string          `json:"controlApiUrl,omitempty"`
-	InferenceAPIURL string          `json:"inferenceApiUrl,omitempty"`
-	Mode            string          `json:"mode,omitempty"` // "oss" | "cloud"
-	Version         string          `json:"version,omitempty"`
-	Features        map[string]bool `json:"features,omitempty"`
-	Telemetry       *Telemetry      `json:"telemetry,omitempty"`
-	DocsURL         string          `json:"docsUrl,omitempty"`
-	SupportURL      string          `json:"supportUrl,omitempty"`
+	ControlAPIURL   string          `json:"controlApiUrl,omitempty"   doc:"Base URL of the control API; empty means /api on the UI's own origin."`
+	InferenceAPIURL string          `json:"inferenceApiUrl,omitempty" doc:"Public base URL of the inference API; empty when not configured."`
+	Mode            string          `json:"mode,omitempty"            enum:"oss,cloud" doc:"Deployment flavour the UI adapts to."` // "oss" | "cloud"
+	Version         string          `json:"version,omitempty"         doc:"Relay build version."`
+	Features        map[string]bool `json:"features,omitempty"        doc:"Feature flags the UI gates on: tokens, users, audit and accessReview are always present; oidc only when enabled."`
+	Telemetry       *Telemetry      `json:"telemetry,omitempty"       doc:"Public client-side error reporting config."`
+	DocsURL         string          `json:"docsUrl,omitempty"         doc:"Documentation link shown in the UI."`
+	SupportURL      string          `json:"supportUrl,omitempty"      doc:"Support link shown in the UI."`
 }
 
 // Telemetry carries PUBLIC client-side telemetry config only.
 type Telemetry struct {
-	SentryDSN   string `json:"sentryDsn,omitempty"`
-	Environment string `json:"environment,omitempty"`
+	SentryDSN   string `json:"sentryDsn,omitempty"   doc:"Public Sentry DSN the UI reports errors to."`
+	Environment string `json:"environment,omitempty" doc:"Environment name attached to reported errors."`
 }
 
 // Typed Body (not raw bytes) so the response schema lands in OpenAPI as
@@ -114,6 +114,7 @@ func registerConfigJSON(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/config.json",
 		Summary:     "Public runtime config for the embedded admin UI",
+		Description: "Unauthenticated. The deployment's public URLs, mode, version and feature flags the UI reads at start. The listener also serves the same body at /config.json on its root, outside the /api prefix.",
 		Tags:        []string{"system"},
 	}, func(_ context.Context, _ *struct{}) (*configJSONOutput, error) {
 		return &configJSONOutput{

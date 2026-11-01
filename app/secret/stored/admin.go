@@ -25,9 +25,9 @@ var (
 
 // RewrapResult reports a rewrap. Skipped lists live data keys left under another KEK because this process cannot unwrap them; run the rewrap again where both that KEK and the target are held.
 type RewrapResult struct {
-	Target    string   `json:"target"`
-	Rewrapped int      `json:"rewrapped"`
-	Skipped   []string `json:"skipped"`
+	Target    string   `json:"target"    doc:"Id of the master key (KEK) the data keys are now wrapped under."`
+	Rewrapped int      `json:"rewrapped" doc:"Data keys rewrapped."`
+	Skipped   []string `json:"skipped"   doc:"Ids of live data keys left under another KEK this process cannot unwrap; rerun where both KEKs are held."`
 }
 
 // Rotate gives scope a new Primary data key and demotes the current one. Values under the old key stay readable; the rewriter moves them to the new one.

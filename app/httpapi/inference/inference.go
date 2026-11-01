@@ -166,6 +166,9 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerModels(api, d, mw)
 	registerCatalog(api, d, mw)
 	registerProxyHosts(api, d, mw)
+	describeListingErrors(api)
+	describeCatalogSchemas(api)
+	api.OpenAPI().Tags = inferenceTags
 
 	// /v1/ws is a raw upgrade, not a huma POST operation, so it mounts
 	// directly on the chi router. It reuses the identical net/http

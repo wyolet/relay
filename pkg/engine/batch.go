@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -72,26 +73,32 @@ func (b *batch) write(k *kindInfo, id string, v any) bool {
 }
 
 func (b *batch) rename(k *kindInfo, id, from, to string) {
-	names := &b.e.st.names[k.idx]
 	if from != "" {
-		ids, _ := names.get(from)
-		if i, ok := slices.BinarySearch(ids, id); ok {
-			if len(ids) == 1 {
-				names.del(from)
-			} else {
-				names.set(from, slices.Delete(slices.Clone(ids), i, i+1))
-			}
+		ids := b.holders(k, from)
+		delete(ids, id)
+		if len(ids) == 0 {
+			b.e.st.names[k.idx].del(from)
 		}
-		b.names[nameKey{k, from}] = struct{}{}
 	}
 	if to != "" {
-		ids, _ := names.get(to)
-		if i, ok := slices.BinarySearch(ids, id); !ok {
-			names.set(to, slices.Insert(slices.Clone(ids), i, id))
-		}
-		b.names[nameKey{k, to}] = struct{}{}
+		b.holders(k, to)[id] = struct{}{}
 	}
 	b.nameRows[Ref{k.kind, id}] = k
+}
+
+// holders returns the ids holding name for this batch to edit in place. The set is copied on the batch's first touch only, so published views never change and a batch adding many holders to one name stays linear.
+func (b *batch) holders(k *kindInfo, name string) map[string]struct{} {
+	names := &b.e.st.names[k.idx]
+	nk := nameKey{k, name}
+	ids, ok := names.get(name)
+	if _, owned := b.names[nk]; owned && ok {
+		return ids
+	}
+	own := make(map[string]struct{}, len(ids)+1)
+	maps.Copy(own, ids)
+	names.set(name, own)
+	b.names[nk] = struct{}{}
+	return own
 }
 
 // rewatch moves row id between memberships and dirties both its previous
@@ -175,17 +182,24 @@ func (b *batch) setIssues(o issueOwner, list []Issue) {
 func (b *batch) markDuplicates() {
 	for nk := range b.names {
 		ids, _ := b.e.st.names[nk.k.idx].get(nk.name)
-		for _, id := range ids {
+		for id := range ids {
 			b.nameRows[Ref{nk.k.kind, id}] = nk.k
 		}
 	}
+	lowest := map[nameKey][2]string{}
 	for ref, k := range b.nameRows {
 		var list []Issue
 		if o, ok := b.e.st.objs[k.idx].get(ref.ID); ok && o.meta.Name != "" {
 			if ids, _ := b.e.st.names[k.idx].get(o.meta.Name); len(ids) > 1 {
-				other := ids[0]
+				nk := nameKey{k, o.meta.Name}
+				lo, ok := lowest[nk]
+				if !ok {
+					lo = lowestTwo(ids)
+					lowest[nk] = lo
+				}
+				other := lo[0]
 				if other == ref.ID {
-					other = ids[1]
+					other = lo[1]
 				}
 				list = []Issue{{
 					Severity: SeverityError,
@@ -199,6 +213,22 @@ func (b *batch) markDuplicates() {
 		}
 		b.setIssues(issueOwner{by: byDuplicateName, out: ref}, list)
 	}
+}
+
+// lowestTwo returns the two smallest ids of a set holding at least two, so a duplicate_name issue names the same other row whatever the map order.
+func lowestTwo(ids map[string]struct{}) [2]string {
+	var lo [2]string
+	n := 0
+	for id := range ids {
+		switch {
+		case n == 0 || id < lo[0]:
+			lo[0], lo[1] = id, lo[0]
+		case n == 1 || id < lo[1]:
+			lo[1] = id
+		}
+		n++
+	}
+	return lo
 }
 
 // publish freezes the working state into the next View when the batch changed anything (always when force), then reports cell links and queues the hooks.

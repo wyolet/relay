@@ -31,16 +31,16 @@ type Binding struct {
 // an optional snapshot subset. Cross-refs are stored as ids (the manifest
 // layer resolves names↔ids); PricingID is optional.
 type Spec struct {
-	ModelID      string        `json:"modelId"                yaml:"modelId"                validate:"required,uuid"`
-	HostID       string        `json:"hostId"                 yaml:"hostId"                 validate:"required,uuid"`
-	Adapter      adapters.Name `json:"adapter"                yaml:"adapter"`
-	UpstreamName string        `json:"upstreamName,omitempty" yaml:"upstreamName,omitempty"`
-	PricingID    string        `json:"pricingId,omitempty"    yaml:"pricingId,omitempty"    validate:"omitempty,uuid"`
-	Enabled      *bool         `json:"enabled,omitempty"      yaml:"enabled,omitempty"`
+	ModelID      string        `json:"modelId"                yaml:"modelId"                validate:"required,uuid" doc:"Id of the model the host serves. One binding per (model, host) pair."`
+	HostID       string        `json:"hostId"                 yaml:"hostId"                 validate:"required,uuid" doc:"Id of the host serving the model."`
+	Adapter      adapters.Name `json:"adapter"                yaml:"adapter"                doc:"Wire shape relay speaks to the host for this model, such as openai, openai_responses, openai_embeddings, anthropic or gemini."`
+	UpstreamName string        `json:"upstreamName,omitempty" yaml:"upstreamName,omitempty" doc:"Model name sent upstream. Empty sends the model's own name."`
+	PricingID    string        `json:"pricingId,omitempty"    yaml:"pricingId,omitempty"    validate:"omitempty,uuid" doc:"Id of the pricing that costs this binding's traffic. Empty leaves it unpriced: requests governed by a budget refuse it with unpriced_under_budget."`
+	Enabled      *bool         `json:"enabled,omitempty"      yaml:"enabled,omitempty"      doc:"False stops routing the model to this host. Omitted means true."`
 	// Snapshots optionally narrows which of the Model's snapshots this Host
 	// serves. Empty/nil means "all snapshots"; a non-empty list filters
 	// routing to those names only.
-	Snapshots []string `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
+	Snapshots []string `json:"snapshots,omitempty" yaml:"snapshots,omitempty" doc:"The model's snapshot names this host serves. Empty serves them all."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

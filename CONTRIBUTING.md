@@ -17,7 +17,7 @@ obey.
 git clone https://github.com/wyolet/relay
 cd relay
 cp .env.example .env          # then set RELAY_MASTER_KEY (openssl rand -base64 32)
-docker compose up             # bundled Postgres / ClickHouse / Valkey
+docker compose up             # bundled Postgres / ClickHouse / Dragonfly
 ```
 
 The data plane listens on `:8080` and the control plane on `:8081`, the binary's defaults. The multi-pod dev stack under `deploy/compose/` (`make dev-compose`) differs: its nginx load balancer serves the data plane on `:5100`, and the first pod's control plane is on `:5103`. See the configuration docs in [`docs/`](docs/) (published at docs.wyolet.com) for configuration details.
@@ -37,12 +37,12 @@ Relay builds and tests with `GOEXPERIMENT=jsonv2`: `encoding/json` keeps its v1 
 
 `make lint` needs [golangci-lint](https://golangci-lint.run/) v2 on `PATH` (CI pins the version in `.github/workflows/ci.yml`); the enabled linters live in `.golangci.yml`.
 
-`make test-integration` brings up the compose test Postgres and Valkey; `make
+`make test-integration` brings up the compose test Postgres and Dragonfly; `make
 test-integration-run` runs the same tests against the servers named by
 `RELAY_TEST_PG_DSN` and `RELAY_TEST_REDIS_ADDR`. Each test creates its own
 database on Postgres (cloned from a migrated template) and drops it afterwards,
-so the role needs `CREATEDB`. Each Redis test leases one of the logical
-databases 1–15 on the Valkey server (a lease key on database 0) and flushes it
+so the role needs `CREATEDB`. Each store test leases one of the logical
+databases 1–15 on the Dragonfly server (a lease key on database 0) and flushes it
 afterwards, so that server must not hold data you want to keep.
 The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test targets drop the deployment DSNs `.env` exports (`RELAY_PG_DSN`, `RELAY_CH_DSN`, `RELAY_REDIS_ADDR`, `RELAY_OTLP_ENDPOINT`), so tests never reach a deployment's databases.
 

@@ -13,7 +13,7 @@
 #   RELAY_CH_DSN        — relay's ClickHouse (bundled service DNS).
 #   postgres-password   — consumed by the bundled PG StatefulSet.
 #   clickhouse-password — consumed by the bundled CH StatefulSet.
-#   RELAY_REDIS_PASSWORD — Valkey's requirepass and relay's AUTH password.
+#   RELAY_REDIS_PASSWORD — Dragonfly's requirepass and relay's AUTH password.
 #
 # Passwords are hex (URL-safe) because they are embedded verbatim in the DSN URLs.
 #
@@ -86,7 +86,7 @@ if [[ "$REFRESH_DSN" == 1 ]]; then
   exit 0
 fi
 
-# --add-redis-password: a secret minted before the key existed leaves Valkey
+# --add-redis-password: a secret minted before the key existed leaves the store
 # without a password. Adds a fresh one only when the key is absent; the value is
 # patched from stdin, so it never reaches argv or the terminal.
 if [[ "$ADD_REDIS_PW" == 1 ]]; then
@@ -99,10 +99,10 @@ if [[ "$ADD_REDIS_PW" == 1 ]]; then
   printf '{"stringData":{"RELAY_REDIS_PASSWORD":"%s"}}' "$(openssl rand -hex 24)" \
     | kubectl -n "$NAMESPACE" patch secret "$SECRET_NAME" --type merge --patch-file /dev/stdin >/dev/null
   echo "✓ added RELAY_REDIS_PASSWORD to $NAMESPACE/$SECRET_NAME (other keys untouched)"
-  echo "  Relay pods send it on connect, which a passwordless Valkey accepts, so roll relay first:"
+  echo "  Relay pods send it on connect, which a passwordless Dragonfly accepts, so roll relay first:"
   echo "    kubectl -n ${NAMESPACE} rollout restart deploy/${FULLNAME} && kubectl -n ${NAMESPACE} rollout status deploy/${FULLNAME}"
-  echo "  then restart Valkey, which starts requiring it (requests needing Valkey fail until it is ready):"
-  echo "    kubectl -n ${NAMESPACE} rollout restart sts/${FULLNAME}-valkey"
+  echo "  then restart Dragonfly, which starts requiring it (requests needing the store fail until it is ready):"
+  echo "    kubectl -n ${NAMESPACE} rollout restart sts/${FULLNAME}-dragonfly"
   exit 0
 fi
 

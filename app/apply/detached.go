@@ -14,11 +14,11 @@ import (
 // narrows to the pools and credentials it still links, never widening.
 type DetachedLinks struct {
 	// Field is the policy field that loses the link.
-	Field string `json:"field"`
+	Field string `json:"field" doc:"The policy field that loses the link, such as spec.budgetIds."`
 	// Policies names the policies the caller may see.
-	Policies []string `json:"policies,omitempty"`
+	Policies []string `json:"policies,omitempty" doc:"Slugs of the affected policies the caller may see."`
 	// Hidden counts the policies the caller may not see.
-	Hidden int `json:"hidden,omitempty"`
+	Hidden int `json:"hidden,omitempty" doc:"Affected policies the caller may not see."`
 }
 
 // DetachedPolicy is a policy a delete takes a link from, visible or not, so

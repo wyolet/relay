@@ -22,16 +22,16 @@ import (
 
 // modelObject is the OpenAI list-models entry shape.
 type modelObject struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	ID      string `json:"id"       doc:"Snapshot name to send as the request's model."`
+	Object  string `json:"object"   enum:"model" doc:"Always model."`
+	Created int64  `json:"created"  doc:"Unix seconds: the snapshot's release date, else when the model was added."`
+	OwnedBy string `json:"owned_by" doc:"Slug of the model's provider."`
 }
 
 type modelsOutput struct {
 	Body struct {
-		Object string        `json:"object"`
-		Data   []modelObject `json:"data"`
+		Object string        `json:"object" enum:"list" doc:"Always list."`
+		Data   []modelObject `json:"data"   doc:"Every model name a request from this caller would be routed for."`
 	}
 }
 
@@ -307,18 +307,21 @@ func exactAliases(aliases []string) []string {
 func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, adapterFilter adapters.Name) {
 	opID := "list_models"
 	summary := "List models accessible to the caller (OpenAI-compatible)"
+	desc := "Lists every snapshot name a request from this caller would be routed for: allowed by every policy on its ladder and served by a host key it can reach."
 	if adapterFilter != "" {
 		opID = "list_models_" + string(adapterFilter)
 		summary = "List models reachable via the " + string(adapterFilter) + " wire shape"
+		desc += " Only models with a host binding in the " + string(adapterFilter) + " wire shape are listed."
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: opID,
 		Method:      "GET",
 		Path:        path,
 		Summary:     summary,
+		Description: desc,
 		Tags:        []string{"inference"},
 		Middlewares: mw,
-		Errors:      []int{401, 403, 500},
+		Errors:      []int{401, 403, 500, 503},
 	}, func(ctx context.Context, _ *struct{}) (*modelsOutput, error) {
 		return listModels(ctx, adapterFilter)
 	})
