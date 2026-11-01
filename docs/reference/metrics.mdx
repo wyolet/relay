@@ -62,8 +62,8 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 
 | Status | `reason` values |
 | --- | --- |
-| `401` | `missing relay key`, `invalid api key`, `api key disabled`, `api key revoked`, `api key expired`, `api key rotated` (an old value past its rotation grace), `invalid token`, `token expired`, `token revoked`, `project unavailable` (a WebSocket frame whose token's project is gone), `unauthenticated` (anonymous proxy traffic while it is not allowed) |
-| `403` | `passthrough_forbidden`, `proxy_disabled`, `no_policy`, `policy_disabled`, `project_unavailable` |
+| `401` | `missing relay key`, `invalid api key` (an unknown, disabled, revoked or expired key, or an old value past its rotation grace), `api key disabled` (the key's user or service account is disabled), `invalid token`, `token expired`, `token revoked`, `unauthenticated` (anonymous proxy traffic while it is not allowed) |
+| `403` | `passthrough_forbidden`, `proxy_disabled`, `project_unavailable`, and the [policy refusals](/reference/inference-api#policy-refusals) of a caller rung: `policy_disabled`, `subject_disabled`, `duplicate_binding` |
 
 ## Health and saturation
 
@@ -83,6 +83,12 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 | `relay_tokencount_ratio_writes_total` | counter | `outcome` | Token-count calibration samples: `written` to the state store, `skipped` (within 5% of the ratio this pod last wrote, less than 5 minutes ago), or `failed` (the write errored). |
 
 `relay_provider_keys_down_total` counts transitions into cooldown, not keys down right now: breaker state is shared across pods, so a per-pod gauge would disagree between pods, while transition counts add up. Alert on its rate.
+
+## Budgets
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `relay_limits_budget_crossings_total` | counter | `rung` (`host`, `account`, `credential`, `team`, `project`, `principal`), `mode` (`hard`, `alert`) | Charges that took a [budget](/concepts/budgets) to its cap, counted once per budget, bound subject and period. An `alert` budget is reported here and nowhere else. |
 
 ## OTLP receiver
 
