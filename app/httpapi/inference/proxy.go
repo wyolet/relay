@@ -32,6 +32,14 @@ const (
 	systemRLProxyAnon   = "inference-api-proxy-anonymous"
 )
 
+// planRoot is the published plans, nil before the first publish or without a plan source.
+func (d Deps) planRoot() *plan.Root {
+	if d.Plans == nil {
+		return nil
+	}
+	return d.Plans.Load()
+}
+
 // handleProxy is the shared proxy-mode flow called by /openai/v1/chat/completions
 // and /anthropic/v1/messages. adapterKind pins the token extractor (and is used in
 // future per-host adapter-mismatch checks). modelName is the body's model, as
@@ -90,7 +98,16 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 			return
 		}
 		host = h
-		if cls.Mode == ModeProxyAuthed && principal != nil {
+		if cls.Mode != ModeProxyAuthed || principal == nil {
+			// Anonymous traffic names no caller, but the host's own policy still governs it.
+			root := d.planRoot()
+			if root == nil {
+				d.fireUsageFailure(ctx, "not_ready", "plans not published yet")
+				writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
+				return
+			}
+			resolved = root.ResolveAtHost(h, modelName)
+		} else {
 			// Folded into the ref as normal mode folds the header pin, so a pinned request reaches only a model the caller's grants allow there and is priced like a routed one.
 			ref := modelName
 			if !strings.Contains(ref, "@") {
@@ -154,7 +171,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		if pol := principal.Policy(); pol != nil {
 			lc.PolicyID, lc.PolicyName = pol.Meta.ID, pol.Meta.Name
 		}
-		if resolved != nil {
+		if resolved != nil && resolved.Model != nil {
 			lc.ModelID, lc.ModelName, lc.ProviderName = resolved.Model.Meta.ID, resolved.Model.Meta.Name, resolved.Provider
 			if resolved.Pricing != nil {
 				lc.PricingID, lc.PricingName = resolved.Pricing.Meta.ID, resolved.Pricing.Meta.Name
