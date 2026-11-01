@@ -178,6 +178,40 @@ func TestMigrateUpGivesKeysTheirOwnersDefaultAccount(t *testing.T) {
 	}
 }
 
+// A team's or project's own budget nothing enforced is dropped on the upgrade; the rest of the spec stays.
+func TestMigrateUpDropsTeamAndProjectBudgets(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	if err := storagemod.MigrateTo(dsn, 35); err != nil {
+		t.Fatalf("migrate to 35: %v", err)
+	}
+	conn := testPool(t, dsn)
+	teamID, projectID := meta.NewID(), meta.NewID()
+	if _, err := conn.Exec(ctx, `INSERT INTO teams (id, name, metadata, spec) VALUES ($1, 'budgeted', '{"owner":{"kind":"system"}}', '{"enabled":false,"budget":{"amount":"10.00","period":"month"}}')`, teamID); err != nil {
+		t.Fatalf("insert team: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO projects (id, name, team_id, metadata, spec) VALUES ($1, 'budgeted', $2, '{"owner":{"kind":"team"}}', $3)`,
+		projectID, teamID, `{"teamId":"`+teamID+`","budget":{"amount":"5","period":"week"}}`); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+	for table, want := range map[string]string{
+		"teams":    `{"enabled": false}`,
+		"projects": `{"teamId": "` + teamID + `"}`,
+	} {
+		var spec string
+		if err := conn.QueryRow(ctx, "SELECT spec::text FROM "+table+" LIMIT 1").Scan(&spec); err != nil {
+			t.Fatalf("read %s: %v", table, err)
+		}
+		if spec != want {
+			t.Errorf("%s spec = %s, want %s", table, spec, want)
+		}
+	}
+}
+
 // Rolling back below accounts, pools and budgets drops their tables and the policy links to them, and keeps the policy bindings, minus the subjects the older schema cannot hold.
 func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 	t.Parallel()

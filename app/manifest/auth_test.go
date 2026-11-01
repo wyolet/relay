@@ -9,16 +9,16 @@ import (
 	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 
-// authKindsYAML holds every kind the auth module owns that relay has a DTO for, relay's own field (budget) included.
+// authKindsYAML holds every kind the auth module owns that relay has a DTO for.
 const authKindsYAML = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata: {name: platform, owner: {kind: user}, labels: {env: prod}}
-spec: {budget: {amount: "100"}}
+spec: {enabled: true}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata: {name: ml-search, annotations: {note: x}}
-spec: {team: platform, budget: {amount: "5", period: week}}
+spec: {team: platform}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
@@ -72,7 +72,7 @@ func TestAuthKindsParseTheSameUnderEitherAPIVersion(t *testing.T) {
 			t.Errorf("%s rows differ:\n relay %+v\n auth  %+v", a.Kind(), rowA, rowB)
 		}
 	}
-	if relay[0].Team.Spec.Budget == nil || relay[0].Team.Spec.Budget.Amount != "100" || relay[2].ServiceAccount.Spec.Project != "ml-search" {
+	if relay[0].Team.Spec.Enabled == nil || !*relay[0].Team.Spec.Enabled || relay[2].ServiceAccount.Spec.Project != "ml-search" {
 		t.Errorf("relay fields lost: %+v %+v", relay[0].Team.Spec, relay[2].ServiceAccount.Spec)
 	}
 }
@@ -105,7 +105,6 @@ func translate(t *testing.T, d manifest.Document, idx manifest.Resolver) any {
 var strictCases = []struct{ name, doc, want string }{
 	{"unknown field", "kind: Group\nmetadata: {name: g}\nspec: {membrs: [a]}", `spec.membrs: unknown field "membrs"`},
 	{"rule typo", "kind: Role\nmetadata: {name: r}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}", `spec.rules[0].verbs[0]: "updat" is not a registered verb`},
-	{"budget typo", "kind: Team\nmetadata: {name: t}\nspec: {budget: {amount: \"1\", amout: \"1\"}}", `spec.budget: json: unknown field "amout"`},
 	{"owner", "kind: Team\nmetadata: {name: t, owner: {kind: user}}", `metadata.owner is not accepted`},
 }
 
@@ -192,7 +191,7 @@ func TestAuthKindsRenderInRelayForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := manifest.FromTeam(tm, rev); got.Spec.Budget == nil || got.Spec.Budget.Period != "month" || got.Metadata.Labels["env"] != "prod" {
+	if got := manifest.FromTeam(tm, rev); got.Spec.Enabled == nil || got.Metadata.Labels["env"] != "prod" {
 		t.Errorf("FromTeam = %+v", got)
 	}
 }

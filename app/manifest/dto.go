@@ -279,12 +279,6 @@ type PricingRateDTO struct {
 	ServiceTier string  `json:"serviceTier,omitempty" yaml:"serviceTier,omitempty"`
 }
 
-// ScopeBudgetDTO is the wire form of the spend cap a Team or Project carries.
-type ScopeBudgetDTO struct {
-	Amount string `json:"amount"           yaml:"amount"`
-	Period string `json:"period,omitempty" yaml:"period,omitempty" enum:"month,week,day"`
-}
-
 // TeamDTO is the wire form of a Team. No cross-refs.
 type TeamDTO struct {
 	APIVersion string   `json:"apiVersion" yaml:"apiVersion"`
@@ -294,8 +288,7 @@ type TeamDTO struct {
 }
 
 type TeamSpec struct {
-	Enabled *bool           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	Budget  *ScopeBudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // ProjectDTO is the wire form of a Project. Spec.Team is a team *name*.
@@ -308,9 +301,8 @@ type ProjectDTO struct {
 
 type ProjectSpec struct {
 	// Team is the owning team *name* (wire form).
-	Team    string          `json:"team"              yaml:"team"`
-	Enabled *bool           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	Budget  *ScopeBudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
+	Team    string `json:"team"              yaml:"team"`
+	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // SettingDTO is the wire form of a settings section. Unlike the catalog kinds

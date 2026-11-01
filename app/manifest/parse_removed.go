@@ -20,6 +20,8 @@ var removedFields = map[string]map[string]string{
 		"modelIds":     "models (model refs)",
 	},
 	"HostKey":        {"policyId": "account, plus a PolicyBinding of the account's tier policy"},
+	"Team":           {"budget": "a Budget linked by the policy bound to the team"},
+	"Project":        {"budget": "a Budget linked by the policy bound to the project"},
 	"Key":            {"policy": "a PolicyBinding on the key's principal"},
 	"ServiceAccount": {"policy": "a PolicyBinding on the service account"},
 }

@@ -38,22 +38,6 @@ func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 	}
 }
 
-func toBudget(b *ScopeBudgetDTO) *team.Budget {
-	if b == nil {
-		return nil
-	}
-	out := &team.Budget{Amount: b.Amount, Period: b.Period}
-	out.Default()
-	return out
-}
-
-func fromBudget(b *team.Budget) *ScopeBudgetDTO {
-	if b == nil {
-		return nil
-	}
-	return &ScopeBudgetDTO{Amount: b.Amount, Period: b.Period}
-}
-
 // ToTeam translates through the auth module, which makes every team system-owned: a user-owned one would let its author inherit every binding made at its scope.
 func ToTeam(d TeamDTO, idx Resolver) (*team.Team, error) {
 	row, err := AuthManifests.ToTeam(teamDoc(d), authRefs{idx})
@@ -65,7 +49,6 @@ func ToTeam(d TeamDTO, idx Resolver) (*team.Team, error) {
 
 // FromTeam renders through the auth module; the metadata keeps relay's wire form.
 func FromTeam(t *team.Team, rev ReverseResolver) TeamDTO {
-	// A budget of plain strings always marshals.
 	row, _ := t.ToDirectory()
 	d, _ := fromAuthDoc(rendered(AuthManifests.FromTeam(row, authNames{rev})))
 	dto := *d.Team

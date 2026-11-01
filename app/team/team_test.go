@@ -38,32 +38,6 @@ func TestValidate(t *testing.T) {
 			}(),
 			want: "owner.kind must be user or system",
 		},
-		{
-			name: "budget amount two decimals",
-			team: func() *Team {
-				tm := fix("platform")
-				tm.Spec.Budget = &Budget{Amount: "12.5"}
-				return tm
-			}(),
-		},
-		{
-			name: "budget amount three decimals rejected",
-			team: func() *Team {
-				tm := fix("platform")
-				tm.Spec.Budget = &Budget{Amount: "12.505"}
-				return tm
-			}(),
-			want: "budgetamount",
-		},
-		{
-			name: "budget period year rejected",
-			team: func() *Team {
-				tm := fix("platform")
-				tm.Spec.Budget = &Budget{Amount: "10", Period: "year"}
-				return tm
-			}(),
-			want: "Period",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.team.Validate()

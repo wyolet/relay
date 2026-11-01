@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
@@ -23,52 +22,15 @@ func authDoc(apiVersion, kind string, w WireMeta) *authmanifest.Document {
 	return &authmanifest.Document{APIVersion: apiVersion, Kind: kind, Metadata: docMetaOf(w)}
 }
 
-// setField stores a relay spec field on the document as JSON; ok false leaves it out, as omitempty did.
-func setField(d *authmanifest.Document, name string, v any, ok bool) {
-	if !ok {
-		return
-	}
-	raw, err := json.Marshal(v)
-	if err != nil {
-		// The relay fields are plain strings and structs of strings, which always marshal.
-		return
-	}
-	if d.Fields == nil {
-		d.Fields = map[string]json.RawMessage{}
-	}
-	d.Fields[name] = raw
-}
-
-// budgetOf reads the budget field strictly, so a typo inside it fails at parse like any other field.
-func budgetOf(d *authmanifest.Document) (*ScopeBudgetDTO, error) {
-	raw, ok := d.Fields["budget"]
-	if !ok {
-		return nil, nil
-	}
-	b, err := decodeBudget(raw)
-	if err != nil {
-		return nil, fmt.Errorf("spec.budget: %w", err)
-	}
-	return b, nil
-}
-
 // fromAuthDoc wraps a decoded module document in relay's DTO for its kind.
 func fromAuthDoc(d *authmanifest.Document) (Document, error) {
 	wm := wireMetaOf(d.Metadata)
 	switch d.Kind {
 	case authmanifest.KindTeam:
-		b, err := budgetOf(d)
-		if err != nil {
-			return Document{}, err
-		}
-		return Document{Team: &TeamDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm, Spec: TeamSpec{Enabled: d.Team.Enabled, Budget: b}}}, nil
+		return Document{Team: &TeamDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm, Spec: TeamSpec{Enabled: d.Team.Enabled}}}, nil
 	case authmanifest.KindProject:
-		b, err := budgetOf(d)
-		if err != nil {
-			return Document{}, err
-		}
 		return Document{Project: &ProjectDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
-			Spec: ProjectSpec{Team: d.Project.Team, Enabled: d.Project.Enabled, Budget: b}}}, nil
+			Spec: ProjectSpec{Team: d.Project.Team, Enabled: d.Project.Enabled}}}, nil
 	case authmanifest.KindServiceAccount:
 		return Document{ServiceAccount: &ServiceAccountDTO{APIVersion: d.APIVersion, Kind: d.Kind, Metadata: wm,
 			Spec: ServiceAccountSpec{Project: d.ServiceAccount.Project, Enabled: d.ServiceAccount.Enabled}}}, nil
@@ -108,14 +70,12 @@ func roleBindingSpecOf(s *authmanifest.RoleBindingSpec) RoleBindingSpec {
 func teamDoc(d TeamDTO) *authmanifest.Document {
 	doc := authDoc(d.APIVersion, authmanifest.KindTeam, d.Metadata)
 	doc.Team = &authmanifest.TeamSpec{Enabled: d.Spec.Enabled}
-	setField(doc, "budget", d.Spec.Budget, d.Spec.Budget != nil)
 	return doc
 }
 
 func projectDoc(d ProjectDTO) *authmanifest.Document {
 	doc := authDoc(d.APIVersion, authmanifest.KindProject, d.Metadata)
 	doc.Project = &authmanifest.ProjectSpec{Team: d.Spec.Team, Enabled: d.Spec.Enabled}
-	setField(doc, "budget", d.Spec.Budget, d.Spec.Budget != nil)
 	return doc
 }
 

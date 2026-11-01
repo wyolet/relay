@@ -1,4 +1,4 @@
--- 000036: drop the pre-v0.20 policy links. A policy now reaches keys through its pools and credentials and is capped by its rate limits and budgets (000035); a host key names its account; keys and service accounts hold no policy, a policy binding binds their principal. A subject has one binding, so bindings carry no priority; a host's tier policies are bound to it, so it lists no policy menu.
+-- 000036: drop the pre-v0.20 policy links. A policy now reaches keys through its pools and credentials and is capped by its rate limits and budgets (000035); a host key names its account; keys and service accounts hold no policy, a policy binding binds their principal. A subject has one binding, so bindings carry no priority; a host's tier policies are bound to it, so it lists no policy menu. A team's or project's spend cap is a Budget its policy links, so they carry no budget of their own.
 --
 -- Moving data to the new shape is manual, so nothing is converted: the legacy model-id and host-key junctions, the single rate-limit column, the binding priority, and the old fields inside the spec documents are removed.
 
@@ -13,6 +13,8 @@ WHERE spec ?| ARRAY['modelIds', 'hostKeyIds', 'rateLimitId', 'rlBindings', 'keyS
 UPDATE relay_keys SET spec = spec - 'policyId' WHERE spec ? 'policyId';
 UPDATE service_accounts SET spec = spec - 'policyId' WHERE spec ? 'policyId';
 UPDATE secrets SET spec = spec - 'policyId' WHERE spec ? 'policyId';
+UPDATE teams SET spec = spec - 'budget' WHERE spec ? 'budget';
+UPDATE projects SET spec = spec - 'budget' WHERE spec ? 'budget';
 
 -- A host key saved without an account joins its owner's default account at its host, created on first use. default_owner marks that account with its owner ('system' or '<kind>:<id>'), so each owner has one per host; other accounts leave it NULL.
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS default_owner TEXT;
