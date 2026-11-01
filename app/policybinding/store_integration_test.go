@@ -304,7 +304,7 @@ func TestIntegration_UserOwnedBinding(t *testing.T) {
 	if err := store.Upsert(ctx, own("alice-own-again")); !errors.Is(err, policybinding.ErrSubjectBound) {
 		t.Fatalf("second user-owned binding of alice: err = %v, want ErrSubjectBound", err)
 	}
-	// The index holds one per scope; that the user's own scope overlaps the project's is refcheck's to refuse.
+	// The index holds one per scope, so a project's binding of alice stands beside her own.
 	if err := store.Upsert(ctx, &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-in-project"},
 		Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{alice}},

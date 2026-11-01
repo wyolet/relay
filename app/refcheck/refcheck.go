@@ -528,7 +528,7 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 // CodeDuplicateBinding is the error code of a binding naming a subject another binding already holds.
 const CodeDuplicateBinding = "duplicate_binding"
 
-// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. A user may be bound once per scope, since a binding governs only the requests inside its owner's scope; two scopes where one holds the other (the system and anything, a team and its projects) would both govern one request, so they conflict, and a user's own binding governs every request of that user, so it conflicts with any other. Group subjects are not policy rungs and may repeat.
+// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. A user may be bound once per scope, since a binding governs only the requests inside its owner's scope; two scopes where one holds the other (the system and anything, a team and its projects) would both govern one request, so they conflict. A user's own binding governs the requests outside any project, so only a system-owned binding conflicts with it. Group subjects are not policy rungs and may repeat.
 func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	if c.Rows.PolicyBindings == nil {
 		return nil
@@ -565,7 +565,7 @@ func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBi
 	return nil
 }
 
-// userScopesOverlap reports whether bindings of one user owned by a and b would both govern one of that user's requests.
+// userScopesOverlap reports whether bindings of one user owned by a and b would both govern one of that user's requests: one scope holds the other, the system holding the user's own.
 func (c Checker) userScopesOverlap(ctx context.Context, a, b meta.Owner) bool {
-	return a.Kind == meta.OwnerUser || b.Kind == meta.OwnerUser || c.containsScope(ctx, a, b) || c.containsScope(ctx, b, a)
+	return c.containsScope(ctx, a, b) || c.containsScope(ctx, b, a)
 }
