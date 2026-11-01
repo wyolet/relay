@@ -13,7 +13,7 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
-// scopeChecker is the link rows with a service account per project, a policy per owner, and one member of p-1 ("u-member"); t-1 holds p-1, t-2 holds p-2.
+// scopeChecker is the link rows with a service account per project, a policy per owner, and one member of p-1 ("u-member") who may manage its policy bindings; t-1 holds p-1, t-2 holds p-2.
 func scopeChecker() Checker {
 	rows := newLinkRows()
 	c := rows.checker(nil)
@@ -30,6 +30,7 @@ func scopeChecker() Checker {
 		"pol-p-1":    {Kind: meta.OwnerProject, ID: "p-1"},
 		"pol-p-2":    {Kind: meta.OwnerProject, ID: "p-2"},
 		"pol-user":   {Kind: meta.OwnerUser, ID: "u-member"},
+		"pol-other":  {Kind: meta.OwnerUser, ID: "u-stranger"},
 	} {
 		pols[id] = &policy.Policy{Meta: meta.Metadata{ID: id, Name: id, Owner: o}}
 	}
@@ -37,6 +38,9 @@ func scopeChecker() Checker {
 	c.Rows.Policy = func(_ context.Context, id string) *policy.Policy { return pols[id] }
 	c.Rows.UserActsIn = func(_ context.Context, userID string, scope meta.Owner) (bool, error) {
 		return userID == "u-member" && (scope == meta.Owner{Kind: meta.OwnerProject, ID: "p-1"} || scope == meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}), nil
+	}
+	c.Rows.UserMayBindIn = func(_ context.Context, userID string, scope meta.Owner) (bool, error) {
+		return userID == "u-member" && scope == meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, nil
 	}
 	return c
 }
@@ -56,6 +60,7 @@ func TestPolicyBindingSubjectsStayInsideTheOwner(t *testing.T) {
 	sys := meta.Owner{Kind: meta.OwnerSystem}
 	t1 := meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}
 	p1 := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
+	self := meta.Owner{Kind: meta.OwnerUser, ID: "u-member"}
 	sub := func(kind rolebinding.SubjectKind, id string) rolebinding.Subject {
 		return rolebinding.Subject{Kind: kind, ID: id}
 	}
@@ -87,6 +92,9 @@ func TestPolicyBindingSubjectsStayInsideTheOwner(t *testing.T) {
 		{"team binds its project", t1, sub(policybinding.SubjectProject, "p-1"), 0},
 		{"team binds another team's project", t1, sub(policybinding.SubjectProject, "p-2"), http.StatusBadRequest},
 		{"team binds a member", t1, sub(rolebinding.SubjectUser, "u-member"), 0},
+		{"user binds themselves", self, sub(rolebinding.SubjectUser, "u-member"), 0},
+		{"user binds another user", self, sub(rolebinding.SubjectUser, "u-stranger"), http.StatusBadRequest},
+		{"user binds a project", self, sub(policybinding.SubjectProject, "p-1"), http.StatusBadRequest},
 		{"system binds anyone", sys, sub(rolebinding.SubjectUser, "u-stranger"), 0},
 		{"system binds a shared account", sys, sub(policybinding.SubjectAccount, "acct-shared"), 0},
 	} {
@@ -96,12 +104,14 @@ func TestPolicyBindingSubjectsStayInsideTheOwner(t *testing.T) {
 	}
 }
 
-// A binding uses a policy of its own scope, an ancestor of it, the system, or a host; a sibling's, a descendant's or a person's is refused.
+// A binding uses a policy of its own scope, an ancestor of it, the system, or a host; a sibling's or a descendant's is refused. A person's policy is bound by that person to themselves, or by a team or project where that person may manage policy bindings.
 func TestPolicyBindingPolicyComesFromItsScopeOrAbove(t *testing.T) {
 	c := scopeChecker()
 	ctx := context.Background()
 	project := rolebinding.Subject{Kind: policybinding.SubjectProject, ID: "p-1"}
 	team := rolebinding.Subject{Kind: policybinding.SubjectTeam, ID: "t-1"}
+	member := rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: "u-member"}
+	ownedByMember := meta.Owner{Kind: meta.OwnerUser, ID: "u-member"}
 	for _, tc := range []struct {
 		name   string
 		owner  meta.Owner
@@ -117,7 +127,14 @@ func TestPolicyBindingPolicyComesFromItsScopeOrAbove(t *testing.T) {
 		{"project binding, its team's policy", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, project, "pol-t-1", true},
 		{"project binding, another team's policy", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, project, "pol-t-2", false},
 		{"project binding, another project's policy", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, project, "pol-p-2", false},
-		{"project binding, a personal policy", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, project, "pol-user", false},
+		{"project binding, a personal policy of someone binding there", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, project, "pol-user", true},
+		{"project binding, a personal policy of someone who may not bind there", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, project, "pol-other", false},
+		{"team binding, a personal policy of someone binding only in its project", meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}, team, "pol-user", false},
+		{"user's own binding, their own policy", ownedByMember, member, "pol-user", true},
+		{"user's own binding, another user's policy", ownedByMember, member, "pol-other", false},
+		{"user's own binding, a system policy", ownedByMember, member, "pol-system", true},
+		{"user's own binding, a project's policy", ownedByMember, member, "pol-p-1", false},
+		{"system binding, a personal policy", meta.Owner{Kind: meta.OwnerSystem}, member, "pol-user", false},
 		{"system binding, a team's policy", meta.Owner{Kind: meta.OwnerSystem}, project, "pol-t-1", false},
 		{"system binding, a host tier preset", meta.Owner{Kind: meta.OwnerSystem}, project, "pol-host", true},
 	} {

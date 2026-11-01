@@ -24,6 +24,7 @@ func refs(d Deps) refcheck.Checker {
 		c.Rows.MissingUsers = d.Users.MissingIDs
 		if d.Authz != nil {
 			c.Rows.UserActsIn = userActsIn(d)
+			c.Rows.UserMayBindIn = userMayBindIn(d)
 		}
 	}
 	s := d.Stores
@@ -101,34 +102,46 @@ func refs(d Deps) refcheck.Checker {
 // userActsIn reports whether a user may mint tokens in a project, or for a team in the team or one of its projects: the scopes the user's requests can fall inside. It asks the Authorizer as that user, so it follows the configured authorization mode.
 func userActsIn(d Deps) func(context.Context, string, meta.Owner) (bool, error) {
 	return func(ctx context.Context, userID string, scope meta.Owner) (bool, error) {
-		u, err := d.Users.Get(ctx, userID)
-		if err != nil || u == nil {
-			return false, err
-		}
-		as := &actor.Actor{UserID: u.ID, Username: u.Username, Roles: u.Roles}
-		scopes := []meta.Owner{scope}
-		if d.Catalog != nil {
-			if snap := d.Catalog.Current(); snap != nil {
-				as.Subjects = appcatalog.UserSubjects(u.ID, snap.GroupsForUser(u.ID), nil)
-				if scope.Kind == meta.OwnerTeam {
-					for _, p := range snap.ProjectsInTeam(scope.ID) {
-						scopes = append(scopes, meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID})
-					}
+		return authorizeAsUser(ctx, d, userID, "tokens.mint", "token", scope, true)
+	}
+}
+
+// userMayBindIn reports whether a user may create policy bindings owned by scope, asking the Authorizer as that user.
+func userMayBindIn(d Deps) func(context.Context, string, meta.Owner) (bool, error) {
+	return func(ctx context.Context, userID string, scope meta.Owner) (bool, error) {
+		return authorizeAsUser(ctx, d, userID, "policy-bindings.create", "policy-binding", scope, false)
+	}
+}
+
+// authorizeAsUser asks the Authorizer whether userID may perform action on a row of kind owned by scope; withProjects also accepts a team scope through any of its projects.
+func authorizeAsUser(ctx context.Context, d Deps, userID, action, kind string, scope meta.Owner, withProjects bool) (bool, error) {
+	u, err := d.Users.Get(ctx, userID)
+	if err != nil || u == nil {
+		return false, err
+	}
+	as := &actor.Actor{UserID: u.ID, Username: u.Username, Roles: u.Roles}
+	scopes := []meta.Owner{scope}
+	if d.Catalog != nil {
+		if snap := d.Catalog.Current(); snap != nil {
+			as.Subjects = appcatalog.UserSubjects(u.ID, snap.GroupsForUser(u.ID), nil)
+			if withProjects && scope.Kind == meta.OwnerTeam {
+				for _, p := range snap.ProjectsInTeam(scope.ID) {
+					scopes = append(scopes, meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID})
 				}
 			}
 		}
-		actx := actor.WithActor(ctx, as)
-		for i := range scopes {
-			err := d.Authz.Authorize(actx, "tokens.mint", authz.Resource{Kind: "token", Owner: &scopes[i]})
-			switch {
-			case err == nil:
-				return true, nil
-			case !errors.Is(err, authz.ErrForbidden):
-				return false, err
-			}
-		}
-		return false, nil
 	}
+	actx := actor.WithActor(ctx, as)
+	for i := range scopes {
+		err := d.Authz.Authorize(actx, action, authz.Resource{Kind: kind, Owner: &scopes[i]})
+		switch {
+		case err == nil:
+			return true, nil
+		case !errors.Is(err, authz.ErrForbidden):
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func getOrNil[T any](get func(context.Context, string) (*T, error)) func(context.Context, string) *T {
