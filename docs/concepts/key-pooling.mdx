@@ -94,6 +94,8 @@ Relay makes one models-list request to the key's host with that key and reads th
 
 When the key's current account has no `orgId` and no other account of the owner at the host claims the organization, Relay fills it in, but only after asking every other key of that account (up to 8) and getting the same organization from each. The answer then names the current account as the match.
 
+Relay also reads the same header on live responses and remembers, per pod, the organization each key last named. When two keys of one account name different organizations, it logs a warning naming both keys and counts [`relay_account_org_mismatch_total`](/reference/metrics). It never moves a key on its own.
+
 ## Inspecting and recovering keys
 
 Read a key's breaker state:

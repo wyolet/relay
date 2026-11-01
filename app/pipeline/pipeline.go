@@ -53,6 +53,17 @@ type CallTimeouter interface {
 	CallTimeout(stream bool) time.Duration
 }
 
+// OrgReader is the optional capability of an Adapter whose upstream names, on every response, the organization the calling credential belongs to.
+type OrgReader interface {
+	// OrgID returns the organization h names, "" when it names none.
+	OrgID(h http.Header) string
+}
+
+// OrgObserver is told the organization each served response named for its credential, to notice an account whose credentials belong to different organizations. Called on the request path: it must return at once.
+type OrgObserver interface {
+	ObserveOrg(accountID, credentialID, orgID string)
+}
+
 // Request is the pre-resolved input. Built by the handler/router.
 type Request struct {
 	// Body is the upstream wire body. Run sets it to nil once an upstream response is accepted: no retry can follow, and a long stream must not pin it.
@@ -119,6 +130,9 @@ type Pipeline struct {
 	// Written only from the detached post-flight goroutines, never on the
 	// latency path. Nil disables health recording.
 	HostHealth HostHealth
+
+	// Orgs is told the organization a served response names, when the adapter reads one; nil skips the read.
+	Orgs OrgObserver
 }
 
 // HostHealth records observed host reachability. Implemented by
