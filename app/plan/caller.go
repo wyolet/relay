@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/limits"
@@ -41,6 +42,13 @@ type CallerPlan struct {
 	budgetAt int // index into Rungs of the first rung with a budget, -1 for none
 	linkedAt int // index into Rungs of the rung deciding reach, -1 for ownership
 	reads    callerReads
+	// inProjects holds a user's plans in the projects its tokens named (ProjectPlan.CallerFor); set on users' own plans only.
+	inProjects *projectCallers
+}
+
+// projectCallers maps a project id to the user's plan in it; the map is replaced, never changed.
+type projectCallers struct {
+	m atomic.Pointer[map[string]projectCaller]
 }
 
 func (p *CallerPlan) builtFrom() inputs { return p.reads.in }
@@ -210,7 +218,11 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 		engine.Put(tx, prev)
 		return nil
 	}
-	engine.Put(tx, foldCaller(principal, rd))
+	cp := foldCaller(principal, rd)
+	if kind == "user" {
+		cp.inProjects = &projectCallers{}
+	}
+	engine.Put(tx, cp)
 	return nil
 }
 
