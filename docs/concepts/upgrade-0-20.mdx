@@ -78,6 +78,8 @@ It then gives every host key without an account its owner's default account at t
 
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
 
+**Migration 37** adds `policy_bindings.user_id`, the owner of a user's own binding; deleting the user deletes it.
+
 ## Before you upgrade
 
 1. **Export the current configuration** with the 0.11 CLI, as the reference for the rewrite:
@@ -380,6 +382,6 @@ $new SET '{revoked}:tokens' "$($old --raw GET '{revoked}:tokens')" EX "$($old TT
 
 ## Rolling back
 
-`relay migrate down 34` recreates the dropped tables and column empty and deletes what 0.20 added: accounts, pools, budgets, their links, team- and system-owned bindings, and binding subjects of the new kinds. It does not bring back the policy links migration 36 removed, so a 0.11 pod on that schema runs with no policy links at all.
+`relay migrate down 34` recreates the dropped tables and column empty and deletes what 0.20 added: accounts, pools, budgets, their links, team-, user- and system-owned bindings, and binding subjects of the new kinds. It does not bring back the policy links migration 36 removed, so a 0.11 pod on that schema runs with no policy links at all.
 
 To return to 0.11, stop every pod, restore the Postgres backup taken before the upgrade, and deploy the 0.11 image. See [Rolling back](/concepts/upgrade#rolling-back) for the general procedure.
