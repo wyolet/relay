@@ -133,7 +133,7 @@ A policy's links are ids in the API and names in manifests:
 
 A `rateLimits` entry may add `"models": [...]` to count per model; a policy with such an entry can be bound only to a host, an account or a host key.
 
-A policy binding is owned by the system, a team (`metadata.owner`) or a project (`spec.projectId`):
+A policy binding is owned by the system, a team or a user binding themselves (`metadata.owner`), or a project (`spec.projectId`):
 
 ```json
 {
