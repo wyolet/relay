@@ -46,7 +46,7 @@ With short requests the default stops costing throughput at 8 cores and below. O
 
 ## State store
 
-With `RELAY_STATE_BACKEND=redis`, each request made about 18 store commands in the benchmark mix: the rate-limit reserve and settle, key breaker reads and the rotation counter. Before the upstream call, the reserve and the key pick go out in one round trip (two when the host key's tier policy has its own rate limit). The settle runs after the response, batched with other requests' settles.
+With `RELAY_STATE_BACKEND=redis`, each request made about 18 store commands in the benchmark mix: the rate-limit reserve and settle, key breaker reads and the rotation counter. Before the upstream call, the caller's limits are reserved in one script call per counter group, the key pick reads the candidates' breaker records, and the picked key's upstream limits take one more script call per group. The settle runs after the response, one store call per counter group the request reserved.
 
 - **Dragonfly** spreads keys over threads, one per core it is given (`--proactor_threads`). Run it with `--cluster_mode=emulated --lock_on_hashtags`: Relay's keys carry hash tags, and with these flags each script stays on one shard. With default flags every script runs as a transaction across shards and throughput levels off early. With the flags, a 16-core relay was still under 0.1 % errors at 28,000 rps.
 - **Several relays on one store** wait longer for it. At the same load per relay, four 8-core relays sharing one Dragonfly waited about ten times longer for a store connection than one relay alone. Plan on about 15,000 rps per 8-core relay at error capacity, or 8,000 at the latency knee, and watch `relay_admission_seconds`.
