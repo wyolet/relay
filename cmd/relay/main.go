@@ -188,6 +188,9 @@ func buildAdapterSpecs() []*adapter.Spec {
 		ExtraHeaders: map[string]string{"Anthropic-Version": "2023-06-01"},
 	}
 	geminiAuth := adapter.AuthStrategy{Header: "X-Goog-Api-Key"}
+	// The response header naming the credential's organization, per each vendor's API reference; Gemini documents none, so its spec has no probe.
+	openaiOrg := &adapter.OrgProbe{Path: "/v1/models", OrgHeader: "Openai-Organization"}
+	anthropicOrg := &adapter.OrgProbe{Path: "/v1/models", OrgHeader: "Anthropic-Organization-Id"}
 	// Gemini encodes the model and the sync/stream choice in the URL path
 	// rather than the request body, so its upstream path is resolved per call.
 	geminiUpstreamPath := func(model string, stream bool) string {
@@ -204,6 +207,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 				{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion (OpenAI Chat Completions shape)"},
 			},
 			DefaultPath:   "/v1/chat/completions",
+			Org:           openaiOrg,
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -216,6 +220,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 				{Path: "/openai/v1/responses", OperationID: "openai_responses_create", Summary: "Create a response (OpenAI Responses API)"},
 			},
 			DefaultPath:   "/v1/responses",
+			Org:           openaiOrg,
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.ResponsesTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -231,6 +236,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 				{Path: "/openai/v1/embeddings", OperationID: "openai_embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"},
 			},
 			DefaultPath:   "/v1/embeddings",
+			Org:           openaiOrg,
 			Auth:          openaiAuth,
 			BytePass:      true,
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -242,6 +248,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 			},
 			DefaultPath:   "/v1/messages",
 			CountPath:     "/v1/messages/count_tokens",
+			Org:           anthropicOrg,
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,

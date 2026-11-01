@@ -91,10 +91,15 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	a.spec.setAuth(req.Header, apiKey, oauth)
+	return req, releaseBody, nil
+}
 
-	auth := a.spec.Auth
-	if oauth && a.spec.OAuthAuth.Header != "" {
-		auth = a.spec.OAuthAuth
+// setAuth sets the credential header and the shape's static auth headers on h, the OAuth variant when oauth is set and the spec has one. A static header already in h is kept.
+func (s *Spec) setAuth(h http.Header, apiKey string, oauth bool) {
+	auth := s.Auth
+	if oauth && s.OAuthAuth.Header != "" {
+		auth = s.OAuthAuth
 	}
 
 	if apiKey != "" && auth.Header != "" {
@@ -102,15 +107,14 @@ func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body [
 		if auth.Scheme != "" {
 			val = auth.Scheme + " " + apiKey
 		}
-		req.Header.Set(auth.Header, val)
+		h.Set(auth.Header, val)
 	}
 
 	for k, v := range auth.ExtraHeaders {
-		if req.Header.Get(k) == "" {
-			req.Header.Set(k, v)
+		if h.Get(k) == "" {
+			h.Set(k, v)
 		}
 	}
-	return req, releaseBody, nil
 }
 
 // ExtractTokens delegates to the spec's extractor, or returns nil if unset.
