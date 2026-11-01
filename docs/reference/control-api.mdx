@@ -77,9 +77,12 @@ Available for `providers`, `hosts`, `models`, `pricings`, `policies`, `host-keys
 ```
 POST /api/host-keys/by-id/{id}/rotate   {"value": "<new value>"}: replace a stored or oauth value
 GET  /api/host-keys/by-id/{id}/health   the key's circuit-breaker state
+POST /api/host-keys/by-id/{id}/detect-account   ask the key's host which organization the key belongs to
 ```
 
 A PUT cannot change a host key's value; rotation is explicit. An env-referenced key is rotated by changing the variable, and the rotate call answers `400`. See [Key pooling](/concepts/key-pooling) for breaker states and [Stored secrets](/concepts/secret-keys) for how stored values are sealed.
+
+`detect-account` needs the same permission as updating the key and answers `{"orgId", "orgName"?, "currentAccountId", "matchingAccountId"?}`. It does not move the key; see [Detect a key's account](/concepts/key-pooling#detect-a-keys-account). It answers `422` when the host's responses name no organization or the key's value cannot be resolved, and `502` when the host refuses the call (the host's status is in the error details).
 
 ### Relay keys
 

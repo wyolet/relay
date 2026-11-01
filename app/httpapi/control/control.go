@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -124,6 +125,9 @@ type Deps struct {
 	// it. nil disables that endpoint.
 	Selector *keypool.Selector
 
+	// Adapters is the wire-shape registry; detecting a host key's account probes the key's host through it. nil answers that detection with 422.
+	Adapters *adapter.Registry
+
 	// HostHealth reads per-host runtime reachability (observed state), shared
 	// with the data plane. Overlays host.Status on host reads. nil disables
 	// the overlay (Status stays absent → UI shows "unknown").
@@ -203,6 +207,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerHostKeyRotate(api, d, protect)
 	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
+	registerHostKeyDetectAccount(api, d, protect)
 	registerReferences(api, d, protect)
 	registerDetach(api, d, protect)
 	registerSettings(api, d, protect)
