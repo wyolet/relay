@@ -61,6 +61,31 @@ func TestPruneReportsThePoliciesThatLoseALink(t *testing.T) {
 	}
 }
 
+// The policies a prune takes links from are kept on the entry, in the field
+// vocabulary the control API's delete audits them with.
+func TestPruneKeepsThePoliciesToAudit(t *testing.T) {
+	rows, pol := linkedRows()
+	b := pruneAll(rows)
+	if err := b.run(context.Background(), nil); err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	want := map[string]string{"Pool": "spec.poolIds", "HostKey": "spec.credentialIds", "RateLimit": "spec.rateLimits[].rateLimitId", "Budget": "spec.budgetIds"}
+	for _, e := range b.entries {
+		field, ok := want[e.Kind]
+		if !ok || e.Action != ActionDelete {
+			continue
+		}
+		delete(want, e.Kind)
+		got := e.DetachedPolicies()
+		if len(got) != 1 || got[0] != (DetachedPolicy{ID: pol.Meta.ID, Name: pol.Meta.Name, Owner: pol.Meta.Owner, Field: field}) {
+			t.Errorf("%s delete keeps %+v, want %s losing %s", e.Kind, got, pol.Meta.Name, field)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("no delete planned for %v", want)
+	}
+}
+
 // A policy the same bundle rewrites without the link loses nothing to the
 // prune, so nothing is reported.
 func TestPruneReportsAgainstThePolicyTheBundleDeclares(t *testing.T) {

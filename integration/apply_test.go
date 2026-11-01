@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -343,6 +344,25 @@ func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) 
 	}
 	if !slices.Equal(got.Spec.CredentialIDs, []string{hk.Meta.ID}) || len(got.Spec.RateLimits) != 0 {
 		t.Fatalf("policy after prune: credentialIds=%v rateLimits=%v, want the key id kept and the limit gone", got.Spec.CredentialIDs, got.Spec.RateLimits)
+	}
+
+	// Each link the prune took is audited as an update of the policy, as the control API's delete audits it.
+	want := map[string]bool{"spec.credentialIds": true, "spec.rateLimits[].rateLimitId": true}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		seen := map[string]bool{}
+		for _, ev := range st.auditList("?action=policies.update&limit=100").Events {
+			if ev.Resource.ID == side.Meta.ID && ev.Change != nil && len(ev.Change.Fields) == 1 {
+				seen[ev.Change.Fields[0]] = true
+			}
+		}
+		if maps.Equal(seen, want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("policies.update rows for side-policy = %v, want %v", seen, want)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

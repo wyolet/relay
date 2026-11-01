@@ -181,7 +181,9 @@ func planFailure(ctx context.Context, a authz.Authorizer, err error) error {
 }
 
 // recordApplied audits each change that landed as its own row, plus the
-// write that failed, if any. Nothing landed leaves the request's single row.
+// write that failed, if any. A prune that took links from policies audits
+// each policy's update, as the control API's delete does. Nothing landed
+// leaves the request's single row.
 func recordApplied(ctx context.Context, d Deps, applied []apply.Entry, failed *apply.Entry) {
 	var snap *appcatalog.Snapshot
 	if d.Catalog != nil {
@@ -201,6 +203,9 @@ func recordApplied(ctx context.Context, d Deps, applied []apply.Entry, failed *a
 	rows := make([]audit.Row, 0, len(applied)+1)
 	for _, e := range applied {
 		rows = append(rows, row(e, audit.StatusAllowed))
+		for _, p := range e.DetachedPolicies() {
+			rows = append(rows, audit.Row{Action: authz.Plural("policy") + ".update", Fields: []string{p.Field}, Resource: d.auditResource("policy", p.ID, p.Name, p.Owner)})
+		}
 	}
 	if failed != nil {
 		rows = append(rows, row(*failed, audit.StatusError))
