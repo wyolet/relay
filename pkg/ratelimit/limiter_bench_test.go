@@ -27,7 +27,7 @@ func BenchmarkBuildReserveCall(b *testing.B) {
 	rules := benchLimiterRules()
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := l.buildReserveCall("policy:prod-policy", rules, "res-1"); err != nil {
+		if _, err := l.buildReserveCall("policy:prod-policy", rules, "res-1", l.clock()); err != nil {
 			b.Fatal(err)
 		}
 	}
