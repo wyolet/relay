@@ -33,12 +33,22 @@ func TestMapRouteRefusal_ModelNotAllowed_NamesModel(t *testing.T) {
 	if !strings.Contains(env.Err.Message, `"gpt-4o"`) {
 		t.Errorf("message should name the model: %q", env.Err.Message)
 	}
-	if !strings.Contains(env.Err.Message, "project policy") {
-		t.Errorf("message should name the rung that refused: %q", env.Err.Message)
+	// Named as a caller limit's 429 names it: the rung, then the policy.
+	if want := `model "gpt-4o" is not allowed by the project policy pol_123`; env.Err.Message != want {
+		t.Errorf("message = %q, want %q", env.Err.Message, want)
 	}
-	// the policy id is log-only on a model refusal — it must never reach the client body.
-	if strings.Contains(rec.Body.String(), "pol_123") {
-		t.Errorf("policy id leaked into client body: %s", rec.Body.String())
+}
+
+// A refusal no policy made (a deprecated model nobody opted into) keeps the plan's reason.
+func TestMapRouteRefusal_ModelNotAllowed_WithoutAPolicy(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mapRouteRefusal(rec, &plan.Refusal{Code: plan.CodeModelNotAllowed, Message: "deprecated models need a policy that names them or includes deprecated models"}, "gpt-3")
+	var env httpapi.APIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != 403 || !strings.Contains(env.Err.Message, `"gpt-3"`) || !strings.Contains(env.Err.Message, "deprecated models need a policy") {
+		t.Fatalf("status %d message %q", rec.Code, env.Err.Message)
 	}
 }
 
