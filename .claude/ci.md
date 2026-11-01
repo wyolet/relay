@@ -20,9 +20,9 @@ Two workflows, so a run lists only the jobs its tier has: `.github/workflows/ci-
 | Event | Runs |
 |---|---|
 | PR into `dev` (or any branch other than `main`) | one `dev` job: gofmt, golangci-lint, the codebase-rule checks, the build, unit tests without `-race` |
-| … that touches `migrations/`, `internal/storage/`, `pkg/kv/` or a kv consumer with Valkey tests, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
+| … that touches `migrations/`, `internal/storage/`, `pkg/kv/` or a kv consumer with store tests, `app/pipeline/`, `jobq/`, the ClickHouse sinks or `integration/` | the above, plus the integration tests the change can reach |
 | … that touches `chart/` or `versions.env` | the above, plus `helm lint` or the boot smoke |
-| PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Valkey and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
+| PR into `main`, push to `main`, full run on `dev` | everything: unit tests under `-race` with coverage, Postgres/Dragonfly and ClickHouse integration tests, fuzzing, the allocation gate, govulncheck, trivy, CodeQL |
 | weekly schedule on `main` | the security scans |
 
 The `dev` job runs its parts in parallel through `scripts/ci-dev.sh`, each part in its own log group, with a summary table at the end; it fails when any part fails. Its integration part runs only the integration-tagged packages (`scripts/integration-pkgs.sh`) whose test binary depends on a changed package, without coverage. A change to migrations, module files, the Makefile, `build.env`, `ci-dev.yml` or those scripts runs all of them. The unit tests are a separate part, so integration doesn't rerun them. Locally: `scripts/ci-dev.sh lint test integration` (integration and ClickHouse need `RELAY_TEST_PG_DSN`, `RELAY_TEST_REDIS_ADDR` and `RELAY_TEST_CH_DSN`; `CHANGED_FROM=<commit>` limits integration to what changed since it).

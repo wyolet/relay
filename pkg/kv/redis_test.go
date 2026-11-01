@@ -77,7 +77,7 @@ func TestRunScriptNOSCRIPTFallback(t *testing.T) {
 
 // TestWithLockContention holds the lock contract across separate clients,
 // as two pods would share it: goroutines with a client each fight over
-// [A,B] and [B,A], and only one may hold the lock at a time.
+// [a,b] and [b,a] under one hash tag, and only one may hold the lock at a time.
 func TestWithLockContention(t *testing.T) {
 	cfg := kvtest.Config(t)
 	ctx := context.Background()
@@ -93,9 +93,9 @@ func TestWithLockContention(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			keys := []string{"lockA", "lockB"}
+			keys := []string{"{lock}:a", "{lock}:b"}
 			if i%2 == 0 {
-				keys = []string{"lockB", "lockA"}
+				keys = []string{"{lock}:b", "{lock}:a"}
 			}
 			s := kvtest.Connect(t, cfg)
 			_ = s.WithLock(ctx, keys, func(ctx context.Context) error {

@@ -1,15 +1,18 @@
-// A policy binding governs only subjects inside its owner's scope, the rule app/refcheck enforces on save. The plan holds to it as well, so a row written around the save check (or left behind when a subject moved) is ignored for that subject rather than applied.
+// A policy binding governs only subjects inside its owner's scope, and its policy's links reach only pools and credentials that scope may use: the rules app/refcheck enforces on save. The plan holds to them as well, so a row written around the save check (or left behind when a subject moved) is ignored or narrowed for that subject rather than applied.
 
 package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/pkg/engine"
@@ -74,6 +77,55 @@ func scopeHolds(tx *engine.Txn, outer, inner meta.Owner) bool {
 		return p != nil && p.Spec.TeamID == outer.ID
 	}
 	return false
+}
+
+// linkScope is the scope whose pools and credentials a caller subject may use through its policy's links: the subject's own, or for a user the scope of the binding governing it (the user's own under a system binding). ok is false for upstream subjects, whose rungs follow no links, and for a missing subject.
+func linkScope(tx *engine.Txn, subject string, b *policybinding.PolicyBinding) (meta.Owner, bool) {
+	kind, id, _ := strings.Cut(subject, ":")
+	switch kind {
+	case "user":
+		if b.Meta.Owner.Kind == meta.OwnerSystem {
+			return meta.Owner{Kind: meta.OwnerUser, ID: id}, true
+		}
+		return b.Meta.Owner, true
+	case "team", "project", "serviceaccount":
+		return subjectScope(tx, subject)
+	}
+	return meta.Owner{}, false
+}
+
+// unusableLinks returns the ids of the pools and credentials p links, directly or inside a linked pool, that scope cannot use, sorted, and files an issue on the binding for each. The save check refuses such a binding; a row written around it narrows instead of reaching another scope's credentials.
+func unusableLinks(tx *engine.Txn, p *policy.Policy, scope meta.Owner, b *policybinding.PolicyBinding) []string {
+	var out []string
+	refuse := func(kind engine.Kind, id string, owner meta.Owner, field string) {
+		out = append(out, id)
+		tx.Issue(engine.Issue{
+			Severity: engine.SeverityError, Code: IssueLinkOutOfScope, Source: engine.Ref{Kind: KindPolicyBinding, ID: b.Meta.ID}, Target: engine.Ref{Kind: kind, ID: id}, Field: field,
+			Message: fmt.Sprintf("policy %s links %s %s owned by %s, which %s cannot use; the link is ignored for it", p.Meta.Name, kind, id, ownerKey(owner), ownerKey(scope)),
+		})
+	}
+	credential := func(id, field string) {
+		if k := engine.Get[hostkey.HostKey](tx, id); k != nil && !scopeHolds(tx, k.Meta.Owner, scope) {
+			refuse(KindCredential, id, k.Meta.Owner, field)
+		}
+	}
+	for _, id := range p.Spec.PoolIDs {
+		pl := engine.Get[pool.Pool](tx, id)
+		switch {
+		case pl == nil:
+		case !scopeHolds(tx, pl.Meta.Owner, scope):
+			refuse(KindPool, id, pl.Meta.Owner, "spec.poolIds")
+		default:
+			for _, cid := range pl.Spec.CredentialIDs {
+				credential(cid, "spec.poolIds")
+			}
+		}
+	}
+	for _, id := range p.Spec.CredentialIDs {
+		credential(id, "spec.credentialIds")
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func ownerKey(o meta.Owner) string {

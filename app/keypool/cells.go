@@ -34,23 +34,57 @@ func (c *BreakerCell) Store(r *CircuitRecord) { c.rec.Store(r) }
 // CooldownCellKey keys a cooldown by account id: every credential of the account shares the provider's ceiling, so they cool together.
 func CooldownCellKey(accountID string) cell.Key { return cell.Key{Type: cellCooldown, ID: accountID} }
 
-// CooldownCell is the time, in unix milliseconds, until which an account is skipped.
-type CooldownCell struct{ until atomic.Int64 }
+// CooldownCell is the time, in unix milliseconds, until which an account is skipped: as a whole, or for one model, since providers limit each model separately within an account.
+type CooldownCell struct {
+	until atomic.Int64
+	// models is an immutable model id → until map, replaced whole on write; nil until a model first cools.
+	models atomic.Pointer[map[string]int64]
+}
 
 // NewCooldownCell returns a cooldown that is not set.
 func NewCooldownCell() *CooldownCell { return &CooldownCell{} }
 
-// Until returns the cooldown end in unix milliseconds, 0 when never set.
-func (c *CooldownCell) Until() int64 { return c.until.Load() }
+// Until returns when the account frees up for modelID in unix milliseconds, the later of its whole and its model cooldown; 0 when neither was set.
+func (c *CooldownCell) Until(modelID string) int64 {
+	u := c.until.Load()
+	if m := c.models.Load(); m != nil {
+		u = max(u, (*m)[modelID])
+	}
+	return u
+}
 
-// Cooled reports whether the account is cooling at nowMs.
-func (c *CooldownCell) Cooled(nowMs int64) bool { return nowMs < c.until.Load() }
+// Cooled reports whether the account is cooling for modelID at nowMs.
+func (c *CooldownCell) Cooled(nowMs int64, modelID string) bool { return nowMs < c.Until(modelID) }
 
-// Extend moves the end to untilMs unless it already lies later, so a short local cooldown never cuts a longer one another pod reported.
+// Extend moves the whole account's end to untilMs unless it already lies later, so a short local cooldown never cuts a longer one another pod reported.
 func (c *CooldownCell) Extend(untilMs int64) {
 	for {
 		cur := c.until.Load()
 		if untilMs <= cur || c.until.CompareAndSwap(cur, untilMs) {
+			return
+		}
+	}
+}
+
+// ExtendModel moves modelID's end to untilMs unless it already lies later. Entries already over at nowMs are dropped from the copy it writes.
+func (c *CooldownCell) ExtendModel(modelID string, untilMs, nowMs int64) {
+	for {
+		old := c.models.Load()
+		var cur map[string]int64
+		if old != nil {
+			cur = *old
+		}
+		if untilMs <= cur[modelID] {
+			return
+		}
+		next := make(map[string]int64, len(cur)+1)
+		for id, u := range cur {
+			if u > nowMs {
+				next[id] = u
+			}
+		}
+		next[modelID] = untilMs
+		if c.models.CompareAndSwap(old, &next) {
 			return
 		}
 	}

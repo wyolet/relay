@@ -41,6 +41,7 @@ const (
 	IssueRefMissing            = "ref_missing"
 	IssueSubjectInvalid        = "subject_invalid"
 	IssueSubjectOutOfScope     = "subject_out_of_scope"
+	IssueLinkOutOfScope        = "link_out_of_scope"
 	IssueModelRefInvalid       = "model_ref_invalid"
 	IssueModelGroupUnsupported = "model_group_unsupported"
 	IssueCredentialUnresolved  = "credential_unresolved"

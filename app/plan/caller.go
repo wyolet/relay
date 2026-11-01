@@ -2,7 +2,9 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/limits"
@@ -40,6 +42,13 @@ type CallerPlan struct {
 	budgetAt int // index into Rungs of the first rung with a budget, -1 for none
 	linkedAt int // index into Rungs of the rung deciding reach, -1 for ownership
 	reads    callerReads
+	// inProjects holds a user's plans in the projects its tokens named (ProjectPlan.CallerFor); set on users' own plans only.
+	inProjects *projectCallers
+}
+
+// projectCallers maps a project id to the user's plan in it; the map is replaced, never changed.
+type projectCallers struct {
+	m atomic.Pointer[map[string]projectCaller]
 }
 
 func (p *CallerPlan) builtFrom() inputs { return p.reads.in }
@@ -209,7 +218,11 @@ func (c *controllers) callerPlan(tx *engine.Txn, principal string) error {
 		engine.Put(tx, prev)
 		return nil
 	}
-	engine.Put(tx, foldCaller(principal, rd))
+	cp := foldCaller(principal, rd)
+	if kind == "user" {
+		cp.inProjects = &projectCallers{}
+	}
+	engine.Put(tx, cp)
 	return nil
 }
 
@@ -233,7 +246,7 @@ func readRung(tx *engine.Txn, r *rungRead, in *inputs) *RungPolicy {
 	}
 	r.rung.Policy, r.refused = rp.Rung.Policy, rp.Refused
 	if r.rung.Policy.links() {
-		r.linked = linkedPools(tx, r.rung.Policy, in)
+		r.linked = linkedPools(tx, r.rung.Policy, rp.unusable, in)
 	}
 	return rp
 }
@@ -248,7 +261,7 @@ func readScoped(tx *engine.Txn, own rungRead, scoped []ScopedRung, in *inputs) [
 		r := own
 		r.rung.Policy, r.refused, r.linked, r.scope = s.Policy.Rung.Policy, s.Policy.Refused, nil, s.Scope
 		if r.rung.Policy.links() {
-			r.linked = linkedPools(tx, r.rung.Policy, in)
+			r.linked = linkedPools(tx, r.rung.Policy, s.Policy.unusable, in)
 		}
 		out = append(out, scopedRead{scope: s.Scope, read: r})
 	}
@@ -384,16 +397,30 @@ func callerPools(cp *CallerPlan, rd *callerReads) []*PoolPlan {
 	return pools
 }
 
-func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, in *inputs) []*PoolPlan {
+// linkedPools reads what the policy links, leaving out the pools and credentials in unusable (sorted ids the subject's scope may not use).
+func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, unusable []string, in *inputs) []*PoolPlan {
+	skip := func(id string) bool {
+		_, found := slices.BinarySearch(unusable, id)
+		return found
+	}
 	var out []*PoolPlan
 	for _, pid := range ep.Policy.Spec.PoolIDs {
+		if skip(pid) {
+			continue
+		}
 		pp := engine.Get[PoolPlan](tx, pid)
 		*in = append(*in, pp)
+		if pp != nil && len(unusable) > 0 {
+			pp = withoutSlots(pp, skip)
+		}
 		if pp != nil {
 			out = append(out, pp)
 		}
 	}
 	for _, cid := range ep.Policy.Spec.CredentialIDs {
+		if skip(cid) {
+			continue
+		}
 		s := engine.Get[KeySlot](tx, cid)
 		*in = append(*in, s)
 		if s != nil {
@@ -401,6 +428,25 @@ func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, in *inputs) []*PoolPlan {
 		}
 	}
 	return out
+}
+
+// withoutSlots returns p without the slots whose credential skip names, p itself when none is, nil when none is left.
+func withoutSlots(p *PoolPlan, skip func(string) bool) *PoolPlan {
+	kept := make([]*KeySlot, 0, len(p.Slots))
+	for _, s := range p.Slots {
+		if !skip(s.Credential.Meta.ID) {
+			kept = append(kept, s)
+		}
+	}
+	switch len(kept) {
+	case len(p.Slots):
+		return p
+	case 0:
+		return nil
+	}
+	cp := *p
+	cp.Slots = kept
+	return &cp
 }
 
 // narrow keeps, in the inner order, only the credentials an outer rung also reaches. A pool losing some keeps its rotation and selection with fewer slots.

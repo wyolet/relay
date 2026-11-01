@@ -246,11 +246,31 @@ func TestTeamRowsServeTheTeamAndItsProjects(t *testing.T) {
 	projectKey := func(acct string) *hostkey.HostKey {
 		return &hostkey.HostKey{Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}}, Spec: hostkey.Spec{HostID: "h-1", AccountID: acct}}
 	}
-	if err := c.HostKey(ctx, projectKey("acct-team-1")); err != nil {
-		t.Errorf("p-1 key -> its team's account: %v", err)
+	// A key joins only an account of its own owner: joining one shares its counters and its 429 cooldown with every other key in it.
+	for _, tc := range []struct {
+		name, account string
+		ok            bool
+	}{
+		{"p-1 key -> p-1's account", "acct-p-1", true},
+		{"p-1 key -> its team's account", "acct-team-1", false},
+		{"p-1 key -> another team's account", "acct-team-2", false},
+		{"p-1 key -> a system account", "acct-shared", false},
+		{"p-1 key -> another project's account", "acct-p-2", false},
+	} {
+		err := c.HostKey(ctx, projectKey(tc.account))
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err=%v, want ok=%v", tc.name, err, tc.ok)
+		}
+		if err != nil && status(err) != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", tc.name, status(err))
+		}
 	}
-	if err := c.HostKey(ctx, projectKey("acct-team-2")); err == nil {
-		t.Error("p-1 key joined another team's account")
+	teamKey := &hostkey.HostKey{Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}}, Spec: hostkey.Spec{HostID: "h-1", AccountID: "acct-shared"}}
+	if err := c.HostKey(ctx, teamKey); err == nil {
+		t.Error("t-1 key joined a system account")
+	}
+	if got := status(c.AccountRef(ctx, "acct-team-1", meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"})); got != 0 {
+		t.Errorf("t-1 key -> t-1's account: status %d, want accepted", got)
 	}
 }
 

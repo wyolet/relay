@@ -32,7 +32,7 @@ Host keys, pools, accounts and budgets may be owned by the system, a team, a pro
 | `round-robin` | Rotates across healthy keys using a counter in the state backend, one per pool, shared by every policy that links the pool. |
 | `least-recently-used` | Picks the healthy key whose last use is oldest. |
 
-Breaker state is shared across pods through the state backend when `RELAY_STATE_BACKEND=redis`. Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
+Breaker state is shared across pods through the state backend (Dragonfly when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
 
 After picking a key, Relay reserves the key's upstream limits: the rate limits and budgets of the policies bound to its host, its account and the key itself. A key over one of them is skipped without touching its breaker, and the next key is tried. When the refusing limit is an account-wide request or token window (no model scope), every key of that account is skipped on this pod until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-rungs).
 
@@ -127,6 +127,6 @@ If every key in the pool is open, requests fail with `502` and the message `no h
 
 1. Fix the cause, for example by giving the key a new value or adding another key to the pool. A stored key is rotated with `POST /api/host-keys/by-id/<id>/rotate` and body `{"value": "<new value>"}`; an env-ref key takes the new value from its environment variable after a restart. Either way the new value gets a closed breaker.
 2. Otherwise wait out the cooldown: at most 60 s for `403`, `5xx` and network failures, at most 1 h for `401`.
-3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with `redis`, delete the `secret_health:*` keys.
+3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with Dragonfly, delete the `secret_health:*` keys.
 
 See [Troubleshooting](/troubleshooting) for related errors.

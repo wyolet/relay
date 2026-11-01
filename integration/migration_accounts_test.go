@@ -3,8 +3,13 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
@@ -209,6 +214,206 @@ func TestMigrateUpDropsTeamAndProjectBudgets(t *testing.T) {
 		if spec != want {
 			t.Errorf("%s spec = %s, want %s", table, spec, want)
 		}
+	}
+}
+
+// lockedBuffer is a log sink safe to read while another goroutine may still write to it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// The upgrade logs, by name, each pre-0.20 link it drops: a key's, service account's or host key's policy, and a policy's host keys, models, rate limit and per-model rate limits; and each binding that stops governing as before: group subjects, and users under a project's binding. A link to a row that is gone is named by id.
+// Not parallel: it reads the process-wide default logger.
+func TestMigrateUpLogsTheLinksItDrops(t *testing.T) {
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	if err := storagemod.MigrateTo(dsn, 35); err != nil {
+		t.Fatalf("migrate to 35: %v", err)
+	}
+	conn := testPool(t, dsn)
+	system := `{"owner":{"kind":"system"}}`
+	userID, hostID, modelID, rlID, rlModelsID, tierID, gone := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	hostKeyID := meta.NewID()
+	teamID, projectID, plainID, bindingID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	for _, stmt := range []struct {
+		what, sql string
+		args      []any
+	}{
+		{"user", `INSERT INTO users (id, username) VALUES ($1, 'link-user')`, []any{userID}},
+		{"host", `INSERT INTO hosts (id, name, metadata, spec) VALUES ($1, 'link-host', $2, '{"baseUrl":"https://api.example.com"}')`, []any{hostID, system}},
+		{"model", `INSERT INTO models (id, name, metadata, spec) VALUES ($1, 'link-model', $2, '{}')`, []any{modelID, system}},
+		{"rate limit", `INSERT INTO rate_limits (id, name, metadata, spec) VALUES ($1, 'tier-rpm', $2, '{}')`, []any{rlID, system}},
+		{"model rate limit", `INSERT INTO rate_limits (id, name, metadata, spec) VALUES ($1, 'model-rpm', $2, '{}')`, []any{rlModelsID, system}},
+		{"policy", `INSERT INTO policies (id, name, metadata, spec, rate_limit_id) VALUES ($1, 'tier-one', $2, $3, $4)`, []any{
+			tierID, system, `{"rlBindings":[{"models":["acme/*","acme/big"],"rateLimitId":"` + rlModelsID + `"}]}`, rlID,
+		}},
+		{"host key", `INSERT INTO secrets (id, name, value_kind, value_from_env, metadata, spec) VALUES ($1, 'link-host-key', 'env', 'LINK_KEY', $2, $3)`, []any{
+			hostKeyID, system, `{"hostId":"` + hostID + `","policyId":"` + tierID + `"}`,
+		}},
+		{"policy host key", `INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, 0)`, []any{tierID, hostKeyID}},
+		{"policy model", `INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, 0)`, []any{tierID, modelID}},
+		{"key", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'link-key', 'aa11', $2, $3, $4)`, []any{
+			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`, `{"policyId":"` + tierID + `","principal":{"kind":"","id":""}}`,
+		}},
+		{"key to a deleted policy", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'stale-key', 'bb22', $2, $3, $4)`, []any{
+			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`, `{"policyId":"` + gone + `"}`,
+		}},
+		{"key without a policy", `INSERT INTO relay_keys (id, name, key_hash, principal_user_id, metadata, spec) VALUES ($1, 'plain-key', 'cc33', $2, $3, '{}')`, []any{
+			meta.NewID(), userID, `{"owner":{"kind":"user","id":"` + userID + `"}}`,
+		}},
+		{"team", `INSERT INTO teams (id, name, metadata, spec) VALUES ($1, 'link-team', $2, '{}')`, []any{teamID, system}},
+		{"project", `INSERT INTO projects (id, name, team_id, metadata, spec) VALUES ($1, 'link-project', $2, $3, '{}')`, []any{projectID, teamID, `{"owner":{"kind":"team","id":"` + teamID + `"}}`}},
+		{"plain policy", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'plain-policy', $2, '{}')`, []any{plainID, system}},
+		{"service account with a policy", `INSERT INTO service_accounts (id, name, project_id, metadata, spec) VALUES ($1, 'link-sa', $2, $3, $4)`, []any{
+			meta.NewID(), projectID, `{"owner":{"kind":"project","id":"` + projectID + `"}}`, `{"projectId":"` + projectID + `","policyId":"` + plainID + `"}`,
+		}},
+		{"binding", `INSERT INTO policy_bindings (id, name, project_id, policy_id, metadata, spec) VALUES ($1, 'link-binding', $2, $3, $4, '{}')`, []any{
+			bindingID, projectID, plainID, `{"owner":{"kind":"project","id":"` + projectID + `"}}`,
+		}},
+		{"group subject", `INSERT INTO policy_binding_subjects (binding_id, kind, subject_name, position, owner_scope) VALUES ($1, 'group', 'system:authenticated', 0, $2)`, []any{bindingID, "project:" + projectID}},
+		{"user subject", `INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_user_id, position, owner_scope) VALUES ($1, 'user', $2, $2, 1, $3)`, []any{bindingID, userID, "project:" + projectID}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("insert %s: %v", stmt.what, err)
+		}
+	}
+
+	logs := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+	slog.SetDefault(prev)
+
+	var got []string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if _, notice, ok := strings.Cut(line, "notice="); ok && strings.Contains(line, "000036") {
+			msg, err := strconv.Unquote(strings.TrimSuffix(notice, " severity=NOTICE"))
+			if err != nil {
+				t.Fatalf("notice %s: %v", notice, err)
+			}
+			got = append(got, msg)
+		}
+	}
+	want := []string{
+		`000036: dropping link: key "link-key" -> policy "tier-one"`,
+		`000036: dropping link: key "stale-key" -> policy "` + gone + `"`,
+		`000036: dropping link: host key "link-host-key" -> tier policy "tier-one"`,
+		`000036: dropping link: service account "link-sa" -> policy "plain-policy"`,
+		`000036: binding no longer applies: policy binding "link-binding" (policy "plain-policy") -> group "system:authenticated"`,
+		`000036: binding narrows to project tokens: policy binding "link-binding" (policy "plain-policy") -> user "link-user" governs only tokens in project "link-project", not personal keys`,
+		`000036: dropping link: policy "tier-one" -> host key "link-host-key"`,
+		`000036: dropping link: policy "tier-one" -> model "link-model"`,
+		`000036: dropping link: policy "tier-one" -> rate limit "tier-rpm"`,
+		`000036: dropping link: policy "tier-one" -> rate limit "model-rpm" for models acme/*, acme/big`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("notices:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A bound policy whose only model or host-key restriction is the pre-0.20 list stops the upgrade, named with its bindings, rather than serving every model and key after it; once unbound, the upgrade goes through. A policy bound only to a group, which binds nothing after the upgrade, does not stop it.
+func TestMigrateUpRefusesWideningABoundPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	if err := storagemod.MigrateTo(dsn, 35); err != nil {
+		t.Fatalf("migrate to 35: %v", err)
+	}
+	conn := testPool(t, dsn)
+	system := `{"owner":{"kind":"system"}}`
+	userID, hostID, modelID, hostKeyID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	teamID, projectID, saID := meta.NewID(), meta.NewID(), meta.NewID()
+	byModels, byKeys, byGroup, narrowed := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	inProject := `{"owner":{"kind":"project","id":"` + projectID + `"}}`
+	binding := func(policyID, name string) []any { return []any{meta.NewID(), name, projectID, policyID, inProject} }
+	bindings := map[string][]any{
+		"sa-binding":    binding(byModels, "sa-binding"),
+		"user-binding":  binding(byKeys, "user-binding"),
+		"group-binding": binding(byGroup, "group-binding"),
+		"kept-binding":  binding(narrowed, "kept-binding"),
+	}
+	for _, stmt := range []struct {
+		what, sql string
+		args      []any
+	}{
+		{"user", `INSERT INTO users (id, username) VALUES ($1, 'widen-user')`, []any{userID}},
+		{"host", `INSERT INTO hosts (id, name, metadata, spec) VALUES ($1, 'widen-host', $2, '{"baseUrl":"https://api.example.com"}')`, []any{hostID, system}},
+		{"model", `INSERT INTO models (id, name, metadata, spec) VALUES ($1, 'widen-model', $2, '{}')`, []any{modelID, system}},
+		{"host key", `INSERT INTO secrets (id, name, value_kind, value_from_env, metadata, spec) VALUES ($1, 'widen-host-key', 'env', 'WIDEN_KEY', $2, $3)`, []any{hostKeyID, system, `{"hostId":"` + hostID + `"}`}},
+		{"team", `INSERT INTO teams (id, name, metadata, spec) VALUES ($1, 'widen-team', $2, '{}')`, []any{teamID, system}},
+		{"project", `INSERT INTO projects (id, name, team_id, metadata, spec) VALUES ($1, 'widen-project', $2, $3, '{}')`, []any{projectID, teamID, `{"owner":{"kind":"team","id":"` + teamID + `"}}`}},
+		{"service account", `INSERT INTO service_accounts (id, name, project_id, metadata, spec) VALUES ($1, 'widen-sa', $2, $3, $4)`, []any{saID, projectID, inProject, `{"projectId":"` + projectID + `"}`}},
+		{"policy by model ids", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'by-model-ids', $2, '{}')`, []any{byModels, system}},
+		{"policy by host keys", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'by-host-keys', $2, '{}')`, []any{byKeys, system}},
+		{"policy bound to a group", `INSERT INTO policies (id, name, metadata, spec) VALUES ($1, 'by-group', $2, '{}')`, []any{byGroup, system}},
+		{"policy keeping model refs", `INSERT INTO policies (id, name, metadata, spec, models) VALUES ($1, 'keeps-refs', $2, '{}', '["acme/*"]')`, []any{narrowed, system}},
+		{"model ids", `INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $3, 0), ($2, $3, 0), ($4, $3, 0)`, []any{byModels, byGroup, modelID, narrowed}},
+		{"host keys", `INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, 0)`, []any{byKeys, hostKeyID}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("insert %s: %v", stmt.what, err)
+		}
+	}
+	for name, args := range bindings {
+		if _, err := conn.Exec(ctx, `INSERT INTO policy_bindings (id, name, project_id, policy_id, metadata, spec) VALUES ($1, $2, $3, $4, $5, '{}')`, args...); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+	scope := "project:" + projectID
+	for what, stmt := range map[string]struct {
+		sql  string
+		args []any
+	}{
+		"service account subject": {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_sa_id, position, owner_scope) VALUES ($1, 'serviceaccount', $2, $2, 0, $3)`, []any{bindings["sa-binding"][0], saID, scope}},
+		"user subject":            {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_user_id, position, owner_scope) VALUES ($1, 'user', $2, $2, 0, $3)`, []any{bindings["user-binding"][0], userID, scope}},
+		"group subject":           {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_name, position, owner_scope) VALUES ($1, 'group', 'system:authenticated', 0, $2)`, []any{bindings["group-binding"][0], scope}},
+		"project subject":         {`INSERT INTO policy_binding_subjects (binding_id, kind, subject_id, subject_project_id, position, owner_scope) VALUES ($1, 'project', $2, $2, 0, $3)`, []any{bindings["kept-binding"][0], projectID, scope}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("insert %s: %v", what, err)
+		}
+	}
+
+	err := storagemod.MigrateUp(dsn)
+	if err == nil {
+		t.Fatal("the upgrade went through with bound policies losing their only restriction")
+	}
+	for _, want := range []string{"policy by-model-ids loses its model ids (bound by sa-binding)", "policy by-host-keys loses its host keys (bound by user-binding)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("upgrade error %q does not name %q", err, want)
+		}
+	}
+	for _, unwanted := range []string{"by-group", "keeps-refs"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("upgrade error %q names %q, which loses nothing a subject relied on", err, unwanted)
+		}
+	}
+
+	if _, err := conn.Exec(ctx, `DELETE FROM policy_bindings WHERE name IN ('sa-binding', 'user-binding')`); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	// The refused step left nothing applied, only the dirty flag the upgrade guide clears.
+	if err := storagemod.ForceVersion(dsn, 35); err != nil {
+		t.Fatalf("clear the failed step: %v", err)
+	}
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("upgrade after unbinding: %v", err)
 	}
 }
 

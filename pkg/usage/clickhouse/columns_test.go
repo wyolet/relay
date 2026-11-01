@@ -37,6 +37,7 @@ func sampleEvents() []usage.Event {
 			ProjectID:     "proj-1", Project: "indexer", TeamID: "team-1", Team: "search",
 			PrincipalKind: "service_account", PrincipalID: "sa-1", Principal: "indexer-bot",
 			CredentialKind: "key", CredentialID: "key-1", RelayKey: "indexer-prod",
+			PoolID: "pool-1", AccountID: "acct-1",
 		},
 		{},
 		{
