@@ -1024,6 +1024,17 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 	return i, err
 }
 
+const getSecretAccountID = `-- name: GetSecretAccountID :one
+SELECT COALESCE(spec->>'accountId', '')::text AS account_id FROM secrets WHERE id = $1
+`
+
+func (q *Queries) GetSecretAccountID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getSecretAccountID, id)
+	var account_id string
+	err := row.Scan(&account_id)
+	return account_id, err
+}
+
 const getSecretDataKey = `-- name: GetSecretDataKey :one
 SELECT id, scope, state, kek_id, wrapped, created_at, demoted_at FROM secret_data_keys WHERE id = $1
 `

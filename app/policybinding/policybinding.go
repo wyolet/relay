@@ -18,7 +18,7 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 )
 
-// Subject kinds a PolicyBinding accepts beyond the RoleBinding ones: the upstream side (host, account, credential) and the tenancy scopes. A relay key is never a subject: it acts as its principal.
+// Subject kinds a PolicyBinding accepts beyond the RoleBinding ones: the upstream side (host, account, credential) and the tenancy scopes. A relay key is never a subject: it acts as its principal. A credential is accepted on write and stored as its account (BindAccounts): a provider counts limits per account, so a limit set on one key is the account's.
 const (
 	SubjectHost       rolebinding.SubjectKind = "host"
 	SubjectAccount    rolebinding.SubjectKind = "account"
@@ -65,6 +65,30 @@ type Spec struct {
 	// Subjects are not dived into: rolebinding.Subject's own tags admit only the RoleBinding kinds, so Validate checks each one against SubjectKinds.
 	Subjects []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1"`
 	Enabled  *bool                 `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// BindAccounts replaces each credential subject with the account accountOf returns for it; an account reached twice that way, or also named directly, is kept once. A credential accountOf returns "" for stays as written, and a subject written twice is left for Validate to refuse.
+func (b *PolicyBinding) BindAccounts(accountOf func(credentialID string) string) {
+	out := make([]rolebinding.Subject, 0, len(b.Spec.Subjects))
+	converted := map[string]bool{} // account key → whether a credential produced it
+	for _, s := range b.Spec.Subjects {
+		fromKey := false
+		if s.Kind == SubjectCredential {
+			if acc := accountOf(s.ID); acc != "" {
+				s, fromKey = rolebinding.Subject{Kind: SubjectAccount, ID: acc}, true
+			}
+		}
+		if s.Kind == SubjectAccount {
+			k := s.Key()
+			if prev, seen := converted[k]; seen && (prev || fromKey) {
+				converted[k] = true
+				continue
+			}
+			converted[k] = fromKey
+		}
+		out = append(out, s)
+	}
+	b.Spec.Subjects = out
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

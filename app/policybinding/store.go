@@ -84,7 +84,7 @@ func (s *Store) Get(ctx context.Context, id string) (*PolicyBinding, error) {
 	return b, nil
 }
 
-// Upsert re-derives Owner from ProjectID when the owner is a project.
+// Upsert re-derives Owner from ProjectID when the owner is a project, and stores a credential subject as its account.
 func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	b.StampOwner()
 	switch b.Meta.Owner.Kind {
@@ -103,6 +103,9 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
+	if err := bindAccounts(ctx, q, b); err != nil {
+		return fmt.Errorf("policybinding.Upsert: %w", err)
+	}
 	if err := meta.StaleIfNoRows(q.UpsertPolicyBinding(ctx, params)); err != nil {
 		return fmt.Errorf("policybinding.Upsert: policy_bindings: %w", err)
 	}
@@ -135,6 +138,27 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("policybinding.Upsert: commit: %w", err)
+	}
+	return nil
+}
+
+// bindAccounts stores each credential subject as its host key's account, on every write path, so no stored binding names a credential.
+func bindAccounts(ctx context.Context, q *gen.Queries, b *PolicyBinding) error {
+	var lookupErr error
+	b.BindAccounts(func(id string) string {
+		acc, err := q.GetSecretAccountID(ctx, id)
+		if err != nil && lookupErr == nil {
+			lookupErr = fmt.Errorf("host key %s: %w", id, err)
+		}
+		return acc
+	})
+	if lookupErr != nil {
+		return lookupErr
+	}
+	for _, s := range b.Spec.Subjects {
+		if s.Kind == SubjectCredential {
+			return fmt.Errorf("host key %s has no account to bind", s.ID)
+		}
 	}
 	return nil
 }

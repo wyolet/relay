@@ -573,6 +573,9 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at   = NOW()
 WHERE sqlc.narg('expected_version')::bigint IS NULL OR policy_bindings.resource_version = sqlc.narg('expected_version')::bigint;
 
+-- name: GetSecretAccountID :one
+SELECT COALESCE(spec->>'accountId', '')::text AS account_id FROM secrets WHERE id = $1;
+
 -- name: DeletePolicyBinding :exec
 DELETE FROM policy_bindings WHERE id = $1;
 

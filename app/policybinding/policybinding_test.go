@@ -1,6 +1,7 @@
 package policybinding
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,6 +191,36 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("Validate() = nil, want error mentioning %q", tc.want)
 			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
 				t.Fatalf("Validate() = %v, want error mentioning %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A credential subject becomes its account; an account reached through two keys, or a key and the account itself, is kept once, while a subject written twice is left for Validate.
+func TestBindAccounts(t *testing.T) {
+	acctA, acctB := meta.NewID(), meta.NewID()
+	k1, k2, k3, lost := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	accounts := map[string]string{k1: acctA, k2: acctA, k3: acctB}
+	cred := func(id string) rolebinding.Subject { return rolebinding.Subject{Kind: SubjectCredential, ID: id} }
+	acct := func(id string) rolebinding.Subject { return rolebinding.Subject{Kind: SubjectAccount, ID: id} }
+	team := rolebinding.Subject{Kind: SubjectTeam, ID: meta.NewID()}
+	for _, tc := range []struct {
+		name     string
+		in, want []rolebinding.Subject
+	}{
+		{"a key", []rolebinding.Subject{cred(k1)}, []rolebinding.Subject{acct(acctA)}},
+		{"two keys of one account", []rolebinding.Subject{cred(k1), cred(k2), team}, []rolebinding.Subject{acct(acctA), team}},
+		{"a key and its account", []rolebinding.Subject{acct(acctA), cred(k1)}, []rolebinding.Subject{acct(acctA)}},
+		{"its account after a key", []rolebinding.Subject{cred(k1), acct(acctA)}, []rolebinding.Subject{acct(acctA)}},
+		{"keys of two accounts", []rolebinding.Subject{cred(k1), cred(k3)}, []rolebinding.Subject{acct(acctA), acct(acctB)}},
+		{"an account written twice", []rolebinding.Subject{acct(acctA), acct(acctA)}, []rolebinding.Subject{acct(acctA), acct(acctA)}},
+		{"a key with no account", []rolebinding.Subject{cred(lost)}, []rolebinding.Subject{cred(lost)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &PolicyBinding{Spec: Spec{Subjects: tc.in}}
+			b.BindAccounts(func(id string) string { return accounts[id] })
+			if !slices.Equal(b.Spec.Subjects, tc.want) {
+				t.Fatalf("subjects = %+v, want %+v", b.Spec.Subjects, tc.want)
 			}
 		})
 	}

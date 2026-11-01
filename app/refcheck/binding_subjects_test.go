@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
@@ -105,5 +106,45 @@ func TestPolicyBindingBindsAUserOncePerScope(t *testing.T) {
 				t.Fatalf("err = %v, want conflict %v", err, tc.wantConflict)
 			}
 		})
+	}
+}
+
+// A binding naming a host key is checked, and saved, as one naming the key's account: an account another binding holds refuses it with that binding named, whichever of its keys it came through.
+func TestPolicyBindingOnAKeyBindsItsAccount(t *testing.T) {
+	acct := meta.NewID()
+	k1, k2 := meta.NewID(), meta.NewID()
+	held := &policybinding.PolicyBinding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "holds-the-account", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: policybinding.Spec{PolicyID: meta.NewID(), Subjects: []rolebinding.Subject{{Kind: policybinding.SubjectAccount, ID: acct}}},
+	}
+	keys := map[string]*hostkey.HostKey{
+		k1: {Meta: meta.Metadata{ID: k1, Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: hostkey.Spec{AccountID: acct}},
+		k2: {Meta: meta.Metadata{ID: k2, Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: hostkey.Spec{AccountID: acct}},
+	}
+	c := Checker{Rows: Lookup{
+		HostKey: func(_ context.Context, id string) *hostkey.HostKey { return keys[id] },
+		PolicyBindings: func(context.Context) ([]*policybinding.PolicyBinding, error) {
+			return []*policybinding.PolicyBinding{held}, nil
+		},
+	}}
+	onKey := func(id, key string) *policybinding.PolicyBinding {
+		return &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: id, Name: "on-key", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+			Spec: policybinding.Spec{PolicyID: meta.NewID(), Subjects: []rolebinding.Subject{{Kind: policybinding.SubjectCredential, ID: key}}},
+		}
+	}
+	for _, k := range []string{k1, k2} {
+		err := c.PolicyBinding(context.Background(), onKey(meta.NewID(), k))
+		var re *Error
+		if !errors.As(err, &re) || re.Status != http.StatusConflict || !strings.Contains(re.Msg, "holds-the-account") {
+			t.Fatalf("binding on a key of a held account: err = %v, want a 409 naming holds-the-account", err)
+		}
+	}
+	edit := onKey(held.Meta.ID, k1)
+	if err := c.PolicyBinding(context.Background(), edit); err != nil {
+		t.Fatalf("editing the holding binding to name a key of its account: %v", err)
+	}
+	if s := edit.Spec.Subjects; len(s) != 1 || s[0].Kind != policybinding.SubjectAccount || s[0].ID != acct {
+		t.Fatalf("subjects after the check = %+v, want the account %s", s, acct)
 	}
 }

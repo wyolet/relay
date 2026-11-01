@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
@@ -90,11 +91,14 @@ func TestIntegration_SubjectsOfEveryKindRoundTripAndDropOut(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get: %v (row %v)", err, got)
 	}
-	if !reflect.DeepEqual(got.Spec.Subjects, subjects) {
-		t.Fatalf("subjects = %+v, want %+v", got.Spec.Subjects, subjects)
+	// The host key is stored as the account it joined.
+	stored := slices.Clone(subjects)
+	stored[1] = rolebinding.Subject{Kind: policybinding.SubjectAccount, ID: hk.Spec.AccountID}
+	if !reflect.DeepEqual(got.Spec.Subjects, stored) || !reflect.DeepEqual(b.Spec.Subjects, stored) {
+		t.Fatalf("subjects = %+v (written as %+v), want %+v", got.Spec.Subjects, b.Spec.Subjects, stored)
 	}
 
-	// Deleting the credential and the host (which takes its account with it) removes them from the binding; the other subjects stay.
+	// Deleting the host takes its accounts with it, which removes them from the binding; the other subjects stay.
 	if err := keys.Delete(ctx, hk.Meta.ID); err != nil {
 		t.Fatalf("delete host key: %v", err)
 	}
