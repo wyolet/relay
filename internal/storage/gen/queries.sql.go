@@ -384,7 +384,7 @@ func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) erro
 
 const getAccount = `-- name: GetAccount :one
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
 FROM accounts WHERE id = $1
 `
 
@@ -412,6 +412,7 @@ func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
 		&i.FollowsRoleBindings,
 		&i.SourceAccountID,
 		&i.ShareReceiver,
+		&i.ShareUserID,
 	)
 	return i, err
 }
@@ -1575,7 +1576,7 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 const listAccounts = `-- name: ListAccounts :many
 
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
 FROM accounts ORDER BY name
 `
 
@@ -1610,6 +1611,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.FollowsRoleBindings,
 			&i.SourceAccountID,
 			&i.ShareReceiver,
+			&i.ShareUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -3238,11 +3240,12 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 }
 
 const upsertAccount = `-- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
 ON CONFLICT (id) DO UPDATE SET
     source_account_id = EXCLUDED.source_account_id,
     share_receiver    = EXCLUDED.share_receiver,
+    share_user_id     = EXCLUDED.share_user_id,
     name          = EXCLUDED.name,
     display_name  = EXCLUDED.display_name,
     host_id       = EXCLUDED.host_id,
@@ -3258,7 +3261,7 @@ ON CONFLICT (id) DO UPDATE SET
     closed        = EXCLUDED.closed,
     follows_role_bindings = EXCLUDED.follows_role_bindings,
     updated_at    = NOW()
-WHERE $18::bigint IS NULL OR accounts.resource_version = $18::bigint
+WHERE $19::bigint IS NULL OR accounts.resource_version = $19::bigint
 `
 
 type UpsertAccountParams struct {
@@ -3279,6 +3282,7 @@ type UpsertAccountParams struct {
 	FollowsRoleBindings bool        `db:"follows_role_bindings" json:"follows_role_bindings"`
 	SourceAccountID     pgtype.Text `db:"source_account_id" json:"source_account_id"`
 	ShareReceiver       pgtype.Text `db:"share_receiver" json:"share_receiver"`
+	ShareUserID         pgtype.Text `db:"share_user_id" json:"share_user_id"`
 	ExpectedVersion     pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
@@ -3301,6 +3305,7 @@ func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (i
 		arg.FollowsRoleBindings,
 		arg.SourceAccountID,
 		arg.ShareReceiver,
+		arg.ShareUserID,
 		arg.ExpectedVersion,
 	)
 	if err != nil {

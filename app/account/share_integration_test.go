@@ -11,16 +11,17 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	appteam "github.com/wyolet/relay/app/team"
+	appuser "github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-// A share round-trips with its real account and receiver, takes a free name, is refused a second time for one receiver, and goes with its receiving team and with its real account.
+// A share round-trips with its real account and receiver, takes a free name, is refused a second time for one receiver, goes with its receiving team or user, and keeps its real account from being deleted under it.
 func TestIntegration_ShareStore(t *testing.T) {
 	ctx := context.Background()
 	db := storagetest.Pool(t)
 	q := gen.New(db)
-	hst :=&host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "share-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
+	hst := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "share-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
 	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestIntegration_ShareStore(t *testing.T) {
 		t.Fatalf("upsert team: %v", err)
 	}
 	team := meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}
-	taken :=&account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "anthropic-for-platform", Owner: team}, Spec: account.Spec{HostID: hst.Meta.ID}}
+	taken := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "anthropic-for-platform", Owner: team}, Spec: account.Spec{HostID: hst.Meta.ID}}
 	if err := store.Upsert(ctx, taken); err != nil {
 		t.Fatalf("upsert account holding the name: %v", err)
 	}
@@ -71,15 +72,28 @@ func TestIntegration_ShareStore(t *testing.T) {
 		t.Fatalf("share after its team went = %+v, %v", got, err)
 	}
 
-	user := meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
-	toUser := account.Share(src, account.Receiver{Kind: account.ReceiverUser, ID: user.ID}, user, "bob")
+	// The real account stays while a share names it: a share is revoked, never taken along.
+	bob := &appuser.User{ID: meta.NewID(), Username: "bob"}
+	if err := appuser.NewStore(db).Upsert(ctx, bob); err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	toBob := meta.Owner{Kind: meta.OwnerUser, ID: bob.ID}
+	toUser := account.Share(src, account.Receiver{Kind: account.ReceiverUser, ID: bob.ID}, toBob, "bob")
 	if err := store.CreateShare(ctx, toUser); err != nil {
 		t.Fatalf("share with a user: %v", err)
 	}
-	if err := store.Delete(ctx, src.Meta.ID); err != nil {
-		t.Fatalf("delete real account: %v", err)
+	if err := store.Delete(ctx, src.Meta.ID); !errors.Is(err, account.ErrShared) {
+		t.Fatalf("delete of a real account a share names = %v, want ErrShared", err)
+	}
+
+	// A share goes with the user it was shared with.
+	if err := appuser.NewStore(db).Delete(ctx, bob.ID); err != nil {
+		t.Fatalf("delete user: %v", err)
 	}
 	if got, err := store.Get(ctx, toUser.Meta.ID); err != nil || got != nil {
-		t.Fatalf("share after its real account went = %+v, %v", got, err)
+		t.Fatalf("share after its user went = %+v, %v", got, err)
+	}
+	if err := store.Delete(ctx, src.Meta.ID); err != nil {
+		t.Fatalf("delete real account with no shares left: %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A shared account's source_account_id cascades from the real account, its team_id or project_id from its receiver, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
+// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A shared account's source_account_id keeps the real account until its shares are revoked, its team_id, project_id, holder_sa_id or share_user_id take it along with its receiver, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
 
 package account
 
@@ -25,7 +25,11 @@ var ErrManagedTaken = errors.New("account: another account already holds this pl
 // ErrShareTaken is a second share of one account with one receiver.
 var ErrShareTaken = errors.New("account: the account is already shared with this receiver")
 
+// ErrShared is a delete of a real account shares still name: they are revoked first, never taken along.
+var ErrShared = errors.New("account: shares still name the account")
+
 const (
+	sourceKey       = "accounts_source_account_id_fkey"
 	oneDefaultIndex = "accounts_one_default"
 	oneManagedIndex = "accounts_managed_key_key"
 	oneShareIndex   = "accounts_one_share"
@@ -110,7 +114,11 @@ func (s *Store) CreateShare(ctx context.Context, a *Account) error {
 
 // Delete removes an Account by id.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return s.q.DeleteAccount(ctx, id)
+	err := s.q.DeleteAccount(ctx, id)
+	if storage.IsForeignKeyViolation(err, sourceKey) {
+		return fmt.Errorf("%w: account %s", ErrShared, id)
+	}
+	return err
 }
 
 // EnsureManaged returns the id of the caller account want describes, creating it on first use with want's name, suffixed -2, -3, … when taken, and want's id when it carries one. Concurrent first saves converge on one row, whose id the caller gets back.
@@ -306,6 +314,9 @@ func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
 	}
 	if a.IsShared() {
 		p.SourceAccountID, p.ShareReceiver = text(a.Spec.SourceAccountID), text(a.Receiver().Key())
+		if a.Meta.Owner.Kind == meta.OwnerUser {
+			p.ShareUserID = text(a.Meta.Owner.ID)
+		}
 	}
 	if h := a.Spec.Holder; h != nil {
 		switch h.Kind {

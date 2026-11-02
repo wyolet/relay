@@ -5,19 +5,22 @@ package integration_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-// Rolling back below 000040 deletes the shares an older release cannot route and keeps the real account and the pool, which loses the accounts it listed; upgrading again adds the columns and the junction back, and a share writes as before.
+// Rolling back below 000040 deletes the shares an older release cannot route and keeps the real account, the pool, which loses the accounts it listed, and a key whose lane was a share, which falls back to its principal's account; upgrading again adds the columns and the junction back, and a share writes as before.
 func TestMigrateDownAndUpAcrossSharedAccounts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -52,6 +55,19 @@ func TestMigrateDownAndUpAcrossSharedAccounts(t *testing.T) {
 	if err := pool.NewStore(db).Upsert(ctx, pl); err != nil {
 		t.Fatalf("upsert pool: %v", err)
 	}
+	bob := &user.User{ID: meta.NewID(), Username: "bob"}
+	if err := user.NewStore(db).Upsert(ctx, bob); err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+	toBob := account.Share(org, account.Receiver{Kind: account.ReceiverUser, ID: bob.ID}, meta.Owner{Kind: meta.OwnerUser, ID: bob.ID}, "bob")
+	if err := accounts.CreateShare(ctx, toBob); err != nil {
+		t.Fatalf("share with bob: %v", err)
+	}
+	lane := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "bob-lane", Owner: meta.Owner{Kind: meta.OwnerUser, ID: bob.ID}},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: bob.ID}, AccountID: toBob.Meta.ID, KeyHash: strings.Repeat("ef", 32)}}
+	if err := key.NewStore(q).Upsert(ctx, lane); err != nil {
+		t.Fatalf("upsert key: %v", err)
+	}
 	st.Close()
 
 	if err := storagemod.MigrateTo(dsn, 39); err != nil {
@@ -64,6 +80,10 @@ func TestMigrateDownAndUpAcrossSharedAccounts(t *testing.T) {
 	}
 	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pools WHERE id = $1", pl.Meta.ID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("pool at 39: %d (err %v)", n, err)
+	}
+	// A key whose lane was a share stays, in its principal's own account.
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM relay_keys WHERE id = $1 AND account_id IS NULL", lane.Meta.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("bob's key at 39: %d (err %v), want it kept with no account", n, err)
 	}
 	for _, probe := range []string{
 		"SELECT count(*) FROM information_schema.columns WHERE table_name = 'accounts' AND column_name IN ('source_account_id', 'share_receiver')",

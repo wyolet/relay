@@ -29,6 +29,7 @@ type Account struct {
 	FollowsRoleBindings bool               `db:"follows_role_bindings" json:"follows_role_bindings"`
 	SourceAccountID     pgtype.Text        `db:"source_account_id" json:"source_account_id"`
 	ShareReceiver       pgtype.Text        `db:"share_receiver" json:"share_receiver"`
+	ShareUserID         pgtype.Text        `db:"share_user_id" json:"share_user_id"`
 }
 
 type AuditEvent struct {
