@@ -93,7 +93,7 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 
 	case "PolicyBinding":
 		var spec PolicyBindingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
+		if err := decodeSpec(env, &spec); err != nil {
 			return Document{}, err
 		}
 		return Document{PolicyBinding: &PolicyBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil

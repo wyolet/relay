@@ -3,6 +3,9 @@
     "KeySpec": {
       "additionalProperties": false,
       "properties": {
+        "account": {
+          "type": "string"
+        },
         "enabled": {
           "type": "boolean"
         },

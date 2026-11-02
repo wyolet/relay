@@ -20,7 +20,7 @@ func TestInferenceOpenAPIIsDocumented(t *testing.T) {
 
 	paths, _ := doc["paths"].(map[string]any)
 	refusals := map[string][]string{
-		"403": {"model_not_allowed", "policy_disabled", "subject_disabled", "duplicate_binding", "unpriced_under_budget"},
+		"403": {"model_not_allowed", "policy_disabled", "subject_disabled", "duplicate_binding", "unpriced_under_budget", "account_closed", "account_not_held"},
 		"429": {"rate_limit_exceeded", "budget_exceeded"},
 		"404": {"model_not_found"},
 	}

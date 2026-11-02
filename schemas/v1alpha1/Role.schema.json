@@ -118,7 +118,8 @@
                     "rewrap",
                     "rotate",
                     "snapshot",
-                    "update"
+                    "update",
+                    "use"
                   ],
                   "type": "string"
                 },
