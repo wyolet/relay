@@ -16,6 +16,7 @@ const (
 	resultRateLimited    = "rate_limited"
 	resultBackpressure   = "backpressure"
 	resultPolicyDisabled = "policy_disabled"
+	resultRefused        = "refused"
 
 	outcomeRecorded  = "recorded"
 	outcomeIgnored   = "ignored"
@@ -37,7 +38,7 @@ var exportsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "exports_total",
-	Help:      "OTLP export requests received, by signal (traces, logs) and result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, policy_disabled (the credential's policy is switched off), rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
+	Help:      "OTLP export requests received, by signal (traces, logs) and result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, policy_disabled (a policy on the credential's ladder is switched off), refused (its lane is otherwise refused: a closed account, a disabled account or subject), rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
 }, []string{"signal", "result"})
 
 // spansTotal answers how much of what clients export becomes usage: spans that are not model calls are ignored by design, so a high ignored share is normal for clients that export whole traces.
