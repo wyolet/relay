@@ -1,9 +1,11 @@
 package plan
 
 import (
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/pkg/engine"
 )
 
@@ -14,16 +16,18 @@ type RungLimits struct {
 	Budgets    []BudgetCounter
 }
 
-// RateLimitCounters is one linked rate limit and its counters, one per rule in rule order.
+// RateLimitCounters is one linked rate limit and its counters, one per rule in rule order. PerLane is set, and Counters nil, when the link counts per lane and the rungs were read for no lane.
 type RateLimitCounters struct {
 	Link     *LinkedRateLimit
 	Counters []limits.Counter
+	PerLane  bool
 }
 
-// BudgetCounter is one linked budget and its counter.
+// BudgetCounter is one linked budget and its counter. PerLane is set, and Counter zero, as for RateLimitCounters.
 type BudgetCounter struct {
 	Link    *LinkedBudget
 	Counter limits.Counter
+	PerLane bool
 }
 
 // Limits returns the caller rungs the lane climbs that have an account, outermost first: a team's or project's account before the lane's own. A rung's links are listed whether or not its binding refuses; a provider account used as a lane climbs none.
@@ -35,20 +39,73 @@ func (cp *CallerPlan) Limits() []RungLimits {
 		if r.SubjectID == "" || r.Account == nil {
 			continue
 		}
-		rl := RungLimits{Rung: r}
-		if ep := r.Policy; ep != nil {
-			for j := range ep.RateLimits {
-				l := &ep.RateLimits[j]
-				rl.RateLimits = append(rl.RateLimits, RateLimitCounters{Link: l, Counters: rateLimitCounters(r, l, lane, group)})
-			}
-			for j := range ep.Budgets {
-				b := &ep.Budgets[j]
-				rl.Budgets = append(rl.Budgets, BudgetCounter{Link: b, Counter: budgetCounter(r, b, lane, group)})
-			}
-		}
-		out = append(out, rl)
+		out = append(out, rungLimits(r, lane, group))
 	}
 	return out
+}
+
+// ScopeLimits returns the rungs of a team's or project's own account in v, outermost first: the team's account, then the project's for a project account. No lane climbs them here, so links counted per lane carry no counters. nil for any other account.
+func ScopeLimits(v *engine.View, acc *account.Account) []RungLimits {
+	var teamID string
+	switch acc.DerivedKind() {
+	case account.KindTeam:
+		teamID = acc.Meta.Owner.ID
+	case account.KindProject:
+		if p := engine.Get[project.Project](v, acc.Meta.Owner.ID); p != nil {
+			teamID = p.Spec.TeamID
+		}
+	default:
+		return nil
+	}
+	var rungs []*Rung
+	group := ""
+	if m := engine.Get[ManagedAccount](v, "team:"+teamID); m != nil && m.Row != nil {
+		rungs = append(rungs, viewRung(v, limits.RungTeam, m.Row))
+		group = accountSubject(m.Row.Meta.ID)
+	}
+	if acc.DerivedKind() == account.KindProject {
+		rungs = append(rungs, viewRung(v, limits.RungProject, acc))
+	}
+	out := make([]RungLimits, 0, len(rungs))
+	for _, r := range rungs {
+		out = append(out, rungLimits(r, "", group))
+	}
+	return out
+}
+
+// viewRung is a team's or project's account as a caller rung, with the policy bound to it in v.
+func viewRung(v *engine.View, kind limits.Rung, a *account.Account) *Rung {
+	r := &Rung{Kind: kind, SubjectID: accountSubject(a.Meta.ID), Account: a, ScopeID: a.Meta.Owner.ID}
+	if rp := engine.Get[RungPolicy](v, r.SubjectID); rp != nil {
+		r.Policy = rp.Rung.Policy
+	}
+	return r
+}
+
+// rungLimits lists r's links with their counters; with lane empty, a link counted per lane is marked rather than counted.
+func rungLimits(r *Rung, lane, group string) RungLimits {
+	rl := RungLimits{Rung: r}
+	ep := r.Policy
+	if ep == nil {
+		return rl
+	}
+	for j := range ep.RateLimits {
+		l := &ep.RateLimits[j]
+		if !l.Shared && lane == "" {
+			rl.RateLimits = append(rl.RateLimits, RateLimitCounters{Link: l, PerLane: true})
+			continue
+		}
+		rl.RateLimits = append(rl.RateLimits, RateLimitCounters{Link: l, Counters: rateLimitCounters(r, l, lane, group)})
+	}
+	for j := range ep.Budgets {
+		b := &ep.Budgets[j]
+		if !b.Shared && lane == "" {
+			rl.Budgets = append(rl.Budgets, BudgetCounter{Link: b, PerLane: true})
+			continue
+		}
+		rl.Budgets = append(rl.Budgets, BudgetCounter{Link: b, Counter: budgetCounter(r, b, lane, group)})
+	}
+	return rl
 }
 
 // counterGroup is the lane's subject and the atomicity group of its caller counters: the team's, so the team's bucket and the lane's ride one store call, else the lane's own.

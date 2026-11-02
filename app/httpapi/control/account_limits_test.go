@@ -57,17 +57,17 @@ func TestAccountLimits_LadderSharedAndEach(t *testing.T) {
 	}
 
 	// Shared on the team account: both members' requests count.
-	if rl := teamRung.RateLimits[0]; !rl.Shared || rl.Rules[0].Used != 5 || rl.Rules[0].Remaining != 95 || rl.Models == nil || len(rl.Models) != 0 {
+	if rl := teamRung.RateLimits[0]; !rl.Shared || rl.PerLane || num(rl.Rules[0].Used) != 5 || num(rl.Rules[0].Remaining) != 95 || rl.Models == nil || len(rl.Models) != 0 {
 		t.Errorf("team rate limit = %+v", rl)
 	}
 	// Each on the project account: only this lane's.
-	if rl := projRung.RateLimits[0]; rl.Shared || rl.Rules[0].Used != 3 || rl.Rules[0].Window != 3600 || len(rl.Models) != 1 || rl.Models[0] != "prov/m1" {
+	if rl := projRung.RateLimits[0]; rl.Shared || rl.PerLane || num(rl.Rules[0].Used) != 3 || rl.Rules[0].Window != 3600 || len(rl.Models) != 1 || rl.Models[0] != "prov/m1" {
 		t.Errorf("project rate limit = %+v", rl)
 	}
 	if b := projRung.Budgets[0]; b.Shared || b.SpentUSD != "3" || b.RemainingUSD != "7" || b.AmountUSD != "10" || b.Period != "month" || b.Mode != "hard" {
 		t.Errorf("project budget = %+v", b)
 	}
-	if rl := laneRung.RateLimits[0]; rl.Rules[0].Used != 3 || rl.Rules[0].Remaining != 1 {
+	if rl := laneRung.RateLimits[0]; num(rl.Rules[0].Used) != 3 || num(rl.Rules[0].Remaining) != 1 {
 		t.Errorf("lane rate limit = %+v", rl)
 	}
 	// A quarter of the lane's cap left beats 70% of the budget and 95% of the team's cap.
@@ -88,6 +88,52 @@ func TestAccountLimits_LadderSharedAndEach(t *testing.T) {
 	}
 	if tt := other.Tightest; tt == nil || tt.Kind != "budget" || tt.ID != aw.projBudgetID || tt.Remaining != 6 || tt.Label != "$6 left: project "+other.Rungs[1].Budgets[0].Name {
 		t.Errorf("tightest = %+v", other.Tightest)
+	}
+}
+
+// num reads an optional count, -1 when absent.
+func num(p *int64) int64 {
+	if p == nil {
+		return -1
+	}
+	return *p
+}
+
+// A team's or project's own account reads the accounts above and including it: shared links from the bound account's counter, links counted per lane marked and left out of tightest.
+func TestAccountLimits_ScopeAccounts(t *testing.T) {
+	aw := newAccountsWorld()
+	ah := newAccountsHarness(t, aw.w, authz.AlwaysAllowAuthenticated{}, map[string]*actor.Actor{"root": {UserID: "u-root"}})
+	ah.spend(t, aw.k1, 3, testUSD)
+	ah.spend(t, aw.k2, 2, 2*testUSD)
+	teamAcc, projAcc := aw.w.TeamAccount(aw.team), aw.w.ProjectAccount(aw.proj)
+
+	var proj AccountLimits
+	if code := ah.get(t, "root", "/accounts/"+projAcc.Meta.ID+"/limits", &proj); code != http.StatusOK {
+		t.Fatalf("project account status %d", code)
+	}
+	if proj.Lane.ID != projAcc.Meta.ID || proj.Lane.Kind != account.KindProject || len(proj.Rungs) != 2 ||
+		proj.Rungs[0].Account.ID != teamAcc.Meta.ID || proj.Rungs[1].Account.ID != projAcc.Meta.ID {
+		t.Fatalf("project account limits = %+v, want the team's then the project's rung", proj)
+	}
+	if rl := proj.Rungs[0].RateLimits[0]; rl.PerLane || num(rl.Rules[0].Used) != 5 {
+		t.Errorf("team's shared rate limit = %+v, want both lanes' 5", rl)
+	}
+	if rl := proj.Rungs[1].RateLimits[0]; !rl.PerLane || rl.Rules[0].Used != nil || rl.Rules[0].Remaining != nil || rl.Rules[0].Amount != 50 {
+		t.Errorf("project's per-lane rate limit = %+v, want it marked with no reading", rl)
+	}
+	if b := proj.Rungs[1].Budgets[0]; !b.PerLane || b.SpentUSD != "" || b.RemainingUSD != "" || b.AmountUSD != "10" {
+		t.Errorf("project's per-lane budget = %+v, want it marked with no spend", b)
+	}
+	if tt := proj.Tightest; tt == nil || tt.Kind != "rateLimit" || tt.ID != aw.teamRL.Meta.ID || tt.AccountID != teamAcc.Meta.ID || tt.Remaining != 95 {
+		t.Errorf("tightest = %+v, want the team's shared cap", proj.Tightest)
+	}
+
+	var team AccountLimits
+	if code := ah.get(t, "root", "/accounts/"+teamAcc.Meta.Name+"/limits", &team); code != http.StatusOK {
+		t.Fatalf("team account status %d", code)
+	}
+	if len(team.Rungs) != 1 || team.Rungs[0].Account.Kind != account.KindTeam || team.Rungs[0].Policy == nil || team.Rungs[0].Policy.ID != aw.teamPol.Meta.ID {
+		t.Fatalf("team account limits = %+v, want the team's rung alone", team)
 	}
 }
 
@@ -116,7 +162,7 @@ func TestAccountLimits_Visibility(t *testing.T) {
 		{"token", k1, http.StatusOK},
 		{"root", m1, http.StatusOK},
 		{"u1", teamAcc, http.StatusNotFound},
-		{"root", teamAcc, http.StatusBadRequest},
+		{"root", teamAcc, http.StatusOK},
 		{"u1", "/accounts/nope/limits", http.StatusNotFound},
 	} {
 		if got := ah.get(t, tc.who, tc.path, nil); got != tc.want {

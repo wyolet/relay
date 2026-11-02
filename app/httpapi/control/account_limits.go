@@ -23,8 +23,8 @@ import (
 
 // AccountLimits is the caller half of the ladder a lane climbs, with current usage against every limit.
 type AccountLimits struct {
-	Lane     LimitsAccount   `json:"lane"     doc:"The account requests run in."`
-	Rungs    []LimitsRung    `json:"rungs"    doc:"The accounts a request in the lane climbs, outermost first: the team's account, the project's account, then the lane. Every rung only narrows. Empty for a provider account, whose own policy caps its keys upstream and is not reported here."`
+	Lane     LimitsAccount   `json:"lane"     doc:"The account read: the lane requests run in, or a team's or project's own account."`
+	Rungs    []LimitsRung    `json:"rungs"    doc:"The accounts a request in the lane climbs, outermost first: the team's account, the project's account, then the lane. Every rung only narrows. For a team's or project's own account, the accounts above and including it. Empty for a provider account, whose own policy caps its keys upstream and is not reported here."`
 	Tightest *LimitsTightest `json:"tightest,omitempty" doc:"The hard limit with the least left as a share of its cap; omitted when no rung caps anything."`
 }
 
@@ -49,6 +49,7 @@ type LimitsRateLimit struct {
 	Name        string       `json:"name"        doc:"Rate limit slug."`
 	Models      []string     `json:"models"      doc:"The models the link applies to, in the policy's model grammar; empty applies it to every request."`
 	Shared      bool         `json:"shared"      doc:"True counts once for the rung's account, so used is what every lane under it spent together; false counts once per lane, so used is this lane's own."`
+	PerLane     bool         `json:"perLane"     doc:"True when the link counts per lane (shared false) and the account read is a team's or project's own: no single count exists, so the rules carry no used or remaining and the link is never tightest."`
 	Rules       []LimitsRule `json:"rules"       doc:"The rate limit's rules, in order."`
 }
 
@@ -58,8 +59,8 @@ type LimitsRule struct {
 	Strategy  ratelimit.Strategy `json:"strategy"  enum:"token-bucket,sliding-window,fixed-window,leaky-bucket,session-window" doc:"Counting algorithm. For a token bucket used is the tokens drawn and not yet refilled; for a leaky bucket its level."`
 	Amount    int64              `json:"amount"    doc:"How much of the meter the window allows."`
 	Window    int64              `json:"window"    doc:"Measurement period, in whole seconds."`
-	Used      int64              `json:"used"      doc:"The current count as admission compares it, rounded up. Under the hybrid limiter it is this relay instance's view, which may lag other instances by up to one sync interval."`
-	Remaining int64              `json:"remaining" doc:"amount minus used, never below zero."`
+	Used      *int64             `json:"used,omitempty"      doc:"The current count as admission compares it, rounded up. Under the hybrid limiter it is this relay instance's view, which may lag other instances by up to one sync interval. Omitted when the rate limit is perLane."`
+	Remaining *int64             `json:"remaining,omitempty" doc:"amount minus used, never below zero. Omitted when the rate limit is perLane."`
 }
 
 // LimitsBudget is one linked budget with this period's spend.
@@ -67,11 +68,12 @@ type LimitsBudget struct {
 	BudgetID     string        `json:"budgetId"     doc:"Budget id."`
 	Name         string        `json:"name"         doc:"Budget slug."`
 	Shared       bool          `json:"shared"       doc:"True spends one budget for the rung's account, so spentUsd is every lane under it together; false gives each lane its own, so spentUsd is this lane's."`
+	PerLane      bool          `json:"perLane"      doc:"True when the budget is spent per lane (shared false) and the account read is a team's or project's own: no single spend exists, so spentUsd and remainingUsd are omitted and the budget is never tightest."`
 	AmountUSD    string        `json:"amountUsd"    doc:"Spend cap in USD per period, as a decimal string."`
 	Period       budget.Period `json:"period"       enum:"day,week,month" doc:"Calendar period the cap covers, in UTC."`
 	Mode         budget.Mode   `json:"mode"         enum:"hard,alert" doc:"hard refuses requests once the cap is spent; alert only reports the overrun."`
-	SpentUSD     string        `json:"spentUsd"     doc:"USD spent in the current period, as a decimal string."`
-	RemainingUSD string        `json:"remainingUsd" doc:"amountUsd minus spentUsd, never below zero, as a decimal string."`
+	SpentUSD     string        `json:"spentUsd,omitempty"     doc:"USD spent in the current period, as a decimal string. Omitted when the budget is perLane."`
+	RemainingUSD string        `json:"remainingUsd,omitempty" doc:"amountUsd minus spentUsd, never below zero, as a decimal string. Omitted when the budget is perLane."`
 }
 
 // LimitsTightest points at the limit closest to refusing.
@@ -93,10 +95,10 @@ func registerLimits(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/accounts/{ref}/limits",
 		Summary:     "Read the limits a request in this account climbs",
-		Description: "The caller rungs a request in the account climbs (team account, project account, the account itself), each with its bound policy, the rate limits and budgets it links and current usage against them, and the tightest of them. Readable by whoever may read the account and by the user who acts in it. A team's or project's own account is a rung, not a lane: it answers 400. {ref} is a slug or id.",
+		Description: "The caller rungs a request in the account climbs (team account, project account, the account itself), each with its bound policy, the rate limits and budgets it links and current usage against them, and the tightest of them. Readable by whoever may read the account and by the user who acts in it. A team's or project's own account answers with the accounts above and including it; links counted per lane have no single reading there and are marked perLane. {ref} is a slug or id.",
 		Tags:        []string{"accounts"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 404, 503},
+		Errors:      []int{401, 404, 503},
 	}, func(ctx context.Context, in *refInput) (*limitsOut, error) {
 		v, err := planView(d)
 		if err != nil {
@@ -170,25 +172,29 @@ func limitsAccount(a *account.Account) LimitsAccount {
 	return LimitsAccount{ID: a.Meta.ID, Name: a.Meta.Name, Kind: a.DerivedKind()}
 }
 
-// laneLimits reads acc's caller rungs from its lane plan and their counts from the limiter.
+// laneLimits reads acc's caller rungs (from its lane plan, or for a team's or project's own account the accounts above and including it) and their counts from the limiter.
 func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Account) (*limitsOut, error) {
+	out := &limitsOut{Body: AccountLimits{Lane: limitsAccount(acc), Rungs: []LimitsRung{}}}
+	var rungs []plan.RungLimits
 	switch acc.DerivedKind() {
 	case account.KindTeam, account.KindProject:
-		return nil, huma.Error400BadRequest("account " + acc.Meta.Name + " is a " + string(acc.DerivedKind()) + "'s own account: a rung of the lanes under it, not a lane; read the limits of an account or key in it")
+		rungs = plan.ScopeLimits(v, acc)
+	default:
+		cp := plan.LanePlan(v, acc.Meta.ID)
+		if cp == nil {
+			return out, nil
+		}
+		rungs = cp.Limits()
 	}
-	out := &limitsOut{Body: AccountLimits{Lane: limitsAccount(acc), Rungs: []LimitsRung{}}}
-	cp := plan.LanePlan(v, acc.Meta.ID)
-	if cp == nil {
-		return out, nil
-	}
-	rungs := cp.Limits()
 	var cs []limits.Counter
 	for _, r := range rungs {
 		for _, rl := range r.RateLimits {
 			cs = append(cs, rl.Counters...)
 		}
 		for _, b := range r.Budgets {
-			cs = append(cs, b.Counter)
+			if !b.PerLane {
+				cs = append(cs, b.Counter)
+			}
 		}
 	}
 	readings := []limits.Reading{}
@@ -211,16 +217,20 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 		kind := string(r.Rung.Account.DerivedKind())
 		for _, rl := range r.RateLimits {
 			l := rl.Link
-			row := LimitsRateLimit{RateLimitID: l.RateLimit.Meta.ID, Name: l.RateLimit.Meta.Name, Models: l.Models, Shared: l.Shared, Rules: []LimitsRule{}}
+			row := LimitsRateLimit{RateLimitID: l.RateLimit.Meta.ID, Name: l.RateLimit.Meta.Name, Models: l.Models, Shared: l.Shared, PerLane: rl.PerLane, Rules: []LimitsRule{}}
 			if row.Models == nil {
 				row.Models = []string{}
 			}
 			for j, rule := range l.RateLimit.Spec.Rules {
+				lr := LimitsRule{Meter: rule.Meter, Strategy: rule.Strategy, Amount: rule.Amount, Window: int64(rule.Window.Duration() / time.Second)}
+				if rl.PerLane {
+					row.Rules = append(row.Rules, lr)
+					continue
+				}
 				rd := readings[at+j]
-				row.Rules = append(row.Rules, LimitsRule{
-					Meter: rule.Meter, Strategy: rule.Strategy, Amount: rule.Amount, Window: int64(rule.Window.Duration() / time.Second),
-					Used: rd.Used, Remaining: rd.Remaining(),
-				})
+				used, left := rd.Used, rd.Remaining()
+				lr.Used, lr.Remaining = &used, &left
+				row.Rules = append(row.Rules, lr)
 				pick.offer(rd, func() LimitsTightest {
 					return LimitsTightest{AccountID: r.Rung.Account.Meta.ID, Kind: "rateLimit", ID: row.RateLimitID, Remaining: float64(rd.Remaining()),
 						Label: strconv.FormatInt(rd.Remaining(), 10) + " " + meterNoun(rule.Meter) + " left: " + kind + " " + row.Name}
@@ -230,8 +240,7 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 			rung.RateLimits = append(rung.RateLimits, row)
 		}
 		for _, b := range r.Budgets {
-			rd, spec := readings[at], b.Link.Budget.Spec
-			at++
+			spec := b.Link.Budget.Spec
 			period, mode := spec.Period, spec.Mode
 			if period == "" {
 				period = budget.DefaultPeriod
@@ -240,9 +249,16 @@ func laneLimits(ctx context.Context, d Deps, v *engine.View, acc *account.Accoun
 				mode = budget.DefaultMode
 			}
 			row := LimitsBudget{
-				BudgetID: b.Link.Budget.Meta.ID, Name: b.Link.Budget.Meta.Name, Shared: b.Link.Shared,
-				AmountUSD: spec.AmountUSD, Period: period, Mode: mode, SpentUSD: usdString(rd.Used), RemainingUSD: usdString(rd.Remaining()),
+				BudgetID: b.Link.Budget.Meta.ID, Name: b.Link.Budget.Meta.Name, Shared: b.Link.Shared, PerLane: b.PerLane,
+				AmountUSD: spec.AmountUSD, Period: period, Mode: mode,
 			}
+			if b.PerLane {
+				rung.Budgets = append(rung.Budgets, row)
+				continue
+			}
+			rd := readings[at]
+			at++
+			row.SpentUSD, row.RemainingUSD = usdString(rd.Used), usdString(rd.Remaining())
 			rung.Budgets = append(rung.Budgets, row)
 			if mode == budget.ModeAlert {
 				continue
