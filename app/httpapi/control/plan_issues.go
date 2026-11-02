@@ -13,6 +13,11 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
+// planIssueAuthorize is intentionally absent: "plan-issues" is not in the role
+// vocabulary (app/role/role.go), so a per-kind RBAC gate would block every
+// non-wildcard principal. Authentication is enforced by the protect middleware;
+// visibility is enforced row-by-row inside planIssues.
+
 // PlanIssueRef is a related object implicated in one plan issue.
 type PlanIssueRef struct {
 	Kind string `json:"kind" doc:"Kind of the referenced object (e.g. policy, host)."`
@@ -48,11 +53,8 @@ func registerPlanIssues(api huma.API, d Deps, protect huma.Middlewares) {
 		Description: "Returns every issue the plan engine has recorded for relay objects (keys, policies, bindings, …) that the caller may see, sorted by kind, name and code. Errors mean the object cannot serve; warnings mean it serves but something is likely wrong. Filter by kind, or by kind and id to narrow to one object.",
 		Tags:        []string{"catalog"},
 		Middlewares: protect,
-		Errors:      []int{401, 403, 500},
+		Errors:      []int{401, 500},
 	}, func(ctx context.Context, in *planIssuesInput) (*planIssuesOutput, error) {
-		if err := d.Authz.Authorize(ctx, "plan-issues.list", authz.Resource{Kind: "plan-issues"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		if d.PlanView == nil {
 			return &planIssuesOutput{Body: []PlanIssue{}}, nil
 		}

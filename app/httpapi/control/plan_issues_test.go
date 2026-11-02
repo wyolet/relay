@@ -302,6 +302,73 @@ func TestIssueVisible_DerivedKind(t *testing.T) {
 	}
 }
 
+// twoOrphanKeysView returns a view with two orphan keys owned by two different
+// users; each key's AccountID points to a non-existent account.
+func twoOrphanKeysView(t *testing.T) (func() *engine.View, *key.Key, *key.Key) {
+	t.Helper()
+	makeKey := func(name string) *key.Key {
+		uid := meta.NewID()
+		return &key.Key{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerUser, ID: uid}},
+			Spec: key.Spec{
+				Principal: key.Principal{Kind: key.PrincipalUser, ID: uid},
+				AccountID: meta.NewID(),
+				KeyHash:   apikey.Hash(name),
+			},
+		}
+	}
+	k1, k2 := makeKey("orphan-a"), makeKey("orphan-b")
+	w := &plantest.World{}
+	w.Keys = append(w.Keys, k1, k2)
+	plans := w.Load(t)
+	return plans.Engine.View, k1, k2
+}
+
+// TestPlanIssues_ScopedCallerSeesExactly checks that under a scoping authorizer a
+// non-admin caller sees issues for the rows it may read and not for rows it may not.
+// This confirms the endpoint is accessible to all authenticated callers (the old
+// Authorize gate used a non-vocabulary kind and would 403 non-wildcard RBAC
+// principals before per-row filtering could run).
+func TestPlanIssues_ScopedCallerSeesExactly(t *testing.T) {
+	viewFunc, k1, k2 := twoOrphanKeysView(t)
+
+	// The scoper allows k1's owner but hides k2's owner.
+	d := mountDeps(t)
+	d.PlanView = viewFunc
+	d.Authz = scopingAuthz{hiddenOwner: k2.Meta.Owner}
+	r := chi.NewRouter()
+	Mount(r, d)
+
+	req := httptest.NewRequest(http.MethodGet, "/plan-issues", nil)
+	req.Header.Set("Authorization", "Bearer "+d.AdminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /plan-issues = %d: %s", w.Code, w.Body)
+	}
+	var items []PlanIssue
+	if err := json.NewDecoder(w.Body).Decode(&items); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	seenK1, seenK2 := false, false
+	for _, it := range items {
+		if it.ID == k1.Meta.ID {
+			seenK1 = true
+		}
+		if it.ID == k2.Meta.ID {
+			seenK2 = true
+		}
+	}
+	if !seenK1 {
+		t.Errorf("scoped caller did not see issue for visible key %s", k1.Meta.ID)
+	}
+	if seenK2 {
+		t.Errorf("scoped caller saw issue for hidden key %s", k2.Meta.ID)
+	}
+}
+
 // TestPlanIssues_VisibilityScope checks that a caller whose authorizer hides a
 // specific owner does not see issues on that owner's rows. Because the test
 // authorizer is a Scoper (like RELAY_AUTHZ=rbac), owner-scope filtering applies.
