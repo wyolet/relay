@@ -18,6 +18,7 @@ func TestForwardHeaders_StripsRelayCredentialsAndControlHeaders(t *testing.T) {
 	in.Set("X-WR-API-Key", "relay-secret")         // relay-internal
 	in.Set("X-WR-Upstream-Host", "openai")         // relay-internal
 	in.Set("X-WR-Proxy-Mode", "Proxy")             // relay-internal
+	in.Set("X-WR-Account", "acme-ml")              // relay-internal lane switch
 	in.Set("Cookie", "relay_session=abc")          // session cookie
 	in.Set("Content-Type", "application/json")     // benign — must pass
 	in.Set("X-Custom-Caller-Header", "keep-me")    // benign — must pass
@@ -26,7 +27,7 @@ func TestForwardHeaders_StripsRelayCredentialsAndControlHeaders(t *testing.T) {
 
 	for _, leaked := range []string{
 		"Authorization", "X-Api-Key", "X-WR-API-Key", "X-WR-Upstream-Host",
-		"X-WR-Proxy-Mode", "Cookie",
+		"X-WR-Proxy-Mode", "X-WR-Account", "Cookie",
 	} {
 		if v := out.Get(leaked); v != "" {
 			t.Errorf("header %q leaked to upstream: %q", leaked, v)

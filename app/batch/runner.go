@@ -52,7 +52,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	if attr.PrincipalKind == string(key.PrincipalUser) {
 		userID = attr.PrincipalID
 	}
-	p, err := rn.Auth.Recheck(relayKeyHash, userID, attr.ProjectID, tok.JTI, tok.Version, tok.Expires, time.Now())
+	p, err := rn.Auth.Recheck(relayKeyHash, userID, attr.ProjectID, tok.JTI, tok.Version, tok.Expires, attr.LaneID, time.Now())
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: %v", ErrCredentialInvalid, err)
 	}

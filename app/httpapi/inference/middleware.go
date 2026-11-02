@@ -19,6 +19,8 @@ type requestState struct {
 	snap      *appcatalog.Snapshot
 	// snapSet tells a pinned nil snapshot from none.
 	snapSet bool
+	// lane is the account the request asked to run in (LaneMiddleware); empty runs it in the credential's default.
+	lane string
 }
 
 type ctxStateT struct{}
@@ -132,7 +134,7 @@ func PrincipalMiddleware(a *Auth) func(http.Handler) http.Handler {
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			p, k, ok := a.authenticate(w, cls.Key)
+			p, k, ok := a.authenticate(w, cls.Key, laneFrom(r.Context()))
 			if !ok {
 				return
 			}
@@ -156,7 +158,7 @@ func AuthenticateMiddleware(a *Auth) func(http.Handler) http.Handler {
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			p, k, ok := a.authenticate(w, cls.Key)
+			p, k, ok := a.authenticate(w, cls.Key, laneFrom(r.Context()))
 			if !ok {
 				return
 			}
@@ -176,18 +178,18 @@ type Auth struct {
 // PlanSource is where the request path loads the published plans; *plan.Holder implements it.
 type PlanSource interface{ Load() *plan.Root }
 
-// authenticate resolves a bearer, a key or a relay-minted token, to its principal. Reports false after writing the response: 401 for a bad credential, 503 before the first plans are published.
-func (a *Auth) authenticate(w http.ResponseWriter, bearer string) (*Principal, *key.Key, bool) {
+// authenticate resolves a bearer, a key or a relay-minted token, to its principal acting in lane (an account id or name; empty for the credential's default). Reports false after writing the response: 401 for a bad credential, 403 for a lane the credential may not use, 503 before the first plans are published.
+func (a *Auth) authenticate(w http.ResponseWriter, bearer, lane string) (*Principal, *key.Key, bool) {
 	root := a.root()
 	if root == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
 		return nil, nil, false
 	}
 	if looksLikeToken(bearer) {
-		p, ok := tokenPrincipal(w, a, root, bearer)
+		p, ok := tokenPrincipal(w, a, root, bearer, lane)
 		return p, nil, ok
 	}
-	return keyPrincipal(w, root, bearer)
+	return keyPrincipal(w, root, bearer, lane)
 }
 
 func (a *Auth) root() *plan.Root {

@@ -104,8 +104,8 @@ func wsReadLimit(maxBody int64) int64 {
 	return maxBody + wsFrameEnvelopeBytes
 }
 
-// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry, the revoked set and the project it acts in. The error says why it no longer authenticates; the caller ladder's own refusal (a disabled team among them) is the caller's to check.
-func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tokenExp int64, now time.Time) (*Principal, error) {
+// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry, the revoked set and the project it acts in. laneID is the account the submission switched into, empty for the credential's default. The error says why it no longer authenticates; the caller ladder's own refusal (a disabled team among them) is the caller's to check.
+func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tokenExp int64, laneID string, now time.Time) (*Principal, error) {
 	root := a.root()
 	if root == nil {
 		return nil, errors.New("plans not loaded")
@@ -115,10 +115,14 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 		if kp == nil {
 			return nil, errors.New("api key no longer valid")
 		}
-		return principalOf(kp, keyHash), nil
+		p, refused := keyPrincipalIn(root, kp, keyHash, laneID)
+		if refused != nil {
+			return nil, refused
+		}
+		return p, nil
 	}
 	up := root.Users.Lookup(userID)
-	cp, refused := root.MemberLane(userID, projectID)
+	cp, refused := root.TokenLane(userID, projectID, laneID)
 	switch {
 	case tokenExp > 0 && tokenExp <= now.Unix():
 		return nil, errors.New("token expired")
@@ -132,12 +136,12 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 		return &Principal{
 			UserID: userID, ProjectID: cp.Project().ID(), TeamID: cp.Team().ID(),
 			CredentialKind: CredentialToken, CredentialID: jti, TokenExp: tokenExp, TokenVer: tokenVer,
-			Caller: cp,
+			Caller: cp, SwitchedLaneID: laneID,
 		}, nil
 	}
 }
 
-// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to. Reports false after writing the response.
+// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to, each in the lane the upgrade switched into. Reports false after writing the response.
 func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, bool) {
 	root := a.root()
 	if root == nil {
@@ -146,12 +150,17 @@ func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, 
 	}
 	now := time.Now()
 	if p.CredentialKind == CredentialToken {
-		return tokenClaimsPrincipal(w, a, root, p.claims, p.claimsTyp, now)
+		return tokenClaimsPrincipal(w, a, root, p.claims, p.claimsTyp, p.SwitchedLaneID, now)
 	}
 	kp := root.Keys.Lookup(p.KeyHash, now)
 	if kp == nil {
 		writeAuthErr(w, "invalid api key")
 		return nil, false
 	}
-	return principalOf(kp, p.KeyHash), true
+	fp, refused := keyPrincipalIn(root, kp, p.KeyHash, p.SwitchedLaneID)
+	if refused != nil {
+		writeForbidden(w, refused.Code, refused.Error())
+		return nil, false
+	}
+	return fp, true
 }

@@ -1,12 +1,14 @@
 package inference
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/metrics"
 )
@@ -23,13 +25,14 @@ var authRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 
 func init() { metrics.Register(authRejectedTotal) }
 
-// writeForbidden reports a caller that authenticated but may not proceed.
+// writeForbidden reports a caller that authenticated but may not proceed. The message may quote the account the caller asked for, so it is encoded, never spliced.
 func writeForbidden(w http.ResponseWriter, code, msg string) {
 	authRejectedTotal.WithLabelValues(code).Inc()
 	slog.Debug("inference: auth rejected", "status", 403, "code", code, "msg", msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"` + code + `","message":"` + msg + `"}}`))
+	body, _ := json.Marshal(httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Message: msg}})
+	_, _ = w.Write(body)
 }
 
 // writeAuthErr rejects an unauthenticated caller. msg doubles as the metric

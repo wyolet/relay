@@ -62,7 +62,7 @@ func FuzzTokenPrincipal(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, bearer string) {
 		w := httptest.NewRecorder()
-		p, ok := tokenPrincipal(w, st.auth, root, bearer)
+		p, ok := tokenPrincipal(w, st.auth, root, bearer, "")
 		if !ok {
 			if p != nil {
 				t.Fatalf("rejected bearer %q still returned a principal", bearer)

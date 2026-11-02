@@ -56,6 +56,7 @@ func startInference(cfg *config.Config, st *storagemod.Storage, auth *inference.
 		RequestStreamUsage: cfg.StreamUsage,
 		MaxRequestBytes:    maxBody,
 		ProxyBodyIdle:      cfg.ProxyBodyIdle,
+		AccountDomain:      cfg.AccountDomain,
 		TrustEventTime:     cfg.DevTrustEventTime,
 	})
 
