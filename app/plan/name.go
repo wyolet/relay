@@ -8,6 +8,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -71,9 +72,112 @@ func NameOf(v *engine.View, ref engine.Ref) string {
 	return ""
 }
 
+// OwnerOf returns the owner of the input object ref names in v. Users are treated as system-owned for visibility purposes; overlays and derived kinds return system owner.
+func OwnerOf(v *engine.View, ref engine.Ref) meta.Owner {
+	sys := meta.Owner{Kind: meta.OwnerSystem}
+	switch ref.Kind {
+	case KindProvider:
+		return metaOwner(engine.Get[provider.Provider](v, ref.ID), func(r *provider.Provider) meta.Owner { return r.Meta.Owner }, sys)
+	case KindHost:
+		return metaOwner(engine.Get[host.Host](v, ref.ID), func(r *host.Host) meta.Owner { return r.Meta.Owner }, sys)
+	case KindModel:
+		return metaOwner(engine.Get[model.Model](v, ref.ID), func(r *model.Model) meta.Owner { return r.Meta.Owner }, sys)
+	case KindBinding:
+		return metaOwner(engine.Get[binding.Binding](v, ref.ID), func(r *binding.Binding) meta.Owner { return r.Meta.Owner }, sys)
+	case KindPricing:
+		return metaOwner(engine.Get[pricing.Pricing](v, ref.ID), func(r *pricing.Pricing) meta.Owner { return r.Meta.Owner }, sys)
+	case KindPolicy:
+		return metaOwner(engine.Get[policy.Policy](v, ref.ID), func(r *policy.Policy) meta.Owner { return r.Meta.Owner }, sys)
+	case KindPolicyBinding:
+		return metaOwner(engine.Get[policybinding.PolicyBinding](v, ref.ID), func(r *policybinding.PolicyBinding) meta.Owner { return r.Meta.Owner }, sys)
+	case KindRateLimit:
+		return metaOwner(engine.Get[ratelimit.RateLimit](v, ref.ID), func(r *ratelimit.RateLimit) meta.Owner { return r.Meta.Owner }, sys)
+	case KindBudget:
+		return metaOwner(engine.Get[budget.Budget](v, ref.ID), func(r *budget.Budget) meta.Owner { return r.Meta.Owner }, sys)
+	case KindPool:
+		return metaOwner(engine.Get[pool.Pool](v, ref.ID), func(r *pool.Pool) meta.Owner { return r.Meta.Owner }, sys)
+	case KindAccount:
+		return metaOwner(engine.Get[account.Account](v, ref.ID), func(r *account.Account) meta.Owner { return r.Meta.Owner }, sys)
+	case KindCredential:
+		return metaOwner(engine.Get[hostkey.HostKey](v, ref.ID), func(r *hostkey.HostKey) meta.Owner { return r.Meta.Owner }, sys)
+	case KindTeam:
+		return metaOwner(engine.Get[team.Team](v, ref.ID), func(r *team.Team) meta.Owner { return r.Meta.Owner }, sys)
+	case KindProject:
+		return metaOwner(engine.Get[project.Project](v, ref.ID), func(r *project.Project) meta.Owner { return r.Meta.Owner }, sys)
+	case KindServiceAccount:
+		return metaOwner(engine.Get[serviceaccount.ServiceAccount](v, ref.ID), func(r *serviceaccount.ServiceAccount) meta.Owner { return r.Meta.Owner }, sys)
+	case KindUser:
+		// Users are identity rows without a tenant owner; the "user" singular treats them as system-owned.
+		return sys
+	case KindKey:
+		return metaOwner(engine.Get[key.Key](v, ref.ID), func(r *key.Key) meta.Owner { return r.Meta.Owner }, sys)
+	case KindRole:
+		return metaOwner(engine.Get[role.Role](v, ref.ID), func(r *role.Role) meta.Owner { return r.Meta.Owner }, sys)
+	case KindRoleBinding:
+		return metaOwner(engine.Get[rolebinding.RoleBinding](v, ref.ID), func(r *rolebinding.RoleBinding) meta.Owner { return r.Meta.Owner }, sys)
+	case KindGroup:
+		return metaOwner(engine.Get[group.Group](v, ref.ID), func(r *group.Group) meta.Owner { return r.Meta.Owner }, sys)
+	}
+	return sys
+}
+
+// KindSingular maps an engine kind to the control API's singular resource name used in authz decisions. Empty when the kind has no control API representation (derived kinds).
+func KindSingular(kind engine.Kind) string {
+	switch kind {
+	case KindProvider:
+		return "provider"
+	case KindHost:
+		return "host"
+	case KindModel:
+		return "model"
+	case KindBinding:
+		return "host-binding"
+	case KindPricing:
+		return "pricing"
+	case KindPolicy:
+		return "policy"
+	case KindPolicyBinding:
+		return "policy-binding"
+	case KindRateLimit:
+		return "rate-limit"
+	case KindBudget:
+		return "budget"
+	case KindPool:
+		return "pool"
+	case KindAccount:
+		return "account"
+	case KindCredential:
+		return "host-key"
+	case KindTeam:
+		return "team"
+	case KindProject:
+		return "project"
+	case KindServiceAccount:
+		return "service-account"
+	case KindUser:
+		return "user"
+	case KindKey:
+		return "key"
+	case KindRole:
+		return "role"
+	case KindRoleBinding:
+		return "role-binding"
+	case KindGroup:
+		return "group"
+	}
+	return ""
+}
+
 func metaName[T any](r *T, name func(*T) string) string {
 	if r == nil {
 		return ""
 	}
 	return name(r)
+}
+
+func metaOwner[T any](r *T, owner func(*T) meta.Owner, fallback meta.Owner) meta.Owner {
+	if r == nil {
+		return fallback
+	}
+	return owner(r)
 }

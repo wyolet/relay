@@ -15,10 +15,10 @@ import (
 // PlanIssueRef is a related object implicated in one plan issue.
 type PlanIssueRef struct {
 	Kind string `json:"kind" doc:"Kind of the referenced object (e.g. policy, host)."`
-	ID   string `json:"id"   doc:"Id (UUIDv7) of the referenced object."`
+	ID   string `json:"id"   doc:"Id (UUIDv7) of the referenced object; empty when the caller may not see the object."`
 }
 
-// PlanIssue is one diagnostic produced by the plan engine for a catalog object.
+// PlanIssue is one diagnostic produced by the plan engine for a relay object.
 type PlanIssue struct {
 	Code     string         `json:"code"     doc:"Stable snake_case diagnostic identifier, such as ref_missing or host_mismatch."`
 	Message  string         `json:"message"  doc:"Human-readable explanation of what is wrong."`
@@ -44,7 +44,7 @@ func registerPlanIssues(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      "GET",
 		Path:        "/plan-issues",
 		Summary:     "List plan-engine diagnostics",
-		Description: "Returns every issue the plan engine has recorded for catalog objects, sorted by kind, name and code. Errors mean an object cannot serve; warnings mean it serves but something is likely wrong. Filter by kind, or by kind and id to narrow to one object.",
+		Description: "Returns every issue the plan engine has recorded for relay objects (keys, policies, bindings, …) that the caller may see, sorted by kind, name and code. Errors mean the object cannot serve; warnings mean it serves but something is likely wrong. Filter by kind, or by kind and id to narrow to one object.",
 		Tags:        []string{"catalog"},
 		Middlewares: protect,
 		Errors:      []int{401, 403, 500},
@@ -59,12 +59,14 @@ func registerPlanIssues(api huma.API, d Deps, protect huma.Middlewares) {
 		if v == nil {
 			return &planIssuesOutput{Body: []PlanIssue{}}, nil
 		}
-		return &planIssuesOutput{Body: planIssues(v, in.Kind, in.ID)}, nil
+		return &planIssuesOutput{Body: planIssues(ctx, d.Authz, v, in.Kind, in.ID)}, nil
 	})
 }
 
-// planIssues projects v's issues for the API. An id without a kind is ambiguous across kinds, so it filters nothing.
-func planIssues(v *engine.View, kind, id string) []PlanIssue {
+// planIssues projects v's issues into the API shape, filtering to rows the
+// caller may read. An id without a kind is ambiguous across kinds and is
+// ignored. A ref the caller may not see keeps its kind but has its id cleared.
+func planIssues(ctx context.Context, az authz.Authorizer, v *engine.View, kind, id string) []PlanIssue {
 	var raw []engine.Issue
 	if kind != "" && id != "" {
 		raw = v.Issues(engine.Ref{Kind: engine.Kind(kind), ID: id})
@@ -76,9 +78,20 @@ func planIssues(v *engine.View, kind, id string) []PlanIssue {
 	}
 	out := make([]PlanIssue, 0, len(raw))
 	for _, iss := range raw {
+		singular := plan.KindSingular(iss.Source.Kind)
+		owner := plan.OwnerOf(v, iss.Source)
+		if !visibleTo(ctx, az, singular, iss.Source.ID, owner) {
+			continue
+		}
 		refs := []PlanIssueRef{}
 		if iss.Target.Kind != "" {
-			refs = append(refs, PlanIssueRef{Kind: string(iss.Target.Kind), ID: iss.Target.ID})
+			refID := iss.Target.ID
+			targetSingular := plan.KindSingular(iss.Target.Kind)
+			targetOwner := plan.OwnerOf(v, iss.Target)
+			if !visibleTo(ctx, az, targetSingular, iss.Target.ID, targetOwner) {
+				refID = ""
+			}
+			refs = append(refs, PlanIssueRef{Kind: string(iss.Target.Kind), ID: refID})
 		}
 		out = append(out, PlanIssue{
 			Code:     iss.Code,
