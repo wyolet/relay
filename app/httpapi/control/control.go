@@ -137,8 +137,8 @@ type Deps struct {
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
 
-	// PlanView returns the plan engine's current view for plan-issue
-	// diagnostics. nil answers GET /plan-issues with an empty list.
+	// PlanView returns the plan engine's current view. Used by GET /plan-issues
+	// (nil → 200 empty list) and by caller-account reads (nil → 503).
 	PlanView func() *engine.View
 
 	// PublicURL is the deployment's externally reachable control-plane

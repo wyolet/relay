@@ -31,8 +31,8 @@ func emptyPlanView(t *testing.T) func() *engine.View {
 	return e.View
 }
 
-// orphanKeyView returns a view with one key whose user principal does not
-// exist, which causes the engine to attach a ref_missing issue to the key.
+// orphanKeyView returns a view with one key whose AccountID points to no
+// existing account, causing the engine to attach a ref_missing issue to the key.
 func orphanKeyView(t *testing.T) (func() *engine.View, *key.Key) {
 	t.Helper()
 	userID := meta.NewID()
@@ -40,6 +40,7 @@ func orphanKeyView(t *testing.T) (func() *engine.View, *key.Key) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "orphan-key", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
+			AccountID: meta.NewID(), // points to no account → ref_missing
 			KeyHash:   apikey.Hash("s3cr3t"),
 		},
 	}
@@ -169,16 +170,16 @@ func TestPlanIssues_RealIssue(t *testing.T) {
 	if got.Message == "" {
 		t.Error("message is empty")
 	}
-	// Refs: the missing principal ref.
+	// Refs: the missing account ref.
 	if len(got.Refs) == 0 {
-		t.Error("refs is empty, want the missing principal ref")
+		t.Error("refs is empty, want the missing account ref")
 	} else {
 		ref := got.Refs[0]
 		if ref.Kind == "" {
 			t.Error("ref.kind is empty")
 		}
-		if ref.ID != k.Spec.Principal.ID {
-			t.Errorf("ref.id = %q, want %q", ref.ID, k.Spec.Principal.ID)
+		if ref.ID != k.Spec.AccountID {
+			t.Errorf("ref.id = %q, want %q", ref.ID, k.Spec.AccountID)
 		}
 	}
 }
