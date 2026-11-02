@@ -44,6 +44,30 @@ CROSS JOIN LATERAL (SELECT CASE a.kind
         WHEN 'team' THEN a.team_id WHEN 'project' THEN a.project_id WHEN 'service' THEN a.holder_sa_id
         WHEN 'personal' THEN a.holder_user_id WHEN 'member' THEN a.holder_user_id ELSE a.id END AS id) m;
 
+-- The older schema holds a user once per owner scope, and several accounts of one user (personal and member, or members fanned out from one binding) map back to that user. The oldest binding keeps the user; the rest are dropped, listed.
+CREATE TEMP TABLE duplicate_users AS
+SELECT binding_id, position, binding, subject_id, keeper FROM (
+    SELECT s.binding_id, s.position, b.name AS binding, s.subject_id,
+           first_value(b.name) OVER w AS keeper, row_number() OVER w AS n
+    FROM policy_binding_subjects s JOIN policy_bindings b ON b.id = s.binding_id
+    WHERE s.kind = 'user'
+    WINDOW w AS (PARTITION BY s.subject_id, s.owner_scope ORDER BY b.created_at, b.id, s.position)
+) ranked WHERE n > 1;
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN SELECT * FROM duplicate_users ORDER BY binding, position LOOP
+        IF r.binding = r.keeper THEN
+            RAISE NOTICE '000039 down: binding "%" bound several accounts of user %; it binds the user once', r.binding, r.subject_id;
+        ELSE
+            RAISE NOTICE '000039 down: binding "%" no longer binds user % in the older schema; binding "%" keeps the user', r.binding, r.subject_id, r.keeper;
+        END IF;
+    END LOOP;
+END $$;
+DELETE FROM policy_binding_subjects s USING duplicate_users d WHERE s.binding_id = d.binding_id AND s.position = d.position;
+DROP TABLE duplicate_users;
+
 CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_binding ON policy_binding_subjects (kind, subject_id) WHERE kind <> 'user';
 CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_subjects_one_user_binding ON policy_binding_subjects (subject_id, owner_scope) WHERE kind = 'user';
 CREATE TRIGGER policy_binding_subjects_notify AFTER INSERT OR UPDATE OR DELETE ON policy_binding_subjects
