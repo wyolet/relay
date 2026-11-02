@@ -59,7 +59,7 @@ func (c Checker) personalPolicyBindableIn(ctx context.Context, p *policy.Policy,
 	return badRequest("policy %q is owned by %s; a binding owned by %s cannot use it: a personal policy is bound by its owner, or by a team or project where its owner may manage policy bindings", p.Meta.Name, ownerText(owner), ownerText(scope))
 }
 
-// linksUsableIn refuses a policy linking a pool, or a pool holding a credential, that scope may not use: binding the policy would hand the scope's accounts another scope's credentials. A missing link is left to the plan, where it narrows.
+// linksUsableIn refuses a policy linking a pool, or a pool holding a credential or drawing on an account, that scope may not use: binding the policy would hand the scope's accounts another scope's credentials. A missing link is left to the plan, where it narrows.
 func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta.Owner) error {
 	if c.Rows.Pool == nil {
 		return nil
@@ -72,6 +72,14 @@ func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta
 		name := c.linkName(ctx, "pool", pl.Meta)
 		if !c.containsScope(ctx, pl.Meta.Owner, scope) {
 			return badRequest("policy %q links pool %s owned by %s, which a binding owned by %s cannot use", p.Meta.Name, name, ownerText(pl.Meta.Owner), ownerText(scope))
+		}
+		if c.Rows.Account != nil {
+			for _, aid := range pl.Spec.AccountIDs {
+				a := c.Rows.Account(ctx, aid)
+				if a != nil && !c.containsScope(ctx, a.Meta.Owner, scope) {
+					return badRequest("policy %q links pool %s drawing on account %s owned by %s, which a binding owned by %s cannot use", p.Meta.Name, name, c.linkName(ctx, "account", a.Meta), ownerText(a.Meta.Owner), ownerText(scope))
+				}
+			}
 		}
 		if c.Rows.HostKey == nil {
 			continue

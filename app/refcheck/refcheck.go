@@ -385,12 +385,18 @@ func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 	return c.budgetRefs(ctx, p.BudgetIDs(), p.Meta.Owner)
 }
 
-// Account checks the host a provider account is held at. Caller accounts are made with their team, project, user, service account or membership, never written as new rows.
+// Account checks the host a provider account is held at and, for a shared account, its real account and receiver. Caller accounts are made with their team, project, user, service account or membership, never written as new rows.
 func (c Checker) Account(ctx context.Context, a *account.Account) error {
 	if !a.IsProvider() {
 		return nil
 	}
-	return c.hostRef(ctx, a.Spec.HostID)
+	if err := c.hostRef(ctx, a.Spec.HostID); err != nil {
+		return err
+	}
+	if a.IsShared() {
+		return c.shareRef(ctx, a)
+	}
+	return nil
 }
 
 // KeyAccount checks the key's default lane against account.TakesKeysOf, and refuses a closed one. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use.
@@ -445,9 +451,12 @@ func (c Checker) AccountPayloadLogging(ctx context.Context, existing, incoming *
 // CodeAccountNotHeld is the error code of a key naming an account it may not run in.
 const CodeAccountNotHeld = "account_not_held"
 
-// Pool checks the pool's host and requires every key in it to authenticate to that host.
+// Pool checks the pool's host and requires every key and account in it to be at that host.
 func (c Checker) Pool(ctx context.Context, p *pool.Pool) error {
 	if err := c.hostRef(ctx, p.Spec.HostID); err != nil {
+		return err
+	}
+	if err := c.accountRefs(ctx, p.Spec.AccountIDs, p.Meta.Owner, p.Spec.HostID); err != nil {
 		return err
 	}
 	return c.credentialRefs(ctx, p.Spec.CredentialIDs, p.Meta.Owner, p.Spec.HostID)
