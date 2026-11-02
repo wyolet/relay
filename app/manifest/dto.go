@@ -238,14 +238,16 @@ type KeyDTO struct {
 type KeySpec struct {
 	// Principal names the subject by kind + *name* (wire form): a service
 	// account slug or a username.
-	Principal             PrincipalDTO `json:"principal" yaml:"principal"`
-	KeyHash               string       `json:"keyHash"                     yaml:"keyHash"`
-	Prefix                string       `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
-	ExpiresAt             *string      `json:"expiresAt,omitempty"         yaml:"expiresAt,omitempty"`
-	RevokedAt             *string      `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
-	Enabled               *bool        `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
-	PassthroughAllowed    bool         `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
-	PayloadLoggingEnabled bool         `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+	Principal PrincipalDTO `json:"principal" yaml:"principal"`
+	// Account is the *name* of the key's default lane; omitted takes the principal's own account.
+	Account               string  `json:"account,omitempty"           yaml:"account,omitempty"`
+	KeyHash               string  `json:"keyHash"                     yaml:"keyHash"`
+	Prefix                string  `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
+	ExpiresAt             *string `json:"expiresAt,omitempty"         yaml:"expiresAt,omitempty"`
+	RevokedAt             *string `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
+	Enabled               *bool   `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
+	PassthroughAllowed    bool    `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
+	PayloadLoggingEnabled bool    `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
 // PrincipalDTO is the wire form of a Key principal.
@@ -401,9 +403,9 @@ type RoleBindingSpec struct {
 	Enabled  *bool        `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
-// PolicyBindingDTO is the wire form of a PolicyBinding. Spec.Project and
-// Spec.Policy are *names*; a binding with no project names its team or
-// system owner in metadata.owner.
+// PolicyBindingDTO is the wire form of a PolicyBinding. Spec.Policy and
+// Spec.Accounts are *names*; metadata.owner names the system, team, project
+// or user owning it.
 type PolicyBindingDTO struct {
 	APIVersion string            `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string            `json:"kind"       yaml:"kind"`
@@ -412,15 +414,7 @@ type PolicyBindingDTO struct {
 }
 
 type PolicyBindingSpec struct {
-	Project  string             `json:"project,omitempty"  yaml:"project,omitempty"`
-	Policy   string             `json:"policy"             yaml:"policy"`
-	Subjects []PolicySubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
-	Enabled  *bool              `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
-}
-
-// PolicySubjectDTO is a policy-binding subject, named: a principal, a
-// tenancy scope, or an upstream rung (host, account, credential = host key).
-type PolicySubjectDTO struct {
-	Kind string `json:"kind" yaml:"kind" enum:"user,serviceaccount,host,account,credential,team,project"`
-	Name string `json:"name" yaml:"name"`
+	Policy   string   `json:"policy"            yaml:"policy"`
+	Accounts []string `json:"accounts"          yaml:"accounts" minItems:"1"`
+	Enabled  *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }

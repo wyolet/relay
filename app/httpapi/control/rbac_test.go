@@ -9,7 +9,6 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 )
@@ -109,23 +108,5 @@ func TestGuardRoleBindingStampsOwner(t *testing.T) {
 	}
 	if err := b.Validate(); err != nil {
 		t.Fatalf("binding with its owner set does not validate: %v", err)
-	}
-}
-
-func TestGuardPolicyBindingStampsTheProjectOwner(t *testing.T) {
-	projectID := meta.NewID()
-	b := &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-search-everyone"},
-		Spec: policybinding.Spec{
-			ProjectID: projectID,
-			PolicyID:  meta.NewID(),
-			Subjects:  []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}},
-		},
-	}
-	if err := guardPolicyBinding(Deps{})(context.Background(), "create", nil, b); err != nil {
-		t.Fatalf("guard: %v", err)
-	}
-	if b.Meta.Owner != (meta.Owner{Kind: meta.OwnerProject, ID: projectID}) {
-		t.Errorf("owner = %+v, want the project", b.Meta.Owner)
 	}
 }

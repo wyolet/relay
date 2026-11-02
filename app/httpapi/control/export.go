@@ -275,7 +275,14 @@ func (e *exporter) documents(ctx context.Context) ([]manifest.Document, error) {
 					return manifest.Document{Budget: &dto}
 				})
 		case "accounts":
-			docs = appendKind(ctx, e, docs, plural, "account", e.rows.Accounts,
+			// Caller accounts follow the tenancy rows they stand for, so a bundle carries only provider accounts; bindings and keys still name caller accounts.
+			providers := make([]*account.Account, 0, len(e.rows.Accounts))
+			for _, a := range e.rows.Accounts {
+				if a.IsProvider() {
+					providers = append(providers, a)
+				}
+			}
+			docs = appendKind(ctx, e, docs, plural, "account", providers,
 				func(a *account.Account) *meta.Metadata { return &a.Meta },
 				func(a *account.Account) manifest.Document {
 					dto := manifest.FromAccount(a, e.rev)

@@ -29,8 +29,8 @@ func TestDeletedBudget_PolicyLosesOnlyThatCap(t *testing.T) {
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	b := o.w.Budget("10")
 	rl := o.w.RateLimit(plantest.Rule(ratelimit.MeterRequests, 10, time.Minute))
-	pol := o.w.Policy("capped", policy.Spec{Models: []string{"prov/m1"}, BudgetIDs: []string{b.Meta.ID}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
+	pol := o.w.Policy("capped", policy.Spec{Models: []string{"prov/m1"}, Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID}}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
+	o.w.BindPolicy(pol, o.saAcct())
 	plans := o.w.Load(t)
 	before := mustRoute(t, keyCaller(t, plans, o.saKey), "m1")
 	if countersOf(before, limits.KindBudget) != 1 || countersOf(before, limits.KindRule) != 1 {
@@ -45,7 +45,7 @@ func TestDeletedBudget_PolicyLosesOnlyThatCap(t *testing.T) {
 	if countersOf(after, limits.KindBudget) != 0 || countersOf(after, limits.KindRule) != 1 {
 		t.Fatalf("after: %d budget and %d rule counters, want 0 and 1", countersOf(after, limits.KindBudget), countersOf(after, limits.KindRule))
 	}
-	wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungPrincipal, pol.Meta.ID)
+	wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungLane, pol.Meta.ID)
 	if !hasIssue(plans.Engine.View(), engine.Ref{Kind: plan.KindPolicy, ID: pol.Meta.ID}, plan.IssueRefMissing) {
 		t.Error("the policy linking the deleted budget has no ref_missing issue")
 	}
@@ -57,8 +57,8 @@ func TestDeletedRateLimit_PolicyLosesOnlyThatCap(t *testing.T) {
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	b := o.w.Budget("10")
 	rl := o.w.RateLimit(plantest.Rule(ratelimit.MeterRequests, 10, time.Minute))
-	pol := o.w.Policy("capped", policy.Spec{BudgetIDs: []string{b.Meta.ID}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
+	pol := o.w.Policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID}}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
+	o.w.BindPolicy(pol, o.saAcct())
 	plans := o.w.Load(t)
 
 	if err := engine.Delete(plans.Engine, engine.Ref{Kind: plan.KindRateLimit, ID: rl.Meta.ID}); err != nil {
@@ -81,7 +81,7 @@ func poolLinkWorld() (*org, *policy.Policy, string) {
 	o.w.Credential(o.host, nil, ownedBy(meta.OwnerProject, o.proj.Meta.ID), "sk-project")
 	p := o.w.Pool(o.host, linked)
 	pol := o.w.Policy("pooled", policy.Spec{PoolIDs: []string{p.Meta.ID}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
+	o.w.BindPolicy(pol, o.saAcct())
 	return o, pol, p.Meta.ID
 }
 
@@ -117,38 +117,13 @@ func TestDeletedPool_NarrowsAfterReload(t *testing.T) {
 	}
 }
 
-// Deleting a directly linked credential narrows the policy to its other links; it never widens to ownership.
-func TestDeletedCredential_DirectLinkNarrows(t *testing.T) {
-	o := newOrg()
-	a := o.w.Credential(o.host, nil, plantest.System, "sk-a")
-	b := o.w.Credential(o.host, nil, plantest.System, "sk-b")
-	o.w.Credential(o.host, nil, plantest.System, "sk-unlinked")
-	o.w.Credential(o.host, nil, ownedBy(meta.OwnerProject, o.proj.Meta.ID), "sk-project")
-	pol := o.w.Policy("direct", policy.Spec{CredentialIDs: []string{a.Meta.ID, b.Meta.ID}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
-	plans := o.w.Load(t)
-
-	if err := engine.Delete(plans.Engine, engine.Ref{Kind: plan.KindCredential, ID: a.Meta.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if got := routeCredentials(mustRoute(t, keyCaller(t, plans, o.saKey), "m1")); !sameList(got, []string{b.Meta.Name}) {
-		t.Fatalf("after deleting one linked credential the route reaches %v, want only %s", got, b.Meta.Name)
-	}
-	if err := engine.Delete(plans.Engine, engine.Ref{Kind: plan.KindCredential, ID: b.Meta.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if r := keyCaller(t, plans, o.saKey).Routes.Get("m1"); r.Refused == nil {
-		t.Fatalf("after deleting every linked credential the route reaches %v, want a refusal", routeCredentials(r))
-	}
-}
-
 // Deleting a credential a pool holds narrows the pool; the policy keeps the pool's other credentials.
 func TestDeletedCredential_PoolNarrows(t *testing.T) {
 	o := newOrg()
 	a := o.w.Credential(o.host, nil, plantest.System, "sk-a")
 	b := o.w.Credential(o.host, nil, plantest.System, "sk-b")
 	p := o.w.Pool(o.host, a, b)
-	o.w.BindPolicy(o.w.Policy("pooled", policy.Spec{PoolIDs: []string{p.Meta.ID}}), saSubject(o.sa))
+	o.w.BindPolicy(o.w.Policy("pooled", policy.Spec{PoolIDs: []string{p.Meta.ID}}), o.saAcct())
 	plans := o.w.Load(t)
 
 	if err := engine.Delete(plans.Engine, engine.Ref{Kind: plan.KindCredential, ID: a.Meta.ID}); err != nil {

@@ -35,10 +35,10 @@ func applyQ[T any](t *testing.T, s filter.Schema[T], q string, items []*T) ([]*T
 func TestPolicyFilter(t *testing.T) {
 	on, off := true, false
 	items := []*policy.Policy{
-		{Meta: meta.Metadata{Name: "a"}, Spec: policy.Spec{Enabled: &on, PoolIDs: []string{"p1", "p2"}, PayloadLoggingEnabled: true,
+		{Meta: meta.Metadata{Name: "a"}, Spec: policy.Spec{Enabled: &on, PoolIDs: []string{"p1", "p2"},
 			RateLimits: []policy.RateLimitLink{{RateLimitID: "rl1"}}}},
-		{Meta: meta.Metadata{Name: "b"}, Spec: policy.Spec{Enabled: &off, PoolIDs: []string{"p3"}, BudgetIDs: []string{"b1"}}},
-		{Meta: meta.Metadata{Name: "c"}, Spec: policy.Spec{PoolIDs: []string{"p2"}, CredentialIDs: []string{"k1"}}}, // nil Enabled => enabled
+		{Meta: meta.Metadata{Name: "b"}, Spec: policy.Spec{Enabled: &off, PoolIDs: []string{"p3"}, Budgets: []policy.BudgetLink{{BudgetID: "b1"}}}},
+		{Meta: meta.Metadata{Name: "c"}, Spec: policy.Spec{PoolIDs: []string{"p2", "k1"}}}, // nil Enabled => enabled
 	}
 	got, total := applyQ(t, policyFilter, "enabled=true", items)
 	if total != 2 { // a (explicit) + c (nil=true)
@@ -48,14 +48,10 @@ func TestPolicyFilter(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("pool_id=p2 => %v, want a,c", names(got))
 	}
-	for q, want := range map[string]string{"credential_id=k1": "c", "rate_limit_id=rl1": "a", "budget_id=b1": "b"} {
+	for q, want := range map[string]string{"pool_id=k1": "c", "rate_limit_id=rl1": "a", "budget_id=b1": "b"} {
 		if got, _ := applyQ(t, policyFilter, q, items); len(got) != 1 || got[0].Meta.Name != want {
 			t.Fatalf("%s => %v, want [%s]", q, names(got), want)
 		}
-	}
-	got, _ = applyQ(t, policyFilter, "payload_logging=true", items)
-	if len(got) != 1 || got[0].Meta.Name != "a" {
-		t.Fatalf("payload_logging=true => %v, want [a]", names(got))
 	}
 	if _, err := policyFilter.Parse(url.Values{"bogus": {"1"}}); err == nil {
 		t.Fatal("unknown key should 400")

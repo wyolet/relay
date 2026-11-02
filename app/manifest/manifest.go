@@ -22,9 +22,9 @@ package manifest
 import "fmt"
 
 // APIVersion is the catalog schema version every relay-aware YAML declares.
-// v1alpha3 reshapes Policy (pools, credentials, rateLimits, budgets),
-// HostKey (account instead of a tier policy), Key (no policy) and
-// PolicyBinding (every subject kind), and adds Account, Pool and Budget.
+// v1alpha3 reshapes Policy (pools, rateLimits, budgets), HostKey (account
+// instead of a tier policy), Key (an account, no policy) and PolicyBinding
+// (accounts), and adds Account, Pool and Budget.
 const APIVersion = "relay.wyolet.dev/v1alpha3"
 
 // PreviousAPIVersion is still accepted for the kinds v1alpha3 left unchanged;

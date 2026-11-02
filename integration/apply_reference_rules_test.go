@@ -8,10 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
@@ -49,9 +51,16 @@ func newTenantPair(t *testing.T) tenantPair {
 		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "VICTIM_HK"}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "victim host key")
+	vpool := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "victim-pool", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}},
+		Spec: pool.Spec{HostID: hst.Meta.ID, CredentialIDs: []string{hk.Meta.ID}}}
+	mustUpsert(t, st.stores.Pool.Upsert(ctx, vpool), "victim pool")
 	vpol := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "victim-pol", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}},
-		Spec: policy.Spec{CredentialIDs: []string{hk.Meta.ID}}}
+		Spec: policy.Spec{PoolIDs: []string{vpool.Meta.ID}}}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, vpol), "victim policy")
+	// The caller's own project account, as relay keeps it, for a binding to name.
+	if _, err := st.stores.Account.EnsureManaged(ctx, account.ForProject(p.ownProj, "own-proj", "")); err != nil {
+		t.Fatalf("ensure the project account: %v", err)
+	}
 
 	p.callerID = st.seedLogin(t, "mallory", "pw-mallory")
 	st.bindRole(t, "own-admins", roles["team-admin"].Meta.ID, p.callerID, "team", ownTeam)
@@ -102,9 +111,9 @@ func TestIntegration_ApplyRefusesForeignReferences(t *testing.T) {
 	caller := p.st.login(t, "mallory", "pw-mallory")
 	header := "apiVersion: relay.wyolet.dev/v1alpha3\n"
 	cases := map[string]string{
-		"policy spending another project's host key": header + `kind: Policy
+		"policy spending another project's pool": header + `kind: Policy
 metadata: {name: stolen-keys, owner: {kind: project, name: own-proj}}
-spec: {credentials: [victim-hk]}
+spec: {pools: [victim-pool]}
 `,
 		"key acting as another project's service account": header + `kind: Key
 metadata: {name: stolen-sa, owner: {kind: project, name: own-proj}}
@@ -112,7 +121,7 @@ spec: {principal: {kind: serviceaccount, name: victim-sa}, keyHash: "` + sha256H
 `,
 		"service account bound to another project's policy": header + `kind: PolicyBinding
 metadata: {name: stolen-pol, owner: {kind: project, name: own-proj}}
-spec: {project: own-proj, policy: victim-pol, subjects: [{kind: project, name: own-proj}]}
+spec: {policy: victim-pol, accounts: [project-own-proj]}
 `,
 		"non-admin host key reading the relay's environment": header + `kind: HostKey
 metadata: {name: env-probe, owner: {kind: project, name: own-proj}}
@@ -140,7 +149,7 @@ spec: {hostId: shared-host, valueFrom: {kind: env, env: ACME_API_KEY}}
 	pols, _ := p.st.stores.Policy.List(ctx)
 	for _, pol := range pols {
 		if pol.Meta.Name == "stolen-keys" {
-			t.Fatal("policy spending another project's host key was written")
+			t.Fatal("policy spending another project's pool was written")
 		}
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
@@ -43,14 +45,14 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
 		Upsert: throughDirectory(b, converted((*serviceaccount.ServiceAccount).ToDirectory)), Delete: deleteThroughDirectory(b, "ServiceAccount"),
-		Check: refsFor(b, refcheck.Checker.ServiceAccount),
+		Check: b.checkServiceAccount(),
 	}); err != nil {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.KeyDTO, key.Key]{
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
-		Upsert: s.Key.Upsert, Delete: s.Key.Delete,
+		Upsert: b.upsertKey, Delete: s.Key.Delete,
 		Check:       refsFor(b, refcheck.Checker.Key),
 		Keep:        keepKeyServerFields,
 		CheckCreate: b.checkKeyCreate,
@@ -65,6 +67,22 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 // an update keeps it. The hash, prefix and principal are immutable, as the
 // control API's update keeps them: a document may omit them or repeat the
 // stored value, and is refused if it declares another.
+// checkServiceAccount refuses moving a stored service account to another project, as the control API does, then runs the reference checks.
+func (b *builder) checkServiceAccount() func(context.Context, *serviceaccount.ServiceAccount) error {
+	refs := refsFor(b, refcheck.Checker.ServiceAccount)
+	return func(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
+		for _, prev := range b.rows.ServiceAccounts {
+			if prev.Meta.ID == sa.Meta.ID && prev.Spec.ProjectID != sa.Spec.ProjectID {
+				return fmt.Errorf("spec.project cannot change: the service account's account and keys belong to the project it was made in; declare a new service account")
+			}
+		}
+		if refs == nil {
+			return nil
+		}
+		return refs(ctx, sa)
+	}
+}
+
 func keepKeyServerFields(prev, next *key.Key) error {
 	next.Spec.PreviousKeyHash = prev.Spec.PreviousKeyHash
 	next.Spec.GraceUntil = prev.Spec.GraceUntil
@@ -129,7 +147,7 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	return b.checkDocsAtPrunedScopes(ctx)
 }
 
-// serviceAccountDependents names, as "Kind/name", the rows deleting service account id would change through the foreign keys: its keys, which go with it, and the bindings that name it as a subject, which lose it. Bindings are read as this run leaves them, since its writes land before its deletes.
+// serviceAccountDependents names, as "Kind/name", the rows deleting service account id would change through the foreign keys: its keys and its account, which go with it, and the role bindings naming it and the policy bindings naming its account, which lose them. Bindings are read as this run leaves them, since its writes land before its deletes.
 func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible project.Visible) (named []string, hidden int) {
 	add := func(kind string, m meta.Metadata) {
 		switch {
@@ -145,15 +163,24 @@ func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible
 			add("Key", k.Meta)
 		}
 	}
-	account := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id}
-	subject := account.Key()
+	sa := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id}
+	subject := sa.Key()
 	for _, rb := range afterRun(b, b.rows.RoleBindings, func(x *rolebinding.RoleBinding) *meta.Metadata { return &x.Meta }) {
 		if namesSubject(rb.Spec.Subjects, subject) {
 			add("RoleBinding", rb.Meta)
 		}
 	}
+	var accountID string
+	for _, a := range b.rows.Accounts {
+		if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == id {
+			accountID = a.Meta.ID
+		}
+	}
+	if accountID == "" {
+		return named, hidden
+	}
 	for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
-		if namesSubject(pb.Spec.Subjects, subject) {
+		if slices.Contains(pb.Spec.AccountIDs, accountID) {
 			add("PolicyBinding", pb.Meta)
 		}
 	}

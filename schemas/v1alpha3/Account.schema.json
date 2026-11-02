@@ -11,11 +11,15 @@
         },
         "orgId": {
           "type": "string"
+        },
+        "payloadLogging": {
+          "enum": [
+            "on",
+            "off"
+          ],
+          "type": "string"
         }
       },
-      "required": [
-        "host"
-      ],
       "type": "object"
     },
     "WireMeta": {

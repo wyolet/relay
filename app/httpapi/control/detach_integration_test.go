@@ -70,7 +70,7 @@ func wantGroups(t *testing.T, what string, groups []blockerGroup, want ...wantGr
 func TestDetachPolicy_KeepsBindings(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	tier := f.policy(t, ctx, "detach-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
-	f.policyBinding(t, ctx, "tier-binding", tier.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	f.policyBinding(t, ctx, "tier-binding", tier.Meta.ID, f.accountOf(t, ctx, f.account))
 	f.allowCatalogDeletes(t, ctx, "governance:policy")
 
 	body := decodeDetach(t, f.detachRow(t, "policies", tier.Meta.ID, false))
@@ -103,7 +103,7 @@ func TestDetachModel_PricingKeepsItsLastModel(t *testing.T) {
 	}
 }
 
-// A binding lets go of the account only while it names another subject.
+// A binding lets go of the service account, or of its account, only while it names another.
 func TestDetachServiceAccount_BindingKeepsItsLastSubject(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	second := f.secondAccount(t, ctx)
@@ -112,11 +112,12 @@ func TestDetachServiceAccount_BindingKeepsItsLastSubject(t *testing.T) {
 	r := f.customRole(t, ctx, "key-reader")
 	shared := f.roleBinding(t, ctx, "shared-binding", r.Meta.ID, f.projectOwner(), acct, other)
 	pol := f.policy(t, ctx, "bound-policy", f.projectOwner())
-	only := f.policyBinding(t, ctx, "only-binding", pol.Meta.ID, acct)
+	own := f.accountOf(t, ctx, f.account)
+	only := f.policyBinding(t, ctx, "only-binding", pol.Meta.ID, own)
 
 	body := decodeDetach(t, f.detachRow(t, "service-accounts", f.account.Meta.ID, false))
 	wantGroups(t, "detached", body.Detached, wantGroup{"role-binding", "spec.subjects", true, 1})
-	wantGroups(t, "blockers", body.Blockers, wantGroup{"policy-binding", "spec.subjects", false, 1})
+	wantGroups(t, "blockers", body.Blockers, wantGroup{"policy-binding", "spec.accountIds", false, 1})
 	rb, err := f.stores.RoleBinding.Get(ctx, shared.Meta.ID)
 	must(t, "get role binding", err)
 	if len(rb.Spec.Subjects) != 1 || rb.Spec.Subjects[0].ID != second.Meta.ID {
@@ -124,8 +125,8 @@ func TestDetachServiceAccount_BindingKeepsItsLastSubject(t *testing.T) {
 	}
 	pb, err := f.stores.PolicyBinding.Get(ctx, only.Meta.ID)
 	must(t, "get policy binding", err)
-	if len(pb.Spec.Subjects) != 1 || pb.Spec.Subjects[0].ID != f.account.Meta.ID || pb.Meta.Dirty {
-		t.Fatalf("policy binding = %+v, want untouched", pb.Spec.Subjects)
+	if !slices.Equal(pb.Spec.AccountIDs, []string{own}) || pb.Meta.Dirty {
+		t.Fatalf("policy binding = %+v, want untouched", pb.Spec.AccountIDs)
 	}
 }
 
@@ -216,7 +217,7 @@ func TestDetachRole_LeavesOneAdmin(t *testing.T) {
 func TestDetach_LeavesRowsTheCallerCannotUpdate(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "alice-policy", meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID})
-	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, f.accountOf(t, ctx, f.account))
 
 	w := f.detachRow(t, "policies", pol.Meta.ID, true)
 	body := decodeDetach(t, w)

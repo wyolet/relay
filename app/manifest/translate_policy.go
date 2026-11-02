@@ -13,9 +13,9 @@ import (
 // Policy
 // ---------------------------------------------------------------------------
 
-// ToPolicy resolves every linked pool, credential, rate limit and budget by
-// name. Model refs are canonicalised exactly as the control API does, or
-// apply reports an update on every run for a grant the API wrote.
+// ToPolicy resolves every linked pool, rate limit and budget by name. Model
+// refs are canonicalised exactly as the control API does, or apply reports an
+// update on every run for a grant the API wrote.
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	name := d.Metadata.Name
 	models, err := policy.CanonicalizeModelRefs(d.Spec.Models)
@@ -26,13 +26,16 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	if err != nil {
 		return nil, err
 	}
-	creds, err := resolveNames(idx.HostKeyID, d.Spec.Credentials, "policy %q: credential %q not found", name)
-	if err != nil {
-		return nil, err
-	}
-	budgets, err := resolveNames(idx.BudgetID, d.Spec.Budgets, "policy %q: budget %q not found", name)
-	if err != nil {
-		return nil, err
+	var budgets []policy.BudgetLink
+	for i, b := range d.Spec.Budgets {
+		if b.Ref == "" {
+			return nil, fmt.Errorf("policy %q: budgets[%d].ref is required", name, i)
+		}
+		id, ok := idx.BudgetID(b.Ref)
+		if !ok {
+			return nil, refNotFound("policy %q: budgets[%d] budget %q not found", name, i, b.Ref)
+		}
+		budgets = append(budgets, policy.BudgetLink{BudgetID: id, Shared: b.Shared})
 	}
 	var limits []policy.RateLimitLink
 	for i, l := range d.Spec.RateLimits {
@@ -47,49 +50,63 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 		if err != nil {
 			return nil, fmt.Errorf("policy %q: rateLimits[%d].models: %w", name, i, err)
 		}
-		limits = append(limits, policy.RateLimitLink{RateLimitID: id, Models: scope})
+		limits = append(limits, policy.RateLimitLink{RateLimitID: id, Models: scope, Shared: l.Shared})
 	}
 
 	m := d.Metadata.toMeta()
 	resolveScopeOwner(&m.Owner, idx)
-	return &policy.Policy{
+	p := &policy.Policy{
 		Meta: m,
 		Spec: policy.Spec{
-			Models:                models,
-			PoolIDs:               pools,
-			CredentialIDs:         creds,
-			RateLimits:            limits,
-			BudgetIDs:             budgets,
-			IncludeDeprecated:     d.Spec.IncludeDeprecated,
-			Enabled:               d.Spec.Enabled,
-			PayloadLoggingEnabled: d.Spec.PayloadLoggingEnabled,
+			Models:     models,
+			PoolIDs:    pools,
+			RateLimits: limits,
+			Budgets:    budgets,
+			Enabled:    d.Spec.Enabled,
 		},
-	}, nil
+	}
+	p.Normalize()
+	return p, nil
 }
 
+// FromPolicy renders a policy; a link counted per account carries shared: false, a shared one leaves it out.
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 	var limits []PolicyRateLimitDTO
 	for _, l := range p.Spec.RateLimits {
 		limits = append(limits, PolicyRateLimitDTO{
 			Ref:    nameOr(rev.RateLimitName, l.RateLimitID),
 			Models: append([]string(nil), l.Models...),
+			Shared: eachOnly(l.IsShared()),
 		})
+	}
+	var budgets []PolicyBudgetDTO
+	for _, b := range p.Spec.Budgets {
+		budgets = append(budgets, PolicyBudgetDTO{Ref: nameOr(rev.BudgetName, b.BudgetID), Shared: eachOnly(b.IsShared())})
+	}
+	var models []string
+	if len(p.Spec.Models) > 0 {
+		models = append(models, p.Spec.Models...)
 	}
 	return PolicyDTO{
 		APIVersion: APIVersion,
 		Kind:       "Policy",
 		Metadata:   metaToWire(p.Meta),
 		Spec: PolicySpec{
-			Enabled:               p.Spec.Enabled,
-			IncludeDeprecated:     p.Spec.IncludeDeprecated,
-			Pools:                 namesOf(rev.PoolName, p.Spec.PoolIDs),
-			Credentials:           namesOf(rev.HostKeyName, p.Spec.CredentialIDs),
-			Models:                append([]string(nil), p.Spec.Models...),
-			RateLimits:            limits,
-			Budgets:               namesOf(rev.BudgetName, p.Spec.BudgetIDs),
-			PayloadLoggingEnabled: p.Spec.PayloadLoggingEnabled,
+			Enabled:    p.Spec.Enabled,
+			Pools:      namesOf(rev.PoolName, p.Spec.PoolIDs),
+			Models:     models,
+			RateLimits: limits,
+			Budgets:    budgets,
 		},
 	}
+}
+
+// eachOnly renders a link's counting the way a manifest writes it: omitted when shared, the default.
+func eachOnly(shared bool) *bool {
+	if shared {
+		return nil
+	}
+	return &shared
 }
 
 // resolveNames maps each name to its id through lookup; a missing name is a

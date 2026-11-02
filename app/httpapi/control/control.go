@@ -92,6 +92,9 @@ type Deps struct {
 	// Stores is the bundle of typed stores used by CRUD writes.
 	Stores *appcatalog.Stores
 
+	// Plans lets a token mint or key create answer once this pod serves what it wrote; nil answers at once.
+	Plans PlanWaiter
+
 	// CookieSecure controls the Secure attribute on the session cookie.
 	// Surfaced here so the OpenAPI doc can reflect deployment posture.
 	CookieSecure bool
@@ -239,7 +242,6 @@ func Mount(r chi.Router, d Deps) huma.API {
 		s.Description = "Measurement period, in whole seconds."
 	})
 	documentDomainSchemas(api)
-	policyBindingSubject(api)
 	entityEnvelope(api)
 	describeErrors(api)
 	api.OpenAPI().Tags = controlTags

@@ -18,6 +18,10 @@ func validateModelRef(raw string, policy Ref, field string, g *graph) []Issue {
 	}
 	src := Ref{Kind: policy.Kind, Name: policy.Name, Field: field}
 	var out []Issue
+	if !ref.HostWildcard {
+		out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant, Source: src,
+			Message: fmt.Sprintf("modelref %q names a host; a policy names a provider or a provider's model, and its pools decide the hosts", raw)})
+	}
 
 	// Explicit provider slug must resolve.
 	if ref.Provider != "" && !ref.ProviderWildcard {

@@ -6,33 +6,31 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
 )
 
-// linkedRows holds a system policy linking a pool, a host key, a rate limit
-// and a budget, each user-owned and labelled for the prune.
+// linkedRows holds a system policy linking a pool, a rate limit and a
+// budget, each user-owned and labelled for the prune.
 func linkedRows() (*Rows, *policy.Policy) {
 	owner := meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
 	row := func(name string) meta.Metadata {
 		return meta.Metadata{ID: meta.NewID(), Name: name, Owner: owner, Labels: pruneLabels}
 	}
 	pl := &apppool.Pool{Meta: row("pool")}
-	hk := &hostkey.HostKey{Meta: row("key")}
 	rl := &ratelimit.RateLimit{Meta: row("limit")}
 	bd := &budget.Budget{Meta: row("cap")}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "team-gate", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: policy.Spec{
-			PoolIDs: []string{pl.Meta.ID}, CredentialIDs: []string{hk.Meta.ID},
-			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}, BudgetIDs: []string{bd.Meta.ID},
+			PoolIDs:    []string{pl.Meta.ID},
+			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}, Budgets: []policy.BudgetLink{{BudgetID: bd.Meta.ID}},
 		},
 	}
 	return &Rows{
-		Pools: []*apppool.Pool{pl}, HostKeys: []*hostkey.HostKey{hk}, RateLimits: []*ratelimit.RateLimit{rl},
+		Pools: []*apppool.Pool{pl}, RateLimits: []*ratelimit.RateLimit{rl},
 		Budgets: []*budget.Budget{bd}, Policies: []*policy.Policy{pol},
 	}, pol
 }
@@ -45,7 +43,7 @@ func TestPruneReportsThePoliciesThatLoseALink(t *testing.T) {
 	if err := b.run(context.Background(), nil); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	want := map[string]string{"Pool": "spec.pools", "HostKey": "spec.credentials", "RateLimit": "spec.rateLimits", "Budget": "spec.budgets"}
+	want := map[string]string{"Pool": "spec.pools", "RateLimit": "spec.rateLimits", "Budget": "spec.budgets"}
 	for _, e := range b.entries {
 		field, ok := want[e.Kind]
 		if !ok || e.Action != ActionDelete {
@@ -69,7 +67,7 @@ func TestPruneKeepsThePoliciesToAudit(t *testing.T) {
 	if err := b.run(context.Background(), nil); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	want := map[string]string{"Pool": "spec.poolIds", "HostKey": "spec.credentialIds", "RateLimit": "spec.rateLimits[].rateLimitId", "Budget": "spec.budgetIds"}
+	want := map[string]string{"Pool": "spec.poolIds", "RateLimit": "spec.rateLimits[].rateLimitId", "Budget": "spec.budgets[].budgetId"}
 	for _, e := range b.entries {
 		field, ok := want[e.Kind]
 		if !ok || e.Action != ActionDelete {

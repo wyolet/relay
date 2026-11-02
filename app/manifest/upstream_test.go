@@ -9,8 +9,6 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 const upstreamYAML = `
@@ -103,58 +101,48 @@ func TestUpstreamKinds_UnknownNames(t *testing.T) {
 	}
 }
 
-// Every policy-binding subject kind resolves by name and renders back.
-func TestPolicyBinding_EverySubjectKind(t *testing.T) {
+// A policy binding names its accounts, which resolve by name and render back.
+func TestPolicyBinding_AccountsRoundTrip(t *testing.T) {
 	const doc = `
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata: {name: tiers, owner: {kind: system}}
 spec:
   policy: cheap-tier
-  subjects:
-    - {kind: host, name: anthropic-direct}
-    - {kind: account, name: acme-anthropic}
-    - {kind: credential, name: openai-key-1}
-    - {kind: team, name: platform}
-    - {kind: project, name: ml-search}
-    - {kind: serviceaccount, name: search-indexer}
-    - {kind: user, name: alice}
-    - {kind: group, name: eng}
+  accounts: [acme-anthropic]
 `
-	idx := testResolver
-	idx.Teams = map[string]string{"platform": teamUUID}
-	idx.Projects = map[string]string{"ml-search": projectUUID}
-	idx.ServiceAccounts = map[string]string{"search-indexer": saUUID}
-	idx.Users = map[string]string{"alice": aliceUUID}
-	rev := testRev
-	rev.Teams = map[string]string{teamUUID: "platform"}
-	rev.Projects = map[string]string{projectUUID: "ml-search"}
-	rev.ServiceAccounts = map[string]string{saUUID: "search-indexer"}
-	rev.Users = map[string]string{aliceUUID: "alice"}
-
 	docs, err := manifest.Parse(strings.NewReader(doc))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	b, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, idx)
+	b, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, testResolver)
 	if err != nil {
 		t.Fatalf("ToPolicyBinding: %v", err)
 	}
-	want := []rolebinding.Subject{
-		{Kind: policybinding.SubjectHost, ID: "host-bbb"},
-		{Kind: policybinding.SubjectAccount, ID: "acc-mmm"},
-		{Kind: policybinding.SubjectCredential, ID: "hk-ggg"},
-		{Kind: policybinding.SubjectTeam, ID: teamUUID},
-		{Kind: policybinding.SubjectProject, ID: projectUUID},
-		{Kind: rolebinding.SubjectServiceAccount, ID: saUUID},
-		{Kind: rolebinding.SubjectUser, ID: aliceUUID},
-		{Kind: rolebinding.SubjectGroup, Name: "eng"},
+	if !reflect.DeepEqual(b.Spec.AccountIDs, []string{"acc-mmm"}) {
+		t.Fatalf("accounts = %v", b.Spec.AccountIDs)
 	}
-	if !reflect.DeepEqual(b.Spec.Subjects, want) {
-		t.Fatalf("subjects = %+v\nwant       %+v", b.Spec.Subjects, want)
+	if back := manifest.FromPolicyBinding(b, testRev); !reflect.DeepEqual(back.Spec.Accounts, []string{"acme-anthropic"}) {
+		t.Errorf("rendered accounts = %v", back.Spec.Accounts)
 	}
-	back := manifest.FromPolicyBinding(b, rev)
-	if !reflect.DeepEqual(back.Spec.Subjects, docs[0].PolicyBinding.Spec.Subjects) {
-		t.Errorf("rendered subjects = %+v", back.Spec.Subjects)
+	var notFound *manifest.RefNotFoundError
+	if _, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, manifest.MapResolver{Policies: testResolver.Policies}); !errors.As(err, &notFound) {
+		t.Errorf("binding an unknown account: %v", err)
+	}
+}
+
+// The v0.20 fields a policy and a binding no longer have are refused, not dropped: a silently dropped restriction would widen access.
+func TestRemovedFieldsAreRefused(t *testing.T) {
+	for field, doc := range map[string]string{
+		"credentials":           "kind: Policy\nmetadata: {name: p}\nspec: {credentials: [k]}",
+		"includeDeprecated":     "kind: Policy\nmetadata: {name: p}\nspec: {includeDeprecated: true}",
+		"payloadLoggingEnabled": "kind: Policy\nmetadata: {name: p}\nspec: {payloadLoggingEnabled: true}",
+		"subjects":              "kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, subjects: [{kind: team, name: t}]}",
+		"project":               "kind: PolicyBinding\nmetadata: {name: b}\nspec: {policy: p, project: x, accounts: [a]}",
+	} {
+		_, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\n" + doc))
+		if err == nil || !strings.Contains(err.Error(), "spec."+field) {
+			t.Errorf("%s: err = %v, want a refusal naming spec.%s", field, err, field)
+		}
 	}
 }

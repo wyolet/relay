@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
@@ -47,9 +46,9 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.PolicyBindingDTO, policybinding.PolicyBinding]{
 		Kind: "PolicyBinding", Docs: pbDocs, Names: b.idx.PolicyBindings, Rows: b.rows.PolicyBindings,
-		To: b.toPolicyBinding(), Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
-		Upsert: s.PolicyBinding.Upsert, Delete: s.PolicyBinding.Delete,
-		// Which subjects and policies a binding may name is a rule of the rows, not of the caller, so the seed and the CLI run it too.
+		To: manifest.ToPolicyBinding, Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
+		Upsert: b.upsertPolicyBinding, Delete: s.PolicyBinding.Delete,
+		// Which accounts and policies a binding may name is a rule of the rows, not of the caller, so the seed and the CLI run it too.
 		Check: func() func(context.Context, *policybinding.PolicyBinding) error {
 			c := b.refs()
 			return func(ctx context.Context, pb *policybinding.PolicyBinding) error { return c.PolicyBinding(ctx, pb) }
@@ -58,25 +57,6 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 		return err
 	}
 	return nil
-}
-
-// toPolicyBinding translates a document and turns each host-key subject into the key's account, as the store will, so a re-applied document diffs equal to the row it wrote. A key this bundle creates without an account gets one only when it is written; the store converts that subject then.
-func (b *builder) toPolicyBinding() func(manifest.PolicyBindingDTO, manifest.Resolver) (*policybinding.PolicyBinding, error) {
-	keys := lookup(b, b.rows.HostKeys, func(x *hostkey.HostKey) *meta.Metadata { return &x.Meta })
-	accountOf := func(id string) string {
-		if k := keys(context.Background(), id); k != nil {
-			return k.Spec.AccountID
-		}
-		return ""
-	}
-	return func(d manifest.PolicyBindingDTO, idx manifest.Resolver) (*policybinding.PolicyBinding, error) {
-		pb, err := manifest.ToPolicyBinding(d, idx)
-		if err != nil {
-			return nil, err
-		}
-		pb.BindAccounts(accountOf)
-		return pb, nil
-	}
 }
 
 // checkRoleDocs refuses Role documents apply must not write: a name the

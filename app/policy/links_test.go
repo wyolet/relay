@@ -10,16 +10,16 @@ import (
 
 func TestValidateLinks(t *testing.T) {
 	rl := meta.NewID()
+	each := false
 	for _, tc := range []struct {
 		name string
 		edit func(p *Policy)
 		want string // "" = valid
 	}{
-		{name: "pools, credentials, limits and budgets", edit: func(p *Policy) {
+		{name: "pools, limits and budgets", edit: func(p *Policy) {
 			p.Spec.PoolIDs = []string{meta.NewID(), meta.NewID()}
-			p.Spec.CredentialIDs = []string{meta.NewID()}
 			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl}, {RateLimitID: meta.NewID(), Models: []string{"openai/gpt-4o"}}}
-			p.Spec.BudgetIDs = []string{meta.NewID()}
+			p.Spec.Budgets = []BudgetLink{{BudgetID: meta.NewID()}}
 		}},
 		{name: "one rate limit over different models", edit: func(p *Policy) {
 			p.Spec.RateLimits = []RateLimitLink{
@@ -27,18 +27,22 @@ func TestValidateLinks(t *testing.T) {
 				{RateLimitID: rl, Models: []string{"openai/gpt-4o-mini"}},
 			}
 		}},
+		{name: "one rate limit shared and per lane", edit: func(p *Policy) {
+			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl}, {RateLimitID: rl, Shared: &each}}
+		}},
 		{name: "host tier with limits and budgets", edit: func(p *Policy) {
 			p.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}
 			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl, Models: []string{"openai/gpt-4o"}}}
-			p.Spec.BudgetIDs = []string{meta.NewID()}
+			p.Spec.Budgets = []BudgetLink{{BudgetID: meta.NewID()}}
 		}},
 		{name: "pool id must be an id", edit: func(p *Policy) { p.Spec.PoolIDs = []string{"anthropic-main"} }, want: "PoolIDs"},
-		{name: "credential id must be an id", edit: func(p *Policy) { p.Spec.CredentialIDs = []string{"my-key"} }, want: "CredentialIDs"},
-		{name: "budget id must be an id", edit: func(p *Policy) { p.Spec.BudgetIDs = []string{"ml-monthly"} }, want: "BudgetIDs"},
+		{name: "budget id must be an id", edit: func(p *Policy) { p.Spec.Budgets = []BudgetLink{{BudgetID: "ml-monthly"}} }, want: "BudgetID"},
 		{name: "rate limit id required", edit: func(p *Policy) { p.Spec.RateLimits = []RateLimitLink{{}} }, want: "RateLimitID"},
 		{name: "duplicate pool", edit: func(p *Policy) { id := meta.NewID(); p.Spec.PoolIDs = []string{id, id} }, want: "duplicate poolIds"},
-		{name: "duplicate credential", edit: func(p *Policy) { id := meta.NewID(); p.Spec.CredentialIDs = []string{id, id} }, want: "duplicate credentialIds"},
-		{name: "duplicate budget", edit: func(p *Policy) { id := meta.NewID(); p.Spec.BudgetIDs = []string{id, id} }, want: "duplicate budgetIds"},
+		{name: "duplicate budget", edit: func(p *Policy) {
+			id := meta.NewID()
+			p.Spec.Budgets = []BudgetLink{{BudgetID: id}, {BudgetID: id, Shared: &each}}
+		}, want: "duplicate budgets"},
 		{name: "one rate limit twice over the same models", edit: func(p *Policy) {
 			p.Spec.RateLimits = []RateLimitLink{
 				{RateLimitID: rl, Models: []string{"openai/gpt-4o", "openai/o1"}},
@@ -51,14 +55,13 @@ func TestValidateLinks(t *testing.T) {
 		{name: "unparseable model scope", edit: func(p *Policy) {
 			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl, Models: []string{"openai/"}}}
 		}, want: "rateLimits[0]"},
+		{name: "a model scope naming a host", edit: func(p *Policy) {
+			p.Spec.RateLimits = []RateLimitLink{{RateLimitID: rl, Models: []string{"openai/gpt-4o@azure"}}}
+		}, want: "names a host"},
 		{name: "host tier with pools", edit: func(p *Policy) {
 			p.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}
 			p.Spec.PoolIDs = []string{meta.NewID()}
-		}, want: "must not list poolIds or credentialIds"},
-		{name: "host tier with credentials", edit: func(p *Policy) {
-			p.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()}
-			p.Spec.CredentialIDs = []string{meta.NewID()}
-		}, want: "must not list poolIds or credentialIds"},
+		}, want: "must not list poolIds"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := fix("p")
@@ -73,6 +76,25 @@ func TestValidateLinks(t *testing.T) {
 				t.Fatalf("Validate() = %v, want error mentioning %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// The read form every boundary returns: models a list, every link's shared flag explicit, omitted read as true.
+func TestNormalize(t *testing.T) {
+	each := false
+	p := fix("p")
+	p.Spec.Models = nil
+	p.Spec.RateLimits = []RateLimitLink{{RateLimitID: meta.NewID()}, {RateLimitID: meta.NewID(), Shared: &each}}
+	p.Spec.Budgets = []BudgetLink{{BudgetID: meta.NewID()}}
+	p.Normalize()
+	if p.Spec.Models == nil || len(p.Spec.Models) != 0 {
+		t.Errorf("models = %#v, want []", p.Spec.Models)
+	}
+	if l := p.Spec.RateLimits; l[0].Shared == nil || !*l[0].Shared || l[1].Shared == nil || *l[1].Shared {
+		t.Errorf("rate-limit shared = %v, %v; want true, false", l[0].Shared, l[1].Shared)
+	}
+	if b := p.Spec.Budgets[0]; b.Shared == nil || !*b.Shared {
+		t.Errorf("budget shared = %v, want true", b.Shared)
 	}
 }
 

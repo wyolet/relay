@@ -70,7 +70,7 @@ func applyPrincipalIdentity(lc *lifecycle.Context, p *Principal) {
 		lc.PrincipalKind = string(key.PrincipalServiceAccount)
 		lc.PrincipalID = p.ServiceAccountID
 		if cp != nil {
-			lc.PrincipalName = cp.PrincipalRung().Name
+			lc.PrincipalName = cp.LaneRung().Name
 		}
 	case p.UserID != "":
 		lc.PrincipalKind = string(key.PrincipalUser)

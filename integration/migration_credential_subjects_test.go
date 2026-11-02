@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/rolebinding"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
@@ -45,7 +44,7 @@ func credentialSubjectsAt37(t *testing.T, bindings []string, subjects func(keys 
 	for _, name := range bindings {
 		b := &policybinding.PolicyBinding{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
-			Spec: policybinding.Spec{PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}},
+			Spec: policybinding.Spec{PolicyID: pol.Meta.ID},
 		}
 		if err := policybinding.NewStore(db).Upsert(ctx, b); err != nil {
 			t.Fatalf("upsert binding %s: %v", name, err)
@@ -87,25 +86,21 @@ func TestMigrateUpMovesCredentialSubjectsToTheirAccount(t *testing.T) {
 	if err := storagemod.MigrateUp(dsn); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
-	rows, err := testPool(t, dsn).Query(ctx, "SELECT kind, subject_id, COALESCE(subject_account_id, ''), subject_credential_id IS NULL FROM policy_binding_subjects WHERE binding_id = $1 AND subject_id IS NOT NULL", ids["on-keys"])
+	rows, err := testPool(t, dsn).Query(ctx, "SELECT account_id FROM policy_binding_accounts WHERE binding_id = $1", ids["on-keys"])
 	if err != nil {
-		t.Fatalf("read subjects: %v", err)
+		t.Fatalf("read bound accounts: %v", err)
 	}
 	defer rows.Close()
 	var got []string
 	for rows.Next() {
-		var kind, id, fk string
-		var noKey bool
-		if err := rows.Scan(&kind, &id, &fk, &noKey); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if fk != id || !noKey {
-			t.Errorf("subject %s:%s carries account column %q and a key column: %v", kind, id, fk, !noKey)
-		}
-		got = append(got, kind+":"+id)
+		got = append(got, id)
 	}
-	if len(got) != 1 || got[0] != "account:"+acct {
-		t.Fatalf("subjects = %v, want the one account %s", got, acct)
+	if len(got) != 1 || got[0] != acct {
+		t.Fatalf("bound accounts = %v, want the one account %s", got, acct)
 	}
 }
 

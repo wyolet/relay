@@ -58,21 +58,21 @@ const (
 // Derived kinds, built by the controllers.
 const (
 	KindCatalogIndex     engine.Kind = "catalogindex"
+	KindManagedAccount   engine.Kind = "managedaccount"
+	KindPendingAccounts  engine.Kind = "pendingaccounts"
 	KindExpandedPolicy   engine.Kind = "expandedpolicy"
 	KindRungPolicy       engine.Kind = "rungpolicy"
 	KindAccountPlan      engine.Kind = "accountplan"
 	KindKeySlot          engine.Kind = "keyslot"
 	KindPoolPlan         engine.Kind = "poolplan"
 	KindOwnedCredentials engine.Kind = "ownedcredentials"
-	KindHostRungs        engine.Kind = "hostrungs"
 	KindCallerPlan       engine.Kind = "callerplan"
+	KindLaneIndex        engine.Kind = "laneindex"
 	KindKeyPlan          engine.Kind = "keyplan"
 	KindKeyPlanShard     engine.Kind = "keyplanshard"
 	KindKeyPlanIndex     engine.Kind = "keyplanindex"
 	KindUserPlan         engine.Kind = "userplan"
 	KindUserIndex        engine.Kind = "userindex"
-	KindProjectPlan      engine.Kind = "projectplan"
-	KindProjectIndex     engine.Kind = "projectindex"
 )
 
 // Sources are the stores each input kind loads from. A nil field loads nothing.
@@ -95,7 +95,7 @@ type Sources struct {
 	ServiceAccounts engine.Source[serviceaccount.ServiceAccount]
 	Users           engine.Source[user.User]
 	Keys            engine.Source[key.Key]
-	// Roles, RoleBindings and Groups feed the RBAC re-check of personal policies bound by a team or project; read only when RBAC is set.
+	// RoleBindings decide the member accounts relay keeps; with Roles and Groups they also feed the RBAC re-check of personal policies bound by a team or project, for which Roles and Groups are read only when RBAC is set.
 	Roles        engine.Source[role.Role]
 	RoleBindings engine.Source[rolebinding.RoleBinding]
 	Groups       engine.Source[group.Group]
@@ -127,28 +127,28 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	}, 64)
 	input(e, KindKey, src.Keys, metaOf(func(r *key.Key) meta.Metadata { return r.Meta }), 256)
 	if !src.RBAC {
-		src.Roles, src.RoleBindings, src.Groups = nil, nil, nil
+		src.Roles, src.Groups = nil, nil
 	}
 	input(e, KindRole, src.Roles, metaOf(func(r *role.Role) meta.Metadata { return r.Meta }), 1)
 	input(e, KindRoleBinding, src.RoleBindings, metaOf(func(r *rolebinding.RoleBinding) meta.Metadata { return r.Meta }), 1)
 	input(e, KindGroup, src.Groups, metaOf(func(r *group.Group) meta.Metadata { return r.Meta }), 1)
 
 	derived[CatalogIndex](e, KindCatalogIndex, 1)
+	derived[ManagedAccount](e, KindManagedAccount, 64)
+	derived[PendingAccounts](e, KindPendingAccounts, 1)
 	derived[ExpandedPolicy](e, KindExpandedPolicy, 16)
 	derived[RungPolicy](e, KindRungPolicy, 64)
 	derived[AccountPlan](e, KindAccountPlan, 1)
 	derived[KeySlot](e, KindKeySlot, 16)
 	derived[PoolPlan](e, KindPoolPlan, 1)
 	derived[OwnedCredentials](e, KindOwnedCredentials, 16)
-	derived[HostRungs](e, KindHostRungs, 1)
 	derived[CallerPlan](e, KindCallerPlan, 64)
+	derived[LaneIndex](e, KindLaneIndex, 1)
 	derived[KeyPlan](e, KindKeyPlan, 256)
 	derived[KeyPlanShard](e, KindKeyPlanShard, 16)
 	derived[KeyPlanIndex](e, KindKeyPlanIndex, 1)
 	derived[UserPlan](e, KindUserPlan, 64)
 	derived[UserIndex](e, KindUserIndex, 1)
-	derived[ProjectPlan](e, KindProjectPlan, 16)
-	derived[ProjectIndex](e, KindProjectIndex, 1)
 
 	c := &controllers{cells: cells, rbac: src.RBAC}
 	for _, ctl := range c.all() {

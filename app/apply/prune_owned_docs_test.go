@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
@@ -54,12 +55,15 @@ func TestPruneRefusesAKeyInAPrunedProject(t *testing.T) {
 	}
 }
 
-// policy_bindings.project_id cascades from the project.
+// A binding owned by the project goes with it.
 func TestPruneRefusesAPolicyBindingInAPrunedProject(t *testing.T) {
 	rows := prunedScopeRows(false)
+	acct := account.ForProject(rows.Projects[0].Meta.ID, rows.Projects[0].Meta.Name, "")
+	acct.Meta.ID = meta.NewID()
+	rows.Accounts = []*account.Account{acct}
 	rows.Policies = []*policy.Policy{{Meta: meta.Metadata{ID: meta.NewID(), Name: "shared-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}}}}
 	doc := "kind: PolicyBinding\nmetadata: {name: ml-binding, owner: {kind: project, name: ml-search}}\n" +
-		"spec: {project: ml-search, policy: shared-policy, subjects: [{kind: project, name: ml-search}]}\n"
+		"spec: {policy: shared-policy, accounts: [" + acct.Meta.Name + "]}\n"
 	wantRefused(t, planPruned(t, rows, doc), "PolicyBinding", "ml-binding", authmanifest.ErrScopePruned)
 }
 

@@ -47,7 +47,7 @@ func entriesFixture(t *testing.T, grants ...string) (*catalog.Snapshot, *policy.
 	}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{Models: grants, CredentialIDs: []string{hkID}},
+		Spec: policy.Spec{Models: grants},
 	}
 	price := &pricing.Pricing{
 		Meta: meta.Metadata{ID: priceID, Name: "big-model-rates", Owner: meta.Owner{Kind: meta.OwnerHost, ID: pricedHostID}},

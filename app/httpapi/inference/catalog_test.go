@@ -31,7 +31,6 @@ import (
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/rolebinding"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
@@ -59,7 +58,7 @@ func catalogRouteFixture(t *testing.T, grants ...string) (*catalog.Catalog, *Pri
 	k := w.UserKey(u, "catalog-route-secret")
 	k.Meta.Name = "rk"
 	pol := w.Policy("p", policy.Spec{Models: grants})
-	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
+	w.BindPolicy(pol, w.PersonalAccount(u))
 	c := catalogtest.Catalog{
 		Providers: []*provider.Provider{
 			{Meta: meta.Metadata{ID: provA, Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}},

@@ -144,7 +144,8 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows.add(registerKind[policybinding.PolicyBinding](
 		api, "policy-bindings", "policy-binding", d.Stores.PolicyBinding, d.Authz, pbmeta,
 		func(b *policybinding.PolicyBinding) error { return b.Validate() },
-		meta.OwnerProject,
+		// As for policies: an omitted owner is the caller's own, or system for the admin token.
+		meta.OwnerUser,
 		listScanResolver(d.Stores.PolicyBinding, pbmeta),
 		guardPolicyBinding(d),
 		nil,
@@ -293,18 +294,22 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		func(k *key.Key) error { return k.Validate() },
 		meta.OwnerProject,
 		listScanResolver(d.Stores.Key, rkmeta),
-		nil,
+		guardKeyAccount(d),
 		nil,
 		nil,
 		d.refuseInUse,
 		// Credential material is server-managed: PUT can neither wipe nor
 		// overwrite it. Rotation goes through POST /keys/by-id/{id}/rotate.
+		// An omitted accountId keeps the key's lane.
 		func(existing, incoming *key.Key) {
 			incoming.Spec.KeyHash = existing.Spec.KeyHash
 			incoming.Spec.Prefix = existing.Spec.Prefix
 			incoming.Spec.PreviousKeyHash = existing.Spec.PreviousKeyHash
 			incoming.Spec.GraceUntil = existing.Spec.GraceUntil
 			incoming.Spec.Principal = existing.Spec.Principal
+			if incoming.Spec.AccountID == "" {
+				incoming.Spec.AccountID = existing.Spec.AccountID
+			}
 		},
 		d.Catalog,
 		true, // skipCreate

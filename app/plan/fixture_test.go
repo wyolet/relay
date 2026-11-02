@@ -130,7 +130,7 @@ func (w *world) price(m *model.Model, h *host.Host) *pricing.Pricing {
 }
 
 func (w *world) account(h *host.Host) *account.Account {
-	a := &account.Account{Meta: md("acct-"+seq(), system), Spec: account.Spec{HostID: h.Meta.ID}}
+	a := &account.Account{Meta: md("acct-"+seq(), system), Spec: account.Spec{HostID: h.Meta.ID, Kind: account.KindProvider}}
 	w.accounts = append(w.accounts, a)
 	return a
 }
@@ -183,37 +183,79 @@ func (w *world) policy(name string, spec policy.Spec) *policy.Policy {
 	return p
 }
 
-func (w *world) bindPolicy(p *policy.Policy, subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
-	b := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), system), Spec: policybinding.Spec{PolicyID: p.Meta.ID, Subjects: subjects}}
+// bindPolicy binds p to accounts in a system-owned binding.
+func (w *world) bindPolicy(p *policy.Policy, accounts ...*account.Account) *policybinding.PolicyBinding {
+	b := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), system), Spec: policybinding.Spec{PolicyID: p.Meta.ID}}
+	for _, a := range accounts {
+		b.Spec.AccountIDs = append(b.Spec.AccountIDs, a.Meta.ID)
+	}
 	w.pbs = append(w.pbs, b)
 	return b
 }
 
-func subject(kind rolebinding.SubjectKind, id string) rolebinding.Subject {
-	return rolebinding.Subject{Kind: kind, ID: id}
+// managed adds a caller account as relay keeps it.
+func (w *world) managed(a *account.Account) *account.Account {
+	a.Meta.ID = meta.NewID()
+	a.Meta.Name += "-" + seq()
+	w.accounts = append(w.accounts, a)
+	return a
+}
+
+// accountAt returns the caller account at a place, nil when there is none.
+func (w *world) accountAt(place string) *account.Account {
+	for _, a := range w.accounts {
+		if a.ManagedKey() == place {
+			return a
+		}
+	}
+	return nil
+}
+
+func (w *world) teamAccount(t *team.Team) *account.Account { return w.accountAt("team:" + t.Meta.ID) }
+func (w *world) projectAccount(p *project.Project) *account.Account {
+	return w.accountAt("project:" + p.Meta.ID)
+}
+func (w *world) saAccount(s *serviceaccount.ServiceAccount) *account.Account {
+	return w.accountAt("service:" + s.Meta.ID)
+}
+func (w *world) personal(u *user.User) *account.Account { return w.accountAt("personal:" + u.ID) }
+
+// member adds u's member account in scope and the role binding granting it.
+func (w *world) member(u *user.User, scope meta.Owner) *account.Account {
+	w.rbs = append(w.rbs, &rolebinding.RoleBinding{
+		Meta: md("rb-"+seq(), scope),
+		Spec: rolebinding.Spec{RoleID: meta.NewID(), Scope: scope, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: u.ID}}},
+	})
+	a := account.Member(u.ID, u.Username, scope, "scope", "")
+	a.FollowsRoleBindings = true
+	return w.managed(a)
 }
 
 func (w *world) team() *team.Team {
 	t := &team.Team{Meta: md("team-"+seq(), system)}
 	w.teams = append(w.teams, t)
+	w.managed(account.ForTeam(t.Meta.ID, t.Meta.Name, ""))
 	return t
 }
 
 func (w *world) project(t *team.Team) *project.Project {
 	p := &project.Project{Meta: md("proj-"+seq(), meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}), Spec: project.Spec{TeamID: t.Meta.ID}}
 	w.projects = append(w.projects, p)
+	w.managed(account.ForProject(p.Meta.ID, p.Meta.Name, ""))
 	return p
 }
 
 func (w *world) sa(p *project.Project) *serviceaccount.ServiceAccount {
 	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: p.Meta.ID}}
 	w.sas = append(w.sas, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", p.Meta.ID))
 	return s
 }
 
 func (w *world) user() *user.User {
 	u := &user.User{ID: meta.NewID(), Username: "user-" + seq()}
 	w.users = append(w.users, u)
+	w.managed(account.Personal(u.ID, u.Username))
 	return u
 }
 
@@ -222,18 +264,27 @@ func keyHash(seed string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (w *world) keyFor(kind key.PrincipalKind, id string) *key.Key {
-	k := &key.Key{Meta: md("key-"+seq(), system), Spec: key.Spec{Principal: key.Principal{Kind: kind, ID: id}}}
+// keyFor is a key of the principal running in lane.
+func (w *world) keyFor(kind key.PrincipalKind, id string, lane *account.Account) *key.Key {
+	k := &key.Key{Meta: md("key-"+seq(), system), Spec: key.Spec{Principal: key.Principal{Kind: kind, ID: id}, AccountID: lane.Meta.ID}}
 	k.Spec.KeyHash = keyHash(k.Meta.ID)
 	w.keys = append(w.keys, k)
 	return k
 }
 
 func (w *world) saKey(s *serviceaccount.ServiceAccount) *key.Key {
-	return w.keyFor(key.PrincipalServiceAccount, s.Meta.ID)
+	return w.keyFor(key.PrincipalServiceAccount, s.Meta.ID, w.saAccount(s))
 }
 
-func (w *world) userKey(u *user.User) *key.Key { return w.keyFor(key.PrincipalUser, u.ID) }
+// userKey is a key of u in u's personal account.
+func (w *world) userKey(u *user.User) *key.Key {
+	return w.keyFor(key.PrincipalUser, u.ID, w.personal(u))
+}
+
+// keyIn is a key of u running in account a.
+func (w *world) keyIn(u *user.User, a *account.Account) *key.Key {
+	return w.keyFor(key.PrincipalUser, u.ID, a)
+}
 
 func (w *world) sources() Sources {
 	return Sources{

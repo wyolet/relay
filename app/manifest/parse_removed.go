@@ -13,17 +13,24 @@ import (
 // dropped restriction (a rate limit, a narrowed key list) widens access.
 var removedFields = map[string]map[string]string{
 	"Policy": {
-		"hostKeys":     "credentials (host-key names) or pools",
-		"rateLimit":    "rateLimits: [{ref: <name>}]",
-		"rlBindings":   "rateLimits: [{ref: <name>, models: [...]}]",
-		"keySelection": "a Pool's selection",
-		"modelIds":     "models (model refs)",
+		"hostKeys":              "pools",
+		"rateLimit":             "rateLimits: [{ref: <name>}]",
+		"rlBindings":            "rateLimits: [{ref: <name>, models: [...]}]",
+		"keySelection":          "a Pool's selection",
+		"modelIds":              "models (model refs)",
+		"credentials":           "pools (a Pool of the one host key)",
+		"includeDeprecated":     "nothing: models grant deprecated models like any other",
+		"payloadLoggingEnabled": "payloadLogging on the accounts the policy is bound to",
+	},
+	"PolicyBinding": {
+		"project":  "metadata.owner",
+		"subjects": "accounts (account names)",
 	},
 	"HostKey":        {"policyId": "account, plus a PolicyBinding of the account's tier policy"},
 	"Team":           {"budget": "a Budget linked by the policy bound to the team"},
 	"Project":        {"budget": "a Budget linked by the policy bound to the project"},
-	"Key":            {"policy": "a PolicyBinding on the key's principal"},
-	"ServiceAccount": {"policy": "a PolicyBinding on the service account"},
+	"Key":            {"policy": "a PolicyBinding on the account the key runs in"},
+	"ServiceAccount": {"policy": "a PolicyBinding on the service account's account"},
 }
 
 // decodeSpec decodes the spec node of env into dst after refusing any field

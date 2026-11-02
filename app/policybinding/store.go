@@ -1,5 +1,4 @@
-// Subjects live in the policy_binding_subjects junction, where a subject with
-// an id also fills the matching FK column so a deleted row drops out.
+// Accounts live in the policy_binding_accounts junction, whose FK drops a deleted account from its binding and whose unique index holds an account to one binding. The owner lives in the project_id, team_id and user_id columns, so a deleted owner takes its bindings along.
 
 package policybinding
 
@@ -12,19 +11,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// ErrSubjectBound is a write naming a subject another binding already holds: a subject is bound to at most one policy.
-var ErrSubjectBound = errors.New("policybinding: subject is already bound by another policy binding")
+// ErrAccountBound is a write naming an account another binding already holds: an account is bound to at most one policy.
+var ErrAccountBound = errors.New("policybinding: account is already bound by another policy binding")
 
-// The unique indexes holding a subject to one binding, and a user to one binding per owner scope.
-const (
-	oneBindingIndex     = "policy_binding_subjects_one_binding"
-	oneUserBindingIndex = "policy_binding_subjects_one_user_binding"
-)
+// oneBindingIndex holds an account to one binding.
+const oneBindingIndex = "policy_binding_accounts_one_binding"
 
 // Store holds a DB rather than Queries so Upsert can run a multi-table
 // transaction.
@@ -40,13 +35,13 @@ func (s *Store) List(ctx context.Context) ([]*PolicyBinding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("policybinding.List: %w", err)
 	}
-	subjectRows, err := q.ListPolicyBindingSubjects(ctx)
+	accountRows, err := q.ListPolicyBindingAccounts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("policybinding.List subjects: %w", err)
+		return nil, fmt.Errorf("policybinding.List accounts: %w", err)
 	}
-	byBinding := map[string][]rolebinding.Subject{}
-	for _, r := range subjectRows {
-		byBinding[r.BindingID] = append(byBinding[r.BindingID], subjectFromRow(r.Kind, r.SubjectID, r.SubjectName))
+	byBinding := map[string][]string{}
+	for _, r := range accountRows {
+		byBinding[r.BindingID] = append(byBinding[r.BindingID], r.AccountID)
 	}
 	out := make([]*PolicyBinding, 0, len(rows))
 	for _, r := range rows {
@@ -54,7 +49,7 @@ func (s *Store) List(ctx context.Context) ([]*PolicyBinding, error) {
 		if err != nil {
 			return nil, fmt.Errorf("policybinding %s: %w", r.Name, err)
 		}
-		b.Spec.Subjects = byBinding[b.Meta.ID]
+		b.Spec.AccountIDs = byBinding[b.Meta.ID]
 		out = append(out, b)
 	}
 	return out, nil
@@ -74,19 +69,18 @@ func (s *Store) Get(ctx context.Context, id string) (*PolicyBinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	subjectRows, err := q.GetPolicyBindingSubjects(ctx, id)
+	accountRows, err := q.GetPolicyBindingAccounts(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("policybinding.Get subjects: %w", err)
+		return nil, fmt.Errorf("policybinding.Get accounts: %w", err)
 	}
-	for _, sr := range subjectRows {
-		b.Spec.Subjects = append(b.Spec.Subjects, subjectFromRow(sr.Kind, sr.SubjectID, sr.SubjectName))
+	for _, ar := range accountRows {
+		b.Spec.AccountIDs = append(b.Spec.AccountIDs, ar.AccountID)
 	}
 	return b, nil
 }
 
-// Upsert re-derives Owner from ProjectID when the owner is a project, and stores a credential subject as its account.
+// Upsert writes the binding and its accounts in one transaction.
 func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
-	b.StampOwner()
 	switch b.Meta.Owner.Kind {
 	case meta.OwnerSystem, meta.OwnerTeam, meta.OwnerProject, meta.OwnerUser:
 	default:
@@ -103,62 +97,22 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
-	if err := bindAccounts(ctx, q, b); err != nil {
-		return fmt.Errorf("policybinding.Upsert: %w", err)
-	}
 	if err := meta.StaleIfNoRows(q.UpsertPolicyBinding(ctx, params)); err != nil {
 		return fmt.Errorf("policybinding.Upsert: policy_bindings: %w", err)
 	}
-	if err := q.DeletePolicyBindingSubjects(ctx, b.Meta.ID); err != nil {
-		return fmt.Errorf("policybinding.Upsert: clear subjects: %w", err)
+	if err := q.DeletePolicyBindingAccounts(ctx, b.Meta.ID); err != nil {
+		return fmt.Errorf("policybinding.Upsert: clear accounts: %w", err)
 	}
-	scope := b.ScopeKey()
-	for i := range b.Spec.Subjects {
-		sub := &b.Spec.Subjects[i]
-		if err := q.InsertPolicyBindingSubject(ctx, gen.InsertPolicyBindingSubjectParams{
-			BindingID:           b.Meta.ID,
-			Kind:                string(sub.Kind),
-			SubjectID:           text(sub.ID),
-			SubjectName:         text(sub.Name),
-			SubjectUserID:       text(subjectFK(sub, rolebinding.SubjectUser)),
-			SubjectSaID:         text(subjectFK(sub, rolebinding.SubjectServiceAccount)),
-			SubjectHostID:       text(subjectFK(sub, SubjectHost)),
-			SubjectAccountID:    text(subjectFK(sub, SubjectAccount)),
-			SubjectCredentialID: text(subjectFK(sub, SubjectCredential)),
-			SubjectTeamID:       text(subjectFK(sub, SubjectTeam)),
-			SubjectProjectID:    text(subjectFK(sub, SubjectProject)),
-			Position:            int32(i),
-			OwnerScope:          scope,
-		}); err != nil {
-			if storage.IsUniqueViolation(err, oneBindingIndex) || storage.IsUniqueViolation(err, oneUserBindingIndex) {
-				return fmt.Errorf("%w: %s", ErrSubjectBound, sub.Key())
+	for i, id := range b.Spec.AccountIDs {
+		if err := q.InsertPolicyBindingAccount(ctx, gen.InsertPolicyBindingAccountParams{BindingID: b.Meta.ID, AccountID: id, Position: int32(i)}); err != nil {
+			if storage.IsUniqueViolation(err, oneBindingIndex) {
+				return fmt.Errorf("%w: account %s", ErrAccountBound, id)
 			}
-			return fmt.Errorf("policybinding.Upsert: insert subject %s: %w", sub.Key(), err)
+			return fmt.Errorf("policybinding.Upsert: insert account %s: %w", id, err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("policybinding.Upsert: commit: %w", err)
-	}
-	return nil
-}
-
-// bindAccounts stores each credential subject as its host key's account, on every write path, so no stored binding names a credential.
-func bindAccounts(ctx context.Context, q *gen.Queries, b *PolicyBinding) error {
-	var lookupErr error
-	b.BindAccounts(func(id string) string {
-		acc, err := q.GetSecretAccountID(ctx, id)
-		if err != nil && lookupErr == nil {
-			lookupErr = fmt.Errorf("host key %s: %w", id, err)
-		}
-		return acc
-	})
-	if lookupErr != nil {
-		return lookupErr
-	}
-	for _, s := range b.Spec.Subjects {
-		if s.Kind == SubjectCredential {
-			return fmt.Errorf("host key %s has no account to bind", s.ID)
-		}
 	}
 	return nil
 }
@@ -168,24 +122,11 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.db).DeletePolicyBinding(ctx, id)
 }
 
-// subjectFK returns the subject id when the subject is of kind want, so the
-// matching FK column carries it and the row cascades with the principal.
-func subjectFK(s *rolebinding.Subject, want rolebinding.SubjectKind) string {
-	if s.Kind != want {
-		return ""
-	}
-	return s.ID
-}
-
 func text(s string) pgtype.Text {
 	if s == "" {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
-}
-
-func subjectFromRow(kind string, id, name pgtype.Text) rolebinding.Subject {
-	return rolebinding.Subject{Kind: rolebinding.SubjectKind(kind), ID: id.String, Name: name.String}
 }
 
 func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
@@ -200,9 +141,8 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	if err := json.Unmarshal(r.Spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	sp.ProjectID = r.ProjectID.String
 	sp.PolicyID = r.PolicyID
-	sp.Subjects = nil
+	sp.AccountIDs = nil
 	// The owner columns are the truth; the metadata copy is ignored.
 	switch {
 	case r.ProjectID.Valid:
@@ -222,13 +162,8 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, fmt.Errorf("metadata: %w", err)
 	}
-	// Relational fields live in columns / the junction; keep them out of the
-	// spec JSONB so there is one source of truth per field.
-	stored := b.Spec
-	stored.ProjectID = ""
-	stored.PolicyID = ""
-	stored.Subjects = nil
-	specJSON, err := json.Marshal(stored)
+	// Relational fields live in columns and the junction; the document keeps the rest.
+	specJSON, err := json.Marshal(Spec{Enabled: b.Spec.Enabled})
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, fmt.Errorf("spec: %w", err)
 	}
@@ -236,8 +171,10 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, err
 	}
-	var teamID, userID string
+	var projectID, teamID, userID string
 	switch b.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		projectID = b.Meta.Owner.ID
 	case meta.OwnerTeam:
 		teamID = b.Meta.Owner.ID
 	case meta.OwnerUser:
@@ -247,7 +184,7 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 		ID:              b.Meta.ID,
 		Name:            b.Meta.Name,
 		DisplayName:     b.Meta.DisplayName,
-		ProjectID:       text(b.Spec.ProjectID),
+		ProjectID:       text(projectID),
 		TeamID:          text(teamID),
 		UserID:          text(userID),
 		PolicyID:        b.Spec.PolicyID,

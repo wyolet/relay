@@ -220,8 +220,8 @@ func removeRoleBindingFromSubjects(s *Snapshot, b *rolebinding.RoleBinding) {
 // the allowed-combo sets are a function of — so these two publish directly
 // instead of rebuilding every policy's grants.
 func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error {
-	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
-		// Same rule as ApplyRoleBindingUpsert: no subjects, no binding.
+	if !b.IsEnabled() || len(b.Spec.AccountIDs) == 0 {
+		// Same rule as ApplyRoleBindingUpsert: no accounts, no binding.
 		return c.ApplyPolicyBindingDelete(b.Meta.ID)
 	}
 	if err := b.Validate(); err != nil {
@@ -257,7 +257,7 @@ func insertPolicyBinding(s *Snapshot, b *policybinding.PolicyBinding) {
 		removePolicyBindingFromProject(s, old)
 	}
 	s.policyBindingsByID[b.Meta.ID] = b
-	if pid := b.Spec.ProjectID; pid != "" {
+	if pid := owningProject(b); pid != "" {
 		list := append(s.policyBindingsByProject[pid], b)
 		sortPolicyBindings(list)
 		s.policyBindingsByProject[pid] = list
@@ -276,10 +276,11 @@ func deletePolicyBinding(s *Snapshot, id string) {
 }
 
 func removePolicyBindingFromProject(s *Snapshot, b *policybinding.PolicyBinding) {
-	if b.Spec.ProjectID == "" {
+	pid := owningProject(b)
+	if pid == "" {
 		return
 	}
-	list := s.policyBindingsByProject[b.Spec.ProjectID]
+	list := s.policyBindingsByProject[pid]
 	out := make([]*policybinding.PolicyBinding, 0, len(list))
 	for _, cur := range list {
 		if cur.Meta.ID != b.Meta.ID {
@@ -287,8 +288,8 @@ func removePolicyBindingFromProject(s *Snapshot, b *policybinding.PolicyBinding)
 		}
 	}
 	if len(out) == 0 {
-		delete(s.policyBindingsByProject, b.Spec.ProjectID)
+		delete(s.policyBindingsByProject, pid)
 		return
 	}
-	s.policyBindingsByProject[b.Spec.ProjectID] = out
+	s.policyBindingsByProject[pid] = out
 }

@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/auth/directory"
@@ -65,6 +66,8 @@ type builder struct {
 	// declared holds the rows this run writes, by id, so a later kind's
 	// reference checks see what an earlier kind in the same bundle declared.
 	declared map[string]any
+	// callerAccounts are the caller accounts this run plans by id; see planCallerAccounts.
+	callerAccounts map[string]*account.Account
 
 	entries []Entry
 	// deletes are collected per kind in the same order the upserts run and
@@ -191,6 +194,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planGroupsAndRoles(ctx, grpDocs, roleDocs); err != nil {
 		return err
 	}
+	b.planCallerAccounts(teamDocs, projDocs, saDocs, userDocs, rbDocs)
 	if err := b.planServiceAccountsAndKeys(ctx, saDocs, keyDocs); err != nil {
 		return err
 	}

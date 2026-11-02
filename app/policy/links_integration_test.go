@@ -1,12 +1,11 @@
 //go:build integration
 
-// links_integration_test.go covers a Policy's links to pools, credentials, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement and what a deleted target leaves behind (nothing for a cap, its id for a pool or credential) are the behaviour. Run with: make test-integration.
+// links_integration_test.go covers a Policy's links to pools, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement, the shared mark and what a deleted target leaves behind (nothing for a cap, its id for a pool) are the behaviour. Run with: make test-integration.
 
 package policy_test
 
 import (
 	"context"
-	"reflect"
 	"slices"
 	"testing"
 
@@ -43,14 +42,13 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 	}
 
 	want := policy.Spec{
-		PoolIDs:       []string{poolIDs[1], poolIDs[0]},
-		CredentialIDs: []string{f.hostKeyID},
+		PoolIDs: []string{poolIDs[1], poolIDs[0]},
 		RateLimits: []policy.RateLimitLink{
 			{RateLimitID: f.rateLimitID},
-			{RateLimitID: f.otherRateLimit, Models: []string{"acme/m"}},
+			{RateLimitID: f.otherRateLimit, Models: []string{"acme/m"}, Shared: new(false)},
 			{RateLimitID: f.otherRateLimit, Models: []string{"acme/n"}},
 		},
-		BudgetIDs: []string{b.Meta.ID},
+		Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID, Shared: new(false)}},
 	}
 	p := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "links-policy-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}},
@@ -72,7 +70,6 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 
 	// A rewrite replaces every link list rather than adding to it.
 	p.Spec.PoolIDs = poolIDs[:1]
-	p.Spec.CredentialIDs = nil
 	p.Spec.RateLimits = []policy.RateLimitLink{{RateLimitID: f.otherRateLimit}}
 	if err := f.store.Upsert(ctx, p); err != nil {
 		t.Fatalf("rewrite: %v", err)
@@ -84,19 +81,12 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 	assertLinks(t, "rewrite", got.Spec, policy.Spec{
 		PoolIDs:    poolIDs[:1],
 		RateLimits: []policy.RateLimitLink{{RateLimitID: f.otherRateLimit}},
-		BudgetIDs:  []string{b.Meta.ID},
+		Budgets:    want.Budgets,
 	})
 
-	// Deleting a linked budget or rate limit drops the link; a deleted pool or credential stays linked by id, so the policy narrows instead of falling back to ownership.
-	p.Spec.CredentialIDs = []string{f.hostKeyID}
-	if err := f.store.Upsert(ctx, p); err != nil {
-		t.Fatalf("relink credential: %v", err)
-	}
+	// Deleting a linked budget or rate limit drops the link; a deleted pool stays linked by id, so the policy narrows instead of falling back to ownership.
 	if err := pools.Delete(ctx, poolIDs[0]); err != nil {
 		t.Fatalf("delete pool: %v", err)
-	}
-	if err := gen.New(f.db).DeleteSecret(ctx, f.hostKeyID); err != nil {
-		t.Fatalf("delete credential: %v", err)
 	}
 	if err := budgets.Delete(ctx, b.Meta.ID); err != nil {
 		t.Fatalf("delete budget: %v", err)
@@ -108,23 +98,27 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get after deletes: %v (row %v)", err, got)
 	}
-	assertLinks(t, "after deletes", got.Spec, policy.Spec{PoolIDs: poolIDs[:1], CredentialIDs: []string{f.hostKeyID}})
-	assertLinks(t, "listed after deletes", listedPolicy(t, ctx, f.store, p.Meta.ID).Spec, policy.Spec{PoolIDs: poolIDs[:1], CredentialIDs: []string{f.hostKeyID}})
+	assertLinks(t, "after deletes", got.Spec, policy.Spec{PoolIDs: poolIDs[:1]})
+	assertLinks(t, "listed after deletes", listedPolicy(t, ctx, f.store, p.Meta.ID).Spec, policy.Spec{PoolIDs: poolIDs[:1]})
 }
 
+// assertLinks compares link lists with the shared mark read as its effective value: the store always returns it explicit.
 func assertLinks(t *testing.T, step string, got, want policy.Spec) {
 	t.Helper()
 	if !slices.Equal(got.PoolIDs, want.PoolIDs) {
 		t.Errorf("%s: poolIds = %v, want %v", step, got.PoolIDs, want.PoolIDs)
 	}
-	if !slices.Equal(got.CredentialIDs, want.CredentialIDs) {
-		t.Errorf("%s: credentialIds = %v, want %v", step, got.CredentialIDs, want.CredentialIDs)
-	}
-	if !reflect.DeepEqual(got.RateLimits, want.RateLimits) {
+	sameRate := slices.EqualFunc(got.RateLimits, want.RateLimits, func(a, b policy.RateLimitLink) bool {
+		return a.RateLimitID == b.RateLimitID && slices.Equal(a.Models, b.Models) && a.IsShared() == b.IsShared() && a.Shared != nil
+	})
+	if !sameRate {
 		t.Errorf("%s: rateLimits = %+v, want %+v", step, got.RateLimits, want.RateLimits)
 	}
-	if !slices.Equal(got.BudgetIDs, want.BudgetIDs) {
-		t.Errorf("%s: budgetIds = %v, want %v", step, got.BudgetIDs, want.BudgetIDs)
+	sameBudget := slices.EqualFunc(got.Budgets, want.Budgets, func(a, b policy.BudgetLink) bool {
+		return a.BudgetID == b.BudgetID && a.IsShared() == b.IsShared() && a.Shared != nil
+	})
+	if !sameBudget {
+		t.Errorf("%s: budgets = %+v, want %+v", step, got.Budgets, want.Budgets)
 	}
 }
 

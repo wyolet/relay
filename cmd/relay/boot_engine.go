@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/wyolet/relay/app/accountsync"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/user"
@@ -16,24 +17,28 @@ import (
 // planDebounce matches the catalog listener's flush interval, so one admin write lands in the snapshot and the plans within the same second.
 const planDebounce = time.Second
 
-// planEngine is the engine that keeps the request path's plans current, with the cell registry its plans link and the holder the request path loads.
+// planEngine is the engine that keeps the request path's plans current, with the cell registry its plans link, the holder the request path loads, and the writer of the caller accounts the plans call for.
 type planEngine struct {
-	engine *engine.Engine
-	cells  *cell.Registry
-	plans  *plan.Holder
-	idle   time.Duration
-	resync time.Duration
+	engine   *engine.Engine
+	cells    *cell.Registry
+	plans    *plan.Holder
+	accounts *accountsync.Syncer
+	idle     time.Duration
+	resync   time.Duration
 }
 
 // buildPlanEngine registers the plan kinds and controllers over the PG stores. Nothing is loaded until load.
 func buildPlanEngine(cfg *config.Config, stores *appcatalog.Stores, users *user.Store) *planEngine {
-	pe := &planEngine{plans: &plan.Holder{}, idle: cfg.PlanCellIdle, resync: cfg.PlanResync}
+	pe := &planEngine{plans: &plan.Holder{}, accounts: accountsync.New(stores.Account), idle: cfg.PlanCellIdle, resync: cfg.PlanResync}
 	pe.cells = cell.NewRegistry(cell.Options{IdleTTL: cfg.PlanCellIdle})
 	pe.engine = engine.New(engine.Options{
 		Debounce: planDebounce,
 		Cells:    pe.cells,
 		Hooks: engine.Hooks{
-			OnPublish: pe.plans.OnPublish,
+			OnPublish: func(v *engine.View, s engine.PublishStats) {
+				pe.plans.OnPublish(v, s)
+				pe.accounts.OnPublish(v, s)
+			},
 			OnReconcileError: func(controller string, out engine.Ref, err error) {
 				slog.Error("plans: reconcile failed; the previous plan keeps serving", "controller", controller, "kind", out.Kind, "id", out.ID, "err", err)
 			},
@@ -79,6 +84,9 @@ func (pe *planEngine) load(ctx context.Context) error {
 		return err
 	}
 	slog.Info("plans: loaded", "generation", pe.engine.View().Gen(), "duration", time.Since(start))
+	go pe.accounts.Run(ctx)
+	// The first publish ran before Run was listening; hand its list over again.
+	pe.accounts.OnPublish(pe.engine.View(), engine.PublishStats{})
 	if pe.resync > 0 {
 		go pe.resyncEvery(ctx)
 	}

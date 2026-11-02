@@ -87,13 +87,10 @@ var policyFilter = filter.Schema[policy.Policy]{
 	Fields: []filter.Field[policy.Policy]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(p *policy.Policy) string { return p.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return enabledTrue(p.Spec.Enabled) }},
-		{Name: "payload_logging", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return p.Spec.PayloadLoggingEnabled }},
-		{Name: "include_deprecated", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return p.Spec.IncludeDeprecated }},
 		{Name: "owner", Kind: filter.String, Get: func(p *policy.Policy) string { return string(p.Meta.Owner.Kind) }},
 		{Name: "pool_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.PoolIDs }},
-		{Name: "credential_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.CredentialIDs }},
 		{Name: "rate_limit_id", Kind: filter.String, Repeat: true, GetMulti: policyRateLimitIDs},
-		{Name: "budget_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.BudgetIDs }},
+		{Name: "budget_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.BudgetIDs() }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(p *policy.Policy) time.Time { return p.Meta.CreatedAt }},
 		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(p *policy.Policy) time.Time { return p.Meta.UpdatedAt }},
 	},
@@ -262,6 +259,7 @@ var keyFilter = filter.Schema[key.Key]{
 		{Name: "principal_kind", Kind: filter.String, Repeat: true, Enum: []string{"serviceaccount", "user"},
 			Get: func(k *key.Key) string { return string(k.Spec.Principal.Kind) }},
 		{Name: "principal_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Spec.Principal.ID }},
+		{Name: "account_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Spec.AccountID }},
 		{Name: "expired", Kind: filter.Bool, GetBool: func(k *key.Key) bool {
 			return k.Spec.ExpiresAt != nil && k.Spec.ExpiresAt.Before(time.Now())
 		}},
@@ -366,10 +364,10 @@ var policyBindingFilter = filter.Schema[policybinding.PolicyBinding]{
 	Fields: []filter.Field[policybinding.PolicyBinding]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *policybinding.PolicyBinding) string { return b.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *policybinding.PolicyBinding) bool { return enabledTrue(b.Spec.Enabled) }},
-		{Name: "project_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Spec.ProjectID }},
+		{Name: "owner", Kind: filter.String, Get: func(b *policybinding.PolicyBinding) string { return string(b.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Meta.Owner.ID }},
 		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Spec.PolicyID }},
-		{Name: "subject", Kind: filter.String, Repeat: true,
-			GetMulti: func(b *policybinding.PolicyBinding) []string { return subjectKeys(b.Spec.Subjects) }},
+		{Name: "account_id", Kind: filter.String, Repeat: true, GetMulti: func(b *policybinding.PolicyBinding) []string { return b.Spec.AccountIDs }},
 	},
 	Q: func(b *policybinding.PolicyBinding) []string {
 		return []string{b.Meta.Name, b.Meta.DisplayName, b.Meta.Description}

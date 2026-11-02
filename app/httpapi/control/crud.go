@@ -328,7 +328,7 @@ func registerKind[T any](
 				return nil, huma.Error400BadRequest(err.Error())
 			}
 			// The guard runs first: on kinds whose owner mirrors a spec field
-			// (Project, ServiceAccount, PolicyBinding) it is what re-derives
+			// (Project, ServiceAccount) it is what re-derives
 			// the owner, and the owner is what the decision below turns on.
 			if guard != nil {
 				if err := guard(ctx, "create", nil, v); err != nil {

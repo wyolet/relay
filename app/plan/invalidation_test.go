@@ -8,7 +8,6 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -38,11 +37,11 @@ func newLadder(t *testing.T) *ladder {
 	l.poolB = w.pool(b.hostB, b.b1)
 	rl := w.rateLimit(rule(ratelimit.MeterRequests, 100, time.Minute))
 	l.teamPol = w.policy("team-one", policy.Spec{PoolIDs: []string{l.poolA.Meta.ID, l.poolB.Meta.ID}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	w.bindPolicy(l.teamPol, subject(policybinding.SubjectTeam, b.team.Meta.ID))
+	w.bindPolicy(l.teamPol, w.teamAccount(b.team))
 	team2Pol := w.policy("team-two", policy.Spec{PoolIDs: []string{l.poolB.Meta.ID}})
-	w.bindPolicy(team2Pol, subject(policybinding.SubjectTeam, team2.Meta.ID))
+	w.bindPolicy(team2Pol, w.teamAccount(team2))
 	l.tierA = w.policy("tier-a", policy.Spec{})
-	w.bindPolicy(l.tierA, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
+	w.bindPolicy(l.tierA, b.acctA)
 	l.h = w.start(t)
 	return l
 }
@@ -112,7 +111,7 @@ func TestInvalidation_BindingChangeRebuildsItsSubjectOnly(t *testing.T) {
 	before := l.snap()
 	p := l.w.policy("project-one", policy.Spec{Models: []string{"acme/m1"}})
 	apply(l.h, p)
-	apply(l.h, l.w.bindPolicy(p, subject(policybinding.SubjectProject, l.proj.Meta.ID)))
+	apply(l.h, l.w.bindPolicy(p, l.w.projectAccount(l.proj)))
 	l.rebuilt(t, before, [3]bool{true, false, false})
 }
 

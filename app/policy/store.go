@@ -1,5 +1,5 @@
 // store.go is the data-access layer for Policy. Spec.Models lives in its own
-// column; PoolIDs, CredentialIDs, RateLimits and BudgetIDs live in junction
+// column; PoolIDs, RateLimits and Budgets live in junction
 // tables (store_links.go), not in the JSONB spec column. Upsert fans out
 // across `policies` and every junction inside a single transaction so
 // callers see a consistent view.
@@ -46,9 +46,9 @@ func (s *Store) List(ctx context.Context) ([]*Policy, error) {
 			return nil, fmt.Errorf("policy %s: %w", r.Name, err)
 		}
 		p.Spec.PoolIDs = l.pools[p.Meta.ID]
-		p.Spec.CredentialIDs = l.credentials[p.Meta.ID]
 		p.Spec.RateLimits = l.rateLimits[p.Meta.ID]
-		p.Spec.BudgetIDs = l.budgets[p.Meta.ID]
+		p.Spec.Budgets = l.budgets[p.Meta.ID]
+		p.Normalize()
 		out = append(out, p)
 	}
 	return out, nil
@@ -72,6 +72,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
 	if err := getLinks(ctx, q, id, &p.Spec); err != nil {
 		return nil, err
 	}
+	p.Normalize()
 	return p, nil
 }
 
@@ -131,12 +132,7 @@ func toUpsertParams(p *Policy) (gen.UpsertPolicyParams, error) {
 		return gen.UpsertPolicyParams{}, fmt.Errorf("metadata: %w", err)
 	}
 	// The links and the model grant live in their own column and junctions.
-	specCopy := p.Spec
-	specCopy.Models = nil
-	specCopy.PoolIDs = nil
-	specCopy.CredentialIDs = nil
-	specCopy.RateLimits = nil
-	specCopy.BudgetIDs = nil
+	specCopy := Spec{Enabled: p.Spec.Enabled}
 	specJSON, err := json.Marshal(specCopy)
 	if err != nil {
 		return gen.UpsertPolicyParams{}, fmt.Errorf("spec: %w", err)

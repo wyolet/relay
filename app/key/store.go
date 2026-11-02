@@ -128,7 +128,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID)
+	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID, r.AccountID)
 	return &Key{Meta: md, Spec: spec}, nil
 }
 
@@ -148,15 +148,16 @@ func fromRow(r gen.ListRelayKeysRow) (*Key, error) {
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID)
+	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID, r.AccountID)
 	return &Key{Meta: md, Spec: spec}, nil
 }
 
-// applyColumns overwrites the spec's principal + previous hash from the
-// relational columns, which the migration backfilled and every write keeps
+// applyColumns overwrites the spec's principal, previous hash and account from the
+// relational columns, which the migrations backfilled and every write keeps
 // in step.
-func applyColumns(spec *Spec, prevHash, saID, userID pgtype.Text) {
+func applyColumns(spec *Spec, prevHash, saID, userID, accountID pgtype.Text) {
 	spec.PreviousKeyHash = prevHash.String
+	spec.AccountID = accountID.String
 	switch {
 	case saID.Valid:
 		spec.Principal = Principal{Kind: PrincipalServiceAccount, ID: saID.String}
@@ -175,6 +176,7 @@ func toUpsertParams(k *Key) (gen.UpsertRelayKeyParams, error) {
 	stored := k.Spec
 	stored.Principal = Principal{}
 	stored.PreviousKeyHash = ""
+	stored.AccountID = ""
 	specJSON, err := json.Marshal(stored)
 	if err != nil {
 		return gen.UpsertRelayKeyParams{}, fmt.Errorf("spec: %w", err)
@@ -194,6 +196,9 @@ func toUpsertParams(k *Key) (gen.UpsertRelayKeyParams, error) {
 	}
 	if k.Spec.PreviousKeyHash != "" {
 		params.PreviousKeyHash = pgtype.Text{String: k.Spec.PreviousKeyHash, Valid: true}
+	}
+	if k.Spec.AccountID != "" {
+		params.AccountID = pgtype.Text{String: k.Spec.AccountID, Valid: true}
 	}
 	switch k.Spec.Principal.Kind {
 	case PrincipalServiceAccount:

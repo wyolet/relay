@@ -1,4 +1,4 @@
-// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. The spec JSONB carries the rest.
+// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
 
 package account
 
@@ -19,10 +19,16 @@ import (
 // ErrDefaultTaken is a write marking a second default account for one owner at one host.
 var ErrDefaultTaken = errors.New("account: the owner already has a default account at this host")
 
-const oneDefaultIndex = "accounts_one_default"
+// ErrManagedTaken is a write of a caller account whose place another row holds.
+var ErrManagedTaken = errors.New("account: another account already holds this place")
 
-// ensureDefaultAttempts bounds the retries when a concurrent save takes the minted name.
-const ensureDefaultAttempts = 3
+const (
+	oneDefaultIndex = "accounts_one_default"
+	oneManagedIndex = "accounts_managed_key_key"
+)
+
+// ensureAttempts bounds the retries when a concurrent save takes the minted name.
+const ensureAttempts = 3
 
 // Store is the Account data-access type.
 type Store struct {
@@ -68,8 +74,11 @@ func (s *Store) Upsert(ctx context.Context, a *Account) error {
 		return fmt.Errorf("account.Upsert: %w", err)
 	}
 	n, err := s.q.UpsertAccount(ctx, params)
-	if storage.IsUniqueViolation(err, oneDefaultIndex) {
+	switch {
+	case storage.IsUniqueViolation(err, oneDefaultIndex):
 		return fmt.Errorf("%w: account %q", ErrDefaultTaken, a.Meta.Name)
+	case storage.IsUniqueViolation(err, oneManagedIndex):
+		return fmt.Errorf("%w: account %q", ErrManagedTaken, a.Meta.Name)
 	}
 	return meta.StaleIfNoRows(n, err)
 }
@@ -79,12 +88,66 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteAccount(ctx, id)
 }
 
+// EnsureManaged returns the id of the caller account want describes, creating it on first use with want's name, suffixed -2, -3, … when taken, and want's id when it carries one. Concurrent first saves converge on one row, whose id the caller gets back.
+func (s *Store) EnsureManaged(ctx context.Context, want *Account) (string, error) {
+	key := want.ManagedKey()
+	if key == "" {
+		return "", fmt.Errorf("account.EnsureManaged: %q is not a caller account", want.Meta.Name)
+	}
+	lookup := pgtype.Text{String: key, Valid: true}
+	for attempt := 0; ; attempt++ {
+		id, err := s.q.GetManagedAccountID(ctx, lookup)
+		if err == nil {
+			return id, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("account.EnsureManaged: %w", err)
+		}
+		if attempt == ensureAttempts {
+			return "", fmt.Errorf("account.EnsureManaged: no account for %s after %d attempts", key, attempt)
+		}
+		name, err := s.uniqueName(ctx, want.Meta.Name)
+		if err != nil {
+			return "", fmt.Errorf("account.EnsureManaged: %w", err)
+		}
+		a := *want
+		a.Meta.Name = name
+		if a.Meta.ID == "" || attempt > 0 {
+			a.Meta.ID = meta.NewID()
+		}
+		p, err := toUpsertParams(&a)
+		if err != nil {
+			return "", fmt.Errorf("account.EnsureManaged: %w", err)
+		}
+		if _, err := s.q.InsertManagedAccount(ctx, gen.InsertManagedAccountParams{
+			ID: p.ID, Name: p.Name, DisplayName: p.DisplayName, Metadata: p.Metadata, Spec: p.Spec,
+			Kind: p.Kind, ManagedKey: p.ManagedKey, HolderUserID: p.HolderUserID, HolderSaID: p.HolderSaID,
+			TeamID: p.TeamID, ProjectID: p.ProjectID, FollowsRoleBindings: p.FollowsRoleBindings,
+		}); err != nil {
+			return "", fmt.Errorf("account.EnsureManaged: insert: %w", err)
+		}
+	}
+}
+
+// SetMembership marks member account a closed or open and whether it follows role bindings, only while the row is still at the version a was read at: a decision made from an older read (a close racing a reopen) changes nothing. A row already so is left alone.
+func (s *Store) SetMembership(ctx context.Context, a *Account, closed, followsRoleBindings bool) error {
+	version, ok, err := a.Meta.ExpectedVersion()
+	if err != nil || !ok {
+		return fmt.Errorf("account.SetMembership: account %q carries no version to guard the write", a.Meta.Name)
+	}
+	_, err = s.q.SetAccountMembership(ctx, gen.SetAccountMembershipParams{ID: a.Meta.ID, Closed: closed, FollowsRoleBindings: followsRoleBindings, ResourceVersion: version})
+	if err != nil {
+		return fmt.Errorf("account.SetMembership: %w", err)
+	}
+	return nil
+}
+
 // EnsureDefault returns the id of owner's default account at hostID, creating it on first use: named after the host, suffixed -2, -3, … when the name is taken. Concurrent first saves converge on one row. It returns "" when the host does not exist, since an account cannot outlive its host.
 func (s *Store) EnsureDefault(ctx context.Context, owner meta.Owner, hostID string) (string, error) {
 	if namesNobody(owner) {
 		owner = meta.Owner{Kind: meta.OwnerSystem}
 	}
-	lookup := gen.GetDefaultAccountIDParams{HostID: hostID, DefaultOwner: pgtype.Text{String: defaultOwner(owner), Valid: true}}
+	lookup := gen.GetDefaultAccountIDParams{HostID: text(hostID), DefaultOwner: text(defaultOwner(owner))}
 	for attempt := 0; ; attempt++ {
 		id, err := s.q.GetDefaultAccountID(ctx, lookup)
 		if err == nil {
@@ -93,7 +156,7 @@ func (s *Store) EnsureDefault(ctx context.Context, owner meta.Owner, hostID stri
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("account.EnsureDefault: %w", err)
 		}
-		if attempt == ensureDefaultAttempts {
+		if attempt == ensureAttempts {
 			return "", fmt.Errorf("account.EnsureDefault: no default account for %s at host %s after %d attempts", lookup.DefaultOwner.String, hostID, attempt)
 		}
 		h, err := s.q.GetHost(ctx, hostID)
@@ -103,17 +166,9 @@ func (s *Store) EnsureDefault(ctx context.Context, owner meta.Owner, hostID stri
 		if err != nil {
 			return "", fmt.Errorf("account.EnsureDefault: host: %w", err)
 		}
-		var nameErr error
-		name := slug.Unique(h.Name, func(c string) bool {
-			taken, err := s.q.AccountNameTaken(ctx, c)
-			if err != nil {
-				nameErr = err
-				return false
-			}
-			return taken
-		})
-		if nameErr != nil {
-			return "", fmt.Errorf("account.EnsureDefault: name: %w", nameErr)
+		name, err := s.uniqueName(ctx, h.Name)
+		if err != nil {
+			return "", fmt.Errorf("account.EnsureDefault: %w", err)
 		}
 		a := &Account{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name, DisplayName: h.DisplayName, Owner: owner},
@@ -130,6 +185,22 @@ func (s *Store) EnsureDefault(ctx context.Context, owner meta.Owner, hostID stri
 			return "", fmt.Errorf("account.EnsureDefault: insert: %w", err)
 		}
 	}
+}
+
+func (s *Store) uniqueName(ctx context.Context, base string) (string, error) {
+	var nameErr error
+	name := slug.Unique(base, func(c string) bool {
+		taken, err := s.q.AccountNameTaken(ctx, c)
+		if err != nil {
+			nameErr = err
+			return false
+		}
+		return taken
+	})
+	if nameErr != nil {
+		return "", fmt.Errorf("name: %w", nameErr)
+	}
+	return name, nil
 }
 
 // defaultOwner is the default_owner value of o's default account; migration 000036 writes the same form.
@@ -157,9 +228,18 @@ func fromRow(r gen.Account) (*Account, error) {
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	spec.HostID = r.HostID
+	spec.HostID = r.HostID.String
 	spec.Default = r.DefaultOwner.Valid
-	return &Account{Meta: md, Spec: spec}, nil
+	spec.Kind = Kind(r.Kind)
+	spec.Closed = r.Closed
+	spec.Holder = nil
+	switch {
+	case r.HolderUserID.Valid:
+		spec.Holder = &Holder{Kind: HolderUser, ID: r.HolderUserID.String}
+	case r.HolderSaID.Valid:
+		spec.Holder = &Holder{Kind: HolderServiceAccount, ID: r.HolderSaID.String}
+	}
+	return &Account{Meta: md, Spec: spec, FollowsRoleBindings: r.FollowsRoleBindings}, nil
 }
 
 func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
@@ -167,9 +247,8 @@ func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
 	if err != nil {
 		return gen.UpsertAccountParams{}, fmt.Errorf("metadata: %w", err)
 	}
-	stored := a.Spec
-	stored.HostID = ""
-	stored.Default = false
+	// Only the flags with no column of their own stay in the document.
+	stored := Spec{PayloadLogging: a.Spec.PayloadLogging, OrgID: a.Spec.OrgID}
 	specJSON, err := json.Marshal(stored)
 	if err != nil {
 		return gen.UpsertAccountParams{}, fmt.Errorf("spec: %w", err)
@@ -178,18 +257,48 @@ func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
 	if err != nil {
 		return gen.UpsertAccountParams{}, err
 	}
-	var def pgtype.Text
-	if a.Spec.Default {
-		def = pgtype.Text{String: defaultOwner(a.Meta.Owner), Valid: true}
+	kind := a.DerivedKind()
+	if kind == "" {
+		return gen.UpsertAccountParams{}, fmt.Errorf("account %q fits no kind", a.Meta.Name)
 	}
-	return gen.UpsertAccountParams{
-		ID:              a.Meta.ID,
-		Name:            a.Meta.Name,
-		DisplayName:     a.Meta.DisplayName,
-		HostID:          a.Spec.HostID,
-		Metadata:        metaJSON,
-		Spec:            specJSON,
-		DefaultOwner:    def,
-		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
-	}, nil
+	p := gen.UpsertAccountParams{
+		ID:                  a.Meta.ID,
+		Name:                a.Meta.Name,
+		DisplayName:         a.Meta.DisplayName,
+		HostID:              text(a.Spec.HostID),
+		Metadata:            metaJSON,
+		Spec:                specJSON,
+		Kind:                string(kind),
+		ManagedKey:          text(a.ManagedKey()),
+		Closed:              a.Spec.Closed,
+		FollowsRoleBindings: a.FollowsRoleBindings,
+		ExpectedVersion:     pgtype.Int8{Int64: ver, Valid: ok},
+	}
+	if a.Spec.Default && kind == KindProvider {
+		p.DefaultOwner = text(defaultOwner(a.Meta.Owner))
+	}
+	if h := a.Spec.Holder; h != nil {
+		switch h.Kind {
+		case HolderUser:
+			p.HolderUserID = text(h.ID)
+		case HolderServiceAccount:
+			p.HolderSaID = text(h.ID)
+		}
+	}
+	if kind != KindProvider {
+		switch a.Meta.Owner.Kind {
+		case meta.OwnerTeam:
+			p.TeamID = text(a.Meta.Owner.ID)
+		case meta.OwnerProject:
+			p.ProjectID = text(a.Meta.Owner.ID)
+		}
+	}
+	return p, nil
+}
+
+func text(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
 }

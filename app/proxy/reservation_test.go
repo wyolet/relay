@@ -48,7 +48,7 @@ func meteredPipeline(t *testing.T, rules ...appratelimit.Rule) (*Pipeline, *kvte
 	rl := &appratelimit.RateLimit{Meta: meta.Metadata{ID: "rl-1", Name: "one-per-hour"}, Spec: appratelimit.Spec{Rules: rules}}
 	var cs []limits.Counter
 	for _, r := range rules {
-		cs = append(cs, limits.CallerRule(limits.RungPrincipal, rl, r, "pol-1", "user:u", "user:u"))
+		cs = append(cs, limits.CallerRule(limits.RungLane, rl, r, "pol-1", "account:a", "account:a"))
 	}
 	return New(lua.New(pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)), nil, nil), store, cs
 }

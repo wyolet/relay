@@ -47,12 +47,13 @@ spec:
     - openai/gpt-4o
     - anthropic/claude-3-5-sonnet
   pools: [bedrock-claude]
-  credentials: [openai-key-1]
   rateLimits:
     - ref: cheap-tier-rpm
     - ref: gpt-4o-tpm
       models: [openai/gpt-4o]
-  budgets: [monthly]
+      shared: false
+  budgets:
+    - ref: monthly
 `
 
 func TestParse_Policy(t *testing.T) {
@@ -87,12 +88,12 @@ func TestToPolicy_HappyPath(t *testing.T) {
 	if pol.Spec.Models[0] != "openai/gpt-4o" {
 		t.Errorf("models[0]: want openai/gpt-4o (verbatim ref), got %q", pol.Spec.Models[0])
 	}
+	shared, each := true, false
 	want := policy.Spec{
-		Models:        []string{"openai/gpt-4o", "anthropic/claude-3-5-sonnet"},
-		PoolIDs:       []string{"pool-kkk"},
-		CredentialIDs: []string{"hk-ggg"},
-		RateLimits:    []policy.RateLimitLink{{RateLimitID: "rl-iii"}, {RateLimitID: "rl-jjj", Models: []string{"openai/gpt-4o"}}},
-		BudgetIDs:     []string{"budget-lll"},
+		Models:     []string{"openai/gpt-4o", "anthropic/claude-3-5-sonnet"},
+		PoolIDs:    []string{"pool-kkk"},
+		RateLimits: []policy.RateLimitLink{{RateLimitID: "rl-iii", Shared: &shared}, {RateLimitID: "rl-jjj", Models: []string{"openai/gpt-4o"}, Shared: &each}},
+		Budgets:    []policy.BudgetLink{{BudgetID: "budget-lll", Shared: &shared}},
 	}
 	if !reflect.DeepEqual(pol.Spec, want) {
 		t.Errorf("spec = %+v\nwant   %+v", pol.Spec, want)
@@ -101,13 +102,11 @@ func TestToPolicy_HappyPath(t *testing.T) {
 
 func TestToPolicy_MissingLink(t *testing.T) {
 	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
-	for _, drop := range []string{"pools", "credentials", "rateLimits", "budgets"} {
+	for _, drop := range []string{"pools", "rateLimits", "budgets"} {
 		r := testResolver
 		switch drop {
 		case "pools":
 			r.Pools = nil
-		case "credentials":
-			r.HostKeys = nil
 		case "rateLimits":
 			r.RateLimits = nil
 		case "budgets":

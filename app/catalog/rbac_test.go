@@ -78,15 +78,10 @@ func newRBACFixture() rbacFixture {
 		return b
 	}
 	pbinding := func(name, projectID, policyID string) *policybinding.PolicyBinding {
-		b := &policybinding.PolicyBinding{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
-			Spec: policybinding.Spec{
-				ProjectID: projectID, PolicyID: policyID,
-				Subjects: []rolebinding.Subject{group("system:authenticated")},
-			},
+		return &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
+			Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{meta.NewID()}},
 		}
-		b.StampOwner()
-		return b
 	}
 
 	eng := group("platform-eng")
@@ -267,7 +262,7 @@ func TestApplyPolicyBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
 	c := f.catalog(t)
 
 	stripped := *f.highA
-	stripped.Spec.Subjects = nil
+	stripped.Spec.AccountIDs = nil
 	if err := c.ApplyPolicyBindingUpsert(&stripped); err != nil {
 		t.Fatalf("ApplyPolicyBindingUpsert: %v", err)
 	}

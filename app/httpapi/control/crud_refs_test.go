@@ -27,9 +27,9 @@ func TestRefErrKeepsTheRefusalCode(t *testing.T) {
 	}
 }
 
-// A binding write the store refuses because another binding holds the subject is the caller's conflict, as the save-time check answers it.
-func TestWriteOfAnAlreadyBoundSubjectIsAConflict(t *testing.T) {
-	err := mapWriteErr("policy-binding", "pb-1", fmt.Errorf("%w: user:u-1", policybinding.ErrSubjectBound))
+// A binding write the store refuses because another binding holds the account is the caller's conflict, as the save-time check answers it.
+func TestWriteOfAnAlreadyBoundAccountIsAConflict(t *testing.T) {
+	err := mapWriteErr("policy-binding", "pb-1", fmt.Errorf("%w: account a-1", policybinding.ErrAccountBound))
 	var ae *httpapi.APIError
 	if !errors.As(err, &ae) || ae.HTTPStatus != http.StatusConflict || ae.Err.Code != refcheck.CodeDuplicateBinding {
 		t.Fatalf("err = %v, want a 409 duplicate_binding", err)

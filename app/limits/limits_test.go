@@ -31,11 +31,25 @@ func TestCounterIDs_AmountKeepsWindowChanges(t *testing.T) {
 	raised, wider := base, base
 	raised.Amount = 5000
 	wider.Window = ratelimit.Window(time.Hour)
-	id := func(r ratelimit.Rule) string { return CallerRule(RungPrincipal, rl, r, "p", "user:u", "user:u").ID }
+	id := func(r ratelimit.Rule) string { return CallerRule(RungLane, rl, r, "p", "account:a", "account:a").ID }
 	if id(base) != id(raised) {
 		t.Error("an amount edit changed the counter identity")
 	}
 	if id(base) == id(wider) {
 		t.Error("a window edit kept the counter identity")
+	}
+}
+
+// A link with shared off counts once per lane: the lane joins the identity, so two lanes under one bound account count apart while the shared count stays one.
+func TestCounterIDs_PerLane(t *testing.T) {
+	rl := &ratelimit.RateLimit{Meta: meta.Metadata{ID: "rl1"}}
+	r := ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}
+	shared := CallerRule(RungTeam, rl, r, "p", "account:team", "account:team")
+	a, b := shared.ForLane("account:a"), shared.ForLane("account:b")
+	if a.ID == b.ID || a.ID == shared.ID {
+		t.Fatalf("per-lane ids %q, %q and shared %q must all differ", a.ID, b.ID, shared.ID)
+	}
+	if a.Lane != "account:a" || shared.Lane != "" || a.Group != shared.Group {
+		t.Fatalf("lane %q / %q, group %q / %q", a.Lane, shared.Lane, a.Group, shared.Group)
 	}
 }

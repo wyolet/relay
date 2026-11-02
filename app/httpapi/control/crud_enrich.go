@@ -89,9 +89,6 @@ func enrichHostKeyPoliciesAll(d Deps) enrichListFn[hostkey.HostKey] {
 					link(id)
 				}
 			}
-			for _, id := range p.Spec.CredentialIDs {
-				link(id)
-			}
 		}
 		for _, k := range keys {
 			k.Policies = byKey[k.Meta.ID]

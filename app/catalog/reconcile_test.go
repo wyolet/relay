@@ -64,9 +64,8 @@ func TestApply_UpsertNew(t *testing.T) {
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-pol", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{
-			Models:        []string{"new-prov/gpt-x"},
-			CredentialIDs: []string{hk.Meta.ID},
-			RateLimits:    []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
+			Models:     []string{"new-prov/gpt-x"},
+			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
 		},
 	}
 

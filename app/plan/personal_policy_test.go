@@ -11,6 +11,18 @@ import (
 	"github.com/wyolet/relay/app/user"
 )
 
+// personalPolicy is a policy owned by u.
+func (w *world) personalPolicy(u *user.User, spec policy.Spec) *policy.Policy {
+	p := w.policy("mine-"+seq(), spec)
+	p.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: u.ID}
+	return p
+}
+
+// userSubject names a user in a role binding.
+func userSubject(id string) rolebinding.Subject {
+	return rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: id}
+}
+
 // policyBindingsAdmin is a role managing policy bindings, as the built-in scope admins do.
 func (w *world) policyBindingsAdmin() *role.Role {
 	r := &role.Role{Meta: md("pb-admin-"+seq(), system), Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"policy-bindings"}, Verbs: []string{"*"}}}}}
@@ -30,11 +42,11 @@ func TestUserOwnBindingStaysWithItsOwnersPolicy(t *testing.T) {
 	alice, bob := b.w.user(), b.w.user()
 	bobKey := b.w.userKey(bob)
 	alicesPolicy := b.w.personalPolicy(alice, policy.Spec{Models: []string{"acme/none"}})
-	onBob := ownedBy(b.w.bindPolicy(alicesPolicy, subject(rolebinding.SubjectUser, bob.ID)), meta.Owner{Kind: meta.OwnerUser, ID: alice.ID})
-	bobsOwn := ownedBy(b.w.bindPolicy(alicesPolicy, subject(rolebinding.SubjectUser, bob.ID)), meta.Owner{Kind: meta.OwnerUser, ID: bob.ID})
+	onBob := ownedBy(b.w.bindPolicy(alicesPolicy, b.w.personal(bob)), meta.Owner{Kind: meta.OwnerUser, ID: alice.ID})
+	bobsOwn := ownedBy(b.w.bindPolicy(alicesPolicy, b.w.personal(bob)), meta.Owner{Kind: meta.OwnerUser, ID: bob.ID})
 	h := b.w.start(t)
 
-	if rung := h.keyPlan(bobKey).Caller.PrincipalRung(); rung.Policy != nil || h.keyPlan(bobKey).Caller.Refused != nil {
+	if rung := h.keyPlan(bobKey).Caller.LaneRung(); rung.Policy != nil || h.keyPlan(bobKey).Caller.Refused != nil {
 		t.Fatalf("bob governed by alice's policy: rung %+v, refused %+v", rung.Policy, h.keyPlan(bobKey).Caller.Refused)
 	}
 	if !hasIssue(h.issues(KindPolicyBinding, onBob.Meta.ID), IssueSubjectOutOfScope) {
@@ -54,13 +66,13 @@ func TestPersonalPolicyBoundWhereItsOwnerManages(t *testing.T) {
 	}{
 		{"no grant", func(*world, *basic, *user.User) {}, false},
 		{"project admin", func(w *world, b *basic, u *user.User) {
-			w.grant(w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}, subject(rolebinding.SubjectUser, u.ID))
+			w.grant(w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}, userSubject(u.ID))
 		}, true},
 		{"team admin", func(w *world, b *basic, u *user.User) {
-			w.grant(w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}, subject(rolebinding.SubjectUser, u.ID))
+			w.grant(w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}, userSubject(u.ID))
 		}, true},
 		{"admin of another project", func(w *world, b *basic, u *user.User) {
-			w.grant(w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerProject, ID: w.project(b.team).Meta.ID}, subject(rolebinding.SubjectUser, u.ID))
+			w.grant(w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerProject, ID: w.project(b.team).Meta.ID}, userSubject(u.ID))
 		}, false},
 		{"through a group", func(w *world, b *basic, u *user.User) {
 			g := &group.Group{Meta: md("leads-"+seq(), system), Spec: group.Spec{MemberIDs: []string{u.ID}}}
@@ -75,10 +87,10 @@ func TestPersonalPolicyBoundWhereItsOwnerManages(t *testing.T) {
 			u := b.w.user()
 			tc.grant(b.w, b, u)
 			mine := b.w.personalPolicy(u, policy.Spec{Models: []string{"acme/none"}})
-			pb := ownedBy(b.w.bindPolicy(mine, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+			pb := ownedBy(b.w.bindPolicy(mine, b.w.saAccount(b.sa)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
 			h := b.w.start(t)
 
-			applied := h.keyPlan(b.key).Caller.PrincipalRung().Policy != nil
+			applied := h.keyPlan(b.key).Caller.LaneRung().Policy != nil
 			ignored := hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssuePolicyNotBindable)
 			if applied != tc.ok || ignored == tc.ok {
 				t.Fatalf("binding applied %v, %s issue %v; want applied %v", applied, IssuePolicyNotBindable, ignored, tc.ok)
@@ -92,9 +104,9 @@ func TestPersonalPolicyBindingFollowsItsOwnersPermission(t *testing.T) {
 	b := newBasic()
 	b.w.rbac = true
 	u := b.w.user()
-	rb := b.w.grant(b.w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}, subject(rolebinding.SubjectUser, u.ID))
+	rb := b.w.grant(b.w.policyBindingsAdmin(), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}, userSubject(u.ID))
 	mine := b.w.personalPolicy(u, policy.Spec{Models: []string{"acme/none"}})
-	pb := ownedBy(b.w.bindPolicy(mine, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+	pb := ownedBy(b.w.bindPolicy(mine, b.w.saAccount(b.sa)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
 	h := b.w.start(t)
 
 	if r := h.route(b.key, "m1"); r.Refused == nil || r.Refused.Code != CodeModelNotAllowed {
@@ -121,10 +133,10 @@ func TestPersonalPolicyBindingWithoutRBAC(t *testing.T) {
 	b := newBasic()
 	u := b.w.user()
 	mine := b.w.personalPolicy(u, policy.Spec{Models: []string{"acme/none"}})
-	ownedBy(b.w.bindPolicy(mine, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+	ownedBy(b.w.bindPolicy(mine, b.w.saAccount(b.sa)), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
 	h := b.w.start(t)
 
-	if h.keyPlan(b.key).Caller.PrincipalRung().Policy == nil {
+	if h.keyPlan(b.key).Caller.LaneRung().Policy == nil {
 		t.Fatal("binding of a personal policy ignored without RBAC")
 	}
 }

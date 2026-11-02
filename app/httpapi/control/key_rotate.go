@@ -107,6 +107,9 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("rotated but could not read back: " + err.Error())
 		}
+		if d.Plans != nil {
+			awaitServed(ctx, "key", in.ID, func(ctx context.Context) bool { return d.Plans.AwaitKey(ctx, gen.Hash) })
+		}
 		out := &rotateKeyResponse{}
 		out.Body.Plaintext = gen.Plaintext
 		out.Body.Key = rotated

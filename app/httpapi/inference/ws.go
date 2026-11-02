@@ -118,7 +118,7 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 		return principalOf(kp, keyHash), nil
 	}
 	up := root.Users.Lookup(userID)
-	pp := root.Projects.Lookup(projectID)
+	cp, refused := root.MemberLane(userID, projectID)
 	switch {
 	case tokenExp > 0 && tokenExp <= now.Unix():
 		return nil, errors.New("token expired")
@@ -126,13 +126,13 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 		return nil, errors.New(msgTokenRevoked)
 	case a.Revoked.Revoked(jti, now):
 		return nil, errors.New("token revoked")
-	case pp == nil:
-		return nil, errors.New("the token's project is not available")
+	case refused != nil:
+		return nil, refused
 	default:
 		return &Principal{
-			UserID: userID, ProjectID: pp.Project.Meta.ID, TeamID: pp.Project.Spec.TeamID,
+			UserID: userID, ProjectID: cp.Project().ID(), TeamID: cp.Team().ID(),
 			CredentialKind: CredentialToken, CredentialID: jti, TokenExp: tokenExp, TokenVer: tokenVer,
-			Caller: pp.CallerFor(up.Caller),
+			Caller: cp,
 		}, nil
 	}
 }

@@ -103,12 +103,22 @@ func ToKey(d KeyDTO, idx Resolver) (*key.Key, error) {
 		return nil, err
 	}
 
+	var accountID string
+	if d.Spec.Account != "" {
+		id, ok := idx.AccountID(d.Spec.Account)
+		if !ok {
+			return nil, refNotFound("key %q: account %q not found", d.Metadata.Name, d.Spec.Account)
+		}
+		accountID = id
+	}
+
 	m := d.Metadata.toMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	return &key.Key{
 		Meta: m,
 		Spec: key.Spec{
 			Principal:             principal,
+			AccountID:             accountID,
 			KeyHash:               d.Spec.KeyHash,
 			Prefix:                d.Spec.Prefix,
 			ExpiresAt:             expiresAt,
@@ -171,6 +181,7 @@ func FromKey(k *key.Key, rev ReverseResolver) KeyDTO {
 		Metadata:   metaToWire(k.Meta),
 		Spec: KeySpec{
 			Principal:             principal,
+			Account:               accountName(k.Spec.AccountID, rev),
 			KeyHash:               k.Spec.KeyHash,
 			Prefix:                k.Spec.Prefix,
 			ExpiresAt:             formatOptionalTime(k.Spec.ExpiresAt),
@@ -180,6 +191,13 @@ func FromKey(k *key.Key, rev ReverseResolver) KeyDTO {
 			PayloadLoggingEnabled: k.Spec.PayloadLoggingEnabled,
 		},
 	}
+}
+
+func accountName(id string, rev ReverseResolver) string {
+	if id == "" {
+		return ""
+	}
+	return nameOr(rev.AccountName, id)
 }
 
 func formatOptionalTime(t *time.Time) *string {

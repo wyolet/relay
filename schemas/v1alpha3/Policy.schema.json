@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "PolicyBudgetDTO": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "shared": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
     "PolicyRateLimitDTO": {
       "additionalProperties": false,
       "properties": {
@@ -14,6 +29,9 @@
         },
         "ref": {
           "type": "string"
+        },
+        "shared": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -26,16 +44,7 @@
       "properties": {
         "budgets": {
           "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "credentials": {
-          "items": {
-            "type": "string"
+            "$ref": "#/$defs/PolicyBudgetDTO"
           },
           "type": [
             "array",
@@ -43,9 +52,6 @@
           ]
         },
         "enabled": {
-          "type": "boolean"
-        },
-        "includeDeprecated": {
           "type": "boolean"
         },
         "models": {
@@ -56,9 +62,6 @@
             "array",
             "null"
           ]
-        },
-        "payloadLoggingEnabled": {
-          "type": "boolean"
         },
         "pools": {
           "items": {

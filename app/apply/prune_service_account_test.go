@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
@@ -48,11 +49,12 @@ func accountRoleBinding(rows *Rows, sa *serviceaccount.ServiceAccount, labels ma
 func accountPolicyBinding(rows *Rows, sa *serviceaccount.ServiceAccount, labels map[string]string) *policybinding.PolicyBinding {
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-policy", Owner: sa.Meta.Owner}}
 	rows.Policies = append(rows.Policies, pol)
+	acct := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID)
+	acct.Meta.ID = meta.NewID()
+	rows.Accounts = append(rows.Accounts, acct)
 	pb := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-policy", Owner: sa.Meta.Owner, Labels: labels}}
-	pb.Spec.ProjectID = sa.Spec.ProjectID
 	pb.Spec.PolicyID = pol.Meta.ID
-	pb.Spec.Subjects = accountSubjects(sa)
-	pb.IndexSubjects()
+	pb.Spec.AccountIDs = []string{acct.Meta.ID}
 	return pb
 }
 

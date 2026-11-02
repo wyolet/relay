@@ -45,11 +45,11 @@ func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
+		if action == "update" && existing.Spec.ProjectID != incoming.Spec.ProjectID {
+			return refuseServiceAccountMove(existing)
+		}
 		if err := refs(d).ServiceAccount(ctx, incoming); err != nil {
 			return refErr(err)
-		}
-		if action == "update" && existing.Meta.Owner != incoming.Meta.Owner {
-			return refuseServiceAccountMove(ctx, d, incoming)
 		}
 		return nil
 	}

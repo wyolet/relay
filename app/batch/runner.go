@@ -109,7 +109,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 		lc.TeamName = cp.Team().Name
 	}
 	if attr.PrincipalKind == string(key.PrincipalServiceAccount) {
-		lc.PrincipalName = cp.PrincipalRung().Name
+		lc.PrincipalName = cp.LaneRung().Name
 	}
 	if p.Key != nil {
 		lc.RelayKeyName = p.Key.Meta.Name
