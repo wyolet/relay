@@ -7,10 +7,7 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/team"
 )
 
 var noon = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
@@ -33,10 +30,10 @@ func TestRateLimit_AccountCountersAreSharedAcrossKeysAndTenants(t *testing.T) {
 	otherKey := l.w.ServiceAccountKey(otherSA, "sk-other-team")
 	a := l.w.Credential(l.host, acct, plantest.System, "sk-a")
 	b := l.w.Credential(l.host, acct, plantest.System, "sk-b")
-	l.w.BindPolicy(l.w.Policy("uses-a", policy.Spec{CredentialIDs: []string{a.Meta.ID}}), saSubject(l.sa1))
-	l.w.BindPolicy(l.w.Policy("uses-b", policy.Spec{CredentialIDs: []string{b.Meta.ID}}), saSubject(otherSA))
+	l.w.BindPolicy(l.w.Policy("uses-a", policy.Spec{PoolIDs: []string{l.w.Pool(l.host, a).Meta.ID}}), l.saAccount(l.sa1))
+	l.w.BindPolicy(l.w.Policy("uses-b", policy.Spec{PoolIDs: []string{l.w.Pool(l.host, b).Meta.ID}}), l.saAccount(otherSA))
 	rl := l.w.RateLimit(hourly(1))
-	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), acct)
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: noon})
 
@@ -54,7 +51,7 @@ func TestRateLimit_CredentialRotationKeepsTheCount(t *testing.T) {
 	acct := l.w.Account(l.host)
 	cred := l.w.Credential(l.host, acct, plantest.System, "sk-before")
 	rl := l.w.RateLimit(hourly(1))
-	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), acct)
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: noon})
 	if !admitted(t, lim, counters(t, plans, l.k1, "m1")) {
@@ -73,7 +70,7 @@ func TestRateLimit_CredentialRotationKeepsTheCount(t *testing.T) {
 func TestRateLimit_AmountEditKeepsCountWindowEditStartsFresh(t *testing.T) {
 	l := newLadder().withSystemCredential()
 	rl := l.w.RateLimit(hourly(1))
-	l.w.BindPolicy(l.w.Policy("limited", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), saSubject(l.sa1))
+	l.w.BindPolicy(l.w.Policy("limited", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), l.saAccount(l.sa1))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: noon})
 	if !admitted(t, lim, counters(t, plans, l.k1, "m1")) {
@@ -107,7 +104,7 @@ func TestRateLimit_RebindingToAnotherPolicyStartsFresh(t *testing.T) {
 	link := []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}
 	first := l.w.Policy("first", policy.Spec{RateLimits: link})
 	second := l.w.Policy("second", policy.Spec{RateLimits: link})
-	pb := l.w.BindPolicy(first, saSubject(l.sa1))
+	pb := l.w.BindPolicy(first, l.saAccount(l.sa1))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: noon})
 	if !admitted(t, lim, counters(t, plans, l.k1, "m1")) {
@@ -126,10 +123,10 @@ func TestRateLimit_RebindingToAnotherPolicyStartsFresh(t *testing.T) {
 func TestBudget_TeamBudgetIsNotSharedWithAnotherTeam(t *testing.T) {
 	l := newLadder().withSystemCredential()
 	b := l.w.Budget("1")
-	pol := l.w.Policy("per-team", policy.Spec{BudgetIDs: []string{b.Meta.ID}})
+	pol := l.w.Policy("per-team", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID}}})
 	other := l.w.Team()
 	otherKey := l.w.ServiceAccountKey(l.w.ServiceAccount(l.w.Project(other)), "sk-other")
-	l.w.BindPolicy(pol, teamOf(l.team), teamOf(other))
+	l.w.BindPolicy(pol, l.w.TeamAccount(l.team), l.w.TeamAccount(other))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: noon})
 
@@ -139,6 +136,21 @@ func TestBudget_TeamBudgetIsNotSharedWithAnotherTeam(t *testing.T) {
 	}
 }
 
-func teamOf(t *team.Team) rolebinding.Subject {
-	return plantest.Subject(policybinding.SubjectTeam, t.Meta.ID)
+// A rate limit linked with shared off on a team account counts per lane: two lanes of one team each get the full amount, while a shared link on the same account counts them together.
+func TestRateLimit_PerLaneLinkCountsEachLaneApart(t *testing.T) {
+	l := newLadder().withSystemCredential()
+	rl := l.w.RateLimit(hourly(1))
+	each := false
+	l.w.BindPolicy(l.w.Policy("team", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID, Shared: &each}}}), l.w.TeamAccount(l.team))
+	plans := l.w.Load(t)
+	lim := newLimiter(t, &clock{now: noon})
+	if !admitted(t, lim, counters(t, plans, l.k1, "m1")) {
+		t.Fatal("first lane's first request refused")
+	}
+	if !admitted(t, lim, counters(t, plans, l.k2, "m1")) {
+		t.Fatal("a per-lane limit counted the second lane against the first")
+	}
+	if refusedBy(t, lim, counters(t, plans, l.k1, "m1")) == nil {
+		t.Fatal("the first lane went past its own limit")
+	}
 }

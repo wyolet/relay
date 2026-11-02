@@ -48,14 +48,16 @@ apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: ml-search-everyone
+  owner: {kind: project, name: ml-search}
 spec:
-  project: ml-search
   policy: ml-search-default
-  subjects:
-    - {kind: project, name: ml-search}
+  accounts: [project-ml-search]
 `
 
-const roleUUID = "0195f8a0-0000-7000-8000-000000000022"
+const (
+	roleUUID           = "0195f8a0-0000-7000-8000-000000000022"
+	projectAccountUUID = "0195f8a0-0000-7000-8000-000000000023"
+)
 
 var rbacResolver = manifest.MapResolver{
 	Teams:           map[string]string{"platform": teamUUID},
@@ -64,6 +66,7 @@ var rbacResolver = manifest.MapResolver{
 	ServiceAccounts: map[string]string{"search-indexer": saUUID},
 	Roles:           map[string]string{"developer": roleUUID},
 	Users:           map[string]string{"alice": aliceUUID},
+	Accounts:        map[string]string{"project-ml-search": projectAccountUUID},
 }
 
 var rbacRev = manifest.MapReverseResolver{
@@ -152,8 +155,8 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	if err := pb.Validate(); err != nil {
 		t.Fatalf("policy binding validate: %v", err)
 	}
-	if pb.Spec.ProjectID != projectUUID || pb.Spec.PolicyID != policyUUID {
-		t.Errorf("policy binding refs = %+v", pb.Spec)
+	if pb.Meta.Owner.ID != projectUUID || pb.Spec.PolicyID != policyUUID || len(pb.Spec.AccountIDs) != 1 || pb.Spec.AccountIDs[0] != projectAccountUUID {
+		t.Errorf("policy binding refs = %+v owned by %+v", pb.Spec, pb.Meta.Owner)
 	}
 }
 

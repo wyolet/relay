@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/host"
@@ -16,10 +17,8 @@ import (
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/kv"
@@ -59,8 +58,9 @@ func (l *ladder) withSystemCredential() *ladder {
 	return l
 }
 
-func saSubject(s *serviceaccount.ServiceAccount) rolebinding.Subject {
-	return plantest.Subject(rolebinding.SubjectServiceAccount, s.Meta.ID)
+// saAccount is the service account's own account, which a binding binds.
+func (l *ladder) saAccount(s *serviceaccount.ServiceAccount) *account.Account {
+	return l.w.ServiceAccountAccount(s)
 }
 
 // clock is a settable limiter clock.
@@ -124,8 +124,8 @@ func budgetLadder(amount string, period budget.Period, mode budget.Mode) (*ladde
 	l := newLadder().withSystemCredential()
 	b := l.w.Budget(amount)
 	b.Spec.Period, b.Spec.Mode = period, mode
-	pol := l.w.Policy("budgeted", policy.Spec{BudgetIDs: []string{b.Meta.ID}})
-	l.w.BindPolicy(pol, saSubject(l.sa1))
+	pol := l.w.Policy("budgeted", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID}}})
+	l.w.BindPolicy(pol, l.saAccount(l.sa1))
 	return l, b, pol
 }
 
@@ -141,7 +141,7 @@ func TestBudget_HardRefusesOnceSpentReachesTheCap(t *testing.T) {
 	if r == nil {
 		t.Fatal("admitted with spent equal to the cap")
 	}
-	if r.Counter.Kind != limits.KindBudget || r.Counter.Rung != limits.RungPrincipal || r.Counter.PolicyID != pol.Meta.ID {
+	if r.Counter.Kind != limits.KindBudget || r.Counter.Rung != limits.RungLane || r.Counter.PolicyID != pol.Meta.ID {
 		t.Fatalf("refused by %+v, want the principal rung's budget of policy %s", r.Counter, pol.Meta.ID)
 	}
 }
@@ -281,8 +281,8 @@ func TestBudget_ChangingTheCapKeepsTheCount(t *testing.T) {
 func TestBudget_PolicyReusedBySubjectsCountsEachApart(t *testing.T) {
 	l := newLadder().withSystemCredential()
 	b := l.w.Budget("1")
-	pol := l.w.Policy("shared", policy.Spec{BudgetIDs: []string{b.Meta.ID}})
-	l.w.BindPolicy(pol, saSubject(l.sa1), saSubject(l.sa2))
+	pol := l.w.Policy("shared", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID}}})
+	l.w.BindPolicy(pol, l.saAccount(l.sa1), l.saAccount(l.sa2))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 
@@ -299,8 +299,8 @@ func TestBudget_PolicyReusedBySubjectsCountsEachApart(t *testing.T) {
 func TestBudget_TeamBoundBudgetIsSharedByTheTeam(t *testing.T) {
 	l := newLadder().withSystemCredential()
 	b := l.w.Budget("1")
-	pol := l.w.Policy("team", policy.Spec{BudgetIDs: []string{b.Meta.ID}})
-	l.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectTeam, l.team.Meta.ID))
+	pol := l.w.Policy("team", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: b.Meta.ID}}})
+	l.w.BindPolicy(pol, l.w.TeamAccount(l.team))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 
@@ -319,8 +319,8 @@ func TestBudget_AccountBudgetCapsEveryCaller(t *testing.T) {
 	l := newLadder()
 	acct := l.w.Account(l.host)
 	l.w.Credential(l.host, acct, plantest.System, "sk-acct")
-	tier := l.w.Policy("tier", policy.Spec{BudgetIDs: []string{l.w.Budget("1").Meta.ID}})
-	l.w.BindPolicy(tier, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	tier := l.w.Policy("tier", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: l.w.Budget("1").Meta.ID}}})
+	l.w.BindPolicy(tier, acct)
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 
@@ -340,7 +340,7 @@ func TestRateLimit_PolicyReusedBySubjectsCountsEachApart(t *testing.T) {
 	l := newLadder().withSystemCredential()
 	rl := l.w.RateLimit(hourly(1))
 	pol := l.w.Policy("one-an-hour", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	l.w.BindPolicy(pol, saSubject(l.sa1), saSubject(l.sa2))
+	l.w.BindPolicy(pol, l.saAccount(l.sa1), l.saAccount(l.sa2))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 
@@ -348,7 +348,7 @@ func TestRateLimit_PolicyReusedBySubjectsCountsEachApart(t *testing.T) {
 		t.Fatal("first request refused")
 	}
 	r := refusedBy(t, lim, counters(t, plans, l.k1, "m1"))
-	if r == nil || r.Counter.Rung != limits.RungPrincipal || r.Counter.PolicyID != pol.Meta.ID || r.RetryAfter <= 0 {
+	if r == nil || r.Counter.Rung != limits.RungLane || r.Counter.PolicyID != pol.Meta.ID || r.RetryAfter <= 0 {
 		t.Fatalf("second request: refusal %+v, want the principal rule of policy %s with a retry-after", r, pol.Meta.ID)
 	}
 	if !admitted(t, lim, counters(t, plans, l.k2, "m1")) {
@@ -361,7 +361,7 @@ func TestRateLimit_TeamBoundPolicySharesOneBucket(t *testing.T) {
 	l := newLadder().withSystemCredential()
 	rl := l.w.RateLimit(hourly(1))
 	pol := l.w.Policy("team", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	l.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectTeam, l.team.Meta.ID))
+	l.w.BindPolicy(pol, l.w.TeamAccount(l.team))
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 
@@ -384,7 +384,7 @@ func TestRateLimit_ModelScopedRuleCountsOnlyItsModels(t *testing.T) {
 	l.w.Credential(l.host, acct, plantest.System, "sk-acct")
 	rl := l.w.RateLimit(hourly(1))
 	tier := l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID, Models: []string{"prov/m1", "prov/m2"}}}})
-	l.w.BindPolicy(tier, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	l.w.BindPolicy(tier, acct)
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 
@@ -411,9 +411,9 @@ func TestRateLimit_RefusalReleasesTheOtherRungs(t *testing.T) {
 	acct := l.w.Account(l.host)
 	l.w.Credential(l.host, acct, plantest.System, "sk-acct")
 	callerRL := l.w.RateLimit(plantest.Rule(ratelimit.MeterRequests, 2, time.Hour))
-	l.w.BindPolicy(l.w.Policy("caller", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: callerRL.Meta.ID}}}), saSubject(l.sa1))
+	l.w.BindPolicy(l.w.Policy("caller", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: callerRL.Meta.ID}}}), l.saAccount(l.sa1))
 	tierRL := l.w.RateLimit(hourly(1))
-	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: tierRL.Meta.ID, Models: []string{"prov/m1"}}}}), plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	l.w.BindPolicy(l.w.Policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: tierRL.Meta.ID, Models: []string{"prov/m1"}}}}), acct)
 	plans := l.w.Load(t)
 	lim := newLimiter(t, &clock{now: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
 

@@ -41,7 +41,7 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 				p.Spec.PoolIDs = []string{meta.NewID()}
 				return p
 			}(),
-			want: "must not list poolIds or credentialIds",
+			want: "must not list poolIds",
 		},
 		{
 			name: "team owner",
@@ -66,12 +66,21 @@ func TestValidate_OwnerShapesAndModelRefs(t *testing.T) {
 			want: "duplicate models entry",
 		},
 		{
-			name: "provider-wide, host-only and host-pinned refs are accepted",
+			name: "provider-wide and model refs are accepted",
 			p: func() *Policy {
 				p := fix("p")
-				p.Spec.Models = []string{"acme", "@host", "acme/m@host", "acme/m"}
+				p.Spec.Models = []string{"acme", "acme/m"}
 				return p
 			}(),
+		},
+		{
+			name: "a host-pinned ref is refused",
+			p: func() *Policy {
+				p := fix("p")
+				p.Spec.Models = []string{"acme/m@host"}
+				return p
+			}(),
+			want: "names a host",
 		},
 		{
 			// A model of "*" is every model of the provider, as leaving the model out is.

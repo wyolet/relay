@@ -52,7 +52,7 @@ func (a *sseAdapter) Retryable(*http.Response) (bool, keypool.FailureKind, time.
 func budgetCounters(meter ratelimit.Meter, strategy ratelimit.Strategy, amount int64) []limits.Counter {
 	rl := &ratelimit.RateLimit{Meta: meta.Metadata{ID: "brl", Name: "brl"}}
 	r := ratelimit.Rule{Meter: meter, Amount: amount, Window: ratelimit.Window(time.Hour), Strategy: strategy}
-	return []limits.Counter{limits.CallerRule(limits.RungPrincipal, rl, r, "bpol", "user:u", "user:u")}
+	return []limits.Counter{limits.CallerRule(limits.RungLane, rl, r, "bpol", "account:a", "user:u")}
 }
 
 // budgetHops is one credential whose request must fit the caller counters cs.

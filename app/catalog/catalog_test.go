@@ -140,9 +140,9 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList, b
 			Owner: meta.Owner{Kind: meta.OwnerUser},
 		},
 		Spec: policy.Spec{
-			Models:        []string{"openai/gpt-4o", "openai/gpt-4o-mini"},
-			CredentialIDs: []string{k1.Meta.ID, k2.Meta.ID},
-			RateLimits:    []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
+			Models:     []string{"openai/gpt-4o", "openai/gpt-4o-mini"},
+			PoolIDs:    []string{meta.NewID(), meta.NewID()},
+			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
 		},
 	}
 
@@ -197,7 +197,7 @@ func TestReload_HappyPath(t *testing.T) {
 	// The snapshot keeps a policy's links as stored; the plan builder
 	// resolves them.
 	pol, _ := s.PolicyByName("cheap-tier")
-	if len(pol.Spec.CredentialIDs) != 2 || len(pol.Spec.RateLimits) != 1 || len(pol.Spec.Models) != 2 {
+	if len(pol.Spec.PoolIDs) != 2 || len(pol.Spec.RateLimits) != 1 || len(pol.Spec.Models) != 2 {
 		t.Errorf("policy spec = %+v, want its links kept", pol.Spec)
 	}
 }

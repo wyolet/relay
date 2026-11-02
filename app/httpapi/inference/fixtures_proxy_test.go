@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/limits/lua"
@@ -19,7 +20,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -47,7 +47,7 @@ func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64, sy
 	k.Meta.Name = "rk"
 	k.Spec.PassthroughAllowed = true
 	pol := w.Policy("p", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
+	w.BindPolicy(pol, w.PersonalAccount(u))
 	plans := w.Load(tb)
 	cat := catalogtest.Catalog{Providers: w.Providers, Hosts: w.Hosts, Models: w.Models, Bindings: w.Bindings, HostKeys: w.Credentials, Keys: w.Keys, RateLimits: system}.Load(tb)
 
@@ -64,19 +64,10 @@ func proxyStreamDepsLimited(tb testing.TB, upstreamURL string, perHour int64, sy
 	return d, principalOf(kp, k.Spec.KeyHash), store
 }
 
-// withPayloadLogging is pr under a copy of its innermost caller policy that captures payloads.
+// withPayloadLogging is pr under a copy of its lane whose ladder turns payload capture on.
 func withPayloadLogging(pr *Principal) *Principal {
 	caller := *pr.Caller
-	for i := len(caller.Rungs) - 1; i >= 0; i-- {
-		if ep := caller.Rungs[i].Policy; ep != nil {
-			pol := *ep.Policy
-			pol.Spec.PayloadLoggingEnabled = true
-			epc := *ep
-			epc.Policy = &pol
-			caller.Rungs[i].Policy = &epc
-			break
-		}
-	}
+	caller.PayloadLogging = account.PayloadLoggingOn
 	cp := *pr
 	cp.Caller = &caller
 	return &cp

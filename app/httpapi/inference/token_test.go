@@ -87,9 +87,9 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 			wantStatus: http.StatusUnauthorized, wantMsg: "token revoked",
 		},
 		{
-			name:       "project not in the snapshot",
+			name:       "a project the user holds no account in",
 			token:      func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Prj = meta.NewID() }) },
-			wantStatus: http.StatusForbidden, wantMsg: "the token's project is not available",
+			wantStatus: http.StatusForbidden, wantCode: "account_not_held",
 		},
 		{
 			name:       "garbage bearer",
@@ -102,7 +102,7 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body)
 			}
-			if got := authCode(t, w.Body.Bytes()); got != tc.wantMsg {
+			if got := authCode(t, w.Body.Bytes()); tc.wantMsg != "" && got != tc.wantMsg {
 				t.Errorf("message = %q, want %q", got, tc.wantMsg)
 			}
 			if tc.wantCode != "" {
@@ -166,9 +166,9 @@ func TestPrincipalFrom_Token(t *testing.T) {
 	if p.PassthroughAllowed {
 		t.Error("a token must never be allowed to forward upstream keys")
 	}
-	// A token acts under its user's caller ladder.
-	if p.Caller == nil || p.Caller.Principal != "user:"+f.user {
-		t.Errorf("caller plan = %+v, want the user's", p.Caller)
+	// A token runs in its user's member account in the project.
+	if p.Caller == nil || p.Caller.Holder != "user:"+f.user || p.Caller.Lane.Meta.ID != f.memberAcct.Meta.ID {
+		t.Errorf("caller plan = %+v, want the user's member account", p.Caller)
 	}
 }
 
@@ -318,14 +318,22 @@ func TestListModels_Token(t *testing.T) {
 	}
 }
 
-// boundTo builds a policy binding naming the given subject keys.
+// boundTo builds a project-owned policy binding on the fixture accounts the subject keys stand for: "project:<id>" the project's, "serviceaccount:<id>" the service account's, "user:<id>" the user's member account. A group stands for no account and binds nothing.
 func boundTo(f principalFixture, name string, policyID string, subjects ...string) *policybinding.PolicyBinding {
 	b := &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.project.Meta.ID}},
-		Spec: policybinding.Spec{ProjectID: f.project.Meta.ID, PolicyID: policyID},
+		Spec: policybinding.Spec{PolicyID: policyID},
 	}
 	for _, s := range subjects {
-		b.Spec.Subjects = append(b.Spec.Subjects, subjectFrom(s))
+		kind, _, _ := strings.Cut(s, ":")
+		switch kind {
+		case "project":
+			b.Spec.AccountIDs = append(b.Spec.AccountIDs, f.projAcct.Meta.ID)
+		case "serviceaccount":
+			b.Spec.AccountIDs = append(b.Spec.AccountIDs, f.saAcct.Meta.ID)
+		case "user":
+			b.Spec.AccountIDs = append(b.Spec.AccountIDs, f.memberAcct.Meta.ID)
+		}
 	}
 	return b
 }
@@ -439,7 +447,7 @@ func TestTokenActsInItsProject(t *testing.T) {
 		t.Fatalf("token status %d: %s", w.Code, w.Body)
 	}
 	cp := st.seen.Caller
-	if cp.Project().SubjectID != "project:"+f.project.Meta.ID || cp.Team().SubjectID != "team:"+f.team.Meta.ID || cp.Project().Policy == nil {
+	if cp.Project().SubjectID != "account:"+f.projAcct.Meta.ID || cp.Team().SubjectID != "account:"+f.teamAcct.Meta.ID || cp.Project().Policy == nil {
 		t.Fatalf("token rungs: team %q, project %q (policy %v); want the token's project and team", cp.Team().SubjectID, cp.Project().SubjectID, cp.Project().Policy)
 	}
 	upgraded := st.seen

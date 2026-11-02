@@ -8,7 +8,6 @@ import (
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 )
 
 // unpricedOrg adds a model "free" served at the org's host with no pricing.
@@ -23,8 +22,8 @@ func unpricedOrg() *org {
 func TestUnpriced_RefusedUnderACallerBudget(t *testing.T) {
 	o := unpricedOrg()
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	pol := o.w.Policy("budgeted", policy.Spec{BudgetIDs: []string{o.w.Budget("5").Meta.ID}})
-	o.w.BindPolicy(pol, projectSubject(o.proj))
+	pol := o.w.Policy("budgeted", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: o.w.Budget("5").Meta.ID}}})
+	o.w.BindPolicy(pol, o.projectAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	wantRefusal(t, cp.Routes.Get("free"), plan.CodeUnpricedUnderBudget, limits.RungProject, pol.Meta.ID)
@@ -43,8 +42,8 @@ func TestUnpriced_RefusedUnderAnAccountBudget(t *testing.T) {
 	o := unpricedOrg()
 	acct := o.w.Account(o.host)
 	o.w.Credential(o.host, acct, plantest.System, "sk-acct")
-	tier := o.w.Policy("tier", policy.Spec{BudgetIDs: []string{o.w.Budget("100").Meta.ID}})
-	o.w.BindPolicy(tier, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	tier := o.w.Policy("tier", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: o.w.Budget("100").Meta.ID}}})
+	o.w.BindPolicy(tier, acct)
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	r := cp.Routes.Get("free")

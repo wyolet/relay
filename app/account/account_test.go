@@ -25,11 +25,13 @@ func TestValidate(t *testing.T) {
 		{name: "system owner", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem} }},
 		{name: "user owner", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()} }},
 		{name: "project owner", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()} }},
-		{name: "host required", edit: func(a *Account) { a.Spec.HostID = "" }, want: "HostID"},
+		{name: "a caller account carries no org id", edit: func(a *Account) { a.Spec.HostID = "" }, want: "provider accounts only"},
 		{name: "host must be an id", edit: func(a *Account) { a.Spec.HostID = "openai" }, want: "HostID"},
 		{name: "team owner without id", edit: func(a *Account) { a.Meta.Owner.ID = "" }, want: "requires an id"},
 		{name: "host owner rejected", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()} }, want: "owner.kind must be"},
 		{name: "missing owner rejected", edit: func(a *Account) { a.Meta.Owner = meta.Owner{} }, want: "owner.kind must be"},
+		{name: "a provider account has no holder", edit: func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: meta.NewID()} }, want: "has no holder"},
+		{name: "a system account needs a host", edit: func(a *Account) { a.Spec.HostID, a.Spec.OrgID, a.Meta.Owner = "", "", meta.Owner{Kind: meta.OwnerSystem} }, want: "hostId is required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := fix()
@@ -77,5 +79,33 @@ func TestDefaultMarkIsTheOwnerColumn(t *testing.T) {
 		if got := defaultOwner(owner); got != want {
 			t.Errorf("defaultOwner(%+v) = %q, want %q", owner, got, want)
 		}
+	}
+}
+
+// The kind follows from the host, the holder and the owner; each caller kind has one place.
+func TestKindsAndPlaces(t *testing.T) {
+	team, proj, usr, sa := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	projectScope := meta.Owner{Kind: meta.OwnerProject, ID: proj}
+	for _, tc := range []struct {
+		a     *Account
+		kind  Kind
+		place string
+	}{
+		{ForTeam(team, "acme", ""), KindTeam, "team:" + team},
+		{ForProject(proj, "ml", ""), KindProject, "project:" + proj},
+		{Personal(usr, "Alice@Example.com"), KindPersonal, "personal:" + usr},
+		{ForServiceAccount(sa, "ci", "", proj), KindService, "service:" + sa},
+		{Member(usr, "alice", projectScope, "ml", ""), KindMember, "member:project:" + proj + ":" + usr},
+		{fix(), KindProvider, ""},
+	} {
+		if err := tc.a.Validate(); err != nil {
+			t.Errorf("%s: Validate() = %v", tc.kind, err)
+		}
+		if tc.a.Spec.Kind != tc.kind || tc.a.ManagedKey() != tc.place {
+			t.Errorf("%s: kind %q, place %q; want %q", tc.kind, tc.a.Spec.Kind, tc.a.ManagedKey(), tc.place)
+		}
+	}
+	if p := Personal(usr, "Alice@Example.com"); p.Meta.Name != "user-alice-example-com" {
+		t.Errorf("personal account name = %q", p.Meta.Name)
 	}
 }

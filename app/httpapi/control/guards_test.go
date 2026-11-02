@@ -24,7 +24,6 @@ import (
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -96,12 +95,6 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	rb.Spec.Scope = meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
 	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "eng"}}
 
-	pb := &policybinding.PolicyBinding{}
-	pb.Meta = meta.Metadata{ID: meta.NewID(), Name: "pb", Owner: wrong}
-	pb.Spec.ProjectID = projectID
-	pb.Spec.PolicyID = meta.NewID()
-	pb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}
-
 	for _, tc := range []struct {
 		name  string
 		run   func() error
@@ -120,10 +113,6 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 			func() error { return guardRoleBinding(Deps{})(context.Background(), "create", nil, rb) },
 			func() meta.Owner { return rb.Meta.Owner },
 			meta.Owner{Kind: meta.OwnerTeam, ID: teamID}},
-		{"policy binding takes its project",
-			func() error { return guardPolicyBinding(Deps{})(context.Background(), "create", nil, pb) },
-			func() meta.Owner { return pb.Meta.Owner },
-			meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.run(); err != nil {
