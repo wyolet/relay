@@ -125,7 +125,7 @@ func generationDescription(spec *adapter.Spec) string {
 		routing = "Routes the request by its model field to a host the caller's policies allow and serves it in this wire shape. "
 	}
 	return routing +
-		"Every rung of the caller's ladder (host, account, host key, team, project, principal) may refuse: a refusal names the rung and policy in error.message. " +
+		"Every rung of the request's account ladder (the team's and the project's own accounts, the lane account the request runs in, and the provider account of the key it is sent with) may refuse: a refusal names the rung and policy in error.message. " +
 		"Errors relay makes carry X-Wr-Origin: relay and the error envelope; an upstream's own error is passed through with X-Wr-Origin: upstream, X-Wr-Upstream-Status, and the upstream's body."
 }
 

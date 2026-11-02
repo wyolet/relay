@@ -199,6 +199,9 @@ func TestMigrateUpStopsWhenStrippingAHostWidens(t *testing.T) {
 	open := d.policy("open", `{}`, `["acme/m@east"]`)
 	confined := d.policy("confined", `{}`, `["acme/m@east"]`)
 	d.exec("policy pool", `INSERT INTO policy_pools (policy_id, pool_id, position) VALUES ($1, $2, 0)`, confined, poolID)
+	limitID := meta.NewID()
+	d.exec("rate limit", `INSERT INTO rate_limits (id, name, metadata, spec) VALUES ($1, 'east-rpm', $2, '{"rules":[]}')`, limitID, system)
+	d.exec("scoped limit link", `INSERT INTO policy_rate_limits (policy_id, rate_limit_id, models, position) VALUES ($1, $2, '["acme/m@east"]', 0)`, confined, limitID)
 	d.userBinding("open-alice", "project:"+search, open, alice)
 	d.userBinding("confined-bob", "system:", confined, d.user("bob"))
 
@@ -213,6 +216,10 @@ func TestMigrateUpStopsWhenStrippingAHostWidens(t *testing.T) {
 	}
 	if err := storagemod.MigrateUp(d.dsn); err != nil {
 		t.Fatalf("upgrade with the pin confined by its pool: %v", err)
+	}
+	var scope string
+	if err := d.conn.QueryRow(d.ctx, `SELECT models::text FROM policy_rate_limits WHERE policy_id = $1`, confined).Scan(&scope); err != nil || scope != `["acme/m"]` {
+		t.Fatalf("the limit link's scope = %s (err %v), want its host dropped", scope, err)
 	}
 }
 
