@@ -3,6 +3,15 @@
     "PoolSpec": {
       "additionalProperties": false,
       "properties": {
+        "accounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "credentials": {
           "items": {
             "type": "string"

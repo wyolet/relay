@@ -137,6 +137,8 @@ const (
 	IssueHostMismatch          = "host_mismatch"
 	IssueCredentialsIgnored    = "credentials_ignored"
 	IssuePolicyNotBindable     = "policy_not_bindable"
+	// IssueSharedAccountMissing is a shared account whose real account is gone, or no longer a provider account at its host: it serves nothing.
+	IssueSharedAccountMissing = "shared_account_missing"
 )
 
 // rungRefusal is the refusal a rung's policy imposes, naming the rung.

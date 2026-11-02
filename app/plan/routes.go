@@ -2,6 +2,7 @@ package plan
 
 import (
 	"hash/maphash"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -374,7 +375,8 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 		}
 		hop := RouteHop{Pool: p, Binding: sv.b, Host: sv.h, Pricing: sv.pricing, Priced: priced}
 		for _, s := range p.Slots {
-			if _, dup := seen[s]; dup {
+			// A key reached through two shares is tried once per hop, through the first that serves.
+			if _, dup := seen[s]; dup || slices.Contains(hop.Credentials, s.Credential) {
 				continue
 			}
 			if step, r := s.refuses(prov, m, sv.b, sv.h.Meta.Name, priced); r != nil {

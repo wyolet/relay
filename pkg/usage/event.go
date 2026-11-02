@@ -63,7 +63,9 @@ type Event struct {
 	HostKeyID string `json:"host_key_id,omitempty" doc:"Hash of the upstream credential's value (not the host key's row id), so a rotated key records a new value."`
 	// PoolID and AccountID are the pool the serving credential was drawn from and the provider account it belongs to; empty when it was linked on its own or holds no account. PolicyID is the innermost caller policy.
 	PoolID    string `json:"pool_id,omitempty"    doc:"Id of the pool the serving host key was drawn from; empty when the policy linked the key directly."`
-	AccountID string `json:"account_id,omitempty" doc:"Id of the provider account the serving host key belongs to."`
+	AccountID string `json:"account_id,omitempty" doc:"Id of the provider account the serving host key belongs to: the real account, whose bill it is, also when the request went through an account shared from it."`
+	// ViaAccountID is the shared account the request reached the key through; grouping by it splits account_id's total by holder.
+	ViaAccountID string `json:"via_account_id,omitempty" doc:"Id of the shared account the request reached the serving host key through; empty when it used the real account directly. Group by account_id for the whole drain on a provider account, by via_account_id for each share's part."`
 
 	// Tenancy + principal attribution as resolved at request entry.
 	// Project/Team/Principal are the event-time slugs beside their ids —

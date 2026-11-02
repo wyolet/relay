@@ -136,8 +136,8 @@ func TestIntegration_PolicyBindingRefusesAnotherTeamsPool(t *testing.T) {
 	binding := func(name, policyID string) string {
 		return `{"metadata":{"name":"` + name + `","owner":{"kind":"project","id":"` + projA + `"}},"spec":{"policyId":"` + policyID + `","accountIds":["` + projAccount + `"]}}`
 	}
-	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-pool", borrowing)); code != http.StatusBadRequest || !strings.Contains(string(raw), "cannot use") {
-		t.Fatalf("binding a system policy on another team's pool = %d, want 400 naming the pool: %s", code, raw)
+	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-pool", borrowing)); code != http.StatusBadRequest || !strings.Contains(string(raw), "uses a pool you cannot see") {
+		t.Fatalf("binding a system policy on another team's pool = %d, want 400 refusing the pool without naming it: %s", code, raw)
 	}
 	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-plain", plain)); code != http.StatusCreated {
 		t.Fatalf("binding a system policy without links = %d, want 201: %s", code, raw)

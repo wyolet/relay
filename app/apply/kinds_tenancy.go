@@ -39,16 +39,18 @@ func (b *builder) planTenancy(ctx context.Context, teamDocs []*manifest.TeamDTO,
 	return nil
 }
 
-func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*manifest.ServiceAccountDTO, keyDocs []*manifest.KeyDTO) error {
-	s := b.opts.Stores
-	if err := planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
+// planServiceAccounts plans service accounts right after their projects: an account shared with one is held by it, so the service account is written first.
+func (b *builder) planServiceAccounts(ctx context.Context, saDocs []*manifest.ServiceAccountDTO) error {
+	return planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
 		Upsert: throughDirectory(b, converted((*serviceaccount.ServiceAccount).ToDirectory)), Delete: deleteThroughDirectory(b, "ServiceAccount"),
 		Check: b.checkServiceAccount(),
-	}); err != nil {
-		return err
-	}
+	})
+}
+
+func (b *builder) planKeys(ctx context.Context, keyDocs []*manifest.KeyDTO) error {
+	s := b.opts.Stores
 	if err := planKind(ctx, b, kindWiring[manifest.KeyDTO, key.Key]{
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
@@ -170,17 +172,18 @@ func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible
 			add("RoleBinding", rb.Meta)
 		}
 	}
-	var accountID string
+	// Its own account and the shares it holds go with it.
+	var held []string
 	for _, a := range b.rows.Accounts {
 		if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == id {
-			accountID = a.Meta.ID
+			held = append(held, a.Meta.ID)
 		}
 	}
-	if accountID == "" {
+	if len(held) == 0 {
 		return named, hidden
 	}
 	for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
-		if slices.Contains(pb.Spec.AccountIDs, accountID) {
+		if slices.ContainsFunc(pb.Spec.AccountIDs, func(aid string) bool { return slices.Contains(held, aid) }) {
 			add("PolicyBinding", pb.Meta)
 		}
 	}

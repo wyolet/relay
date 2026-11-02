@@ -63,10 +63,14 @@ type Entry struct {
 	IDMismatch string `json:"idMismatch,omitempty" doc:"The document's metadata.id when it differs from the stored row's; ids stay server-owned, so it is ignored."`
 	// Detached is set on a delete that takes links from policies that stay.
 	Detached *DetachedLinks `json:"detached,omitempty" doc:"On a delete: the policies that lose a link to the row."`
+	// Revokes is set on the delete of a shared account: what revoking it changes.
+	Revokes []RevokeImpact `json:"revokes,omitempty" doc:"On the delete of a shared account (pruned, or pruned with its real account): what revoking it changes. Policy bindings drop it, or go when it was their only account; relay keys whose lane it was move to their principal's own account; pools lose it."`
 
 	plural string
 	owner  meta.Owner
-	write  func(context.Context) error
+	// authorizeAt, when set, is the scope the write is authorized in instead of owner's: a share pruned with its real account is the real account owner's to remove, as detach is.
+	authorizeAt *meta.Owner
+	write       func(context.Context) error
 	// prev is what the row looked like when this entry was planned. Execute
 	// re-reads and refuses the write if it no longer matches.
 	prev rowState
@@ -350,6 +354,9 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 	kept := make([]Entry, 0, len(p.Entries))
 	for _, e := range p.Entries {
 		owner := e.owner
+		if e.authorizeAt != nil {
+			owner = *e.authorizeAt
+		}
 		res := authz.Resource{Kind: singularOf(e.plural), ID: e.ID, Name: e.Name, Owner: &owner}
 		if e.write == nil {
 			if authzr.Authorize(ctx, e.plural+".get", res) != nil {
@@ -360,7 +367,7 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 			kept = append(kept, e)
 			continue
 		}
-		if err := authzr.Authorize(ctx, "system.apply", authz.Resource{Kind: "system", Owner: applyScope(e.owner)}); err != nil {
+		if err := authzr.Authorize(ctx, "system.apply", authz.Resource{Kind: "system", Owner: applyScope(owner)}); err != nil {
 			return &AuthzError{Entry: e, Err: err}
 		}
 		if err := authzr.Authorize(ctx, e.plural+"."+string(verbOf(e.Action)), res); err != nil {

@@ -27,6 +27,9 @@ type Account struct {
 	ProjectID           pgtype.Text        `db:"project_id" json:"project_id"`
 	Closed              bool               `db:"closed" json:"closed"`
 	FollowsRoleBindings bool               `db:"follows_role_bindings" json:"follows_role_bindings"`
+	SourceAccountID     pgtype.Text        `db:"source_account_id" json:"source_account_id"`
+	ShareReceiver       pgtype.Text        `db:"share_receiver" json:"share_receiver"`
+	ShareUserID         pgtype.Text        `db:"share_user_id" json:"share_user_id"`
 }
 
 type AuditEvent struct {
@@ -210,6 +213,12 @@ type Pool struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+}
+
+type PoolAccount struct {
+	PoolID    string `db:"pool_id" json:"pool_id"`
+	AccountID string `db:"account_id" json:"account_id"`
+	Position  int32  `db:"position" json:"position"`
 }
 
 type PoolCredential struct {

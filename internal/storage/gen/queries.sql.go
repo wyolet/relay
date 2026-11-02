@@ -274,6 +274,15 @@ func (q *Queries) DeletePool(ctx context.Context, id string) error {
 	return err
 }
 
+const deletePoolAccounts = `-- name: DeletePoolAccounts :exec
+DELETE FROM pool_accounts WHERE pool_id = $1
+`
+
+func (q *Queries) DeletePoolAccounts(ctx context.Context, poolID string) error {
+	_, err := q.db.Exec(ctx, deletePoolAccounts, poolID)
+	return err
+}
+
 const deletePoolCredentials = `-- name: DeletePoolCredentials :exec
 DELETE FROM pool_credentials WHERE pool_id = $1
 `
@@ -375,7 +384,7 @@ func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) erro
 
 const getAccount = `-- name: GetAccount :one
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
 FROM accounts WHERE id = $1
 `
 
@@ -401,6 +410,9 @@ func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
 		&i.ProjectID,
 		&i.Closed,
 		&i.FollowsRoleBindings,
+		&i.SourceAccountID,
+		&i.ShareReceiver,
+		&i.ShareUserID,
 	)
 	return i, err
 }
@@ -760,6 +772,30 @@ func (q *Queries) GetPool(ctx context.Context, id string) (Pool, error) {
 		&i.ResourceVersion,
 	)
 	return i, err
+}
+
+const getPoolAccounts = `-- name: GetPoolAccounts :many
+SELECT pool_id, account_id, position FROM pool_accounts WHERE pool_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPoolAccounts(ctx context.Context, poolID string) ([]PoolAccount, error) {
+	rows, err := q.db.Query(ctx, getPoolAccounts, poolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PoolAccount
+	for rows.Next() {
+		var i PoolAccount
+		if err := rows.Scan(&i.PoolID, &i.AccountID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getPoolCredentials = `-- name: GetPoolCredentials :many
@@ -1268,6 +1304,21 @@ func (q *Queries) InsertPolicyRateLimit(ctx context.Context, arg InsertPolicyRat
 	return err
 }
 
+const insertPoolAccount = `-- name: InsertPoolAccount :exec
+INSERT INTO pool_accounts (pool_id, account_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPoolAccountParams struct {
+	PoolID    string `db:"pool_id" json:"pool_id"`
+	AccountID string `db:"account_id" json:"account_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPoolAccount(ctx context.Context, arg InsertPoolAccountParams) error {
+	_, err := q.db.Exec(ctx, insertPoolAccount, arg.PoolID, arg.AccountID, arg.Position)
+	return err
+}
+
 const insertPoolCredential = `-- name: InsertPoolCredential :exec
 INSERT INTO pool_credentials (pool_id, host_key_id, position) VALUES ($1, $2, $3)
 `
@@ -1525,7 +1576,7 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 const listAccounts = `-- name: ListAccounts :many
 
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
 FROM accounts ORDER BY name
 `
 
@@ -1558,6 +1609,9 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.ProjectID,
 			&i.Closed,
 			&i.FollowsRoleBindings,
+			&i.SourceAccountID,
+			&i.ShareReceiver,
+			&i.ShareUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -2086,6 +2140,30 @@ func (q *Queries) ListPolicyRateLimits(ctx context.Context) ([]PolicyRateLimit, 
 			&i.Position,
 			&i.Shared,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPoolAccounts = `-- name: ListPoolAccounts :many
+SELECT pool_id, account_id, position FROM pool_accounts ORDER BY pool_id, position
+`
+
+func (q *Queries) ListPoolAccounts(ctx context.Context) ([]PoolAccount, error) {
+	rows, err := q.db.Query(ctx, listPoolAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PoolAccount
+	for rows.Next() {
+		var i PoolAccount
+		if err := rows.Scan(&i.PoolID, &i.AccountID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3162,9 +3240,12 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 }
 
 const upsertAccount = `-- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
 ON CONFLICT (id) DO UPDATE SET
+    source_account_id = EXCLUDED.source_account_id,
+    share_receiver    = EXCLUDED.share_receiver,
+    share_user_id     = EXCLUDED.share_user_id,
     name          = EXCLUDED.name,
     display_name  = EXCLUDED.display_name,
     host_id       = EXCLUDED.host_id,
@@ -3180,7 +3261,7 @@ ON CONFLICT (id) DO UPDATE SET
     closed        = EXCLUDED.closed,
     follows_role_bindings = EXCLUDED.follows_role_bindings,
     updated_at    = NOW()
-WHERE $16::bigint IS NULL OR accounts.resource_version = $16::bigint
+WHERE $19::bigint IS NULL OR accounts.resource_version = $19::bigint
 `
 
 type UpsertAccountParams struct {
@@ -3199,6 +3280,9 @@ type UpsertAccountParams struct {
 	ProjectID           pgtype.Text `db:"project_id" json:"project_id"`
 	Closed              bool        `db:"closed" json:"closed"`
 	FollowsRoleBindings bool        `db:"follows_role_bindings" json:"follows_role_bindings"`
+	SourceAccountID     pgtype.Text `db:"source_account_id" json:"source_account_id"`
+	ShareReceiver       pgtype.Text `db:"share_receiver" json:"share_receiver"`
+	ShareUserID         pgtype.Text `db:"share_user_id" json:"share_user_id"`
 	ExpectedVersion     pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
@@ -3219,6 +3303,9 @@ func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (i
 		arg.ProjectID,
 		arg.Closed,
 		arg.FollowsRoleBindings,
+		arg.SourceAccountID,
+		arg.ShareReceiver,
+		arg.ShareUserID,
 		arg.ExpectedVersion,
 	)
 	if err != nil {

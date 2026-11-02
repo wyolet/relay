@@ -25,6 +25,13 @@ func refs(d Deps) refcheck.Checker {
 	c := refcheck.Checker{Authz: d.Authz}
 	if d.Users != nil {
 		c.Rows.MissingUsers = d.Users.MissingIDs
+		c.Rows.UserVisible = d.userVisible
+		c.Rows.UserName = func(ctx context.Context, id string) string {
+			if u, err := d.Users.Get(ctx, id); err == nil && u != nil {
+				return u.Username
+			}
+			return ""
+		}
 		if d.Authz != nil {
 			c.Rows.UserMayBindIn = userMayBindIn(d)
 		}

@@ -23,16 +23,37 @@ func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 	}
 	m := d.Metadata.toMeta()
 	resolveScopeOwner(&m.Owner, idx)
-	return &account.Account{
+	a := &account.Account{
 		Meta: m,
 		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID, Default: d.Spec.Default, PayloadLogging: account.PayloadLogging(d.Spec.PayloadLogging)},
-	}, nil
+	}
+	if d.Spec.SourceAccount != "" {
+		id, ok := idx.AccountID(d.Spec.SourceAccount)
+		if !ok {
+			return nil, refNotFound("account %q: sourceAccount %q not found", d.Metadata.Name, d.Spec.SourceAccount)
+		}
+		a.Spec.SourceAccountID = id
+	}
+	if d.Spec.ServiceAccount != "" {
+		id, ok := idx.ServiceAccountID(d.Spec.ServiceAccount)
+		if !ok {
+			return nil, refNotFound("account %q: serviceAccount %q not found", d.Metadata.Name, d.Spec.ServiceAccount)
+		}
+		a.Spec.Holder = &account.Holder{Kind: account.HolderServiceAccount, ID: id}
+	}
+	return a, nil
 }
 
 func FromAccount(a *account.Account, rev ReverseResolver) AccountDTO {
 	spec := AccountSpec{OrgID: a.Spec.OrgID, Default: a.Spec.Default, PayloadLogging: string(a.Spec.PayloadLogging)}
 	if a.Spec.HostID != "" {
 		spec.Host = nameOr(rev.HostName, a.Spec.HostID)
+	}
+	if a.IsShared() {
+		spec.SourceAccount = nameOr(rev.AccountName, a.Spec.SourceAccountID)
+		if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount {
+			spec.ServiceAccount = nameOr(rev.ServiceAccountName, h.ID)
+		}
 	}
 	return AccountDTO{
 		APIVersion: APIVersion,
@@ -53,12 +74,17 @@ func ToPool(d PoolDTO, idx Resolver) (*pool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
+	accounts, err := resolveNames(idx.AccountID, d.Spec.Accounts, "pool %q: account %q not found", d.Metadata.Name)
+	if err != nil {
+		return nil, err
+	}
 	m := d.Metadata.toMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	p := &pool.Pool{
 		Meta: m,
 		Spec: pool.Spec{
 			HostID:        hostID,
+			AccountIDs:    accounts,
 			CredentialIDs: creds,
 			Selection:     keypool.KeySelection(d.Spec.Selection),
 		},
@@ -74,6 +100,7 @@ func FromPool(p *pool.Pool, rev ReverseResolver) PoolDTO {
 		Metadata:   metaToWire(p.Meta),
 		Spec: PoolSpec{
 			Host:        nameOr(rev.HostName, p.Spec.HostID),
+			Accounts:    namesOf(rev.AccountName, p.Spec.AccountIDs),
 			Credentials: namesOf(rev.HostKeyName, p.Spec.CredentialIDs),
 			Selection:   string(p.Spec.Selection),
 		},

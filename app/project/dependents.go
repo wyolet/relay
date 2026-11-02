@@ -120,6 +120,10 @@ func (r Rows) addOwned(d *dependents, owner meta.Owner) {
 			callers[x.Meta.ID] = true
 			continue
 		}
+		// A share received is a link and goes with its receiver.
+		if x.Meta.Owner == owner && x.IsShared() {
+			continue
+		}
 		d.add("Account", x.Meta, x.Meta.Owner == owner && (!x.Spec.Default || held[x.Meta.ID]))
 	}
 	for _, x := range r.Keys {

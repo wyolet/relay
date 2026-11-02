@@ -1,4 +1,4 @@
-// Spec.HostID lives in the host_id column and Spec.CredentialIDs in the pool_credentials junction, so deleting a host or a key reaches the pool through its FKs. Upsert writes both inside one transaction.
+// Spec.HostID lives in the host_id column, Spec.CredentialIDs in the pool_credentials junction and Spec.AccountIDs in pool_accounts, so deleting a host, a key or an account reaches the pool through its FKs. Upsert writes all three inside one transaction.
 
 package pool
 
@@ -38,6 +38,14 @@ func (s *Store) List(ctx context.Context) ([]*Pool, error) {
 	for _, r := range keyRows {
 		keysByPool[r.PoolID] = append(keysByPool[r.PoolID], r.HostKeyID)
 	}
+	accountRows, err := q.ListPoolAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pool.List accounts: %w", err)
+	}
+	accountsByPool := map[string][]string{}
+	for _, r := range accountRows {
+		accountsByPool[r.PoolID] = append(accountsByPool[r.PoolID], r.AccountID)
+	}
 	out := make([]*Pool, 0, len(rows))
 	for _, r := range rows {
 		p, err := fromRow(r)
@@ -45,6 +53,7 @@ func (s *Store) List(ctx context.Context) ([]*Pool, error) {
 			return nil, fmt.Errorf("pool %s: %w", r.Name, err)
 		}
 		p.Spec.CredentialIDs = keysByPool[p.Meta.ID]
+		p.Spec.AccountIDs = accountsByPool[p.Meta.ID]
 		out = append(out, p)
 	}
 	return out, nil
@@ -70,6 +79,13 @@ func (s *Store) Get(ctx context.Context, id string) (*Pool, error) {
 	}
 	for _, kr := range keyRows {
 		p.Spec.CredentialIDs = append(p.Spec.CredentialIDs, kr.HostKeyID)
+	}
+	accountRows, err := q.GetPoolAccounts(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("pool.Get accounts: %w", err)
+	}
+	for _, ar := range accountRows {
+		p.Spec.AccountIDs = append(p.Spec.AccountIDs, ar.AccountID)
 	}
 	return p, nil
 }
@@ -101,13 +117,21 @@ func (s *Store) Upsert(ctx context.Context, p *Pool) error {
 			return fmt.Errorf("pool.Upsert: insert credential %s: %w", id, err)
 		}
 	}
+	if err := q.DeletePoolAccounts(ctx, p.Meta.ID); err != nil {
+		return fmt.Errorf("pool.Upsert: clear accounts: %w", err)
+	}
+	for i, id := range p.Spec.AccountIDs {
+		if err := q.InsertPoolAccount(ctx, gen.InsertPoolAccountParams{PoolID: p.Meta.ID, AccountID: id, Position: int32(i)}); err != nil {
+			return fmt.Errorf("pool.Upsert: insert account %s: %w", id, err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pool.Upsert: commit: %w", err)
 	}
 	return nil
 }
 
-// Delete removes a Pool by id and its credential rows. A policy linking it keeps the id, so it narrows rather than widens.
+// Delete removes a Pool by id and its credential and account rows. A policy linking it keeps the id, so it narrows rather than widens.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.db).DeletePool(ctx, id)
 }
@@ -125,7 +149,7 @@ func fromRow(r gen.Pool) (*Pool, error) {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
 	spec.HostID = r.HostID
-	spec.CredentialIDs = nil
+	spec.CredentialIDs, spec.AccountIDs = nil, nil
 	return &Pool{Meta: md, Spec: spec}, nil
 }
 
@@ -136,7 +160,7 @@ func toUpsertParams(p *Pool) (gen.UpsertPoolParams, error) {
 	}
 	stored := p.Spec
 	stored.HostID = ""
-	stored.CredentialIDs = nil
+	stored.CredentialIDs, stored.AccountIDs = nil, nil
 	specJSON, err := json.Marshal(stored)
 	if err != nil {
 		return gen.UpsertPoolParams{}, fmt.Errorf("spec: %w", err)

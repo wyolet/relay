@@ -4,9 +4,11 @@ package refcheck
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
-	"strconv"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -21,8 +23,12 @@ func (c Checker) BindablePolicy(ctx context.Context, policyID string, scope meta
 	if p == nil {
 		return badRequest("policy %q does not exist", policyID)
 	}
+	return c.policyBindable(ctx, p, scope)
+}
+
+func (c Checker) policyBindable(ctx context.Context, p *policy.Policy, scope meta.Owner) error {
 	if !Visible(ctx, c.Authz, "policy", p.Meta.ID, p.Meta.Owner) {
-		return notVisible("policy", policyID)
+		return notVisible("policy", p.Meta.ID)
 	}
 	switch {
 	case p.Meta.Owner.Kind == meta.OwnerUser:
@@ -30,7 +36,8 @@ func (c Checker) BindablePolicy(ctx context.Context, policyID string, scope meta
 			return err
 		}
 	case p.Meta.Owner.Kind != meta.OwnerHost && !c.containsScope(ctx, p.Meta.Owner, scope):
-		return badRequest("policy %q is owned by %s; a binding owned by %s may use a policy of its own scope, an ancestor of it, the system, a host, or a user who may manage policy bindings there", p.Meta.Name, ownerText(p.Meta.Owner), ownerText(scope))
+		return badRequest("a policy binding of %s cannot use %s: %s binding can use policies of %s, a host's tier policies, or a personal policy of someone who may manage policy bindings there. Create the policy in %s, or move this one there.",
+			c.scopeText(ctx, scope), c.rowText(ctx, "policy", p.Meta), scopeArticle(scope), reachText(scope), homeText(scope))
 	}
 	return c.linksUsableIn(ctx, p, scope)
 }
@@ -54,12 +61,14 @@ func (c Checker) personalPolicyBindableIn(ctx context.Context, p *policy.Policy,
 		if ok {
 			return nil
 		}
-		return badRequest("policy %q is owned by %s, who may not manage policy bindings in %s", p.Meta.Name, ownerText(owner), ownerText(scope))
+		return badRequest("%s cannot be bound in %s: %s may not manage policy bindings there. Use a policy of %s instead.",
+			c.rowText(ctx, "policy", p.Meta), c.scopeText(ctx, scope), c.userSubject(ctx, owner.ID), reachText(scope))
 	}
-	return badRequest("policy %q is owned by %s; a binding owned by %s cannot use it: a personal policy is bound by its owner, or by a team or project where its owner may manage policy bindings", p.Meta.Name, ownerText(owner), ownerText(scope))
+	return badRequest("a policy binding of %s cannot use %s: a personal policy is bound by its owner to their own accounts, or in a team or project where its owner may manage policy bindings. Use a policy of %s instead.",
+		c.scopeText(ctx, scope), c.rowText(ctx, "policy", p.Meta), reachText(scope))
 }
 
-// linksUsableIn refuses a policy linking a pool, or a pool holding a credential, that scope may not use: binding the policy would hand the scope's accounts another scope's credentials. A missing link is left to the plan, where it narrows.
+// linksUsableIn refuses a policy linking a pool, or a pool holding a credential or drawing on an account, that scope may not use: binding the policy would hand the scope's accounts another scope's credentials. A missing link is left to the plan, where it narrows.
 func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta.Owner) error {
 	if c.Rows.Pool == nil {
 		return nil
@@ -69,9 +78,19 @@ func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta
 		if pl == nil {
 			continue
 		}
-		name := c.linkName(ctx, "pool", pl.Meta)
+		poolText := c.rowText(ctx, "pool", pl.Meta)
 		if !c.containsScope(ctx, pl.Meta.Owner, scope) {
-			return badRequest("policy %q links pool %s owned by %s, which a binding owned by %s cannot use", p.Meta.Name, name, ownerText(pl.Meta.Owner), ownerText(scope))
+			return badRequest("policy %q uses %s; a policy binding of %s can use pools of %s. Create the pool in %s, or move this one there.",
+				label(p.Meta), poolText, c.scopeText(ctx, scope), reachText(scope), homeText(scope))
+		}
+		if c.Rows.Account != nil {
+			for _, aid := range pl.Spec.AccountIDs {
+				a := c.Rows.Account(ctx, aid)
+				if a != nil && !c.containsScope(ctx, a.Meta.Owner, scope) {
+					return badRequest("policy %q uses %s, which draws on %s; a policy binding of %s can use accounts of %s. Take the account out of the pool, or share it with %s.",
+						label(p.Meta), poolText, c.rowText(ctx, "account", a.Meta), c.scopeText(ctx, scope), reachText(scope), c.scopeText(ctx, scope))
+				}
+			}
 		}
 		if c.Rows.HostKey == nil {
 			continue
@@ -79,19 +98,12 @@ func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta
 		for _, kid := range pl.Spec.CredentialIDs {
 			k := c.Rows.HostKey(ctx, kid)
 			if k != nil && !c.containsScope(ctx, k.Meta.Owner, scope) {
-				return badRequest("policy %q links pool %s holding host-key %s owned by %s, which a binding owned by %s cannot use", p.Meta.Name, name, c.linkName(ctx, "host-key", k.Meta), ownerText(k.Meta.Owner), ownerText(scope))
+				return badRequest("policy %q uses %s, which holds %s; a policy binding of %s can use host keys of %s. Take the key out of the pool, or move it to %s.",
+					label(p.Meta), poolText, c.rowText(ctx, "host-key", k.Meta), c.scopeText(ctx, scope), reachText(scope), homeText(scope))
 			}
 		}
 	}
 	return nil
-}
-
-// linkName names a linked row by name when the caller may see it, else by id.
-func (c Checker) linkName(ctx context.Context, kind string, m meta.Metadata) string {
-	if Visible(ctx, c.Authz, kind, m.ID, m.Owner) {
-		return strconv.Quote(m.Name)
-	}
-	return strconv.Quote(m.ID)
 }
 
 // linksOnPolicy checks the bindings already using p against its links, so a bound policy cannot gain a pool its bindings' scopes may not use.
@@ -111,25 +123,50 @@ func (c Checker) linksOnPolicy(ctx context.Context, p *policy.Policy) error {
 	return nil
 }
 
-// accountsInScope refuses an account that does not exist, that the caller may not see, or that lives outside the binding owner's scope: a project binds its own account and the accounts it owns (its members', its service accounts', its provider accounts); a team the same for itself and its projects; a user the accounts they own; the system any account.
+// accountsInScope refuses an account that does not exist, that the caller may not see, or that lives outside the binding owner's scope.
 func (c Checker) accountsInScope(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	if c.Rows.Account == nil {
 		return nil
 	}
-	owner := pb.Meta.Owner
 	for i, id := range pb.Spec.AccountIDs {
 		a := c.Rows.Account(ctx, id)
 		if a == nil {
 			return badRequest("accountIds[%d]: account %q does not exist", i, id)
 		}
-		if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
-			return notVisible("account", id)
-		}
-		if !c.containsScope(ctx, owner, a.Meta.Owner) {
-			return badRequest("accountIds[%d]: account %q is owned by %s, outside the scope of this binding's owner, %s", i, a.Meta.Name, ownerText(a.Meta.Owner), ownerText(owner))
+		if err := c.accountBindable(ctx, a, pb.Meta.Owner); err != nil {
+			var re *Error
+			if errors.As(err, &re) && re.Status == http.StatusBadRequest {
+				re.Msg = fmt.Sprintf("accountIds[%d]: %s", i, re.Msg)
+			}
+			return err
 		}
 	}
 	return nil
+}
+
+// accountBindable is the scope rule for one account a binding owned by owner binds: a project binds its own account and the accounts it owns (its members', its service accounts', its provider accounts); a team the same for itself and its projects; a user the accounts they own; the system any account.
+func (c Checker) accountBindable(ctx context.Context, a *account.Account, owner meta.Owner) error {
+	if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
+		return notVisible("account", a.Meta.ID)
+	}
+	if c.containsScope(ctx, owner, a.Meta.Owner) {
+		return nil
+	}
+	return badRequest("%s is outside the scope of this binding's owner, %s: %s. Create the binding in %s instead.",
+		c.rowText(ctx, "account", a.Meta), c.scopeText(ctx, owner), bindReachText(owner), c.scopeText(ctx, a.Meta.Owner))
+}
+
+// bindReachText says which accounts a binding owned by owner binds.
+func bindReachText(owner meta.Owner) string {
+	switch owner.Kind {
+	case meta.OwnerProject:
+		return "a project's binding binds the project's own accounts: its account, its members', its service accounts' and its provider accounts"
+	case meta.OwnerTeam:
+		return "a team's binding binds the accounts of the team and its projects"
+	case meta.OwnerUser:
+		return "a personal binding binds only its owner's own accounts"
+	}
+	return "a system binding binds any account"
 }
 
 // containsScope reports whether scope outer holds scope inner: the same scope, the system above everything, or a team above its projects. Without a project lookup a team is taken to hold every project.
@@ -141,11 +178,4 @@ func (c Checker) containsScope(ctx context.Context, outer, inner meta.Owner) boo
 		return c.projectInTeam(ctx, inner.ID, outer.ID)
 	}
 	return false
-}
-
-func ownerText(o meta.Owner) string {
-	if o.ID == "" {
-		return string(o.Kind)
-	}
-	return string(o.Kind) + " " + o.ID
 }

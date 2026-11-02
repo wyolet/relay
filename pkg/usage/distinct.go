@@ -9,6 +9,7 @@ var ValidDistinct = []string{
 	"pool_id",
 	"account_id",
 	"lane_account_id",
+	"via_account_id",
 	"project_id",
 	"team_id",
 	"model_id",
