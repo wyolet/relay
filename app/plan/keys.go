@@ -282,14 +282,14 @@ func (r *Root) LaneFor(kp *KeyPlan, ref string) (*CallerPlan, *Refusal) {
 	return r.withHolderState(cp, h), nil
 }
 
-// TokenLane resolves the lane a relay-minted token of userID runs in: ref, an account id or name the user holds (a member account opened on first use among them), or the user's member account in projectID when ref is empty.
+// TokenLane resolves the lane a relay-minted token of userID runs in: the user's member account in projectID when ref is empty, else ref, an account id or name the user holds (a member account opened on first use among them). A token scoped to a project switches only into accounts inside it; one without a project into any the user holds.
 func (r *Root) TokenLane(userID, projectID, ref string) (*CallerPlan, *Refusal) {
 	if ref == "" {
 		return r.MemberLane(userID, projectID)
 	}
 	h := account.Holder{Kind: account.HolderUser, ID: userID}
 	cp := r.Lanes.Lookup(ref)
-	if cp == nil || !cp.HeldBy(h.Key()) {
+	if cp == nil || !cp.HeldBy(h.Key()) || (projectID != "" && cp.Lane.Meta.Owner != meta.Owner{Kind: meta.OwnerProject, ID: projectID}) {
 		return nil, notHeld(ref, h.Key())
 	}
 	return r.withHolderState(cp, h), nil

@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -178,19 +179,24 @@ func TestLane_KeyRefusals(t *testing.T) {
 	})
 }
 
-// A relay-minted token switches by the same means into any account its user holds, a member account made on first use included, and is refused one it does not hold.
+// A relay-minted token switches by the same means. One scoped to a project stays inside it: its member account there, made on first use, and nothing outside. One without a project switches into any account its user holds, and is refused one it does not hold.
 func TestLane_TokenSwitch(t *testing.T) {
 	f := newLaneFixture()
 	st := f.stack(t, "")
 	tok := f.mint(t, nil)
 
 	st.wantLane(t, st.send(tok, "/v1/chat/completions", nil), f.memberAcct)
-	st.wantLane(t, st.send(tok, "/a/acme-ml/v1/chat/completions", nil), f.teamMember)
-	st.wantLane(t, st.send(tok, "/v1/chat/completions", accountHeader(f.personalAcct.Meta.ID)), f.personalAcct)
+	st.wantLane(t, st.send(tok, "/v1/chat/completions", accountHeader(f.memberAcct.Meta.ID)), f.memberAcct)
+	wantForbidden(t, st.send(tok, "/a/acme-ml/v1/chat/completions", nil), plan.CodeAccountNotHeld)
+	wantForbidden(t, st.send(tok, "/v1/chat/completions", accountHeader(f.personalAcct.Meta.ID)), plan.CodeAccountNotHeld)
+
+	unscoped := f.mint(t, func(c *crypto.TokenClaims) { c.Prj = "" })
+	st.wantLane(t, st.send(unscoped, "/a/acme-ml/v1/chat/completions", nil), f.teamMember)
+	st.wantLane(t, st.send(unscoped, "/v1/chat/completions", accountHeader(f.personalAcct.Meta.ID)), f.personalAcct)
 	if st.seen.SwitchedLaneID != f.personalAcct.Meta.ID || st.seen.ProjectID != "" {
 		t.Fatalf("switched = %q project = %q", st.seen.SwitchedLaneID, st.seen.ProjectID)
 	}
-	wantForbidden(t, st.send(tok, "/v1/chat/completions", accountHeader(f.otherPersonal.Meta.ID)), plan.CodeAccountNotHeld)
+	wantForbidden(t, st.send(unscoped, "/v1/chat/completions", accountHeader(f.otherPersonal.Meta.ID)), plan.CodeAccountNotHeld)
 }
 
 // The lifecycle, and so the usage event, records the lane the request ran in: the default, or the one it switched into.
@@ -233,9 +239,12 @@ func TestLane_RecheckRunsInTheSwitchedLane(t *testing.T) {
 	if _, err := st.auth.Recheck(sha("sk-wr-alice"), "", "", "", 0, 0, f.otherPersonal.Meta.ID, now); err == nil {
 		t.Fatal("a key item ran in an account its principal does not hold")
 	}
-	p, err = st.auth.Recheck("", f.user, f.project.Meta.ID, "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now)
+	p, err = st.auth.Recheck("", f.user, "", "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now)
 	if err != nil || p.Caller.Lane.Meta.ID != f.personalAcct.Meta.ID {
 		t.Fatalf("token item lane = %v, %v", p, err)
+	}
+	if _, err := st.auth.Recheck("", f.user, f.project.Meta.ID, "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now); err == nil {
+		t.Fatal("a project token's item ran outside its project")
 	}
 }
 

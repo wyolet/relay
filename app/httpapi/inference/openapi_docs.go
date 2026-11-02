@@ -210,7 +210,7 @@ func documentRequestBody(api huma.API, path string, spec *adapter.Spec) {
 		item.Post.Parameters = append(item.Post.Parameters, &huma.Param{
 			Name:        httpheader.HeaderAccount,
 			In:          "header",
-			Description: "Id or name of the account to run the request in and charge it to, instead of the credential's default; one the credential's principal holds, else 403 account_not_held. Wins over a /a/{account}/ prefix and the account's own host.",
+			Description: "Id or name of the account to run the request in and charge it to, instead of the credential's default; one the credential's principal holds, and for a token scoped to a project one inside that project, else 403 account_not_held. Wins over a /a/{account}/ prefix and the account's own host.",
 			Schema:      &huma.Schema{Type: huma.TypeString},
 		})
 	}

@@ -224,6 +224,29 @@ func TestLane_LaneForResolvesHeldAccountsOnly(t *testing.T) {
 	}
 }
 
+// A token scoped to a project switches only into accounts inside that project; one without a project into any account its user holds.
+func TestLane_TokenSwitchStaysInItsProject(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	inProject := b.w.member(u, meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+	inTeam := b.w.member(u, meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID})
+	personal := b.w.personal(u)
+	h := b.w.start(t)
+	root, proj := h.holder.Load(), b.proj.Meta.ID
+
+	if cp, r := root.TokenLane(u.ID, proj, inProject.Meta.Name); r != nil || cp.Lane.Meta.ID != inProject.Meta.ID {
+		t.Fatalf("project token into its member account = %v, %v", cp, r)
+	}
+	for name, ref := range map[string]string{"team member account": inTeam.Meta.ID, "personal account": personal.Meta.ID} {
+		if _, r := root.TokenLane(u.ID, proj, ref); r == nil || r.Code != CodeAccountNotHeld {
+			t.Errorf("project token into its %s: refusal = %v, want account_not_held", name, r)
+		}
+		if cp, r := root.TokenLane(u.ID, "", ref); r != nil || cp.Lane.Meta.ID != ref {
+			t.Errorf("token without a project into its %s = %v, %v", name, cp, r)
+		}
+	}
+}
+
 // A key switches by the rules a key's own account obeys: never into a member account opened on first use, a team's account, or a provider account its user does not own. A token switches into any account its user holds. A provider lane of a disabled user is refused, since its plan reads no holder.
 func TestLane_SwitchFollowsTheKeyRules(t *testing.T) {
 	b := newBasic()
