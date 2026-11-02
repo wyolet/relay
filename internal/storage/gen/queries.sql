@@ -598,18 +598,20 @@ INSERT INTO policy_binding_accounts (binding_id, account_id, position) VALUES ($
 
 -- name: ListAccounts :many
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver
 FROM accounts ORDER BY name;
 
 -- name: GetAccount :one
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver
 FROM accounts WHERE id = $1;
 
 -- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
 ON CONFLICT (id) DO UPDATE SET
+    source_account_id = EXCLUDED.source_account_id,
+    share_receiver    = EXCLUDED.share_receiver,
     name          = EXCLUDED.name,
     display_name  = EXCLUDED.display_name,
     host_id       = EXCLUDED.host_id,
@@ -688,6 +690,18 @@ DELETE FROM pool_credentials WHERE pool_id = $1;
 
 -- name: InsertPoolCredential :exec
 INSERT INTO pool_credentials (pool_id, host_key_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPoolAccounts :many
+SELECT pool_id, account_id, position FROM pool_accounts ORDER BY pool_id, position;
+
+-- name: GetPoolAccounts :many
+SELECT pool_id, account_id, position FROM pool_accounts WHERE pool_id = $1 ORDER BY position;
+
+-- name: DeletePoolAccounts :exec
+DELETE FROM pool_accounts WHERE pool_id = $1;
+
+-- name: InsertPoolAccount :exec
+INSERT INTO pool_accounts (pool_id, account_id, position) VALUES ($1, $2, $3);
 
 -- name: ListBudgets :many
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM budgets ORDER BY name;

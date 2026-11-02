@@ -1,4 +1,4 @@
-// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
+// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A shared account's source_account_id cascades from the real account, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
 
 package account
 
@@ -22,9 +22,14 @@ var ErrDefaultTaken = errors.New("account: the owner already has a default accou
 // ErrManagedTaken is a write of a caller account whose place another row holds.
 var ErrManagedTaken = errors.New("account: another account already holds this place")
 
+// ErrShareTaken is a second share of one account with one receiver.
+var ErrShareTaken = errors.New("account: the account is already shared with this receiver")
+
 const (
 	oneDefaultIndex = "accounts_one_default"
 	oneManagedIndex = "accounts_managed_key_key"
+	oneShareIndex   = "accounts_one_share"
+	nameIndex       = "accounts_name_key"
 )
 
 // ensureAttempts bounds the retries when a concurrent save takes the minted name.
@@ -79,8 +84,28 @@ func (s *Store) Upsert(ctx context.Context, a *Account) error {
 		return fmt.Errorf("%w: account %q", ErrDefaultTaken, a.Meta.Name)
 	case storage.IsUniqueViolation(err, oneManagedIndex):
 		return fmt.Errorf("%w: account %q", ErrManagedTaken, a.Meta.Name)
+	case storage.IsUniqueViolation(err, oneShareIndex):
+		return fmt.Errorf("%w: account %q", ErrShareTaken, a.Meta.Name)
 	}
 	return meta.StaleIfNoRows(n, err)
+}
+
+// CreateShare writes the new shared account a under a fresh id, with a's name suffixed -2, -3, … when taken. A second share with one receiver is ErrShareTaken.
+func (s *Store) CreateShare(ctx context.Context, a *Account) error {
+	base := a.Meta.Name
+	for attempt := 0; ; attempt++ {
+		name, err := s.uniqueName(ctx, base)
+		if err != nil {
+			return fmt.Errorf("account.CreateShare: %w", err)
+		}
+		a.Meta.ID, a.Meta.Name, a.Meta.ResourceVersion = meta.NewID(), name, ""
+		err = s.Upsert(ctx, a)
+		// A concurrent save took the name between the check and the insert.
+		if storage.IsUniqueViolation(err, nameIndex) && attempt < ensureAttempts {
+			continue
+		}
+		return err
+	}
 }
 
 // Delete removes an Account by id.
@@ -229,6 +254,8 @@ func fromRow(r gen.Account) (*Account, error) {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
 	spec.HostID = r.HostID.String
+	spec.SourceAccountID = r.SourceAccountID.String
+	spec.SharedBy = nil
 	spec.Default = r.DefaultOwner.Valid
 	spec.Kind = Kind(r.Kind)
 	spec.Closed = r.Closed
@@ -276,6 +303,9 @@ func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
 	}
 	if a.Spec.Default && kind == KindProvider {
 		p.DefaultOwner = text(defaultOwner(a.Meta.Owner))
+	}
+	if a.IsShared() {
+		p.SourceAccountID, p.ShareReceiver = text(a.Spec.SourceAccountID), text(a.Receiver().Key())
 	}
 	if h := a.Spec.Holder; h != nil {
 		switch h.Kind {
