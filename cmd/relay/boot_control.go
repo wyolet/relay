@@ -87,8 +87,8 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Selector:       selector,
 		Adapters:       specs,
 		HostHealth:     hostHealth,
-		PlanView:      planView,
-		PublicURL:     cfg.PublicURL,
+		PlanView:       planView,
+		PublicURL:      cfg.PublicURL,
 		RuntimeConfig:  runtimeConfig(cfg),
 	}
 	// /config.json stays at the listener root: the UI fetches it before
