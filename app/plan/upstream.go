@@ -42,7 +42,8 @@ func (a *AccountPlan) builtFrom() inputs { return a.in }
 
 func (c *controllers) accountPlan(tx *engine.Txn, id string) error {
 	acc := engine.Get[account.Account](tx, id)
-	if acc == nil || !acc.IsProvider() {
+	// A shared account holds no keys: its slots carry the real account's plan.
+	if acc == nil || !acc.IsProvider() || acc.IsShared() {
 		engine.Drop(tx)
 		return nil
 	}
@@ -60,6 +61,10 @@ type KeySlot struct {
 	Account    *AccountPlan         // nil when the credential names no account
 	Breaker    *keypool.BreakerCell // nil for a keyless host's anonymous slot
 	Upstream   Rung                 // the provider account's
+	// Via is the shared account the slot is reached through, whose policy narrows the real account's; SubjectID is empty on the real account's own slot.
+	Via Rung
+	// OnlyFor is the one lane holder ("serviceaccount:<id>") a service account's share serves; empty serves every lane reaching the slot.
+	OnlyFor string
 	// Refused is set when the account's policy is disabled or its binding ambiguous: the credential then serves nothing, rather than serving unmetered.
 	Refused *Refusal
 	// Whole holds the account's rules with no model scope and its budgets; ByModel the scoped rules, expanded per model id. A counter whose link is not shared counts per lane: the route fill renders it for the caller's lane.
@@ -79,10 +84,19 @@ type slotCounter struct {
 
 func (s *KeySlot) builtFrom() inputs { return s.in }
 
-// rejects reports whether the account's grant leaves out the model at this slot's host.
-func (s *KeySlot) rejects(providerSlug string, m *model.Model, hostSlug string) bool {
-	p := s.Upstream.Policy
-	return p != nil && p.Grant != nil && !p.Grant.Allows(providerSlug, m, hostSlug)
+// rejects returns the rung whose grant leaves out the model at this slot's host, nil when both allow it.
+func (s *KeySlot) rejects(providerSlug string, m *model.Model, hostSlug string) *Rung {
+	for _, r := range [2]*Rung{&s.Upstream, &s.Via} {
+		if p := r.Policy; p != nil && p.Grant != nil && !p.Grant.Allows(providerSlug, m, hostSlug) {
+			return r
+		}
+	}
+	return nil
+}
+
+// CountsOnAccount reports whether c counts on the real provider account of the slot, rather than on a shared account it is reached through.
+func (s *KeySlot) CountsOnAccount(c *limits.Counter) bool {
+	return s.Via.SubjectID == "" || c.SubjectID != s.Via.SubjectID
 }
 
 func (c *controllers) keySlot(tx *engine.Txn, id string) error {
@@ -137,17 +151,31 @@ func foldUpstream(tx *engine.Txn, cred *hostkey.HostKey, h *host.Host, acc *Acco
 	}
 	r := &s.Upstream
 	r.SubjectID, r.Account = accountSubject(acc.Account.Meta.ID), acc.Account
+	var counts rungCounts
+	counts, s.Refused = foldAccountRung(tx, h, r, r.SubjectID, &s.in)
+	s.Whole, s.ByModel, s.hasBudget = counts.whole, counts.byModel, counts.hasBudget
+	return s
+}
+
+// rungCounts are one provider account rung's counters as a slot carries them.
+type rungCounts struct {
+	whole     []slotCounter
+	byModel   map[string][]slotCounter
+	hasBudget bool
+}
+
+// foldAccountRung reads the policy bound to r's account into r and returns its counters, counted in atomicity group group, or the refusal its binding imposes.
+func foldAccountRung(tx *engine.Txn, h *host.Host, r *Rung, group string, in *inputs) (rungCounts, *Refusal) {
+	var out rungCounts
 	rp := engine.Get[RungPolicy](tx, r.SubjectID)
-	s.in = append(s.in, rp)
+	*in = append(*in, rp)
 	if rp == nil {
-		return s
+		return out, nil
 	}
 	r.Policy = rp.Rung.Policy
 	if rp.Refused != nil {
-		s.Refused = rp.Refused
-		return s
+		return out, rp.Refused
 	}
-	g := r.SubjectID
 	pid := r.Policy.Policy.Meta.ID
 	var scoped []*LinkedRateLimit
 	for j := range r.Policy.RateLimits {
@@ -157,19 +185,19 @@ func foldUpstream(tx *engine.Txn, cred *hostkey.HostKey, h *host.Host, acc *Acco
 			continue
 		}
 		for _, rule := range l.RateLimit.Spec.Rules {
-			s.Whole = append(s.Whole, slotCounter{limits.UpstreamRule(r.Kind, l.RateLimit, rule, pid, r.SubjectID, "", g), !l.Shared})
+			out.whole = append(out.whole, slotCounter{limits.UpstreamRule(r.Kind, l.RateLimit, rule, pid, r.SubjectID, "", group), !l.Shared})
 		}
 	}
 	for _, b := range r.Policy.Budgets {
-		s.Whole = append(s.Whole, slotCounter{limits.BudgetCounter(r.Kind, b.Budget, pid, r.SubjectID, g), !b.Shared})
-		s.hasBudget = true
+		out.whole = append(out.whole, slotCounter{limits.BudgetCounter(r.Kind, b.Budget, pid, r.SubjectID, group), !b.Shared})
+		out.hasBudget = true
 	}
 	if len(scoped) > 0 {
 		idx := engine.Get[CatalogIndex](tx, "")
-		s.in = append(s.in, idx)
-		s.ByModel = expandScoped(idx, h, r, pid, scoped)
+		*in = append(*in, idx)
+		out.byModel = expandScoped(idx, h, r, pid, scoped, group)
 	}
-	return s
+	return out, nil
 }
 
 // refuses reports why the slot may not serve model m through binding b at its host, and the fill step that refuses it; a nil refusal means it may.
@@ -177,18 +205,25 @@ func (s *KeySlot) refuses(providerSlug string, m *model.Model, b *binding.Bindin
 	if s.Refused != nil {
 		return stepUpstream, s.Refused
 	}
-	r := &s.Upstream
-	if s.rejects(providerSlug, m, hostSlug) {
-		return stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the provider account's policy")
+	if r := s.rejects(providerSlug, m, hostSlug); r != nil {
+		whose := "the provider account's policy"
+		if r == &s.Via {
+			whose = "the policy of the shared account " + r.Account.Meta.Name
+		}
+		return stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by "+whose)
 	}
 	if !priced && s.hasBudget {
+		r := &s.Upstream
+		if r.Policy == nil || len(r.Policy.Budgets) == 0 {
+			r = &s.Via
+		}
 		return stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
 	}
 	return 0, nil
 }
 
 // expandScoped gives each model the host serves the counters of every scoped link matching it: one bucket per matched model. A rule reached twice for one model (two overlapping links of one rate limit) counts once.
-func expandScoped(idx *CatalogIndex, h *host.Host, r *Rung, policyID string, links []*LinkedRateLimit) map[string][]slotCounter {
+func expandScoped(idx *CatalogIndex, h *host.Host, r *Rung, policyID string, links []*LinkedRateLimit, group string) map[string][]slotCounter {
 	if idx == nil {
 		return nil
 	}
@@ -204,7 +239,7 @@ func expandScoped(idx *CatalogIndex, h *host.Host, r *Rung, policyID string, lin
 				continue
 			}
 			for _, rule := range l.RateLimit.Spec.Rules {
-				ct := slotCounter{limits.UpstreamRule(r.Kind, l.RateLimit, rule, policyID, r.SubjectID, m.Meta.ID, r.SubjectID), !l.Shared}
+				ct := slotCounter{limits.UpstreamRule(r.Kind, l.RateLimit, rule, policyID, r.SubjectID, m.Meta.ID, group), !l.Shared}
 				if !hasCounter(out[m.Meta.ID], ct) {
 					out[m.Meta.ID] = append(out[m.Meta.ID], ct)
 				}
@@ -255,33 +290,80 @@ func (c *controllers) poolPlan(tx *engine.Txn, id string) error {
 	pp.in = inputs{p, h}
 	if h.Spec.NoAuth {
 		// A keyless host is reached through a pool linked on purpose, never by a wildcard: the pool is the explicit grant.
-		if len(p.Spec.CredentialIDs) > 0 {
-			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueCredentialsIgnored, Source: src, Field: "spec.credentialIds", Message: "the host needs no key; requests go out without the pool's credentials"})
+		if len(p.Spec.CredentialIDs) > 0 || len(p.Spec.AccountIDs) > 0 {
+			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueCredentialsIgnored, Source: src, Field: "spec.credentialIds", Message: "the host needs no key; requests go out without the pool's credentials and accounts"})
 		}
 		anon := foldUpstream(tx, hostkey.Anonymous(h.Meta.ID, h.Meta.Name), h, nil)
 		pp.Slots = []*KeySlot{anon}
 		pp.in = append(pp.in, anon.in...)
 	} else {
-		for i, cid := range p.Spec.CredentialIDs {
-			s := engine.Get[KeySlot](tx, cid)
-			if s == nil {
-				if engine.Get[hostkey.HostKey](tx, cid) == nil {
-					tx.Issue(refMissing(src, fmt.Sprintf("spec.credentialIds[%d]", i), engine.Ref{Kind: KindCredential, ID: cid}))
-				}
-				continue
-			}
-			if s.Host.Meta.ID != h.Meta.ID {
-				tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: src, Field: fmt.Sprintf("spec.credentialIds[%d]", i), Target: engine.Ref{Kind: KindCredential, ID: cid}, Message: "the credential authenticates to another host; it is left out"})
-				continue
-			}
-			pp.Slots = append(pp.Slots, s)
-			pp.in = append(pp.in, s)
-		}
+		poolSlots(tx, p, h, pp)
 	}
 	pp.Rotation = cell.Acquire(c.cells, tx, keypool.RotationKey(id), keypool.NewRotation)
 	pp.in = append(pp.in, pp.Rotation)
 	engine.Put(tx, SameOr(engine.Get[PoolPlan](tx, id), pp))
 	return nil
+}
+
+// poolSlots fills pp with the pool's slots in prioritized order: every key of each listed account, in account order and each account's keys in creation order, then the listed credentials; a key reached twice the same way keeps its first place. Two shares reaching one key stay apart, as each lane may use only one of them.
+func poolSlots(tx *engine.Txn, p *pool.Pool, h *host.Host, pp *PoolPlan) {
+	src := engine.Ref{Kind: KindPool, ID: p.Meta.ID}
+	placed := make(map[[2]string]struct{}, len(p.Spec.CredentialIDs))
+	add := func(s *KeySlot) {
+		k := [2]string{s.Credential.Meta.ID, s.Via.SubjectID}
+		if _, dup := placed[k]; dup {
+			return
+		}
+		placed[k] = struct{}{}
+		pp.Slots = append(pp.Slots, s)
+	}
+	for i, aid := range p.Spec.AccountIDs {
+		field := fmt.Sprintf("spec.accountIds[%d]", i)
+		a := engine.Get[account.Account](tx, aid)
+		switch {
+		case a == nil:
+			tx.Issue(refMissing(src, field, engine.Ref{Kind: KindAccount, ID: aid}))
+			continue
+		case a.Spec.HostID != h.Meta.ID:
+			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: src, Field: field, Target: engine.Ref{Kind: KindAccount, ID: aid}, Message: "the account is held at another host; it is left out"})
+			continue
+		}
+		// The account's id and host decide its part, so a learned org id or a rename rebuilds no pool.
+		pp.in = append(pp.in, aid, a.Spec.HostID)
+		if a.IsShared() {
+			// A shared account whose real account is gone carries the issue itself.
+			sa := engine.Get[SharedAccount](tx, aid)
+			pp.in = append(pp.in, sa)
+			if sa != nil {
+				for _, s := range sa.Slots {
+					add(s)
+				}
+			}
+			continue
+		}
+		oc := engine.Get[OwnedCredentials](tx, accountSubject(aid))
+		pp.in = append(pp.in, oc)
+		if oc != nil {
+			for _, one := range oc.Pools {
+				add(one.Slots[0])
+			}
+		}
+	}
+	for i, cid := range p.Spec.CredentialIDs {
+		s := engine.Get[KeySlot](tx, cid)
+		if s == nil {
+			if engine.Get[hostkey.HostKey](tx, cid) == nil {
+				tx.Issue(refMissing(src, fmt.Sprintf("spec.credentialIds[%d]", i), engine.Ref{Kind: KindCredential, ID: cid}))
+			}
+			continue
+		}
+		if s.Host.Meta.ID != h.Meta.ID {
+			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: src, Field: fmt.Sprintf("spec.credentialIds[%d]", i), Target: engine.Ref{Kind: KindCredential, ID: cid}, Message: "the credential authenticates to another host; it is left out"})
+			continue
+		}
+		pp.in = append(pp.in, s)
+		add(s)
+	}
 }
 
 // OwnedCredentials is the credentials one owner scope holds ("user:<id>", "project:<id>", "team:<id>", "system:"), or one provider account holds ("account:<id>"), each as a pool of one in creation order: what a lane reaches when no caller rung links pools.

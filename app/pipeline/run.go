@@ -446,9 +446,9 @@ func pickScope(hop *plan.RouteHop) string {
 	return hop.Slots[0].Credential.Meta.ID
 }
 
-// coolAccount skips the slot's account on this pod until the refused account counter frees up: every credential of the account shares that ceiling.
+// coolAccount skips the slot's account on this pod until the refused account counter frees up: every credential of the account shares that ceiling. A shared account's own limit holds only for its holders, so it cools nothing.
 func coolAccount(s *plan.KeySlot, r *limits.Refused) {
-	if s.Account == nil || !coolsAccount(r.Counter) || r.RetryAfter <= 0 {
+	if s.Account == nil || !coolsAccount(r.Counter) || !s.CountsOnAccount(r.Counter) || r.RetryAfter <= 0 {
 		return
 	}
 	s.Account.Cooldown.Extend(time.Now().Add(r.RetryAfter).UnixMilli())
@@ -481,12 +481,15 @@ func stampAttempt(lc *lifecycle.Context, a *attempt, attempts int) {
 	lc.Attempts = attempts
 	lc.HostKeyID = a.slot.Credential.KeyHash
 	lc.HostID, lc.HostName = a.hop.Host.Meta.ID, a.hop.Host.Meta.Name
-	lc.PoolID, lc.AccountID = "", ""
+	lc.PoolID, lc.AccountID, lc.ViaAccountID = "", "", ""
 	if a.hop.Pool.Pool != nil {
 		lc.PoolID = a.hop.Pool.Pool.Meta.ID
 	}
 	if a.slot.Account != nil {
 		lc.AccountID = a.slot.Account.Account.Meta.ID
+	}
+	if via := a.slot.Via.Account; via != nil {
+		lc.ViaAccountID = via.Meta.ID
 	}
 	lc.PricingID, lc.PricingName = "", ""
 	if pr := a.hop.Pricing; pr != nil {

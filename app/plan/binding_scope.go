@@ -44,7 +44,7 @@ func scopeHolds(tx *engine.Txn, outer, inner meta.Owner) bool {
 	return false
 }
 
-// unusableLinks returns the ids of the pools p links, and of the credentials inside them, that scope cannot use, sorted, and files an issue on the binding for each. The save check refuses such a binding; a row written around it narrows instead of reaching another scope's credentials.
+// unusableLinks returns the ids of the pools p links, and of the credentials and accounts inside them, that scope cannot use, sorted, and files an issue on the binding for each. The save check refuses such a binding; a row written around it narrows instead of reaching another scope's credentials.
 func unusableLinks(tx *engine.Txn, p *policy.Policy, scope meta.Owner, b *policybinding.PolicyBinding) []string {
 	var out []string
 	refuse := func(kind engine.Kind, id string, owner meta.Owner) {
@@ -61,6 +61,11 @@ func unusableLinks(tx *engine.Txn, p *policy.Policy, scope meta.Owner, b *policy
 		case !scopeHolds(tx, pl.Meta.Owner, scope):
 			refuse(KindPool, id, pl.Meta.Owner)
 		default:
+			for _, aid := range pl.Spec.AccountIDs {
+				if a := engine.Get[account.Account](tx, aid); a != nil && !scopeHolds(tx, a.Meta.Owner, scope) {
+					refuse(KindAccount, aid, a.Meta.Owner)
+				}
+			}
 			for _, cid := range pl.Spec.CredentialIDs {
 				if k := engine.Get[hostkey.HostKey](tx, cid); k != nil && !scopeHolds(tx, k.Meta.Owner, scope) {
 					refuse(KindCredential, cid, k.Meta.Owner)

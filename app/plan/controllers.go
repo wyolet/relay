@@ -63,11 +63,22 @@ func (c *controllers) all() []*engine.Controller {
 	slot := engine.NewController("key-slot", KindKeySlot, c.keySlot)
 	engine.Watch(slot, func(k *hostkey.HostKey) []string { return []string{k.Meta.ID} })
 
-	pl := engine.NewController("pool-plan", KindPoolPlan, c.poolPlan)
-	engine.Watch(pl, func(p *pool.Pool) []string { return []string{p.Meta.ID} })
-
 	owned := engine.NewController("owned-credentials", KindOwnedCredentials, c.ownedCredentials)
 	engine.Watch(owned, ownedCredentialKeys)
+
+	shared := engine.NewController("shared-account", KindSharedAccount, c.sharedAccount)
+	engine.Watch(shared, func(a *account.Account) []string {
+		if a.IsShared() {
+			return []string{a.Meta.ID}
+		}
+		return nil
+	})
+
+	sharedWith := engine.NewController("shared-credentials", KindSharedCredentials, c.sharedCredentials)
+	engine.Watch(sharedWith, sharedWithKey)
+
+	pl := engine.NewController("pool-plan", KindPoolPlan, c.poolPlan)
+	engine.Watch(pl, func(p *pool.Pool) []string { return []string{p.Meta.ID} })
 
 	caller := engine.NewController("caller-plan", KindCallerPlan, c.callerPlan)
 	engine.Watch(caller, func(a *account.Account) []string { return []string{accountSubject(a.Meta.ID)} })
@@ -90,5 +101,5 @@ func (c *controllers) all() []*engine.Controller {
 	users := engine.NewController("user-index", KindUserIndex, c.userIndex)
 	engine.Watch(users, toSingleton[UserPlan])
 
-	return []*engine.Controller{catalog, managed, pending, expanded, rung, acct, slot, pl, owned, caller, lanes, kp, shard, index, up, users}
+	return []*engine.Controller{catalog, managed, pending, expanded, rung, acct, slot, owned, shared, sharedWith, pl, caller, lanes, kp, shard, index, up, users}
 }

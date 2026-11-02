@@ -73,6 +73,10 @@ const (
 	KindKeyPlanIndex     engine.Kind = "keyplanindex"
 	KindUserPlan         engine.Kind = "userplan"
 	KindUserIndex        engine.Kind = "userindex"
+
+	// A shared account resolved to its real account, and what one scope reaches through the accounts shared with it.
+	KindSharedAccount     engine.Kind = "sharedaccount"
+	KindSharedCredentials engine.Kind = "sharedcredentials"
 )
 
 // Sources are the stores each input kind loads from. A nil field loads nothing.
@@ -142,6 +146,8 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[KeySlot](e, KindKeySlot, 16)
 	derived[PoolPlan](e, KindPoolPlan, 1)
 	derived[OwnedCredentials](e, KindOwnedCredentials, 16)
+	derived[SharedAccount](e, KindSharedAccount, 1)
+	derived[SharedCredentials](e, KindSharedCredentials, 1)
 	derived[CallerPlan](e, KindCallerPlan, 64)
 	derived[LaneIndex](e, KindLaneIndex, 1)
 	derived[KeyPlan](e, KindKeyPlan, 256)
