@@ -20,7 +20,6 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/refcheck"
-	"github.com/wyolet/relay/app/settings"
 )
 
 // catalogDocs are the catalog and upstream documents of one bundle, by kind.
@@ -61,7 +60,7 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	if err := planKind(ctx, b, kindWiring[manifest.AccountDTO, account.Account]{
 		Kind: "Account", Docs: realAccountsFirst(d.accounts), Names: b.idx.Accounts, Rows: b.rows.Accounts,
 		To: manifest.ToAccount, Meta: func(a *account.Account) *meta.Metadata { return &a.Meta },
-		Upsert: s.Account.Upsert, Delete: s.Account.Delete,
+		Upsert: s.Account.Upsert, Delete: b.deleteAccount,
 		Check: b.checkAccount(),
 		Keep: func(prev, next *account.Account) error {
 			if err := keepAccountPlace(prev, next); err != nil {
@@ -74,7 +73,7 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	}); err != nil {
 		return err
 	}
-	if err := b.pruneSharesWithTheirAccount(d.accounts); err != nil {
+	if err := b.planShareRevokes(ctx, d.accounts); err != nil {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
@@ -163,47 +162,6 @@ func keepAccountPlace(prev, next *account.Account) error {
 	return nil
 }
 
-// pruneSharesWithTheirAccount names, as deletes of their own, the shares a pruned real account takes along, each just before it, so the plan shows them before anyone confirms. A share the bundle still declares refuses the prune.
-func (b *builder) pruneSharesWithTheirAccount(docs []*manifest.AccountDTO) error {
-	pruned := b.deletes[len(b.deletes)-1]
-	if len(pruned) == 0 {
-		return nil
-	}
-	declared := make(map[string]bool, len(docs))
-	for _, d := range docs {
-		declared[d.Metadata.Name] = true
-	}
-	listed := make(map[string]bool, len(pruned))
-	for _, e := range pruned {
-		listed[e.ID] = true
-	}
-	out := make([]Entry, 0, len(pruned))
-	for _, e := range pruned {
-		for _, s := range b.rows.Accounts {
-			if s.Spec.SourceAccountID != e.ID || listed[s.Meta.ID] {
-				continue
-			}
-			if declared[s.Meta.Name] {
-				return &InvalidError{Kind: "Account", Name: s.Meta.Name, Err: fmt.Errorf("shares account %q, which this run prunes; drop the share from the bundle too, or keep the account", e.Name)}
-			}
-			if err := b.governs(settings.OpDelete, "account", &s.Meta); err != nil {
-				return &GovernanceError{Kind: "Account", Name: s.Meta.Name, Err: err}
-			}
-			id, realOwner := s.Meta.ID, e.owner
-			out = append(out, Entry{
-				Kind: "Account", Name: s.Meta.Name, ID: id, Action: ActionDelete,
-				plural: "accounts", owner: s.Meta.Owner, authorizeAt: &realOwner,
-				prev:  rowState{present: true, dirty: s.Meta.Dirty, updatedAt: s.Meta.UpdatedAt},
-				write: func(ctx context.Context) error { return b.opts.Stores.Account.Delete(ctx, id) },
-			})
-			listed[id] = true
-		}
-		out = append(out, e)
-	}
-	b.deletes[len(b.deletes)-1] = out
-	return nil
-}
-
 // realAccountsFirst orders the documents so a real account is planned, and written, before the shares naming it.
 func realAccountsFirst(docs []*manifest.AccountDTO) []*manifest.AccountDTO {
 	out := slices.Clone(docs)
@@ -220,7 +178,7 @@ func boolRank(b bool) int {
 	return 0
 }
 
-// checkAccount runs the account rules and, for a share this run creates, who may share its real account, as POST /accounts/{ref}/shares does.
+// checkAccount runs the account rules and, for a share this run creates, the rules POST /accounts/{ref}/shares runs: who shares, and a receiver the caller sees that does not already reach the account.
 func (b *builder) checkAccount() func(context.Context, *account.Account) error {
 	check := refsFor(b, refcheck.Checker.Account)
 	if check == nil {
@@ -239,7 +197,7 @@ func (b *builder) checkAccount() func(context.Context, *account.Account) error {
 		}
 		c := b.refs()
 		if src := c.Rows.Account(ctx, a.Spec.SourceAccountID); src != nil {
-			return c.MayShare(ctx, src)
+			return c.Share(ctx, src, a)
 		}
 		return nil
 	}

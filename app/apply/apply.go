@@ -63,6 +63,8 @@ type Entry struct {
 	IDMismatch string `json:"idMismatch,omitempty" doc:"The document's metadata.id when it differs from the stored row's; ids stay server-owned, so it is ignored."`
 	// Detached is set on a delete that takes links from policies that stay.
 	Detached *DetachedLinks `json:"detached,omitempty" doc:"On a delete: the policies that lose a link to the row."`
+	// Revokes is set on the delete of a shared account: what revoking it changes.
+	Revokes []RevokeImpact `json:"revokes,omitempty" doc:"On the delete of a shared account (pruned, or pruned with its real account): what revoking it changes. Policy bindings drop it, or go when it was their only account; relay keys whose lane it was move to their principal's own account; pools lose it."`
 
 	plural string
 	owner  meta.Owner
