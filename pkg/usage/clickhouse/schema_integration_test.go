@@ -102,6 +102,15 @@ ORDER BY (ts, model_id, policy_id)`
 			t.Fatalf("column %q missing after ensureSchema", c)
 		}
 	}
+
+	var indexes uint64
+	if err := conn.QueryRow(ctx,
+		"SELECT count() FROM system.data_skipping_indices WHERE database = ? AND table = ? AND name = 'idx_lane_account_id' AND type = 'bloom_filter'", db, chTable).Scan(&indexes); err != nil {
+		t.Fatalf("describe indexes: %v", err)
+	}
+	if indexes != 1 {
+		t.Fatal("idx_lane_account_id missing after ensureSchema")
+	}
 }
 
 // Every inserted column reads back as the value insertValues gives, across

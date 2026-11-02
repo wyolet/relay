@@ -162,6 +162,7 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_project_id project_id TYPE bloom_filter GRANULARITY 4`,
 	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_team_id team_id TYPE bloom_filter GRANULARITY 4`,
 	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_relay_key_hash relay_key_hash TYPE bloom_filter GRANULARITY 4`,
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_lane_account_id lane_account_id TYPE bloom_filter GRANULARITY 4`,
 }
 
 // ensureSchema creates the table if absent, then verifies its columns match
