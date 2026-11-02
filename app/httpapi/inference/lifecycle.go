@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/tokencount"
@@ -189,9 +190,44 @@ func (d Deps) fireUsageFailure(ctx context.Context, kind, msg string) {
 	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: kind, ErrorMessage: msg})
 }
 
-// fireRouteRefusal is fireUsageFailure for a route the caller's plan refused, recording the refusal's class beside its code.
+// fireRouteRefusal is fireUsageFailure for a route the caller's plan refused, recording the refusal's class beside its code and the model it refused.
 func (d Deps) fireRouteRefusal(ctx context.Context, r *plan.Refusal) {
+	if lc := lifecycle.FromContext(ctx); lc != nil && d.Lifecycle != nil {
+		stampRefusedModel(lc, d.refusalCatalog(ctx))
+	}
 	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: routeRefusalKind(r), Refusal: string(r.Kind()), ErrorMessage: r.Error()})
+}
+
+// refusalCatalog is the catalog a refused route resolved against: the caller's route table's, else the request's snapshot, else the live one (anonymous proxy traffic pins none).
+func (d Deps) refusalCatalog(ctx context.Context) *appcatalog.Snapshot {
+	if p := PrincipalFrom(ctx); p != nil && p.Caller != nil && p.Caller.Routes != nil {
+		if snap := p.Caller.Routes.Catalog(); snap != nil {
+			return snap
+		}
+	}
+	if snap := SnapshotFrom(ctx); snap != nil {
+		return snap
+	}
+	if d.Catalog != nil {
+		return d.Catalog.Current()
+	}
+	return nil
+}
+
+// stampRefusedModel names on lc the catalog model a refused request asked for, as routing would have on success, so its row says which model was refused. A name no model answers keeps only the requested string; an alias naming several takes the first, the one routing tries first.
+func stampRefusedModel(lc *lifecycle.Context, snap *appcatalog.Snapshot) {
+	if snap == nil || lc.RequestedModel == "" || lc.ModelID != "" {
+		return
+	}
+	res := snap.ResolveModelRef(lc.RequestedModel)
+	if len(res.Models) == 0 {
+		return
+	}
+	m := res.Models[0]
+	lc.ModelID, lc.ModelName = m.Meta.ID, m.Meta.Name
+	if prov, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
+		lc.ProviderName = prov
+	}
 }
 
 func (d Deps) fireFailure(ctx context.Context, ev *lifecycle.PostFlightEvent) {

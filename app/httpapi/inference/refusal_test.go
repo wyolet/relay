@@ -99,6 +99,11 @@ func TestUsageEvent_CarriesTheRefusal(t *testing.T) {
 		if ev.LaneAccountID != p.Caller.Lane.Meta.ID {
 			t.Errorf("%s: event lane_account_id %q, want the key's lane %s", model, ev.LaneAccountID, p.Caller.Lane.Meta.ID)
 		}
+		// A refused row names the model it refused: the catalog's when the name resolves, the requested string always.
+		resolves := model != "missing"
+		if ev.RequestedModel != model || (ev.ModelID != "") != resolves || (resolves && (ev.Model != model || ev.Provider != "openai")) {
+			t.Errorf("%s: event requested_model %q model_id %q model %q provider %q", model, ev.RequestedModel, ev.ModelID, ev.Model, ev.Provider)
+		}
 	}
 
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
