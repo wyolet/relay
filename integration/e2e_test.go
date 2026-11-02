@@ -285,6 +285,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		Authz:         audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
 		Catalog:       cat,
 		Stores:        stores,
+		Plans:         plans,
 		Audit:         auditEmitter,
 		AuditReader:   auditStore,
 		TokenSigner:   signer,

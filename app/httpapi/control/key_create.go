@@ -111,6 +111,10 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
 		}
+		// The plaintext is often spent at once; answer when this pod authenticates it.
+		if d.Plans != nil {
+			awaitServed(ctx, "key", k.Meta.ID, func(ctx context.Context) bool { return d.Plans.AwaitKey(ctx, k.Spec.KeyHash) })
+		}
 
 		out := &createKeyResponse{}
 		out.Body.Plaintext = gen.Plaintext

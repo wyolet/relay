@@ -37,6 +37,8 @@ type tokenDeps struct {
 	limiter  MintLimiter
 	// accounts makes the user's member account in the token's project on first mint; nil skips it.
 	accounts memberAccounts
+	// plans holds a mint until this pod serves the member account; nil answers at once.
+	plans PlanWaiter
 }
 
 // memberAccounts is the account-store surface minting needs.
@@ -62,6 +64,7 @@ func newTokenDeps(d Deps) tokenDeps {
 		audit:    d.AuditReader,
 		authz:    d.Authz,
 		limiter:  d.MintLimiter,
+		plans:    d.Plans,
 	}
 	if d.Users != nil {
 		td.users = d.Users

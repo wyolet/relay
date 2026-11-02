@@ -2,6 +2,7 @@ package plan
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,7 +26,12 @@ type Root struct {
 }
 
 // Holder keeps the current Root behind one atomic pointer, swapped when the engine publishes.
-type Holder struct{ root atomic.Pointer[Root] }
+type Holder struct {
+	root atomic.Pointer[Root]
+	// published is closed and replaced on every publish, for writers waiting on the plans (Await).
+	mu        sync.Mutex
+	published chan struct{}
+}
 
 // Load returns the current Root, nil before the first publish.
 func (h *Holder) Load() *Root { return h.root.Load() }
@@ -39,6 +45,12 @@ func (h *Holder) OnPublish(v *engine.View, _ engine.PublishStats) {
 		Catalog: engine.Get[CatalogIndex](v, ""),
 		Gen:     uint64(v.Gen()),
 	})
+	h.mu.Lock()
+	if h.published != nil {
+		close(h.published)
+		h.published = nil
+	}
+	h.mu.Unlock()
 }
 
 // KeyPlan is what authentication derives for one key: its principal and its default lane.
