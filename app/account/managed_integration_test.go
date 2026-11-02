@@ -71,11 +71,22 @@ func TestIntegration_EnsureManaged(t *testing.T) {
 		t.Fatalf("the clashing account = %+v, want the name suffixed", got)
 	}
 
-	if err := store.SetMembership(ctx, member.Meta.ID, true, true); err != nil {
+	if err := store.SetMembership(ctx, member, true, true); err != nil {
 		t.Fatalf("SetMembership: %v", err)
 	}
-	if got, _ := store.Get(ctx, member.Meta.ID); got == nil || !got.Spec.Closed || !got.FollowsRoleBindings {
-		t.Fatalf("after SetMembership = %+v, want closed and following role bindings", got)
+	closed, _ := store.Get(ctx, member.Meta.ID)
+	if closed == nil || !closed.Spec.Closed || !closed.FollowsRoleBindings {
+		t.Fatalf("after SetMembership = %+v, want closed and following role bindings", closed)
+	}
+	// A close decided from an older read (here the reopen below wins) changes nothing.
+	if err := store.SetMembership(ctx, closed, false, true); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := store.SetMembership(ctx, closed, true, true); err != nil {
+		t.Fatalf("stale close: %v", err)
+	}
+	if got, _ := store.Get(ctx, member.Meta.ID); got == nil || got.Spec.Closed {
+		t.Fatalf("after a stale close = %+v, want the reopened account left open", got)
 	}
 
 	if err := users.Delete(ctx, alice.ID); err != nil {

@@ -636,9 +636,10 @@ INSERT INTO accounts (id, name, display_name, metadata, spec, kind, managed_key,
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT DO NOTHING;
 
+-- A writer working from an older read of the row changes nothing: the row moved on since, and the next plan lists it again.
 -- name: SetAccountMembership :execrows
 UPDATE accounts SET closed = $2, follows_role_bindings = $3, updated_at = NOW()
-WHERE id = $1 AND (closed <> $2 OR follows_role_bindings <> $3);
+WHERE id = $1 AND resource_version = $4 AND (closed <> $2 OR follows_role_bindings <> $3);
 
 -- name: GetDefaultAccountID :one
 SELECT id FROM accounts WHERE host_id = $1 AND default_owner = $2;

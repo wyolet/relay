@@ -39,7 +39,11 @@ func TestIntegration_KeyLaneChecksOnCreateAndUpdate(t *testing.T) {
 			t.Fatalf("open member account: %v", err)
 		}
 		if close {
-			mustUpsert(t, st.stores.Account.SetMembership(ctx, id, true, true), "close member account")
+			a, err := st.stores.Account.Get(ctx, id)
+			if err != nil || a == nil {
+				t.Fatalf("read member account: %v", err)
+			}
+			mustUpsert(t, st.stores.Account.SetMembership(ctx, a, true, true), "close member account")
 		}
 		return id
 	}

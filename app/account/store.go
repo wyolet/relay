@@ -129,9 +129,13 @@ func (s *Store) EnsureManaged(ctx context.Context, want *Account) (string, error
 	}
 }
 
-// SetMembership marks a member account closed or open and whether it follows role bindings; a row already so is left alone.
-func (s *Store) SetMembership(ctx context.Context, id string, closed, followsRoleBindings bool) error {
-	_, err := s.q.SetAccountMembership(ctx, gen.SetAccountMembershipParams{ID: id, Closed: closed, FollowsRoleBindings: followsRoleBindings})
+// SetMembership marks member account a closed or open and whether it follows role bindings, only while the row is still at the version a was read at: a decision made from an older read (a close racing a reopen) changes nothing. A row already so is left alone.
+func (s *Store) SetMembership(ctx context.Context, a *Account, closed, followsRoleBindings bool) error {
+	version, ok, err := a.Meta.ExpectedVersion()
+	if err != nil || !ok {
+		return fmt.Errorf("account.SetMembership: account %q carries no version to guard the write", a.Meta.Name)
+	}
+	_, err = s.q.SetAccountMembership(ctx, gen.SetAccountMembershipParams{ID: a.Meta.ID, Closed: closed, FollowsRoleBindings: followsRoleBindings, ResourceVersion: version})
 	if err != nil {
 		return fmt.Errorf("account.SetMembership: %w", err)
 	}

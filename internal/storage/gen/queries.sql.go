@@ -2907,17 +2907,24 @@ func (q *Queries) RotateRelayKey(ctx context.Context, arg RotateRelayKeyParams) 
 
 const setAccountMembership = `-- name: SetAccountMembership :execrows
 UPDATE accounts SET closed = $2, follows_role_bindings = $3, updated_at = NOW()
-WHERE id = $1 AND (closed <> $2 OR follows_role_bindings <> $3)
+WHERE id = $1 AND resource_version = $4 AND (closed <> $2 OR follows_role_bindings <> $3)
 `
 
 type SetAccountMembershipParams struct {
 	ID                  string `db:"id" json:"id"`
 	Closed              bool   `db:"closed" json:"closed"`
 	FollowsRoleBindings bool   `db:"follows_role_bindings" json:"follows_role_bindings"`
+	ResourceVersion     int64  `db:"resource_version" json:"resource_version"`
 }
 
+// A writer working from an older read of the row changes nothing: the row moved on since, and the next plan lists it again.
 func (q *Queries) SetAccountMembership(ctx context.Context, arg SetAccountMembershipParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setAccountMembership, arg.ID, arg.Closed, arg.FollowsRoleBindings)
+	result, err := q.db.Exec(ctx, setAccountMembership,
+		arg.ID,
+		arg.Closed,
+		arg.FollowsRoleBindings,
+		arg.ResourceVersion,
+	)
 	if err != nil {
 		return 0, err
 	}

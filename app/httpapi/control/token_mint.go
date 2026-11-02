@@ -133,7 +133,7 @@ func openMemberAccount(ctx context.Context, s memberAccounts, want *account.Acco
 	if err != nil || a == nil || !a.Spec.Closed {
 		return err
 	}
-	return s.SetMembership(ctx, id, false, false)
+	return s.SetMembership(ctx, a, false, false)
 }
 
 // mintGroups is the group set the token carries: only what the IdP asserted

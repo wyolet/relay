@@ -43,7 +43,7 @@ type tokenDeps struct {
 type memberAccounts interface {
 	EnsureManaged(ctx context.Context, want *account.Account) (string, error)
 	Get(ctx context.Context, id string) (*account.Account, error)
-	SetMembership(ctx context.Context, id string, closed, followsRoleBindings bool) error
+	SetMembership(ctx context.Context, a *account.Account, closed, followsRoleBindings bool) error
 }
 
 // tokenUserStore is the narrow user-store surface minting and revocation

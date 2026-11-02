@@ -16,7 +16,7 @@ import (
 // Store is the account-store surface the writer needs; *account.Store satisfies it.
 type Store interface {
 	EnsureManaged(ctx context.Context, want *account.Account) (string, error)
-	SetMembership(ctx context.Context, id string, closed, followsRoleBindings bool) error
+	SetMembership(ctx context.Context, a *account.Account, closed, followsRoleBindings bool) error
 }
 
 // Syncer applies pending account places. OnPublish only hands the latest list over, so the engine's hooks never wait on Postgres.
@@ -71,10 +71,11 @@ func (s *Syncer) apply(ctx context.Context, items []*plan.ManagedAccount) {
 		switch m.Action() {
 		case plan.AccountCreate:
 			_, err = s.Store.EnsureManaged(ctx, m.Want)
+		// Both are conditional on the row's version the plan read: a list gone stale (the row reopened or closed since) writes nothing.
 		case plan.AccountClose:
-			err = s.Store.SetMembership(ctx, m.Row.Meta.ID, true, true)
+			err = s.Store.SetMembership(ctx, m.Row, true, true)
 		case plan.AccountReopen:
-			err = s.Store.SetMembership(ctx, m.Row.Meta.ID, false, true)
+			err = s.Store.SetMembership(ctx, m.Row, false, true)
 		}
 		if err != nil {
 			// The next publish lists the place again.
