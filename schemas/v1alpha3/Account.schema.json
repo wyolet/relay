@@ -18,6 +18,12 @@
             "off"
           ],
           "type": "string"
+        },
+        "serviceAccount": {
+          "type": "string"
+        },
+        "sourceAccount": {
+          "type": "string"
         }
       },
       "type": "object"

@@ -39,16 +39,18 @@ func (b *builder) planTenancy(ctx context.Context, teamDocs []*manifest.TeamDTO,
 	return nil
 }
 
-func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*manifest.ServiceAccountDTO, keyDocs []*manifest.KeyDTO) error {
-	s := b.opts.Stores
-	if err := planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
+// planServiceAccounts plans service accounts right after their projects: an account shared with one is held by it, so the service account is written first.
+func (b *builder) planServiceAccounts(ctx context.Context, saDocs []*manifest.ServiceAccountDTO) error {
+	return planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
 		Upsert: throughDirectory(b, converted((*serviceaccount.ServiceAccount).ToDirectory)), Delete: deleteThroughDirectory(b, "ServiceAccount"),
 		Check: b.checkServiceAccount(),
-	}); err != nil {
-		return err
-	}
+	})
+}
+
+func (b *builder) planKeys(ctx context.Context, keyDocs []*manifest.KeyDTO) error {
+	s := b.opts.Stores
 	if err := planKind(ctx, b, kindWiring[manifest.KeyDTO, key.Key]{
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
