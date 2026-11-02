@@ -23,6 +23,7 @@ Events wait in a bounded in-memory queue for the store (`RELAY_USAGE_QUEUE_SIZE`
 | `host`, `host_id`, `host_key_id` | The host that served it, and a hash of the host key's value (not the host key's id), so a rotated key appears as a new value. It names the key the request last tried, also on failed and streamed requests. |
 | `policy`, `policy_id` | The [policy](/concepts/policies) that governed the request. |
 | `pool_id`, `account_id` | The pool the serving credential was drawn from and the provider account it belongs to. Empty when the credential was linked on its own or holds no account. |
+| `lane_account_id` | The account the request ran in and was charged to: its credential's default, or the one it switched into with `X-WR-Account`, a `/a/<account>/` base URL or the account's own host. |
 | `project`, `team`, `principal` and their `_id` fields, `principal_kind` | Who made the request. `principal` is empty for a user; the read API labels users by username. |
 | `credential_kind`, `credential_id`, `relay_key`, `relay_key_hash` | The credential that authenticated: a relay key (its slug and the SHA-256 of its value) or an inference token. |
 | `tokens` | Token counts the provider reported. See [Token counts and cost](#token-counts-and-cost). |
@@ -68,7 +69,7 @@ Every endpoint above takes these query parameters. List parameters are repeatabl
 | Parameter | Matches |
 | --- | --- |
 | `since` (default `1h`), `from`, `to` | The window: a relative duration, or RFC3339 bounds. `from` overrides `since`. |
-| `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`, `relay_key_hash` | Ids. |
+| `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `lane_account_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`, `relay_key_hash` | Ids. |
 | `model`, `host`, `policy`, `provider`, `relay_key`, `requested_model` | Slugs as recorded on the event, or the requested model string. |
 | `source`, `finish_reason`, `error_kind`, `refusal` | The field's values. |
 | `status`, `status_min`, `status_max`, `status_class` | Exact statuses, a range, or a band (`2xx`, `4xx`, `5xx`). |
@@ -84,7 +85,7 @@ Every endpoint above takes these query parameters. List parameters are repeatabl
 
 - `source` (the `summary` default), `finish_reason`, `error_kind`, `refusal`
 - slugs as recorded: `model`, `host`, `policy`, `provider`, `project`, `team`, `principal`, `relay_key`
-- ids: `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`
+- ids: `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `lane_account_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`
 - `tags.<key>` (a caller tag) or `extras.<key>` (a Relay-added value such as `extras.instance`)
 - `none`: one row over everything the filters match, with `group` set to `{}`
 
@@ -127,7 +128,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ### Distinct counts
 
-`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `pool_id`, `account_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
+`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `pool_id`, `account_id`, `lane_account_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \

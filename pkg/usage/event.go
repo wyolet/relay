@@ -81,6 +81,7 @@ type Event struct {
 	Principal      string `json:"principal,omitempty"       doc:"The service account's slug at request time; empty for a user."`
 	CredentialKind string `json:"credential_kind,omitempty" doc:"Kind of credential presented, such as key or token."`
 	CredentialID   string `json:"credential_id,omitempty"   doc:"Id of the credential presented: the relay key's id or the token's jti."`
+	LaneAccountID  string `json:"lane_account_id,omitempty" doc:"Id of the account the request ran in and was charged to: the credential's default, or the one the request switched into. Not account_id, the serving host key's provider account."`
 
 	// Token usage as reported by the upstream. Empty on error or when
 	// the adapter could not extract.

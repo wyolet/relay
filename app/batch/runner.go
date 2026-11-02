@@ -102,6 +102,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	lc.CredentialID = attr.CredentialID
 	// The ids were fixed at submit; the names describe them as of execution, from the plan the item runs under.
 	cp := p.Caller
+	lc.LaneAccountID = cp.Lane.Meta.ID
 	if cp.Project().ID() == attr.ProjectID {
 		lc.ProjectName = cp.Project().Name
 	}

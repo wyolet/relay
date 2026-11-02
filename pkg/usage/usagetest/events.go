@@ -46,6 +46,15 @@ var eventsCases = []eventsCase{
 		want: []string{"r03", "r02", "r01", "r00"},
 	},
 	{
+		name: "lane_account_id filter",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.LaneAccountID = []string{"lane-b"}
+			return q
+		}(),
+		want: []string{"r03"},
+	},
+	{
 		name: "refusal filter",
 		q: func() usage.EventQuery {
 			q := Window()
@@ -107,7 +116,7 @@ func runEvents(t *testing.T, r usage.Reader) {
 		if len(events) != 1 {
 			t.Fatalf("Events: got %d events, want 1", len(events))
 		}
-		assertEqual(t, "pool and account", [2]string{events[0].PoolID, events[0].AccountID}, [2]string{"pool-b", "acct-b"})
+		assertEqual(t, "pool, account and lane", [3]string{events[0].PoolID, events[0].AccountID, events[0].LaneAccountID}, [3]string{"pool-b", "acct-b", "lane-b"})
 	})
 	t.Run("refusal reads back", func(t *testing.T) {
 		q := Window()

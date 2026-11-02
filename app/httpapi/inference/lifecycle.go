@@ -66,6 +66,9 @@ func applyPrincipalIdentity(lc *lifecycle.Context, p *Principal) {
 		lc.RelayKeyName = p.Key.Meta.Name
 	}
 	cp := p.Caller
+	if cp != nil {
+		lc.LaneAccountID = cp.Lane.Meta.ID
+	}
 	switch {
 	case p.ServiceAccountID != "":
 		lc.PrincipalKind = string(key.PrincipalServiceAccount)

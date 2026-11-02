@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/httpheader"
+	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 // laneStack is the principal stack behind LaneMiddleware, recording the path the routes saw.
@@ -190,6 +191,23 @@ func TestLane_TokenSwitch(t *testing.T) {
 		t.Fatalf("switched = %q project = %q", st.seen.SwitchedLaneID, st.seen.ProjectID)
 	}
 	wantForbidden(t, st.send(tok, "/v1/chat/completions", accountHeader(f.otherPersonal.Meta.ID)), plan.CodeAccountNotHeld)
+}
+
+// The lifecycle, and so the usage event, records the lane the request ran in: the default, or the one it switched into.
+func TestLane_StampedOnTheLifecycle(t *testing.T) {
+	f := newLaneFixture()
+	st := f.stack(t, "")
+	for path, want := range map[string]*account.Account{
+		"/v1/chat/completions":           f.personalAcct,
+		"/a/acme-ml/v1/chat/completions": f.teamMember,
+	} {
+		st.wantLane(t, st.send("sk-wr-alice", path, nil), want)
+		lc := lifecycle.NewContext("r", "pipeline", time.Now())
+		applyPrincipalIdentity(lc, st.seen)
+		if lc.LaneAccountID != want.Meta.ID {
+			t.Errorf("%s: lane_account_id = %q, want %s", path, lc.LaneAccountID, want.Meta.Name)
+		}
+	}
 }
 
 // A switched WebSocket connection re-resolves each frame in the lane it switched into.

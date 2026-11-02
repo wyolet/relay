@@ -128,6 +128,7 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		Principal:      lc.PrincipalName,
 		CredentialKind: lc.CredentialKind,
 		CredentialID:   lc.CredentialID,
+		LaneAccountID:  lc.LaneAccountID,
 		Model:          lc.ModelName,
 		Host:           lc.HostName,
 		Policy:         lc.PolicyName,

@@ -91,8 +91,12 @@ func TestUsageEvent_CarriesTheRefusal(t *testing.T) {
 		"free":    {"", ""},
 	} {
 		chat(d, p, model)
-		if ev := events.next(t); ev.ErrorKind != want.kind || ev.Refusal != string(want.refusal) {
+		ev := events.next(t)
+		if ev.ErrorKind != want.kind || ev.Refusal != string(want.refusal) {
 			t.Errorf("%s: event error_kind %q refusal %q, want %q %q", model, ev.ErrorKind, ev.Refusal, want.kind, want.refusal)
+		}
+		if ev.LaneAccountID != p.Caller.Lane.Meta.ID {
+			t.Errorf("%s: event lane_account_id %q, want the key's lane %s", model, ev.LaneAccountID, p.Caller.Lane.Meta.ID)
 		}
 	}
 
