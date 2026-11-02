@@ -164,11 +164,13 @@ The rules behind each answer are on [Policies](/concepts/policies#policy-binding
 ### Accounts and pools
 
 ```
-GET /api/pools/{ref}/keys       the pool's host keys in pool order, without values
-GET /api/accounts/{ref}/keys    the host keys that name the account, without values
+GET  /api/pools/{ref}/keys       the pool's host keys in pool order, without values
+GET  /api/accounts/{ref}/keys    the host keys that name the account, without values; a shared account's are its real account's, readOnly
+POST /api/accounts/{ref}/shares  share a provider account: {"receiver": {"kind": "user|team|project|serviceaccount", "id"}}
+GET  /api/accounts/{ref}/shares  its shares, each {sharedAccount: {id, name}, receiver: {kind, id, name}, usage: {requests, costNanos, unpriced}}; since= sets the usage window (default 30d)
 ```
 
-A pool's keys must authenticate to the pool's host, and an account named by a host key must be at that key's host. A host key saved without `accountId` gets its owner's default account at its host, created on first use; an owner has one default account per host, and marking a second `"default": true` answers `409`. See [Default accounts](/concepts/key-pooling#default-accounts).
+A pool's keys and accounts must be at the pool's host, and an account named by a host key must be at that key's host. A shared account is made only by `POST …/shares` (`spec.sourceAccountId` on `POST /api/accounts` answers `400`); a PUT keeps its real account, owner and host. See [Sharing an account](/concepts/key-pooling#sharing-an-account). A host key saved without `accountId` gets its owner's default account at its host, created on first use; an owner has one default account per host, and marking a second `"default": true` answers `409`. See [Default accounts](/concepts/key-pooling#default-accounts).
 
 `POST /api/accounts` creates provider accounts only (`spec.hostId` is required). Team, project, personal, member and service accounts are made by Relay; a PUT may change their name, display name and `payloadLogging`, and keeps their owner, holder and kind. Every account carries a read-only `spec.kind`, and `spec.holder` and `spec.closed` where they apply. The list filters by `kind`, `owner_id`, `holder_id` and `closed`. See [Accounts and lanes](/concepts/accounts).
 
@@ -215,7 +217,7 @@ The account read is open to whoever may read the account and to the user who act
 GET /api/plan-issues?kind=&id=   what Relay found wrong while folding the configuration
 ```
 
-Each issue is `{code, message, kind, id, name, severity, refs: [{kind, id}]}`, sorted by kind, name and code. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include `ref_missing` (a link to a row that does not exist), `subject_out_of_scope` (a binding naming an account outside its owner's scope), `link_out_of_scope` (a policy linking a pool its binding's scope may not use), `duplicate_binding`, `model_ref_invalid`, `credential_unresolved` (a host key whose value cannot be read) and `unpriced_under_budget`. `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, …), and `id` together with `kind` narrows to one row.
+Each issue is `{code, message, kind, id, name, severity, refs: [{kind, id}]}`, sorted by kind, name and code. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include `ref_missing` (a link to a row that does not exist), `subject_out_of_scope` (a binding naming an account outside its owner's scope), `link_out_of_scope` (a policy linking a pool its binding's scope may not use), `duplicate_binding`, `model_ref_invalid`, `credential_unresolved` (a host key whose value cannot be read), `shared_account_missing` (a shared account whose real account is gone) and `unpriced_under_budget`. `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, …), and `id` together with `kind` narrows to one row.
 
 Issues on rows the caller may not read are left out, and a ref to such a row keeps its kind with an empty id. Under `RELAY_AUTHZ=rbac` the route takes a role whose rules include the kind `*`, such as the built-in `admin`.
 

@@ -17,6 +17,7 @@ A **pool** is an ordered set of host keys at one host, with the algorithm that p
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
 | `hostId` | `host` (name) | The host every key in the pool authenticates to. |
+| `accountIds` | `accounts` (names) | Provider [accounts](#accounts) the pool draws on whole: each brings every host key it holds, including keys added later, and a [shared account](#sharing-an-account) brings its real account's keys. An account at another host is refused on save. May be empty. |
 | `credentialIds` | `credentials` (names) | The host keys, in order. A key at another host is refused on save. May be empty. |
 | `selection` | `selection` | `prioritized` (default), `round-robin` or `least-recently-used`. |
 
@@ -28,7 +29,7 @@ Host keys, pools, accounts and budgets may be owned by the system, a team, a pro
 
 | Selection | Behavior |
 | --- | --- |
-| `prioritized` | The first healthy key in pool order. Later keys take traffic only when earlier ones are unhealthy or over a limit. |
+| `prioritized` | The first healthy key in pool order: the keys of `accountIds` first, account by account and each account's keys in the order they were created, then `credentialIds`. A key listed directly and through its account keeps its first place. Later keys take traffic only when earlier ones are unhealthy or over a limit. |
 | `round-robin` | Rotates across healthy keys using a counter in the state backend, one per pool, shared by every policy that links the pool. |
 | `least-recently-used` | Picks the healthy key whose last use is oldest. |
 
@@ -49,6 +50,8 @@ A **provider account** is one provider organization at one host. A host key name
 | `hostId` | `host` (name) | The host the organization is held at. |
 | `orgId` | `orgId` | The provider's organization id. Optional and informational. |
 | `default` | `default` | Marks the owner's default account at the host. See [Default accounts](#default-accounts). |
+| `sourceAccountId` (read-only) | `sourceAccount` (name) | On a [shared account](#sharing-an-account): the real account whose keys it reaches. |
+| `holder` (read-only) | `serviceAccount` (name) | On a share with a service account: that service account, the only lane that draws on it. |
 
 An account is the organization, not a person: one login can belong to several organizations with separate limits, and each is its own account. Keys of one account share its capacity. Adding a second key to an account gives failover on key-level failures and lets you rotate without downtime (add the new key, then revoke the old one); it does not add throughput.
 
@@ -64,6 +67,33 @@ When every key of the route is over a limit or cooling, the request fails with `
 Deleting an account that host keys, relay keys or a policy binding still name is refused with `409`. Read an account's keys with `GET /api/accounts/{ref}/keys` and a pool's with `GET /api/pools/{ref}/keys`.
 
 A user may also run requests directly in a provider account they own personally, as a [lane](/concepts/accounts#lanes): such a request reaches only that account's host keys, under the account's own policy.
+
+### Sharing an account
+
+To let a user, team, project or service account use a provider account without giving them its keys, share it:
+
+```bash
+curl -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"receiver": {"kind": "team", "id": "<team id>"}}' \
+  http://localhost:8081/api/accounts/anthropic/shares
+```
+
+The receiver gets a provider account of its own (`anthropic-for-platform`) whose `spec.sourceAccountId` names the real account and `spec.sharedBy` its owner. It holds no host keys and never shows a secret: it reaches every key of the real account, including keys added later and rotated values, and `GET /api/accounts/{ref}/keys` lists them read-only. A host key cannot be added to it (`409 account_shared`).
+
+- **Who shares.** The real account's owner: its user for a personal account, an admin of its team or project, or an admin for a system account. A shared account is not shared on (`409 reshare_refused`), and one account is shared with one receiver once (`409 share_exists`).
+- **Who reaches it.** The receiver's lanes reach it as they reach the receiver's own keys: a user's personal lane, the member lanes of a team or project, and, for a service account, only that service account's lane (its share is owned by its project and held by it). A pool of the receiving scope may list it in `accountIds`.
+- **Limits.** Requests through it count on the real account's tier, one ceiling for the owner and every share. A policy bound to the shared account only narrows: its rate limits and budgets count on the share, in the same store call as the tier.
+- **Usage.** Rows keep `account_id` on the real account and add `via_account_id`. `GET /api/accounts/{ref}/shares?since=30d` lists the real account's shares with each receiver and the requests and cost it drew.
+- **Removing it.** Delete the shared account like any account, as the real account's owner or as an admin of the receiving scope; the answer lists the pools that lose it. Deleting the real account is refused while shares exist; `POST /api/accounts/by-id/{id}/detach` deletes them first. A share whose real account is gone serves nothing and shows the plan issue `shared_account_missing`.
+
+In a manifest, a shared account names its real account by name and repeats its host:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
+metadata: {name: anthropic-for-indexer, owner: {kind: project, name: ml-search}}
+spec: {host: anthropic, sourceAccount: anthropic, serviceAccount: search-indexer}
+```
 
 ### Default accounts
 
