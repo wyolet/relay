@@ -169,7 +169,7 @@ func main() {
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
 			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
-			selector, hostHealth, revoked, specRegistry, plans.plans)
+			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View)
 	}
 
 	pprofSrv, pprofErr := startPprof(cfg)

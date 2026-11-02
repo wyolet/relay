@@ -29,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
+	"github.com/wyolet/relay/pkg/engine"
 )
 
 // Deps is the typed dependency bundle for the admin plane.
@@ -136,6 +137,10 @@ type Deps struct {
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
 
+	// PlanView returns the plan engine's current view. Used by GET /plan-issues
+	// (nil → 200 empty list) and by caller-account reads (nil → 503).
+	PlanView func() *engine.View
+
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin. Exported manifests reference the schema endpoint under it;
 	// empty renders the reference relative.
@@ -218,6 +223,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
 	registerOverlayRoutes(api, d, protect) // /models/by-id/{id}/overlay
 	registerCatalogGraph(api, d, protect)
+	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
 	registerUsageFacets(api, d, protect)
