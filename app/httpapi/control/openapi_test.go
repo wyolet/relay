@@ -113,6 +113,34 @@ func TestControlOpenAPIHasPolicyModel(t *testing.T) {
 	}
 }
 
+// Usage and log records carry the lane account and the refusal class, the error envelope the class, and both list endpoints filter on them.
+func TestControlOpenAPIHasRefusalAndLane(t *testing.T) {
+	doc := controlDoc(t)
+	want := []string{"model_not_allowed", "host_not_reachable", "no_capacity"}
+	for _, schema := range []string{"Event", "APIErrorBody"} {
+		if got := enumOf(t, doc, schema, "refusal"); !slices.Equal(got, want) {
+			t.Errorf("%s.refusal enum = %v, want %v", schema, got, want)
+		}
+	}
+	if _, ok := schemaProps(t, doc, "Event")["lane_account_id"]; !ok {
+		t.Error("Event lacks lane_account_id")
+	}
+	for _, path := range []string{"/usage/events", "/logs"} {
+		params, _ := operation(t, doc, path, "get")["parameters"].([]any)
+		found := map[string]bool{}
+		for _, p := range params {
+			if name, _ := p.(map[string]any)["name"].(string); name != "" {
+				found[name] = true
+			}
+		}
+		for _, name := range []string{"refusal", "lane_account_id"} {
+			if !found[name] {
+				t.Errorf("GET %s does not filter on %s", path, name)
+			}
+		}
+	}
+}
+
 func controlDoc(t *testing.T) map[string]any {
 	t.Helper()
 	api := Mount(chi.NewRouter(), mountDeps(t))

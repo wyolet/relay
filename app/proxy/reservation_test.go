@@ -20,6 +20,7 @@ import (
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -191,6 +192,44 @@ func TestRunRequestOnlyReservationSendsNoCommit(t *testing.T) {
 }
 
 // A failed request's hold is released before Run returns, on the post-flight store: the refunded bucket admits the retry.
+// A refused proxy request's row records what the caller is answered: 429 and the client message, never the counter key.
+func TestRunRefusalRowRecordsTheAnswer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	p, _, cs := meteredPipeline(t)
+	got := make(chan *lifecycle.PostFlightEvent, 1)
+	reg := lifecycle.New()
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+		if ev.Refusal != "" {
+			got <- ev
+		}
+		return nil, nil
+	}})
+	p.Lifecycle = reg
+	res, err := p.Run(context.Background(), meteredRequest(upstream.URL, cs))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+
+	req := meteredRequest(upstream.URL, cs)
+	req.Lifecycle = lifecycle.NewContext("refused", "proxy", time.Now())
+	if _, err := p.Run(context.Background(), req); err == nil {
+		t.Fatal("second Run was not refused")
+	}
+	select {
+	case ev := <-got:
+		if ev.Status != http.StatusTooManyRequests || ev.Refusal != "no_capacity" || !strings.HasPrefix(ev.ErrorMessage, "the rate limit of the lane policy pol-1 is exhausted; try again in ") {
+			t.Fatalf("row status %d refusal %q message %q", ev.Status, ev.Refusal, ev.ErrorMessage)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no failure event")
+	}
+}
+
 func TestRunRefundsOnThePostFlightStore(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	deadURL := dead.URL

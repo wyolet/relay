@@ -269,21 +269,45 @@ func (p *CallerPlan) HeldBy(principal string) bool {
 	return p.Holder == principal
 }
 
-// LaneFor resolves the lane a key's request runs in: ref, an account id or name the key's principal holds, or the key's default lane when ref is empty or names it. A lane the principal does not hold refuses with account_not_held, the same answer for an account that does not exist.
+// LaneFor resolves the lane a key's request runs in: ref, an account id or name the key could be saved in (account.Account.TakesKeysOf), or the key's default lane when ref is empty or names it. Any other account refuses with account_not_held, the same answer for an account that does not exist. A closed account resolves and refuses through its plan, as a key's default lane does.
 func (r *Root) LaneFor(kp *KeyPlan, ref string) (*CallerPlan, *Refusal) {
 	if ref == "" || ref == kp.Caller.Lane.Meta.ID || ref == kp.Caller.Lane.Meta.Name {
 		return kp.Caller, nil
 	}
-	return r.Lane(principalKey(kp.Principal), ref)
+	h := account.Holder{Kind: account.HolderKind(kp.Principal.Kind), ID: kp.Principal.ID}
+	cp := r.Lanes.Lookup(ref)
+	if cp == nil || !cp.Lane.TakesKeysOf(h) {
+		return nil, notHeld(ref, h.Key())
+	}
+	return r.withHolderState(cp, h), nil
 }
 
-// Lane resolves the lane named by ref, an account id or name, for principal; account_not_held when the principal does not hold it or it does not exist.
-func (r *Root) Lane(principal, ref string) (*CallerPlan, *Refusal) {
-	cp := r.Lanes.Lookup(ref)
-	if cp == nil || !cp.HeldBy(principal) {
-		return nil, &Refusal{Code: CodeAccountNotHeld, Message: "no account " + ref + " held by " + principal}
+// TokenLane resolves the lane a relay-minted token of userID runs in: the user's member account in projectID when ref is empty, else ref, an account id or name the user holds (a member account opened on first use among them). A token scoped to a project switches only into accounts inside it; one without a project into any the user holds.
+func (r *Root) TokenLane(userID, projectID, ref string) (*CallerPlan, *Refusal) {
+	if ref == "" {
+		return r.MemberLane(userID, projectID)
 	}
-	return cp, nil
+	h := account.Holder{Kind: account.HolderUser, ID: userID}
+	cp := r.Lanes.Lookup(ref)
+	if cp == nil || !cp.HeldBy(h.Key()) || (projectID != "" && cp.Lane.Meta.Owner != meta.Owner{Kind: meta.OwnerProject, ID: projectID}) {
+		return nil, notHeld(ref, h.Key())
+	}
+	return r.withHolderState(cp, h), nil
+}
+
+func notHeld(ref, principal string) *Refusal {
+	return &Refusal{Code: CodeAccountNotHeld, Message: "no account " + ref + " held by " + principal}
+}
+
+// withHolderState refuses a provider lane whose user is disabled: the lane's plan reads no holder, so the check a key's plan makes for its default lane is made here.
+func (r *Root) withHolderState(cp *CallerPlan, h account.Holder) *CallerPlan {
+	if !cp.Lane.IsProvider() || h.Kind != account.HolderUser {
+		return cp
+	}
+	if up := r.Users.Lookup(h.ID); up == nil || up.Disabled {
+		return refusedPlan(cp.Lane, &Refusal{Code: CodeSubjectDisabled, Rung: limits.RungLane, SubjectID: h.Key(), Message: h.Key() + " is disabled"})
+	}
+	return cp
 }
 
 // MemberLane is the lane a user's request inside a project runs in, as a relay-minted token scoped to the project names: the user's member account there.

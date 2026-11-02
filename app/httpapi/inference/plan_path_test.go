@@ -133,7 +133,7 @@ func TestFrameReauthenticates(t *testing.T) {
 		t.Fatalf("upgrade status %d", w.Code)
 	}
 	upgraded := st.seen
-	if _, ok := st.auth.reauthenticate(httptest.NewRecorder(), upgraded); !ok {
+	if _, ok := st.auth.reauthenticate(httptest.NewRecorder(), nil, upgraded); !ok {
 		t.Fatal("a live key must pass a frame")
 	}
 	past := time.Now().Add(-time.Minute)
@@ -141,7 +141,7 @@ func TestFrameReauthenticates(t *testing.T) {
 	revoked.Spec.RevokedAt = &past
 	plantest.Apply(t, st.plans, &revoked)
 	w := httptest.NewRecorder()
-	if _, ok := st.auth.reauthenticate(w, upgraded); ok || w.Code != http.StatusUnauthorized {
+	if _, ok := st.auth.reauthenticate(w, nil, upgraded); ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked key: ok=%v status %d, want a 401", ok, w.Code)
 	}
 
@@ -152,7 +152,7 @@ func TestFrameReauthenticates(t *testing.T) {
 	tokenPrincipal := st.seen
 	plantest.Apply(t, st.plans, &user.User{ID: f.user, Username: "u-" + f.user, TokenVersion: 2})
 	w = httptest.NewRecorder()
-	if _, ok := st.auth.reauthenticate(w, tokenPrincipal); ok || w.Code != http.StatusUnauthorized {
+	if _, ok := st.auth.reauthenticate(w, nil, tokenPrincipal); ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("signed-out token: ok=%v status %d, want a 401", ok, w.Code)
 	}
 }

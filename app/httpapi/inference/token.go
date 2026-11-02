@@ -161,18 +161,18 @@ func looksLikeToken(bearer string) bool {
 // The signature check is the expensive half and its result is cached until
 // the token expires; the version check and the revoked-token set are not —
 // those are the revocation paths and run on every request, in memory.
-func tokenPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, bearer string) (*Principal, bool) {
+func tokenPrincipal(w http.ResponseWriter, a *Auth, rec *http.Request, root *plan.Root, bearer, lane string) (*Principal, bool) {
 	now := time.Now()
 	ent, ok := a.Tokens.verified(bearer, now)
 	if !ok {
 		writeAuthErr(w, "invalid token")
 		return nil, false
 	}
-	return tokenClaimsPrincipal(w, a, root, ent.claims, ent.typ, now)
+	return tokenClaimsPrincipal(w, a, rec, root, ent.claims, ent.typ, lane, now)
 }
 
-// tokenClaimsPrincipal checks verified claims against the plans and the revoked set, the part of token authentication a long-lived connection repeats per frame.
-func tokenClaimsPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, claims crypto.TokenClaims, typ string, now time.Time) (*Principal, bool) {
+// tokenClaimsPrincipal checks verified claims against the plans and the revoked set, the part of token authentication a long-lived connection repeats per frame. lane names the account the token acts in; empty is the user's member account in the token's project. A lane refusal is recorded against rec.
+func tokenClaimsPrincipal(w http.ResponseWriter, a *Auth, rec *http.Request, root *plan.Root, claims crypto.TokenClaims, typ, lane string, now time.Time) (*Principal, bool) {
 	userID := claims.UserID()
 	// iat stays out: tokens minted on another pod would fail on clock skew,
 	// which relay has never checked. Validate checks typ and iss before exp,
@@ -199,11 +199,16 @@ func tokenClaimsPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, claim
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked", "this token has been revoked")
 		return nil, false
 	}
-	// The token acts in its project: the lane is the user's member account there, under the project's and its team's.
-	cp, refused := root.MemberLane(userID, claims.Prj)
+	// Without a switch the token acts in its project: the lane is the user's member account there, under the project's and its team's.
+	cp, refused := root.TokenLane(userID, claims.Prj, lane)
 	if refused != nil {
-		writeForbidden(w, refused.Code, refused.Error())
+		who := &Principal{UserID: userID, CredentialKind: CredentialToken, CredentialID: claims.Jti, TokenExp: claims.Exp, TokenVer: claims.Ver}
+		a.refuseLane(w, rec, who, refused)
 		return nil, false
+	}
+	switchedLaneID := ""
+	if lane != "" {
+		switchedLaneID = cp.Lane.Meta.ID
 	}
 	return &Principal{
 		UserID:         userID,
@@ -214,6 +219,7 @@ func tokenClaimsPrincipal(w http.ResponseWriter, a *Auth, root *plan.Root, claim
 		TokenExp:       claims.Exp,
 		TokenVer:       claims.Ver,
 		Caller:         cp,
+		SwitchedLaneID: switchedLaneID,
 		claims:         claims,
 		claimsTyp:      typ,
 	}, true

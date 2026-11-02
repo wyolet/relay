@@ -112,6 +112,9 @@ type Deps struct {
 	// ProxyBodyIdle bounds the wait for each read of a proxy-mode request body (RELAY_PROXY_BODY_IDLE_S); a client silent that long gets 408. 0 disables it.
 	ProxyBodyIdle time.Duration
 
+	// AccountDomain is the parent domain of the per-account hosts (RELAY_ACCOUNT_DOMAIN): a request to <account-name>.<AccountDomain> runs in that account. Empty turns host selection off; the header and the /a/{account}/ prefix work regardless.
+	AccountDomain string
+
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
 	// tooling only; off by default.
@@ -128,6 +131,9 @@ type Pinger interface {
 // Returns the huma.API so the caller can attach test-only operations.
 func Mount(r chi.Router, d Deps) huma.API {
 	httpapi.InstallErrorRewriter()
+
+	// First, so the profile middleware and the router see the path without its /a/{account} prefix.
+	r.Use(LaneMiddleware(d.AccountDomain))
 
 	// Ahead of every route on r (chi requires middleware before routes), so
 	// header- and User-Agent-selected profiles reach handlers that carry no
@@ -214,5 +220,5 @@ func mountProfileRoutes(r chi.Router, d Deps) {
 
 // Auth is the credential middleware's view of d.
 func (d Deps) Auth() *Auth {
-	return &Auth{Catalog: d.Catalog, Plans: d.Plans, Revoked: d.Revoked, Tokens: d.Tokens}
+	return &Auth{Catalog: d.Catalog, Plans: d.Plans, Revoked: d.Revoked, Tokens: d.Tokens, Lifecycle: d.Lifecycle}
 }

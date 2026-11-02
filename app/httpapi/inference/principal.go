@@ -24,7 +24,9 @@ type Principal struct {
 	KeyHash                      string // hash presented; empty for tokens
 	Key                          *key.Key
 	// Caller is the request's lane with its ladder folded: what it may reach and the counters it must fit.
-	Caller             *plan.CallerPlan
+	Caller *plan.CallerPlan
+	// SwitchedLaneID is the account the request asked to run in, by id, so a WebSocket frame or a queued batch item resolves the same lane again; empty when it runs in the credential's default.
+	SwitchedLaneID     string
 	PassthroughAllowed bool
 	PayloadLogging     bool // the credential's own flag; read through CapturesPayload
 

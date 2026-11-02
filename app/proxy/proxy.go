@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/pkg/contentcoding"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -394,12 +395,15 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 		return
 	}
 	kind, status := classifyFailure(runErr)
+	ev := &lifecycle.PostFlightEvent{Status: status, ErrorKind: kind, ErrorMessage: runErr.Error()}
+	var refused *limits.Refused
+	if errors.As(runErr, &refused) {
+		// Recorded as the caller was answered; the internal error names counter keys.
+		a := plan.LimitAnswer(refused)
+		ev.Status, ev.Refusal, ev.ErrorMessage = a.Status, string(a.Kind), a.Message
+	}
 	req.Lifecycle.MarkEnd()
-	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, &lifecycle.PostFlightEvent{
-		Status:       status,
-		ErrorKind:    kind,
-		ErrorMessage: runErr.Error(),
-	})
+	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, ev)
 }
 
 // classifyFailure maps a proxy Run error to a telemetry category. Proxy

@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/pkg/httpheader"
 )
 
 // inferenceTags describes the tags the inference operations use.
@@ -125,7 +126,8 @@ func generationDescription(spec *adapter.Spec) string {
 		routing = "Routes the request by its model field to a host the caller's policies allow and serves it in this wire shape. "
 	}
 	return routing +
-		"Every rung of the request's account ladder (the team's and the project's own accounts, the lane account the request runs in, and the provider account of the key it is sent with) may refuse: a refusal names the rung and policy in error.message. " +
+		"The request runs in the credential's default account unless it names another its principal holds: the X-WR-Account header, a /a/{account}/ prefix before this path, or the account's own host where the deployment sets RELAY_ACCOUNT_DOMAIN, in that precedence. " +
+		"Every rung of the request's account ladder (the team's and the project's own accounts, the lane account the request runs in, and the provider account of the key it is sent with) may refuse: a refusal names the rung and policy in error.message, and error.refusal classes its code as model_not_allowed, host_not_reachable or no_capacity. " +
 		"Errors relay makes carry X-Wr-Origin: relay and the error envelope; an upstream's own error is passed through with X-Wr-Origin: upstream, X-Wr-Upstream-Status, and the upstream's body."
 }
 
@@ -140,7 +142,7 @@ var generationErrors = map[int]string{
 	http.StatusTooManyRequests:       "A limit refused the request before any upstream call. Codes: rate_limit_exceeded (a rate limit on the ladder, or every host key over its upstream limit), budget_exceeded (a budget on the ladder is spent). Retry-After says when to retry: the limit's refill, or the start of the budget's next period.",
 	http.StatusInternalServerError:   "Relay is misconfigured or failed. Codes such as no_adapter, no_translator, marshal_request, serialize_response, pre_flight_aborted.",
 	http.StatusBadGateway:            "The upstream failed. Codes: upstream_unreachable, upstream_unavailable, upstream_error, upstream_stalled, read_response, translate_response.",
-	http.StatusServiceUnavailable:    "Relay cannot serve now. Codes: overloaded (the pod is at capacity; Retry-After set; a path whose shape defines its own overload error answers with that instead), no_keys (no host key the caller can reach serves the model), no_host_binding, not_ready, catalog_unavailable.",
+	http.StatusServiceUnavailable:    "Relay cannot serve now. Codes: overloaded (the pod is at capacity; Retry-After set; a path whose shape defines its own overload error answers with that instead), no_keys (no host key the caller can reach serves the model), no_healthy_keys (every host key that serves it is out of rotation after failing), no_host_binding, not_ready, catalog_unavailable.",
 }
 
 // listingErrors are the error codes the read-only inference routes answer with.
@@ -201,10 +203,16 @@ func generationResponses(api huma.API, spec *adapter.Spec) map[string]*huma.Resp
 	return out
 }
 
-// documentRequestBody adds the generation route's request body to the document only. Declared on the operation before registration, huma would read and validate the body itself, ahead of the handler's own streaming read.
+// documentRequestBody adds the generation route's request body and the account header to the document only. Declared on the operation before registration, huma would read and validate them itself, ahead of the handler's own streaming read and LaneMiddleware.
 func documentRequestBody(api huma.API, path string, spec *adapter.Spec) {
 	if item := api.OpenAPI().Paths[path]; item != nil && item.Post != nil {
 		item.Post.RequestBody = generationRequestBody(spec)
+		item.Post.Parameters = append(item.Post.Parameters, &huma.Param{
+			Name:        httpheader.HeaderAccount,
+			In:          "header",
+			Description: "Id or name of the account to run the request in and charge it to, instead of the credential's default; one the credential's principal holds, and for a token scoped to a project one inside that project, else 403 account_not_held. Wins over a /a/{account}/ prefix and the account's own host.",
+			Schema:      &huma.Schema{Type: huma.TypeString},
+		})
 	}
 }
 

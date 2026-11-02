@@ -27,6 +27,9 @@ type PostFlightEvent struct {
 	// "model_not_found", "stream_aborted".
 	ErrorKind string
 
+	// Refusal classes a request relay refused itself: model_not_allowed, host_not_reachable or no_capacity. Empty on success and on every other failure, an upstream's own error included.
+	Refusal string
+
 	// ErrorMessage is the human-readable detail. Optional even when
 	// ErrorKind is set; observers should not require it.
 	ErrorMessage string

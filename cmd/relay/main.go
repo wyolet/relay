@@ -156,7 +156,7 @@ func main() {
 	// the stored values (the data plane gates on IsReady until it completes).
 	go hydrateLoop(listenerCtx, cat, stores, bootOpts, plans.load)
 
-	auth := &inference.Auth{Catalog: cat, Plans: plans.plans, Revoked: revoked.Set(), Tokens: tokenVerifier}
+	auth := &inference.Auth{Catalog: cat, Plans: plans.plans, Revoked: revoked.Set(), Tokens: tokenVerifier, Lifecycle: lifecycleReg}
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, auth, pl, specRegistry, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, auth, pl, proxyPipeline, lifecycleReg,
