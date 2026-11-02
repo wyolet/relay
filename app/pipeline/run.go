@@ -448,9 +448,9 @@ func coolAccount(s *plan.KeySlot, r *limits.Refused) {
 	s.Account.Cooldown.Extend(time.Now().Add(r.RetryAfter).UnixMilli())
 }
 
-// coolsAccount reports a refusal that holds for every request to the account until its retry-after: an account-wide request or token window. A model-scoped rule refuses only its model, a concurrency lease frees when a request ends, and a budget answers to cap edits, so those are asked again per request.
+// coolsAccount reports a refusal that holds for every request to the account until its retry-after: an account-wide request or token window. A model-scoped rule refuses only its model, a rule counted per lane only that lane, a concurrency lease frees when a request ends, and a budget answers to cap edits, so those are asked again per request.
 func coolsAccount(c *limits.Counter) bool {
-	return c.Rung == limits.RungAccount && c.Kind == limits.KindRule && c.ModelID == "" && c.Rule.Meter != ratelimit.MeterConcurrency
+	return c.Rung == limits.RungAccount && c.Kind == limits.KindRule && c.ModelID == "" && c.Lane == "" && c.Rule.Meter != ratelimit.MeterConcurrency
 }
 
 // noteLimited keeps the earliest time any refused or cooled credential frees up.

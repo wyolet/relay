@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
@@ -39,6 +40,17 @@ func (c *controllers) all() []*engine.Controller {
 	engine.Watch(catalog, toSingleton[binding.Binding])
 	engine.Watch(catalog, toSingleton[overlay.Overlay])
 
+	managed := engine.NewController("managed-account", KindManagedAccount, c.managedAccount)
+	engine.Watch(managed, func(t *team.Team) []string { return []string{"team:" + t.Meta.ID} })
+	engine.Watch(managed, func(p *project.Project) []string { return []string{"project:" + p.Meta.ID} })
+	engine.Watch(managed, func(u *user.User) []string { return []string{"personal:" + u.ID} })
+	engine.Watch(managed, func(sa *serviceaccount.ServiceAccount) []string { return []string{"service:" + sa.Meta.ID} })
+	engine.Watch(managed, managedKeyOf)
+	engine.Watch(managed, memberKeys)
+
+	pending := engine.NewController("pending-accounts", KindPendingAccounts, c.pendingAccounts)
+	engine.Watch(pending, pendingKey)
+
 	expanded := engine.NewController("expanded-policy", KindExpandedPolicy, c.expandedPolicy)
 	engine.Watch(expanded, func(p *policy.Policy) []string { return []string{p.Meta.ID} })
 
@@ -55,14 +67,13 @@ func (c *controllers) all() []*engine.Controller {
 	engine.Watch(pl, func(p *pool.Pool) []string { return []string{p.Meta.ID} })
 
 	owned := engine.NewController("owned-credentials", KindOwnedCredentials, c.ownedCredentials)
-	engine.Watch(owned, func(k *hostkey.HostKey) []string { return []string{ownerRef(k.Meta.Owner)} })
-
-	hostRungs := engine.NewController("host-rungs", KindHostRungs, c.hostRungs)
-	engine.Watch(hostRungs, toSingleton[host.Host])
+	engine.Watch(owned, ownedCredentialKeys)
 
 	caller := engine.NewController("caller-plan", KindCallerPlan, c.callerPlan)
-	engine.Watch(caller, func(sa *serviceaccount.ServiceAccount) []string { return []string{"serviceaccount:" + sa.Meta.ID} })
-	engine.Watch(caller, func(u *user.User) []string { return []string{"user:" + u.ID} })
+	engine.Watch(caller, func(a *account.Account) []string { return []string{accountSubject(a.Meta.ID)} })
+
+	lanes := engine.NewController("lane-index", KindLaneIndex, c.laneIndex)
+	engine.Watch(lanes, toSingleton[CallerPlan])
 
 	kp := engine.NewController("key-plan", KindKeyPlan, c.keyPlan)
 	engine.Watch(kp, func(k *key.Key) []string { return []string{k.Meta.ID} })
@@ -79,11 +90,5 @@ func (c *controllers) all() []*engine.Controller {
 	users := engine.NewController("user-index", KindUserIndex, c.userIndex)
 	engine.Watch(users, toSingleton[UserPlan])
 
-	pp := engine.NewController("project-plan", KindProjectPlan, c.projectPlan)
-	engine.Watch(pp, func(p *project.Project) []string { return []string{p.Meta.ID} })
-
-	projects := engine.NewController("project-index", KindProjectIndex, c.projectIndex)
-	engine.Watch(projects, toSingleton[ProjectPlan])
-
-	return []*engine.Controller{catalog, expanded, rung, acct, slot, pl, owned, hostRungs, caller, kp, shard, index, up, users, pp, projects}
+	return []*engine.Controller{catalog, managed, pending, expanded, rung, acct, slot, pl, owned, caller, lanes, kp, shard, index, up, users}
 }

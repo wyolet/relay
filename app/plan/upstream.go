@@ -16,11 +16,15 @@ import (
 	"github.com/wyolet/relay/pkg/engine/cell"
 )
 
-// Rung is one level of the ladder as a plan holds it: the subject and the policy bound to it. A nil Policy does not constrain.
+// Rung is one level of the ladder as a plan holds it: the account and the policy bound to it. A nil Policy does not constrain.
 type Rung struct {
-	Kind      limits.Rung
+	Kind limits.Rung
+	// SubjectID is the account, as "account:<id>"; empty for a rung the request does not climb.
 	SubjectID string
-	// Name is the subject's slug where the plan read its row (team, project, service account), for usage rows; empty otherwise.
+	Account   *account.Account
+	// ScopeID is the team or project id of a team or project rung, and of the lane's own scope; ID returns it.
+	ScopeID string
+	// Name is the slug of the team, project or service account the rung stands for, for usage rows; empty otherwise.
 	Name   string
 	Policy *ExpandedPolicy
 }
@@ -38,7 +42,7 @@ func (a *AccountPlan) builtFrom() inputs { return a.in }
 
 func (c *controllers) accountPlan(tx *engine.Txn, id string) error {
 	acc := engine.Get[account.Account](tx, id)
-	if acc == nil {
+	if acc == nil || !acc.IsProvider() {
 		engine.Drop(tx)
 		return nil
 	}
@@ -49,35 +53,36 @@ func (c *controllers) accountPlan(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// KeySlot is one credential with the upstream half of the ladder folded: its host and account, the policies bound to them, the counters those impose, and the breaker cell. One KeySlot is shared by every pool holding the credential.
+// KeySlot is one credential with the upstream half of the ladder folded: its host and provider account, the policy bound to the account, the counters it imposes, and the breaker cell. One KeySlot is shared by every pool holding the credential.
 type KeySlot struct {
 	Credential *hostkey.HostKey
 	Host       *host.Host
 	Account    *AccountPlan         // nil when the credential names no account
 	Breaker    *keypool.BreakerCell // nil for a keyless host's anonymous slot
-	Upstream   [2]Rung              // host, account
-	// Refused is set when an upstream rung's policy is disabled or its binding ambiguous: the credential then serves nothing, rather than serving unmetered.
+	Upstream   Rung                 // the provider account's
+	// Refused is set when the account's policy is disabled or its binding ambiguous: the credential then serves nothing, rather than serving unmetered.
 	Refused *Refusal
-	// Whole holds the upstream rules with no model scope and the upstream budgets, outer rung first; ByModel the scoped rules, expanded per model id.
-	Whole   []limits.Counter
-	ByModel map[string][]limits.Counter
-	// Alone is the credential as a pool of one, for policies that link it directly and for reach by ownership.
+	// Whole holds the account's rules with no model scope and its budgets; ByModel the scoped rules, expanded per model id. A counter whose link is not shared counts per lane: the route fill renders it for the caller's lane.
+	Whole   []slotCounter
+	ByModel map[string][]slotCounter
+	// Alone is the credential as a pool of one, for reach by ownership.
 	Alone     *PoolPlan
 	hasBudget bool
-	budgetAt  int // index into Upstream of the first rung with a budget
 	in        inputs
+}
+
+// slotCounter is an upstream counter and whether it counts once per lane.
+type slotCounter struct {
+	limits.Counter
+	perLane bool
 }
 
 func (s *KeySlot) builtFrom() inputs { return s.in }
 
-// rejects returns the index of the first upstream rung whose grant does not cover the model at this slot's host, or -1.
-func (s *KeySlot) rejects(providerSlug string, m *model.Model, hostSlug string) int {
-	for i := range s.Upstream {
-		if p := s.Upstream[i].Policy; p != nil && p.Grant != nil && !p.Grant.Allows(providerSlug, m, hostSlug) {
-			return i
-		}
-	}
-	return -1
+// rejects reports whether the account's grant leaves out the model at this slot's host.
+func (s *KeySlot) rejects(providerSlug string, m *model.Model, hostSlug string) bool {
+	p := s.Upstream.Policy
+	return p != nil && p.Grant != nil && !p.Grant.Allows(providerSlug, m, hostSlug)
 }
 
 func (c *controllers) keySlot(tx *engine.Txn, id string) error {
@@ -123,58 +128,46 @@ func (c *controllers) keySlot(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// foldUpstream builds a slot from the host and account rungs. A credential has no rung of its own: a binding naming it is stored as its account's. Each rung's counters are grouped by its subject, the host's or the account's.
+// foldUpstream builds a slot from its provider account's rung. A credential has no rung of its own, and a host is no binding subject, so the account's tier policy is the whole upstream half.
 func foldUpstream(tx *engine.Txn, cred *hostkey.HostKey, h *host.Host, acc *AccountPlan) *KeySlot {
-	s := &KeySlot{Credential: cred, Host: h, Account: acc, budgetAt: -1}
+	s := &KeySlot{Credential: cred, Host: h, Account: acc, Upstream: Rung{Kind: limits.RungAccount}}
 	s.in = inputs{h, acc}
-	s.Upstream = [2]Rung{
-		{Kind: limits.RungHost, SubjectID: "host:" + h.Meta.ID},
-		{Kind: limits.RungAccount},
+	if acc == nil {
+		return s
 	}
-	if acc != nil {
-		s.Upstream[1].SubjectID = "account:" + acc.Account.Meta.ID
+	r := &s.Upstream
+	r.SubjectID, r.Account = accountSubject(acc.Account.Meta.ID), acc.Account
+	rp := engine.Get[RungPolicy](tx, r.SubjectID)
+	s.in = append(s.in, rp)
+	if rp == nil {
+		return s
 	}
-	var scoped []scopedLink
-	for i := range s.Upstream {
-		r := &s.Upstream[i]
-		if r.SubjectID == "" {
+	r.Policy = rp.Rung.Policy
+	if rp.Refused != nil {
+		s.Refused = rp.Refused
+		return s
+	}
+	g := r.SubjectID
+	pid := r.Policy.Policy.Meta.ID
+	var scoped []*LinkedRateLimit
+	for j := range r.Policy.RateLimits {
+		l := &r.Policy.RateLimits[j]
+		if l.Scoped {
+			scoped = append(scoped, l)
 			continue
 		}
-		rp := engine.Get[RungPolicy](tx, r.SubjectID)
-		s.in = append(s.in, rp)
-		if rp == nil {
-			continue
+		for _, rule := range l.RateLimit.Spec.Rules {
+			s.Whole = append(s.Whole, slotCounter{limits.UpstreamRule(r.Kind, l.RateLimit, rule, pid, r.SubjectID, "", g), !l.Shared})
 		}
-		r.Policy = rp.Rung.Policy
-		if rp.Refused != nil {
-			if s.Refused == nil {
-				s.Refused = rp.Refused
-			}
-			continue
-		}
-		g := r.SubjectID
-		pid := r.Policy.Policy.Meta.ID
-		for j := range r.Policy.RateLimits {
-			l := &r.Policy.RateLimits[j]
-			if l.Scoped {
-				scoped = append(scoped, scopedLink{link: l, rung: r, policyID: pid, group: g})
-				continue
-			}
-			for _, rule := range l.RateLimit.Spec.Rules {
-				s.Whole = append(s.Whole, limits.UpstreamRule(r.Kind, l.RateLimit, rule, pid, r.SubjectID, "", g))
-			}
-		}
-		for _, b := range r.Policy.Budgets {
-			s.Whole = append(s.Whole, limits.BudgetCounter(r.Kind, b, pid, r.SubjectID, g))
-			if !s.hasBudget {
-				s.hasBudget, s.budgetAt = true, i
-			}
-		}
+	}
+	for _, b := range r.Policy.Budgets {
+		s.Whole = append(s.Whole, slotCounter{limits.BudgetCounter(r.Kind, b.Budget, pid, r.SubjectID, g), !b.Shared})
+		s.hasBudget = true
 	}
 	if len(scoped) > 0 {
 		idx := engine.Get[CatalogIndex](tx, "")
 		s.in = append(s.in, idx)
-		s.ByModel = expandScoped(idx, h, scoped)
+		s.ByModel = expandScoped(idx, h, r, pid, scoped)
 	}
 	return s
 }
@@ -184,78 +177,35 @@ func (s *KeySlot) refuses(providerSlug string, m *model.Model, b *binding.Bindin
 	if s.Refused != nil {
 		return stepUpstream, s.Refused
 	}
-	if i := s.rejects(providerSlug, m, hostSlug); i >= 0 {
-		r := &s.Upstream[i]
-		return stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the "+string(r.Kind)+" policy")
+	r := &s.Upstream
+	if s.rejects(providerSlug, m, hostSlug) {
+		return stepUpstream, rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, m.Meta.Name+" is not allowed by the provider account's policy")
 	}
 	if !priced && s.hasBudget {
-		r := &s.Upstream[s.budgetAt]
 		return stepUnpriced, rungRefusal(CodeUnpricedUnderBudget, r, r.Policy.Policy.Meta.ID, "binding "+b.Meta.Name+" has no pricing and a budget applies")
 	}
 	return 0, nil
 }
 
-// HostRungs is every host's own rung folded on its own: what governs a request that brings its own upstream key, where no account rung applies but the host's operator-wide policy does.
-type HostRungs struct {
-	byID map[string]*KeySlot
-	in   inputs
-}
-
-func (h *HostRungs) builtFrom() inputs { return h.in }
-
-// noHostRung stands for a host with no fold: nothing on it constrains.
-var noHostRung = &KeySlot{budgetAt: -1}
-
-// Of returns the host's fold.
-func (h *HostRungs) Of(hostID string) *KeySlot {
-	if h != nil {
-		if s := h.byID[hostID]; s != nil {
-			return s
-		}
-	}
-	return noHostRung
-}
-
-// hostRungs folds each host as an anonymous credential, which has no account rung, so foldUpstream reads the host rung alone.
-func (c *controllers) hostRungs(tx *engine.Txn, _ string) error {
-	hosts := engine.Members[host.Host](tx)
-	hr := &HostRungs{byID: make(map[string]*KeySlot, len(hosts))}
-	for _, h := range hosts {
-		s := foldUpstream(tx, hostkey.Anonymous(h.Meta.ID, h.Meta.Name), h, nil)
-		hr.byID[h.Meta.ID] = s
-		hr.in = append(hr.in, s.in...)
-	}
-	engine.Put(tx, SameOr(engine.Get[HostRungs](tx, ""), hr))
-	return nil
-}
-
-// scopedLink is an upstream rate-limit link with a model scope, waiting to be expanded against the models its host serves.
-type scopedLink struct {
-	link     *LinkedRateLimit
-	rung     *Rung
-	policyID string
-	group    string
-}
-
 // expandScoped gives each model the host serves the counters of every scoped link matching it: one bucket per matched model. A rule reached twice for one model (two overlapping links of one rate limit) counts once.
-func expandScoped(idx *CatalogIndex, h *host.Host, links []scopedLink) map[string][]limits.Counter {
+func expandScoped(idx *CatalogIndex, h *host.Host, r *Rung, policyID string, links []*LinkedRateLimit) map[string][]slotCounter {
 	if idx == nil {
 		return nil
 	}
-	out := map[string][]limits.Counter{}
+	out := map[string][]slotCounter{}
 	for _, b := range idx.bindingsByHost[h.Meta.ID] {
 		m, ok := idx.Snap.Model(b.Spec.ModelID)
 		if !ok {
 			continue
 		}
 		prov, _ := idx.Snap.ProviderSlug(m.Meta.Owner.ID)
-		for _, sl := range links {
-			if !sl.link.matches(prov, m.Meta.Name, h.Meta.Name) {
+		for _, l := range links {
+			if !l.matches(prov, m.Meta.Name, h.Meta.Name) {
 				continue
 			}
-			for _, rule := range sl.link.RateLimit.Spec.Rules {
-				ct := limits.UpstreamRule(sl.rung.Kind, sl.link.RateLimit, rule, sl.policyID, sl.rung.SubjectID, m.Meta.ID, sl.group)
-				if !hasCounter(out[m.Meta.ID], ct.ID) {
+			for _, rule := range l.RateLimit.Spec.Rules {
+				ct := slotCounter{limits.UpstreamRule(r.Kind, l.RateLimit, rule, policyID, r.SubjectID, m.Meta.ID, r.SubjectID), !l.Shared}
+				if !hasCounter(out[m.Meta.ID], ct) {
 					out[m.Meta.ID] = append(out[m.Meta.ID], ct)
 				}
 			}
@@ -264,9 +214,9 @@ func expandScoped(idx *CatalogIndex, h *host.Host, links []scopedLink) map[strin
 	return out
 }
 
-func hasCounter(cs []limits.Counter, id string) bool {
+func hasCounter(cs []slotCounter, c slotCounter) bool {
 	for i := range cs {
-		if cs[i].ID == id {
+		if cs[i].ID == c.ID && cs[i].perLane == c.perLane {
 			return true
 		}
 	}
@@ -334,7 +284,7 @@ func (c *controllers) poolPlan(tx *engine.Txn, id string) error {
 	return nil
 }
 
-// OwnedCredentials is the credentials one owner scope holds ("user:<id>", "project:<id>", "team:<id>", "system:"), each as a pool of one in creation order: what a principal reaches when no caller rung links pools or credentials.
+// OwnedCredentials is the credentials one owner scope holds ("user:<id>", "project:<id>", "team:<id>", "system:"), or one provider account holds ("account:<id>"), each as a pool of one in creation order: what a lane reaches when no caller rung links pools.
 type OwnedCredentials struct {
 	Pools []*PoolPlan
 	in    inputs
@@ -343,6 +293,14 @@ type OwnedCredentials struct {
 func (o *OwnedCredentials) builtFrom() inputs { return o.in }
 
 func ownerRef(o meta.Owner) string { return string(o.Kind) + ":" + o.ID }
+
+// ownedCredentialKeys is a credential's Watch key: its owner scope and, when it names one, its provider account.
+func ownedCredentialKeys(k *hostkey.HostKey) []string {
+	if k.Spec.AccountID == "" {
+		return []string{ownerRef(k.Meta.Owner)}
+	}
+	return []string{ownerRef(k.Meta.Owner), accountSubject(k.Spec.AccountID)}
+}
 
 func (c *controllers) ownedCredentials(tx *engine.Txn, owner string) error {
 	oc := &OwnedCredentials{}

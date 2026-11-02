@@ -58,6 +58,7 @@ type World struct {
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Users           []*user.User
 	Keys            []*key.Key
+	RoleBindings    []*rolebinding.RoleBinding
 }
 
 var nameSeq atomic.Uint64
@@ -117,7 +118,7 @@ func (w *World) Price(m *model.Model, h *host.Host, perMtok float64) *pricing.Pr
 
 // Account adds a provider account at h.
 func (w *World) Account(h *host.Host) *account.Account {
-	a := &account.Account{Meta: md("acct-"+seq(), System), Spec: account.Spec{HostID: h.Meta.ID}}
+	a := &account.Account{Meta: md("acct-"+seq(), System), Spec: account.Spec{HostID: h.Meta.ID, Kind: account.KindProvider}}
 	w.Accounts = append(w.Accounts, a)
 	return a
 }
@@ -175,54 +176,106 @@ func (w *World) Policy(name string, spec policy.Spec) *policy.Policy {
 	return p
 }
 
-// BindPolicy binds p to subjects.
-func (w *World) BindPolicy(p *policy.Policy, subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
-	b := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), System), Spec: policybinding.Spec{PolicyID: p.Meta.ID, Subjects: subjects}}
+// BindPolicy binds p to accounts, in a system-owned binding.
+func (w *World) BindPolicy(p *policy.Policy, accounts ...*account.Account) *policybinding.PolicyBinding {
+	b := &policybinding.PolicyBinding{Meta: md("pb-"+seq(), System), Spec: policybinding.Spec{PolicyID: p.Meta.ID}}
+	for _, a := range accounts {
+		b.Spec.AccountIDs = append(b.Spec.AccountIDs, a.Meta.ID)
+	}
 	w.PolicyBindings = append(w.PolicyBindings, b)
 	return b
 }
 
-// Subject names a binding subject.
-func Subject(kind rolebinding.SubjectKind, id string) rolebinding.Subject {
-	return rolebinding.Subject{Kind: kind, ID: id}
-}
-
-// Team adds a team.
+// Team adds a team and its account.
 func (w *World) Team() *team.Team {
 	t := &team.Team{Meta: md("team-"+seq(), System)}
 	w.Teams = append(w.Teams, t)
+	w.managed(account.ForTeam(t.Meta.ID, t.Meta.Name, ""))
 	return t
 }
 
-// Project adds a project of t.
+// Project adds a project of t and its account.
 func (w *World) Project(t *team.Team) *project.Project {
 	p := &project.Project{Meta: md("proj-"+seq(), meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}), Spec: project.Spec{TeamID: t.Meta.ID}}
 	w.Projects = append(w.Projects, p)
+	w.managed(account.ForProject(p.Meta.ID, p.Meta.Name, ""))
 	return p
 }
 
-// ServiceAccount adds a service account of p.
+// ServiceAccount adds a service account of p and its account.
 func (w *World) ServiceAccount(p *project.Project) *serviceaccount.ServiceAccount {
 	s := &serviceaccount.ServiceAccount{Meta: md("sa-"+seq(), meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}), Spec: serviceaccount.Spec{ProjectID: p.Meta.ID}}
 	w.ServiceAccounts = append(w.ServiceAccounts, s)
+	w.managed(account.ForServiceAccount(s.Meta.ID, s.Meta.Name, "", p.Meta.ID))
 	return s
 }
 
-// User adds a user.
+// User adds a user and the user's personal account.
 func (w *World) User() *user.User {
 	u := &user.User{ID: meta.NewID(), Username: "user-" + seq()}
 	w.Users = append(w.Users, u)
+	w.managed(account.Personal(u.ID, u.Username))
 	return u
 }
 
-// UserKey adds a key of u whose bearer is secret.
-func (w *World) UserKey(u *user.User, secret string) *key.Key {
-	return w.key(key.PrincipalUser, u.ID, secret)
+// Member adds u's member account in a team or project, and the role binding that grants it.
+func (w *World) Member(u *user.User, scope meta.Owner) *account.Account {
+	w.RoleBindings = append(w.RoleBindings, &rolebinding.RoleBinding{
+		Meta: md("rb-"+seq(), scope),
+		Spec: rolebinding.Spec{RoleID: meta.NewID(), Scope: scope, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: u.ID}}},
+	})
+	a := account.Member(u.ID, u.Username, scope, "scope-"+seq(), "")
+	a.FollowsRoleBindings = true
+	return w.managed(a)
 }
 
-// ServiceAccountKey adds a key of s whose bearer is secret.
+// managed adds a caller account the way relay keeps it.
+func (w *World) managed(a *account.Account) *account.Account {
+	a.Meta.ID = meta.NewID()
+	a.Meta.Name += "-" + seq()
+	w.Accounts = append(w.Accounts, a)
+	return a
+}
+
+// AccountOf returns the caller account at a place (account.Account.ManagedKey), such as "team:<id>" or "personal:<user id>".
+func (w *World) AccountOf(managedKey string) *account.Account {
+	for _, a := range w.Accounts {
+		if a.ManagedKey() == managedKey {
+			return a
+		}
+	}
+	return nil
+}
+
+// TeamAccount, ProjectAccount, PersonalAccount and ServiceAccountAccount return the accounts the builders added.
+func (w *World) TeamAccount(t *team.Team) *account.Account { return w.AccountOf("team:" + t.Meta.ID) }
+func (w *World) ProjectAccount(p *project.Project) *account.Account {
+	return w.AccountOf("project:" + p.Meta.ID)
+}
+func (w *World) PersonalAccount(u *user.User) *account.Account {
+	return w.AccountOf("personal:" + u.ID)
+}
+func (w *World) ServiceAccountAccount(s *serviceaccount.ServiceAccount) *account.Account {
+	return w.AccountOf("service:" + s.Meta.ID)
+}
+
+// UserKey adds a key of u, in u's personal account, whose bearer is secret.
+func (w *World) UserKey(u *user.User, secret string) *key.Key {
+	return w.KeyIn(u, w.PersonalAccount(u), secret)
+}
+
+// KeyIn adds a key of u running in account a, whose bearer is secret.
+func (w *World) KeyIn(u *user.User, a *account.Account, secret string) *key.Key {
+	k := w.key(key.PrincipalUser, u.ID, secret)
+	k.Spec.AccountID = a.Meta.ID
+	return k
+}
+
+// ServiceAccountKey adds a key of s, in its account, whose bearer is secret.
 func (w *World) ServiceAccountKey(s *serviceaccount.ServiceAccount, secret string) *key.Key {
-	return w.key(key.PrincipalServiceAccount, s.Meta.ID, secret)
+	k := w.key(key.PrincipalServiceAccount, s.Meta.ID, secret)
+	k.Spec.AccountID = w.ServiceAccountAccount(s).Meta.ID
+	return k
 }
 
 func (w *World) key(kind key.PrincipalKind, id, secret string) *key.Key {

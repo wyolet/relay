@@ -157,12 +157,12 @@ type Unkeyed struct {
 	Pricing       *pricing.Pricing
 	UpstreamModel string
 	ResolvedVia   string
-	// Counters are what the request must fit: the caller rungs' counters, then the host rung's.
+	// Counters are what the request must fit: the caller rungs' counters.
 	Counters []limits.Counter
 	Refused  *Refusal
 }
 
-// ResolveUnkeyed resolves ref without credentials, uncached. The host rung applies as on a routed request; the account rung does not, as no relay credential serves. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
+// ResolveUnkeyed resolves ref without credentials, uncached. No provider account's policy applies, as no relay credential serves. A keyless host counts only when one of the caller's pools is at it: the pool is the explicit grant a wildcard never gives.
 func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 	cp := t.caller
 	if cp.Refused != nil {
@@ -204,13 +204,8 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 				best.note(stepUnpriced, r)
 				continue
 			}
-			hr := cp.hosts.Of(h.Meta.ID)
-			if step, r := hr.refuses(prov, m, b, h.Meta.Name, pr != nil); r != nil {
-				best.note(step, r)
-				continue
-			}
 			u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h, Pricing: pr}
-			u.Counters, _ = t.counters(hr, prov, m, h.Meta.Name)
+			u.Counters = t.callerCounters(prov, m, h.Meta.Name, 0)
 			u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
 			if u.UpstreamModel == "" && res.Snapshot != nil {
 				u.UpstreamModel = res.Snapshot.Upstream()
@@ -222,12 +217,8 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 	return &Unkeyed{Refused: best.r}
 }
 
-// ResolveAtHost is what governs a request that brings its own upstream key and names no caller, as anonymous proxy traffic does: the host's own rung, for the model ref at host h. A model the catalog does not serve at h has Model unset and only the host's whole-policy counters; it is refused when the host's policy names models or carries a budget, since neither can be checked for it.
+// ResolveAtHost resolves the model ref at host h for a request that brings its own upstream key and names no caller, as anonymous proxy traffic does. No policy governs a host, so nothing is counted; the resolved model only prices and labels the request. A model the catalog does not serve at h leaves Model unset.
 func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
-	hr := r.Hosts.Of(h.Meta.ID)
-	if hr.Refused != nil {
-		return &Unkeyed{Refused: hr.Refused}
-	}
 	if ref != "" && !strings.Contains(ref, "@") {
 		ref += "@" + h.Meta.Name
 	}
@@ -244,11 +235,7 @@ func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
 					continue
 				}
 				pr, _ := snap.PricingForBinding(b)
-				if _, refused := hr.refuses(prov, m, b, h.Meta.Name, pr != nil); refused != nil {
-					return &Unkeyed{Refused: refused}
-				}
 				u := &Unkeyed{Model: m, Provider: prov, Binding: b, Host: h, Pricing: pr}
-				u.Counters = append(append(make([]limits.Counter, 0, len(hr.Whole)+len(hr.ByModel[m.Meta.ID])), hr.Whole...), hr.ByModel[m.Meta.ID]...)
 				u.ResolvedVia, u.UpstreamModel = appcatalog.AliasUpstream(res.Alias, ref)
 				if u.UpstreamModel == "" && res.Snapshot != nil {
 					u.UpstreamModel = res.Snapshot.Upstream()
@@ -257,22 +244,7 @@ func (r *Root) ResolveAtHost(h *host.Host, ref string) *Unkeyed {
 			}
 		}
 	}
-	rung := &hr.Upstream[0]
-	if p := rung.Policy; p != nil && p.Grant != nil {
-		return &Unkeyed{Refused: rungRefusal(CodeModelNotAllowed, rung, p.Policy.Meta.ID, "the catalog has no "+ref+" and the host policy names the models it allows")}
-	}
-	if hr.hasBudget {
-		br := &hr.Upstream[hr.budgetAt]
-		return &Unkeyed{Refused: rungRefusal(CodeUnpricedUnderBudget, br, br.Policy.Policy.Meta.ID, "the catalog has no pricing for "+ref+" and a budget applies")}
-	}
-	return &Unkeyed{Host: h, Counters: hr.Whole}
-}
-
-// AtHostNeedsModel reports whether the host's own rung decides by model (a model list, a budget, or per-model limits), so ResolveAtHost needs the request's model; otherwise the request may stream before its model is read.
-func (r *Root) AtHostNeedsModel(hostID string) bool {
-	hr := r.Hosts.Of(hostID)
-	p := hr.Upstream[0].Policy
-	return hr.Refused == nil && p != nil && (p.Grant != nil || hr.hasBudget || len(hr.ByModel) > 0)
+	return &Unkeyed{Host: h}
 }
 
 // ReachesHost reports whether one of the caller's pools is at the host.
@@ -431,20 +403,39 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 	return hops
 }
 
-// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing, and how many of them lead as the caller's.
+// counters is the full list one slot's request must fit, built once per route so admission concatenates nothing, and how many of them lead as the caller's. An upstream counter linked per lane counts for this table's lane.
 func (t *RouteTable) counters(s *KeySlot, prov string, m *model.Model, hostSlug string) ([]limits.Counter, int) {
-	cp := t.caller
 	byModel := s.ByModel[m.Meta.ID]
-	out := make([]limits.Counter, 0, len(cp.Counters)+len(s.Whole)+len(byModel))
+	out := t.callerCounters(prov, m, hostSlug, len(s.Whole)+len(byModel))
+	callerN := len(out)
+	lane := t.caller.LaneRung().SubjectID
+	if lane == "" {
+		// A provider account used as a lane is its own caller.
+		lane = accountSubject(t.caller.Lane.Meta.ID)
+	}
+	for _, list := range [2][]slotCounter{s.Whole, byModel} {
+		for _, c := range list {
+			if c.perLane {
+				out = append(out, c.ForLane(lane))
+			} else {
+				out = append(out, c.Counter)
+			}
+		}
+	}
+	return out, callerN
+}
+
+// callerCounters is the caller rungs' counters for the model at the host, with room for extra more.
+func (t *RouteTable) callerCounters(prov string, m *model.Model, hostSlug string, extra int) []limits.Counter {
+	cp := t.caller
+	out := make([]limits.Counter, 0, len(cp.Counters)+extra)
 	out = append(out, cp.Counters...)
 	for _, sc := range cp.scoped {
 		if sc.scope.matches(prov, m.Meta.Name, hostSlug) {
 			out = append(out, sc.counters...)
 		}
 	}
-	callerN := len(out)
-	out = append(out, s.Whole...)
-	return append(out, byModel...), callerN
+	return out
 }
 
 // unpriced is the caller's refusal of a binding with no pricing while a caller budget applies; nil otherwise.
@@ -458,9 +449,6 @@ func (cp *CallerPlan) unpriced(b *binding.Binding, priced bool) *Refusal {
 
 // notAllowed names the caller rung that refused a model.
 func (cp *CallerPlan) notAllowed(i int) *Refusal {
-	if i == noGrant {
-		return &Refusal{Code: CodeModelNotAllowed, Message: "deprecated models need a policy that names them or includes deprecated models"}
-	}
 	r := &cp.Rungs[i]
 	return rungRefusal(CodeModelNotAllowed, r, r.Policy.Policy.Meta.ID, "the model is not allowed by the "+string(r.Kind)+" policy")
 }

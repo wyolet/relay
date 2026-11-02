@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
@@ -82,6 +83,7 @@ type sources struct {
 	sas         *rows[serviceaccount.ServiceAccount]
 	users       *rows[user.User]
 	keys        *rows[key.Key]
+	rbs         *rows[rolebinding.RoleBinding]
 }
 
 func newSources(w *World) *sources {
@@ -103,6 +105,7 @@ func newSources(w *World) *sources {
 		sas:         newRows(w.ServiceAccounts, func(r *serviceaccount.ServiceAccount) string { return r.Meta.ID }),
 		users:       newRows(w.Users, func(r *user.User) string { return r.ID }),
 		keys:        newRows(w.Keys, func(r *key.Key) string { return r.Meta.ID }),
+		rbs:         newRows(w.RoleBindings, func(r *rolebinding.RoleBinding) string { return r.Meta.ID }),
 	}
 }
 
@@ -111,7 +114,7 @@ func (s *sources) plan() plan.Sources {
 		Providers: s.providers, Hosts: s.hosts, Models: s.models, Bindings: s.bindings, Pricings: s.pricings,
 		Policies: s.policies, PolicyBindings: s.pbs, RateLimits: s.rls, Budgets: s.budgets, Pools: s.pools,
 		Accounts: s.accounts, Credentials: s.credentials, Teams: s.teams, Projects: s.projects,
-		ServiceAccounts: s.sas, Users: s.users, Keys: s.keys,
+		ServiceAccounts: s.sas, Users: s.users, Keys: s.keys, RoleBindings: s.rbs,
 	}
 }
 
@@ -152,6 +155,8 @@ func upsert(s *sources, row any) {
 		s.users.put(r)
 	case *key.Key:
 		s.keys.put(r)
+	case *rolebinding.RoleBinding:
+		s.rbs.put(r)
 	default:
 		panic("plantest: no source for this row type")
 	}

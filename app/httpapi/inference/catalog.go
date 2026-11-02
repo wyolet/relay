@@ -60,7 +60,7 @@ func scopedCatalog(ctx context.Context, d Deps, cache *catalogCache) (*catalogEn
 		return nil, huma.Error401Unauthorized("missing relay key")
 	}
 	table := principal.Caller.Routes
-	scope := principal.Caller.Principal
+	scope := principal.Caller.Lane.Meta.ID
 	version := deploymentCatalogVersion(d.Catalog)
 	if e, ok := cache.get(scope, table, version); ok {
 		return e, nil

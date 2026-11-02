@@ -183,6 +183,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 		inference.WritePolicyDisabled(w)
 		return
 	}
+	capture := inference.PayloadLoggingOf(ctx)
 
 	// Checked before the body is read, so a client over its limit costs one kv call and no decoding.
 	if wait, limited := h.rateLimited(ctx, snap, reporter); limited {
@@ -226,7 +227,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	if len(accepted) > 0 {
 		from := origin{instance: h.opts.InstanceID, clientIP: inference.ClassificationFrom(ctx).ClientIP}
 		var queued bool
-		if queued, content = h.record(ctx, sig, snap, reporter, governing, from, accepted, now); !queued {
+		if queued, content = h.record(ctx, sig, snap, reporter, capture, from, accepted, now); !queued {
 			sig.result(resultBackpressure).Inc()
 			setRetryAfter(w, queueRetryAfter)
 			writeStatus(w, mediaType, http.StatusServiceUnavailable, otlp.StatusUnavailable, "usage queue is full; send the export again")
@@ -239,7 +240,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	sig.records.WithLabelValues(outcomeRejected).Add(float64(refused.rejected()))
 	sig.result(resultAccepted).Inc()
 	w.Header().Set("Content-Type", mediaType)
-	w.Header().Set(httpheader.HeaderContentCapture, h.contentCapture(governing))
+	w.Header().Set(httpheader.HeaderContentCapture, h.contentCapture(capture))
 	w.WriteHeader(http.StatusOK)
 	// Content the operator does not keep is not a rejection: the export succeeded, and the message alone tells the client it can stop sending it.
 	message := refused.message(sig)

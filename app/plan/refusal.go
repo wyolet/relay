@@ -7,7 +7,7 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// Refusal says why a principal, a credential or a route cannot serve: a stable code, and the rung, subject and policy that decided it.
+// Refusal says why a lane, a credential or a route cannot serve: a stable code, and the rung, account and policy that decided it.
 type Refusal struct {
 	Code      string
 	Rung      limits.Rung
@@ -34,12 +34,15 @@ const (
 	CodeModelNotAllowed     = "model_not_allowed"
 	CodeNoCredentials       = "no_credentials"
 	CodeUnpricedUnderBudget = "unpriced_under_budget"
+	// CodeAccountClosed refuses a member account whose membership ended.
+	CodeAccountClosed = "account_closed"
+	// CodeAccountNotHeld refuses a lane the key's principal does not hold.
+	CodeAccountNotHeld = "account_not_held"
 )
 
 // Issue codes the controllers attach besides duplicate_binding and unpriced_under_budget, which they share with refusals.
 const (
 	IssueRefMissing            = "ref_missing"
-	IssueSubjectInvalid        = "subject_invalid"
 	IssueSubjectOutOfScope     = "subject_out_of_scope"
 	IssueLinkOutOfScope        = "link_out_of_scope"
 	IssueModelRefInvalid       = "model_ref_invalid"
