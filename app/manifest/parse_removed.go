@@ -29,8 +29,8 @@ var removedFields = map[string]map[string]string{
 	"HostKey":        {"policyId": "account, plus a PolicyBinding of the account's tier policy"},
 	"Team":           {"budget": "a Budget linked by the policy bound to the team"},
 	"Project":        {"budget": "a Budget linked by the policy bound to the project"},
-	"Key":            {"policy": "a PolicyBinding on the key's principal"},
-	"ServiceAccount": {"policy": "a PolicyBinding on the service account"},
+	"Key":            {"policy": "a PolicyBinding on the account the key runs in"},
+	"ServiceAccount": {"policy": "a PolicyBinding on the service account's account"},
 }
 
 // decodeSpec decodes the spec node of env into dst after refusing any field

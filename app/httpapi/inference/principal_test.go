@@ -56,6 +56,7 @@ type principalFixture struct {
 
 	// The accounts relay keeps for the team, the project, the service account, and the user's personal and member (in the project) places.
 	teamAcct, projAcct, saAcct, personalAcct, memberAcct *account.Account
+	extraAccounts                                        []*account.Account
 
 	tokens *TokenVerifier
 	signer ed25519.PrivateKey
@@ -116,7 +117,7 @@ func newPrincipalFixture() principalFixture {
 }
 
 func (f principalFixture) accounts() []*account.Account {
-	return []*account.Account{f.teamAcct, f.projAcct, f.saAcct, f.personalAcct, f.memberAcct}
+	return append([]*account.Account{f.teamAcct, f.projAcct, f.saAcct, f.personalAcct, f.memberAcct}, f.extraAccounts...)
 }
 
 // mint signs a token for this fixture's user + project with the claims a

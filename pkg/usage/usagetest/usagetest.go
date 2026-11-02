@@ -29,6 +29,7 @@ func Run(t *testing.T, open Open) {
 	t.Run("facets", func(t *testing.T) { runFacets(t, r) })
 	t.Run("labels", func(t *testing.T) { runLabels(t, r) })
 	t.Run("labels with distinct and compare", func(t *testing.T) { runLabelsWithDistinctAndCompare(t, r) })
+	t.Run("refusals in a window", func(t *testing.T) { runRefusalWindow(t, open) })
 }
 
 func flat(ms int64) usage.DurationStats {

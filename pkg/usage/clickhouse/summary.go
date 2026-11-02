@@ -40,7 +40,7 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		selGroup += " " + labelExpr + " AS lbl,"
 	}
 
-	where, args := buildWhere(q.EventQuery, true)
+	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, groupBy))
 	// clickhouse-go substitutes ? placeholders in text order — the group
 	// key appears in the SELECT list, ahead of the WHERE args.
 	args = append(preArgs, args...)

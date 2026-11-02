@@ -81,15 +81,15 @@ func Facets(ctx context.Context, r Reader, q EventQuery, dims []string, limit in
 	return out, nil
 }
 
-// TopValues counts the (already-filtered) events by dim and returns the most frequent values, requests desc then value asc. LogOnly events are skipped, as in Summarize.
-func TopValues(events []Event, dim string, limit int) ([]FacetValue, error) {
+// TopValues counts the (already-filtered) events by dim and returns the most frequent values, requests desc then value asc. LogOnly events are skipped, as in Summarize; refusals keeps relay's own refusals among them (CountsRefused).
+func TopValues(events []Event, dim string, limit int, refusals bool) ([]FacetValue, error) {
 	if !IsValidFacetDim(dim) {
 		return nil, fmt.Errorf("usage.TopValues: invalid dim %q", dim)
 	}
 	var labels LatestLabels
 	counts := map[string]int64{}
 	for _, ev := range events {
-		if ev.LogOnly() {
+		if !ev.Aggregated(refusals) {
 			continue
 		}
 		v := groupKey(ev, dim)

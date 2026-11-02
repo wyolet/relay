@@ -94,6 +94,9 @@ type Deps struct {
 	// Stores is the bundle of typed stores used by CRUD writes.
 	Stores *appcatalog.Stores
 
+	// Plans lets a token mint or key create answer once this pod serves what it wrote; nil answers at once.
+	Plans PlanWaiter
+
 	// CookieSecure controls the Secure attribute on the session cookie.
 	// Surfaced here so the OpenAPI doc can reflect deployment posture.
 	CookieSecure bool
@@ -135,7 +138,7 @@ type Deps struct {
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
 
-	// PlanView returns the plan engine's current view: the caller's accounts and their limits are read from it. nil answers those reads 503.
+	// PlanView returns the plan engine's current view: plan issues, the caller's accounts and their limits are read from it. nil answers the issues read with an empty list and the account reads 503.
 	PlanView func() *engine.View
 
 	// Counters reads current counts for the limits reads; the data plane's limiter. nil answers them 503.
@@ -230,6 +233,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerCatalogGraph(api, d, protect)
 	registerMyAccounts(api, d, protect)
 	registerLimits(api, d, protect)
+	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
 	registerUsageFacets(api, d, protect)

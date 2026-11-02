@@ -28,13 +28,13 @@ var eventsCases = []eventsCase{
 		want: []string{"r11", "r10", "r09"},
 	},
 	{
-		name: "status filter",
+		name: "status filter matches a refusal by the status relay answered",
 		q: func() usage.EventQuery {
 			q := Window()
 			q.Status = []int{429}
 			return q
 		}(),
-		want: []string{"r08", "r03"},
+		want: []string{"r11", "r08", "r03"},
 	},
 	{
 		name: "relay_key filter",
@@ -44,6 +44,24 @@ var eventsCases = []eventsCase{
 			return q
 		}(),
 		want: []string{"r03", "r02", "r01", "r00"},
+	},
+	{
+		name: "lane_account_id filter",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.LaneAccountID = []string{"lane-b"}
+			return q
+		}(),
+		want: []string{"r03"},
+	},
+	{
+		name: "refusal filter",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.Refusal = []string{"no_capacity", "model_not_allowed"}
+			return q
+		}(),
+		want: []string{"r11"},
 	},
 	{
 		name: "pool_id filter",
@@ -98,6 +116,18 @@ func runEvents(t *testing.T, r usage.Reader) {
 		if len(events) != 1 {
 			t.Fatalf("Events: got %d events, want 1", len(events))
 		}
-		assertEqual(t, "pool and account", [2]string{events[0].PoolID, events[0].AccountID}, [2]string{"pool-b", "acct-b"})
+		assertEqual(t, "pool, account and lane", [3]string{events[0].PoolID, events[0].AccountID, events[0].LaneAccountID}, [3]string{"pool-b", "acct-b", "lane-b"})
+	})
+	t.Run("refusal reads back", func(t *testing.T) {
+		q := Window()
+		q.RequestID = "r11"
+		events, err := r.Events(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("Events: got %d events, want 1", len(events))
+		}
+		assertEqual(t, "refusal and status", [2]any{events[0].Refusal, events[0].Status}, [2]any{"no_capacity", 429})
 	})
 }

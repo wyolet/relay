@@ -83,18 +83,20 @@ type EventQuery struct {
 
 	// Categorical filters — match any value in the slice (SQL IN / set
 	// membership). Empty slice means no filter on that dimension.
-	RelayKeyHash []string
-	PolicyID     []string
-	PoolID       []string
-	AccountID    []string
-	ProjectID    []string
-	TeamID       []string
-	PrincipalID  []string
-	ModelID      []string
-	HostID       []string
-	Source       []string // "pipeline" | "proxy" | "ws" | "batch" | "count" | "otlp"
-	FinishReason []string
-	ErrorKind    []string
+	RelayKeyHash  []string
+	PolicyID      []string
+	PoolID        []string
+	AccountID     []string
+	LaneAccountID []string
+	ProjectID     []string
+	TeamID        []string
+	PrincipalID   []string
+	ModelID       []string
+	HostID        []string
+	Source        []string // "pipeline" | "proxy" | "ws" | "batch" | "count" | "otlp"
+	FinishReason  []string
+	ErrorKind     []string
+	Refusal       []string
 
 	// StatusMin / StatusMax restrict by HTTP status. Zero values mean
 	// unbounded on that side. StatusMin=400 picks errors only;
@@ -174,8 +176,8 @@ type SummaryQuery struct {
 	EventQuery
 
 	// GroupBy is the dimension to group on. Valid values:
-	// "relay_key_hash", "policy_id", "pool_id", "account_id", "model_id", "host_id",
-	// "host_key_id", "source", "finish_reason", "error_kind",
+	// "relay_key_hash", "policy_id", "pool_id", "account_id", "lane_account_id", "model_id", "host_id",
+	// "host_key_id", "source", "finish_reason", "error_kind", "refusal",
 	// "model", "host", "policy", "provider", "project", "team",
 	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",

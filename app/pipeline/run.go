@@ -84,6 +84,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		lastStatus int
 		lastHeader http.Header
 		lastBody   []byte
+		connected  bool // a candidate accepted a connection
 	)
 hops:
 	for hi := range req.Hops {
@@ -140,6 +141,7 @@ hops:
 			if rerr.status != 0 {
 				lastStatus, lastHeader, lastBody = rerr.status, rerr.header, rerr.body
 			}
+			connected = connected || action != actNextHop
 			switch action {
 			case actNextKey:
 				st.closeAttempt()
@@ -171,6 +173,10 @@ hops:
 	}
 	if errors.Is(err, ErrAllKeysExhausted) && lastStatus != 0 {
 		err = &UpstreamFailureError{Status: lastStatus, Header: lastHeader, Body: lastBody, Cause: err}
+	}
+	var unreachable *UpstreamUnreachableError
+	if errors.As(err, &unreachable) {
+		unreachable.NoneConnected = !connected
 	}
 	return nil, err
 }

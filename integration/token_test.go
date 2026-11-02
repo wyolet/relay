@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -130,6 +131,44 @@ func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
 	}
 	if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
 		t.Fatalf("chat with a fresh token = %d (%s)", got, reason)
+	}
+}
+
+// A first mint opens the user's member account; the mint answers once this pod serves it, so a request sent right after succeeds without waiting on the client side.
+func TestFirstMintServesTheNextRequest(t *testing.T) {
+	t.Parallel()
+	f := newTokenFixture(t)
+	for i := range 5 {
+		name := "first-minter-" + strconv.Itoa(i)
+		f.seedLogin(t, name, "pw-"+name)
+		code, token, raw := f.mint(f.login(t, name, "pw-"+name))
+		if code != http.StatusOK {
+			t.Fatalf("mint %d = %d: %s", i, code, raw)
+		}
+		if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
+			t.Fatalf("request right after first mint %d = %d (%s), want 200", i, got, reason)
+		}
+	}
+}
+
+// A fresh key's plaintext authenticates on the request right after create.
+func TestCreatedKeyServesTheNextRequest(t *testing.T) {
+	t.Parallel()
+	f := newTokenFixture(t)
+	for i := range 5 {
+		code, raw := f.adminDo(http.MethodPost, "/api/keys", `{"metadata":{"name":"fresh-key-`+strconv.Itoa(i)+`"},"spec":{"principal":{"kind":"user","id":"`+f.userID+`"}}}`)
+		if code != http.StatusCreated {
+			t.Fatalf("create key %d = %d: %s", i, code, raw)
+		}
+		var out struct {
+			Plaintext string `json:"plaintext"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil || out.Plaintext == "" {
+			t.Fatalf("decode key %d: %v %s", i, err, raw)
+		}
+		if got, reason := f.chat(out.Plaintext, "test-model"); got != http.StatusOK {
+			t.Fatalf("request right after key create %d = %d (%s), want 200", i, got, reason)
+		}
 	}
 }
 

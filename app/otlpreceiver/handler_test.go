@@ -41,6 +41,7 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/otlp"
 	"github.com/wyolet/relay/pkg/otlp/genai"
@@ -81,8 +82,10 @@ type fixture struct {
 	team         *team.Team
 	sa           *serviceaccount.ServiceAccount
 	keyRow       *key.Key
-	model        *model.Model
-	ownPrice     *pricing.Pricing
+	// siblingAccount is the account of siblingKey's service account, which the reporting key does not hold.
+	siblingAccount *account.Account
+	model          *model.Model
+	ownPrice       *pricing.Pricing
 	// sharedAcme and sharedZeta are two providers' models with the same snapshot name.
 	sharedAcme *model.Model
 	sharedZeta *model.Model
@@ -141,6 +144,8 @@ type fixtureOptions struct {
 	policyModels []string
 	// keyCaptures sets the reporting key's own payload logging flag.
 	keyCaptures bool
+	// teamDisabled, projectDisabled and saDisabled switch off the reporting key's team, project or service account; laneClosed closes its account; keyInSiblingAccount saves the key in another service account's account, which it does not hold.
+	teamDisabled, projectDisabled, saDisabled, laneClosed, keyInSiblingAccount bool
 }
 
 func system() meta.Owner { return meta.Owner{Kind: meta.OwnerSystem} }
@@ -178,6 +183,17 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		return a
 	}
 	indexerAccount := accountOf(fx.sa, fx.keyRow)
+	off := false
+	if o.teamDisabled {
+		fx.team.Spec.Enabled = &off
+	}
+	if o.projectDisabled {
+		fx.project.Spec.Enabled = &off
+	}
+	if o.saDisabled {
+		fx.sa.Spec.Enabled = &off
+	}
+	indexerAccount.Spec.Closed = o.laneClosed
 	var policies []*policy.Policy
 	var policyBindings []*policybinding.PolicyBinding
 	if o.policyCaptures != nil {
@@ -306,8 +322,12 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		Payloads:         fx.payloads,
 		InstanceID:       "pod-a",
 	})
-	accountOf(sibling, siblingRow)
+	siblingAccount := accountOf(sibling, siblingRow)
 	accountOf(outsider, outsiderRow)
+	fx.siblingAccount = siblingAccount
+	if o.keyInSiblingAccount {
+		fx.keyRow.Spec.AccountID = siblingAccount.Meta.ID
+	}
 	plans := (&plantest.World{
 		Policies: policies, PolicyBindings: policyBindings, Accounts: accounts,
 		Keys: []*key.Key{fx.keyRow, siblingRow, outsiderRow}, Teams: []*team.Team{fx.team}, Projects: []*project.Project{fx.project, fx.otherProject},
@@ -315,7 +335,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	}).Load(t)
 	auth := &inference.Auth{Catalog: cat, Plans: plans.Holder}
 	authenticated := func(next http.Handler) http.Handler {
-		return inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(auth)(next))
+		return inference.LaneMiddleware("")(inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(auth)(next)))
 	}
 	mux := http.NewServeMux()
 	mux.Handle(otlpreceiver.TracesPath, authenticated(h.Traces()))
@@ -694,6 +714,51 @@ func TestACredentialUnderADisabledPolicyMayNotReport(t *testing.T) {
 	// Another key of the same project, under no policy, still reports.
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(3, "acme-large")), "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK || len(fx.events) != 1 {
 		t.Errorf("key with no policy: status = %d events = %d", rec.Code, len(fx.events))
+	}
+}
+
+// A credential whose lane inference refuses may not report: the same check, the same answer, nothing recorded.
+func TestACredentialInARefusedLaneMayNotReport(t *testing.T) {
+	for name, tc := range map[string]struct {
+		o          fixtureOptions
+		status     int
+		code, body string
+	}{
+		"closed account":              {fixtureOptions{laneClosed: true}, http.StatusForbidden, "account_closed", ""},
+		"account the key may not use": {fixtureOptions{keyInSiblingAccount: true}, http.StatusForbidden, "account_not_held", ""},
+		"disabled team":               {fixtureOptions{teamDisabled: true}, http.StatusForbidden, "subject_disabled", ""},
+		"disabled project":            {fixtureOptions{projectDisabled: true}, http.StatusForbidden, "subject_disabled", ""},
+		"disabled service account":    {fixtureOptions{saDisabled: true}, http.StatusUnauthorized, "unauthenticated", "api key disabled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newFixtureWith(t, tc.o)
+			rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
+			var refusal struct {
+				Error struct{ Code, Message string } `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
+				t.Fatalf("body %q: %v", rec.Body, err)
+			}
+			if rec.Code != tc.status || refusal.Error.Code != tc.code || (tc.body != "" && refusal.Error.Message != tc.body) {
+				t.Errorf("status = %d error = %+v, want %d %s", rec.Code, refusal.Error, tc.status, tc.code)
+			}
+			if len(fx.events) != 0 {
+				t.Errorf("recorded %d events from a refused lane", len(fx.events))
+			}
+		})
+	}
+}
+
+// A report switches its lane like an inference request: into an account the key holds, and not into one it does not.
+func TestAReportHonoursTheLaneSwitch(t *testing.T) {
+	fx := newFixture(t)
+	body := export(t, chatSpan(1, "acme-large"))
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, httpheader.HeaderAccount, fx.siblingAccount.Meta.ID); rec.Code != http.StatusForbidden || len(fx.events) != 0 {
+		t.Fatalf("switch into another account: status = %d events = %d, want 403 and none", rec.Code, len(fx.events))
+	}
+	own := fx.keyRow.Spec.AccountID
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, httpheader.HeaderAccount, own); rec.Code != http.StatusOK || len(fx.events) != 1 || fx.events[0].LaneAccountID != own {
+		t.Fatalf("switch into its own account: status = %d events = %d", rec.Code, len(fx.events))
 	}
 }
 

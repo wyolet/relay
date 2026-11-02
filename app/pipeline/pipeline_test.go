@@ -160,8 +160,9 @@ func TestRun_NoKeysEmitsFailureEvent(t *testing.T) {
 	if gotKind != "no_keys" {
 		t.Errorf("ErrorKind = %q, want no_keys", gotKind)
 	}
-	if gotStatus != 0 {
-		t.Errorf("Status = %d, want 0 (upstream never reached)", gotStatus)
+	// A refusal records the status relay answered, not an upstream's.
+	if gotStatus != http.StatusServiceUnavailable {
+		t.Errorf("Status = %d, want 503 (relay's answer to no key)", gotStatus)
 	}
 }
 
@@ -410,6 +411,44 @@ func TestConnRefused_RetriesSameHost_NoBreakerTrip(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("host was not recorded unreachable")
+	}
+}
+
+// A dial failure is relay's host_not_reachable refusal only when no candidate accepted a connection; a host that answered before the last one failed to dial leaves it an upstream failure.
+func TestUnreachable_RefusalOnlyWhenNoCandidateConnected(t *testing.T) {
+	t.Parallel()
+	dialErr := &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}
+	down := &host.Host{Meta: meta.Metadata{ID: "down", Name: "down"}, Spec: host.Spec{BaseURL: "http://down"}}
+	up := &host.Host{Meta: meta.Metadata{ID: "up", Name: "up"}, Spec: host.Spec{BaseURL: "http://up"}}
+	adp := &fakeAdapter{
+		callFn: func(_ context.Context, baseURL, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+			if baseURL == "http://down" {
+				return nil, dialErr
+			}
+			return errResp(500), nil
+		},
+		retryFn: func(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
+			return resp.StatusCode >= 500, keypool.FailureServerError, 0
+		},
+	}
+	for name, tc := range map[string]struct {
+		hops []plan.RouteHop
+		want plan.RefusalKind
+	}{
+		"every host down": {[]plan.RouteHop{hopAt(down, []*hostkey.HostKey{makeKey("d1", "sk-d1")})}, plan.RefusalHostNotReachable},
+		"an earlier host answered": {[]plan.RouteHop{
+			hopAt(up, []*hostkey.HostKey{makeKey("u2", "sk-u2")}),
+			hopAt(down, []*hostkey.HostKey{makeKey("d2", "sk-d2")}),
+		}, ""},
+	} {
+		_, err := newPipeline().Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: tc.hops})
+		var unreachable *pipeline.UpstreamUnreachableError
+		if !errors.As(err, &unreachable) {
+			t.Fatalf("%s: err = %v, want *UpstreamUnreachableError", name, err)
+		}
+		if got := pipeline.RefusalOf(err); got != tc.want {
+			t.Errorf("%s: RefusalOf = %q, want %q", name, got, tc.want)
+		}
 	}
 }
 

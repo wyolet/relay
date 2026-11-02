@@ -81,8 +81,13 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 		version = u.TokenVersion
 		// The token runs in the user's member account in the project. Authorization above confirmed the membership, which may come from a group relay cannot list, so the account is made here on first use.
 		if d.accounts != nil {
-			if err := openMemberAccount(ctx, d.accounts, account.Member(u.ID, u.Username, owner, proj.Meta.Name, proj.Meta.DisplayName)); err != nil {
+			id, err := openMemberAccount(ctx, d.accounts, account.Member(u.ID, u.Username, owner, proj.Meta.Name, proj.Meta.DisplayName))
+			if err != nil {
 				return nil, huma.Error500InternalServerError("member account: " + err.Error())
+			}
+			// The token is spent right after mint; this pod's plans must serve the account first, or the first request is account_not_held.
+			if d.plans != nil {
+				awaitServed(ctx, "member account", id, func(ctx context.Context) bool { return d.plans.AwaitOpenLane(ctx, id) })
 			}
 		}
 	}
@@ -124,16 +129,16 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 }
 
 // openMemberAccount makes the member account want describes, or reopens it when a role grant ended but the membership holds through a group: it then no longer follows role bindings, so relay does not close it again.
-func openMemberAccount(ctx context.Context, s memberAccounts, want *account.Account) error {
+func openMemberAccount(ctx context.Context, s memberAccounts, want *account.Account) (string, error) {
 	id, err := s.EnsureManaged(ctx, want)
 	if err != nil {
-		return err
+		return "", err
 	}
 	a, err := s.Get(ctx, id)
 	if err != nil || a == nil || !a.Spec.Closed {
-		return err
+		return id, err
 	}
-	return s.SetMembership(ctx, a, false, false)
+	return id, s.SetMembership(ctx, a, false, false)
 }
 
 // mintGroups is the group set the token carries: only what the IdP asserted

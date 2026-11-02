@@ -42,7 +42,7 @@ type Spec struct {
 // RateLimitLink applies one RateLimit to a policy's requests: to every model when Models is empty, otherwise only to requests for a model matching one of Models. One rate limit may be linked more than once with different Models or counting.
 type RateLimitLink struct {
 	RateLimitID string   `json:"rateLimitId"      yaml:"rateLimitId"      validate:"required,uuid"    doc:"Id of the linked rate limit."`
-	Models      []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1" doc:"Models the limit applies to, in the policy's model grammar (provider or provider/model); empty applies it to every request. Each matched model counts on its own."`
+	Models      []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1" doc:"Models the limit applies to, in the policy's model grammar (provider or provider/model); empty applies it to every request. Bound to a caller account (team, project or lane), every matched model draws on one shared count; bound to a provider account, each matched model counts on its own."`
 	// Shared reads back explicit; nil on write means true.
 	Shared *bool `json:"shared,omitempty" yaml:"shared,omitempty" doc:"True counts once for the bound account; false counts once per account under it (each lane its own bucket). Omitted on write means true; always returned."`
 }

@@ -9,7 +9,9 @@ import (
 type UserPlan struct {
 	UserID       string
 	TokenVersion int
-	in           inputs
+	// Disabled is read where no lane plan reads the user: a provider account used as a lane has no holder.
+	Disabled bool
+	in       inputs
 }
 
 func (u *UserPlan) builtFrom() inputs { return u.in }
@@ -20,7 +22,7 @@ func (c *controllers) userPlan(tx *engine.Txn, id string) error {
 		engine.Drop(tx)
 		return nil
 	}
-	up := &UserPlan{UserID: id, TokenVersion: u.TokenVersion, in: inputs{u.TokenVersion}}
+	up := &UserPlan{UserID: id, TokenVersion: u.TokenVersion, Disabled: u.Disabled, in: inputs{u.TokenVersion, u.Disabled}}
 	engine.Put(tx, SameOr(engine.Get[UserPlan](tx, id), up))
 	return nil
 }

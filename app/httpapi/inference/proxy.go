@@ -134,7 +134,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 	}
 	if resolved != nil && resolved.Refused != nil {
-		d.fireUsageFailure(ctx, routeRefusalKind(resolved.Refused), resolved.Refused.Error())
+		d.fireRouteRefusal(ctx, resolved.Refused, modelName)
 		mapRouteRefusal(w, resolved.Refused, modelName)
 		return
 	}
@@ -341,9 +341,8 @@ func mapProxyErr(w http.ResponseWriter, inbound *adapter.Spec, err error) {
 		// A refused counter is a 429 with Retry-After from the limiter, in the same envelope as the pipeline path: two error.type values for one rejection makes it unclassifiable by any client that branches on it.
 		var refused *limits.Refused
 		if errors.As(err, &refused) {
-			secs := setRetryAfter(w, refused.RetryAfter)
-			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", callerLimitCode(refused),
-				rateLimitMessage(callerLimitMessage(refused), secs), "counter", refused.Counter.ID)
+			slog.Debug("inference: refusal detail", "err", err)
+			writeAnswer(w, plan.LimitAnswer(refused))
 			return
 		}
 		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", httpheader.SafeUpstreamError("upstream", err), "err", err)
