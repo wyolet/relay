@@ -31,7 +31,9 @@ func TestValidate(t *testing.T) {
 		{name: "host owner rejected", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()} }, want: "owner.kind must be"},
 		{name: "missing owner rejected", edit: func(a *Account) { a.Meta.Owner = meta.Owner{} }, want: "owner.kind must be"},
 		{name: "a provider account has no holder", edit: func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: meta.NewID()} }, want: "has no holder"},
-		{name: "a system account needs a host", edit: func(a *Account) { a.Spec.HostID, a.Spec.OrgID, a.Meta.Owner = "", "", meta.Owner{Kind: meta.OwnerSystem} }, want: "hostId is required"},
+		{name: "a system account needs a host", edit: func(a *Account) {
+			a.Spec.HostID, a.Spec.OrgID, a.Meta.Owner = "", "", meta.Owner{Kind: meta.OwnerSystem}
+		}, want: "hostId is required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := fix()

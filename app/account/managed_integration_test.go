@@ -41,7 +41,9 @@ func TestIntegration_EnsureManaged(t *testing.T) {
 	errs := make([]error, n)
 	var wg sync.WaitGroup
 	for i := range n {
-		wg.Go(func() { ids[i], errs[i] = store.EnsureManaged(ctx, account.Member(alice.ID, alice.Username, scope, prj.Meta.Name, "")) })
+		wg.Go(func() {
+			ids[i], errs[i] = store.EnsureManaged(ctx, account.Member(alice.ID, alice.Username, scope, prj.Meta.Name, ""))
+		})
 	}
 	wg.Wait()
 	for i := range n {

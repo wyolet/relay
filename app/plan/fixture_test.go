@@ -277,7 +277,9 @@ func (w *world) saKey(s *serviceaccount.ServiceAccount) *key.Key {
 }
 
 // userKey is a key of u in u's personal account.
-func (w *world) userKey(u *user.User) *key.Key { return w.keyFor(key.PrincipalUser, u.ID, w.personal(u)) }
+func (w *world) userKey(u *user.User) *key.Key {
+	return w.keyFor(key.PrincipalUser, u.ID, w.personal(u))
+}
 
 // keyIn is a key of u running in account a.
 func (w *world) keyIn(u *user.User, a *account.Account) *key.Key {
