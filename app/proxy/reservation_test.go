@@ -199,6 +199,15 @@ func TestRunRefusalRowRecordsTheAnswer(t *testing.T) {
 	}))
 	defer upstream.Close()
 	p, _, cs := meteredPipeline(t)
+	got := make(chan *lifecycle.PostFlightEvent, 1)
+	reg := lifecycle.New()
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+		if ev.Refusal != "" {
+			got <- ev
+		}
+		return nil, nil
+	}})
+	p.Lifecycle = reg
 	res, err := p.Run(context.Background(), meteredRequest(upstream.URL, cs))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -206,13 +215,6 @@ func TestRunRefusalRowRecordsTheAnswer(t *testing.T) {
 	_, _ = io.Copy(io.Discard, res.Body)
 	_ = res.Body.Close()
 
-	got := make(chan *lifecycle.PostFlightEvent, 1)
-	reg := lifecycle.New()
-	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
-		got <- ev
-		return nil, nil
-	}})
-	p.Lifecycle = reg
 	req := meteredRequest(upstream.URL, cs)
 	req.Lifecycle = lifecycle.NewContext("refused", "proxy", time.Now())
 	if _, err := p.Run(context.Background(), req); err == nil {
