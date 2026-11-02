@@ -62,6 +62,28 @@ DELETE /api/{plural}/by-id/{id}      delete
 
 List endpoints accept `q` (free text), `sort`, `limit`, `offset`, `label=key=value` (repeatable), and per-kind field filters; an unknown filter answers `400`. The OpenAPI document lists each kind's filters.
 
+A create that leaves out `metadata.owner` makes the row the caller's own: owned by the signed-in user, or by the system for the admin token. Teams and groups are always owned by the system and a role without an owner is too; a project by its `spec.teamId`, a service account by its `spec.projectId`, a role binding by its `spec.scope`, and a relay key by its principal. To create a row in a team or project, set `metadata.owner` to it.
+
+A signed-in user who creates a team or a project gets a role binding of the scope's built-in admin role there (`team-admin`, `project-admin`), and with it a member account. The admin token gets none, and [`apply`](/concepts/gitops) creates only the bindings a bundle declares.
+
+#### Listing what a scope may use
+
+`usable_by` narrows the lists of pools, policies, rate limits, budgets, accounts and host keys to the rows a row owned by one scope may link, by the same rule a save of that row applies. The value is `system`, `user:<id>`, `team:<id>` or `project:<id>`; it composes with the other filters, and a malformed value answers `400`.
+
+| List | What `usable_by=<scope>` keeps |
+| --- | --- |
+| `pools`, `budgets`, `rate-limits` | What a policy owned by the scope may link |
+| `host-keys` | What a pool owned by the scope may hold; add `host_id` for the pool's host |
+| `policies` | What a policy binding owned by the scope may use, including the pools and host keys the policy links |
+| `accounts` | What a policy binding owned by the scope may bind. A host key joins only an account of its own owner: filter with `owner` and `owner_id` |
+
+```bash
+curl -H "Cookie: relay_session=<session>" \
+  "http://localhost:8081/api/pools?usable_by=project:<project-id>&host_id=<host-id>"
+```
+
+`GET /api/me/contexts` lists the scopes the caller may create rows in: their personal scope first, then each team, then each project. Each row is `{kind, id, name, displayName, teamId?, admin}`, with `kind` one of `personal`, `team`, `project`, and `teamId` on projects. A team or project is listed when the caller may create at least one policy, pool, account, host key, budget, rate limit, policy binding, key, service account or role binding there, through any binding: direct, a group's, or one on the project's team. `admin` is true where the caller holds every permission of the scope's built-in admin role. The admin token gets every team and project with `admin: true` and no personal scope.
+
 Every read returns `metadata.resourceVersion`, an opaque string that changes on every write to the row. Send it back unchanged in the PUT body to make the update conditional: if the row changed since you read it, the PUT fails with `409` and the code `stale_resource_version`, and nothing is written. A PUT without `resourceVersion` replaces the row unconditionally.
 
 Every write is applied to each pod's in-memory catalog within about a second; no reload is needed. Edits and deletes of catalog-owned rows are governed by the `governance:*` settings; see [Settings](/reference/settings).
@@ -159,7 +181,11 @@ Find a team's, project's or service account's account with `GET /api/accounts?ki
 | `409` `duplicate_binding` | An account is already held by another binding. |
 | `422` | The body does not match the schema, including a field of an earlier version (`subjects`, `projectId` on a binding; `includeDeprecated`, `credentialIds`, `budgetIds`, `payloadLoggingEnabled` on a policy). |
 
-The rules behind each answer are on [Policies](/concepts/policies#policy-bindings).
+The rules behind each answer are on [Policies](/concepts/policies#policy-bindings). A scope refusal names the rows by display name and their owners in words, and says what to change, for example:
+
+```
+policy "General Policy" uses your personal pool "anthropic"; a policy binding of project "Web" can use pools of the project, its team or the system. Create the pool in the project or its team, or move this one there.
+```
 
 ### Accounts and pools
 

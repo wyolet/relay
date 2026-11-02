@@ -92,6 +92,8 @@ type Lookup struct {
 	DefaultAccount func(ctx context.Context, p key.Principal) (string, error)
 	// UserMayBindIn reports whether a user may manage policy bindings in a team or project scope.
 	UserMayBindIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
+	// UserName returns a user's username for refusal wording, empty when unknown.
+	UserName func(ctx context.Context, userID string) string
 }
 
 // Checker applies the rules for the caller in ctx. A nil Authz is a loader
@@ -146,18 +148,18 @@ func StampOwnerID(ctx context.Context, o *meta.Owner) error {
 // tenant's row must not become inference through its credentials and limits.
 // Referrers owned by the catalog tiers are unconstrained.
 func SharedOwner(kind, name string, owner, refOwner meta.Owner) error {
+	if sharedOwnerReaches(owner, refOwner) {
+		return nil
+	}
+	return badRequest("%s %q lives outside this project: a project's rows can use %s of the project or the system. Create the %s in the project, or move this one there.",
+		kindWord(kind), name, kindWords(kind), kindWord(kind))
+}
+
+func sharedOwnerReaches(owner, refOwner meta.Owner) bool {
 	if refOwner.Kind != meta.OwnerProject {
-		return nil
+		return true
 	}
-	switch owner.Kind {
-	case meta.OwnerSystem:
-		return nil
-	case meta.OwnerProject:
-		if owner.ID == refOwner.ID {
-			return nil
-		}
-	}
-	return badRequest("%s %q belongs to another scope (%s) and cannot be referenced from this project", kind, name, owner.Kind)
+	return owner.Kind == meta.OwnerSystem || (owner.Kind == meta.OwnerProject && owner.ID == refOwner.ID)
 }
 
 // catalogOwned reports a row the catalog tiers own. Its rate limits and
@@ -174,14 +176,15 @@ func catalogOwned(o meta.Owner) bool {
 // personalToProject refuses a personal row drawing on a project's row unless
 // the caller may create keys in that project — a member is inside the
 // project's attribution and limits, anyone else is not.
-func (c Checker) personalToProject(ctx context.Context, owner, refOwner meta.Owner) error {
+func (c Checker) personalToProject(ctx context.Context, from, kind string, m meta.Metadata, refOwner meta.Owner) error {
+	owner := m.Owner
 	if refOwner.Kind != meta.OwnerUser || owner.Kind != meta.OwnerProject {
 		return nil
 	}
 	if c.Authz == nil || c.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &owner}) == nil {
 		return nil
 	}
-	return badRequest("personal rows cannot reference project resources")
+	return c.personalRefusal(ctx, from, kind, m, refOwner)
 }
 
 // PolicyRef checks a policy named by refOwner's row.
@@ -204,10 +207,14 @@ func (c Checker) PolicyRef(ctx context.Context, policyID string, refOwner meta.O
 	if catalogOwned(p.Meta.Owner) {
 		return nil
 	}
-	if err := c.personalToProject(ctx, p.Meta.Owner, refOwner); err != nil {
+	if err := c.personalToProject(ctx, "row", "policy", p.Meta, refOwner); err != nil {
 		return err
 	}
-	return SharedOwner("policy", p.Meta.Name, p.Meta.Owner, refOwner)
+	if !sharedOwnerReaches(p.Meta.Owner, refOwner) {
+		return badRequest("a row of %s cannot use %s: a project's rows can use policies of the project or the system. Create the policy in the project, or move this one there.",
+			c.scopeText(ctx, refOwner), c.rowText(ctx, "policy", p.Meta))
+	}
+	return nil
 }
 
 // RateLimitRef applies the policy-ref rule to a rate limit a policy names.
@@ -219,16 +226,21 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 	if rl == nil {
 		return badRequest("rate-limit %q does not exist", rateLimitID)
 	}
+	return c.rateLimitUsable(ctx, rl, refOwner)
+}
+
+// rateLimitUsable is the owner rule for one rate limit a policy owned by refOwner names; the catalog's rate limits are open to every scope.
+func (c Checker) rateLimitUsable(ctx context.Context, rl *ratelimit.RateLimit, refOwner meta.Owner) error {
 	if !Visible(ctx, c.Authz, "rate-limit", rl.Meta.ID, rl.Meta.Owner) {
-		return notVisible("rate-limit", rateLimitID)
+		return notVisible("rate-limit", rl.Meta.ID)
 	}
 	if catalogOwned(rl.Meta.Owner) {
 		return nil
 	}
-	if err := c.personalToProject(ctx, rl.Meta.Owner, refOwner); err != nil {
+	if err := c.personalToProject(ctx, "policy", "rate-limit", rl.Meta, refOwner); err != nil {
 		return err
 	}
-	return c.linkable(ctx, "rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
+	return c.linkable(ctx, "policy", "rate-limit", rl.Meta, refOwner)
 }
 
 func (c Checker) projectRef(ctx context.Context, projectID string) error {
@@ -427,9 +439,23 @@ func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
 		return badRequest("account %q is closed: the membership it stood for has ended", a.Meta.Name)
 	case !a.TakesKeysOf(principal):
 		return &Error{Status: http.StatusForbidden, Code: CodeAccountNotHeld, Msg: fmt.Sprintf(
-			"account %q does not take keys of %s: a key lands in its principal's personal or service account, a member account a role binding grants, or a provider account its user owns", a.Meta.Name, principal.Key())}
+			"%s cannot run in %s: a key runs in its principal's personal or service account, a member account a role binding grants, or a provider account its user owns. Leave accountId empty to use the principal's own account.",
+			c.principalKeys(ctx, k.Spec.Principal), c.rowText(ctx, "account", a.Meta))}
 	}
 	return nil
+}
+
+// principalKeys names whose keys a principal's are: "your keys", "alice's keys", `keys of service account "ci"`.
+func (c Checker) principalKeys(ctx context.Context, p key.Principal) string {
+	if p.Kind == key.PrincipalServiceAccount {
+		if c.Rows.ServiceAccount != nil {
+			if sa := c.Rows.ServiceAccount(ctx, p.ID); sa != nil {
+				return fmt.Sprintf("keys of service account %q", label(sa.Meta))
+			}
+		}
+		return "keys of a service account"
+	}
+	return c.userPossessive(ctx, p.ID) + " keys"
 }
 
 // AccountPayloadLogging refuses a change to a caller account's payloadLogging by the user it constrains, since it decides whether their request bodies are kept. A personal account's is an admin's to set; a team, project, member or service account's is its scope admin's (the caller already passed accounts.update there), never the member account's own holder.
@@ -461,7 +487,7 @@ func (c Checker) Pool(ctx context.Context, p *pool.Pool) error {
 	if err := c.accountRefs(ctx, p.Spec.AccountIDs, p.Meta.Owner, p.Spec.HostID); err != nil {
 		return err
 	}
-	return c.credentialRefs(ctx, p.Spec.CredentialIDs, p.Meta.Owner, p.Spec.HostID)
+	return c.credentialRefs(ctx, "pool", p.Spec.CredentialIDs, p.Meta.Owner, p.Spec.HostID)
 }
 
 // HostKey checks the host the key authenticates to and, when named, its
@@ -567,9 +593,16 @@ func (c Checker) accountsUnbound(ctx context.Context, pb *policybinding.PolicyBi
 			}
 			by := "another policy binding"
 			if Visible(ctx, c.Authz, "policy-binding", other.Meta.ID, other.Meta.Owner) {
-				by = fmt.Sprintf("policy binding %q", other.Meta.Name)
+				by = fmt.Sprintf("policy binding %q", label(other.Meta))
 			}
-			return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf("account %s is already bound by %s; an account is bound to one policy", held, by)}
+			what := "account " + held
+			if c.Rows.Account != nil {
+				if a := c.Rows.Account(ctx, held); a != nil {
+					what = c.rowText(ctx, "account", a.Meta)
+				}
+			}
+			return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf(
+				"%s is already bound by %s: an account is bound to one policy. Remove it from that binding first, or edit that binding instead.", what, by)}
 		}
 	}
 	return nil

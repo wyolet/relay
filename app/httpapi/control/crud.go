@@ -150,6 +150,7 @@ func registerKind[T any](
 	skipCreate bool,
 	protect huma.Middlewares,
 	filterSchema *filter.Schema[T],
+	usable *usableFilter[T],
 ) kindRows {
 	base := "/" + plural
 	tag := plural
@@ -180,10 +181,15 @@ func registerKind[T any](
 	listErrors := []int{401, 500}
 	listMW := protect
 	var listParams []*huma.Param
-	if filterSchema != nil {
+	if filterSchema != nil || usable != nil {
 		listErrors = []int{400, 401, 500}
 		listMW = withRawQuery(protect)
+	}
+	if filterSchema != nil {
 		listParams = filterParams(filterSchema)
+	}
+	if usable != nil {
+		listParams = append(listParams, usable.param(plural))
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
@@ -198,6 +204,14 @@ func registerKind[T any](
 	}, func(ctx context.Context, _ *struct{}) (*listResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".list", authz.Resource{Kind: singular}); err != nil {
 			return nil, mapAuthzErr(err)
+		}
+		query := rawQueryFrom(ctx)
+		var usableBy *meta.Owner
+		if usable != nil {
+			var err error
+			if usableBy, query, err = takeUsableBy(query); err != nil {
+				return nil, err
+			}
 		}
 		items, err := store.List(ctx)
 		if err != nil {
@@ -217,6 +231,11 @@ func registerKind[T any](
 			}
 			items = visible
 		}
+		if usableBy != nil {
+			if items, err = usable.keep(ctx, items, *usableBy); err != nil {
+				return nil, err
+			}
+		}
 		if enrichList != nil {
 			enrichList(ctx, items)
 		} else if enrich != nil {
@@ -226,7 +245,7 @@ func registerKind[T any](
 		}
 		out := &listResponse[T]{}
 		if filterSchema != nil {
-			q, err := filterSchema.Parse(rawQueryFrom(ctx))
+			q, err := filterSchema.Parse(query)
 			if err != nil {
 				var fe *filter.Error
 				if errors.As(err, &fe) {

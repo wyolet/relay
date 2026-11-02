@@ -162,7 +162,7 @@ func TestIntegration_PersonalPolicyBindings(t *testing.T) {
 	}{
 		{"a user cannot see another user's account to bind it", alice.do, binding("personal-alice-on-bob", ownedBy(aliceID), alicesPolicy, personal(bobID)), http.StatusNotFound, "not found"},
 		{"the operator binds a user's policy to another user's account", st.adminDo, binding("personal-alice-on-bob-admin", ownedBy(aliceID), alicesPolicy, personal(bobID)), http.StatusBadRequest, "outside the scope"},
-		{"the operator binds one user's policy to another user's own binding", st.adminDo, binding("personal-bob-with-alices", ownedBy(bobID), alicesPolicy, personal(bobID)), http.StatusBadRequest, "cannot use it"},
+		{"the operator binds one user's policy to another user's own binding", st.adminDo, binding("personal-bob-with-alices", ownedBy(bobID), alicesPolicy, personal(bobID)), http.StatusBadRequest, "a personal policy is bound by its owner"},
 		{"a user cannot see another user's policy to bind it", bob.do, binding("personal-bob-borrows", `{"kind":"user"}`, alicesPolicy, personal(bobID)), http.StatusNotFound, "not found"},
 		{"a project binds a policy of someone who may not manage its bindings", st.adminDo, binding("personal-bob-on-sa", project, bobsPolicy, sa), http.StatusBadRequest, "may not manage policy bindings"},
 		{"the system binds an account its user already bound", st.adminDo, binding("personal-alice-everywhere", `{"kind":"system"}`, sharedPolicy, personal(aliceID)), http.StatusConflict, "duplicate_binding"},

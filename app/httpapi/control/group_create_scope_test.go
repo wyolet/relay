@@ -38,6 +38,7 @@ func newGroupsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 		false,
 		nil,
 		nil,
+		nil,
 	)
 	return r
 }
@@ -57,6 +58,7 @@ func newTeamsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 		nil, nil, nil, nil, nil,
 		noSettings{},
 		false,
+		nil,
 		nil,
 		nil,
 	)

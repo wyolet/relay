@@ -57,6 +57,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&teamFilter,
+		nil,
 	))
 
 	rows.add(registerKind[project.Project](
@@ -73,6 +74,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&projectFilter,
+		nil,
 	))
 
 	rows.add(registerKind[serviceaccount.ServiceAccount](
@@ -89,6 +91,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&serviceAccountFilter,
+		nil,
 	))
 
 	rows.add(registerKind[group.Group](
@@ -105,6 +108,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&groupFilter,
+		nil,
 	))
 
 	rows.add(registerKind[role.Role](
@@ -121,6 +125,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&roleFilter,
+		nil,
 	))
 
 	rows.add(registerKind[rolebinding.RoleBinding](
@@ -139,6 +144,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&roleBindingFilter,
+		nil,
 	))
 
 	rows.add(registerKind[policybinding.PolicyBinding](
@@ -156,6 +162,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyBindingFilter,
+		nil,
 	))
 
 	rows.add(registerKind[provider.Provider](
@@ -172,6 +179,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&providerFilter,
+		nil,
 	))
 
 	rows.add(registerKind[host.Host](
@@ -188,6 +196,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostFilter,
+		nil,
 	))
 
 	rows.add(registerKind[model.Model](
@@ -204,6 +213,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&modelFilter,
+		nil,
 	))
 
 	rows.add(registerKind[hostkey.HostKey](
@@ -220,6 +230,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostKeyFilter,
+		&usableFilter[hostkey.HostKey]{linker: "a pool", check: refs(d).UsableHostKey},
 	))
 
 	rows.add(registerKind[ratelimit.RateLimit](
@@ -236,6 +247,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&rateLimitFilter,
+		&usableFilter[ratelimit.RateLimit]{linker: "a policy", check: refs(d).UsableRateLimit},
 	))
 
 	rows.add(registerKind[policy.Policy](
@@ -252,6 +264,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyFilter,
+		&usableFilter[policy.Policy]{linker: "a policy binding", check: refs(d).UsablePolicy},
 	))
 
 	rows.add(registerKind[pricing.Pricing](
@@ -268,6 +281,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&pricingFilter,
+		nil,
 	))
 
 	rows.add(registerKind[binding.Binding](
@@ -284,6 +298,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&bindingFilter,
+		nil,
 	))
 
 	// keys uses a custom POST handler (registerKeyCreate) that
@@ -315,6 +330,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		true, // skipCreate
 		protect,
 		&keyFilter,
+		nil,
 	))
 	registerKeyCreate(api, d, protect)
 	registerUpstreamCRUD(api, d, protect, rows)

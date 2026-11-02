@@ -16,7 +16,6 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/usagelog"
@@ -146,10 +145,7 @@ func (d Deps) shareAccount(ctx context.Context, ref string, r account.Receiver) 
 	}
 	if err := d.Stores.Account.CreateShare(ctx, share); err != nil {
 		if errors.Is(err, account.ErrShareTaken) {
-			return nil, &httpapi.APIError{
-				Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: refcheck.CodeShareExists, Message: fmt.Sprintf("account %q is already shared with %s", src.Meta.Name, r.Key())},
-				HTTPStatus: http.StatusConflict,
-			}
+			return nil, refErr(c.ShareExists(ctx, src, r))
 		}
 		return nil, mapWriteErr("account", share.Meta.ID, err)
 	}

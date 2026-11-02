@@ -4,6 +4,7 @@ package refcheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -37,11 +38,11 @@ func (c Checker) shareRef(ctx context.Context, a *account.Account) error {
 		case src == nil:
 			return badRequest("account %q does not exist", a.Spec.SourceAccountID)
 		case src.IsShared():
-			return conflict(CodeReshare, "account %q is itself shared with this scope; only the owner of the real account shares it", src.Meta.Name)
+			return c.reshareRefusal(ctx, src)
 		case !src.IsProvider():
-			return badRequest("account %q is a %s account; only a provider account is shared", src.Meta.Name, src.Spec.Kind)
+			return badRequest("account %q is a %s account; only a provider account is shared", label(src.Meta), src.Spec.Kind)
 		case src.Spec.HostID != a.Spec.HostID:
-			return badRequest("a shared account is held at the host of its real account %q", src.Meta.Name)
+			return badRequest("a share is held at the host of the account it comes from, %q", label(src.Meta))
 		}
 	}
 	return c.receiverExists(ctx, a)
@@ -53,7 +54,8 @@ func (c Checker) newShare(ctx context.Context, src, share *account.Account) erro
 		return err
 	}
 	if c.containsScope(ctx, src.Meta.Owner, share.Meta.Owner) {
-		return conflict(CodeAlreadyReachable, "%s already reaches account %q through ownership; a pool there can list the account itself, so sharing it adds nothing", ownerText(share.Meta.Owner), src.Meta.Name)
+		return conflict(CodeAlreadyReachable, "%s already reaches %s as its owner or a scope inside it, so a share adds nothing. List the account in a pool of %s instead.",
+			c.scopeText(ctx, share.Meta.Owner), c.rowText(ctx, "account", src.Meta), c.scopeText(ctx, share.Meta.Owner))
 	}
 	return nil
 }
@@ -111,11 +113,11 @@ func (c Checker) receiverExists(ctx context.Context, a *account.Account) error {
 		if sa == nil {
 			return notVisible("service-account", r.ID)
 		}
-		if a.Meta.Owner != (meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}) {
-			return badRequest("a service account's share is owned by its project %q", sa.Spec.ProjectID)
+		if home := (meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}); a.Meta.Owner != home {
+			return badRequest("a share with service account %q belongs to its project, %s; leave the owner out or set it to that project", label(sa.Meta), c.scopeText(ctx, home))
 		}
 	default:
-		return badRequest("a shared account is owned by a user, team or project, got %q", a.Meta.Owner.Kind)
+		return badRequest("an account is shared with a user, a team, a project or a service account, not a %s", a.Meta.Owner.Kind)
 	}
 	return nil
 }
@@ -130,18 +132,49 @@ func (c Checker) MayShare(ctx context.Context, src *account.Account) error {
 		if a := actor.From(ctx); a != nil && !a.AdminToken && a.UserID == o.ID {
 			return nil
 		}
-		return forbidden(fmt.Errorf("%w: account %q is personal; only its user shares it", authz.ErrForbidden, src.Meta.Name))
+		return forbidden(fmt.Errorf("%w: %s is personal: only its user shares it; ask them to share it", authz.ErrForbidden, c.rowText(ctx, "account", src.Meta)))
 	}
 	if err := c.Authz.Authorize(ctx, "accounts.update", authz.Resource{Kind: "account", ID: src.Meta.ID, Name: src.Meta.Name, Owner: &o}); err != nil {
-		return forbidden(fmt.Errorf("%w: only an admin of %s shares account %q", authz.ErrForbidden, ownerText(o), src.Meta.Name))
+		return forbidden(fmt.Errorf("%w: only an admin of %s shares %s; ask one to share it", authz.ErrForbidden, c.scopeText(ctx, o), c.rowText(ctx, "account", src.Meta)))
 	}
 	return nil
+}
+
+// reshareRefusal refuses sharing a share on: only the owner of the account it came from gives it away.
+func (c Checker) reshareRefusal(ctx context.Context, src *account.Account) error {
+	return conflict(CodeReshare, "%s is a share, so it cannot be shared on: only the owner of the account it came from shares that account. Ask them to share it with the receiver.",
+		c.rowText(ctx, "account", src.Meta))
+}
+
+// ShareExists is the refusal of a second share of src with r.
+func (c Checker) ShareExists(ctx context.Context, src *account.Account, r account.Receiver) error {
+	return conflict(CodeShareExists, "%s is already shared with %s: one share per receiver. Use the existing share, or delete it first.",
+		c.rowText(ctx, "account", src.Meta), c.receiverText(ctx, r))
+}
+
+// receiverText names who a share goes to: "you", alice, `team "Platform"`, `service account "ci"`.
+func (c Checker) receiverText(ctx context.Context, r account.Receiver) string {
+	switch r.Kind {
+	case account.ReceiverUser:
+		if s := c.userSubject(ctx, r.ID); s != "its owner" {
+			return s
+		}
+		return "that user"
+	case account.ReceiverServiceAccount:
+		if c.Rows.ServiceAccount != nil {
+			if sa := c.Rows.ServiceAccount(ctx, r.ID); sa != nil {
+				return fmt.Sprintf("service account %q", label(sa.Meta))
+			}
+		}
+		return "that service account"
+	}
+	return c.scopeText(ctx, meta.Owner{Kind: meta.OwnerKind(r.Kind), ID: r.ID})
 }
 
 // Share checks a new share of src: who shares it, the row itself, and what only a new share must meet.
 func (c Checker) Share(ctx context.Context, src, share *account.Account) error {
 	if src.IsShared() {
-		return conflict(CodeReshare, "account %q is itself shared with this scope; only the owner of the real account shares it", src.Meta.Name)
+		return c.reshareRefusal(ctx, src)
 	}
 	if err := c.MayShare(ctx, src); err != nil {
 		return err
@@ -162,31 +195,45 @@ func (c Checker) accountRefs(ctx context.Context, ids []string, refOwner meta.Ow
 	if c.Rows.Account == nil {
 		return nil
 	}
-	_, scoped := c.Authz.(authz.Scoper)
 	for i, id := range ids {
 		a := c.Rows.Account(ctx, id)
 		if a == nil {
 			return badRequest("accountIds[%d]: account %q does not exist", i, id)
 		}
-		if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
-			return notVisible("account", id)
+		err := c.poolAccountUsable(ctx, a, refOwner)
+		if err == nil && a.Spec.HostID != hostID {
+			err = badRequest("%s is held at another host than the pool's; a pool draws on accounts of its own host", c.rowText(ctx, "account", a.Meta))
 		}
-		switch {
-		case !a.IsProvider():
-			return badRequest("accountIds[%d]: account %q is a %s account; a pool draws on provider accounts", i, a.Meta.Name, a.Spec.Kind)
-		case a.Spec.HostID != hostID:
-			return badRequest("accountIds[%d]: account %q is held at another host than %q", i, a.Meta.Name, hostID)
-		case a.IsShared():
-			if a.Meta.Owner != refOwner {
-				return badRequest("accountIds[%d]: account %q is shared with %s; only a pool of that scope lists it", i, a.Meta.Name, ownerText(a.Meta.Owner))
-			}
-		case scoped && refOwner.Kind == meta.OwnerUser && a.Meta.Owner.Kind == meta.OwnerProject:
-			return badRequest("personal rows cannot reference project resources")
-		default:
-			if err := c.linkable(ctx, "account", a.Meta.Name, a.Meta.Owner, refOwner); err != nil {
-				return err
-			}
+		var re *Error
+		if errors.As(err, &re) && re.Status == http.StatusBadRequest {
+			re.Msg = fmt.Sprintf("accountIds[%d]: %s", i, re.Msg)
 		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// poolAccountUsable is the scope rule for one account a pool owned by refOwner lists, the host aside: visible, a provider account, and either a share made with refOwner itself or a real account refOwner may draw on as it may on keys.
+func (c Checker) poolAccountUsable(ctx context.Context, a *account.Account, refOwner meta.Owner) error {
+	if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
+		return notVisible("account", a.Meta.ID)
+	}
+	_, scoped := c.Authz.(authz.Scoper)
+	switch {
+	case !a.IsProvider():
+		return badRequest("%s is a %s account; a pool draws on provider accounts", c.rowText(ctx, "account", a.Meta), a.Spec.Kind)
+	case a.IsShared():
+		if a.Meta.Owner != refOwner {
+			return badRequest("%s was shared with %s, so only a pool of %s lists it. Create the pool there, or ask the owner of the account it came from to share it with %s.",
+				c.rowText(ctx, "account", a.Meta), c.scopeText(ctx, a.Meta.Owner), c.scopeText(ctx, a.Meta.Owner), c.scopeText(ctx, refOwner))
+		}
+	case scoped && refOwner.Kind == meta.OwnerUser && a.Meta.Owner.Kind == meta.OwnerProject:
+		return badRequest("a pool of %s cannot draw on %s: a personal pool cannot draw on a project's accounts. Use an account of your own or of the system, or create the pool in that project.",
+			c.scopeText(ctx, refOwner), c.rowText(ctx, "account", a.Meta))
+	default:
+		return c.linkable(ctx, "pool", "account", a.Meta, refOwner)
 	}
 	return nil
 }
