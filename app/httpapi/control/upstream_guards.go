@@ -41,6 +41,8 @@ func guardAccount(d Deps) mutationGuard[account.Account] {
 			return nil
 		case action == "create" && !incoming.IsProvider():
 			return huma.Error400BadRequest("spec.hostId is required: team, project, personal, member and service accounts are made by relay with their team, project, user, membership or service account")
+		case action == "create" && incoming.IsShared():
+			return huma.Error400BadRequest("spec.sourceAccountId is set by sharing: POST /accounts/{ref}/shares shares the real account")
 		}
 		if err := refs(d).Account(ctx, incoming); err != nil {
 			return refErr(err)
@@ -73,15 +75,20 @@ func accountSource(k account.Kind) string {
 	return string(k)
 }
 
-// mergeAccountServerFields keeps what relay owns on an account through a PUT: the kind, holder and closed mark, and for a caller account its owner and host (none), which fix its place.
+// mergeAccountServerFields keeps what relay owns on an account through a PUT: the kind, holder, closed mark and the account it was shared from, for a caller account its owner and host (none), which fix its place, and for a shared account its owner and host, which follow the share.
 func mergeAccountServerFields(existing, incoming *account.Account) {
 	incoming.Spec.Kind = existing.Spec.Kind
 	incoming.Spec.Holder = existing.Spec.Holder
 	incoming.Spec.Closed = existing.Spec.Closed
+	incoming.Spec.SourceAccountID, incoming.Spec.SharedBy = existing.Spec.SourceAccountID, existing.Spec.SharedBy
 	incoming.FollowsRoleBindings = existing.FollowsRoleBindings
-	if !existing.IsProvider() {
+	switch {
+	case !existing.IsProvider():
 		incoming.Meta.Owner = existing.Meta.Owner
 		incoming.Spec.HostID = ""
+	case existing.IsShared():
+		incoming.Meta.Owner = existing.Meta.Owner
+		incoming.Spec.HostID = existing.Spec.HostID
 	}
 }
 

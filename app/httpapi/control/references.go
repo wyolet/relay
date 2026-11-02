@@ -42,6 +42,13 @@ type referenceItem struct {
 	// detachable marks an optional field or a list entry: the referencing row
 	// stays valid without the target, so it can let go instead of blocking.
 	detachable bool
+	// shownToSharer names an account shared from the target to whoever asks about the target: they may share it, so they see its shares.
+	shownToSharer bool
+}
+
+// listedTo reports whether the caller is shown it by name.
+func (it referenceItem) listedTo(ctx context.Context, a authz.Authorizer) bool {
+	return it.shownToSharer || visibleTo(ctx, a, it.Kind, it.ID, it.owner)
 }
 
 type referencesOutput struct {
@@ -114,7 +121,7 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			if s, ok := d.Authz.(authz.Scoper); ok {
 				visible := items[:0:0]
 				for _, it := range items {
-					if s.Visible(ctx, it.Kind, it.ID, it.owner) {
+					if it.shownToSharer || s.Visible(ctx, it.Kind, it.ID, it.owner) {
 						visible = append(visible, it)
 					}
 				}

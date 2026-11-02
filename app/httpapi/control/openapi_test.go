@@ -141,6 +141,46 @@ func TestControlOpenAPIHasRefusalAndLane(t *testing.T) {
 	}
 }
 
+// The sharing surface the UI is generated from: share and list operations with named schemas, the share's read fields, pools by account, and via_account_id on usage.
+func TestControlOpenAPIHasSharing(t *testing.T) {
+	doc := controlDoc(t)
+	if ref := responseRef(operation(t, doc, "/accounts/{ref}/shares", "post"), "201"); ref != "#/components/schemas/Account" {
+		t.Errorf("POST shares answers %q, want the Account schema", ref)
+	}
+	if ref := responseRef(operation(t, doc, "/accounts/{ref}/shares", "get"), "200"); ref != "#/components/schemas/AccountShares" {
+		t.Errorf("GET shares answers %q, want AccountShares", ref)
+	}
+	for schema, fields := range map[string][]string{
+		"AccountShare":      {"sharedAccount", "receiver", "usage"},
+		"ShareUsage":        {"requests", "costNanos", "unpriced"},
+		"AccountShareParty": {"kind", "id", "name"},
+		"AccountReceiver":   {"kind", "id"},
+		"AccountSpec":       {"sourceAccountId", "sharedBy"},
+		"PoolSpec":          {"accountIds", "credentialIds"},
+		"HostKeyView":       {"readOnly"},
+		"Event":             {"via_account_id"},
+	} {
+		props := schemaProps(t, doc, schema)
+		for _, f := range fields {
+			if _, ok := props[f]; !ok {
+				t.Errorf("%s lacks %s", schema, f)
+			}
+		}
+	}
+	for _, path := range []string{"/usage/events", "/logs"} {
+		params, _ := operation(t, doc, path, "get")["parameters"].([]any)
+		found := false
+		for _, p := range params {
+			if name, _ := p.(map[string]any)["name"].(string); name == "via_account_id" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("GET %s does not filter on via_account_id", path)
+		}
+	}
+}
+
 func controlDoc(t *testing.T) map[string]any {
 	t.Helper()
 	api := Mount(chi.NewRouter(), mountDeps(t))

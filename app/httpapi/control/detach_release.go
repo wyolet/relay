@@ -59,8 +59,35 @@ func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*r
 		}.apply(ctx, d, it)
 	case "user":
 		return d.releaseRole(ctx, it, t)
+	case "account":
+		return d.releaseShare(ctx, it)
 	}
 	return nil, nil
+}
+
+// releaseShare deletes an account shared from the target, as its own delete would: by a caller who may share the real account or delete in the receiver's scope, and only while nothing blocks it (a relay key whose lane it is, a policy binding holding it). Pools drawing on it lose it.
+func (d Deps) releaseShare(ctx context.Context, it referenceItem) (*releasedRow, error) {
+	a, err := d.Stores.Account.Get(ctx, it.ID)
+	if err != nil || a == nil || !a.IsShared() {
+		return nil, err
+	}
+	src, err := d.Stores.Account.Get(ctx, a.Spec.SourceAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if src == nil || refs(d).MayShare(ctx, src) != nil {
+		if err := d.Authz.Authorize(ctx, "accounts.delete", authz.Resource{Kind: "account", ID: a.Meta.ID, Owner: &a.Meta.Owner}); err != nil {
+			return nil, failOrKeep(mapAuthzErr(err))
+		}
+	}
+	held, err := blockers(ctx, d, "account", a.Meta.ID)
+	if err != nil || len(held) > 0 {
+		return nil, err
+	}
+	if err := d.Stores.Account.Delete(ctx, a.Meta.ID); err != nil {
+		return nil, err
+	}
+	return &releasedRow{item: it, action: "accounts.delete", fields: []string{audit.AnyField}}, nil
 }
 
 // rowEdit lets one referencing row of type T go of the target through the

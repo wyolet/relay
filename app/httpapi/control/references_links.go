@@ -8,10 +8,13 @@ import (
 	"github.com/wyolet/relay/app/policy"
 )
 
-// droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key drops out of the pools holding it.
+// droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key drops out of the pools holding it, an account out of the pools drawing on it.
 var droppedLinkScans = map[string]func(ctx context.Context, d Deps, id string) ([]referenceItem, error){
 	"host-key": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 		return poolsHolding(ctx, d, id)
+	},
+	"account": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+		return poolsDrawingOn(ctx, d, id)
 	},
 	"rate-limit": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 		return policiesLinking(ctx, d, "spec.rateLimits[].rateLimitId", func(p *policy.Policy) bool {

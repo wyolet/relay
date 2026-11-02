@@ -1,0 +1,291 @@
+//go:build integration
+
+package control
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/ids"
+)
+
+// sharesWorld is the control API in roles mode over Postgres: alice owns a personal provider account with a key; team one owns one, administered by dave, with erin as a viewer; bob administers team two, which holds project two and its service account; carol holds no role.
+type sharesWorld struct {
+	r                    http.Handler
+	stores               *appcatalog.Stores
+	cat                  *appcatalog.Catalog
+	usage                *fakeUsageReader
+	users                map[string]string
+	host                 *host.Host
+	alicesAcct, teamAcct *account.Account
+	aliceKey             *hostkey.HostKey
+	teamOne, teamTwo     *team.Team
+	projTwo              *project.Project
+	sa                   *serviceaccount.ServiceAccount
+}
+
+func newSharesWorld(t *testing.T) *sharesWorld {
+	t.Helper()
+	ctx := t.Context()
+	pgPool := storagetest.Pool(t)
+	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pgPool})
+	must(t, "bootstrap", err)
+	must(t, "seed roles", role.SeedBuiltins(ctx, stores.Role, nil, nil))
+	roles, err := stores.Role.List(ctx)
+	must(t, "list roles", err)
+	roleID := map[string]string{}
+	for _, r := range roles {
+		roleID[r.Meta.Name] = r.Meta.ID
+	}
+
+	w := &sharesWorld{stores: stores, cat: cat, usage: &fakeUsageReader{}, users: map[string]string{}}
+	users := user.NewStore(pgPool)
+	for _, name := range []string{"alice", "bob", "carol", "dave", "erin"} {
+		id := ids.New()
+		w.users[name] = id
+		must(t, "upsert user", users.Upsert(ctx, &user.User{ID: id, Username: name}))
+	}
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	w.host = &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "share-host", Owner: system}, Spec: host.Spec{BaseURL: "https://share.example.com"}}
+	must(t, "host", stores.Host.Upsert(ctx, w.host))
+	w.teamOne = &team.Team{Meta: meta.Metadata{ID: ids.New(), Name: "one", Owner: system}}
+	w.teamTwo = &team.Team{Meta: meta.Metadata{ID: ids.New(), Name: "two", Owner: system}}
+	for _, tm := range []*team.Team{w.teamOne, w.teamTwo} {
+		must(t, "team", stores.Team.Upsert(ctx, tm))
+	}
+	w.projTwo = &project.Project{Meta: meta.Metadata{ID: ids.New(), Name: "two-app"}, Spec: project.Spec{TeamID: w.teamTwo.Meta.ID}}
+	w.projTwo.StampOwner()
+	must(t, "project", stores.Project.Upsert(ctx, w.projTwo))
+	w.sa = &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: "two-bot"}, Spec: serviceaccount.Spec{ProjectID: w.projTwo.Meta.ID}}
+	w.sa.StampOwner()
+	must(t, "service account", stores.ServiceAccount.Upsert(ctx, w.sa))
+
+	alice := meta.Owner{Kind: meta.OwnerUser, ID: w.users["alice"]}
+	w.alicesAcct = &account.Account{Meta: meta.Metadata{ID: ids.New(), Name: "alice-anthropic", Owner: alice}, Spec: account.Spec{HostID: w.host.Meta.ID}}
+	w.teamAcct = &account.Account{Meta: meta.Metadata{ID: ids.New(), Name: "one-anthropic", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: w.teamOne.Meta.ID}}, Spec: account.Spec{HostID: w.host.Meta.ID}}
+	for _, a := range []*account.Account{w.alicesAcct, w.teamAcct} {
+		must(t, "account", stores.Account.Upsert(ctx, a))
+	}
+	w.aliceKey = &hostkey.HostKey{Meta: meta.Metadata{ID: ids.New(), Name: "alice-key", Owner: alice}, Spec: hostkey.Spec{HostID: w.host.Meta.ID, AccountID: w.alicesAcct.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "SHARE_TEST_KEY"}}}
+	must(t, "host key", stores.HostKey.Upsert(ctx, w.aliceKey))
+
+	yes := true
+	for _, g := range []struct {
+		who, role string
+		scope     meta.Owner
+	}{
+		{"dave", "team-admin", meta.Owner{Kind: meta.OwnerTeam, ID: w.teamOne.Meta.ID}},
+		{"erin", "viewer", meta.Owner{Kind: meta.OwnerTeam, ID: w.teamOne.Meta.ID}},
+		{"bob", "team-admin", meta.Owner{Kind: meta.OwnerTeam, ID: w.teamTwo.Meta.ID}},
+	} {
+		rb := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: g.who + "-" + g.role, Owner: g.scope}}
+		rb.Spec.RoleID, rb.Spec.Scope, rb.Spec.Enabled = roleID[g.role], g.scope, &yes
+		rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: w.users[g.who]}}
+		must(t, "role binding", stores.RoleBinding.Upsert(ctx, rb))
+	}
+	must(t, "reload", cat.Reload(ctx))
+
+	deps := mountDeps(t)
+	deps.Stores, deps.Catalog, deps.Users, deps.UsageReader = stores, cat, users, w.usage
+	deps.Authz = audit.Authorizer{Inner: authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}, Snap: cat.Current}
+	actors := map[string]*actor.Actor{"root": {AdminToken: true, Username: "admin-token"}}
+	for name, id := range w.users {
+		actors[name] = &actor.Actor{UserID: id, Username: name, SessionID: "s-" + name, Subjects: appcatalog.UserSubjects(id, nil, nil)}
+	}
+	r := chi.NewRouter()
+	r.Use(withTestActor("X-Test-User", actors))
+	Mount(r, deps)
+	w.r = r
+	return w
+}
+
+func (w *sharesWorld) send(who, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-User", who)
+	rec := httptest.NewRecorder()
+	w.r.ServeHTTP(rec, req)
+	return rec
+}
+
+func (w *sharesWorld) share(who string, src *account.Account, kind account.ReceiverKind, id string) *httptest.ResponseRecorder {
+	return w.send(who, http.MethodPost, "/accounts/"+src.Meta.ID+"/shares", `{"receiver":{"kind":"`+string(kind)+`","id":"`+id+`"}}`)
+}
+
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	return body.Error.Code
+}
+
+func decodeAccount(t *testing.T, rec *httptest.ResponseRecorder) account.Account {
+	t.Helper()
+	var a account.Account
+	must(t, "decode account", json.Unmarshal(rec.Body.Bytes(), &a))
+	return a
+}
+
+// Only the real account's owner shares it: its user, or an admin of its team. Viewers and strangers are refused, a second share with one receiver and a share of a share answer 409, and the share is owned by its receiver.
+func TestShares_CreateAndRules(t *testing.T) {
+	w := newSharesWorld(t)
+	bob := w.users["bob"]
+
+	rec := w.share("alice", w.alicesAcct, account.ReceiverUser, bob)
+	wantStatus(t, rec, http.StatusCreated)
+	toBob := decodeAccount(t, rec)
+	if toBob.Spec.SourceAccountID != w.alicesAcct.Meta.ID || toBob.Meta.Owner != (meta.Owner{Kind: meta.OwnerUser, ID: bob}) || toBob.Spec.Kind != account.KindProvider || toBob.Meta.Name != "alice-anthropic-for-bob" {
+		t.Fatalf("share = %+v %+v", toBob.Meta, toBob.Spec)
+	}
+	if sb := toBob.Spec.SharedBy; sb == nil || sb.Kind != "user" || sb.ID != w.users["alice"] || sb.Name != "alice" {
+		t.Fatalf("sharedBy = %+v, want alice", sb)
+	}
+	if rec := w.share("alice", w.alicesAcct, account.ReceiverUser, bob); rec.Code != http.StatusConflict || errorCode(t, rec) != "share_exists" {
+		t.Fatalf("second share: %d %s, want 409 share_exists", rec.Code, rec.Body)
+	}
+	if rec := w.share("carol", w.alicesAcct, account.ReceiverUser, w.users["carol"]); rec.Code != http.StatusNotFound {
+		t.Fatalf("a stranger's share: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if rec := w.share("erin", w.teamAcct, account.ReceiverTeam, w.teamTwo.Meta.ID); rec.Code != http.StatusForbidden {
+		t.Fatalf("a viewer's share: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := w.share("dave", w.teamAcct, account.ReceiverTeam, ids.New()); rec.Code != http.StatusNotFound {
+		t.Fatalf("a share with a missing team: %d %s, want 404", rec.Code, rec.Body)
+	}
+
+	rec = w.share("dave", w.teamAcct, account.ReceiverTeam, w.teamTwo.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	toTeam := decodeAccount(t, rec)
+	if rec := w.share("bob", &toTeam, account.ReceiverUser, w.users["carol"]); rec.Code != http.StatusConflict || errorCode(t, rec) != "reshare_refused" {
+		t.Fatalf("the receiving admin shares on: %d %s, want 409 reshare_refused", rec.Code, rec.Body)
+	}
+
+	rec = w.share("dave", w.teamAcct, account.ReceiverServiceAccount, w.sa.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	toSA := decodeAccount(t, rec)
+	if toSA.Meta.Owner != (meta.Owner{Kind: meta.OwnerProject, ID: w.projTwo.Meta.ID}) || toSA.Spec.Holder == nil || toSA.Spec.Holder.ID != w.sa.Meta.ID {
+		t.Fatalf("service account share = %+v holder %+v, want its project's, held by it", toSA.Meta.Owner, toSA.Spec.Holder)
+	}
+
+	keyBody := `{"metadata":{"name":"on-a-share","owner":{"kind":"team","id":"` + w.teamTwo.Meta.ID + `"}},"spec":{"hostId":"` + w.host.Meta.ID + `","accountId":"` + toTeam.Meta.ID + `","valueFrom":{"kind":"env","env":"SHARE_TEST_KEY"}}}`
+	if rec := w.send("root", http.MethodPost, "/host-keys", keyBody); rec.Code != http.StatusConflict || errorCode(t, rec) != "account_shared" {
+		t.Fatalf("host key on a share: %d %s, want 409 account_shared", rec.Code, rec.Body)
+	}
+	if rec := w.send("alice", http.MethodPost, "/accounts", `{"metadata":{"name":"forged"},"spec":{"hostId":"`+w.host.Meta.ID+`","sourceAccountId":"`+w.teamAcct.Meta.ID+`"}}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a share made through POST /accounts: %d %s, want 400", rec.Code, rec.Body)
+	}
+}
+
+// The owner lists shares with each receiver and what it drew; the receiver sees the share and the real account's keys read-only, never their secret.
+func TestShares_ListAndReadOnlyKeys(t *testing.T) {
+	w := newSharesWorld(t)
+	rec := w.share("alice", w.alicesAcct, account.ReceiverTeam, w.teamTwo.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	share := decodeAccount(t, rec)
+	w.usage.events = []usagelog.Event{
+		{RequestID: "r1", Status: 200, AccountID: w.alicesAcct.Meta.ID, ViaAccountID: share.Meta.ID},
+		{RequestID: "r2", Status: 200, AccountID: w.alicesAcct.Meta.ID, ViaAccountID: share.Meta.ID},
+		{RequestID: "r3", Status: 200, AccountID: w.alicesAcct.Meta.ID},
+	}
+
+	rec = w.send("alice", http.MethodGet, "/accounts/"+w.alicesAcct.Meta.Name+"/shares?since=7d", "")
+	wantStatus(t, rec, http.StatusOK)
+	var list AccountShares
+	must(t, "decode shares", json.Unmarshal(rec.Body.Bytes(), &list))
+	if len(list.Items) != 1 || list.Items[0].SharedAccount.ID != share.Meta.ID || list.Items[0].Receiver != (account.ShareParty{Kind: "team", ID: w.teamTwo.Meta.ID, Name: "two"}) {
+		t.Fatalf("shares = %+v", list.Items)
+	}
+	if u := list.Items[0].Usage; u == nil || u.Requests != 2 {
+		t.Fatalf("share usage = %+v, want the two requests through it", u)
+	}
+	if rec := w.send("bob", http.MethodGet, "/accounts/"+w.alicesAcct.Meta.ID+"/shares", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("the receiver lists the owner's shares: %d, want 404", rec.Code)
+	}
+
+	rec = w.send("bob", http.MethodGet, "/accounts/"+share.Meta.ID+"/keys", "")
+	wantStatus(t, rec, http.StatusOK)
+	body := rec.Body.String()
+	if !strings.Contains(body, `"name":"alice-key"`) || !strings.Contains(body, `"readOnly":true`) || strings.Contains(body, "SHARE_TEST_KEY") {
+		t.Fatalf("the receiver's view of the shared keys = %s", body)
+	}
+	if rec := w.send("bob", http.MethodGet, "/host-keys/"+w.aliceKey.Meta.ID, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("the receiver reads the real key: %d, want 404", rec.Code)
+	}
+}
+
+// A share is deleted through the account delete, by the owner or the receiving scope's admin, answering which pools lose it; the real account's delete is blocked by its shares until detach deletes them.
+func TestShares_Delete(t *testing.T) {
+	w := newSharesWorld(t)
+	ctx := t.Context()
+	rec := w.share("dave", w.teamAcct, account.ReceiverTeam, w.teamTwo.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	toTeam := decodeAccount(t, rec)
+	rec = w.share("dave", w.teamAcct, account.ReceiverUser, w.users["carol"])
+	wantStatus(t, rec, http.StatusCreated)
+	toCarol := decodeAccount(t, rec)
+	p := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "two-pool", Owner: toTeam.Meta.Owner}, Spec: pool.Spec{HostID: w.host.Meta.ID, AccountIDs: []string{toTeam.Meta.ID}}}
+	must(t, "pool", w.stores.Pool.Upsert(ctx, p))
+
+	body := decodeInUse(t, w.send("dave", http.MethodDelete, "/accounts/by-id/"+w.teamAcct.Meta.ID, ""))
+	if len(body.Blockers) != 1 || body.Blockers[0].Kind != "account" || body.Blockers[0].Field != "spec.sourceAccountId" || !body.Blockers[0].Detachable {
+		t.Fatalf("real account delete blockers = %+v, want its shares, detachable", body.Blockers)
+	}
+
+	rec = w.send("carol", http.MethodDelete, "/accounts/by-id/"+toTeam.Meta.ID, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("a stranger deletes a share: %d, want 404", rec.Code)
+	}
+	// The owner learns how many of the receiver's pools lose the share, not their names.
+	rec = w.send("dave", http.MethodDelete, "/accounts/by-id/"+toTeam.Meta.ID, "")
+	wantStatus(t, rec, http.StatusOK)
+	if !strings.Contains(rec.Body.String(), `"field":"spec.accountIds"`) || !strings.Contains(rec.Body.String(), `"count":1,"hidden":1`) {
+		t.Fatalf("share delete answer = %s, want the pool that lost it, counted", rec.Body)
+	}
+	if got, _ := w.stores.Pool.Get(ctx, p.Meta.ID); got == nil || len(got.Spec.AccountIDs) != 0 {
+		t.Fatalf("pool after the share went = %+v", got)
+	}
+
+	rec = w.share("dave", w.teamAcct, account.ReceiverTeam, w.teamTwo.Meta.ID)
+	wantStatus(t, rec, http.StatusCreated)
+	again := decodeAccount(t, rec)
+	p.Spec.AccountIDs, p.Meta.ResourceVersion = []string{again.Meta.ID}, ""
+	must(t, "pool", w.stores.Pool.Upsert(ctx, p))
+	rec = w.send("bob", http.MethodDelete, "/accounts/by-id/"+again.Meta.ID, "")
+	wantStatus(t, rec, http.StatusOK)
+	if !strings.Contains(rec.Body.String(), `"name":"two-pool"`) {
+		t.Fatalf("the receiving admin's delete answer = %s, want its pool named", rec.Body)
+	}
+
+	det := decodeDetach(t, w.send("dave", http.MethodPost, "/accounts/by-id/"+w.teamAcct.Meta.ID+"/detach", ""))
+	if len(det.Detached) != 1 || det.Detached[0].Kind != "account" || len(det.Blockers) != 0 {
+		t.Fatalf("detach = %+v, want carol's share deleted and nothing left", det)
+	}
+	if got, _ := w.stores.Account.Get(ctx, toCarol.Meta.ID); got != nil {
+		t.Fatalf("carol's share after detach = %+v", got)
+	}
+	wantStatus(t, w.send("dave", http.MethodDelete, "/accounts/by-id/"+w.teamAcct.Meta.ID, ""), http.StatusNoContent)
+}
