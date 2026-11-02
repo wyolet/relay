@@ -54,6 +54,7 @@ type eventColumns struct {
 	accountID             proto.ColStr
 	refusal               *proto.ColLowCardinality[string]
 	laneAccountID         proto.ColStr
+	viaAccountID          proto.ColStr
 
 	input proto.Input
 	// lowCardinality lists every LowCardinality buffer, map keys included:
@@ -134,6 +135,7 @@ func newEventColumns() *eventColumns {
 		{Name: "account_id", Data: &c.accountID},
 		{Name: "refusal", Data: c.refusal},
 		{Name: "lane_account_id", Data: &c.laneAccountID},
+		{Name: "via_account_id", Data: &c.viaAccountID},
 	}
 	return c
 }
@@ -207,6 +209,7 @@ func (c *eventColumns) appendEvent(ev *usage.Event) {
 	c.accountID.Append(ev.AccountID)
 	c.refusal.Append(ev.Refusal)
 	c.laneAccountID.Append(ev.LaneAccountID)
+	c.viaAccountID.Append(ev.ViaAccountID)
 }
 
 // reset empties every column and keeps its capacity.

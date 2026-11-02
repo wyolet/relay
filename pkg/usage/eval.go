@@ -99,6 +99,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.LaneAccountID, ev.LaneAccountID) {
 		return false
 	}
+	if !inList(q.ViaAccountID, ev.ViaAccountID) {
+		return false
+	}
 	if !inList(q.ProjectID, ev.ProjectID) {
 		return false
 	}

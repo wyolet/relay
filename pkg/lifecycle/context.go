@@ -68,6 +68,8 @@ type Context struct {
 	// PoolID and AccountID are the pool and provider account of the credential last tried; empty for a credential linked on its own or held in no account.
 	PoolID    string
 	AccountID string
+	// ViaAccountID is the shared account the credential last tried was reached through; AccountID stays the real account that pays. Empty when none was.
+	ViaAccountID string
 
 	// PolicyName / ModelName / HostName carry the entities' slugs
 	// (metadata.name) as resolved at request time — denormalized onto the

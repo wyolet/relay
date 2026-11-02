@@ -403,7 +403,7 @@ func TestIntegration_EnsureSchemaAddsPoolAndAccount(t *testing.T) {
 	}
 }
 
-// A table from before refusal and lane_account_id is upgraded in place by New: its rows read back without them, and new rows carry and filter on both.
+// A table from before refusal, lane_account_id and via_account_id is upgraded in place by New: its rows read back without them, and new rows carry and filter on them.
 func TestIntegration_EnsureSchemaAddsRefusalAndLane(t *testing.T) {
 	dsn := os.Getenv("RELAY_TEST_PG_DSN")
 	if dsn == "" {
@@ -438,16 +438,16 @@ func TestIntegration_EnsureSchemaAddsRefusalAndLane(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("Events: err=%v rows=%+v", err, got)
 	}
-	if got[0].ErrorKind != "rate_limited" || got[0].Refusal != "" || got[0].LaneAccountID != "" {
+	if got[0].ErrorKind != "rate_limited" || got[0].Refusal != "" || got[0].LaneAccountID != "" || got[0].ViaAccountID != "" {
 		t.Fatalf("old row: %+v", got[0])
 	}
 
-	ev := usage.Event{RequestID: "new-1", Timestamp: now.Add(time.Second), ErrorKind: "rate_limited", Refusal: "no_capacity", LaneAccountID: "lane-1"}
+	ev := usage.Event{RequestID: "new-1", Timestamp: now.Add(time.Second), ErrorKind: "rate_limited", Refusal: "no_capacity", LaneAccountID: "lane-1", ViaAccountID: "via-1"}
 	if err := s.insertBatch([]usage.Event{ev}); err != nil {
 		t.Fatalf("insertBatch: %v", err)
 	}
-	got, err = s.Events(ctx, usage.EventQuery{Refusal: []string{"no_capacity"}, LaneAccountID: []string{"lane-1"}})
-	if err != nil || len(got) != 1 || got[0].RequestID != "new-1" || got[0].Refusal != "no_capacity" || got[0].LaneAccountID != "lane-1" {
-		t.Fatalf("Events by refusal and lane: err=%v rows=%+v", err, got)
+	got, err = s.Events(ctx, usage.EventQuery{Refusal: []string{"no_capacity"}, LaneAccountID: []string{"lane-1"}, ViaAccountID: []string{"via-1"}})
+	if err != nil || len(got) != 1 || got[0].RequestID != "new-1" || got[0].Refusal != "no_capacity" || got[0].LaneAccountID != "lane-1" || got[0].ViaAccountID != "via-1" {
+		t.Fatalf("Events by refusal, lane and shared account: err=%v rows=%+v", err, got)
 	}
 }
