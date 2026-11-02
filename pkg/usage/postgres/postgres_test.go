@@ -402,3 +402,52 @@ func TestIntegration_EnsureSchemaAddsPoolAndAccount(t *testing.T) {
 		t.Fatalf("new row: %+v", got[0])
 	}
 }
+
+// A table from before refusal is upgraded in place by New: its rows read back without one, and new rows carry and filter on it.
+func TestIntegration_EnsureSchemaAddsRefusal(t *testing.T) {
+	dsn := os.Getenv("RELAY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_TEST_PG_DSN unset; skipping live PostgreSQL schema check")
+	}
+	ctx := context.Background()
+	table := fmt.Sprintf("usage_events_refusal_upgrade_%d", time.Now().UnixNano())
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	defer func() { _, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS "+table) }()
+
+	older := strings.SplitN(fmt.Sprintf(createTableSQL, table), ",\n    refusal ", 2)[0] + "\n)"
+	if _, err := pool.Exec(ctx, older); err != nil {
+		t.Fatalf("create table without refusal: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (request_id, ts, error_kind) VALUES ('old-1', $1, 'rate_limited')`, table), now); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	s, err := New(ctx, Config{DSN: dsn, FlushInterval: 200 * time.Millisecond, Table: table})
+	if err != nil {
+		t.Fatalf("New on a table without refusal: %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.Events(ctx, usage.EventQuery{RequestID: "old-1"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Events: err=%v rows=%+v", err, got)
+	}
+	if got[0].ErrorKind != "rate_limited" || got[0].Refusal != "" {
+		t.Fatalf("old row: %+v", got[0])
+	}
+
+	ev := usage.Event{RequestID: "new-1", Timestamp: now.Add(time.Second), ErrorKind: "rate_limited", Refusal: "no_capacity"}
+	if err := s.insertBatch([]usage.Event{ev}); err != nil {
+		t.Fatalf("insertBatch: %v", err)
+	}
+	got, err = s.Events(ctx, usage.EventQuery{Refusal: []string{"no_capacity"}})
+	if err != nil || len(got) != 1 || got[0].RequestID != "new-1" || got[0].Refusal != "no_capacity" {
+		t.Fatalf("Events by refusal: err=%v rows=%+v", err, got)
+	}
+}

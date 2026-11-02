@@ -40,6 +40,49 @@ const (
 	CodeAccountNotHeld = "account_not_held"
 )
 
+// Codes relay refuses with once a route is found: a caller limit, or no credential of the route with room.
+const (
+	CodeRateLimitExceeded = "rate_limit_exceeded"
+	CodeBudgetExceeded    = "budget_exceeded"
+	// CodeUpstreamLimited is every credential over an upstream limit or in its account's cooldown; answered as rate_limit_exceeded.
+	CodeUpstreamLimited = "upstream_limited"
+	// CodeNoHealthyKeys is every credential of the route out of rotation, its breaker open.
+	CodeNoHealthyKeys = "no_healthy_keys"
+)
+
+// RefusalKind is the class of a refusal a client acts on: use another model, reach another host, or wait.
+type RefusalKind string
+
+const (
+	RefusalModelNotAllowed  RefusalKind = "model_not_allowed"
+	RefusalHostNotReachable RefusalKind = "host_not_reachable"
+	RefusalNoCapacity       RefusalKind = "no_capacity"
+)
+
+// KindOf is the class of a refusal code; "" for a code that is not a relay refusal, such as an upstream's own error.
+func KindOf(code string) RefusalKind {
+	switch code {
+	case CodePolicyDisabled, CodeModelNotAllowed, CodeUnpricedUnderBudget, CodeSubjectDisabled, CodeAccountClosed, CodeAccountNotHeld, CodeDuplicateBinding:
+		return RefusalModelNotAllowed
+	case CodeModelNotFound, CodeModelDisabled, CodeNoBinding, CodeNoCredentials:
+		return RefusalHostNotReachable
+	case CodeRateLimitExceeded, CodeBudgetExceeded, CodeUpstreamLimited, CodeNoHealthyKeys:
+		return RefusalNoCapacity
+	}
+	return ""
+}
+
+// Kind is r's class.
+func (r *Refusal) Kind() RefusalKind { return KindOf(r.Code) }
+
+// LimitCode is the code a refused counter answers with: budget_exceeded for a spent budget, rate_limit_exceeded for any other.
+func LimitCode(r *limits.Refused) string {
+	if r.Counter != nil && r.Counter.Kind == limits.KindBudget {
+		return CodeBudgetExceeded
+	}
+	return CodeRateLimitExceeded
+}
+
 // Issue codes the controllers attach besides duplicate_binding and unpriced_under_budget, which they share with refusals.
 const (
 	IssueRefMissing            = "ref_missing"

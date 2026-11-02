@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
@@ -47,20 +48,25 @@ const (
 // and policy on a routing rejection) without leaking them into the
 // client-facing error body.
 func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string, attrs ...any) {
+	writeRefusal(w, status, errType, code, "", msg, attrs...)
+}
+
+// writeRefusal is writeAPIError for a relay refusal, whose envelope carries its class beside the code.
+func writeRefusal(w http.ResponseWriter, status int, errType, code string, refusal plan.RefusalKind, msg string, attrs ...any) {
 	slog.Warn("inference: error response",
-		append([]any{"status", status, "type", errType, "code", code, "msg", msg}, attrs...)...,
+		append([]any{"status", status, "type", errType, "code", code, "refusal", string(refusal), "msg", msg}, attrs...)...,
 	)
-	writeErrorEnvelope(w, status, errType, code, msg)
+	writeErrorEnvelope(w, status, errType, code, refusal, msg)
 }
 
 // writeErrorEnvelope writes relay's error envelope without logging it, for refusals a flood could repeat and that are counted instead.
-func writeErrorEnvelope(w http.ResponseWriter, status int, errType, code, msg string) {
+func writeErrorEnvelope(w http.ResponseWriter, status int, errType, code string, refusal plan.RefusalKind, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(HeaderOrigin, "relay")
 	setShouldRetry(w, status)
 	w.WriteHeader(status)
 	env := httpapi.APIError{
-		Err:        httpapi.APIErrorBody{Type: errType, Code: code, Message: msg},
+		Err:        httpapi.APIErrorBody{Type: errType, Code: code, Refusal: string(refusal), Message: msg},
 		HTTPStatus: status,
 	}
 	body, _ := json.Marshal(env)
@@ -72,24 +78,25 @@ func mapRouteRefusal(w http.ResponseWriter, r *plan.Refusal, model string) {
 	// log-only attrs; the requested model and the deciding rung make a routing rejection diagnosable from logs.
 	attrs := []any{"model", model, "rung", string(r.Rung), "subject", r.SubjectID, "policy", r.PolicyID}
 	modelMsg := func(format string) string { return fmt.Sprintf(format, model) }
+	kind := r.Kind()
 	switch r.Code {
 	case plan.CodeModelNotFound:
-		writeAPIError(w, http.StatusNotFound, "invalid_request_error", r.Code, modelMsg("model %q not found"), attrs...)
+		writeRefusal(w, http.StatusNotFound, "invalid_request_error", r.Code, kind, modelMsg("model %q not found"), attrs...)
 	case plan.CodeModelDisabled:
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, modelMsg("model %q is disabled"), attrs...)
+		writeRefusal(w, http.StatusForbidden, "invalid_request_error", r.Code, kind, modelMsg("model %q is disabled"), attrs...)
 	case plan.CodeModelNotAllowed:
 		msg := modelMsg("model %q is not allowed: ") + r.Message
 		if r.PolicyID != "" {
 			// Named like the 429 of a caller limit: the rung, then the policy.
 			msg = fmt.Sprintf("model %q is not allowed by the %s policy %s", model, r.Rung, r.PolicyID)
 		}
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, msg, attrs...)
+		writeRefusal(w, http.StatusForbidden, "invalid_request_error", r.Code, kind, msg, attrs...)
 	case plan.CodeNoBinding:
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", "no enabled host binding for model", attrs...)
+		writeRefusal(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", kind, "no enabled host binding for model", attrs...)
 	case plan.CodeNoCredentials:
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", modelMsg("no credential you can reach serves %q"), attrs...)
+		writeRefusal(w, http.StatusServiceUnavailable, "server_error", "no_keys", kind, modelMsg("no credential you can reach serves %q"), attrs...)
 	default:
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", r.Code, r.Error(), attrs...)
+		writeRefusal(w, http.StatusForbidden, "invalid_request_error", r.Code, kind, r.Error(), attrs...)
 	}
 }
 
@@ -141,12 +148,7 @@ func rateLimitMessage(msg string, secs int64) string {
 }
 
 // callerLimitCode tells a spent budget from a rate limit.
-func callerLimitCode(r *limits.Refused) string {
-	if r.Counter.Kind == limits.KindBudget {
-		return "budget_exceeded"
-	}
-	return "rate_limit_exceeded"
-}
+func callerLimitCode(r *limits.Refused) string { return plan.LimitCode(r) }
 
 // callerLimitMessage names the rung and policy whose limit refused, never the rule itself.
 func callerLimitMessage(r *limits.Refused) string {
@@ -167,13 +169,16 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 	case errors.As(err, &limited):
 		// Every credential is over an upstream limit or cooling: the caller's own limits had room. The upstream rules are the host's configuration and stay out of the message.
 		secs := setRetryAfter(w, limited.RetryAfter)
-		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
+		writeRefusal(w, http.StatusTooManyRequests, "rate_limit_error", plan.CodeRateLimitExceeded, pipeline.RefusalOf(err),
 			fmt.Sprintf("every credential for this model is over its upstream rate limit; try again in %ds", secs))
 	case errors.As(err, &refused):
 		// One of the caller's own limits or budgets refused before any upstream call: a 429 with the refill (or, for a budget, the next period start) as Retry-After, naming the rung and policy that refused.
 		secs := setRetryAfter(w, refused.RetryAfter)
-		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", callerLimitCode(refused),
+		writeRefusal(w, http.StatusTooManyRequests, "rate_limit_error", callerLimitCode(refused), pipeline.RefusalOf(err),
 			rateLimitMessage(callerLimitMessage(refused), secs), "counter", refused.Counter.ID)
+	case errors.Is(err, keypool.ErrNoHealthyKeys):
+		// Every credential the route reaches is out of rotation: relay's verdict before any upstream call, not an upstream error.
+		writeRefusal(w, http.StatusServiceUnavailable, "server_error", plan.CodeNoHealthyKeys, pipeline.RefusalOf(err), "every host key for this model is out of rotation after failing; retry later")
 	case errors.As(err, &unreachable):
 		// Dial failure against the host — likely a misconfigured baseURL or a
 		// down upstream, not a key problem. Surface it distinctly so operators
@@ -181,7 +186,8 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unreachable",
 			fmt.Sprintf("upstream host %q unreachable after %d attempt(s)", unreachable.Host, unreachable.Attempts), "err", err)
 	case errors.Is(err, pipeline.ErrNoKeys):
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys")
+		// No credential speaks the request's shape: as unreachable as a route with none.
+		writeRefusal(w, http.StatusServiceUnavailable, "server_error", "no_keys", pipeline.RefusalOf(err), "no host keys")
 	case errors.As(err, &upstream) && upstream.Status > 0:
 		forwardUpstreamFailure(w, upstream)
 	case errors.As(err, &upstream):

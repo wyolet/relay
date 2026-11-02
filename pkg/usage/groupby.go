@@ -17,6 +17,7 @@ var ValidGroupBy = []string{
 	"source",
 	"finish_reason",
 	"error_kind",
+	"refusal",
 	"model",
 	"host",
 	"policy",
@@ -126,6 +127,8 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.FinishReason
 	case "error_kind":
 		return ev.ErrorKind
+	case "refusal":
+		return ev.Refusal
 	case "model":
 		return ev.Model
 	case "host":

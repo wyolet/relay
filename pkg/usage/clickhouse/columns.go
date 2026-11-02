@@ -52,6 +52,7 @@ type eventColumns struct {
 	relayKey              *proto.ColLowCardinality[string]
 	poolID                proto.ColStr
 	accountID             proto.ColStr
+	refusal               *proto.ColLowCardinality[string]
 
 	input proto.Input
 	// lowCardinality lists every LowCardinality buffer, map keys included:
@@ -86,6 +87,7 @@ func newEventColumns() *eventColumns {
 	c.principal = lc()
 	c.credentialKind = lc()
 	c.relayKey = lc()
+	c.refusal = lc()
 
 	c.input = proto.Input{
 		{Name: "request_id", Data: &c.requestID},
@@ -129,6 +131,7 @@ func newEventColumns() *eventColumns {
 		{Name: "relay_key", Data: c.relayKey},
 		{Name: "pool_id", Data: &c.poolID},
 		{Name: "account_id", Data: &c.accountID},
+		{Name: "refusal", Data: c.refusal},
 	}
 	return c
 }
@@ -200,6 +203,7 @@ func (c *eventColumns) appendEvent(ev *usage.Event) {
 	c.relayKey.Append(ev.RelayKey)
 	c.poolID.Append(ev.PoolID)
 	c.accountID.Append(ev.AccountID)
+	c.refusal.Append(ev.Refusal)
 }
 
 // reset empties every column and keeps its capacity.

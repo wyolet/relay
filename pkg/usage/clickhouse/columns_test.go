@@ -48,7 +48,7 @@ func sampleEvents() []usage.Event {
 		},
 		{
 			RequestID: "req-rejected", Source: "pipeline", Timestamp: time.Unix(1_800_000_000, 1),
-			ErrorKind: "rate_limited", ErrorMessage: "too many requests — retry later",
+			ErrorKind: "rate_limited", Refusal: "no_capacity", ErrorMessage: "too many requests — retry later",
 			Tags: map[string]string{"leg": "translate"}, Model: "gpt-x", RelayKey: "indexer-prod",
 		},
 		{

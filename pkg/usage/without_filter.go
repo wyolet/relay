@@ -12,6 +12,7 @@ var dimFilters = map[string]func(*EventQuery){
 	"source":         func(q *EventQuery) { q.Source = nil },
 	"finish_reason":  func(q *EventQuery) { q.FinishReason = nil },
 	"error_kind":     func(q *EventQuery) { q.ErrorKind = nil },
+	"refusal":        func(q *EventQuery) { q.Refusal = nil },
 	"model":          func(q *EventQuery) { q.Model = nil },
 	"host":           func(q *EventQuery) { q.Host = nil },
 	"policy":         func(q *EventQuery) { q.Policy = nil },

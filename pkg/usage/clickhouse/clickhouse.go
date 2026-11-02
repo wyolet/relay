@@ -100,7 +100,8 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     credential_id            String,
     relay_key                LowCardinality(String),
     pool_id                  String,
-    account_id               String
+    account_id               String,
+    refusal                  LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)`
@@ -122,6 +123,7 @@ var insertColumns = []string{
 	"credential_kind", "credential_id",
 	"relay_key",
 	"pool_id", "account_id",
+	"refusal",
 }
 
 var insertSQL = "INSERT INTO " + chTable + " (" + strings.Join(insertColumns, ", ") + ")"
@@ -151,6 +153,7 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS relay_key LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pool_id String`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS account_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS refusal LowCardinality(String)`,
 	// Scoped reads (one project's events, one team's, one key's) filter on
 	// columns the ORDER BY does not lead with, so without a skip index every
 	// partition in the window is read.
@@ -429,6 +432,7 @@ func insertValues(ev usage.Event) []any {
 		ev.RelayKey,
 		ev.PoolID,
 		ev.AccountID,
+		ev.Refusal,
 	}
 }
 
@@ -445,7 +449,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id, relay_key, pool_id, account_id FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id, relay_key, pool_id, account_id, refusal FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -513,6 +517,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.RelayKey,
 			&ev.PoolID,
 			&ev.AccountID,
+			&ev.Refusal,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -623,6 +628,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	in("source", q.Source)
 	in("finish_reason", q.FinishReason)
 	in("error_kind", q.ErrorKind)
+	in("refusal", q.Refusal)
 	if q.StatusMin > 0 {
 		clauses = append(clauses, "status >= ?")
 		args = append(args, uint16(q.StatusMin))

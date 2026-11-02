@@ -134,7 +134,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 	}
 	if resolved != nil && resolved.Refused != nil {
-		d.fireUsageFailure(ctx, routeRefusalKind(resolved.Refused), resolved.Refused.Error())
+		d.fireRouteRefusal(ctx, resolved.Refused)
 		mapRouteRefusal(w, resolved.Refused, modelName)
 		return
 	}
@@ -342,7 +342,8 @@ func mapProxyErr(w http.ResponseWriter, inbound *adapter.Spec, err error) {
 		var refused *limits.Refused
 		if errors.As(err, &refused) {
 			secs := setRetryAfter(w, refused.RetryAfter)
-			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", callerLimitCode(refused),
+			code := callerLimitCode(refused)
+			writeRefusal(w, http.StatusTooManyRequests, "rate_limit_error", code, plan.KindOf(code),
 				rateLimitMessage(callerLimitMessage(refused), secs), "counter", refused.Counter.ID)
 			return
 		}

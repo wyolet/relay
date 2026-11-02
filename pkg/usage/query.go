@@ -95,6 +95,7 @@ type EventQuery struct {
 	Source       []string // "pipeline" | "proxy" | "ws" | "batch" | "count" | "otlp"
 	FinishReason []string
 	ErrorKind    []string
+	Refusal      []string
 
 	// StatusMin / StatusMax restrict by HTTP status. Zero values mean
 	// unbounded on that side. StatusMin=400 picks errors only;
@@ -175,7 +176,7 @@ type SummaryQuery struct {
 
 	// GroupBy is the dimension to group on. Valid values:
 	// "relay_key_hash", "policy_id", "pool_id", "account_id", "model_id", "host_id",
-	// "host_key_id", "source", "finish_reason", "error_kind",
+	// "host_key_id", "source", "finish_reason", "error_kind", "refusal",
 	// "model", "host", "policy", "provider", "project", "team",
 	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",

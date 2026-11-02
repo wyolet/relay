@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/clientprofile"
@@ -177,6 +178,15 @@ func sourceForMode(m Mode) string {
 // status, which is 0 here because upstream was never reached — ErrorKind
 // carries the reason.
 func (d Deps) fireUsageFailure(ctx context.Context, kind, msg string) {
+	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: kind, ErrorMessage: msg})
+}
+
+// fireRouteRefusal is fireUsageFailure for a route the caller's plan refused, recording the refusal's class beside its code.
+func (d Deps) fireRouteRefusal(ctx context.Context, r *plan.Refusal) {
+	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: routeRefusalKind(r), Refusal: string(r.Kind()), ErrorMessage: r.Error()})
+}
+
+func (d Deps) fireFailure(ctx context.Context, ev *lifecycle.PostFlightEvent) {
 	if d.Lifecycle == nil {
 		return
 	}
@@ -186,9 +196,6 @@ func (d Deps) fireUsageFailure(ctx context.Context, kind, msg string) {
 	}
 	go func() {
 		lc.MarkEnd()
-		d.Lifecycle.Finalize(context.Background(), lc, &lifecycle.PostFlightEvent{
-			ErrorKind:    kind,
-			ErrorMessage: msg,
-		})
+		d.Lifecycle.Finalize(context.Background(), lc, ev)
 	}()
 }

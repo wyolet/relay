@@ -9,6 +9,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/metrics"
 )
@@ -25,13 +26,13 @@ var authRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 
 func init() { metrics.Register(authRejectedTotal) }
 
-// writeForbidden reports a caller that authenticated but may not proceed. The message may quote the account the caller asked for, so it is encoded, never spliced.
+// writeForbidden reports a caller that authenticated but may not proceed, classing a ladder refusal's code. The message may quote the account the caller asked for, so it is encoded, never spliced.
 func writeForbidden(w http.ResponseWriter, code, msg string) {
 	authRejectedTotal.WithLabelValues(code).Inc()
 	slog.Debug("inference: auth rejected", "status", 403, "code", code, "msg", msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	body, _ := json.Marshal(httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Message: msg}})
+	body, _ := json.Marshal(httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Refusal: string(plan.KindOf(code)), Message: msg}})
 	_, _ = w.Write(body)
 }
 
@@ -63,7 +64,7 @@ func authorizeProxyMode(w http.ResponseWriter, cat *appcatalog.Catalog, mode Mod
 	}
 	authRejectedTotal.WithLabelValues(code).Inc()
 	slog.Debug("inference: auth rejected", "status", status, "code", code, "msg", msg)
-	writeErrorEnvelope(w, status, "invalid_request_error", code, msg)
+	writeErrorEnvelope(w, status, "invalid_request_error", code, "", msg)
 	return false
 }
 

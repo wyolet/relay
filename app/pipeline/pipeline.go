@@ -532,8 +532,26 @@ func (p *Pipeline) fireFailure(req *Request, h *host.Host, runErr error) {
 	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, &lifecycle.PostFlightEvent{
 		Status:       status,
 		ErrorKind:    kind,
+		Refusal:      string(RefusalOf(runErr)),
 		ErrorMessage: runErr.Error(),
 	})
+}
+
+// RefusalOf is the refusal class of a Run error relay decided before any upstream call; "" for every other error.
+func RefusalOf(err error) plan.RefusalKind {
+	var refused *limits.Refused
+	var limited *UpstreamLimitedError
+	switch {
+	case errors.As(err, &refused):
+		return plan.KindOf(plan.LimitCode(refused))
+	case errors.As(err, &limited):
+		return plan.KindOf(plan.CodeUpstreamLimited)
+	case errors.Is(err, keypool.ErrNoHealthyKeys):
+		return plan.KindOf(plan.CodeNoHealthyKeys)
+	case errors.Is(err, ErrNoKeys):
+		return plan.KindOf(plan.CodeNoCredentials)
+	}
+	return ""
 }
 
 // classifyFailure maps a Run error to a machine-readable category and the
@@ -557,6 +575,8 @@ func classifyFailure(err error) (kind string, status int) {
 		return "kv_unavailable", 0
 	case errors.Is(err, ErrNoKeys):
 		return "no_keys", 0
+	case errors.Is(err, keypool.ErrNoHealthyKeys):
+		return plan.CodeNoHealthyKeys, 0
 	case errors.Is(err, ErrAllKeysExhausted):
 		return "keys_exhausted", 0
 	case errors.Is(err, ErrAdapterMissing):

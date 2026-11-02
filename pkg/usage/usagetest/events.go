@@ -46,6 +46,15 @@ var eventsCases = []eventsCase{
 		want: []string{"r03", "r02", "r01", "r00"},
 	},
 	{
+		name: "refusal filter",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.Refusal = []string{"no_capacity", "model_not_allowed"}
+			return q
+		}(),
+		want: []string{"r11"},
+	},
+	{
 		name: "pool_id filter",
 		q: func() usage.EventQuery {
 			q := Window()
@@ -99,5 +108,17 @@ func runEvents(t *testing.T, r usage.Reader) {
 			t.Fatalf("Events: got %d events, want 1", len(events))
 		}
 		assertEqual(t, "pool and account", [2]string{events[0].PoolID, events[0].AccountID}, [2]string{"pool-b", "acct-b"})
+	})
+	t.Run("refusal reads back", func(t *testing.T) {
+		q := Window()
+		q.RequestID = "r00"
+		events, err := r.Events(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("Events: got %d events, want 1", len(events))
+		}
+		assertEqual(t, "refusal", events[0].Refusal, "host_not_reachable")
 	})
 }

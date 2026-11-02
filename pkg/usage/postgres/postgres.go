@@ -82,6 +82,7 @@ var expectedColumns = []string{
 	"credential_kind", "credential_id",
 	"relay_key",
 	"pool_id", "account_id",
+	"refusal",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -127,7 +128,8 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     credential_id            text         NOT NULL DEFAULT '',
     relay_key                text         NOT NULL DEFAULT '',
     pool_id                  text         NOT NULL DEFAULT '',
-    account_id               text         NOT NULL DEFAULT ''
+    account_id               text         NOT NULL DEFAULT '',
+    refusal                  text         NOT NULL DEFAULT ''
 )`
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -155,6 +157,7 @@ var alterTableSQL = []string{
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS relay_key text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS pool_id text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS refusal text NOT NULL DEFAULT ''`,
 }
 
 const createIndexSQL = `
@@ -461,6 +464,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.RelayKey,
 			ev.PoolID,
 			ev.AccountID,
+			ev.Refusal,
 		})
 	}
 
@@ -498,7 +502,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        project_id, project, team_id, team,
 		        principal_kind, principal_id, principal,
 		        credential_kind, credential_id, relay_key,
-		        pool_id, account_id
+		        pool_id, account_id, refusal
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -566,6 +570,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.RelayKey,
 			&ev.PoolID,
 			&ev.AccountID,
+			&ev.Refusal,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -687,6 +692,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	any("source", q.Source)
 	any("finish_reason", q.FinishReason)
 	any("error_kind", q.ErrorKind)
+	any("refusal", q.Refusal)
 	if q.StatusMin > 0 {
 		add("status >= $%d", int16(q.StatusMin))
 	}

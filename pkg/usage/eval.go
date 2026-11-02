@@ -120,6 +120,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.ErrorKind, ev.ErrorKind) {
 		return false
 	}
+	if !inList(q.Refusal, ev.Refusal) {
+		return false
+	}
 	if q.StatusMin > 0 && ev.Status < q.StatusMin {
 		return false
 	}

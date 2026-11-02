@@ -15,6 +15,7 @@ Events wait in a bounded in-memory queue for the store (`RELAY_USAGE_QUEUE_SIZE`
 | `source` | The runner that handled the request: `pipeline` (normal mode), `proxy` ([proxy mode](/concepts/proxy-mode)), `ws` (WebSocket frame), `batch`, `count` (a count-tokens request) or `otlp` ([reported usage](/concepts/otlp-receiver)). |
 | `ts`, `duration_ms` | Request start, and total time until the response body closed. |
 | `status`, `error_kind`, `error_message` | The provider's HTTP status, or `0` when no provider answered. See [Failed requests](#failed-requests). |
+| `refusal` | Set when Relay refused the request itself: `model_not_allowed`, `host_not_reachable` or `no_capacity`. See [Failed requests](#failed-requests). |
 | `streamed`, `finish_reason`, `attempts` | Whether the response streamed, why generation stopped (`stop`, `length`, `tool_calls`, `content_filter`, `refusal`, `other`), and how many upstream tries the request took. |
 | `upstream` | `start`, `response_start`, `response_end`: microseconds from request start to the upstream handoff, the first response byte, and the end of the upstream response. Absent when the request never reached a provider. |
 | `reasoning` | `start`, `end`: microseconds from request start to the first and last reasoning frame, on streams that carried reasoning. |
@@ -69,7 +70,7 @@ Every endpoint above takes these query parameters. List parameters are repeatabl
 | `since` (default `1h`), `from`, `to` | The window: a relative duration, or RFC3339 bounds. `from` overrides `since`. |
 | `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`, `relay_key_hash` | Ids. |
 | `model`, `host`, `policy`, `provider`, `relay_key`, `requested_model` | Slugs as recorded on the event, or the requested model string. |
-| `source`, `finish_reason`, `error_kind` | The field's values. |
+| `source`, `finish_reason`, `error_kind`, `refusal` | The field's values. |
 | `status`, `status_min`, `status_max`, `status_class` | Exact statuses, a range, or a band (`2xx`, `4xx`, `5xx`). |
 | `streamed`, `error` | `true` or `false`. `error=true` matches a status of 400 or above, or any `error_kind`. |
 | `attempts_min`, `duration_ms_min`, `duration_ms_max`, `ttft_ms_min`, `ttft_ms_max` | Retried and slow requests. The TTFT filters skip events with no upstream timing. |
@@ -81,7 +82,7 @@ Every endpoint above takes these query parameters. List parameters are repeatabl
 
 `summary` and `timeseries` take `group_by`:
 
-- `source` (the `summary` default), `finish_reason`, `error_kind`
+- `source` (the `summary` default), `finish_reason`, `error_kind`, `refusal`
 - slugs as recorded: `model`, `host`, `policy`, `provider`, `project`, `team`, `principal`, `relay_key`
 - ids: `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`
 - `tags.<key>` (a caller tag) or `extras.<key>` (a Relay-added value such as `extras.instance`)
@@ -165,7 +166,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 `error_count` in summaries and time series counts events with a status of 400 or above, split into `errors_4xx` and `errors_5xx`. `throttled` counts the 429s, which are also in `errors_4xx`.
 
-A request Relay refused before calling a provider has status `0` and an `error_kind` naming why: `rate_limited`, `no_keys`, `keys_exhausted`, `model_not_found`, `model_not_allowed`, `no_host_binding`, and so on. It is listed by `/api/usage/events` and `/api/logs` and left out of `summary`, `timeseries` and `facets`, since it carries no usage.
+A request Relay refused before calling a provider has status `0` and an `error_kind` naming why: `rate_limited`, `no_keys`, `keys_exhausted`, `model_not_found`, `model_not_allowed`, `no_host_binding`, and so on. It is listed by `/api/usage/events` and `/api/logs` and left out of `summary`, `timeseries` and `facets`, since it carries no usage. `refusal` classes the refusals a client acts on, as the error body's `error.refusal` does: `model_not_allowed` (a policy, account or principal refuses the model: `policy_disabled`, `model_not_allowed`, `unpriced_under_budget`, `subject_disabled`, `account_closed`, `account_not_held`), `host_not_reachable` (no host the caller can reach serves it: `model_not_found`, `model_disabled`, `no_host_binding`, `no_keys`) and `no_capacity` (`rate_limited`: a rate limit, a budget or a cooldown, or `no_healthy_keys`: every host key out of rotation). A provider's own error carries none.
 
 When the provider answered with an error status, the event has that status and `error_kind` `upstream_error`, whether Relay passed the response to the caller or returned it after every key failed. That includes a 4xx the request itself caused, such as an invalid parameter or a prompt over the context window; `status` tells them apart. `error_message` is `upstream returned <status>`, or, when every key failed, the start of the provider's error body. Only [payload logging](/concepts/payload-logging) keeps the full body. Other provider-side kinds are `upstream_unreachable` (no connection to the host), `timeout` and `client_canceled`. In proxy mode a request that failed before the provider answered (a refused connection, a TLS error) is recorded as `upstream_error` with status `0`.
 
