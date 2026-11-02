@@ -10,15 +10,17 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
+	appteam "github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-// A share round-trips with its real account and receiver, takes a free name, is refused a second time for one receiver, and goes with its real account.
+// A share round-trips with its real account and receiver, takes a free name, is refused a second time for one receiver, and goes with its receiving team and with its real account.
 func TestIntegration_ShareStore(t *testing.T) {
 	ctx := context.Background()
-	q := gen.New(storagetest.Pool(t))
-	hst := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "share-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
+	db := storagetest.Pool(t)
+	q := gen.New(db)
+	hst :=&host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "share-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
 	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
@@ -27,8 +29,12 @@ func TestIntegration_ShareStore(t *testing.T) {
 	if err := store.Upsert(ctx, src); err != nil {
 		t.Fatalf("upsert real account: %v", err)
 	}
-	team := meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
-	taken := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "anthropic-for-platform", Owner: team}, Spec: account.Spec{HostID: hst.Meta.ID}}
+	tm := &appteam.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	if err := appteam.NewStore(db).Upsert(ctx, tm); err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+	team := meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}
+	taken :=&account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "anthropic-for-platform", Owner: team}, Spec: account.Spec{HostID: hst.Meta.ID}}
 	if err := store.Upsert(ctx, taken); err != nil {
 		t.Fatalf("upsert account holding the name: %v", err)
 	}
@@ -57,10 +63,23 @@ func TestIntegration_ShareStore(t *testing.T) {
 		t.Fatal("a share held by a missing service account was stored")
 	}
 
+	// A share goes with the team it was shared with.
+	if err := appteam.NewStore(db).Delete(ctx, tm.Meta.ID); err != nil {
+		t.Fatalf("delete team: %v", err)
+	}
+	if got, err := store.Get(ctx, share.Meta.ID); err != nil || got != nil {
+		t.Fatalf("share after its team went = %+v, %v", got, err)
+	}
+
+	user := meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
+	toUser := account.Share(src, account.Receiver{Kind: account.ReceiverUser, ID: user.ID}, user, "bob")
+	if err := store.CreateShare(ctx, toUser); err != nil {
+		t.Fatalf("share with a user: %v", err)
+	}
 	if err := store.Delete(ctx, src.Meta.ID); err != nil {
 		t.Fatalf("delete real account: %v", err)
 	}
-	if got, err := store.Get(ctx, share.Meta.ID); err != nil || got != nil {
+	if got, err := store.Get(ctx, toUser.Meta.ID); err != nil || got != nil {
 		t.Fatalf("share after its real account went = %+v, %v", got, err)
 	}
 }
