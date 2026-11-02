@@ -19,12 +19,14 @@ const (
 // subject.
 type Principal struct {
 	UserID, ServiceAccountID     string // exactly one set
-	ProjectID, TeamID            string // empty for a user's own key
+	ProjectID, TeamID            string // the lane's scope; empty for a personal or provider account
 	CredentialKind, CredentialID string // CredentialKey/CredentialToken; key id or jti
 	KeyHash                      string // hash presented; empty for tokens
 	Key                          *key.Key
-	// Caller is the principal's folded caller ladder: what it may reach and the counters it must fit.
-	Caller             *plan.CallerPlan
+	// Caller is the request's lane with its ladder folded: what it may reach and the counters it must fit.
+	Caller *plan.CallerPlan
+	// SwitchedLaneID is the account the request asked to run in, by id, so a WebSocket frame or a queued batch item resolves the same lane again; empty when it runs in the credential's default.
+	SwitchedLaneID     string
 	PassthroughAllowed bool
 	PayloadLogging     bool // the credential's own flag; read through CapturesPayload
 
@@ -40,14 +42,18 @@ type Principal struct {
 }
 
 // CapturesPayload reports whether this principal's requests have their
-// bodies captured, the same answer on every runner: the innermost caller
-// policy decides when one governs, else the credential's own opt-in. Nil
-// (anonymous proxy traffic) carries no opt-in and captures nothing.
+// bodies captured, the same answer on every runner: the nearest account on
+// the lane's ladder that sets payloadLogging decides, else the credential's
+// own opt-in. Nil (anonymous proxy traffic) carries no opt-in and captures
+// nothing.
 func (p *Principal) CapturesPayload() bool {
 	if p == nil {
 		return false
 	}
-	return policy.CapturesPayload(p.Policy(), p.PayloadLogging)
+	if p.Caller == nil {
+		return p.PayloadLogging
+	}
+	return p.Caller.CapturesPayload(p.PayloadLogging)
 }
 
 // Policy returns the innermost caller policy, nil when no caller rung binds one. Nil-safe so error paths can call it unguarded.

@@ -22,6 +22,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
@@ -37,10 +38,10 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/otlp"
 	"github.com/wyolet/relay/pkg/otlp/genai"
@@ -81,8 +82,10 @@ type fixture struct {
 	team         *team.Team
 	sa           *serviceaccount.ServiceAccount
 	keyRow       *key.Key
-	model        *model.Model
-	ownPrice     *pricing.Pricing
+	// siblingAccount is the account of siblingKey's service account, which the reporting key does not hold.
+	siblingAccount *account.Account
+	model          *model.Model
+	ownPrice       *pricing.Pricing
 	// sharedAcme and sharedZeta are two providers' models with the same snapshot name.
 	sharedAcme *model.Model
 	sharedZeta *model.Model
@@ -133,7 +136,7 @@ type fixtureOptions struct {
 	markerStore kv.Scripter
 	// reasoningRate above zero adds a reasoning meter at that rate (USD per million) to the model's own rate sheet.
 	reasoningRate float64
-	// policyCaptures, when set, puts the reporting key under a policy whose payload logging flag has that value. Nil leaves the key with no policy.
+	// policyCaptures, when set, binds a policy to the reporting key's account and sets the account's payload logging on (true) or off (false). Nil leaves the account with neither.
 	policyCaptures *bool
 	// policyDisabled switches that policy off.
 	policyDisabled bool
@@ -141,6 +144,8 @@ type fixtureOptions struct {
 	policyModels []string
 	// keyCaptures sets the reporting key's own payload logging flag.
 	keyCaptures bool
+	// teamDisabled, projectDisabled and saDisabled switch off the reporting key's team, project or service account; laneClosed closes its account; keyInSiblingAccount saves the key in another service account's account, which it does not hold.
+	teamDisabled, projectDisabled, saDisabled, laneClosed, keyInSiblingAccount bool
 }
 
 func system() meta.Owner { return meta.Owner{Kind: meta.OwnerSystem} }
@@ -169,18 +174,42 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: fx.sa.Meta.ID}, KeyHash: keyHash(relayKey)},
 	}
 	fx.keyRow.Spec.PayloadLoggingEnabled = o.keyCaptures
+	var accounts []*account.Account
+	accountOf := func(sa *serviceaccount.ServiceAccount, k *key.Key) *account.Account {
+		a := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID)
+		a.Meta.ID = meta.NewID()
+		accounts = append(accounts, a)
+		k.Spec.AccountID = a.Meta.ID
+		return a
+	}
+	indexerAccount := accountOf(fx.sa, fx.keyRow)
+	off := false
+	if o.teamDisabled {
+		fx.team.Spec.Enabled = &off
+	}
+	if o.projectDisabled {
+		fx.project.Spec.Enabled = &off
+	}
+	if o.saDisabled {
+		fx.sa.Spec.Enabled = &off
+	}
+	indexerAccount.Spec.Closed = o.laneClosed
 	var policies []*policy.Policy
 	var policyBindings []*policybinding.PolicyBinding
 	if o.policyCaptures != nil {
 		enabled := !o.policyDisabled
+		indexerAccount.Spec.PayloadLogging = account.PayloadLoggingOff
+		if *o.policyCaptures {
+			indexerAccount.Spec.PayloadLogging = account.PayloadLoggingOn
+		}
 		governing := &policy.Policy{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
-			Spec: policy.Spec{PayloadLoggingEnabled: *o.policyCaptures, Enabled: &enabled, Models: o.policyModels},
+			Spec: policy.Spec{Enabled: &enabled, Models: o.policyModels},
 		}
 		policies = append(policies, governing)
 		policyBindings = append(policyBindings, &policybinding.PolicyBinding{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-binding", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
-			Spec: policybinding.Spec{ProjectID: fx.project.Meta.ID, PolicyID: governing.Meta.ID, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: fx.sa.Meta.ID}}},
+			Spec: policybinding.Spec{PolicyID: governing.Meta.ID, AccountIDs: []string{indexerAccount.Meta.ID}},
 		})
 	}
 	sibling := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "crawler"}, Spec: serviceaccount.Spec{ProjectID: fx.project.Meta.ID}}
@@ -293,14 +322,20 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		Payloads:         fx.payloads,
 		InstanceID:       "pod-a",
 	})
+	siblingAccount := accountOf(sibling, siblingRow)
+	accountOf(outsider, outsiderRow)
+	fx.siblingAccount = siblingAccount
+	if o.keyInSiblingAccount {
+		fx.keyRow.Spec.AccountID = siblingAccount.Meta.ID
+	}
 	plans := (&plantest.World{
-		Policies: policies, PolicyBindings: policyBindings,
+		Policies: policies, PolicyBindings: policyBindings, Accounts: accounts,
 		Keys: []*key.Key{fx.keyRow, siblingRow, outsiderRow}, Teams: []*team.Team{fx.team}, Projects: []*project.Project{fx.project, fx.otherProject},
 		ServiceAccounts: []*serviceaccount.ServiceAccount{fx.sa, sibling, outsider},
 	}).Load(t)
 	auth := &inference.Auth{Catalog: cat, Plans: plans.Holder}
 	authenticated := func(next http.Handler) http.Handler {
-		return inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(auth)(next))
+		return inference.LaneMiddleware("")(inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(auth)(next)))
 	}
 	mux := http.NewServeMux()
 	mux.Handle(otlpreceiver.TracesPath, authenticated(h.Traces()))
@@ -679,6 +714,51 @@ func TestACredentialUnderADisabledPolicyMayNotReport(t *testing.T) {
 	// Another key of the same project, under no policy, still reports.
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(3, "acme-large")), "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK || len(fx.events) != 1 {
 		t.Errorf("key with no policy: status = %d events = %d", rec.Code, len(fx.events))
+	}
+}
+
+// A credential whose lane inference refuses may not report: the same check, the same answer, nothing recorded.
+func TestACredentialInARefusedLaneMayNotReport(t *testing.T) {
+	for name, tc := range map[string]struct {
+		o          fixtureOptions
+		status     int
+		code, body string
+	}{
+		"closed account":              {fixtureOptions{laneClosed: true}, http.StatusForbidden, "account_closed", ""},
+		"account the key may not use": {fixtureOptions{keyInSiblingAccount: true}, http.StatusForbidden, "account_not_held", ""},
+		"disabled team":               {fixtureOptions{teamDisabled: true}, http.StatusForbidden, "subject_disabled", ""},
+		"disabled project":            {fixtureOptions{projectDisabled: true}, http.StatusForbidden, "subject_disabled", ""},
+		"disabled service account":    {fixtureOptions{saDisabled: true}, http.StatusUnauthorized, "unauthenticated", "api key disabled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newFixtureWith(t, tc.o)
+			rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
+			var refusal struct {
+				Error struct{ Code, Message string } `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
+				t.Fatalf("body %q: %v", rec.Body, err)
+			}
+			if rec.Code != tc.status || refusal.Error.Code != tc.code || (tc.body != "" && refusal.Error.Message != tc.body) {
+				t.Errorf("status = %d error = %+v, want %d %s", rec.Code, refusal.Error, tc.status, tc.code)
+			}
+			if len(fx.events) != 0 {
+				t.Errorf("recorded %d events from a refused lane", len(fx.events))
+			}
+		})
+	}
+}
+
+// A report switches its lane like an inference request: into an account the key holds, and not into one it does not.
+func TestAReportHonoursTheLaneSwitch(t *testing.T) {
+	fx := newFixture(t)
+	body := export(t, chatSpan(1, "acme-large"))
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, httpheader.HeaderAccount, fx.siblingAccount.Meta.ID); rec.Code != http.StatusForbidden || len(fx.events) != 0 {
+		t.Fatalf("switch into another account: status = %d events = %d, want 403 and none", rec.Code, len(fx.events))
+	}
+	own := fx.keyRow.Spec.AccountID
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, httpheader.HeaderAccount, own); rec.Code != http.StatusOK || len(fx.events) != 1 || fx.events[0].LaneAccountID != own {
+		t.Fatalf("switch into its own account: status = %d events = %d", rec.Code, len(fx.events))
 	}
 }
 
@@ -1327,7 +1407,7 @@ func TestTheClientIsToldWhenItsContentWasNotStored(t *testing.T) {
 		if rec.Code != http.StatusOK || !present || rejected != "" || len(fx.events) != 3 {
 			t.Fatalf("status = %d body = %s events = %d, want an accepted export with a warning and nothing rejected", rec.Code, rec.Body, len(fx.events))
 		}
-		want := "message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded."
+		want := "message content of 2 model calls was not stored: the account this credential runs in does not allow storing message content. It is safe to stop sending content; usage was recorded."
 		if message != want {
 			t.Errorf("warning =\n%s\nwant\n%s", message, want)
 		}

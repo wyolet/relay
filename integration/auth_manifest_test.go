@@ -113,8 +113,8 @@ spec: {principal: {kind: user, name: dana}, keyHash: "2c9e0a2585dc7406589a3724f0
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
-metadata: {name: etl-users}
-spec: {project: etl, policy: etl-default, subjects: [{kind: user, name: dana}, {kind: serviceaccount, name: loader}]}
+metadata: {name: etl-users, owner: {kind: project, name: etl}}
+spec: {policy: etl-default, accounts: [dana-project-etl, sa-loader]}
 ---
 apiVersion: auth.wyolet.dev/v1alpha1
 kind: RoleBinding

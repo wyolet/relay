@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits/lua"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
@@ -61,6 +62,7 @@ func runnerFixture(t *testing.T, baseURL string) *fixture {
 	k.Meta.Name = "rk"
 	tm := w.Team()
 	proj := w.Project(tm)
+	w.Member(u, meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID})
 	plans := w.Load(t)
 	rn, revoked := runnerOver(t, plans)
 	return &fixture{rn: rn, plans: plans, revoked: revoked, userID: u.ID, key: k, team: tm, project: proj}

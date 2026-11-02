@@ -142,6 +142,9 @@ type Config struct {
 	// ProxyBodyIdle is how long a proxy-mode request body may go without a byte before relay answers 408 and aborts the forward (RELAY_PROXY_BODY_IDLE_S, default 30s; 0 disables). The body streams upstream while the request holds an in-flight slot, a rate-limit lease and an upstream connection, and the listener has no read timeout of its own.
 	ProxyBodyIdle time.Duration
 
+	// AccountDomain is the parent domain of the per-account inference hosts (RELAY_ACCOUNT_DOMAIN): a request to <account-name>.<AccountDomain> runs in that account. Empty turns host selection off.
+	AccountDomain string
+
 	// StreamUsage makes same-shape streamed requests ask the upstream for token usage when the wire shape reports it only on request (RELAY_STREAM_USAGE, default on). The extra usage frame is removed from the caller's stream unless the caller asked for it.
 	StreamUsage bool
 
@@ -491,6 +494,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_PROXY_BODY_IDLE_S must be >= 0")
 	} else {
 		cfg.ProxyBodyIdle = time.Duration(v) * time.Second
+	}
+	cfg.AccountDomain = strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_ACCOUNT_DOMAIN"))), ".")
+	if strings.ContainsAny(cfg.AccountDomain, "/: \t") {
+		return nil, fmt.Errorf("RELAY_ACCOUNT_DOMAIN must be a bare domain such as accounts.example.com, got %q", os.Getenv("RELAY_ACCOUNT_DOMAIN"))
 	}
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_STREAM_USAGE"))); v {
 	case "", "on", "1", "true":

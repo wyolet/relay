@@ -97,6 +97,8 @@ type Context struct {
 	CredentialKind string // "key" | "token"
 	CredentialID   string
 	RelayKeyName   string // the key's slug; empty for a token
+	// LaneAccountID is the account the request ran in and is charged to, distinct from AccountID, the serving credential's provider account.
+	LaneAccountID string
 
 	// PricingID / PricingName identify the rate sheet billing this request,
 	// stamped at plan-fill from what routing already resolved. The post-

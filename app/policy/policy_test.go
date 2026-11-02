@@ -75,24 +75,18 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestCapturesPayload(t *testing.T) {
-	capturing, silent := fix("on"), fix("off")
-	capturing.Spec.PayloadLoggingEnabled = true
-	for _, tc := range []struct {
-		name      string
-		governing *Policy
-		credOptIn bool
-		want      bool
-	}{
-		{"policy on, credential off", capturing, false, true},
-		{"policy off, credential on", silent, true, false},
-		{"no policy, credential on", nil, true, true},
-		{"no policy, credential off", nil, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := CapturesPayload(tc.governing, tc.credOptIn); got != tc.want {
-				t.Errorf("got %v, want %v", got, tc.want)
-			}
-		})
+// A policy names providers and their models; hosts are the pools' business.
+func TestValidateRefusesHosts(t *testing.T) {
+	for _, ref := range []string{"anthropic/claude-opus-4-7@bedrock", "@bedrock", "anthropic@bedrock"} {
+		p := fix("x")
+		p.Spec.Models = []string{ref}
+		if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "names a host") {
+			t.Errorf("models [%s]: Validate() = %v, want a refusal naming the host", ref, err)
+		}
+	}
+	p := fix("x")
+	p.Spec.Models = []string{"anthropic", "anthropic/claude-opus-4-7"}
+	if err := p.Validate(); err != nil {
+		t.Errorf("provider and model refs: %v", err)
 	}
 }

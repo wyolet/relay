@@ -159,14 +159,13 @@ func TestValidateGraph_PolicyMissingLinks(t *testing.T) {
 	docs = append(docs, manifest.Document{Policy: &manifest.PolicyDTO{
 		Metadata: manifest.WireMeta{Name: "user-pol", Owner: manifest.WireOwner{Kind: "user"}},
 		Spec: manifest.PolicySpec{
-			Pools:       []string{"ghost-pool"},
-			Credentials: []string{"ghost-key"},
-			RateLimits:  []manifest.PolicyRateLimitDTO{{Ref: "ghost-rl"}},
-			Budgets:     []string{"ghost-budget"},
+			Pools:      []string{"ghost-pool"},
+			RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "ghost-rl"}},
+			Budgets:    []manifest.PolicyBudgetDTO{{Ref: "ghost-budget"}},
 		},
 	}})
 	issues := ValidateGraph(docs)
-	for _, want := range [][2]string{{"Pool", "ghost-pool"}, {"HostKey", "ghost-key"}, {"RateLimit", "ghost-rl"}, {"Budget", "ghost-budget"}} {
+	for _, want := range [][2]string{{"Pool", "ghost-pool"}, {"RateLimit", "ghost-rl"}, {"Budget", "ghost-budget"}} {
 		if !hasRefMissing(issues, want[0], want[1]) {
 			t.Errorf("expected ref_missing → %s/%s, got:\n%s", want[0], want[1], Format(issues))
 		}
@@ -219,8 +218,9 @@ func TestValidateGraph_TierPolicyShape(t *testing.T) {
 	}{
 		{"scoped to a served model", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-x"}}}}, ""},
 		{"unscoped", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl"}}}, ""},
-		{"scoped to a model the host does not serve", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-x@other"}}}}, "matches no model host"},
-		{"links credentials", manifest.PolicySpec{Credentials: []string{"openai-key"}}, "links no credentials"},
+		{"scoped to a model the host does not serve", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-unserved"}}}}, "matches no model host"},
+		{"scoped to a host", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-x@other"}}}}, "names a host"},
+		{"links pools", manifest.PolicySpec{Pools: []string{"openai-pool"}}, "links no pools"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			issues := ValidateGraph(tier(tc.spec))
@@ -241,7 +241,6 @@ func TestValidateGraph_TierPolicyShape(t *testing.T) {
 func TestValidateGraph_PolicyBareModelName(t *testing.T) {
 	cases := []struct{ entry, want string }{
 		{"gpt-x", `"openai/gpt-x"`},
-		{"gpt-x@openai-host", `"openai/gpt-x@openai-host"`},
 	}
 	for _, tc := range cases {
 		docs := append(fixture(), manifest.Document{Policy: &manifest.PolicyDTO{

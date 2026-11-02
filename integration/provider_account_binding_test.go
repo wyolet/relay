@@ -1,6 +1,6 @@
 //go:build integration
 
-// credential_binding_test.go binds a policy to a host key and checks it lands on the key's account: the API answers with the account, the limit counts across every key of the account, the account takes no second binding, and a manifest naming the key applies and exports without drift.
+// provider_account_binding_test.go binds a policy to a provider account and checks it counts across every key of the account, the account takes no second binding, and a manifest naming the account applies and exports without drift.
 
 package integration_test
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,20 +23,17 @@ import (
 	"github.com/wyolet/relay/pkg/ids"
 )
 
-type subjectsRow struct {
+type accountsRow struct {
 	Metadata struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
-		Subjects []struct {
-			Kind string `json:"kind"`
-			ID   string `json:"id"`
-		} `json:"subjects"`
+		AccountIDs []string `json:"accountIds"`
 	} `json:"spec"`
 }
 
-func TestIntegration_CredentialBindingCountsOnTheAccount(t *testing.T) {
+func TestIntegration_ProviderAccountBindingCountsAcrossItsKeys(t *testing.T) {
 	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,32 +76,24 @@ func TestIntegration_CredentialBindingCountsOnTheAccount(t *testing.T) {
 		t.Fatalf("POST /api/policies = %d: %s", code, raw)
 	}
 	pol := decodeID(t, raw)
-	binding := func(name, subject string) string {
-		return `{"metadata":{"name":"` + name + `","owner":{"kind":"system"}},"spec":{"policyId":"` + pol + `","subjects":[` + subject + `]}}`
+	binding := func(name string) string {
+		return `{"metadata":{"name":"` + name + `","owner":{"kind":"system"}},"spec":{"policyId":"` + pol + `","accountIds":["` + account + `"]}}`
 	}
 
-	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", binding("key-cap-on-first", `{"kind":"credential","id":"`+first.Meta.ID+`"}`))
+	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", binding("key-cap-on-account"))
 	if code != http.StatusCreated {
-		t.Fatalf("POST binding on a host key = %d: %s", code, raw)
+		t.Fatalf("POST binding on the provider account = %d: %s", code, raw)
 	}
-	var row subjectsRow
+	var row accountsRow
 	if err := json.Unmarshal(raw, &row); err != nil {
 		t.Fatalf("decode binding: %v", err)
 	}
-	if s := row.Spec.Subjects; len(s) != 1 || s[0].Kind != "account" || s[0].ID != account {
-		t.Fatalf("subjects = %+v, want the key's account %s", s, account)
+	if !slices.Equal(row.Spec.AccountIDs, []string{account}) {
+		t.Fatalf("accountIds = %v, want the keys' account %s", row.Spec.AccountIDs, account)
 	}
-
-	for _, tc := range []struct{ name, subject string }{
-		{"the account itself", `{"kind":"account","id":"` + account + `"}`},
-		{"another key of the account", `{"kind":"credential","id":"` + second.Meta.ID + `"}`},
-	} {
-		t.Run("a second binding on "+tc.name, func(t *testing.T) {
-			code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", binding("key-cap-again-"+ids.New()[:8], tc.subject))
-			if code != http.StatusConflict || !strings.Contains(string(raw), "key-cap-on-first") {
-				t.Fatalf("POST = %d, want 409 naming key-cap-on-first: %s", code, raw)
-			}
-		})
+	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", binding("key-cap-again"))
+	if code != http.StatusConflict || !strings.Contains(string(raw), "key-cap-on-account") {
+		t.Fatalf("a second binding on the account = %d, want 409 naming key-cap-on-account: %s", code, raw)
 	}
 
 	if err := st.reload(ctx); err != nil {
@@ -117,8 +107,8 @@ func TestIntegration_CredentialBindingCountsOnTheAccount(t *testing.T) {
 	}
 }
 
-// A manifest binding a host key applies as the account binding the store keeps, re-applies unchanged, and exports as the account.
-func TestIntegration_CredentialBindingManifestRoundTrip(t *testing.T) {
+// A manifest binding a provider account by name applies, re-applies unchanged, and exports as the same account name.
+func TestIntegration_ProviderAccountBindingManifestRoundTrip(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
@@ -136,9 +126,13 @@ func TestIntegration_CredentialBindingManifestRoundTrip(t *testing.T) {
 metadata: {name: roundtrip}
 spec: {}
 ---
+` + head + `kind: Account
+metadata: {name: roundtrip-org, owner: {kind: team, name: roundtrip}}
+spec: {host: roundtrip-host}
+---
 ` + head + `kind: HostKey
 metadata: {name: roundtrip-key, owner: {kind: team, name: roundtrip}}
-spec: {hostId: roundtrip-host, valueFrom: {kind: env, env: ` + envName + `}}
+spec: {hostId: roundtrip-host, account: roundtrip-org, valueFrom: {kind: env, env: ` + envName + `}}
 ---
 ` + head + `kind: RateLimit
 metadata: {name: roundtrip-rpm, owner: {kind: team, name: roundtrip}}
@@ -149,22 +143,22 @@ metadata: {name: roundtrip-cap, owner: {kind: team, name: roundtrip}}
 spec: {rateLimits: [{ref: roundtrip-rpm}]}
 ---
 ` + head + `kind: PolicyBinding
-metadata: {name: roundtrip-cap-on-key, owner: {kind: team, name: roundtrip}}
-spec: {policy: roundtrip-cap, subjects: [{kind: credential, name: roundtrip-key}]}
+metadata: {name: roundtrip-cap-on-org, owner: {kind: team, name: roundtrip}}
+spec: {policy: roundtrip-cap, accounts: [roundtrip-org]}
 `
 	for i, want := range []string{"create", "unchanged"} {
 		code, plan, raw := st.applyBundle(bundle, "")
-		if code != http.StatusOK || !plan.Applied || plan.action("PolicyBinding", "roundtrip-cap-on-key") != want {
-			t.Fatalf("apply %d = %d, binding %q, want %q: %s", i+1, code, plan.action("PolicyBinding", "roundtrip-cap-on-key"), want, raw)
+		if code != http.StatusOK || !plan.Applied || plan.action("PolicyBinding", "roundtrip-cap-on-org") != want {
+			t.Fatalf("apply %d = %d, binding %q, want %q: %s", i+1, code, plan.action("PolicyBinding", "roundtrip-cap-on-org"), want, raw)
 		}
 	}
-	code, raw := st.adminDo(http.MethodGet, "/api/policy-bindings/roundtrip-cap-on-key", "")
+	code, raw := st.adminDo(http.MethodGet, "/api/policy-bindings/roundtrip-cap-on-org", "")
 	if code != http.StatusOK {
 		t.Fatalf("GET binding = %d: %s", code, raw)
 	}
-	var row subjectsRow
-	if err := json.Unmarshal(raw, &row); err != nil || len(row.Spec.Subjects) != 1 || row.Spec.Subjects[0].Kind != "account" {
-		t.Fatalf("stored binding = %s, want one account subject", raw)
+	var row accountsRow
+	if err := json.Unmarshal(raw, &row); err != nil || len(row.Spec.AccountIDs) != 1 {
+		t.Fatalf("stored binding = %s, want one account", raw)
 	}
 
 	code, exported := st.adminDo(http.MethodGet, "/api/export", "")
@@ -177,15 +171,15 @@ spec: {policy: roundtrip-cap, subjects: [{kind: credential, name: roundtrip-key}
 	}
 	found := false
 	for _, d := range docs {
-		if pb := d.PolicyBinding; pb != nil && pb.Metadata.Name == "roundtrip-cap-on-key" {
-			found = len(pb.Spec.Subjects) == 1 && pb.Spec.Subjects[0].Kind == "account"
+		if pb := d.PolicyBinding; pb != nil && pb.Metadata.Name == "roundtrip-cap-on-org" {
+			found = slices.Equal(pb.Spec.Accounts, []string{"roundtrip-org"})
 		}
 	}
 	if !found {
-		t.Fatalf("export does not bind the account:\n%s", exported)
+		t.Fatalf("export does not bind the account by name:\n%s", exported)
 	}
 	code, plan, raw := st.applyBundle(string(exported), "dryRun=true")
-	if code != http.StatusOK || plan.action("PolicyBinding", "roundtrip-cap-on-key") != "unchanged" {
-		t.Fatalf("exported bundle = %d, binding %q, want unchanged: %s", code, plan.action("PolicyBinding", "roundtrip-cap-on-key"), raw)
+	if code != http.StatusOK || plan.action("PolicyBinding", "roundtrip-cap-on-org") != "unchanged" {
+		t.Fatalf("exported bundle = %d, binding %q, want unchanged: %s", code, plan.action("PolicyBinding", "roundtrip-cap-on-org"), raw)
 	}
 }

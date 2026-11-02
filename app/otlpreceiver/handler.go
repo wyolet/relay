@@ -10,6 +10,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -176,13 +177,16 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	reporter := lifecycle.NewContext("", Source, time.Time{})
 	inference.StampPrincipal(ctx, reporter)
 
-	// A disabled policy is access the operator switched off, so its credential may not report either. A credential with no policy, or one whose policy grants other models, still may: reporting needs a valid credential, not a route.
-	governing := inference.GoverningPolicy(ctx)
-	if governing != nil && !governing.IsEnabled() {
-		sig.result(resultPolicyDisabled).Inc()
-		inference.WritePolicyDisabled(w)
+	// A lane inference refuses (a closed account, a disabled policy or subject on any rung) is access the operator switched off, so its credential may not report either. A credential with no policy, or one whose policy grants other models, still may: reporting needs a valid credential, not a route.
+	if refused := inference.AdmitCaller(ctx, w); refused != nil {
+		result := resultRefused
+		if refused.Code == plan.CodePolicyDisabled {
+			result = resultPolicyDisabled
+		}
+		sig.result(result).Inc()
 		return
 	}
+	capture := inference.PayloadLoggingOf(ctx)
 
 	// Checked before the body is read, so a client over its limit costs one kv call and no decoding.
 	if wait, limited := h.rateLimited(ctx, snap, reporter); limited {
@@ -226,7 +230,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	if len(accepted) > 0 {
 		from := origin{instance: h.opts.InstanceID, clientIP: inference.ClassificationFrom(ctx).ClientIP}
 		var queued bool
-		if queued, content = h.record(ctx, sig, snap, reporter, governing, from, accepted, now); !queued {
+		if queued, content = h.record(ctx, sig, snap, reporter, capture, from, accepted, now); !queued {
 			sig.result(resultBackpressure).Inc()
 			setRetryAfter(w, queueRetryAfter)
 			writeStatus(w, mediaType, http.StatusServiceUnavailable, otlp.StatusUnavailable, "usage queue is full; send the export again")
@@ -239,7 +243,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	sig.records.WithLabelValues(outcomeRejected).Add(float64(refused.rejected()))
 	sig.result(resultAccepted).Inc()
 	w.Header().Set("Content-Type", mediaType)
-	w.Header().Set(httpheader.HeaderContentCapture, h.contentCapture(governing))
+	w.Header().Set(httpheader.HeaderContentCapture, h.contentCapture(capture))
 	w.WriteHeader(http.StatusOK)
 	// Content the operator does not keep is not a rejection: the export succeeded, and the message alone tells the client it can stop sending it.
 	message := refused.message(sig)

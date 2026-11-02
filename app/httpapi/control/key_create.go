@@ -26,10 +26,11 @@ type createKeyMetadata struct {
 
 type createKeySpec struct {
 	Principal             key.Principal `json:"principal"                       doc:"The service account or user the key acts as. Its owner becomes the key's owner."`
+	AccountID             string        `json:"accountId,omitempty"             format:"uuid" doc:"Id of the account the key's requests run in by default: the service account's account, the user's personal account, a member account a role binding grants the user, or a provider account the user owns personally. Any other answers 403 account_not_held. Omitted: the service account's account, or the user's personal account."`
 	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"             doc:"When the key stops authenticating. Omitted never expires."`
 	Enabled               *bool         `json:"enabled,omitempty"               doc:"False creates the key disabled. Omitted means true."`
 	PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"    doc:"Let the key send its own upstream credential in proxy mode."`
-	PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. A governing policy's flag overrides it."`
+	PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. An account on the request's ladder that sets payloadLogging decides instead."`
 }
 
 type createKeyInput struct {
@@ -89,6 +90,10 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
+		k.Spec.AccountID = in.Body.Spec.AccountID
+		if err := refs(d).KeyAccount(ctx, k); err != nil {
+			return nil, refErr(err)
+		}
 		k.Spec.ExpiresAt = in.Body.Spec.ExpiresAt
 		k.Spec.Enabled = in.Body.Spec.Enabled
 		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed
@@ -105,6 +110,10 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		created, err := d.Stores.Key.Get(ctx, k.Meta.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
+		}
+		// The plaintext is often spent at once; answer when this pod authenticates it.
+		if d.Plans != nil {
+			awaitServed(ctx, "key", k.Meta.ID, func(ctx context.Context) bool { return d.Plans.AwaitKey(ctx, k.Spec.KeyHash) })
 		}
 
 		out := &createKeyResponse{}

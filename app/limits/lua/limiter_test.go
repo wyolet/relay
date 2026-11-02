@@ -346,8 +346,8 @@ func TestLimiter_StoreCalls(t *testing.T) {
 
 func TestGroupCounters_Order(t *testing.T) {
 	r := rule(ratelimit.MeterRequests, ratelimit.StrategyTokenBucket, 1)
-	host := limits.UpstreamRule(limits.RungHost, testRateLimit, r, "p3", "host:h", "", "host:h")
-	cs := []limits.Counter{upstreamCounter(r, "a"), host, callerCounter(r, "project:x"), upstreamCounter(r, "a")}
+	other := limits.UpstreamRule(limits.RungAccount, testRateLimit, r, "p3", "account:b", "", "account:b")
+	cs := []limits.Counter{upstreamCounter(r, "a"), other, callerCounter(r, "project:x"), upstreamCounter(r, "a")}
 	groups, err := groupCounters(cs)
 	if err != nil {
 		t.Fatal(err)
@@ -356,8 +356,8 @@ func TestGroupCounters_Order(t *testing.T) {
 	for _, g := range groups {
 		got = append(got, g.name)
 	}
-	if len(got) != 3 || got[0] != "team:t1" || got[1] != "account:a" || got[2] != "host:h" || groups[0].upstream || !groups[1].upstream {
-		t.Fatalf("groups = %v, want team:t1 (caller), account:a, host:h", got)
+	if len(got) != 3 || got[0] != "team:t1" || got[1] != "account:a" || got[2] != "account:b" || groups[0].upstream || !groups[1].upstream {
+		t.Fatalf("groups = %v, want team:t1 (caller), account:a, account:b", got)
 	}
 	if len(groups[1].rules) != 1 {
 		t.Fatalf("account group holds %d rules, want the duplicate dropped", len(groups[1].rules))

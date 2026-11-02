@@ -96,20 +96,21 @@ func TestIntegration_PersonalPolicyBindings(t *testing.T) {
 	}
 	sharedPolicy := decodeID(t, raw)
 	bobsPolicy := mkPolicy(bob.do, "personal-bob-policy")
-	binding := func(name, owner, policyID, subject string) string {
-		return `{"metadata":{"name":"` + name + `","owner":` + owner + `},"spec":{"policyId":"` + policyID + `","subjects":[` + subject + `]}}`
+	binding := func(name, owner, policyID, accountID string) string {
+		return `{"metadata":{"name":"` + name + `","owner":` + owner + `},"spec":{"policyId":"` + policyID + `","accountIds":["` + accountID + `"]}}`
 	}
 	ownedBy := func(userID string) string { return `{"kind":"user","id":"` + userID + `"}` }
-	userSubject := func(userID string) string { return `{"kind":"user","id":"` + userID + `"}` }
+	personal := func(userID string) string { return st.accountAt(t, "personal:"+userID) }
+	aliceInProject := st.accountAt(t, "member:project:"+projectID+":"+aliceID)
 	project := `{"kind":"project","id":"` + projectID + `"}`
-	sa := `{"kind":"serviceaccount","id":"` + saID + `"}`
+	sa := st.accountAt(t, "service:"+saID)
 
 	if got, reason := f.chat(aliceKey, "test-model"); got != http.StatusOK {
 		t.Fatalf("alice's key before any binding = %d (%s)", got, reason)
 	}
 
-	t.Run("a user binds their own policy to themselves", func(t *testing.T) {
-		code, raw := alice.do(http.MethodPost, "/api/policy-bindings", binding("personal-alice-own", `{"kind":"user"}`, alicesPolicy, userSubject(aliceID)))
+	t.Run("a user binds their own policy to their personal account", func(t *testing.T) {
+		code, raw := alice.do(http.MethodPost, "/api/policy-bindings", binding("personal-alice-own", `{"kind":"user"}`, alicesPolicy, personal(aliceID)))
 		if code != http.StatusCreated {
 			t.Fatalf("POST = %d: %s", code, raw)
 		}
@@ -128,8 +129,8 @@ func TestIntegration_PersonalPolicyBindings(t *testing.T) {
 		}
 	})
 
-	t.Run("a project binds a user who binds themselves too", func(t *testing.T) {
-		code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", binding("personal-alice-in-project", project, sharedPolicy, userSubject(aliceID)))
+	t.Run("a project binds the user's member account beside her personal one", func(t *testing.T) {
+		code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", binding("personal-alice-in-project", project, sharedPolicy, aliceInProject))
 		if code != http.StatusCreated {
 			t.Fatalf("POST = %d: %s", code, raw)
 		}
@@ -159,11 +160,12 @@ func TestIntegration_PersonalPolicyBindings(t *testing.T) {
 		want int
 		says string
 	}{
-		{"a user binds their policy to another user", alice.do, binding("personal-alice-on-bob", ownedBy(aliceID), alicesPolicy, userSubject(bobID)), http.StatusBadRequest, "binds only that user"},
-		{"the operator binds one user's policy to another user's own binding", st.adminDo, binding("personal-bob-with-alices", ownedBy(bobID), alicesPolicy, userSubject(bobID)), http.StatusBadRequest, "cannot use it"},
-		{"a user cannot see another user's policy to bind it", bob.do, binding("personal-bob-borrows", `{"kind":"user"}`, alicesPolicy, userSubject(bobID)), http.StatusNotFound, "not found"},
+		{"a user cannot see another user's account to bind it", alice.do, binding("personal-alice-on-bob", ownedBy(aliceID), alicesPolicy, personal(bobID)), http.StatusNotFound, "not found"},
+		{"the operator binds a user's policy to another user's account", st.adminDo, binding("personal-alice-on-bob-admin", ownedBy(aliceID), alicesPolicy, personal(bobID)), http.StatusBadRequest, "outside the scope"},
+		{"the operator binds one user's policy to another user's own binding", st.adminDo, binding("personal-bob-with-alices", ownedBy(bobID), alicesPolicy, personal(bobID)), http.StatusBadRequest, "cannot use it"},
+		{"a user cannot see another user's policy to bind it", bob.do, binding("personal-bob-borrows", `{"kind":"user"}`, alicesPolicy, personal(bobID)), http.StatusNotFound, "not found"},
 		{"a project binds a policy of someone who may not manage its bindings", st.adminDo, binding("personal-bob-on-sa", project, bobsPolicy, sa), http.StatusBadRequest, "may not manage policy bindings"},
-		{"the system binds a user who binds themselves", st.adminDo, binding("personal-alice-everywhere", `{"kind":"system"}`, sharedPolicy, userSubject(aliceID)), http.StatusConflict, "duplicate_binding"},
+		{"the system binds an account its user already bound", st.adminDo, binding("personal-alice-everywhere", `{"kind":"system"}`, sharedPolicy, personal(aliceID)), http.StatusConflict, "duplicate_binding"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if code, raw := tc.as(http.MethodPost, "/api/policy-bindings", tc.body); code != tc.want || !strings.Contains(string(raw), tc.says) {

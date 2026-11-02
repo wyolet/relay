@@ -1,52 +1,59 @@
 ---
 title: "Upgrading to 0.20"
-description: "Moving a 0.11 deployment to the policy ladder: what the migrations drop, the checks to run first, and the steps in order"
+description: "Moving a 0.11 deployment to accounts and the policy ladder: what the migrations drop and convert, the checks to run first, and the steps in order"
 ---
 
-0.20 replaces how policies reach host keys and limits. A policy now links pools, host keys, rate limits and budgets, policy bindings attach it to any rung of the [policy ladder](/concepts/policies#the-ladder), and relay keys, service accounts and host keys no longer hold a policy. The upgrade is a manual migration: you rewrite your policies and bindings in the new shape, and nothing is converted for you.
+0.20 replaces how policies reach host keys and limits, and what they apply to. A policy now links pools, rate limits and budgets; policy bindings attach it to [accounts](/concepts/accounts), the things requests run in and are charged to; and relay keys, service accounts and host keys no longer hold a policy. The 0.11 policy links are dropped and you rewrite them in the new shape. Policy bindings are converted to accounts for you, and the upgrade stops, listing the rows, where a conversion would widen access.
 
 <Warning>
 **The migration drops the old policy links.** Migration 36 deletes every policy's host keys, model ids and rate limit, every relay key's and service account's policy, and every host key's tier policy. They are not converted and not restored by a down-migration. Export your configuration and back up Postgres before you upgrade.
 </Warning>
 
-This is a [stop-and-start upgrade](/concepts/upgrade#stop-and-start-upgrades): a 0.11 pod cannot serve against the new schema. Schema version goes from 34 to 36.
+This is a [stop-and-start upgrade](/concepts/upgrade#stop-and-start-upgrades): a 0.11 pod cannot serve against the new schema. Schema version goes from 34 to 39.
 
 ## What changes
 
 | 0.11 | 0.20 |
 | --- | --- |
-| Policy `hostKeyIds` (`hostKeys` in manifests) | `poolIds` / `credentialIds` (`pools` / `credentials`). See [Pools](/concepts/key-pooling#pools). |
+| Policy `hostKeyIds` (`hostKeys` in manifests) | `poolIds` (`pools`). A single host key is a pool of one. See [Pools](/concepts/key-pooling#pools). |
 | Policy `keySelection` | A pool's `selection`. |
 | Policy `rateLimitId` (`rateLimit`) | `rateLimits: [{rateLimitId}]` (`[{ref}]`). |
-| Policy `rlBindings` | `rateLimits` entries with `models`, in a policy bound to a host, an account or a host key. A policy bound to a team, project, user or service account cannot scope a rate limit to models: its limits cover every model. |
-| Policy `modelIds` | `models` (model references). |
-| Relay key `policyId`, service account `policyId` | A policy binding on the key's principal. |
-| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [account](/concepts/key-pooling#accounts). A key without an account joins its owner's [default account](/concepts/key-pooling#default-accounts). |
-| Policy binding `priority`, several bindings per subject | One binding per subject. `priority` is gone: the control API refuses it with `422` and manifests ignore it. |
-| Group subjects in policy bindings, `system:authenticated` as a project default | Group subjects are refused with `422` on save, and stored ones bind nothing. Bind the users, the team or the project instead. |
-| Host `policies` and `defaultPolicy` | Gone. A host's tier presets are the policies it owns (`GET /api/hosts/{host}/policies`), and one applies once it is bound to an account. The control API refuses the fields with `422`, manifests ignore them, and the hosts list filters `policy_id`, `default_policy` and `has_default_policy` answer `400`. |
-| Team and project `spec.budget`, which nothing enforced | A [budget](/concepts/budgets) linked by the policy bound to the team or project. A manifest that still carries `budget` is refused with a pointer to `Budget`. |
+| Policy `rlBindings` | `rateLimits` entries with `models`. |
+| Policy `modelIds` | `models` (model references: `provider` or `provider/model`). |
+| A host in a policy's `models` (`provider@host`, `@host`) | Refused with `400`. The pools a policy links decide the hosts. |
+| Policy `includeDeprecated` | Gone. `provider` references grant deprecated and sunset models like any other. |
+| Policy `payloadLoggingEnabled` | `payloadLogging: on \| off` on the [accounts](/concepts/accounts#payload-logging) the policy is bound to. |
+| Relay key `policyId`, service account `policyId` | A policy binding on the key's account: the service account's account, or the user's personal account. Every key now has `accountId`. |
+| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [provider account](/concepts/key-pooling#accounts). A key without an account joins its owner's [default account](/concepts/key-pooling#default-accounts). |
+| Policy binding `projectId` (`project`) and `subjects` | `metadata.owner` and `accountIds` (`accounts`, names). Only accounts are bound. |
+| Policy binding `priority`, several bindings per subject | One binding per account. `priority` is gone: the control API refuses it with `422` and manifests ignore it. |
+| Group subjects in policy bindings, `system:authenticated` as a project default | Gone. Bind the accounts of the team, the project or the members instead. |
+| Host `policies` and `defaultPolicy` | Gone. A host's tier presets are the policies it owns (`GET /api/hosts/{host}/policies`), and one applies once it is bound to a provider account. The control API refuses the fields with `422`, manifests ignore them, and the hosts list filters `policy_id`, `default_policy` and `has_default_policy` answer `400`. |
+| Team and project `spec.budget`, which nothing enforced | A [budget](/concepts/budgets) linked by the policy bound to the team's or project's account. A manifest that still carries `budget` is refused with a pointer to `Budget`. |
 | `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE`, `RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS`, `RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE`, the chart's `relay.redisPostFlightBatchSize`, `relay.redisPostFlightBatchDelayMs`, `relay.redisPostFlightQueueSize`, and the metrics `relay_settle_queue_full_total`, `relay_settle_retries_total` | Gone: each request settles its counters on store calls of its own. Leftover values are ignored. |
-| `allowMissingPolicy` in the `inference` settings section | Gone. A principal with no caller policy reaches the host keys its own scopes own, and system-owned ones. |
+| `allowMissingPolicy` in the `inference` settings section | Gone. An account with no policy on its ladder reaches the host keys its scopes own, and system-owned ones. |
 | `relay.wyolet.dev/v1alpha2` for `Policy`, `HostKey`, `Key`, `PolicyBinding` | `relay.wyolet.dev/v1alpha3`. The old shape is refused with a pointer to the new one; other kinds still accept v1alpha2. |
-| `POST`/`DELETE /api/policies/by-id/{id}/keys/{keyId}` | Removed. Bind a policy to the key's principal. |
+| `POST`/`DELETE /api/policies/by-id/{id}/keys/{keyId}` | Removed. Bind a policy to the key's account. |
 | `/api/schemas/v1alpha2/...` | `/api/schemas/v1alpha3/...`. |
 
-New kinds: `Account`, `Pool` and `Budget`, with their CRUD routes (`/api/accounts`, `/api/pools`, `/api/budgets`) and RBAC kinds (`accounts`, `pools`, `budgets`, granted by the built-in roles). Teams may now own host keys and rate limits as well.
+New kinds: `Account`, `Pool` and `Budget`, with their CRUD routes (`/api/accounts`, `/api/pools`, `/api/budgets`) and RBAC kinds (`accounts`, `pools`, `budgets`, granted by the built-in roles). Relay makes a team, project, personal, member and service account for each matching row, and you create provider accounts; see [Accounts and lanes](/concepts/accounts). Teams may now own host keys and rate limits as well. New reads: `GET /api/me/accounts`, `GET /api/accounts/{ref}/limits`, `GET /api/keys/{ref}/limits` and `GET /api/plan-issues`; see [Control API](/reference/control-api#accounts-and-limits). A request can run in another of its credential's accounts with `X-WR-Account`, a `/a/<account>/` base URL, or `RELAY_ACCOUNT_DOMAIN`.
 
 Behaviour that changes at request time:
 
-- **Reach without a policy widens.** In 0.11 a project-scoped credential that resolved no policy was refused with `no_policy`. In 0.20 it reaches the host keys owned by its project, its team and the system. Host keys created with the admin token are system-owned, so every principal without a caller policy that links pools can use them. To keep a team or project on specific keys, bind it a policy that links the pools it should use; see [Reach without a caller policy](/concepts/policies#reach-without-a-caller-policy).
-- **Project bindings on users govern only that project's tokens.** A binding owned by a project, naming a user, applies to the inference tokens that user mints for the project. The user's own relay keys see only a system-owned binding or the user's own, and no longer take a project's attribution or limits from a project-owned policy.
+- **Reach without a policy widens.** In 0.11 a project-scoped credential that resolved no policy was refused with `no_policy`. In 0.20 a request whose ladder links no pools reaches the host keys owned by its project, its team and the system, or for a personal account the user's own and the system's. Host keys created with the admin token are system-owned, so every such request can use them. To keep a team or project on specific keys, bind its account a policy that links the pools it should use; see [Reach without a linking rung](/concepts/policies#reach-without-a-linking-rung).
+- **Bindings on users apply to their member accounts.** A 0.11 binding owned by a project and naming a user becomes a binding of that user's member account in the project. It governs requests in that account: the user's inference tokens for the project, and relay keys created in the account. The user's existing keys run in the personal account and are not governed by it.
+- **Inference tokens run in a member account.** A token runs in its user's member account in the token's project. A user who holds a role in that project directly, or whom a 0.11 project binding names, has one after the upgrade. A user whose access to the project comes only through a group or a team-level role has none until the next mint creates it: tokens minted before the upgrade answer `403 account_not_held`, and the user mints new ones.
+- **Rate-limit and budget counters start over.** They are now kept per account, so the counts and spend of the current windows and periods begin at zero at the upgrade.
 - **Every host key has an account.** Migration 36 puts each host key without one into its owner's default account at its host, and a key saved later without one joins it too. A `429` from the provider on a key in a default account still goes to that key's breaker and the request fails over to the next key, as in 0.11. Only accounts you create cool on a `429`: put keys that share one provider organization into such an account to have a `429` on one skip the others for the requested model. See [Accounts](/concepts/key-pooling#accounts).
-- **Usage `policy_id`** records the innermost caller policy: the principal's, else the project's, else the team's.
+- **Deprecated models are granted like any other.** A `provider` reference covers them, and a request whose ladder lists no models may call them.
+- **Usage events** carry `lane_account_id`, the account the request ran in, and `refusal` on the requests Relay refused itself, which are now recorded with the status and message the caller received. `policy_id` records the innermost caller policy: the lane's, else the project's, else the team's. See [Usage](/concepts/usage).
 - **Proxy mode** refuses a model that is not in the catalog, also for a key that had no policy, instead of forwarding it unpriced.
 - **Batch items** run under the ladder as it is when each item runs, not as it was at submission.
-- **Error codes.** `no_policy`, `policy_not_found` and `policyless_disabled` are gone; `subject_disabled`, `duplicate_binding`, `unpriced_under_budget` and `budget_exceeded` are new. `model_not_allowed` names the rung and the policy that refused. A disabled, revoked, expired or rotated-out relay key answers `401 invalid api key`. See [Policy refusals](/reference/inference-api#policy-refusals).
+- **Error codes.** `no_policy`, `policy_not_found`, `policyless_disabled` and `project_unavailable` are gone; `subject_disabled`, `duplicate_binding`, `unpriced_under_budget`, `budget_exceeded`, `account_closed` and `account_not_held` are new. A request whose every host key is out of rotation answers `503 no_healthy_keys`, where 0.11 answered `502 upstream_error`. Relay's own refusals carry `error.refusal` (`model_not_allowed`, `host_not_reachable` or `no_capacity`). `model_not_allowed` names the rung and the policy that refused. A disabled, revoked, expired or rotated-out relay key answers `401 invalid api key`. See [Errors](/reference/inference-api#errors).
 
 ## What the migrations do
 
-**Migration 35** adds the `accounts`, `pools`, `pool_credentials` and `budgets` tables and the junctions linking a policy to pools, host keys, rate limits and budgets. Policy bindings gain team and system owners and the host, account, credential, team and project subject kinds. Every existing binding stays owned by its project.
+**Migration 35** adds the `accounts`, `pools`, `pool_credentials` and `budgets` tables and the junctions linking a policy to pools, host keys, rate limits and budgets. Policy bindings gain team and system owners and more subject kinds. Every existing binding stays owned by its project.
 
 It then enforces one binding per subject: a subject other than a user may appear in one binding, and a user in one binding per owning project. If the database holds a subject bound twice, the migration stops and nothing of it is applied:
 
@@ -54,10 +61,10 @@ It then enforces one binding per subject: a subject other than a user may appear
 migration 000035: a subject may be bound by one policy binding (a user by one per owner scope); remove the subject from all but one binding, then upgrade again: serviceaccount <id> in <binding>, <binding>
 ```
 
-**Migration 36** drops the `policy_models` and `policy_host_keys` tables, the `policies.rate_limit_id` column and the `policy_bindings.priority` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, `policyId` from every relay key, service account and host key, `policies` and `defaultPolicy` from every host, and `budget` from every team and project. Policies keep their name, owner, `models`, `includeDeprecated`, `payloadLoggingEnabled` and `enabled`. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
+**Migration 36** drops the `policy_models` and `policy_host_keys` tables, the `policies.rate_limit_id` column and the `policy_bindings.priority` column, and removes `modelIds`, `hostKeyIds`, `rateLimitId`, `rlBindings` and `keySelection` from every policy, `policyId` from every relay key, service account and host key, `policies` and `defaultPolicy` from every host, and `budget` from every team and project. Policies keep their name, owner, `models`, `payloadLoggingEnabled` and `enabled` for migration 39. Policy bindings, rate limits, host keys, relay keys, teams, projects and service accounts are kept.
 
 <Note>
-Migration 36 refuses to run if any still-bound policy would lose its only access restriction. A policy with rows in `policy_models` and an empty `models` field, or rows in `policy_host_keys` and no pools or credentials, becomes unrestricted once those rows are gone. If any such policy is bound to a non-group subject—disabled bindings count—the migration stops and lists each policy and its bindings. Adding `models` or pools before upgrading is not possible; the pools table exists only in 0.20. Unbind those policies (or delete their bindings) on the 0.11 database first, upgrade, then add `models`, pools or credentials following [Re-creating the dropped links](#re-creating-the-dropped-links). See step 5 of [Before you upgrade](#before-you-upgrade) for the check query.
+Migration 36 refuses to run if any still-bound policy would lose its only access restriction. A policy with rows in `policy_models` and an empty `models` field, or rows in `policy_host_keys` and no pools or credentials, becomes unrestricted once those rows are gone. If any such policy is bound to a non-group subject—disabled bindings count—the migration stops and lists each policy and its bindings. Adding `models` or pools before upgrading is not possible; the pools table exists only in 0.20. Unbind those policies (or delete their bindings) on the 0.11 database first, upgrade, then add `models` or pools following [Re-creating the dropped links](#re-creating-the-dropped-links). See step 5 of [Before you upgrade](#before-you-upgrade) for the check query.
 </Note>
 
 Before it drops them, it logs each link it removes by the names of both ends, on boot and in `relay migrate up`: one log entry per link, with the message `migrate: postgres notice` and the line below in its `notice` field. A target whose row no longer exists is named by its id:
@@ -78,9 +85,57 @@ It then gives every host key without an account its owner's default account at t
 
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
 
-**Migration 37** adds `policy_bindings.user_id`, the owner of a user's own binding; deleting the user deletes it.
+**Migration 37** adds the owner of a user's own policy binding; deleting the user deletes it. **Migration 38** moves every binding subject that names a host key to the key's account. A 0.11 database has no bindings either one changes.
 
-**Migration 38** moves every binding subject that names a host key to the key's account, since a limit set on a key counts on its account (see [Bindings on host keys](/concepts/policies#bindings-on-host-keys)). A 0.11 database has none. If an account would end up in two bindings, the migration stops and names the account and the bindings; remove all but one and upgrade again.
+**Migration 39** makes accounts what policies bind to:
+
+- **Accounts.** It creates a team account per team, a project account per project, a personal account per user and an account per service account, and a member account for each user an enabled role binding names directly at a team or project. They are named as in [Accounts Relay makes](/concepts/accounts#accounts-relay-makes).
+- **Relay keys.** Every key gets `accountId`: a service account's key its service account's account, a user's key the user's personal account.
+- **Binding subjects become accounts.** A service account becomes its account. A user named by a binding owned by a project becomes the user's member account in that project, created when no role binding made one; such an account serves inference tokens only. A binding owned by a team, the system or the user fans a user out to every account of theirs it covered: the user's member accounts in the team and its projects, the personal account and every member account, or the personal account alone. A team or project subject becomes its account, and a host key's subject its provider account. Group subjects, and host key subjects whose key has no account, bind nothing and are dropped, each logged:
+
+  ```
+  000039: dropping policy-binding subject: binding "project-default" -> group "system:authenticated" (only accounts are bound)
+  ```
+
+  Bindings lose `projectId` and `subjects` and keep their owner.
+- **Policy models.** `@host` is stripped from every reference in `models` and in rate-limit links' `models`, duplicates are removed, and each policy whose `models` change is logged: `000039: policy "ci": models ["openai/gpt-4o-mini@openai", "openai/gpt-4o-mini"] become ["openai/gpt-4o-mini"]`. A policy no binding uses that named only hosts is left with `models: []`, which allows every model its pools serve: set its models before you bind it.
+- **Links.** Each budget link becomes a `budgets` entry, and every rate-limit and budget link is `shared: true`. A host key a policy linked directly becomes a pool of that one key, named after the key and owned like it, linked after the policy's pools; each is logged as `000039: host key "<key>" linked directly by a policy is now pool "<pool>"`.
+- **Payload logging.** Each account an enabled binding ties to a policy gets `payloadLogging: on` where the policy had `payloadLoggingEnabled: true`, and `off` where it did not, so the policy's decision over the keys' own flags stands. `includeDeprecated`, `payloadLoggingEnabled`, `credentialIds` and `budgetIds` are removed from every policy.
+
+Migration 39 stops, applies nothing and lists what to fix in three cases:
+
+- **A bound policy names only hosts in `models`** (such as `["@ollama-self"]`). Stripping the hosts would leave it allowing every model.
+
+  ```
+  migration 000039: these bound policies name only hosts in models, which would widen them to every model; name the providers or models they allow, then upgrade again: <policy>, <policy>
+  ```
+
+  Fix: replace the references with the providers or models the policy allows (`ollama`, `ollama/llama-4`), or unbind the policy.
+
+- **A bound policy pins a host for a provider served at other hosts** (such as `anthropic/claude-haiku-4-5@anthropic` while the provider's models are also bound at another host the policy can reach), and does not grant the same reference without the host. Dropping the pin would let it reach that provider elsewhere.
+
+  ```
+  migration 000039: policy models no longer pin a host, and these pinned refs would reach their provider at other hosts the policies reach; link pools at the pinned host only, or drop the refs, then upgrade again: policy <policy>: <ref>, <ref>
+  ```
+
+  Fix: remove the `@host` from the reference yourself, or the reference, and after the upgrade link the policy only to pools at that host; or unbind the policy before the upgrade and bind it again once its pools are set.
+
+- **Two bindings reach one account.** For example, a binding owned by the system and the user's own binding on one user both become the user's personal account, and a team's binding on a user and a binding of one of its projects on the same user both reach the user's member account in that project. A 0.11 database cannot reach this case, since its bindings are owned by projects and name a user once per project.
+
+  ```
+  migration 000039: policy-binding subjects become accounts, and an account is bound by one policy binding; remove the subject from all but one of the bindings listed for each account, then upgrade again: account <account> in <binding>, <binding>
+  ```
+
+  Fix: remove the subject from all but one of the bindings listed.
+
+Bound policies count with disabled bindings. Step 6 of [Before you upgrade](#before-you-upgrade) finds the first two cases on the 0.11 database.
+
+Migration 39 ends with two log lines:
+
+```
+000039: caller rate-limit and budget counters are now kept per account, so their counts start over at this upgrade
+000039: a token runs in its user's member account in the token's project; a user granted the project only through a group or a team role has none until they mint a new token, so tokens minted before the upgrade are refused with account_not_held until then
+```
 
 ## Before you upgrade
 
@@ -111,7 +166,7 @@ The catalog's tier policies lose their rate limits with this migration. They get
    JOIN policies p ON p.id = b.policy_id
    WHERE s.kind = 'group'
    UNION ALL
-   SELECT 'binding -> user (project tokens only)', b.name, COALESCE(u.username, s.subject_id), pr.name
+   SELECT 'binding -> user (member account in the project)', b.name, COALESCE(u.username, s.subject_id), pr.name
    FROM policy_binding_subjects s
    JOIN policy_bindings b ON b.id = s.binding_id
    JOIN policies p ON p.id = b.policy_id
@@ -141,7 +196,7 @@ The catalog's tier policies lose their rate limits with this migration. They get
    psql "$RELAY_PG_DSN" --csv -f dropped-links.sql > dropped-links.csv
    ```
 
-   Host keys are the rows of the `secrets` table. For `binding -> group` and `binding -> user` rows the `models` column holds the policy name and project name; these bindings are not dropped but change: group subjects bind nothing after the upgrade, user subjects govern only that project's tokens. The migration logs the same dropped links as it drops them.
+   Host keys are the rows of the `secrets` table. For `binding -> group` and `binding -> user` rows the `models` column holds the policy name and project name; these bindings are not dropped but change: group subjects bind nothing after the upgrade, and a user subject becomes the user's member account in that project. The migration logs the same dropped links as it drops them.
 
 3. **Back up Postgres.** Rolling back needs it; see [Rolling back](#rolling-back).
 
@@ -179,27 +234,62 @@ The catalog's tier policies lose their rate limits with this migration. They get
    WHERE l.lost <> '' AND l.bindings IS NOT NULL;
    ```
 
-   For each row, the migration stops and reports: `migration 000036: bound policies would lose their only model or host-key restriction and widen; …: policy <name> loses its <what> (bound by <bindings>)`. Adding `models` or pools before upgrading is not possible—the pools table exists only in 0.20. On the 0.11 database, delete those bindings or remove those policies from them, then upgrade. After upgrading, add `models`, pools or credentials following [Re-creating the dropped links](#re-creating-the-dropped-links).
+   For each row, the migration stops and reports: `migration 000036: bound policies would lose their only model or host-key restriction and widen; …: policy <name> loses its <what> (bound by <bindings>)`. Adding `models` or pools before upgrading is not possible—the pools table exists only in 0.20. On the 0.11 database, delete those bindings or remove those policies from them, then upgrade. After upgrading, add `models` or pools following [Re-creating the dropped links](#re-creating-the-dropped-links).
 
-6. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the exports; [Re-creating the dropped links](#re-creating-the-dropped-links) maps each dropped link to its replacement:
+6. **Check for policies that migration 39 would refuse**: bound policies whose `models` name only hosts, and pinned references whose provider is served at another host. Run this against the 0.11 database:
+
+   ```sql
+   WITH bound AS (
+       SELECT DISTINCT b.policy_id
+       FROM policy_bindings b JOIN policy_binding_subjects s ON s.binding_id = b.id
+       WHERE s.kind IN ('user', 'serviceaccount') AND s.subject_id IS NOT NULL
+   ),
+   refs AS (
+       SELECT p.id, p.name, p.models, e.value AS ref
+       FROM policies p JOIN bound ON bound.policy_id = p.id
+       CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.models) = 'array' THEN p.models ELSE '[]' END) AS e(value)
+   )
+   SELECT name AS policy, 'names only hosts' AS problem, models::text AS refs
+   FROM refs GROUP BY id, name, models
+   HAVING bool_and(split_part(ref, '@', 1) = '')
+   UNION ALL
+   SELECT r.name, 'pins a host its provider is not limited to', string_agg(r.ref, ', ')
+   FROM refs r
+   WHERE r.ref LIKE '%_@%' AND NOT r.models ? split_part(r.ref, '@', 1)
+     AND EXISTS (
+         SELECT 1 FROM host_bindings hb
+         JOIN models m ON m.id = hb.model_id
+         JOIN providers pr ON pr.id = m.metadata->'owner'->>'id'
+         WHERE pr.name = split_part(split_part(r.ref, '@', 1), '/', 1)
+           AND hb.host_id IS DISTINCT FROM (SELECT id FROM hosts WHERE name = split_part(r.ref, '@', 2)))
+   GROUP BY r.id, r.name
+   ORDER BY 1, 2;
+   ```
+
+   Fix each row on 0.11 with `PUT /api/policies/by-id/{id}`, as described for each case under [Migration 39](#what-the-migrations-do), or unbind the policy. Callers stay off the inference port until your new pools are linked (step 1 of [Upgrade steps](#upgrade-steps)), so dropping a pin before the upgrade does not widen live traffic.
+
+7. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the exports; [Re-creating the dropped links](#re-creating-the-dropped-links) maps each dropped link to its replacement:
 
    - An `Account` for each provider organization, and `account` on each of its host keys. A key you leave without one stays in the default account migration 36 gave it.
-   - A `PolicyBinding` of a tier preset (or your own tier policy) on each account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
+   - A `PolicyBinding` of a tier preset (or your own tier policy) on each provider account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
    - A `Pool` for each set of host keys a policy listed, with the old `keySelection` as its `selection`.
-   - Each policy with `pools` (or `credentials`), `rateLimits` and, where you want spend caps, `budgets`. Only a policy bound to a host, an account or a host key may scope a rate limit to `models`.
+   - Each policy with `pools`, `rateLimits` and, where you want spend caps, `budgets` (`[{ref}]` entries). `models` names providers and models, never hosts.
    - A `Budget` linked by the team's or project's policy in place of a team or project `budget`.
-   - Policy bindings on the subjects the keys and service accounts pointed at, and on the users, team or project in place of group and `system:authenticated` subjects. Remove group subjects from the bindings you keep: a binding that still has one is refused when it is saved again.
+   - Policy bindings on the accounts the keys and service accounts pointed at, and on the team's or project's account in place of group and `system:authenticated` subjects. Bindings name `accounts`, with the owner in `metadata.owner`.
+   - `payloadLogging` on the accounts whose traffic you capture, in place of a policy's `payloadLoggingEnabled`.
    - No `priority` on bindings, and no `policies` or `defaultPolicy` on hosts.
 
    [Policy examples](/policy-examples) shows each of these.
 
-7. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
+8. **Pick the catalog release.** Set `RELAY_CATALOG_VERSION` to the relay-catalog release with the v1alpha3 schema that is published for 0.20. A release in the older schema is refused by 0.20.
 
 ## Upgrade steps
 
-1. Keep callers off the inference port until step 5. Between the migration and your new bindings, principals reach what their scopes own, which may be more than before.
+1. Keep callers off the inference port until step 5. Between the migration and your new bindings, accounts reach what their scopes own, which may be more than before.
 2. Stop every 0.11 pod: scale the deployment to 0, as in [Stop-and-start upgrades](/concepts/upgrade#stop-and-start-upgrades).
-3. Deploy 0.20 with the new `RELAY_CATALOG_VERSION`. Migrations 35 and 36 run, and the catalog release is seeded. Keep the log of the pod that ran the migrations, or of `relay migrate up` if you migrate in a step of its own: it holds the `000036: dropping link` lines. If migration 35 stops on a subject bound twice, it applies nothing but leaves version 35 marked dirty: run `relay migrate force 34` (see [Recovering from a dirty schema version](/concepts/upgrade#recovering-from-a-dirty-schema-version)), start the 0.11 image again, fix the bindings, and repeat.
+3. Deploy 0.20 with the new `RELAY_CATALOG_VERSION`. Migrations 35 to 39 run, and the catalog release is seeded. Keep the log of the pod that ran the migrations, or of `relay migrate up` if you migrate in a step of its own: it holds the `000036: dropping link` and `000039:` lines. A migration that stops applies nothing of itself but leaves its version marked dirty (see [Recovering from a dirty schema version](/concepts/upgrade#recovering-from-a-dirty-schema-version)):
+   - Migration 35 stopped: run `relay migrate force 34`, start the 0.11 image again, fix the bindings, and repeat.
+   - Migration 39 stopped: migrations 35 to 38 are applied, and no image serves that schema. Either run `relay migrate force 38`, fix the listed rows in Postgres (for example `UPDATE policies SET models = '["ollama"]' WHERE name = '<policy>';`), and deploy 0.20 again; or restore the backup, fix the rows on 0.11, and repeat the upgrade.
 4. Apply the manifests with the 0.20 CLI, dry run first:
 
    ```bash
@@ -211,12 +301,13 @@ The catalog's tier policies lose their rate limits with this migration. They get
 
    ```bash
    curl http://localhost:8080/v1/models -H "Authorization: Bearer <relay key>"
-   curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" http://localhost:8081/api/policies/<policy>/models
+   curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" http://localhost:8081/api/keys/<key>/limits
+   curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" http://localhost:8081/api/plan-issues
    ```
 
-   Watch `relay_inference_auth_rejected_total` and the `403` and `503` codes in the [usage events](/concepts/usage#failed-requests) for refusals you did not expect.
+   Watch `relay_inference_auth_rejected_total` and the `refusal` values in the [usage events](/concepts/usage#failed-requests) for refusals you did not expect.
 
-6. Re-run token revocations, see [The state store](#the-state-store).
+6. Re-run token revocations, see [The state store](#the-state-store). Tell users whose project access comes through a group or a team-level role to mint new inference tokens.
 
 ## Re-creating the dropped links
 
@@ -224,18 +315,18 @@ Each row of the export, and each `000036: dropping link` line, has a replacement
 
 | Dropped link | In 0.20 |
 | --- | --- |
-| key → policy | A policy binding of the policy on the key's principal. |
-| host key → tier policy | A policy binding of the tier on the key's account. |
-| policy → host key | `credentials`, or a pool in `pools`, on the policy. |
+| key → policy | A policy binding of the policy on the key's account: `sa-<service account>` or `user-<username>`. |
+| host key → tier policy | A policy binding of the tier on the key's provider account. |
+| policy → host key | A pool at the key's host holding the key, in the policy's `pools`. |
 | policy → model | `models` on the policy, as model references (`provider/model`). |
 | policy → rate limit | `rateLimits: [{ref}]` on the policy. |
-| policy → rate limit for models | `rateLimits: [{ref, models}]` on the policy, which may then be bound only to a host, an account or a host key. |
+| policy → rate limit for models | `rateLimits: [{ref, models}]` on the policy. |
 
 The catalog's tier policies, owned by their host, get their rate limits back when the v1alpha3 catalog release is seeded, so their `policy → rate limit` rows need nothing from you, unless you edited those policies.
 
 ### A host key's tier
 
-Migration 36 put each host key in its owner's default account at its host, named after the host. List the accounts with `GET /api/accounts` and an account's keys with `GET /api/accounts/{ref}/keys`. Bind the tier to the account with a binding owned by the system:
+Migration 36 put each host key in its owner's default account at its host, named after the host. List the accounts with `GET /api/accounts?kind=provider` and an account's keys with `GET /api/accounts/{ref}/keys`. Bind the tier to the account with a binding owned by the system:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -245,8 +336,7 @@ metadata:
   owner: {kind: system}
 spec:
   policy: anthropic-start
-  subjects:
-    - {kind: account, name: anthropic}
+  accounts: [anthropic]
 ```
 
 An account has one policy. Host keys of one owner at one host share a default account, so if they had different tiers, they belong to different provider organizations: create an account for each, name it on its keys, and bind each tier to its own account:
@@ -277,19 +367,27 @@ metadata:
   owner: {kind: system}
 spec:
   policy: openai-build
-  subjects:
-    - {kind: account, name: openai-build-org}
+  accounts: [openai-build-org]
 ```
 
 Accounts you create cool on a provider `429`, unlike default accounts; see [Accounts](/concepts/key-pooling#accounts).
 
 ### A relay key's policy
 
-A policy now reaches a relay key through the key's principal, the service account or user the key belongs to. Every key of a principal has the principal's policy, and a subject has one binding, so keys of one principal that pointed at different policies need either one policy for all of them or a principal each, such as a service account per use.
+A policy now reaches a relay key through the account the key runs in: its service account's account, or its user's personal account. Every key in one account has that account's policy, and an account has one binding, so keys of one principal that pointed at different policies need either one policy for all of them or an account each, such as a service account per use.
 
-For a service account's key, bind the policy with a binding owned by the service account's project. The policy may be owned by that project, its team or the system. Keys created without a user before service accounts existed belong to generated service accounts in the `legacy` project, named `legacy-<key name>-` and the last 8 characters of the key's id:
+For a service account's key, bind the policy to the service account's account with a binding owned by the service account's project. The policy may be owned by that project, its team or the system. Keys created without a user before service accounts existed belong to generated service accounts in the `legacy` project, named `legacy-<key name>-` and the last 8 characters of the key's id; their accounts are `sa-` followed by that name:
 
 ```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Pool
+metadata:
+  name: anthropic-main
+  owner: {kind: system}
+spec:
+  host: anthropic
+  credentials: [anthropic-main]
+---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
@@ -297,20 +395,19 @@ metadata:
   owner: {kind: project, name: legacy}
 spec:
   models: [anthropic/claude-haiku-4-5]
-  credentials: [anthropic-main]
+  pools: [anthropic-main]
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: ci-runner
+  owner: {kind: project, name: legacy}
 spec:
-  project: legacy
   policy: ci
-  subjects:
-    - {kind: serviceaccount, name: legacy-ci-runner-0d9f1a2b}
+  accounts: [sa-legacy-ci-runner-0d9f1a2b]
 ```
 
-For a user's own key, bind a system-owned policy with a binding owned by the system:
+For a user's own key, bind a system-owned policy to the user's personal account with a binding owned by the system:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -328,7 +425,7 @@ metadata:
   name: alice
   owner: {kind: system}
 spec:
-  models: [anthropic/*]
+  models: [anthropic]
   rateLimits:
     - ref: alice-rpm
 ---
@@ -339,11 +436,10 @@ metadata:
   owner: {kind: system}
 spec:
   policy: alice
-  subjects:
-    - {kind: user, name: alice}
+  accounts: [user-alice]
 ```
 
-A policy a user owns, such as one made for their own automation key, stays theirs: the user binds it to themselves with a binding they own, and it governs their relay keys; their inference tokens follow the binding of the project or team they act in. It cannot sit beside a system-owned binding of the same user, so use one or the other:
+A policy a user owns, such as one made for their own automation key, stays theirs: the user binds it to their personal account with a binding they own. It cannot sit beside a system-owned binding of the same account, so use one or the other:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -353,14 +449,10 @@ metadata:
   owner: {kind: user, name: alice}
 spec:
   policy: alice-bot
-  subjects:
-    - {kind: user, name: alice}
+  accounts: [user-alice]
 ```
 
-Two limits of this version apply here:
-
-- A binding owned by a project may name the user, but it governs only the inference tokens the user mints for that project, not the user's relay keys. It may use the user's own policy only while that user may create policy bindings in the project.
-- A policy bound to a user, a service account, a team or a project cannot scope a rate limit to models: its rate limits count every model together, and saving one with `models` is refused. Per-model limits belong in a policy bound to a host, an account or a host key.
+A policy for a user's work inside a project binds their member account there, `alice-project-dev` for the user `alice` in the project `dev`, with a binding owned by the project. It governs the user's inference tokens for that project and any relay keys created in that account.
 
 ## The state store
 
@@ -384,6 +476,8 @@ $new SET '{revoked}:tokens' "$($old --raw GET '{revoked}:tokens')" EX "$($old TT
 
 ## Rolling back
 
-`relay migrate down 34` recreates the dropped tables and column empty and deletes what 0.20 added: accounts, pools, budgets, their links, team-, user- and system-owned bindings, and binding subjects of the new kinds. It does not bring back the policy links migration 36 removed, so a 0.11 pod on that schema runs with no policy links at all.
+`relay migrate down 34` first reverses migration 39: bindings get subjects back (the account of a team, project or service account becomes that team, project or service account; a personal or member account becomes its user; a provider account stays an account), policies get `payloadLoggingEnabled: true` back where every account bound to them had `payloadLogging: on`, and caller accounts, keys' `accountId` and the `shared` flags are dropped, so links counted per lane come back shared. Pools made from directly linked host keys stay pools, and stripped `@host` suffixes stay stripped. The older schema holds a user once per owner scope, and several accounts of one user (a personal and a member account, or member accounts one binding reached) map back to that user: the oldest binding keeps the user and the others drop it, each logged as `000039 down: binding "<binding>" no longer binds user <id> in the older schema; binding "<keeper>" keeps the user`.
+
+It then recreates the tables and column migration 36 dropped, empty, and deletes what 0.20 added: accounts, pools, budgets, their links, team-, user- and system-owned bindings, and binding subjects of the new kinds. It does not bring back the policy links migration 36 removed, so a 0.11 pod on that schema runs with no policy links at all.
 
 To return to 0.11, stop every pod, restore the Postgres backup taken before the upgrade, and deploy the 0.11 image. See [Rolling back](/concepts/upgrade#rolling-back) for the general procedure.

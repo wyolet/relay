@@ -22,13 +22,15 @@ Tenancy has three levels:
 - A **project** belongs to one team. Policies, policy bindings, rate limits, budgets, host keys, accounts, pools, service accounts and service-account keys can be owned by a project. A team can own policies, policy bindings, rate limits, budgets, host keys, accounts and pools.
 - A **principal** is who a request acts as: a **user** (a person, from local config, [SSO](/concepts/sso) or [SCIM](/concepts/scim)) or a **service account** (a machine principal that lives in one project).
 
-A relay key is a credential of one principal, named in `spec.principal` (`{kind: serviceaccount | user, ...}`). Rotating, revoking or deleting a key leaves the principal and everything bound to it untouched.
+Principals act and hold roles. What policies bind to and what usage is charged to is an [account](/concepts/accounts): each team and project has one, a service account has one, and a user has a personal account plus a member account for each team or project they belong to.
 
-- A **service account's key** belongs to the account's project. Its requests are attributed to that project and team.
-- A **user's key** (a personal key) belongs to the user and carries no project.
-- An **inference token** is minted for a user in one project, and its requests are attributed to that project.
+A relay key is a credential of one principal, named in `spec.principal` (`{kind: serviceaccount | user, ...}`), and runs in one of that principal's accounts by default, named in `spec.accountId`. Rotating, revoking or deleting a key leaves the principal and its accounts untouched.
 
-Keys and tokens hold no policy. A request is governed by the [policy ladder](/concepts/policies#the-ladder): the policies bound to the principal, its project and its team on the caller side, and to the host, account and host key on the upstream side. A service account's key passes its project's and team's rungs; an inference token passes the rungs of the project it was minted for; a personal key passes only the user's own rung, through system-owned bindings. A principal with no caller policy still reaches the host keys its own scopes own; see [Reach without a caller policy](/concepts/policies#reach-without-a-caller-policy).
+- A **service account's key** runs in the service account's account, inside its project and team.
+- A **user's key** runs in the user's personal account unless it is created in one of the user's member accounts or personal provider accounts.
+- An **inference token** is minted for a user in one project and runs in the user's member account there.
+
+Keys and tokens hold no policy. A request is governed by the [policy ladder](/concepts/policies#the-ladder): the policies bound to the team's account, the project's account and the request's own account on the caller side, and to each host key's provider account on the upstream side. A request can switch to another account its credential may use; see [Lanes](/concepts/accounts#lanes). An account with no policy on its ladder still reaches the host keys its scopes own; see [Reach without a linking rung](/concepts/policies#reach-without-a-linking-rung).
 
 Teams, projects, service accounts, keys and bindings are ordinary resources: create them through the [control API](/reference/control-api) or declare them as manifests and [apply them from git](/concepts/gitops).
 
@@ -43,6 +45,8 @@ A key stops authenticating when it is disabled, revoked (`revokedAt`), past `exp
 Every inference route also accepts a relay-signed **inference token** in the same `Authorization: Bearer` header. Relay tells the two apart by shape: a token looks like a JWT (`ey…`, two `.` separators) and a key never does.
 
 A token is minted by a signed-in user who holds `tokens.mint` in the project. It names that user and project and carries no secret beyond its signature, so a leaked token exposes only what that user's bindings already grant inside that project. The admin bearer names no user and cannot mint one.
+
+A token runs in the user's [member account](/concepts/accounts#member-accounts-and-role-bindings) in its project and cannot switch to another account. If that account does not exist yet, because the membership comes from a group or a team-level role, the mint creates it. The mint answers once the pod serves the account, waiting up to 5 seconds, so the token can be used at once.
 
 ```bash
 curl -X POST http://localhost:8081/api/auth/token \
@@ -115,7 +119,7 @@ The control API (`/api/*`) and the admin UI accept either:
 
 Local account passwords may be bcrypt hashes (`$2a$`, `$2b$`, `$2y$`). A plain-text password still works and logs a deprecation warning. For single sign-on, see [SSO](/concepts/sso).
 
-An account is disabled with `PUT /api/users/by-id/{id}` and `{"disabled": true}`. It is signed out on its next request and refused at login, and its personal keys and inference tokens stop working at once. The control plane answers it `401` with the code `account_disabled`.
+A user is disabled with `PUT /api/users/by-id/{id}` and `{"disabled": true}`. They are signed out on their next request and refused at login, and their relay keys and inference tokens stop working at once. The control plane answers it `401` with the code `account_disabled`.
 
 Run the control plane on its own port (`RELAY_CONTROL_PORT`) behind your network controls, and expose only the inference plane publicly.
 

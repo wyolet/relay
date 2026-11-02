@@ -525,11 +525,12 @@ func isTokenMeter(meter string) bool {
 	return meter == "tokens" || strings.HasPrefix(meter, "tokens.")
 }
 
-// RegisterScripts registers the Go emulators for limit.reserve and limit.commit
-// on the given MemStore. Called once per Limiter constructed from a MemStore.
+// RegisterScripts registers the Go emulators for limit.reserve, limit.commit
+// and limit.peek on the given MemStore. Called once per Limiter constructed from a MemStore.
 func RegisterScripts(m *kv.Mem) {
 	m.RegisterScript("limit.reserve", memReserveImpl)
 	m.RegisterScript("limit.commit", memCommitImpl)
+	m.RegisterScript("limit.peek", memPeekImpl)
 }
 
 // pendingEntry is one phase-2 write planned during phase-1 decide.

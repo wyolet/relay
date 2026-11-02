@@ -77,11 +77,12 @@ func frameRequest(d Deps, fw http.ResponseWriter, fr *http.Request) (*http.Reque
 	// subject reaches a live connection. Frames run concurrently, so each
 	// gets its own principal.
 	if p := PrincipalFrom(ctx); p != nil {
-		fp, ok := d.Auth().reauthenticate(fw, p)
+		auth := d.Auth()
+		fp, ok := auth.reauthenticate(fw, fr, p)
 		if !ok {
 			return nil, false
 		}
-		if !authorizePrincipal(fw, fp, frame.cls.Mode) {
+		if !auth.authorizePrincipal(fw, fr, fp, frame.cls.Mode) {
 			return nil, false
 		}
 		frame.principal = fp
@@ -104,8 +105,8 @@ func wsReadLimit(maxBody int64) int64 {
 	return maxBody + wsFrameEnvelopeBytes
 }
 
-// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry, the revoked set and the project it acts in. The error says why it no longer authenticates; the caller ladder's own refusal (a disabled team among them) is the caller's to check.
-func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tokenExp int64, now time.Time) (*Principal, error) {
+// Recheck resolves a credential admitted earlier (the submitter of a queued batch item) against the current plans: a key by the hash it presented, a token by its user's version, its expiry, the revoked set and the project it acts in. laneID is the account the submission switched into, empty for the credential's default. The error says why it no longer authenticates; the caller ladder's own refusal (a disabled team among them) is the caller's to check.
+func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tokenExp int64, laneID string, now time.Time) (*Principal, error) {
 	root := a.root()
 	if root == nil {
 		return nil, errors.New("plans not loaded")
@@ -115,10 +116,14 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 		if kp == nil {
 			return nil, errors.New("api key no longer valid")
 		}
-		return principalOf(kp, keyHash), nil
+		p, refused := keyPrincipalIn(root, kp, keyHash, laneID)
+		if refused != nil {
+			return nil, refused
+		}
+		return p, nil
 	}
 	up := root.Users.Lookup(userID)
-	pp := root.Projects.Lookup(projectID)
+	cp, refused := root.TokenLane(userID, projectID, laneID)
 	switch {
 	case tokenExp > 0 && tokenExp <= now.Unix():
 		return nil, errors.New("token expired")
@@ -126,19 +131,19 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 		return nil, errors.New(msgTokenRevoked)
 	case a.Revoked.Revoked(jti, now):
 		return nil, errors.New("token revoked")
-	case pp == nil:
-		return nil, errors.New("the token's project is not available")
+	case refused != nil:
+		return nil, refused
 	default:
 		return &Principal{
-			UserID: userID, ProjectID: pp.Project.Meta.ID, TeamID: pp.Project.Spec.TeamID,
+			UserID: userID, ProjectID: cp.Project().ID(), TeamID: cp.Team().ID(),
 			CredentialKind: CredentialToken, CredentialID: jti, TokenExp: tokenExp, TokenVer: tokenVer,
-			Caller: pp.CallerFor(up.Caller),
+			Caller: cp, SwitchedLaneID: laneID,
 		}, nil
 	}
 }
 
-// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to. Reports false after writing the response.
-func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, bool) {
+// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to, each in the lane the upgrade switched into. Reports false after writing the response; a lane refusal is recorded against rec.
+func (a *Auth) reauthenticate(w http.ResponseWriter, rec *http.Request, p *Principal) (*Principal, bool) {
 	root := a.root()
 	if root == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
@@ -146,12 +151,17 @@ func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, 
 	}
 	now := time.Now()
 	if p.CredentialKind == CredentialToken {
-		return tokenClaimsPrincipal(w, a, root, p.claims, p.claimsTyp, now)
+		return tokenClaimsPrincipal(w, a, rec, root, p.claims, p.claimsTyp, p.SwitchedLaneID, now)
 	}
 	kp := root.Keys.Lookup(p.KeyHash, now)
 	if kp == nil {
 		writeAuthErr(w, "invalid api key")
 		return nil, false
 	}
-	return principalOf(kp, p.KeyHash), true
+	fp, refused := keyPrincipalIn(root, kp, p.KeyHash, p.SwitchedLaneID)
+	if refused != nil {
+		a.refuseLane(w, rec, laneless(principalOf(kp, p.KeyHash)), refused)
+		return nil, false
+	}
+	return fp, true
 }

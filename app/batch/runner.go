@@ -52,7 +52,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	if attr.PrincipalKind == string(key.PrincipalUser) {
 		userID = attr.PrincipalID
 	}
-	p, err := rn.Auth.Recheck(relayKeyHash, userID, attr.ProjectID, tok.JTI, tok.Version, tok.Expires, time.Now())
+	p, err := rn.Auth.Recheck(relayKeyHash, userID, attr.ProjectID, tok.JTI, tok.Version, tok.Expires, attr.LaneID, time.Now())
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: %v", ErrCredentialInvalid, err)
 	}
@@ -102,6 +102,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 	lc.CredentialID = attr.CredentialID
 	// The ids were fixed at submit; the names describe them as of execution, from the plan the item runs under.
 	cp := p.Caller
+	lc.LaneAccountID = cp.Lane.Meta.ID
 	if cp.Project().ID() == attr.ProjectID {
 		lc.ProjectName = cp.Project().Name
 	}
@@ -109,7 +110,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, tok T
 		lc.TeamName = cp.Team().Name
 	}
 	if attr.PrincipalKind == string(key.PrincipalServiceAccount) {
-		lc.PrincipalName = cp.PrincipalRung().Name
+		lc.PrincipalName = cp.LaneRung().Name
 	}
 	if p.Key != nil {
 		lc.RelayKeyName = p.Key.Meta.Name

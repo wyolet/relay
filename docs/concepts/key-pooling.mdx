@@ -20,7 +20,7 @@ A **pool** is an ordered set of host keys at one host, with the algorithm that p
 | `credentialIds` | `credentials` (names) | The host keys, in order. A key at another host is refused on save. May be empty. |
 | `selection` | `selection` | `prioritized` (default), `round-robin` or `least-recently-used`. |
 
-A caller [policy](/concepts/policies) links pools in `pools`, in the order they are tried. Many policies may link one pool and draw on it first come, first served: nothing in a pool is reserved for one of them, and to keep one caller from using all of it, cap each caller with its own [rate limits](/concepts/rate-limits) or [budgets](/concepts/budgets). A host key linked directly in a policy's `credentials` acts as a pool of one.
+A caller [policy](/concepts/policies) links pools in `pools`, in the order they are tried. Many policies may link one pool and draw on it first come, first served: nothing in a pool is reserved for one of them, and to keep one caller from using all of it, cap each caller with its own [rate limits](/concepts/rate-limits) or [budgets](/concepts/budgets). To give a policy a single host key, make a pool of that one key.
 
 Host keys, pools, accounts and budgets may be owned by the system, a team, a project or a user. Your callers never see which key served them.
 
@@ -34,7 +34,7 @@ Host keys, pools, accounts and budgets may be owned by the system, a team, a pro
 
 Breaker state is shared across pods through the state backend (Dragonfly when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
 
-After picking a key, Relay reserves the key's upstream limits: the rate limits and budgets of the policies bound to its host, its account and the key itself. A key over one of them is skipped without touching its breaker, and the next key is tried. When the refusing limit is an account-wide request or token window (no model scope), every key of that account is skipped on this pod until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-rungs).
+After picking a key, Relay reserves the key's upstream limits: the rate limits and budgets of the policy bound to its account. A key over one of them is skipped without touching its breaker, and the next key is tried. When the refusing limit is an account-wide request or token window (no model scope), every key of that account is skipped on this pod until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-rungs).
 
 ### Keyless hosts
 
@@ -42,7 +42,7 @@ A host marked `noAuth` (a self-hosted Ollama, for example) needs no host key: Re
 
 ## Accounts
 
-An **account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host.
+A **provider account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host. Accounts of other kinds stand for teams, projects, users and service accounts on the caller side; see [Accounts and lanes](/concepts/accounts).
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
@@ -61,7 +61,9 @@ Two cooldowns skip a whole account. Both live in each pod and are learned from t
 
 When every key of the route is over a limit or cooling, the request fails with `429 rate_limit_exceeded` and a `Retry-After` for the first one that frees up.
 
-Deleting an account that host keys still name is refused with `409`. Read an account's keys with `GET /api/accounts/{ref}/keys` and a pool's with `GET /api/pools/{ref}/keys`.
+Deleting an account that host keys, relay keys or a policy binding still name is refused with `409`. Read an account's keys with `GET /api/accounts/{ref}/keys` and a pool's with `GET /api/pools/{ref}/keys`.
+
+A user may also run requests directly in a provider account they own personally, as a [lane](/concepts/accounts#lanes): such a request reaches only that account's host keys, under the account's own policy.
 
 ### Default accounts
 

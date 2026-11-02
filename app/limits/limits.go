@@ -25,18 +25,19 @@ const (
 type Rung string
 
 const (
-	RungHost      Rung = "host"
-	RungAccount   Rung = "account"
-	RungTeam      Rung = "team"
-	RungProject   Rung = "project"
-	RungPrincipal Rung = "principal"
+	// RungAccount is a provider account, the upstream side.
+	RungAccount Rung = "account"
+	RungTeam    Rung = "team"
+	RungProject Rung = "project"
+	// RungLane is the account a request runs in: a personal, member or service account.
+	RungLane Rung = "lane"
 	// RungSystem marks a relay-wide ceiling no policy binds, such as the proxy-mode limit.
 	RungSystem Rung = "system"
 )
 
 // Upstream reports whether the rung is on the provider side of the ladder, where counters are shared by every caller that reaches the rung object.
 func (r Rung) Upstream() bool {
-	return r == RungHost || r == RungAccount
+	return r == RungAccount
 }
 
 // Counter is one rate-limit rule or one budget a request must fit. Plans build it once; the request path hands it to a Limiter unchanged, so ID and Group are rendered here rather than per request.
@@ -44,8 +45,10 @@ type Counter struct {
 	Kind     Kind
 	Rung     Rung
 	PolicyID string
-	// SubjectID is the subject the policy is bound to, as "<kind>:<id>": a team, project or principal on the caller side; the host or account upstream.
+	// SubjectID is the account the policy is bound to, as "account:<id>".
 	SubjectID string
+	// Lane is set on a counter linked as each (not shared): the lane account it counts for, as "account:<id>".
+	Lane string
 	// ModelID is set when an upstream rule is scoped to models; such a rule counts once per matched model.
 	ModelID     string
 	RateLimitID string
@@ -57,7 +60,14 @@ type Counter struct {
 	Group string
 }
 
-// CallerRule describes a rule of a caller-side policy. Its identity is (rule, policy, bound subject): a policy reused by two subjects gives each its own bucket, and rebinding a subject to another policy starts a fresh one.
+// ForLane is c counted once per lane account rather than once for the bound account: a link with shared off.
+func (c Counter) ForLane(lane string) Counter {
+	c.Lane = lane
+	c.ID += ":l:" + lane
+	return c
+}
+
+// CallerRule describes a rule of a caller-side policy. Its identity is (rule, policy, bound account): a policy reused by two accounts gives each its own bucket, and rebinding an account to another policy starts a fresh one.
 func CallerRule(rung Rung, rl *ratelimit.RateLimit, r ratelimit.Rule, policyID, subjectID, group string) Counter {
 	return Counter{
 		Kind: KindRule, Rung: rung, PolicyID: policyID, SubjectID: subjectID, RateLimitID: rl.Meta.ID, Rule: r,
@@ -66,7 +76,7 @@ func CallerRule(rung Rung, rl *ratelimit.RateLimit, r ratelimit.Rule, policyID, 
 	}
 }
 
-// UpstreamRule describes a rule of a host or account policy. Its identity is (rule, rung object, model) without the policy, so the provider's ceiling keeps its count when the rung is rebound to another tier policy that links the same rate limit, and every caller reaching the object shares it.
+// UpstreamRule describes a rule of a provider account's policy. Its identity is (rule, account, model) without the policy, so the provider's ceiling keeps its count when the account is rebound to another tier policy that links the same rate limit, and every caller reaching the account shares it.
 func UpstreamRule(rung Rung, rl *ratelimit.RateLimit, r ratelimit.Rule, policyID, subjectID, modelID, group string) Counter {
 	id := ruleContent(rl.Meta.ID, r) + ":o:" + subjectID
 	if modelID != "" {
@@ -87,7 +97,7 @@ func SystemRule(rl *ratelimit.RateLimit, r ratelimit.Rule, subject string) Count
 	}
 }
 
-// BudgetCounter describes a budget linked by a policy at any rung. Its identity is (budget, bound subject, period): an amount or mode edit keeps the spent count, a period change starts a new one.
+// BudgetCounter describes a budget linked by a policy at any rung. Its identity is (budget, bound account, period): an amount or mode edit keeps the spent count, a period change starts a new one.
 func BudgetCounter(rung Rung, b *budget.Budget, policyID, subjectID, group string) Counter {
 	return Counter{
 		Kind: KindBudget, Rung: rung, PolicyID: policyID, SubjectID: subjectID, Budget: b,
@@ -111,7 +121,19 @@ type Usage struct {
 type Limiter interface {
 	// Admit checks every counter (rules reserve the estimate; budgets compare spent with the cap) and either reserves all of them or refuses with a *Refused naming the first counter that refused; on refusal nothing stays reserved. A store failure refuses: limits fail closed.
 	Admit(ctx context.Context, cs []Counter, est Usage) (Reservation, error)
+	// Peek reads every counter's current count, one Reading per counter in order, without counting anything: no store write and no TTL change. For admin reads, never the request path.
+	Peek(ctx context.Context, cs []Counter) ([]Reading, error)
 }
+
+// Reading is a counter's count as Admit would compare it with the cap, before a new request: requests, tokens or concurrency slots for a rule, USD nanos spent this period for a budget. Fractional counts round up.
+type Reading struct {
+	Used int64
+	// Amount is the cap in the same unit.
+	Amount int64
+}
+
+// Remaining is what is left under the cap, never below zero.
+func (r Reading) Remaining() int64 { return max(r.Amount-r.Used, 0) }
 
 // Reservation is one admitted request's hold on its counters.
 type Reservation interface {

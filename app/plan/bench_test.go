@@ -11,11 +11,9 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 // synthetic is a deployment at the sizes the plans are designed for: 50k keys, 10k principals, 2k policies, 200 pools, 1k credentials, 100 accounts, over 500 models on 20 hosts.
@@ -77,35 +75,32 @@ func newSynthetic() *synthetic {
 			{RateLimitID: rls[i%50].Meta.ID},
 			{RateLimitID: rls[(i+1)%50].Meta.ID, Models: []string{provs[i%5].Meta.Name}},
 		}})
-		w.bindPolicy(p, subject(policybinding.SubjectAccount, a.Meta.ID))
+		w.bindPolicy(p, a)
 		if i == 0 {
 			s.tierPol = p
 		}
 	}
-	for i, h := range hosts {
-		w.bindPolicy(w.policy(fmt.Sprintf("host-%d", i), policy.Spec{BudgetIDs: []string{bud.Meta.ID}}), subject(policybinding.SubjectHost, h.Meta.ID))
-	}
-	principalPolicies := 2000 - len(accounts) - len(hosts) - 100 - 1000
+	principalPolicies := 2000 - len(accounts) - 100 - 1000
 	n := 0
 	for ti := range 100 {
 		t := w.team()
 		tp := w.policy(fmt.Sprintf("team-%d", ti), policy.Spec{
 			PoolIDs:    []string{pools[ti%200].Meta.ID, pools[(ti+67)%200].Meta.ID, pools[(ti+133)%200].Meta.ID},
 			RateLimits: []policy.RateLimitLink{{RateLimitID: rls[ti%50].Meta.ID}},
-			BudgetIDs:  []string{bud.Meta.ID},
+			Budgets:    []policy.BudgetLink{{BudgetID: bud.Meta.ID}},
 		})
-		w.bindPolicy(tp, subject(policybinding.SubjectTeam, t.Meta.ID))
+		w.bindPolicy(tp, w.teamAccount(t))
 		if ti == 0 {
 			s.teamPol = tp
 		}
 		for pi := range 10 {
 			p := w.project(t)
 			pp := w.policy(fmt.Sprintf("project-%d-%d", ti, pi), policy.Spec{Models: []string{provs[(ti+pi)%5].Meta.Name, provs[(ti+pi+1)%5].Meta.Name}, RateLimits: []policy.RateLimitLink{{RateLimitID: rls[pi].Meta.ID}}})
-			w.bindPolicy(pp, subject(policybinding.SubjectProject, p.Meta.ID))
+			w.bindPolicy(pp, w.projectAccount(p))
 			for range 10 {
 				sa := w.sa(p)
 				if n < principalPolicies {
-					w.bindPolicy(w.policy(fmt.Sprintf("sa-%d", n), policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rls[n%50].Meta.ID}}}), subject(rolebinding.SubjectServiceAccount, sa.Meta.ID))
+					w.bindPolicy(w.policy(fmt.Sprintf("sa-%d", n), policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rls[n%50].Meta.ID}}}), w.saAccount(sa))
 				}
 				n++
 				for range 5 {

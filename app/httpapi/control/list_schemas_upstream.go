@@ -13,6 +13,16 @@ var accountFilter = filter.Schema[account.Account]{
 	Fields: []filter.Field[account.Account]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(a *account.Account) string { return a.Meta.Name }},
 		{Name: "owner", Kind: filter.String, Get: func(a *account.Account) string { return string(a.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(a *account.Account) string { return a.Meta.Owner.ID }},
+		{Name: "kind", Kind: filter.String, Repeat: true, Enum: []string{"team", "project", "personal", "member", "service", "provider"},
+			Get: func(a *account.Account) string { return string(a.Spec.Kind) }},
+		{Name: "holder_id", Kind: filter.String, Repeat: true, Get: func(a *account.Account) string {
+			if a.Spec.Holder == nil {
+				return ""
+			}
+			return a.Spec.Holder.ID
+		}},
+		{Name: "closed", Kind: filter.Bool, GetBool: func(a *account.Account) bool { return a.Spec.Closed }},
 		{Name: "host_id", Kind: filter.String, Repeat: true, Get: func(a *account.Account) string { return a.Spec.HostID }},
 		{Name: "org_id", Kind: filter.String, Get: func(a *account.Account) string { return a.Spec.OrgID }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(a *account.Account) time.Time { return a.Meta.CreatedAt }},

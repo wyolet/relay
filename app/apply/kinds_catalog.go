@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
@@ -59,6 +60,14 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		To: manifest.ToAccount, Meta: func(a *account.Account) *meta.Metadata { return &a.Meta },
 		Upsert: s.Account.Upsert, Delete: s.Account.Delete,
 		Check: refsFor(b, refcheck.Checker.Account),
+		Keep: func(prev, next *account.Account) error {
+			if err := keepAccountPlace(prev, next); err != nil {
+				return err
+			}
+			return b.refs().AccountPayloadLogging(ctx, prev, next)
+		},
+		CheckCreate: refuseCallerAccountCreate,
+		CheckDelete: refuseCallerAccountPrune,
 	}); err != nil {
 		return err
 	}
@@ -132,6 +141,35 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 // hostkey.Store.Upsert does, so the diff shows what the save writes. A key
 // moved to another owner or host leaves its account for the new owner's
 // default, which the save fills.
+// keepAccountPlace keeps what relay decides about a caller account (its owner, holder, closed mark and kind), so a document edits only its display fields and payload logging; a document cannot give it a host or turn a provider account into one.
+func keepAccountPlace(prev, next *account.Account) error {
+	if prev.IsProvider() != next.IsProvider() {
+		return fmt.Errorf("spec.host cannot be added to or removed from an account; a caller account has none and a provider account keeps its own")
+	}
+	if !prev.IsProvider() {
+		next.Meta.Owner, next.Spec.Holder = prev.Meta.Owner, prev.Spec.Holder
+		next.Spec.Closed, next.FollowsRoleBindings = prev.Spec.Closed, prev.FollowsRoleBindings
+	}
+	next.Spec.Kind = next.DerivedKind()
+	return nil
+}
+
+// refuseCallerAccountCreate leaves caller accounts to relay, as the control API does: a document creates provider accounts only.
+func refuseCallerAccountCreate(a *account.Account) error {
+	if a.IsProvider() {
+		return nil
+	}
+	return fmt.Errorf("spec.host is required: relay keeps the team, project, personal, member and service accounts itself")
+}
+
+// refuseCallerAccountPrune deletes a caller account only once it is a closed member account, as the control API does; the rest go with the row they stand for.
+func refuseCallerAccountPrune(a *account.Account) error {
+	if a.IsProvider() || (a.DerivedKind() == account.KindMember && a.Spec.Closed) {
+		return nil
+	}
+	return fmt.Errorf("relay keeps this account while its %s exists", a.Meta.Owner.Kind)
+}
+
 func keepAccount(prev, next *hostkey.HostKey) {
 	if next.Spec.AccountID == "" && prev.Spec.HostID == next.Spec.HostID && prev.Meta.Owner == next.Meta.Owner {
 		next.Spec.AccountID = prev.Spec.AccountID

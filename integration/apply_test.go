@@ -33,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/seed"
@@ -280,10 +281,10 @@ func TestIntegration_ApplyPrune(t *testing.T) {
 	}
 }
 
-// Pruning a host key or a rate limit a policy links is allowed, as the
-// control API's delete is: the plan names the policy, the rate limit's link
-// goes, and the credential's id stays so the policy narrows.
-func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) {
+// Pruning a pool or a rate limit a policy links is allowed, as the control
+// API's delete is: the plan names the policy, the rate limit's link goes,
+// and the pool's id stays so the policy narrows.
+func TestIntegration_ApplyPruneReportsLinkedPoolsAndRateLimits(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
@@ -306,10 +307,12 @@ func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = os.Unsetenv(pruneEnv) })
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned, Labels: managed},
+		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned},
 		Spec: hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "host key")
+	pl := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "acme-pool", Owner: owned, Labels: managed}, Spec: pool.Spec{HostID: h.Meta.ID, CredentialIDs: []string{hk.Meta.ID}}}
+	mustUpsert(t, st.stores.Pool.Upsert(ctx, pl), "pool")
 	rl := &ratelimit.RateLimit{
 		Meta: meta.Metadata{ID: ids.New(), Name: "burst", Owner: owned, Labels: managed},
 		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: "token-bucket"}}},
@@ -320,8 +323,8 @@ func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) 
 	side := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "side-policy", Owner: owned},
 		Spec: policy.Spec{
-			CredentialIDs: []string{hk.Meta.ID},
-			RateLimits:    []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
+			PoolIDs:    []string{pl.Meta.ID},
+			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
 		},
 	}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, side), "policy")
@@ -330,11 +333,11 @@ func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) 
 	if code != http.StatusOK {
 		t.Fatalf("prune: %d %s", code, raw)
 	}
-	if plan.action("HostKey", "acme-key") != "delete" || plan.action("RateLimit", "burst") != "delete" {
+	if plan.action("Pool", "acme-pool") != "delete" || plan.action("RateLimit", "burst") != "delete" {
 		t.Fatalf("prune plan = %+v", plan.Plan)
 	}
 	for _, e := range plan.Plan {
-		if (e.Kind == "HostKey" || e.Kind == "RateLimit") && (e.Detached == nil || len(e.Detached.Policies) != 1 || e.Detached.Policies[0] != "side-policy") {
+		if (e.Kind == "Pool" || e.Kind == "RateLimit") && (e.Detached == nil || len(e.Detached.Policies) != 1 || e.Detached.Policies[0] != "side-policy") {
 			t.Fatalf("%s %s detached = %+v, want side-policy named", e.Kind, e.Name, e.Detached)
 		}
 	}
@@ -342,12 +345,12 @@ func TestIntegration_ApplyPruneReportsLinkedHostKeysAndRateLimits(t *testing.T) 
 	if err != nil || got == nil {
 		t.Fatalf("read policy: %v", err)
 	}
-	if !slices.Equal(got.Spec.CredentialIDs, []string{hk.Meta.ID}) || len(got.Spec.RateLimits) != 0 {
-		t.Fatalf("policy after prune: credentialIds=%v rateLimits=%v, want the key id kept and the limit gone", got.Spec.CredentialIDs, got.Spec.RateLimits)
+	if !slices.Equal(got.Spec.PoolIDs, []string{pl.Meta.ID}) || len(got.Spec.RateLimits) != 0 {
+		t.Fatalf("policy after prune: poolIds=%v rateLimits=%v, want the pool id kept and the limit gone", got.Spec.PoolIDs, got.Spec.RateLimits)
 	}
 
 	// Each link the prune took is audited as an update of the policy, as the control API's delete audits it.
-	want := map[string]bool{"spec.credentialIds": true, "spec.rateLimits[].rateLimitId": true}
+	want := map[string]bool{"spec.poolIds": true, "spec.rateLimits[].rateLimitId": true}
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		seen := map[string]bool{}

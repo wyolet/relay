@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/clientprofile"
@@ -27,6 +29,11 @@ import (
 // project/team/service-account slugs. Post-flight observers must never
 // re-resolve them — the row they name may be gone by then.
 func mintLifecycle(ctx context.Context, source, clientIP string) *lifecycle.Context {
+	return lifecycleFor(ctx, source, clientIP, PrincipalFrom(ctx))
+}
+
+// lifecycleFor is mintLifecycle for principal p, nil for none.
+func lifecycleFor(ctx context.Context, source, clientIP string, p *Principal) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), source, time.Now())
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP
@@ -34,7 +41,7 @@ func mintLifecycle(ctx context.Context, source, clientIP string) *lifecycle.Cont
 	if cid := reqid.ClientID(ctx); cid != "" {
 		lc.Metadata[usagelog.ExtrasKeyClientRequestID] = cid
 	}
-	if p := PrincipalFrom(ctx); p != nil {
+	if p != nil {
 		// The hash the auth middleware matched on — empty for a token, which
 		// presents no key. Re-hashing the bearer here would record a hash on
 		// token traffic that matches no key row.
@@ -65,12 +72,15 @@ func applyPrincipalIdentity(lc *lifecycle.Context, p *Principal) {
 		lc.RelayKeyName = p.Key.Meta.Name
 	}
 	cp := p.Caller
+	if cp != nil {
+		lc.LaneAccountID = cp.Lane.Meta.ID
+	}
 	switch {
 	case p.ServiceAccountID != "":
 		lc.PrincipalKind = string(key.PrincipalServiceAccount)
 		lc.PrincipalID = p.ServiceAccountID
 		if cp != nil {
-			lc.PrincipalName = cp.PrincipalRung().Name
+			lc.PrincipalName = cp.LaneRung().Name
 		}
 	case p.UserID != "":
 		lc.PrincipalKind = string(key.PrincipalUser)
@@ -177,18 +187,78 @@ func sourceForMode(m Mode) string {
 // status, which is 0 here because upstream was never reached — ErrorKind
 // carries the reason.
 func (d Deps) fireUsageFailure(ctx context.Context, kind, msg string) {
+	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: kind, ErrorMessage: msg})
+}
+
+// fireRouteRefusal is fireUsageFailure for a route the caller's plan refused: the row records the answer the caller got (status, code, class, message) and the model it refused. model is the caller-supplied ref.
+func (d Deps) fireRouteRefusal(ctx context.Context, r *plan.Refusal, model string) {
+	if lc := lifecycle.FromContext(ctx); lc != nil && d.Lifecycle != nil {
+		stampRefusedModel(lc, d.refusalCatalog(ctx))
+	}
+	a := routeAnswer(r, model)
+	d.fireFailure(ctx, &lifecycle.PostFlightEvent{Status: a.Status, ErrorKind: a.Code, Refusal: string(a.Kind), ErrorMessage: a.Message})
+}
+
+// refusalCatalog is the catalog a refused route resolved against: the caller's route table's, else the request's snapshot, else the live one (anonymous proxy traffic pins none).
+func (d Deps) refusalCatalog(ctx context.Context) *appcatalog.Snapshot {
+	if p := PrincipalFrom(ctx); p != nil && p.Caller != nil && p.Caller.Routes != nil {
+		if snap := p.Caller.Routes.Catalog(); snap != nil {
+			return snap
+		}
+	}
+	if snap := SnapshotFrom(ctx); snap != nil {
+		return snap
+	}
+	if d.Catalog != nil {
+		return d.Catalog.Current()
+	}
+	return nil
+}
+
+// stampRefusedModel names on lc the catalog model a refused request asked for, as routing would have on success, so its row says which model was refused. A name no model answers keeps only the requested string; an alias naming several takes the first, the one routing tries first.
+func stampRefusedModel(lc *lifecycle.Context, snap *appcatalog.Snapshot) {
+	if snap == nil || lc.RequestedModel == "" || lc.ModelID != "" {
+		return
+	}
+	res := snap.ResolveModelRef(lc.RequestedModel)
+	if len(res.Models) == 0 {
+		return
+	}
+	m := res.Models[0]
+	lc.ModelID, lc.ModelName = m.Meta.ID, m.Meta.Name
+	if prov, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
+		lc.ProviderName = prov
+	}
+}
+
+func (d Deps) fireFailure(ctx context.Context, ev *lifecycle.PostFlightEvent) {
 	if d.Lifecycle == nil {
 		return
 	}
-	lc := lifecycle.FromContext(ctx)
-	if lc == nil {
-		return
+	if lc := lifecycle.FromContext(ctx); lc != nil {
+		finalizeDetached(d.Lifecycle, lc, ev)
 	}
+}
+
+// finalizeDetached ends lc with ev off the caller's goroutine: the response is about to be written and telemetry must not hold it.
+func finalizeDetached(reg *lifecycle.Registry, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
 	go func() {
 		lc.MarkEnd()
-		d.Lifecycle.Finalize(context.Background(), lc, &lifecycle.PostFlightEvent{
-			ErrorKind:    kind,
-			ErrorMessage: msg,
-		})
+		reg.Finalize(context.Background(), lc, ev)
 	}()
+}
+
+// recordRefusal writes the usage row of a request whose credential authenticated but whose lane refused it, as a route refusal writes one; r is the request, nil records nothing. Only relay refusals are recorded, never a bad or missing credential.
+func (a *Auth) recordRefusal(r *http.Request, p *Principal, refused *plan.Refusal) {
+	kind := refused.Kind()
+	if a == nil || a.Lifecycle == nil || r == nil || p == nil || kind == "" {
+		return
+	}
+	ctx := r.Context()
+	cls := ClassificationFrom(ctx)
+	lc := lifecycleFor(ctx, sourceForMode(cls.Mode), cls.ClientIP, p)
+	applyObsHeaders(lc, r.Header, false)
+	applyProfile(lc, clientprofile.FromContext(ctx), r.Header)
+	ans := edgeAnswer(refused)
+	finalizeDetached(a.Lifecycle, lc, &lifecycle.PostFlightEvent{Status: ans.Status, ErrorKind: refused.Code, Refusal: string(kind), ErrorMessage: ans.Message})
 }

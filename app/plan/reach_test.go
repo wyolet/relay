@@ -54,7 +54,7 @@ func TestReach_PolicyWithoutLinksKeepsOwnershipReach(t *testing.T) {
 	sys := o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	pr := o.w.Credential(o.host, nil, ownedBy(meta.OwnerProject, o.proj.Meta.ID), "sk-project")
 	pol := o.w.Policy("models-only", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
+	o.w.BindPolicy(pol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	want := []string{pr.Meta.Name, sys.Meta.Name}
@@ -71,28 +71,11 @@ func TestReach_CallerPolicyReachesOnlyWhatItLinks(t *testing.T) {
 	o.w.Credential(o.host, nil, ownedBy(meta.OwnerProject, o.proj.Meta.ID), "sk-project")
 	p := o.w.Pool(o.host, linked)
 	pol := o.w.Policy("linker", policy.Spec{PoolIDs: []string{p.Meta.ID}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
+	o.w.BindPolicy(pol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{linked.Meta.Name}) {
 		t.Fatalf("route reaches %v, want only %s", got, linked.Meta.Name)
-	}
-}
-
-// A directly linked credential is an implicit pool of one.
-func TestReach_DirectCredentialLinkIsAPoolOfOne(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-a")
-	b := o.w.Credential(o.host, nil, plantest.System, "sk-b")
-	pol := o.w.Policy("direct", policy.Spec{CredentialIDs: []string{b.Meta.ID}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-
-	if len(cp.Pools) != 1 || len(cp.Pools[0].Slots) != 1 {
-		t.Fatalf("pools = %d, want one pool of one", len(cp.Pools))
-	}
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{b.Meta.Name}) {
-		t.Fatalf("route reaches %v, want only %s", got, b.Meta.Name)
 	}
 }
 
@@ -106,8 +89,8 @@ func TestReach_PoolsInInnermostOrderOuterRungsIntersect(t *testing.T) {
 	p1, p2, p3, p4 := o.w.Pool(o.host, c1), o.w.Pool(o.host, c2), o.w.Pool(o.host, c3), o.w.Pool(o.host, c4)
 	projPol := o.w.Policy("project", policy.Spec{PoolIDs: []string{p1.Meta.ID, p2.Meta.ID, p3.Meta.ID}})
 	saPol := o.w.Policy("sa", policy.Spec{PoolIDs: []string{p3.Meta.ID, p1.Meta.ID, p4.Meta.ID}})
-	o.w.BindPolicy(projPol, projectSubject(o.proj))
-	o.w.BindPolicy(saPol, saSubject(o.sa))
+	o.w.BindPolicy(projPol, o.projectAcct())
+	o.w.BindPolicy(saPol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	want := []string{c3.Meta.Name, c1.Meta.Name}
@@ -127,8 +110,8 @@ func TestReach_OuterRungLinksApplyWhenInnerLinksNothing(t *testing.T) {
 	p1 := o.w.Pool(o.host, c1)
 	teamPol := o.w.Policy("team", policy.Spec{PoolIDs: []string{p1.Meta.ID}})
 	saPol := o.w.Policy("sa", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(teamPol, teamSubject(o.team))
-	o.w.BindPolicy(saPol, saSubject(o.sa))
+	o.w.BindPolicy(teamPol, o.teamAcct())
+	o.w.BindPolicy(saPol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{c1.Meta.Name}) {
@@ -146,7 +129,7 @@ func TestReach_PoolOrderIsCrossHostFailoverOrder(t *testing.T) {
 	b := o.w.Credential(second, nil, plantest.System, "sk-h2")
 	pa, pb := o.w.Pool(o.host, a), o.w.Pool(second, b)
 	pol := o.w.Policy("failover", policy.Spec{PoolIDs: []string{pb.Meta.ID, pa.Meta.ID}})
-	o.w.BindPolicy(pol, saSubject(o.sa))
+	o.w.BindPolicy(pol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	r := mustRoute(t, cp, "m1")
@@ -169,7 +152,7 @@ func TestReach_KeylessHostOnlyThroughAPool(t *testing.T) {
 			spec.PoolIDs = []string{o.w.Pool(free).Meta.ID}
 		}
 		if link || models != nil {
-			o.w.BindPolicy(o.w.Policy("p", spec), saSubject(o.sa))
+			o.w.BindPolicy(o.w.Policy("p", spec), o.saAcct())
 		}
 		return keyCaller(t, o.w.Load(t), o.saKey)
 	}

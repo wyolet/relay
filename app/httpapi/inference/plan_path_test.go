@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
@@ -18,7 +19,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/revocation"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/kv"
@@ -41,7 +41,7 @@ func listingWorld(t *testing.T) (*plantest.Plans, *Principal) {
 	u := w.User()
 	k := w.UserKey(u, "listing-secret")
 	pol := w.Policy("grants", policy.Spec{Models: []string{"prov/allowed", "prov/keyless"}})
-	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
+	w.BindPolicy(pol, w.PersonalAccount(u))
 	plans := w.Load(t)
 	kp := plans.Root().Keys.Lookup(k.Spec.KeyHash, time.Now())
 	if kp == nil {
@@ -133,7 +133,7 @@ func TestFrameReauthenticates(t *testing.T) {
 		t.Fatalf("upgrade status %d", w.Code)
 	}
 	upgraded := st.seen
-	if _, ok := st.auth.reauthenticate(httptest.NewRecorder(), upgraded); !ok {
+	if _, ok := st.auth.reauthenticate(httptest.NewRecorder(), nil, upgraded); !ok {
 		t.Fatal("a live key must pass a frame")
 	}
 	past := time.Now().Add(-time.Minute)
@@ -141,7 +141,7 @@ func TestFrameReauthenticates(t *testing.T) {
 	revoked.Spec.RevokedAt = &past
 	plantest.Apply(t, st.plans, &revoked)
 	w := httptest.NewRecorder()
-	if _, ok := st.auth.reauthenticate(w, upgraded); ok || w.Code != http.StatusUnauthorized {
+	if _, ok := st.auth.reauthenticate(w, nil, upgraded); ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked key: ok=%v status %d, want a 401", ok, w.Code)
 	}
 
@@ -152,7 +152,7 @@ func TestFrameReauthenticates(t *testing.T) {
 	tokenPrincipal := st.seen
 	plantest.Apply(t, st.plans, &user.User{ID: f.user, Username: "u-" + f.user, TokenVersion: 2})
 	w = httptest.NewRecorder()
-	if _, ok := st.auth.reauthenticate(w, tokenPrincipal); ok || w.Code != http.StatusUnauthorized {
+	if _, ok := st.auth.reauthenticate(w, nil, tokenPrincipal); ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("signed-out token: ok=%v status %d, want a 401", ok, w.Code)
 	}
 }
@@ -223,24 +223,20 @@ func TestProxy_SystemCeiling(t *testing.T) {
 	}
 }
 
-// Payload capture: the innermost caller policy decides when one governs, else the key's own flag.
+// Payload capture: the nearest account on the lane's ladder that sets payloadLogging decides, else the key's own flag.
 func TestCapturesPayload(t *testing.T) {
-	on, off := true, false
 	for _, tc := range []struct {
-		name           string
-		policyCaptures *bool
-		keyCaptures    bool
-		want           bool
+		name        string
+		lane        account.PayloadLogging
+		keyCaptures bool
+		want        bool
 	}{
-		{"policy on, key off", &on, false, true},
-		{"policy off, key on", &off, true, false},
-		{"no policy, key on", nil, true, true},
-		{"no policy, key off", nil, false, false},
+		{"account on, key off", account.PayloadLoggingOn, false, true},
+		{"account off, key on", account.PayloadLoggingOff, true, false},
+		{"unset, key on", "", true, true},
+		{"unset, key off", "", false, false},
 	} {
-		cp := &plan.CallerPlan{}
-		if tc.policyCaptures != nil {
-			cp.Rungs[1].Policy = &plan.ExpandedPolicy{Policy: &policy.Policy{Spec: policy.Spec{PayloadLoggingEnabled: *tc.policyCaptures}}}
-		}
+		cp := &plan.CallerPlan{PayloadLogging: tc.lane}
 		p := &Principal{Caller: cp, PayloadLogging: tc.keyCaptures}
 		if got := p.CapturesPayload(); got != tc.want {
 			t.Errorf("%s: captures = %v, want %v", tc.name, got, tc.want)

@@ -11,12 +11,14 @@ var ValidGroupBy = []string{
 	"policy_id",
 	"pool_id",
 	"account_id",
+	"lane_account_id",
 	"model_id",
 	"host_id",
 	"host_key_id",
 	"source",
 	"finish_reason",
 	"error_kind",
+	"refusal",
 	"model",
 	"host",
 	"policy",
@@ -108,6 +110,8 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.PoolID
 	case "account_id":
 		return ev.AccountID
+	case "lane_account_id":
+		return ev.LaneAccountID
 	case "project_id":
 		return ev.ProjectID
 	case "team_id":
@@ -126,6 +130,8 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.FinishReason
 	case "error_kind":
 		return ev.ErrorKind
+	case "refusal":
+		return ev.Refusal
 	case "model":
 		return ev.Model
 	case "host":

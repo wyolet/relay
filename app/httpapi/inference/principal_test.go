@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
@@ -53,6 +54,10 @@ type principalFixture struct {
 	bindings                []*policybinding.PolicyBinding
 	versions                stubVersions
 
+	// The accounts relay keeps for the team, the project, the service account, and the user's personal and member (in the project) places.
+	teamAcct, projAcct, saAcct, personalAcct, memberAcct *account.Account
+	extraAccounts                                        []*account.Account
+
 	tokens *TokenVerifier
 	signer ed25519.PrivateKey
 }
@@ -94,15 +99,25 @@ func newPrincipalFixture() principalFixture {
 	}
 	verifier := &TokenVerifier{}
 	verifier.SetKey(pub)
+	withID := func(a *account.Account) *account.Account { a.Meta.ID = meta.NewID(); return a }
 	return principalFixture{
 		team: tm, project: proj, sa: sa, group: g, user: user,
-		saPol:    saPol,
-		keyPol:   testPolicy("key-pol", proj.Meta.ID),
-		boundPol: testPolicy("bound-pol", proj.Meta.ID),
-		versions: stubVersions{user: 1},
-		tokens:   verifier,
-		signer:   priv,
+		saPol:        saPol,
+		keyPol:       testPolicy("key-pol", proj.Meta.ID),
+		boundPol:     testPolicy("bound-pol", proj.Meta.ID),
+		versions:     stubVersions{user: 1},
+		tokens:       verifier,
+		signer:       priv,
+		teamAcct:     withID(account.ForTeam(tm.Meta.ID, tm.Meta.Name, "")),
+		projAcct:     withID(account.ForProject(proj.Meta.ID, proj.Meta.Name, "")),
+		saAcct:       withID(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)),
+		personalAcct: withID(account.Personal(user, "u-"+user)),
+		memberAcct:   withID(account.Member(user, "u-"+user, meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}, proj.Meta.Name, "")),
 	}
+}
+
+func (f principalFixture) accounts() []*account.Account {
+	return append([]*account.Account{f.teamAcct, f.projAcct, f.saAcct, f.personalAcct, f.memberAcct}, f.extraAccounts...)
 }
 
 // mint signs a token for this fixture's user + project with the claims a
@@ -130,6 +145,7 @@ func (f principalFixture) stack(t testing.TB, keys ...*key.Key) *principalStack 
 	w := plantest.World{
 		Policies:        []*policy.Policy{f.saPol, f.keyPol, f.boundPol},
 		PolicyBindings:  f.bindings,
+		Accounts:        f.accounts(),
 		Teams:           []*team.Team{f.team},
 		Projects:        []*project.Project{f.project},
 		ServiceAccounts: []*serviceaccount.ServiceAccount{f.sa},

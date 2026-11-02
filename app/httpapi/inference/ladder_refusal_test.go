@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/sdk/adapters/openai"
@@ -54,10 +53,10 @@ func ladderDeps(t *testing.T, c ladderCase, now time.Time) (Deps, *Principal, us
 	if c.budget != nil {
 		b := w.Budget(c.budget.AmountUSD)
 		b.Spec = *c.budget
-		spec.BudgetIDs = []string{b.Meta.ID}
+		spec.Budgets = []policy.BudgetLink{{BudgetID: b.Meta.ID}}
 	}
 	pol := w.Policy("caller", spec)
-	w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, u.ID))
+	w.BindPolicy(pol, w.PersonalAccount(u))
 	plans := w.Load(t)
 
 	cat := catalogtest.Catalog{Providers: w.Providers, Hosts: w.Hosts, Models: w.Models, HostKeys: w.Credentials, Keys: w.Keys, Bindings: w.Bindings, Pricings: w.Pricings}.Load(t)
@@ -109,8 +108,8 @@ func TestBudgetRefusal_Is429WithRetryAfterAtTheNextPeriodStart(t *testing.T) {
 	if err != nil || secs < 3599 || secs > 3601 {
 		t.Fatalf("Retry-After = %q, want 3600 (the next month start)", w.Header().Get("Retry-After"))
 	}
-	if body := w.Body.String(); !strings.Contains(body, "principal") || !strings.Contains(body, policyID) {
-		t.Fatalf("refusal %s does not name the principal rung and policy %s", body, policyID)
+	if body := w.Body.String(); !strings.Contains(body, "lane") || !strings.Contains(body, policyID) {
+		t.Fatalf("refusal %s does not name the lane rung and policy %s", body, policyID)
 	}
 	if hits.Load() != served {
 		t.Fatal("the refused request reached the upstream")
@@ -169,7 +168,7 @@ func TestLadderRefusal_ModelNotAllowedNamesRungAndPolicy(t *testing.T) {
 	if hits.Load() != 0 {
 		t.Fatal("a refused model reached the upstream")
 	}
-	if body := w.Body.String(); !strings.Contains(body, "principal") || !strings.Contains(body, policyID) {
-		t.Fatalf("refusal %s does not name the principal rung and policy %s", body, policyID)
+	if body := w.Body.String(); !strings.Contains(body, "lane") || !strings.Contains(body, policyID) {
+		t.Fatalf("refusal %s does not name the lane rung and policy %s", body, policyID)
 	}
 }

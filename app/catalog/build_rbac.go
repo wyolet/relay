@@ -72,7 +72,7 @@ func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, sc
 			continue
 		}
 		s.policyBindingsByID[clean.Meta.ID] = clean
-		if pid := clean.Spec.ProjectID; pid != "" {
+		if pid := owningProject(clean); pid != "" {
 			s.policyBindingsByProject[pid] = append(s.policyBindingsByProject[pid], clean)
 		}
 		s.registerRefs(refKey{Kind: refPolicyBinding, ID: clean.Meta.ID}, outboundPolicyBindingRefs(clean))
@@ -108,8 +108,15 @@ func sanitizePolicyBinding(b *policybinding.PolicyBinding, scopes func(meta.Owne
 		return nil, false
 	}
 	clean := *b
-	clean.IndexSubjects()
 	return &clean, true
+}
+
+// owningProject is the id of the project owning b, "" when a team, a user or the system does.
+func owningProject(b *policybinding.PolicyBinding) string {
+	if b.Meta.Owner.Kind == meta.OwnerProject {
+		return b.Meta.Owner.ID
+	}
+	return ""
 }
 
 func sortRoleBindings(list []*rolebinding.RoleBinding) {

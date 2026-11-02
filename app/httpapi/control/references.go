@@ -16,10 +16,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
@@ -425,8 +427,8 @@ func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 		return nil, fmt.Errorf("list policy-bindings: %w", err)
 	}
 	for _, b := range pbs {
-		if b.Spec.ProjectID == id {
-			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.projectId", owner: b.Meta.Owner})
+		if ownedBy(b.Meta.Owner, meta.OwnerProject, id) {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "metadata.owner.id", owner: b.Meta.Owner})
 		}
 	}
 	scoped, err := scanRoleBindingsScopedTo(ctx, d, meta.OwnerProject, id)
@@ -455,7 +457,24 @@ func scanServiceAccountRefs(ctx context.Context, d Deps, id string) ([]reference
 	if err != nil {
 		return nil, err
 	}
-	return append(out, bound...), nil
+	out = append(out, bound...)
+	// The service account's own account goes with it, out of every binding naming it.
+	if d.Stores.Account != nil {
+		accounts, err := d.Stores.Account.List(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list accounts: %w", err)
+		}
+		for _, a := range accounts {
+			if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == id {
+				held, err := bindingsHolding(ctx, d, a.Meta.ID)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, held...)
+			}
+		}
+	}
+	return out, nil
 }
 
 // scanGroupRefs finds bindings naming the group. Group subjects carry the
@@ -471,9 +490,9 @@ func scanGroupRefs(ctx context.Context, d Deps, id string) ([]referenceItem, err
 	return scanBindingSubjects(ctx, d, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: g.Meta.Name})
 }
 
-// scanBindingSubjects returns the role and policy bindings naming subject.
-// Subjects needs at least one entry, so a binding can let go only while it
-// names someone else.
+// scanBindingSubjects returns the role bindings naming subject. Subjects
+// needs at least one entry, so a binding can let go only while it names
+// someone else.
 func scanBindingSubjects(ctx context.Context, d Deps, subject rolebinding.Subject) ([]referenceItem, error) {
 	out := []referenceItem{}
 	want := subject.Key()
@@ -487,14 +506,23 @@ func scanBindingSubjects(ctx context.Context, d Deps, subject rolebinding.Subjec
 				detachable: len(b.Spec.Subjects) > 1})
 		}
 	}
+	return out, nil
+}
+
+// bindingsHolding returns the policy bindings naming the account. AccountIDs needs at least one entry, so a binding can let go only while it names another.
+func bindingsHolding(ctx context.Context, d Deps, accountID string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	if d.Stores.PolicyBinding == nil {
+		return out, nil
+	}
 	pbs, err := d.Stores.PolicyBinding.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list policy-bindings: %w", err)
 	}
 	for _, b := range pbs {
-		if namesSubject(b.Spec.Subjects, want) {
-			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.subjects", owner: b.Meta.Owner,
-				detachable: len(b.Spec.Subjects) > 1})
+		if slices.Contains(b.Spec.AccountIDs, accountID) {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.accountIds", owner: b.Meta.Owner,
+				detachable: len(b.Spec.AccountIDs) > 1})
 		}
 	}
 	return out, nil

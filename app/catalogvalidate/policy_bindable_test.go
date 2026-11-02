@@ -15,27 +15,25 @@ func policyOwnedBy(name string, owner manifest.WireOwner) manifest.Document {
 	}}
 }
 
-func policyBindingDoc(name, project, pol string, subjects ...manifest.PolicySubjectDTO) manifest.Document {
-	if len(subjects) == 0 {
-		subjects = []manifest.PolicySubjectDTO{{Kind: "group", Name: "system:authenticated"}}
+func policyBindingDoc(name, project, pol string) manifest.Document {
+	return scopedBindingDoc(name, manifest.WireOwner{Kind: "project", Name: project}, pol)
+}
+
+func scopedBindingDoc(name string, owner manifest.WireOwner, pol string, accounts ...string) manifest.Document {
+	if len(accounts) == 0 {
+		accounts = []string{"some-account"}
 	}
 	return manifest.Document{PolicyBinding: &manifest.PolicyBindingDTO{
 		APIVersion: "v1alpha3",
 		Kind:       "PolicyBinding",
-		Metadata:   manifest.WireMeta{Name: name, Owner: manifest.WireOwner{Kind: "project", Name: project}},
-		Spec:       manifest.PolicyBindingSpec{Project: project, Policy: pol, Subjects: subjects},
+		Metadata:   manifest.WireMeta{Name: name, Owner: owner},
+		Spec:       manifest.PolicyBindingSpec{Policy: pol, Accounts: accounts},
 	}}
-}
-
-func scopedBindingDoc(name string, owner manifest.WireOwner, pol string, subjects ...manifest.PolicySubjectDTO) manifest.Document {
-	d := policyBindingDoc(name, "", pol, subjects...)
-	d.PolicyBinding.Metadata.Owner = owner
-	return d
 }
 
 // The graph linter mirrors the control-plane rule: a binding uses a policy of
 // its own scope, an ancestor of it, the system, or a host (a tier preset);
-// a personal policy is bound by its owner or a team or project, and only a system binding binds a host.
+// a personal policy is bound by its owner or a team or project.
 func TestValidateGraph_BindsOnlyPoliciesOfItsScope(t *testing.T) {
 	base := func(extra ...manifest.Document) []manifest.Document {
 		docs := append(fixture(),
@@ -72,19 +70,14 @@ func TestValidateGraph_BindsOnlyPoliciesOfItsScope(t *testing.T) {
 		{"a project binding a person's policy", policyBindingDoc("pb-personal", "ml-search", "personal"), ""},
 		{"a system binding a person's policy", scopedBindingDoc("pb-personal-system", manifest.WireOwner{Kind: "system"}, "personal"),
 			`policy "personal" is personal`},
-		{"a person binding their own policy", scopedBindingDoc("pb-alice", manifest.WireOwner{Kind: "user", Name: "alice"}, "personal",
-			manifest.PolicySubjectDTO{Kind: "user", Name: "alice"}), ""},
-		{"a person binding another's policy", scopedBindingDoc("pb-bob", manifest.WireOwner{Kind: "user", Name: "bob"}, "personal",
-			manifest.PolicySubjectDTO{Kind: "user", Name: "bob"}), `policy "personal" is personal`},
-		{"a person binding a team", scopedBindingDoc("pb-alice-team", manifest.WireOwner{Kind: "user", Name: "alice"}, "personal",
-			manifest.PolicySubjectDTO{Kind: "team", Name: "platform"}), "has one subject, its owner"},
+		{"a person binding their own policy", scopedBindingDoc("pb-alice", manifest.WireOwner{Kind: "user", Name: "alice"}, "personal"), ""},
+		{"a person binding another's policy", scopedBindingDoc("pb-bob", manifest.WireOwner{Kind: "user", Name: "bob"}, "personal"), `policy "personal" is personal`},
 		{"team binding on its own policy", scopedBindingDoc("pb-team-own", manifest.WireOwner{Kind: "team", Name: "platform"}, "team-pol"), ""},
-		{"system binding on a host", scopedBindingDoc("pb-host", manifest.WireOwner{Kind: "system"}, "tier",
-			manifest.PolicySubjectDTO{Kind: "host", Name: "openai-host"}), ""},
-		{"project binding on a host", policyBindingDoc("pb-host-project", "ml-search", "tier",
-			manifest.PolicySubjectDTO{Kind: "host", Name: "openai-host"}), "bound only by a system-owned binding"},
-		{"missing subject", scopedBindingDoc("pb-missing", manifest.WireOwner{Kind: "system"}, "shared",
-			manifest.PolicySubjectDTO{Kind: "account", Name: "ghost"}), `account "ghost" not found`},
+		{"a binding naming no account", func() manifest.Document {
+			d := scopedBindingDoc("pb-empty", manifest.WireOwner{Kind: "system"}, "shared")
+			d.PolicyBinding.Spec.Accounts = nil
+			return d
+		}(), "binds at least one account"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			issues := ValidateGraph(base(tc.doc))

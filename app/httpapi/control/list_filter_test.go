@@ -40,7 +40,7 @@ func TestFilterParamsReachOpenAPI(t *testing.T) {
 	// A representative spread: a bool, a repeatable IN, a time range pair,
 	// and the engine-owned sort/q/label/limit params.
 	for _, want := range []string{
-		`"name":"enabled"`, `"name":"payload_logging"`, `"name":"pool_id"`,
+		`"name":"enabled"`, `"name":"rate_limit_id"`, `"name":"pool_id"`,
 		`"name":"created_from"`, `"name":"created_to"`, `"name":"owner"`,
 		`"name":"q"`, `"name":"label"`, `"name":"sort"`, `"name":"limit"`, `"name":"offset"`,
 	} {

@@ -48,13 +48,12 @@ type debugSnapshotCounts struct {
 
 // debugPolicyJoin counts a policy's model refs and links, as stored.
 type debugPolicyJoin struct {
-	PolicyID    string `json:"policyId"    doc:"Policy id."`
-	PolicyName  string `json:"policyName"  doc:"Policy slug."`
-	Models      int    `json:"models"      doc:"Model references the policy lists."`
-	Pools       int    `json:"pools"       doc:"Pools it links."`
-	Credentials int    `json:"credentials" doc:"Host keys it links directly."`
-	RateLimits  int    `json:"rateLimits"  doc:"Rate-limit links."`
-	Budgets     int    `json:"budgets"     doc:"Budgets it links."`
+	PolicyID   string `json:"policyId"    doc:"Policy id."`
+	PolicyName string `json:"policyName"  doc:"Policy slug."`
+	Models     int    `json:"models"      doc:"Model references the policy lists."`
+	Pools      int    `json:"pools"      doc:"Pools it links."`
+	RateLimits int    `json:"rateLimits" doc:"Rate-limit links."`
+	Budgets    int    `json:"budgets"    doc:"Budgets it links."`
 }
 
 type debugSnapshotBody struct {
@@ -108,13 +107,12 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.PolicyJoins = make([]debugPolicyJoin, 0, len(policies))
 		for _, p := range policies {
 			out.Body.PolicyJoins = append(out.Body.PolicyJoins, debugPolicyJoin{
-				PolicyID:    p.Meta.ID,
-				PolicyName:  p.Meta.Name,
-				Models:      len(p.Spec.Models),
-				Pools:       len(p.Spec.PoolIDs),
-				Credentials: len(p.Spec.CredentialIDs),
-				RateLimits:  len(p.Spec.RateLimits),
-				Budgets:     len(p.Spec.BudgetIDs),
+				PolicyID:   p.Meta.ID,
+				PolicyName: p.Meta.Name,
+				Models:     len(p.Spec.Models),
+				Pools:      len(p.Spec.PoolIDs),
+				RateLimits: len(p.Spec.RateLimits),
+				Budgets:    len(p.Spec.Budgets),
 			})
 		}
 

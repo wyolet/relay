@@ -21,6 +21,8 @@ func redisStore(t testing.TB) kvtest.ScriptStore { return kvtest.NewRedis(t) }
 
 func TestHybrid_Redis(t *testing.T) { runSuite(t, redisStore) }
 
+func TestPeek_Redis(t *testing.T) { runPeekSuite(t, redisStore) }
+
 func TestConcurrent_Redis(t *testing.T) { runConcurrent(t, redisStore) }
 
 func BenchmarkAdmitSettle_Redis(b *testing.B) {

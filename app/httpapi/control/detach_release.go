@@ -8,6 +8,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
@@ -45,10 +46,16 @@ func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*r
 			drop:     func(b *rolebinding.RoleBinding) bool { return dropKeepingOne(&b.Spec.Subjects, t.isSubject) },
 		}.apply(ctx, d, it)
 	case "policy-binding":
+		held, err := d.accountsOf(ctx, t)
+		if err != nil {
+			return nil, err
+		}
 		return rowEdit[policybinding.PolicyBinding]{
 			plural: "policy-bindings", store: s.PolicyBinding, validate: (*policybinding.PolicyBinding).Validate, guard: guardPolicyBinding(d),
 			metaOf: func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta },
-			drop:   func(b *policybinding.PolicyBinding) bool { return dropKeepingOne(&b.Spec.Subjects, t.isSubject) },
+			drop: func(b *policybinding.PolicyBinding) bool {
+				return dropKeepingOne(&b.Spec.AccountIDs, func(id string) bool { return slices.Contains(held, id) })
+			},
 		}.apply(ctx, d, it)
 	case "user":
 		return d.releaseRole(ctx, it, t)
@@ -149,14 +156,35 @@ func failOrKeep(err error) error {
 	return err
 }
 
-// isSubject reports whether a role or policy binding subject names t: a
-// service account by id, a group by name.
+// isSubject reports whether a role binding subject names t: a service
+// account by id, a group by name.
 func (t detachTarget) isSubject(s rolebinding.Subject) bool {
 	want := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: t.id}
 	if t.kind == "group" {
 		want = rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: t.name}
 	}
 	return s.Key() == want.Key()
+}
+
+// accountsOf is the accounts a detach target stands for in policy bindings: an account itself, or a service account's own account.
+func (d Deps) accountsOf(ctx context.Context, t detachTarget) ([]string, error) {
+	switch t.kind {
+	case "account":
+		return []string{t.id}, nil
+	case "service-account":
+		accounts, err := d.Stores.Account.List(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		var out []string
+		for _, a := range accounts {
+			if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == t.id {
+				out = append(out, a.Meta.ID)
+			}
+		}
+		return out, nil
+	}
+	return nil, nil
 }
 
 // clearID empties ref when it names id.

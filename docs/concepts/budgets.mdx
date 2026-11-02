@@ -19,7 +19,7 @@ A budget is owned by the system, a team, a project or a user, and may be linked 
 
 A request's cost is computed from the provider's reported token counts and the binding's [pricing](/concepts/usage#token-counts-and-cost), and charged to every budget on its ladder after the response ends. Spend counts in the period the charge lands in.
 
-Like a [rate limit](/concepts/rate-limits#where-rate-limits-apply), a budget counts per bound subject. A policy bound to a team gives the team one spend count; the same policy bound to two projects gives each project its own. Linking one budget from the policies of two subjects gives each subject its own count of the same cap.
+Like a [rate limit](/concepts/rate-limits#where-rate-limits-apply), a budget counts per bound account. A policy bound to a team's account gives the team one spend count; the same policy bound to two projects' accounts gives each project its own. Linking one budget from the policies of two accounts gives each account its own count of the same cap. A link with `shared: false` gives every lane under the bound account its own count instead, so a team policy can cap each member at the same amount; see [Shared and per-lane counting](/concepts/policies#shared-and-per-lane-counting).
 
 At each period start the count begins again from zero and the full cap is available. Editing a budget mid-period:
 
@@ -32,18 +32,18 @@ Counts live in the state backend. With `RELAY_STATE_BACKEND=memory`, each pod co
 
 A **hard** budget is checked when the request is admitted: once the period's spend has reached the cap, the request is refused. Requests already in flight are charged when they finish, so spend can pass the cap by what those requests cost.
 
-A refusal by a budget on a caller rung (team, project or principal) answers:
+A refusal by a budget on a caller rung (team, project or lane) answers:
 
 ```http
 HTTP/1.1 429 Too Many Requests
 Retry-After: 302400
 
-{"error": {"type": "rate_limit_error", "code": "budget_exceeded", "message": "the budget of the project policy <policy-id> is exhausted; try again in 302400s"}}
+{"error": {"type": "rate_limit_error", "code": "budget_exceeded", "refusal": "no_capacity", "message": "the budget of the project policy <policy-id> is exhausted; try again in 302400s"}}
 ```
 
 `Retry-After` is the time left until the next period starts.
 
-A budget on an upstream rung (a host or an account; one bound to a host key is its account's) caps the total spend through that subject, whoever the caller is. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it.
+A budget on an upstream rung (a provider account) caps the total spend through that account's host keys, whoever the caller is; linked with `shared: false`, it caps each caller lane's spend through them. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it.
 
 An **alert** budget is never checked at admission. Both modes report the charge that takes a budget to its cap, once per budget and period, in the `relay_limits_budget_crossings_total` counter, labelled by `rung` and `mode`.
 

@@ -43,7 +43,7 @@ func TestPolicySaveRefusesAnotherProjectsPoolAndBudget(t *testing.T) {
 
 	for name, spec := range map[string]policy.Spec{
 		"pool":   {PoolIDs: []string{privatePool.Meta.ID}},
-		"budget": {BudgetIDs: []string{privateBudget.Meta.ID}},
+		"budget": {Budgets: []policy.BudgetLink{{BudgetID: privateBudget.Meta.ID}}},
 	} {
 		inB := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "b-policy", Owner: projB}, Spec: spec}
 		err := refErr(refs(d).Policy(ctx, inB))

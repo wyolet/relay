@@ -11,26 +11,34 @@ import (
 // Account / Pool / Budget
 // ---------------------------------------------------------------------------
 
-// ToAccount resolves the host name.
+// ToAccount resolves the host name. A document with no host names a caller account, whose holder and kind the loader takes from the stored row.
 func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
-	hostID, err := hostOf(idx, "account", d.Metadata.Name, d.Spec.Host)
-	if err != nil {
-		return nil, err
+	var hostID string
+	if d.Spec.Host != "" {
+		id, err := hostOf(idx, "account", d.Metadata.Name, d.Spec.Host)
+		if err != nil {
+			return nil, err
+		}
+		hostID = id
 	}
 	m := d.Metadata.toMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	return &account.Account{
 		Meta: m,
-		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID, Default: d.Spec.Default},
+		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID, Default: d.Spec.Default, PayloadLogging: account.PayloadLogging(d.Spec.PayloadLogging)},
 	}, nil
 }
 
 func FromAccount(a *account.Account, rev ReverseResolver) AccountDTO {
+	spec := AccountSpec{OrgID: a.Spec.OrgID, Default: a.Spec.Default, PayloadLogging: string(a.Spec.PayloadLogging)}
+	if a.Spec.HostID != "" {
+		spec.Host = nameOr(rev.HostName, a.Spec.HostID)
+	}
 	return AccountDTO{
 		APIVersion: APIVersion,
 		Kind:       "Account",
 		Metadata:   metaToWire(a.Meta),
-		Spec:       AccountSpec{Host: nameOr(rev.HostName, a.Spec.HostID), OrgID: a.Spec.OrgID, Default: a.Spec.Default},
+		Spec:       spec,
 	}
 }
 

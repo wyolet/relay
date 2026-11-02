@@ -20,6 +20,8 @@ func redisStore(t testing.TB) kvtest.ScriptStore { return kvtest.NewRedis(t) }
 
 func TestLimiter_Redis(t *testing.T) { runSuite(t, redisStore) }
 
+func TestPeek_Redis(t *testing.T) { runPeekSuite(t, redisStore) }
+
 func TestLimiter_RedisKeysExpire(t *testing.T) {
 	cfg := kvtest.Config(t)
 	now := time.Now()

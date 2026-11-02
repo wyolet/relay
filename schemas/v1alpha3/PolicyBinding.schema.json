@@ -3,54 +3,26 @@
     "PolicyBindingSpec": {
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "policy": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "subjects": {
+        "accounts": {
           "items": {
-            "$ref": "#/$defs/PolicySubjectDTO"
+            "type": "string"
           },
           "minItems": 1,
           "type": [
             "array",
             "null"
           ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "policy": {
+          "type": "string"
         }
       },
       "required": [
         "policy",
-        "subjects"
-      ],
-      "type": "object"
-    },
-    "PolicySubjectDTO": {
-      "additionalProperties": false,
-      "properties": {
-        "kind": {
-          "enum": [
-            "user",
-            "serviceaccount",
-            "host",
-            "account",
-            "credential",
-            "team",
-            "project"
-          ],
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "name"
+        "accounts"
       ],
       "type": "object"
     },

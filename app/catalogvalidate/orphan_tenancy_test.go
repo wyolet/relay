@@ -37,9 +37,6 @@ func TestOrphanCountsTenantOwnedPolicies(t *testing.T) {
 		return false
 	}
 
-	if orphaned(append(fixture(), hostKey, policyLinking(manifest.PolicySpec{Credentials: []string{"openai-key"}}))) {
-		t.Fatal("a host key linked by a project-owned policy was reported unreachable")
-	}
 	if orphaned(append(fixture(), hostKey, pool, policyLinking(manifest.PolicySpec{Pools: []string{"openai-pool"}}))) {
 		t.Fatal("a host key in a pool a project-owned policy links was reported unreachable")
 	}

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
@@ -12,10 +13,8 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/engine"
@@ -52,17 +51,10 @@ func newOrg() *org {
 
 func ownedBy(kind meta.OwnerKind, id string) meta.Owner { return meta.Owner{Kind: kind, ID: id} }
 
-func teamSubject(t *team.Team) rolebinding.Subject {
-	return plantest.Subject(policybinding.SubjectTeam, t.Meta.ID)
-}
-
-func projectSubject(p *project.Project) rolebinding.Subject {
-	return plantest.Subject(policybinding.SubjectProject, p.Meta.ID)
-}
-
-func saSubject(s *serviceaccount.ServiceAccount) rolebinding.Subject {
-	return plantest.Subject(rolebinding.SubjectServiceAccount, s.Meta.ID)
-}
+// teamAcct, projectAcct and saAcct are the accounts of the org's team, project and service account, which bindings bind.
+func (o *org) teamAcct() *account.Account    { return o.w.TeamAccount(o.team) }
+func (o *org) projectAcct() *account.Account { return o.w.ProjectAccount(o.proj) }
+func (o *org) saAcct() *account.Account      { return o.w.ServiceAccountAccount(o.sa) }
 
 // routeCredentials lists the credential names a route reaches, hop by hop, slot by slot.
 func routeCredentials(r *plan.Route) []string {
@@ -130,19 +122,14 @@ func hasIssue(v *engine.View, ref engine.Ref, code string) bool {
 	return false
 }
 
-// tokenCaller is the caller plan a relay-minted token of the user u carries inside project p; nil when the project takes no tokens.
+// tokenCaller is the lane a relay-minted token of the user carries inside the project: the user's member account there.
 func tokenCaller(t *testing.T, plans *plantest.Plans, userID, projectID string) *plan.CallerPlan {
 	t.Helper()
-	root := plans.Root()
-	up := root.Users.Lookup(userID)
-	if up == nil {
-		t.Fatalf("no user plan for %s", userID)
+	cp, refused := plans.Root().MemberLane(userID, projectID)
+	if refused != nil {
+		t.Fatalf("no lane for user %s in project %s: %v", userID, projectID, refused)
 	}
-	pp := root.Projects.Lookup(projectID)
-	if pp == nil {
-		return nil
-	}
-	return pp.CallerFor(up.Caller)
+	return cp
 }
 
 func keyCaller(t *testing.T, plans *plantest.Plans, k *key.Key) *plan.CallerPlan {

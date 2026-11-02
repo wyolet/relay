@@ -97,8 +97,9 @@ func TestDispatch_UpstreamErrorStatusIsStoredAsUpstreamError(t *testing.T) {
 				}
 
 				ev := events.next(t)
-				if ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream {
-					t.Errorf("%s: event status=%d kind=%q", name, ev.Status, ev.ErrorKind)
+				// An upstream's own error is not a relay refusal.
+				if ev.Status != status || ev.ErrorKind != usage.ErrorKindUpstream || ev.Refusal != "" {
+					t.Errorf("%s: event status=%d kind=%q refusal=%q", name, ev.Status, ev.ErrorKind, ev.Refusal)
 				}
 			}
 		}

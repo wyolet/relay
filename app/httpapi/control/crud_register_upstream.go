@@ -26,7 +26,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		nil,
 		nil,
 		d.refuseInUse,
-		nil,
+		mergeAccountServerFields,
 		d.Catalog,
 		false,
 		protect,

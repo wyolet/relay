@@ -35,14 +35,13 @@ func checkPolicyRefs(g *graph) []Issue {
 				out = append(out, refMissing(src, fmt.Sprintf("spec.pools[%d]", i), "Pool", name))
 			}
 		}
-		for i, name := range pol.Spec.Credentials {
-			if _, ok := g.HostKeys[name]; !ok {
-				out = append(out, refMissing(src, fmt.Sprintf("spec.credentials[%d]", i), "HostKey", name))
-			}
-		}
-		for i, name := range pol.Spec.Budgets {
-			if _, ok := g.Budgets[name]; !ok {
-				out = append(out, refMissing(src, fmt.Sprintf("spec.budgets[%d]", i), "Budget", name))
+		for i, b := range pol.Spec.Budgets {
+			field := fmt.Sprintf("spec.budgets[%d]", i)
+			if b.Ref == "" {
+				out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
+					Source: Ref{Kind: src.Kind, Name: src.Name, Field: field + ".ref"}, Message: "ref is required"})
+			} else if _, ok := g.Budgets[b.Ref]; !ok {
+				out = append(out, refMissing(src, field+".ref", "Budget", b.Ref))
 			}
 		}
 		for i, l := range pol.Spec.RateLimits {
@@ -69,22 +68,15 @@ func checkPolicyRefs(g *graph) []Issue {
 	return out
 }
 
-// checkTierLinks refuses pools and credentials on a host-owned policy: a
-// tier describes what the provider grants an account, not which keys a
-// caller may spend.
+// checkTierLinks refuses pools on a host-owned policy: a tier describes what
+// the provider grants an account, not which keys a caller may spend.
 func checkTierLinks(src Ref, pol *manifest.PolicyDTO) []Issue {
-	var out []Issue
-	if len(pol.Spec.Pools) > 0 {
-		out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant,
-			Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.pools"},
-			Message: "a host-owned tier policy links no pools"})
+	if len(pol.Spec.Pools) == 0 {
+		return nil
 	}
-	if len(pol.Spec.Credentials) > 0 {
-		out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant,
-			Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.credentials"},
-			Message: "a host-owned tier policy links no credentials"})
-	}
-	return out
+	return []Issue{{Severity: SeverityError, Kind: KindInvariant,
+		Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.pools"},
+		Message: "a host-owned tier policy links no pools"}}
 }
 
 // checkServedAtHost requires a tier policy's scoped model ref to match at

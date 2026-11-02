@@ -212,17 +212,17 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 		t.Fatalf("POST with a non-user subject = %d: %s", code, raw)
 	}
 
-	// A group is no policy subject: the schema offers no such kind.
-	body = `{"metadata":{"name":"ml-search-group"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
-		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
+	// A policy binds accounts only: the schema offers no subjects.
+	body = `{"metadata":{"name":"ml-search-group","owner":{"kind":"project","id":"` + project.Metadata.ID + `"}},` +
+		`"spec":{"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"group","name":"system:authenticated"}]}}`
 	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", body)
-	if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "body.spec.subjects[0].kind") {
-		t.Fatalf("POST /api/policy-bindings naming a group = %d: %s, want 422 on subjects[0].kind", code, raw)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "body.spec.subjects") {
+		t.Fatalf("POST /api/policy-bindings naming a group = %d: %s, want 422 on spec.subjects", code, raw)
 	}
 
 	// A project's policy binding is owned by the project.
-	body = `{"metadata":{"name":"ml-search-everyone"},"spec":{"projectId":"` + project.Metadata.ID + `",` +
-		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"project","id":"` + project.Metadata.ID + `"}]}}`
+	body = `{"metadata":{"name":"ml-search-everyone","owner":{"kind":"project","id":"` + project.Metadata.ID + `"}},` +
+		`"spec":{"policyId":"` + pol.Metadata.ID + `","accountIds":["` + st.accountAt(t, "project:"+project.Metadata.ID) + `"]}}`
 	code, raw = st.adminDo(http.MethodPost, "/api/policy-bindings", body)
 	if code != http.StatusCreated {
 		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
@@ -260,15 +260,15 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 		t.Errorf("?scope_kind=team returned %+v", list.Items)
 	}
 
-	code, raw = st.adminDo(http.MethodGet, "/api/policy-bindings?project_id="+project.Metadata.ID, "")
+	code, raw = st.adminDo(http.MethodGet, "/api/policy-bindings?owner_id="+project.Metadata.ID, "")
 	if code != http.StatusOK {
-		t.Fatalf("GET ?project_id = %d: %s", code, raw)
+		t.Fatalf("GET ?owner_id = %d: %s", code, raw)
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
 	if list.Total != 1 || list.Items[0].Metadata.Name != "ml-search-everyone" {
-		t.Errorf("?project_id returned %+v", list.Items)
+		t.Errorf("?owner_id returned %+v", list.Items)
 	}
 }
 
@@ -416,11 +416,10 @@ apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: ml-search-everyone
+  owner: {kind: project, name: ml-search}
 spec:
-  project: ml-search
   policy: ml-search-pol
-  subjects:
-    - {kind: project, name: ml-search}
+  accounts: [project-ml-search]
 `
 
 func TestIntegration_SeedRBAC(t *testing.T) {
@@ -433,7 +432,6 @@ func TestIntegration_SeedRBAC(t *testing.T) {
 	if err := st.users.Upsert(ctx, alice); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "rbac.yaml"), []byte(seedRBACYAML), 0o600); err != nil {
 		t.Fatalf("write yaml: %v", err)

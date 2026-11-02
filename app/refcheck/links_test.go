@@ -12,13 +12,13 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -160,7 +160,7 @@ func TestHostKeyAccountIsAtTheKeysHost(t *testing.T) {
 	}
 }
 
-// Every pool, credential, rate limit and budget a policy links must exist; one the caller may not see answers as absent without saying so.
+// Every pool, rate limit and budget a policy links must exist; one the caller may not see answers as absent without saying so.
 func TestPolicyLinksMustExist(t *testing.T) {
 	rows := newLinkRows()
 	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
@@ -169,10 +169,9 @@ func TestPolicyLinksMustExist(t *testing.T) {
 		return &policy.Policy{
 			Meta: meta.Metadata{Name: "ml", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 			Spec: policy.Spec{
-				PoolIDs:       []string{"pool-shared"},
-				CredentialIDs: []string{"key-h1"},
-				RateLimits:    []policy.RateLimitLink{{RateLimitID: "rl"}},
-				BudgetIDs:     []string{"budget-shared"},
+				PoolIDs:    []string{"pool-shared"},
+				RateLimits: []policy.RateLimitLink{{RateLimitID: "rl"}},
+				Budgets:    []policy.BudgetLink{{BudgetID: "budget-shared"}},
 			},
 		}
 	}
@@ -186,9 +185,8 @@ func TestPolicyLinksMustExist(t *testing.T) {
 	}{
 		{"missing pool", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-gone"} }, http.StatusBadRequest},
 		{"hidden pool", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-p-2"} }, http.StatusNotFound},
-		{"missing credential", func(p *policy.Policy) { p.Spec.CredentialIDs = []string{"key-gone"} }, http.StatusBadRequest},
 		{"missing rate limit", func(p *policy.Policy) { p.Spec.RateLimits = []policy.RateLimitLink{{RateLimitID: "rl-gone"}} }, http.StatusBadRequest},
-		{"missing budget", func(p *policy.Policy) { p.Spec.BudgetIDs = []string{"budget-gone"} }, http.StatusBadRequest},
+		{"missing budget", func(p *policy.Policy) { p.Spec.Budgets = []policy.BudgetLink{{BudgetID: "budget-gone"}} }, http.StatusBadRequest},
 	} {
 		p := full()
 		tc.edit(p)
@@ -213,12 +211,11 @@ func TestTeamRowsServeTheTeamAndItsProjects(t *testing.T) {
 		ok   bool
 	}{
 		{"p-1 -> its team's pool", projectPolicy("p-1", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-team-1"} }), true},
-		{"p-1 -> its team's budget", projectPolicy("p-1", func(p *policy.Policy) { p.Spec.BudgetIDs = []string{"budget-team-1"} }), true},
-		{"p-1 -> its team's key", projectPolicy("p-1", func(p *policy.Policy) { p.Spec.CredentialIDs = []string{"key-team-1"} }), true},
+		{"p-1 -> its team's budget", projectPolicy("p-1", func(p *policy.Policy) { p.Spec.Budgets = []policy.BudgetLink{{BudgetID: "budget-team-1"}} }), true},
 		{"p-1 -> its own pool", projectPolicy("p-1", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-p-1"} }), true},
 		{"p-1 -> a shared pool", projectPolicy("p-1", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-shared"} }), true},
 		{"p-2 -> another team's pool", projectPolicy("p-2", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-team-1"} }), false},
-		{"p-2 -> another team's budget", projectPolicy("p-2", func(p *policy.Policy) { p.Spec.BudgetIDs = []string{"budget-team-1"} }), false},
+		{"p-2 -> another team's budget", projectPolicy("p-2", func(p *policy.Policy) { p.Spec.Budgets = []policy.BudgetLink{{BudgetID: "budget-team-1"}} }), false},
 		{"p-2 -> a sibling project's pool", projectPolicy("p-2", func(p *policy.Policy) { p.Spec.PoolIDs = []string{"pool-p-1"} }), false},
 	} {
 		if err := c.Policy(ctx, tc.p); (err == nil) != tc.ok {
@@ -274,38 +271,68 @@ func TestTeamRowsServeTheTeamAndItsProjects(t *testing.T) {
 	}
 }
 
-// Policy-binding subjects of the upstream and tenancy kinds must name rows that exist and that the caller can see.
-func TestPolicyBindingSubjectsOfEveryKindMustExist(t *testing.T) {
+// Policy-binding accounts must exist and be visible to the caller; one the caller may not see answers as absent.
+func TestPolicyBindingAccountsMustExist(t *testing.T) {
 	rows := newLinkRows()
 	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
 	c := rows.checker(hidingAuthz{hidden: map[string]bool{"acct-p-2": true}})
-	// System-owned, so every subject is in scope and only existence and visibility decide.
-	bind := func(subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
-		return &policybinding.PolicyBinding{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policybinding.Spec{Subjects: subjects}}
+	// System-owned, so every account is in scope and only existence and visibility decide.
+	bind := func(accounts ...string) *policybinding.PolicyBinding {
+		return &policybinding.PolicyBinding{Meta: meta.Metadata{Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policybinding.Spec{AccountIDs: accounts}}
 	}
-	ok := bind(
-		rolebinding.Subject{Kind: policybinding.SubjectHost, ID: "h-1"},
-		rolebinding.Subject{Kind: policybinding.SubjectAccount, ID: "acct-shared"},
-		rolebinding.Subject{Kind: policybinding.SubjectCredential, ID: "key-h1"},
-		rolebinding.Subject{Kind: policybinding.SubjectTeam, ID: "t-1"},
-		rolebinding.Subject{Kind: policybinding.SubjectProject, ID: "p-1"},
-	)
-	if err := c.PolicyBinding(ctx, ok); err != nil {
-		t.Fatalf("existing subjects: %v", err)
+	if err := c.PolicyBinding(ctx, bind("acct-shared", "acct-p-1")); err != nil {
+		t.Fatalf("existing accounts: %v", err)
+	}
+	for id, want := range map[string]int{"acct-gone": http.StatusBadRequest, "acct-p-2": http.StatusNotFound} {
+		if got := status(c.PolicyBinding(ctx, bind(id))); got != want {
+			t.Errorf("%s: status %d, want %d", id, got, want)
+		}
+	}
+}
+
+// A key's lane is an account its principal holds, or a provider account the caller may use; an empty one takes the principal's own account; a closed one is refused.
+func TestKeyAccount(t *testing.T) {
+	rows := newLinkRows()
+	personal := account.Personal("u-1", "alice")
+	personal.Meta.ID = "personal-u-1"
+	other := account.Personal("u-2", "bob")
+	other.Meta.ID = "personal-u-2"
+	inProject := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
+	closed := account.Member("u-1", "alice", inProject, "p-1", "")
+	closed.Meta.ID, closed.Spec.Closed, closed.FollowsRoleBindings = "member-u-1", true, true
+	granted := account.Member("u-1", "alice", meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, "p-2", "")
+	granted.Meta.ID, granted.FollowsRoleBindings = "member-granted", true
+	firstUse := account.Member("u-1", "alice", meta.Owner{Kind: meta.OwnerProject, ID: "p-3"}, "p-3", "")
+	firstUse.Meta.ID = "member-first-use"
+	ownOrg := &account.Account{Meta: meta.Metadata{ID: "own-org", Name: "alice-org", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}, Spec: account.Spec{HostID: "h-1"}}
+	for _, a := range []*account.Account{personal, other, closed, granted, firstUse, ownOrg} {
+		rows.accounts[a.Meta.ID] = a
+	}
+	c := rows.checker(nil)
+	c.Rows.DefaultAccount = func(_ context.Context, p key.Principal) (string, error) { return "personal-" + p.ID, nil }
+	ctx := context.Background()
+	keyIn := func(acct string) *key.Key {
+		return &key.Key{Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: "u-1"}, AccountID: acct}}
 	}
 	for _, tc := range []struct {
-		sub  rolebinding.Subject
-		want int
+		name, account string
+		want          int
 	}{
-		{rolebinding.Subject{Kind: policybinding.SubjectHost, ID: "h-9"}, http.StatusBadRequest},
-		{rolebinding.Subject{Kind: policybinding.SubjectAccount, ID: "acct-gone"}, http.StatusBadRequest},
-		{rolebinding.Subject{Kind: policybinding.SubjectAccount, ID: "acct-p-2"}, http.StatusNotFound},
-		{rolebinding.Subject{Kind: policybinding.SubjectCredential, ID: "key-gone"}, http.StatusBadRequest},
-		{rolebinding.Subject{Kind: policybinding.SubjectTeam, ID: "t-9"}, http.StatusBadRequest},
-		{rolebinding.Subject{Kind: policybinding.SubjectProject, ID: "p-9"}, http.StatusBadRequest},
+		{"own personal account", "personal-u-1", 0},
+		{"a member account a role binding grants", "member-granted", 0},
+		{"a provider account the user owns", "own-org", 0},
+		{"a provider account the user does not own", "acct-shared", http.StatusForbidden},
+		{"a member account opened on first use", "member-first-use", http.StatusForbidden},
+		{"another user's account", "personal-u-2", http.StatusForbidden},
+		{"a closed member account", "member-u-1", http.StatusBadRequest},
+		{"an account that does not exist", "acct-gone", http.StatusBadRequest},
 	} {
-		if got := status(c.PolicyBinding(ctx, bind(tc.sub))); got != tc.want {
-			t.Errorf("%s %s: status %d, want %d", tc.sub.Kind, tc.sub.ID, got, tc.want)
+		if got := status(c.KeyAccount(ctx, keyIn(tc.account))); got != tc.want {
+			t.Errorf("%s: status %d, want %d", tc.name, got, tc.want)
 		}
+	}
+	k := keyIn("")
+	if err := c.KeyAccount(ctx, k); err != nil || k.Spec.AccountID != "personal-u-1" {
+		t.Fatalf("defaulted lane = %q, %v; want the personal account", k.Spec.AccountID, err)
 	}
 }

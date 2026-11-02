@@ -11,10 +11,10 @@ import (
 
 // DetachedLinks lists the policies a prune takes a link from. The prune is
 // allowed: a policy stops counting a deleted rate limit or budget, and
-// narrows to the pools and credentials it still links, never widening.
+// narrows to the pools it still links, never widening.
 type DetachedLinks struct {
 	// Field is the policy field that loses the link.
-	Field string `json:"field" doc:"The policy field that loses the link, such as spec.budgetIds."`
+	Field string `json:"field" doc:"The policy field that loses the link, such as spec.budgets."`
 	// Policies names the policies the caller may see.
 	Policies []string `json:"policies,omitempty" doc:"Slugs of the affected policies the caller may see."`
 	// Hidden counts the policies the caller may not see.
@@ -42,9 +42,8 @@ var linkedBy = map[string]struct {
 	auditField string
 	links      func(p *policy.Policy, id string) bool
 }{
-	"HostKey": {"spec.credentials", "spec.credentialIds", func(p *policy.Policy, id string) bool { return slices.Contains(p.Spec.CredentialIDs, id) }},
-	"Pool":    {"spec.pools", "spec.poolIds", func(p *policy.Policy, id string) bool { return slices.Contains(p.Spec.PoolIDs, id) }},
-	"Budget":  {"spec.budgets", "spec.budgetIds", func(p *policy.Policy, id string) bool { return slices.Contains(p.Spec.BudgetIDs, id) }},
+	"Pool":   {"spec.pools", "spec.poolIds", func(p *policy.Policy, id string) bool { return slices.Contains(p.Spec.PoolIDs, id) }},
+	"Budget": {"spec.budgets", "spec.budgets[].budgetId", func(p *policy.Policy, id string) bool { return slices.Contains(p.BudgetIDs(), id) }},
 	"RateLimit": {"spec.rateLimits", "spec.rateLimits[].rateLimitId", func(p *policy.Policy, id string) bool {
 		return slices.ContainsFunc(p.Spec.RateLimits, func(l policy.RateLimitLink) bool { return l.RateLimitID == id })
 	}},

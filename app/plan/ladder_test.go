@@ -9,25 +9,23 @@ import (
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 // A policy on any one caller rung narrows the models the principal may call, and a refused model names that rung and its policy.
 func TestLadder_EachCallerRungNarrowsTheModels(t *testing.T) {
-	for _, rung := range []limits.Rung{limits.RungTeam, limits.RungProject, limits.RungPrincipal} {
+	for _, rung := range []limits.Rung{limits.RungTeam, limits.RungProject, limits.RungLane} {
 		t.Run(string(rung), func(t *testing.T) {
 			o := newOrg()
 			o.w.Credential(o.host, nil, plantest.System, "sk-system")
 			pol := o.w.Policy("only-m1", policy.Spec{Models: []string{"prov/m1"}})
 			switch rung {
 			case limits.RungTeam:
-				o.w.BindPolicy(pol, teamSubject(o.team))
+				o.w.BindPolicy(pol, o.teamAcct())
 			case limits.RungProject:
-				o.w.BindPolicy(pol, projectSubject(o.proj))
+				o.w.BindPolicy(pol, o.projectAcct())
 			default:
-				o.w.BindPolicy(pol, saSubject(o.sa))
+				o.w.BindPolicy(pol, o.saAcct())
 			}
 			cp := keyCaller(t, o.w.Load(t), o.saKey)
 			mustRoute(t, cp, "m1")
@@ -43,13 +41,13 @@ func TestLadder_CallerRungsIntersect(t *testing.T) {
 	teamPol := o.w.Policy("team", policy.Spec{Models: []string{"prov/m1", "prov/m2", "prov/m3"}})
 	projPol := o.w.Policy("project", policy.Spec{Models: []string{"prov/m1", "prov/m2"}})
 	saPol := o.w.Policy("sa", policy.Spec{Models: []string{"prov/m2", "prov/m3"}})
-	o.w.BindPolicy(teamPol, teamSubject(o.team))
-	o.w.BindPolicy(projPol, projectSubject(o.proj))
-	o.w.BindPolicy(saPol, saSubject(o.sa))
+	o.w.BindPolicy(teamPol, o.teamAcct())
+	o.w.BindPolicy(projPol, o.projectAcct())
+	o.w.BindPolicy(saPol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	mustRoute(t, cp, "m2")
-	wantRefusal(t, cp.Routes.Get("m1"), plan.CodeModelNotAllowed, limits.RungPrincipal, saPol.Meta.ID)
+	wantRefusal(t, cp.Routes.Get("m1"), plan.CodeModelNotAllowed, limits.RungLane, saPol.Meta.ID)
 	wantRefusal(t, cp.Routes.Get("m3"), plan.CodeModelNotAllowed, limits.RungProject, projPol.Meta.ID)
 }
 
@@ -58,11 +56,11 @@ func TestLadder_RungWithoutPolicyDoesNotConstrain(t *testing.T) {
 	o := newOrg()
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	pol := o.w.Policy("project", policy.Spec{Models: []string{"prov/m1", "prov/m2"}})
-	o.w.BindPolicy(pol, projectSubject(o.proj))
+	o.w.BindPolicy(pol, o.projectAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
-	if cp.Team().Policy != nil || cp.PrincipalRung().Policy != nil {
-		t.Fatalf("unbound rungs carry a policy: team %v, principal %v", cp.Team().Policy, cp.PrincipalRung().Policy)
+	if cp.Team().Policy != nil || cp.LaneRung().Policy != nil {
+		t.Fatalf("unbound rungs carry a policy: team %v, lane %v", cp.Team().Policy, cp.LaneRung().Policy)
 	}
 	mustRoute(t, cp, "m1")
 	mustRoute(t, cp, "m2")
@@ -85,32 +83,28 @@ func TestLadder_EmptyModelListInheritsTheOuterRung(t *testing.T) {
 	teamPol := o.w.Policy("team", policy.Spec{Models: []string{"prov/m1"}})
 	rl := o.w.RateLimit(plantest.Rule(ratelimit.MeterRequests, 100, time.Minute))
 	saPol := o.w.Policy("sa-limit-only", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	o.w.BindPolicy(teamPol, teamSubject(o.team))
-	o.w.BindPolicy(saPol, saSubject(o.sa))
+	o.w.BindPolicy(teamPol, o.teamAcct())
+	o.w.BindPolicy(saPol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	mustRoute(t, cp, "m1")
 	wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungTeam, teamPol.Meta.ID)
 }
 
-// The host and account rungs each narrow the models a credential may serve; a model the upstream side refuses is refused naming that rung and its policy.
-func TestLadder_EachUpstreamRungNarrowsTheModels(t *testing.T) {
-	for _, rung := range []limits.Rung{limits.RungHost, limits.RungAccount} {
-		t.Run(string(rung), func(t *testing.T) {
-			o := newOrg()
-			acct := o.w.Account(o.host)
-			o.w.Credential(o.host, acct, plantest.System, "sk-acct")
-			pol := o.w.Policy("tier", policy.Spec{Models: []string{"prov/m1"}})
-			if rung == limits.RungHost {
-				pol.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: o.host.Meta.ID}
-				o.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectHost, o.host.Meta.ID))
-			} else {
-				o.w.BindPolicy(pol, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
-			}
-			cp := keyCaller(t, o.w.Load(t), o.saKey)
-			mustRoute(t, cp, "m1")
-			wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, rung, pol.Meta.ID)
-		})
+// The provider account's policy narrows the models its credentials may serve, a host-owned tier preset as much as any; a model it refuses is refused naming the account rung and the policy.
+func TestLadder_TheProviderAccountNarrowsTheModels(t *testing.T) {
+	for _, preset := range []bool{false, true} {
+		o := newOrg()
+		acct := o.w.Account(o.host)
+		o.w.Credential(o.host, acct, plantest.System, "sk-acct")
+		pol := o.w.Policy("tier", policy.Spec{Models: []string{"prov/m1"}})
+		if preset {
+			pol.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: o.host.Meta.ID}
+		}
+		o.w.BindPolicy(pol, acct)
+		cp := keyCaller(t, o.w.Load(t), o.saKey)
+		mustRoute(t, cp, "m1")
+		wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungAccount, pol.Meta.ID)
 	}
 }
 
@@ -120,9 +114,9 @@ func TestLadder_UpstreamAndCallerSidesIntersect(t *testing.T) {
 	acct := o.w.Account(o.host)
 	o.w.Credential(o.host, acct, plantest.System, "sk-acct")
 	tier := o.w.Policy("tier", policy.Spec{Models: []string{"prov/m1", "prov/m2"}})
-	o.w.BindPolicy(tier, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	o.w.BindPolicy(tier, acct)
 	caller := o.w.Policy("caller", policy.Spec{Models: []string{"prov/m2", "prov/m3"}})
-	o.w.BindPolicy(caller, saSubject(o.sa))
+	o.w.BindPolicy(caller, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	mustRoute(t, cp, "m2")
@@ -139,8 +133,8 @@ func TestLadder_DisabledCallerPolicyRefusesOnItsRung(t *testing.T) {
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	teamPol := o.w.Policy("team-off", policy.Spec{Models: []string{"prov/m1"}, Enabled: off()})
 	projPol := o.w.Policy("project", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(teamPol, teamSubject(o.team))
-	o.w.BindPolicy(projPol, projectSubject(o.proj))
+	o.w.BindPolicy(teamPol, o.teamAcct())
+	o.w.BindPolicy(projPol, o.projectAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	wantRefusal(t, cp.Routes.Get("m1"), plan.CodePolicyDisabled, limits.RungTeam, teamPol.Meta.ID)
@@ -152,7 +146,7 @@ func TestLadder_DisabledUpstreamPolicyRefusesItsCredentials(t *testing.T) {
 	acct := o.w.Account(o.host)
 	o.w.Credential(o.host, acct, plantest.System, "sk-acct")
 	tier := o.w.Policy("tier-off", policy.Spec{Models: []string{"prov/m1"}, Enabled: off()})
-	o.w.BindPolicy(tier, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	o.w.BindPolicy(tier, acct)
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	wantRefusal(t, cp.Routes.Get("m1"), plan.CodePolicyDisabled, limits.RungAccount, tier.Meta.ID)
@@ -165,7 +159,7 @@ func TestLadder_DisabledUpstreamPolicyLeavesOtherCredentials(t *testing.T) {
 	o.w.Credential(o.host, acct, plantest.System, "sk-acct")
 	free := o.w.Credential(o.host, nil, plantest.System, "sk-free")
 	tier := o.w.Policy("tier-off", policy.Spec{Enabled: off()})
-	o.w.BindPolicy(tier, plantest.Subject(policybinding.SubjectAccount, acct.Meta.ID))
+	o.w.BindPolicy(tier, acct)
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{free.Meta.Name}) {
@@ -173,14 +167,14 @@ func TestLadder_DisabledUpstreamPolicyLeavesOtherCredentials(t *testing.T) {
 	}
 }
 
-// A subject holds at most one policy: two bindings on one subject refuse that rung rather than picking one.
+// An account holds at most one policy: two bindings on one account refuse that rung rather than picking one.
 func TestLadder_TwoBindingsOnOneSubjectRefuseThatRung(t *testing.T) {
 	o := newOrg()
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	wide := o.w.Policy("wide", policy.Spec{})
 	narrow := o.w.Policy("narrow", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(wide, projectSubject(o.proj))
-	o.w.BindPolicy(narrow, projectSubject(o.proj))
+	o.w.BindPolicy(wide, o.projectAcct())
+	o.w.BindPolicy(narrow, o.projectAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	r := cp.Routes.Get("m1")
@@ -189,28 +183,18 @@ func TestLadder_TwoBindingsOnOneSubjectRefuseThatRung(t *testing.T) {
 	}
 }
 
-// One policy may govern many subjects: binding it to two service accounts governs both.
+// One policy may govern many accounts: binding it to two service accounts' accounts governs both.
 func TestLadder_OnePolicyGovernsManySubjects(t *testing.T) {
 	o := newOrg()
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
 	other := o.w.ServiceAccount(o.proj)
 	otherKey := o.w.ServiceAccountKey(other, "sk-other")
 	pol := o.w.Policy("shared", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(pol, saSubject(o.sa), saSubject(other))
+	o.w.BindPolicy(pol, o.saAcct(), o.w.ServiceAccountAccount(other))
 	plans := o.w.Load(t)
 
 	for _, cp := range []*plan.CallerPlan{keyCaller(t, plans, o.saKey), keyCaller(t, plans, otherKey)} {
 		mustRoute(t, cp, "m1")
-		wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungPrincipal, pol.Meta.ID)
+		wantRefusal(t, cp.Routes.Get("m2"), plan.CodeModelNotAllowed, limits.RungLane, pol.Meta.ID)
 	}
-}
-
-// Keys never hold a policy: a binding naming a key is not applied to the key's requests.
-func TestLadder_KeySubjectIsNotARung(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	pol := o.w.Policy("on-key", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(pol, rolebinding.Subject{Kind: "key", ID: o.saKey.Meta.ID})
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-	mustRoute(t, cp, "m2")
 }

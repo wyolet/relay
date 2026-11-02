@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 // record queues one usage event per call not recorded before, then stores the content of the calls that carry any and reports how much of it was withheld. It reports false when the usage queue could not take them all: the client must then send the export again, and whatever was queued this time is skipped as a duplicate.
-func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snapshot, reporter *lifecycle.Context, governing *policy.Policy, from origin, calls []reported, now time.Time) (bool, withheld) {
+func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snapshot, reporter *lifecycle.Context, capture account.PayloadLogging, from origin, calls []reported, now time.Time) (bool, withheld) {
 	queue := h.opts.Usage
 	// Refused before anything is marked when the export cannot fit. An export larger than the receiver's whole share never fits, so it is taken in parts across resends instead.
 	if room := sharedRoom(queue); room <= 0 || (room < len(calls) && len(calls) <= share(queue)) {
@@ -45,7 +45,7 @@ func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snaps
 		sig.records.WithLabelValues(outcomeRecorded).Inc()
 		recorded = append(recorded, c)
 	}
-	kept := h.storeContent(ctx, tenant, reporter, governing, recorded, now)
+	kept := h.storeContent(ctx, tenant, reporter, capture, recorded, now)
 	if len(unqueued) == 0 {
 		return true, kept
 	}
@@ -57,7 +57,7 @@ func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snaps
 type withheld struct {
 	// captureOff counts calls whose content arrived while content capture or payload logging was off.
 	captureOff int
-	// byPolicy counts calls whose content the reporter's policy does not store.
+	// byPolicy counts calls whose content the reporter's account does not store.
 	byPolicy int
 	// expired counts calls that started before the payload store's retention window, retentionDays long.
 	expired       int
@@ -68,7 +68,7 @@ type withheld struct {
 func (w withheld) message() string {
 	n, why := w.captureOff, "this server does not capture message content"
 	if w.byPolicy > 0 {
-		n, why = w.byPolicy, "the policy of this credential does not allow storing message content"
+		n, why = w.byPolicy, "the account this credential runs in does not allow storing message content"
 	}
 	advice := "It is safe to stop sending content"
 	if w.expired > 0 {
@@ -82,7 +82,7 @@ func (w withheld) message() string {
 }
 
 // storeContent queues the reported message content of calls for the payload store, once per call, when the operator's switches are on and the reporter's policy allows it. Content is secondary to the usage row: when the payload queue lacks room it is dropped and counted rather than holding up the export, and left unmarked so a later report of the same call can still store it.
-func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lifecycle.Context, governing *policy.Policy, calls []reported, received time.Time) withheld {
+func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lifecycle.Context, capture account.PayloadLogging, calls []reported, received time.Time) withheld {
 	var with []reported
 	for _, c := range calls {
 		if !c.inf.Content.Empty() {
@@ -95,8 +95,8 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 	if !h.capturesContent() {
 		return withheld{captureOff: len(with)}
 	}
-	// The rule proxied requests follow, with sending content as the reporter's opt-in in place of the key's flag: a governing policy decides, and with none what the client sent is kept.
-	if !policy.CapturesPayload(governing, true) {
+	// The rule proxied requests follow, with sending content as the reporter's opt-in in place of the key's flag: an account on the lane's ladder that sets payloadLogging decides, and with none what the client sent is kept.
+	if capture == account.PayloadLoggingOff {
 		contentTotal.WithLabelValues(contentPolicy).Add(float64(len(with)))
 		return withheld{byPolicy: len(with)}
 	}
@@ -155,17 +155,17 @@ func (h *Handler) capturesContent() bool {
 	return o.CaptureContent != nil && o.PayloadLog != nil && o.Payloads != nil && o.CaptureContent() && o.PayloadLog.Enabled()
 }
 
-// contentCapture is the answer to the reporter's question whether content it sends is stored, by the rule storeContent applies: switches off or a policy that does not store drops it, a policy that stores keeps it, and with no policy the client's choice stands.
-func (h *Handler) contentCapture(governing *policy.Policy) string {
+// contentCapture is the answer to the reporter's question whether content it sends is stored, by the rule storeContent applies: switches off or an account with payloadLogging off drops it, one with it on keeps it, and with none set the client's choice stands.
+func (h *Handler) contentCapture(capture account.PayloadLogging) string {
 	switch {
 	case !h.capturesContent():
 		return httpheader.ContentCaptureDrop
-	case governing == nil:
-		return httpheader.ContentCaptureClient
-	case policy.CapturesPayload(governing, false):
+	case capture == account.PayloadLoggingOn:
 		return httpheader.ContentCaptureStore
+	case capture == account.PayloadLoggingOff:
+		return httpheader.ContentCaptureDrop
 	}
-	return httpheader.ContentCaptureDrop
+	return httpheader.ContentCaptureClient
 }
 
 // mark reports which calls have not had kind stored before. A failing store answers "none had": storing a call twice is the smaller harm than losing it.

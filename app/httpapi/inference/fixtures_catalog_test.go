@@ -16,7 +16,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 // dispatchFixture is the plans behind one buildDispatchCatalog catalog, so a later edit (pointHostAt) reaches the principal the test already holds.
@@ -98,7 +97,7 @@ func limitCaller(t *testing.T, cat *catalog.Catalog, perHour int64) {
 	var w plantest.World
 	rl := w.RateLimit(ratelimit.Rule{Meter: ratelimit.MeterRequests, Amount: perHour, Window: ratelimit.Window(time.Hour), Strategy: ratelimit.StrategyFixedWindow})
 	pol := w.Policy("hourly", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	pb := w.BindPolicy(pol, plantest.Subject(rolebinding.SubjectUser, f.principal.UserID))
+	pb := w.BindPolicy(pol, f.principal.Caller.Lane)
 	plantest.Apply(t, f.plans, rl)
 	plantest.Apply(t, f.plans, pol)
 	plantest.Apply(t, f.plans, pb)

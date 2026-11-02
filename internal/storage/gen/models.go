@@ -9,16 +9,24 @@ import (
 )
 
 type Account struct {
-	ID              string             `db:"id" json:"id"`
-	Name            string             `db:"name" json:"name"`
-	DisplayName     string             `db:"display_name" json:"display_name"`
-	HostID          string             `db:"host_id" json:"host_id"`
-	Metadata        []byte             `db:"metadata" json:"metadata"`
-	Spec            []byte             `db:"spec" json:"spec"`
-	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
-	DefaultOwner    pgtype.Text        `db:"default_owner" json:"default_owner"`
+	ID                  string             `db:"id" json:"id"`
+	Name                string             `db:"name" json:"name"`
+	DisplayName         string             `db:"display_name" json:"display_name"`
+	HostID              pgtype.Text        `db:"host_id" json:"host_id"`
+	Metadata            []byte             `db:"metadata" json:"metadata"`
+	Spec                []byte             `db:"spec" json:"spec"`
+	CreatedAt           pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion     int64              `db:"resource_version" json:"resource_version"`
+	DefaultOwner        pgtype.Text        `db:"default_owner" json:"default_owner"`
+	Kind                string             `db:"kind" json:"kind"`
+	ManagedKey          pgtype.Text        `db:"managed_key" json:"managed_key"`
+	HolderUserID        pgtype.Text        `db:"holder_user_id" json:"holder_user_id"`
+	HolderSaID          pgtype.Text        `db:"holder_sa_id" json:"holder_sa_id"`
+	TeamID              pgtype.Text        `db:"team_id" json:"team_id"`
+	ProjectID           pgtype.Text        `db:"project_id" json:"project_id"`
+	Closed              bool               `db:"closed" json:"closed"`
+	FollowsRoleBindings bool               `db:"follows_role_bindings" json:"follows_role_bindings"`
 }
 
 type AuditEvent struct {
@@ -165,32 +173,17 @@ type PolicyBinding struct {
 	UserID          pgtype.Text        `db:"user_id" json:"user_id"`
 }
 
-type PolicyBindingSubject struct {
-	BindingID           string      `db:"binding_id" json:"binding_id"`
-	Kind                string      `db:"kind" json:"kind"`
-	SubjectID           pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName         pgtype.Text `db:"subject_name" json:"subject_name"`
-	SubjectUserID       pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
-	SubjectSaID         pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
-	Position            int32       `db:"position" json:"position"`
-	SubjectHostID       pgtype.Text `db:"subject_host_id" json:"subject_host_id"`
-	SubjectAccountID    pgtype.Text `db:"subject_account_id" json:"subject_account_id"`
-	SubjectCredentialID pgtype.Text `db:"subject_credential_id" json:"subject_credential_id"`
-	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
-	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
-	OwnerScope          string      `db:"owner_scope" json:"owner_scope"`
+type PolicyBindingAccount struct {
+	BindingID string `db:"binding_id" json:"binding_id"`
+	AccountID string `db:"account_id" json:"account_id"`
+	Position  int32  `db:"position" json:"position"`
 }
 
 type PolicyBudget struct {
 	PolicyID string `db:"policy_id" json:"policy_id"`
 	BudgetID string `db:"budget_id" json:"budget_id"`
 	Position int32  `db:"position" json:"position"`
-}
-
-type PolicyCredential struct {
-	PolicyID  string `db:"policy_id" json:"policy_id"`
-	HostKeyID string `db:"host_key_id" json:"host_key_id"`
-	Position  int32  `db:"position" json:"position"`
+	Shared   bool   `db:"shared" json:"shared"`
 }
 
 type PolicyPool struct {
@@ -204,6 +197,7 @@ type PolicyRateLimit struct {
 	RateLimitID string `db:"rate_limit_id" json:"rate_limit_id"`
 	Models      []byte `db:"models" json:"models"`
 	Position    int32  `db:"position" json:"position"`
+	Shared      bool   `db:"shared" json:"shared"`
 }
 
 type Pool struct {
@@ -289,6 +283,7 @@ type RelayKey struct {
 	PrincipalUserID pgtype.Text        `db:"principal_user_id" json:"principal_user_id"`
 	PreviousKeyHash pgtype.Text        `db:"previous_key_hash" json:"previous_key_hash"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	AccountID       pgtype.Text        `db:"account_id" json:"account_id"`
 }
 
 type Role struct {

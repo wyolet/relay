@@ -9,9 +9,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 // C15: /v1/models never lists what resolution refuses, and lists everything it serves.
@@ -37,14 +35,14 @@ func TestCarryOver_ListingMatchesResolve(t *testing.T) {
 	w.price(tierOnly, b.hostA)
 
 	bud := w.budget("10")
-	teamPol := w.policy("team", policy.Spec{BudgetIDs: []string{bud.Meta.ID}})
-	projPol := w.policy("proj", policy.Spec{Models: []string{"acme"}, IncludeDeprecated: true})
+	teamPol := w.policy("team", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	projPol := w.policy("proj", policy.Spec{Models: []string{"acme"}})
 	saPol := w.policy("sa", policy.Spec{Models: []string{"acme/m1", "acme/old", "acme/unpriced", "acme/tier-only", "acme/gone"}})
 	tier := w.policy("tier-a", policy.Spec{Models: []string{"acme/m1", "acme/old"}})
-	w.bindPolicy(teamPol, subject(policybinding.SubjectTeam, b.team.Meta.ID))
-	w.bindPolicy(projPol, subject(policybinding.SubjectProject, b.proj.Meta.ID))
-	w.bindPolicy(saPol, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID))
-	w.bindPolicy(tier, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
+	w.bindPolicy(teamPol, w.teamAccount(b.team))
+	w.bindPolicy(projPol, w.projectAccount(b.proj))
+	w.bindPolicy(saPol, w.saAccount(b.sa))
+	w.bindPolicy(tier, b.acctA)
 	h := w.start(t)
 
 	rt := h.keyPlan(b.key).Caller.Routes
@@ -77,7 +75,7 @@ func TestCarryOver_KeylessHostNeedsAnExplicitPool(t *testing.T) {
 
 	wild := w.policy("wild", policy.Spec{Models: []string{"acme"}})
 	apply(h, wild)
-	apply(h, w.bindPolicy(wild, subject(policybinding.SubjectProject, b.proj.Meta.ID)))
+	apply(h, w.bindPolicy(wild, w.projectAccount(b.proj)))
 	_ = wantRefused(t, h.route(b.key, "m3"), CodeNoCredentials, "")
 
 	lp := w.pool(local)
@@ -95,24 +93,24 @@ func TestCarryOver_KeylessHostNeedsAnExplicitPool(t *testing.T) {
 	}
 }
 
-// C17: deprecated grants, snapshot-gated bindings, disabled and unknown models, hosts without a base URL.
-func TestCarryOver_DeprecatedGrantMatrix(t *testing.T) {
+// A deprecated model is granted like any other: the model list decides, and an empty one allows it.
+func TestCarryOver_DeprecatedModelsFollowTheGrant(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		spec  *policy.Spec
 		serve bool
 	}{
-		{"no caller policy", nil, false},
-		{"wildcard", &policy.Spec{Models: []string{"acme"}}, false},
-		{"wildcard with includeDeprecated", &policy.Spec{Models: []string{"acme"}, IncludeDeprecated: true}, true},
+		{"no caller policy", nil, true},
+		{"provider", &policy.Spec{Models: []string{"acme"}}, true},
 		{"named", &policy.Spec{Models: []string{"acme/m1"}}, true},
-		{"empty list with includeDeprecated", &policy.Spec{IncludeDeprecated: true}, true},
+		{"another model", &policy.Spec{Models: []string{"acme/other"}}, false},
+		{"empty list", &policy.Spec{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBasic()
 			b.m1.Spec.Deprecation = &model.Deprecation{Status: model.DeprecationSunset}
 			if tc.spec != nil {
-				b.w.bindPolicy(b.w.policy("p", *tc.spec), subject(policybinding.SubjectProject, b.proj.Meta.ID))
+				b.w.bindPolicy(b.w.policy("p", *tc.spec), b.w.projectAccount(b.proj))
 			}
 			r := b.w.start(t).route(b.key, "m1")
 			if served := r.Refused == nil; served != tc.serve {
@@ -163,7 +161,7 @@ func TestCarryOver_UnmatchableGrantNarrowsToNothing(t *testing.T) {
 		t.Run(ref, func(t *testing.T) {
 			b := newBasic()
 			p := b.w.policy("p", policy.Spec{Models: []string{ref}})
-			b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+			b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 			h := b.w.start(t)
 			_ = wantRefused(t, h.route(b.key, "m1"), CodeModelNotAllowed, limits.RungProject)
 			is := h.issues(KindPolicy, p.Meta.ID)
@@ -187,7 +185,7 @@ func TestCounters_ScopedUpstreamRulesAreDistinctPerModel(t *testing.T) {
 		{RateLimitID: scoped.Meta.ID, Models: []string{"acme/m2"}},
 		{RateLimitID: whole.Meta.ID},
 	}})
-	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
+	b.w.bindPolicy(tier, b.acctA)
 	h := b.w.start(t)
 
 	c1 := h.route(b.key, "m1@host-a").Hops[0].Counters[0]
@@ -213,7 +211,7 @@ func TestCounters_ScopedUpstreamRulesAreDistinctPerModel(t *testing.T) {
 	}
 }
 
-// Caller counters count per (rule, policy, bound subject): a reused policy gives each subject its own bucket, a team binding one bucket for the whole team.
+// Caller counters count per (rule, policy, bound account): a reused policy gives each account its own bucket, a team binding one bucket for the whole team.
 func TestCounters_CallerIdentityPerBoundSubject(t *testing.T) {
 	b := newBasic()
 	w := b.w
@@ -225,13 +223,14 @@ func TestCounters_CallerIdentityPerBoundSubject(t *testing.T) {
 	sa2 := w.sa(proj2)
 	key2 := w.saKey(sa2)
 	keyB := w.saKey(b.sa)
-	w.bindPolicy(shared, subject(policybinding.SubjectProject, b.proj.Meta.ID), subject(policybinding.SubjectProject, proj2.Meta.ID))
-	w.bindPolicy(teamPol, subject(policybinding.SubjectTeam, b.team.Meta.ID))
+	w.bindPolicy(shared, w.projectAccount(b.proj), w.projectAccount(proj2))
+	teamAcct := w.teamAccount(b.team)
+	w.bindPolicy(teamPol, teamAcct)
 	h := w.start(t)
 
 	k1, k2, kB := h.keyPlan(b.key), h.keyPlan(key2), h.keyPlan(keyB)
 	if k1.Caller != kB.Caller {
-		t.Fatal("two keys of one principal hold different caller plans")
+		t.Fatal("two keys of one lane hold different caller plans")
 	}
 	c1, c2 := k1.Caller.Counters, k2.Caller.Counters
 	if len(c1) != 2 || len(c2) != 2 {
@@ -244,7 +243,7 @@ func TestCounters_CallerIdentityPerBoundSubject(t *testing.T) {
 		t.Error("one policy bound to two projects shares a bucket")
 	}
 	for _, c := range append(c1, c2...) {
-		if c.Group != "team:"+b.team.Meta.ID {
+		if c.Group != "account:"+teamAcct.Meta.ID {
 			t.Errorf("caller counter %s grouped under %s, want the team", c.ID, c.Group)
 		}
 	}

@@ -123,9 +123,10 @@ func TestModelPolicies_Filtering(t *testing.T) {
 		Bindings: fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "b"}, Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI}}},
 		Pricings: fPricings{},
 		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}}},
+		Pools:    fPools{poolOf(hostB, keyB)},
 		Policies: fPolicies{
 			// wildcard customer policy whose only key is on hostB → cannot reach the model → EXCLUDE
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "unreachable-wildcard", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyB}}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "unreachable-wildcard", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyB}}},
 			// host-tier wildcard on hostA (serves the model) → INCLUDE
 			{Meta: meta.Metadata{ID: meta.NewID(), Name: "hostA-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{}},
 			// host-tier wildcard on hostB (does NOT serve the model) → EXCLUDE
@@ -208,7 +209,8 @@ func TestPolicyHosts_KeysFoldedIn(t *testing.T) {
 		Bindings:   fBindings{},
 		Pricings:   fPricings{},
 		HostKeys:   fHostKeys{{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA}}},
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyA}}}},
+		Pools:      fPools{poolOf(hostA, keyA)},
+		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyA}}}},
 		RateLimits: fRLs{},
 	}
 	_, rows, err := svc.PolicyHosts(context.Background(), "cust")
@@ -329,8 +331,9 @@ func TestPolicyModels_DSLMatchedByAndCaps(t *testing.T) {
 		Bindings: fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "b"}, Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI}}},
 		Pricings: fPricings{},
 		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
+		Pools:    fPools{poolOf(hostID, keyID)},
 		// customer policy, DSL grant "openai/*", key reaches the host
-		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "dsl", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai"}, CredentialIDs: []string{keyID}}}},
+		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "dsl", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{Models: []string{"openai"}, PoolIDs: []string{"pool-" + keyID}}}},
 		RateLimits: fRLs{},
 	}
 	_, rows, err := svc.PolicyModels(context.Background(), "dsl")
@@ -375,10 +378,11 @@ func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
 			{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA, Enabled: &disabled}},
 			{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}},
 		},
+		Pools: fPools{poolOf(hostA, keyA), poolOf(hostB, keyB)},
 		Policies: fPolicies{
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyA, keyB}}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyA, "pool-" + keyB}}},
 			// a second policy that also uses keyA → sharedWithPolicyCount = 1
-			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{CredentialIDs: []string{keyA}}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{PoolIDs: []string{"pool-" + keyA}}},
 		},
 		RateLimits: fRLs{},
 	}
@@ -427,11 +431,12 @@ func TestPolicyRateLimits_EveryMatchingLinkApplies(t *testing.T) {
 			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
 		},
 		// two links both scoped to gpt-4o; free-model matched by neither (unthrottled)
+		Pools: fPools{poolOf(hostID, keyID)},
 		Policies: fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{
-			CredentialIDs: []string{keyID},
+			PoolIDs: []string{"pool-" + keyID},
 			RateLimits: []policy.RateLimitLink{
 				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl1},
-				{Models: []string{"openai/gpt-4o@openai"}, RateLimitID: rl2},
+				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl2},
 			},
 		}}},
 	}
@@ -459,6 +464,11 @@ func TestPolicyRateLimits_EveryMatchingLinkApplies(t *testing.T) {
 type fPools []*pool.Pool
 
 func (f fPools) List(context.Context) ([]*pool.Pool, error) { return f, nil }
+
+// poolOf is a pool at host holding keys, with id "pool-" plus the first key's.
+func poolOf(host string, keys ...string) *pool.Pool {
+	return &pool.Pool{Meta: meta.Metadata{ID: "pool-" + keys[0], Name: "pool-" + keys[0]}, Spec: pool.Spec{HostID: host, CredentialIDs: keys}}
+}
 
 // A policy linking a pool reaches the pool's host and its keys.
 func TestPolicyHosts_ThroughAPool(t *testing.T) {

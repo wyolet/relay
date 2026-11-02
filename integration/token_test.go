@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -51,7 +52,7 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 	const username, password = "token-minter", "correct-horse-battery"
 	userID := st.seedLogin(t, username, password)
 
-	// A token acts under its user's caller ladder, so the policy is bound to the user.
+	// A token runs in its user's member account in the project, under the project's own account, so the policy bound there governs it.
 	code, raw := st.adminDo(http.MethodGet, "/api/policies/test-policy", "")
 	if code != http.StatusOK {
 		t.Fatalf("GET policy = %d: %s", code, raw)
@@ -60,8 +61,8 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 	if err := json.Unmarshal(raw, &pol); err != nil {
 		t.Fatalf("decode policy: %v", err)
 	}
-	body := `{"metadata":{"name":"token-project-everyone"},"spec":{"projectId":"` + projectID + `",` +
-		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"user","id":"` + userID + `"}]}}`
+	body := `{"metadata":{"name":"token-project-everyone","owner":{"kind":"project","id":"` + projectID + `"}},` +
+		`"spec":{"policyId":"` + pol.Metadata.ID + `","accountIds":["` + st.accountAt(t, "project:"+projectID) + `"]}}`
 	if code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", body); code != http.StatusCreated {
 		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
 	}
@@ -130,6 +131,44 @@ func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
 	}
 	if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
 		t.Fatalf("chat with a fresh token = %d (%s)", got, reason)
+	}
+}
+
+// A first mint opens the user's member account; the mint answers once this pod serves it, so a request sent right after succeeds without waiting on the client side.
+func TestFirstMintServesTheNextRequest(t *testing.T) {
+	t.Parallel()
+	f := newTokenFixture(t)
+	for i := range 5 {
+		name := "first-minter-" + strconv.Itoa(i)
+		f.seedLogin(t, name, "pw-"+name)
+		code, token, raw := f.mint(f.login(t, name, "pw-"+name))
+		if code != http.StatusOK {
+			t.Fatalf("mint %d = %d: %s", i, code, raw)
+		}
+		if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
+			t.Fatalf("request right after first mint %d = %d (%s), want 200", i, got, reason)
+		}
+	}
+}
+
+// A fresh key's plaintext authenticates on the request right after create.
+func TestCreatedKeyServesTheNextRequest(t *testing.T) {
+	t.Parallel()
+	f := newTokenFixture(t)
+	for i := range 5 {
+		code, raw := f.adminDo(http.MethodPost, "/api/keys", `{"metadata":{"name":"fresh-key-`+strconv.Itoa(i)+`"},"spec":{"principal":{"kind":"user","id":"`+f.userID+`"}}}`)
+		if code != http.StatusCreated {
+			t.Fatalf("create key %d = %d: %s", i, code, raw)
+		}
+		var out struct {
+			Plaintext string `json:"plaintext"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil || out.Plaintext == "" {
+			t.Fatalf("decode key %d: %v %s", i, err, raw)
+		}
+		if got, reason := f.chat(out.Plaintext, "test-model"); got != http.StatusOK {
+			t.Fatalf("request right after key create %d = %d (%s), want 200", i, got, reason)
+		}
 	}
 }
 

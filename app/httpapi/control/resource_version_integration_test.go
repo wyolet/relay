@@ -194,16 +194,16 @@ func TestStoreUpsertComparesVersionAtomically(t *testing.T) {
 	t.Run("policy", func(t *testing.T) {
 		stale, _ := f.stores.Policy.Get(ctx, pol.Meta.ID)
 		fresh, _ := f.stores.Policy.Get(ctx, pol.Meta.ID)
-		fresh.Spec.CredentialIDs = []string{hk.Meta.ID}
+		fresh.Spec.Models = []string{"acme/m"}
 		must(t, "fresh upsert", f.stores.Policy.Upsert(ctx, fresh))
-		stale.Spec.CredentialIDs = nil
+		stale.Spec.Models = nil
 		stale.Spec.Enabled = new(bool)
 		if err := f.stores.Policy.Upsert(ctx, stale); !errors.Is(err, meta.ErrStaleResourceVersion) {
 			t.Fatalf("stale upsert err = %v, want ErrStaleResourceVersion", err)
 		}
 		got, _ := f.stores.Policy.Get(ctx, pol.Meta.ID)
-		if len(got.Spec.CredentialIDs) != 1 || !got.IsEnabled() {
-			t.Fatalf("stale upsert changed the policy: credentialIds=%v enabled=%v", got.Spec.CredentialIDs, got.IsEnabled())
+		if len(got.Spec.Models) != 1 || !got.IsEnabled() {
+			t.Fatalf("stale upsert changed the policy: models=%v enabled=%v", got.Spec.Models, got.IsEnabled())
 		}
 	})
 

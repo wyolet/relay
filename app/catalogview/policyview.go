@@ -60,7 +60,7 @@ type PolicyBindingRow struct {
 // — e.g. a host-tier policy whose host has no bindings post-migration.
 type PolicyModelExclusion struct {
 	Model  ModelRef `json:"model"  doc:"The model."`
-	Reason string   `json:"reason" doc:"Why the policy does not allow it, such as no matching entry, deprecated, or no host the policy reaches."`
+	Reason string   `json:"reason" doc:"Why the policy does not allow it, such as no matching entry or no host the policy reaches."`
 }
 
 // PolicyHostRow — a host this policy can reach, with the host-keys that reach
@@ -168,10 +168,7 @@ func (idx *index) bindingGrantRefs(p *policy.Policy, m *model.Model, provSlug, h
 		return refs
 	}
 	if len(p.Spec.Models) == 0 {
-		if !(modelDeprecated(m) && !p.Spec.IncludeDeprecated) {
-			refs = append(refs, "*")
-		}
-		return refs
+		return append(refs, "*")
 	}
 	for _, raw := range p.Spec.Models {
 		r, err := modelref.Parse(raw)
@@ -187,7 +184,7 @@ func (idx *index) bindingGrantRefs(p *policy.Policy, m *model.Model, provSlug, h
 
 // PolicyModelExclusions returns the models this policy does NOT grant, each with
 // the reason — the diagnostic complement to PolicyModels. Use it to explain an
-// empty grant list (missing bindings, deprecation gate, non-matching DSL).
+// empty grant list (missing bindings, non-matching DSL).
 func (s *Service) PolicyModelExclusions(ctx context.Context, ref string) (PolicyRef, []PolicyModelExclusion, error) {
 	p, idx, err := s.loadPolicy(ctx, ref)
 	if err != nil {
@@ -258,7 +255,7 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 	for hid := range idx.policyReachHosts(p) {
 		hostIDs[hid] = struct{}{}
 	}
-	if len(p.Spec.PoolIDs) == 0 && len(p.Spec.CredentialIDs) == 0 {
+	if len(p.Spec.PoolIDs) == 0 {
 		for hid := range hostModels {
 			hostIDs[hid] = struct{}{}
 		}

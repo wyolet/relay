@@ -33,7 +33,7 @@ Every pod holds an immutable in-memory snapshot of the catalog, credentials, pol
 
 A change made through the control API reaches every pod in about a second, with no restart and no manual reload. `POST /api/reload` rebuilds the snapshot from Postgres in full if you need it.
 
-From the same rows each pod folds the [policy ladder](/concepts/policies#the-ladder) into one plan per principal. A change rebuilds only the plans it touches, and every `RELAY_PLAN_RESYNC_S` seconds the rows are read again to heal a missed notification.
+From the same rows each pod folds the [policy ladder](/concepts/policies#the-ladder) into one plan per [account](/concepts/accounts) a request can run in. A change rebuilds only the plans it touches, and every `RELAY_PLAN_RESYNC_S` seconds the rows are read again to heal a missed notification.
 
 <Frame caption="A control-plane write propagates to every pod's snapshot via Postgres NOTIFY/LISTEN.">
   <img className="block dark:hidden" src="/images/architecture/snapshot-fanout.svg" alt="Snapshot fan-out via NOTIFY/LISTEN" />
@@ -52,10 +52,10 @@ From the same rows each pod folds the [policy ladder](/concepts/policies#the-lad
     A relay key is hashed and looked up in the snapshot; an inference token is verified against the signing key. A miss, a disabled or expired key, or a bad token is a `401`.
   </Step>
   <Step title="Read the plan">
-    The credential points at its principal's plan: the [policy ladder](/concepts/policies#the-ladder) folded ahead of time from the policies bound to the principal, its project and team, and the hosts, accounts and host keys it can reach. A disabled policy or subject on the way is a `403`.
+    The credential points at the plan of its default account, or of the account the request names: the [policy ladder](/concepts/policies#the-ladder) folded ahead of time from the policies bound to that account and to its project's and team's accounts, and the pools and host keys it can reach. A disabled policy, team or project on the way, or a closed account, is a `403`.
   </Step>
   <Step title="Route">
-    The `model` resolves to a catalog model. Relay keeps the caller's pools, in order, that are at a host serving the model and whose rungs allow it; each becomes a hop. The binding at the hop's host supplies the wire adapter (`openai`, `openai_responses`, `anthropic` or `gemini`) and the upstream model name. Routes are cached per principal.
+    The `model` resolves to a catalog model. Relay keeps the caller's pools, in order, that are at a host serving the model and whose rungs allow it; each becomes a hop. The binding at the hop's host supplies the wire adapter (`openai`, `openai_responses`, `anthropic` or `gemini`) and the upstream model name. Routes are cached per account.
   </Step>
   <Step title="Reserve and pick a key">
     The caller's rate limits and budgets are reserved in the state backend. A host key is then picked from the first hop's pool, skipping keys whose circuit breaker is open or whose account is cooling, and the key's upstream limits are reserved. See [Key pooling](/concepts/key-pooling) and [Rate limits](/concepts/rate-limits).

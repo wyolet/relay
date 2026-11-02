@@ -8,9 +8,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 func wantHops(t *testing.T, r *Route, want ...[]string) {
@@ -59,13 +57,14 @@ func TestRoute_InnermostLinkingRungOrdersPoolsAndOuterRungsNarrow(t *testing.T) 
 	poolA := b.w.pool(b.hostA, b.a1, b.a2)
 	poolB := b.w.pool(b.hostB, b.b1)
 	stray := b.w.cred(b.hostA, b.acctA, system)
+	strayPool := b.w.pool(b.hostA, stray, b.a2)
 	teamPol := b.w.policy("team", policy.Spec{PoolIDs: []string{poolA.Meta.ID, poolB.Meta.ID}})
-	saPol := b.w.policy("sa", policy.Spec{PoolIDs: []string{poolB.Meta.ID}, CredentialIDs: []string{stray.Meta.ID, b.a2.Meta.ID}})
-	b.w.bindPolicy(teamPol, subject(policybinding.SubjectTeam, b.team.Meta.ID))
-	b.w.bindPolicy(saPol, subject(rolebinding.SubjectServiceAccount, b.sa.Meta.ID))
+	saPol := b.w.policy("sa", policy.Spec{PoolIDs: []string{poolB.Meta.ID, strayPool.Meta.ID}})
+	b.w.bindPolicy(teamPol, b.w.teamAccount(b.team))
+	b.w.bindPolicy(saPol, b.w.saAccount(b.sa))
 	h := b.w.start(t)
 
-	// The principal's order wins; the stray credential is outside the team's pools and is narrowed away.
+	// The lane's order wins; the stray credential is outside the team's pools and is narrowed away.
 	wantHops(t, h.route(b.key, "m1"), ids(b.b1), ids(b.a2))
 	if hop := h.route(b.key, "m1").Hops[0]; hop.Pool.Pool == nil || hop.Pool.Pool.Meta.ID != poolB.Meta.ID || hop.Binding.Spec.HostID != b.hostB.Meta.ID {
 		t.Fatalf("first hop = pool %v at %s, want pool B", hop.Pool.Pool, hop.Binding.Spec.HostID)
@@ -82,12 +81,13 @@ func TestRoute_CallerGrantRefusalNamesRungAndPolicy(t *testing.T) {
 	b := newBasic()
 	b.w.model(b.prov, "other")
 	p := b.w.policy("only-other", policy.Spec{Models: []string{"acme/other"}})
-	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	projAcct := b.w.projectAccount(b.proj)
+	b.w.bindPolicy(p, projAcct)
 	h := b.w.start(t)
 
 	r := wantRefused(t, h.route(b.key, "m1"), CodeModelNotAllowed, limits.RungProject)
-	if r.PolicyID != p.Meta.ID || r.SubjectID != "project:"+b.proj.Meta.ID {
-		t.Fatalf("refusal names %s/%s, want the project policy", r.SubjectID, r.PolicyID)
+	if r.PolicyID != p.Meta.ID || r.SubjectID != "account:"+projAcct.Meta.ID {
+		t.Fatalf("refusal names %s/%s, want the project account's policy", r.SubjectID, r.PolicyID)
 	}
 }
 
@@ -100,29 +100,29 @@ func TestRoute_ProviderWildcardGrantsTheProvidersModels(t *testing.T) {
 	b.w.price(x, b.hostA)
 	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
 	tier := b.w.policy("acme-tier", policy.Spec{Models: []string{"acme/*", "beta/*"}, RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID, Models: []string{"acme/*"}}}})
-	b.w.bindPolicy(tier, subject(policybinding.SubjectHost, b.hostA.Meta.ID))
+	b.w.bindPolicy(tier, b.acctA)
 	p := b.w.policy("acme-only", policy.Spec{Models: []string{"acme/*"}})
-	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 
 	if r := h.route(b.key, "acme/m1@host-a"); r.Refused != nil || len(r.Hops) == 0 {
 		t.Fatalf("acme/m1 under acme/* = %+v, want served", r.Refused)
 	}
 	_ = wantRefused(t, h.route(b.key, "beta/x"), CodeModelNotAllowed, limits.RungProject)
-	byModel := get[HostRungs](h, "").Of(b.hostA.Meta.ID).ByModel
+	byModel := get[KeySlot](h, b.a1.Meta.ID).ByModel
 	if len(byModel[b.m1.Meta.ID]) != 1 || len(byModel[x.Meta.ID]) != 0 {
-		t.Fatalf("scoped host counters by model = %v, want one for m1 and none for x", byModel)
+		t.Fatalf("scoped account counters by model = %v, want one for m1 and none for x", byModel)
 	}
 }
 
-// C19: a disabled policy refuses on its rung, never falls through to a broader one, keeps its dependents and serves again once re-enabled.
+// A disabled policy refuses on its rung, never falls through to a broader one, keeps its dependents and serves again once re-enabled.
 func TestRoute_DisabledPolicyRefusesOnItsRungWithoutFallThrough(t *testing.T) {
 	b := newBasic()
 	off := false
 	broad := b.w.policy("broad", policy.Spec{})
 	p := b.w.policy("narrow", policy.Spec{Enabled: &off})
-	b.w.bindPolicy(broad, subject(policybinding.SubjectTeam, b.team.Meta.ID))
-	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	b.w.bindPolicy(broad, b.w.teamAccount(b.team))
+	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 
 	kp := h.keyPlan(b.key)
@@ -143,8 +143,8 @@ func TestRoute_DisabledPolicyRefusesOnItsRungWithoutFallThrough(t *testing.T) {
 func TestRoute_DuplicateBindingRefusesAndFlagsBoth(t *testing.T) {
 	b := newBasic()
 	p1, p2 := b.w.policy("p1", policy.Spec{}), b.w.policy("p2", policy.Spec{})
-	pb1 := b.w.bindPolicy(p1, subject(policybinding.SubjectProject, b.proj.Meta.ID))
-	pb2 := b.w.bindPolicy(p2, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	pb1 := b.w.bindPolicy(p1, b.w.projectAccount(b.proj))
+	pb2 := b.w.bindPolicy(p2, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 
 	_ = wantRefused(t, h.route(b.key, "m1"), CodeDuplicateBinding, limits.RungProject)
@@ -160,24 +160,28 @@ func TestRoute_DuplicateBindingRefusesAndFlagsBoth(t *testing.T) {
 	}
 }
 
-func TestRoute_GroupSubjectIsInvalid(t *testing.T) {
+// A binding whose owner's scope does not hold the account (a team binding a user's personal account) is ignored for it and says so.
+func TestRoute_BindingOutsideItsOwnersScopeIsIgnored(t *testing.T) {
 	b := newBasic()
+	u := b.w.user()
+	uk := b.w.userKey(u)
 	p := b.w.policy("p", policy.Spec{Models: []string{"acme/none"}})
-	pb := b.w.bindPolicy(p, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"})
+	pb := b.w.bindPolicy(p, b.w.personal(u))
+	pb.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}
 	h := b.w.start(t)
-	if !hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectInvalid) {
-		t.Fatal("a group subject raised no subject_invalid")
+	if !hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectOutOfScope) {
+		t.Fatal("an out-of-scope account raised no subject_out_of_scope")
 	}
-	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
+	wantHops(t, h.route(uk, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
 }
 
-// C36: a missing pool narrows the route and raises ref_missing on the policy; restoring it restores the route.
+// A missing pool narrows the route and raises ref_missing on the policy; restoring it restores the route.
 func TestRoute_MissingPoolNarrowsAndReturns(t *testing.T) {
 	b := newBasic()
 	poolA := b.w.pool(b.hostA, b.a1)
 	poolB := b.w.pool(b.hostB, b.b1)
 	p := b.w.policy("p", policy.Spec{PoolIDs: []string{poolA.Meta.ID, poolB.Meta.ID}})
-	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.b1))
 
@@ -197,8 +201,8 @@ func TestRoute_DeletedBudgetAndRateLimitDropFromTheFold(t *testing.T) {
 	b := newBasic()
 	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
 	bud := b.w.budget("100")
-	p := b.w.policy("p", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}, BudgetIDs: []string{bud.Meta.ID}})
-	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	p := b.w.policy("p", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}, Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 	if n := len(h.keyPlan(b.key).Caller.Counters); n != 2 {
 		t.Fatalf("caller counters = %d, want a rule and a budget", n)
@@ -214,12 +218,12 @@ func TestRoute_DeletedBudgetAndRateLimitDropFromTheFold(t *testing.T) {
 	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
 }
 
-// C20: a disabled tier policy takes its account's credentials out instead of letting them serve unmetered.
+// A disabled tier policy takes its account's credentials out instead of letting them serve unmetered.
 func TestRoute_DisabledAccountPolicyTakesItsCredentialsOut(t *testing.T) {
 	b := newBasic()
 	off := false
 	tier := b.w.policy("tier", policy.Spec{Enabled: &off})
-	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
+	b.w.bindPolicy(tier, b.acctA)
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.b1))
 	_ = wantRefused(t, h.route(b.key, "m1@host-a"), CodePolicyDisabled, limits.RungAccount)
@@ -231,21 +235,9 @@ func TestRoute_UpstreamGrantNarrowsSlots(t *testing.T) {
 	own := b.w.account(b.hostA)
 	b.a1.Spec.AccountID = own.Meta.ID
 	tier := b.w.policy("tier", policy.Spec{Models: []string{"acme/other"}})
-	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, own.Meta.ID))
+	b.w.bindPolicy(tier, own)
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m1"), ids(b.a2), ids(b.b1))
-}
-
-// A credential is no rung: the store keeps a binding on one as its account's, so a stored credential subject binds nothing and says so.
-func TestRoute_CredentialSubjectBindsNothing(t *testing.T) {
-	b := newBasic()
-	tier := b.w.policy("tier", policy.Spec{Models: []string{"acme/other"}})
-	pb := b.w.bindPolicy(tier, subject(policybinding.SubjectCredential, b.a1.Meta.ID))
-	h := b.w.start(t)
-	wantHops(t, h.route(b.key, "m1"), ids(b.a1), ids(b.a2), ids(b.b1))
-	if !hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectInvalid) {
-		t.Fatalf("issues = %+v, want %s", h.issues(KindPolicyBinding, pb.Meta.ID), IssueSubjectInvalid)
-	}
 }
 
 func TestRoute_UnpricedUnderBudgetIsRefusedAndFlagged(t *testing.T) {
@@ -253,8 +245,8 @@ func TestRoute_UnpricedUnderBudgetIsRefusedAndFlagged(t *testing.T) {
 	m2 := b.w.model(b.prov, "m2")
 	b.w.bind(m2, b.hostA)
 	bud := b.w.budget("50")
-	p := b.w.policy("capped", policy.Spec{BudgetIDs: []string{bud.Meta.ID}})
-	pb := b.w.bindPolicy(p, subject(policybinding.SubjectTeam, b.team.Meta.ID))
+	p := b.w.policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	pb := b.w.bindPolicy(p, b.w.teamAccount(b.team))
 	h := b.w.start(t)
 
 	r := wantRefused(t, h.route(b.key, "m2"), CodeUnpricedUnderBudget, limits.RungTeam)
@@ -280,8 +272,8 @@ func TestRoute_UpstreamBudgetRefusesUnpricedOnThatSlotOnly(t *testing.T) {
 	b.w.bind(m2, b.hostB)
 	b.w.price(m2, b.hostB)
 	bud := b.w.budget("50")
-	tier := b.w.policy("tier", policy.Spec{BudgetIDs: []string{bud.Meta.ID}})
-	b.w.bindPolicy(tier, subject(policybinding.SubjectAccount, b.acctA.Meta.ID))
+	tier := b.w.policy("tier", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	b.w.bindPolicy(tier, b.acctA)
 	h := b.w.start(t)
 	wantHops(t, h.route(b.key, "m2"), ids(b.b1))
 	_ = wantRefused(t, h.route(b.key, "m2@host-a"), CodeUnpricedUnderBudget, limits.RungAccount)
@@ -294,32 +286,20 @@ func wantUnkeyedRefused(t *testing.T, u *Unkeyed, code string, rung limits.Rung)
 	}
 }
 
-// A request bringing its own key passes the host rung as a routed one does: a host policy that denies the model or is disabled refuses it, and the host's counters are held after the caller's.
-func TestResolveUnkeyed_HostRungApplies(t *testing.T) {
+// A request bringing its own key fits the caller rungs alone: no provider account's policy applies, as no relay credential serves, and a host is no rung.
+func TestResolveUnkeyed_CallerRungsAloneApply(t *testing.T) {
 	b := newBasic()
-	b.w.model(b.prov, "other")
 	rl := b.w.rateLimit(rule(ratelimit.MeterRequests, 10, time.Minute))
-	narrow := b.w.policy("host-a-ops", policy.Spec{Models: []string{"acme/other"}})
-	b.w.bindPolicy(narrow, subject(policybinding.SubjectHost, b.hostA.Meta.ID))
-	capped := b.w.policy("host-b-ops", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
-	b.w.bindPolicy(capped, subject(policybinding.SubjectHost, b.hostB.Meta.ID))
+	b.w.bindPolicy(b.w.policy("tier", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), b.acctB)
+	b.w.bindPolicy(b.w.policy("lane", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}), b.w.saAccount(b.sa))
 	h := b.w.start(t)
-	table := h.keyPlan(b.key).Caller.Routes
-
-	wantUnkeyedRefused(t, table.ResolveUnkeyed("m1@host-a"), CodeModelNotAllowed, limits.RungHost)
-	u := table.ResolveUnkeyed("m1@host-b")
+	u := h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m1@host-b")
 	if u.Refused != nil {
 		t.Fatalf("m1@host-b refused: %v", u.Refused)
 	}
-	if n := len(u.Counters); n != 1 || u.Counters[0].Rung != limits.RungHost || u.Counters[0].SubjectID != "host:"+b.hostB.Meta.ID {
-		t.Fatalf("counters = %+v, want host-b's one rule", u.Counters)
+	if n := len(u.Counters); n != 1 || u.Counters[0].Rung != limits.RungLane {
+		t.Fatalf("counters = %+v, want the lane's one rule", u.Counters)
 	}
-
-	off := false
-	disabled := clone(capped)
-	disabled.Spec.Enabled = &off
-	apply(h, disabled)
-	wantUnkeyedRefused(t, h.keyPlan(b.key).Caller.Routes.ResolveUnkeyed("m1@host-b"), CodePolicyDisabled, limits.RungHost)
 }
 
 // An unpriced binding is refused under a budget whether the request brings its own key or not, so a budget has no hole.
@@ -328,8 +308,8 @@ func TestResolveUnkeyed_UnpricedUnderBudgetIsRefused(t *testing.T) {
 	m2 := b.w.model(b.prov, "m2")
 	b.w.bind(m2, b.hostA)
 	bud := b.w.budget("50")
-	p := b.w.policy("capped", policy.Spec{BudgetIDs: []string{bud.Meta.ID}})
-	b.w.bindPolicy(p, subject(policybinding.SubjectTeam, b.team.Meta.ID))
+	p := b.w.policy("capped", policy.Spec{Budgets: []policy.BudgetLink{{BudgetID: bud.Meta.ID}}})
+	b.w.bindPolicy(p, b.w.teamAccount(b.team))
 	h := b.w.start(t)
 	table := h.keyPlan(b.key).Caller.Routes
 
@@ -366,13 +346,13 @@ func TestRoute_AliasCarriesItsWireName(t *testing.T) {
 	}
 }
 
-// C41: an alias resolves to its model but the ladder still gates it.
+// An alias resolves to its model but the ladder still gates it.
 func TestRoute_AliasStillPassesTheGate(t *testing.T) {
 	b := newBasic()
 	b.m1.Spec.Aliases = []string{"m1-latest"}
 	b.w.model(b.prov, "other")
 	p := b.w.policy("p", policy.Spec{Models: []string{"acme/other"}})
-	b.w.bindPolicy(p, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 	_ = wantRefused(t, h.route(b.key, "m1-latest"), CodeModelNotAllowed, limits.RungProject)
 }
@@ -413,9 +393,9 @@ func TestCells_SharedPerAccountKeyedByValueAndPool(t *testing.T) {
 	poolA := b.w.pool(b.hostA, b.a1, b.a2)
 	p1 := b.w.policy("p1", policy.Spec{PoolIDs: []string{poolA.Meta.ID}})
 	p2 := b.w.policy("p2", policy.Spec{PoolIDs: []string{poolA.Meta.ID}})
-	b.w.bindPolicy(p1, subject(policybinding.SubjectProject, b.proj.Meta.ID))
+	b.w.bindPolicy(p1, b.w.projectAccount(b.proj))
 	other := b.w.sa(b.w.project(b.team))
-	b.w.bindPolicy(p2, subject(rolebinding.SubjectServiceAccount, other.Meta.ID))
+	b.w.bindPolicy(p2, b.w.saAccount(other))
 	otherKey := b.w.saKey(other)
 	h := b.w.start(t)
 

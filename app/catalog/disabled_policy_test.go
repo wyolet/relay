@@ -9,7 +9,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -50,13 +49,9 @@ func newDisabledPolicyFixture(enabled bool) disabledPolicyFixture {
 		},
 	}
 	f.binding = &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb"},
-		Spec: policybinding.Spec{
-			ProjectID: f.project.Meta.ID, PolicyID: f.pol.Meta.ID,
-			Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}},
-		},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb", Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.project.Meta.ID}},
+		Spec: policybinding.Spec{PolicyID: f.pol.Meta.ID, AccountIDs: []string{meta.NewID()}},
 	}
-	f.binding.StampOwner()
 	return f
 }
 

@@ -30,7 +30,7 @@ spec:
   baseURL: https://rt.invalid
 `
 
-// linkedBundle exercises every link a v1alpha3 document can carry: pools (with order), credentials, accounts, rate limits with and without a model scope, budgets, and bindings on a caller and an upstream rung.
+// linkedBundle exercises every link a v1alpha3 document can carry: pools (with order), accounts, rate limits with and without a model scope or the shared mark, budgets, and bindings on a caller account the same bundle makes and on a provider account.
 func linkedBundle(envA, envB string) string {
 	return linkedCatalog + `---
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -117,13 +117,13 @@ metadata:
   name: rt-caller
   owner: {kind: project, name: rt-project}
 spec:
-  includeDeprecated: true
   pools: [rt-pool]
-  credentials: [rt-key-a]
   models: [rt-prov]
   rateLimits:
     - ref: rt-limit
-  budgets: [rt-budget]
+      shared: false
+  budgets:
+    - ref: rt-budget
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
@@ -143,8 +143,7 @@ metadata:
   owner: {kind: project, name: rt-project}
 spec:
   policy: rt-caller
-  subjects:
-    - {kind: serviceaccount, name: rt-sa}
+  accounts: [sa-rt-sa]
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
@@ -153,8 +152,7 @@ metadata:
   owner: {kind: project, name: rt-project}
 spec:
   policy: rt-tier
-  subjects:
-    - {kind: account, name: rt-org}
+  accounts: [rt-org]
 `
 }
 
@@ -220,19 +218,17 @@ func TestIntegration_ManifestExportApplyKeepsEveryLink(t *testing.T) {
 		want       any
 	}{
 		{"Policy/rt-caller", "pools", []any{"rt-pool"}},
-		{"Policy/rt-caller", "credentials", []any{"rt-key-a"}},
-		{"Policy/rt-caller", "budgets", []any{"rt-budget"}},
+		{"Policy/rt-caller", "budgets", []any{map[string]any{"ref": "rt-budget"}}},
 		{"Policy/rt-caller", "models", []any{"rt-prov"}},
-		{"Policy/rt-caller", "includeDeprecated", true},
-		{"Policy/rt-caller", "rateLimits", []any{map[string]any{"ref": "rt-limit"}}},
+		{"Policy/rt-caller", "rateLimits", []any{map[string]any{"ref": "rt-limit", "shared": false}}},
 		{"Policy/rt-tier", "rateLimits", []any{map[string]any{"ref": "rt-limit", "models": []any{"rt-prov/rt-model"}}}},
 		{"Pool/rt-pool", "credentials", []any{"rt-key-b", "rt-key-a"}},
 		{"Pool/rt-pool", "selection", "round-robin"},
 		{"HostKey/rt-key-a", "account", "rt-org"},
 		{"Budget/rt-budget", "period", "week"},
 		{"Budget/rt-budget", "mode", "alert"},
-		{"PolicyBinding/rt-caller-binding", "subjects", []any{map[string]any{"kind": "serviceaccount", "name": "rt-sa"}}},
-		{"PolicyBinding/rt-tier-binding", "subjects", []any{map[string]any{"kind": "account", "name": "rt-org"}}},
+		{"PolicyBinding/rt-caller-binding", "accounts", []any{"sa-rt-sa"}},
+		{"PolicyBinding/rt-tier-binding", "accounts", []any{"rt-org"}},
 	} {
 		if got := field(tc.doc, tc.field); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("exported %s spec.%s = %#v, want %#v", tc.doc, tc.field, got, tc.want)
