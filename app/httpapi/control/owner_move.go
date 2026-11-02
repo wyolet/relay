@@ -93,11 +93,13 @@ func refuseHostKeyMove(ctx context.Context, d Deps, moved *hostkey.HostKey) erro
 	})
 }
 
-// refuseServiceAccountMove refuses moving an account anything references: its
-// keys take their owner from the account's project, and its bindings name it
-// within the old project.
-func refuseServiceAccountMove(ctx context.Context, d Deps, moved *serviceaccount.ServiceAccount) error {
-	return refuseStrandingMove(ctx, d, "service-account", moved.Meta.ID, moved.Meta.Name, moved.Meta.Owner, func(referenceItem) bool { return false })
+// refuseServiceAccountMove refuses moving a service account to another project: its account, its keys and the bindings on them all sit in the project it was made in.
+func refuseServiceAccountMove(existing *serviceaccount.ServiceAccount) error {
+	return &httpapi.APIError{
+		Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: "resource_in_use", Message: fmt.Sprintf(
+			"service account %q stays in the project it was made in: its account and keys belong there; create a new service account in the other project", existing.Meta.Name)},
+		HTTPStatus: http.StatusConflict,
+	}
 }
 
 // guardRateLimitMove refuses an update that moves a rate limit away from the

@@ -45,7 +45,7 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
 		Upsert: throughDirectory(b, converted((*serviceaccount.ServiceAccount).ToDirectory)), Delete: deleteThroughDirectory(b, "ServiceAccount"),
-		Check: refsFor(b, refcheck.Checker.ServiceAccount),
+		Check: b.checkServiceAccount(),
 	}); err != nil {
 		return err
 	}
@@ -67,6 +67,22 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 // an update keeps it. The hash, prefix and principal are immutable, as the
 // control API's update keeps them: a document may omit them or repeat the
 // stored value, and is refused if it declares another.
+// checkServiceAccount refuses moving a stored service account to another project, as the control API does, then runs the reference checks.
+func (b *builder) checkServiceAccount() func(context.Context, *serviceaccount.ServiceAccount) error {
+	refs := refsFor(b, refcheck.Checker.ServiceAccount)
+	return func(ctx context.Context, sa *serviceaccount.ServiceAccount) error {
+		for _, prev := range b.rows.ServiceAccounts {
+			if prev.Meta.ID == sa.Meta.ID && prev.Spec.ProjectID != sa.Spec.ProjectID {
+				return fmt.Errorf("spec.project cannot change: the service account's account and keys belong to the project it was made in; declare a new service account")
+			}
+		}
+		if refs == nil {
+			return nil
+		}
+		return refs(ctx, sa)
+	}
+}
+
 func keepKeyServerFields(prev, next *key.Key) error {
 	next.Spec.PreviousKeyHash = prev.Spec.PreviousKeyHash
 	next.Spec.GraceUntil = prev.Spec.GraceUntil

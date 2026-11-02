@@ -292,3 +292,13 @@ func newScopedListHarness(t *testing.T, plural, singular string, seed ...*scoped
 	)
 	return r
 }
+
+// A service account stays in the project it was made in: its account and keys belong there, so a PUT naming another project is refused.
+func TestGuardServiceAccountRefusesAProjectMove(t *testing.T) {
+	existing := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer"}, Spec: serviceaccount.Spec{ProjectID: meta.NewID()}}
+	moved := *existing
+	moved.Spec.ProjectID = meta.NewID()
+	if got := statusOf(t, guardServiceAccount(Deps{})(context.Background(), "update", existing, &moved)); got != http.StatusConflict {
+		t.Fatalf("project move = status %d, want 409", got)
+	}
+}

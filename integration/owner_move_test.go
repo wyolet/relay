@@ -107,11 +107,11 @@ func TestIntegration_UpdateMovesOwner(t *testing.T) {
 		t.Fatalf("refused move changed the owner to %s/%s", kind, id)
 	}
 
-	// The account's key takes its owner from the account's project.
+	// A service account stays in its project: its account and keys belong there.
 	code, raw = alice.do(http.MethodPut, "/api/service-accounts/by-id/"+saA,
 		`{"metadata":{"name":"alpha-bot"`+projectOwner(projB)+`},"spec":{"projectId":"`+projB+`"}}`)
-	if code != http.StatusConflict || !strings.Contains(string(raw), "alpha-key") {
-		t.Fatalf("moving a service account with a key = %d, want 409 naming the key: %s", code, raw)
+	if code != http.StatusConflict || !strings.Contains(string(raw), "create a new service account") {
+		t.Fatalf("moving a service account to another project = %d, want 409: %s", code, raw)
 	}
 
 	// A project-A policy on a project-A rate limit keeps the limit there.
