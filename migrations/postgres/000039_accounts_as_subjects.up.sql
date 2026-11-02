@@ -95,7 +95,7 @@ FROM accounts a
 WHERE k.account_id IS NULL
   AND a.managed_key = CASE WHEN k.principal_sa_id IS NOT NULL THEN 'service:' || k.principal_sa_id ELSE 'personal:' || k.principal_user_id END;
 
--- Policy-binding subjects become accounts. A user under a team- or project-owned binding is that user's member account there (made when no role binding made it), any other user the personal account; a team, project or service account is its own account. Host and group subjects bind no account and are dropped, listed.
+-- Policy-binding subjects become accounts. A team, project or service account is its own account. A user fans out to every account of theirs the binding covered: under a project's binding the member account there; under a team's the team member account and every project member account in that team; under the system's the personal account and every member account; under the user's own binding the personal account. Member accounts made here follow no role binding, so they serve tokens only, never keys. Host and group subjects bind no account and are dropped, listed.
 CREATE TABLE IF NOT EXISTS policy_binding_accounts (
     binding_id TEXT NOT NULL REFERENCES policy_bindings(id) ON DELETE CASCADE,
     account_id TEXT NOT NULL REFERENCES accounts(id)        ON DELETE CASCADE,
@@ -132,22 +132,26 @@ WHERE s.kind = 'user' AND (b.project_id IS NOT NULL OR b.team_id IS NOT NULL)
 ORDER BY u.username;
 
 CREATE TEMP TABLE binding_accounts AS
-SELECT s.binding_id, s.position, b.name AS binding_name,
-       CASE s.kind
-           WHEN 'account'        THEN s.subject_id
-           WHEN 'credential'     THEN (SELECT NULLIF(spec->>'accountId', '') FROM secrets WHERE id = s.subject_id)
-           WHEN 'team'           THEN (SELECT id FROM accounts WHERE managed_key = 'team:' || s.subject_id)
-           WHEN 'project'        THEN (SELECT id FROM accounts WHERE managed_key = 'project:' || s.subject_id)
-           WHEN 'serviceaccount' THEN (SELECT id FROM accounts WHERE managed_key = 'service:' || s.subject_id)
-           WHEN 'user'           THEN (SELECT id FROM accounts WHERE managed_key = CASE
-                                          WHEN b.project_id IS NOT NULL THEN 'member:project:' || b.project_id || ':' || s.subject_id
-                                          WHEN b.team_id IS NOT NULL THEN 'member:team:' || b.team_id || ':' || s.subject_id
-                                          ELSE 'personal:' || s.subject_id END)
-       END AS account_id
-FROM policy_binding_subjects s JOIN policy_bindings b ON b.id = s.binding_id
+SELECT s.binding_id, s.position, b.name AS binding_name, t.account_id
+FROM policy_binding_subjects s
+JOIN policy_bindings b ON b.id = s.binding_id
+CROSS JOIN LATERAL (
+    SELECT s.subject_id AS account_id WHERE s.kind = 'account'
+    UNION ALL SELECT NULLIF(spec->>'accountId', '') FROM secrets WHERE s.kind = 'credential' AND id = s.subject_id
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'team' AND managed_key = 'team:' || s.subject_id
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'project' AND managed_key = 'project:' || s.subject_id
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'serviceaccount' AND managed_key = 'service:' || s.subject_id
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.project_id IS NOT NULL
+        AND managed_key = 'member:project:' || b.project_id || ':' || s.subject_id
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.team_id IS NOT NULL AND kind = 'member' AND holder_user_id = s.subject_id
+        AND (team_id = b.team_id OR project_id IN (SELECT id FROM projects WHERE team_id = b.team_id))
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.project_id IS NULL AND b.team_id IS NULL AND b.user_id IS NULL
+        AND kind IN ('personal', 'member') AND holder_user_id = s.subject_id
+    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.user_id IS NOT NULL AND managed_key = 'personal:' || s.subject_id
+) t
 WHERE s.kind NOT IN ('host', 'group');
 
--- An account is held by one binding. Two bindings reaching one account (a user bound by the system and by the user's own binding, which both become the personal account) stop the upgrade, listed, so the operator chooses which binding keeps it.
+-- An account is held by one binding. Two bindings reaching one account (a user bound by the system and by the user's own binding, which both become the personal account; a team's binding fanning out to a project member account the project's binding also holds) stop the upgrade, listed, so the operator chooses which binding keeps it.
 DO $$
 DECLARE
     dups TEXT;
@@ -159,12 +163,12 @@ BEGIN
         GROUP BY account_id HAVING count(DISTINCT binding_id) > 1
     ) d JOIN accounts a ON a.id = d.account_id;
     IF dups IS NOT NULL THEN
-        RAISE EXCEPTION 'migration 000039: policy-binding subjects become accounts, and an account is bound by one policy binding; remove the subject from all but one binding, then upgrade again: %', dups;
+        RAISE EXCEPTION 'migration 000039: policy-binding subjects become accounts, and an account is bound by one policy binding; remove the subject from all but one of the bindings listed for each account, then upgrade again: %', dups;
     END IF;
 END $$;
 
 INSERT INTO policy_binding_accounts (binding_id, account_id, position)
-SELECT binding_id, account_id, (row_number() OVER (PARTITION BY binding_id ORDER BY position) - 1)::int
+SELECT binding_id, account_id, (row_number() OVER (PARTITION BY binding_id ORDER BY position, account_id) - 1)::int
 FROM (
     SELECT DISTINCT ON (binding_id, account_id) binding_id, account_id, position
     FROM binding_accounts WHERE account_id IS NOT NULL
@@ -190,6 +194,11 @@ SELECT p.id, p.name,
        CASE WHEN jsonb_typeof(p.models) = 'array' THEN p.models ELSE '[]'::jsonb END AS was
 FROM policies p;
 
+-- A pinned ref also widens when its provider is served at a host other than the pinned one that the policy reaches: through a linked pool or credential at that host, or anywhere when it links none and reaches by ownership. Those stop the upgrade, listed, unless the same ref is also granted unpinned. Served is read per provider, so a ref is listed even if only another model of its provider is served there.
+CREATE TEMP TABLE policy_hosts AS
+SELECT pp.policy_id, pl.host_id FROM policy_pools pp JOIN pools pl ON pl.id = pp.pool_id
+UNION SELECT pc.policy_id, s.spec->>'hostId' FROM policy_credentials pc JOIN secrets s ON s.id = pc.host_key_id;
+
 DO $$
 DECLARE
     widened TEXT;
@@ -202,12 +211,33 @@ BEGIN
     IF widened IS NOT NULL THEN
         RAISE EXCEPTION 'migration 000039: these bound policies name only hosts in models, which would widen them to every model; name the providers or models they allow, then upgrade again: %', widened;
     END IF;
+    SELECT string_agg(format('policy %s: %s', w.name, w.refs), '; ' ORDER BY w.name) INTO widened
+    FROM (
+        SELECT s.name, string_agg(e.value, ', ' ORDER BY e.n) AS refs
+        FROM stripped_models s
+        CROSS JOIN LATERAL jsonb_array_elements_text(s.was) WITH ORDINALITY AS e(value, n)
+        WHERE e.value LIKE '%_@%' AND NOT s.was ? split_part(e.value, '@', 1)
+          AND EXISTS (SELECT 1 FROM policy_bindings b JOIN policy_binding_accounts a ON a.binding_id = b.id WHERE b.policy_id = s.id)
+          AND EXISTS (
+              SELECT 1 FROM host_bindings hb
+              JOIN models m ON m.id = hb.model_id
+              JOIN providers pr ON pr.id = m.metadata->'owner'->>'id'
+              WHERE pr.name = split_part(split_part(e.value, '@', 1), '/', 1)
+                AND hb.host_id IS DISTINCT FROM (SELECT id FROM hosts WHERE name = split_part(e.value, '@', 2))
+                AND (hb.host_id IN (SELECT host_id FROM policy_hosts ph WHERE ph.policy_id = s.id)
+                     OR NOT EXISTS (SELECT 1 FROM policy_hosts ph WHERE ph.policy_id = s.id)))
+        GROUP BY s.id, s.name
+    ) w;
+    IF widened IS NOT NULL THEN
+        RAISE EXCEPTION 'migration 000039: policy models no longer pin a host, and these pinned refs would reach their provider at other hosts the policies reach; link pools at the pinned host only, or drop the refs, then upgrade again: %', widened;
+    END IF;
     FOR r IN SELECT name, was, models FROM stripped_models WHERE was <> models ORDER BY name LOOP
         RAISE NOTICE '000039: policy "%": models % become %', r.name, r.was, r.models;
     END LOOP;
 END $$;
 UPDATE policies p SET models = s.models FROM stripped_models s WHERE s.id = p.id AND s.was <> s.models;
 DROP TABLE stripped_models;
+DROP TABLE policy_hosts;
 
 UPDATE policy_rate_limits SET models = COALESCE((
     SELECT jsonb_agg(m ORDER BY first) FROM (
@@ -257,12 +287,19 @@ ON CONFLICT DO NOTHING;
 DROP TABLE credential_pools;
 DROP TABLE policy_credentials;
 
--- Payload logging moves from the policy to the accounts it governed: a policy that captured bodies turns capture on for each account bound to it.
-UPDATE accounts a SET spec = jsonb_set(a.spec, '{payloadLogging}', '"on"')
+-- Payload logging moves from the policy to the accounts it governed. A governing policy decided capture outright, over the key's own flag, so each account an enabled binding ties to one keeps that decision: on where the policy captured bodies, off where it did not (an absent flag was off).
+UPDATE accounts a SET spec = jsonb_set(a.spec, '{payloadLogging}',
+       CASE WHEN COALESCE((p.spec->>'payloadLoggingEnabled')::boolean, FALSE) THEN '"on"'::jsonb ELSE '"off"'::jsonb END)
 FROM policy_binding_accounts pa JOIN policy_bindings b ON b.id = pa.binding_id JOIN policies p ON p.id = b.policy_id
-WHERE pa.account_id = a.id AND COALESCE((p.spec->>'payloadLoggingEnabled')::boolean, FALSE);
+WHERE pa.account_id = a.id AND COALESCE((b.spec->>'enabled')::boolean, TRUE);
 UPDATE policies SET spec = spec - 'includeDeprecated' - 'payloadLoggingEnabled' - 'credentialIds' - 'budgetIds'
 WHERE spec ?| ARRAY['includeDeprecated', 'payloadLoggingEnabled', 'credentialIds', 'budgetIds'];
 
 DROP FUNCTION migration_000039_add_account(TEXT, TEXT, TEXT, TEXT, JSONB, TEXT, TEXT, TEXT, TEXT, BOOLEAN);
 DROP FUNCTION migration_000039_account_name(TEXT);
+
+DO $$
+BEGIN
+    RAISE NOTICE '000039: caller rate-limit and budget counters are now kept per account, so their counts start over at this upgrade';
+    RAISE NOTICE '000039: a token runs in its user''s member account in the token''s project; a user granted the project only through a group or a team role has none until they mint a new token, so tokens minted before the upgrade are refused with account_not_held until then';
+END $$;
