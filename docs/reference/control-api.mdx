@@ -51,8 +51,9 @@ DELETE /api/{plural}/by-id/{id}      delete
 | --- | --- | --- |
 | `providers`, `hosts`, `models`, `host-bindings`, `pricings` | Catalog | [Catalog](/concepts/catalog) |
 | `host-keys` | Upstream credentials | [Authentication](/concepts/auth), [Key pooling](/concepts/key-pooling) |
-| `accounts`, `pools` | Provider organizations; ordered sets of one host's keys | [Key pooling](/concepts/key-pooling) |
-| `policies`, `policy-bindings` | Model grants and links to pools, rate limits and budgets; who they govern | [Policies](/concepts/policies) |
+| `accounts` | What requests run in and are charged to: team, project, personal, member, service and provider accounts | [Accounts and lanes](/concepts/accounts), [Key pooling](/concepts/key-pooling#accounts) |
+| `pools` | Ordered sets of one host's keys | [Key pooling](/concepts/key-pooling) |
+| `policies`, `policy-bindings` | Model grants and links to pools, rate limits and budgets; the accounts they govern | [Policies](/concepts/policies) |
 | `rate-limits` | Rule sets | [Rate limits](/concepts/rate-limits) |
 | `budgets` | Spend caps | [Budgets](/concepts/budgets) |
 | `keys` | Relay keys (create through [`POST /api/keys`](#relay-keys)) | [Authentication](/concepts/auth) |
@@ -65,7 +66,7 @@ Every read returns `metadata.resourceVersion`, an opaque string that changes on 
 
 Every write is applied to each pod's in-memory catalog within about a second; no reload is needed. Edits and deletes of catalog-owned rows are governed by the `governance:*` settings; see [Settings](/reference/settings).
 
-A `DELETE` answers `204`, or `200` with `{"detached": [...]}` when it took links from rows that stay: policies that lose a rate limit or budget, or that keep a deleted pool's or host key's id and narrow, and pools that lose a deleted host key. Each entry groups the rows by `kind` and `field`, with `count`, `hidden` (rows you may not see) and `items`. A row still referenced where the link cannot be dropped answers `409` with the code `resource_in_use` and the same groups as `blockers`.
+A `DELETE` answers `204`, or `200` with `{"detached": [...]}` when it took links from rows that stay: policies that lose a rate limit or budget, or that keep a deleted pool's id and narrow, and pools that lose a deleted host key. Each entry groups the rows by `kind` and `field`, with `count`, `hidden` (rows you may not see) and `items`. A row still referenced where the link cannot be dropped answers `409` with the code `resource_in_use` and the same groups as `blockers`.
 
 ### References and detach
 
@@ -115,7 +116,9 @@ curl -X POST http://localhost:8081/api/keys \
 }
 ```
 
-`spec.principal` is required. Optional fields: `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. A key holds no policy: bind one to its principal instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal.
+`spec.principal` is required. Optional fields: `accountId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. `accountId` is the key's default [lane](/concepts/accounts#a-keys-default-lane): left out, the service account's account or the user's personal account; an account the principal may not run keys in answers `403 account_not_held`, and a closed one `400`. A key holds no policy: bind one to its account instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal; it may move the key to another account under the same rules.
+
+Create and rotate answer once the pod that handled them authenticates the new value, waiting up to 5 seconds, so the plaintext can be used at once. `GET /api/keys?account_id=<id>` lists the keys whose default lane is an account.
 
 ### Policies and policy bindings
 
@@ -127,35 +130,34 @@ A policy's links are ids in the API and names in manifests:
   "spec": {
     "models": ["openai"],
     "poolIds": ["<pool-id>"],
-    "credentialIds": [],
-    "rateLimits": [{ "rateLimitId": "<rate-limit-id>" }],
-    "budgetIds": ["<budget-id>"]
+    "rateLimits": [{ "rateLimitId": "<rate-limit-id>" }, { "rateLimitId": "<per-person-id>", "shared": false }],
+    "budgets": [{ "budgetId": "<budget-id>" }]
   }
 }
 ```
 
-A `rateLimits` entry may add `"models": [...]` to count per model; a policy with such an entry can be bound only to a host, an account or a host key.
+A `rateLimits` entry may add `"models": [...]` to apply only to those models. `shared` on a rate-limit or budget link defaults to `true` (one count for the bound account) and is always returned; `false` counts once per lane under it. `models` is always returned, `[]` when the policy allows every model its pools serve.
 
-A policy binding is owned by the system, a team or a user binding themselves (`metadata.owner`), or a project (`spec.projectId`):
+A policy binding is owned by the system, a team, a project or a user (`metadata.owner`) and names accounts:
 
 ```json
 {
   "metadata": { "displayName": "ML team", "owner": { "kind": "team", "id": "<team-id>" } },
   "spec": {
     "policyId": "<policy-id>",
-    "subjects": [{ "kind": "team", "id": "<team-id>" }]
+    "accountIds": ["<account id of team-ml>"]
   }
 }
 ```
 
-Subject kinds are `host`, `account`, `credential` (a host key), `team`, `project`, `user` and `serviceaccount`. A `credential` subject is saved, and answered, as an `account` subject naming the key's account. On save:
+Find a team's, project's or service account's account with `GET /api/accounts?kind=team&owner_id=<team-id>`, `kind=project&owner_id=<project-id>` or `kind=service&holder_id=<service-account-id>`. List bindings with the `account_id`, `owner` and `owner_id` filters. On save:
 
 | Answer | When |
 | --- | --- |
-| `400` | A linked row does not exist or lives in a scope the policy may not use; a subject lies outside the binding owner's scope; the binding uses a policy its owner may not use; a host-owned policy links pools or host keys; a policy with a model-scoped rate limit would be bound to a team, project, user or service account, by a new binding or by adding `models` to a bound policy. |
+| `400` | A linked row does not exist or lives in a scope the policy may not use; an account does not exist or lies outside the binding owner's scope; the binding uses a policy, or a pool, its owner may not use; a host-owned policy links pools; a policy model names a host. |
 | `404` | A linked row exists but you may not see it. |
-| `409` `duplicate_binding` | A subject is already held by another binding (for a user: by a binding whose scope overlaps this one). |
-| `422` | The body does not match the schema, including a subject of kind `group`. |
+| `409` `duplicate_binding` | An account is already held by another binding. |
+| `422` | The body does not match the schema, including a field of an earlier version (`subjects`, `projectId` on a binding; `includeDeprecated`, `credentialIds`, `budgetIds`, `payloadLoggingEnabled` on a policy). |
 
 The rules behind each answer are on [Policies](/concepts/policies#policy-bindings).
 
@@ -168,7 +170,54 @@ GET /api/accounts/{ref}/keys    the host keys that name the account, without val
 
 A pool's keys must authenticate to the pool's host, and an account named by a host key must be at that key's host. A host key saved without `accountId` gets its owner's default account at its host, created on first use; an owner has one default account per host, and marking a second `"default": true` answers `409`. See [Default accounts](/concepts/key-pooling#default-accounts).
 
-Deleting an account that host keys still name, or a host that still has accounts or pools, answers `409`. A default account no host key names does not block: it is deleted with its host, team or project. Deleting a team or project that still has rows under it or owned by it answers `409` and lists them as `blockers`.
+`POST /api/accounts` creates provider accounts only (`spec.hostId` is required). Team, project, personal, member and service accounts are made by Relay; a PUT may change their name, display name and `payloadLogging`, and keeps their owner, holder and kind. Every account carries a read-only `spec.kind`, and `spec.holder` and `spec.closed` where they apply. The list filters by `kind`, `owner_id`, `holder_id` and `closed`. See [Accounts and lanes](/concepts/accounts).
+
+Deleting an account that host keys, relay keys or a policy binding still name, or a host that still has accounts or pools, answers `409`. A default account no host key names does not block: it is deleted with its host, team or project. Deleting a team, project, personal, service or open member account on its own answers `409` with the code `account_managed`: it goes with the row it stands for. Deleting a team or project that still has rows under it or owned by it answers `409` and lists them as `blockers`.
+
+### Accounts and limits
+
+```
+GET /api/me/accounts             the signed-in user's accounts, each with its policy and the user's keys in it
+GET /api/accounts/{ref}/limits   the rungs a request in the account climbs, with usage against every limit
+GET /api/keys/{ref}/limits       the same for the key's default lane
+```
+
+`GET /api/me/accounts` answers any signed-in user with their personal account, their member accounts (closed and token-only ones flagged) and the provider accounts they own personally; the admin token gets `[]`. Each row is `{account: {id, name, displayName, closed}, kind, scope: {kind, id, name}, policy?: {id, name}, keys: [{id, name, prefix}], tokenOnly}`. `policy` is omitted when no binding names the account, or when two do.
+
+The limits reads answer the account's caller rungs, outermost first, as the published configuration holds them:
+
+```json
+{
+  "lane": {"id": "…", "name": "alice-project-search", "kind": "member"},
+  "rungs": [
+    {"account": {"id": "…", "name": "team-ml", "kind": "team"}, "policy": {"id": "…", "name": "ml"},
+     "rateLimits": [{"rateLimitId": "…", "name": "ml-limits", "models": [], "shared": true, "perLane": false,
+       "rules": [{"meter": "requests", "strategy": "sliding-window", "amount": 600, "window": 60, "used": 188, "remaining": 412}]}],
+     "budgets": [{"budgetId": "…", "name": "ml-monthly", "shared": true, "perLane": false, "amountUsd": "2000",
+       "period": "month", "mode": "hard", "spentUsd": "759.5", "remainingUsd": "1240.5"}]},
+    {"account": {"id": "…", "name": "project-search", "kind": "project"}, "rateLimits": [], "budgets": []},
+    {"account": {"id": "…", "name": "alice-project-search", "kind": "member"}, "rateLimits": [], "budgets": []}
+  ],
+  "tightest": {"accountId": "…", "kind": "budget", "id": "…", "remaining": 1240.5, "label": "$1240.50 left: team ml-monthly"}
+}
+```
+
+- `used` and `spentUsd` are read without counting anything. With `shared: true` they are what every lane under that rung's account spent together; with `shared: false`, this lane's own. Under `RELAY_LIMITER=hybrid` they are the answering pod's view, which may lag other pods by up to one sync interval.
+- Read for a team's or project's own account, the answer holds the rungs above and including it. A link with `shared: false` has no single count there, so it is marked `perLane: true` and carries no `used`, `remaining`, `spentUsd` or `remainingUsd`.
+- `tightest` is the hard limit with the least left as a share of its cap; alert budgets and `perLane` links are never it. It is omitted when no rung caps anything.
+- A provider account answers with no rungs: its own policy caps its host keys upstream.
+
+The account read is open to whoever may read the account and to the user who acts in it; the key read to whoever may read the key and to the user it authenticates as. Anyone else gets `404`. Both answer `503` before the configuration has loaded.
+
+### Plan issues
+
+```
+GET /api/plan-issues?kind=&id=   what Relay found wrong while folding the configuration
+```
+
+Each issue is `{code, message, kind, id, name, severity, refs: [{kind, id}]}`, sorted by kind, name and code. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include `ref_missing` (a link to a row that does not exist), `subject_out_of_scope` (a binding naming an account outside its owner's scope), `link_out_of_scope` (a policy linking a pool its binding's scope may not use), `duplicate_binding`, `model_ref_invalid`, `credential_unresolved` (a host key whose value cannot be read) and `unpriced_under_budget`. `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, …), and `id` together with `kind` narrows to one row.
+
+Issues on rows the caller may not read are left out, and a ref to such a row keeps its kind with an empty id. Under `RELAY_AUTHZ=rbac` the route takes a role whose rules include the kind `*`, such as the built-in `admin`.
 
 ### Model overlays
 
@@ -192,7 +241,7 @@ GET /api/hosts/{ref}/models          models the host serves, with binding and pr
 GET /api/hosts/{ref}/keys            the host's keys, without values
 GET /api/hosts/{ref}/policies        the host's tier presets, with limits
 GET /api/policies/{ref}/models       models the policy grants, with the limits it applies
-GET /api/policies/{ref}/hosts        hosts the policy's pools and host keys reach, with the keys at each
+GET /api/policies/{ref}/hosts        hosts the policy's pools reach, with the keys at each
 GET /api/policies/{ref}/rate-limits  rate limits the policy links
 GET /api/catalog/resolve             expand model references into matching catalog rows
 GET /api/catalog/graph               providers, hosts, models and bindings, minimal
@@ -246,7 +295,7 @@ curl -X POST http://localhost:8081/api/auth/token \
   -d '{"project": "my-project", "ttl": "1h"}'
 ```
 
-Who may revoke which token, and how revocation reaches inference, is on [Authentication](/concepts/auth#inference-tokens). Sign-in with an identity provider is on [SSO](/concepts/sso).
+The token runs in the user's member account in the project; the mint creates that account when it does not exist yet, and answers once the pod serves it, waiting up to 5 seconds. Who may revoke which token, and how revocation reaches inference, is on [Authentication](/concepts/auth#inference-tokens). Sign-in with an identity provider is on [SSO](/concepts/sso).
 
 ## Users, access review and audit
 

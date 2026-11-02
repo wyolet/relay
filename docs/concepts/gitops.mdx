@@ -32,7 +32,9 @@ A dirty row the manifest matches is `unchanged` and nothing is written, so it st
 
 `Team`, `Project`, `ServiceAccount`, `Group`, `Role` and `RoleBinding` documents may declare `apiVersion: auth.wyolet.dev/v1alpha1` instead of `relay.wyolet.dev/v1alpha3`. Both write the same rows, and one file may mix them with the other kinds. Under `auth.wyolet.dev/v1alpha1` they are parsed strictly: an unknown field, a rule kind or verb outside the [role vocabulary](/concepts/auth#writing-bindings), `metadata.owner` (every owner of these kinds is derived), or a plain-text password fails the apply with the document's index and the field's path. Under `relay.wyolet.dev/v1alpha3` unknown fields and `metadata.owner` are ignored.
 
-`relay.wyolet.dev/v1alpha2` is still read for the kinds whose shape did not change. `Policy`, `HostKey`, `Key` and `PolicyBinding` documents under it are refused with a pointer to the new shape. Under either version a field v1alpha3 removed is refused rather than ignored (`hostKeys`, `rateLimit`, `rlBindings`, `keySelection`, `modelIds` on a policy; `policyId` on a host key; `policy` on a key or service account), because ignoring a removed restriction would widen access. See [Upgrading to 0.20](/concepts/upgrade-0-20).
+`relay.wyolet.dev/v1alpha2` is still read for the kinds whose shape did not change. `Policy`, `HostKey`, `Key` and `PolicyBinding` documents under it are refused with a pointer to the new shape. Under either version a field v1alpha3 removed is refused rather than ignored (`hostKeys`, `rateLimit`, `rlBindings`, `keySelection`, `modelIds`, `credentials`, `includeDeprecated`, `payloadLoggingEnabled` on a policy; `project`, `subjects` on a policy binding; `policyId` on a host key; `policy` on a key or service account), because ignoring a removed restriction would widen access.
+
+A `PolicyBinding` names `accounts`, and a `Key` may name its default lane in `account`. Both may name the accounts Relay makes for a team, project, user or service account (`team-<team>`, `sa-<name>`, …; see [Accounts](/concepts/accounts#accounts-relay-makes)), including those of rows declared in the same bundle: the apply creates them first. An `Account` document creates provider accounts only; one without `host` may only update an account Relay made, and a prune never removes one unless it is a closed member account. See [Upgrading to 0.20](/concepts/upgrade-0-20).
 
 `User` documents are accepted under `auth.wyolet.dev/v1alpha1` only; `metadata.name` is the username:
 
@@ -83,7 +85,7 @@ relay apply -f manifests/ --prune --selector env=prod,team=platform
 
 Pruning draws the same membership line as export (below): teams, groups, roles and role bindings are always prunable, except built-in roles; every other kind is prunable only when it is owned by a user, team or project. System-, provider- and host-owned rows, the catalog's own data, are never candidates, whatever labels they carry: a manifest that omits a catalog provider or host is not asking for its removal. Accounts carry no labels, so prune never deletes a user.
 
-A prune never removes rows silently. Pruning a team, project or service account is refused while rows under it or owned by it stay out of the prune, as its delete through the control API is; a [default account](/concepts/key-pooling#default-accounts) no host key names goes with its team or project. For a service account those rows are its keys and the role and policy bindings that name it as a subject. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
+A prune never removes rows silently. Pruning a team, project or service account is refused while rows under it or owned by it stay out of the prune, as its delete through the control API is; a [default account](/concepts/key-pooling#default-accounts) no host key names goes with its team or project. For a service account those rows are its keys, the role bindings that name it as a subject, and the policy bindings that hold its account. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
 
 ## Authorization and partial failure
 
@@ -104,12 +106,12 @@ relay export --include-system -o backup/relay.yaml
 `GET /api/export` renders the tenant-owned rows as a manifest bundle in the shape `apply` accepts, so a deployment's state can round-trip without hand-written YAML. Kinds are emitted in dependency order, each sorted by name for a stable diff:
 
 ```
-teams, projects, groups, roles, rate-limits, policies,
-host-keys, service-accounts, keys, role-bindings,
-policy-bindings, overlays
+teams, projects, groups, roles, rate-limits, budgets,
+accounts, host-keys, pools, policies, service-accounts,
+keys, role-bindings, policy-bindings, overlays
 ```
 
-Teams, groups, roles and role bindings are exported by kind, whoever owns the row: a scope or a grant is not its author's property, so ownership can't decide membership for these four (built-in roles are left out by name). Every other kind is exported by owner: only rows owned by a user, a team or a project. Catalog rows (system-, provider- and host-owned providers, hosts, models and pricing) are never exported; they come from the catalog, not from a git repository. [Overlays](/concepts/overlays) on those catalog rows are exported, since the overlay itself is user-owned. Accounts are not exported.
+Teams, groups, roles and role bindings are exported by kind, whoever owns the row: a scope or a grant is not its author's property, so ownership can't decide membership for these four (built-in roles are left out by name). Every other kind is exported by owner: only rows owned by a user, a team or a project. Catalog rows (system-, provider- and host-owned providers, hosts, models and pricing) are never exported; they come from the catalog, not from a git repository. [Overlays](/concepts/overlays) on those catalog rows are exported, since the overlay itself is user-owned. Only provider accounts are exported: the others follow the team, project, user or service account they stand for, and the exported bindings and keys name them.
 
 `--include-system` (`?includeSystem=true`) widens the owner rule for a backup: it adds every system-owned row of the exported kinds (what the admin bearer creates through the API or `apply`, and the relay's own system rate limits), and every host- or provider-owned catalog row an operator edited through the API (a dirty row). Catalog rows nobody edited stay out, and so does every added row in a scoped export, since none of them has a team or project. Applied back to the deployment it came from, the bundle's dirty rows match what is stored and plan as `unchanged`; on a newly seeded deployment they apply as updates. An edit made through `apply` does not mark a row dirty, so a catalog row changed that way is not included.
 

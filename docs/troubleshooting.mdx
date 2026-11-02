@@ -20,13 +20,14 @@ A `401` with `X-WR-Origin: upstream` is the provider rejecting a host key, not y
 
 | Code | Cause | Fix |
 | --- | --- | --- |
-| `model_not_allowed` | A policy on the caller's ladder does not allow the model; the message names the rung and the policy. | Add the model to that policy's `models`; see [Policies](/concepts/policies). |
+| `model_not_allowed` | A policy on the caller's ladder does not allow the model; the message names the rung and the policy. | Add the model to that policy's `models`; see [Policies](/concepts/policies). `GET /api/plan-issues` lists configuration Relay found broken, such as a binding outside its owner's scope. |
 | `model_disabled` | The model is disabled in the catalog. | Enable it, or use another model. |
-| `policy_disabled` | The policy bound on the rung the message names is disabled. | Enable the policy, or bind the subject to another one. |
-| `subject_disabled` | The caller's team, project or service account is disabled. | Enable it. |
-| `duplicate_binding` | Two policy bindings name one subject. | Remove the subject from all but one binding. |
+| `policy_disabled` | The policy bound on the rung the message names is disabled. | Enable the policy, or bind the account to another one. |
+| `subject_disabled` | The caller's team or project is disabled. | Enable it. |
+| `duplicate_binding` | Two policy bindings name one account. | Remove the account from all but one binding. |
+| `account_closed` | The request runs in a member account whose membership ended. | Grant the user a role in that team or project again, or use another account. |
+| `account_not_held` | The request named an account its credential may not run in (by `X-WR-Account`, a `/a/<account>/` base URL or the account's host), or an inference token's user has no account in the token's project, as with a token minted before an upgrade or for a project that is gone. | Name an account the credential may use, see [Lanes](/concepts/accounts#lanes); for a token, mint a new one. |
 | `unpriced_under_budget` | A budget applies and the model's binding has no pricing. | Add pricing for the binding; see [Budgets](/concepts/budgets#models-without-pricing). |
-| `project_unavailable` | The inference token's project is gone or unavailable. | Mint a token for an existing project. |
 | `proxy_disabled` | A [proxy-mode](/concepts/proxy-mode) request arrived while proxy mode is off. | Enable the `proxy-mode` section, or drop the proxy-mode header. |
 | `passthrough_forbidden` | An authenticated proxy-mode request used a credential without `passthroughAllowed`. | Use a relay key with `spec.passthroughAllowed: true`. |
 
@@ -45,7 +46,8 @@ curl http://localhost:8080/v1/models \
 | --- | --- | --- |
 | `catalog_unavailable` | The process has not finished loading the catalog after start. | Retry after the `Retry-After` delay. `/healthz` reports `503` until it is ready. |
 | `no_host_binding` | The model has no enabled host binding. | Bind the model to a host, or enable the binding. |
-| `no_keys` | None of the pools or host keys the caller reaches is at a host that serves the model, or none of them is usable. | Link a pool at a serving host in the caller's policy, or give the caller's scope a host key there; see [Reach without a caller policy](/concepts/policies#reach-without-a-caller-policy). |
+| `no_keys` | None of the pools the caller reaches is at a host that serves the model, or none of them is usable. | Link a pool at a serving host in the caller's policy, or give the caller's scope a host key there; see [Reach without a linking rung](/concepts/policies#reach-without-a-linking-rung). |
+| `no_healthy_keys` | Every host key that could serve the model is out of rotation after failing. | Check the keys' breakers (`GET /api/host-keys/by-id/{id}/health`) and the upstream; see [Every key fails](#502-every-key-fails-or-is-cooling-down). |
 | `overloaded` (`529` `overloaded_error` on Anthropic-shaped routes) | The process is at its in-flight cap (`RELAY_MAX_INFLIGHT`, default 2048), Dragonfly did not answer a rate-limit check within `RELAY_REDIS_READ_TIMEOUT_MS`, or `RELAY_REDIS_POOL_MAX_WAITERS` calls were already waiting for a Dragonfly connection. | Retry after 1 second. If it persists, add replicas, or check `relay_requests_shed_total` (`stage="kv_pool"` means the Dragonfly pool was the limit), `relay_kv_errors_total` and Dragonfly's load. |
 
 ## `502`: every key fails or is cooling down
@@ -54,7 +56,7 @@ Each host key has a circuit breaker. A key that the upstream rejects with `401` 
 
 | What you see | Cause |
 | --- | --- |
-| `upstream_error` with `no healthy keys in pool` in the message | Every key for the route is cooling down. |
+| `503 no_healthy_keys` | Every key for the route is cooling down after failing. |
 | The provider's own status and body, `X-WR-Origin: upstream` | Every key was tried and failed; this is the last provider response. |
 | `upstream_unavailable` | Every key failed and the provider sent no body. |
 | `upstream_unreachable` | Relay could not connect to the host at all (refused, DNS, TLS). This is the host's base URL or network, not a key. |
@@ -77,6 +79,8 @@ A `429` written by Relay always means a limit set for the caller. Relay's own la
 | --- | --- |
 | `rate_limit_exceeded` | A [rate limit](/concepts/rate-limits) on a caller rung is used up (the message names the rung and policy), or every host key for the model is over an upstream limit or its account is cooling. `Retry-After` says when the first one has room. |
 | `budget_exceeded` | A hard [budget](/concepts/budgets) on a caller rung is spent for this period. `Retry-After` is the time to the next period. |
+
+`GET /api/accounts/{ref}/limits` (or `GET /api/keys/{ref}/limits` for a key) shows every limit on the account's ladder with what is used and left, and which one is closest to refusing; see [Control API](/reference/control-api#accounts-and-limits).
 | A provider body, `X-WR-Origin: upstream` | The provider's own rate limit, after every key was tried. |
 
 ## `413`: request too large

@@ -42,6 +42,7 @@
               "concepts/architecture",
               "concepts/catalog",
               "concepts/overlays",
+              "concepts/accounts",
               "concepts/policies",
               "concepts/rate-limits",
               "concepts/budgets",

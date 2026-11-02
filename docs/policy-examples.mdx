@@ -1,6 +1,6 @@
 ---
 title: "Policy Examples"
-description: "Manifests for a team policy with a pool, a budget and rate limits, a provider tier on an account, and per-project budgets"
+description: "Manifests for a team policy with a pool, a budget and rate limits, a provider tier on an account, per-project budgets and per-person caps"
 ---
 
 Each example is a `relay.wyolet.dev/v1alpha3` manifest bundle. Apply it with [`relay apply`](/concepts/gitops), dry run first:
@@ -10,11 +10,11 @@ relay apply -f policies/ --dry-run
 relay apply -f policies/
 ```
 
-The examples build on each other: the second and third use the team, project and account the first one declares. The tier presets they bind (`openai-build`, `openai-grow`) ship in catalog releases with the v1alpha3 schema. How the pieces combine is on [Policies](/concepts/policies).
+The examples build on each other: the later ones use the team, project and provider account the first one declares. The tier presets they bind (`openai-build`, `openai-grow`) ship in catalog releases with the v1alpha3 schema. How the pieces combine is on [Policies](/concepts/policies), and the account names (`team-ml`, `project-search`, `sa-eval-runner`) on [Accounts](/concepts/accounts#accounts-relay-makes). An apply that declares a team, project or service account can bind its account in the same bundle.
 
 ## A team policy with a pool, a budget and rate limits
 
-An admin provisions the upstream side: one OpenAI organization as an account, its two keys, and a pool of them. The team gets a policy that draws on the pool, a monthly budget, and request and token limits.
+An admin provisions the upstream side: one OpenAI organization as a provider account, its two keys, and a pool of them. The team's account gets a policy that draws on the pool, a monthly budget, and request and token limits.
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -94,11 +94,12 @@ metadata:
   name: ml
   owner: {kind: team, name: ml}
 spec:
-  models: [openai/*]
+  models: [openai]
   pools: [openai-main]
   rateLimits:
     - ref: ml-limits
-  budgets: [ml-monthly]
+  budgets:
+    - ref: ml-monthly
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
@@ -107,21 +108,20 @@ metadata:
   owner: {kind: team, name: ml}
 spec:
   policy: ml
-  subjects:
-    - {kind: team, name: ml}
+  accounts: [team-ml]
 ```
 
-What this gives every request on the team's rung, which is every service-account key and inference token of every project in `ml`:
+What this gives every request on the team's rung, which is every lane in `ml`: the member accounts of the team and its projects, and the accounts of their service accounts:
 
-- Only OpenAI models, and only through `openai-main`. The policy links a pool, so it decides reach: the team's members no longer fall back to the host keys their scopes own.
+- Only OpenAI models, and only through `openai-main`. The policy links a pool, so it decides reach: the team's lanes no longer fall back to the host keys their scopes own.
 - 600 requests and 2,000,000 tokens a minute, and $2,000 a month, each one counter shared by the whole team across every model.
 - Unpriced OpenAI models are refused while the budget applies.
 
-The account, the host keys and the pool are system-owned, so any team's policy can link the pool. The rate limit, the budget, the policy and the binding belong to the team, so a `team-admin` can change them. A team that brings its own OpenAI keys can own them, and a pool of them, the same way.
+A team member's personal account climbs no team rung, so a relay key in it is not governed by this policy. A key in the member's account in `ml` is.
 
-The policy's rate limits carry no `models`: a team's limits cover the whole policy. Per-model limits belong on the account, as in the next example.
+The provider account, the host keys and the pool are system-owned, so any team's policy can link the pool. The rate limit, the budget, the policy and the binding belong to the team, so a `team-admin` can change them. A team that brings its own OpenAI keys can own them, and a pool of them, the same way.
 
-Naming the account on each key is optional: a key saved without `account` joins its owner's [default account](/concepts/key-pooling#default-accounts) at the host, here the system's.
+Naming the account on each host key is optional: a host key saved without `account` joins its owner's [default account](/concepts/key-pooling#default-accounts) at the host, here the system's.
 
 ## Binding a tier to an account
 
@@ -135,8 +135,7 @@ metadata:
   owner: {kind: system}
 spec:
   policy: openai-grow
-  subjects:
-    - {kind: account, name: acme-openai}
+  accounts: [acme-openai]
 ```
 
 A project that brings its own OpenAI organization owns its account and binds the tier itself, with a binding owned by the project:
@@ -154,11 +153,10 @@ apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: search-openai-tier
+  owner: {kind: project, name: search}
 spec:
-  project: search
   policy: openai-build
-  subjects:
-    - {kind: account, name: search-openai}
+  accounts: [search-openai]
 ```
 
 A tier negotiated with the provider is a policy of your own. Scope each rate limit to the models it covers, as the presets do, so each model counts on its own:
@@ -199,8 +197,7 @@ metadata:
   owner: {kind: system}
 spec:
   policy: acme-openai-enterprise-tier
-  subjects:
-    - {kind: account, name: acme-openai-enterprise}
+  accounts: [acme-openai-enterprise]
 ```
 
 An account has one policy. To move it to another tier, change the binding's `policy`; counters of a rate limit both tiers link carry over, since upstream counters do not depend on the policy.
@@ -236,17 +233,18 @@ metadata:
   name: search
   owner: {kind: project, name: search}
 spec:
-  budgets: [search-weekly, search-weekly-alert]
+  budgets:
+    - ref: search-weekly
+    - ref: search-weekly-alert
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: search
+  owner: {kind: project, name: search}
 spec:
-  project: search
   policy: search
-  subjects:
-    - {kind: project, name: search}
+  accounts: [project-search]
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: ServiceAccount
@@ -271,22 +269,52 @@ metadata:
   owner: {kind: project, name: search}
 spec:
   models: [openai/gpt-4o-mini]
-  budgets: [eval-runner-daily]
+  budgets:
+    - ref: eval-runner-daily
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: eval-runner
+  owner: {kind: project, name: search}
 spec:
-  project: search
   policy: eval-runner
-  subjects:
-    - {kind: serviceaccount, name: eval-runner}
+  accounts: [sa-eval-runner]
 ```
 
-A request with an `eval-runner` key passes three caller rungs. It must fit the team's $2,000 a month, the project's $250 a week and the service account's $20 a day, and it may call only `gpt-4o-mini`, since the team allows all of OpenAI and the service account narrows that to one model. Neither project policy links a pool, so reach still comes from the team's `openai-main`. The alert budget refuses nothing; the charge that reaches $150 counts once in `relay_limits_budget_crossings_total`.
+A request with an `eval-runner` key climbs three caller rungs: `team-ml`, `project-search`, then `sa-eval-runner`. It must fit the team's $2,000 a month, the project's $250 a week and the service account's $20 a day, and it may call only `gpt-4o-mini`, since the team allows all of OpenAI and the service account narrows that to one model. Neither project policy links a pool, so reach still comes from the team's `openai-main`. The alert budget refuses nothing; the charge that reaches $150 counts once in `relay_limits_budget_crossings_total`.
 
-To cap one person inside the project, bind a policy to the user with a binding owned by the project. It governs only the inference tokens that user mints for `search`; the user's own relay keys and their tokens for other projects are not affected.
+## Per-person caps
+
+To give every person in a project the same cap of their own, link it per lane on the project's account rather than binding a policy to each member:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: RateLimit
+metadata:
+  name: per-person-rpm
+  owner: {kind: project, name: search}
+spec:
+  rules:
+    - {meter: requests, amount: 60, window: 1m, strategy: sliding-window}
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Policy
+metadata:
+  name: search
+  owner: {kind: project, name: search}
+spec:
+  rateLimits:
+    - ref: per-person-rpm
+      shared: false
+  budgets:
+    - ref: search-weekly
+    - ref: search-weekly-alert
+```
+
+Each lane under `project-search` (every member account in the project, and `sa-eval-runner`) now counts its own 60 requests a minute, while the weekly budgets stay one count for the project.
+
+To cap one person differently, bind a policy to their member account in the project, `alice-project-search` for the user `alice`. It governs that account only: the requests of alice's inference tokens for `search`, and of her keys in that account. Her personal account and her accounts in other teams and projects are not affected.
 
 ## Checking the result
 
@@ -294,6 +322,12 @@ List what a credential can reach; a model a rung refuses does not appear:
 
 ```bash
 curl http://localhost:8080/v1/models -H "Authorization: Bearer <eval-runner key>"
+```
+
+Read the rungs a lane climbs and what is left of every limit on them:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" http://localhost:8081/api/accounts/sa-eval-runner/limits
 ```
 
 Read what one policy allows and the limits it applies per model, without the rest of the ladder:

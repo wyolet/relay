@@ -3,26 +3,26 @@ title: "Payload logging"
 description: "Capture full request and response bodies, choose where they are stored, read them back, and erase them"
 ---
 
-Payload logging stores the full request and response bodies of a request and attaches them to its [usage event](/concepts/usage) by request id. Use it to see exactly what a client sent and what the provider returned. It is off by default, and nothing is captured until both an operator switch and the request's policy allow it.
+Payload logging stores the full request and response bodies of a request and attaches them to its [usage event](/concepts/usage) by request id. Use it to see exactly what a client sent and what the provider returned. It is off by default, and nothing is captured until both an operator switch and the request's account allow it.
 
 Bodies are stored as Relay received and sent them, after decompression. Streamed responses are captured as the stream of frames the upstream sent. Capture happens after the response, in the background; captured bodies wait in a queue bounded by bytes (`RELAY_PAYLOAD_QUEUE_BYTES`, 1/16 of `GOMEMLIMIT` by default; see [Configuration](/configuration)), and when it is full new captures are dropped and counted in `relay_records_lost_total{kind="payload"}`. Requests refused before reaching an upstream keep their captures in a small queue of their own (`RELAY_PAYLOAD_REFUSED_QUEUE_BYTES`, 2 MiB), written after the served ones and counted as `kind="payload_refused"` when dropped.
 
 <Warning>
-Bodies hold prompts and completions, which are often sensitive. Turn capture on for the policies you need, set a `maxBytes` cap, and set a retention.
+Bodies hold prompts and completions, which are often sensitive. Turn capture on for the accounts you need, set a `maxBytes` cap, and set a retention.
 </Warning>
 
 ## Enabling capture
 
 <Steps>
   <Step title="Turn on the payload-logging section">
-    `PUT /api/settings/payload-logging` with `enabled: true` and a backend. While `enabled` is false nothing is captured, whatever the policies say.
+    `PUT /api/settings/payload-logging` with `enabled: true` and a backend. While `enabled` is false nothing is captured, whatever the accounts say.
   </Step>
-  <Step title="Opt in on the policy">
-    Set `payloadLoggingEnabled: true` on the [policy](/concepts/policies) that governs the traffic. The policy decides, whatever the relay key's own `payloadLoggingEnabled` says. Only a relay key with no caller policy opts in with its own flag.
+  <Step title="Opt in on the account">
+    Set `payloadLogging: on` on the [account](/concepts/accounts#payload-logging) the traffic runs in, or on its project's or team's account. The account decides, whatever the relay key's own `payloadLoggingEnabled` says. Only when no account on the ladder sets `payloadLogging` does a relay key opt in with its own flag.
   </Step>
 </Steps>
 
-The governing policy is the innermost caller policy on the [ladder](/concepts/policies#the-ladder): the one bound to the principal, else the project's, else the team's. The rule is the same for normal and [proxy-mode](/concepts/proxy-mode) requests and for WebSocket frames. To capture everything a policy governs, set the flag on that policy. To capture one service account's traffic, bind it a policy of its own with the flag set.
+The deciding account is the nearest one on the request's [ladder](/concepts/policies#the-ladder) that sets `payloadLogging`: the request's own account, else its project's, else its team's. `on` captures and `off` does not; omitted leaves it to the next account up, then to the key. The rule is the same for normal and [proxy-mode](/concepts/proxy-mode) requests and for WebSocket frames. To capture a whole team, set it on the team's account (`team-<team>`); to capture one service account's traffic, on its account (`sa-<name>`); to keep one member out, set `off` on that member's account. Who may set it is on [Accounts](/concepts/accounts#payload-logging).
 
 ```bash
 # 1. Turn capture on and pick a backend.
@@ -36,12 +36,12 @@ curl -X PUT http://localhost:8081/api/settings/payload-logging \
     "clickhouse": {}
   }'
 
-# 2. Opt in on the policy that governs the traffic. PUT replaces the row,
-#    so send back the policy as read with GET, with the flag set.
-curl -X PUT http://localhost:8081/api/policies/by-id/<id> \
+# 2. Opt in on the account the traffic runs in. PUT replaces the row,
+#    so send back the account as read with GET, with the field set.
+curl -X PUT http://localhost:8081/api/accounts/by-id/<id> \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"metadata": {...}, "spec": {..., "payloadLoggingEnabled": true}}'
+  -d '{"metadata": {...}, "spec": {..., "payloadLogging": "on"}}'
 ```
 
 The settings write replaces the whole section: `enabled`, `backend`, `maxBytes`, `retentionDays` and every backend block are required, including the blocks not in use. To change one field, read the section with `GET /api/settings/payload-logging` and send its `value` back with the change. Changes apply without a restart. Only an admin may change this section.
@@ -58,7 +58,7 @@ The settings write replaces the whole section: `enabled`, `backend`, `maxBytes`,
 
 ## What is never captured
 
-- Requests whose governing policy does not have `payloadLoggingEnabled`, and any request while the section is off.
+- Requests whose ladder has `payloadLogging: off` nearest, or sets none while the relay key has no `payloadLoggingEnabled`, and any request while the section is off.
 - Anonymous proxy traffic, which has no relay key.
 - Batch items.
 - Usage events themselves: `/api/usage/*` and `/api/logs` never carry bodies, only the detail endpoint below does.

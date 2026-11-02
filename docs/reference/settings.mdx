@@ -103,7 +103,7 @@ Admin only.
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `enabled` | `false` | Master switch. A request is captured only when this is on and the request also opts in through its policy (`payloadLoggingEnabled`); see [Payload logging](/concepts/payload-logging) for which flag applies. |
+| `enabled` | `false` | Master switch. A request is captured only when this is on and the request also opts in through its account (`payloadLogging`) or, when no account on its ladder sets it, its relay key (`payloadLoggingEnabled`); see [Payload logging](/concepts/payload-logging). |
 | `backend` | `file` | `file`, `s3` or `clickhouse`. |
 | `maxBytes` | `4194304` (4 MiB) | Cap per stored body, measured after decompression. `0` is unlimited. |
 | `retentionDays` | `30` | Days bodies are kept by the `clickhouse` backend; `0` keeps them forever. Unlike other fields, leaving it out of a seed file keeps 30. |
@@ -120,7 +120,7 @@ See [Payload logging](/concepts/payload-logging).
 | Field | Default | Description |
 | --- | --- | --- |
 | `enabled` | `false` | Accepts OTLP/HTTP exports at `/otlp/v1/traces` and `/otlp/v1/logs` on the inference listener and records the model calls they describe as usage events with source `otlp`. |
-| `captureContent` | `false` | Also stores the message content clients report, in the payload store, while payload logging is enabled and the reporting credential's policy allows it. |
+| `captureContent` | `false` | Also stores the message content clients report, in the payload store, while payload logging is enabled and no account on the reporting credential's ladder sets `payloadLogging: off`. |
 
 See [OTLP receiver](/concepts/otlp-receiver).
 
