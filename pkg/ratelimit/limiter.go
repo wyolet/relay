@@ -317,16 +317,7 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 	tokAmounts := make([]int64, len(res.tokRules))
 	if !obs.Cancelled {
 		for i, rule := range res.tokRules {
-			m := rule.Meter
-			if m == "tokens" {
-				// Input + output is the provider's total; cache, reasoning
-				// and server-tool counts have their own tokens.<key> meters,
-				// so summing the whole map would count a request several times.
-				tokAmounts[i] = obs.Tokens["input"] + obs.Tokens["output"]
-			} else if strings.HasPrefix(m, "tokens.") {
-				key := m[len("tokens."):]
-				tokAmounts[i] = obs.Tokens[key]
-			}
+			tokAmounts[i] = TokenCharge(rule.Meter, obs.Tokens)
 		}
 	}
 

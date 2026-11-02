@@ -126,6 +126,22 @@ A request that is refused, or fails before any attempt reaches the upstream, doe
 
 With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enforces the full amount on its own. Use `redis` (Dragonfly) to share counters across pods.
 
+## Hybrid counting
+
+With `RELAY_LIMITER=hybrid`, each pod counts in memory and syncs with Dragonfly every `RELAY_LIMITER_SYNC_MS` (1000 by default): one pipelined round trip per pod adds the pod's counts to the shared counters and reads the totals back. A request is checked against the totals of the last sync plus the pod's own counts since, and one whose counters are all counted this way makes no Dragonfly call before the upstream.
+
+A counter is counted in memory when it is a `fixed-window` or `sliding-window` `requests` rule, a token meter, or a [budget](/concepts/budgets), its `amount` is at least 100, and, for a rule, its `window` is longer than the sync interval. Every other counter (`token-bucket`, `leaky-bucket`, `session-window`, `concurrency`, and small caps or short windows) is checked and reserved in Dragonfly per request, as with `lua`.
+
+A counter counted in memory switches to the per-request check at the sync where it has used 80% of its `amount`, or where less room is left than one interval spends at the rate of the last one, whichever comes first. A new window or period, or a later sync that finds it clear of both, switches it back. Its counts the pod had not yet synced go to Dragonfly ahead of its first per-request check, so they count once. A pod's first request on a counter, and requests on a counter whose totals are older than two intervals, are checked in Dragonfly as well.
+
+### Accuracy
+
+While a counter is counted in memory, pods admit against totals up to one interval old, so its cap can be exceeded by at most what the pods admit in one interval: pods × per-pod rate × interval. The switch to the per-request check before the cap keeps it well under that unless traffic jumps within one interval. Token meters and budgets also overshoot by the usage of requests in flight, as with `lua`.
+
+A pod that crashes loses at most one interval of counts it had not synced; its usage records are written separately and are unaffected. A pod that shuts down cleanly syncs first.
+
+If a sync fails, a pod keeps counting in memory on its last totals for at most two intervals after its last successful sync, then checks those counters in Dragonfly per request; a check that cannot reach Dragonfly refuses the request, as with `lua`. Unsynced counts stay in memory and go out with the next successful sync. `relay_limits_hybrid_syncs_total` and `relay_limits_hybrid_counters` show syncs and modes; see [Metrics](/reference/metrics#hybrid-limiter).
+
 ## What a limited caller sees
 
 ```http

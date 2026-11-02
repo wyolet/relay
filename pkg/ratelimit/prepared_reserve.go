@@ -15,12 +15,20 @@ type PreparedReserve struct {
 	rules  []Rule
 	token  string
 	now    time.Time
-	result *kv.BatchResult
+	result *kv.BatchResult // nil when nothing was queued: Alert spend rules alone, which Reserve does not check
 }
 
 // PrepareReserve queues the reserve script for rules on b. The caller runs b, then calls Finish: same script, arguments and outcome as Reserve.
 func (l *Limiter) PrepareReserve(b *kv.Batch, scope string, rules []Rule) (*PreparedReserve, error) {
 	token := reqid.Generate()
+	if onlyAlerts(rules) {
+		for _, r := range rules {
+			if _, _, err := periodBounds(r.Period, time.Time{}); err != nil {
+				return nil, err
+			}
+		}
+		return &PreparedReserve{l: l, scope: scope, rules: rules, token: token}, nil
+	}
 	now := l.clock()
 	call, err := l.buildReserveCall(scope, rules, token, now)
 	if err != nil {
@@ -31,6 +39,9 @@ func (l *Limiter) PrepareReserve(b *kv.Batch, scope string, rules []Rule) (*Prep
 
 // Finish returns what Reserve would have: the reservation, *ExceededError, ErrRevoked, or the script's failure.
 func (p *PreparedReserve) Finish(ctx context.Context) (*Reservation, error) {
+	if p.result == nil {
+		return newReservation(p.scope, p.rules, p.token, time.Time{}), nil
+	}
 	if p.result.Err != nil {
 		p.l.releaseUnanswered(p.scope, p.rules, p.token, p.result.Err)
 		return nil, reserveFailed(p.result.Err)
