@@ -74,9 +74,6 @@ func (c *controllers) all() []*engine.Controller {
 		return nil
 	})
 
-	sharedWith := engine.NewController("shared-credentials", KindSharedCredentials, c.sharedCredentials)
-	engine.Watch(sharedWith, sharedWithKey)
-
 	pl := engine.NewController("pool-plan", KindPoolPlan, c.poolPlan)
 	engine.Watch(pl, func(p *pool.Pool) []string { return []string{p.Meta.ID} })
 
@@ -101,5 +98,5 @@ func (c *controllers) all() []*engine.Controller {
 	users := engine.NewController("user-index", KindUserIndex, c.userIndex)
 	engine.Watch(users, toSingleton[UserPlan])
 
-	return []*engine.Controller{catalog, managed, pending, expanded, rung, acct, slot, owned, shared, sharedWith, pl, caller, lanes, kp, shard, index, up, users}
+	return []*engine.Controller{catalog, managed, pending, expanded, rung, acct, slot, owned, shared, pl, caller, lanes, kp, shard, index, up, users}
 }

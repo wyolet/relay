@@ -89,38 +89,6 @@ func viaSlot(base *KeySlot, via Rung, counts rungCounts, refused *Refusal, onlyF
 	return &s
 }
 
-// SharedCredentials is what the accounts shared with one owner scope ("user:<id>", "team:<id>", "project:<id>") reach, each key a pool of one: reach by ownership, as OwnedCredentials is for the scope's own keys.
-type SharedCredentials struct {
-	Pools []*PoolPlan
-	in    inputs
-}
-
-func (s *SharedCredentials) builtFrom() inputs { return s.in }
-
-// sharedWithKey is an account's Watch key into SharedCredentials: the scope a shared account belongs to.
-func sharedWithKey(a *account.Account) []string {
-	if !a.IsShared() {
-		return nil
-	}
-	return []string{ownerRef(a.Meta.Owner)}
-}
-
-func (c *controllers) sharedCredentials(tx *engine.Txn, scope string) error {
-	out := &SharedCredentials{}
-	for _, a := range engine.Members[account.Account](tx) {
-		sa := engine.Get[SharedAccount](tx, a.Meta.ID)
-		out.in = append(out.in, sa)
-		if sa == nil {
-			continue
-		}
-		for _, s := range sa.Slots {
-			out.Pools = append(out.Pools, s.Alone)
-		}
-	}
-	engine.Put(tx, SameOr(engine.Get[SharedCredentials](tx, scope), out))
-	return nil
-}
-
 // forHolder leaves out of pools the slots of a service account's share that a lane of another holder would reach; pools itself when there are none.
 func forHolder(pools []*PoolPlan, holder string) []*PoolPlan {
 	other := func(s *KeySlot) bool { return s.OnlyFor != "" && s.OnlyFor != holder }

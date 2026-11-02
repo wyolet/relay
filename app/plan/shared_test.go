@@ -180,32 +180,49 @@ func TestShare_FollowsTheRealAccountsKeys(t *testing.T) {
 	}
 }
 
-// An account shared with a team is reached by its members by ownership, as the team's own keys are.
-func TestShare_TeamMembersReachIt(t *testing.T) {
-	s := newSharing()
-	teamOwner := meta.Owner{Kind: meta.OwnerTeam, ID: s.team.Meta.ID}
-	shared := s.w.share(s.real, account.Receiver{Kind: account.ReceiverTeam, ID: s.team.Meta.ID}, teamOwner)
-	carol := s.w.user()
-	key := s.w.keyIn(carol, s.w.member(carol, teamOwner))
-	outsider := s.w.user()
-	outsiderKey := s.w.userKey(outsider)
-	h := s.w.start(t)
-
-	r := h.route(key, "m1")
-	if r.Refused != nil || r.Hops[0].Slots[0].Via.Account.Meta.ID != shared.Meta.ID {
-		t.Fatalf("team member's route %v refused %v, want the shared key", slotIDs(r), r.Refused)
+// A share never changes routing by itself: the team's members keep reaching what they did, and use the share only once the team links a pool listing it.
+func TestShare_UsedOnlyWhereLinked(t *testing.T) {
+	build := func(linked bool) (*sharing, *hostkey.HostKey, *account.Account, func() *Route) {
+		s := newSharing()
+		sysKey := s.w.cred(s.host, nil, system)
+		teamOwner := meta.Owner{Kind: meta.OwnerTeam, ID: s.team.Meta.ID}
+		shared := s.w.share(s.real, account.Receiver{Kind: account.ReceiverTeam, ID: s.team.Meta.ID}, teamOwner)
+		carol := s.w.user()
+		key := s.w.keyIn(carol, s.w.member(carol, teamOwner))
+		if linked {
+			p := s.w.pool(s.host)
+			p.Meta.Owner, p.Spec.AccountIDs = teamOwner, []string{shared.Meta.ID}
+			pol := s.w.policy("team-pool", policy.Spec{PoolIDs: []string{p.Meta.ID}})
+			pol.Meta.Owner = teamOwner
+			s.w.bindPolicy(pol, s.w.teamAccount(s.team))
+		}
+		h := s.w.start(t)
+		return s, sysKey, shared, func() *Route { return h.route(key, "m1") }
 	}
-	if r := h.route(outsiderKey, "m1"); r.Refused == nil {
-		t.Errorf("a user outside the team reaches %v", slotIDs(r))
+
+	_, sys, _, route := build(false)
+	if got := slotIDs(route()); len(got) != 1 || !slices.Equal(got[0], ids(sys)) {
+		t.Fatalf("an unlinked share changed the team's route: %v, want only the system key", got)
+	}
+	s, _, shared, route := build(true)
+	r := route()
+	if r.Refused != nil || !slices.Equal(slotIDs(r)[0], ids(s.key)) || r.Hops[0].Slots[0].Via.Account.Meta.ID != shared.Meta.ID {
+		t.Fatalf("linked share: route %v refused %v, want the shared key", slotIDs(r), r.Refused)
 	}
 }
 
-// A service account's share is owned by its project but held by it: only its lane draws on it, not the project's other lanes.
+// A service account's share is owned by its project but held by it: through a project pool listing it, only its lane draws on it.
 func TestShare_ServiceAccountOnly(t *testing.T) {
 	s := newSharing()
 	proj := s.w.project(s.team)
+	projOwner := meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
 	mine, other := s.w.sa(proj), s.w.sa(proj)
-	s.w.share(s.real, account.Receiver{Kind: account.ReceiverServiceAccount, ID: mine.Meta.ID}, meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID})
+	shared := s.w.share(s.real, account.Receiver{Kind: account.ReceiverServiceAccount, ID: mine.Meta.ID}, projOwner)
+	p := s.w.pool(s.host)
+	p.Meta.Owner, p.Spec.AccountIDs = projOwner, []string{shared.Meta.ID}
+	pol := s.w.policy("project-pool", policy.Spec{PoolIDs: []string{p.Meta.ID}})
+	pol.Meta.Owner = projOwner
+	s.w.bindPolicy(pol, s.w.projectAccount(proj))
 	mineKey, otherKey := s.w.saKey(mine), s.w.saKey(other)
 	h := s.w.start(t)
 

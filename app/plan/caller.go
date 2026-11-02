@@ -274,19 +274,14 @@ func readRung(tx *engine.Txn, r *rungRead, in *inputs) {
 	}
 }
 
-// readOwned is what scope reaches by ownership: its own keys, then the keys of the accounts shared with it.
+// readOwned is what scope reaches by ownership: its own keys. Accounts shared with it are reached only through a pool that lists them, so a share never changes routing on its own.
 func readOwned(tx *engine.Txn, scope string, in *inputs) []*PoolPlan {
 	oc := engine.Get[OwnedCredentials](tx, scope)
-	sc := engine.Get[SharedCredentials](tx, scope)
-	*in = append(*in, oc, sc)
-	var out []*PoolPlan
-	if oc != nil {
-		out = oc.Pools
+	*in = append(*in, oc)
+	if oc == nil {
+		return nil
 	}
-	if sc != nil {
-		out = append(out[:len(out):len(out)], sc.Pools...)
-	}
-	return out
+	return oc.Pools
 }
 
 // readSharedLane is what a shared account used as a lane reaches: its real account's keys, narrowed by its own policy.
