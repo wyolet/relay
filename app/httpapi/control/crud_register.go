@@ -144,7 +144,8 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows.add(registerKind[policybinding.PolicyBinding](
 		api, "policy-bindings", "policy-binding", d.Stores.PolicyBinding, d.Authz, pbmeta,
 		func(b *policybinding.PolicyBinding) error { return b.Validate() },
-		meta.OwnerProject,
+		// As for policies: an omitted owner is the caller's own, or system for the admin token.
+		meta.OwnerUser,
 		listScanResolver(d.Stores.PolicyBinding, pbmeta),
 		guardPolicyBinding(d),
 		nil,

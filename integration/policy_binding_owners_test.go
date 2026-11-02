@@ -143,3 +143,42 @@ func TestIntegration_PolicyBindingRefusesAnotherTeamsPool(t *testing.T) {
 		t.Fatalf("binding a system policy without links = %d, want 201: %s", code, raw)
 	}
 }
+
+// A binding created without metadata.owner takes the default other kinds do: system for the admin token, the caller's own user owner for a signed-in user.
+func TestIntegration_PolicyBindingOmittedOwnerDefaults(t *testing.T) {
+	t.Parallel()
+	st := newStack(t)
+	teamID := st.mkTeam(t, "default-owner")
+	aliceID := st.seedLogin(t, "default-alice", "pw-default-alice")
+	alice := st.login(t, "default-alice", "pw-default-alice")
+	create := func(as func(method, path, body string) (int, []byte), path, body string) tenancyRow {
+		t.Helper()
+		code, raw := as(http.MethodPost, path, body)
+		if code != http.StatusCreated {
+			t.Fatalf("POST %s = %d: %s", path, code, raw)
+		}
+		var row tenancyRow
+		if err := json.Unmarshal(raw, &row); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return row
+	}
+	shared := create(st.adminDo, "/api/policies", `{"metadata":{"name":"default-shared"},"spec":{}}`)
+	own := create(alice.do, "/api/policies", `{"metadata":{"name":"default-alice-own"},"spec":{}}`)
+
+	for _, tc := range []struct {
+		name             string
+		as               func(method, path, body string) (int, []byte)
+		policyID         string
+		accountID        string
+		wantKind, wantID string
+	}{
+		{"the admin token", st.adminDo, shared.Metadata.ID, st.accountAt(t, "team:"+teamID), "system", ""},
+		{"a signed-in user", alice.do, own.Metadata.ID, st.accountAt(t, "personal:"+aliceID), "user", aliceID},
+	} {
+		row := create(tc.as, "/api/policy-bindings", `{"metadata":{"name":"default-`+strings.ReplaceAll(tc.name, " ", "-")+`"},"spec":{"policyId":"`+tc.policyID+`","accountIds":["`+tc.accountID+`"]}}`)
+		if row.Metadata.Owner.Kind != tc.wantKind || row.Metadata.Owner.ID != tc.wantID {
+			t.Errorf("%s: owner = %+v, want %s/%s", tc.name, row.Metadata.Owner, tc.wantKind, tc.wantID)
+		}
+	}
+}
