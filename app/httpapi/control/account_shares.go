@@ -340,6 +340,23 @@ func (d Deps) sharesOf(ctx context.Context, id string) bool {
 	return c.MayShare(ctx, src) == nil
 }
 
+// keySharedWithCaller reports whether the caller sees an account shared from accountID, the account a key belongs to: the share's receivers see that key read-only.
+func (d Deps) keySharedWithCaller(ctx context.Context, accountID string) bool {
+	if accountID == "" || d.Stores == nil || d.Stores.Account == nil {
+		return false
+	}
+	all, err := d.Stores.Account.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, a := range all {
+		if a.Spec.SourceAccountID == accountID && visibleTo(ctx, d.Authz, "account", a.Meta.ID, a.Meta.Owner) {
+			return true
+		}
+	}
+	return false
+}
+
 // accountRow reads an account from the published plans when there are any, else from the store; nil when absent.
 func (d Deps) accountRow(ctx context.Context, id string) *account.Account {
 	if d.PlanView != nil {

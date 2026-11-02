@@ -26,7 +26,8 @@ type HostKeyView struct {
 	Kind        string `json:"kind"                  enum:"env,stored,oauth" doc:"Where the secret comes from; the secret itself is never shown."` // "env" | "stored"
 	DefaultTier string `json:"defaultTier,omitempty" deprecated:"true" doc:"Stored but not applied to requests."`
 	Enabled     bool   `json:"enabled"               doc:"Whether the key is enabled."`
-	ReadOnly    bool   `json:"readOnly,omitempty"    doc:"The key belongs to the real account of a shared account: listed for the receiver to see, never edited or revealed through the share."`
+	Prefix      string `json:"prefix,omitempty"      doc:"The secret's first 8 characters, for recognising the key; absent while it cannot be read or when it is shorter than 24 characters. The rest is never shown."`
+	ReadOnly    bool   `json:"readOnly,omitempty"    doc:"The key belongs to the real account of a shared account: listed for the receiver to see, never edited or revealed through the share. Its breaker state reads from GET /host-keys/by-id/{id}/health."`
 }
 
 // HostPolicyRow — a host-tier policy this host owns, with its rate-limit rule

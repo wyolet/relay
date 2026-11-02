@@ -167,6 +167,20 @@ func reservedEnv(name string) bool {
 	return false
 }
 
+// Shown prefix bounds: a short secret shows nothing, so a prefix is never a large part of one.
+const (
+	prefixLen          = 8
+	minLenToShowPrefix = 24
+)
+
+// Prefix is the secret's first characters, for recognising the key; "" while it is unresolved or too short to show any of it.
+func (k *HostKey) Prefix() string {
+	if len(k.Resolved) < minLenToShowPrefix {
+		return ""
+	}
+	return k.Resolved[:prefixLen]
+}
+
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Enabled }
 

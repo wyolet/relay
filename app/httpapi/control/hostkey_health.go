@@ -42,7 +42,7 @@ func registerHostKeyHealth(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/host-keys/by-id/{id}/health",
 		Summary:     "Read a HostKey's circuit-breaker state",
-		Description: "Reports why requests skip the key: open indefinitely after an auth failure until the key heals or rotates, or for a timed cooldown after rate limits and server errors.",
+		Description: "Reports why requests skip the key: open indefinitely after an auth failure until the key heals or rotates, or for a timed cooldown after rate limits and server errors. Readable by whoever may read the key, and by whoever sees an account shared from the key's account.",
 		Tags:        []string{"host-keys"},
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
@@ -59,7 +59,9 @@ func registerHostKeyHealth(api huma.API, d Deps, protect huma.Middlewares) {
 			if errors.Is(err, authz.ErrUnauthenticated) {
 				return nil, mapAuthzErr(err)
 			}
-			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
+			if !d.keySharedWithCaller(ctx, existing.Spec.AccountID) {
+				return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
+			}
 		}
 
 		// KeyHash is derived from the resolved secret value. When the secret

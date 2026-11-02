@@ -162,5 +162,6 @@ func hostKeyView(k *hostkey.HostKey) HostKeyView {
 		Kind:        string(k.Spec.ValueFrom.Kind),
 		DefaultTier: k.Spec.DefaultTier,
 		Enabled:     hostKeyEnabled(k),
+		Prefix:      k.Prefix(),
 	}
 }

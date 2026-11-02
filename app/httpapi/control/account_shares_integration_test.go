@@ -202,6 +202,8 @@ func TestShares_CreateAndRules(t *testing.T) {
 
 // The owner lists shares with each receiver and what it drew; the receiver sees the share and the real account's keys read-only, never their secret.
 func TestShares_ListAndReadOnlyKeys(t *testing.T) {
+	const secret = "sk-share-0123456789abcdefghijkl"
+	t.Setenv("SHARE_TEST_KEY", secret)
 	w := newSharesWorld(t)
 	rec := w.share("alice", w.alicesAcct, account.ReceiverTeam, w.teamTwo.Meta.ID)
 	wantStatus(t, rec, http.StatusCreated)
@@ -229,11 +231,17 @@ func TestShares_ListAndReadOnlyKeys(t *testing.T) {
 	rec = w.send("bob", http.MethodGet, "/accounts/"+share.Meta.ID+"/keys", "")
 	wantStatus(t, rec, http.StatusOK)
 	body := rec.Body.String()
-	if !strings.Contains(body, `"name":"alice-key"`) || !strings.Contains(body, `"readOnly":true`) || strings.Contains(body, "SHARE_TEST_KEY") {
+	if !strings.Contains(body, `"name":"alice-key"`) || !strings.Contains(body, `"readOnly":true`) || !strings.Contains(body, `"prefix":"sk-share"`) || strings.Contains(body, "SHARE_TEST_KEY") || strings.Contains(body, secret) {
 		t.Fatalf("the receiver's view of the shared keys = %s", body)
 	}
 	if rec := w.send("bob", http.MethodGet, "/host-keys/"+w.aliceKey.Meta.ID, ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("the receiver reads the real key: %d, want 404", rec.Code)
+	}
+	if rec := w.send("bob", http.MethodGet, "/host-keys/by-id/"+w.aliceKey.Meta.ID+"/health", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"state"`) {
+		t.Fatalf("the receiver reads the shared key's health: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := w.send("carol", http.MethodGet, "/host-keys/by-id/"+w.aliceKey.Meta.ID+"/health", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("a stranger reads the key's health: %d, want 404", rec.Code)
 	}
 }
 
