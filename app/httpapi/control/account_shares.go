@@ -1,4 +1,4 @@
-// Sharing a provider account: POST /accounts/{ref}/shares makes an account owned by the receiver that reaches the real account's keys, and GET lists them with what each drew. The owner of the real account (its user, or an admin of its scope) shares; a shared account is deleted through the normal account delete, by that owner or by an admin of the receiving scope.
+// Sharing a provider account: POST /accounts/{ref}/shares makes an account owned by the receiver that reaches the real account's keys, and GET lists them with what each drew. The owner of the real account (its user alone, or an admin of its team, project or the system) shares; a shared account is revoked through the normal account delete (account_revoke.go), by that owner or by an admin of the receiving scope.
 
 package control
 
@@ -76,12 +76,12 @@ func registerAccountShares(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:        http.MethodPost,
 		Path:          "/accounts/{ref}/shares",
 		Summary:       "Share a provider account with a user, team, project or service account",
-		Description:   "Creates an account owned by the receiver (a service account's by its project, held by it so only its lane draws on it) that reaches the real account's keys: current ones, keys added later, and their rotations. The shared account holds no keys and never shows a secret; its requests count on the real account's tier, and a policy bound to it only narrows them. Only the real account's owner shares it: its user for a personal account, an admin of its team, project or the system otherwise (403). One share per receiver: a second answers 409 share_exists. A shared account is not shared on: 409 reshare_refused. A receiver that does not exist answers 404.",
+		Description:   "Creates an account owned by the receiver (a service account's by its project, held by it so only its lane draws on it) that reaches the real account's keys: current ones, keys added later, and their rotations. The shared account holds no keys and never shows a secret; its requests count on the real account's tier, and a policy bound to it only narrows them. It changes no routing by itself: the receiving scope uses it by listing it in one of its pools. Only the real account's owner shares it: its user alone for a personal account (no admin), an admin of its team, project or the system otherwise (403). A receiver that does not exist, or that the caller may not see, answers 404. One share per receiver: a second answers 409 share_exists. A shared account is not shared on: 409 reshare_refused. A receiver that already reaches the account through ownership (a project of the team that owns it, any scope for a system account) answers 409 already_reachable.",
 		Tags:          []string{"accounts"},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{400, 401, 403, 404, 500},
-		Responses:     map[string]*huma.Response{"409": conflictResponse(api, "share_exists: the account is already shared with this receiver; reshare_refused: the account is itself a share.")},
+		Responses:     map[string]*huma.Response{"409": conflictResponse(api, "share_exists: the account is already shared with this receiver; reshare_refused: the account is itself a share; already_reachable: the receiver reaches the account through ownership already.")},
 	}, func(ctx context.Context, in *createShareInput) (*itemResponse[account.Account], error) {
 		return d.shareAccount(ctx, in.Ref, in.Body.Receiver)
 	})
@@ -91,7 +91,7 @@ func registerAccountShares(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/accounts/{ref}/shares",
 		Summary:     "List the accounts a provider account is shared with",
-		Description: "The real account's shares, each with its receiver and the requests and cost it sent through the real account over the window: usage rows of the real account grouped by via_account_id. For the real account's owner, as sharing is (403 otherwise). Delete a share with DELETE /accounts/by-id/{id} on the shared account: it answers which pools lose it.",
+		Description: "The real account's shares, each with its receiver and the requests and cost it sent through the real account over the window: usage rows of the real account grouped by via_account_id. For the real account's owner, as sharing is (403 otherwise). Revoke a share with DELETE /accounts/by-id/{id} on the shared account: it always goes through and answers what it changed (policy bindings that drop it or go, relay keys moved to their principal's own account, pools that lose it).",
 		Tags:        []string{"accounts"},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 404, 500},
@@ -333,11 +333,45 @@ func (d Deps) sharesOf(ctx context.Context, id string) bool {
 		return false
 	}
 	c := refs(d)
-	// A probe, not a decision of the request: the audit wrapper does not record it.
-	if w, ok := c.Authz.(interface{ Unwrap() authz.Authorizer }); ok {
-		c.Authz = w.Unwrap()
-	}
+	c.Authz = unaudited(c.Authz)
 	return c.MayShare(ctx, src) == nil
+}
+
+// userVisible reports whether the caller may see the user, as a share's receiver: themselves, a caller who may read users, or one holding an account in a team or project the user holds one in.
+func (d Deps) userVisible(ctx context.Context, id string) bool {
+	a := actor.From(ctx)
+	if a == nil {
+		return false
+	}
+	if a.UserID == id || unaudited(d.Authz).Authorize(ctx, "users.get", userResource(id)) == nil {
+		return true
+	}
+	if a.UserID == "" || d.Stores == nil || d.Stores.Account == nil {
+		return false
+	}
+	all, err := d.Stores.Account.List(ctx)
+	if err != nil {
+		return false
+	}
+	scopes := map[meta.Owner]int{}
+	for _, acc := range all {
+		h := acc.Spec.Holder
+		if acc.DerivedKind() != account.KindMember || acc.Spec.Closed || h == nil {
+			continue
+		}
+		switch h.ID {
+		case a.UserID:
+			scopes[acc.Meta.Owner] |= 1
+		case id:
+			scopes[acc.Meta.Owner] |= 2
+		}
+	}
+	for _, both := range scopes {
+		if both == 3 {
+			return true
+		}
+	}
+	return false
 }
 
 // keySharedWithCaller reports whether the caller sees an account shared from accountID, the account a key belongs to: the share's receivers see that key read-only.

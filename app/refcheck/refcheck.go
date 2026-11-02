@@ -86,6 +86,8 @@ type Lookup struct {
 	PolicyBindingsFor func(ctx context.Context, policyID string) ([]*policybinding.PolicyBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
+	// UserVisible reports whether the caller may see the user, for a share with one; nil sees every user.
+	UserVisible func(ctx context.Context, id string) bool
 	// DefaultAccount returns the id of a principal's own account (a service account's account, a user's personal account), making it on first use.
 	DefaultAccount func(ctx context.Context, p key.Principal) (string, error)
 	// UserMayBindIn reports whether a user may manage policy bindings in a team or project scope.

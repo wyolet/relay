@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -14,8 +16,11 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
-// editsOnly lets the caller edit accounts of the listed owners; every other action passes.
-type editsOnly struct{ owners []meta.Owner }
+// editsOnly lets the caller edit accounts of the listed owners and see every row but the hidden ids; every other action passes.
+type editsOnly struct {
+	owners []meta.Owner
+	hidden []string
+}
 
 func (e editsOnly) Authorize(_ context.Context, action string, r authz.Resource) error {
 	if action != "accounts.update" {
@@ -29,7 +34,13 @@ func (e editsOnly) Authorize(_ context.Context, action string, r authz.Resource)
 	return authz.ErrForbidden
 }
 
-func (editsOnly) Visible(context.Context, string, string, meta.Owner) bool { return true }
+func (e editsOnly) Visible(_ context.Context, _, id string, _ meta.Owner) bool {
+	return !slices.Contains(e.hidden, id)
+}
+
+func as(userID string) context.Context {
+	return actor.WithActor(context.Background(), &actor.Actor{UserID: userID})
+}
 
 func code(err error) string {
 	var re *Error
@@ -66,22 +77,26 @@ func (r *linkRows) shareChecker(a authz.Authorizer) Checker {
 	c.Rows.MissingUsers = func(_ context.Context, ids []string) ([]string, error) {
 		var out []string
 		for _, id := range ids {
-			if id != "u-alice" && id != "u-bob" {
+			if id != "u-alice" && id != "u-bob" && id != "u-hidden" {
 				out = append(out, id)
 			}
 		}
 		return out, nil
 	}
+	c.Rows.UserVisible = func(_ context.Context, id string) bool { return id != "u-hidden" }
 	return c
 }
 
 // Only who may edit the real account shares it: its user for a personal account, an admin of its team (or the system) otherwise. A share is never shared on, and a receiver must exist.
 func TestShareRules(t *testing.T) {
 	rows := shareRows()
-	ctx := context.Background()
 	bob := account.Receiver{Kind: account.ReceiverUser, ID: "u-bob"}
+	toBob := meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}
+	admin := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true})
+	everything := editsOnly{owners: []meta.Owner{alice, teamOne, teamTwo, projectOne, {Kind: meta.OwnerSystem}}}
 	for _, tc := range []struct {
 		name   string
+		ctx    context.Context
 		caller authz.Authorizer
 		src    string
 		to     account.Receiver
@@ -89,20 +104,26 @@ func TestShareRules(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"owner shares a personal account", editsOnly{[]meta.Owner{alice}}, "acct-alice", bob, meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}, 0, ""},
-		{"team admin shares the team's account", editsOnly{[]meta.Owner{teamOne}}, "acct-team-1", account.Receiver{Kind: account.ReceiverProject, ID: "p-2"}, meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, 0, ""},
-		{"a stranger is refused", editsOnly{[]meta.Owner{teamTwo}}, "acct-alice", bob, meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}, http.StatusForbidden, ""},
-		{"the receiving admin cannot share on", editsOnly{[]meta.Owner{teamTwo}}, "share-t2", bob, meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}, http.StatusConflict, CodeReshare},
-		{"a missing user", editsOnly{[]meta.Owner{alice}}, "acct-alice", account.Receiver{Kind: account.ReceiverUser, ID: "u-gone"}, meta.Owner{Kind: meta.OwnerUser, ID: "u-gone"}, http.StatusNotFound, ""},
-		{"a missing team", editsOnly{[]meta.Owner{alice}}, "acct-alice", account.Receiver{Kind: account.ReceiverTeam, ID: "t-9"}, meta.Owner{Kind: meta.OwnerTeam, ID: "t-9"}, http.StatusNotFound, ""},
-		{"a service account's share is its project's", editsOnly{[]meta.Owner{alice}}, "acct-alice", account.Receiver{Kind: account.ReceiverServiceAccount, ID: "sa-1"}, projectOne, 0, ""},
-		{"a service account's share in another project", editsOnly{[]meta.Owner{alice}}, "acct-alice", account.Receiver{Kind: account.ReceiverServiceAccount, ID: "sa-1"}, meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, http.StatusBadRequest, ""},
-		{"sharing with its own owner", editsOnly{[]meta.Owner{alice}}, "acct-alice", account.Receiver{Kind: account.ReceiverUser, ID: "u-alice"}, alice, http.StatusBadRequest, ""},
+		{"its user shares a personal account", as("u-alice"), editsOnly{}, "acct-alice", bob, toBob, 0, ""},
+		{"an admin does not share a personal account", admin, everything, "acct-alice", bob, toBob, http.StatusForbidden, ""},
+		{"a user who may edit every account does not share another's personal one", as("u-carol"), everything, "acct-alice", bob, toBob, http.StatusForbidden, ""},
+		{"team admin shares the team's account", as("u-dave"), editsOnly{owners: []meta.Owner{teamOne}}, "acct-team-1", account.Receiver{Kind: account.ReceiverProject, ID: "p-2"}, meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, 0, ""},
+		{"a team member who may not edit its accounts", as("u-erin"), editsOnly{}, "acct-team-1", account.Receiver{Kind: account.ReceiverTeam, ID: "t-2"}, teamTwo, http.StatusForbidden, ""},
+		{"the receiving admin cannot share on", as("u-bob"), editsOnly{owners: []meta.Owner{teamTwo}}, "share-t2", bob, toBob, http.StatusConflict, CodeReshare},
+		{"a missing user", as("u-alice"), editsOnly{}, "acct-alice", account.Receiver{Kind: account.ReceiverUser, ID: "u-gone"}, meta.Owner{Kind: meta.OwnerUser, ID: "u-gone"}, http.StatusNotFound, ""},
+		{"a user the sharer may not see", as("u-alice"), editsOnly{}, "acct-alice", account.Receiver{Kind: account.ReceiverUser, ID: "u-hidden"}, meta.Owner{Kind: meta.OwnerUser, ID: "u-hidden"}, http.StatusNotFound, ""},
+		{"a missing team", as("u-alice"), editsOnly{}, "acct-alice", account.Receiver{Kind: account.ReceiverTeam, ID: "t-9"}, meta.Owner{Kind: meta.OwnerTeam, ID: "t-9"}, http.StatusNotFound, ""},
+		{"a team the sharer may not see", as("u-alice"), editsOnly{hidden: []string{"t-2"}}, "acct-alice", account.Receiver{Kind: account.ReceiverTeam, ID: "t-2"}, teamTwo, http.StatusNotFound, ""},
+		{"a service account's share is its project's", as("u-alice"), editsOnly{}, "acct-alice", account.Receiver{Kind: account.ReceiverServiceAccount, ID: "sa-1"}, projectOne, 0, ""},
+		{"a service account's share in another project", as("u-alice"), editsOnly{}, "acct-alice", account.Receiver{Kind: account.ReceiverServiceAccount, ID: "sa-1"}, meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, http.StatusBadRequest, ""},
+		{"sharing with its own owner", as("u-alice"), editsOnly{}, "acct-alice", account.Receiver{Kind: account.ReceiverUser, ID: "u-alice"}, alice, http.StatusConflict, CodeAlreadyReachable},
+		{"a team's account with a project of the team", as("u-dave"), editsOnly{owners: []meta.Owner{teamOne}}, "acct-team-1", account.Receiver{Kind: account.ReceiverProject, ID: "p-1"}, projectOne, http.StatusConflict, CodeAlreadyReachable},
+		{"a system account, which every scope reaches", admin, everything, "acct-shared", account.Receiver{Kind: account.ReceiverTeam, ID: "t-2"}, teamTwo, http.StatusConflict, CodeAlreadyReachable},
 	} {
 		src := rows.accounts[tc.src]
 		share := account.Share(src, tc.to, tc.owner, "x")
 		share.Meta.ID = meta.NewID()
-		err := rows.shareChecker(tc.caller).Share(ctx, src, share)
+		err := rows.shareChecker(tc.caller).Share(tc.ctx, src, share)
 		if got := status(err); got != tc.status || code(err) != tc.code {
 			t.Errorf("%s: status %d code %q (%v), want %d %q", tc.name, got, code(err), err, tc.status, tc.code)
 		}

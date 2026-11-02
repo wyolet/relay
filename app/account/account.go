@@ -71,7 +71,7 @@ func (r Receiver) Key() string { return string(r.Kind) + ":" + r.ID }
 type ShareParty struct {
 	Kind string `json:"kind" enum:"system,user,team,project,serviceaccount" doc:"Kind of the party: the system, a user, a team, a project or a service account."`
 	ID   string `json:"id,omitempty"   doc:"Id of the user, team, project or service account; empty for the system."`
-	Name string `json:"name,omitempty" doc:"Username, or slug of the team, project or service account; empty for the system, when the row is gone, or when the caller may not see it."`
+	Name string `json:"name,omitempty" doc:"Username, or slug of the team, project or service account; empty for the system or when the row is gone."`
 }
 
 // IsShared reports whether a is a shared account: one that reaches another provider account's keys and holds none of its own.
@@ -132,7 +132,7 @@ type Spec struct {
 	SourceAccountID string `json:"sourceAccountId,omitempty" yaml:"sourceAccountId,omitempty" readOnly:"true" validate:"omitempty,uuid" doc:"Set on a shared account: the id of the provider account whose keys it reaches. A shared account holds no host keys of its own; its requests use the real account's keys, count on the real account's tier, and only narrow by the policy bound to the shared account. Made by POST /accounts/{ref}/shares; fixed at create."`
 
 	// SharedBy is derived on read from the real account's owner.
-	SharedBy *ShareParty `json:"sharedBy,omitempty" yaml:"-" readOnly:"true" doc:"Set on a shared account: the owner of the real account, who shared it. Derived on read."`
+	SharedBy *ShareParty `json:"sharedBy,omitempty" yaml:"-" readOnly:"true" doc:"Set on a shared account: the owner of the real account, who shared it, always named to whoever sees the share (sharing it was their choice). Derived on read."`
 }
 
 // DerivedKind is the account's kind from its host, holder and owner; "" when they fit no kind.
