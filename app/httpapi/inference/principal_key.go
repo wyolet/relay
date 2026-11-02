@@ -9,8 +9,8 @@ import (
 	"github.com/wyolet/relay/auth/apikey"
 )
 
-// keyPrincipal authenticates a key bearer against the published key plans, writing the 401 and reporting false when no active key has its hash (unknown, disabled, revoked, expired, or a rotated-out hash past its grace), and the 403 when lane names an account the key may not run in.
-func keyPrincipal(w http.ResponseWriter, root *plan.Root, bearer, lane string) (*Principal, *key.Key, bool) {
+// keyPrincipal authenticates a key bearer against the published key plans, writing the 401 and reporting false when no active key has its hash (unknown, disabled, revoked, expired, or a rotated-out hash past its grace), and the 403 when lane names an account the key may not run in, recorded against rec.
+func (a *Auth) keyPrincipal(w http.ResponseWriter, rec *http.Request, root *plan.Root, bearer, lane string) (*Principal, *key.Key, bool) {
 	hash := apikey.Hash(bearer)
 	kp := root.Keys.Lookup(hash, time.Now())
 	if kp == nil {
@@ -19,10 +19,22 @@ func keyPrincipal(w http.ResponseWriter, root *plan.Root, bearer, lane string) (
 	}
 	p, refused := keyPrincipalIn(root, kp, hash, lane)
 	if refused != nil {
-		writeForbidden(w, refused.Code, refused.Error())
+		a.refuseLane(w, rec, laneless(principalOf(kp, hash)), refused)
 		return nil, nil, false
 	}
 	return p, kp.Key, true
+}
+
+// refuseLane answers a credential that may not run in the lane it asked for, recording the refusal against rec for the credential's principal.
+func (a *Auth) refuseLane(w http.ResponseWriter, rec *http.Request, who *Principal, refused *plan.Refusal) {
+	a.recordRefusal(rec, who, refused)
+	writeForbidden(w, refused.Code, refused.Error())
+}
+
+// laneless is p without a lane: a refused switch ran in no account, so its row names the principal and credential only.
+func laneless(p *Principal) *Principal {
+	p.Caller, p.ProjectID, p.TeamID = nil, "", ""
+	return p
 }
 
 // keyPrincipalIn is the principal kp authenticates, acting in lane; account_not_held when the key may not run there.

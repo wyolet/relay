@@ -77,11 +77,12 @@ func frameRequest(d Deps, fw http.ResponseWriter, fr *http.Request) (*http.Reque
 	// subject reaches a live connection. Frames run concurrently, so each
 	// gets its own principal.
 	if p := PrincipalFrom(ctx); p != nil {
-		fp, ok := d.Auth().reauthenticate(fw, p)
+		auth := d.Auth()
+		fp, ok := auth.reauthenticate(fw, fr, p)
 		if !ok {
 			return nil, false
 		}
-		if !authorizePrincipal(fw, fp, frame.cls.Mode) {
+		if !auth.authorizePrincipal(fw, fr, fp, frame.cls.Mode) {
 			return nil, false
 		}
 		frame.principal = fp
@@ -141,8 +142,8 @@ func (a *Auth) Recheck(keyHash, userID, projectID, jti string, tokenVer int, tok
 	}
 }
 
-// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to, each in the lane the upgrade switched into. Reports false after writing the response.
-func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, bool) {
+// reauthenticate resolves an admitted principal's credential again against the current plans, without the bearer: a key by the hash it presented, a token by the claims it verified to, each in the lane the upgrade switched into. Reports false after writing the response; a lane refusal is recorded against rec.
+func (a *Auth) reauthenticate(w http.ResponseWriter, rec *http.Request, p *Principal) (*Principal, bool) {
 	root := a.root()
 	if root == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
@@ -150,7 +151,7 @@ func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, 
 	}
 	now := time.Now()
 	if p.CredentialKind == CredentialToken {
-		return tokenClaimsPrincipal(w, a, root, p.claims, p.claimsTyp, p.SwitchedLaneID, now)
+		return tokenClaimsPrincipal(w, a, rec, root, p.claims, p.claimsTyp, p.SwitchedLaneID, now)
 	}
 	kp := root.Keys.Lookup(p.KeyHash, now)
 	if kp == nil {
@@ -159,7 +160,7 @@ func (a *Auth) reauthenticate(w http.ResponseWriter, p *Principal) (*Principal, 
 	}
 	fp, refused := keyPrincipalIn(root, kp, p.KeyHash, p.SwitchedLaneID)
 	if refused != nil {
-		writeForbidden(w, refused.Code, refused.Error())
+		a.refuseLane(w, rec, laneless(principalOf(kp, p.KeyHash)), refused)
 		return nil, false
 	}
 	return fp, true

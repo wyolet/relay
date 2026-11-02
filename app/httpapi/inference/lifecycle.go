@@ -28,6 +28,11 @@ import (
 // project/team/service-account slugs. Post-flight observers must never
 // re-resolve them — the row they name may be gone by then.
 func mintLifecycle(ctx context.Context, source, clientIP string) *lifecycle.Context {
+	return lifecycleFor(ctx, source, clientIP, PrincipalFrom(ctx))
+}
+
+// lifecycleFor is mintLifecycle for principal p, nil for none.
+func lifecycleFor(ctx context.Context, source, clientIP string, p *Principal) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), source, time.Now())
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP
@@ -35,7 +40,7 @@ func mintLifecycle(ctx context.Context, source, clientIP string) *lifecycle.Cont
 	if cid := reqid.ClientID(ctx); cid != "" {
 		lc.Metadata[usagelog.ExtrasKeyClientRequestID] = cid
 	}
-	if p := PrincipalFrom(ctx); p != nil {
+	if p != nil {
 		// The hash the auth middleware matched on — empty for a token, which
 		// presents no key. Re-hashing the bearer here would record a hash on
 		// token traffic that matches no key row.
@@ -193,12 +198,29 @@ func (d Deps) fireFailure(ctx context.Context, ev *lifecycle.PostFlightEvent) {
 	if d.Lifecycle == nil {
 		return
 	}
-	lc := lifecycle.FromContext(ctx)
-	if lc == nil {
-		return
+	if lc := lifecycle.FromContext(ctx); lc != nil {
+		finalizeDetached(d.Lifecycle, lc, ev)
 	}
+}
+
+// finalizeDetached ends lc with ev off the caller's goroutine: the response is about to be written and telemetry must not hold it.
+func finalizeDetached(reg *lifecycle.Registry, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
 	go func() {
 		lc.MarkEnd()
-		d.Lifecycle.Finalize(context.Background(), lc, ev)
+		reg.Finalize(context.Background(), lc, ev)
 	}()
+}
+
+// recordRefusal writes the usage row of a request whose credential authenticated but whose lane refused it, as a route refusal writes one; r is the request, nil records nothing. Only relay refusals are recorded, never a bad or missing credential.
+func (a *Auth) recordRefusal(r *http.Request, p *Principal, refused *plan.Refusal) {
+	kind := refused.Kind()
+	if a == nil || a.Lifecycle == nil || r == nil || p == nil || kind == "" {
+		return
+	}
+	ctx := r.Context()
+	cls := ClassificationFrom(ctx)
+	lc := lifecycleFor(ctx, sourceForMode(cls.Mode), cls.ClientIP, p)
+	applyObsHeaders(lc, r.Header, false)
+	applyProfile(lc, clientprofile.FromContext(ctx), r.Header)
+	finalizeDetached(a.Lifecycle, lc, &lifecycle.PostFlightEvent{ErrorKind: refused.Code, Refusal: string(kind), ErrorMessage: refused.Error()})
 }

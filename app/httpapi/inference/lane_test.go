@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -199,6 +200,69 @@ func TestLane_TokenSwitch(t *testing.T) {
 	wantForbidden(t, st.send(unscoped, "/v1/chat/completions", accountHeader(f.otherPersonal.Meta.ID)), plan.CodeAccountNotHeld)
 }
 
+// recordUsage gives st's credential middleware a usage hook whose rows land in the returned capture.
+func (st *laneStack) recordUsage() usageCapture {
+	events := make(usageCapture, 16)
+	reg := lifecycle.New()
+	reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
+	reg.RegisterCollector(events)
+	st.auth.Lifecycle = reg
+	return events
+}
+
+// A request refused at the credential check, once its credential is known, leaves a usage row with the refusal; a bad credential leaves none.
+func TestLane_EdgeRefusalsWriteAUsageRow(t *testing.T) {
+	f := newLaneFixture()
+	closed := *f.teamMember
+	closed.Spec.Closed = true
+	g := f
+	g.teamMember = &closed
+	st, cst := f.stack(t, ""), g.stack(t, "")
+	events := st.recordUsage()
+	cst.auth.Lifecycle = st.auth.Lifecycle
+
+	if w := st.send("sk-wr-nobody", "/a/acme-ml/v1/chat/completions", nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown key = %d", w.Code)
+	}
+	tok := f.mint(t, nil)
+	for _, tc := range []struct {
+		name                                 string
+		st                                   *laneStack
+		bearer, path, code, lane, credential string
+	}{
+		{"key into an account it does not hold", st, "sk-wr-alice", "/a/" + f.otherPersonal.Meta.ID + "/v1/chat/completions", plan.CodeAccountNotHeld, "", f.key.Meta.ID},
+		{"key into a closed account", cst, "sk-wr-alice", "/a/acme-ml/v1/chat/completions", plan.CodeAccountClosed, closed.Meta.ID, f.key.Meta.ID},
+		{"project token outside its project", st, tok, "/a/acme-ml/v1/chat/completions", plan.CodeAccountNotHeld, "", ""},
+	} {
+		wantForbidden(t, tc.st.send(tc.bearer, tc.path, nil), tc.code)
+		ev := events.next(t)
+		if ev.ErrorKind != tc.code || ev.Refusal != string(plan.RefusalModelNotAllowed) || ev.Status != 0 {
+			t.Errorf("%s: row error_kind %q refusal %q status %d", tc.name, ev.ErrorKind, ev.Refusal, ev.Status)
+		}
+		if ev.PrincipalID != f.user || ev.LaneAccountID != tc.lane || (tc.credential != "" && ev.CredentialID != tc.credential) {
+			t.Errorf("%s: row principal %q lane %q credential %q", tc.name, ev.PrincipalID, ev.LaneAccountID, ev.CredentialID)
+		}
+	}
+}
+
+// A principal switched off answers 401 as before, and its row records why.
+func TestLane_DisabledSubjectWritesAUsageRow(t *testing.T) {
+	f := newPrincipalFixture()
+	fls := false
+	disabled := *f.sa
+	disabled.Spec.Enabled = &fls
+	f.sa = &disabled
+	ps := f.stack(t, saKey(f, "sk-wr-live"))
+	st := &laneStack{principalStack: ps, handler: ClassifyMiddleware()(PrincipalMiddleware(ps.auth)(http.NotFoundHandler()))}
+	events := st.recordUsage()
+	if w := st.send("sk-wr-live", "/v1/chat/completions", nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	if ev := events.next(t); ev.ErrorKind != plan.CodeSubjectDisabled || ev.Refusal != string(plan.RefusalModelNotAllowed) || ev.PrincipalID != f.sa.Meta.ID {
+		t.Fatalf("row error_kind %q refusal %q principal %q", ev.ErrorKind, ev.Refusal, ev.PrincipalID)
+	}
+}
+
 // The lifecycle, and so the usage event, records the lane the request ran in: the default, or the one it switched into.
 func TestLane_StampedOnTheLifecycle(t *testing.T) {
 	f := newLaneFixture()
@@ -221,7 +285,7 @@ func TestLane_ReauthenticateKeepsTheSwitch(t *testing.T) {
 	f := newLaneFixture()
 	st := f.stack(t, "")
 	st.wantLane(t, st.send("sk-wr-alice", "/a/acme-ml/v1/chat/completions", nil), f.teamMember)
-	fp, ok := st.auth.reauthenticate(httptest.NewRecorder(), st.seen)
+	fp, ok := st.auth.reauthenticate(httptest.NewRecorder(), nil, st.seen)
 	if !ok || fp.Caller.Lane.Meta.ID != f.teamMember.Meta.ID {
 		t.Fatalf("frame lane = %v, ok %v", fp, ok)
 	}

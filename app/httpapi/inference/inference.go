@@ -220,5 +220,5 @@ func mountProfileRoutes(r chi.Router, d Deps) {
 
 // Auth is the credential middleware's view of d.
 func (d Deps) Auth() *Auth {
-	return &Auth{Catalog: d.Catalog, Plans: d.Plans, Revoked: d.Revoked, Tokens: d.Tokens}
+	return &Auth{Catalog: d.Catalog, Plans: d.Plans, Revoked: d.Revoked, Tokens: d.Tokens, Lifecycle: d.Lifecycle}
 }
