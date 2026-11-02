@@ -5,16 +5,26 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 )
 
-// droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key drops out of the pools holding it, an account out of the pools drawing on it.
+// droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key drops out of the pools holding it, an account out of the pools drawing on it, and the shares a team, project or service account received out of theirs.
 var droppedLinkScans = map[string]func(ctx context.Context, d Deps, id string) ([]referenceItem, error){
 	"host-key": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 		return poolsHolding(ctx, d, id)
 	},
 	"account": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 		return poolsDrawingOn(ctx, d, id)
+	},
+	"team": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+		return poolsLosingShares(ctx, d, sharesOwnedBy(meta.OwnerTeam, id))
+	},
+	"project": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+		return poolsLosingShares(ctx, d, sharesOwnedBy(meta.OwnerProject, id))
+	},
+	"service-account": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+		return poolsLosingShares(ctx, d, sharesHeldBy(id))
 	},
 	"rate-limit": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 		return policiesLinking(ctx, d, "spec.rateLimits[].rateLimitId", func(p *policy.Policy) bool {

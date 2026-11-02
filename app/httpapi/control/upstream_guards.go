@@ -58,7 +58,13 @@ func guardAccount(d Deps) mutationGuard[account.Account] {
 		c := refs(d)
 		c.Rows.Account = func(context.Context, string) *account.Account { return incoming }
 		return refuseStrandingMove(ctx, d, "account", incoming.Meta.ID, incoming.Meta.Name, incoming.Meta.Owner, func(it referenceItem) bool {
-			return it.Kind == "host-key" && c.AccountRef(ctx, incoming.Meta.ID, it.owner) == nil
+			switch it.Kind {
+			case "host-key":
+				return c.AccountRef(ctx, incoming.Meta.ID, it.owner) == nil
+			case "pool":
+				return c.PoolAccountRefs(ctx, []string{incoming.Meta.ID}, it.owner, incoming.Spec.HostID) == nil
+			}
+			return false
 		})
 	}
 }

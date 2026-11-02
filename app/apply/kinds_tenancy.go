@@ -172,17 +172,18 @@ func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible
 			add("RoleBinding", rb.Meta)
 		}
 	}
-	var accountID string
+	// Its own account and the shares it holds go with it.
+	var held []string
 	for _, a := range b.rows.Accounts {
 		if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == id {
-			accountID = a.Meta.ID
+			held = append(held, a.Meta.ID)
 		}
 	}
-	if accountID == "" {
+	if len(held) == 0 {
 		return named, hidden
 	}
 	for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
-		if slices.Contains(pb.Spec.AccountIDs, accountID) {
+		if slices.ContainsFunc(pb.Spec.AccountIDs, func(aid string) bool { return slices.Contains(held, aid) }) {
 			add("PolicyBinding", pb.Meta)
 		}
 	}

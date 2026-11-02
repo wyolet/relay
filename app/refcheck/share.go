@@ -109,6 +109,11 @@ func (c Checker) Share(ctx context.Context, src, share *account.Account) error {
 	return c.Account(ctx, share)
 }
 
+// PoolAccountRefs checks that a pool owned by refOwner at hostID may draw on the accounts.
+func (c Checker) PoolAccountRefs(ctx context.Context, ids []string, refOwner meta.Owner, hostID string) error {
+	return c.accountRefs(ctx, ids, refOwner, hostID)
+}
+
 // accountRefs checks provider accounts a pool owned by refOwner draws on, all at hostID. A real account follows the rules for its keys; a shared account is listed only by a pool of the scope it was shared with.
 func (c Checker) accountRefs(ctx context.Context, ids []string, refOwner meta.Owner, hostID string) error {
 	if c.Rows.Account == nil {

@@ -289,3 +289,34 @@ func TestShares_Delete(t *testing.T) {
 	}
 	wantStatus(t, w.send("dave", http.MethodDelete, "/accounts/by-id/"+w.teamAcct.Meta.ID, ""), http.StatusNoContent)
 }
+
+// A share goes with its receiver: deleting the service account or the project it was shared with deletes it instead of blocking, and the answer lists the pools that lose it.
+func TestShares_GoWithTheReceiver(t *testing.T) {
+	w := newSharesWorld(t)
+	ctx := t.Context()
+	toSA := decodeAccount(t, w.share("alice", w.alicesAcct, account.ReceiverServiceAccount, w.sa.Meta.ID))
+	toProject := decodeAccount(t, w.share("alice", w.alicesAcct, account.ReceiverProject, w.projTwo.Meta.ID))
+	if toSA.Meta.ID == "" || toProject.Meta.ID == "" {
+		t.Fatal("shares were not made")
+	}
+	p := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "two-app-pool", Owner: toSA.Meta.Owner}, Spec: pool.Spec{HostID: w.host.Meta.ID, AccountIDs: []string{toSA.Meta.ID}}}
+	must(t, "pool", w.stores.Pool.Upsert(ctx, p))
+
+	rec := w.send("root", http.MethodDelete, "/service-accounts/by-id/"+w.sa.Meta.ID, "")
+	wantStatus(t, rec, http.StatusOK)
+	if !strings.Contains(rec.Body.String(), `"name":"two-app-pool"`) || !strings.Contains(rec.Body.String(), `"field":"spec.accountIds"`) {
+		t.Fatalf("service account delete answer = %s, want the pool that lost its share", rec.Body)
+	}
+	if got, _ := w.stores.Account.Get(ctx, toSA.Meta.ID); got != nil {
+		t.Fatalf("the service account's share after its delete = %+v", got)
+	}
+
+	must(t, "drop pool", w.stores.Pool.Delete(ctx, p.Meta.ID))
+	rec = w.send("root", http.MethodDelete, "/projects/by-id/"+w.projTwo.Meta.ID, "")
+	if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
+		t.Fatalf("project delete with a share = %d %s, want it to go through", rec.Code, rec.Body)
+	}
+	if got, _ := w.stores.Account.Get(ctx, toProject.Meta.ID); got != nil {
+		t.Fatalf("the project's share after its delete = %+v", got)
+	}
+}

@@ -76,6 +76,42 @@ func poolsDrawingOn(ctx context.Context, d Deps, accountID string) ([]referenceI
 	return out, nil
 }
 
+// poolsLosingShares lists the pools drawing on the shares a receiver's delete takes along: those it owns, or a service account's, those it holds.
+func poolsLosingShares(ctx context.Context, d Deps, goes func(*account.Account) bool) ([]referenceItem, error) {
+	if d.Stores.Account == nil {
+		return nil, nil
+	}
+	accounts, err := d.Stores.Account.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list accounts: %w", err)
+	}
+	var out []referenceItem
+	for _, a := range accounts {
+		if !a.IsShared() || !goes(a) {
+			continue
+		}
+		pools, err := poolsDrawingOn(ctx, d, a.Meta.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pools...)
+	}
+	return out, nil
+}
+
+// sharesOwnedBy matches the shares a team or project receives; a service account's are owned by its project too, so they go with the project.
+func sharesOwnedBy(kind meta.OwnerKind, id string) func(*account.Account) bool {
+	return func(a *account.Account) bool { return ownedBy(a.Meta.Owner, kind, id) }
+}
+
+// sharesHeldBy matches the shares a service account receives.
+func sharesHeldBy(id string) func(*account.Account) bool {
+	return func(a *account.Account) bool {
+		h := a.Spec.Holder
+		return h != nil && h.Kind == account.HolderServiceAccount && h.ID == id
+	}
+}
+
 // keysInAccounts lists the relay keys whose default lane in matches: a lane's delete would take them with it.
 func keysInAccounts(ctx context.Context, d Deps, in func(accountID string) bool) ([]referenceItem, error) {
 	out := []referenceItem{}
@@ -166,7 +202,8 @@ func scanUpstreamOwnedBy(ctx context.Context, d Deps, kind meta.OwnerKind, id st
 		callers := map[string]bool{}
 		for _, a := range accounts {
 			switch {
-			case !ownedBy(a.Meta.Owner, kind, id):
+			// A share holds nothing of its own and goes with its receiver; poolsLosingShares reports what that takes.
+			case !ownedBy(a.Meta.Owner, kind, id), a.IsShared():
 			case !a.IsProvider():
 				callers[a.Meta.ID] = true
 			case inUse(a):

@@ -1,4 +1,4 @@
-// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A shared account's source_account_id cascades from the real account, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
+// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A shared account's source_account_id cascades from the real account, its team_id or project_id from its receiver, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
 
 package account
 
@@ -315,7 +315,8 @@ func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
 			p.HolderSaID = text(h.ID)
 		}
 	}
-	if kind != KindProvider {
+	// A share fills its receiving team or project too: it is a link, so it goes with the receiver instead of blocking its delete.
+	if kind != KindProvider || a.IsShared() {
 		switch a.Meta.Owner.Kind {
 		case meta.OwnerTeam:
 			p.TeamID = text(a.Meta.Owner.ID)

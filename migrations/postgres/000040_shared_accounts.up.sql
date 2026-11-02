@@ -1,6 +1,6 @@
 -- 000040: provider accounts shared with another scope, and pools that draw on whole accounts.
 --
--- A shared account is a provider account owned by the receiver that holds no keys of its own: source_account_id names the real account whose keys it reaches. share_receiver names who it was shared with ('user:<id>', 'team:<id>', 'project:<id>' or 'serviceaccount:<id>'; a service account's share is owned by its project and held by it), so one account is shared with one receiver once. Deleting the real account takes its shares along.
+-- A shared account is a provider account owned by the receiver that holds no keys of its own: source_account_id names the real account whose keys it reaches. share_receiver names who it was shared with ('user:<id>', 'team:<id>', 'project:<id>' or 'serviceaccount:<id>'; a service account's share is owned by its project and held by it), so one account is shared with one receiver once. Deleting the real account takes its shares along; a share fills team_id or project_id (and holder_sa_id for a service account), so deleting its receiver does too.
 --
 -- pool_accounts lists the accounts a pool draws on, each contributing every key it holds; a deleted account drops out of every pool, as a deleted key does from pool_credentials.
 
