@@ -121,7 +121,19 @@ type Usage struct {
 type Limiter interface {
 	// Admit checks every counter (rules reserve the estimate; budgets compare spent with the cap) and either reserves all of them or refuses with a *Refused naming the first counter that refused; on refusal nothing stays reserved. A store failure refuses: limits fail closed.
 	Admit(ctx context.Context, cs []Counter, est Usage) (Reservation, error)
+	// Peek reads every counter's current count, one Reading per counter in order, without counting anything: no store write and no TTL change. For admin reads, never the request path.
+	Peek(ctx context.Context, cs []Counter) ([]Reading, error)
 }
+
+// Reading is a counter's count as Admit would compare it with the cap, before a new request: requests, tokens or concurrency slots for a rule, USD nanos spent this period for a budget. Fractional counts round up.
+type Reading struct {
+	Used int64
+	// Amount is the cap in the same unit.
+	Amount int64
+}
+
+// Remaining is what is left under the cap, never below zero.
+func (r Reading) Remaining() int64 { return max(r.Amount-r.Used, 0) }
 
 // Reservation is one admitted request's hold on its counters.
 type Reservation interface {
