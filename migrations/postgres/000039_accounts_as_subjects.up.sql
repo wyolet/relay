@@ -131,31 +131,32 @@ LEFT JOIN projects p ON p.id = b.project_id
 WHERE s.kind = 'user' AND (b.project_id IS NOT NULL OR b.team_id IS NOT NULL)
 ORDER BY u.username;
 
-CREATE TEMP TABLE binding_accounts AS
-SELECT s.binding_id, s.position, b.name AS binding_name, t.account_id
-FROM policy_binding_subjects s
-JOIN policy_bindings b ON b.id = s.binding_id
-CROSS JOIN LATERAL (
-    SELECT s.subject_id AS account_id WHERE s.kind = 'account'
-    UNION ALL SELECT NULLIF(spec->>'accountId', '') FROM secrets WHERE s.kind = 'credential' AND id = s.subject_id
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'team' AND managed_key = 'team:' || s.subject_id
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'project' AND managed_key = 'project:' || s.subject_id
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'serviceaccount' AND managed_key = 'service:' || s.subject_id
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.project_id IS NOT NULL
-        AND managed_key = 'member:project:' || b.project_id || ':' || s.subject_id
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.team_id IS NOT NULL AND kind = 'member' AND holder_user_id = s.subject_id
-        AND (team_id = b.team_id OR project_id IN (SELECT id FROM projects WHERE team_id = b.team_id))
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.project_id IS NULL AND b.team_id IS NULL AND b.user_id IS NULL
-        AND kind IN ('personal', 'member') AND holder_user_id = s.subject_id
-    UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.user_id IS NOT NULL AND managed_key = 'personal:' || s.subject_id
-) t
-WHERE s.kind NOT IN ('host', 'group');
-
 -- An account is held by one binding. Two bindings reaching one account (a user bound by the system and by the user's own binding, which both become the personal account; a team's binding fanning out to a project member account the project's binding also holds) stop the upgrade, listed, so the operator chooses which binding keeps it.
+-- One block, so the work table lives and dies inside it and schema readers such as sqlc skip it.
 DO $$
 DECLARE
     dups TEXT;
 BEGIN
+    CREATE TEMP TABLE binding_accounts AS
+    SELECT s.binding_id, s.position, b.name AS binding_name, t.account_id
+    FROM policy_binding_subjects s
+    JOIN policy_bindings b ON b.id = s.binding_id
+    CROSS JOIN LATERAL (
+        SELECT s.subject_id AS account_id WHERE s.kind = 'account'
+        UNION ALL SELECT NULLIF(spec->>'accountId', '') FROM secrets WHERE s.kind = 'credential' AND id = s.subject_id
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'team' AND managed_key = 'team:' || s.subject_id
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'project' AND managed_key = 'project:' || s.subject_id
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'serviceaccount' AND managed_key = 'service:' || s.subject_id
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.project_id IS NOT NULL
+            AND managed_key = 'member:project:' || b.project_id || ':' || s.subject_id
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.team_id IS NOT NULL AND kind = 'member' AND holder_user_id = s.subject_id
+            AND (team_id = b.team_id OR project_id IN (SELECT id FROM projects WHERE team_id = b.team_id))
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.project_id IS NULL AND b.team_id IS NULL AND b.user_id IS NULL
+            AND kind IN ('personal', 'member') AND holder_user_id = s.subject_id
+        UNION ALL SELECT id FROM accounts WHERE s.kind = 'user' AND b.user_id IS NOT NULL AND managed_key = 'personal:' || s.subject_id
+    ) t
+    WHERE s.kind NOT IN ('host', 'group');
+
     SELECT string_agg(format('account %s in %s', a.name, d.bindings), '; ' ORDER BY a.name) INTO dups
     FROM (
         SELECT account_id, string_agg(DISTINCT binding_name, ', ') AS bindings
@@ -165,16 +166,16 @@ BEGIN
     IF dups IS NOT NULL THEN
         RAISE EXCEPTION 'migration 000039: policy-binding subjects become accounts, and an account is bound by one policy binding; remove the subject from all but one of the bindings listed for each account, then upgrade again: %', dups;
     END IF;
-END $$;
 
-INSERT INTO policy_binding_accounts (binding_id, account_id, position)
-SELECT binding_id, account_id, (row_number() OVER (PARTITION BY binding_id ORDER BY position, account_id) - 1)::int
-FROM (
-    SELECT DISTINCT ON (binding_id, account_id) binding_id, account_id, position
-    FROM binding_accounts WHERE account_id IS NOT NULL
-    ORDER BY binding_id, account_id, position
-) firsts;
-DROP TABLE binding_accounts;
+    INSERT INTO policy_binding_accounts (binding_id, account_id, position)
+    SELECT binding_id, account_id, (row_number() OVER (PARTITION BY binding_id ORDER BY position, account_id) - 1)::int
+    FROM (
+        SELECT DISTINCT ON (binding_id, account_id) binding_id, account_id, position
+        FROM binding_accounts WHERE account_id IS NOT NULL
+        ORDER BY binding_id, account_id, position
+    ) firsts;
+    DROP TABLE binding_accounts;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS policy_binding_accounts_one_binding ON policy_binding_accounts (account_id);
 CREATE TRIGGER policy_binding_accounts_notify AFTER INSERT OR UPDATE OR DELETE ON policy_binding_accounts
