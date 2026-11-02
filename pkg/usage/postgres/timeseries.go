@@ -31,7 +31,7 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 		return usage.TimeSeriesResult{}, err
 	}
 
-	where, args := buildWhere(q.EventQuery, true)
+	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, q.GroupBy))
 	bucketExpr := fmt.Sprintf("date_bin(interval '%d seconds', ts, TIMESTAMPTZ 'epoch')", intervalSec)
 
 	grouped := usage.Grouped(groupBy)

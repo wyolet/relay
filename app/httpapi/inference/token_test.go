@@ -452,7 +452,7 @@ func TestTokenActsInItsProject(t *testing.T) {
 	if w := st.do(token); w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "subject_disabled" {
 		t.Fatalf("token under a disabled team: %d %s, want 403 subject_disabled", w.Code, w.Body)
 	}
-	fp, ok := st.auth.reauthenticate(httptest.NewRecorder(), upgraded)
+	fp, ok := st.auth.reauthenticate(httptest.NewRecorder(), nil, upgraded)
 	if !ok || fp.Caller.Refused == nil || fp.Caller.Refused.Code != "subject_disabled" {
 		t.Fatalf("frame re-authentication under a disabled team: ok=%v caller %+v, want the team's refusal", ok, fp)
 	}

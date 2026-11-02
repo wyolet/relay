@@ -239,14 +239,28 @@ UPDATE policies p SET models = s.models FROM stripped_models s WHERE s.id = p.id
 DROP TABLE stripped_models;
 DROP TABLE policy_hosts;
 
-UPDATE policy_rate_limits SET models = COALESCE((
-    SELECT jsonb_agg(m ORDER BY first) FROM (
-        SELECT split_part(e.value, '@', 1) AS m, min(e.n) AS first
-        FROM jsonb_array_elements_text(models) WITH ORDINALITY AS e(value, n)
-        WHERE split_part(e.value, '@', 1) <> ''
-        GROUP BY 1
-    ) kept), '[]'::jsonb)
-WHERE EXISTS (SELECT 1 FROM jsonb_array_elements_text(models) e WHERE e LIKE '%@%');
+-- A rate-limit link's model scope drops its @host the same way, each change listed.
+CREATE TEMP TABLE stripped_limit_scopes AS
+SELECT l.policy_id, l.position, p.name AS policy, r.name AS rate_limit, l.models AS was,
+       COALESCE((SELECT jsonb_agg(m ORDER BY first) FROM (
+           SELECT split_part(e.value, '@', 1) AS m, min(e.n) AS first
+           FROM jsonb_array_elements_text(l.models) WITH ORDINALITY AS e(value, n)
+           WHERE split_part(e.value, '@', 1) <> ''
+           GROUP BY 1
+       ) kept), '[]'::jsonb) AS models
+FROM policy_rate_limits l JOIN policies p ON p.id = l.policy_id JOIN rate_limits r ON r.id = l.rate_limit_id
+WHERE EXISTS (SELECT 1 FROM jsonb_array_elements_text(l.models) e WHERE e LIKE '%@%');
+
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN SELECT policy, rate_limit, was, models FROM stripped_limit_scopes ORDER BY policy, rate_limit LOOP
+        RAISE NOTICE '000039: policy "%": rate limit "%" models % become %', r.policy, r.rate_limit, r.was, r.models;
+    END LOOP;
+END $$;
+UPDATE policy_rate_limits l SET models = s.models FROM stripped_limit_scopes s WHERE l.policy_id = s.policy_id AND l.position = s.position;
+DROP TABLE stripped_limit_scopes;
 
 -- A link counts once for the bound account (shared) or once per account under it; every link so far was shared.
 ALTER TABLE policy_rate_limits ADD COLUMN IF NOT EXISTS shared BOOLEAN NOT NULL DEFAULT TRUE;

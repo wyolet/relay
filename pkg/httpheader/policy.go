@@ -43,6 +43,9 @@ const (
 	// from the upstream request by the X-WR-* denylist.
 	HeaderClient = "X-Wr-Client"
 
+	// HeaderAccount names the account (id or name) a request runs in and is charged to, instead of the credential's default. Stripped from the upstream request by the X-WR-* denylist.
+	HeaderAccount = "X-Wr-Account"
+
 	// HeaderWarnings is a response header carrying non-fatal request
 	// adjustments the relay made (e.g. params stripped because the routed
 	// model declares them unsupported) so drops are surfaced, never silent.

@@ -282,12 +282,7 @@ func foldCaller(cp *CallerPlan, rd callerReads) {
 	for i := range rd.rungs {
 		cp.Rungs[i] = rd.rungs[i].rung
 	}
-	lane := cp.Rungs[rungLane].SubjectID
-	group := lane
-	if t := cp.Rungs[rungTeam].SubjectID; t != "" {
-		// The team's bucket and the lane's ride one store call.
-		group = t
-	}
+	lane, group := cp.counterGroup()
 	for i := range cp.Rungs {
 		r := &cp.Rungs[i]
 		if r.ScopeID == "" && r.SubjectID == "" {
@@ -329,29 +324,17 @@ func (cp *CallerPlan) foldRung(i int, lane, group string) {
 	r := &cp.Rungs[i]
 	ep := r.Policy
 	cp.Allow.grants[i] = ep.Grant
-	pid := ep.Policy.Meta.ID
 	for j := range ep.RateLimits {
 		l := &ep.RateLimits[j]
-		cs := make([]limits.Counter, 0, len(l.RateLimit.Spec.Rules))
-		for _, rule := range l.RateLimit.Spec.Rules {
-			c := limits.CallerRule(r.Kind, l.RateLimit, rule, pid, r.SubjectID, group)
-			if !l.Shared {
-				c = c.ForLane(lane)
-			}
-			cs = append(cs, c)
-		}
+		cs := rateLimitCounters(r, l, lane, group)
 		if l.Scoped {
 			cp.scoped = append(cp.scoped, scopedCounters{scope: l, counters: cs})
 		} else {
 			cp.Counters = append(cp.Counters, cs...)
 		}
 	}
-	for _, b := range ep.Budgets {
-		c := limits.BudgetCounter(r.Kind, b.Budget, pid, r.SubjectID, group)
-		if !b.Shared {
-			c = c.ForLane(lane)
-		}
-		cp.Counters = append(cp.Counters, c)
+	for j := range ep.Budgets {
+		cp.Counters = append(cp.Counters, budgetCounter(r, &ep.Budgets[j], lane, group))
 		if cp.budgetAt < 0 {
 			cp.budgetAt = i
 		}

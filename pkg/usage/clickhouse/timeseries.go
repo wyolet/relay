@@ -29,7 +29,7 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 		return usage.TimeSeriesResult{}, err
 	}
 
-	where, args := buildWhere(q.EventQuery, true)
+	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, q.GroupBy))
 
 	bucketExpr := fmt.Sprintf("toStartOfInterval(ts, INTERVAL %d second)", intervalSec)
 	selCols := bucketExpr + " AS bucket"

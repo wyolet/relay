@@ -21,6 +21,7 @@ func batchCaller(ctx context.Context) *batch.Caller {
 	c := &batch.Caller{KeyHash: p.KeyHash, PolicyID: p.PolicyID(), TokenVer: p.TokenVer, TokenExp: p.TokenExp}
 	c.ProjectID, c.TeamID = p.ProjectID, p.TeamID
 	c.CredentialKind, c.CredentialID = p.CredentialKind, p.CredentialID
+	c.LaneID = p.SwitchedLaneID
 	switch {
 	case p.ServiceAccountID != "":
 		c.PrincipalKind, c.PrincipalID = string(key.PrincipalServiceAccount), p.ServiceAccountID

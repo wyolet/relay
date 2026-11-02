@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/revocation"
+	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 // requestState is the one context value the middleware chain gives a request: ClassifyMiddleware sets it and the credential middleware fills it in, so the chain adds no further context layers or request copies.
@@ -19,6 +20,8 @@ type requestState struct {
 	snap      *appcatalog.Snapshot
 	// snapSet tells a pinned nil snapshot from none.
 	snapSet bool
+	// lane is the account the request asked to run in (LaneMiddleware); empty runs it in the credential's default.
+	lane string
 }
 
 type ctxStateT struct{}
@@ -132,11 +135,11 @@ func PrincipalMiddleware(a *Auth) func(http.Handler) http.Handler {
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			p, k, ok := a.authenticate(w, cls.Key)
+			p, k, ok := a.authenticate(w, r, cls.Key, laneFrom(r.Context()))
 			if !ok {
 				return
 			}
-			if !authorizePrincipal(w, p, cls.Mode) {
+			if !a.authorizePrincipal(w, r, p, cls.Mode) {
 				return
 			}
 			if !authorizeProxyMode(w, a.Catalog, cls.Mode) {
@@ -156,7 +159,8 @@ func AuthenticateMiddleware(a *Auth) func(http.Handler) http.Handler {
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			p, k, ok := a.authenticate(w, cls.Key)
+			// A report refused here is not a model request, so it leaves no usage row.
+			p, k, ok := a.authenticate(w, nil, cls.Key, laneFrom(r.Context()))
 			if !ok {
 				return
 			}
@@ -171,23 +175,25 @@ type Auth struct {
 	Plans   PlanSource
 	Revoked *revocation.Set
 	Tokens  *TokenVerifier
+	// Lifecycle receives the usage row of a request refused once its credential is known; nil records none.
+	Lifecycle *lifecycle.Registry
 }
 
 // PlanSource is where the request path loads the published plans; *plan.Holder implements it.
 type PlanSource interface{ Load() *plan.Root }
 
-// authenticate resolves a bearer, a key or a relay-minted token, to its principal. Reports false after writing the response: 401 for a bad credential, 503 before the first plans are published.
-func (a *Auth) authenticate(w http.ResponseWriter, bearer string) (*Principal, *key.Key, bool) {
+// authenticate resolves a bearer, a key or a relay-minted token, to its principal acting in lane (an account id or name; empty for the credential's default). Reports false after writing the response: 401 for a bad credential, 403 for a lane the credential may not use, recorded against rec (nil records nothing), 503 before the first plans are published.
+func (a *Auth) authenticate(w http.ResponseWriter, rec *http.Request, bearer, lane string) (*Principal, *key.Key, bool) {
 	root := a.root()
 	if root == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
 		return nil, nil, false
 	}
 	if looksLikeToken(bearer) {
-		p, ok := tokenPrincipal(w, a, root, bearer)
+		p, ok := tokenPrincipal(w, a, rec, root, bearer, lane)
 		return p, nil, ok
 	}
-	return keyPrincipal(w, root, bearer)
+	return a.keyPrincipal(w, rec, root, bearer, lane)
 }
 
 func (a *Auth) root() *plan.Root {
@@ -221,8 +227,11 @@ func (s *requestState) setPrincipal(snap *appcatalog.Snapshot, p *Principal, k *
 	}
 }
 
-// authorizePrincipal answers a caller ladder that fails closed and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.
-func authorizePrincipal(w http.ResponseWriter, p *Principal, mode Mode) bool {
+// authorizePrincipal answers a caller ladder that fails closed, recording the refusal against r, and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.
+func (a *Auth) authorizePrincipal(w http.ResponseWriter, r *http.Request, p *Principal, mode Mode) bool {
+	if refused := p.Caller.Refused; refused != nil {
+		a.recordRefusal(r, p, refused)
+	}
 	if !admitCaller(w, p.Caller) {
 		return false
 	}

@@ -105,7 +105,7 @@ func (sk *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summar
 	if err != nil {
 		return usage.SummaryResult{}, err
 	}
-	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct)
+	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct, usage.CountsRefused(q.EventQuery, q.GroupBy))
 }
 
 // TimeSeries buckets the matching events into time series via
@@ -115,7 +115,7 @@ func (sk *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
-	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
+	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct, usage.CountsRefused(q.EventQuery, q.GroupBy))
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
@@ -129,7 +129,7 @@ func (sk *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetVal
 	if err != nil {
 		return nil, err
 	}
-	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit)
+	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit, usage.CountsRefused(q.EventQuery, q.Dim))
 }
 
 // scan fetches and decodes all events from the store, skipping malformed

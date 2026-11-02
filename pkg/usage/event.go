@@ -29,12 +29,13 @@ type Event struct {
 	Timestamp time.Time `json:"ts"         doc:"When the request started."`
 
 	// Outcome
-	Status       int    `json:"status"                  doc:"HTTP status the caller received; 0 for a request refused before reaching an upstream."`
+	Status       int    `json:"status"                  doc:"HTTP status the caller received: the provider's, or relay's own when relay refused the request (refusal set). 0 for a request relay failed before any upstream answered for another reason."`
 	DurationMs   int64  `json:"duration_ms"             doc:"Milliseconds from request start until the response closed."` // total: start → response closed
 	Streamed     bool   `json:"streamed,omitempty"      doc:"The response was streamed."`
 	FinishReason string `json:"finish_reason,omitempty" doc:"Why generation stopped: stop, length, tool_calls, content_filter, refusal or other."` // "stop"|"length"|"tool_calls"|"content_filter"|"refusal"|"other"
 	Attempts     int    `json:"attempts,omitempty"      doc:"Upstream attempts, counting failover; 0 when not tracked."`                           // upstream tries (pipeline failover); 0 = not tracked
 	ErrorKind    string `json:"error_kind,omitempty"    doc:"Error code of a failed request, such as model_not_allowed, rate_limit_exceeded or upstream_error."`
+	Refusal      string `json:"refusal,omitempty"       enum:"model_not_allowed,host_not_reachable,no_capacity" doc:"Set when relay refused the request itself, as the class of error_kind: model_not_allowed (a policy, account or principal refuses the model), host_not_reachable (no host the caller can reach serves it, or none of them accepted a connection), no_capacity (a rate limit, budget, cooldown, or every host key out of rotation). Absent on success and on every other failure, an upstream's own error included."`
 	ErrorMessage string `json:"error_message,omitempty" doc:"Error message of a failed request."`
 
 	// Upstream is the upstream-leg timing breakdown. Nil when the request
@@ -80,6 +81,7 @@ type Event struct {
 	Principal      string `json:"principal,omitempty"       doc:"The service account's slug at request time; empty for a user."`
 	CredentialKind string `json:"credential_kind,omitempty" doc:"Kind of credential presented, such as key or token."`
 	CredentialID   string `json:"credential_id,omitempty"   doc:"Id of the credential presented: the relay key's id or the token's jti."`
+	LaneAccountID  string `json:"lane_account_id,omitempty" doc:"Id of the account the request ran in and was charged to: the credential's default, or the one the request switched into. Not account_id, the serving host key's provider account."`
 
 	// Token usage as reported by the upstream. Empty on error or when
 	// the adapter could not extract.
@@ -126,9 +128,17 @@ type Event struct {
 const ErrorKindUpstream = "upstream_error"
 
 // LogOnly reports whether the event records a request rejected before any
-// upstream was reached: status 0 with an ErrorKind set (routing denials,
-// auth/proxy gating, key-pool exhaustion). Such events stay visible in
+// upstream was reached: a relay refusal (which carries the status relay
+// answered), or status 0 with an ErrorKind set. Such events stay visible in
 // event listings (the logs view) but are excluded from Summary and
 // TimeSeries aggregation — they carry no usage and would otherwise pollute
 // stats as phantom unattributed requests.
-func (e Event) LogOnly() bool { return e.Status == 0 && e.ErrorKind != "" }
+func (e Event) LogOnly() bool { return e.Refusal != "" || (e.Status == 0 && e.ErrorKind != "") }
+
+// Aggregated reports whether an aggregate counts e: every row but a log-only one, and a log-only relay refusal too when refusals is set.
+func (e Event) Aggregated(refusals bool) bool { return !e.LogOnly() || (refusals && e.Refusal != "") }
+
+// CountsRefused reports whether an aggregate over q grouped by groupBy counts relay's own refusals: only one that filters or groups by refusal, so every other aggregate keeps its served-request numbers.
+func CountsRefused(q EventQuery, groupBy string) bool {
+	return len(q.Refusal) > 0 || groupBy == "refusal"
+}

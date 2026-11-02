@@ -27,7 +27,7 @@ The write replaces the whole section: `captureContent` left out is `false`, so t
 
 ## Configure the exporter
 
-The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or inference token in the `Authorization` header. Any valid credential may report: one with no policy, and one whose policy does not grant the reported model, since reporting routes nothing. A credential that inference rejects as invalid (unknown, disabled, expired) cannot, and neither can one whose innermost caller policy is disabled: the operator switched that access off, and the export is answered `403`. Calls are attributed to the credential's project, team, principal and [account](/concepts/accounts) (`lane_account_id`), so give each reporting service a relay key of its own. An export may name another account with `X-WR-Account` or a `/a/<account>/` prefix, as an inference request does.
+The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or inference token in the `Authorization` header. Any valid credential may report: one with no policy, and one whose policy does not grant the reported model, since reporting routes nothing. A credential that inference rejects as invalid (unknown, disabled, expired) cannot, and neither can one whose account inference refuses: a closed account, an account the credential may not use, or a disabled policy, team, project or principal on its ladder. The operator switched that access off, and the export gets the answer inference gives. A report can run in another account its credential may use, with the `X-WR-Account` header or the `/a/<account>/` prefix, as inference does. Calls are attributed to the credential's project, team, principal and [account](/concepts/accounts) (`lane_account_id`), so give each reporting service a relay key of its own.
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
@@ -150,7 +150,7 @@ Because Relay did not route the call, it picks the rate sheet in this order: a h
 | `200` with `partialSuccess.errorMessage` only | Everything was recorded, with a warning: the export carried [message content](#message-content) that Relay does not store. No record is counted as rejected. | logs it if it reads partial success |
 | `400` | The body does not decode, or the export reports more than 10,000 model calls. | drops the batch |
 | `401` | Missing or invalid credential. | drops the batch |
-| `403` `policy_disabled` | The policy that governs the credential is disabled. The body is the one inference returns for that credential. | drops the batch |
+| `403` `policy_disabled`, `subject_disabled`, `account_closed`, `account_not_held` | Inference refuses the credential's account: a disabled policy, team or project, a closed account, or one the credential may not use. A disabled principal answers `401`. The body is the one inference returns for that credential. | drops the batch |
 | `404` | The receiver is disabled, or the path is not served (`/otlp/v1/metrics`). | drops the batch |
 | `413` | The body is over 16 MiB after decompression (`RELAY_MAX_REQUEST_BYTES` when set). | drops the batch |
 | `415` | The `Content-Type` is neither `application/x-protobuf` nor `application/json`, or the `Content-Encoding` is not `gzip`. | drops the batch |

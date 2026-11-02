@@ -75,7 +75,9 @@ type LinkedRateLimit struct {
 	RateLimit *ratelimit.RateLimit
 	Scoped    bool
 	Scope     []modelref.Ref
-	Shared    bool
+	// Models is the entry's model list as written, for reads that show it.
+	Models []string
+	Shared bool
 }
 
 // LinkedBudget is one budgets entry with its budget read.
@@ -119,7 +121,7 @@ func (c *controllers) expandedPolicy(tx *engine.Txn, id string) error {
 		if !rl.IsEnabled() {
 			continue
 		}
-		ep.RateLimits = append(ep.RateLimits, LinkedRateLimit{RateLimit: rl, Scoped: len(l.Models) > 0, Scope: parseRefs(tx, src, field+".models", l.Models), Shared: l.IsShared()})
+		ep.RateLimits = append(ep.RateLimits, LinkedRateLimit{RateLimit: rl, Scoped: len(l.Models) > 0, Scope: parseRefs(tx, src, field+".models", l.Models), Models: l.Models, Shared: l.IsShared()})
 	}
 	for i, l := range p.Spec.Budgets {
 		b := engine.Get[budget.Budget](tx, l.BudgetID)

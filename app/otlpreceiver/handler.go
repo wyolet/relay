@@ -10,6 +10,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -176,11 +177,13 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	reporter := lifecycle.NewContext("", Source, time.Time{})
 	inference.StampPrincipal(ctx, reporter)
 
-	// A disabled policy is access the operator switched off, so its credential may not report either. A credential with no policy, or one whose policy grants other models, still may: reporting needs a valid credential, not a route.
-	governing := inference.GoverningPolicy(ctx)
-	if governing != nil && !governing.IsEnabled() {
-		sig.result(resultPolicyDisabled).Inc()
-		inference.WritePolicyDisabled(w)
+	// A lane inference refuses (a closed account, a disabled policy or subject on any rung) is access the operator switched off, so its credential may not report either. A credential with no policy, or one whose policy grants other models, still may: reporting needs a valid credential, not a route.
+	if refused := inference.AdmitCaller(ctx, w); refused != nil {
+		result := resultRefused
+		if refused.Code == plan.CodePolicyDisabled {
+			result = resultPolicyDisabled
+		}
+		sig.result(result).Inc()
 		return
 	}
 	capture := inference.PayloadLoggingOf(ctx)

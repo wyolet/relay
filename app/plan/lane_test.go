@@ -224,6 +224,73 @@ func TestLane_LaneForResolvesHeldAccountsOnly(t *testing.T) {
 	}
 }
 
+// A token scoped to a project switches only into accounts inside that project; one without a project into any account its user holds.
+func TestLane_TokenSwitchStaysInItsProject(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	inProject := b.w.member(u, meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+	inTeam := b.w.member(u, meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID})
+	personal := b.w.personal(u)
+	h := b.w.start(t)
+	root, proj := h.holder.Load(), b.proj.Meta.ID
+
+	if cp, r := root.TokenLane(u.ID, proj, inProject.Meta.Name); r != nil || cp.Lane.Meta.ID != inProject.Meta.ID {
+		t.Fatalf("project token into its member account = %v, %v", cp, r)
+	}
+	for name, ref := range map[string]string{"team member account": inTeam.Meta.ID, "personal account": personal.Meta.ID} {
+		if _, r := root.TokenLane(u.ID, proj, ref); r == nil || r.Code != CodeAccountNotHeld {
+			t.Errorf("project token into its %s: refusal = %v, want account_not_held", name, r)
+		}
+		if cp, r := root.TokenLane(u.ID, "", ref); r != nil || cp.Lane.Meta.ID != ref {
+			t.Errorf("token without a project into its %s = %v, %v", name, cp, r)
+		}
+	}
+}
+
+// A key switches by the rules a key's own account obeys: never into a member account opened on first use, a team's account, or a provider account its user does not own. A token switches into any account its user holds. A provider lane of a disabled user is refused, since its plan reads no holder.
+func TestLane_SwitchFollowsTheKeyRules(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	firstUse := b.w.member(u, meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID})
+	firstUse.FollowsRoleBindings = false
+	teamOrg := b.w.account(b.hostA)
+	teamOrg.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}
+	own := b.w.account(b.hostA)
+	own.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: u.ID}
+	k := b.w.userKey(u)
+	h := b.w.start(t)
+	root, kp := h.holder.Load(), h.keyPlan(k)
+
+	for name, ref := range map[string]string{"first-use member": firstUse.Meta.ID, "team account": b.w.teamAccount(b.team).Meta.ID, "team's provider account": teamOrg.Meta.ID} {
+		if _, r := root.LaneFor(kp, ref); r == nil || r.Code != CodeAccountNotHeld {
+			t.Errorf("key into %s: refusal = %v, want account_not_held", name, r)
+		}
+	}
+	if cp, r := root.LaneFor(kp, own.Meta.Name); r != nil || cp.Refused != nil || cp.Lane.Meta.ID != own.Meta.ID {
+		t.Fatalf("key into its user's provider account = %v, %v", cp, r)
+	}
+	if cp, r := root.TokenLane(u.ID, "", firstUse.Meta.ID); r != nil || cp.Lane.Meta.ID != firstUse.Meta.ID {
+		t.Fatalf("token into first-use member = %v, %v", cp, r)
+	}
+	if _, r := root.TokenLane(u.ID, "", teamOrg.Meta.ID); r == nil || r.Code != CodeAccountNotHeld {
+		t.Fatalf("token into the team's provider account: refusal = %v", r)
+	}
+
+	off := *u
+	off.Disabled = true
+	apply(h, &off)
+	root = h.holder.Load()
+	for name, resolve := range map[string]func() (*CallerPlan, *Refusal){
+		"key":   func() (*CallerPlan, *Refusal) { return root.LaneFor(h.keyPlan(k), own.Meta.ID) },
+		"token": func() (*CallerPlan, *Refusal) { return root.TokenLane(u.ID, "", own.Meta.ID) },
+	} {
+		cp, r := resolve()
+		if r != nil || cp.Refused == nil || cp.Refused.Code != CodeSubjectDisabled || cp.Refused.Rung != limits.RungLane {
+			t.Errorf("%s into a disabled user's provider account = %v, %v; want a lane refusing subject_disabled", name, cp, r)
+		}
+	}
+}
+
 func pendingFor(h *harness, place string) *ManagedAccount {
 	for _, m := range Pending(h.e.View()) {
 		if m.Key == place {

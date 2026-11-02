@@ -315,6 +315,8 @@ type UpstreamUnreachableError struct {
 	Host     string
 	Attempts int
 	Cause    error
+	// NoneConnected is set when no candidate of the request accepted a connection: a later hop that answered leaves this, the last dial failure, as the error.
+	NoneConnected bool
 }
 
 func (e *UpstreamUnreachableError) Error() string {
@@ -528,12 +530,59 @@ func (p *Pipeline) fireFailure(req *Request, h *host.Host, runErr error) {
 		return
 	}
 	kind, status := classifyFailure(runErr)
+	ev := &lifecycle.PostFlightEvent{Status: status, ErrorKind: kind, ErrorMessage: runErr.Error()}
+	if a, ok := AnswerOf(runErr); ok && a.Kind != "" {
+		// A refusal's row records what the caller was answered, not the internal error (which names counter keys).
+		ev.Status, ev.Refusal, ev.ErrorMessage = a.Status, string(a.Kind), a.Message
+	}
 	req.Lifecycle.MarkEnd()
-	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, &lifecycle.PostFlightEvent{
-		Status:       status,
-		ErrorKind:    kind,
-		ErrorMessage: runErr.Error(),
-	})
+	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, ev)
+}
+
+// RefusalOf is the refusal class of a Run error relay decided before any upstream call; "" for every other error.
+func RefusalOf(err error) plan.RefusalKind {
+	a, _ := AnswerOf(err)
+	return a.Kind
+}
+
+// AnswerOf is relay's answer to a Run error it decided before any upstream call, or to a dial failure; ok is false for every other error. Kind is set only for a refusal: a dial failure is one only when no candidate connected.
+func AnswerOf(err error) (a plan.Answer, ok bool) {
+	var refused *limits.Refused
+	var limited *UpstreamLimitedError
+	var unreachable *UpstreamUnreachableError
+	switch {
+	case errors.As(err, &limited):
+		// The caller's own limits had room; the upstream rules are the host's configuration and stay out of the message.
+		secs := plan.RetryAfterSeconds(limited.RetryAfter)
+		return plan.Answer{
+			Status: http.StatusTooManyRequests, Type: "rate_limit_error", Code: plan.CodeRateLimitExceeded, Kind: plan.KindOf(plan.CodeUpstreamLimited),
+			Message:    fmt.Sprintf("every credential for this model is over its upstream rate limit; try again in %ds", secs),
+			RetryAfter: secs,
+		}, true
+	case errors.As(err, &refused):
+		return plan.LimitAnswer(refused), true
+	case errors.Is(err, keypool.ErrNoHealthyKeys):
+		return plan.Answer{
+			Status: http.StatusServiceUnavailable, Type: "server_error", Code: plan.CodeNoHealthyKeys, Kind: plan.KindOf(plan.CodeNoHealthyKeys),
+			Message: "every host key for this model is out of rotation after failing; retry later",
+		}, true
+	case errors.As(err, &unreachable):
+		a := plan.Answer{
+			Status: http.StatusBadGateway, Type: "server_error", Code: plan.CodeUpstreamUnreachable,
+			Message: fmt.Sprintf("upstream host %q unreachable after %d attempt(s)", unreachable.Host, unreachable.Attempts),
+		}
+		if unreachable.NoneConnected {
+			a.Kind = plan.KindOf(plan.CodeUpstreamUnreachable)
+		}
+		return a, true
+	case errors.Is(err, ErrNoKeys):
+		// No credential speaks the request's shape: as unreachable as a route with none.
+		return plan.Answer{
+			Status: http.StatusServiceUnavailable, Type: "server_error", Code: "no_keys", Kind: plan.KindOf(plan.CodeNoCredentials),
+			Message: "no host keys",
+		}, true
+	}
+	return plan.Answer{}, false
 }
 
 // classifyFailure maps a Run error to a machine-readable category and the
@@ -546,7 +595,7 @@ func classifyFailure(err error) (kind string, status int) {
 	var limited *UpstreamLimitedError
 	switch {
 	case errors.As(err, &unreachable):
-		return "upstream_unreachable", 0
+		return plan.CodeUpstreamUnreachable, 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
 	case errors.As(err, &refused), errors.As(err, &limited):
@@ -557,6 +606,8 @@ func classifyFailure(err error) (kind string, status int) {
 		return "kv_unavailable", 0
 	case errors.Is(err, ErrNoKeys):
 		return "no_keys", 0
+	case errors.Is(err, keypool.ErrNoHealthyKeys):
+		return plan.CodeNoHealthyKeys, 0
 	case errors.Is(err, ErrAllKeysExhausted):
 		return "keys_exhausted", 0
 	case errors.Is(err, ErrAdapterMissing):

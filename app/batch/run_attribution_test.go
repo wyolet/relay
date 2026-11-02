@@ -41,3 +41,43 @@ func TestRun_StampsTheKeyName(t *testing.T) {
 		t.Fatal("no usage event emitted")
 	}
 }
+
+// An item runs in, and its usage event names, the lane its submission switched into; without a switch the key's own.
+func TestRun_RunsInTheSubmissionsLane(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer up.Close()
+
+	f := runnerFixture(t, up.URL)
+	events := make(usageCapture, 1)
+	reg := lifecycle.New()
+	reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
+	reg.RegisterCollector(events)
+	f.rn.Pipeline.Lifecycle = reg
+	member, refused := f.plans.Root().MemberLane(f.userID, f.project.Meta.ID)
+	if refused != nil {
+		t.Fatal(refused)
+	}
+
+	for _, lane := range []string{"", member.Lane.Meta.ID} {
+		attr := f.keyAttr()
+		attr.LaneID = lane
+		if _, _, err := f.rn.Run(context.Background(), "item", f.key.Spec.KeyHash, TokenClaims{}, attr, adapters.OpenAI, []byte(`{"model":"test-model"}`)); err != nil {
+			t.Fatalf("Run in lane %q: %v", lane, err)
+		}
+		want := f.key.Spec.AccountID
+		if lane != "" {
+			want = lane
+		}
+		select {
+		case ev := <-events:
+			if ev.LaneAccountID != want {
+				t.Errorf("lane %q: event lane_account_id = %q, want %q", lane, ev.LaneAccountID, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no usage event emitted")
+		}
+	}
+}
