@@ -42,6 +42,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rbmeta := func(b *rolebinding.RoleBinding) *meta.Metadata { return &b.Meta }
 	pbmeta := func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta }
 	dk := newDirectoryKinds(d, newDirectoryOps(d))
+	c := refs(d)
 
 	rows.add(registerKind[team.Team](
 		api, "teams", "team", dk.teams, d.Authz, tmeta,
@@ -230,7 +231,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostKeyFilter,
-		usableFor("a pool", refs(d).UsableHostKey),
+		usableFor(c, "a pool", c.UsableHostKey),
 	))
 
 	rows.add(registerKind[ratelimit.RateLimit](
@@ -247,7 +248,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&rateLimitFilter,
-		usableFor("a policy", refs(d).UsableRateLimit),
+		usableFor(c, "a policy", c.UsableRateLimit),
 	))
 
 	rows.add(registerKind[policy.Policy](
@@ -264,7 +265,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyFilter,
-		usableFor("a policy binding", refs(d).UsablePolicy),
+		usableFor(c, "a policy binding", c.UsablePolicy),
 	))
 
 	rows.add(registerKind[pricing.Pricing](

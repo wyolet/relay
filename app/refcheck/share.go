@@ -40,9 +40,9 @@ func (c Checker) shareRef(ctx context.Context, a *account.Account) error {
 		case src.IsShared():
 			return c.reshareRefusal(ctx, src)
 		case !src.IsProvider():
-			return badRequest("account %q is a %s account; only a provider account is shared", label(src.Meta), src.Spec.Kind)
+			return badRequest("%s is a %s account; only a provider account is shared", c.rowText(ctx, "account", src.Meta), src.Spec.Kind)
 		case src.Spec.HostID != a.Spec.HostID:
-			return badRequest("a share is held at the host of the account it comes from, %q", label(src.Meta))
+			return badRequest("a share is held at the host of the account it comes from, %s", c.rowText(ctx, "account", src.Meta))
 		}
 	}
 	return c.receiverExists(ctx, a)
@@ -114,7 +114,7 @@ func (c Checker) receiverExists(ctx context.Context, a *account.Account) error {
 			return notVisible("service-account", r.ID)
 		}
 		if home := (meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}); a.Meta.Owner != home {
-			return badRequest("a share with service account %q belongs to its project, %s; leave the owner out or set it to that project", label(sa.Meta), c.scopeText(ctx, home))
+			return badRequest("a share with %s belongs to its project, %s; leave the owner out or set it to that project", c.rowText(ctx, "service-account", sa.Meta), c.scopeText(ctx, home))
 		}
 	default:
 		return badRequest("an account is shared with a user, a team, a project or a service account, not a %s", a.Meta.Owner.Kind)
@@ -162,7 +162,7 @@ func (c Checker) receiverText(ctx context.Context, r account.Receiver) string {
 		return "that user"
 	case account.ReceiverServiceAccount:
 		if c.Rows.ServiceAccount != nil {
-			if sa := c.Rows.ServiceAccount(ctx, r.ID); sa != nil {
+			if sa := c.Rows.ServiceAccount(ctx, r.ID); sa != nil && Visible(ctx, c.Authz, "service-account", sa.Meta.ID, sa.Meta.Owner) {
 				return fmt.Sprintf("service account %q", label(sa.Meta))
 			}
 		}

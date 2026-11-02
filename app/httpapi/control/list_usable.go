@@ -34,10 +34,12 @@ type usablePurpose[T any] struct {
 // usableFilter is one kind's usable_by rules; the first purpose is the default.
 type usableFilter[T any] struct {
 	purposes []usablePurpose[T]
+	// scope checks the usable_by scope itself as a save checks the owner it writes (refcheck.Checker.UsableScope); nil checks nothing.
+	scope func(ctx context.Context, by meta.Owner) error
 }
 
-func usableFor[T any](linker string, check func(context.Context, *T, meta.Owner) error) *usableFilter[T] {
-	return &usableFilter[T]{purposes: []usablePurpose[T]{{linker: linker, check: check}}}
+func usableFor[T any](c refcheck.Checker, linker string, check func(context.Context, *T, meta.Owner) error) *usableFilter[T] {
+	return &usableFilter[T]{purposes: []usablePurpose[T]{{linker: linker, check: check}}, scope: c.UsableScope}
 }
 
 func (u *usableFilter[T]) params(plural string) []*huma.Param {
@@ -71,10 +73,16 @@ func (u *usableFilter[T]) params(plural string) []*huma.Param {
 type usableQuery[T any] struct {
 	by      meta.Owner
 	purpose usablePurpose[T]
+	scope   func(ctx context.Context, by meta.Owner) error
 }
 
-// keep returns the items a row owned by q.by may link for q's purpose.
+// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal when no row could be saved in it.
 func (q *usableQuery[T]) keep(ctx context.Context, items []*T) ([]*T, error) {
+	if q.scope != nil {
+		if err := q.scope(ctx, q.by); err != nil {
+			return nil, refErr(err)
+		}
+	}
 	out := items[:0:0]
 	for _, it := range items {
 		err := q.purpose.check(ctx, it, q.by)
@@ -110,7 +118,7 @@ func (u *usableFilter[T]) take(q url.Values) (*usableQuery[T], url.Values, error
 	if err != nil {
 		return nil, nil, huma.Error400BadRequest(usableByParam + ": " + err.Error())
 	}
-	out := &usableQuery[T]{by: by, purpose: u.purposes[0]}
+	out := &usableQuery[T]{by: by, purpose: u.purposes[0], scope: u.scope}
 	if hasFor {
 		found := false
 		for _, p := range u.purposes {

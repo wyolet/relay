@@ -15,9 +15,11 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/app/team"
 )
 
 func newUsablePoolsHarness(t *testing.T) http.Handler {
@@ -38,8 +40,11 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 		"p-1": {Meta: meta.Metadata{ID: "p-1", Name: "p-1"}, Spec: project.Spec{TeamID: "t-1"}},
 		"p-2": {Meta: meta.Metadata{ID: "p-2", Name: "p-2"}, Spec: project.Spec{TeamID: "t-2"}},
 	}
+	teams := map[string]*team.Team{"t-1": {Meta: meta.Metadata{ID: "t-1", Name: "t-1"}}, "t-2": {Meta: meta.Metadata{ID: "t-2", Name: "t-2"}}}
 	c := refcheck.Checker{Authz: authz.AlwaysAllowAuthenticated{}, Rows: refcheck.Lookup{
 		Project: func(_ context.Context, id string) *project.Project { return projects[id] },
+		Team:    func(_ context.Context, id string) *team.Team { return teams[id] },
+		Pool:    getOrNil(store.Get),
 	}}
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-Actor", scopeActors))
@@ -48,7 +53,7 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 		api, "pools", "pool", store, authz.AlwaysAllowAuthenticated{}, plmeta, nil, meta.OwnerUser,
 		listScanResolver[pool.Pool](store, plmeta),
 		nil, nil, nil, nil, nil, noSettings{}, false, nil, &poolFilter,
-		usableFor("a policy", c.UsablePool),
+		usableFor(c, "a policy", c.UsablePool),
 	)
 	return r
 }
@@ -153,8 +158,14 @@ func TestListAccountsUsableFor(t *testing.T) {
 	add(account.Share(t1, account.Receiver{Kind: account.ReceiverTeam, ID: "t-2"}, t2, "t-2"), "share-t2")
 	add(account.Share(t1, account.Receiver{Kind: account.ReceiverProject, ID: "p-1"}, p1, "p-1"), "share-p1")
 	projects := map[string]*project.Project{"p-1": {Meta: meta.Metadata{ID: "p-1", Name: "p-1"}, Spec: project.Spec{TeamID: "t-1"}}}
+	teams := map[string]*team.Team{"t-1": {Meta: meta.Metadata{ID: "t-1", Name: "t-1"}}, "t-2": {Meta: meta.Metadata{ID: "t-2", Name: "t-2"}}}
+	// Another binding already holds acct-p1, so a new binding cannot take it.
+	held := []*policybinding.PolicyBinding{{Meta: meta.Metadata{ID: "pb-held", Name: "held", Owner: p1}, Spec: policybinding.Spec{AccountIDs: []string{"acct-p1"}}}}
 	c := refcheck.Checker{Authz: authz.AlwaysAllowAuthenticated{}, Rows: refcheck.Lookup{
-		Project: func(_ context.Context, id string) *project.Project { return projects[id] },
+		Project:        func(_ context.Context, id string) *project.Project { return projects[id] },
+		Team:           func(_ context.Context, id string) *team.Team { return teams[id] },
+		Account:        getOrNil(store.Get),
+		PolicyBindings: func(context.Context) ([]*policybinding.PolicyBinding, error) { return held, nil },
 	}}
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-Actor", scopeActors))
@@ -163,7 +174,7 @@ func TestListAccountsUsableFor(t *testing.T) {
 		api, "accounts", "account", store, authz.AlwaysAllowAuthenticated{}, ameta, nil, meta.OwnerUser,
 		listScanResolver[account.Account](store, ameta),
 		nil, nil, nil, nil, nil, noSettings{}, false, nil, &accountFilter,
-		&usableFilter[account.Account]{purposes: []usablePurpose[account.Account]{
+		&usableFilter[account.Account]{scope: c.UsableScope, purposes: []usablePurpose[account.Account]{
 			{name: "binding", linker: "a policy binding", check: c.UsableAccount},
 			{name: "pool", linker: "a pool", check: c.UsablePoolAccount},
 		}},
@@ -175,7 +186,7 @@ func TestListAccountsUsableFor(t *testing.T) {
 		{"?usable_by=team:t-2", []string{"share-t2"}},
 		{"?usable_by=team:t-2&usable_for=binding", []string{"share-t2"}},
 		{"?usable_by=team:t-2&usable_for=pool", []string{"acct-sys", "share-t2"}},
-		{"?usable_by=project:p-1", []string{"acct-p1", "share-p1"}},
+		{"?usable_by=project:p-1", []string{"share-p1"}},
 		{"?usable_by=project:p-1&usable_for=pool", []string{"acct-p1", "acct-sys", "acct-t1", "share-p1"}},
 	} {
 		w := scopeReq(t, r, "alice", http.MethodGet, "/accounts"+tc.query, "")
@@ -195,6 +206,12 @@ func TestListAccountsUsableFor(t *testing.T) {
 		slices.Sort(got)
 		if !slices.Equal(got, tc.want) {
 			t.Errorf("%s: got %v, want %v", tc.query, got, tc.want)
+		}
+	}
+	// A scope a save could not own a row in answers as that save would.
+	for _, bad := range []string{"?usable_by=team:t-9", "?usable_by=project:p-9&usable_for=pool", "?usable_by=user:u-bob"} {
+		if w := scopeReq(t, r, "alice", http.MethodGet, "/accounts"+bad, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400: %s", bad, w.Code, w.Body)
 		}
 	}
 	for _, bad := range []string{"?usable_for=pool", "?usable_by=system&usable_for=key", "?usable_by=system&usable_for=pool&usable_for=binding"} {

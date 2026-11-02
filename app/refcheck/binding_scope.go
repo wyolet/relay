@@ -78,7 +78,7 @@ func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta
 		if pl == nil {
 			continue
 		}
-		poolText := c.linkText(ctx, "pool", pl.Meta)
+		poolText := c.rowText(ctx, "pool", pl.Meta)
 		if !c.containsScope(ctx, pl.Meta.Owner, scope) {
 			return badRequest("policy %q uses %s; a policy binding of %s can use pools of %s. Create the pool in %s, or move this one there.",
 				label(p.Meta), poolText, c.scopeText(ctx, scope), reachText(scope), homeText(scope))
@@ -88,7 +88,7 @@ func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta
 				a := c.Rows.Account(ctx, aid)
 				if a != nil && !c.containsScope(ctx, a.Meta.Owner, scope) {
 					return badRequest("policy %q uses %s, which draws on %s; a policy binding of %s can use accounts of %s. Take the account out of the pool, or share it with %s.",
-						label(p.Meta), poolText, c.linkText(ctx, "account", a.Meta), c.scopeText(ctx, scope), reachText(scope), c.scopeText(ctx, scope))
+						label(p.Meta), poolText, c.rowText(ctx, "account", a.Meta), c.scopeText(ctx, scope), reachText(scope), c.scopeText(ctx, scope))
 				}
 			}
 		}
@@ -99,19 +99,11 @@ func (c Checker) linksUsableIn(ctx context.Context, p *policy.Policy, scope meta
 			k := c.Rows.HostKey(ctx, kid)
 			if k != nil && !c.containsScope(ctx, k.Meta.Owner, scope) {
 				return badRequest("policy %q uses %s, which holds %s; a policy binding of %s can use host keys of %s. Take the key out of the pool, or move it to %s.",
-					label(p.Meta), poolText, c.linkText(ctx, "host-key", k.Meta), c.scopeText(ctx, scope), reachText(scope), homeText(scope))
+					label(p.Meta), poolText, c.rowText(ctx, "host-key", k.Meta), c.scopeText(ctx, scope), reachText(scope), homeText(scope))
 			}
 		}
 	}
 	return nil
-}
-
-// linkText names a linked row with its owner when the caller may see it, and without anything about it otherwise.
-func (c Checker) linkText(ctx context.Context, kind string, m meta.Metadata) string {
-	if Visible(ctx, c.Authz, kind, m.ID, m.Owner) {
-		return c.rowText(ctx, kind, m)
-	}
-	return hiddenRowText(kind)
 }
 
 // linksOnPolicy checks the bindings already using p against its links, so a bound policy cannot gain a pool its bindings' scopes may not use.

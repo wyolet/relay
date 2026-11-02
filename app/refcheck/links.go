@@ -44,7 +44,7 @@ func (c Checker) accountRef(ctx context.Context, k *hostkey.HostKey) error {
 			c.rowText(ctx, "account", a.Meta), c.scopeText(ctx, k.Meta.Owner))
 	}
 	if a.Spec.HostID != k.Spec.HostID {
-		return badRequest("account %q is held at another host than the key's host %q", a.Meta.Name, k.Spec.HostID)
+		return badRequest("%s is held at another host than the key's; a host key joins an account of its own host", c.rowText(ctx, "account", a.Meta))
 	}
 	return nil
 }
@@ -95,7 +95,7 @@ func (c Checker) credentialRefs(ctx context.Context, from string, ids []string, 
 			return err
 		}
 		if hostID != "" && k.Spec.HostID != hostID {
-			return badRequest("host-key %q authenticates to another host than %q", k.Meta.Name, hostID)
+			return badRequest("%s authenticates to another host than the pool's; a pool holds keys of its own host", c.rowText(ctx, "host-key", k.Meta))
 		}
 	}
 	return nil

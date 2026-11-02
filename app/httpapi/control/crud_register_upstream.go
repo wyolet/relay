@@ -16,6 +16,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 	ameta := func(a *account.Account) *meta.Metadata { return &a.Meta }
 	plmeta := func(p *pool.Pool) *meta.Metadata { return &p.Meta }
 	bumeta := func(b *budget.Budget) *meta.Metadata { return &b.Meta }
+	c := refs(d)
 
 	rows.add(registerKind[account.Account](
 		api, "accounts", "account", accountRows{Store: d.Stores.Account, d: d}, sharerAuthz{Authorizer: d.Authz, d: d}, ameta,
@@ -31,9 +32,9 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&accountFilter,
-		&usableFilter[account.Account]{purposes: []usablePurpose[account.Account]{
-			{name: "binding", linker: "a policy binding", check: refs(d).UsableAccount},
-			{name: "pool", linker: "a pool", check: refs(d).UsablePoolAccount},
+		&usableFilter[account.Account]{scope: c.UsableScope, purposes: []usablePurpose[account.Account]{
+			{name: "binding", linker: "a policy binding", check: c.UsableAccount},
+			{name: "pool", linker: "a pool", check: c.UsablePoolAccount},
 		}},
 	))
 
@@ -51,7 +52,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&poolFilter,
-		usableFor("a policy", refs(d).UsablePool),
+		usableFor(c, "a policy", c.UsablePool),
 	))
 
 	rows.add(registerKind[budget.Budget](
@@ -68,6 +69,6 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&budgetFilter,
-		usableFor("a policy", refs(d).UsableBudget),
+		usableFor(c, "a policy", c.UsableBudget),
 	))
 }

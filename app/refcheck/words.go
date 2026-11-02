@@ -31,8 +31,11 @@ func label(m meta.Metadata) string {
 	return m.Name
 }
 
-// rowText names a row with its owner: `your personal pool "anthropic"`, `pool "anthropic" of team "Platform"`, `system pool "anthropic"`.
+// rowText names a row with its owner: `your personal pool "anthropic"`, `pool "anthropic" of team "Platform"`, `system pool "anthropic"`. A row the caller may not see is named by kind alone.
 func (c Checker) rowText(ctx context.Context, kind string, m meta.Metadata) string {
+	if !Visible(ctx, c.Authz, kind, m.ID, m.Owner) {
+		return hiddenRowText(kind)
+	}
 	name := fmt.Sprintf("%s %q", kindWord(kind), label(m))
 	switch m.Owner.Kind {
 	case meta.OwnerSystem:
@@ -44,7 +47,13 @@ func (c Checker) rowText(ctx context.Context, kind string, m meta.Metadata) stri
 }
 
 // hiddenRowText names a row the caller may not see without confirming anything about it.
-func hiddenRowText(kind string) string { return "a " + kindWord(kind) + " you cannot see" }
+func hiddenRowText(kind string) string {
+	w := kindWord(kind)
+	if strings.ContainsRune("aeiou", rune(w[0])) {
+		return "an " + w + " you cannot see"
+	}
+	return "a " + w + " you cannot see"
+}
 
 // scopeText names a scope: `team "Platform"`, `project "Web"`, "your personal scope", "the system".
 func (c Checker) scopeText(ctx context.Context, o meta.Owner) string {
@@ -69,7 +78,7 @@ func (c Checker) scopeText(ctx context.Context, o meta.Owner) string {
 		return "another project"
 	case meta.OwnerHost:
 		if c.Rows.Host != nil {
-			if h := c.Rows.Host(ctx, o.ID); h != nil {
+			if h := c.Rows.Host(ctx, o.ID); h != nil && Visible(ctx, c.Authz, "host", h.Meta.ID, h.Meta.Owner) {
 				return fmt.Sprintf("host %q", label(h.Meta))
 			}
 		}
@@ -100,8 +109,9 @@ func (c Checker) userSubject(ctx context.Context, userID string) string {
 	return "its owner"
 }
 
+// userName is another user's username, only for a caller who may list users (an admin, or anyone without a scoping authorizer): a scoped caller does not learn who else is on the relay.
 func (c Checker) userName(ctx context.Context, userID string) string {
-	if c.Rows.UserName == nil || userID == "" {
+	if c.Rows.UserName == nil || userID == "" || RequireAdmin(ctx, c.Authz, "") != nil {
 		return ""
 	}
 	return c.Rows.UserName(ctx, userID)

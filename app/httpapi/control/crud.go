@@ -190,6 +190,8 @@ func registerKind[T any](
 	}
 	if usable != nil {
 		listParams = append(listParams, usable.params(plural)...)
+		// A usable_by scope that is not there, or not the caller's to see, answers as a save naming it would.
+		listErrors = []int{400, 401, 404, 500}
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
