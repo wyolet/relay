@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/limits/hybrid"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/orgwatch"
 	"github.com/wyolet/relay/app/pipeline"
@@ -42,9 +43,16 @@ func newPostFlightWriters(s kv.Store) postFlightWriters {
 	}
 }
 
-// buildLimiter counts the plans' counters on limiter, settling on the post-flight store.
-func buildLimiter(limiter *pkgratelimit.Limiter, postFlight postFlightWriters) limits.Limiter {
-	return lua.New(limiter).WithPostFlight(postFlight.limiter)
+// buildLimiter counts the plans' counters on limiter, settling on the post-flight store. With RELAY_LIMITER=hybrid it counts in memory, reserving through the same Lua limiter only what must be exact and syncing on the post-flight store; the returned func stops it and syncs what is left.
+func buildLimiter(cfg *config.Config, limiter *pkgratelimit.Limiter, shared, postFlightKV kv.Store, postFlight postFlightWriters) (limits.Limiter, func()) {
+	exact := lua.New(limiter).WithPostFlight(postFlight.limiter)
+	if cfg.Limiter != "hybrid" {
+		return exact, func() {}
+	}
+	h := hybrid.New(exact, shared, postFlightKV, cfg.LimiterSync)
+	h.Start()
+	slog.Info("limiter", "kind", "hybrid", "sync_interval", cfg.LimiterSync)
+	return h, h.Close
 }
 
 // buildPipeline wires the realtime pipeline.

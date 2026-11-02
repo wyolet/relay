@@ -10,9 +10,11 @@
 //
 // MeterSpend is a spend cap per calendar period rather than a rate: checked at Reserve, charged at Commit.
 //
+// Fixed and sliding windows, token meters and spend keep plain counters (plain.go), which a limiter may count in memory and sync as deltas; CheckPlain decides on such counts as the reserve script does.
+//
 // Expected kv ops per request:
 //   - Reserve:    1 RunScript call (all counter checks + increments atomic), or none when every rule is an Alert spend rule, which Reserve does not check.
-//   - PrepareReserve: the same script queued on the caller's kv.Batch, so it costs no round trip of its own.
+//   - PrepareReserve: the same script queued on the caller's kv.Batch, so it costs no round trip of its own; nothing is queued when Reserve would make no call.
 //   - A reserve that failed after it may have run, with a concurrency rule: 1 detached RunScript releasing its lease, on the store ReleaseUnansweredOn names.
 //   - Commit:     1 RunScript call (concurrency lease release + token post-increment), or none when it settles nothing: an uncancelled request whose rules meter neither concurrency nor tokens. PrepareCommit queues the same script on a caller's kv.Batch.
 //   - CommitBoth: 1 batched round trip committing two reservations that live

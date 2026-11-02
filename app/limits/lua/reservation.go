@@ -66,8 +66,13 @@ func (l *Limiter) reportCrossing(c *limits.Counter) {
 	if c.Budget != nil && c.Budget.Spec.Mode != "" {
 		mode = c.Budget.Spec.Mode
 	}
-	budgetCrossings.WithLabelValues(string(c.Rung), string(mode)).Inc()
+	CountBudgetCrossing(c.Rung, mode)
 	if l.crossed != nil {
 		l.crossed(c)
 	}
+}
+
+// CountBudgetCrossing counts a budget reaching its cap in relay_limits_budget_crossings_total, for a limiter that sees the crossing outside these scripts.
+func CountBudgetCrossing(rung limits.Rung, mode budget.Mode) {
+	budgetCrossings.WithLabelValues(string(rung), string(mode)).Inc()
 }

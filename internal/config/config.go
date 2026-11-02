@@ -126,6 +126,10 @@ type Config struct {
 	KeyBreakerThreshold int
 	KeyBreakerWindow    time.Duration
 
+	// Limiter names the limiter that counts rate limits and budgets (RELAY_LIMITER): "lua" (default) reserves every request in the store; "hybrid" counts in pod memory, synced every LimiterSync (RELAY_LIMITER_SYNC_MS, default 1000), and reserves in the store only counters near their cap.
+	Limiter     string
+	LimiterSync time.Duration
+
 	// PlanCellIdle is how long runtime state no published plan links any more (a rotated credential's breaker copy, a deleted pool's rotation) is kept before it is dropped (RELAY_PLAN_CELL_IDLE_S, default 600). A plan that links it again within the window gets it back.
 	PlanCellIdle time.Duration
 
@@ -452,6 +456,19 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_KEY_BREAKER_WINDOW_S must be >= 0")
 	} else {
 		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
+	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LIMITER"))); v {
+	case "", "lua":
+		cfg.Limiter = "lua"
+	case "hybrid":
+		cfg.Limiter = v
+	default:
+		return nil, fmt.Errorf(`RELAY_LIMITER must be "lua" or "hybrid", got %q`, v)
+	}
+	if v, err := envPositiveInt("RELAY_LIMITER_SYNC_MS", 1000); err != nil {
+		return nil, fmt.Errorf("RELAY_LIMITER_SYNC_MS must be >= 1")
+	} else {
+		cfg.LimiterSync = time.Duration(v) * time.Millisecond
 	}
 	if v := envInt("RELAY_PLAN_CELL_IDLE_S", 600); v < 1 {
 		return nil, fmt.Errorf("RELAY_PLAN_CELL_IDLE_S must be >= 1")

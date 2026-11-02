@@ -4,6 +4,7 @@
 //
 // Expected kv ops per request:
 //   - Admit: one script call per group that checks something, sequentially; a group of alert budgets alone makes none. A refusal or failure after a group reserved adds one batched round trip releasing them.
+//   - PrepareAdmit: the same scripts queued on the caller's kv.Batch, no round trip of its own; a refusal adds the same release.
 //   - Settle: one batched round trip committing the groups that settle something (a concurrency lease, a token meter, a spend charge); none when nothing does.
 //   - Release: one batched round trip.
 //

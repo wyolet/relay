@@ -91,6 +91,15 @@ All are labelled by `source`, the runner that handled the request: `pipeline` (n
 | --- | --- | --- | --- |
 | `relay_limits_budget_crossings_total` | counter | `rung` (`host`, `account`, `team`, `project`, `principal`), `mode` (`hard`, `alert`) | Charges that took a [budget](/concepts/budgets) to its cap, counted once per budget, bound subject and period. An `alert` budget is reported here and nowhere else. |
 
+## Hybrid limiter
+
+Reported only with `RELAY_LIMITER=hybrid`; see [Hybrid counting](/concepts/rate-limits#hybrid-counting).
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `relay_limits_hybrid_counters` | gauge | `mode` (`local`, `exact`) | Counters this pod holds in memory, by how they are checked now: `local` from memory, `exact` in Dragonfly per request (near the cap, or with totals not yet read or older than two sync intervals). Counters always checked in Dragonfly are not held and not counted. Updated at each sync. |
+| `relay_limits_hybrid_syncs_total` | counter | `outcome` (`ok`, `failed`) | Sync round trips with Dragonfly, one per pod per `RELAY_LIMITER_SYNC_MS` while it has counters to sync. `failed` means Dragonfly did not answer every command; its unsynced counts are sent again on the next sync. A run of failures switches counters to `exact` two intervals after the last `ok`. |
+
 ## OTLP receiver
 
 Counted only for exports to the [OTLP receiver](/concepts/otlp-receiver).
