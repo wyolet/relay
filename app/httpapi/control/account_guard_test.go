@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/user"
 )
 
 // Caller accounts are relay's: none is created through the API, and only a closed member account is deleted on its own; a provider account is the caller's to create and delete.
@@ -35,6 +37,42 @@ func TestGuardAccount_CallerAccountsAreRelays(t *testing.T) {
 		if got := statusOf(t, guard(ctx, "delete", tc.a, nil)); got != tc.want {
 			t.Errorf("deleting %s: status %d, want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+// payloadLogging decides whether a user's request bodies are kept, so the user it constrains does not set it: a personal account's is an admin's, a member account's its scope admin's but never its holder's.
+func TestGuardAccount_PayloadLoggingIsNotTheHoldersToSet(t *testing.T) {
+	guard := guardAccount(Deps{Authz: scopedAllow{}})
+	as := func(userID string, roles ...string) context.Context {
+		return actor.WithActor(context.Background(), &actor.Actor{UserID: userID, Roles: roles})
+	}
+	scope := meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}
+	personal := account.Personal("u-alice", "alice")
+	member := account.Member("u-alice", "alice", scope, "ml", "")
+	project := account.ForProject(scope.ID, "ml", "")
+	on := func(a *account.Account) *account.Account {
+		b := *a
+		b.Spec.PayloadLogging = account.PayloadLoggingOn
+		return &b
+	}
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		a    *account.Account
+		want int
+	}{
+		{"the user on their personal account", as("u-alice"), personal, http.StatusForbidden},
+		{"an admin on a personal account", as("u-root", user.RoleAdmin), personal, 0},
+		{"the holder on their member account", as("u-alice"), member, http.StatusForbidden},
+		{"a scope admin on someone's member account", as("u-bob"), member, 0},
+		{"a scope admin on the project's account", as("u-bob"), project, 0},
+	} {
+		if got := statusOf(t, guard(tc.ctx, "update", tc.a, on(tc.a))); got != tc.want {
+			t.Errorf("%s: status %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	if err := guard(as("u-alice"), "update", personal, personal); err != nil {
+		t.Errorf("an update leaving payloadLogging alone: %v", err)
 	}
 }
 

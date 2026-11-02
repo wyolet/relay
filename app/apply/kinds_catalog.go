@@ -59,8 +59,13 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		Kind: "Account", Docs: d.accounts, Names: b.idx.Accounts, Rows: b.rows.Accounts,
 		To: manifest.ToAccount, Meta: func(a *account.Account) *meta.Metadata { return &a.Meta },
 		Upsert: s.Account.Upsert, Delete: s.Account.Delete,
-		Check:       refsFor(b, refcheck.Checker.Account),
-		Keep:        keepAccountPlace,
+		Check: refsFor(b, refcheck.Checker.Account),
+		Keep: func(prev, next *account.Account) error {
+			if err := keepAccountPlace(prev, next); err != nil {
+				return err
+			}
+			return b.refs().AccountPayloadLogging(ctx, prev, next)
+		},
 		CheckCreate: refuseCallerAccountCreate,
 		CheckDelete: refuseCallerAccountPrune,
 	}); err != nil {

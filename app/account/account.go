@@ -86,7 +86,7 @@ type Spec struct {
 	// Default marks the provider account a host key of the same owner at HostID joins when it names none. An owner has at most one per host.
 	Default bool `json:"default,omitempty" yaml:"default,omitempty" doc:"The provider account a host key of the same owner at this host joins when it names none. Created on first use; an owner has at most one per host, and a second answers 409."`
 
-	PayloadLogging PayloadLogging `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" validate:"omitempty,oneof=on off" enum:"on,off" doc:"Capture request and response bodies of requests in this account: on or off. Omitted leaves it to the account above it on the ladder (project, then team), then to the key's own flag."`
+	PayloadLogging PayloadLogging `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" validate:"omitempty,oneof=on off" enum:"on,off" doc:"Capture request and response bodies of requests in this account: on or off. Omitted leaves it to the account above it on the ladder (project, then team), then to the key's own flag. On a personal account only an admin sets it; on a team, project, member or service account an admin of its scope, never the member account's own holder (403)."`
 
 	// Closed is set on a member account whose membership ended; its keys are refused.
 	Closed bool `json:"closed,omitempty" yaml:"-" readOnly:"true" doc:"The membership this member account stood for has ended: its keys are refused with account_closed. Reopened when a role grants the membership again. Server-managed."`

@@ -424,6 +424,24 @@ func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
 	return nil
 }
 
+// AccountPayloadLogging refuses a change to a caller account's payloadLogging by the user it constrains, since it decides whether their request bodies are kept. A personal account's is an admin's to set; a team, project, member or service account's is its scope admin's (the caller already passed accounts.update there), never the member account's own holder.
+func (c Checker) AccountPayloadLogging(ctx context.Context, existing, incoming *account.Account) error {
+	if existing.IsProvider() || existing.Spec.PayloadLogging == incoming.Spec.PayloadLogging {
+		return nil
+	}
+	if _, scoped := c.Authz.(authz.Scoper); !scoped || authz.IsAdmin(ctx) {
+		return nil
+	}
+	a := actor.From(ctx)
+	switch kind := existing.DerivedKind(); {
+	case kind == account.KindPersonal:
+		return forbidden(fmt.Errorf("%w: spec.payloadLogging of a personal account is set by an admin", authz.ErrForbidden))
+	case kind == account.KindMember && a != nil && a.UserID == existing.Spec.Holder.ID:
+		return forbidden(fmt.Errorf("%w: spec.payloadLogging of your own member account is set by an admin of its %s", authz.ErrForbidden, existing.Meta.Owner.Kind))
+	}
+	return nil
+}
+
 // CodeAccountNotHeld is the error code of a key naming an account it may not run in.
 const CodeAccountNotHeld = "account_not_held"
 
