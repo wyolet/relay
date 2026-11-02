@@ -43,6 +43,8 @@ const (
 type Holder struct {
 	Kind HolderKind `json:"kind" yaml:"kind" validate:"required,oneof=user serviceaccount" enum:"user,serviceaccount" doc:"Whether a user or a service account acts in the account."`
 	ID   string     `json:"id"   yaml:"id"   validate:"required,uuid" doc:"Id of the user or service account."`
+	// Derived: filled on control API reads, never stored; compare holders by Kind and ID.
+	Name string `json:"name,omitempty" yaml:"-" readOnly:"true" doc:"Username of the user, or display name of the service account. Read-only: filled on reads for a caller who sees the account; ignored on writes."`
 }
 
 // Key renders the holder as a principal string, "user:<id>" or "serviceaccount:<id>".

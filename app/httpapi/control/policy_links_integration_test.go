@@ -47,8 +47,8 @@ func TestPolicySaveRefusesAnotherProjectsPoolAndBudget(t *testing.T) {
 	} {
 		inB := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "b-policy", Owner: projB}, Spec: spec}
 		err := refErr(refs(d).Policy(ctx, inB))
-		if statusOf(t, err) != 400 || !strings.Contains(err.Error(), "another scope") {
-			t.Errorf("project B linking project A's %s: err = %v, want a 400 naming the other scope", name, err)
+		if statusOf(t, err) != 400 || !strings.Contains(err.Error(), "a project's policy can use "+name+"s of the project, its team or the system") {
+			t.Errorf("project B linking project A's %s: err = %v, want a 400 saying what a project's policy may use", name, err)
 		}
 		inA := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "a-policy", Owner: projA}, Spec: spec}
 		if err := refErr(refs(d).Policy(ctx, inA)); err != nil {

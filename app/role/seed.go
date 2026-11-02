@@ -19,6 +19,12 @@ import (
 //go:embed builtin.yaml
 var builtinYAML []byte
 
+// Names of the built-in roles that administer one team or one project.
+const (
+	BuiltinTeamAdmin    = "team-admin"
+	BuiltinProjectAdmin = "project-admin"
+)
+
 // builtinDoc is the slice of the manifest envelope the built-ins need. The
 // file is parsed here rather than through app/manifest because manifest
 // translates into this package.

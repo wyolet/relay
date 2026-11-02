@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/app/refcheck"
 )
 
 // registerUpstreamCRUD wires accounts, pools and budgets: the rows a policy
@@ -16,6 +17,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 	ameta := func(a *account.Account) *meta.Metadata { return &a.Meta }
 	plmeta := func(p *pool.Pool) *meta.Metadata { return &p.Meta }
 	bumeta := func(b *budget.Budget) *meta.Metadata { return &b.Meta }
+	c := refs(d)
 
 	rows.add(registerKind[account.Account](
 		api, "accounts", "account", accountRows{Store: d.Stores.Account, d: d}, sharerAuthz{Authorizer: d.Authz, d: d}, ameta,
@@ -24,13 +26,17 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		listScanResolver(d.Stores.Account, ameta),
 		guardAccount(d),
 		d.enrichAccount,
-		nil,
+		d.enrichAccounts,
 		d.accountInUse,
 		mergeAccountServerFields,
 		d.Catalog,
 		false,
 		protect,
 		&accountFilter,
+		&usableFilter[account.Account]{checker: c, purposes: []usablePurpose[account.Account]{
+			{name: "binding", linker: "a policy binding", check: refcheck.Checker.UsableAccount},
+			{name: "pool", linker: "a pool", check: refcheck.Checker.UsablePoolAccount},
+		}},
 	))
 
 	rows.add(registerKind[pool.Pool](
@@ -47,6 +53,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&poolFilter,
+		usableFor(c, "a policy", refcheck.Checker.UsablePool),
 	))
 
 	rows.add(registerKind[budget.Budget](
@@ -63,5 +70,6 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&budgetFilter,
+		usableFor(c, "a policy", refcheck.Checker.UsableBudget),
 	))
 }

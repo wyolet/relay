@@ -185,7 +185,7 @@ func newTenancyHarness[T any](t *testing.T, plural, singular string,
 	registerKind[T](
 		api, plural, singular, store, testRBAC(), metaOf, validate,
 		meta.OwnerSystem, listScanResolver[T](store, metaOf),
-		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil,
+		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil,
 	)
 	return r
 }
@@ -288,7 +288,7 @@ func newScopedListHarness(t *testing.T, plural, singular string, seed ...*scoped
 	registerKind[scopedThing](
 		api, plural, singular, store, testRBAC(), tmeta, nil,
 		meta.OwnerUser, listScanResolver[scopedThing](store, tmeta),
-		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil,
+		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil,
 	)
 	return r
 }

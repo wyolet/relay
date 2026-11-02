@@ -32,6 +32,8 @@ const (
 type Principal struct {
 	Kind PrincipalKind `json:"kind" yaml:"kind" validate:"required,oneof=serviceaccount user" enum:"serviceaccount,user" doc:"Whether the key acts as a service account or a user."`
 	ID   string        `json:"id"   yaml:"id"   validate:"required,uuid" doc:"Id of the service account or user."`
+	// Derived: filled on control API reads, never stored; compare principals by Kind and ID.
+	Name string `json:"name,omitempty" yaml:"-" readOnly:"true" doc:"Username of the user, or display name of the service account. Read-only: filled on reads for a caller who sees the key; ignored on writes."`
 }
 
 // Key is an inbound bearer credential.

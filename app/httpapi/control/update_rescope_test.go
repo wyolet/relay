@@ -130,7 +130,7 @@ func newRescopeFixture(t *testing.T, secondRole string) *rescopeFixture {
 			}
 			return refErr(checker.RoleBinding(ctx, incoming))
 		},
-		nil, nil, nil, nil, noSettings{}, false, nil, nil,
+		nil, nil, nil, nil, noSettings{}, false, nil, nil, nil,
 	)
 	registerKind[serviceaccount.ServiceAccount](
 		api, "service-accounts", "service-account", accounts, rbac, sameta,
@@ -143,7 +143,7 @@ func newRescopeFixture(t *testing.T, secondRole string) *rescopeFixture {
 			}
 			return refErr(checker.ServiceAccount(ctx, incoming))
 		},
-		nil, nil, nil, nil, noSettings{}, false, nil, nil,
+		nil, nil, nil, nil, noSettings{}, false, nil, nil, nil,
 	)
 	return &rescopeFixture{h: r, p1: p1, p2: p2, roleID: roleID, victimID: victimID,
 		rbAtP1: rbAtP1, saAtP1: sa, roleBindings: roleBindings, accounts: accounts}

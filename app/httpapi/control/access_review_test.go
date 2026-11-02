@@ -142,7 +142,7 @@ func newReviewWorld(t *testing.T) *reviewWorld {
 			store.items[it.Meta.ID] = it
 		}
 		rows.add(registerKind[scopedThing](api, plural, singular, store, az, tmeta, nil, defaultOwner,
-			listScanResolver[scopedThing](store, tmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil))
+			listScanResolver[scopedThing](store, tmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil))
 	}
 	mount("teams", "team", meta.OwnerSystem, reviewThing(w.team, "t", global))
 	mount("projects", "project", meta.OwnerTeam, reviewThing(w.p1, "p1", teamScope), reviewThing(w.p2, "p2", teamScope))

@@ -176,6 +176,8 @@ Seeded as system rows on boot. Bind them; they cannot be edited through the API.
 
 Roles and bindings are manifests like any other resource: [apply them](/concepts/gitops) from a repository or create them through the API.
 
+A signed-in user who creates a team or a project through the API is bound to its `team-admin` or `project-admin` role there. The admin token is no user and gets no binding; `apply` writes only the bindings a bundle declares.
+
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: RoleBinding
