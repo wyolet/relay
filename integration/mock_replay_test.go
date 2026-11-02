@@ -282,10 +282,7 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{
-			Models:        []string{prov.Meta.Name + "/" + mdl.Meta.Name},
-			CredentialIDs: []string{hk.Meta.ID},
-		},
+		Spec: policy.Spec{Models: []string{prov.Meta.Name + "/" + mdl.Meta.Name}},
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 

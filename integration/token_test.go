@@ -51,7 +51,7 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 	const username, password = "token-minter", "correct-horse-battery"
 	userID := st.seedLogin(t, username, password)
 
-	// A token acts under its user's caller ladder, so the policy is bound to the user.
+	// A token runs in its user's member account in the project, under the project's own account, so the policy bound there governs it.
 	code, raw := st.adminDo(http.MethodGet, "/api/policies/test-policy", "")
 	if code != http.StatusOK {
 		t.Fatalf("GET policy = %d: %s", code, raw)
@@ -60,8 +60,8 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 	if err := json.Unmarshal(raw, &pol); err != nil {
 		t.Fatalf("decode policy: %v", err)
 	}
-	body := `{"metadata":{"name":"token-project-everyone"},"spec":{"projectId":"` + projectID + `",` +
-		`"policyId":"` + pol.Metadata.ID + `","subjects":[{"kind":"user","id":"` + userID + `"}]}}`
+	body := `{"metadata":{"name":"token-project-everyone","owner":{"kind":"project","id":"` + projectID + `"}},` +
+		`"spec":{"policyId":"` + pol.Metadata.ID + `","accountIds":["` + st.accountAt(t, "project:"+projectID) + `"]}}`
 	if code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings", body); code != http.StatusCreated {
 		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
 	}

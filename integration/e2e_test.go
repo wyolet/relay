@@ -41,6 +41,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/accountsync"
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/audit"
@@ -145,8 +146,12 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	// The plans the request path reads, over the same stores and fed by the same listener as the binary wires them.
 	cells := cell.NewRegistry(cell.Options{IdleTTL: time.Hour})
 	plans := &plan.Holder{}
-	eng := engine.New(engine.Options{Cells: cells, Hooks: engine.Hooks{OnPublish: plans.OnPublish}})
 	q := gen.New(st.Pool())
+	syncer := accountsync.New(stores.Account)
+	eng := engine.New(engine.Options{Cells: cells, Hooks: engine.Hooks{OnPublish: func(v *engine.View, s engine.PublishStats) {
+		plans.OnPublish(v, s)
+		syncer.OnPublish(v, s)
+	}}})
 	plan.Register(eng, cells, plan.Sources{
 		Providers: stores.Provider, Hosts: stores.Host, Models: stores.Model, Bindings: stores.Binding, Pricings: stores.Pricing,
 		Overlays: plan.OverlaySource{Store: stores.Overlay}, Policies: stores.Policy, PolicyBindings: stores.PolicyBinding,
@@ -159,6 +164,10 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		t.Fatalf("plans load: %v", err)
 	}
 	t.Cleanup(func() { _ = eng.Close() })
+	syncCtx, stopSync := context.WithCancel(ctx)
+	t.Cleanup(stopSync)
+	go syncer.Run(syncCtx)
+	syncer.OnPublish(eng.View(), engine.PublishStats{})
 	cat.ForwardEvents(plan.Forwarder{Engine: eng})
 
 	lctx, cancel := context.WithCancel(ctx)
@@ -328,8 +337,15 @@ func (s *stack) reload(ctx context.Context) error {
 	if err := s.engine.Resync(ctx); err != nil {
 		return err
 	}
-	want := uint64(s.engine.View().Gen())
 	deadline := time.Now().Add(5 * time.Second)
+	// The account writer makes the caller accounts the rows call for off the engine; wait until it has and their plans are published.
+	for len(plan.Pending(s.engine.View())) > 0 {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("caller accounts never settled: %d pending", len(plan.Pending(s.engine.View())))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	want := uint64(s.engine.View().Gen())
 	for r := s.plans.Load(); r == nil || r.Gen < want; r = s.plans.Load() {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("plans generation %d never published", want)
@@ -397,10 +413,7 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{
-			Models:        []string{prov.Meta.Name + "/" + mdl.Meta.Name},
-			CredentialIDs: []string{hk.Meta.ID},
-		},
+		Spec: policy.Spec{Models: []string{prov.Meta.Name + "/" + mdl.Meta.Name}},
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 
@@ -787,7 +800,7 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 	// across the rename to HostKey at the domain layer).
 	const stmt = `TRUNCATE TABLE
 		pricing_models, pricings,
-		policy_pools, policy_credentials, policy_rate_limits, policy_budgets, policies,
+		policy_pools, policy_rate_limits, policy_budgets, policies,
 		relay_keys,
 		pool_credentials, pools, accounts, budgets,
 		secrets,
@@ -798,7 +811,7 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 		settings,
 		group_members, groups,
 		role_binding_subjects, role_bindings,
-		policy_binding_subjects, policy_bindings,
+		policy_binding_accounts, policy_bindings,
 		roles,
 		service_accounts,
 		users,
@@ -807,6 +820,27 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 		RESTART IDENTITY CASCADE`
 	if _, err := st.Pool().Exec(ctx, stmt); err != nil {
 		t.Fatalf("truncateAll: %v", err)
+	}
+}
+
+// accountAt is the id of the caller account relay keeps at place ("team:<id>", "project:<id>", "personal:<user>", "service:<sa>", "member:project:<id>:<user>"), waiting for the account writer to make it.
+func (s *stack) accountAt(t *testing.T, place string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		accounts, err := s.stores.Account.List(context.Background())
+		if err != nil {
+			t.Fatalf("list accounts: %v", err)
+		}
+		for _, a := range accounts {
+			if a.ManagedKey() == place {
+				return a.Meta.ID
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no account at %s", place)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -96,7 +96,7 @@ func TestIntegration_UpdateMovesOwner(t *testing.T) {
 		t.Fatalf("POST /api/keys = %d: %s", code, raw)
 	}
 	if code, raw := st.adminDo(http.MethodPost, "/api/policy-bindings",
-		`{"metadata":{"name":"alpha-binding"},"spec":{"projectId":"`+projA+`","policyId":"`+pol+`","subjects":[{"kind":"serviceaccount","id":"`+saA+`"}]}}`); code != http.StatusCreated {
+		`{"metadata":{"name":"alpha-binding"`+projectOwner(projA)+`},"spec":{"policyId":"`+pol+`","accountIds":["`+st.accountAt(t, "service:"+saA)+`"]}}`); code != http.StatusCreated {
 		t.Fatalf("POST /api/policy-bindings = %d: %s", code, raw)
 	}
 	code, raw := put(alice, pol, "moving", projectOwner(projB))

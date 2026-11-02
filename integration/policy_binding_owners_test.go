@@ -1,6 +1,6 @@
 //go:build integration
 
-// policy_binding_owners_test.go drives policy-binding owners through the control API under RELAY_AUTHZ=rbac: a team admin binds within their team, only a system-scope grant makes a system-owned binding, and subjects and policies outside the owner's scope are refused.
+// policy_binding_owners_test.go drives policy-binding owners through the control API under RELAY_AUTHZ=rbac: a team admin binds within their team, only a system-scope grant makes a system-owned binding, and accounts and policies outside the owner's scope are refused.
 
 package integration_test
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/pkg/ids"
@@ -27,6 +28,14 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 	hst := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "owners-host", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
 	if err := st.stores.Host.Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
+	}
+	orgs := map[string]string{}
+	for _, name := range []string{"owners-org", "owners-other-org"} {
+		org := &account.Account{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: hst.Meta.ID}}
+		if err := st.stores.Account.Upsert(ctx, org); err != nil {
+			t.Fatalf("upsert provider account: %v", err)
+		}
+		orgs[name] = org.Meta.ID
 	}
 	mkPolicy := func(name, owner string) string {
 		code, raw := st.adminDo(http.MethodPost, "/api/policies", `{"metadata":{"name":"`+name+`"`+owner+`},"spec":{}}`)
@@ -49,14 +58,13 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 	}
 	lead := st.login(t, "owners-lead", "pw-owners-lead")
 
-	binding := func(name, owner, policyID, subject string) string {
-		return `{"metadata":{"name":"` + name + `","owner":` + owner + `},"spec":{"policyId":"` + policyID + `","subjects":[` + subject + `]}}`
+	binding := func(name, owner, policyID, accountID string) string {
+		return `{"metadata":{"name":"` + name + `","owner":` + owner + `},"spec":{"policyId":"` + policyID + `","accountIds":["` + accountID + `"]}}`
 	}
 	system := `{"kind":"system"}`
 	ownTeam := `{"kind":"team","id":"` + teamA + `"}`
 	ownProject := `{"kind":"project","id":"` + projA + `"}`
-	projectA := `{"kind":"project","id":"` + projA + `"}`
-	host := `{"kind":"host","id":"` + hst.Meta.ID + `"}`
+	projectA, teamAccount := st.accountAt(t, "project:"+projA), st.accountAt(t, "team:"+teamA)
 
 	for _, tc := range []struct {
 		name      string
@@ -66,11 +74,11 @@ func TestIntegration_PolicyBindingOwners(t *testing.T) {
 		wantOwner string
 	}{
 		{"a team admin binds within the team", lead.do, binding("owners-team", ownTeam, shared, projectA), http.StatusCreated, "team"},
-		{"a team admin cannot make a system binding", lead.do, binding("owners-sys-lead", system, shared, `{"kind":"team","id":"`+teamA+`"}`), http.StatusForbidden, ""},
-		{"the operator binds a host from the system", st.adminDo, binding("owners-sys-host", system, shared, host), http.StatusCreated, "system"},
-		{"a project binding names a host", st.adminDo, binding("owners-project-host", ownProject, shared, host), http.StatusBadRequest, ""},
-		{"a project binding names another project's service account", st.adminDo, binding("owners-project-sa", ownProject, shared, `{"kind":"serviceaccount","id":"`+saB+`"}`), http.StatusBadRequest, ""},
-		{"a team binding uses a sibling team's policy", st.adminDo, binding("owners-sibling", ownTeam, siblings, `{"kind":"team","id":"`+teamA+`"}`), http.StatusBadRequest, ""},
+		{"a team admin cannot make a system binding", lead.do, binding("owners-sys-lead", system, shared, teamAccount), http.StatusForbidden, ""},
+		{"the operator binds a provider account from the system", st.adminDo, binding("owners-sys-org", system, shared, orgs["owners-org"]), http.StatusCreated, "system"},
+		{"a project binding names a provider account it does not own", st.adminDo, binding("owners-project-org", ownProject, shared, orgs["owners-other-org"]), http.StatusBadRequest, ""},
+		{"a project binding names another project's service account", st.adminDo, binding("owners-project-sa", ownProject, shared, st.accountAt(t, "service:"+saB)), http.StatusBadRequest, ""},
+		{"a team binding uses a sibling team's policy", st.adminDo, binding("owners-sibling", ownTeam, siblings, teamAccount), http.StatusBadRequest, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, raw := tc.as(http.MethodPost, "/api/policy-bindings", tc.body)
@@ -124,8 +132,9 @@ func TestIntegration_PolicyBindingRefusesAnotherTeamsPool(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	admin := st.login(t, "borrow-admin", "pw-borrow-admin")
+	projAccount := st.accountAt(t, "project:"+projA)
 	binding := func(name, policyID string) string {
-		return `{"metadata":{"name":"` + name + `","owner":{"kind":"project","id":"` + projA + `"}},"spec":{"policyId":"` + policyID + `","subjects":[{"kind":"project","id":"` + projA + `"}]}}`
+		return `{"metadata":{"name":"` + name + `","owner":{"kind":"project","id":"` + projA + `"}},"spec":{"policyId":"` + policyID + `","accountIds":["` + projAccount + `"]}}`
 	}
 	if code, raw := admin.do(http.MethodPost, "/api/policy-bindings", binding("borrow-pool", borrowing)); code != http.StatusBadRequest || !strings.Contains(string(raw), "cannot use") {
 		t.Fatalf("binding a system policy on another team's pool = %d, want 400 naming the pool: %s", code, raw)

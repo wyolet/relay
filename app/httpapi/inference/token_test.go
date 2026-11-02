@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/rolebinding"
 	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -268,19 +267,6 @@ func TestCallerLadder(t *testing.T) {
 			}
 		})
 	}
-}
-
-// subjectFrom parses a "<kind>:<id-or-name>" subject key back into the row
-// shape a binding stores.
-func subjectFrom(k string) rolebinding.Subject {
-	kind, value, _ := strings.Cut(k, ":")
-	s := rolebinding.Subject{Kind: rolebinding.SubjectKind(kind)}
-	if s.Kind == rolebinding.SubjectGroup {
-		s.Name = value
-		return s
-	}
-	s.ID = value
-	return s
 }
 
 // proxyRequest is a proxy-mode request carrying bearer as the relay

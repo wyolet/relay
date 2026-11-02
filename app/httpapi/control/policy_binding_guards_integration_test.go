@@ -13,13 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -36,6 +36,8 @@ type bindingFixture struct {
 	shared  *policy.Policy
 	tier    *policy.Policy
 	account *serviceaccount.ServiceAccount
+	// accountID is the service account's own account, the one a binding names.
+	accountID string
 }
 
 func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
@@ -89,6 +91,10 @@ func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
 	if err := stores.ServiceAccount.Upsert(ctx, w.account); err != nil {
 		t.Fatalf("upsert service account: %v", err)
 	}
+	w.accountID, err = stores.Account.EnsureManaged(ctx, account.ForServiceAccount(w.account.Meta.ID, w.account.Meta.Name, "", w.mine.Meta.ID))
+	if err != nil {
+		t.Fatalf("ensure the service account's account: %v", err)
+	}
 	return w, ctx
 }
 
@@ -102,11 +108,8 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 
 	mkBinding := func(projectID, policyID string) *policybinding.PolicyBinding {
 		return &policybinding.PolicyBinding{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: "b-" + policyID[:8]},
-			Spec: policybinding.Spec{
-				ProjectID: projectID, PolicyID: policyID,
-				Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: w.account.Meta.ID, Name: w.account.Meta.Name}},
-			},
+			Meta: meta.Metadata{ID: meta.NewID(), Name: "b-" + policyID[:8], Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
+			Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{w.accountID}},
 		}
 	}
 
@@ -126,10 +129,6 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("guard refused a bindable policy: %v", err)
-				}
-				// The guard re-derives the owner from the project.
-				if b.Meta.Owner.Kind != meta.OwnerProject || b.Meta.Owner.ID != w.mine.Meta.ID {
-					t.Errorf("owner = %+v, want the binding's own project", b.Meta.Owner)
 				}
 				return
 			}
@@ -152,11 +151,11 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 		}
 	})
 
-	t.Run("a subject that does not exist", func(t *testing.T) {
+	t.Run("an account that does not exist", func(t *testing.T) {
 		b := mkBinding(w.mine.Meta.ID, w.ownPol.Meta.ID)
-		b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: meta.NewID(), Name: "no-such-account"}}
+		b.Spec.AccountIDs = []string{meta.NewID()}
 		if err := guard(ctx, "create", nil, b); err == nil {
-			t.Fatal("guard accepted a binding naming a subject that does not exist")
+			t.Fatal("guard accepted a binding naming an account that does not exist")
 		}
 	})
 

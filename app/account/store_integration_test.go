@@ -39,6 +39,8 @@ func TestIntegration_AccountStoreRoundTrip(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get: %v (row %v)", err, got)
 	}
+	// The kind is read-only and comes back derived.
+	a.Spec.Kind = account.KindProvider
 	if got.Spec != a.Spec || got.Meta.Owner != a.Meta.Owner || got.Meta.Name != a.Meta.Name {
 		t.Fatalf("round trip = %+v %+v, want %+v %+v", got.Meta, got.Spec, a.Meta, a.Spec)
 	}

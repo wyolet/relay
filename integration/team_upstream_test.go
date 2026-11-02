@@ -47,7 +47,7 @@ func TestIntegration_TeamOwnedHostKeysAndRateLimits(t *testing.T) {
 
 	policy := func(name, projectID string) string {
 		return `{"metadata":{"name":"` + name + `","owner":{"kind":"project","id":"` + projectID + `"}},` +
-			`"spec":{"poolIds":["` + pool.Metadata.ID + `"],"credentialIds":["` + key.Metadata.ID + `"],"rateLimits":[{"rateLimitId":"` + limit.Metadata.ID + `"}]}}`
+			`"spec":{"poolIds":["` + pool.Metadata.ID + `"],"rateLimits":[{"rateLimitId":"` + limit.Metadata.ID + `"}]}}`
 	}
 	create("/api/policies", policy("upstream-a-pol", projA))
 	if code, raw := st.adminDo(http.MethodPost, "/api/policies", policy("upstream-b-pol", projB)); code != http.StatusBadRequest {

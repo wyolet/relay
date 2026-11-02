@@ -26,9 +26,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
@@ -202,17 +200,7 @@ func TestDeletePolicy_UnboundHostTierDeletes(t *testing.T) {
 func TestDeletePolicy_BoundByPolicyBindingIsRefusedNotDetachable(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "bound-policy", meta.Owner{Kind: meta.OwnerProject, ID: f.proj.Meta.ID})
-	pb := &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "del-binding"},
-		Spec: policybinding.Spec{
-			ProjectID: f.proj.Meta.ID, PolicyID: pol.Meta.ID,
-			Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}},
-		},
-	}
-	pb.StampOwner()
-	if err := f.stores.PolicyBinding.Upsert(ctx, pb); err != nil {
-		t.Fatalf("upsert policy binding: %v", err)
-	}
+	pb := f.policyBinding(t, ctx, "del-binding", pol.Meta.ID, f.accountOf(t, ctx, f.account))
 
 	body := decodeInUse(t, f.deletePolicy(t, pol.Meta.ID, false))
 	if len(body.Blockers) != 1 {
@@ -234,7 +222,7 @@ func TestDeletePolicy_BoundByPolicyBindingIsRefusedNotDetachable(t *testing.T) {
 func TestDeletePolicy_HiddenReferenceBlocksWithoutItsName(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "alice-policy", meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID})
-	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	hidden := f.policyBinding(t, ctx, "hidden-binding", pol.Meta.ID, f.accountOf(t, ctx, f.account))
 
 	w := f.deletePolicy(t, pol.Meta.ID, true)
 	body := decodeInUse(t, w)

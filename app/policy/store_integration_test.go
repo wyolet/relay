@@ -93,10 +93,8 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	p := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "store-policy-" + short(), DisplayName: "Store Policy", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{
-			Models:                []string{"acme/m", "acme"},
-			CredentialIDs:         []string{f.hostKeyID},
-			RateLimits:            []policy.RateLimitLink{{RateLimitID: f.rateLimitID}},
-			PayloadLoggingEnabled: true,
+			Models:     []string{"acme/m", "acme"},
+			RateLimits: []policy.RateLimitLink{{RateLimitID: f.rateLimitID, Shared: new(false)}},
 		},
 	}
 	if err := f.store.Upsert(ctx, p); err != nil {
@@ -110,13 +108,10 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	if got.Meta.DisplayName != "Store Policy" || got.Meta.Owner.Kind != meta.OwnerUser {
 		t.Errorf("identity round trip = %+v", got.Meta)
 	}
-	if len(got.Spec.CredentialIDs) != 1 || got.Spec.CredentialIDs[0] != f.hostKeyID {
-		t.Errorf("credentialIds = %v, want [%s]", got.Spec.CredentialIDs, f.hostKeyID)
+	if len(got.Spec.RateLimits) != 1 || got.Spec.RateLimits[0].RateLimitID != f.rateLimitID || got.Spec.RateLimits[0].IsShared() {
+		t.Errorf("rateLimits = %+v, want the one link, per account", got.Spec.RateLimits)
 	}
-	if len(got.Spec.RateLimits) != 1 || got.Spec.RateLimits[0].RateLimitID != f.rateLimitID {
-		t.Errorf("rateLimits = %+v", got.Spec.RateLimits)
-	}
-	if len(got.Spec.Models) != 2 || !got.Spec.PayloadLoggingEnabled {
+	if len(got.Spec.Models) != 2 {
 		t.Errorf("spec = %+v", got.Spec)
 	}
 	// The stored row must satisfy its own Validate, or the next PUT of it
@@ -139,13 +134,12 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	if listed == nil {
 		t.Fatal("the policy is missing from List")
 	}
-	if len(listed.Spec.CredentialIDs) != 1 || len(listed.Spec.RateLimits) != 1 || len(listed.Spec.Models) != 2 {
+	if len(listed.Spec.RateLimits) != 1 || listed.Spec.RateLimits[0].IsShared() || len(listed.Spec.Models) != 2 {
 		t.Errorf("List hydration = %+v, want the same as Get %+v", listed.Spec, got.Spec)
 	}
 
 	// Rewriting with other links replaces the junction rows.
 	p.Spec.Models = []string{"acme/m"}
-	p.Spec.CredentialIDs = nil
 	p.Spec.RateLimits = []policy.RateLimitLink{{RateLimitID: f.otherRateLimit, Models: []string{"acme/m"}}}
 	if err := f.store.Upsert(ctx, p); err != nil {
 		t.Fatalf("second Upsert: %v", err)
@@ -154,11 +148,11 @@ func TestIntegration_PolicyStoreRoundTrip(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get after rewrite: %v", err)
 	}
-	if len(got.Spec.Models) != 1 || len(got.Spec.CredentialIDs) != 0 {
-		t.Errorf("spec = %+v, want one model and no credentials", got.Spec)
+	if len(got.Spec.Models) != 1 {
+		t.Errorf("spec = %+v, want one model", got.Spec)
 	}
-	if len(got.Spec.RateLimits) != 1 || got.Spec.RateLimits[0].RateLimitID != f.otherRateLimit {
-		t.Errorf("rateLimits = %+v, want only the scoped link", got.Spec.RateLimits)
+	if len(got.Spec.RateLimits) != 1 || got.Spec.RateLimits[0].RateLimitID != f.otherRateLimit || !got.Spec.RateLimits[0].IsShared() {
+		t.Errorf("rateLimits = %+v, want only the scoped link, shared", got.Spec.RateLimits)
 	}
 
 	if err := f.store.Delete(ctx, p.Meta.ID); err != nil {

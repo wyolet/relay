@@ -353,10 +353,6 @@ func (f *tokenFixture) seedPolicyForModel(t *testing.T, policyName, modelName st
 	if !ok {
 		t.Fatal("the happy path host is missing")
 	}
-	base, ok := snap.PolicyByName("test-policy")
-	if !ok {
-		t.Fatal("the happy path policy is missing")
-	}
 	prov, ok := snap.ProviderByName("test-provider")
 	if !ok {
 		t.Fatal("the happy path provider is missing")
@@ -374,10 +370,7 @@ func (f *tokenFixture) seedPolicyForModel(t *testing.T, policyName, modelName st
 	mustUpsert(t, f.stores.Binding.Upsert(ctx, bnd), "binding")
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: policyName, Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{
-			Models:        []string{prov.Meta.Name + "/" + mdl.Meta.Name},
-			CredentialIDs: base.Spec.CredentialIDs,
-		},
+		Spec: policy.Spec{Models: []string{prov.Meta.Name + "/" + mdl.Meta.Name}},
 	}
 	mustUpsert(t, f.stores.Policy.Upsert(ctx, pol), "policy")
 	f.waitForSnapshot(t, func(s *appcatalog.Snapshot) bool {
@@ -387,17 +380,15 @@ func (f *tokenFixture) seedPolicyForModel(t *testing.T, policyName, modelName st
 	return pol.Meta.ID
 }
 
-// waitForCallerPolicy blocks until the user's token plan in the fixture's
-// project, where the project's binding on the user governs, holds policyID.
+// waitForCallerPolicy blocks until the plan of the user's member account in the fixture's project, the lane a token runs in, holds policyID.
 func (f *tokenFixture) waitForCallerPolicy(t *testing.T, userID, policyID string) {
 	t.Helper()
 	projectID := f.projectRow(t).Metadata.ID
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if r := f.plans.Load(); r != nil {
-			up, pp := r.Users.Lookup(userID), r.Projects.Lookup(projectID)
-			if up != nil && pp != nil {
-				if pol := pp.CallerFor(up.Caller).InnermostPolicy(); pol != nil && pol.Meta.ID == policyID {
+			if cp, refused := r.MemberLane(userID, projectID); refused == nil {
+				if pol := cp.InnermostPolicy(); pol != nil && pol.Meta.ID == policyID {
 					return
 				}
 			}

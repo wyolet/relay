@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
@@ -36,6 +37,7 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 )
@@ -171,15 +173,23 @@ func (f policyDeleteFixture) roleBinding(t *testing.T, ctx context.Context, name
 	return b
 }
 
-func (f policyDeleteFixture) policyBinding(t *testing.T, ctx context.Context, name, policyID string, subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
+// policyBinding binds the accounts to the policy, owned by the fixture's project.
+func (f policyDeleteFixture) policyBinding(t *testing.T, ctx context.Context, name, policyID string, accountIDs ...string) *policybinding.PolicyBinding {
 	t.Helper()
 	b := &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: name},
-		Spec: policybinding.Spec{ProjectID: f.proj.Meta.ID, PolicyID: policyID, Subjects: subjects},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: f.projectOwner()},
+		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: accountIDs},
 	}
-	b.StampOwner()
 	must(t, "upsert policy binding", f.stores.PolicyBinding.Upsert(ctx, b))
 	return b
+}
+
+// accountOf is the id of the service account's own account, made as relay makes it.
+func (f policyDeleteFixture) accountOf(t *testing.T, ctx context.Context, sa *serviceaccount.ServiceAccount) string {
+	t.Helper()
+	id, err := f.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID))
+	must(t, "ensure the service account's account", err)
+	return id
 }
 
 func (f policyDeleteFixture) projectOwner() meta.Owner {
@@ -305,10 +315,9 @@ func TestDeleteHostKey_SigningKeyRefBlocks(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "host-keys", unused.Meta.ID, false), http.StatusNoContent)
 }
 
-// A credential, rate limit, pool or budget a policy links is deleted, and the answer and the audit say which policies lost which link: the policy stops counting a rate limit or budget and keeps a credential's or pool's id, so it narrows rather than widens.
+// A rate limit, pool or budget a policy links is deleted, and the answer and the audit say which policies lost which link: the policy stops counting a rate limit or budget and keeps a pool's id, so it narrows rather than widens.
 func TestDeleteLinkedRows_ReportsThePolicies(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	hk := f.hostKey(t, ctx, "linked-key")
 	rl := f.rateLimit(t, ctx, "linked-limit", meta.Owner{Kind: meta.OwnerSystem})
 	pl := &pool.Pool{Meta: meta.Metadata{ID: meta.NewID(), Name: "linked-pool", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: pool.Spec{HostID: f.host.Meta.ID}}
 	must(t, "upsert pool", f.stores.Pool.Upsert(ctx, pl))
@@ -317,17 +326,16 @@ func TestDeleteLinkedRows_ReportsThePolicies(t *testing.T) {
 	linking := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "linking", Owner: f.projectOwner()},
 		Spec: policy.Spec{
-			CredentialIDs: []string{hk.Meta.ID}, PoolIDs: []string{pl.Meta.ID}, BudgetIDs: []string{bd.Meta.ID},
+			PoolIDs: []string{pl.Meta.ID}, Budgets: []policy.BudgetLink{{BudgetID: bd.Meta.ID}},
 			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
 		},
 	}
 	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, linking))
 
 	for _, tc := range []struct{ plural, id, field string }{
-		{"host-keys", hk.Meta.ID, "spec.credentialIds"},
 		{"rate-limits", rl.Meta.ID, "spec.rateLimits[].rateLimitId"},
 		{"pools", pl.Meta.ID, "spec.poolIds"},
-		{"budgets", bd.Meta.ID, "spec.budgetIds"},
+		{"budgets", bd.Meta.ID, "spec.budgets[].budgetId"},
 	} {
 		w := f.deleteRow(t, tc.plural, tc.id, false)
 		wantStatus(t, w, http.StatusOK)
@@ -346,9 +354,9 @@ func TestDeleteLinkedRows_ReportsThePolicies(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "rate-limits", f.rateLimit(t, ctx, "unlinked-limit", meta.Owner{Kind: meta.OwnerSystem}).Meta.ID, false), http.StatusNoContent)
 
 	got, err := f.stores.Policy.Get(ctx, linking.Meta.ID)
-	if err != nil || got == nil || !slices.Equal(got.Spec.CredentialIDs, []string{hk.Meta.ID}) || !slices.Equal(got.Spec.PoolIDs, []string{pl.Meta.ID}) ||
-		len(got.Spec.RateLimits) != 0 || len(got.Spec.BudgetIDs) != 0 {
-		t.Fatalf("policy after the deletes = %+v (err %v), want the credential and pool ids kept and the caps gone", got, err)
+	if err != nil || got == nil || !slices.Equal(got.Spec.PoolIDs, []string{pl.Meta.ID}) ||
+		len(got.Spec.RateLimits) != 0 || len(got.Spec.Budgets) != 0 {
+		t.Fatalf("policy after the deletes = %+v (err %v), want the pool id kept and the caps gone", got, err)
 	}
 
 	f.emitter.Close()
@@ -358,8 +366,8 @@ func TestDeleteLinkedRows_ReportsThePolicies(t *testing.T) {
 			updates++
 		}
 	}
-	if updates != 4 {
-		t.Fatalf("audit rows for the policy's lost links = %d, want 4", updates)
+	if updates != 3 {
+		t.Fatalf("audit rows for the policy's lost links = %d, want 3", updates)
 	}
 }
 
@@ -440,19 +448,19 @@ func TestDeleteProject_RowsUnderItBlock(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "projects", empty.Meta.ID, false), http.StatusNoContent)
 }
 
-// A binding can let go of a subject only while it names someone else.
+// A binding can let go of a subject or account only while it names another.
 func TestDeleteServiceAccount_KeysAndBindingsBlock(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	f.projectKey(t, ctx, "key-d")
 	r := f.customRole(t, ctx, "indexer-role")
-	account := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}
+	sa := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}
 	f.roleBinding(t, ctx, "shared-grant", r.Meta.ID, f.projectOwner(),
-		account, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: f.alice.ID})
-	f.policyBinding(t, ctx, "sole-grant", f.policy(t, ctx, "bound", f.projectOwner()).Meta.ID, account)
+		sa, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: f.alice.ID})
+	f.policyBinding(t, ctx, "sole-grant", f.policy(t, ctx, "bound", f.projectOwner()).Meta.ID, f.accountOf(t, ctx, f.account))
 
 	wantBlockers(t, f.deleteRow(t, "service-accounts", f.account.Meta.ID, false),
 		wantGroup{"key", "spec.principal.id", false, 1},
-		wantGroup{"policy-binding", "spec.subjects", false, 1},
+		wantGroup{"policy-binding", "spec.accountIds", false, 1},
 		wantGroup{"role-binding", "spec.subjects", true, 1},
 	)
 }
@@ -463,11 +471,8 @@ func TestDeleteGroup_BindingsNamingItBlock(t *testing.T) {
 	must(t, "upsert group", f.stores.Group.Upsert(ctx, g))
 	subject := rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: g.Meta.Name}
 	f.roleBinding(t, ctx, "group-grant", f.customRole(t, ctx, "group-role").Meta.ID, f.projectOwner(), subject)
-	f.policyBinding(t, ctx, "group-policy", f.policy(t, ctx, "group-bound", f.projectOwner()).Meta.ID,
-		subject, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
 
 	wantBlockers(t, f.deleteRow(t, "groups", g.Meta.ID, false),
-		wantGroup{"policy-binding", "spec.subjects", true, 1},
 		wantGroup{"role-binding", "spec.subjects", false, 1},
 	)
 
@@ -535,8 +540,7 @@ func TestDeleteBindings_Unreferenced(t *testing.T) {
 	hb := f.hostBinding(t, ctx, "lone-binding", m.Meta.ID, "")
 	rb := f.roleBinding(t, ctx, "lone-grant", f.customRole(t, ctx, "lone-role").Meta.ID, f.projectOwner(),
 		rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: f.alice.ID})
-	pb := f.policyBinding(t, ctx, "lone-policy", f.policy(t, ctx, "lone-bound", f.projectOwner()).Meta.ID,
-		rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	pb := f.policyBinding(t, ctx, "lone-policy", f.policy(t, ctx, "lone-bound", f.projectOwner()).Meta.ID, f.accountOf(t, ctx, f.account))
 
 	wantStatus(t, f.deleteRow(t, "host-bindings", hb.Meta.ID, false), http.StatusNoContent)
 	wantStatus(t, f.deleteRow(t, "role-bindings", rb.Meta.ID, false), http.StatusNoContent)

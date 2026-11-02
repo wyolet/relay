@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -16,7 +17,6 @@ import (
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/storagetest"
@@ -33,7 +33,7 @@ func loadPlans(t *testing.T, stores *appcatalog.Stores) *engine.View {
 		Providers: stores.Provider, Hosts: stores.Host, Models: stores.Model, Bindings: stores.Binding, Pricings: stores.Pricing,
 		Policies: stores.Policy, PolicyBindings: stores.PolicyBinding, RateLimits: stores.RateLimit, Budgets: stores.Budget,
 		Pools: stores.Pool, Accounts: stores.Account, Credentials: stores.HostKey, Teams: stores.Team, Projects: stores.Project,
-		ServiceAccounts: stores.ServiceAccount, Users: stores.Users, Keys: stores.Key,
+		ServiceAccounts: stores.ServiceAccount, Users: stores.Users, Keys: stores.Key, RoleBindings: stores.RoleBinding,
 	})
 	if err := e.Load(context.Background()); err != nil {
 		t.Fatalf("load plans: %v", err)
@@ -75,11 +75,13 @@ func TestIntegration_DeletedPoolNarrowsAfterReload(t *testing.T) {
 	must("upsert service account", stores.ServiceAccount.Upsert(ctx, sa))
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "links-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}}, Spec: policy.Spec{PoolIDs: []string{pl.Meta.ID}}}
 	must("upsert policy", stores.Policy.Upsert(ctx, pol))
+	saAccount, err := stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID))
+	must("ensure the service account's account", err)
 	must("upsert binding", stores.PolicyBinding.Upsert(ctx, &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "links-binding"},
-		Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: sa.Meta.ID}}},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "links-binding", Owner: meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}},
+		Spec: policybinding.Spec{PolicyID: pol.Meta.ID, AccountIDs: []string{saAccount}},
 	}))
-	principal := "serviceaccount:" + sa.Meta.ID
+	principal := "account:" + saAccount
 
 	if cp := engine.Get[plan.CallerPlan](loadPlans(t, stores), principal); cp == nil || len(cp.Pools) != 1 || len(cp.Pools[0].Slots) != 1 {
 		t.Fatalf("before the delete: caller plan %+v, want the linked pool with its credential", cp)

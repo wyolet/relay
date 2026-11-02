@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
@@ -139,10 +140,10 @@ func (ls *ladderStack) create(t *testing.T, plural, body string) string {
 	return row.Metadata.ID
 }
 
-// bindToUser binds policyID to the stack's user from the system scope.
+// bindToUser binds policyID to the stack's user's personal account, the key's lane, from the system scope.
 func (ls *ladderStack) bindToUser(t *testing.T, name, policyID string) {
 	t.Helper()
-	ls.create(t, "policy-bindings", `{"metadata":{"name":"`+name+`","owner":{"kind":"system"}},"spec":{"policyId":"`+policyID+`","subjects":[{"kind":"user","id":"`+ls.userID+`"}]}}`)
+	ls.create(t, "policy-bindings", `{"metadata":{"name":"`+name+`","owner":{"kind":"system"}},"spec":{"policyId":"`+policyID+`","accountIds":["`+ls.accountAt(t, "personal:"+ls.userID)+`"]}}`)
 }
 
 func (ls *ladderStack) chat(t *testing.T) (int, http.Header, []byte) {
@@ -241,7 +242,7 @@ func TestIntegration_DeletingALinkedBudgetReportsAndLiftsTheCap(t *testing.T) {
 	t.Parallel()
 	ls := newLadderStack(t)
 	budgetID := ls.create(t, "budgets", `{"metadata":{"name":"ladder-budget"},"spec":{"amountUsd":"1"}}`)
-	policyID := ls.create(t, "policies", `{"metadata":{"name":"ladder-budgeted"},"spec":{"budgetIds":["`+budgetID+`"]}}`)
+	policyID := ls.create(t, "policies", `{"metadata":{"name":"ladder-budgeted"},"spec":{"budgets":[{"budgetId":"`+budgetID+`"}]}}`)
 	ls.bindToUser(t, "ladder-budgeted-user", policyID)
 	ls.sync(t)
 
@@ -254,7 +255,7 @@ func TestIntegration_DeletingALinkedBudgetReportsAndLiftsTheCap(t *testing.T) {
 	}
 
 	ls.deleteReportsPolicy(t, "budgets", budgetID, "ladder-budgeted")
-	if ids, _ := ls.policySpec(t, policyID)["budgetIds"].([]any); len(ids) != 0 {
+	if ids, _ := ls.policySpec(t, policyID)["budgets"].([]any); len(ids) != 0 {
 		t.Fatalf("policy still links budgets %v after the delete", ids)
 	}
 	ls.sync(t)
@@ -269,7 +270,7 @@ func TestIntegration_DeletingALinkedRateLimitReportsAndLiftsTheCap(t *testing.T)
 	ls := newLadderStack(t)
 	rlID := ls.create(t, "rate-limits", `{"metadata":{"name":"ladder-one-an-hour"},"spec":{"rules":[{"meter":"requests","amount":1,"window":3600,"strategy":"fixed-window"}]}}`)
 	budgetID := ls.create(t, "budgets", `{"metadata":{"name":"ladder-roomy"},"spec":{"amountUsd":"1000"}}`)
-	policyID := ls.create(t, "policies", `{"metadata":{"name":"ladder-limited"},"spec":{"rateLimits":[{"rateLimitId":"`+rlID+`"}],"budgetIds":["`+budgetID+`"]}}`)
+	policyID := ls.create(t, "policies", `{"metadata":{"name":"ladder-limited"},"spec":{"rateLimits":[{"rateLimitId":"`+rlID+`"}],"budgets":[{"budgetId":"`+budgetID+`"}]}}`)
 	ls.bindToUser(t, "ladder-limited-user", policyID)
 	ls.sync(t)
 
@@ -285,7 +286,7 @@ func TestIntegration_DeletingALinkedRateLimitReportsAndLiftsTheCap(t *testing.T)
 	if rls, _ := spec["rateLimits"].([]any); len(rls) != 0 {
 		t.Fatalf("policy still links rate limits %v after the delete", rls)
 	}
-	if bs, _ := spec["budgetIds"].([]any); len(bs) != 1 {
+	if bs, _ := spec["budgets"].([]any); len(bs) != 1 {
 		t.Fatalf("policy budgets = %v, want the budget kept", bs)
 	}
 	ls.sync(t)
@@ -320,58 +321,55 @@ func TestIntegration_DeletingALinkedPoolNarrowsNeverWidens(t *testing.T) {
 	}
 }
 
-// Deleting a credential a policy links directly narrows the policy to its other links; it never widens to ownership.
-func TestIntegration_DeletingALinkedCredentialNarrows(t *testing.T) {
+// Deleting a credential a policy's pool holds narrows the pool to its other credentials; the policy never widens to ownership.
+func TestIntegration_DeletingAPooledCredentialNarrows(t *testing.T) {
 	t.Parallel()
 	ls := newLadderStack(t)
 	ls.credential(t, "ladder-direct-a")
 	kept := ls.credential(t, "ladder-direct-b")
 	a, b := ls.credentialID(t, "ladder-direct-a"), ls.credentialID(t, "ladder-direct-b")
-	policyID := ls.create(t, "policies", `{"metadata":{"name":"ladder-direct"},"spec":{"credentialIds":["`+a+`","`+b+`"]}}`)
+	poolID := ls.create(t, "pools", `{"metadata":{"name":"ladder-direct-pool"},"spec":{"hostId":"`+ls.hostID+`","credentialIds":["`+a+`","`+b+`"]}}`)
+	policyID := ls.create(t, "policies", `{"metadata":{"name":"ladder-direct"},"spec":{"poolIds":["`+poolID+`"]}}`)
 	ls.bindToUser(t, "ladder-direct-user", policyID)
 	ls.sync(t)
 
-	ls.deleteReportsPolicy(t, "host-keys", a, "ladder-direct")
+	code, raw := ls.adminDo(http.MethodDelete, "/api/host-keys/by-id/"+a, "")
+	if code != http.StatusOK && code != http.StatusNoContent {
+		t.Fatalf("DELETE a pooled credential = %d %s", code, raw)
+	}
 	ls.sync(t)
 	for range 3 {
 		if code, _, raw := ls.chat(t); code != http.StatusOK || ls.lastUsed() != kept {
-			t.Fatalf("after deleting one linked credential = %d %s using %q, want only %q", code, raw, ls.lastUsed(), kept)
+			t.Fatalf("after deleting one pooled credential = %d %s using %q, want only %q", code, raw, ls.lastUsed(), kept)
 		}
-	}
-	code, raw := ls.adminDo(http.MethodDelete, "/api/host-keys/by-id/"+b, "")
-	if code != http.StatusOK && code != http.StatusNoContent {
-		t.Fatalf("DELETE the last linked credential = %d %s", code, raw)
-	}
-	ls.sync(t)
-	if code, _, raw := ls.chat(t); code == http.StatusOK {
-		t.Fatalf("after deleting every linked credential = %d %s using %q, want a refusal", code, raw, ls.lastUsed())
 	}
 }
 
-// A subject holds at most one policy: a second binding naming the same subject is refused on save.
-func TestIntegration_SecondBindingOnOneSubjectIsRefused(t *testing.T) {
+// An account holds at most one policy: a second binding naming the same account is refused on save.
+func TestIntegration_SecondBindingOnOneAccountIsRefused(t *testing.T) {
 	t.Parallel()
 	ls := newLadderStack(t)
 	first := ls.create(t, "policies", `{"metadata":{"name":"ladder-first"},"spec":{}}`)
 	second := ls.create(t, "policies", `{"metadata":{"name":"ladder-second"},"spec":{}}`)
 	ls.bindToUser(t, "ladder-first-user", first)
-	code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", `{"metadata":{"name":"ladder-second-user","owner":{"kind":"system"}},"spec":{"policyId":"`+second+`","subjects":[{"kind":"user","id":"`+ls.userID+`"}]}}`)
+	personal := ls.accountAt(t, "personal:"+ls.userID)
+	code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", `{"metadata":{"name":"ladder-second-user","owner":{"kind":"system"}},"spec":{"policyId":"`+second+`","accountIds":["`+personal+`"]}}`)
 	if code != http.StatusConflict {
-		t.Fatalf("second binding on the user = %d %s, want 409", code, raw)
+		t.Fatalf("second binding on the personal account = %d %s, want 409", code, raw)
 	}
 
 	teamID := ls.mkTeam(t, "ladder-dup-team")
-	team := `{"kind":"team","id":"` + teamID + `"}`
-	if code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", `{"metadata":{"name":"ladder-team-a","owner":{"kind":"system"}},"spec":{"policyId":"`+first+`","subjects":[`+team+`]}}`); code != http.StatusCreated {
-		t.Fatalf("first binding on the team = %d %s", code, raw)
+	team := ls.accountAt(t, "team:"+teamID)
+	if code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", `{"metadata":{"name":"ladder-team-a","owner":{"kind":"system"}},"spec":{"policyId":"`+first+`","accountIds":["`+team+`"]}}`); code != http.StatusCreated {
+		t.Fatalf("first binding on the team account = %d %s", code, raw)
 	}
-	if code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", `{"metadata":{"name":"ladder-team-b","owner":{"kind":"team","id":"`+teamID+`"}},"spec":{"policyId":"`+second+`","subjects":[`+team+`]}}`); code != http.StatusConflict {
-		t.Fatalf("second binding on the team = %d %s, want 409", code, raw)
+	if code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", `{"metadata":{"name":"ladder-team-b","owner":{"kind":"team","id":"`+teamID+`"}},"spec":{"policyId":"`+second+`","accountIds":["`+team+`"]}}`); code != http.StatusConflict {
+		t.Fatalf("second binding on the team account = %d %s, want 409", code, raw)
 	}
 }
 
-// Only a system-owned binding may name a host; a team binds a host-owned tier preset to the team's own account.
-func TestIntegration_BindingOwnersForUpstreamSubjects(t *testing.T) {
+// A team binds a host-owned tier preset to its own provider account and not to another team's or the system's; the system binds any.
+func TestIntegration_BindingOwnersForProviderAccounts(t *testing.T) {
 	t.Parallel()
 	ls := newLadderStack(t)
 	teamID := ls.mkTeam(t, "ladder-owners-team")
@@ -379,20 +377,23 @@ func TestIntegration_BindingOwnersForUpstreamSubjects(t *testing.T) {
 	ownTeam := `{"kind":"team","id":"` + teamID + `"}`
 	accountID := ls.create(t, "accounts", `{"metadata":{"name":"ladder-team-org","owner":`+ownTeam+`},"spec":{"hostId":"`+ls.hostID+`"}}`)
 	otherAccount := ls.create(t, "accounts", `{"metadata":{"name":"ladder-other-org","owner":{"kind":"team","id":"`+otherTeam+`"}},"spec":{"hostId":"`+ls.hostID+`"}}`)
+	// The API refuses a system owner on create, so the system's account is written to the store.
+	systemOrg := &account.Account{Meta: meta.Metadata{ID: ids.New(), Name: "ladder-system-org", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: ls.hostID}}
+	mustUpsert(t, ls.stores.Account.Upsert(context.Background(), systemOrg), "account")
+	systemAccount := systemOrg.Meta.ID
 	preset := ls.create(t, "policies", `{"metadata":{"name":"ladder-tier-1","owner":{"kind":"host","id":"`+ls.hostID+`"}},"spec":{"models":["ladder-prov/ladder-model"]}}`)
-	hostSubject := `{"kind":"host","id":"` + ls.hostID + `"}`
-	binding := func(name, owner, subject string) string {
-		return `{"metadata":{"name":"` + name + `","owner":` + owner + `},"spec":{"policyId":"` + preset + `","subjects":[` + subject + `]}}`
+	binding := func(name, owner, accountID string) string {
+		return `{"metadata":{"name":"` + name + `","owner":` + owner + `},"spec":{"policyId":"` + preset + `","accountIds":["` + accountID + `"]}}`
 	}
 
 	for _, tc := range []struct {
 		name, body string
 		want       int
 	}{
-		{"a team binding naming a host", binding("ladder-team-host", ownTeam, hostSubject), http.StatusBadRequest},
-		{"a team binding naming another team's account", binding("ladder-team-foreign", ownTeam, `{"kind":"account","id":"`+otherAccount+`"}`), http.StatusBadRequest},
-		{"a team binds a tier preset to its own account", binding("ladder-team-tier", ownTeam, `{"kind":"account","id":"`+accountID+`"}`), http.StatusCreated},
-		{"the system binds the host", binding("ladder-system-host", `{"kind":"system"}`, hostSubject), http.StatusCreated},
+		{"a team binding naming a system account", binding("ladder-team-system", ownTeam, systemAccount), http.StatusBadRequest},
+		{"a team binding naming another team's account", binding("ladder-team-foreign", ownTeam, otherAccount), http.StatusBadRequest},
+		{"a team binds a tier preset to its own account", binding("ladder-team-tier", ownTeam, accountID), http.StatusCreated},
+		{"the system binds another team's account", binding("ladder-system-foreign", `{"kind":"system"}`, otherAccount), http.StatusCreated},
 	} {
 		if code, raw := ls.adminDo(http.MethodPost, "/api/policy-bindings", tc.body); code != tc.want {
 			t.Errorf("%s = %d %s, want %d", tc.name, code, raw, tc.want)
@@ -431,12 +432,12 @@ func TestIntegration_TeamOwnsEveryLinkableKind(t *testing.T) {
 	if t.Failed() {
 		return
 	}
-	ls.create(t, "pools", `{"metadata":{"name":"ladder-team-pool","owner":`+owner+`},"spec":{"hostId":"`+ls.hostID+`","credentialIds":["`+created["host-keys"]+`"]}}`)
-	ls.create(t, "policies", `{"metadata":{"name":"ladder-team-policy","owner":`+owner+`},"spec":{"credentialIds":["`+created["host-keys"]+`"],"rateLimits":[{"rateLimitId":"`+created["rate-limits"]+`"}],"budgetIds":["`+created["budgets"]+`"]}}`)
+	poolID := ls.create(t, "pools", `{"metadata":{"name":"ladder-team-pool","owner":`+owner+`},"spec":{"hostId":"`+ls.hostID+`","credentialIds":["`+created["host-keys"]+`"]}}`)
+	ls.create(t, "policies", `{"metadata":{"name":"ladder-team-policy","owner":`+owner+`},"spec":{"poolIds":["`+poolID+`"],"rateLimits":[{"rateLimitId":"`+created["rate-limits"]+`"}],"budgets":[{"budgetId":"`+created["budgets"]+`"}]}}`)
 }
 
-// Upstream-rung (host-owned tier) policies carry models, limits and budgets, never pools or credentials.
-func TestIntegration_TierPolicyLinksNoPoolsOrCredentials(t *testing.T) {
+// Upstream-rung (host-owned tier) policies carry models, limits and budgets, never pools.
+func TestIntegration_TierPolicyLinksNoPools(t *testing.T) {
 	t.Parallel()
 	ls := newLadderStack(t)
 	poolID := ls.create(t, "pools", `{"metadata":{"name":"ladder-tier-pool"},"spec":{"hostId":"`+ls.hostID+`"}}`)
@@ -447,7 +448,6 @@ func TestIntegration_TierPolicyLinksNoPoolsOrCredentials(t *testing.T) {
 		want       int
 	}{
 		{"pools", `{"poolIds":["` + poolID + `"]}`, http.StatusBadRequest},
-		{"credentials", `{"credentialIds":["` + ls.credentialID(t, "ladder-system-key") + `"]}`, http.StatusBadRequest},
 		{"limits", `{"models":["ladder-prov/ladder-model"],"rateLimits":[{"rateLimitId":"` + rlID + `","models":["ladder-prov/ladder-model"]}]}`, http.StatusCreated},
 	} {
 		code, raw := ls.adminDo(http.MethodPost, "/api/policies", `{"metadata":{"name":"ladder-tier-`+tc.name+`","owner":`+owner+`},"spec":`+tc.spec+`}`)
@@ -479,7 +479,7 @@ func TestIntegration_ProjectPolicyLinksOnlyWhatItsScopeMayUse(t *testing.T) {
 		ok         bool
 	}{
 		{"a sibling project's pool", `{"poolIds":["` + siblingPool + `"]}`, false},
-		{"a sibling project's budget", `{"budgetIds":["` + siblingBudget + `"]}`, false},
+		{"a sibling project's budget", `{"budgets":[{"budgetId":"` + siblingBudget + `"}]}`, false},
 		{"its team's pool", `{"poolIds":["` + teamPool + `"]}`, true},
 		{"a system pool", `{"poolIds":["` + systemPool + `"]}`, true},
 	} {

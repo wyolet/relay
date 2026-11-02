@@ -43,14 +43,8 @@ func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "dup-sa"}, Spec: serviceaccount.Spec{ProjectID: prj.Meta.ID}}
 	sa.StampOwner()
-	binding := func(name string, sub rolebinding.Subject) *policybinding.PolicyBinding {
-		return &policybinding.PolicyBinding{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
-			Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{sub}},
-		}
-	}
-	first := binding("first-binding", rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: sa.Meta.ID})
-	second := binding("second-binding", rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"})
+	accounts := account.NewStore(gen.New(db))
+	saAccount, projAccount := account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID), account.ForProject(prj.Meta.ID, prj.Meta.Name, "")
 	for _, step := range []struct {
 		name  string
 		write func() error
@@ -59,11 +53,26 @@ func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
 		{"project", func() error { return project.NewStore(db).Upsert(ctx, prj) }},
 		{"service account", func() error { return serviceaccount.NewStore(db).Upsert(ctx, sa) }},
 		{"policy", func() error { return policy.NewStore(db).Upsert(ctx, pol) }},
+		{"accounts", func() (err error) {
+			if saAccount.Meta.ID, err = accounts.EnsureManaged(ctx, saAccount); err != nil {
+				return err
+			}
+			projAccount.Meta.ID, err = accounts.EnsureManaged(ctx, projAccount)
+			return err
+		}},
 	} {
 		if err := step.write(); err != nil {
 			t.Fatalf("upsert %s: %v", step.name, err)
 		}
 	}
+	binding := func(name, accountID string) *policybinding.PolicyBinding {
+		return &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}},
+			Spec: policybinding.Spec{PolicyID: pol.Meta.ID, AccountIDs: []string{accountID}},
+		}
+	}
+	first := binding("first-binding", saAccount.Meta.ID)
+	second := binding("second-binding", projAccount.Meta.ID)
 	for _, b := range []*policybinding.PolicyBinding{first, second} {
 		if err := policybinding.NewStore(db).Upsert(ctx, b); err != nil {
 			t.Fatalf("upsert binding %s: %v", b.Meta.Name, err)
@@ -417,7 +426,7 @@ func TestMigrateUpRefusesWideningABoundPolicy(t *testing.T) {
 	}
 }
 
-// Rolling back below accounts, pools and budgets drops their tables and the policy links to them, and keeps the policy bindings, minus the subjects the older schema cannot hold.
+// Rolling back below accounts, pools and budgets drops their tables and the policy links to them, and keeps the policy bindings, their caller accounts turned back into subjects, minus the subjects the older schema cannot hold.
 func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -437,16 +446,16 @@ func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 	bg := &budget.Budget{Meta: meta.Metadata{ID: meta.NewID(), Name: "monthly", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: budget.Spec{AmountUSD: "10"}}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "contractors", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{PoolIDs: []string{pl.Meta.ID}, BudgetIDs: []string{bg.Meta.ID}},
+		Spec: policy.Spec{PoolIDs: []string{pl.Meta.ID}, Budgets: []policy.BudgetLink{{BudgetID: bg.Meta.ID}}},
 	}
-	group := rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}
-	pb := &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "everyone"},
-		Spec: policybinding.Spec{ProjectID: prj.Meta.ID, PolicyID: pol.Meta.ID, Subjects: []rolebinding.Subject{
-			{Kind: policybinding.SubjectHost, ID: hst.Meta.ID},
-			group,
-			{Kind: policybinding.SubjectAccount, ID: acct.Meta.ID},
-		}},
+	sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer"}, Spec: serviceaccount.Spec{ProjectID: prj.Meta.ID}}
+	sa.StampOwner()
+	accounts := account.NewStore(q)
+	pb := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "everyone", Owner: meta.Owner{Kind: meta.OwnerProject, ID: prj.Meta.ID}}, Spec: policybinding.Spec{PolicyID: pol.Meta.ID}}
+	bindAccount := func(want *account.Account) error {
+		id, err := accounts.EnsureManaged(ctx, want)
+		pb.Spec.AccountIDs = append(pb.Spec.AccountIDs, id)
+		return err
 	}
 	for _, step := range []struct {
 		name  string
@@ -454,12 +463,18 @@ func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 	}{
 		{"team", func() error { return team.NewStore(db).Upsert(ctx, tm) }},
 		{"project", func() error { return project.NewStore(db).Upsert(ctx, prj) }},
+		{"service account", func() error { return serviceaccount.NewStore(db).Upsert(ctx, sa) }},
 		{"host", func() error { return host.NewStore(q).Upsert(ctx, hst) }},
-		{"account", func() error { return account.NewStore(q).Upsert(ctx, acct) }},
+		{"account", func() error { return accounts.Upsert(ctx, acct) }},
 		{"pool", func() error { return pool.NewStore(db).Upsert(ctx, pl) }},
 		{"budget", func() error { return budget.NewStore(q).Upsert(ctx, bg) }},
 		{"policy", func() error { return policy.NewStore(db).Upsert(ctx, pol) }},
-		{"binding", func() error { return policybinding.NewStore(db).Upsert(ctx, pb) }},
+		{"project account", func() error { return bindAccount(account.ForProject(prj.Meta.ID, prj.Meta.Name, "")) }},
+		{"service account's account", func() error { return bindAccount(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID)) }},
+		{"binding", func() error {
+			pb.Spec.AccountIDs = append(pb.Spec.AccountIDs, acct.Meta.ID)
+			return policybinding.NewStore(db).Upsert(ctx, pb)
+		}},
 	} {
 		if err := step.write(); err != nil {
 			t.Fatalf("upsert %s: %v", step.name, err)
@@ -493,8 +508,8 @@ func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 		kinds = append(kinds, k)
 	}
 	rows.Close()
-	if len(kinds) != 1 || kinds[0] != string(rolebinding.SubjectGroup) {
-		t.Errorf("subjects after the down migration = %v, want only the group", kinds)
+	if len(kinds) != 1 || kinds[0] != string(rolebinding.SubjectServiceAccount) {
+		t.Errorf("subjects after the down migration = %v, want only the service account", kinds)
 	}
 
 	st, err = storagemod.Open(ctx, dsn)
