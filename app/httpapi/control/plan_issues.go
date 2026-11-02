@@ -8,6 +8,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/engine"
 )
@@ -80,7 +81,7 @@ func planIssues(ctx context.Context, az authz.Authorizer, v *engine.View, kind, 
 	for _, iss := range raw {
 		singular := plan.KindSingular(iss.Source.Kind)
 		owner := plan.OwnerOf(v, iss.Source)
-		if !visibleTo(ctx, az, singular, iss.Source.ID, owner) {
+		if !issueVisible(ctx, az, singular, iss.Source.ID, owner) {
 			continue
 		}
 		refs := []PlanIssueRef{}
@@ -88,7 +89,7 @@ func planIssues(ctx context.Context, az authz.Authorizer, v *engine.View, kind, 
 			refID := iss.Target.ID
 			targetSingular := plan.KindSingular(iss.Target.Kind)
 			targetOwner := plan.OwnerOf(v, iss.Target)
-			if !visibleTo(ctx, az, targetSingular, iss.Target.ID, targetOwner) {
+			if !issueVisible(ctx, az, targetSingular, iss.Target.ID, targetOwner) {
 				refID = ""
 			}
 			refs = append(refs, PlanIssueRef{Kind: string(iss.Target.Kind), ID: refID})
@@ -107,6 +108,18 @@ func planIssues(ctx context.Context, az authz.Authorizer, v *engine.View, kind, 
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Code, b.Code))
 	})
 	return out
+}
+
+// issueVisible reports whether the caller may see a row of singular kind with
+// the given id and owner. When singular is "" (a derived kind with no control
+// API representation), a Scoper restricts visibility to admins only; without a
+// Scoper the row is shown as-is.
+func issueVisible(ctx context.Context, az authz.Authorizer, singular, id string, owner meta.Owner) bool {
+	if singular == "" {
+		_, scoped := az.(authz.Scoper)
+		return !scoped || authz.IsAdmin(ctx)
+	}
+	return visibleTo(ctx, az, singular, id, owner)
 }
 
 func severityString(s engine.Severity) string {

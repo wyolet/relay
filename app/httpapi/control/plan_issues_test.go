@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
@@ -271,6 +272,33 @@ type scopingAuthz struct {
 
 func (s scopingAuthz) Visible(_ context.Context, _, _ string, owner meta.Owner) bool {
 	return owner != s.hiddenOwner
+}
+
+// TestIssueVisible_DerivedKind checks that issueVisible handles the singular==""
+// (derived kind) path: without a Scoper the issue is always shown; with a
+// Scoper only an admin may see it.
+func TestIssueVisible_DerivedKind(t *testing.T) {
+	id := meta.NewID()
+	owner := meta.Owner{} // OwnerOf returns the zero value for derived kinds
+
+	nonAdminCtx := actor.WithActor(context.Background(), &actor.Actor{UserID: meta.NewID(), Username: "user"})
+	adminCtx := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true, Username: "admin-token"})
+
+	noScoper := authz.AlwaysAllowAuthenticated{}
+	if !issueVisible(nonAdminCtx, noScoper, "", id, owner) {
+		t.Error("no Scoper, non-admin: derived-kind issue should be visible")
+	}
+	if !issueVisible(adminCtx, noScoper, "", id, owner) {
+		t.Error("no Scoper, admin: derived-kind issue should be visible")
+	}
+
+	scoper := scopingAuthz{} // satisfies authz.Scoper; hiddenOwner not relevant here
+	if issueVisible(nonAdminCtx, scoper, "", id, owner) {
+		t.Error("Scoper present, non-admin: derived-kind issue should NOT be visible")
+	}
+	if !issueVisible(adminCtx, scoper, "", id, owner) {
+		t.Error("Scoper present, admin: derived-kind issue should be visible")
+	}
 }
 
 // TestPlanIssues_VisibilityScope checks that a caller whose authorizer hides a
