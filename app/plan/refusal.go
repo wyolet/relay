@@ -2,6 +2,8 @@ package plan
 
 import (
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/pkg/engine"
@@ -83,6 +85,45 @@ func LimitCode(r *limits.Refused) string {
 		return CodeBudgetExceeded
 	}
 	return CodeRateLimitExceeded
+}
+
+// Answer is how relay answers a refusal: the HTTP status, error type and code, the class, and the message the caller reads. A usage row records the same status and message.
+type Answer struct {
+	Status     int
+	Type, Code string
+	Kind       RefusalKind
+	Message    string
+	// RetryAfter is the seconds the caller is told to wait; 0 sends no Retry-After.
+	RetryAfter int64
+}
+
+// RetryAfterSeconds rounds d up to whole seconds, at least 1: an SDK reads "0" as retry at once.
+func RetryAfterSeconds(d time.Duration) int64 {
+	secs := int64(1)
+	if d > 0 {
+		secs = int64((d + time.Second - 1) / time.Second)
+	}
+	return secs
+}
+
+// LimitAnswer answers a refused caller counter, naming the rung and policy whose limit refused, never the rule itself.
+func LimitAnswer(r *limits.Refused) Answer {
+	code := LimitCode(r)
+	what := "rate limit"
+	if code == CodeBudgetExceeded {
+		what = "budget"
+	}
+	var rung limits.Rung
+	var policyID string
+	if r.Counter != nil {
+		rung, policyID = r.Counter.Rung, r.Counter.PolicyID
+	}
+	secs := RetryAfterSeconds(r.RetryAfter)
+	return Answer{
+		Status: http.StatusTooManyRequests, Type: "rate_limit_error", Code: code, Kind: KindOf(code),
+		Message:    fmt.Sprintf("the %s of the %s policy %s is exhausted; try again in %ds", what, rung, policyID, secs),
+		RetryAfter: secs,
+	}
 }
 
 // Issue codes the controllers attach besides duplicate_binding and unpriced_under_budget, which they share with refusals.

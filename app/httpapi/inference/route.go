@@ -13,7 +13,7 @@ import (
 func (d Deps) resolveRoute(ctx context.Context, w http.ResponseWriter, p *Principal, modelRef string) (*plan.Route, bool) {
 	route := p.Caller.Routes.Get(modelRef)
 	if route.Refused != nil {
-		d.fireRouteRefusal(ctx, route.Refused)
+		d.fireRouteRefusal(ctx, route.Refused, modelRef)
 		mapRouteRefusal(w, route.Refused, modelRef)
 		return nil, false
 	}

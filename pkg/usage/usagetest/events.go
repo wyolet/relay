@@ -28,13 +28,13 @@ var eventsCases = []eventsCase{
 		want: []string{"r11", "r10", "r09"},
 	},
 	{
-		name: "status filter",
+		name: "status filter matches a refusal by the status relay answered",
 		q: func() usage.EventQuery {
 			q := Window()
 			q.Status = []int{429}
 			return q
 		}(),
-		want: []string{"r08", "r03"},
+		want: []string{"r11", "r08", "r03"},
 	},
 	{
 		name: "relay_key filter",
@@ -120,7 +120,7 @@ func runEvents(t *testing.T, r usage.Reader) {
 	})
 	t.Run("refusal reads back", func(t *testing.T) {
 		q := Window()
-		q.RequestID = "r00"
+		q.RequestID = "r11"
 		events, err := r.Events(t.Context(), q)
 		if err != nil {
 			t.Fatalf("Events: %v", err)
@@ -128,6 +128,6 @@ func runEvents(t *testing.T, r usage.Reader) {
 		if len(events) != 1 {
 			t.Fatalf("Events: got %d events, want 1", len(events))
 		}
-		assertEqual(t, "refusal", events[0].Refusal, "host_not_reachable")
+		assertEqual(t, "refusal and status", [2]any{events[0].Refusal, events[0].Status}, [2]any{"no_capacity", 429})
 	})
 }

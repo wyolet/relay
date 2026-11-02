@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -76,39 +74,38 @@ func writeErrorEnvelope(w http.ResponseWriter, status int, errType, code string,
 // mapRouteRefusal answers a route that has no hop. model is the caller-supplied model ref (safe to echo back); the rung, subject and policy that decided are logged.
 func mapRouteRefusal(w http.ResponseWriter, r *plan.Refusal, model string) {
 	// log-only attrs; the requested model and the deciding rung make a routing rejection diagnosable from logs.
-	attrs := []any{"model", model, "rung", string(r.Rung), "subject", r.SubjectID, "policy", r.PolicyID}
-	modelMsg := func(format string) string { return fmt.Sprintf(format, model) }
-	kind := r.Kind()
-	switch r.Code {
-	case plan.CodeModelNotFound:
-		writeRefusal(w, http.StatusNotFound, "invalid_request_error", r.Code, kind, modelMsg("model %q not found"), attrs...)
-	case plan.CodeModelDisabled:
-		writeRefusal(w, http.StatusForbidden, "invalid_request_error", r.Code, kind, modelMsg("model %q is disabled"), attrs...)
-	case plan.CodeModelNotAllowed:
-		msg := modelMsg("model %q is not allowed: ") + r.Message
-		if r.PolicyID != "" {
-			// Named like the 429 of a caller limit: the rung, then the policy.
-			msg = fmt.Sprintf("model %q is not allowed by the %s policy %s", model, r.Rung, r.PolicyID)
-		}
-		writeRefusal(w, http.StatusForbidden, "invalid_request_error", r.Code, kind, msg, attrs...)
-	case plan.CodeNoBinding:
-		writeRefusal(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", kind, "no enabled host binding for model", attrs...)
-	case plan.CodeNoCredentials:
-		writeRefusal(w, http.StatusServiceUnavailable, "server_error", "no_keys", kind, modelMsg("no credential you can reach serves %q"), attrs...)
-	default:
-		writeRefusal(w, http.StatusForbidden, "invalid_request_error", r.Code, kind, r.Error(), attrs...)
-	}
+	writeAnswer(w, routeAnswer(r, model), "model", model, "rung", string(r.Rung), "subject", r.SubjectID, "policy", r.PolicyID)
 }
 
-// routeRefusalKind is the usage ErrorKind of a route refusal, agreeing with the code mapRouteRefusal answers.
-func routeRefusalKind(r *plan.Refusal) string {
+// routeAnswer is relay's answer to a route with no hop, which its usage row records too; model is the caller-supplied ref.
+func routeAnswer(r *plan.Refusal, model string) plan.Answer {
+	modelMsg := func(format string) string { return fmt.Sprintf(format, model) }
+	a := plan.Answer{Status: http.StatusForbidden, Type: "invalid_request_error", Code: r.Code, Kind: r.Kind(), Message: r.Error()}
 	switch r.Code {
+	case plan.CodeModelNotFound:
+		a.Status, a.Message = http.StatusNotFound, modelMsg("model %q not found")
+	case plan.CodeModelDisabled:
+		a.Message = modelMsg("model %q is disabled")
+	case plan.CodeModelNotAllowed:
+		a.Message = modelMsg("model %q is not allowed: ") + r.Message
+		if r.PolicyID != "" {
+			// Named like the 429 of a caller limit: the rung, then the policy.
+			a.Message = fmt.Sprintf("model %q is not allowed by the %s policy %s", model, r.Rung, r.PolicyID)
+		}
 	case plan.CodeNoBinding:
-		return "no_host_binding"
+		a.Status, a.Type, a.Code, a.Message = http.StatusServiceUnavailable, "server_error", "no_host_binding", "no enabled host binding for model"
 	case plan.CodeNoCredentials:
-		return "no_keys"
+		a.Status, a.Type, a.Code, a.Message = http.StatusServiceUnavailable, "server_error", "no_keys", modelMsg("no credential you can reach serves %q")
 	}
-	return r.Code
+	return a
+}
+
+// writeAnswer writes a refusal's answer, its Retry-After included.
+func writeAnswer(w http.ResponseWriter, a plan.Answer, attrs ...any) {
+	if a.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(a.RetryAfter, 10))
+	}
+	writeRefusal(w, a.Status, a.Type, a.Code, a.Kind, a.Message, attrs...)
 }
 
 // setRetryAfter writes a Retry-After header from a bucket-refill duration,
@@ -119,10 +116,7 @@ func routeRefusalKind(r *plan.Refusal) string {
 // retries/s against a naked 429).
 // Returns the seconds written so callers can name the same figure in the error message.
 func setRetryAfter(w http.ResponseWriter, d time.Duration) int64 {
-	secs := int64(1)
-	if d > 0 {
-		secs = int64((d + time.Second - 1) / time.Second)
-	}
+	secs := plan.RetryAfterSeconds(d)
 	w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
 	return secs
 }
@@ -142,52 +136,16 @@ func setShouldRetry(w http.ResponseWriter, status int) {
 	w.Header().Set(httpheader.HeaderShouldRetry, strconv.FormatBool(retryableStatus(status)))
 }
 
-// rateLimitMessage appends the retry delay to msg in the one phrasing some clients scrape out of the message text because they never read Retry-After.
-func rateLimitMessage(msg string, secs int64) string {
-	return fmt.Sprintf("%s; try again in %ds", msg, secs)
-}
-
-// callerLimitCode tells a spent budget from a rate limit.
-func callerLimitCode(r *limits.Refused) string { return plan.LimitCode(r) }
-
-// callerLimitMessage names the rung and policy whose limit refused, never the rule itself.
-func callerLimitMessage(r *limits.Refused) string {
-	what := "rate limit"
-	if r.Counter.Kind == limits.KindBudget {
-		what = "budget"
-	}
-	return fmt.Sprintf("the %s of the %s policy %s is exhausted", what, r.Counter.Rung, r.Counter.PolicyID)
-}
-
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
+	// A caller limit, every credential limited or out of rotation, a dial failure (likely a misconfigured baseURL or a down upstream, not a key problem), no credential for the shape: the pipeline's own answer. The error names the counter or dial target, so it goes to the debug log only.
+	if a, ok := pipeline.AnswerOf(err); ok {
+		slog.Debug("inference: refusal detail", "code", a.Code, "err", err)
+		writeAnswer(w, a)
+		return
+	}
 	var upstream *pipeline.UpstreamFailureError
-	var unreachable *pipeline.UpstreamUnreachableError
-	var limited *pipeline.UpstreamLimitedError
-	var refused *limits.Refused
 	switch {
-	case errors.As(err, &limited):
-		// Every credential is over an upstream limit or cooling: the caller's own limits had room. The upstream rules are the host's configuration and stay out of the message.
-		secs := setRetryAfter(w, limited.RetryAfter)
-		writeRefusal(w, http.StatusTooManyRequests, "rate_limit_error", plan.CodeRateLimitExceeded, pipeline.RefusalOf(err),
-			fmt.Sprintf("every credential for this model is over its upstream rate limit; try again in %ds", secs))
-	case errors.As(err, &refused):
-		// One of the caller's own limits or budgets refused before any upstream call: a 429 with the refill (or, for a budget, the next period start) as Retry-After, naming the rung and policy that refused.
-		secs := setRetryAfter(w, refused.RetryAfter)
-		writeRefusal(w, http.StatusTooManyRequests, "rate_limit_error", callerLimitCode(refused), pipeline.RefusalOf(err),
-			rateLimitMessage(callerLimitMessage(refused), secs), "counter", refused.Counter.ID)
-	case errors.Is(err, keypool.ErrNoHealthyKeys):
-		// Every credential the route reaches is out of rotation: relay's verdict before any upstream call, not an upstream error.
-		writeRefusal(w, http.StatusServiceUnavailable, "server_error", plan.CodeNoHealthyKeys, pipeline.RefusalOf(err), "every host key for this model is out of rotation after failing; retry later")
-	case errors.As(err, &unreachable):
-		// Dial failure against the host — likely a misconfigured baseURL or a
-		// down upstream, not a key problem. Surface it distinctly so operators
-		// don't chase key/pool config; the dial target stays in the log.
-		writeRefusal(w, http.StatusBadGateway, "server_error", plan.CodeUpstreamUnreachable, pipeline.RefusalOf(err),
-			fmt.Sprintf("upstream host %q unreachable after %d attempt(s)", unreachable.Host, unreachable.Attempts), "err", err)
-	case errors.Is(err, pipeline.ErrNoKeys):
-		// No credential speaks the request's shape: as unreachable as a route with none.
-		writeRefusal(w, http.StatusServiceUnavailable, "server_error", "no_keys", pipeline.RefusalOf(err), "no host keys")
 	case errors.As(err, &upstream) && upstream.Status > 0:
 		forwardUpstreamFailure(w, upstream)
 	case errors.As(err, &upstream):

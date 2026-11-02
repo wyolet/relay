@@ -160,8 +160,9 @@ func TestRun_NoKeysEmitsFailureEvent(t *testing.T) {
 	if gotKind != "no_keys" {
 		t.Errorf("ErrorKind = %q, want no_keys", gotKind)
 	}
-	if gotStatus != 0 {
-		t.Errorf("Status = %d, want 0 (upstream never reached)", gotStatus)
+	// A refusal records the status relay answered, not an upstream's.
+	if gotStatus != http.StatusServiceUnavailable {
+		t.Errorf("Status = %d, want 503 (relay's answer to no key)", gotStatus)
 	}
 }
 

@@ -17,7 +17,7 @@ func Window() usage.EventQuery {
 	return usage.EventQuery{From: at(-60), To: at(120), Limit: usage.MaxEventLimit}
 }
 
-// Fixture returns the events every backend is loaded with. Durations are equal within a model (model-a 200ms, model-b 100ms) and every TTFT truncates to 40ms except r03's 41ms, so percentiles agree across backends on any row holding one model and one TTFT. Some averages are fractional on purpose (key-a: 166.7ms duration, 41.3ms TTFT) to pin truncation on every backend. r00 and r11 are log-only and sit outside the included span, so a backend that aggregates them shifts counts, from/to and buckets. r05 carries no relay key. Only r01/r02 (project-a) and r06/r11 (principal-a) carry attribution, for read-scope cases. r01/r02 were served from pool-a under acct-a in lane lane-a and r03 from pool-b under acct-b in lane-b; the rest carry no pool, account or lane. The log-only rows are relay refusals: r00 host_not_reachable, r11 no_capacity. Host hid-1 is renamed from host-old to host-new and its newest included event has no slug, so its label is host-new; hid-3 never has a slug and r09 has no host.
+// Fixture returns the events every backend is loaded with. Durations are equal within a model (model-a 200ms, model-b 100ms) and every TTFT truncates to 40ms except r03's 41ms, so percentiles agree across backends on any row holding one model and one TTFT. Some averages are fractional on purpose (key-a: 166.7ms duration, 41.3ms TTFT) to pin truncation on every backend. r00 and r11 are log-only and sit outside the included span, so a backend that aggregates them shifts counts, from/to and buckets. r05 carries no relay key. Only r01/r02 (project-a) and r06/r11 (principal-a) carry attribution, for read-scope cases. r01/r02 were served from pool-a under acct-a in lane lane-a and r03 from pool-b under acct-b in lane-b; the rest carry no pool, account or lane. Of the log-only rows, r00 failed before any upstream (status 0) and r11 is a relay refusal (no_capacity) answered 429. Host hid-1 is renamed from host-old to host-new and its newest included event has no slug, so its label is host-new; hid-3 never has a slug and r09 has no host.
 func Fixture() []usage.Event {
 	upstream := func(responseStartUs int64) *sdkusage.UpstreamTiming {
 		return &sdkusage.UpstreamTiming{Start: 1_000, ResponseStart: responseStartUs, ResponseEnd: 90_000}
@@ -91,10 +91,10 @@ func Fixture() []usage.Event {
 	r10.HostID = "hid-1"
 
 	r00 := modelA("r00", -1, "pipeline", 0)
-	r00.DurationMs, r00.ErrorKind, r00.Refusal = 0, "no_keys", "host_not_reachable"
+	r00.DurationMs, r00.ErrorKind = 0, "no_keys"
 	keyA(&r00)
 	r00.HostID, r00.Host = "hid-9", "host-z"
-	r11 := modelB("r11", 119, "proxy", 0)
+	r11 := modelB("r11", 119, "proxy", 429)
 	r11.DurationMs, r11.ErrorKind, r11.PrincipalID, r11.Refusal = 0, "rate_limited", "principal-a", "no_capacity"
 	r11.HostID, r11.Host = "hid-1", "host-log-only"
 

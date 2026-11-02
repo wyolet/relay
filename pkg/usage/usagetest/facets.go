@@ -69,7 +69,7 @@ var facetsCases = []facetsCase{
 		}(),
 		dims: []string{"refusal", "source"},
 		want: map[string][]usage.FacetValue{
-			"refusal": {fv("", "", 10), fv("host_not_reachable", "", 1), fv("no_capacity", "", 1)},
+			"refusal": {fv("", "", 10), fv("no_capacity", "", 1)},
 			"source":  {fv("proxy", "", 1)},
 		},
 	},

@@ -236,7 +236,7 @@ func TestLane_EdgeRefusalsWriteAUsageRow(t *testing.T) {
 	} {
 		wantForbidden(t, tc.st.send(tc.bearer, tc.path, nil), tc.code)
 		ev := events.next(t)
-		if ev.ErrorKind != tc.code || ev.Refusal != string(plan.RefusalModelNotAllowed) || ev.Status != 0 {
+		if ev.ErrorKind != tc.code || ev.Refusal != string(plan.RefusalModelNotAllowed) || ev.Status != http.StatusForbidden {
 			t.Errorf("%s: row error_kind %q refusal %q status %d", tc.name, ev.ErrorKind, ev.Refusal, ev.Status)
 		}
 		if ev.PrincipalID != f.user || ev.LaneAccountID != tc.lane || (tc.credential != "" && ev.CredentialID != tc.credential) {
@@ -258,8 +258,9 @@ func TestLane_DisabledSubjectWritesAUsageRow(t *testing.T) {
 	if w := st.send("sk-wr-live", "/v1/chat/completions", nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	if ev := events.next(t); ev.ErrorKind != plan.CodeSubjectDisabled || ev.Refusal != string(plan.RefusalModelNotAllowed) || ev.PrincipalID != f.sa.Meta.ID {
-		t.Fatalf("row error_kind %q refusal %q principal %q", ev.ErrorKind, ev.Refusal, ev.PrincipalID)
+	if ev := events.next(t); ev.ErrorKind != plan.CodeSubjectDisabled || ev.Refusal != string(plan.RefusalModelNotAllowed) || ev.PrincipalID != f.sa.Meta.ID ||
+		ev.Status != http.StatusUnauthorized || ev.ErrorMessage != "api key disabled" {
+		t.Fatalf("row error_kind %q refusal %q principal %q status %d message %q", ev.ErrorKind, ev.Refusal, ev.PrincipalID, ev.Status, ev.ErrorMessage)
 	}
 }
 

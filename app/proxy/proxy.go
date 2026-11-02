@@ -398,7 +398,9 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 	ev := &lifecycle.PostFlightEvent{Status: status, ErrorKind: kind, ErrorMessage: runErr.Error()}
 	var refused *limits.Refused
 	if errors.As(runErr, &refused) {
-		ev.Refusal = string(plan.KindOf(plan.LimitCode(refused)))
+		// Recorded as the caller was answered; the internal error names counter keys.
+		a := plan.LimitAnswer(refused)
+		ev.Status, ev.Refusal, ev.ErrorMessage = a.Status, string(a.Kind), a.Message
 	}
 	req.Lifecycle.MarkEnd()
 	p.Lifecycle.Finalize(context.Background(), req.Lifecycle, ev)

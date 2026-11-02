@@ -190,12 +190,13 @@ func (d Deps) fireUsageFailure(ctx context.Context, kind, msg string) {
 	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: kind, ErrorMessage: msg})
 }
 
-// fireRouteRefusal is fireUsageFailure for a route the caller's plan refused, recording the refusal's class beside its code and the model it refused.
-func (d Deps) fireRouteRefusal(ctx context.Context, r *plan.Refusal) {
+// fireRouteRefusal is fireUsageFailure for a route the caller's plan refused: the row records the answer the caller got (status, code, class, message) and the model it refused. model is the caller-supplied ref.
+func (d Deps) fireRouteRefusal(ctx context.Context, r *plan.Refusal, model string) {
 	if lc := lifecycle.FromContext(ctx); lc != nil && d.Lifecycle != nil {
 		stampRefusedModel(lc, d.refusalCatalog(ctx))
 	}
-	d.fireFailure(ctx, &lifecycle.PostFlightEvent{ErrorKind: routeRefusalKind(r), Refusal: string(r.Kind()), ErrorMessage: r.Error()})
+	a := routeAnswer(r, model)
+	d.fireFailure(ctx, &lifecycle.PostFlightEvent{Status: a.Status, ErrorKind: a.Code, Refusal: string(a.Kind), ErrorMessage: a.Message})
 }
 
 // refusalCatalog is the catalog a refused route resolved against: the caller's route table's, else the request's snapshot, else the live one (anonymous proxy traffic pins none).
@@ -258,5 +259,6 @@ func (a *Auth) recordRefusal(r *http.Request, p *Principal, refused *plan.Refusa
 	lc := lifecycleFor(ctx, sourceForMode(cls.Mode), cls.ClientIP, p)
 	applyObsHeaders(lc, r.Header, false)
 	applyProfile(lc, clientprofile.FromContext(ctx), r.Header)
-	finalizeDetached(a.Lifecycle, lc, &lifecycle.PostFlightEvent{ErrorKind: refused.Code, Refusal: string(kind), ErrorMessage: refused.Error()})
+	ans := edgeAnswer(refused)
+	finalizeDetached(a.Lifecycle, lc, &lifecycle.PostFlightEvent{Status: ans.Status, ErrorKind: refused.Code, Refusal: string(kind), ErrorMessage: ans.Message})
 }

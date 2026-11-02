@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/usagelog"
 )
 
 func envelopeOf(t *testing.T, rec *httptest.ResponseRecorder) httpapi.APIErrorBody {
@@ -91,11 +93,12 @@ func TestUsageEvent_CarriesTheRefusal(t *testing.T) {
 		"missing": {plan.CodeModelNotFound, plan.RefusalHostNotReachable},
 		"free":    {"", ""},
 	} {
-		chat(d, p, model)
+		w := chat(d, p, model)
 		ev := events.next(t)
 		if ev.ErrorKind != want.kind || ev.Refusal != string(want.refusal) {
 			t.Errorf("%s: event error_kind %q refusal %q, want %q %q", model, ev.ErrorKind, ev.Refusal, want.kind, want.refusal)
 		}
+		wantAnsweredRow(t, model, w, ev)
 		if ev.LaneAccountID != p.Caller.Lane.Meta.ID {
 			t.Errorf("%s: event lane_account_id %q, want the key's lane %s", model, ev.LaneAccountID, p.Caller.Lane.Meta.ID)
 		}
@@ -117,7 +120,25 @@ func TestUsageEvent_CarriesTheRefusal(t *testing.T) {
 		if ev.ErrorKind != "rate_limited" || ev.Refusal != string(plan.RefusalNoCapacity) {
 			t.Fatalf("spent budget: %d, event error_kind %q refusal %q", w.Code, ev.ErrorKind, ev.Refusal)
 		}
+		wantAnsweredRow(t, "spent budget", w, ev)
+		if strings.Contains(ev.ErrorMessage, "counter") || strings.Contains(ev.ErrorMessage, ":s:account:") {
+			t.Errorf("spent budget: row message %q names the counter", ev.ErrorMessage)
+		}
 		break
+	}
+}
+
+// wantAnsweredRow checks a row records what the caller was answered: its status and, for an error, the body's message.
+func wantAnsweredRow(t *testing.T, name string, w *httptest.ResponseRecorder, ev usagelog.Event) {
+	t.Helper()
+	if ev.Status != w.Code {
+		t.Errorf("%s: row status %d, caller got %d", name, ev.Status, w.Code)
+	}
+	if w.Code < 400 {
+		return
+	}
+	if msg := envelopeOf(t, w).Message; ev.ErrorMessage != msg {
+		t.Errorf("%s: row message %q, body message %q", name, ev.ErrorMessage, msg)
 	}
 }
 

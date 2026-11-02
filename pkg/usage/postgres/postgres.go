@@ -786,7 +786,7 @@ func buildWhere(q usage.EventQuery, rows rowSet) (string, []any) {
 	// Mirrors usage.Event.Aggregated.
 	switch rows {
 	case usageRows:
-		clauses = append(clauses, "NOT (status = 0 AND error_kind != '')")
+		clauses = append(clauses, "refusal = '' AND NOT (status = 0 AND error_kind != '')")
 	case usageAndRefusals:
 		clauses = append(clauses, "NOT (status = 0 AND error_kind != '' AND refusal = '')")
 	}

@@ -29,7 +29,7 @@ type Event struct {
 	Timestamp time.Time `json:"ts"         doc:"When the request started."`
 
 	// Outcome
-	Status       int    `json:"status"                  doc:"HTTP status the caller received; 0 for a request refused before reaching an upstream."`
+	Status       int    `json:"status"                  doc:"HTTP status the caller received: the provider's, or relay's own when relay refused the request (refusal set). 0 for a request relay failed before any upstream answered for another reason."`
 	DurationMs   int64  `json:"duration_ms"             doc:"Milliseconds from request start until the response closed."` // total: start → response closed
 	Streamed     bool   `json:"streamed,omitempty"      doc:"The response was streamed."`
 	FinishReason string `json:"finish_reason,omitempty" doc:"Why generation stopped: stop, length, tool_calls, content_filter, refusal or other."` // "stop"|"length"|"tool_calls"|"content_filter"|"refusal"|"other"
@@ -128,12 +128,12 @@ type Event struct {
 const ErrorKindUpstream = "upstream_error"
 
 // LogOnly reports whether the event records a request rejected before any
-// upstream was reached: status 0 with an ErrorKind set (routing denials,
-// auth/proxy gating, key-pool exhaustion). Such events stay visible in
+// upstream was reached: a relay refusal (which carries the status relay
+// answered), or status 0 with an ErrorKind set. Such events stay visible in
 // event listings (the logs view) but are excluded from Summary and
 // TimeSeries aggregation — they carry no usage and would otherwise pollute
 // stats as phantom unattributed requests.
-func (e Event) LogOnly() bool { return e.Status == 0 && e.ErrorKind != "" }
+func (e Event) LogOnly() bool { return e.Refusal != "" || (e.Status == 0 && e.ErrorKind != "") }
 
 // Aggregated reports whether an aggregate counts e: every row but a log-only one, and a log-only relay refusal too when refusals is set.
 func (e Event) Aggregated(refusals bool) bool { return !e.LogOnly() || (refusals && e.Refusal != "") }
