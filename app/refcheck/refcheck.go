@@ -393,7 +393,7 @@ func (c Checker) Account(ctx context.Context, a *account.Account) error {
 	return c.hostRef(ctx, a.Spec.HostID)
 }
 
-// KeyAccount checks the key's default lane: an account the key's principal holds, or a provider account the caller may use; an open member account only. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use.
+// KeyAccount checks the key's default lane against account.TakesKeysOf, and refuses a closed one. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use.
 func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
 	if k.Spec.AccountID == "" {
 		if c.Rows.DefaultAccount == nil {
@@ -413,26 +413,19 @@ func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
 	if a == nil {
 		return badRequest("account %q does not exist", k.Spec.AccountID)
 	}
-	principal := string(k.Spec.Principal.Kind) + ":" + k.Spec.Principal.ID
+	principal := account.Holder{Kind: account.HolderKind(k.Spec.Principal.Kind), ID: k.Spec.Principal.ID}
 	switch {
 	case a.Spec.Closed:
 		return badRequest("account %q is closed: the membership it stood for has ended", a.Meta.Name)
-	case a.Spec.Holder != nil && a.Spec.Holder.Key() == principal:
-		return nil
-	case !a.IsProvider():
-		return badRequest("account %q is not held by the key's principal %s; a key lands in one of its principal's accounts", a.Meta.Name, principal)
-	}
-	if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
-		return notVisible("account", a.Meta.ID)
-	}
-	if c.Authz == nil {
-		return nil
-	}
-	if err := c.Authz.Authorize(ctx, "accounts.use", authz.Resource{Kind: "account", ID: a.Meta.ID, Name: a.Meta.Name, Owner: &a.Meta.Owner}); err != nil {
-		return forbidden(fmt.Errorf("provider account %q: %w", a.Meta.Name, err))
+	case !a.TakesKeysOf(principal):
+		return &Error{Status: http.StatusForbidden, Code: CodeAccountNotHeld, Msg: fmt.Sprintf(
+			"account %q does not take keys of %s: a key lands in its principal's personal or service account, a member account a role binding grants, or a provider account its user owns", a.Meta.Name, principal.Key())}
 	}
 	return nil
 }
+
+// CodeAccountNotHeld is the error code of a key naming an account it may not run in.
+const CodeAccountNotHeld = "account_not_held"
 
 // Pool checks the pool's host and requires every key in it to authenticate to that host.
 func (c Checker) Pool(ctx context.Context, p *pool.Pool) error {

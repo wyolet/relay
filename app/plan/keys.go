@@ -158,8 +158,9 @@ func (c *controllers) keyPlan(tx *engine.Txn, id string) error {
 	kp := &KeyPlan{Key: k, Principal: k.Spec.Principal, Caller: cp, in: inputs{k, cp}}
 	principal := principalKey(k.Spec.Principal)
 	switch {
-	case !cp.Lane.IsProvider() && cp.Holder != principal:
-		kp.Caller = refusedPlan(cp.Lane, &Refusal{Code: CodeAccountNotHeld, Rung: limits.RungLane, SubjectID: accountSubject(cp.Lane.Meta.ID), Message: "account " + cp.Lane.Meta.Name + " is not held by " + principal})
+	// Re-read on every lane change, so a key whose account stops taking it (a membership no longer followed, an owner moved) is refused.
+	case !cp.Lane.TakesKeysOf(account.Holder{Kind: account.HolderKind(k.Spec.Principal.Kind), ID: k.Spec.Principal.ID}):
+		kp.Caller = refusedPlan(cp.Lane, &Refusal{Code: CodeAccountNotHeld, Rung: limits.RungLane, SubjectID: accountSubject(cp.Lane.Meta.ID), Message: "account " + cp.Lane.Meta.Name + " does not take keys of " + principal})
 	case cp.Lane.IsProvider():
 		// A provider account has no holder whose state the lane plan reads, so the key's own principal is checked here.
 		if disabled, ok := principalDisabled(tx, k.Spec.Principal); !ok {

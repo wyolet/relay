@@ -137,6 +137,31 @@ func TestLane_KeyInAnAccountItsPrincipalDoesNotHold(t *testing.T) {
 	_ = wantRefused(t, h.route(k, "m1"), CodeAccountNotHeld, limits.RungLane)
 }
 
+// A key outlives the membership it was made under, so it is refused in a member account opened on first use, in a provider account its user does not own, and in one its user stops owning.
+func TestLane_KeyLandsOnlyWhereRelayRechecksMembership(t *testing.T) {
+	b := newBasic()
+	u := b.w.user()
+	firstUse := b.w.member(u, meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID})
+	firstUse.FollowsRoleBindings = false
+	teamOrg := b.w.account(b.hostA)
+	teamOrg.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}
+	own := b.w.account(b.hostA)
+	own.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: u.ID}
+	b.w.cred(b.hostA, own, own.Meta.Owner)
+	inFirstUse, inTeamOrg, inOwn := b.w.keyIn(u, firstUse), b.w.keyIn(u, teamOrg), b.w.keyIn(u, own)
+	h := b.w.start(t)
+
+	_ = wantRefused(t, h.route(inFirstUse, "m1"), CodeAccountNotHeld, limits.RungLane)
+	_ = wantRefused(t, h.route(inTeamOrg, "m1"), CodeAccountNotHeld, limits.RungLane)
+	if cp := h.keyPlan(inOwn).Caller; cp.Refused != nil {
+		t.Fatalf("a key in its user's own provider account refused: %v", cp.Refused)
+	}
+	moved := clone(own)
+	moved.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}
+	apply(h, moved)
+	_ = wantRefused(t, h.route(inOwn, "m1"), CodeAccountNotHeld, limits.RungLane)
+}
+
 // A key saved without a lane runs in its principal's own account.
 func TestLane_KeyWithoutAnAccountRunsInItsPrincipalsOwn(t *testing.T) {
 	b := newBasic()

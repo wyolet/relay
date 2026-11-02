@@ -48,6 +48,19 @@ type Holder struct {
 // Key renders the holder as a principal string, "user:<id>" or "serviceaccount:<id>".
 func (h *Holder) Key() string { return string(h.Kind) + ":" + h.ID }
 
+// TakesKeysOf reports whether a relay key of principal may run in a. A key outlives the membership it was made under, so it lands only where relay re-checks that membership itself: the principal's personal or service account, a member account that follows role bindings, or a provider account the key's user owns personally. A member account opened on first use (a group or team-level grant relay cannot see) serves minted tokens only, and team, project and system provider accounts are reached through the caller ladder, never as a lane.
+func (a *Account) TakesKeysOf(principal Holder) bool {
+	switch a.DerivedKind() {
+	case KindPersonal, KindService:
+		return *a.Spec.Holder == principal
+	case KindMember:
+		return *a.Spec.Holder == principal && a.FollowsRoleBindings
+	case KindProvider:
+		return principal.Kind == HolderUser && a.Meta.Owner == meta.Owner{Kind: meta.OwnerUser, ID: principal.ID}
+	}
+	return false
+}
+
 // PayloadLogging is an account's say on capturing request and response bodies; empty leaves it to the account above on the ladder, then to the key.
 type PayloadLogging string
 

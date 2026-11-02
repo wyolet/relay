@@ -297,9 +297,15 @@ func TestKeyAccount(t *testing.T) {
 	personal.Meta.ID = "personal-u-1"
 	other := account.Personal("u-2", "bob")
 	other.Meta.ID = "personal-u-2"
-	closed := account.Member("u-1", "alice", meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}, "p-1", "")
-	closed.Meta.ID, closed.Spec.Closed = "member-u-1", true
-	for _, a := range []*account.Account{personal, other, closed} {
+	inProject := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
+	closed := account.Member("u-1", "alice", inProject, "p-1", "")
+	closed.Meta.ID, closed.Spec.Closed, closed.FollowsRoleBindings = "member-u-1", true, true
+	granted := account.Member("u-1", "alice", meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, "p-2", "")
+	granted.Meta.ID, granted.FollowsRoleBindings = "member-granted", true
+	firstUse := account.Member("u-1", "alice", meta.Owner{Kind: meta.OwnerProject, ID: "p-3"}, "p-3", "")
+	firstUse.Meta.ID = "member-first-use"
+	ownOrg := &account.Account{Meta: meta.Metadata{ID: "own-org", Name: "alice-org", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}, Spec: account.Spec{HostID: "h-1"}}
+	for _, a := range []*account.Account{personal, other, closed, granted, firstUse, ownOrg} {
 		rows.accounts[a.Meta.ID] = a
 	}
 	c := rows.checker(nil)
@@ -313,8 +319,11 @@ func TestKeyAccount(t *testing.T) {
 		want          int
 	}{
 		{"own personal account", "personal-u-1", 0},
-		{"a provider account", "acct-shared", 0},
-		{"another user's account", "personal-u-2", http.StatusBadRequest},
+		{"a member account a role binding grants", "member-granted", 0},
+		{"a provider account the user owns", "own-org", 0},
+		{"a provider account the user does not own", "acct-shared", http.StatusForbidden},
+		{"a member account opened on first use", "member-first-use", http.StatusForbidden},
+		{"another user's account", "personal-u-2", http.StatusForbidden},
 		{"a closed member account", "member-u-1", http.StatusBadRequest},
 		{"an account that does not exist", "acct-gone", http.StatusBadRequest},
 	} {

@@ -374,7 +374,7 @@ type RoleSpec struct {
 // RoleRuleDTO mirrors role.Rule using plain types.
 type RoleRuleDTO struct {
 	Kinds []string `json:"kinds" yaml:"kinds" minItems:"1" enum:"*,accounts,audit,budgets,debug,groups,host-bindings,host-keys,hosts,keys,license,logs,master-key,models,policies,policy-bindings,pools,pricings,projects,providers,rate-limits,role-bindings,roles,scim-clients,secret-keys,service-accounts,settings,system,teams,tokens,usage,users"`
-	Verbs []string `json:"verbs" yaml:"verbs" minItems:"1" enum:"*,apply,attach,create,delete,destroy,detach,generate,get,health,list,mint,read,reload,revoke,rewrap,rotate,snapshot,update,use"`
+	Verbs []string `json:"verbs" yaml:"verbs" minItems:"1" enum:"*,apply,attach,create,delete,destroy,detach,generate,get,health,list,mint,read,reload,revoke,rewrap,rotate,snapshot,update"`
 }
 
 // SubjectDTO is the wire form of a binding subject: everything is named, so

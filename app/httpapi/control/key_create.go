@@ -26,7 +26,7 @@ type createKeyMetadata struct {
 
 type createKeySpec struct {
 	Principal             key.Principal `json:"principal"                       doc:"The service account or user the key acts as. Its owner becomes the key's owner."`
-	AccountID             string        `json:"accountId,omitempty"             format:"uuid" doc:"Id of the account the key's requests run in by default: one the principal holds (a service account's account, the user's personal or member account), or a provider account the caller may use. Omitted: the service account's account, or the user's personal account."`
+	AccountID             string        `json:"accountId,omitempty"             format:"uuid" doc:"Id of the account the key's requests run in by default: the service account's account, the user's personal account, a member account a role binding grants the user, or a provider account the user owns personally. Any other answers 403 account_not_held. Omitted: the service account's account, or the user's personal account."`
 	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"             doc:"When the key stops authenticating. Omitted never expires."`
 	Enabled               *bool         `json:"enabled,omitempty"               doc:"False creates the key disabled. Omitted means true."`
 	PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"    doc:"Let the key send its own upstream credential in proxy mode."`
