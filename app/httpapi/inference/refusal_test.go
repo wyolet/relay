@@ -64,7 +64,8 @@ func TestMapPipelineErr_CarriesTheRefusal(t *testing.T) {
 		"every key broken":  {keypool.ErrNoHealthyKeys, http.StatusServiceUnavailable, plan.CodeNoHealthyKeys, plan.RefusalNoCapacity},
 		"no key":            {pipeline.ErrNoKeys, http.StatusServiceUnavailable, "no_keys", plan.RefusalHostNotReachable},
 		"upstream status":   {&pipeline.UpstreamFailureError{Status: 500, Cause: pipeline.ErrAllKeysExhausted}, http.StatusInternalServerError, "upstream_unavailable", ""},
-		"unreachable":       {&pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial")}, http.StatusBadGateway, "upstream_unreachable", ""},
+		"no host connected": {&pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial"), NoneConnected: true}, http.StatusBadGateway, plan.CodeUpstreamUnreachable, plan.RefusalHostNotReachable},
+		"last host down":    {&pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial")}, http.StatusBadGateway, plan.CodeUpstreamUnreachable, ""},
 		"transport":         {errors.New("reset"), http.StatusBadGateway, "upstream_error", ""},
 	} {
 		rec := httptest.NewRecorder()

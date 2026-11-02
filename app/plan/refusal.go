@@ -48,6 +48,8 @@ const (
 	CodeUpstreamLimited = "upstream_limited"
 	// CodeNoHealthyKeys is every credential of the route out of rotation, its breaker open.
 	CodeNoHealthyKeys = "no_healthy_keys"
+	// CodeUpstreamUnreachable is a dial failure; it is a refusal only when no candidate host of the request accepted a connection.
+	CodeUpstreamUnreachable = "upstream_unreachable"
 )
 
 // RefusalKind is the class of a refusal a client acts on: use another model, reach another host, or wait.
@@ -64,7 +66,7 @@ func KindOf(code string) RefusalKind {
 	switch code {
 	case CodePolicyDisabled, CodeModelNotAllowed, CodeUnpricedUnderBudget, CodeSubjectDisabled, CodeAccountClosed, CodeAccountNotHeld, CodeDuplicateBinding:
 		return RefusalModelNotAllowed
-	case CodeModelNotFound, CodeModelDisabled, CodeNoBinding, CodeNoCredentials:
+	case CodeModelNotFound, CodeModelDisabled, CodeNoBinding, CodeNoCredentials, CodeUpstreamUnreachable:
 		return RefusalHostNotReachable
 	case CodeRateLimitExceeded, CodeBudgetExceeded, CodeUpstreamLimited, CodeNoHealthyKeys:
 		return RefusalNoCapacity

@@ -315,6 +315,8 @@ type UpstreamUnreachableError struct {
 	Host     string
 	Attempts int
 	Cause    error
+	// NoneConnected is set when no candidate of the request accepted a connection: a later hop that answered leaves this, the last dial failure, as the error.
+	NoneConnected bool
 }
 
 func (e *UpstreamUnreachableError) Error() string {
@@ -541,11 +543,17 @@ func (p *Pipeline) fireFailure(req *Request, h *host.Host, runErr error) {
 func RefusalOf(err error) plan.RefusalKind {
 	var refused *limits.Refused
 	var limited *UpstreamLimitedError
+	var unreachable *UpstreamUnreachableError
 	switch {
 	case errors.As(err, &refused):
 		return plan.KindOf(plan.LimitCode(refused))
 	case errors.As(err, &limited):
 		return plan.KindOf(plan.CodeUpstreamLimited)
+	case errors.As(err, &unreachable):
+		if unreachable.NoneConnected {
+			return plan.KindOf(plan.CodeUpstreamUnreachable)
+		}
+		return ""
 	case errors.Is(err, keypool.ErrNoHealthyKeys):
 		return plan.KindOf(plan.CodeNoHealthyKeys)
 	case errors.Is(err, ErrNoKeys):
@@ -564,7 +572,7 @@ func classifyFailure(err error) (kind string, status int) {
 	var limited *UpstreamLimitedError
 	switch {
 	case errors.As(err, &unreachable):
-		return "upstream_unreachable", 0
+		return plan.CodeUpstreamUnreachable, 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
 	case errors.As(err, &refused), errors.As(err, &limited):

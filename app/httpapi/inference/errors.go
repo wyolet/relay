@@ -183,7 +183,7 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 		// Dial failure against the host — likely a misconfigured baseURL or a
 		// down upstream, not a key problem. Surface it distinctly so operators
 		// don't chase key/pool config; the dial target stays in the log.
-		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unreachable",
+		writeRefusal(w, http.StatusBadGateway, "server_error", plan.CodeUpstreamUnreachable, pipeline.RefusalOf(err),
 			fmt.Sprintf("upstream host %q unreachable after %d attempt(s)", unreachable.Host, unreachable.Attempts), "err", err)
 	case errors.Is(err, pipeline.ErrNoKeys):
 		// No credential speaks the request's shape: as unreachable as a route with none.
