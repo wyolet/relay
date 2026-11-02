@@ -133,3 +133,50 @@ func TestIntegration_SharesRoundTripThroughApply(t *testing.T) {
 		}
 	}
 }
+
+// docNamed is the document of bundle whose metadata.name is name, with its leading separator.
+func docNamed(t *testing.T, bundle, name string) string {
+	t.Helper()
+	for _, doc := range strings.Split(bundle, "---\n") {
+		if strings.Contains(doc, "\n  name: "+name+"\n") {
+			return "---\n" + doc
+		}
+	}
+	t.Fatalf("no document %s", name)
+	return ""
+}
+
+// Pruning a real account never removes its shares silently: the plan lists each as a delete of its own before anything is written, and a bundle that still declares a share refuses the prune.
+func TestIntegration_PruneNamesTheSharesOfARealAccount(t *testing.T) {
+	t.Parallel()
+	st := newStack(t)
+	labelled := strings.Replace(sharesBundle, "  name: rt-sh-org\n", "  name: rt-sh-org\n  labels: {managed: gitops}\n", 1)
+	if code, _, raw := st.applyBundle(labelled, ""); code != http.StatusOK {
+		t.Fatalf("apply bundle = %d %s", code, raw)
+	}
+	// Everything but the accounts and the pool: only rt-sh-org carries the label the prune selects.
+	tenancy := labelled[:strings.Index(labelled, "---\napiVersion: relay.wyolet.dev/v1alpha3\nkind: Account")]
+
+	if code, _, raw := st.applyBundle(tenancy+docNamed(t, sharesBundle, "rt-sh-share-team"), "prune=true&selector=managed=gitops&dryRun=true"); code != http.StatusBadRequest {
+		t.Fatalf("pruning the real account while declaring a share = %d %s, want 400", code, raw)
+	}
+
+	code, plan, raw := st.applyBundle(tenancy, "prune=true&selector=managed=gitops&dryRun=true")
+	if code != http.StatusOK {
+		t.Fatalf("dry-run prune = %d %s", code, raw)
+	}
+	for _, name := range []string{"rt-sh-org", "rt-sh-share-team", "rt-sh-share-sa"} {
+		if got := plan.action("Account", name); got != "delete" {
+			t.Errorf("Account/%s in the prune plan = %q, want delete\n%s", name, got, raw)
+		}
+	}
+	if code, _, raw := st.applyBundle(tenancy, "prune=true&selector=managed=gitops"); code != http.StatusOK {
+		t.Fatalf("prune = %d %s", code, raw)
+	}
+	all, _ := exportedSpecs(t, st)
+	for _, name := range []string{"Account/rt-sh-org", "Account/rt-sh-share-team", "Account/rt-sh-share-sa"} {
+		if _, ok := all[name]; ok {
+			t.Errorf("%s survived the prune", name)
+		}
+	}
+}

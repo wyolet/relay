@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/app/settings"
 )
 
 // catalogDocs are the catalog and upstream documents of one bundle, by kind.
@@ -71,6 +72,9 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		CheckCreate: refuseCallerAccountCreate,
 		CheckDelete: refuseCallerAccountPrune,
 	}); err != nil {
+		return err
+	}
+	if err := b.pruneSharesWithTheirAccount(d.accounts); err != nil {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
@@ -156,6 +160,47 @@ func keepAccountPlace(prev, next *account.Account) error {
 		next.Spec.Closed, next.FollowsRoleBindings = prev.Spec.Closed, prev.FollowsRoleBindings
 	}
 	next.Spec.Kind = next.DerivedKind()
+	return nil
+}
+
+// pruneSharesWithTheirAccount names, as deletes of their own, the shares a pruned real account takes along, each just before it, so the plan shows them before anyone confirms. A share the bundle still declares refuses the prune.
+func (b *builder) pruneSharesWithTheirAccount(docs []*manifest.AccountDTO) error {
+	pruned := b.deletes[len(b.deletes)-1]
+	if len(pruned) == 0 {
+		return nil
+	}
+	declared := make(map[string]bool, len(docs))
+	for _, d := range docs {
+		declared[d.Metadata.Name] = true
+	}
+	listed := make(map[string]bool, len(pruned))
+	for _, e := range pruned {
+		listed[e.ID] = true
+	}
+	out := make([]Entry, 0, len(pruned))
+	for _, e := range pruned {
+		for _, s := range b.rows.Accounts {
+			if s.Spec.SourceAccountID != e.ID || listed[s.Meta.ID] {
+				continue
+			}
+			if declared[s.Meta.Name] {
+				return &InvalidError{Kind: "Account", Name: s.Meta.Name, Err: fmt.Errorf("shares account %q, which this run prunes; drop the share from the bundle too, or keep the account", e.Name)}
+			}
+			if err := b.governs(settings.OpDelete, "account", &s.Meta); err != nil {
+				return &GovernanceError{Kind: "Account", Name: s.Meta.Name, Err: err}
+			}
+			id, realOwner := s.Meta.ID, e.owner
+			out = append(out, Entry{
+				Kind: "Account", Name: s.Meta.Name, ID: id, Action: ActionDelete,
+				plural: "accounts", owner: s.Meta.Owner, authorizeAt: &realOwner,
+				prev:  rowState{present: true, dirty: s.Meta.Dirty, updatedAt: s.Meta.UpdatedAt},
+				write: func(ctx context.Context) error { return b.opts.Stores.Account.Delete(ctx, id) },
+			})
+			listed[id] = true
+		}
+		out = append(out, e)
+	}
+	b.deletes[len(b.deletes)-1] = out
 	return nil
 }
 
