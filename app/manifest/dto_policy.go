@@ -1,8 +1,8 @@
 package manifest
 
-// PolicyDTO is the wire form of a Policy: the gate linking a subject to the
-// models, pools, credentials, rate limits and budgets it may use. Every link
-// is a *name*.
+// PolicyDTO is the wire form of a Policy: a rule set naming the models,
+// pools, rate limits and budgets requests under it may use. Every link is a
+// *name*.
 type PolicyDTO struct {
 	APIVersion string     `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string     `json:"kind"       yaml:"kind"`
@@ -11,32 +11,36 @@ type PolicyDTO struct {
 }
 
 type PolicySpec struct {
-	Enabled           *bool `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
-	IncludeDeprecated bool  `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	// Pools are pool names, tried in order: a later pool is the failover for
 	// an earlier one. Host-owned (tier) policies list none.
 	Pools []string `json:"pools,omitempty" yaml:"pools,omitempty"`
-	// Credentials are host-key names linked directly, each a pool of one.
-	// Host-owned (tier) policies list none.
-	Credentials []string `json:"credentials,omitempty" yaml:"credentials,omitempty"`
-	// Models holds modelref DSL strings ("provider", "provider/model",
-	// "@host", ...), not bare model names; see app/modelref.
+	// Models holds model refs ("provider", "provider/model"), not bare model
+	// names; see app/modelref. Empty allows every model the pools serve.
 	Models     []string             `json:"models,omitempty"     yaml:"models,omitempty"`
 	RateLimits []PolicyRateLimitDTO `json:"rateLimits,omitempty" yaml:"rateLimits,omitempty"`
-	// Budgets are budget names.
-	Budgets               []string `json:"budgets,omitempty"               yaml:"budgets,omitempty"`
-	PayloadLoggingEnabled bool     `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+	Budgets    []PolicyBudgetDTO    `json:"budgets,omitempty"    yaml:"budgets,omitempty"`
 }
 
 // PolicyRateLimitDTO links one rate limit by name: to the whole policy when
-// Models is empty, otherwise only to requests for a matching model.
+// Models is empty, otherwise only to requests for a matching model. Shared
+// omitted means true.
 type PolicyRateLimitDTO struct {
 	Ref    string   `json:"ref"              yaml:"ref"`
 	Models []string `json:"models,omitempty" yaml:"models,omitempty"`
+	Shared *bool    `json:"shared,omitempty" yaml:"shared,omitempty"`
 }
 
-// AccountDTO is the wire form of an Account: one provider organization at
-// one host. Spec.Host is a host *name*.
+// PolicyBudgetDTO links one budget by name. Shared omitted means true.
+type PolicyBudgetDTO struct {
+	Ref    string `json:"ref"              yaml:"ref"`
+	Shared *bool  `json:"shared,omitempty" yaml:"shared,omitempty"`
+}
+
+// AccountDTO is the wire form of an Account. A provider account names its
+// host by *name*; a caller account (team, project, personal, member,
+// service) carries no host and is made by relay, so a manifest may only
+// update one that exists.
 type AccountDTO struct {
 	APIVersion string      `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string      `json:"kind"       yaml:"kind"`
@@ -45,10 +49,11 @@ type AccountDTO struct {
 }
 
 type AccountSpec struct {
-	Host  string `json:"host"            yaml:"host"`
+	Host  string `json:"host,omitempty"  yaml:"host,omitempty"`
 	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty"`
 	// Default marks the account its owner's keys at the host join when they name none; at most one per owner and host.
-	Default bool `json:"default,omitempty" yaml:"default,omitempty"`
+	Default        bool   `json:"default,omitempty"        yaml:"default,omitempty"`
+	PayloadLogging string `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" enum:"on,off"`
 }
 
 // PoolDTO is the wire form of a Pool: one host's keys and how a key is

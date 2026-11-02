@@ -56,8 +56,8 @@ func checkOrphans(g *graph) []Issue {
 		})
 	}
 
-	// HostKey → linked by a caller policy, directly or through a pool. Team-
-	// and project-owned policies count too, or a linked key reads as
+	// HostKey → linked by a caller policy through a pool. Team- and
+	// project-owned policies count too, or a linked key reads as
 	// unreachable.
 	keyReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
@@ -65,9 +65,6 @@ func checkOrphans(g *graph) []Issue {
 		case "user", "system", "team", "project":
 		default:
 			continue
-		}
-		for _, hk := range pol.Spec.Credentials {
-			keyReferenced[hk] = true
 		}
 		for _, name := range pol.Spec.Pools {
 			if p, ok := g.Pools[name]; ok {

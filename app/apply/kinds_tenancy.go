@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
@@ -129,7 +131,7 @@ func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	return b.checkDocsAtPrunedScopes(ctx)
 }
 
-// serviceAccountDependents names, as "Kind/name", the rows deleting service account id would change through the foreign keys: its keys, which go with it, and the bindings that name it as a subject, which lose it. Bindings are read as this run leaves them, since its writes land before its deletes.
+// serviceAccountDependents names, as "Kind/name", the rows deleting service account id would change through the foreign keys: its keys and its account, which go with it, and the role bindings naming it and the policy bindings naming its account, which lose them. Bindings are read as this run leaves them, since its writes land before its deletes.
 func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible project.Visible) (named []string, hidden int) {
 	add := func(kind string, m meta.Metadata) {
 		switch {
@@ -145,15 +147,24 @@ func (b *builder) serviceAccountDependents(id string, gone project.Gone, visible
 			add("Key", k.Meta)
 		}
 	}
-	account := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id}
-	subject := account.Key()
+	sa := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id}
+	subject := sa.Key()
 	for _, rb := range afterRun(b, b.rows.RoleBindings, func(x *rolebinding.RoleBinding) *meta.Metadata { return &x.Meta }) {
 		if namesSubject(rb.Spec.Subjects, subject) {
 			add("RoleBinding", rb.Meta)
 		}
 	}
+	var accountID string
+	for _, a := range b.rows.Accounts {
+		if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == id {
+			accountID = a.Meta.ID
+		}
+	}
+	if accountID == "" {
+		return named, hidden
+	}
 	for _, pb := range afterRun(b, b.rows.PolicyBindings, func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta }) {
-		if namesSubject(pb.Spec.Subjects, subject) {
+		if slices.Contains(pb.Spec.AccountIDs, accountID) {
 			add("PolicyBinding", pb.Meta)
 		}
 	}

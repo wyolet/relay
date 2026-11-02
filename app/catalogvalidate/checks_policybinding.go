@@ -7,40 +7,31 @@ import (
 )
 
 // checkPolicyBindingRefs validates PolicyBinding outbound refs:
-//   - the owner scope (spec.project, else a team, user or system
-//     metadata.owner) exists
+//   - the owner scope (a project, team, user or system metadata.owner)
+//     exists
 //   - spec.policy exists and is bindable from that scope
-//   - every catalog-held subject exists; only a system binding binds a host,
-//     and a user's binding binds only that user
+//   - spec.accounts names at least one account; a provider account the
+//     catalog holds must exist, the others (made by relay with their team,
+//     project, user or service account) are left to the server
 func checkPolicyBindingRefs(g *graph) []Issue {
 	var out []Issue
 	for _, b := range g.PolicyBindings {
 		src := Ref{Kind: "PolicyBinding", Name: b.Metadata.Name}
 		scope, name := string(b.Metadata.Owner.Kind), ownerName(b.Metadata.Owner.Name, b.Metadata.Owner.ID)
-		if b.Spec.Project != "" {
-			scope, name = "project", b.Spec.Project
-		}
 		switch scope {
 		case "project":
 			if _, ok := g.Projects[name]; !ok {
-				out = append(out, refMissing(src, "spec.project", "Project", name))
+				out = append(out, refMissing(src, "metadata.owner", "Project", name))
 			}
 		case "team":
 			if _, ok := g.Teams[name]; !ok {
 				out = append(out, refMissing(src, "metadata.owner", "Team", name))
 			}
-		case "system":
-		case "user":
-			// The owner may be named by id and the subject by name, so the server checks they are one user.
-			if s := b.Spec.Subjects; name == "" || len(s) != 1 || s[0].Kind != "user" {
-				out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant,
-					Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.subjects"},
-					Message: "a user-owned policy binding has one subject, its owner"})
-			}
+		case "system", "user":
 		default:
 			out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
 				Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "metadata.owner"},
-				Message: "a policy binding names spec.project, or a team, user or system owner"})
+				Message: "a policy binding is owned by a project, a team, a user or the system"})
 		}
 		if b.Spec.Policy == "" {
 			out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
@@ -51,7 +42,11 @@ func checkPolicyBindingRefs(g *graph) []Issue {
 		} else {
 			out = append(out, checkPolicyBindable(g, src, p, scope, name)...)
 		}
-		out = append(out, checkPolicySubjects(g, src, scope, b.Spec.Subjects)...)
+		if len(b.Spec.Accounts) == 0 {
+			out = append(out, Issue{Severity: SeverityError, Kind: KindIncomplete,
+				Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.accounts"},
+				Message: "a policy binding binds at least one account"})
+		}
 	}
 	return out
 }
@@ -87,50 +82,8 @@ func checkPolicyBindable(g *graph, src Ref, p *manifest.PolicyDTO, scope, scopeN
 		case name == "", scope == "team", scope == "project":
 		case scope == "user" && scopeName == name:
 		default:
-			return refuse(fmt.Sprintf("policy %q is personal: its owner binds it to themselves, or a team or project binds it", p.Metadata.Name))
+			return refuse(fmt.Sprintf("policy %q is personal: its owner binds it to their own accounts, or a team or project binds it", p.Metadata.Name))
 		}
 	}
 	return nil
-}
-
-// checkPolicySubjects validates the subjects the catalog can hold. Users and
-// groups name rows outside it and are unchecked.
-func checkPolicySubjects(g *graph, src Ref, scope string, subjects []manifest.PolicySubjectDTO) []Issue {
-	var out []Issue
-	for _, sub := range subjects {
-		var exists bool
-		kind := ""
-		switch sub.Kind {
-		case "serviceaccount":
-			_, exists = g.ServiceAccounts[sub.Name]
-			kind = "ServiceAccount"
-		case "host":
-			_, exists = g.Hosts[sub.Name]
-			kind = "Host"
-			if scope != "system" {
-				out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant,
-					Source:  Ref{Kind: src.Kind, Name: src.Name, Field: "spec.subjects"},
-					Target:  Ref{Kind: "Host", Name: sub.Name},
-					Message: fmt.Sprintf("host %q is bound only by a system-owned binding", sub.Name)})
-			}
-		case "account":
-			_, exists = g.Accounts[sub.Name]
-			kind = "Account"
-		case "credential":
-			_, exists = g.HostKeys[sub.Name]
-			kind = "HostKey"
-		case "team":
-			_, exists = g.Teams[sub.Name]
-			kind = "Team"
-		case "project":
-			_, exists = g.Projects[sub.Name]
-			kind = "Project"
-		default:
-			continue
-		}
-		if !exists {
-			out = append(out, refMissing(src, "spec.subjects", kind, sub.Name))
-		}
-	}
-	return out
 }
