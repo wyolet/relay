@@ -207,7 +207,8 @@ func principalDisabled(tx *engine.Txn, p key.Principal) (disabled, ok bool) {
 // LaneIndex finds a lane's plan by account id or name, and a user's member account in a team or project.
 type LaneIndex struct {
 	byID, byName map[string]*CallerPlan
-	member       map[string]*CallerPlan // account.MemberKey → plan
+	// member is user id → team or project scope → the user's member lane there; nested so a lookup builds no key.
+	member map[string]map[meta.Owner]*CallerPlan
 }
 
 // Lookup returns the plan of the lane named by ref, an account id or name; nil when there is none.
@@ -226,17 +227,22 @@ func (x *LaneIndex) Member(userID string, scope meta.Owner) *CallerPlan {
 	if x == nil {
 		return nil
 	}
-	return x.member[account.MemberKey(scope, userID)]
+	return x.member[userID][scope]
 }
 
 func (c *controllers) laneIndex(tx *engine.Txn, _ string) error {
 	cps := engine.Members[CallerPlan](tx)
-	x := &LaneIndex{byID: make(map[string]*CallerPlan, len(cps)), byName: make(map[string]*CallerPlan, len(cps)), member: map[string]*CallerPlan{}}
+	x := &LaneIndex{byID: make(map[string]*CallerPlan, len(cps)), byName: make(map[string]*CallerPlan, len(cps)), member: map[string]map[meta.Owner]*CallerPlan{}}
 	for _, cp := range cps {
 		x.byID[cp.Lane.Meta.ID], x.byName[cp.Lane.Meta.Name] = cp, cp
-		if cp.Lane.DerivedKind() == account.KindMember {
-			x.member[cp.Lane.ManagedKey()] = cp
+		if cp.Lane.DerivedKind() != account.KindMember {
+			continue
 		}
+		user := cp.Lane.Spec.Holder.ID
+		if x.member[user] == nil {
+			x.member[user] = map[meta.Owner]*CallerPlan{}
+		}
+		x.member[user][cp.Lane.Meta.Owner] = cp
 	}
 	engine.Put(tx, x)
 	return nil
@@ -262,7 +268,7 @@ func (r *Root) LaneFor(kp *KeyPlan, ref string) (*CallerPlan, *Refusal) {
 func (r *Root) Lane(principal, ref string) (*CallerPlan, *Refusal) {
 	cp := r.Lanes.Lookup(ref)
 	if cp == nil || !cp.HeldBy(principal) {
-		return nil, &Refusal{Code: CodeAccountNotHeld, Rung: limits.RungLane, Message: "no account " + ref + " held by " + principal}
+		return nil, &Refusal{Code: CodeAccountNotHeld, Message: "no account " + ref + " held by " + principal}
 	}
 	return cp, nil
 }
@@ -272,7 +278,7 @@ func (r *Root) MemberLane(userID, projectID string) (*CallerPlan, *Refusal) {
 	if cp := r.Lanes.Member(userID, meta.Owner{Kind: meta.OwnerProject, ID: projectID}); cp != nil {
 		return cp, nil
 	}
-	return nil, &Refusal{Code: CodeAccountNotHeld, Rung: limits.RungLane, Message: "user:" + userID + " holds no account in project " + projectID}
+	return nil, &Refusal{Code: CodeAccountNotHeld, Message: "user:" + userID + " holds no account in project " + projectID}
 }
 
 func (c *controllers) keyPlanShard(tx *engine.Txn, id string) error {
