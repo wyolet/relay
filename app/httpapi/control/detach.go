@@ -166,6 +166,14 @@ func (d Deps) releaseAll(ctx context.Context, t detachTarget) ([]releasedRow, []
 		if !it.detachable {
 			continue
 		}
+		if it.Kind == "account" && it.Via == "spec.sourceAccountId" {
+			rows, err := d.releaseShare(ctx, it)
+			if err != nil {
+				return nil, nil, err
+			}
+			released = append(released, rows...)
+			continue
+		}
 		r, err := d.release(ctx, it, t)
 		if err != nil {
 			return nil, nil, err

@@ -30,6 +30,7 @@ type blockerGroup struct {
 	Kind       string        `json:"kind"       doc:"Kind of the referencing rows, as an API singular (policy, host-key, policy-binding, …)."`
 	Field      string        `json:"field"      doc:"Field path on those rows that names the target, such as spec.poolIds."`
 	Detachable bool          `json:"detachable" doc:"The rows can let go of the target (POST …/detach does it); otherwise reassign or delete them first."`
+	Deleted    bool          `json:"deleted,omitempty" doc:"In a delete's answer: the rows went with the target instead of letting go of it, such as a policy binding left with no account when a share is revoked."`
 	Count      int           `json:"count"      doc:"Every referencing row, including the hidden ones."`
 	Hidden     int           `json:"hidden"     doc:"Referencing rows in scopes the caller may not see; they are counted but not listed."`
 	Items      []blockerItem `json:"items"      doc:"The referencing rows the caller may see."`
@@ -42,7 +43,7 @@ type deleteDetachedBody struct {
 
 // conflictBody documents a 409: the error envelope, plus blockers when the code is resource_in_use.
 type conflictBody struct {
-	Err      httpapi.APIErrorBody `json:"error"              doc:"The error. code says which conflict: resource_in_use, stale_resource_version, managed_by_source, duplicate_binding, account_shared, share_exists, reshare_refused, or a duplicate default account."`
+	Err      httpapi.APIErrorBody `json:"error"              doc:"The error. code says which conflict: resource_in_use, stale_resource_version, managed_by_source, duplicate_binding, account_shared, share_exists, reshare_refused, already_reachable, or a duplicate default account."`
 	Blockers []blockerGroup       `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the target, grouped by kind and field."`
 }
 
@@ -73,18 +74,18 @@ func blockers(ctx context.Context, d Deps, kind, id string) ([]blockerGroup, err
 func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceItem) []blockerGroup {
 	sortReferences(items)
 	type kindField struct {
-		kind, field string
-		detachable  bool
+		kind, field         string
+		detachable, deleted bool
 	}
 	groups := []blockerGroup{}
 	at := map[kindField]int{}
 	for _, it := range items {
-		k := kindField{it.Kind, it.Via, it.detachable}
+		k := kindField{it.Kind, it.Via, it.detachable, it.deleted}
 		i, ok := at[k]
 		if !ok {
 			i = len(groups)
 			at[k] = i
-			groups = append(groups, blockerGroup{Kind: it.Kind, Field: it.Via, Detachable: it.detachable, Items: []blockerItem{}})
+			groups = append(groups, blockerGroup{Kind: it.Kind, Field: it.Via, Detachable: it.detachable, Deleted: it.deleted, Items: []blockerItem{}})
 		}
 		g := &groups[i]
 		g.Count++

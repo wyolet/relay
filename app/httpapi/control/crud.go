@@ -508,6 +508,11 @@ func registerKind[T any](
 			if managed := managedError(err); managed != nil {
 				return nil, managed
 			}
+			// A store that answers in HTTP terms (a race the references scan lost) is passed through.
+			var se huma.StatusError
+			if errors.As(err, &se) {
+				return nil, err
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
 		return dropped.answer(ctx), nil

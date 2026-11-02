@@ -44,6 +44,8 @@ type referenceItem struct {
 	detachable bool
 	// shownToSharer names an account shared from the target to whoever asks about the target: they may share it, so they see its shares.
 	shownToSharer bool
+	// deleted marks a row that went with the target rather than letting go of it.
+	deleted bool
 }
 
 // listedTo reports whether the caller is shown it by name.

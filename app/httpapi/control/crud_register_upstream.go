@@ -18,14 +18,14 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 	bumeta := func(b *budget.Budget) *meta.Metadata { return &b.Meta }
 
 	rows.add(registerKind[account.Account](
-		api, "accounts", "account", d.Stores.Account, sharerAuthz{Authorizer: d.Authz, d: d}, ameta,
+		api, "accounts", "account", accountRows{Store: d.Stores.Account, d: d}, sharerAuthz{Authorizer: d.Authz, d: d}, ameta,
 		func(a *account.Account) error { return a.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.Account, ameta),
 		guardAccount(d),
 		d.enrichAccount,
 		nil,
-		d.refuseInUse,
+		d.accountInUse,
 		mergeAccountServerFields,
 		d.Catalog,
 		false,
