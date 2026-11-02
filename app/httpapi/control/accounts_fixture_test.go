@@ -2,6 +2,8 @@ package control
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
@@ -23,6 +26,8 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/kv"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // accountsWorld is a team with a project, two members of the project with a key each, and a priced model served through a system credential. The team's account caps requests shared, the project's account gives each lane a budget and a model-scoped cap, and the first member's account has a small cap of its own.
@@ -82,21 +87,28 @@ func newAccountsWorld() *accountsWorld {
 	return aw
 }
 
-// accountsHarness serves the account reads over a loaded engine.
+// accountsHarness serves the account reads over a loaded engine and a Lua limiter on kv.Mem with a fixed clock.
 type accountsHarness struct {
 	h     http.Handler
 	plans *plantest.Plans
+	lim   *lua.Limiter
 }
 
 func newAccountsHarness(t *testing.T, w *plantest.World, az authz.Authorizer, actors map[string]*actor.Actor) *accountsHarness {
 	t.Helper()
 	plans := w.Load(t)
+	mem := kv.NewMem()
+	t.Cleanup(func() { _ = mem.Close() })
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	lim := lua.New(pkgratelimit.New(mem, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return now }))
+
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-Actor", actors))
 	api := humachi.New(r, huma.DefaultConfig("accounts-test", "0"))
-	d := Deps{Authz: az, PlanView: plans.Engine.View}
+	d := Deps{Authz: az, PlanView: plans.Engine.View, Counters: lim}
 	registerMyAccounts(api, d, nil)
-	return &accountsHarness{h: r, plans: plans}
+	registerLimits(api, d, nil)
+	return &accountsHarness{h: r, plans: plans, lim: lim}
 }
 
 func (ah *accountsHarness) get(t *testing.T, who, path string, out any) int {

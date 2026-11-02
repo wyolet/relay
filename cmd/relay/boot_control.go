@@ -38,7 +38,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	kvStore kv.Store, limiter *pkgratelimit.Limiter, sessMgr *session.Manager, licenseSvc *license.Service, cookieSecure bool,
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
 	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List, planView func() *engine.View,
-	specs *adapter.Registry) (*http.Server, <-chan error) {
+	counters control.CounterReader, specs *adapter.Registry) (*http.Server, <-chan error) {
 	ctrlRouter := chi.NewRouter()
 	ctrlRouter.Use(httpmw.SecurityHeaders)
 	if len(cfg.ControlAllowOrigins) > 0 {
@@ -86,6 +86,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Adapters:       specs,
 		HostHealth:     hostHealth,
 		PlanView:       planView,
+		Counters:       counters,
 		PublicURL:      cfg.PublicURL,
 		RuntimeConfig:  runtimeConfig(cfg),
 	}
