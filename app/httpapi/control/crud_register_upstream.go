@@ -7,6 +7,7 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/app/refcheck"
 )
 
 // registerUpstreamCRUD wires accounts, pools and budgets: the rows a policy
@@ -32,9 +33,9 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&accountFilter,
-		&usableFilter[account.Account]{scope: c.UsableScope, purposes: []usablePurpose[account.Account]{
-			{name: "binding", linker: "a policy binding", check: c.UsableAccount},
-			{name: "pool", linker: "a pool", check: c.UsablePoolAccount},
+		&usableFilter[account.Account]{checker: c, purposes: []usablePurpose[account.Account]{
+			{name: "binding", linker: "a policy binding", check: refcheck.Checker.UsableAccount},
+			{name: "pool", linker: "a pool", check: refcheck.Checker.UsablePoolAccount},
 		}},
 	))
 
@@ -52,7 +53,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&poolFilter,
-		usableFor(c, "a policy", c.UsablePool),
+		usableFor(c, "a policy", refcheck.Checker.UsablePool),
 	))
 
 	rows.add(registerKind[budget.Budget](
@@ -69,6 +70,6 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&budgetFilter,
-		usableFor(c, "a policy", c.UsableBudget),
+		usableFor(c, "a policy", refcheck.Checker.UsableBudget),
 	))
 }

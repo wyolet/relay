@@ -16,6 +16,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -231,7 +232,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostKeyFilter,
-		usableFor(c, "a pool", c.UsableHostKey),
+		usableFor(c, "a pool", refcheck.Checker.UsableHostKey),
 	))
 
 	rows.add(registerKind[ratelimit.RateLimit](
@@ -248,7 +249,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&rateLimitFilter,
-		usableFor(c, "a policy", c.UsableRateLimit),
+		usableFor(c, "a policy", refcheck.Checker.UsableRateLimit),
 	))
 
 	rows.add(registerKind[policy.Policy](
@@ -265,7 +266,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyFilter,
-		usableFor(c, "a policy binding", c.UsablePolicy),
+		usableFor(c, "a policy binding", refcheck.Checker.UsablePolicy),
 	))
 
 	rows.add(registerKind[pricing.Pricing](

@@ -28,18 +28,18 @@ type usablePurpose[T any] struct {
 	name string
 	// linker names the linking row in descriptions, such as "a policy binding".
 	linker string
-	check  func(ctx context.Context, t *T, by meta.Owner) error
+	// check is a refcheck.Checker method, such as refcheck.Checker.UsablePool, run on the request's checker.
+	check func(c refcheck.Checker, ctx context.Context, t *T, by meta.Owner) error
 }
 
-// usableFilter is one kind's usable_by rules; the first purpose is the default.
+// usableFilter is one kind's usable_by rules over the checker its saves use; the first purpose is the default.
 type usableFilter[T any] struct {
+	checker  refcheck.Checker
 	purposes []usablePurpose[T]
-	// scope checks the usable_by scope itself as a save checks the owner it writes (refcheck.Checker.UsableScope); nil checks nothing.
-	scope func(ctx context.Context, by meta.Owner) error
 }
 
-func usableFor[T any](c refcheck.Checker, linker string, check func(context.Context, *T, meta.Owner) error) *usableFilter[T] {
-	return &usableFilter[T]{purposes: []usablePurpose[T]{{linker: linker, check: check}}, scope: c.UsableScope}
+func usableFor[T any](c refcheck.Checker, linker string, check func(refcheck.Checker, context.Context, *T, meta.Owner) error) *usableFilter[T] {
+	return &usableFilter[T]{checker: c, purposes: []usablePurpose[T]{{linker: linker, check: check}}}
 }
 
 func (u *usableFilter[T]) params(plural string) []*huma.Param {
@@ -69,23 +69,23 @@ func (u *usableFilter[T]) params(plural string) []*huma.Param {
 	}}
 }
 
-// usableQuery is a parsed usable_by: the scope and the purpose it asks for.
+// usableQuery is a parsed usable_by: the scope, the purpose it asks for, and the checker that answers it.
 type usableQuery[T any] struct {
 	by      meta.Owner
 	purpose usablePurpose[T]
-	scope   func(ctx context.Context, by meta.Owner) error
+	checker refcheck.Checker
 }
 
-// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal when no row could be saved in it.
+// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal (refcheck.Checker.UsableScope) when no row could be saved in it. The checker's reads are memoized for this one answer, so checking every row reads each stored row once.
 func (q *usableQuery[T]) keep(ctx context.Context, items []*T) ([]*T, error) {
-	if q.scope != nil {
-		if err := q.scope(ctx, q.by); err != nil {
-			return nil, refErr(err)
-		}
+	c := q.checker
+	c.Rows = c.Rows.Memoized()
+	if err := c.UsableScope(ctx, q.by); err != nil {
+		return nil, refErr(err)
 	}
 	out := items[:0:0]
 	for _, it := range items {
-		err := q.purpose.check(ctx, it, q.by)
+		err := q.purpose.check(c, ctx, it, q.by)
 		if err == nil {
 			out = append(out, it)
 			continue
@@ -118,7 +118,7 @@ func (u *usableFilter[T]) take(q url.Values) (*usableQuery[T], url.Values, error
 	if err != nil {
 		return nil, nil, huma.Error400BadRequest(usableByParam + ": " + err.Error())
 	}
-	out := &usableQuery[T]{by: by, purpose: u.purposes[0], scope: u.scope}
+	out := &usableQuery[T]{by: by, purpose: u.purposes[0], checker: u.checker}
 	if hasFor {
 		found := false
 		for _, p := range u.purposes {

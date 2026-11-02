@@ -53,7 +53,7 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 		api, "pools", "pool", store, authz.AlwaysAllowAuthenticated{}, plmeta, nil, meta.OwnerUser,
 		listScanResolver[pool.Pool](store, plmeta),
 		nil, nil, nil, nil, nil, noSettings{}, false, nil, &poolFilter,
-		usableFor(c, "a policy", c.UsablePool),
+		usableFor(c, "a policy", refcheck.Checker.UsablePool),
 	)
 	return r
 }
@@ -161,11 +161,12 @@ func TestListAccountsUsableFor(t *testing.T) {
 	teams := map[string]*team.Team{"t-1": {Meta: meta.Metadata{ID: "t-1", Name: "t-1"}}, "t-2": {Meta: meta.Metadata{ID: "t-2", Name: "t-2"}}}
 	// Another binding already holds acct-p1, so a new binding cannot take it.
 	held := []*policybinding.PolicyBinding{{Meta: meta.Metadata{ID: "pb-held", Name: "held", Owner: p1}, Spec: policybinding.Spec{AccountIDs: []string{"acct-p1"}}}}
+	bindingReads := 0
 	c := refcheck.Checker{Authz: authz.AlwaysAllowAuthenticated{}, Rows: refcheck.Lookup{
 		Project:        func(_ context.Context, id string) *project.Project { return projects[id] },
 		Team:           func(_ context.Context, id string) *team.Team { return teams[id] },
 		Account:        getOrNil(store.Get),
-		PolicyBindings: func(context.Context) ([]*policybinding.PolicyBinding, error) { return held, nil },
+		PolicyBindings: func(context.Context) ([]*policybinding.PolicyBinding, error) { bindingReads++; return held, nil },
 	}}
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-Actor", scopeActors))
@@ -174,9 +175,9 @@ func TestListAccountsUsableFor(t *testing.T) {
 		api, "accounts", "account", store, authz.AlwaysAllowAuthenticated{}, ameta, nil, meta.OwnerUser,
 		listScanResolver[account.Account](store, ameta),
 		nil, nil, nil, nil, nil, noSettings{}, false, nil, &accountFilter,
-		&usableFilter[account.Account]{scope: c.UsableScope, purposes: []usablePurpose[account.Account]{
-			{name: "binding", linker: "a policy binding", check: c.UsableAccount},
-			{name: "pool", linker: "a pool", check: c.UsablePoolAccount},
+		&usableFilter[account.Account]{checker: c, purposes: []usablePurpose[account.Account]{
+			{name: "binding", linker: "a policy binding", check: refcheck.Checker.UsableAccount},
+			{name: "pool", linker: "a pool", check: refcheck.Checker.UsablePoolAccount},
 		}},
 	)
 	for _, tc := range []struct {
@@ -189,9 +190,14 @@ func TestListAccountsUsableFor(t *testing.T) {
 		{"?usable_by=project:p-1", []string{"share-p1"}},
 		{"?usable_by=project:p-1&usable_for=pool", []string{"acct-p1", "acct-sys", "acct-t1", "share-p1"}},
 	} {
+		bindingReads = 0
 		w := scopeReq(t, r, "alice", http.MethodGet, "/accounts"+tc.query, "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s: status %d: %s", tc.query, w.Code, w.Body)
+		}
+		// Six accounts, one read of the bindings: the request's checks share it.
+		if bindingReads > 1 {
+			t.Errorf("%s: read the policy bindings %d times in one request, want at most 1", tc.query, bindingReads)
 		}
 		var body struct {
 			Items []account.Account `json:"items"`
