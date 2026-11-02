@@ -36,9 +36,9 @@ The `model` field of an inference request resolves against the catalog. These fo
 
 Names are normalized before lookup, so dotted and hyphenated forms match (`gpt-5.5` and `gpt-5-5` are the same name). A dated snapshot name the model lists (for example `gpt-4o-2024-08-06`) selects that snapshot.
 
-When a model has bindings on several hosts and you don't pin one, Relay tries the pools your caller policy links in their order (without one, the host keys your scopes own), keeping those at a host that serves the model, so that order decides the host order and later pools are the failover. See [Failover](/concepts/key-pooling#failover). Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policies don't give. See [Policies](/concepts/policies) for how grants are written.
+When a model has bindings on several hosts and you don't pin one, Relay tries the pools your caller policy links in their order (without one, the host keys your scopes own), keeping those at a host that serves the model, so that order decides the host order and later pools are the failover. See [Failover](/concepts/key-pooling#failover). Pin a host with `@host` in the model name, or send `X-WR-Upstream-Host: <host>`; Relay appends the header's host to the model name unless the name already contains `@`. A pin limits routing to that host; it does not grant access the policies don't give, and a host none of your pools is at is refused with `host_not_reachable`. See [Policies](/concepts/policies) for how grants are written.
 
-`GET /v1/models` lists the models your credential can reach. `GET /api/catalog/resolve?ref=<ref>` on the control API shows what a [policy grant](/concepts/policies#granting-models) such as `anthropic@anthropic` or `@ollama-self` expands to.
+`GET /v1/models` lists the models your credential can reach. `GET /api/catalog/resolve?ref=<ref>` on the control API shows what a reference expands to: a [policy grant](/concepts/policies#granting-models) such as `anthropic`, or a request's `claude-sonnet-4-6@anthropic`.
 
 ## Model aliases
 

@@ -3,7 +3,7 @@ title: "Rate Limits"
 description: "Meters, strategies, the rungs a rate limit applies on, how counters are shared, and what a limited caller sees"
 ---
 
-A **rate limit** is a named list of rules. Each rule caps one meter over one window, and each rule keeps its own counter: a request is admitted only when every rule of every rate limit that applies to it has room. A policy links rate limits, and the rung the policy is bound on decides who shares the counters. Rate limits are enforced by Relay before the request leaves for the upstream, with counters in the state backend.
+A **rate limit** is a named list of rules. Each rule caps one meter over one window, and each rule keeps its own counter: a request is admitted only when every rule of every rate limit that applies to it has room. A policy links rate limits, and the account the policy is bound to, with the link's `shared` flag, decides who shares the counters. Rate limits are enforced by Relay before the request leaves for the upstream, with counters in the state backend.
 
 ## Rules
 
@@ -66,37 +66,38 @@ A [policy](/concepts/policies) lists rate limits in `rateLimits`. Each entry nam
 
 ```yaml
 rateLimits:
-  - ref: ml-requests             # every request under the policy
-  - ref: ml-gpt-5-5-tokens       # only requests for these models; upstream rungs only
+  - ref: ml-requests             # every request under the policy, one count for the bound account
+  - ref: ml-gpt-5-5-tokens       # only requests for these models
     models: [openai/gpt-5-5]
+  - ref: per-person-requests     # one count per lane under the bound account
+    shared: false
 ```
 
-`models` takes the same references as a policy's [model grant](/concepts/policies#granting-models). One rate limit may be linked more than once with different `models`; linking it twice over the same models is refused on save. A disabled rate limit, or one the policy can no longer find, applies nothing.
+`models` takes the same references as a policy's [model grant](/concepts/policies#granting-models). One rate limit may be linked more than once with different `models` or counting; linking it twice over the same models and counting is refused on save. A disabled rate limit, or one the policy can no longer find, applies nothing.
 
-An entry with `models` counts per model, which only the upstream rungs do, so a policy with one can be bound only to a host, an account or a host key. Binding it to a team, project, user or service account is refused with `400`, and so is adding `models` to an entry of a policy already bound to one.
-
-Every rate limit on every rung of the ladder applies to a request. Who shares a counter depends on the side of the ladder the policy is bound on.
+Every rate limit on every rung of the ladder applies to a request. Who shares a counter depends on the side of the ladder the policy is bound on and on the link's `shared` flag; see [Shared and per-lane counting](/concepts/policies#shared-and-per-lane-counting).
 
 ### Caller rungs
 
-On the team, project and principal rungs, a counter belongs to one rule, one policy and one bound subject:
+On the team, project and lane rungs, a counter belongs to one rule, one policy and one bound account:
 
-- A policy bound to a team gives the whole team one counter per rule, shared by its projects, service accounts and members' tokens.
-- A policy bound to a project, or to a principal, counts for that project or principal alone.
-- One policy bound to two subjects gives each its own counters. Binding a subject to another policy starts fresh ones.
-- A user bound by a project-owned binding is counted per project, so the same policy bound by two projects never shares a counter.
-- Every entry covers the whole policy: a caller policy's entries carry no `models`.
+- A policy bound to a team's account gives the whole team one counter per rule, shared by every lane in the team: its members, its projects' members and their service accounts.
+- A policy bound to a project's account, or to a lane, counts for that account alone.
+- One policy bound to two accounts gives each its own counters. Binding an account to another policy starts fresh ones.
+- A link with `shared: false` gives every lane under the bound account its own counter of the same rule.
+- An entry with `models` applies only to requests for a matching model. On a caller rung the models it matches count together, in one counter per rule.
 
-To cap one relay key on its own, give it a service account of its own and bind a policy to that service account.
+To cap one relay key on its own, give it a service account of its own and bind a policy to that service account's account.
 
 The caller's counters are reserved once per request, before the first upstream attempt, so failing over between host keys or pools does not charge them again. A caller counter that has no room ends the request with `429`.
 
 ### Upstream rungs
 
-On the host, account and credential rungs, a counter belongs to one rule and the rung's subject, and is shared by every caller that reaches it, across teams. It models a limit the provider enforces, so:
+On a provider account's rung, a counter belongs to one rule and the account, and is shared by every caller that reaches it, across teams. It models a limit the provider enforces, so:
 
 - A rate limit on an account's tier policy counts once across every host key of the account.
 - An entry with `models` keeps a separate counter for each model it matches, as providers limit each model separately. A rule that two entries reach for one model counts once.
+- A link with `shared: false` keeps one counter per caller lane instead of one for the organization.
 - The policy is not part of the counter. Binding the account to another tier policy that links the same rate limit keeps the count.
 
 Upstream counters are reserved per attempt, after a host key is picked. A key over an upstream limit is skipped without touching its breaker and the next key is tried; a skipped key does not count toward the three keys a request tries upstream. An account-wide request or token window that refuses also cools the whole account on this pod until it has room. See [Accounts](/concepts/key-pooling#accounts). If every key is over its limits, the request fails with `429 rate_limit_exceeded`, and `Retry-After` says when the first key has room.
@@ -151,7 +152,7 @@ X-Should-Retry: true
 X-WR-Origin: relay
 Content-Type: application/json
 
-{"error": {"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "the rate limit of the team policy <policy-id> is exhausted; try again in 12s"}}
+{"error": {"type": "rate_limit_error", "code": "rate_limit_exceeded", "refusal": "no_capacity", "message": "the rate limit of the team policy <policy-id> is exhausted; try again in 12s"}}
 ```
 
 The message names the rung and the policy whose limit refused, never the rule. A spent [budget](/concepts/budgets) answers the same way with the code `budget_exceeded`. When every host key is over an upstream limit, the message is `every credential for this model is over its upstream rate limit`.

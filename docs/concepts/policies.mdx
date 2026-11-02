@@ -1,161 +1,151 @@
 ---
 title: "Policies"
-description: "The policy ladder: which policies govern a request, how each one narrows it, and how bindings attach them"
+description: "The policy ladder: which policies govern a request, how each one narrows it, and how bindings attach them to accounts"
 ---
 
-A **policy** links a subject to what it may use: the models it may call, the pools and host keys it draws from, and the rate limits and budgets every request must fit. A policy holds none of these itself; it names them. A **policy binding** attaches a policy to subjects such as a team, a project, a service account or a provider account.
+A **policy** is a reusable rule set: the models requests under it may call, the pools of host keys they draw from, and the rate limits and budgets they must fit. A policy holds none of these itself; it names them. A **policy binding** applies one policy to one or more [accounts](/concepts/accounts). Many bindings may use one policy, so one rule set can govern many teams, projects or members.
 
 ## The ladder
 
-Every request passes five rungs, two on the upstream side and three on the caller side:
+Every request runs in one account, its [lane](/concepts/accounts#lanes), and climbs the accounts above it. On the caller side, outermost first:
 
-```
-Host → Account → Team → Project → Principal
-```
+| Lane | Rungs |
+| --- | --- |
+| Member or service account in project P of team T | T's account → P's account → the lane |
+| Member account in team T | T's account → the lane |
+| Personal account | The lane |
+| Provider account used as a lane | None: its own policy applies as the upstream rung of its keys, which are all it reaches |
 
-| Rung | Subject | Typical use |
-| --- | --- | --- |
-| Host | A [host](/concepts/catalog) | Rules for everything sent to that host. Only a system-owned binding can bind a host. |
-| Account | A provider [account](/concepts/key-pooling#accounts) | The provider's tier: what the provider allows that organization. A limit set on one host key is its account's, see [Bindings on host keys](#bindings-on-host-keys). |
-| Team | The caller's team | A team-wide model list, budget or rate limit. |
-| Project | The caller's project | The same, for one project. |
-| Principal | A user or a service account | The same, for one identity. |
+On the upstream side, each host key's [provider account](/concepts/key-pooling#accounts) is a rung: its policy, usually a [tier preset](#tier-presets), applies to every request a key of that account serves, whoever the caller is. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
+
+Refusals, usage and metrics name the rungs `team`, `project`, `lane` and, upstream, `account`.
 
 Three rules hold on every rung:
 
-- A subject is bound to at most one policy. A second binding naming the same subject is refused when it is saved; there is no priority between bindings. A user is the one exception, see [Bindings on users](#bindings-on-users).
-- A request must pass every rung, and a rung can only narrow what the others allow. A rung whose subject has no policy does not constrain anything.
-- Relay keys and inference tokens never carry a policy. A key acts as its principal, so rotating or replacing a key leaves the principal's allowance as it was.
-
-Which caller rungs a request has depends on its credential:
-
-| Credential | Team and project rungs | Principal rung |
-| --- | --- | --- |
-| Service account key | The service account's project and that project's team | The service account |
-| A user's own relay key | None | The user, through a system-owned binding or the user's own |
-| Inference token | The project the token was minted for, and its team | The user, through the binding that governs inside that project or a system-owned one |
-
-The upstream rungs are the host the request goes to and the account of the host key that serves it. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
+- An account is bound to at most one policy. A second binding naming the same account is refused when it is saved; there is no priority between bindings. To add a cap on top of an account's policy, put it on a rung above (the project's or team's account), or give the work an account of its own, such as a service account.
+- A request must pass every rung, and a rung can only narrow what the others allow. A rung whose account has no policy constrains nothing.
+- Relay keys and inference tokens never carry a policy. A key runs in an account, so rotating or replacing a key leaves the account's allowance as it was.
 
 ## How the rungs combine
 
 Relay folds the ladder ahead of time, when a policy, binding or linked row changes, so a request reads the result instead of walking the rungs.
 
-- **Models.** A model is allowed only if every rung whose policy lists `models` allows it, upstream rungs included. A policy with no `models` does not narrow models. Wildcard grants skip deprecated and sunset models unless the policy sets `includeDeprecated`. When no caller rung lists models, deprecated models are refused unless a caller policy sets `includeDeprecated`.
-- **Pools and host keys.** Only caller rungs link pools and host keys. The innermost caller rung whose policy links any decides which ones the request reaches and in what order; each outer rung that also links some narrows that list to the host keys it reaches too. A rung whose policy links none leaves reach to the others. See [Reach without a caller policy](#reach-without-a-caller-policy) for the case where no rung links any.
-- **Rate limits and budgets.** Every rate limit and budget on every rung applies, and the request must fit all of them. See [Rate limits](/concepts/rate-limits) and [Budgets](/concepts/budgets).
-- **Disabled rows.** A disabled policy on a caller rung refuses the request with `policy_disabled`; Relay never falls through to a broader rule. A disabled team, project or service account refuses with `subject_disabled`. On an upstream rung, a disabled policy takes that host key out of every route, so it serves nothing rather than serving unmetered.
+- **Models.** A model is allowed only if every rung whose policy lists `models` allows it, upstream rungs included. A policy with `models: []` does not narrow models.
+- **Pools.** Only caller rungs link pools. The innermost caller rung whose policy links any decides which ones the request reaches and in what order; each outer rung that also links some narrows that list to the host keys it reaches too. A rung whose policy links none leaves reach to the others. When no rung links any, see [Reach without a linking rung](#reach-without-a-linking-rung).
+- **Rate limits and budgets.** Every rate limit and budget on every rung applies, and the request must fit all of them. See [Shared and per-lane counting](#shared-and-per-lane-counting), [Rate limits](/concepts/rate-limits) and [Budgets](/concepts/budgets).
+- **Disabled and closed rows.** A disabled policy on a caller rung refuses the request with `policy_disabled`; Relay never falls through to a broader rule. A disabled team or project refuses with `subject_disabled`, and a closed member account with `account_closed`. A disabled user or service account makes its keys answer `401`. On an upstream rung, a disabled policy takes that account's host keys out of every route, so they serve nothing rather than serving unmetered.
 
-A refusal names the rung, the subject and the policy that decided it. The codes are listed in [Policy refusals](/reference/inference-api#policy-refusals).
+A refusal names the rung, the account and the policy that decided it. The codes are listed in [Policy refusals](/reference/inference-api#policy-refusals).
 
-## Reach without a caller policy
+## Reach without a linking rung
 
-When no caller rung links pools or host keys, the principal reaches the host keys its own scopes own, each on its own:
+When no caller rung links pools, the lane reaches the host keys its own scopes own, each on its own:
 
-1. the user's own host keys (for a user),
-2. the project's (when the request is inside a project: a service account's key, or an inference token),
-3. the team's,
-4. system-owned host keys.
+| Lane | Host keys reached, in this order |
+| --- | --- |
+| Member or service account in a project | The project's, the team's, then the system's |
+| Member account in a team | The team's, then the system's |
+| Personal account | The user's own, then the system's |
+| Provider account | That account's host keys |
 
-They are tried in that order, and within one scope in the order they were created. A keyless (`noAuth`) host is never reached this way: it takes a pool at that host, linked by a caller policy, because no key gates it.
+Within one scope they are tried in the order they were created. A keyless (`noAuth`) host is never reached this way: it takes a pool at that host, linked by a caller policy, because no key gates it.
 
-Upstream rungs still apply to these requests: the account's tier and the host's rules.
+Upstream rungs still apply to these requests: each key's account and its tier.
 
-To give a principal anything beyond this, or a different order, link pools or host keys in a caller policy.
+To give a lane anything beyond this, or a different order, link pools in a caller policy.
 
 ## What a policy holds
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
-| `models` | `models` | Model references the rung allows. Empty does not narrow. See [Granting models](#granting-models). |
+| `models` | `models` | Model references the rung allows. Always returned; `[]` allows every model the reached pools serve. See [Granting models](#granting-models). |
 | `poolIds` | `pools` (names) | Pools to draw host keys from, in failover order. Caller rungs only. See [Pools](/concepts/key-pooling#pools). |
-| `credentialIds` | `credentials` (names) | Host keys linked directly; each acts as a pool of one. Caller rungs only. |
-| `rateLimits` | `rateLimits` | A list of `{rateLimitId, models}` (`{ref, models}` in manifests). An entry without `models` covers every request; with `models` only requests for a matching model, and only on upstream rungs. See [Rate limits](/concepts/rate-limits#where-rate-limits-apply). |
-| `budgetIds` | `budgets` (names) | [Budgets](/concepts/budgets) every request must fit. |
-| `includeDeprecated` | `includeDeprecated` | Lets wildcard grants include deprecated and sunset models. Default `false`. |
-| `payloadLoggingEnabled` | `payloadLoggingEnabled` | Captures request and response bodies when [payload logging](/concepts/payload-logging) is on. The innermost caller policy decides, overriding the relay key's own flag in both directions. |
+| `rateLimits` | `rateLimits` | A list of `{rateLimitId, models, shared}` (`{ref, models, shared}` in manifests). An entry without `models` covers every request; with `models`, only requests for a matching model. See [Rate limits](/concepts/rate-limits#where-rate-limits-apply). |
+| `budgets` | `budgets` | A list of `{budgetId, shared}` (`{ref, shared}` in manifests). [Budgets](/concepts/budgets) every request must fit. |
 | `enabled` | `enabled` | Default `true`. |
 
-A policy is owned by the system, a team, a project, a user or a host. Host-owned policies are the catalog's [tier presets](#tier-presets) and cannot link pools or host keys.
+`shared` defaults to `true` when left out, and is always returned. The API refuses the fields of earlier versions (`includeDeprecated`, `credentialIds`, `budgetIds`, `payloadLoggingEnabled`) with `422`. A manifest with `includeDeprecated`, `credentials` or `payloadLoggingEnabled` is refused with an error naming the replacement, and each `budgets` entry is a `{ref}` object, not a bare name. Payload logging is set on [accounts](/concepts/accounts#payload-logging).
 
-A policy links only rows its scope may use. A system-owned row can be linked from any policy; a team's row from the team's policies and its projects' policies; a project's row from that project's policies. Host keys, rate limits, pools, accounts, budgets and policies can all be owned by a team. A linked row that is missing or out of scope is refused with `400`, and one the caller may not see with `404`.
+A policy is owned by the system, a team, a project, a user or a host. Host-owned policies are the catalog's [tier presets](#tier-presets) and cannot link pools.
 
-A policy whose `rateLimits` has an entry with `models` can be bound only to a host, an account or a host key. Binding it to a team, project, user or service account is refused with `400`, and so is adding `models` to an entry of a policy already bound to one: a caller rung's limits cover the whole policy.
+A policy links only rows its scope may use. A system-owned row can be linked from any policy; a team's row from the team's policies and its projects' policies; a project's row from that project's policies. Rate limits, pools, budgets and policies can all be owned by a team. A linked row that is missing or out of scope is refused with `400`, and one the caller may not see with `404`.
+
+## Shared and per-lane counting
+
+Each rate-limit and budget link says how it counts under the account the policy is bound to:
+
+- `shared: true` (the default): one count for the bound account. A rate limit linked this way by the policy on a team's account is one counter for every lane in the team.
+- `shared: false`: one count per lane under the bound account. The same link gives every member and service account in the team its own counter of the same cap.
+
+```yaml
+rateLimits:
+  - ref: ml-rpm                 # one 600/min counter for the whole team
+  - ref: per-person-rpm         # 60/min for each lane in the team
+    shared: false
+budgets:
+  - ref: ml-monthly             # one $2,000 a month for the team
+  - ref: per-person-daily       # $20 a day for each lane
+    shared: false
+```
+
+On a provider account, `shared: true` counts once for the whole organization, as the provider does, and `shared: false` once per caller lane that reaches the account's keys. One rate limit may be linked shared by one policy and per lane by another.
 
 ## Granting models
 
-`models` is an allow-list of references. A reference has up to three parts, and a missing part matches everything:
+`models` is an allow-list of references:
 
 | Reference | Example | Grants |
 | --- | --- | --- |
-| `provider` or `provider/*` | `anthropic` | Every model from the provider, on every host |
-| `provider@host` or `provider/*@host` | `anthropic@anthropic` | Every model from the provider, on that host only |
-| `provider/model` | `openai/gpt-4o-mini` | That model on every host |
-| `provider/model@host` | `openai/gpt-4o-mini@openai` | That model on that host only |
-| `@host` | `@ollama-self` | Every model on that host |
+| `provider` or `provider/*` | `anthropic` | Every model from the provider |
+| `provider/model` | `openai/gpt-4o-mini` | That model |
 
 Rules:
 
 - Names are normalized, so `openai/gpt-5.5` and `openai/gpt-5-5` are the same reference.
-- `provider/*` is the only pattern, the same grant as `provider`, and is stored as `provider`. Any other `*`, such as `openai/gpt-*` or `@*`, is refused with `400`; leave the part out to match everything.
-- References with a missing part expand against the live catalog, so a model added later is covered without editing the policy.
-- Those wildcard references skip deprecated and sunset models unless `includeDeprecated` is set. A `provider/model` reference grants the model whatever its status.
+- `provider/*` is stored as `provider`. Any other `*`, such as `openai/gpt-*`, is refused with `400`.
+- A reference naming a host (`anthropic@anthropic`, `@ollama-self`) is refused with `400`: the pools a policy reaches decide the hosts.
+- A `provider` reference expands against the live catalog, so a model added later is covered without editing the policy. It covers deprecated and sunset models too.
 - There is no deny syntax. To exclude a model, list what you do want.
 - `group:` references are accepted and match no model yet.
 
-A grant alone does not make a model callable: the request also needs a pool or host key, reachable from the caller side, at a host that serves the model. See [Naming a model in a request](/concepts/catalog#naming-a-model-in-a-request).
+A grant alone does not make a model callable: the request also needs a pool, reachable from the caller side, at a host that serves the model. A request may still pin a host with `model@host`; it is refused with `host_not_reachable` when none of the pools it reaches is at that host. See [Naming a model in a request](/concepts/catalog#naming-a-model-in-a-request).
 
 To check what a reference expands to before saving it:
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
-  "http://localhost:8081/api/catalog/resolve?ref=anthropic@anthropic&ref=@ollama-self"
+  "http://localhost:8081/api/catalog/resolve?ref=anthropic&ref=openai/gpt-4o-mini"
 ```
 
 ## Policy bindings
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
-| `metadata.owner` | `metadata.owner` | `{kind: system}`, `{kind: team, ...}` or `{kind: user}`. A project-owned binding sets `projectId` instead. |
-| `projectId` | `project` (name) | The owning project, for a project-owned binding. |
-| `policyId` | `policy` (name) | The policy it attaches. |
-| `subjects` | `subjects` | One or more `{kind, id}` (`{kind, name}` in manifests). Kinds: `host`, `account`, `credential` (a host key, saved as its account), `team`, `project`, `user`, `serviceaccount`. |
+| `metadata.owner` | `metadata.owner` | `{kind: system}`, or a team, project or user. Left out of an API create, the caller's own user, or the system for the admin token. |
+| `policyId` | `policy` (name) | The policy it applies. |
+| `accountIds` | `accounts` (names) | One or more accounts. |
 | `enabled` | `enabled` | Default `true`. A disabled binding binds nothing. |
 
-The owner decides which subjects a binding may name:
+Only accounts are bound. To govern a team, bind its account (`team-<team>`); a project, `project-<project>`; a service account, `sa-<name>`; one person inside a team or project, their member account there; a provider organization, its provider account. See [Kinds of account](/concepts/accounts#kinds-of-account).
+
+The owner decides which accounts a binding may name:
 
 | Owner | May bind |
 | --- | --- |
-| System | Any subject. Only a system-owned binding binds a host. |
-| Team | The team, its projects, their service accounts, accounts and host keys owned by the team or one of its projects, and users who are members of the team. |
-| Project | The project, its service accounts, accounts and host keys it owns, and users who are members of the project. |
-| User | Only that user. See [A user's own binding](#a-users-own-binding). |
+| System | Any account. |
+| Team | The team's account and every account owned by the team or one of its projects: project, member, service and provider accounts. |
+| Project | The project's account and the accounts it owns: its members', its service accounts' and its provider accounts. |
+| User | The accounts the user owns: the personal account and the user's own provider accounts. |
 
-A user is a member of a team or project when they may mint inference tokens there. A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A policy owned by a user is bound by that user to themselves, or by a team or project binding where its owner may create policy bindings (a project admin binds their own policy to the project's service accounts). A subject outside the owner's scope, or a policy it may not use, is refused with `400`. If a subject later leaves the owner's scope, for example a project moved to another team, the binding stops applying to it, and so does a team or project binding of a user's policy once that user may no longer create policy bindings there.
+A binding may use a policy owned by its own scope, an enclosing scope (a project binding may use its team's policies), the system, or a host. A policy owned by a user is bound by that user to their own accounts, or by a team or project binding where its owner may create policy bindings. The policy's pools, and the host keys in them, must be usable from the binding's scope. An account outside the owner's scope, or a policy or pool it may not use, is refused with `400`. If an account later leaves the owner's scope, for example a project moved to another team, the binding stops applying to it, and so does a team or project binding of a user's policy once that user may no longer create policy bindings there.
 
-A group is not a rung, so a group subject is refused with `422`; bind the users, their team or their project instead. A binding stored with a group subject by an earlier version binds nothing through it and must drop the group before it can be saved again. Relay keys are never subjects.
+### One binding per account
 
-### Bindings on users
-
-A user may be bound once per owner scope, because a team- or project-owned binding on a user governs only that user's requests inside that scope: the inference tokens minted for that project, or for a project of that team. A system-owned binding on a user governs everywhere, including the user's own relay keys. Two scopes that would both govern one request conflict and the second is refused: a system-owned binding and any other (the user's own included), or a team's binding and one owned by a project of that team.
-
-Counters follow the scope, so a policy bound to the same user by two projects counts each project's requests on its own.
-
-### A user's own binding
-
-A user may bind a policy to themselves with a binding they own: `metadata.owner: {kind: user}` and the user as the only subject. The policy is the user's own, a system policy or a host's. It governs the user's requests outside any project, which are the user's relay keys; inference tokens act inside a project and follow that project's or team's binding of the user instead, so both bindings can stand together. A system-owned binding on the user governs everywhere, so it conflicts with the user's own and the second one is refused with `409`. Its links must be usable by the user: the user's own pools and host keys, or system-owned ones. A user signed in to the control API leaves `owner.id` out; the admin token names the user in it.
-
-### Bindings on host keys
-
-A provider counts its limits per organization, not per key, so a policy bound to a host key is bound to the key's [account](/concepts/key-pooling#accounts). A `credential` subject is saved as an `account` subject naming the key's account, and the API answers and lists the binding that way; an exported manifest names the account. Its rate limits and budgets count across every host key of the account. Binding a second key of the account, or the account itself, is refused with `409` like any other subject bound twice. To cap one key on its own, put it in an account of its own.
-
-### One binding per subject
-
-Saving a binding that names a subject another binding already holds answers `409` with the code `duplicate_binding` and names the other binding when you may see it. Remove the subject from one binding first. If two bindings do reach one subject, the rung refuses every request with `duplicate_binding` until one is removed.
+Saving a binding that names an account another binding already holds answers `409` with the code `duplicate_binding` and names the other binding when you may see it. Remove the account from one binding first. If two bindings do reach one account, the rung refuses every request with `duplicate_binding` until one is removed.
 
 ## Tier presets
 
-The catalog ships host-owned policies that describe a provider's account tiers, such as `openai-build` or `anthropic-scale`, with the provider's published rate limits scoped to the models they apply to. Bind one to an [account](/concepts/key-pooling#accounts) and its limits count across every host key of that account.
+The catalog ships host-owned policies that describe a provider's account tiers, such as `openai-build` or `anthropic-scale`, with the provider's published rate limits scoped to the models they apply to. Bind one to a [provider account](/concepts/key-pooling#accounts) and its limits count across every host key of that account.
 
 List a host's presets:
 
@@ -168,20 +158,24 @@ A negotiated tier is a policy you write yourself, usually starting from a preset
 
 ## Deleting what a policy links
 
-Deleting a rate limit, budget, pool or host key that policies link is allowed, and the policies lose the link:
+Deleting a rate limit, budget or pool that policies link is allowed, and the policies lose the link:
 
 - **Rate limit or budget.** The policy acts as if it never had that cap.
-- **Pool or host key.** The policy keeps the deleted id and reaches nothing through it; it narrows to what it still links and never falls back to the ownership reach. A policy left with nothing reachable refuses with `no_keys`. A deleted host key also drops out of every pool. Saving that policy again requires removing the stale id, since every link is checked on save.
+- **Pool.** The policy keeps the deleted id and reaches nothing through it; it narrows to what it still links and never falls back to the ownership reach. A policy left with nothing reachable refuses with `no_keys`. Saving that policy again requires removing the stale id, since every link is checked on save. A deleted host key drops out of every pool.
 
 The delete answers `200` with the links it took, grouped by the kind and field that held them, or `204` when it took none:
 
 ```json
-{"detached": [{"kind": "policy", "field": "spec.budgetIds", "detachable": false, "count": 2, "hidden": 0,
+{"detached": [{"kind": "policy", "field": "spec.budgets[].budgetId", "detachable": false, "count": 2, "hidden": 0,
   "items": [{"id": "…", "name": "ml"}, {"id": "…", "name": "search"}]}]}
 ```
 
-`GET /api/{plural}/by-id/{id}/references` lists the same before you delete. Some deletes are refused with `409 resource_in_use` instead: a policy still used by a binding, an account still named by host keys, and a host that still has accounts or pools. A default account no host key names never blocks a delete; it goes with its host, team or project.
+`GET /api/{plural}/by-id/{id}/references` lists the same before you delete. Some deletes are refused with `409 resource_in_use` instead: a policy still used by a binding, an account still named by host keys, relay keys or a binding, and a host that still has accounts or pools. A default account no host key names never blocks a delete; it goes with its host, team or project.
+
+## Finding problems
+
+`GET /api/plan-issues` lists what Relay found wrong while folding the configuration: a binding naming an account outside its owner's scope, a policy linking a pool that no longer exists, an account bound twice, a host key whose value cannot be resolved. See [Control API](/reference/control-api#plan-issues).
 
 ## Examples
 
-[Policy examples](/policy-examples) has manifests for a team policy with a pool, a budget and rate limits, for binding a tier preset or a model-scoped tier of your own to an account, and for per-project budgets. The control API routes are in [Control API](/reference/control-api#policies-and-policy-bindings).
+[Policy examples](/policy-examples) has manifests for a team policy with a pool, a budget and rate limits, for binding a tier preset or a model-scoped tier of your own to an account, for per-project budgets and for per-person caps. The control API routes are in [Control API](/reference/control-api#policies-and-policy-bindings).

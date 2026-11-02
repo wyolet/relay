@@ -27,7 +27,7 @@ The write replaces the whole section: `captureContent` left out is `false`, so t
 
 ## Configure the exporter
 
-The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or inference token in the `Authorization` header. Any valid credential may report: one with no policy, and one whose policy does not grant the reported model, since reporting routes nothing. A credential that inference rejects as invalid (unknown, disabled, expired) cannot, and neither can one whose governing policy is disabled: the operator switched that access off, and the export is answered `403`. Calls are attributed to the credential's project, team and principal, so give each reporting service a relay key of its own.
+The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or inference token in the `Authorization` header. Any valid credential may report: one with no policy, and one whose policy does not grant the reported model, since reporting routes nothing. A credential that inference rejects as invalid (unknown, disabled, expired) cannot, and neither can one whose innermost caller policy is disabled: the operator switched that access off, and the export is answered `403`. Calls are attributed to the credential's project, team, principal and [account](/concepts/accounts) (`lane_account_id`), so give each reporting service a relay key of its own. An export may name another account with `X-WR-Account` or a `/a/<account>/` prefix, as an inference request does.
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
@@ -163,17 +163,17 @@ Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the
 
 ## Message content
 
-Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches must be on: [payload logging](/concepts/payload-logging) (`enabled` on the `payload-logging` section) and `captureContent` on the receiver. Then the policy that governs the reporting credential decides, as it does for payload logging: content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored: sending content is its opt-in, and the key's `payloadLoggingEnabled` is not read. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
+Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches must be on: [payload logging](/concepts/payload-logging) (`enabled` on the `payload-logging` section) and `captureContent` on the receiver. Then the account the reporting credential runs in decides, as it does for payload logging: the nearest account on its ladder that sets [`payloadLogging`](/concepts/accounts#payload-logging) (the account itself, then its project's, then its team's) stores content when it is `on` and drops it when it is `off`, whatever the key's own flag says. When no account on the ladder sets it, what the client sends is stored: sending content is its opt-in, and the key's `payloadLoggingEnabled` is not read. A client whose account does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
 
-Relay tells the client. When an export carries content that is not stored because of the policy, because an operator switch is off, or because the call is [older than the payload retention](#old-calls), the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
+Relay tells the client. When an export carries content that is not stored because of the account, because an operator switch is off, or because the call is [older than the payload retention](#old-calls), the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the account this credential runs in does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
 
 A client can also ask before it sends content. Every export Relay accepts, an empty one included (`{"resourceLogs":[]}` on `/otlp/v1/logs`), is answered with the `X-WR-Content-Capture` header for the credential that sent it:
 
 | Value | When | What the client should do |
 | --- | --- | --- |
-| `store` | Both operator switches are on and the governing policy has `payloadLoggingEnabled: true`. | send content |
-| `drop` | An operator switch is off, or the governing policy does not store content. | leave content out |
-| `client` | Both switches are on and no policy governs the credential. | follow its own opt-in |
+| `store` | Both operator switches are on and the account's ladder has `payloadLogging: on`. | send content |
+| `drop` | An operator switch is off, or the account's ladder has `payloadLogging: off`. | leave content out |
+| `client` | Both switches are on and no account on the ladder sets `payloadLogging`. | follow its own opt-in |
 
 The answer covers the credential as a whole; content of a call older than the payload retention is still not stored. The [Go SDK](/go-sdk) follows this header.
 
@@ -205,7 +205,7 @@ Relay reads `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.
 - Each body is cut at the payload `maxBytes` and flagged `request_truncated` / `response_truncated`; a cut body is no longer valid JSON.
 - With the deduplicated ClickHouse store ([`clickhouse.dedup: true`](/concepts/payload-logging#deduplication)), each message, tool definition and instruction part of the request body is stored once. A message is the same bytes whether it came on a span or an event and whichever export carried it, so the second turn of a conversation adds only its new messages. A body cut at `maxBytes` is stored whole, so use `maxBytes: 0` with it. The response body is not deduplicated.
 - Content is stored once per call, also when it arrives after the usage event (`event_only` with spans exported first). `span_and_event` sends every message to Relay twice and stores it once, so prefer one of the other two.
-- The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings.
+- The account is found as for inference: the credential's default, or the one the export switched into.
 - When the payload queue is over half full, content is dropped and the usage event is kept; `relay_otlp_content_total{outcome="dropped"}` counts it.
 - The content forms of earlier conventions (`gen_ai.prompt` / `gen_ai.completion` attributes, one event per message) are not stored. `@opentelemetry/instrumentation-openai` 0.20.0 emits the per-message events, so its content is not captured.
 

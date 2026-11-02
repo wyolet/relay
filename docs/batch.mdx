@@ -95,7 +95,7 @@ An item fails when:
 - routing rejects it (unknown model, model not allowed by a policy on the ladder, no binding or reachable pool), or its shape does not match the binding;
 - a rate limit or budget on the ladder is spent when it runs. Items do not wait for the limit to refill;
 - the submitting credential stopped working: the relay key was disabled, revoked, expired or rotated out, or the inference token expired or was revoked;
-- a policy or subject on the caller's ladder is disabled when it runs;
+- a policy, team or project on the caller's ladder is disabled, or its account is closed, when it runs;
 - it runs longer than 5 minutes.
 
 ## Cancel
@@ -113,7 +113,7 @@ Items that have not started become `cancelled`. An item running on the replica t
 
 ## Access, policy and limits
 
-A batch authenticates like any inference request, with a relay key or an inference token. The credential is checked again when each item runs, and the item runs under the [policy ladder](/concepts/policies#the-ladder) as it is at that moment: its model grants, rate limits and budgets, pools, key selection and circuit breakers. A policy edited after submission applies to the items that have not run yet.
+A batch authenticates like any inference request, with a relay key or an inference token. The credential is checked again when each item runs, and the item runs under the [policy ladder](/concepts/policies#the-ladder) as it is at that moment: its model grants, rate limits and budgets, pools, key selection and circuit breakers. A policy edited after submission applies to the items that have not run yet. A batch submitted in a switched [account](/concepts/accounts#switching-lanes-per-request) (`X-WR-Account` or a `/a/<account>/` prefix) runs every item in that account.
 
 Only the submitter can read or cancel a batch: the same relay key, or, for an inference token, any token of the same user. Anyone else gets `404`. Because access follows the relay key itself, a rotated key cannot read the batches its previous value submitted.
 

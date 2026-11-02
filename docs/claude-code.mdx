@@ -82,7 +82,7 @@ Two more are worth setting: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to match the contex
 
    or set it on an existing key with `PUT /api/keys/by-id/{id}`. Inference tokens never carry this flag, so proxy mode needs a relay key.
 
-3. **Access to the Claude models** Claude Code uses (Sonnet, Opus, Haiku) for the key's user. Without an explicit host header, Relay reads the `model` from the request and picks the upstream host from what the user's [policies](/concepts/policies) allow, so no policy on the ladder may exclude those models. The rate limits and budgets on the user's rungs and the host's rung apply to proxied requests too.
+3. **Access to the Claude models** Claude Code uses (Sonnet, Opus, Haiku) for the key's user. Without an explicit host header, Relay reads the `model` from the request and picks the upstream host from what the user's [policies](/concepts/policies) allow, so no policy on the ladder of the key's [account](/concepts/accounts) may exclude those models. The rate limits and budgets on that ladder apply to proxied requests too.
 
 4. *(Optional)* **Payload logging** turned on, if you want to capture the full request and response bodies. See [Payload logging](/concepts/payload-logging).
 
@@ -136,7 +136,7 @@ See [Usage](/concepts/usage) for reading it back and [Payload logging](/concepts
 On the routed path, Relay emits the Anthropic shape's own `ping` frame while an upstream is silent, so a long generation doesn't trip the client's idle watchdog. The interval is 15 s by default (`RELAY_STREAM_KEEPALIVE_S`); see [Configuration](/configuration) for it and the matching upstream idle timeout.
 
 <Warning>
-Keep your relay key out of shared dotfiles and version control; treat the wrapper script or `settings.json` as secret-bearing. Payload capture records prompt and completion text, so scope it to the policies or keys you mean to debug.
+Keep your relay key out of shared dotfiles and version control; treat the wrapper script or `settings.json` as secret-bearing. Payload capture records prompt and completion text, so scope it to the accounts or keys you mean to debug.
 </Warning>
 
 ## Notes
