@@ -7,21 +7,20 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 )
 
 // The 409 answers of the generic CRUD operations, by operation.
 const (
-	createConflicts = "A conflict with stored rows: duplicate_binding (a policy-binding subject another binding already holds), managed_by_source (a provisioning source owns the row), or a second default account for one owner and host."
+	createConflicts = "A conflict with stored rows: duplicate_binding (an account another policy binding already holds), managed_by_source (a provisioning source owns the row), or a second default account for one owner and host."
 	updateConflicts = "stale_resource_version (metadata.resourceVersion no longer matches; reload and reapply), resource_in_use (an owner move would strand referencing rows; blockers lists them), managed_by_source, or duplicate_binding."
-	deleteConflicts = "resource_in_use: other rows still reference the target; blockers lists them, and groups marked detachable can be released with POST …/detach. Also managed_by_source for a row a provisioning source owns."
+	deleteConflicts = "resource_in_use: other rows still reference the target; blockers lists them, and groups marked detachable can be released with POST …/detach. Also managed_by_source for a row a provisioning source owns, and account_managed for a team, project, personal, service or open member account, which goes with its own row."
 )
 
 // controlTags describes each tag the control operations use, one per kind or area.
 var controlTags = []*huma.Tag{
-	{Name: "accounts", Description: "Accounts: one provider organization at one host. Host keys of an account share its upstream limits; bind a tier policy to the account to cap them. Every key joins its owner's default account at its host unless it names one."},
+	{Name: "accounts", Description: "Accounts: what policies bind to and usage is charged to. Relay keeps a team's and a project's own account, a personal account per user, an account per service account and a member account per team or project membership; those are made and removed with their rows, and closed when the membership ends. A provider account is one organization at one host: its host keys share its upstream limits, and a tier policy bound to it caps them. A host key joins its owner's default provider account at its host unless it names one."},
 	{Name: "audit", Description: "The admin audit log."},
 	{Name: "auth", Description: "Sign-in, sessions, inference tokens and access review."},
 	{Name: "budgets", Description: "Budgets: recurring USD spend caps over a calendar period. A policy links budgets; every request under it must fit each one."},
@@ -31,11 +30,11 @@ var controlTags = []*huma.Tag{
 	{Name: "host-bindings", Description: "Host bindings: which host serves which model, over which wire shape, at what price. One per (model, host) pair."},
 	{Name: "host-keys", Description: "Host keys: credentials relay uses to call a host. Each belongs to an account at its host; pools and policies link keys by id."},
 	{Name: "hosts", Description: "Hosts: serving endpoints (a provider's API, a cloud, a self-hosted server). Host-owned policies are the host's tier presets."},
-	{Name: "keys", Description: "Relay keys: bearer credentials callers send to the inference API. A key acts as its principal (a service account or a user); the policies bound to that principal and its project and team govern it."},
+	{Name: "keys", Description: "Relay keys: bearer credentials callers send to the inference API. A key acts as its principal (a service account or a user) and runs in one of the principal's accounts, its default lane: the policies bound to that account and to the project and team accounts above it govern it."},
 	{Name: "logs", Description: "Per-request log records with captured bodies."},
 	{Name: "models", Description: "Models in the catalog, with their snapshots, capabilities and aliases."},
-	{Name: "policies", Description: "Policies: the gate between a subject and what it may use. A policy links models, pools, host keys, rate limits and budgets; a policy binding attaches it to subjects. Every rung a request passes (host, account, host key, team, project, principal) may have one policy, and each only narrows."},
-	{Name: "policy-bindings", Description: "Policy bindings: attach one policy to subjects inside the binding owner's scope (system, team or project). A subject is held by at most one binding; a user once per scope. Only system-owned bindings may name a host."},
+	{Name: "policies", Description: "Policies: reusable rule sets. A policy names the models it allows and links pools, rate limits and budgets, each counted once for the bound account (shared) or once per account under it; a policy binding applies it to accounts. Every account a request climbs (team, project, the lane, and each candidate key's provider account) may have one policy, and each only narrows."},
+	{Name: "policy-bindings", Description: "Policy bindings: apply one policy to accounts inside the binding owner's scope (system, team, project or user). An account is held by at most one binding."},
 	{Name: "pools", Description: "Pools: ordered sets of host keys at one host, with a selection algorithm. Policies draw keys from pools, tried in order; nothing in a pool is reserved for one policy."},
 	{Name: "pricings", Description: "Pricing sheets: a host's rates for a set of models."},
 	{Name: "projects", Description: "Projects inside a team; service accounts and project keys live here."},
@@ -116,37 +115,6 @@ func entityEnvelope(api huma.API) {
 			spec.Description = "The row's configuration."
 		}
 	}
-}
-
-// policyBindingSubject gives policy-binding subjects their own schema: the Go type is shared with role bindings, whose kinds differ.
-func policyBindingSubject(api huma.API) {
-	reg := api.OpenAPI().Components.Schemas
-	spec := reg.SchemaFromRef("#/components/schemas/PolicyBindingSpec")
-	if spec == nil || spec.Properties["subjects"] == nil {
-		return
-	}
-	kinds := make([]any, len(policybinding.SubjectKinds))
-	for i, k := range policybinding.SubjectKinds {
-		kinds[i] = string(k)
-	}
-	kind := &huma.Schema{
-		Type:        huma.TypeString,
-		Enum:        kinds,
-		Description: "What the subject is: a principal (user, serviceaccount), a tenancy scope (team, project), or an upstream rung (host, account, credential, meaning a host key). Groups are not policy subjects.",
-	}
-	id := &huma.Schema{Type: huma.TypeString, Description: "Id of the subject row."}
-	subject := &huma.Schema{
-		Type:                 huma.TypeObject,
-		Description:          "One rung a policy binding governs.",
-		Properties:           map[string]*huma.Schema{"kind": kind, "id": id},
-		Required:             []string{"kind", "id"},
-		AdditionalProperties: false,
-	}
-	for _, s := range []*huma.Schema{kind, id, subject} {
-		s.PrecomputeMessages()
-	}
-	reg.Map()["PolicyBindingSubject"] = subject
-	spec.Properties["subjects"].Items = &huma.Schema{Ref: "#/components/schemas/PolicyBindingSubject"}
 }
 
 // stringEnum projects a closed set onto huma's enum form.

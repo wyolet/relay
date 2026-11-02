@@ -90,7 +90,7 @@ func mapWriteErr(kind, id string, err error) error {
 		return refused
 	}
 	// The save-time check already refuses this; the store's constraint answers the write that raced it.
-	if errors.Is(err, policybinding.ErrSubjectBound) {
+	if errors.Is(err, policybinding.ErrAccountBound) {
 		return &httpapi.APIError{
 			Err:        httpapi.APIErrorBody{Type: "invalid_request_error", Code: refcheck.CodeDuplicateBinding, Message: err.Error()},
 			HTTPStatus: http.StatusConflict,

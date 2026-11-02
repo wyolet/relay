@@ -8,15 +8,10 @@ import (
 	"github.com/wyolet/relay/app/policy"
 )
 
-// droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a credential or pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key also drops out of the pools holding it.
+// droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key drops out of the pools holding it.
 var droppedLinkScans = map[string]func(ctx context.Context, d Deps, id string) ([]referenceItem, error){
 	"host-key": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
-		out, err := policiesLinking(ctx, d, "spec.credentialIds", func(p *policy.Policy) bool { return slices.Contains(p.Spec.CredentialIDs, id) })
-		if err != nil {
-			return nil, err
-		}
-		pools, err := poolsHolding(ctx, d, id)
-		return append(out, pools...), err
+		return poolsHolding(ctx, d, id)
 	},
 	"rate-limit": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 		return policiesLinking(ctx, d, "spec.rateLimits[].rateLimitId", func(p *policy.Policy) bool {
@@ -27,7 +22,7 @@ var droppedLinkScans = map[string]func(ctx context.Context, d Deps, id string) (
 		return policiesLinking(ctx, d, "spec.poolIds", func(p *policy.Policy) bool { return slices.Contains(p.Spec.PoolIDs, id) })
 	},
 	"budget": func(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
-		return policiesLinking(ctx, d, "spec.budgetIds", func(p *policy.Policy) bool { return slices.Contains(p.Spec.BudgetIDs, id) })
+		return policiesLinking(ctx, d, "spec.budgets[].budgetId", func(p *policy.Policy) bool { return slices.Contains(p.BudgetIDs(), id) })
 	},
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -78,6 +79,12 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 			return nil, accountDisabledError()
 		}
 		version = u.TokenVersion
+		// The token runs in the user's member account in the project. Authorization above confirmed the membership, which may come from a group relay cannot list, so the account is made here on first use.
+		if d.accounts != nil {
+			if err := openMemberAccount(ctx, d.accounts, account.Member(u.ID, u.Username, owner, proj.Meta.Name, proj.Meta.DisplayName)); err != nil {
+				return nil, huma.Error500InternalServerError("member account: " + err.Error())
+			}
+		}
 	}
 
 	now := time.Now()
@@ -114,6 +121,19 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 	out.Body.Project = proj.Meta.Name
 	out.Body.TeamID = proj.Spec.TeamID
 	return out, nil
+}
+
+// openMemberAccount makes the member account want describes, or reopens it when a role grant ended but the membership holds through a group: it then no longer follows role bindings, so relay does not close it again.
+func openMemberAccount(ctx context.Context, s memberAccounts, want *account.Account) error {
+	id, err := s.EnsureManaged(ctx, want)
+	if err != nil {
+		return err
+	}
+	a, err := s.Get(ctx, id)
+	if err != nil || a == nil || !a.Spec.Closed {
+		return err
+	}
+	return s.SetMembership(ctx, id, false, false)
 }
 
 // mintGroups is the group set the token carries: only what the IdP asserted

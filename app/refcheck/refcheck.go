@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
@@ -85,8 +86,8 @@ type Lookup struct {
 	PolicyBindingsFor func(ctx context.Context, policyID string) ([]*policybinding.PolicyBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
-	// UserActsIn reports whether a user is a member of a team or project scope: one whose requests can fall inside it.
-	UserActsIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
+	// DefaultAccount returns the id of a principal's own account (a service account's account, a user's personal account), making it on first use.
+	DefaultAccount func(ctx context.Context, p key.Principal) (string, error)
 	// UserMayBindIn reports whether a user may manage policy bindings in a team or project scope.
 	UserMayBindIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
 }
@@ -270,8 +271,7 @@ func (c Checker) roleRef(ctx context.Context, roleID string) (*role.Role, error)
 	return r, nil
 }
 
-// subjectsExist refuses an id-bearing subject naming no row; the policy-binding
-// kinds are also refused when the caller may not see the row. Group subjects
+// subjectsExist refuses a role-binding subject naming no row. Group subjects
 // carry a name an IdP may supply and are never checked.
 func (c Checker) subjectsExist(ctx context.Context, subjects []rolebinding.Subject) error {
 	for i := range subjects {
@@ -295,48 +295,17 @@ func (c Checker) subjectsExist(ctx context.Context, subjects []rolebinding.Subje
 			if c.Rows.ServiceAccount(ctx, sub.ID) == nil {
 				return badRequest("service account %q does not exist", sub.ID)
 			}
-		case policybinding.SubjectHost:
-			if err := c.hostRef(ctx, sub.ID); err != nil {
-				return err
-			}
-		case policybinding.SubjectTeam:
-			if err := c.teamRef(ctx, sub.ID); err != nil {
-				return err
-			}
-		case policybinding.SubjectProject:
-			if err := c.projectRef(ctx, sub.ID); err != nil {
-				return err
-			}
-		case policybinding.SubjectAccount:
-			if c.Rows.Account == nil {
-				continue
-			}
-			a := c.Rows.Account(ctx, sub.ID)
-			if a == nil {
-				return badRequest("account %q does not exist", sub.ID)
-			}
-			if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
-				return notVisible("account", sub.ID)
-			}
-		case policybinding.SubjectCredential:
-			if c.Rows.HostKey == nil {
-				continue
-			}
-			k := c.Rows.HostKey(ctx, sub.ID)
-			if k == nil {
-				return badRequest("host-key %q does not exist", sub.ID)
-			}
-			if !Visible(ctx, c.Authz, "host-key", k.Meta.ID, k.Meta.Owner) {
-				return notVisible("host-key", sub.ID)
-			}
 		}
 	}
 	return nil
 }
 
-// Key derives the key's owner from its principal.
+// Key derives the key's owner from its principal and checks its default lane.
 func (c Checker) Key(ctx context.Context, k *key.Key) error {
-	return c.KeyOwner(ctx, k)
+	if err := c.KeyOwner(ctx, k); err != nil {
+		return err
+	}
+	return c.KeyAccount(ctx, k)
 }
 
 // KeyOwner derives the key's owner from its principal — a service account's
@@ -400,18 +369,12 @@ func (c Checker) Group(ctx context.Context, g *group.Group) error {
 	return nil
 }
 
-// Policy checks the pools, credentials, rate limits and budgets a policy draws on, that a models scope on its rate limits reaches no caller subject it is bound to, and that every binding using it may use its pools and credentials.
+// Policy checks the pools, rate limits and budgets a policy draws on, and that every binding using it may use its pools.
 func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
-	if err := c.modelScopeOnPolicy(ctx, p); err != nil {
-		return err
-	}
 	if err := c.linksOnPolicy(ctx, p); err != nil {
 		return err
 	}
 	if err := c.poolRefs(ctx, p.Spec.PoolIDs, p.Meta.Owner); err != nil {
-		return err
-	}
-	if err := c.credentialRefs(ctx, p.Spec.CredentialIDs, p.Meta.Owner, ""); err != nil {
 		return err
 	}
 	for _, l := range p.Spec.RateLimits {
@@ -419,12 +382,56 @@ func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 			return err
 		}
 	}
-	return c.budgetRefs(ctx, p.Spec.BudgetIDs, p.Meta.Owner)
+	return c.budgetRefs(ctx, p.BudgetIDs(), p.Meta.Owner)
 }
 
-// Account checks the host an account is held at.
+// Account checks the host a provider account is held at. Caller accounts are made with their team, project, user, service account or membership, never written as new rows.
 func (c Checker) Account(ctx context.Context, a *account.Account) error {
+	if !a.IsProvider() {
+		return nil
+	}
 	return c.hostRef(ctx, a.Spec.HostID)
+}
+
+// KeyAccount checks the key's default lane: an account the key's principal holds, or a provider account the caller may use; an open member account only. An empty accountId takes the principal's own account (Rows.DefaultAccount), made on first use.
+func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
+	if k.Spec.AccountID == "" {
+		if c.Rows.DefaultAccount == nil {
+			return nil
+		}
+		id, err := c.Rows.DefaultAccount(ctx, k.Spec.Principal)
+		if err != nil {
+			return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+		}
+		k.Spec.AccountID = id
+		return nil
+	}
+	if c.Rows.Account == nil {
+		return nil
+	}
+	a := c.Rows.Account(ctx, k.Spec.AccountID)
+	if a == nil {
+		return badRequest("account %q does not exist", k.Spec.AccountID)
+	}
+	principal := string(k.Spec.Principal.Kind) + ":" + k.Spec.Principal.ID
+	switch {
+	case a.Spec.Closed:
+		return badRequest("account %q is closed: the membership it stood for has ended", a.Meta.Name)
+	case a.Spec.Holder != nil && a.Spec.Holder.Key() == principal:
+		return nil
+	case !a.IsProvider():
+		return badRequest("account %q is not held by the key's principal %s; a key lands in one of its principal's accounts", a.Meta.Name, principal)
+	}
+	if !Visible(ctx, c.Authz, "account", a.Meta.ID, a.Meta.Owner) {
+		return notVisible("account", a.Meta.ID)
+	}
+	if c.Authz == nil {
+		return nil
+	}
+	if err := c.Authz.Authorize(ctx, "accounts.use", authz.Resource{Kind: "account", ID: a.Meta.ID, Name: a.Meta.Name, Owner: &a.Meta.Owner}); err != nil {
+		return forbidden(fmt.Errorf("provider account %q: %w", a.Meta.Name, err))
+	}
+	return nil
 }
 
 // Pool checks the pool's host and requires every key in it to authenticate to that host.
@@ -495,11 +502,8 @@ func (c Checker) Role(ctx context.Context, r *role.Role) error {
 	return nil
 }
 
-// PolicyBinding re-derives the owner from spec.projectId, turns each host-key
-// subject into its account, and checks the owning scope, the policy, and the
-// subjects, each of which must sit inside that scope.
+// PolicyBinding checks the owning scope, the policy, and the accounts, each of which must sit inside that scope and be held by no other binding.
 func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBinding) error {
-	pb.StampOwner()
 	switch pb.Meta.Owner.Kind {
 	case meta.OwnerProject:
 		if err := c.projectRef(ctx, pb.Meta.Owner.ID); err != nil {
@@ -513,31 +517,17 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 	if err := c.BindablePolicy(ctx, pb.Spec.PolicyID, pb.Meta.Owner); err != nil {
 		return err
 	}
-	if err := c.subjectsExist(ctx, pb.Spec.Subjects); err != nil {
+	if err := c.accountsInScope(ctx, pb); err != nil {
 		return err
 	}
-	if c.Rows.HostKey != nil {
-		pb.BindAccounts(func(id string) string {
-			if k := c.Rows.HostKey(ctx, id); k != nil {
-				return k.Spec.AccountID
-			}
-			return ""
-		})
-	}
-	if err := c.subjectsInScope(ctx, pb); err != nil {
-		return err
-	}
-	if err := c.modelScopeOnBinding(ctx, pb); err != nil {
-		return err
-	}
-	return c.subjectsUnbound(ctx, pb)
+	return c.accountsUnbound(ctx, pb)
 }
 
-// CodeDuplicateBinding is the error code of a binding naming a subject another binding already holds.
+// CodeDuplicateBinding is the error code of a binding naming an account another binding already holds.
 const CodeDuplicateBinding = "duplicate_binding"
 
-// subjectsUnbound refuses a subject another binding already holds: a subject is bound to at most one policy, with no priority between two. A user may be bound once per scope, since a binding governs only the requests inside its owner's scope; two scopes where one holds the other (the system and anything, a team and its projects) would both govern one request, so they conflict. A user's own binding governs the requests outside any project, so only a system-owned binding conflicts with it. Group subjects are not policy rungs and may repeat.
-func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBinding) error {
+// accountsUnbound refuses an account another binding already holds: an account has one policy, with no priority between two.
+func (c Checker) accountsUnbound(ctx context.Context, pb *policybinding.PolicyBinding) error {
 	if c.Rows.PolicyBindings == nil {
 		return nil
 	}
@@ -549,31 +539,16 @@ func (c Checker) subjectsUnbound(ctx context.Context, pb *policybinding.PolicyBi
 		if other.Meta.ID == pb.Meta.ID {
 			continue
 		}
-		for _, held := range other.Spec.Subjects {
-			for _, sub := range pb.Spec.Subjects {
-				if sub.ID == "" || sub.Kind != held.Kind || sub.ID != held.ID {
-					continue
-				}
-				user := sub.Kind == rolebinding.SubjectUser
-				if user && !c.userScopesOverlap(ctx, pb.Meta.Owner, other.Meta.Owner) {
-					continue
-				}
-				by := "another policy binding"
-				if Visible(ctx, c.Authz, "policy-binding", other.Meta.ID, other.Meta.Owner) {
-					by = fmt.Sprintf("policy binding %q", other.Meta.Name)
-				}
-				rule := "a subject is bound to one policy"
-				if user {
-					rule = "a user is bound to one policy per scope, and that binding's scope overlaps this one"
-				}
-				return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf("%s is already bound by %s; %s", sub.Key(), by, rule)}
+		for _, held := range other.Spec.AccountIDs {
+			if !slices.Contains(pb.Spec.AccountIDs, held) {
+				continue
 			}
+			by := "another policy binding"
+			if Visible(ctx, c.Authz, "policy-binding", other.Meta.ID, other.Meta.Owner) {
+				by = fmt.Sprintf("policy binding %q", other.Meta.Name)
+			}
+			return &Error{Status: http.StatusConflict, Code: CodeDuplicateBinding, Msg: fmt.Sprintf("account %s is already bound by %s; an account is bound to one policy", held, by)}
 		}
 	}
 	return nil
-}
-
-// userScopesOverlap reports whether bindings of one user owned by a and b would both govern one of that user's requests: one scope holds the other, the system holding the user's own.
-func (c Checker) userScopesOverlap(ctx context.Context, a, b meta.Owner) bool {
-	return c.containsScope(ctx, a, b) || c.containsScope(ctx, b, a)
 }

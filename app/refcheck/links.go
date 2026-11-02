@@ -36,6 +36,9 @@ func (c Checker) accountRef(ctx context.Context, k *hostkey.HostKey) error {
 	if err := c.joinable(ctx, k.Spec.AccountID, a.Meta, k.Meta.Owner); err != nil {
 		return err
 	}
+	if !a.IsProvider() {
+		return badRequest("account %q is a %s account; a host key joins a provider account", a.Meta.Name, a.Spec.Kind)
+	}
 	if a.Spec.HostID != k.Spec.HostID {
 		return badRequest("account %q is held at another host than the key's host %q", a.Meta.Name, k.Spec.HostID)
 	}

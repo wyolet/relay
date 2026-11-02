@@ -3,13 +3,16 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
@@ -23,13 +26,15 @@ func refs(d Deps) refcheck.Checker {
 	if d.Users != nil {
 		c.Rows.MissingUsers = d.Users.MissingIDs
 		if d.Authz != nil {
-			c.Rows.UserActsIn = userActsIn(d)
 			c.Rows.UserMayBindIn = userMayBindIn(d)
 		}
 	}
 	s := d.Stores
 	if s == nil {
 		return c
+	}
+	if s.Account != nil && d.Users != nil && s.ServiceAccount != nil {
+		c.Rows.DefaultAccount = defaultAccount(d)
 	}
 	if s.Policy != nil {
 		c.Rows.Policy = getOrNil(s.Policy.Get)
@@ -99,47 +104,58 @@ func refs(d Deps) refcheck.Checker {
 	return c
 }
 
-// userActsIn reports whether a user may mint tokens in a project, or for a team in the team or one of its projects: the scopes the user's requests can fall inside. It asks the Authorizer as that user, so it follows the configured authorization mode.
-func userActsIn(d Deps) func(context.Context, string, meta.Owner) (bool, error) {
-	return func(ctx context.Context, userID string, scope meta.Owner) (bool, error) {
-		return authorizeAsUser(ctx, d, userID, "tokens.mint", "token", scope, true)
+// defaultAccount returns the id of a principal's own account, making it when relay has not yet: a key may be created for a user or service account written a moment ago.
+func defaultAccount(d Deps) func(context.Context, key.Principal) (string, error) {
+	return func(ctx context.Context, p key.Principal) (string, error) {
+		switch p.Kind {
+		case key.PrincipalUser:
+			u, err := d.Users.Get(ctx, p.ID)
+			if err != nil {
+				return "", err
+			}
+			if u == nil {
+				return "", fmt.Errorf("user %q does not exist", p.ID)
+			}
+			return d.Stores.Account.EnsureManaged(ctx, account.Personal(u.ID, u.Username))
+		case key.PrincipalServiceAccount:
+			sa, err := d.Stores.ServiceAccount.Get(ctx, p.ID)
+			if err != nil {
+				return "", err
+			}
+			if sa == nil {
+				return "", fmt.Errorf("service account %q does not exist", p.ID)
+			}
+			return d.Stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, sa.Meta.DisplayName, sa.Spec.ProjectID))
+		}
+		return "", fmt.Errorf("principal kind %q has no account of its own", p.Kind)
 	}
 }
 
 // userMayBindIn reports whether a user may create policy bindings owned by scope, asking the Authorizer as that user.
 func userMayBindIn(d Deps) func(context.Context, string, meta.Owner) (bool, error) {
 	return func(ctx context.Context, userID string, scope meta.Owner) (bool, error) {
-		return authorizeAsUser(ctx, d, userID, "policy-bindings.create", "policy-binding", scope, false)
+		return authorizeAsUser(ctx, d, userID, "policy-bindings.create", "policy-binding", scope)
 	}
 }
 
-// authorizeAsUser asks the Authorizer whether userID may perform action on a row of kind owned by scope; withProjects also accepts a team scope through any of its projects.
-func authorizeAsUser(ctx context.Context, d Deps, userID, action, kind string, scope meta.Owner, withProjects bool) (bool, error) {
+// authorizeAsUser asks the Authorizer whether userID may perform action on a row of kind owned by scope.
+func authorizeAsUser(ctx context.Context, d Deps, userID, action, kind string, scope meta.Owner) (bool, error) {
 	u, err := d.Users.Get(ctx, userID)
 	if err != nil || u == nil {
 		return false, err
 	}
 	as := &actor.Actor{UserID: u.ID, Username: u.Username, Roles: u.Roles}
-	scopes := []meta.Owner{scope}
 	if d.Catalog != nil {
 		if snap := d.Catalog.Current(); snap != nil {
 			as.Subjects = appcatalog.UserSubjects(u.ID, snap.GroupsForUser(u.ID), nil)
-			if withProjects && scope.Kind == meta.OwnerTeam {
-				for _, p := range snap.ProjectsInTeam(scope.ID) {
-					scopes = append(scopes, meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID})
-				}
-			}
 		}
 	}
-	actx := actor.WithActor(ctx, as)
-	for i := range scopes {
-		err := d.Authz.Authorize(actx, action, authz.Resource{Kind: kind, Owner: &scopes[i]})
-		switch {
-		case err == nil:
-			return true, nil
-		case !errors.Is(err, authz.ErrForbidden):
-			return false, err
-		}
+	err = d.Authz.Authorize(actor.WithActor(ctx, as), action, authz.Resource{Kind: kind, Owner: &scope})
+	switch {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, authz.ErrForbidden):
+		return false, err
 	}
 	return false, nil
 }

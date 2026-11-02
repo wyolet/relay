@@ -73,7 +73,7 @@ func (r Rows) Dependents(id string, gone Gone, visible Visible) (named []string,
 	}
 	r.addOwned(d, owner)
 	for _, x := range r.PolicyBindings {
-		d.add("PolicyBinding", x.Meta, x.Spec.ProjectID == id)
+		d.add("PolicyBinding", x.Meta, x.Meta.Owner == owner)
 	}
 	return d.named, d.hidden
 }

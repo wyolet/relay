@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -34,6 +35,15 @@ type tokenDeps struct {
 	audit    audit.Reader
 	authz    authz.Authorizer
 	limiter  MintLimiter
+	// accounts makes the user's member account in the token's project on first mint; nil skips it.
+	accounts memberAccounts
+}
+
+// memberAccounts is the account-store surface minting needs.
+type memberAccounts interface {
+	EnsureManaged(ctx context.Context, want *account.Account) (string, error)
+	Get(ctx context.Context, id string) (*account.Account, error)
+	SetMembership(ctx context.Context, id string, closed, followsRoleBindings bool) error
 }
 
 // tokenUserStore is the narrow user-store surface minting and revocation
@@ -55,6 +65,9 @@ func newTokenDeps(d Deps) tokenDeps {
 	}
 	if d.Users != nil {
 		td.users = d.Users
+	}
+	if d.Stores != nil && d.Stores.Account != nil {
+		td.accounts = d.Stores.Account
 	}
 	return td
 }

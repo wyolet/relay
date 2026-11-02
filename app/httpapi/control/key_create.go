@@ -26,10 +26,11 @@ type createKeyMetadata struct {
 
 type createKeySpec struct {
 	Principal             key.Principal `json:"principal"                       doc:"The service account or user the key acts as. Its owner becomes the key's owner."`
+	AccountID             string        `json:"accountId,omitempty"             format:"uuid" doc:"Id of the account the key's requests run in by default: one the principal holds (a service account's account, the user's personal or member account), or a provider account the caller may use. Omitted: the service account's account, or the user's personal account."`
 	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"             doc:"When the key stops authenticating. Omitted never expires."`
 	Enabled               *bool         `json:"enabled,omitempty"               doc:"False creates the key disabled. Omitted means true."`
 	PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"    doc:"Let the key send its own upstream credential in proxy mode."`
-	PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. A governing policy's flag overrides it."`
+	PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. An account on the request's ladder that sets payloadLogging decides instead."`
 }
 
 type createKeyInput struct {
@@ -88,6 +89,10 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		// Authorize AFTER owner stamping, same as the generic create path.
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
+		}
+		k.Spec.AccountID = in.Body.Spec.AccountID
+		if err := refs(d).KeyAccount(ctx, k); err != nil {
+			return nil, refErr(err)
 		}
 		k.Spec.ExpiresAt = in.Body.Spec.ExpiresAt
 		k.Spec.Enabled = in.Body.Spec.Enabled

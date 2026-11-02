@@ -9,8 +9,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-// scanAccountRefs lists the host keys that name the account: removing it
-// would leave each one pointing at an organization that no longer exists.
+// scanAccountRefs lists the host keys that name the account, which would point at an organization that no longer exists, the relay keys whose lane it is, which would go with it, and the policy bindings holding it.
 func scanAccountRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
 	keys, err := d.Stores.HostKey.List(ctx)
@@ -20,6 +19,32 @@ func scanAccountRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	for _, k := range keys {
 		if k.Spec.AccountID == id {
 			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.accountId", owner: k.Meta.Owner})
+		}
+	}
+	lanes, err := keysInAccounts(ctx, d, func(accountID string) bool { return accountID == id })
+	if err != nil {
+		return nil, err
+	}
+	held, err := bindingsHolding(ctx, d, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, lanes...), held...), nil
+}
+
+// keysInAccounts lists the relay keys whose default lane in matches: a lane's delete would take them with it.
+func keysInAccounts(ctx context.Context, d Deps, in func(accountID string) bool) ([]referenceItem, error) {
+	out := []referenceItem{}
+	if d.Stores.Key == nil {
+		return out, nil
+	}
+	keys, err := d.Stores.Key.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list keys: %w", err)
+	}
+	for _, k := range keys {
+		if k.Spec.AccountID != "" && in(k.Spec.AccountID) {
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.accountId", owner: k.Meta.Owner})
 		}
 	}
 	return out, nil
@@ -35,7 +60,7 @@ func scanBudgetRefs(context.Context, Deps, string) ([]referenceItem, error) {
 	return []referenceItem{}, nil
 }
 
-// accountsInUse reports whether an account blocks the delete of its host or owner. A default account no key names does not: autofill made it and the next key recreates it, so it goes with the host (foreign key) or the owner (000036's trigger).
+// accountsInUse reports whether a provider account blocks the delete of its host or owner. A default account no key names does not: autofill made it and the next key recreates it, so it goes with the host (foreign key) or the owner (000036's trigger). A caller account never does itself: it goes with its team or project, and the keys in it are listed instead.
 func accountsInUse(ctx context.Context, d Deps) (func(*account.Account) bool, error) {
 	keys, err := d.Stores.HostKey.List(ctx)
 	if err != nil {
@@ -45,7 +70,7 @@ func accountsInUse(ctx context.Context, d Deps) (func(*account.Account) bool, er
 	for _, k := range keys {
 		held[k.Spec.AccountID] = true
 	}
-	return func(a *account.Account) bool { return !a.Spec.Default || held[a.Meta.ID] }, nil
+	return func(a *account.Account) bool { return a.IsProvider() && (!a.Spec.Default || held[a.Meta.ID]) }, nil
 }
 
 // scanUpstreamAtHost lists the accounts and pools held at a host; neither
@@ -94,11 +119,21 @@ func scanUpstreamOwnedBy(ctx context.Context, d Deps, kind meta.OwnerKind, id st
 		if err != nil {
 			return nil, err
 		}
+		callers := map[string]bool{}
 		for _, a := range accounts {
-			if ownedBy(a.Meta.Owner, kind, id) && inUse(a) {
+			switch {
+			case !ownedBy(a.Meta.Owner, kind, id):
+			case !a.IsProvider():
+				callers[a.Meta.ID] = true
+			case inUse(a):
 				out = append(out, referenceItem{Kind: "account", ID: a.Meta.ID, Name: a.Meta.Name, Via: "metadata.owner.id", owner: a.Meta.Owner})
 			}
 		}
+		lanes, err := keysInAccounts(ctx, d, func(accountID string) bool { return callers[accountID] })
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, lanes...)
 	}
 	if d.Stores.Pool != nil {
 		pools, err := d.Stores.Pool.List(ctx)
