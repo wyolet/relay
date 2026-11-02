@@ -134,3 +134,11 @@ const ErrorKindUpstream = "upstream_error"
 // TimeSeries aggregation — they carry no usage and would otherwise pollute
 // stats as phantom unattributed requests.
 func (e Event) LogOnly() bool { return e.Status == 0 && e.ErrorKind != "" }
+
+// Aggregated reports whether an aggregate counts e: every row but a log-only one, and a log-only relay refusal too when refusals is set.
+func (e Event) Aggregated(refusals bool) bool { return !e.LogOnly() || (refusals && e.Refusal != "") }
+
+// CountsRefused reports whether an aggregate over q grouped by groupBy counts relay's own refusals: only one that filters or groups by refusal, so every other aggregate keeps its served-request numbers.
+func CountsRefused(q EventQuery, groupBy string) bool {
+	return len(q.Refusal) > 0 || groupBy == "refusal"
+}

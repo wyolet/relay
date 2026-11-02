@@ -449,7 +449,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		limit = usage.MaxEventLimit
 	}
 
-	where, args := buildWhere(q, false)
+	where, args := buildWhere(q, allRows)
 
 	sql := fmt.Sprintf(
 		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id, relay_key, pool_id, account_id, refusal, lane_account_id FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
@@ -551,11 +551,28 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	return events, rows.Err()
 }
 
+// rowSet is which rows a query reads: an event listing every row, an aggregate (Summary/TimeSeries/Facet) the rows usage.Event.Aggregated keeps.
+type rowSet int
+
+const (
+	allRows rowSet = iota
+	usageRows
+	usageAndRefusals
+)
+
+// aggregateRows is the row set of an aggregate over q grouped by groupBy (usage.CountsRefused).
+func aggregateRows(q usage.EventQuery, groupBy string) rowSet {
+	if usage.CountsRefused(q, groupBy) {
+		return usageAndRefusals
+	}
+	return usageRows
+}
+
 // buildWhere generates the WHERE clause and positional args for an EventQuery.
-// With aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
-// rejections, status 0 + error_kind — are excluded: they belong to the logs
-// view, not usage stats. Event listings (aggregate=false) keep them.
-func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
+// An aggregate's row set excludes LogOnly events — pre-upstream rejections,
+// status 0 + error_kind — which belong to the logs view, not usage stats,
+// except relay refusals when it counts them. Event listings keep them all.
+func buildWhere(q usage.EventQuery, rows rowSet) (string, []any) {
 	var clauses []string
 	var args []any
 
@@ -715,9 +732,12 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		args = append(args, needle, needle, needle, needle)
 	}
 
-	if aggregate {
-		// Mirrors usage.Event.LogOnly.
+	// Mirrors usage.Event.Aggregated.
+	switch rows {
+	case usageRows:
 		clauses = append(clauses, "NOT (status = 0 AND error_kind != '')")
+	case usageAndRefusals:
+		clauses = append(clauses, "NOT (status = 0 AND error_kind != '' AND refusal = '')")
 	}
 
 	if len(clauses) == 0 {

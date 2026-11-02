@@ -61,6 +61,19 @@ var facetsCases = []facetsCase{
 		},
 	},
 	{
+		name: "refusal counts relay's refusals, and a refusal filter keeps them in other dimensions",
+		q: func() usage.EventQuery {
+			q := Window()
+			q.Refusal = []string{"no_capacity"}
+			return q
+		}(),
+		dims: []string{"refusal", "source"},
+		want: map[string][]usage.FacetValue{
+			"refusal": {fv("", "", 10), fv("host_not_reachable", "", 1), fv("no_capacity", "", 1)},
+			"source":  {fv("proxy", "", 1)},
+		},
+	},
+	{
 		name: "pool, account and lane ids group without labels",
 		q: func() usage.EventQuery {
 			q := Window()

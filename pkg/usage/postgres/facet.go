@@ -12,7 +12,7 @@ func (s *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetValu
 	if !usage.IsValidFacetDim(q.Dim) {
 		return nil, fmt.Errorf("usage/postgres: invalid facet dim %q", q.Dim)
 	}
-	where, args := buildWhere(q.EventQuery, true)
+	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, q.Dim))
 	var dimExpr string
 	dimExpr, args = groupExpr(q.Dim, args)
 	labelExpr := "''"

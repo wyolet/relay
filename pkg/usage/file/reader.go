@@ -52,7 +52,7 @@ func (r *Reader) Summary(_ context.Context, q usage.SummaryQuery) (usage.Summary
 	if err != nil {
 		return usage.SummaryResult{}, err
 	}
-	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct)
+	return usage.SummarizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.GroupBy, q.Distinct, usage.CountsRefused(q.EventQuery, q.GroupBy))
 }
 
 // TimeSeries streams the file, applies filters, and buckets the matching
@@ -62,7 +62,7 @@ func (r *Reader) TimeSeries(_ context.Context, q usage.TimeSeriesQuery) (usage.T
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
-	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
+	res, err := usage.BucketizeWithDistinct(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy, q.Distinct, usage.CountsRefused(q.EventQuery, q.GroupBy))
 	if err != nil {
 		return usage.TimeSeriesResult{}, err
 	}
@@ -76,7 +76,7 @@ func (r *Reader) Facet(_ context.Context, q usage.FacetQuery) ([]usage.FacetValu
 	if err != nil {
 		return nil, err
 	}
-	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit)
+	return usage.TopValues(usage.FilterEvents(all, q.EventQuery), q.Dim, q.Limit, usage.CountsRefused(q.EventQuery, q.Dim))
 }
 
 // scan reads every event in the file (no filter/limit; callers evaluate

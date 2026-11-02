@@ -138,7 +138,7 @@ func (f *fakeUsageReader) Summary(_ context.Context, q usagelog.SummaryQuery) (u
 	defer f.mu.Unlock()
 	f.calls++
 	f.last, f.distinct = q.EventQuery, q.Distinct
-	return usage.SummarizeWithDistinct(f.events, q.GroupBy, q.Distinct)
+	return usage.SummarizeWithDistinct(f.events, q.GroupBy, q.Distinct, usage.CountsRefused(q.EventQuery, q.GroupBy))
 }
 
 func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQuery) (usagelog.TimeSeriesResult, error) {
@@ -146,7 +146,7 @@ func (f *fakeUsageReader) TimeSeries(_ context.Context, q usagelog.TimeSeriesQue
 	defer f.mu.Unlock()
 	f.calls++
 	f.last, f.distinct = q.EventQuery, q.Distinct
-	return usage.BucketizeWithDistinct(usage.FilterEvents(f.events, q.EventQuery), q.Interval, q.GroupBy, q.Distinct)
+	return usage.BucketizeWithDistinct(usage.FilterEvents(f.events, q.EventQuery), q.Interval, q.GroupBy, q.Distinct, usage.CountsRefused(q.EventQuery, q.GroupBy))
 }
 
 func (f *fakeUsageReader) Facet(_ context.Context, q usagelog.FacetQuery) ([]usagelog.FacetValue, error) {
@@ -154,7 +154,7 @@ func (f *fakeUsageReader) Facet(_ context.Context, q usagelog.FacetQuery) ([]usa
 	defer f.mu.Unlock()
 	f.calls++
 	f.last = q.EventQuery
-	return usage.TopValues(usage.FilterEvents(f.events, q.EventQuery), q.Dim, q.Limit)
+	return usage.TopValues(usage.FilterEvents(f.events, q.EventQuery), q.Dim, q.Limit, usage.CountsRefused(q.EventQuery, q.Dim))
 }
 
 // newUsageHarness mounts the usage + logs read endpoints behind the actor-

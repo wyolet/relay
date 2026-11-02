@@ -83,6 +83,32 @@ var summaryCases = []summaryCase{
 		}}, From: at(0), To: at(110)},
 	},
 	{
+		name: "group by refusal counts relay's refusals beside the served rows",
+		q:    summaryQuery("refusal"),
+		want: usage.SummaryResult{Rows: []usage.SummaryRow{
+			{
+				Group: map[string]string{"refusal": ""}, Requests: 10,
+				ErrorCount: 5, Errors4xx: 3, Errors5xx: 2, Throttled: 2,
+				Tokens:     map[string]int64{"input": 66, "output": 37, "cache_read": 7},
+				DurationMs: mixed(160, 200), TTFTMs: ptr(mixed(40, 41)),
+				FirstSeen: at(0), LastSeen: at(110), CostNanos: 6750, Unpriced: 4,
+			},
+			{Group: map[string]string{"refusal": "host_not_reachable"}, Requests: 1, DurationMs: flat(0), FirstSeen: at(-1), LastSeen: at(-1), Unpriced: 1},
+			{Group: map[string]string{"refusal": "no_capacity"}, Requests: 1, DurationMs: flat(0), FirstSeen: at(119), LastSeen: at(119), Unpriced: 1},
+		}, From: at(-1), To: at(119)},
+	},
+	{
+		name: "a refusal filter counts the refusals it matches",
+		q: func() usage.SummaryQuery {
+			q := summaryQuery("source")
+			q.Refusal = []string{"no_capacity"}
+			return q
+		}(),
+		want: usage.SummaryResult{Rows: []usage.SummaryRow{
+			{Group: map[string]string{"source": "proxy"}, Requests: 1, DurationMs: flat(0), FirstSeen: at(119), LastSeen: at(119), Unpriced: 1},
+		}, From: at(119), To: at(119)},
+	},
+	{
 		name: "group by none applies the filter first",
 		q: func() usage.SummaryQuery {
 			q := summaryQuery(usage.GroupByNone)
