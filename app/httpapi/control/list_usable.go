@@ -1,4 +1,4 @@
-// The usable_by list filter: a picker in a team, project or personal context lists only the rows a row of that context may link, by the same refcheck rule a save applies.
+// The usable_by list filter: a picker in a team, project or personal context lists only the rows a row of that context may link, by the same refcheck rule a save applies. usable_for picks which linking row asks, where a kind is linked by more than one.
 
 package control
 
@@ -17,30 +17,67 @@ import (
 	"github.com/wyolet/relay/app/refcheck"
 )
 
-const usableByParam = "usable_by"
+const (
+	usableByParam  = "usable_by"
+	usableForParam = "usable_for"
+)
 
-// usableFilter is one kind's usable_by rule: check answers whether a row of linker kind owned by by may link t.
-type usableFilter[T any] struct {
-	// linker names the linking row in the parameter's description, such as "a policy".
+// usablePurpose is one linking row's rule: check answers whether a row of linker kind owned by by may link t.
+type usablePurpose[T any] struct {
+	// name is the usable_for value, such as "binding".
+	name string
+	// linker names the linking row in descriptions, such as "a policy binding".
 	linker string
 	check  func(ctx context.Context, t *T, by meta.Owner) error
 }
 
-func (u *usableFilter[T]) param(plural string) *huma.Param {
-	return &huma.Param{
+// usableFilter is one kind's usable_by rules; the first purpose is the default.
+type usableFilter[T any] struct {
+	purposes []usablePurpose[T]
+}
+
+func usableFor[T any](linker string, check func(context.Context, *T, meta.Owner) error) *usableFilter[T] {
+	return &usableFilter[T]{purposes: []usablePurpose[T]{{linker: linker, check: check}}}
+}
+
+func (u *usableFilter[T]) params(plural string) []*huma.Param {
+	def := u.purposes[0]
+	by := &huma.Param{
 		Name: usableByParam,
 		In:   "query",
 		Description: fmt.Sprintf("Only the %s %s owned by this scope may link, by the rule a save of that row applies: system, user:<id>, team:<id> or project:<id>.",
-			plural, u.linker),
+			plural, def.linker),
 		Schema: &huma.Schema{Type: "string", Pattern: `^(system|(user|team|project):[^:]+)$`},
 	}
+	if len(u.purposes) == 1 {
+		return []*huma.Param{by}
+	}
+	names := make([]any, len(u.purposes))
+	var each []string
+	for i, p := range u.purposes {
+		names[i] = p.name
+		each = append(each, fmt.Sprintf("%s: what %s owned by the usable_by scope may list", p.name, p.linker))
+	}
+	by.Description = fmt.Sprintf("Only the %s a row owned by this scope may link, by the rule a save of that row applies; usable_for says which row: system, user:<id>, team:<id> or project:<id>.", plural)
+	return []*huma.Param{by, {
+		Name:        usableForParam,
+		In:          "query",
+		Description: fmt.Sprintf("Which row usable_by asks for (%s). Default %s. Only with usable_by.", strings.Join(each, "; "), def.name),
+		Schema:      &huma.Schema{Type: "string", Enum: names, Default: def.name},
+	}}
 }
 
-// keep returns the items a row owned by by may link.
-func (u *usableFilter[T]) keep(ctx context.Context, items []*T, by meta.Owner) ([]*T, error) {
+// usableQuery is a parsed usable_by: the scope and the purpose it asks for.
+type usableQuery[T any] struct {
+	by      meta.Owner
+	purpose usablePurpose[T]
+}
+
+// keep returns the items a row owned by q.by may link for q's purpose.
+func (q *usableQuery[T]) keep(ctx context.Context, items []*T) ([]*T, error) {
 	out := items[:0:0]
 	for _, it := range items {
-		err := u.check(ctx, it, by)
+		err := q.purpose.check(ctx, it, q.by)
 		if err == nil {
 			out = append(out, it)
 			continue
@@ -53,22 +90,42 @@ func (u *usableFilter[T]) keep(ctx context.Context, items []*T, by meta.Owner) (
 	return out, nil
 }
 
-// takeUsableBy parses usable_by out of q, returning the scope (nil when absent) and q without it, so the filter schema never sees it.
-func takeUsableBy(q url.Values) (*meta.Owner, url.Values, error) {
-	vals, ok := q[usableByParam]
-	if !ok {
+// take parses usable_by and usable_for out of q, returning the query (nil when usable_by is absent) and q without them, so the filter schema never sees them.
+func (u *usableFilter[T]) take(q url.Values) (*usableQuery[T], url.Values, error) {
+	byVals, hasBy := q[usableByParam]
+	forVals, hasFor := q[usableForParam]
+	if hasFor && len(u.purposes) == 1 {
+		return nil, nil, huma.Error400BadRequest(usableForParam + " is not a filter of this list")
+	}
+	if !hasBy {
+		if hasFor {
+			return nil, nil, huma.Error400BadRequest(usableForParam + " applies only with " + usableByParam)
+		}
 		return nil, q, nil
 	}
-	if len(vals) != 1 {
-		return nil, nil, huma.Error400BadRequest(usableByParam + " takes one scope")
+	if len(byVals) != 1 || len(forVals) > 1 {
+		return nil, nil, huma.Error400BadRequest(usableByParam + " and " + usableForParam + " take one value each")
 	}
-	by, err := parseScope(vals[0])
+	by, err := parseScope(byVals[0])
 	if err != nil {
 		return nil, nil, huma.Error400BadRequest(usableByParam + ": " + err.Error())
 	}
+	out := &usableQuery[T]{by: by, purpose: u.purposes[0]}
+	if hasFor {
+		found := false
+		for _, p := range u.purposes {
+			if p.name == forVals[0] {
+				out.purpose, found = p, true
+			}
+		}
+		if !found {
+			return nil, nil, huma.Error400BadRequest(fmt.Sprintf("%s: %q is not a purpose of this list", usableForParam, forVals[0]))
+		}
+	}
 	rest := maps.Clone(q)
 	delete(rest, usableByParam)
-	return &by, rest, nil
+	delete(rest, usableForParam)
+	return out, rest, nil
 }
 
 // parseScope reads "system", "user:<id>", "team:<id>" or "project:<id>".

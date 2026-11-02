@@ -31,7 +31,10 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&accountFilter,
-		&usableFilter[account.Account]{linker: "a policy binding", check: refs(d).UsableAccount},
+		&usableFilter[account.Account]{purposes: []usablePurpose[account.Account]{
+			{name: "binding", linker: "a policy binding", check: refs(d).UsableAccount},
+			{name: "pool", linker: "a pool", check: refs(d).UsablePoolAccount},
+		}},
 	))
 
 	rows.add(registerKind[pool.Pool](
@@ -48,7 +51,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&poolFilter,
-		&usableFilter[pool.Pool]{linker: "a policy", check: refs(d).UsablePool},
+		usableFor("a policy", refs(d).UsablePool),
 	))
 
 	rows.add(registerKind[budget.Budget](
@@ -65,6 +68,6 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		false,
 		protect,
 		&budgetFilter,
-		&usableFilter[budget.Budget]{linker: "a policy", check: refs(d).UsableBudget},
+		usableFor("a policy", refs(d).UsableBudget),
 	))
 }

@@ -25,6 +25,12 @@ func wordRows() (*linkRows, Checker) {
 	mine := meta.Owner{Kind: meta.OwnerUser, ID: meID}
 	r.pools["pool-mine"] = &pool.Pool{Meta: meta.Metadata{ID: "pool-mine", Name: "anthropic-967841", DisplayName: "anthropic", Owner: mine}, Spec: pool.Spec{HostID: "h-1"}}
 	r.accounts["acct-mine"] = &account.Account{Meta: meta.Metadata{ID: "acct-mine", Name: "acct-mine", DisplayName: "Anthropic org", Owner: mine}, Spec: account.Spec{HostID: "h-1"}}
+	// Two shares of t-1's account: with team t-2, and with project p-1.
+	for id, to := range map[string]meta.Owner{"share-t-2": {Kind: meta.OwnerTeam, ID: "t-2"}, "share-p-1": {Kind: meta.OwnerProject, ID: "p-1"}} {
+		s := account.Share(r.accounts["acct-team-1"], account.Receiver{Kind: account.ReceiverKind(to.Kind), ID: to.ID}, to, to.ID)
+		s.Meta.ID = id
+		r.accounts[id] = s
+	}
 	c := r.checker(nil)
 	pol := &policy.Policy{Meta: meta.Metadata{ID: "pol-mine", Name: "general-policy-051141", DisplayName: "General Policy", Owner: mine}, Spec: policy.Spec{PoolIDs: []string{"pool-mine"}}}
 	c.Rows.Policy = func(_ context.Context, id string) *policy.Policy {
@@ -90,6 +96,26 @@ func TestScopeRefusalsSayWhatToDo(t *testing.T) {
 			c.PolicyBinding(me, &policybinding.PolicyBinding{Meta: meta.Metadata{Name: "b", Owner: project}, Spec: policybinding.Spec{AccountIDs: []string{"acct-mine"}}}),
 			`accountIds[0]: your personal account "Anthropic org" is outside the scope of this binding's owner, project "Web": a project's binding binds the project's own accounts: its account, its members', its service accounts' and its provider accounts. Create the binding in your personal scope instead.`,
 		},
+		{
+			"a team's pool lists a share made with a project",
+			c.Pool(me, &pool.Pool{Meta: meta.Metadata{Name: "x", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}}, Spec: pool.Spec{HostID: "h-1", AccountIDs: []string{"share-p-1"}}}),
+			`accountIds[0]: account "acct-team-1" was shared with project "Web", so only a pool of project "Web" lists it. Create the pool there, or ask the owner of the account it came from to share it with team "Platform".`,
+		},
+		{
+			"sharing a share on",
+			c.Share(me, c.Rows.Account(me, "share-p-1"), account.Share(c.Rows.Account(me, "share-p-1"), account.Receiver{Kind: account.ReceiverTeam, ID: "t-2"}, team2, "t-2")),
+			`account "acct-team-1" of project "Web" is a share, so it cannot be shared on: only the owner of the account it came from shares that account. Ask them to share it with the receiver.`,
+		},
+		{
+			"a host key joins a share",
+			c.HostKey(me, &hostkey.HostKey{Meta: meta.Metadata{Name: "k", Owner: project}, Spec: hostkey.Spec{HostID: "h-1", AccountID: "share-p-1"}}),
+			`account "acct-team-1" of project "Web" is a share and holds no keys of its own: its keys are the ones of the account it came from. Add the host key to that account, or join an account of project "Web".`,
+		},
+		{
+			"a second share with one receiver",
+			c.ShareExists(me, c.Rows.Account(me, "acct-team-1"), account.Receiver{Kind: account.ReceiverProject, ID: "p-1"}),
+			`account "acct-team-1" of team "Platform" is already shared with project "Web": one share per receiver. Use the existing share, or delete it first.`,
+		},
 	} {
 		got := refusalMsg(t, tc.err)
 		if got != tc.want {
@@ -133,6 +159,11 @@ func TestUsableMatchesTheSaveRule(t *testing.T) {
 			if usable != saved {
 				t.Errorf("account %s by %v: usable %v, binding save %v", id, by, usable, saved)
 			}
+			usable = c.UsablePoolAccount(ctx, a, by) == nil
+			saved = c.Pool(ctx, &pool.Pool{Meta: meta.Metadata{Name: "x", Owner: by}, Spec: pool.Spec{HostID: a.Spec.HostID, AccountIDs: []string{id}}}) == nil
+			if usable != saved {
+				t.Errorf("account %s by %v: usable for a pool %v, pool save %v", id, by, usable, saved)
+			}
 		}
 		pol := c.Rows.Policy(ctx, "pol-mine")
 		usable := c.UsablePolicy(ctx, pol, by) == nil
@@ -140,6 +171,13 @@ func TestUsableMatchesTheSaveRule(t *testing.T) {
 		if usable != saved {
 			t.Errorf("policy by %v: usable %v, binding save %v", by, usable, saved)
 		}
+	}
+	t2 := meta.Owner{Kind: meta.OwnerTeam, ID: "t-2"}
+	if err := c.UsablePoolAccount(ctx, r.accounts["share-t-2"], t2); err != nil {
+		t.Errorf("a pool of the receiving team may not list its share: %v", err)
+	}
+	if err := c.UsablePoolAccount(ctx, r.accounts["share-p-1"], meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}); err == nil {
+		t.Error("a pool of another scope may list a share")
 	}
 	if err := c.UsablePool(ctx, r.pools["pool-mine"], meta.Owner{Kind: meta.OwnerUser, ID: meID}); err != nil {
 		t.Errorf("a personal policy may not link its owner's pool: %v", err)

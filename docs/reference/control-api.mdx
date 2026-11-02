@@ -75,7 +75,9 @@ A signed-in user who creates a team or a project gets a role binding of the scop
 | `pools`, `budgets`, `rate-limits` | What a policy owned by the scope may link |
 | `host-keys` | What a pool owned by the scope may hold; add `host_id` for the pool's host |
 | `policies` | What a policy binding owned by the scope may use, including the pools and host keys the policy links |
-| `accounts` | What a policy binding owned by the scope may bind. A host key joins only an account of its own owner: filter with `owner` and `owner_id` |
+| `accounts` | With `usable_for=binding` (the default), what a policy binding owned by the scope may bind. With `usable_for=pool`, what a pool owned by the scope may list: the provider accounts it may draw on and the shares made with that scope; add `host_id` for the pool's host. A host key joins only an account of its own owner: filter with `owner` and `owner_id` |
+
+`usable_for` is accepted on the accounts list only, and only together with `usable_by`.
 
 ```bash
 curl -H "Cookie: relay_session=<session>" \

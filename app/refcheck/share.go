@@ -226,8 +226,8 @@ func (c Checker) poolAccountUsable(ctx context.Context, a *account.Account, refO
 		return badRequest("%s is a %s account; a pool draws on provider accounts", c.rowText(ctx, "account", a.Meta), a.Spec.Kind)
 	case a.IsShared():
 		if a.Meta.Owner != refOwner {
-			return badRequest("%s was shared with %s, so only a pool of %s lists it. Create the pool there, or ask the owner of the account it came from to share it with %s.",
-				c.rowText(ctx, "account", a.Meta), c.scopeText(ctx, a.Meta.Owner), c.scopeText(ctx, a.Meta.Owner), c.scopeText(ctx, refOwner))
+			return badRequest("account %q was shared with %s, so only a pool of %s lists it. Create the pool there, or ask the owner of the account it came from to share it with %s.",
+				label(a.Meta), c.scopeText(ctx, a.Meta.Owner), c.scopeText(ctx, a.Meta.Owner), c.scopeText(ctx, refOwner))
 		}
 	case scoped && refOwner.Kind == meta.OwnerUser && a.Meta.Owner.Kind == meta.OwnerProject:
 		return badRequest("a pool of %s cannot draw on %s: a personal pool cannot draw on a project's accounts. Use an account of your own or of the system, or create the pool in that project.",

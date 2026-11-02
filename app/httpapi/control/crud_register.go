@@ -230,7 +230,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostKeyFilter,
-		&usableFilter[hostkey.HostKey]{linker: "a pool", check: refs(d).UsableHostKey},
+		usableFor("a pool", refs(d).UsableHostKey),
 	))
 
 	rows.add(registerKind[ratelimit.RateLimit](
@@ -247,7 +247,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&rateLimitFilter,
-		&usableFilter[ratelimit.RateLimit]{linker: "a policy", check: refs(d).UsableRateLimit},
+		usableFor("a policy", refs(d).UsableRateLimit),
 	))
 
 	rows.add(registerKind[policy.Policy](
@@ -264,7 +264,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyFilter,
-		&usableFilter[policy.Policy]{linker: "a policy binding", check: refs(d).UsablePolicy},
+		usableFor("a policy binding", refs(d).UsablePolicy),
 	))
 
 	rows.add(registerKind[pricing.Pricing](

@@ -43,3 +43,8 @@ func (c Checker) UsablePolicy(ctx context.Context, p *policy.Policy, by meta.Own
 func (c Checker) UsableAccount(ctx context.Context, a *account.Account, by meta.Owner) error {
 	return c.accountBindable(ctx, a, by)
 }
+
+// UsablePoolAccount checks the account for a pool owned by by: its own and reachable provider accounts and the shares made with by; the pool's host is the list's host_id filter.
+func (c Checker) UsablePoolAccount(ctx context.Context, a *account.Account, by meta.Owner) error {
+	return c.poolAccountUsable(ctx, a, by)
+}

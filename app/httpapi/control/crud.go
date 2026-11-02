@@ -189,7 +189,7 @@ func registerKind[T any](
 		listParams = filterParams(filterSchema)
 	}
 	if usable != nil {
-		listParams = append(listParams, usable.param(plural))
+		listParams = append(listParams, usable.params(plural)...)
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
@@ -206,10 +206,10 @@ func registerKind[T any](
 			return nil, mapAuthzErr(err)
 		}
 		query := rawQueryFrom(ctx)
-		var usableBy *meta.Owner
+		var usableBy *usableQuery[T]
 		if usable != nil {
 			var err error
-			if usableBy, query, err = takeUsableBy(query); err != nil {
+			if usableBy, query, err = usable.take(query); err != nil {
 				return nil, err
 			}
 		}
@@ -232,7 +232,7 @@ func registerKind[T any](
 			items = visible
 		}
 		if usableBy != nil {
-			if items, err = usable.keep(ctx, items, *usableBy); err != nil {
+			if items, err = usableBy.keep(ctx, items); err != nil {
 				return nil, err
 			}
 		}
