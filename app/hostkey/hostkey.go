@@ -173,12 +173,31 @@ const (
 	minLenToShowPrefix = 24
 )
 
-// Prefix is the secret's first characters, for recognising the key; "" while it is unresolved or too short to show any of it.
+// Prefix is the secret's first characters, for the key's owners to recognise it; "" while it is unresolved or too short to show any of it.
 func (k *HostKey) Prefix() string {
 	if len(k.Resolved) < minLenToShowPrefix {
 		return ""
 	}
 	return k.Resolved[:prefixLen]
+}
+
+// formatPrefixes are the fixed starts of provider key formats, which carry no secret. Longer ones come first, so the most specific matches.
+var formatPrefixes = []string{"sk-proj-", "sk-svcacct-", "sk-ant-", "sk-or-", "sk-", "AIza", "gsk_", "xai-", "pplx-", "hf_", "nvapi-", "r8_"}
+
+// Hint is what anyone but the key's owners sees of the secret: the key format's fixed prefix, when it starts with a known one, and the last 4 characters; "" while it is unresolved or too short to show any of it.
+func (k *HostKey) Hint() string {
+	v := k.Resolved
+	if len(v) < minLenToShowPrefix {
+		return ""
+	}
+	format := ""
+	for _, p := range formatPrefixes {
+		if strings.HasPrefix(v, p) {
+			format = p
+			break
+		}
+	}
+	return format + "..." + v[len(v)-4:]
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

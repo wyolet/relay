@@ -59,9 +59,7 @@ func (s *Service) PoolKeys(ctx context.Context, ref string) (UpstreamRef, []Host
 			return
 		}
 		placed[k.Meta.ID] = true
-		v := hostKeyView(k)
-		v.ReadOnly = readOnly
-		rows = append(rows, v)
+		rows = append(rows, s.hostKeyView(k, readOnly))
 	}
 	if len(p.Spec.AccountIDs) > 0 {
 		accounts, err := s.accountsByID(ctx)
@@ -146,22 +144,26 @@ func (s *Service) AccountKeys(ctx context.Context, ref string) (UpstreamRef, []H
 	for _, k := range keysOf(keys, a) {
 		// Whoever sees a shared account sees its real account's keys, read-only.
 		if a.IsShared() || s.visible("host-key", k.Meta.ID, k.Meta.Owner) {
-			v := hostKeyView(k)
-			v.ReadOnly = a.IsShared()
-			rows = append(rows, v)
+			rows = append(rows, s.hostKeyView(k, a.IsShared()))
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	return UpstreamRef{ID: a.Meta.ID, Name: a.Meta.Name, HostID: a.Spec.HostID}, rows, nil
 }
 
-func hostKeyView(k *hostkey.HostKey) HostKeyView {
-	return HostKeyView{
+// hostKeyView is k without its secret. Its owners see the secret's first characters; anyone else, and anyone seeing it through a share (readOnly), only its format prefix and last 4.
+func (s *Service) hostKeyView(k *hostkey.HostKey, readOnly bool) HostKeyView {
+	v := HostKeyView{
 		ID:          k.Meta.ID,
 		Name:        k.Meta.Name,
 		Kind:        string(k.Spec.ValueFrom.Kind),
 		DefaultTier: k.Spec.DefaultTier,
 		Enabled:     hostKeyEnabled(k),
-		Prefix:      k.Prefix(),
+		ReadOnly:    readOnly,
+		Prefix:      k.Hint(),
 	}
+	if !readOnly && s.owns("host-key", k.Meta.ID, k.Meta.Owner) {
+		v.Prefix = k.Prefix()
+	}
+	return v
 }

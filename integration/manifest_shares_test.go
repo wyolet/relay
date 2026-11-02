@@ -18,12 +18,18 @@ spec:
   baseURL: https://rs.invalid
 `
 
-// sharesBundle shares one provider account with a team and with a service account, and gives the team a pool drawing on its share. The shares come first, so the plan must order the real account before them.
+// sharesBundle shares one team's provider account with another team and with a service account there, and gives the receiving team a pool drawing on its share. The shares come first, so the plan must order the real account before them.
 const sharesBundle = sharesCatalog + `---
 apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata:
   name: rt-sh-team
+spec: {}
+---
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Team
+metadata:
+  name: rt-sh-owners
 spec: {}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -63,7 +69,7 @@ apiVersion: relay.wyolet.dev/v1alpha3
 kind: Account
 metadata:
   name: rt-sh-org
-  owner: {kind: project, name: rt-sh-project}
+  owner: {kind: team, name: rt-sh-owners}
 spec:
   host: rt-sh-host
 ---
@@ -169,6 +175,10 @@ func TestIntegration_PruneNamesTheSharesOfARealAccount(t *testing.T) {
 		if got := plan.action("Account", name); got != "delete" {
 			t.Errorf("Account/%s in the prune plan = %q, want delete\n%s", name, got, raw)
 		}
+	}
+	// The plan says what revoking the share changes: the team's pool loses it.
+	if !strings.Contains(string(raw), `"revokes":[{"kind":"pool","change":"drops","names":["rt-sh-pool"]}]`) {
+		t.Errorf("the prune plan does not list the share's impact:\n%s", raw)
 	}
 	if code, _, raw := st.applyBundle(tenancy, "prune=true&selector=managed=gitops"); code != http.StatusOK {
 		t.Fatalf("prune = %d %s", code, raw)

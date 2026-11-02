@@ -89,6 +89,12 @@ type Service struct {
 	// (the single-user default). kind is the singular resource kind
 	// ("policy", "host-key"); id is that row's metadata.id.
 	Visible func(kind, id string, owner meta.Owner) bool
+	// Owns optionally reports whether the caller may edit a row; a host key's owners see more of its secret's start than anyone else. Nil owns every row.
+	Owns func(kind, id string, owner meta.Owner) bool
+}
+
+func (s *Service) owns(kind, id string, owner meta.Owner) bool {
+	return s.Owns == nil || s.Owns(kind, id, owner)
 }
 
 func (s *Service) visible(kind, id string, owner meta.Owner) bool {

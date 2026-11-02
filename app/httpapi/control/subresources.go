@@ -51,6 +51,10 @@ func viewService(ctx context.Context, d Deps) *catalogview.Service {
 		svc.Visible = func(kind, id string, owner meta.Owner) bool {
 			return s.Visible(ctx, kind, id, owner)
 		}
+		probe := unaudited(d.Authz)
+		svc.Owns = func(kind, id string, owner meta.Owner) bool {
+			return probe.Authorize(ctx, authz.Plural(kind)+".update", authz.Resource{Kind: kind, ID: id, Owner: &owner}) == nil
+		}
 	}
 	return svc
 }
