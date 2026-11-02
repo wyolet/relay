@@ -7,6 +7,7 @@
 //   - PrepareAdmit: the same scripts queued on the caller's kv.Batch, no round trip of its own; a refusal adds the same release.
 //   - Settle: one batched round trip committing the groups that settle something (a concurrency lease, a token meter, a spend charge); none when nothing does.
 //   - Release: one batched round trip.
+//   - Peek (admin reads, off the request path): one batched round trip of read-only scripts, one per group.
 //
 // The admission estimate is unused: token meters are checked against what earlier requests used and charged at Settle, and budgets reserve nothing. A rollback or Release refunds every strategy's request count, so a refused or unsent request consumes no quota.
 package lua

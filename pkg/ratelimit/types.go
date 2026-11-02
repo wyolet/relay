@@ -23,6 +23,7 @@
 //     individually atomic; the batch is not cross-atomic (a single CROSSSLOT
 //     script across the two tags is impossible on Redis Cluster).
 //   - CommitAll:  the same for any number of reservations: 1 batched round trip, or 1 RunScript when one settles something.
+//   - Peek:       not on the request path; 1 batched round trip of read-only scripts, one per scope.
 package ratelimit
 
 import (

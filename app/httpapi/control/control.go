@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/license"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
@@ -137,9 +138,11 @@ type Deps struct {
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
 
-	// PlanView returns the plan engine's current view. Used by GET /plan-issues
-	// (nil → 200 empty list) and by caller-account reads (nil → 503).
+	// PlanView returns the plan engine's current view: plan issues, the caller's accounts and their limits are read from it. nil answers the issues read with an empty list and the account reads 503.
 	PlanView func() *engine.View
+
+	// Counters reads current counts for the limits reads; the data plane's limiter. nil answers them 503.
+	Counters CounterReader
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin. Exported manifests reference the schema endpoint under it;
@@ -154,6 +157,11 @@ type Deps struct {
 // Pinger reports one backend's health for /healthz.
 type Pinger interface {
 	Ping(ctx context.Context) error
+}
+
+// CounterReader reads counters without counting. Implemented by every limits.Limiter.
+type CounterReader interface {
+	Peek(ctx context.Context, cs []limits.Counter) ([]limits.Reading, error)
 }
 
 // HostHealthReader reads observed host reachability. Implemented by
@@ -223,6 +231,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
 	registerOverlayRoutes(api, d, protect) // /models/by-id/{id}/overlay
 	registerCatalogGraph(api, d, protect)
+	registerMyAccounts(api, d, protect)
+	registerLimits(api, d, protect)
 	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
@@ -244,6 +254,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// `meter` enum comes from the domain const set; `window` is documented as
 	// seconds (ratelimit.Window marshals as integer seconds). No-op if renamed.
 	patchProp(api, "RateLimitRule", "meter", func(s *huma.Schema) { s.Enum = meterEnum() })
+	patchProp(api, "LimitsRule", "meter", func(s *huma.Schema) { s.Enum = meterEnum() })
 	patchProp(api, "RateLimitRule", "window", func(s *huma.Schema) {
 		s.Description = "Measurement period, in whole seconds."
 	})
