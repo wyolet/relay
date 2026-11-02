@@ -30,6 +30,7 @@ func (l Lookup) Memoized() Lookup {
 		PolicyBindings:    memoList(l.PolicyBindings),
 		PolicyBindingsFor: memoListByID(l.PolicyBindingsFor),
 		MissingUsers:      memoMissing(l.MissingUsers),
+		UserVisible:       memoVisible(l.UserVisible),
 		DefaultAccount:    l.DefaultAccount,
 		UserMayBindIn:     memoMayBind(l.UserMayBindIn),
 		UserName:          memoName(l.UserName),
@@ -116,6 +117,16 @@ func memoMayBind(f func(context.Context, string, meta.Owner) (bool, error)) func
 	return func(ctx context.Context, userID string, scope meta.Owner) (bool, error) {
 		r := c.get(k{userID, scope}, func() result[bool] { v, err := f(ctx, userID, scope); return result[bool]{v, err} })
 		return r.v, r.err
+	}
+}
+
+func memoVisible(f func(context.Context, string) bool) func(context.Context, string) bool {
+	if f == nil {
+		return nil
+	}
+	c := &cache[string, bool]{}
+	return func(ctx context.Context, id string) bool {
+		return c.get(id, func() bool { return f(ctx, id) })
 	}
 }
 

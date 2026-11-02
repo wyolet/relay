@@ -156,7 +156,9 @@ func TestListAccountsUsableFor(t *testing.T) {
 	add(provider("acct-p1", p1), "acct-p1")
 	add(provider("acct-alice", meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}), "acct-alice")
 	add(account.Share(t1, account.Receiver{Kind: account.ReceiverTeam, ID: "t-2"}, t2, "t-2"), "share-t2")
-	add(account.Share(t1, account.Receiver{Kind: account.ReceiverProject, ID: "p-1"}, p1, "p-1"), "share-p1")
+	// p-1 sits in t-1, which already reaches acct-t1, so its share comes from t-2.
+	tt2 := add(provider("acct-t2", t2), "acct-t2")
+	add(account.Share(tt2, account.Receiver{Kind: account.ReceiverProject, ID: "p-1"}, p1, "p-1"), "share-p1")
 	projects := map[string]*project.Project{"p-1": {Meta: meta.Metadata{ID: "p-1", Name: "p-1"}, Spec: project.Spec{TeamID: "t-1"}}}
 	teams := map[string]*team.Team{"t-1": {Meta: meta.Metadata{ID: "t-1", Name: "t-1"}}, "t-2": {Meta: meta.Metadata{ID: "t-2", Name: "t-2"}}}
 	// Another binding already holds acct-p1, so a new binding cannot take it.
@@ -184,9 +186,9 @@ func TestListAccountsUsableFor(t *testing.T) {
 		query string
 		want  []string
 	}{
-		{"?usable_by=team:t-2", []string{"share-t2"}},
-		{"?usable_by=team:t-2&usable_for=binding", []string{"share-t2"}},
-		{"?usable_by=team:t-2&usable_for=pool", []string{"acct-sys", "share-t2"}},
+		{"?usable_by=team:t-2", []string{"acct-t2", "share-t2"}},
+		{"?usable_by=team:t-2&usable_for=binding", []string{"acct-t2", "share-t2"}},
+		{"?usable_by=team:t-2&usable_for=pool", []string{"acct-sys", "acct-t2", "share-t2"}},
 		{"?usable_by=project:p-1", []string{"share-p1"}},
 		{"?usable_by=project:p-1&usable_for=pool", []string{"acct-p1", "acct-sys", "acct-t1", "share-p1"}},
 	} {
@@ -195,7 +197,7 @@ func TestListAccountsUsableFor(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s: status %d: %s", tc.query, w.Code, w.Body)
 		}
-		// Six accounts, one read of the bindings: the request's checks share it.
+		// Seven accounts, one read of the bindings: the request's checks share it.
 		if bindingReads > 1 {
 			t.Errorf("%s: read the policy bindings %d times in one request, want at most 1", tc.query, bindingReads)
 		}
