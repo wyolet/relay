@@ -33,7 +33,7 @@ var Kinds = []string{
 var Verbs = []string{
 	"*", "apply", "attach", "create", "delete", "destroy", "detach", "generate",
 	"get", "health", "list", "mint", "read", "reload", "revoke", "rewrap", "rotate",
-	"snapshot", "update",
+	"snapshot", "update", "use",
 }
 
 func init() {

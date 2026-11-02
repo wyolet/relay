@@ -229,12 +229,12 @@ func (q *Queries) DeletePolicyBinding(ctx context.Context, id string) error {
 	return err
 }
 
-const deletePolicyBindingSubjects = `-- name: DeletePolicyBindingSubjects :exec
-DELETE FROM policy_binding_subjects WHERE binding_id = $1
+const deletePolicyBindingAccounts = `-- name: DeletePolicyBindingAccounts :exec
+DELETE FROM policy_binding_accounts WHERE binding_id = $1
 `
 
-func (q *Queries) DeletePolicyBindingSubjects(ctx context.Context, bindingID string) error {
-	_, err := q.db.Exec(ctx, deletePolicyBindingSubjects, bindingID)
+func (q *Queries) DeletePolicyBindingAccounts(ctx context.Context, bindingID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyBindingAccounts, bindingID)
 	return err
 }
 
@@ -244,15 +244,6 @@ DELETE FROM policy_budgets WHERE policy_id = $1
 
 func (q *Queries) DeletePolicyBudgets(ctx context.Context, policyID string) error {
 	_, err := q.db.Exec(ctx, deletePolicyBudgets, policyID)
-	return err
-}
-
-const deletePolicyCredentials = `-- name: DeletePolicyCredentials :exec
-DELETE FROM policy_credentials WHERE policy_id = $1
-`
-
-func (q *Queries) DeletePolicyCredentials(ctx context.Context, policyID string) error {
-	_, err := q.db.Exec(ctx, deletePolicyCredentials, policyID)
 	return err
 }
 
@@ -383,7 +374,9 @@ func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) erro
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner FROM accounts WHERE id = $1
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings
+FROM accounts WHERE id = $1
 `
 
 func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
@@ -400,6 +393,14 @@ func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
 		&i.UpdatedAt,
 		&i.ResourceVersion,
 		&i.DefaultOwner,
+		&i.Kind,
+		&i.ManagedKey,
+		&i.HolderUserID,
+		&i.HolderSaID,
+		&i.TeamID,
+		&i.ProjectID,
+		&i.Closed,
+		&i.FollowsRoleBindings,
 	)
 	return i, err
 }
@@ -457,7 +458,7 @@ SELECT id FROM accounts WHERE host_id = $1 AND default_owner = $2
 `
 
 type GetDefaultAccountIDParams struct {
-	HostID       string      `db:"host_id" json:"host_id"`
+	HostID       pgtype.Text `db:"host_id" json:"host_id"`
 	DefaultOwner pgtype.Text `db:"default_owner" json:"default_owner"`
 }
 
@@ -509,6 +510,17 @@ func (q *Queries) GetHostBinding(ctx context.Context, id string) (HostBinding, e
 		&i.ResourceVersion,
 	)
 	return i, err
+}
+
+const getManagedAccountID = `-- name: GetManagedAccountID :one
+SELECT id FROM accounts WHERE managed_key = $1
+`
+
+func (q *Queries) GetManagedAccountID(ctx context.Context, managedKey pgtype.Text) (string, error) {
+	row := q.db.QueryRow(ctx, getManagedAccountID, managedKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getModel = `-- name: GetModel :one
@@ -621,35 +633,21 @@ func (q *Queries) GetPolicyBinding(ctx context.Context, id string) (PolicyBindin
 	return i, err
 }
 
-const getPolicyBindingSubjects = `-- name: GetPolicyBindingSubjects :many
-SELECT binding_id, kind, subject_id, subject_name, position
-FROM policy_binding_subjects WHERE binding_id = $1 ORDER BY position
+const getPolicyBindingAccounts = `-- name: GetPolicyBindingAccounts :many
+SELECT binding_id, account_id, position
+FROM policy_binding_accounts WHERE binding_id = $1 ORDER BY position
 `
 
-type GetPolicyBindingSubjectsRow struct {
-	BindingID   string      `db:"binding_id" json:"binding_id"`
-	Kind        string      `db:"kind" json:"kind"`
-	SubjectID   pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName pgtype.Text `db:"subject_name" json:"subject_name"`
-	Position    int32       `db:"position" json:"position"`
-}
-
-func (q *Queries) GetPolicyBindingSubjects(ctx context.Context, bindingID string) ([]GetPolicyBindingSubjectsRow, error) {
-	rows, err := q.db.Query(ctx, getPolicyBindingSubjects, bindingID)
+func (q *Queries) GetPolicyBindingAccounts(ctx context.Context, bindingID string) ([]PolicyBindingAccount, error) {
+	rows, err := q.db.Query(ctx, getPolicyBindingAccounts, bindingID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetPolicyBindingSubjectsRow
+	var items []PolicyBindingAccount
 	for rows.Next() {
-		var i GetPolicyBindingSubjectsRow
-		if err := rows.Scan(
-			&i.BindingID,
-			&i.Kind,
-			&i.SubjectID,
-			&i.SubjectName,
-			&i.Position,
-		); err != nil {
+		var i PolicyBindingAccount
+		if err := rows.Scan(&i.BindingID, &i.AccountID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -661,7 +659,7 @@ func (q *Queries) GetPolicyBindingSubjects(ctx context.Context, bindingID string
 }
 
 const getPolicyBudgets = `-- name: GetPolicyBudgets :many
-SELECT policy_id, budget_id, position FROM policy_budgets WHERE policy_id = $1 ORDER BY position
+SELECT policy_id, budget_id, position, shared FROM policy_budgets WHERE policy_id = $1 ORDER BY position
 `
 
 func (q *Queries) GetPolicyBudgets(ctx context.Context, policyID string) ([]PolicyBudget, error) {
@@ -673,31 +671,12 @@ func (q *Queries) GetPolicyBudgets(ctx context.Context, policyID string) ([]Poli
 	var items []PolicyBudget
 	for rows.Next() {
 		var i PolicyBudget
-		if err := rows.Scan(&i.PolicyID, &i.BudgetID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getPolicyCredentials = `-- name: GetPolicyCredentials :many
-SELECT policy_id, host_key_id, position FROM policy_credentials WHERE policy_id = $1 ORDER BY position
-`
-
-func (q *Queries) GetPolicyCredentials(ctx context.Context, policyID string) ([]PolicyCredential, error) {
-	rows, err := q.db.Query(ctx, getPolicyCredentials, policyID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PolicyCredential
-	for rows.Next() {
-		var i PolicyCredential
-		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
+		if err := rows.Scan(
+			&i.PolicyID,
+			&i.BudgetID,
+			&i.Position,
+			&i.Shared,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -733,7 +712,7 @@ func (q *Queries) GetPolicyPools(ctx context.Context, policyID string) ([]Policy
 }
 
 const getPolicyRateLimits = `-- name: GetPolicyRateLimits :many
-SELECT policy_id, rate_limit_id, models, position FROM policy_rate_limits WHERE policy_id = $1 ORDER BY position
+SELECT policy_id, rate_limit_id, models, position, shared FROM policy_rate_limits WHERE policy_id = $1 ORDER BY position
 `
 
 func (q *Queries) GetPolicyRateLimits(ctx context.Context, policyID string) ([]PolicyRateLimit, error) {
@@ -750,6 +729,7 @@ func (q *Queries) GetPolicyRateLimits(ctx context.Context, policyID string) ([]P
 			&i.RateLimitID,
 			&i.Models,
 			&i.Position,
+			&i.Shared,
 		); err != nil {
 			return nil, err
 		}
@@ -943,7 +923,7 @@ func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow,
 }
 
 const getRelayKey = `-- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys WHERE id = $1
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys WHERE id = $1
 `
 
 type GetRelayKeyRow struct {
@@ -959,6 +939,7 @@ type GetRelayKeyRow struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	AccountID       pgtype.Text        `db:"account_id" json:"account_id"`
 }
 
 func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, error) {
@@ -977,6 +958,7 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
+		&i.AccountID,
 	)
 	return i, err
 }
@@ -1146,7 +1128,7 @@ type InsertDefaultAccountParams struct {
 	ID           string      `db:"id" json:"id"`
 	Name         string      `db:"name" json:"name"`
 	DisplayName  string      `db:"display_name" json:"display_name"`
-	HostID       string      `db:"host_id" json:"host_id"`
+	HostID       pgtype.Text `db:"host_id" json:"host_id"`
 	Metadata     []byte      `db:"metadata" json:"metadata"`
 	Spec         []byte      `db:"spec" json:"spec"`
 	DefaultOwner pgtype.Text `db:"default_owner" json:"default_owner"`
@@ -1169,75 +1151,82 @@ func (q *Queries) InsertDefaultAccount(ctx context.Context, arg InsertDefaultAcc
 	return result.RowsAffected(), nil
 }
 
-const insertPolicyBindingSubject = `-- name: InsertPolicyBindingSubject :exec
-INSERT INTO policy_binding_subjects
-    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id,
-     subject_host_id, subject_account_id, subject_credential_id, subject_team_id, subject_project_id, position, owner_scope)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+const insertManagedAccount = `-- name: InsertManagedAccount :execrows
+INSERT INTO accounts (id, name, display_name, metadata, spec, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, follows_role_bindings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT DO NOTHING
 `
 
-type InsertPolicyBindingSubjectParams struct {
-	BindingID           string      `db:"binding_id" json:"binding_id"`
+type InsertManagedAccountParams struct {
+	ID                  string      `db:"id" json:"id"`
+	Name                string      `db:"name" json:"name"`
+	DisplayName         string      `db:"display_name" json:"display_name"`
+	Metadata            []byte      `db:"metadata" json:"metadata"`
+	Spec                []byte      `db:"spec" json:"spec"`
 	Kind                string      `db:"kind" json:"kind"`
-	SubjectID           pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName         pgtype.Text `db:"subject_name" json:"subject_name"`
-	SubjectUserID       pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
-	SubjectSaID         pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
-	SubjectHostID       pgtype.Text `db:"subject_host_id" json:"subject_host_id"`
-	SubjectAccountID    pgtype.Text `db:"subject_account_id" json:"subject_account_id"`
-	SubjectCredentialID pgtype.Text `db:"subject_credential_id" json:"subject_credential_id"`
-	SubjectTeamID       pgtype.Text `db:"subject_team_id" json:"subject_team_id"`
-	SubjectProjectID    pgtype.Text `db:"subject_project_id" json:"subject_project_id"`
-	Position            int32       `db:"position" json:"position"`
-	OwnerScope          string      `db:"owner_scope" json:"owner_scope"`
+	ManagedKey          pgtype.Text `db:"managed_key" json:"managed_key"`
+	HolderUserID        pgtype.Text `db:"holder_user_id" json:"holder_user_id"`
+	HolderSaID          pgtype.Text `db:"holder_sa_id" json:"holder_sa_id"`
+	TeamID              pgtype.Text `db:"team_id" json:"team_id"`
+	ProjectID           pgtype.Text `db:"project_id" json:"project_id"`
+	FollowsRoleBindings bool        `db:"follows_role_bindings" json:"follows_role_bindings"`
 }
 
-func (q *Queries) InsertPolicyBindingSubject(ctx context.Context, arg InsertPolicyBindingSubjectParams) error {
-	_, err := q.db.Exec(ctx, insertPolicyBindingSubject,
-		arg.BindingID,
+// A concurrent writer may create the same managed account, or take the name; either conflict inserts nothing and the caller looks again.
+func (q *Queries) InsertManagedAccount(ctx context.Context, arg InsertManagedAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertManagedAccount,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
 		arg.Kind,
-		arg.SubjectID,
-		arg.SubjectName,
-		arg.SubjectUserID,
-		arg.SubjectSaID,
-		arg.SubjectHostID,
-		arg.SubjectAccountID,
-		arg.SubjectCredentialID,
-		arg.SubjectTeamID,
-		arg.SubjectProjectID,
-		arg.Position,
-		arg.OwnerScope,
+		arg.ManagedKey,
+		arg.HolderUserID,
+		arg.HolderSaID,
+		arg.TeamID,
+		arg.ProjectID,
+		arg.FollowsRoleBindings,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertPolicyBindingAccount = `-- name: InsertPolicyBindingAccount :exec
+INSERT INTO policy_binding_accounts (binding_id, account_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPolicyBindingAccountParams struct {
+	BindingID string `db:"binding_id" json:"binding_id"`
+	AccountID string `db:"account_id" json:"account_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyBindingAccount(ctx context.Context, arg InsertPolicyBindingAccountParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyBindingAccount, arg.BindingID, arg.AccountID, arg.Position)
 	return err
 }
 
 const insertPolicyBudget = `-- name: InsertPolicyBudget :exec
-INSERT INTO policy_budgets (policy_id, budget_id, position) VALUES ($1, $2, $3)
+INSERT INTO policy_budgets (policy_id, budget_id, position, shared) VALUES ($1, $2, $3, $4)
 `
 
 type InsertPolicyBudgetParams struct {
 	PolicyID string `db:"policy_id" json:"policy_id"`
 	BudgetID string `db:"budget_id" json:"budget_id"`
 	Position int32  `db:"position" json:"position"`
+	Shared   bool   `db:"shared" json:"shared"`
 }
 
 func (q *Queries) InsertPolicyBudget(ctx context.Context, arg InsertPolicyBudgetParams) error {
-	_, err := q.db.Exec(ctx, insertPolicyBudget, arg.PolicyID, arg.BudgetID, arg.Position)
-	return err
-}
-
-const insertPolicyCredential = `-- name: InsertPolicyCredential :exec
-INSERT INTO policy_credentials (policy_id, host_key_id, position) VALUES ($1, $2, $3)
-`
-
-type InsertPolicyCredentialParams struct {
-	PolicyID  string `db:"policy_id" json:"policy_id"`
-	HostKeyID string `db:"host_key_id" json:"host_key_id"`
-	Position  int32  `db:"position" json:"position"`
-}
-
-func (q *Queries) InsertPolicyCredential(ctx context.Context, arg InsertPolicyCredentialParams) error {
-	_, err := q.db.Exec(ctx, insertPolicyCredential, arg.PolicyID, arg.HostKeyID, arg.Position)
+	_, err := q.db.Exec(ctx, insertPolicyBudget,
+		arg.PolicyID,
+		arg.BudgetID,
+		arg.Position,
+		arg.Shared,
+	)
 	return err
 }
 
@@ -1257,7 +1246,7 @@ func (q *Queries) InsertPolicyPool(ctx context.Context, arg InsertPolicyPoolPara
 }
 
 const insertPolicyRateLimit = `-- name: InsertPolicyRateLimit :exec
-INSERT INTO policy_rate_limits (policy_id, rate_limit_id, models, position) VALUES ($1, $2, $3, $4)
+INSERT INTO policy_rate_limits (policy_id, rate_limit_id, models, position, shared) VALUES ($1, $2, $3, $4, $5)
 `
 
 type InsertPolicyRateLimitParams struct {
@@ -1265,6 +1254,7 @@ type InsertPolicyRateLimitParams struct {
 	RateLimitID string `db:"rate_limit_id" json:"rate_limit_id"`
 	Models      []byte `db:"models" json:"models"`
 	Position    int32  `db:"position" json:"position"`
+	Shared      bool   `db:"shared" json:"shared"`
 }
 
 func (q *Queries) InsertPolicyRateLimit(ctx context.Context, arg InsertPolicyRateLimitParams) error {
@@ -1273,6 +1263,7 @@ func (q *Queries) InsertPolicyRateLimit(ctx context.Context, arg InsertPolicyRat
 		arg.RateLimitID,
 		arg.Models,
 		arg.Position,
+		arg.Shared,
 	)
 	return err
 }
@@ -1533,7 +1524,9 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 
 const listAccounts = `-- name: ListAccounts :many
 
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner FROM accounts ORDER BY name
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings
+FROM accounts ORDER BY name
 `
 
 // ── accounts, pools, budgets (migration 0035) ────────────────────────────────
@@ -1557,6 +1550,14 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.UpdatedAt,
 			&i.ResourceVersion,
 			&i.DefaultOwner,
+			&i.Kind,
+			&i.ManagedKey,
+			&i.HolderUserID,
+			&i.HolderSaID,
+			&i.TeamID,
+			&i.ProjectID,
+			&i.Closed,
+			&i.FollowsRoleBindings,
 		); err != nil {
 			return nil, err
 		}
@@ -1947,35 +1948,21 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 	return items, nil
 }
 
-const listPolicyBindingSubjects = `-- name: ListPolicyBindingSubjects :many
-SELECT binding_id, kind, subject_id, subject_name, position
-FROM policy_binding_subjects ORDER BY binding_id, position
+const listPolicyBindingAccounts = `-- name: ListPolicyBindingAccounts :many
+SELECT binding_id, account_id, position
+FROM policy_binding_accounts ORDER BY binding_id, position
 `
 
-type ListPolicyBindingSubjectsRow struct {
-	BindingID   string      `db:"binding_id" json:"binding_id"`
-	Kind        string      `db:"kind" json:"kind"`
-	SubjectID   pgtype.Text `db:"subject_id" json:"subject_id"`
-	SubjectName pgtype.Text `db:"subject_name" json:"subject_name"`
-	Position    int32       `db:"position" json:"position"`
-}
-
-func (q *Queries) ListPolicyBindingSubjects(ctx context.Context) ([]ListPolicyBindingSubjectsRow, error) {
-	rows, err := q.db.Query(ctx, listPolicyBindingSubjects)
+func (q *Queries) ListPolicyBindingAccounts(ctx context.Context) ([]PolicyBindingAccount, error) {
+	rows, err := q.db.Query(ctx, listPolicyBindingAccounts)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPolicyBindingSubjectsRow
+	var items []PolicyBindingAccount
 	for rows.Next() {
-		var i ListPolicyBindingSubjectsRow
-		if err := rows.Scan(
-			&i.BindingID,
-			&i.Kind,
-			&i.SubjectID,
-			&i.SubjectName,
-			&i.Position,
-		); err != nil {
+		var i PolicyBindingAccount
+		if err := rows.Scan(&i.BindingID, &i.AccountID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2027,7 +2014,7 @@ func (q *Queries) ListPolicyBindings(ctx context.Context) ([]PolicyBinding, erro
 }
 
 const listPolicyBudgets = `-- name: ListPolicyBudgets :many
-SELECT policy_id, budget_id, position FROM policy_budgets ORDER BY policy_id, position
+SELECT policy_id, budget_id, position, shared FROM policy_budgets ORDER BY policy_id, position
 `
 
 func (q *Queries) ListPolicyBudgets(ctx context.Context) ([]PolicyBudget, error) {
@@ -2039,31 +2026,12 @@ func (q *Queries) ListPolicyBudgets(ctx context.Context) ([]PolicyBudget, error)
 	var items []PolicyBudget
 	for rows.Next() {
 		var i PolicyBudget
-		if err := rows.Scan(&i.PolicyID, &i.BudgetID, &i.Position); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPolicyCredentials = `-- name: ListPolicyCredentials :many
-SELECT policy_id, host_key_id, position FROM policy_credentials ORDER BY policy_id, position
-`
-
-func (q *Queries) ListPolicyCredentials(ctx context.Context) ([]PolicyCredential, error) {
-	rows, err := q.db.Query(ctx, listPolicyCredentials)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PolicyCredential
-	for rows.Next() {
-		var i PolicyCredential
-		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
+		if err := rows.Scan(
+			&i.PolicyID,
+			&i.BudgetID,
+			&i.Position,
+			&i.Shared,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2099,7 +2067,7 @@ func (q *Queries) ListPolicyPools(ctx context.Context) ([]PolicyPool, error) {
 }
 
 const listPolicyRateLimits = `-- name: ListPolicyRateLimits :many
-SELECT policy_id, rate_limit_id, models, position FROM policy_rate_limits ORDER BY policy_id, position
+SELECT policy_id, rate_limit_id, models, position, shared FROM policy_rate_limits ORDER BY policy_id, position
 `
 
 func (q *Queries) ListPolicyRateLimits(ctx context.Context) ([]PolicyRateLimit, error) {
@@ -2116,6 +2084,7 @@ func (q *Queries) ListPolicyRateLimits(ctx context.Context) ([]PolicyRateLimit, 
 			&i.RateLimitID,
 			&i.Models,
 			&i.Position,
+			&i.Shared,
 		); err != nil {
 			return nil, err
 		}
@@ -2334,7 +2303,7 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 }
 
 const listRelayKeys = `-- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys ORDER BY name
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys ORDER BY name
 `
 
 type ListRelayKeysRow struct {
@@ -2350,6 +2319,7 @@ type ListRelayKeysRow struct {
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
+	AccountID       pgtype.Text        `db:"account_id" json:"account_id"`
 }
 
 func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
@@ -2374,6 +2344,7 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
+			&i.AccountID,
 		); err != nil {
 			return nil, err
 		}
@@ -2934,6 +2905,25 @@ func (q *Queries) RotateRelayKey(ctx context.Context, arg RotateRelayKeyParams) 
 	return result.RowsAffected(), nil
 }
 
+const setAccountMembership = `-- name: SetAccountMembership :execrows
+UPDATE accounts SET closed = $2, follows_role_bindings = $3, updated_at = NOW()
+WHERE id = $1 AND (closed <> $2 OR follows_role_bindings <> $3)
+`
+
+type SetAccountMembershipParams struct {
+	ID                  string `db:"id" json:"id"`
+	Closed              bool   `db:"closed" json:"closed"`
+	FollowsRoleBindings bool   `db:"follows_role_bindings" json:"follows_role_bindings"`
+}
+
+func (q *Queries) SetAccountMembership(ctx context.Context, arg SetAccountMembershipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAccountMembership, arg.ID, arg.Closed, arg.FollowsRoleBindings)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setBatchCompleted = `-- name: SetBatchCompleted :exec
 UPDATE batches SET status = $2, completed_at = NOW() WHERE id = $1
 `
@@ -3165,8 +3155,8 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 }
 
 const upsertAccount = `-- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name          = EXCLUDED.name,
     display_name  = EXCLUDED.display_name,
@@ -3174,19 +3164,35 @@ ON CONFLICT (id) DO UPDATE SET
     metadata      = EXCLUDED.metadata,
     spec          = EXCLUDED.spec,
     default_owner = EXCLUDED.default_owner,
+    kind          = EXCLUDED.kind,
+    managed_key   = EXCLUDED.managed_key,
+    holder_user_id = EXCLUDED.holder_user_id,
+    holder_sa_id  = EXCLUDED.holder_sa_id,
+    team_id       = EXCLUDED.team_id,
+    project_id    = EXCLUDED.project_id,
+    closed        = EXCLUDED.closed,
+    follows_role_bindings = EXCLUDED.follows_role_bindings,
     updated_at    = NOW()
-WHERE $8::bigint IS NULL OR accounts.resource_version = $8::bigint
+WHERE $16::bigint IS NULL OR accounts.resource_version = $16::bigint
 `
 
 type UpsertAccountParams struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	HostID          string      `db:"host_id" json:"host_id"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	DefaultOwner    pgtype.Text `db:"default_owner" json:"default_owner"`
-	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
+	ID                  string      `db:"id" json:"id"`
+	Name                string      `db:"name" json:"name"`
+	DisplayName         string      `db:"display_name" json:"display_name"`
+	HostID              pgtype.Text `db:"host_id" json:"host_id"`
+	Metadata            []byte      `db:"metadata" json:"metadata"`
+	Spec                []byte      `db:"spec" json:"spec"`
+	DefaultOwner        pgtype.Text `db:"default_owner" json:"default_owner"`
+	Kind                string      `db:"kind" json:"kind"`
+	ManagedKey          pgtype.Text `db:"managed_key" json:"managed_key"`
+	HolderUserID        pgtype.Text `db:"holder_user_id" json:"holder_user_id"`
+	HolderSaID          pgtype.Text `db:"holder_sa_id" json:"holder_sa_id"`
+	TeamID              pgtype.Text `db:"team_id" json:"team_id"`
+	ProjectID           pgtype.Text `db:"project_id" json:"project_id"`
+	Closed              bool        `db:"closed" json:"closed"`
+	FollowsRoleBindings bool        `db:"follows_role_bindings" json:"follows_role_bindings"`
+	ExpectedVersion     pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
 func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (int64, error) {
@@ -3198,6 +3204,14 @@ func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (i
 		arg.Metadata,
 		arg.Spec,
 		arg.DefaultOwner,
+		arg.Kind,
+		arg.ManagedKey,
+		arg.HolderUserID,
+		arg.HolderSaID,
+		arg.TeamID,
+		arg.ProjectID,
+		arg.Closed,
+		arg.FollowsRoleBindings,
 		arg.ExpectedVersion,
 	)
 	if err != nil {
@@ -3619,8 +3633,8 @@ func (q *Queries) UpsertRateLimit(ctx context.Context, arg UpsertRateLimitParams
 }
 
 const upsertRelayKey = `-- name: UpsertRelayKey :execrows
-INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, account_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
@@ -3628,10 +3642,11 @@ ON CONFLICT (id) DO UPDATE SET
     previous_key_hash = EXCLUDED.previous_key_hash,
     principal_sa_id   = EXCLUDED.principal_sa_id,
     principal_user_id = EXCLUDED.principal_user_id,
+    account_id        = EXCLUDED.account_id,
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
     updated_at = NOW()
-WHERE $10::bigint IS NULL OR relay_keys.resource_version = $10::bigint
+WHERE $11::bigint IS NULL OR relay_keys.resource_version = $11::bigint
 `
 
 type UpsertRelayKeyParams struct {
@@ -3642,6 +3657,7 @@ type UpsertRelayKeyParams struct {
 	PreviousKeyHash pgtype.Text `db:"previous_key_hash" json:"previous_key_hash"`
 	PrincipalSaID   pgtype.Text `db:"principal_sa_id" json:"principal_sa_id"`
 	PrincipalUserID pgtype.Text `db:"principal_user_id" json:"principal_user_id"`
+	AccountID       pgtype.Text `db:"account_id" json:"account_id"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
 	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
@@ -3656,6 +3672,7 @@ func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) 
 		arg.PreviousKeyHash,
 		arg.PrincipalSaID,
 		arg.PrincipalUserID,
+		arg.AccountID,
 		arg.Metadata,
 		arg.Spec,
 		arg.ExpectedVersion,

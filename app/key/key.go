@@ -45,7 +45,10 @@ type Key struct {
 // stored anywhere.
 type Spec struct {
 	// Principal is the subject this key authenticates as. Required.
-	Principal Principal `json:"principal" yaml:"principal" validate:"required" doc:"The service account or user the key authenticates as; its policies govern the key's requests. Fixed at create."`
+	Principal Principal `json:"principal" yaml:"principal" validate:"required" doc:"The service account or user the key authenticates as. Fixed at create."`
+
+	// AccountID is the key's default lane: the account its requests run in and are charged to unless a request names another the principal holds.
+	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid" doc:"Id of the account the key's requests run in by default: one the principal holds (a service account's account, the user's personal or member account) or a provider account the principal may use. Optional on create: a service account's key defaults to its account, a user's key to the personal account."`
 
 	// KeyHash is sha256(plaintext) hex. Required and immutable after create.
 	KeyHash string `json:"keyHash" yaml:"keyHash" validate:"required,len=64,hexadecimal" readOnly:"true" doc:"Hex SHA-256 of the plaintext key. Server-managed; an update cannot change it."`
@@ -79,9 +82,8 @@ type Spec struct {
 
 	// PayloadLoggingEnabled opts requests authenticated by this key into
 	// full request/response body capture by the payloadlog observer. Off
-	// by default. Ignored while a policy governs the key: the policy's own
-	// flag decides then (policy.CapturesPayload).
-	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. A governing policy's flag overrides it."`
+	// by default. An account on the request's ladder that sets payloadLogging decides instead.
+	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. An account on the request's ladder (the lane, its project, its team) that sets payloadLogging decides instead."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
