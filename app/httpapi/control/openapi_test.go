@@ -157,7 +157,7 @@ func TestControlOpenAPIHasSharing(t *testing.T) {
 		"AccountReceiver":   {"kind", "id"},
 		"AccountSpec":       {"sourceAccountId", "sharedBy"},
 		"PoolSpec":          {"accountIds", "credentialIds"},
-		"HostKeyView":       {"readOnly"},
+		"HostKeyView":       {"readOnly", "prefix"},
 		"Event":             {"via_account_id"},
 	} {
 		props := schemaProps(t, doc, schema)
