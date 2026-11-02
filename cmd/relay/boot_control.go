@@ -26,6 +26,7 @@ import (
 	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/license"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/metrics"
@@ -36,7 +37,8 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	idStore *identity.Store, usersStore *user.Store, tokenSigner *control.TokenSigner, tokenVerifier *inference.TokenVerifier,
 	kvStore kv.Store, limiter *pkgratelimit.Limiter, sessMgr *session.Manager, licenseSvc *license.Service, cookieSecure bool,
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
-	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List, specs *adapter.Registry) (*http.Server, <-chan error) {
+	selector *keypool.Selector, hostHealth *hosthealth.Recorder, revoked *revocation.List, planView func() *engine.View,
+	specs *adapter.Registry) (*http.Server, <-chan error) {
 	ctrlRouter := chi.NewRouter()
 	ctrlRouter.Use(httpmw.SecurityHeaders)
 	if len(cfg.ControlAllowOrigins) > 0 {
@@ -83,6 +85,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 		Selector:       selector,
 		Adapters:       specs,
 		HostHealth:     hostHealth,
+		PlanView:       planView,
 		PublicURL:      cfg.PublicURL,
 		RuntimeConfig:  runtimeConfig(cfg),
 	}
