@@ -150,6 +150,7 @@ func registerKind[T any](
 	skipCreate bool,
 	protect huma.Middlewares,
 	filterSchema *filter.Schema[T],
+	usable *usableFilter[T],
 ) kindRows {
 	base := "/" + plural
 	tag := plural
@@ -180,10 +181,17 @@ func registerKind[T any](
 	listErrors := []int{401, 500}
 	listMW := protect
 	var listParams []*huma.Param
-	if filterSchema != nil {
+	if filterSchema != nil || usable != nil {
 		listErrors = []int{400, 401, 500}
 		listMW = withRawQuery(protect)
+	}
+	if filterSchema != nil {
 		listParams = filterParams(filterSchema)
+	}
+	if usable != nil {
+		listParams = append(listParams, usable.params(plural)...)
+		// A usable_by scope that is not there, or not the caller's to see, answers as a save naming it would.
+		listErrors = []int{400, 401, 404, 500}
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
@@ -198,6 +206,14 @@ func registerKind[T any](
 	}, func(ctx context.Context, _ *struct{}) (*listResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".list", authz.Resource{Kind: singular}); err != nil {
 			return nil, mapAuthzErr(err)
+		}
+		query := rawQueryFrom(ctx)
+		var usableBy *usableQuery[T]
+		if usable != nil {
+			var err error
+			if usableBy, query, err = usable.take(query); err != nil {
+				return nil, err
+			}
 		}
 		items, err := store.List(ctx)
 		if err != nil {
@@ -217,6 +233,11 @@ func registerKind[T any](
 			}
 			items = visible
 		}
+		if usableBy != nil {
+			if items, err = usableBy.keep(ctx, items); err != nil {
+				return nil, err
+			}
+		}
 		if enrichList != nil {
 			enrichList(ctx, items)
 		} else if enrich != nil {
@@ -226,7 +247,7 @@ func registerKind[T any](
 		}
 		out := &listResponse[T]{}
 		if filterSchema != nil {
-			q, err := filterSchema.Parse(rawQueryFrom(ctx))
+			q, err := filterSchema.Parse(query)
 			if err != nil {
 				var fe *filter.Error
 				if errors.As(err, &fe) {
@@ -507,6 +528,11 @@ func registerKind[T any](
 		if err := store.Delete(ctx, in.ID); err != nil {
 			if managed := managedError(err); managed != nil {
 				return nil, managed
+			}
+			// A store that answers in HTTP terms (a race the references scan lost) is passed through.
+			var se huma.StatusError
+			if errors.As(err, &se) {
+				return nil, err
 			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}

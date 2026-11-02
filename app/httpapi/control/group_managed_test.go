@@ -38,7 +38,7 @@ func TestManagedGroupWriteIsAConflict(t *testing.T) {
 	api := humachi.New(r, huma.DefaultConfig("groups-managed-test", "0"))
 	registerKind[group.Group](api, "groups", "group", store, testRBAC(), gmeta,
 		func(g *group.Group) error { return g.Validate() }, meta.OwnerSystem,
-		listScanResolver[group.Group](store, gmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil)
+		listScanResolver[group.Group](store, gmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil)
 
 	body := `{"metadata":{"id":"` + id + `","name":"ops","displayName":"Ops 2","owner":{"kind":"system"}},"spec":{}}`
 	for method, req := range map[string]string{http.MethodPut: body, http.MethodDelete: ""} {

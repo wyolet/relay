@@ -54,6 +54,10 @@ type AccountSpec struct {
 	// Default marks the account its owner's keys at the host join when they name none; at most one per owner and host.
 	Default        bool   `json:"default,omitempty"        yaml:"default,omitempty"`
 	PayloadLogging string `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" enum:"on,off"`
+	// SourceAccount names the real account a shared account reaches; host names the same host. Fixed once created.
+	SourceAccount string `json:"sourceAccount,omitempty" yaml:"sourceAccount,omitempty"`
+	// ServiceAccount names the service account a share with one is held by; metadata.owner is its project.
+	ServiceAccount string `json:"serviceAccount,omitempty" yaml:"serviceAccount,omitempty"`
 }
 
 // PoolDTO is the wire form of a Pool: one host's keys and how a key is
@@ -67,6 +71,8 @@ type PoolDTO struct {
 
 type PoolSpec struct {
 	Host string `json:"host" yaml:"host"`
+	// Accounts are provider-account names whose keys the pool draws on whole, tried before Credentials.
+	Accounts []string `json:"accounts,omitempty" yaml:"accounts,omitempty"`
 	// Credentials are host-key names; order is the preference for
 	// prioritized selection.
 	Credentials []string `json:"credentials,omitempty" yaml:"credentials,omitempty"`

@@ -16,9 +16,9 @@ A service account has one account. A user has several: a personal account, a mem
 | `personal` | A user's own account | The user | The user | With the user |
 | `member` | A user inside one team or project | That team or project | The user | When a role binding at that team or project names the user, or when the user mints an inference token for a project |
 | `service` | A service account's account | The service account's project | The service account | With the service account |
-| `provider` | One provider organization at one host | The system, a team, a project or a user | Nobody | Created explicitly, or as the owner's [default account](/concepts/key-pooling#default-accounts) at a host when its first host key names none |
+| `provider` | One provider organization at one host | The system, a team, a project or a user | Nobody; a share with a service account is held by it | Created explicitly, as the owner's [default account](/concepts/key-pooling#default-accounts) at a host when its first host key names none, or by [sharing](/concepts/key-pooling#sharing-an-account) another provider account with the owner |
 
-`spec.kind` is derived from `spec.hostId`, `spec.holder` and the owner, and is read-only. `spec.holder` (`{kind: user | serviceaccount, id}`) names the principal of a personal, member or service account. Provider accounts are described on [Key pooling](/concepts/key-pooling#accounts).
+`spec.kind` is derived from `spec.hostId`, `spec.holder` and the owner, and is read-only. `spec.holder` (`{kind: user | serviceaccount, id}`) names the principal of a personal, member or service account, and the service account a share was made with. Provider accounts are described on [Key pooling](/concepts/key-pooling#accounts).
 
 ### Accounts Relay makes
 

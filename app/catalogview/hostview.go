@@ -26,6 +26,8 @@ type HostKeyView struct {
 	Kind        string `json:"kind"                  enum:"env,stored,oauth" doc:"Where the secret comes from; the secret itself is never shown."` // "env" | "stored"
 	DefaultTier string `json:"defaultTier,omitempty" deprecated:"true" doc:"Stored but not applied to requests."`
 	Enabled     bool   `json:"enabled"               doc:"Whether the key is enabled."`
+	Prefix      string `json:"prefix,omitempty"      doc:"What the caller may see of the secret, for recognising the key: its first 8 characters for whoever may edit the key; for anyone else, and through a share, only the key format's fixed prefix (such as sk-proj-) when it has a known one, then ... and the last 4 characters. Absent while the secret cannot be read or when it is shorter than 24 characters."`
+	ReadOnly    bool   `json:"readOnly,omitempty"    doc:"The key belongs to the real account of a shared account: listed for the receiver to see, never edited or revealed through the share. Its breaker state reads from GET /host-keys/by-id/{id}/health."`
 }
 
 // HostPolicyRow — a host-tier policy this host owns, with its rate-limit rule
@@ -65,7 +67,7 @@ func (s *Service) HostKeyList(ctx context.Context, ref string) (HostRef, []HostK
 		if !s.visible("host-key", k.Meta.ID, k.Meta.Owner) {
 			continue
 		}
-		rows = append(rows, hostKeyView(k))
+		rows = append(rows, s.hostKeyView(k, false))
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	return hostRefOf(h), rows, nil

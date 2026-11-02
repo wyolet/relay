@@ -1271,7 +1271,7 @@ func TestE2E_KeyRotate(t *testing.T) {
 	if rot.Key.Spec.KeyHash != sha256Hex(rot.Plaintext) {
 		t.Fatalf("KeyHash does not match sha256(plaintext)")
 	}
-	if rot.Key.Spec.Principal != principal {
+	if got := rot.Key.Spec.Principal; got.Kind != principal.Kind || got.ID != principal.ID {
 		t.Fatalf("rotation must not change the principal: want %+v, got %+v", principal, rot.Key.Spec.Principal)
 	}
 

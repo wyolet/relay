@@ -37,10 +37,18 @@ type directoryKind[T, D any] struct {
 	create directoryOp[D]
 	update directoryOp[D]
 	remove func(dir *directory.Directory, ctx context.Context, id string) error
+	// created runs after a create through the API wrote the row; nil for none.
+	created func(ctx context.Context, t *T) error
 }
 
 func (k directoryKind[T, D]) Create(ctx context.Context, t *T) error {
-	return k.write(ctx, t, k.create)
+	if err := k.write(ctx, t, k.create); err != nil {
+		return err
+	}
+	if k.created != nil {
+		return k.created(ctx, t)
+	}
+	return nil
 }
 
 func (k directoryKind[T, D]) Update(ctx context.Context, t *T) error {
@@ -88,10 +96,16 @@ func newDirectoryKinds(d Deps, ops directoryOps) directoryKinds {
 		teams: directoryKind[team.Team, directory.Team]{
 			entityStore: s.Team, ops: ops, toRow: (*team.Team).ToDirectory,
 			create: ungranted((*dir).CreateTeam), update: ungranted((*dir).UpdateTeam), remove: (*dir).DeleteTeam,
+			created: func(ctx context.Context, t *team.Team) error {
+				return grantCreatorAdmin(ctx, d, ops, meta.Owner{Kind: meta.OwnerTeam, ID: t.Meta.ID}, t.Meta, role.BuiltinTeamAdmin)
+			},
 		},
 		projects: directoryKind[project.Project, directory.Project]{
 			entityStore: s.Project, ops: ops, toRow: (*project.Project).ToDirectory,
 			create: ungranted((*dir).CreateProject), update: ungranted((*dir).UpdateProject), remove: (*dir).DeleteProject,
+			created: func(ctx context.Context, p *project.Project) error {
+				return grantCreatorAdmin(ctx, d, ops, meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}, p.Meta, role.BuiltinProjectAdmin)
+			},
 		},
 		serviceAccounts: directoryKind[serviceaccount.ServiceAccount, directory.ServiceAccount]{
 			entityStore: s.ServiceAccount, ops: ops, toRow: (*serviceaccount.ServiceAccount).ToDirectory,

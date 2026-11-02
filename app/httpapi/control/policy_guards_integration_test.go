@@ -138,7 +138,7 @@ func TestCheckRateLimitRefVisible_OwnProjectOrSharedOnly(t *testing.T) {
 	err = checkRateLimitRefVisible(outsider, d, own.Meta.ID, personal)
 	if err == nil {
 		t.Error("a personal row referenced a project's rate limit")
-	} else if got := err.Error(); !strings.Contains(got, "personal rows cannot reference project resources") &&
+	} else if got := err.Error(); !strings.Contains(got, "a personal row uses a project's rows only where you may create keys") &&
 		!strings.Contains(got, "not found") {
 		t.Errorf("err = %q, want the reference refused", got)
 	}

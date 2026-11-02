@@ -113,8 +113,8 @@ type rungRead struct {
 // callerReads is everything a caller fold reads.
 type callerReads struct {
 	rungs [3]rungRead
-	// owned holds what the lane's scopes own, innermost first: the reach when no rung links; read only then.
-	owned []*OwnedCredentials
+	// owned holds what the lane's scopes own and what is shared with them, innermost first: the reach when no rung links; read only then.
+	owned [][]*PoolPlan
 	idx   *CatalogIndex
 	in    inputs
 }
@@ -174,6 +174,10 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 		}
 	}
 	if !rd.links() {
+		if acc.IsShared() {
+			// A shared account used as a lane reaches the keys of its real account.
+			rd.owned = append(rd.owned, readSharedLane(tx, id, &rd.in))
+		}
 		for _, s := range scopes {
 			rd.owned = append(rd.owned, readOwned(tx, s, &rd.in))
 		}
@@ -270,10 +274,28 @@ func readRung(tx *engine.Txn, r *rungRead, in *inputs) {
 	}
 }
 
-func readOwned(tx *engine.Txn, scope string, in *inputs) *OwnedCredentials {
+// readOwned is what scope reaches by ownership: its own keys. Accounts shared with it are reached only through a pool that lists them, so a share never changes routing on its own.
+func readOwned(tx *engine.Txn, scope string, in *inputs) []*PoolPlan {
 	oc := engine.Get[OwnedCredentials](tx, scope)
 	*in = append(*in, oc)
-	return oc
+	if oc == nil {
+		return nil
+	}
+	return oc.Pools
+}
+
+// readSharedLane is what a shared account used as a lane reaches: its real account's keys, narrowed by its own policy.
+func readSharedLane(tx *engine.Txn, id string, in *inputs) []*PoolPlan {
+	sa := engine.Get[SharedAccount](tx, id)
+	*in = append(*in, sa)
+	if sa == nil {
+		return nil
+	}
+	out := make([]*PoolPlan, len(sa.Slots))
+	for i, s := range sa.Slots {
+		out[i] = s.Alone
+	}
+	return out
 }
 
 // foldCaller folds read rungs into cp.
@@ -314,7 +336,7 @@ func foldCaller(cp *CallerPlan, rd callerReads) {
 			cp.PayloadLogging = a.Spec.PayloadLogging
 		}
 	}
-	cp.Pools = callerPools(cp, &rd)
+	cp.Pools = forHolder(callerPools(cp, &rd), cp.Holder)
 	// One table per plan: the keys of a lane share it; lanes with the same rungs fill their own.
 	cp.Routes = newRouteTable(cp, rd.idx)
 }
@@ -352,10 +374,8 @@ func callerPools(cp *CallerPlan, rd *callerReads) []*PoolPlan {
 	}
 	if inner < 0 {
 		var pools []*PoolPlan
-		for _, oc := range rd.owned {
-			if oc != nil {
-				pools = append(pools, oc.Pools...)
-			}
+		for _, reach := range rd.owned {
+			pools = append(pools, reach...)
 		}
 		return pools
 	}
@@ -369,12 +389,13 @@ func callerPools(cp *CallerPlan, rd *callerReads) []*PoolPlan {
 	return pools
 }
 
-// linkedPools reads the pools the policy links, leaving out the pools and credentials in unusable (sorted ids the account's scope may not use).
+// linkedPools reads the pools the policy links, leaving out the pools, credentials and accounts in unusable (sorted ids the account's scope may not use).
 func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, unusable []string, in *inputs) []*PoolPlan {
 	skip := func(id string) bool {
 		_, found := slices.BinarySearch(unusable, id)
 		return found
 	}
+	skipSlot := func(s *KeySlot) bool { return skip(s.Credential.Meta.ID) || skip(s.drawsOn()) }
 	var out []*PoolPlan
 	for _, pid := range ep.Policy.Spec.PoolIDs {
 		if skip(pid) {
@@ -383,7 +404,7 @@ func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, unusable []string, in *inpu
 		pp := engine.Get[PoolPlan](tx, pid)
 		*in = append(*in, pp)
 		if pp != nil && len(unusable) > 0 {
-			pp = withoutSlots(pp, skip)
+			pp = withoutSlots(pp, skipSlot)
 		}
 		if pp != nil {
 			out = append(out, pp)
@@ -392,11 +413,11 @@ func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, unusable []string, in *inpu
 	return out
 }
 
-// withoutSlots returns p without the slots whose credential skip names, p itself when none is, nil when none is left.
-func withoutSlots(p *PoolPlan, skip func(string) bool) *PoolPlan {
+// withoutSlots returns p without the slots skip names, p itself when none is, nil when none is left.
+func withoutSlots(p *PoolPlan, skip func(*KeySlot) bool) *PoolPlan {
 	kept := make([]*KeySlot, 0, len(p.Slots))
 	for _, s := range p.Slots {
-		if !skip(s.Credential.Meta.ID) {
+		if !skip(s) {
 			kept = append(kept, s)
 		}
 	}

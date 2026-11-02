@@ -52,6 +52,7 @@ func Fixture() []usage.Event {
 	r02.ProjectID = "project-a"
 	r02.HostID, r02.Host = "hid-1", "host-old"
 	r02.PoolID, r02.AccountID, r02.LaneAccountID = "pool-a", "acct-a", "lane-a"
+	r02.ViaAccountID = "via-a"
 
 	r03 := modelB("r03", 20, "pipeline", 429)
 	r03.Upstream = upstream(41_999)

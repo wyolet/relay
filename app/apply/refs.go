@@ -39,6 +39,7 @@ func (b *builder) refs() refcheck.Checker {
 			Role:           lookup(b, b.rows.Roles, func(x *role.Role) *meta.Metadata { return &x.Meta }),
 			ServiceAccount: lookup(b, b.rows.ServiceAccounts, func(x *serviceaccount.ServiceAccount) *meta.Metadata { return &x.Meta }),
 			MissingUsers:   b.missingUsers,
+			UserName:       b.userName,
 			RoleBindingsFor: func(_ context.Context, roleID string) ([]*rolebinding.RoleBinding, error) {
 				var out []*rolebinding.RoleBinding
 				for _, rb := range b.rows.RoleBindings {
@@ -82,6 +83,15 @@ func lookup[T any](b *builder, stored []*T, metaOf func(*T) *meta.Metadata) func
 		}
 		return byID[id]
 	}
+}
+
+func (b *builder) userName(_ context.Context, id string) string {
+	for _, u := range b.rows.Users {
+		if u.ID == id {
+			return u.Username
+		}
+	}
+	return ""
 }
 
 func (b *builder) missingUsers(_ context.Context, ids []string) ([]string, error) {

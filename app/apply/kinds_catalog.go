@@ -1,8 +1,10 @@
 package apply
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
@@ -56,10 +58,10 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.AccountDTO, account.Account]{
-		Kind: "Account", Docs: d.accounts, Names: b.idx.Accounts, Rows: b.rows.Accounts,
+		Kind: "Account", Docs: realAccountsFirst(d.accounts), Names: b.idx.Accounts, Rows: b.rows.Accounts,
 		To: manifest.ToAccount, Meta: func(a *account.Account) *meta.Metadata { return &a.Meta },
-		Upsert: s.Account.Upsert, Delete: s.Account.Delete,
-		Check: refsFor(b, refcheck.Checker.Account),
+		Upsert: s.Account.Upsert, Delete: b.deleteAccount,
+		Check: b.checkAccount(),
 		Keep: func(prev, next *account.Account) error {
 			if err := keepAccountPlace(prev, next); err != nil {
 				return err
@@ -69,6 +71,9 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		CheckCreate: refuseCallerAccountCreate,
 		CheckDelete: refuseCallerAccountPrune,
 	}); err != nil {
+		return err
+	}
+	if err := b.planShareRevokes(ctx, d.accounts); err != nil {
 		return err
 	}
 	if err := planKind(ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
@@ -141,10 +146,13 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 // hostkey.Store.Upsert does, so the diff shows what the save writes. A key
 // moved to another owner or host leaves its account for the new owner's
 // default, which the save fills.
-// keepAccountPlace keeps what relay decides about a caller account (its owner, holder, closed mark and kind), so a document edits only its display fields and payload logging; a document cannot give it a host or turn a provider account into one.
+// keepAccountPlace keeps what relay decides about a caller account (its owner, holder, closed mark and kind), so a document edits only its display fields and payload logging; a document cannot give it a host or turn a provider account into one. A share keeps the account it was shared from and its receiver.
 func keepAccountPlace(prev, next *account.Account) error {
 	if prev.IsProvider() != next.IsProvider() {
 		return fmt.Errorf("spec.host cannot be added to or removed from an account; a caller account has none and a provider account keeps its own")
+	}
+	if prev.Spec.SourceAccountID != next.Spec.SourceAccountID || (prev.IsShared() && prev.Receiver() != next.Receiver()) {
+		return fmt.Errorf("spec.sourceAccount and the receiver of a share are fixed: delete the share and share the account again")
 	}
 	if !prev.IsProvider() {
 		next.Meta.Owner, next.Spec.Holder = prev.Meta.Owner, prev.Spec.Holder
@@ -152,6 +160,47 @@ func keepAccountPlace(prev, next *account.Account) error {
 	}
 	next.Spec.Kind = next.DerivedKind()
 	return nil
+}
+
+// realAccountsFirst orders the documents so a real account is planned, and written, before the shares naming it.
+func realAccountsFirst(docs []*manifest.AccountDTO) []*manifest.AccountDTO {
+	out := slices.Clone(docs)
+	slices.SortStableFunc(out, func(a, b *manifest.AccountDTO) int {
+		return cmp.Compare(boolRank(a.Spec.SourceAccount != ""), boolRank(b.Spec.SourceAccount != ""))
+	})
+	return out
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// checkAccount runs the account rules and, for a share this run creates, the rules POST /accounts/{ref}/shares runs: who shares, and a receiver the caller sees that does not already reach the account.
+func (b *builder) checkAccount() func(context.Context, *account.Account) error {
+	check := refsFor(b, refcheck.Checker.Account)
+	if check == nil {
+		return nil
+	}
+	stored := make(map[string]bool, len(b.rows.Accounts))
+	for _, a := range b.rows.Accounts {
+		stored[a.Meta.ID] = true
+	}
+	return func(ctx context.Context, a *account.Account) error {
+		if err := check(ctx, a); err != nil {
+			return err
+		}
+		if !a.IsShared() || stored[a.Meta.ID] {
+			return nil
+		}
+		c := b.refs()
+		if src := c.Rows.Account(ctx, a.Spec.SourceAccountID); src != nil {
+			return c.Share(ctx, src, a)
+		}
+		return nil
+	}
 }
 
 // refuseCallerAccountCreate leaves caller accounts to relay, as the control API does: a document creates provider accounts only.

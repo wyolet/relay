@@ -181,6 +181,9 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planTenancy(ctx, teamDocs, projDocs); err != nil {
 		return err
 	}
+	if err := b.planServiceAccounts(ctx, saDocs); err != nil {
+		return err
+	}
 	if err := b.planCatalog(ctx, catalogDocs{
 		providers: provDocs, hosts: hostDocs, accounts: accDocs, rateLimits: rlDocs, budgets: budDocs,
 		hostKeys: hkDocs, pools: poolDocs, models: mDocs, pricings: prDocs, bindings: bndDocs, policies: polDocs,
@@ -195,7 +198,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		return err
 	}
 	b.planCallerAccounts(teamDocs, projDocs, saDocs, userDocs, rbDocs)
-	if err := b.planServiceAccountsAndKeys(ctx, saDocs, keyDocs); err != nil {
+	if err := b.planKeys(ctx, keyDocs); err != nil {
 		return err
 	}
 	// Bindings last: they name roles, tenancy rows, policies, and the

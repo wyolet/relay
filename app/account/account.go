@@ -1,4 +1,4 @@
-// Package account is the domain layer for the Account entity: what policies bind to and usage is charged to. A provider account is one provider organization at one host, whose tier limits every host key of the organization shares. A caller account is one relay keeps in step with the tenancy rows: one per team and per project, a personal account per user, one per service account, and a member account per user and team or project the user is a member of. A key lands in one account its principal holds, its default lane.
+// Package account is the domain layer for the Account entity: what policies bind to and usage is charged to. A provider account is one provider organization at one host, whose tier limits every host key of the organization shares. A caller account is one relay keeps in step with the tenancy rows: one per team and per project, a personal account per user, one per service account, and a member account per user and team or project the user is a member of. A key lands in one account its principal holds, its default lane. A shared account is a provider account owned by the user, team or project it was shared with (a service account's by its project, held by it) that holds no keys and reaches those of the real account it names.
 //
 // This package validates one row's shape, stores it, creates an owner's default provider account at a host on first use (Store.EnsureDefault), and creates a caller account idempotently (Store.EnsureManaged). Out of scope: learning org ids from upstream responses, deciding which caller accounts should exist (app/plan) and applying an account's policy to requests.
 package account
@@ -43,10 +43,49 @@ const (
 type Holder struct {
 	Kind HolderKind `json:"kind" yaml:"kind" validate:"required,oneof=user serviceaccount" enum:"user,serviceaccount" doc:"Whether a user or a service account acts in the account."`
 	ID   string     `json:"id"   yaml:"id"   validate:"required,uuid" doc:"Id of the user or service account."`
+	// Derived: filled on control API reads, never stored; compare holders by Kind and ID.
+	Name string `json:"name,omitempty" yaml:"-" readOnly:"true" doc:"Username of the user, or display name of the service account. Read-only: filled on reads for a caller who sees the account; ignored on writes."`
 }
 
 // Key renders the holder as a principal string, "user:<id>" or "serviceaccount:<id>".
 func (h *Holder) Key() string { return string(h.Kind) + ":" + h.ID }
+
+// ReceiverKind names who a provider account is shared with.
+type ReceiverKind string
+
+const (
+	ReceiverUser           ReceiverKind = "user"
+	ReceiverTeam           ReceiverKind = "team"
+	ReceiverProject        ReceiverKind = "project"
+	ReceiverServiceAccount ReceiverKind = "serviceaccount"
+)
+
+// Receiver is who a provider account is shared with.
+type Receiver struct {
+	Kind ReceiverKind `json:"kind" yaml:"kind" validate:"required,oneof=user team project serviceaccount" enum:"user,team,project,serviceaccount" doc:"Whether the account is shared with a user, a team, a project or a service account."`
+	ID   string       `json:"id"   yaml:"id"   validate:"required,uuid" doc:"Id of the user, team, project or service account."`
+}
+
+// Key renders the receiver as "<kind>:<id>", the form one share per receiver is keyed by.
+func (r Receiver) Key() string { return string(r.Kind) + ":" + r.ID }
+
+// ShareParty names one side of a share: the owner of the real account, or the receiver.
+type ShareParty struct {
+	Kind string `json:"kind" enum:"system,user,team,project,serviceaccount" doc:"Kind of the party: the system, a user, a team, a project or a service account."`
+	ID   string `json:"id,omitempty"   doc:"Id of the user, team, project or service account; empty for the system."`
+	Name string `json:"name,omitempty" doc:"Username, or slug of the team, project or service account; empty for the system or when the row is gone."`
+}
+
+// IsShared reports whether a is a shared account: one that reaches another provider account's keys and holds none of its own.
+func (a *Account) IsShared() bool { return a.Spec.SourceAccountID != "" }
+
+// Receiver is who a shared account was shared with: its holder for a service account's share, else its owner.
+func (a *Account) Receiver() Receiver {
+	if h := a.Spec.Holder; h != nil && h.Kind == HolderServiceAccount {
+		return Receiver{Kind: ReceiverServiceAccount, ID: h.ID}
+	}
+	return Receiver{Kind: ReceiverKind(a.Meta.Owner.Kind), ID: a.Meta.Owner.ID}
+}
 
 // TakesKeysOf reports whether a relay key of principal may run in a. A key outlives the membership it was made under, so it lands only where relay re-checks that membership itself: the principal's personal or service account, a member account that follows role bindings, or a provider account the key's user owns personally. A member account opened on first use (a group or team-level grant relay cannot see) serves minted tokens only, and team, project and system provider accounts are reached through the caller ladder, never as a lane.
 func (a *Account) TakesKeysOf(principal Holder) bool {
@@ -90,6 +129,12 @@ type Spec struct {
 
 	// Closed is set on a member account whose membership ended; its keys are refused.
 	Closed bool `json:"closed,omitempty" yaml:"-" readOnly:"true" doc:"The membership this member account stood for has ended: its keys are refused with account_closed. Reopened when a role grants the membership again. Server-managed."`
+
+	// SourceAccountID marks a shared account: the provider account whose keys it reaches. It holds no keys of its own, and is fixed at create.
+	SourceAccountID string `json:"sourceAccountId,omitempty" yaml:"sourceAccountId,omitempty" readOnly:"true" validate:"omitempty,uuid" doc:"Set on a shared account: the id of the provider account whose keys it reaches. A shared account holds no host keys of its own; its requests use the real account's keys, count on the real account's tier, and only narrow by the policy bound to the shared account. Made by POST /accounts/{ref}/shares; fixed at create."`
+
+	// SharedBy is derived on read from the real account's owner.
+	SharedBy *ShareParty `json:"sharedBy,omitempty" yaml:"-" readOnly:"true" doc:"Set on a shared account: the owner of the real account, who shared it, always named to whoever sees the share (sharing it was their choice). Derived on read."`
 }
 
 // DerivedKind is the account's kind from its host, holder and owner; "" when they fit no kind.
@@ -97,7 +142,8 @@ func (a *Account) DerivedKind() Kind {
 	o := a.Meta.Owner
 	switch h := a.Spec.Holder; {
 	case a.Spec.HostID != "":
-		if h == nil {
+		// A service account's share is owned by its project and held by it, so only its lane draws on it.
+		if h == nil || (a.IsShared() && h.Kind == HolderServiceAccount && o.Kind == meta.OwnerProject) {
 			return KindProvider
 		}
 	case h == nil:
@@ -168,14 +214,39 @@ func (a *Account) Validate() error {
 	k := a.DerivedKind()
 	switch {
 	case k == "" && a.Spec.HostID != "":
-		return fmt.Errorf("account %q: a provider account (spec.hostId set) has no holder", a.Meta.Name)
+		return fmt.Errorf("account %q: a provider account (spec.hostId set) has no holder, except a service account's share, owned by its project", a.Meta.Name)
 	case k == "":
 		return fmt.Errorf("account %q: spec.hostId is required unless the account is a team's, a project's, a user's personal account, a member account or a service account's", a.Meta.Name)
 	case k != KindProvider && (a.Spec.OrgID != "" || a.Spec.Default):
 		return fmt.Errorf("account %q: orgId and default are for provider accounts only", a.Meta.Name)
+	case a.IsShared() && k != KindProvider:
+		return fmt.Errorf("account %q: only a provider account is shared", a.Meta.Name)
+	case a.IsShared() && (a.Spec.OrgID != "" || a.Spec.Default):
+		return fmt.Errorf("account %q: a shared account takes its org and keys from the real account; orgId and default stay on that one", a.Meta.Name)
+	case a.IsShared() && o.Kind == meta.OwnerSystem:
+		return fmt.Errorf("account %q: a shared account is owned by the user, team or project it was shared with", a.Meta.Name)
+	case a.IsShared() && a.Spec.SourceAccountID == a.Meta.ID:
+		return fmt.Errorf("account %q: an account cannot be shared with itself", a.Meta.Name)
 	}
 	a.Spec.Kind = k
 	return nil
+}
+
+// Share is the account sharing src with r, owned by owner (r itself, or a service account's project) and named after src and receiverName; the store mints the final name.
+func Share(src *Account, r Receiver, owner meta.Owner, receiverName string) *Account {
+	name := slug.From(src.Meta.Name + "-for-" + receiverName)
+	if name == "" {
+		name = "account"
+	}
+	a := &Account{
+		Meta: meta.Metadata{Name: name, DisplayName: orName(src.Meta.DisplayName, src.Meta.Name), Owner: owner},
+		Spec: Spec{HostID: src.Spec.HostID, SourceAccountID: src.Meta.ID},
+	}
+	if r.Kind == ReceiverServiceAccount {
+		a.Spec.Holder = &Holder{Kind: HolderServiceAccount, ID: r.ID}
+	}
+	a.Spec.Kind = a.DerivedKind()
+	return a
 }
 
 // Caller-account name prefixes, so a team, a project and a user of one name get accounts that read apart.

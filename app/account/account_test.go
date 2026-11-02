@@ -111,3 +111,63 @@ func TestKindsAndPlaces(t *testing.T) {
 		t.Errorf("personal account name = %q", p.Meta.Name)
 	}
 }
+
+// A share is a provider account owned by its receiver, a service account's by its project and held by it, and keyed by receiver so one account is shared with one receiver once.
+func TestShare(t *testing.T) {
+	src := fix()
+	proj, sa, team := meta.NewID(), meta.NewID(), meta.NewID()
+	for _, tc := range []struct {
+		name  string
+		r     Receiver
+		owner meta.Owner
+		key   string
+	}{
+		{"team", Receiver{Kind: ReceiverTeam, ID: team}, meta.Owner{Kind: meta.OwnerTeam, ID: team}, "team:" + team},
+		{"service account", Receiver{Kind: ReceiverServiceAccount, ID: sa}, meta.Owner{Kind: meta.OwnerProject, ID: proj}, "serviceaccount:" + sa},
+	} {
+		a := Share(src, tc.r, tc.owner, "Platform")
+		a.Meta.ID = meta.NewID()
+		if err := a.Validate(); err != nil {
+			t.Fatalf("%s: Validate() = %v", tc.name, err)
+		}
+		if a.Spec.Kind != KindProvider || !a.IsShared() || a.Spec.HostID != src.Spec.HostID || a.ManagedKey() != "" {
+			t.Errorf("%s: kind %q shared %v host %q place %q", tc.name, a.Spec.Kind, a.IsShared(), a.Spec.HostID, a.ManagedKey())
+		}
+		if a.Meta.Name != "acme-openai-for-platform" || a.Receiver().Key() != tc.key {
+			t.Errorf("%s: name %q receiver %q, want acme-openai-for-platform %q", tc.name, a.Meta.Name, a.Receiver().Key(), tc.key)
+		}
+		p, err := toUpsertParams(a)
+		if err != nil || p.SourceAccountID.String != src.Meta.ID || p.ShareReceiver.String != tc.key {
+			t.Errorf("%s: params source %+v receiver %+v err %v", tc.name, p.SourceAccountID, p.ShareReceiver, err)
+		}
+	}
+	if a := fix(); a.TakesKeysOf(Holder{Kind: HolderServiceAccount, ID: sa}) {
+		t.Error("a service account's key lands in a provider account")
+	}
+}
+
+func TestValidateShare(t *testing.T) {
+	share := func() *Account {
+		a := Share(fix(), Receiver{Kind: ReceiverTeam, ID: "t"}, meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}, "t")
+		a.Meta.ID = meta.NewID()
+		return a
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(a *Account)
+		want string
+	}{
+		{name: "org id stays on the real account", edit: func(a *Account) { a.Spec.OrgID = "org" }, want: "orgId and default stay"},
+		{name: "default stays on the real account", edit: func(a *Account) { a.Spec.Default = true }, want: "orgId and default stay"},
+		{name: "the system receives no share", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem} }, want: "owned by the user, team or project"},
+		{name: "a user holder is no share's", edit: func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: meta.NewID()} }, want: "has no holder"},
+		{name: "a service account's share outside a project", edit: func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderServiceAccount, ID: meta.NewID()} }, want: "has no holder"},
+		{name: "not shared with itself", edit: func(a *Account) { a.Spec.SourceAccountID = a.Meta.ID }, want: "with itself"},
+	} {
+		a := share()
+		tc.edit(a)
+		if err := a.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: Validate() = %v, want error mentioning %q", tc.name, err, tc.want)
+		}
+	}
+}

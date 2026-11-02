@@ -83,7 +83,7 @@ func TestCheckPolicyRefVisible_PersonalRowCannotReferenceProjectPolicy(t *testin
 		// project, depending on what the caller may see; both are 400s that
 		// keep the reference out.
 		got := err.Error()
-		if !strings.Contains(got, "personal rows cannot reference project resources") &&
+		if !strings.Contains(got, "a personal row uses a project's rows only where you may create keys") &&
 			!strings.Contains(got, "not found") {
 			t.Fatalf("err = %q, want the reference refused", got)
 		}
@@ -149,8 +149,8 @@ func TestCheckHostKeyRefsVisible_PersonalRowCannotReferenceProjectHostKey(t *tes
 		if err == nil {
 			t.Fatal("want an error, got nil")
 		}
-		if got := err.Error(); !strings.Contains(got, "personal rows cannot reference project resources") {
-			t.Fatalf("err = %q, want it to mention personal rows cannot reference project resources", got)
+		if got := err.Error(); !strings.Contains(got, "cannot hold a project's host keys") {
+			t.Fatalf("err = %q, want it to say a personal row cannot hold a project's host keys", got)
 		}
 	})
 

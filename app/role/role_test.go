@@ -111,7 +111,7 @@ func TestBuiltins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Builtins: %v", err)
 	}
-	want := []string{"admin", "auditor", "catalog-editor", "team-admin", "project-admin", "developer", "viewer"}
+	want := []string{"admin", "auditor", "catalog-editor", BuiltinTeamAdmin, BuiltinProjectAdmin, "developer", "viewer"}
 	if len(roles) != len(want) {
 		t.Fatalf("got %d built-in roles, want %d", len(roles), len(want))
 	}

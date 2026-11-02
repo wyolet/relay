@@ -79,6 +79,7 @@ func newAuditHarness(t *testing.T, inner authz.Authorizer, seed ...*scopedThing)
 		false,
 		nil,
 		nil,
+		nil,
 	)
 	return r, sink, em
 }

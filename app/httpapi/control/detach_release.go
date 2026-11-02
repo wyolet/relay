@@ -17,6 +17,7 @@ import (
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/share"
 )
 
 // release makes the referencing row it let go of t, mirroring the detachable
@@ -61,6 +62,36 @@ func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*r
 		return d.releaseRole(ctx, it, t)
 	}
 	return nil, nil
+}
+
+// releaseShare revokes an account shared from the target, as its own delete does: by a caller who may share the real account or delete in the receiver's scope, always going through. It returns the share and every row the revoke changed.
+func (d Deps) releaseShare(ctx context.Context, it referenceItem) ([]releasedRow, error) {
+	a, err := d.Stores.Account.Get(ctx, it.ID)
+	if err != nil || a == nil || !a.IsShared() {
+		return nil, err
+	}
+	src, err := d.Stores.Account.Get(ctx, a.Spec.SourceAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if src == nil || refs(d).MayShare(ctx, src) != nil {
+		if err := d.Authz.Authorize(ctx, "accounts.delete", authz.Resource{Kind: "account", ID: a.Meta.ID, Owner: &a.Meta.Owner}); err != nil {
+			return nil, failOrKeep(mapAuthzErr(err))
+		}
+	}
+	changes, err := share.Revoke(ctx, d.shareStores(), a.Meta.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := []releasedRow{{item: it, action: "accounts.delete", fields: []string{audit.AnyField}}}
+	for _, c := range revokeItems(changes) {
+		action := authz.Plural(c.Kind) + ".update"
+		if c.deleted {
+			action = authz.Plural(c.Kind) + ".delete"
+		}
+		out = append(out, releasedRow{item: c, action: action, fields: []string{c.Via}})
+	}
+	return out, nil
 }
 
 // rowEdit lets one referencing row of type T go of the target through the
