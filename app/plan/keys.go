@@ -139,13 +139,8 @@ func (c *controllers) keyPlan(tx *engine.Txn, id string) error {
 		return nil
 	}
 	src := engine.Ref{Kind: KindKey, ID: id}
-	laneID := k.Spec.AccountID
-	if laneID == "" {
-		// A key saved without a lane runs in its principal's own account.
-		if m := engine.Get[ManagedAccount](tx, ownAccountKey(k.Spec.Principal)); m != nil && m.Row != nil {
-			laneID = m.Row.Meta.ID
-		}
-	}
+	// A key saved without a lane runs in its principal's own account.
+	laneID := keyLaneID(tx, k)
 	var cp *CallerPlan
 	if laneID != "" {
 		cp = engine.Get[CallerPlan](tx, accountSubject(laneID))
