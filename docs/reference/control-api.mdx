@@ -138,7 +138,7 @@ curl -X POST http://localhost:8081/api/keys \
 }
 ```
 
-`spec.principal` is required. Optional fields: `accountId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. `accountId` is the key's default [lane](/concepts/accounts#a-keys-default-lane): left out, the service account's account or the user's personal account; an account the principal may not run keys in answers `403 account_not_held`, and a closed one `400`. A key holds no policy: bind one to its account instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal; it may move the key to another account under the same rules.
+`spec.principal` left out makes the key the signed-in user's; the admin token must name one, or the create answers `400`. Optional fields: `accountId`, `expiresAt`, `enabled`, `passthroughAllowed` ([proxy mode](/concepts/proxy-mode)) and `payloadLoggingEnabled`. `accountId` is the key's default [lane](/concepts/accounts#a-keys-default-lane): left out, the service account's account or the user's personal account; an account the principal may not run keys in answers `403 account_not_held`, and a closed one `400`. A key holds no policy: bind one to its account instead. Relay stores only a hash of the plaintext; save it on receipt, it cannot be read again. A PUT never changes the key's value, hash or principal; it may move the key to another account under the same rules.
 
 Create and rotate answer once the pod that handled them authenticates the new value, waiting up to 5 seconds, so the plaintext can be used at once. `GET /api/keys?account_id=<id>` lists the keys whose default lane is an account.
 

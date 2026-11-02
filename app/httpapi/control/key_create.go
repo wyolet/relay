@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
@@ -25,7 +26,7 @@ type createKeyMetadata struct {
 }
 
 type createKeySpec struct {
-	Principal             key.Principal `json:"principal"                       doc:"The service account or user the key acts as. Its owner becomes the key's owner."`
+	Principal             key.Principal `json:"principal,omitempty"             doc:"The service account or user the key acts as. Its owner becomes the key's owner. Omitted: the signed-in user; the admin token must name one."`
 	AccountID             string        `json:"accountId,omitempty"             format:"uuid" doc:"Id of the account the key's requests run in by default: the service account's account, the user's personal account, a member account a role binding grants the user, or a provider account the user owns personally. Any other answers 403 account_not_held. Omitted: the service account's account, or the user's personal account."`
 	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"             doc:"When the key stops authenticating. Omitted never expires."`
 	Enabled               *bool         `json:"enabled,omitempty"               doc:"False creates the key disabled. Omitted means true."`
@@ -83,6 +84,13 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 			k.Meta.Name = slug.Unique(base, slugTakenFn(d.Stores.Key, func(rk *key.Key) *meta.Metadata { return &rk.Meta }))
 		}
 		k.Spec.Principal = in.Body.Spec.Principal
+		if k.Spec.Principal == (key.Principal{}) {
+			a := actor.From(ctx)
+			if a == nil || a.AdminToken || a.UserID == "" {
+				return nil, huma.Error400BadRequest("spec.principal is required here: the admin token is no user, so name the service account or user the key acts as")
+			}
+			k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: a.UserID}
+		}
 		if err := refs(d).KeyOwner(ctx, k); err != nil {
 			return nil, refErr(err)
 		}
