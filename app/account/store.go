@@ -88,7 +88,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteAccount(ctx, id)
 }
 
-// EnsureManaged returns the id of the caller account want describes, creating it on first use with want's name, suffixed -2, -3, … when taken. Concurrent first saves converge on one row.
+// EnsureManaged returns the id of the caller account want describes, creating it on first use with want's name, suffixed -2, -3, … when taken, and want's id when it carries one. Concurrent first saves converge on one row, whose id the caller gets back.
 func (s *Store) EnsureManaged(ctx context.Context, want *Account) (string, error) {
 	key := want.ManagedKey()
 	if key == "" {
@@ -111,7 +111,10 @@ func (s *Store) EnsureManaged(ctx context.Context, want *Account) (string, error
 			return "", fmt.Errorf("account.EnsureManaged: %w", err)
 		}
 		a := *want
-		a.Meta.ID, a.Meta.Name = meta.NewID(), name
+		a.Meta.Name = name
+		if a.Meta.ID == "" || attempt > 0 {
+			a.Meta.ID = meta.NewID()
+		}
 		p, err := toUpsertParams(&a)
 		if err != nil {
 			return "", fmt.Errorf("account.EnsureManaged: %w", err)

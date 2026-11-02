@@ -47,7 +47,7 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 	if err := planKind(ctx, b, kindWiring[manifest.PolicyBindingDTO, policybinding.PolicyBinding]{
 		Kind: "PolicyBinding", Docs: pbDocs, Names: b.idx.PolicyBindings, Rows: b.rows.PolicyBindings,
 		To: manifest.ToPolicyBinding, Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
-		Upsert: s.PolicyBinding.Upsert, Delete: s.PolicyBinding.Delete,
+		Upsert: b.upsertPolicyBinding, Delete: s.PolicyBinding.Delete,
 		// Which accounts and policies a binding may name is a rule of the rows, not of the caller, so the seed and the CLI run it too.
 		Check: func() func(context.Context, *policybinding.PolicyBinding) error {
 			c := b.refs()

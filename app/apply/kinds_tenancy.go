@@ -52,7 +52,7 @@ func (b *builder) planServiceAccountsAndKeys(ctx context.Context, saDocs []*mani
 	if err := planKind(ctx, b, kindWiring[manifest.KeyDTO, key.Key]{
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
-		Upsert: s.Key.Upsert, Delete: s.Key.Delete,
+		Upsert: b.upsertKey, Delete: s.Key.Delete,
 		Check:       refsFor(b, refcheck.Checker.Key),
 		Keep:        keepKeyServerFields,
 		CheckCreate: b.checkKeyCreate,
