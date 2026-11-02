@@ -112,6 +112,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		out := &rotateKeyResponse{}
 		out.Body.Plaintext = gen.Plaintext
+		enrichKey(d)(ctx, rotated)
 		out.Body.Key = rotated
 		return out, nil
 	})

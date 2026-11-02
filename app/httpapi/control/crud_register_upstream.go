@@ -26,7 +26,7 @@ func registerUpstreamCRUD(api huma.API, d Deps, protect huma.Middlewares, rows k
 		listScanResolver(d.Stores.Account, ameta),
 		guardAccount(d),
 		d.enrichAccount,
-		nil,
+		d.enrichAccounts,
 		d.accountInUse,
 		mergeAccountServerFields,
 		d.Catalog,

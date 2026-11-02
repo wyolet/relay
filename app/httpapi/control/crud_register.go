@@ -312,8 +312,8 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		meta.OwnerProject,
 		listScanResolver(d.Stores.Key, rkmeta),
 		guardKeyAccount(d),
-		nil,
-		nil,
+		enrichKey(d),
+		enrichKeys(d),
 		d.refuseInUse,
 		// Credential material is server-managed: PUT can neither wipe nor
 		// overwrite it. Rotation goes through POST /keys/by-id/{id}/rotate.

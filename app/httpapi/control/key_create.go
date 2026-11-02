@@ -83,7 +83,7 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			k.Meta.Name = slug.Unique(base, slugTakenFn(d.Stores.Key, func(rk *key.Key) *meta.Metadata { return &rk.Meta }))
 		}
-		k.Spec.Principal = in.Body.Spec.Principal
+		k.Spec.Principal = key.Principal{Kind: in.Body.Spec.Principal.Kind, ID: in.Body.Spec.Principal.ID}
 		if k.Spec.Principal == (key.Principal{}) {
 			a := actor.From(ctx)
 			if a == nil || a.AdminToken || a.UserID == "" {
@@ -126,6 +126,7 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 
 		out := &createKeyResponse{}
 		out.Body.Plaintext = gen.Plaintext
+		enrichKey(d)(ctx, created)
 		out.Body.Key = created
 		return out, nil
 	})

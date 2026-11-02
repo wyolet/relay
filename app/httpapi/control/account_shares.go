@@ -281,8 +281,24 @@ func (d Deps) ownerName(ctx context.Context, o meta.Owner) string {
 	return ""
 }
 
-// enrichAccount fills a shared account's sharedBy from its real account's owner.
+// enrichAccount fills a shared account's sharedBy and the holder's name.
 func (d Deps) enrichAccount(ctx context.Context, a *account.Account) {
+	d.enrichSharedBy(ctx, a)
+	newPrincipalNamer(ctx, d, false).nameHolder(ctx, sharerAuthz{Authorizer: d.Authz, d: d}, a)
+}
+
+// enrichAccounts is enrichAccount over a list, reading users and service accounts once.
+func (d Deps) enrichAccounts(ctx context.Context, items []*account.Account) {
+	n := newPrincipalNamer(ctx, d, len(items) > 1)
+	az := sharerAuthz{Authorizer: d.Authz, d: d}
+	for _, a := range items {
+		d.enrichSharedBy(ctx, a)
+		n.nameHolder(ctx, az, a)
+	}
+}
+
+// enrichSharedBy fills a shared account's sharedBy from its real account's owner.
+func (d Deps) enrichSharedBy(ctx context.Context, a *account.Account) {
 	if !a.IsShared() || d.Stores == nil || d.Stores.Account == nil {
 		return
 	}
