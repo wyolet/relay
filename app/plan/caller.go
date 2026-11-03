@@ -6,13 +6,8 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/serviceaccount"
-	"github.com/wyolet/relay/app/team"
-	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
 )
 
@@ -143,7 +138,7 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 				tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssuePersonalAccountOff, Source: engine.Ref{Kind: KindAccount, ID: acc.Meta.ID}, Field: "metadata.owner",
 					Message: "personal accounts are turned off for " + off.name() + "; this account and its keys serve nothing until they are on again"})
 			}
-			cp := refusedPlan(acc, &Refusal{Code: CodePersonalAccountOff, Rung: limits.RungLane, SubjectID: subject, Message: off.offMessage()})
+			cp := refusedPlan(acc, personalOffRefusal(off, subject))
 			if h := acc.Spec.Holder; h != nil {
 				cp.Holder = h.Key()
 			}
@@ -152,59 +147,21 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 			return nil
 		}
 	}
-	rd := callerReads{in: inputs{acc}}
-	rd.rungs = [3]rungRead{{rung: Rung{Kind: limits.RungTeam}}, {rung: Rung{Kind: limits.RungProject}}, {rung: Rung{Kind: limits.RungLane}}}
-	cp := &CallerPlan{Lane: acc, budgetAt: -1, linkedAt: -1}
-	var scopes []string // owner scopes whose credentials the lane reaches without a linking rung, innermost first
-	switch kind {
-	case account.KindProvider:
-		scopes = []string{subject}
-	case account.KindPersonal:
-		if !c.readHolder(tx, &rd, acc) {
-			engine.Drop(tx)
-			return nil
-		}
-		scopes = []string{ownerRef(acc.Meta.Owner), "system:"}
-	case account.KindMember, account.KindService:
-		if !c.readHolder(tx, &rd, acc) || !readScopes(tx, &rd, acc) {
-			engine.Drop(tx)
-			return nil
-		}
-		if p := rd.rungs[rungProject].rung.ScopeID; p != "" {
-			scopes = append(scopes, "project:"+p)
-		}
-		scopes = append(scopes, "team:"+rd.rungs[rungTeam].rung.ScopeID, "system:")
-	default:
-		// A team's or project's own account is a rung above lanes, never a lane itself.
+	// A team's or project's own account is a rung above lanes, never a lane itself.
+	if kind == account.KindTeam || kind == account.KindProject {
 		engine.Drop(tx)
 		return nil
 	}
-	if !acc.IsProvider() {
-		lane := &rd.rungs[rungLane]
-		lane.rung.SubjectID, lane.rung.Account, lane.closed = subject, acc, acc.Spec.Closed
-		lane.rung.ScopeID = rd.rungs[rungProject].rung.ScopeID
-		if lane.rung.ScopeID == "" {
-			lane.rung.ScopeID = rd.rungs[rungTeam].rung.ScopeID
-		}
-		for i := range rd.rungs {
-			readRung(tx, &rd.rungs[i], &rd.in)
-		}
+	rd, ok := readLane(tx, acc, nil, tx.Issue)
+	if !ok {
+		engine.Drop(tx)
+		return nil
 	}
-	if !rd.links() {
-		if acc.IsShared() {
-			// A shared account used as a lane reaches the keys of its real account.
-			rd.owned = append(rd.owned, readSharedLane(tx, id, &rd.in))
-		}
-		for _, s := range scopes {
-			rd.owned = append(rd.owned, readOwned(tx, s, &rd.in))
-		}
-	}
-	rd.idx = engine.Get[CatalogIndex](tx, "")
-	rd.in = append(rd.in, rd.idx)
 	if prev := engine.Get[CallerPlan](tx, subject); prev != nil && prev.in.equal(rd.in) {
 		engine.Put(tx, prev)
 		return nil
 	}
+	cp := &CallerPlan{Lane: acc, budgetAt: -1, linkedAt: -1}
 	if h := acc.Spec.Holder; h != nil {
 		cp.Holder = h.Key()
 	}
@@ -213,106 +170,8 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 	return nil
 }
 
-// readHolder reads the user or service account acting in the lane; false when it is gone.
-func (c *controllers) readHolder(tx *engine.Txn, rd *callerReads, acc *account.Account) bool {
-	h := acc.Spec.Holder
-	lane := &rd.rungs[rungLane]
-	switch h.Kind {
-	case account.HolderUser:
-		u := engine.Get[user.User](tx, h.ID)
-		if u == nil {
-			return false
-		}
-		// The user row also carries login state; only the disabled flag shapes the plan.
-		lane.disabled = u.Disabled
-		rd.in = append(rd.in, u.ID, u.Disabled)
-	case account.HolderServiceAccount:
-		sa := engine.Get[serviceaccount.ServiceAccount](tx, h.ID)
-		if sa == nil {
-			return false
-		}
-		lane.rung.Name, lane.disabled = sa.Meta.Name, !sa.IsEnabled()
-		rd.in = append(rd.in, sa)
-	}
-	return true
-}
-
-// readScopes reads the team and project the lane sits in, and their own accounts; false when the scope is gone.
-func readScopes(tx *engine.Txn, rd *callerReads, lane *account.Account) bool {
-	scope := lane.Meta.Owner
-	teamID := scope.ID
-	if scope.Kind == meta.OwnerProject {
-		p := engine.Get[project.Project](tx, scope.ID)
-		if p == nil {
-			tx.Issue(parentMissing(engine.Ref{Kind: KindAccount, ID: lane.Meta.ID}, "metadata.owner", engine.Ref{Kind: KindProject, ID: scope.ID}))
-			return false
-		}
-		rd.rungs[rungProject] = scopeRung(tx, limits.RungProject, "project:"+p.Meta.ID, p.Meta.ID, p.Meta.Name, !p.IsEnabled())
-		rd.in = append(rd.in, p)
-		teamID = p.Spec.TeamID
-	}
-	t := engine.Get[team.Team](tx, teamID)
-	if t == nil {
-		tx.Issue(parentMissing(engine.Ref{Kind: KindProject, ID: scope.ID}, "spec.teamId", engine.Ref{Kind: KindTeam, ID: teamID}))
-		return false
-	}
-	rd.rungs[rungTeam] = scopeRung(tx, limits.RungTeam, "team:"+t.Meta.ID, t.Meta.ID, t.Meta.Name, !t.IsEnabled())
-	rd.in = append(rd.in, t)
-	for _, i := range []int{rungTeam, rungProject} {
-		if a := rd.rungs[i].rung.Account; a != nil {
-			rd.in = append(rd.in, a)
-		}
-	}
-	return true
-}
-
-// scopeRung is a team's or project's rung: its own account, when relay has made it, carries the policy.
-func scopeRung(tx *engine.Txn, kind limits.Rung, managedKey, scopeID, name string, disabled bool) rungRead {
-	r := rungRead{rung: Rung{Kind: kind, ScopeID: scopeID, Name: name}, disabled: disabled}
-	if m := engine.Get[ManagedAccount](tx, managedKey); m != nil && m.Row != nil {
-		r.rung.SubjectID, r.rung.Account = accountSubject(m.Row.Meta.ID), m.Row
-	}
-	return r
-}
-
-// readRung reads the policy bound to the rung's account and, when the policy links pools, what it links.
-func readRung(tx *engine.Txn, r *rungRead, in *inputs) {
-	if r.rung.SubjectID == "" {
-		return
-	}
-	rp := engine.Get[RungPolicy](tx, r.rung.SubjectID)
-	*in = append(*in, rp)
-	if rp == nil {
-		return
-	}
-	r.rung.Policy, r.refused = rp.Rung.Policy, rp.Refused
-	if r.rung.Policy.links() {
-		r.linked = linkedPools(tx, r.rung.Policy, rp.unusable, in)
-	}
-}
-
-// readOwned is what scope reaches by ownership: its own keys. Accounts shared with it are reached only through a pool that lists them, so a share never changes routing on its own.
-func readOwned(tx *engine.Txn, scope string, in *inputs) []*PoolPlan {
-	oc := engine.Get[OwnedCredentials](tx, scope)
-	*in = append(*in, oc)
-	if oc == nil {
-		return nil
-	}
-	return oc.Pools
-}
-
-// readSharedLane is what a shared account used as a lane reaches: its real account's keys, narrowed by its own policy.
-func readSharedLane(tx *engine.Txn, id string, in *inputs) []*PoolPlan {
-	sa := engine.Get[SharedAccount](tx, id)
-	*in = append(*in, sa)
-	if sa == nil {
-		return nil
-	}
-	out := make([]*PoolPlan, len(sa.Slots))
-	for i, s := range sa.Slots {
-		out[i] = s.Alone
-	}
-	return out
+func personalOffRefusal(off *PersonalAccount, subject string) *Refusal {
+	return &Refusal{Code: CodePersonalAccountOff, Rung: limits.RungLane, SubjectID: subject, Message: off.offMessage()}
 }
 
 // foldCaller folds read rungs into cp.
@@ -407,7 +266,7 @@ func callerPools(cp *CallerPlan, rd *callerReads) []*PoolPlan {
 }
 
 // linkedPools reads the pools the policy links, leaving out the pools, credentials and accounts in unusable (sorted ids the account's scope may not use).
-func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, unusable []string, in *inputs) []*PoolPlan {
+func linkedPools[R *engine.Txn | *engine.View](r R, ep *ExpandedPolicy, unusable []string, in *inputs) []*PoolPlan {
 	skip := func(id string) bool {
 		_, found := slices.BinarySearch(unusable, id)
 		return found
@@ -418,7 +277,7 @@ func linkedPools(tx *engine.Txn, ep *ExpandedPolicy, unusable []string, in *inpu
 		if skip(pid) {
 			continue
 		}
-		pp := engine.Get[PoolPlan](tx, pid)
+		pp := engine.Get[PoolPlan](r, pid)
 		*in = append(*in, pp)
 		if pp != nil && len(unusable) > 0 {
 			pp = withoutSlots(pp, skipSlot)

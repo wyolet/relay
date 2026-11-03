@@ -33,12 +33,12 @@ func bindingsInScope(tx *engine.Txn, acc *account.Account, bs []*policybinding.P
 }
 
 // scopeHolds reports whether scope outer holds inner: the system holds everything, a scope itself, a team its projects.
-func scopeHolds(tx *engine.Txn, outer, inner meta.Owner) bool {
+func scopeHolds[R *engine.Txn | *engine.View](r R, outer, inner meta.Owner) bool {
 	switch {
 	case outer.Kind == meta.OwnerSystem, outer == inner:
 		return true
 	case outer.Kind == meta.OwnerTeam && inner.Kind == meta.OwnerProject:
-		p := engine.Get[project.Project](tx, inner.ID)
+		p := engine.Get[project.Project](r, inner.ID)
 		return p != nil && p.Spec.TeamID == outer.ID
 	}
 	return false
@@ -46,29 +46,36 @@ func scopeHolds(tx *engine.Txn, outer, inner meta.Owner) bool {
 
 // unusableLinks returns the ids of the pools p links, and of the credentials and accounts inside them, that scope cannot use, sorted, and files an issue on the binding for each. The save check refuses such a binding; a row written around it narrows instead of reaching another scope's credentials.
 func unusableLinks(tx *engine.Txn, p *policy.Policy, scope meta.Owner, b *policybinding.PolicyBinding) []string {
-	var out []string
-	refuse := func(kind engine.Kind, id string, owner meta.Owner) {
-		out = append(out, id)
+	return unusableIDs(tx, p, scope, func(kind engine.Kind, id string, owner meta.Owner) {
 		tx.Issue(engine.Issue{
 			Severity: engine.SeverityError, Code: IssueLinkOutOfScope, Source: engine.Ref{Kind: KindPolicyBinding, ID: b.Meta.ID}, Target: engine.Ref{Kind: kind, ID: id}, Field: "spec.poolIds",
 			Message: fmt.Sprintf("policy %s links %s %s owned by %s, which %s cannot use; the link is ignored for it", p.Meta.Name, kind, id, ownerKey(owner), ownerKey(scope)),
 		})
+	})
+}
+
+// unusableIDs returns the ids of the pools p links, and of the credentials and accounts inside them, that scope cannot use, sorted, calling refuse for each.
+func unusableIDs[R *engine.Txn | *engine.View](r R, p *policy.Policy, scope meta.Owner, refuse func(kind engine.Kind, id string, owner meta.Owner)) []string {
+	var out []string
+	drop := func(kind engine.Kind, id string, owner meta.Owner) {
+		out = append(out, id)
+		refuse(kind, id, owner)
 	}
 	for _, id := range p.Spec.PoolIDs {
-		pl := engine.Get[pool.Pool](tx, id)
+		pl := engine.Get[pool.Pool](r, id)
 		switch {
 		case pl == nil:
-		case !scopeHolds(tx, pl.Meta.Owner, scope):
-			refuse(KindPool, id, pl.Meta.Owner)
+		case !scopeHolds(r, pl.Meta.Owner, scope):
+			drop(KindPool, id, pl.Meta.Owner)
 		default:
 			for _, aid := range pl.Spec.AccountIDs {
-				if a := engine.Get[account.Account](tx, aid); a != nil && !scopeHolds(tx, a.Meta.Owner, scope) {
-					refuse(KindAccount, aid, a.Meta.Owner)
+				if a := engine.Get[account.Account](r, aid); a != nil && !scopeHolds(r, a.Meta.Owner, scope) {
+					drop(KindAccount, aid, a.Meta.Owner)
 				}
 			}
 			for _, cid := range pl.Spec.CredentialIDs {
-				if k := engine.Get[hostkey.HostKey](tx, cid); k != nil && !scopeHolds(tx, k.Meta.Owner, scope) {
-					refuse(KindCredential, cid, k.Meta.Owner)
+				if k := engine.Get[hostkey.HostKey](r, cid); k != nil && !scopeHolds(r, k.Meta.Owner, scope) {
+					drop(KindCredential, cid, k.Meta.Owner)
 				}
 			}
 		}
