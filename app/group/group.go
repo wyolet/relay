@@ -8,6 +8,7 @@ package group
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/meta"
@@ -41,7 +42,7 @@ type Spec struct {
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops role bindings on the group from granting anything. Omitted means true."`
 
 	// PersonalAccount is the group's say on its members' personal accounts; empty leaves it to the deployment's accounts setting.
-	PersonalAccount string `json:"personalAccount,omitempty" yaml:"-" validate:"omitempty,oneof=on off" enum:"on,off" doc:"Turns its members' personal accounts on or off. A member's own value wins over it; between groups, off wins. Omitted leaves it to the deployment's accounts setting; a disabled group says nothing. Set by an admin only, whoever owns the group (403 otherwise); a non-admin's write that leaves it out keeps the stored value."`
+	PersonalAccount string `json:"personalAccount,omitempty" yaml:"-" validate:"omitempty,oneof=on off" enum:"on,off" doc:"Turns its members' personal accounts on or off. A member's own value wins over it; between groups, off wins. Omitted leaves it to the deployment's accounts setting; a disabled group says nothing. Only on a group the system owns (400 on a user's group), set by an admin only (403 otherwise), also on a group a SCIM client manages; while a group carries it, only an admin edits or deletes the group. A non-admin's write that leaves it out keeps the stored value."`
 }
 
 // PersonalAccountAttribute is the directory attribute the group's PersonalAccount is stored under.
@@ -50,8 +51,22 @@ const PersonalAccountAttribute = "personalAccount"
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (g *Group) IsEnabled() bool { return g.Spec.Enabled == nil || *g.Spec.Enabled }
 
+// PersonalAccountOwnerRule refuses personalAccount on a group the system does not own: whoever owns a user's group edits its members and enabled flag, which would let a non-admin turn other users' personal accounts on or off.
+func (g *Group) PersonalAccountOwnerRule() error {
+	if g.Spec.PersonalAccount != "" && g.Meta.Owner.Kind != meta.OwnerSystem {
+		return fmt.Errorf("group %q: personalAccount is set only on a group the system owns; clear it before moving the group to a user, or set it on a system group", g.Meta.Name)
+	}
+	return nil
+}
+
+// SameExceptPersonalAccount reports whether a and b differ in nothing but personalAccount: name, display name, owner, members and enabled flag.
+func SameExceptPersonalAccount(a, b *Group) bool {
+	return a.Meta.Name == b.Meta.Name && a.Meta.DisplayName == b.Meta.DisplayName && a.Meta.Owner == b.Meta.Owner &&
+		slices.Equal(a.Spec.MemberIDs, b.Spec.MemberIDs) && a.IsEnabled() == b.IsEnabled()
+}
+
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is user or system.
+//   - Owner.Kind is user or system, and system when personalAccount is set.
 //   - the name does not claim a built-in virtual group.
 //   - no duplicate member ids.
 func (g *Group) Validate() error {
@@ -67,6 +82,9 @@ func (g *Group) Validate() error {
 	case meta.OwnerUser, meta.OwnerSystem:
 	default:
 		return fmt.Errorf("group %q: owner.kind must be user or system, got %q", g.Meta.Name, g.Meta.Owner.Kind)
+	}
+	if err := g.PersonalAccountOwnerRule(); err != nil {
+		return err
 	}
 	seen := make(map[string]struct{}, len(g.Spec.MemberIDs))
 	for _, id := range g.Spec.MemberIDs {

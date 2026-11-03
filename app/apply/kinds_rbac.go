@@ -18,8 +18,13 @@ func (b *builder) planGroupsAndRoles(ctx context.Context, grpDocs []*manifest.Gr
 		Kind: "Group", Docs: grpDocs, Names: b.idx.Groups, Rows: b.rows.Groups,
 		To: manifest.ToGroup, Meta: func(g *group.Group) *meta.Metadata { return &g.Meta },
 		Upsert: throughDirectory(b, infallible((*group.Group).ToDirectory)), Delete: deleteThroughDirectory(b, "Group"),
-		Check:       groupChecks(b),
-		CheckDelete: func(g *group.Group) error { return b.refuseManagedGroup(g.Meta.ID) },
+		Check: groupChecks(b),
+		CheckDelete: func(g *group.Group) error {
+			if g.Spec.PersonalAccount != "" && !b.operator {
+				return groupPersonalAccountAdminOnly(g.Meta.Name)
+			}
+			return b.refuseManagedGroup(g.Meta.ID)
+		},
 		// A Group document cannot carry personalAccount, which an admin sets through the API; re-applying the group keeps it.
 		Keep: func(prev, next *group.Group) error {
 			next.Spec.PersonalAccount = prev.Spec.PersonalAccount

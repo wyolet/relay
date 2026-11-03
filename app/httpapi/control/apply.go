@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/refcheck"
@@ -90,7 +91,8 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			License:  applyLicense(d),
 			Authz:    d.Authz,
 			// The handlers' directory: grant probes skip the audit wrapper and an account change ends its sessions.
-			Directory: newDirectoryOps(d).dir,
+			Directory:          newDirectoryOps(d).dir,
+			PersonalAccountOff: refs(d).Rows.PersonalAccountOff,
 		})
 		if err != nil {
 			return nil, planFailure(ctx, d.Authz, err)
@@ -165,6 +167,10 @@ func planFailure(ctx context.Context, a authz.Authorizer, err error) error {
 		errors.As(err, &re) && re.Status == http.StatusNotFound,
 		errors.As(err, &nf) && scoped && !authz.IsAdmin(ctx):
 		return &applyFailure{status: http.StatusForbidden, Message: "forbidden"}
+	}
+	// A refusal with a code answers as the control API's own write would, so a client reads one code for both.
+	if re != nil && re.Code != "" {
+		return &httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: re.Code, Message: err.Error()}, HTTPStatus: re.Status}
 	}
 	var ge *apply.GovernanceError
 	if errors.As(err, &ge) {

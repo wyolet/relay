@@ -3,7 +3,9 @@ package apply
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
@@ -66,6 +68,9 @@ func groupChecks(b *builder) func(context.Context, *group.Group) error {
 		if err := b.refuseManagedGroup(g.Meta.ID); err != nil {
 			return err
 		}
+		if err := b.groupPersonalAccountRule(g); err != nil {
+			return err
+		}
 		if refs == nil {
 			return nil
 		}
@@ -78,6 +83,26 @@ func groupChecks(b *builder) func(context.Context, *group.Group) error {
 		}
 		return b.dir.CheckMembershipGrants(ctx, refcheck.Principal(ctx, b.opts.Authz), g.ToDirectory())
 	}
+}
+
+// groupPersonalAccountRule applies the control API's rules for a group that turns personal accounts on or off (the document carries the stored value, see Keep): it stays system-owned, and only an admin changes or deletes it (g nil with id).
+func (b *builder) groupPersonalAccountRule(g *group.Group) error {
+	if err := g.PersonalAccountOwnerRule(); err != nil {
+		return err
+	}
+	if b.operator {
+		return nil
+	}
+	for _, prev := range b.rows.Groups {
+		if prev.Meta.ID == g.Meta.ID && prev.Spec.PersonalAccount != "" && !group.SameExceptPersonalAccount(prev, g) {
+			return groupPersonalAccountAdminOnly(prev.Meta.Name)
+		}
+	}
+	return nil
+}
+
+func groupPersonalAccountAdminOnly(name string) error {
+	return fmt.Errorf("%w: group %q turns its members' personal accounts on or off, so only an admin edits or deletes it", authz.ErrForbidden, name)
 }
 
 // refuseManagedGroup is the directory's managed-group rule run while planning: a stored group a provisioning source manages is written only by a forced apply, and refusing it here keeps the rest of the bundle from being written first.

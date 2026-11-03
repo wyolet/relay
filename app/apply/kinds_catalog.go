@@ -179,15 +179,23 @@ func (b *builder) checkAccount() func(context.Context, *account.Account) error {
 	if check == nil {
 		return nil
 	}
-	stored := make(map[string]bool, len(b.rows.Accounts))
+	stored := make(map[string]meta.Owner, len(b.rows.Accounts))
 	for _, a := range b.rows.Accounts {
-		stored[a.Meta.ID] = true
+		stored[a.Meta.ID] = a.Meta.Owner
 	}
 	return func(ctx context.Context, a *account.Account) error {
 		if err := check(ctx, a); err != nil {
 			return err
 		}
-		if !a.IsShared() || stored[a.Meta.ID] {
+		owner, ok := stored[a.Meta.ID]
+		if !a.IsShared() {
+			// A new provider account of a user, or one moved to a user, must find that user's personal account on, as the control API requires.
+			if !ok || owner != a.Meta.Owner {
+				return b.refs().PersonalProviderAccount(ctx, a)
+			}
+			return nil
+		}
+		if ok {
 			return nil
 		}
 		c := b.refs()

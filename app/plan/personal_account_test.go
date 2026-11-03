@@ -10,7 +10,7 @@ import (
 )
 
 func groupSaying(id, value string, enabled bool) *group.Group {
-	return &group.Group{Meta: meta.Metadata{ID: id}, Spec: group.Spec{PersonalAccount: value, Enabled: &enabled}}
+	return &group.Group{Meta: meta.Metadata{ID: id, Owner: system}, Spec: group.Spec{PersonalAccount: value, Enabled: &enabled}}
 }
 
 // The user's own value wins; then an enabled group's, off over on; then the deployment's setting, on when unset.
@@ -32,6 +32,11 @@ func TestEffectivePersonalAccount(t *testing.T) {
 		{name: "off wins between groups", groups: []*group.Group{groupSaying("g1", "on", true), groupSaying("g2", "off", true)}, on: false, source: PersonalAccountFromGroup, groupID: "g2"},
 		{name: "group on beats setting off", setting: off, groups: []*group.Group{groupSaying("g1", "on", true)}, on: true, source: PersonalAccountFromGroup, groupID: "g1"},
 		{name: "a disabled group says nothing", groups: []*group.Group{groupSaying("g1", "off", false)}, on: true, source: PersonalAccountFromSetting},
+		{name: "a user's group says nothing", groups: []*group.Group{func() *group.Group {
+			g := groupSaying("g1", "off", true)
+			g.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}
+			return g
+		}()}, on: true, source: PersonalAccountFromSetting},
 		{name: "a group without a value says nothing", setting: off, groups: []*group.Group{groupSaying("g1", "", true)}, on: false, source: PersonalAccountFromSetting},
 	} {
 		on, source, groupID := EffectivePersonalAccount(tc.user, tc.groups, tc.setting)

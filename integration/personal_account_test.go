@@ -98,8 +98,21 @@ func TestIntegration_PersonalAccountSwitch(t *testing.T) {
 	}
 
 	id := owner().ID
-	if code, raw := st.adminDo(http.MethodPut, "/api/users/by-id/"+id, `{"personalAccount":"on"}`); code != http.StatusOK {
-		t.Fatalf("PUT personalAccount = %d %s", code, raw)
+	put := func(body string) userRow {
+		t.Helper()
+		code, raw := st.adminDo(http.MethodPut, "/api/users/by-id/"+id, body)
+		if code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s", body, code, raw)
+		}
+		var u userRow
+		if err := json.Unmarshal(raw, &u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	// The answer shows the value just saved, before the plans rebuild.
+	if u := put(`{"personalAccount":"on"}`); u.PersonalAccountEffective == nil || u.PersonalAccountEffective.State != "on" || u.PersonalAccountEffective.Source != "user" {
+		t.Fatalf("PUT answer = %+v, want on from the user", u)
 	}
 	waitFor("user on", http.StatusOK, "")
 	if u := owner(); u.PersonalAccount != "on" || u.PersonalAccountEffective == nil || u.PersonalAccountEffective.State != "on" || u.PersonalAccountEffective.Source != "user" {
@@ -110,8 +123,12 @@ func TestIntegration_PersonalAccountSwitch(t *testing.T) {
 	if code, raw := st.adminDo(http.MethodPut, "/api/settings/accounts", `{"personalAccounts":"on"}`); code != http.StatusOK {
 		t.Fatalf("PUT /api/settings/accounts = %d %s", code, raw)
 	}
-	if code, raw := st.adminDo(http.MethodPut, "/api/users/by-id/"+id, `{"personalAccount":""}`); code != http.StatusOK {
-		t.Fatalf("clear personalAccount = %d %s", code, raw)
+	// Roles and personalAccount in one request commit together.
+	if u := put(`{"personalAccount":"","roles":["admin"]}`); u.PersonalAccount != "" {
+		t.Fatalf("PUT answer = %+v, want personalAccount cleared", u)
+	}
+	if u := owner(); u.PersonalAccount != "" {
+		t.Fatalf("owner after the combined PUT = %+v, want personalAccount cleared", u)
 	}
 	code, raw := st.adminDo(http.MethodPost, "/api/groups", `{"metadata":{"name":"no-personal"},"spec":{"memberIds":["`+id+`"],"personalAccount":"off"}}`)
 	if code != http.StatusCreated {
@@ -134,5 +151,62 @@ func TestIntegration_PersonalAccountSwitch(t *testing.T) {
 	}
 	if u := owner(); u.PersonalAccountEffective == nil || u.PersonalAccountEffective.Source != "group" {
 		t.Fatalf("owner under the group = %+v, want off from the group", u)
+	}
+	// A group carrying a value stays on the system: moving it to a user is refused.
+	if code, raw := st.adminDo(http.MethodPut, "/api/groups/by-id/"+g.Metadata.ID, `{"metadata":{"name":"no-personal","owner":{"kind":"user","id":"`+id+`"}},"spec":{"memberIds":["`+id+`"],"personalAccount":"off"}}`); code != http.StatusBadRequest {
+		t.Fatalf("moving the group to a user = %d %s, want 400", code, raw)
+	}
+}
+
+// personalAccount is relay's own attribute, so an admin sets it on a group a SCIM client manages; the group's members stay the client's.
+func TestIntegration_PersonalAccountOnSCIMGroup(t *testing.T) {
+	t.Parallel()
+	st := newStack(t)
+	code, raw := st.adminDo(http.MethodPost, "/api/scim-clients", `{"name":"entra"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create SCIM client = %d: %s", code, raw)
+	}
+	var client struct{ Token string }
+	if err := json.Unmarshal(raw, &client); err != nil || client.Token == "" {
+		t.Fatalf("create SCIM client: %v %s", err, raw)
+	}
+	st.enableSCIM()
+	created := st.scimWant(client.Token, http.MethodPost, "/Groups", `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"externalId":"g-ext-1","displayName":"Pilots"}`, http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	read := func() map[string]any {
+		t.Helper()
+		code, raw := st.adminDo(http.MethodGet, "/api/groups/"+id, "")
+		if code != http.StatusOK {
+			t.Fatalf("GET group = %d %s", code, raw)
+		}
+		var g map[string]any
+		if err := json.Unmarshal(raw, &g); err != nil {
+			t.Fatal(err)
+		}
+		delete(g, "$schema")
+		return g
+	}
+	g := read()
+	spec, _ := g["spec"].(map[string]any)
+	if spec == nil {
+		spec = map[string]any{}
+		g["spec"] = spec
+	}
+	spec["personalAccount"] = "off"
+	body, _ := json.Marshal(g)
+	if code, raw := st.adminDo(http.MethodPut, "/api/groups/by-id/"+id, string(body)); code != http.StatusOK {
+		t.Fatalf("admin setting personalAccount on a SCIM group = %d %s, want 200", code, raw)
+	}
+	after := read()
+	if s, _ := after["spec"].(map[string]any); s["personalAccount"] != "off" || after["external"] == nil {
+		t.Fatalf("group after = %v, want personalAccount off and still managed", after)
+	}
+
+	// Its members stay the source's.
+	after["spec"].(map[string]any)["memberIds"] = []string{st.seedUser("not-from-scim")}
+	body, _ = json.Marshal(after)
+	if code, raw := st.adminDo(http.MethodPut, "/api/groups/by-id/"+id, string(body)); code != http.StatusConflict || !bytes.Contains(raw, []byte("managed_by_source")) {
+		t.Fatalf("admin changing a SCIM group's members = %d %s, want 409 managed_by_source", code, raw)
 	}
 }

@@ -4,11 +4,16 @@ package control
 
 import (
 	"context"
+	"slices"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/engine"
 )
 
 // PersonalAccountEffective is a user's personal-account state and what decided it.
@@ -43,18 +48,54 @@ func personalAccountEffective(d Deps, userID string) *PersonalAccountEffective {
 	return out
 }
 
-// guardGroupPersonalAccount leaves a group's personalAccount to admins: it decides whether other users may act on their own, and a group may be owned by a user who is no admin. A non-admin's write that leaves it out keeps the stored value.
+// personalAccountEffectiveFor is userID's state with userValue as their own value, folded from the groups and setting the plans hold now, so a write's answer shows the value it saved before the plans rebuild; nil before the first publish.
+func personalAccountEffectiveFor(d Deps, userID, userValue string) *PersonalAccountEffective {
+	if d.PlanView == nil {
+		return nil
+	}
+	v := d.PlanView()
+	if v == nil {
+		return nil
+	}
+	var groups []*group.Group
+	for g := range engine.All[group.Group](v) {
+		if slices.Contains(g.Spec.MemberIDs, userID) {
+			groups = append(groups, g)
+		}
+	}
+	on, source, groupID := plan.EffectivePersonalAccount(userValue, groups, engine.Get[settings.Accounts](v, settings.SectionAccounts))
+	out := &PersonalAccountEffective{State: "on", Source: string(source), GroupID: groupID}
+	if !on {
+		out.State = "off"
+	}
+	return out
+}
+
+// guardGroupPersonalAccount leaves a group's personalAccount to admins, since it decides whether other users may act on their own: only an admin sets it, it sits only on system groups, and while a group carries it only an admin changes the group's members, enabled flag, name or owner, or deletes it (incoming nil). A non-admin's write that leaves it out keeps the stored value.
 func guardGroupPersonalAccount(ctx context.Context, az authz.Authorizer, existing, incoming *group.Group) error {
 	var stored string
 	if existing != nil {
 		stored = existing.Spec.PersonalAccount
 	}
-	if incoming.Spec.PersonalAccount == stored || refcheck.RequireAdmin(ctx, az, "a group's personalAccount") == nil {
+	admin := refcheck.RequireAdmin(ctx, az, "a group that turns personal accounts on or off")
+	if incoming == nil {
+		if stored != "" && admin != nil {
+			return refErr(admin)
+		}
 		return nil
 	}
-	if incoming.Spec.PersonalAccount == "" {
+	if incoming.Spec.PersonalAccount == "" && admin != nil {
 		incoming.Spec.PersonalAccount = stored
-		return nil
 	}
-	return refErr(refcheck.RequireAdmin(ctx, az, "a group's personalAccount"))
+	switch {
+	case admin == nil:
+	case incoming.Spec.PersonalAccount != stored:
+		return refErr(refcheck.RequireAdmin(ctx, az, "a group's personalAccount"))
+	case stored != "" && !group.SameExceptPersonalAccount(existing, incoming):
+		return refErr(admin)
+	}
+	if err := incoming.PersonalAccountOwnerRule(); err != nil {
+		return huma.Error400BadRequest(err.Error())
+	}
+	return nil
 }

@@ -43,10 +43,10 @@ They are deleted with the team, project, user or service account they stand for.
 A deployment can keep users from acting on their own, so they act only through what their teams and projects give them. Whether a user's personal account serves is decided by the first of:
 
 1. the user's own `personalAccount` (`on` or `off`), set with `PUT /api/users/by-id/{id}`;
-2. the user's enabled groups' `personalAccount`: `off` if any says off, else `on` if any says on;
+2. the `personalAccount` of the enabled groups the user is a stored member of: `off` if any says off, else `on` if any says on;
 3. the [`accounts`](/reference/settings#accounts) settings section's `personalAccounts`, `on` by default.
 
-Only an admin sets them: a user cannot change their own value, and the owner of a group who is no admin cannot change the group's (`403`). `GET /api/users` and `GET /api/auth/whoami` carry `personalAccountEffective`: `{"state": "on" | "off", "source": "user" | "group" | "setting", "groupId"}`.
+Only an admin sets them: a user cannot change their own value (`403`). A group's value sits only on a group the system owns (`400` on a user's group, or when moving a group that carries one to a user), and while a group carries one, only an admin changes its members, enabled flag, name or owner, or deletes it, through the API and through apply (`403`). An admin may set it on a group a SCIM client manages, whose members stay the client's. Groups an identity provider only asserts at sign-in are not stored, so they do not count. `GET /api/users` and `GET /api/auth/whoami` carry `personalAccountEffective`: `{"state": "on" | "off", "source": "user" | "group" | "setting", "groupId"}`.
 
 While a user's personal account is off, nothing is deleted:
 

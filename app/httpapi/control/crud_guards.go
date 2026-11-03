@@ -57,10 +57,7 @@ func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 
 func guardGroup(d Deps) mutationGuard[group.Group] {
 	return func(ctx context.Context, action string, existing, incoming *group.Group) error {
-		if action == "delete" || incoming == nil {
-			return nil
-		}
-		if err := guardGroupPersonalAccount(ctx, d.Authz, existing, incoming); err != nil {
+		if err := guardGroupPersonalAccount(ctx, d.Authz, existing, incoming); err != nil || action == "delete" || incoming == nil {
 			return err
 		}
 		c := refs(d)

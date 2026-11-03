@@ -184,7 +184,7 @@ Only rotation changes the signing-key references. A `PUT` that leaves them out k
 | --- | --- | --- |
 | `personalAccounts` | `on` | `on` or `off`. Off closes every user's personal account and the provider accounts users own personally, unless a group or the user says otherwise. |
 
-A user's own `personalAccount` wins over it, then their enabled groups' (`off` over `on`). See [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off).
+A user's own `personalAccount` wins over it, then their enabled system groups' (`off` over `on`), including groups a SCIM client provisions. Groups an identity provider only asserts at sign-in are not stored and say nothing here. See [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off).
 
 ### catalog-source
 

@@ -55,6 +55,8 @@ type builder struct {
 	// admin relaxes the rules an operator may cross: only re-parenting a row
 	// onto a different owner.
 	admin bool
+	// operator is what refcheck.RequireAdmin passes: an admin, or any caller when nothing scopes reads. It guards groups that turn personal accounts on or off.
+	operator bool
 	// lic gates the features a manifest may declare. Nil is no gate — see
 	// Options.License.
 	lic license.Checker
