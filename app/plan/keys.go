@@ -158,7 +158,12 @@ func (c *controllers) keyPlan(tx *engine.Txn, id string) error {
 		cp = engine.Get[CallerPlan](tx, accountSubject(laneID))
 	}
 	if cp == nil {
-		tx.Issue(parentMissing(src, "spec.accountId", engine.Ref{Kind: KindAccount, ID: laneID}))
+		if laneID == "" {
+			tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssueRefMissing, Source: src, Field: "spec.accountId",
+				Message: "the key names no account and " + principalName(tx, k.Spec.Principal) + " has no account of its own; the key cannot serve"})
+		} else {
+			tx.Issue(parentMissing(src, "spec.accountId", engine.Ref{Kind: KindAccount, ID: laneID}))
+		}
 		engine.Drop(tx)
 		return nil
 	}
@@ -198,6 +203,21 @@ func ownAccountKey(p key.Principal) string {
 		return "service:" + p.ID
 	}
 	return "personal:" + p.ID
+}
+
+// principalName names a key's principal by its username or slug, falling back to principalKey when its row is gone.
+func principalName(tx *engine.Txn, p key.Principal) string {
+	switch p.Kind {
+	case key.PrincipalUser:
+		if u := engine.Get[user.User](tx, p.ID); u != nil {
+			return "user " + u.Username
+		}
+	case key.PrincipalServiceAccount:
+		if sa := engine.Get[serviceaccount.ServiceAccount](tx, p.ID); sa != nil {
+			return "service account " + sa.Meta.Name
+		}
+	}
+	return principalKey(p)
 }
 
 // principalDisabled reads whether the principal is switched off; ok is false when its row is gone.

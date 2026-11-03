@@ -46,6 +46,10 @@ func viewService(ctx context.Context, d Deps) *catalogview.Service {
 		HostKeys:   d.Stores.HostKey,
 		Pools:      d.Stores.Pool,
 		Accounts:   d.Stores.Account,
+		PersonalAccountOff: func(userID string) bool {
+			p := personalAccountState(d, userID)
+			return p != nil && !p.On
+		},
 	}
 	if s, ok := d.Authz.(authz.Scoper); ok {
 		svc.Visible = func(kind, id string, owner meta.Owner) bool {

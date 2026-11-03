@@ -10,7 +10,7 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// SharedAccount is a shared provider account resolved to its real account: the real account's slots, current and future, each narrowed by the shared account's own policy. Absent, with a shared_account_missing issue, while the real account is gone or cannot be shared.
+// SharedAccount is a shared provider account resolved to its real account: the real account's slots, current and future, each narrowed by the shared account's own policy. Absent, with a shared_account_missing issue, while the real account is gone or cannot be shared, and with personal_account_off while its owner's personal accounts are off.
 type SharedAccount struct {
 	Account *account.Account
 	Source  *account.Account
@@ -39,8 +39,8 @@ func (c *controllers) sharedAccount(tx *engine.Txn, id string) error {
 	}
 	if off := personalAccountOff(tx, src.Meta.Owner); off != nil {
 		tx.Issue(engine.Issue{
-			Severity: engine.SeverityError, Code: IssueSharedAccountMissing, Source: ref, Field: "spec.sourceAccountId", Target: engine.Ref{Kind: KindAccount, ID: srcID},
-			Message: "the account it was shared from belongs to " + off.name() + ", whose personal accounts are turned off; the shared account serves nothing until they are on again",
+			Severity: engine.SeverityError, Code: IssuePersonalAccountOff, Source: ref, Field: "spec.sourceAccountId", Target: engine.Ref{Kind: KindAccount, ID: srcID},
+			Message: "account " + src.Meta.Name + ", which this account was shared from, belongs to " + off.name() + ", whose personal accounts are turned off; the shared account serves nothing until they are on again",
 		})
 		engine.Drop(tx)
 		return nil

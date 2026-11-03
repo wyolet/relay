@@ -71,3 +71,54 @@ func TestPolicyHosts_PoolAccounts(t *testing.T) {
 		}
 	}
 }
+
+// Keys the plan cannot reach are left out: those of an account whose owner has personal accounts off, listed through the account, a share of it, or by key, and those of a share whose real account is gone.
+func TestPolicyHosts_LeavesOutClosedAccounts(t *testing.T) {
+	hostID := meta.NewID()
+	alice := meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
+	bob := meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}
+	own, real, share, elsewhere, broken := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
+	ownKey, realKey := meta.NewID(), meta.NewID()
+	poolID := meta.NewID()
+	svc := &Service{
+		Providers: fProviders{}, Models: fModels{}, Bindings: fBindings{}, Pricings: fPricings{}, RateLimits: fRLs{},
+		Hosts: fHosts{{Meta: meta.Metadata{ID: hostID, Name: "h"}}},
+		HostKeys: fHostKeys{
+			{Meta: meta.Metadata{ID: ownKey, Name: "own-key", Owner: alice}, Spec: hostkey.Spec{HostID: hostID, AccountID: own}},
+			{Meta: meta.Metadata{ID: realKey, Name: "bobs-key", Owner: bob}, Spec: hostkey.Spec{HostID: hostID, AccountID: real}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "elsewhere-key", Owner: bob}, Spec: hostkey.Spec{HostID: hostID, AccountID: elsewhere}},
+		},
+		Accounts: fAccounts{
+			{Meta: meta.Metadata{ID: own, Name: "own", Owner: alice}, Spec: account.Spec{HostID: hostID}},
+			{Meta: meta.Metadata{ID: real, Name: "bobs", Owner: bob}, Spec: account.Spec{HostID: hostID}},
+			{Meta: meta.Metadata{ID: share, Name: "bobs-for-alice", Owner: alice}, Spec: account.Spec{HostID: hostID, SourceAccountID: real}},
+			// A share whose real account moved to another host serves nothing.
+			{Meta: meta.Metadata{ID: elsewhere, Name: "elsewhere", Owner: bob}, Spec: account.Spec{HostID: meta.NewID()}},
+			{Meta: meta.Metadata{ID: broken, Name: "elsewhere-for-alice", Owner: alice}, Spec: account.Spec{HostID: hostID, SourceAccountID: elsewhere}},
+		},
+		Pools: fPools{
+			{Meta: meta.Metadata{ID: poolID, Name: "p", Owner: alice}, Spec: pool.Spec{HostID: hostID, AccountIDs: []string{share, broken, own}, CredentialIDs: []string{realKey}}},
+		},
+		Policies: fPolicies{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "via-pool", Owner: alice}, Spec: policy.Spec{PoolIDs: []string{poolID}}},
+		},
+	}
+	keys := func() []string {
+		_, rows, err := svc.PolicyHosts(context.Background(), "via-pool")
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("rows = %+v, err %v", rows, err)
+		}
+		var out []string
+		for _, k := range rows[0].HostKeys {
+			out = append(out, k.Name)
+		}
+		return out
+	}
+	if got := keys(); len(got) != 2 || got[0] != "bobs-key" || got[1] != "own-key" {
+		t.Fatalf("bob on: keys = %v, want bobs-key then own-key", got)
+	}
+	svc.PersonalAccountOff = func(userID string) bool { return userID == bob.ID }
+	if got := keys(); len(got) != 1 || got[0] != "own-key" {
+		t.Errorf("bob off: keys = %v, want own-key alone", got)
+	}
+}

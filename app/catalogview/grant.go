@@ -1,6 +1,7 @@
 package catalogview
 
 import (
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
@@ -75,7 +76,9 @@ type credentialLink struct {
 
 // policyCredentials lists the host keys the policy reaches through its pools
 // in pool order (each pool's accounts' keys, then its listed keys), each once
-// at its first place, as PoolKeys lists them.
+// at its first place, as PoolKeys lists them. Keys of an account closed by its
+// owner's personal switch, and of a broken share, are left out, as the plan
+// leaves them out.
 func (idx *index) policyCredentials(p *policy.Policy) []credentialLink {
 	seen := map[string]bool{}
 	var out []credentialLink
@@ -91,17 +94,41 @@ func (idx *index) policyCredentials(p *policy.Policy) []credentialLink {
 			continue
 		}
 		for _, aid := range pl.Spec.AccountIDs {
-			if a, ok := idx.accountByID[aid]; ok {
+			if a, ok := idx.accountByID[aid]; ok && idx.accountServes(a) {
 				for _, k := range idx.keysByAccount[keyHolder(a)] {
 					add(k.Meta.ID, a.IsShared())
 				}
 			}
 		}
 		for _, id := range pl.Spec.CredentialIDs {
+			if k, ok := idx.hostkeyByID[id]; ok {
+				if a, ok := idx.accountByID[k.Spec.AccountID]; ok && idx.ownerOff(a.Meta.Owner) {
+					continue
+				}
+			}
 			add(id, false)
 		}
 	}
 	return out
+}
+
+// accountServes reports whether a pool listing a reaches its keys: a shared
+// account only while its real account is a provider account at the same host,
+// and either only while the real account's owner has personal accounts on.
+func (idx *index) accountServes(a *account.Account) bool {
+	if a.IsShared() {
+		src, ok := idx.accountByID[a.Spec.SourceAccountID]
+		if !ok || !src.IsProvider() || src.IsShared() || src.Spec.HostID != a.Spec.HostID {
+			return false
+		}
+		a = src
+	}
+	return !idx.ownerOff(a.Meta.Owner)
+}
+
+// ownerOff reports whether o is a user whose personal accounts are turned off.
+func (idx *index) ownerOff(o meta.Owner) bool {
+	return idx.personalOff != nil && o.Kind == meta.OwnerUser && o.ID != "" && idx.personalOff(o.ID)
 }
 
 // limitsFor returns the rules of every rate limit the policy links that

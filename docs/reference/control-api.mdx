@@ -242,12 +242,35 @@ The account read is open to whoever may read the account and to the user who act
 ### Plan issues
 
 ```
-GET /api/plan-issues?kind=&id=   what Relay found wrong while folding the configuration
+GET /api/plan-issues?kind=&id=&target=&about=   what Relay found wrong while folding the configuration
 ```
 
-Each issue is `{code, message, kind, id, name, severity, refs: [{kind, id}]}`, sorted by kind, name and code. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include `ref_missing` (a link to a row that does not exist), `subject_out_of_scope` (a binding naming an account outside its owner's scope), `link_out_of_scope` (a policy linking a pool its binding's scope may not use), `duplicate_binding`, `model_ref_invalid`, `credential_unresolved` (a host key whose value cannot be read), `shared_account_missing` (a shared account whose real account is gone, or belongs to a user whose personal accounts are turned off), `personal_account_off` (a relay key running in, or a provider account owned by, a user whose personal accounts are turned off) and `unpriced_under_budget`. `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, …), and `id` together with `kind` narrows to one row.
+Each issue is `{code, message, kind, id, name, field, severity, refs: [{kind, id, name}]}`, sorted by kind, name and code. `field` is the spec path the issue is about (`spec.models[2]`, `spec.poolIds[0]`), empty when it is about the row as a whole. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include:
 
-Issues on rows the caller may not read are left out, and a ref to such a row keeps its kind with an empty id. Under `RELAY_AUTHZ=rbac` the route takes a role whose rules include the kind `*`, such as the built-in `admin`.
+| Code | On | Means |
+|---|---|---|
+| `ref_missing` | any | a link to a row that does not exist |
+| `subject_out_of_scope`, `link_out_of_scope` | policy binding | a binding naming an account outside its owner's scope, or a policy linking a pool its binding's scope may not use |
+| `duplicate_binding` | policy binding | an account bound by more than one binding |
+| `model_ref_invalid` | policy | a model entry that does not parse |
+| `credential_unresolved` | host key | a key whose value cannot be read |
+| `shared_account_missing` | account | a shared account whose real account is gone |
+| `personal_account_off` | key, account | a relay key running in, a personal or provider account of, or a share of an account of a user whose personal accounts are turned off |
+| `unpriced_under_budget` | policy | bindings the policy allows have no pricing while a budget applies |
+| `host_disabled` | pool, host key | its host is disabled, so requests are not sent to it |
+| `host_disabled_in_use` | host | a disabled host that pools or enabled keys still point at |
+| `pool_member_unusable` | pool | a listed key or account adds no usable key (disabled, unresolved, personal accounts off, broken share) |
+| `pools_serve_nothing` | policy | none of the linked pools has a usable key at an enabled host |
+| `pool_outside_models` | policy | a linked pool's host serves none of the policy's models |
+| `model_ref_unreachable` | policy | a model entry served at no host the linked pools reach; an error when no entry is reachable |
+| `model_ref_disabled` | policy | a model entry naming a disabled model |
+| `rate_limit_disabled` | policy | a linked rate limit is disabled and does not apply |
+| `rate_limit_scope_outside_models` | policy | a rate-limit link scoped only to models the policy does not allow, so it never counts |
+| `model_unservable` | model | no enabled binding at an enabled host serves the model |
+
+`kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, `pool`, `credential`, `host`, `model`, `ratelimit`, …), and `id` together with `kind` narrows to one row. `target=kind:id` keeps the issues whose refs name that row, and `about=kind:id` the issues on that row or naming it. `about` repeats and matches any of its rows, so a policy page asks for `about=policy:<id>&about=pool:<id>&…` to get its own and its pools' issues in one call. Filters combine.
+
+Issues on rows the caller may not read are left out, and a ref to such a row keeps its kind with an empty id and name. Under `RELAY_AUTHZ=rbac` the route takes a role whose rules include the kind `*`, such as the built-in `admin`.
 
 ### Model overlays
 

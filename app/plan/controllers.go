@@ -102,5 +102,13 @@ func (c *controllers) all() []*engine.Controller {
 	users := engine.NewController("user-index", KindUserIndex, c.userIndex)
 	engine.Watch(users, toSingleton[UserPlan])
 
-	return []*engine.Controller{catalog, managed, pending, personal, expanded, rung, acct, slot, owned, shared, pl, caller, lanes, kp, shard, index, up, users}
+	policyChecks := engine.NewController("policy-check", KindPolicyCheck, c.policyCheck)
+	engine.Watch(policyChecks, func(p *policy.Policy) []string { return []string{p.Meta.ID} })
+
+	hostChecks := engine.NewController("host-check", KindHostCheck, c.hostCheck)
+	engine.Watch(hostChecks, func(h *host.Host) []string { return []string{h.Meta.ID} })
+	engine.Watch(hostChecks, poolHost)
+	engine.Watch(hostChecks, credentialHost)
+
+	return []*engine.Controller{catalog, managed, pending, personal, expanded, rung, acct, slot, owned, shared, pl, caller, lanes, kp, shard, index, up, users, policyChecks, hostChecks}
 }
