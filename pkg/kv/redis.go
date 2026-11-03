@@ -104,6 +104,8 @@ type Redis struct {
 // Precedence: ClusterAddrs > Sentinel > Addr (single-node).
 //
 // Each command sent is bounded by PoolTimeout + WriteTimeout + ReadTimeout, plus one DialTimeout on a pool miss: the caller waits on the dial itself, which PoolTimeout does not cover, so dial retries are off. A script call sends one EVALSHA when its SHA is cached, but a SCRIPT LOAD on a cold cache and the NOSCRIPT reload (SCRIPT LOAD, EVALSHA, then EVAL) add commands, up to five bounds in all. The cluster client also resends through its redirect loop (MaxRedirects), which MaxRetries does not govern, so there a script can run twice.
+//
+// PipelinePoolSize -1 keeps batches on the main pool, so PoolSize and PoolTimeout bound every connection relay opens.
 func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 	cfg = cfg.withDefaults()
 	retries := goRedisRetries(cfg.MaxRetries)
@@ -119,6 +121,7 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 			ReadTimeout:           cfg.ReadTimeout,
 			WriteTimeout:          cfg.WriteTimeout,
 			PoolTimeout:           cfg.PoolTimeout,
+			PipelinePoolSize:      -1,
 			MaxRetries:            retries,
 			ContextTimeoutEnabled: true,
 		})
@@ -136,6 +139,7 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 			ReadTimeout:           cfg.ReadTimeout,
 			WriteTimeout:          cfg.WriteTimeout,
 			PoolTimeout:           cfg.PoolTimeout,
+			PipelinePoolSize:      -1,
 			MaxRetries:            retries,
 			ContextTimeoutEnabled: true,
 		})
@@ -151,6 +155,7 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 			ReadTimeout:           cfg.ReadTimeout,
 			WriteTimeout:          cfg.WriteTimeout,
 			PoolTimeout:           cfg.PoolTimeout,
+			PipelinePoolSize:      -1,
 			MaxRetries:            retries,
 			ContextTimeoutEnabled: true,
 		})
