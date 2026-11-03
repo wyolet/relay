@@ -17,7 +17,7 @@ A provider API key has one rate limit and fails on its own. Running real traffic
     Keep your existing SDK and change the base URL. A request in one shape can be served by an upstream that speaks another.
   </Card>
   <Card title="Policies and rate limits" icon="scale-balanced" href="/concepts/policies">
-    A policy decides which models a caller reaches, which host keys it spends, and which limits apply.
+    Policies on teams, projects, identities and provider accounts decide which models a caller reaches, which keys it spends, and which limits and budgets apply.
   </Card>
   <Card title="Admin UI and control API" icon="sliders" href="/reference/control-api">
     Hosts, keys, policies and tenancy are rows you change at runtime. Changes reach every pod in about a second.
@@ -45,10 +45,10 @@ The catalog describes what can be called. Credentials and policies describe who 
     The credentials your apps send. A relay key (`sk-wr-…`) is long-lived and belongs to a service account or a user. An inference token is short-lived, minted for a signed-in user, and scoped to one project. Neither exposes a host key. See [Authentication](/concepts/auth).
   </Accordion>
   <Accordion title="Policies and policy bindings" icon="scale-balanced">
-    A policy grants models, lists the host keys requests may spend, and names a rate limit. A relay key can point at a policy directly; otherwise a service account's policy or a project's policy bindings decide. See [Policies](/concepts/policies).
+    A policy names the models requests may call, the pools of host keys they draw from, and the rate limits and budgets they must fit. A policy binding attaches it to accounts: a team's, a project's, a member's, a service account's or a provider organization's. A request runs in one account and passes every account above it, and each can only narrow it. See [Accounts and lanes](/concepts/accounts) and [Policies](/concepts/policies).
   </Accordion>
-  <Accordion title="Rate limits" icon="timer">
-    Named rule sets (requests, tokens, concurrency per window). A policy's rate limit caps everyone it governs; a host key's tier limit caps that one upstream credential. See [Rate limits](/concepts/rate-limits).
+  <Accordion title="Rate limits and budgets" icon="timer">
+    Rate limits are named rule sets (requests, tokens, concurrency per window); budgets cap spend in dollars per day, week or month. On a caller's policy they cap that caller; on a provider account's tier policy they cap every key of the account. See [Rate limits](/concepts/rate-limits) and [Budgets](/concepts/budgets).
   </Accordion>
   <Accordion title="Teams, projects, service accounts, users" icon="users">
     The tenancy layer. Teams contain projects; projects contain service accounts; users join through groups and role bindings. Keys, policies and usage are attributed to this hierarchy, and RBAC scopes on it. See [Authentication](/concepts/auth#authorization).
@@ -59,16 +59,16 @@ The catalog describes what can be called. Credentials and policies describe who 
 
 <Steps>
   <Step title="Authenticate">
-    The app sends a request with a relay key or an inference token. Relay resolves it to a principal: a service account or a user, plus its project and team.
+    The app sends a request with a relay key or an inference token. Relay resolves it to a principal, a service account or a user, and to the account the request runs in: the credential's default, or one the request names.
   </Step>
-  <Step title="Resolve the policy">
-    Relay finds the governing policy: the key's own, else the service account's, else the first matching policy binding in the project.
+  <Step title="Read the policies">
+    Relay reads the account's plan: the policies bound to it and to its project's and team's accounts, folded ahead of time.
   </Step>
   <Step title="Route">
-    The `model` is resolved against the catalog. Relay walks the model's enabled bindings, keeps those the policy grants, and picks the first whose host has a usable host key in the policy.
+    The `model` is resolved against the catalog. Relay keeps the caller's pools, in order, that are at a host serving the model and whose policies allow it.
   </Step>
   <Step title="Reserve and pick a key">
-    The policy's rate limit is reserved. A healthy host key is picked from the policy's keys for that host, and its tier limit is reserved. If the key fails before any response bytes are sent, Relay tries the next key.
+    The caller's rate limits and budgets are reserved. A healthy host key is picked from the first pool, and the limits of its account, its host and the key itself are reserved. If the key fails before any response bytes are sent, Relay tries the next key, then the next pool.
   </Step>
   <Step title="Forward and settle">
     The request goes upstream, translated if the binding speaks a different shape, and the response streams back in the shape you sent. When the response ends, Relay commits the token counts to the rate limits and records the usage event.

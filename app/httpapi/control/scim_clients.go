@@ -20,9 +20,9 @@ import (
 type SCIMClientRow struct {
 	Name        string     `json:"name"                 doc:"The client's name, stamped as the source of every user and group it provisions."`
 	TokenPrefix string     `json:"tokenPrefix"          doc:"The start of the token, for telling tokens apart."`
-	CreatedAt   time.Time  `json:"createdAt"`
+	CreatedAt   time.Time  `json:"createdAt"            doc:"When the client was created."`
 	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty" doc:"When the token last authenticated, to the minute."`
-	Revoked     bool       `json:"revoked"`
+	Revoked     bool       `json:"revoked"              doc:"The token was revoked and no longer authenticates."`
 }
 
 func scimClientRowOf(c *scim.Client) SCIMClientRow {
@@ -36,7 +36,7 @@ func scimClientRowOf(c *scim.Client) SCIMClientRow {
 
 type scimClientListOutput struct {
 	Body struct {
-		Clients []SCIMClientRow `json:"clients"`
+		Clients []SCIMClientRow `json:"clients" doc:"Every SCIM client, revoked ones included."`
 	}
 }
 
@@ -54,7 +54,7 @@ type scimClientCreateOutput struct {
 }
 
 type scimClientRevokeInput struct {
-	Name string `path:"name"`
+	Name string `path:"name" doc:"The SCIM client's name."`
 }
 
 // scimClientResource is where scim-clients actions are authorized: the global scope, as only an administrator may hand out provisioning rights.
@@ -84,6 +84,7 @@ func registerSCIMClients(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/scim-clients",
 		Summary:     "List SCIM clients",
+		Description: "Every identity provider issued a SCIM token, with when it was last used. Admin only.",
 		Tags:        []string{"scim"},
 		Middlewares: protect,
 		Errors:      []int{401, 403, 500},
@@ -108,6 +109,7 @@ func registerSCIMClients(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:        http.MethodPost,
 		Path:          "/scim-clients",
 		Summary:       "Create a SCIM client and return its token once",
+		Description:   "Issues a bearer token for an identity provider to call /scim/v2 with. The name is issued once: a taken or previously revoked name answers 409. Admin only.",
 		Tags:          []string{"scim"},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,

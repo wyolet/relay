@@ -26,10 +26,10 @@ type Pricing struct {
 // Spec carries the rate list, the target model set, currency, and an enable
 // flag.
 type Spec struct {
-	Currency       string   `json:"currency"             yaml:"currency"             validate:"required"`
-	TargetModelIDs []string `json:"targetModels"         yaml:"targetModels"         validate:"required,min=1,dive,required"`
-	Rates          []Rate   `json:"rates"                yaml:"rates"                validate:"required,min=1,dive"`
-	Enabled        *bool    `json:"enabled,omitempty"    yaml:"enabled,omitempty"`
+	Currency       string   `json:"currency"             yaml:"currency"             validate:"required"         doc:"ISO 4217 currency of the amounts, such as USD."`
+	TargetModelIDs []string `json:"targetModels"         yaml:"targetModels"         validate:"required,min=1,dive,required" doc:"Ids of the models this rate sheet prices at its host."`
+	Rates          []Rate   `json:"rates"                yaml:"rates"                validate:"required,min=1,dive" doc:"One entry per priced meter, context tier and service tier."`
+	Enabled        *bool    `json:"enabled,omitempty"    yaml:"enabled,omitempty"    doc:"False stops costing traffic with this sheet, leaving it unpriced. Omitted means true."`
 }
 
 // Rate is one priced meter. AboveTokens=0 is the base tier; AboveTokens>0 is
@@ -41,11 +41,11 @@ type Spec struct {
 // to responses the upstream reports as served in that tier, under the
 // upstream's own tier name.
 type Rate struct {
-	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.cache_creation_1h tokens.reasoning tokens.audio_input tokens.audio_output tokens.accepted_prediction tokens.rejected_prediction tokens.server_tool_use_input tokens.server_tool_use_output"`
-	Unit        Unit    `json:"unit"                  yaml:"unit"                  validate:"required,oneof=per_million per_unit"`
-	Amount      float64 `json:"amount"                yaml:"amount"                validate:"gte=0"`
-	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty" validate:"gte=0"`
-	ServiceTier string  `json:"serviceTier,omitempty" yaml:"serviceTier,omitempty"`
+	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.cache_creation_1h tokens.reasoning tokens.audio_input tokens.audio_output tokens.accepted_prediction tokens.rejected_prediction tokens.server_tool_use_input tokens.server_tool_use_output" enum:"tokens.input,tokens.output,tokens.cache_read,tokens.cache_creation,tokens.cache_creation_1h,tokens.reasoning,tokens.audio_input,tokens.audio_output,tokens.accepted_prediction,tokens.rejected_prediction,tokens.server_tool_use_input,tokens.server_tool_use_output" doc:"Usage counter this rate prices."`
+	Unit        Unit    `json:"unit"                  yaml:"unit"                  validate:"required,oneof=per_million per_unit" enum:"per_million,per_unit" doc:"per_million prices a million units of the meter; per_unit prices one."`
+	Amount      float64 `json:"amount"                yaml:"amount"                validate:"gte=0" doc:"Price per unit, in the sheet's currency. 0 is an explicit free meter, not a missing rate."`
+	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty" validate:"gte=0" doc:"Context tier: the rate applies once the request's prompt reaches this many tokens; the largest qualifying tier wins. 0 is the base tier."`
+	ServiceTier string  `json:"serviceTier,omitempty" yaml:"serviceTier,omitempty" doc:"Upstream service tier name this rate applies to, as the upstream reports it. Empty is the base rate."`
 }
 
 // Meter is the dimension a Rate prices. Closed set; new meters require a

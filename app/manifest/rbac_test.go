@@ -6,12 +6,11 @@ import (
 
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
 )
 
 const rbacYAML = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Role
 metadata:
   name: developer
@@ -23,7 +22,7 @@ spec:
     - kinds: [usage, logs]
       verbs: [read]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: platform-admins
@@ -35,7 +34,7 @@ spec:
     - {kind: user, name: alice}
     - {kind: serviceaccount, name: search-indexer}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: everyone-viewer
@@ -45,18 +44,20 @@ spec:
   subjects:
     - {kind: group, name: system:authenticated}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
 metadata:
   name: ml-search-everyone
+  owner: {kind: project, name: ml-search}
 spec:
-  project: ml-search
   policy: ml-search-default
-  subjects:
-    - {kind: group, name: system:authenticated}
+  accounts: [project-ml-search]
 `
 
-const roleUUID = "0195f8a0-0000-7000-8000-000000000022"
+const (
+	roleUUID           = "0195f8a0-0000-7000-8000-000000000022"
+	projectAccountUUID = "0195f8a0-0000-7000-8000-000000000023"
+)
 
 var rbacResolver = manifest.MapResolver{
 	Teams:           map[string]string{"platform": teamUUID},
@@ -65,6 +66,7 @@ var rbacResolver = manifest.MapResolver{
 	ServiceAccounts: map[string]string{"search-indexer": saUUID},
 	Roles:           map[string]string{"developer": roleUUID},
 	Users:           map[string]string{"alice": aliceUUID},
+	Accounts:        map[string]string{"project-ml-search": projectAccountUUID},
 }
 
 var rbacRev = manifest.MapReverseResolver{
@@ -153,69 +155,14 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	if err := pb.Validate(); err != nil {
 		t.Fatalf("policy binding validate: %v", err)
 	}
-	if pb.Spec.ProjectID != projectUUID || pb.Spec.PolicyID != policyUUID {
-		t.Errorf("policy binding refs = %+v", pb.Spec)
-	}
-	if rendered := manifest.FromPolicyBinding(pb, rbacRev); rendered.Spec.Priority == nil || *rendered.Spec.Priority != 100 {
-		t.Errorf("rendered priority = %v, want the default 100", rendered.Spec.Priority)
-	}
-}
-
-// The default lands on Spec.Priority itself, not just in EffectivePriority:
-// re-applying the same document must produce the identical stored row, or
-// apply would see a spurious diff every run.
-func TestToPolicyBinding_OmittedPrioritySetsTheDefaultOnSpec(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(rbacYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	pb, err := manifest.ToPolicyBinding(*docs[3].PolicyBinding, rbacResolver)
-	if err != nil {
-		t.Fatalf("ToPolicyBinding: %v", err)
-	}
-	if pb.Spec.Priority == nil || *pb.Spec.Priority != policybinding.DefaultPriority {
-		t.Errorf("Spec.Priority = %v, want the default %d set directly", pb.Spec.Priority, policybinding.DefaultPriority)
-	}
-}
-
-// TestPolicyBindingExplicitZeroPriorityRoundTrips: 0 is the highest-winning
-// priority, so it must survive parse → domain → render instead of reading as
-// an omitted field and picking up the default.
-func TestPolicyBindingExplicitZeroPriorityRoundTrips(t *testing.T) {
-	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
-kind: PolicyBinding
-metadata:
-  name: zero-priority
-spec:
-  project: ml-search
-  policy: ml-search-default
-  priority: 0
-  subjects:
-    - {kind: user, name: alice}
-`
-	docs, err := manifest.Parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	pb, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, rbacResolver)
-	if err != nil {
-		t.Fatalf("ToPolicyBinding: %v", err)
-	}
-	if pb.Spec.Priority == nil || *pb.Spec.Priority != 0 {
-		t.Fatalf("Spec.Priority = %v, want an explicit 0", pb.Spec.Priority)
-	}
-	if got := pb.EffectivePriority(); got != 0 {
-		t.Errorf("EffectivePriority = %d, want 0", got)
-	}
-	if rendered := manifest.FromPolicyBinding(pb, rbacRev); rendered.Spec.Priority == nil || *rendered.Spec.Priority != 0 {
-		t.Errorf("rendered priority = %v, want 0", rendered.Spec.Priority)
+	if pb.Meta.Owner.ID != projectUUID || pb.Spec.PolicyID != policyUUID || len(pb.Spec.AccountIDs) != 1 || pb.Spec.AccountIDs[0] != projectAccountUUID {
+		t.Errorf("policy binding refs = %+v owned by %+v", pb.Spec, pb.Meta.Owner)
 	}
 }
 
 func TestToRoleBinding_UnknownScopeTarget(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: ghost-team
@@ -225,7 +172,7 @@ spec:
   subjects:
     - {kind: group, name: platform-eng}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: ghost-project
@@ -251,7 +198,7 @@ spec:
 
 func TestToRoleBinding_UnknownSubject(t *testing.T) {
 	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RoleBinding
 metadata:
   name: ghosts

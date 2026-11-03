@@ -45,19 +45,19 @@ func (u tokenUsers) BumpTokenVersion(_ context.Context, id string) error {
 	return nil
 }
 
-// memDenylist records the revocation entries a revoke writes.
+// memDenylist records each revoked jti with the time left until its token expires.
 type memDenylist struct {
 	mu      sync.Mutex
 	entries map[string]time.Duration
 }
 
-func (d *memDenylist) Set(_ context.Context, key string, _ []byte, ttl time.Duration) error {
+func (d *memDenylist) Revoke(_ context.Context, jti string, exp time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.entries == nil {
 		d.entries = map[string]time.Duration{}
 	}
-	d.entries[key] = ttl
+	d.entries[jti] = time.Until(exp)
 	return nil
 }
 
@@ -277,7 +277,7 @@ func TestRevokeToken_ByJTI(t *testing.T) {
 	if _, err := revokeTokenByJTI(actor.WithActor(context.Background(), a), f.deps, minted.Body.JTI, "", ""); err != nil {
 		t.Fatalf("revokeTokenByJTI: %v", err)
 	}
-	want := policy.RevokedKey(f.team.Meta.ID, minted.Body.JTI)
+	want := minted.Body.JTI
 	ttl, ok := f.denylist.entries[want]
 	if !ok {
 		t.Fatalf("denylist entries = %v, want one at %q", f.denylist.entries, want)
@@ -309,7 +309,7 @@ func TestRevokeToken_ByValue(t *testing.T) {
 	if _, err := revokeTokenByValue(context.Background(), f.deps, minted.Body.Token); err != nil {
 		t.Fatalf("revokeTokenByValue: %v", err)
 	}
-	if _, ok := f.denylist.entries[policy.RevokedKey(f.team.Meta.ID, minted.Body.JTI)]; !ok {
+	if _, ok := f.denylist.entries[minted.Body.JTI]; !ok {
 		t.Fatalf("denylist entries = %v, want the minted jti", f.denylist.entries)
 	}
 	if _, err := revokeTokenByValue(context.Background(), f.deps, "eyJ.garbage.token"); statusOf(t, err) != http.StatusUnauthorized {
@@ -405,7 +405,7 @@ func TestRevokeToken_ByJTI_HintsPathRequiresAdminAndNoAuditRow(t *testing.T) {
 		if _, err := revokeTokenByJTI(admin, f.deps, minted.Body.JTI, teamHint, expHint); err != nil {
 			t.Fatalf("revokeTokenByJTI: %v", err)
 		}
-		want := policy.RevokedKey(teamHint, minted.Body.JTI)
+		want := minted.Body.JTI
 		ttl, ok := f.denylist.entries[want]
 		if !ok {
 			t.Fatalf("denylist entries = %v, want one at %q", f.denylist.entries, want)
@@ -447,7 +447,7 @@ func TestTokenRevokeByValuePreviousKey(t *testing.T) {
 	}
 	f.denylist.mu.Lock()
 	defer f.denylist.mu.Unlock()
-	if _, ok := f.denylist.entries[policy.RevokedKey(f.team.Meta.ID, minted.Body.JTI)]; !ok {
+	if _, ok := f.denylist.entries[minted.Body.JTI]; !ok {
 		t.Fatalf("no denylist entry written; entries = %v", f.denylist.entries)
 	}
 }

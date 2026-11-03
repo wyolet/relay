@@ -1,243 +1,154 @@
-// Package policy is the domain layer for the Policy entity — the named
-// group that bundles Models (m:n), ProviderKeys (m:n), and an optional
-// single RateLimit (m:1, the one rule set that applies to traffic through
-// this Policy).
+// Package policy is the domain layer for the Policy entity: a reusable rule set a policy binding applies to accounts. A policy holds nothing of its own, only references: the models it allows, the pools it draws keys from, and the rate limits and budgets every request under it must fit, each counted once for the bound account (shared) or once per account under it. One kind serves every rung of the ladder; a host-owned policy is a tier preset and links no pools.
 //
-// Wire format: Policy YAML/JSON carries entity *names*; the admin and seed
-// boundaries resolve names to ids.
+// Wire format: Policy YAML/JSON carries entity *names*; the admin and seed boundaries resolve names to ids. PG storage: Spec.Models sits in a column, the links in junction tables (see store.go).
 //
-// Go domain shape: Policy.Spec carries id arrays / scalar id. Callers read
-// the lists directly without dealing with joins.
-//
-// PG storage: arrays land in junction tables (policy_models,
-// policy_provider_keys) with proper FKs; the single RateLimit ref is a
-// column on the policies table. Policy's store.go fans the writes out
-// across the junctions inside a transaction and rebuilds the arrays on
-// read. (Migration + sqlc queries land as a follow-up; current store.go
-// keeps Spec in JSONB until then, see TODO in store.go.)
-//
-// Reverse direction: Key carries a single Spec.PolicyID (m:1).
-// Provider names its default via Spec.DefaultPolicyID. Models and
-// ProviderKeys carry no policy reference — they are discovered via the
-// junctions / via Policy.Spec.
+// Out of scope: which accounts a policy governs (app/policybinding), and resolving the ladder per request (app/plan).
 package policy
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
-	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/modelref"
-	"github.com/wyolet/relay/app/ratelimit"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// Policy is the routing/auth bundle. Composition layer enforces that every
-// id in the lists below resolves and (for ProviderKeys) shares the Provider
-// of the Models in the same Policy.
+// Policy is the access gate. Composition enforces that every linked id
+// resolves and that the author may use it.
 type Policy struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec carries the membership lists, the single rate-limit, and the
-// strategy knobs.
+// Spec carries the model grant, the links, and the enabled flag.
 type Spec struct {
-	// Models is the catalog grant — a list of ref strings parsed by
-	// app/modelref. See its package doc for the grammar. Each entry can
-	// match a single binding ("anthropic/claude-opus-4-7@bedrock"), all
-	// hosts for a model ("anthropic/claude-opus-4-7" or trailing @*),
-	// or every model under a provider ("anthropic" or "anthropic/*").
-	//
-	// Patterns expand against the live catalog at snapshot build time,
-	// so a wildcard automatically includes models added later.
-	//
-	// **Empty Models AND empty ModelIDs is treated as an implicit
-	// wildcard**: every model reachable through the policy's HostKeys is
-	// allowed. The hostkey-coverage check at routing time is the real
-	// authorization gate in that case; Models/ModelIDs, when set, narrow
-	// that gate. Deprecated models are hidden from the implicit wildcard
-	// unless Spec.IncludeDeprecated.
-	Models []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1"`
-
-	// ModelIDs is the legacy literal-ID grant — exact Model UUIDs, no
-	// wildcards. Coexists with Models during the transition; the
-	// snapshot expands both into the same bindingsByPolicy index.
-	// New grants should prefer Models. See Models above for the
-	// empty-list = implicit-wildcard rule.
-	ModelIDs []string `json:"modelIds,omitempty" yaml:"modelIds,omitempty" validate:"omitempty,dive,uuid"`
-
-	// HostKeyIDs is the set of HostKeys this Policy can draw from
-	// (m:n with ProviderKey). Order is significant for KeySelectionPrioritized.
-	HostKeyIDs []string `json:"hostKeyIds,omitempty" yaml:"hostKeyIds,omitempty" validate:"omitempty,dive,uuid"`
-
-	// RateLimitID is a single RateLimit applied uniformly to every model
-	// the policy grants. Mutually exclusive with RLBindings — pick one or
-	// the other (or neither for an uncapped policy). The flat form is the
-	// common case for user-authored policies that don't differentiate
-	// caps per model.
-	RateLimitID string `json:"rateLimitId,omitempty" yaml:"rateLimitId,omitempty" validate:"omitempty,uuid"`
-
-	// RLBindings declares per-model rate-limit mappings. Use this when
-	// caps vary by the model being called (the typical host-tier case
-	// where, e.g., gpt-4o has different TPM than gpt-4o-mini at the same
-	// upstream tier). At request time the first binding whose Models
-	// matches the requested model contributes its RateLimit's rules; a
-	// model not covered by any binding is uncapped at this policy.
-	//
-	// Each binding must declare at least one entry in Models. Mutually
-	// exclusive with RateLimitID — Validate rejects setting both.
-	RLBindings []RLBinding `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty" validate:"omitempty,dive"`
-
-	// KeySelection is the algorithm used to pick a ProviderKey from the
-	// healthy pool. Defaults to prioritized. The enum lives in app/keypool
-	// (the consumer); policy re-exports the constants via type aliases
-	// for backward source-compatibility.
-	KeySelection keypool.KeySelection `json:"keySelection,omitempty" yaml:"keySelection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used"`
-
-	// IncludeDeprecated controls whether wildcard Models entries expand
-	// to models whose Spec.Deprecation.Status is "deprecated" or
-	// "sunset". Default false (deprecated models excluded). Literal
-	// grants in Models always resolve regardless — if you explicitly
-	// name a deprecated model by slug, you mean to grant it.
-	IncludeDeprecated bool `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
+	// Models is the catalog grant: "provider" for every model of a provider, "provider/model" for one model. Empty grants every model the policy's pools can serve. Hosts are the pools' business, so a ref naming one is refused.
+	Models []string `json:"models" yaml:"models,omitempty" required:"false" validate:"omitempty,dive,min=1" doc:"Models this policy allows: provider for every model of a provider, provider/model for one model (provider/* is stored as provider). Empty ([]) allows every model the reached pools serve. A host (@host) is refused: the pools decide hosts. The request is held to every rung's list."`
 
 	// Enabled defaults to true when nil.
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False refuses every request this policy governs with policy_disabled. Omitted means true."`
 
-	// PayloadLoggingEnabled decides whether the request/response bodies of
-	// every request this policy governs are captured, overriding the
-	// credential's own flag either way (see CapturesPayload). Off by default.
-	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+	// PoolIDs are the pools this policy draws keys from, tried in order, so a later pool is the failover for an earlier one. Host-owned policies list none.
+	PoolIDs []string `json:"poolIds,omitempty" yaml:"poolIds,omitempty" validate:"omitempty,dive,uuid" doc:"Ids of the pools requests draw host keys from, tried in this order: a later pool is the failover for an earlier one. Not on host-owned (tier) policies."`
+
+	// RateLimits are the rate limits a request under this policy must fit.
+	RateLimits []RateLimitLink `json:"rateLimits,omitempty" yaml:"rateLimits,omitempty" validate:"omitempty,dive" doc:"Rate limits every request under this policy must fit."`
+
+	// Budgets are the budgets a request under this policy must fit.
+	Budgets []BudgetLink `json:"budgets,omitempty" yaml:"budgets,omitempty" validate:"omitempty,dive" doc:"Budgets every request under this policy must fit. Unpriced models are refused under a budget."`
 }
 
-// RLBinding maps a set of Models to one RateLimit. The Models list uses
-// the modelref DSL (same grammar as Policy.Spec.Models): a single binding
-// can name explicit models, a provider/host wildcard, etc. Resolution
-// scans bindings in declared order and the first match wins; authors
-// should keep model sets disjoint within a policy.
-type RLBinding struct {
-	Models      []string `json:"models"      yaml:"models"      validate:"required,min=1,dive,min=1"`
-	RateLimitID string   `json:"rateLimitId" yaml:"rateLimitId" validate:"required,uuid"`
+// RateLimitLink applies one RateLimit to a policy's requests: to every model when Models is empty, otherwise only to requests for a model matching one of Models. One rate limit may be linked more than once with different Models or counting.
+type RateLimitLink struct {
+	RateLimitID string   `json:"rateLimitId"      yaml:"rateLimitId"      validate:"required,uuid"    doc:"Id of the linked rate limit."`
+	Models      []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1" doc:"Models the limit applies to, in the policy's model grammar (provider or provider/model); empty applies it to every request. Bound to a caller account (team, project or lane), every matched model draws on one shared count; bound to a provider account, each matched model counts on its own."`
+	// Shared reads back explicit; nil on write means true.
+	Shared *bool `json:"shared,omitempty" yaml:"shared,omitempty" doc:"True counts once for the bound account; false counts once per account under it (each lane its own bucket). Omitted on write means true; always returned."`
 }
 
-// KeySelection is an alias for keypool.KeySelection so existing callers
-// can keep writing policy.KeySelection without an import change. The
-// canonical definition lives in app/keypool.
-type KeySelection = keypool.KeySelection
+// BudgetLink applies one Budget to a policy's requests.
+type BudgetLink struct {
+	BudgetID string `json:"budgetId" yaml:"budgetId" validate:"required,uuid" doc:"Id of the linked budget."`
+	// Shared reads back explicit; nil on write means true.
+	Shared *bool `json:"shared,omitempty" yaml:"shared,omitempty" doc:"True spends one budget for the bound account; false gives each account under it a budget of its own. Omitted on write means true; always returned."`
+}
 
-// Re-exported constants for source compatibility.
-const (
-	KeySelectionPrioritized       = keypool.KeySelectionPrioritized
-	KeySelectionRoundRobin        = keypool.KeySelectionRoundRobin
-	KeySelectionLeastRecentlyUsed = keypool.KeySelectionLeastRecentlyUsed
-)
+// IsShared reports whether the link counts once for the bound account.
+func (l *RateLimitLink) IsShared() bool { return l.Shared == nil || *l.Shared }
+
+// IsShared reports whether the link spends one budget for the bound account.
+func (l *BudgetLink) IsShared() bool { return l.Shared == nil || *l.Shared }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (p *Policy) IsEnabled() bool { return p.Spec.Enabled == nil || *p.Spec.Enabled }
 
-// CapturesPayload reports whether a request's bodies are captured. The
-// governing policy decides, in both directions; credentialOptIn counts only
-// when no policy governs. Nil governing means none does.
-func CapturesPayload(governing *Policy, credentialOptIn bool) bool {
-	if governing != nil {
-		return governing.Spec.PayloadLoggingEnabled
+// Normalize gives the read form every boundary returns: models as a list (never null) and every link's shared flag explicit.
+func (p *Policy) Normalize() {
+	if p.Spec.Models == nil {
+		p.Spec.Models = []string{}
 	}
-	return credentialOptIn
+	for i := range p.Spec.RateLimits {
+		l := &p.Spec.RateLimits[i]
+		l.Shared = explicit(l.Shared)
+	}
+	for i := range p.Spec.Budgets {
+		l := &p.Spec.Budgets[i]
+		l.Shared = explicit(l.Shared)
+	}
 }
 
-// EffectiveKeySelection returns KeySelection or the prioritized default.
-func (p *Policy) EffectiveKeySelection() keypool.KeySelection {
-	if p.Spec.KeySelection == "" {
-		return keypool.KeySelectionPrioritized
-	}
-	return p.Spec.KeySelection
+func explicit(b *bool) *bool {
+	v := b == nil || *b
+	return &v
 }
 
-// SelectRateLimitID returns the id of the RateLimit that applies to one
-// request triple, or "" when the policy doesn't cap this request, plus
-// whether the match came from a per-model RLBinding (which buckets per
-// model rather than once for the whole policy).
-//
-// Resolution: when Spec.RLBindings is non-empty, the first binding whose
-// Models matches the (provider, model, host) triple wins. Otherwise the
-// flat Spec.RateLimitID is used. A request that matches no binding and
-// has no flat fallback is uncapped at this policy.
-//
-// Pure query — no snapshot lookup, no I/O. Caller resolves the id to a
-// *ratelimit.RateLimit via the snapshot.
-func (p *Policy) SelectRateLimitID(providerSlug, modelSlug, hostSlug string) (id string, perModel bool) {
-	if p == nil {
-		return "", false
+// BudgetIDs returns the ids of the linked budgets, in link order.
+func (p *Policy) BudgetIDs() []string {
+	out := make([]string, len(p.Spec.Budgets))
+	for i, b := range p.Spec.Budgets {
+		out[i] = b.BudgetID
 	}
-	for _, b := range p.Spec.RLBindings {
-		if modelref.MatchAny(b.Models, providerSlug, modelSlug, hostSlug) {
-			return b.RateLimitID, true
-		}
-	}
-	return p.Spec.RateLimitID, false
-}
-
-// ResolveRules converts the given RateLimit into the limiter's Rule
-// shape, scoped by this policy's id, the RateLimit, and — for a
-// per-model RLBinding — modelID. Returns nil when rl is nil, disabled, or
-// has no Rules. This is the runtime equivalent of the old
-// ratelimit.Resolve(pol, rl) function — moved here so app/ratelimit
-// stays free of policy imports.
-func (p *Policy) ResolveRules(rl *ratelimit.RateLimit, modelID string) []pkgratelimit.Rule {
-	if p == nil || rl == nil {
-		return nil
-	}
-	return ratelimit.ResolveWithScope("policy", ruleSubject(p.Meta.ID, rl.Meta.ID, modelID), rl)
+	return out
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is user or system.
-//   - ModelIDs / HostKeyIDs have no within-list duplicates.
+//   - Owner.Kind is system, host, team, project or user.
+//   - no pool or budget is linked twice.
+//   - host-owned policies link no pools.
+//   - every model ref names a provider or a provider's model, never a host.
 //
-// Cross-entity checks (every id resolves; ProviderKeys + Models share a
-// Provider; RateLimitID resolves; auth-required Providers have at least
-// one resolvable ProviderKey) live in the composition layer.
+// Cross-entity checks (every id resolves; the author may use it) live in
+// app/refcheck.
 func (p *Policy) Validate() error {
 	if err := meta.Validator.Struct(p); err != nil {
 		return err
 	}
 	switch p.Meta.Owner.Kind {
-	case meta.OwnerUser, meta.OwnerSystem:
+	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject, meta.OwnerTeam:
 	case meta.OwnerHost:
-		// Host-owned policies are tier definitions published by a Host as
-		// part of its menu. They carry rules and (optionally) model lists
-		// but never inbound grants — HostKeyIDs is meaningless for an
-		// upstream tier.
+		// A host-owned policy is a tier preset: what the provider grants an
+		// account. It caps; it never hands out keys.
 		if p.Meta.Owner.ID == "" {
 			return fmt.Errorf("policy %q: owner.id is required for host-owned policy", p.Meta.Name)
 		}
-		if len(p.Spec.HostKeyIDs) > 0 {
-			return fmt.Errorf("policy %q: host-owned policies must not list hostKeyIds", p.Meta.Name)
+		if len(p.Spec.PoolIDs) > 0 {
+			return fmt.Errorf("policy %q: host-owned policies must not list poolIds", p.Meta.Name)
 		}
-	case meta.OwnerProject:
 	default:
-		return fmt.Errorf("policy %q: owner.kind required (user|system|host|project)", p.Meta.Name)
+		return fmt.Errorf("policy %q: owner.kind required (user|system|host|team|project)", p.Meta.Name)
 	}
-	// RateLimit shape: flat singular OR per-model bindings, never both.
-	if p.Spec.RateLimitID != "" && len(p.Spec.RLBindings) > 0 {
-		return fmt.Errorf("policy %q: rateLimitId and rlBindings are mutually exclusive", p.Meta.Name)
-	}
-	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
+	if err := uniqueIDs("poolIds", p.Meta.Name, p.Spec.PoolIDs); err != nil {
 		return err
 	}
-	if err := uniqueIDs("hostKeyIds", p.Meta.Name, p.Spec.HostKeyIDs); err != nil {
+	if err := uniqueIDs("budgets", p.Meta.Name, p.BudgetIDs()); err != nil {
 		return err
 	}
 	if err := validateModelRefs(p.Meta.Name, p.Spec.Models); err != nil {
 		return err
 	}
+	return validateRateLimitLinks(p.Meta.Name, p.Spec.RateLimits)
+}
+
+// validateRateLimitLinks checks each link's model refs and refuses two links of one rate limit over the same models and counting, which would only count every request twice.
+func validateRateLimitLinks(policyName string, links []RateLimitLink) error {
+	seen := make(map[string]int, len(links))
+	for i, l := range links {
+		if err := validateModelRefs(policyName, l.Models); err != nil {
+			return fmt.Errorf("rateLimits[%d]: %w", i, err)
+		}
+		models := slices.Clone(l.Models)
+		slices.Sort(models)
+		key := fmt.Sprintf("%s\x00%t\x00%s", l.RateLimitID, l.IsShared(), strings.Join(models, "\x00"))
+		if j, dup := seen[key]; dup {
+			return fmt.Errorf("policy %q: rateLimits[%d] and rateLimits[%d] link rate limit %q over the same models", policyName, j, i, l.RateLimitID)
+		}
+		seen[key] = i
+	}
 	return nil
 }
 
-// validateModelRefs runs the modelref parser over every entry and
-// rejects duplicates. Parser errors carry their own message; the policy
-// name is prepended for context.
+// validateModelRefs parses every entry, rejects duplicates, and refuses a ref naming a host: pools decide hosts, so a policy names providers and models only.
 func validateModelRefs(policyName string, refs []string) error {
 	if len(refs) == 0 {
 		return nil
@@ -248,9 +159,24 @@ func validateModelRefs(policyName string, refs []string) error {
 			return fmt.Errorf("policy %q: duplicate models entry %q", policyName, raw)
 		}
 		seen[raw] = struct{}{}
-		if _, err := modelref.Parse(raw); err != nil {
+		r, err := modelref.Parse(raw)
+		if err != nil {
 			return fmt.Errorf("policy %q: %w", policyName, err)
 		}
+		if err := grantable(r); err != nil {
+			return fmt.Errorf("policy %q: models entry %q %w", policyName, raw, err)
+		}
+	}
+	return nil
+}
+
+// grantable refuses a ref a policy cannot hold: one naming a host, or a model without its provider.
+func grantable(r modelref.Ref) error {
+	switch {
+	case !r.HostWildcard:
+		return fmt.Errorf("names a host; a policy names a provider or a provider's model, and its pools decide the hosts")
+	case r.ProviderWildcard:
+		return fmt.Errorf("names no provider; write provider or provider/model")
 	}
 	return nil
 }

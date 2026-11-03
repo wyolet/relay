@@ -1,0 +1,274 @@
+package plan
+
+import (
+	"context"
+	"strings"
+
+	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/engine/cell"
+)
+
+// Input kinds, loaded from the stores.
+const (
+	KindProvider       engine.Kind = "provider"
+	KindHost           engine.Kind = "host"
+	KindModel          engine.Kind = "model"
+	KindBinding        engine.Kind = "binding"
+	KindPricing        engine.Kind = "pricing"
+	KindOverlay        engine.Kind = "overlay"
+	KindPolicy         engine.Kind = "policy"
+	KindPolicyBinding  engine.Kind = "policybinding"
+	KindRateLimit      engine.Kind = "ratelimit"
+	KindBudget         engine.Kind = "budget"
+	KindPool           engine.Kind = "pool"
+	KindAccount        engine.Kind = "account"
+	KindCredential     engine.Kind = "credential"
+	KindTeam           engine.Kind = "team"
+	KindProject        engine.Kind = "project"
+	KindServiceAccount engine.Kind = "serviceaccount"
+	KindUser           engine.Kind = "user"
+	KindKey            engine.Kind = "key"
+	KindRole           engine.Kind = "role"
+	KindRoleBinding    engine.Kind = "rolebinding"
+	KindGroup          engine.Kind = "group"
+	// KindAccountsSetting is the accounts settings section, one row keyed by its section name.
+	KindAccountsSetting engine.Kind = "accountssetting"
+)
+
+// Derived kinds, built by the controllers.
+const (
+	KindCatalogIndex     engine.Kind = "catalogindex"
+	KindManagedAccount   engine.Kind = "managedaccount"
+	KindPendingAccounts  engine.Kind = "pendingaccounts"
+	KindExpandedPolicy   engine.Kind = "expandedpolicy"
+	KindRungPolicy       engine.Kind = "rungpolicy"
+	KindAccountPlan      engine.Kind = "accountplan"
+	KindKeySlot          engine.Kind = "keyslot"
+	KindPoolPlan         engine.Kind = "poolplan"
+	KindOwnedCredentials engine.Kind = "ownedcredentials"
+	KindCallerPlan       engine.Kind = "callerplan"
+	KindLaneIndex        engine.Kind = "laneindex"
+	KindKeyPlan          engine.Kind = "keyplan"
+	KindKeyPlanShard     engine.Kind = "keyplanshard"
+	KindKeyPlanIndex     engine.Kind = "keyplanindex"
+	KindUserPlan         engine.Kind = "userplan"
+	KindUserIndex        engine.Kind = "userindex"
+	KindPersonalAccount  engine.Kind = "personalaccount"
+
+	// A shared account resolved to its real account.
+	KindSharedAccount engine.Kind = "sharedaccount"
+
+	// Checks that only attach issues, to a policy and to a host; no object of these kinds is built.
+	KindPolicyCheck engine.Kind = "policycheck"
+	KindHostCheck   engine.Kind = "hostcheck"
+)
+
+// Sources are the stores each input kind loads from. A nil field loads nothing.
+type Sources struct {
+	Providers       engine.Source[provider.Provider]
+	Hosts           engine.Source[host.Host]
+	Models          engine.Source[model.Model]
+	Bindings        engine.Source[binding.Binding]
+	Pricings        engine.Source[pricing.Pricing]
+	Overlays        engine.Source[overlay.Overlay]
+	Policies        engine.Source[policy.Policy]
+	PolicyBindings  engine.Source[policybinding.PolicyBinding]
+	RateLimits      engine.Source[ratelimit.RateLimit]
+	Budgets         engine.Source[budget.Budget]
+	Pools           engine.Source[pool.Pool]
+	Accounts        engine.Source[account.Account]
+	Credentials     engine.Source[hostkey.HostKey]
+	Teams           engine.Source[team.Team]
+	Projects        engine.Source[project.Project]
+	ServiceAccounts engine.Source[serviceaccount.ServiceAccount]
+	Users           engine.Source[user.User]
+	Keys            engine.Source[key.Key]
+	// RoleBindings decide the member accounts relay keeps; with Roles and Groups they also feed the RBAC re-check of personal policies bound by a team or project, for which Roles are read only when RBAC is set. Groups are read always: they turn their members' personal accounts on or off.
+	Roles        engine.Source[role.Role]
+	RoleBindings engine.Source[rolebinding.RoleBinding]
+	Groups       engine.Source[group.Group]
+	// AccountsSetting is the accounts settings section; nil reads personal accounts as on.
+	AccountsSetting engine.Source[settings.Accounts]
+	// RBAC is set under the role-based authorizer. Without it every user may manage every policy binding, so the plans do not re-check.
+	RBAC bool
+}
+
+// Register declares every input kind with its source, the derived kinds, and their controllers on e. cells must be the registry passed as e's Options.Cells, so the cells the controllers acquire are kept alive by the plans that link them. Call before e.Load.
+func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
+	input(e, KindProvider, src.Providers, metaOf(func(r *provider.Provider) meta.Metadata { return r.Meta }), 1)
+	input(e, KindHost, src.Hosts, metaOf(func(r *host.Host) meta.Metadata { return r.Meta }), 1)
+	input(e, KindModel, src.Models, metaOf(func(r *model.Model) meta.Metadata { return r.Meta }), 16)
+	input(e, KindBinding, src.Bindings, metaOf(func(r *binding.Binding) meta.Metadata { return r.Meta }), 16)
+	input(e, KindPricing, src.Pricings, metaOf(func(r *pricing.Pricing) meta.Metadata { return r.Meta }), 16)
+	input(e, KindOverlay, src.Overlays, func(o *overlay.Overlay) engine.Meta { return engine.Meta{ID: OverlayID(o.Kind, o.ResourceID)} }, 1)
+	input(e, KindPolicy, src.Policies, metaOf(func(r *policy.Policy) meta.Metadata { return r.Meta }), 16)
+	input(e, KindPolicyBinding, src.PolicyBindings, metaOf(func(r *policybinding.PolicyBinding) meta.Metadata { return r.Meta }), 16)
+	input(e, KindRateLimit, src.RateLimits, metaOf(func(r *ratelimit.RateLimit) meta.Metadata { return r.Meta }), 1)
+	input(e, KindBudget, src.Budgets, metaOf(func(r *budget.Budget) meta.Metadata { return r.Meta }), 1)
+	input(e, KindPool, src.Pools, metaOf(func(r *pool.Pool) meta.Metadata { return r.Meta }), 1)
+	input(e, KindAccount, src.Accounts, metaOf(func(r *account.Account) meta.Metadata { return r.Meta }), 1)
+	// Version 0 makes the engine fetch and compare credential rows by value: a credential's resolved secret can change while its row version does not (an env var edited, a 401 heal re-resolving it), and a versioned Apply of the same version would be dropped.
+	input(e, KindCredential, src.Credentials, func(r *hostkey.HostKey) engine.Meta { return engine.Meta{ID: r.Meta.ID, Name: r.Meta.Name} }, 16)
+	input(e, KindTeam, src.Teams, metaOf(func(r *team.Team) meta.Metadata { return r.Meta }), 1)
+	input(e, KindProject, src.Projects, metaOf(func(r *project.Project) meta.Metadata { return r.Meta }), 16)
+	input(e, KindServiceAccount, src.ServiceAccounts, metaOf(func(r *serviceaccount.ServiceAccount) meta.Metadata { return r.Meta }), 64)
+	// Version 0: a user's personalAccount sits in a table of relay's whose writes leave the user row's version alone, so users are compared by value.
+	input(e, KindUser, src.Users, func(u *user.User) engine.Meta {
+		return engine.Meta{ID: u.ID, Name: u.Username}
+	}, 64)
+	input(e, KindKey, src.Keys, metaOf(func(r *key.Key) meta.Metadata { return r.Meta }), 256)
+	if !src.RBAC {
+		src.Roles = nil
+	}
+	input(e, KindRole, src.Roles, metaOf(func(r *role.Role) meta.Metadata { return r.Meta }), 1)
+	input(e, KindRoleBinding, src.RoleBindings, metaOf(func(r *rolebinding.RoleBinding) meta.Metadata { return r.Meta }), 1)
+	input(e, KindGroup, src.Groups, metaOf(func(r *group.Group) meta.Metadata { return r.Meta }), 1)
+	// Version 0: the section has no row version, so the engine compares it by value.
+	input(e, KindAccountsSetting, src.AccountsSetting, func(*settings.Accounts) engine.Meta { return engine.Meta{ID: settings.SectionAccounts} }, 1)
+
+	derived[CatalogIndex](e, KindCatalogIndex, 1)
+	derived[ManagedAccount](e, KindManagedAccount, 64)
+	derived[PendingAccounts](e, KindPendingAccounts, 1)
+	derived[ExpandedPolicy](e, KindExpandedPolicy, 16)
+	derived[RungPolicy](e, KindRungPolicy, 64)
+	derived[AccountPlan](e, KindAccountPlan, 1)
+	derived[KeySlot](e, KindKeySlot, 16)
+	derived[PoolPlan](e, KindPoolPlan, 1)
+	derived[OwnedCredentials](e, KindOwnedCredentials, 16)
+	derived[SharedAccount](e, KindSharedAccount, 1)
+	derived[CallerPlan](e, KindCallerPlan, 64)
+	derived[LaneIndex](e, KindLaneIndex, 1)
+	derived[KeyPlan](e, KindKeyPlan, 256)
+	derived[KeyPlanShard](e, KindKeyPlanShard, 16)
+	derived[KeyPlanIndex](e, KindKeyPlanIndex, 1)
+	derived[UserPlan](e, KindUserPlan, 64)
+	derived[UserIndex](e, KindUserIndex, 1)
+	derived[PersonalAccount](e, KindPersonalAccount, 64)
+	derived[policyCheck](e, KindPolicyCheck, 1)
+	derived[hostCheck](e, KindHostCheck, 1)
+
+	c := &controllers{cells: cells, rbac: src.RBAC}
+	for _, ctl := range c.all() {
+		e.Register(ctl)
+	}
+}
+
+// OverlayID is an overlay's engine id: overlays are keyed by the kind and id of the row they patch.
+func OverlayID(kind, resourceID string) string { return kind + "/" + resourceID }
+
+func input[T any](e *engine.Engine, k engine.Kind, src engine.Source[T], m func(*T) engine.Meta, shards int) {
+	if src == nil {
+		src = noRows[T]{}
+	}
+	engine.RegisterKind(e, engine.KindSpec[T]{Kind: k, Meta: m, Source: src, Shards: shards})
+}
+
+func derived[T any](e *engine.Engine, k engine.Kind, shards int) {
+	engine.RegisterKind(e, engine.KindSpec[T]{Kind: k, Shards: shards})
+}
+
+func metaOf[T any](md func(*T) meta.Metadata) func(*T) engine.Meta {
+	return func(r *T) engine.Meta {
+		m := md(r)
+		return engine.Meta{ID: m.ID, Name: m.Name, Version: version(m.ResourceVersion)}
+	}
+}
+
+// version reads a row's resource version; a missing or unreadable one is 0, which makes the engine fetch on every event.
+func version(rv string) int64 {
+	v, _, _ := meta.Metadata{ResourceVersion: rv}.ExpectedVersion()
+	return v
+}
+
+// noRows is the source of a kind the caller supplied none for.
+type noRows[T any] struct{}
+
+func (noRows[T]) List(context.Context) ([]*T, error)      { return nil, nil }
+func (noRows[T]) Get(context.Context, string) (*T, error) { return nil, nil }
+
+// OverlaySource adapts the overlay store, keyed by (kind, resource id), to the engine's single-string ids from OverlayID.
+type OverlaySource struct{ Store *overlay.Store }
+
+func (s OverlaySource) List(ctx context.Context) ([]*overlay.Overlay, error) {
+	return s.Store.List(ctx)
+}
+
+func (s OverlaySource) Get(ctx context.Context, id string) (*overlay.Overlay, error) {
+	kind, resourceID, ok := strings.Cut(id, "/")
+	if !ok {
+		return nil, nil
+	}
+	return s.Store.Get(ctx, kind, resourceID)
+}
+
+// AccountsSettingSource reads the accounts settings section from the settings store as the one row of its kind; a section never written reads as its defaults.
+type AccountsSettingSource struct{ Store *settings.Store }
+
+func (s AccountsSettingSource) List(ctx context.Context) ([]*settings.Accounts, error) {
+	a, err := s.Get(ctx, settings.SectionAccounts)
+	if err != nil || a == nil {
+		return nil, err
+	}
+	return []*settings.Accounts{a}, nil
+}
+
+func (s AccountsSettingSource) Get(ctx context.Context, id string) (*settings.Accounts, error) {
+	if id != settings.SectionAccounts {
+		return nil, nil
+	}
+	row, err := s.Store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	a, _ := row.Value.(*settings.Accounts)
+	return a, nil
+}
+
+// Every other store already lists, and fetches by id with (nil, nil) for a missing row, so it is a Source as it is.
+var (
+	_ engine.Source[provider.Provider]             = (*provider.Store)(nil)
+	_ engine.Source[host.Host]                     = (*host.Store)(nil)
+	_ engine.Source[model.Model]                   = (*model.Store)(nil)
+	_ engine.Source[binding.Binding]               = (*binding.Store)(nil)
+	_ engine.Source[pricing.Pricing]               = (*pricing.Store)(nil)
+	_ engine.Source[overlay.Overlay]               = OverlaySource{}
+	_ engine.Source[policy.Policy]                 = (*policy.Store)(nil)
+	_ engine.Source[policybinding.PolicyBinding]   = (*policybinding.Store)(nil)
+	_ engine.Source[ratelimit.RateLimit]           = (*ratelimit.Store)(nil)
+	_ engine.Source[budget.Budget]                 = (*budget.Store)(nil)
+	_ engine.Source[pool.Pool]                     = (*pool.Store)(nil)
+	_ engine.Source[account.Account]               = (*account.Store)(nil)
+	_ engine.Source[hostkey.HostKey]               = (*hostkey.Store)(nil)
+	_ engine.Source[team.Team]                     = (*team.Store)(nil)
+	_ engine.Source[project.Project]               = (*project.Store)(nil)
+	_ engine.Source[serviceaccount.ServiceAccount] = (*serviceaccount.Store)(nil)
+	_ engine.Source[user.User]                     = (*user.Store)(nil)
+	_ engine.Source[key.Key]                       = (*key.Store)(nil)
+	_ engine.Source[role.Role]                     = (*role.Store)(nil)
+	_ engine.Source[rolebinding.RoleBinding]       = (*rolebinding.Store)(nil)
+	_ engine.Source[group.Group]                   = (*group.Store)(nil)
+	_ engine.Source[settings.Accounts]             = AccountsSettingSource{}
+)

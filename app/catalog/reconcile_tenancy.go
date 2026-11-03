@@ -24,7 +24,7 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), s.policyResolvable)
+	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID))
 	if !keep {
 		deleteServiceAccount(s, sa.Meta.ID)
 		c.snap.Store(s)

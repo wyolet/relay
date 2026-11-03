@@ -24,7 +24,6 @@ import (
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -39,7 +38,7 @@ func TestGuardHostKeyRefusesAValueOnUpdate(t *testing.T) {
 	mk := func(kind hostkey.ValueKind, value string) *hostkey.HostKey {
 		k := &hostkey.HostKey{}
 		k.Meta = meta.Metadata{ID: meta.NewID(), Name: "k"}
-		k.Spec.HostID = meta.NewID()
+		k.Spec.HostID, k.Spec.AccountID = meta.NewID(), meta.NewID()
 		k.Spec.ValueFrom = hostkey.ValueFrom{Kind: kind}
 		k.Spec.Value = value
 		return k
@@ -96,12 +95,6 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 	rb.Spec.Scope = meta.Owner{Kind: meta.OwnerTeam, ID: teamID}
 	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "eng"}}
 
-	pb := &policybinding.PolicyBinding{}
-	pb.Meta = meta.Metadata{ID: meta.NewID(), Name: "pb", Owner: wrong}
-	pb.Spec.ProjectID = projectID
-	pb.Spec.PolicyID = meta.NewID()
-	pb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}
-
 	for _, tc := range []struct {
 		name  string
 		run   func() error
@@ -120,10 +113,6 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 			func() error { return guardRoleBinding(Deps{})(context.Background(), "create", nil, rb) },
 			func() meta.Owner { return rb.Meta.Owner },
 			meta.Owner{Kind: meta.OwnerTeam, ID: teamID}},
-		{"policy binding takes its project",
-			func() error { return guardPolicyBinding(Deps{})(context.Background(), "create", nil, pb) },
-			func() meta.Owner { return pb.Meta.Owner },
-			meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.run(); err != nil {
@@ -133,38 +122,6 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 				t.Fatalf("owner = %+v, want %+v", got, tc.want)
 			}
 		})
-	}
-}
-
-// The default is applied to an absent priority, never to an explicit one.
-func TestGuardPolicyBindingKeepsAnExplicitPriority(t *testing.T) {
-	mk := func(priority *int) *policybinding.PolicyBinding {
-		b := &policybinding.PolicyBinding{}
-		b.Meta = meta.Metadata{ID: meta.NewID(), Name: "pb"}
-		b.Spec.ProjectID = meta.NewID()
-		b.Spec.PolicyID = meta.NewID()
-		b.Spec.Priority = priority
-		return b
-	}
-	ptr := func(n int) *int { return &n }
-	for _, tc := range []struct {
-		name string
-		in   *int
-		want int
-	}{
-		{"absent", nil, policybinding.DefaultPriority},
-		// 0 is the highest-winning priority, not "not set".
-		{"explicit zero", ptr(0), 0},
-		{"explicit value", ptr(50), 50},
-		{"explicit default", ptr(policybinding.DefaultPriority), policybinding.DefaultPriority},
-	} {
-		b := mk(tc.in)
-		if err := guardPolicyBinding(Deps{})(context.Background(), "create", nil, b); err != nil {
-			t.Fatalf("guard: %v", err)
-		}
-		if b.Spec.Priority == nil || *b.Spec.Priority != tc.want {
-			t.Errorf("%s priority => %v, want %d", tc.name, b.Spec.Priority, tc.want)
-		}
 	}
 }
 
@@ -228,7 +185,7 @@ func newTenancyHarness[T any](t *testing.T, plural, singular string,
 	registerKind[T](
 		api, plural, singular, store, testRBAC(), metaOf, validate,
 		meta.OwnerSystem, listScanResolver[T](store, metaOf),
-		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil,
+		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil,
 	)
 	return r
 }
@@ -331,7 +288,17 @@ func newScopedListHarness(t *testing.T, plural, singular string, seed ...*scoped
 	registerKind[scopedThing](
 		api, plural, singular, store, testRBAC(), tmeta, nil,
 		meta.OwnerUser, listScanResolver[scopedThing](store, tmeta),
-		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil,
+		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil,
 	)
 	return r
+}
+
+// A service account stays in the project it was made in: its account and keys belong there, so a PUT naming another project is refused.
+func TestGuardServiceAccountRefusesAProjectMove(t *testing.T) {
+	existing := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer"}, Spec: serviceaccount.Spec{ProjectID: meta.NewID()}}
+	moved := *existing
+	moved.Spec.ProjectID = meta.NewID()
+	if got := statusOf(t, guardServiceAccount(Deps{})(context.Background(), "update", existing, &moved)); got != http.StatusConflict {
+		t.Fatalf("project move = status %d, want 409", got)
+	}
 }

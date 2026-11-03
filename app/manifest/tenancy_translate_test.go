@@ -50,13 +50,9 @@ func TestTenancyKindsAreAlwaysSystemOwned(t *testing.T) {
 // cross-reference; leaving the username in place would make the stored owner
 // unresolvable.
 func TestUserOwnerNameResolvesToID(t *testing.T) {
-	idx := MapResolver{
-		Policies: map[string]string{"basic": "p-1"},
-		Users:    map[string]string{"alice": "u-alice"},
-	}
+	idx := MapResolver{Users: map[string]string{"alice": "u-alice"}}
 	d := KeyDTO{Metadata: WireMeta{Name: "alice-cli"}}
 	d.Metadata.Owner = WireOwner{Kind: meta.OwnerUser, Name: "alice"}
-	d.Spec.Policy = "basic"
 	d.Spec.Principal = PrincipalDTO{Kind: "user", Name: "alice"}
 
 	k, err := ToKey(d, idx)
@@ -85,73 +81,26 @@ func TestHostOwnerNameResolvesToID(t *testing.T) {
 	}
 }
 
-// A Key resolves its policy through its principal when it declares none, so
-// omitting spec.policy is legal on the wire.
-func TestKeyPolicyIsOptional(t *testing.T) {
-	idx := MapResolver{ServiceAccounts: map[string]string{"ci": "sa-1"}}
-	d := KeyDTO{Metadata: WireMeta{Name: "ci-key"}}
-	d.Spec.Principal = PrincipalDTO{Kind: "serviceaccount", Name: "ci"}
-
-	k, err := ToKey(d, idx)
-	if err != nil {
-		t.Fatalf("ToKey with no policy: %v", err)
-	}
-	if k.Spec.PolicyID != "" {
-		t.Errorf("policy id = %q, want empty", k.Spec.PolicyID)
-	}
-
-	d.Spec.Policy = "missing"
-	if _, err := ToKey(d, idx); err == nil {
-		t.Error("a named policy that does not resolve must still be an error")
+// A Key holds no policy: a v1alpha3 document still carrying spec.policy is
+// refused rather than silently dropping the restriction it meant.
+func TestKeyPolicyIsRefused(t *testing.T) {
+	doc := "apiVersion: " + APIVersion + "\nkind: Key\nmetadata: {name: ci-key}\n" +
+		"spec: {principal: {kind: serviceaccount, name: ci}, keyHash: x, policy: basic}\n"
+	_, err := Parse(strings.NewReader(doc))
+	if err == nil || !strings.Contains(err.Error(), "spec.policy") {
+		t.Fatalf("Parse = %v, want a refusal naming spec.policy", err)
 	}
 }
 
-// A budget with no period is a monthly budget; without the default the
-// stored row and the manifest that declared it never converge.
-func TestBudgetPeriodDefaultsToMonth(t *testing.T) {
-	d := TeamDTO{Metadata: WireMeta{Name: "platform"}}
-	d.Spec.Budget = &BudgetDTO{Amount: "100"}
-	tm, err := ToTeam(d, MapResolver{})
-	if err != nil {
-		t.Fatalf("ToTeam: %v", err)
-	}
-	if tm.Spec.Budget.Period != "month" {
-		t.Errorf("period = %q, want month", tm.Spec.Budget.Period)
-	}
-
-	d.Spec.Budget.Period = "week"
-	tm, err = ToTeam(d, MapResolver{})
-	if err != nil {
-		t.Fatalf("ToTeam: %v", err)
-	}
-	if tm.Spec.Budget.Period != "week" {
-		t.Errorf("period = %q, want the declared week", tm.Spec.Budget.Period)
-	}
-}
-
-// Nothing enforces a budget, so a manifest may not ask for an action on exceeding one.
-func TestBudgetOnExceedRefused(t *testing.T) {
+// A Team or Project spend cap is a Budget kind now; a document still carrying spec.budget is refused rather than silently losing the cap it meant.
+func TestScopeBudgetIsRefused(t *testing.T) {
 	for _, doc := range []string{
-		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\", onExceed: block}}\n",
-		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Project\nmetadata: {name: search}\nspec: {budget: {amount: \"100\", onExceed: warn}}\n",
-		"apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\", onExceed: block}}\n",
+		"apiVersion: " + APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n",
+		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Project\nmetadata: {name: search}\nspec: {team: platform, budget: {amount: \"100\", period: week}}\n",
+		"apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n",
 	} {
-		if _, err := Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "onExceed is not supported") {
-			t.Errorf("Parse(%q) err = %v, want the onExceed refusal", doc, err)
+		if _, err := Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "budget") {
+			t.Errorf("Parse(%q) err = %v, want a refusal naming spec.budget", doc, err)
 		}
-	}
-	if _, err := budgetField.ToAttribute([]byte(`{"amount": "100", "onExceed": "warn"}`), nil); err == nil || !strings.Contains(err.Error(), "onExceed is not supported") {
-		t.Fatalf("ToAttribute err = %v, want the onExceed refusal", err)
-	}
-}
-
-// A row stored while onExceed was accepted still exports, without it.
-func TestBudgetStoredOnExceedIgnored(t *testing.T) {
-	out, err := budgetField.FromAttribute([]byte(`{"amount": "100", "period": "week", "onExceed": "block"}`), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(out), `{"amount":"100","period":"week"}`; got != want {
-		t.Errorf("FromAttribute = %s, want %s", got, want)
 	}
 }

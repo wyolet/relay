@@ -30,7 +30,7 @@ func TestIntegration_AdminTokenCreatesSystemRows(t *testing.T) {
 		t.Fatalf("CRUD owner = %+v, want system", row.Metadata.Owner)
 	}
 
-	const doc = `apiVersion: relay.wyolet.dev/v1alpha2
+	const doc = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: ci-apply

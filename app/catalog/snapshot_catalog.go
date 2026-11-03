@@ -5,7 +5,6 @@ import (
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -202,24 +201,6 @@ func (s *Snapshot) Hosts() []*host.Host {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
 	return out
-}
-
-// ModelsInPolicy returns the Models attached to this Policy in declaration
-// order. nil if the Policy is unknown or empty.
-func (s *Snapshot) ModelsInPolicy(policyID string) []*model.Model {
-	return s.modelsByPolicy[policyID]
-}
-
-// HostKeysInPolicy returns the HostKeys attached to this Policy in
-// declaration order (relevant for KeySelectionPrioritized).
-func (s *Snapshot) HostKeysInPolicy(policyID string) []*hostkey.HostKey {
-	return s.hostKeysByPolicy[policyID]
-}
-
-// RateLimitOfPolicy returns the single RateLimit bound to this Policy, or
-// nil when none is configured.
-func (s *Snapshot) RateLimitOfPolicy(policyID string) *ratelimit.RateLimit {
-	return s.rateLimitByPolicy[policyID]
 }
 
 // Pricing returns the enabled Pricing with this id, or false.

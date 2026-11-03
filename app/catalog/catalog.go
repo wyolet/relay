@@ -69,6 +69,9 @@ type Catalog struct {
 	rmu   sync.Mutex
 
 	settings settingsHolder
+
+	// forward receives the NOTIFY feed alongside the snapshot; nil when nothing else consumes it.
+	forward EventForwarder
 }
 
 // Per-package narrow Lister interfaces — Catalog only needs List from each.
@@ -181,6 +184,17 @@ func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister, sa ServiceAccountLis
 // at composition time before the first Reload; nil keeps every version
 // absent, which makes verification reject tokens.
 func (c *Catalog) UseTokenVersions(l TokenVersionLister) { c.tokenVersions = l }
+
+// EventForwarder receives the catalog NOTIFY feed as it arrives, so a second consumer of the same rows stays current without a LISTEN of its own.
+type EventForwarder interface {
+	// Event is one parsed notification, before debouncing.
+	Event(kind, op, id string)
+	// Attached runs each time the listener (re)attaches: notifications sent while it was detached were lost.
+	Attached(ctx context.Context)
+}
+
+// ForwardEvents hands every notification the listener receives to f. Call before Hydrate.
+func (c *Catalog) ForwardEvents(f EventForwarder) { c.forward = f }
 
 // Current returns the live Snapshot. Safe to call from any goroutine; the
 // returned pointer is immutable until the next successful Reload.

@@ -58,12 +58,18 @@ type Context struct {
 	// Routing identity (filled during routing / pre-flight).
 
 	RelayKeyHash string
-	PolicyID     string
-	ModelID      string
-	HostID       string
+	// PolicyID is the innermost caller policy: the one bound closest to the principal.
+	PolicyID string
+	ModelID  string
+	HostID   string
 	// HostKeyID is the value hash of the upstream credential last tried,
 	// not the HostKey row id.
 	HostKeyID string
+	// PoolID and AccountID are the pool and provider account of the credential last tried; empty for a credential linked on its own or held in no account.
+	PoolID    string
+	AccountID string
+	// ViaAccountID is the shared account the credential last tried was reached through; AccountID stays the real account that pays. Empty when none was.
+	ViaAccountID string
 
 	// PolicyName / ModelName / HostName carry the entities' slugs
 	// (metadata.name) as resolved at request time — denormalized onto the
@@ -93,6 +99,8 @@ type Context struct {
 	CredentialKind string // "key" | "token"
 	CredentialID   string
 	RelayKeyName   string // the key's slug; empty for a token
+	// LaneAccountID is the account the request ran in and is charged to, distinct from AccountID, the serving credential's provider account.
+	LaneAccountID string
 
 	// PricingID / PricingName identify the rate sheet billing this request,
 	// stamped at plan-fill from what routing already resolved. The post-

@@ -10,14 +10,14 @@ import (
 // Summarize groups the (already-filtered) events by groupBy and builds
 // per-group totals + latency percentiles, sorted by request count desc.
 // LogOnly events (pre-upstream rejections) are skipped — they belong to
-// the logs view, not usage stats. Returns an error for an unknown groupBy
-// dimension.
+// the logs view, not usage stats — except relay refusals when grouping by
+// refusal. Returns an error for an unknown groupBy dimension.
 func Summarize(events []Event, groupBy string) (SummaryResult, error) {
-	return SummarizeWithDistinct(events, groupBy, "")
+	return SummarizeWithDistinct(events, groupBy, "", groupBy == "refusal")
 }
 
-// SummarizeWithDistinct is Summarize plus SummaryRow.Distinct over the distinct dimension (a ValidDistinct entry; "" for none).
-func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryResult, error) {
+// SummarizeWithDistinct is Summarize plus SummaryRow.Distinct over the distinct dimension (a ValidDistinct entry; "" for none). refusals counts relay's log-only refusals too (CountsRefused).
+func SummarizeWithDistinct(events []Event, groupBy, distinct string, refusals bool) (SummaryResult, error) {
 	if groupBy == "" {
 		groupBy = "source"
 	}
@@ -43,7 +43,7 @@ func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryRes
 	from, to := time.Time{}, time.Time{}
 
 	for _, ev := range events {
-		if ev.LogOnly() {
+		if !ev.Aggregated(refusals) {
 			continue
 		}
 		key := groupKey(ev, groupBy)
@@ -114,11 +114,11 @@ func SummarizeWithDistinct(events []Event, groupBy, distinct string) (SummaryRes
 // oldest-first; series (rows) are ordered by total request count desc.
 // Returns an error for a non-positive interval or unknown groupBy.
 func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeriesResult, error) {
-	return BucketizeWithDistinct(events, interval, groupBy, "")
+	return BucketizeWithDistinct(events, interval, groupBy, "", groupBy == "refusal")
 }
 
-// BucketizeWithDistinct is Bucketize plus TimeSeriesPoint.Distinct over the distinct dimension (a ValidDistinct entry; "" for none).
-func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, distinct string) (TimeSeriesResult, error) {
+// BucketizeWithDistinct is Bucketize plus TimeSeriesPoint.Distinct over the distinct dimension (a ValidDistinct entry; "" for none). refusals counts relay's log-only refusals too (CountsRefused).
+func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, distinct string, refusals bool) (TimeSeriesResult, error) {
 	if interval <= 0 {
 		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: interval must be > 0")
 	}
@@ -149,7 +149,7 @@ func BucketizeWithDistinct(events []Event, interval time.Duration, groupBy, dist
 	from, to := time.Time{}, time.Time{}
 
 	for _, ev := range events {
-		if ev.LogOnly() {
+		if !ev.Aggregated(refusals) {
 			continue
 		}
 		sk := groupKey(ev, groupBy)

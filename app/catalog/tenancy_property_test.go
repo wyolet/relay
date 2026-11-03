@@ -65,15 +65,13 @@ func newTenancyChain() *tenancyChain {
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-pol", Owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}},
 	}
-	// A personal key pointed at a project's policy: it spends that project's
-	// credentials, so it has to disappear with the project even though the
-	// row itself is owned by a user.
+	// A personal key holds no policy, so it lives independently of the
+	// project and its policy.
 	userID := meta.NewID()
 	k := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-key", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
-			PolicyID:  pol.Meta.ID,
 			KeyHash:   strings.Repeat("c", 64),
 		},
 	}
@@ -239,6 +237,10 @@ func assertChainConsistency(t *testing.T, s *Snapshot, c *tenancyChain, step int
 	if _, ok := s.Project(c.project.Meta.ID); ok != projectPresent {
 		t.Fatalf("step %d: project present = %v, want %v (team present %v)", step, ok, projectPresent, teamPresent)
 	}
+	wantKey := len(c.keys) > 0 && enabledFlag(c.key.Spec.Enabled)
+	if got, _ := s.KeyByHash(c.key.Spec.KeyHash); (got != nil) != wantKey {
+		t.Fatalf("step %d: key present = %v, want %v", step, got != nil, wantKey)
+	}
 	if !projectPresent {
 		if _, ok := s.Policy(c.policy.Meta.ID); ok {
 			t.Fatalf("step %d: a project-owned policy outlived its project", step)
@@ -246,29 +248,19 @@ func assertChainConsistency(t *testing.T, s *Snapshot, c *tenancyChain, step int
 		if _, ok := s.DisabledPolicy(c.policy.Meta.ID); ok {
 			t.Fatalf("step %d: the retained disabled copy of a project-owned policy outlived its project", step)
 		}
-		if got, _ := s.KeyByHash(c.key.Spec.KeyHash); got != nil {
-			t.Fatalf("step %d: a key still authenticates against a project that is gone", step)
-		}
 		if !teamPresent && len(s.ProjectsInTeam(c.team.Meta.ID)) != 0 {
 			t.Fatalf("step %d: a team that is gone still lists projects", step)
 		}
 		return
 	}
-	// With the project present the key survives exactly while its policy
-	// resolves — disabled included, since a disabled policy answers 403
-	// rather than turning a valid key into an unknown one.
+	// With the project present the policy is held while it resolves; a
+	// disabled one is kept aside rather than dropped.
 	policyResolves := len(c.policies) > 0
 	if _, live := s.Policy(c.policy.Meta.ID); live != (policyResolves && enabledFlag(c.policy.Spec.Enabled)) {
 		t.Fatalf("step %d: policy in the routing index = %v, want %v", step, live, policyResolves && enabledFlag(c.policy.Spec.Enabled))
 	}
 	if _, ok := s.DisabledPolicy(c.policy.Meta.ID); ok != (policyResolves && !enabledFlag(c.policy.Spec.Enabled)) {
 		t.Fatalf("step %d: policy retained as disabled = %v, want %v", step, ok, policyResolves && !enabledFlag(c.policy.Spec.Enabled))
-	}
-	wantKey := len(c.keys) > 0 && enabledFlag(c.key.Spec.Enabled) && policyResolves
-	got, _ := s.KeyByHash(c.key.Spec.KeyHash)
-	if (got != nil) != wantKey {
-		t.Fatalf("step %d: key present = %v, want %v (policy resolves %v, key enabled %v)",
-			step, got != nil, wantKey, policyResolves, enabledFlag(c.key.Spec.Enabled))
 	}
 }
 

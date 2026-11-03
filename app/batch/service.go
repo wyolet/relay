@@ -30,6 +30,7 @@ const (
 	metaPrincipalID    = "principal_id"
 	metaCredentialKind = "credential_kind"
 	metaCredentialID   = "credential_id"
+	metaLaneID         = "lane_account_id"
 	metaPolicyID       = "policy_id"
 	metaTokenJTI       = "token_jti"
 	metaTokenVer       = "token_ver"
@@ -91,7 +92,6 @@ func (s *Service) Handler() jobq.Handler {
 			ctx,
 			job.ID,
 			job.Meta(metaKeyHash),
-			job.Meta(metaPolicyID),
 			TokenClaims{JTI: job.Meta(metaTokenJTI), Version: ver, Expires: exp},
 			Attribution{
 				ProjectID:      job.Meta(metaProjectID),
@@ -100,6 +100,7 @@ func (s *Service) Handler() jobq.Handler {
 				PrincipalID:    job.Meta(metaPrincipalID),
 				CredentialKind: job.Meta(metaCredentialKind),
 				CredentialID:   job.Meta(metaCredentialID),
+				LaneID:         job.Meta(metaLaneID),
 			},
 			adapters.Name(job.Meta(metaInbound)),
 			job.Input(),
@@ -171,6 +172,7 @@ func (s *Service) Submit(ctx context.Context, c *Caller, inbound string, items [
 				metaPrincipalID:    attr.PrincipalID,
 				metaCredentialKind: attr.CredentialKind,
 				metaCredentialID:   attr.CredentialID,
+				metaLaneID:         attr.LaneID,
 			},
 		})
 		if err != nil {

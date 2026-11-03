@@ -24,7 +24,7 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		return usage.SummaryResult{}, err
 	}
 
-	where, args := buildWhere(q.EventQuery, true)
+	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, groupBy))
 	grouped := usage.Grouped(groupBy)
 	selGroup, subGroup, groupClause := "", "", ungroupedHaving
 	if grouped {

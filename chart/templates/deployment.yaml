@@ -42,7 +42,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       # Wait for relay's own data stores before starting (relay self-migrates PG
-      # on boot; CH/Valkey are needed for the selected backends).
+      # on boot; CH and the kv store are needed for the selected backends).
       initContainers:
         - name: wait-for-stores
           image: busybox:1.38
@@ -58,6 +58,9 @@ spec:
               {{- end }}
               {{- if .Values.clickhouse.enabled }}
               until nc -z {{ include "relay.clickhouse.fullname" . }} 9000; do echo "waiting for clickhouse"; sleep 2; done
+              {{- end }}
+              {{- if .Values.dragonfly.enabled }}
+              until nc -z {{ include "relay.dragonfly.fullname" . }} 6379; do echo "waiting for dragonfly"; sleep 2; done
               {{- end }}
               {{- if .Values.valkey.enabled }}
               until nc -z {{ include "relay.valkey.fullname" . }} 6379; do echo "waiting for valkey"; sleep 2; done

@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/budget"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
@@ -28,12 +30,14 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 )
@@ -137,12 +141,14 @@ func (f policyDeleteFixture) rateLimit(t *testing.T, ctx context.Context, name s
 	return r
 }
 
-func (f policyDeleteFixture) hostKey(t *testing.T, ctx context.Context, name, policyID string) *hostkey.HostKey {
+func (f policyDeleteFixture) hostKey(t *testing.T, ctx context.Context, name string) *hostkey.HostKey {
 	t.Helper()
 	t.Setenv("DEL_HOSTKEY_VALUE", "sk-test-value")
+	acct := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: name + "-org", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: f.host.Meta.ID}}
+	must(t, "upsert account", f.stores.Account.Upsert(ctx, acct))
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: f.host.Meta.ID, PolicyID: policyID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "DEL_HOSTKEY_VALUE"}},
+		Spec: hostkey.Spec{HostID: f.host.Meta.ID, AccountID: acct.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "DEL_HOSTKEY_VALUE"}},
 	}
 	must(t, "upsert host key", f.stores.HostKey.Upsert(ctx, k))
 	return k
@@ -169,15 +175,23 @@ func (f policyDeleteFixture) roleBinding(t *testing.T, ctx context.Context, name
 	return b
 }
 
-func (f policyDeleteFixture) policyBinding(t *testing.T, ctx context.Context, name, policyID string, subjects ...rolebinding.Subject) *policybinding.PolicyBinding {
+// policyBinding binds the accounts to the policy, owned by the fixture's project.
+func (f policyDeleteFixture) policyBinding(t *testing.T, ctx context.Context, name, policyID string, accountIDs ...string) *policybinding.PolicyBinding {
 	t.Helper()
 	b := &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: name},
-		Spec: policybinding.Spec{ProjectID: f.proj.Meta.ID, PolicyID: policyID, Subjects: subjects},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: f.projectOwner()},
+		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: accountIDs},
 	}
-	b.StampOwner()
 	must(t, "upsert policy binding", f.stores.PolicyBinding.Upsert(ctx, b))
 	return b
+}
+
+// accountOf is the id of the service account's own account, made as relay makes it.
+func (f policyDeleteFixture) accountOf(t *testing.T, ctx context.Context, sa *serviceaccount.ServiceAccount) string {
+	t.Helper()
+	id, err := f.stores.Account.EnsureManaged(ctx, account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", sa.Spec.ProjectID))
+	must(t, "ensure the service account's account", err)
+	return id
 }
 
 func (f policyDeleteFixture) projectOwner() meta.Owner {
@@ -214,13 +228,15 @@ func TestDeleteProvider_UnreferencedSystemRowIsAdminOnly(t *testing.T) {
 func TestDeleteHost_EveryRowOnTheHostBlocks(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	m := f.model(t, ctx, "host-model", f.provider(t, ctx, "host-vendor").Meta.ID)
-	tier := f.policy(t, ctx, "host-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
-	f.hostKey(t, ctx, "host-key", tier.Meta.ID)
+	f.policy(t, ctx, "host-tier", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
+	f.hostKey(t, ctx, "host-key")
 	f.hostBinding(t, ctx, "host-binding", m.Meta.ID, "")
 	f.pricing(t, ctx, "host-pricing", m.Meta.ID)
 	f.rateLimit(t, ctx, "host-limit", meta.Owner{Kind: meta.OwnerHost, ID: f.host.Meta.ID})
 
+	// The key joined its owner's default account at the host, which blocks too.
 	wantBlockers(t, f.deleteRow(t, "hosts", f.host.Meta.ID, false),
+		wantGroup{"account", "spec.hostId", false, 1},
 		wantGroup{"host-binding", "spec.hostId", false, 1},
 		wantGroup{"host-key", "spec.hostId", false, 1},
 		wantGroup{"policy", "metadata.owner.id", false, 1},
@@ -236,18 +252,13 @@ func TestDeleteHost_EveryRowOnTheHostBlocks(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "hosts", spare.Meta.ID, false), http.StatusNoContent)
 }
 
-func TestDeleteModel_GrantsPricingsBindingsAndOverlayBlock(t *testing.T) {
+func TestDeleteModel_PricingsBindingsAndOverlayBlock(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	f.allowCatalogDeletes(t, ctx, "governance:model")
 	prov := f.provider(t, ctx, "model-vendor")
 	m := f.model(t, ctx, "used-model", prov.Meta.ID)
 	other := f.model(t, ctx, "other-model", prov.Meta.ID)
 
-	grant := &policy.Policy{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "grant", Owner: f.projectOwner()},
-		Spec: policy.Spec{ModelIDs: []string{m.Meta.ID}},
-	}
-	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, grant))
 	f.pricing(t, ctx, "shared-pricing", m.Meta.ID, other.Meta.ID)
 	f.pricing(t, ctx, "own-pricing", m.Meta.ID)
 	f.hostBinding(t, ctx, "model-binding", m.Meta.ID, "")
@@ -258,7 +269,6 @@ func TestDeleteModel_GrantsPricingsBindingsAndOverlayBlock(t *testing.T) {
 	wantBlockers(t, f.deleteRow(t, "models", m.Meta.ID, false),
 		wantGroup{"host-binding", "spec.modelId", false, 1},
 		wantGroup{"overlay", "resourceId", false, 1},
-		wantGroup{"policy", "spec.modelIds", true, 1},
 		// A pricing can drop this model only while it prices another.
 		wantGroup{"pricing", "spec.targetModels", true, 1},
 		wantGroup{"pricing", "spec.targetModels", false, 1},
@@ -292,88 +302,112 @@ func TestPricingBlockers_BindingsCanLetGo(t *testing.T) {
 
 // The token signing key lives in a stored secret; a host key's delete removes
 // the secret kept under its id, so a settings ref to that id blocks it.
-func TestDeleteHostKey_PolicyAndSigningKeyRefBlock(t *testing.T) {
+func TestDeleteHostKey_SigningKeyRefBlocks(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	tier := f.policy(t, ctx, "key-tier", f.projectOwner())
-	hk := f.hostKey(t, ctx, "pooled-key", tier.Meta.ID)
-	pool := &policy.Policy{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "pool", Owner: f.projectOwner()},
-		Spec: policy.Spec{HostKeyIDs: []string{hk.Meta.ID}},
-	}
-	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, pool))
+	hk := f.hostKey(t, ctx, "signing-key")
 	_, err := f.stores.Settings.Upsert(ctx, "auth:tokens", json.RawMessage(
 		`{"enabled":true,"defaultTTL":3600000000000,"maxTTL":86400000000000,"signingKey":{"kind":"stored","id":"`+hk.Meta.ID+`"}}`))
 	must(t, "upsert auth:tokens", err)
 
 	wantBlockers(t, f.deleteRow(t, "host-keys", hk.Meta.ID, false),
-		wantGroup{"policy", "spec.hostKeyIds", true, 1},
 		wantGroup{"settings", "signingKey", false, 1},
 	)
-	got, err := f.stores.Policy.Get(ctx, pool.Meta.ID)
-	if err != nil || got == nil || !slices.Contains(got.Spec.HostKeyIDs, hk.Meta.ID) {
-		t.Fatalf("policy after refused delete = %+v (err %v), want it still drawing on the key", got, err)
-	}
 
-	unused := f.hostKey(t, ctx, "unused-key", tier.Meta.ID)
+	unused := f.hostKey(t, ctx, "unused-key")
 	wantStatus(t, f.deleteRow(t, "host-keys", unused.Meta.ID, false), http.StatusNoContent)
 }
 
-func TestDeleteRateLimit_PolicyRefsBlockAsDetachable(t *testing.T) {
+// A rate limit, pool or budget a policy links is deleted, and the answer and the audit say which policies lost which link: the policy stops counting a rate limit or budget and keeps a pool's id, so it narrows rather than widens.
+func TestDeleteLinkedRows_ReportsThePolicies(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	rl := f.rateLimit(t, ctx, "shared-limit", meta.Owner{Kind: meta.OwnerSystem})
-	flat := &policy.Policy{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "flat", Owner: f.projectOwner()},
-		Spec: policy.Spec{RateLimitID: rl.Meta.ID},
+	rl := f.rateLimit(t, ctx, "linked-limit", meta.Owner{Kind: meta.OwnerSystem})
+	pl := &pool.Pool{Meta: meta.Metadata{ID: meta.NewID(), Name: "linked-pool", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: pool.Spec{HostID: f.host.Meta.ID}}
+	must(t, "upsert pool", f.stores.Pool.Upsert(ctx, pl))
+	bd := &budget.Budget{Meta: meta.Metadata{ID: meta.NewID(), Name: "linked-budget", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: budget.Spec{AmountUSD: "10", Period: budget.PeriodMonth, Mode: budget.ModeHard}}
+	must(t, "upsert budget", f.stores.Budget.Upsert(ctx, bd))
+	linking := &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "linking", Owner: f.projectOwner()},
+		Spec: policy.Spec{
+			PoolIDs: []string{pl.Meta.ID}, Budgets: []policy.BudgetLink{{BudgetID: bd.Meta.ID}},
+			RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}},
+		},
 	}
-	perModel := &policy.Policy{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "per-model", Owner: f.projectOwner()},
-		Spec: policy.Spec{RLBindings: []policy.RLBinding{{Models: []string{"some-model"}, RateLimitID: rl.Meta.ID}}},
-	}
-	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, flat))
-	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, perModel))
+	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, linking))
 
-	wantBlockers(t, f.deleteRow(t, "rate-limits", rl.Meta.ID, false),
-		wantGroup{"policy", "spec.rateLimitId", true, 1},
-		wantGroup{"policy", "spec.rlBindings[].rateLimitId", true, 1},
-	)
-	if got, err := f.stores.Policy.Get(ctx, perModel.Meta.ID); err != nil || got == nil || len(got.Spec.RLBindings) != 1 {
-		t.Fatalf("policy after refused delete = %+v (err %v), want its binding kept", got, err)
+	for _, tc := range []struct{ plural, id, field string }{
+		{"rate-limits", rl.Meta.ID, "spec.rateLimits[].rateLimitId"},
+		{"pools", pl.Meta.ID, "spec.poolIds"},
+		{"budgets", bd.Meta.ID, "spec.budgets[].budgetId"},
+	} {
+		w := f.deleteRow(t, tc.plural, tc.id, false)
+		wantStatus(t, w, http.StatusOK)
+		var body struct {
+			Detached []struct {
+				Kind, Field string
+				Items       []struct{ ID, Name string }
+			} `json:"detached"`
+		}
+		must(t, "decode "+tc.plural+" delete", json.Unmarshal(w.Body.Bytes(), &body))
+		if len(body.Detached) != 1 || body.Detached[0].Kind != "policy" || body.Detached[0].Field != tc.field ||
+			len(body.Detached[0].Items) != 1 || body.Detached[0].Items[0].Name != linking.Meta.Name {
+			t.Fatalf("%s delete answer = %s, want the linking policy under %s", tc.plural, w.Body, tc.field)
+		}
+	}
+	wantStatus(t, f.deleteRow(t, "rate-limits", f.rateLimit(t, ctx, "unlinked-limit", meta.Owner{Kind: meta.OwnerSystem}).Meta.ID, false), http.StatusNoContent)
+
+	got, err := f.stores.Policy.Get(ctx, linking.Meta.ID)
+	if err != nil || got == nil || !slices.Equal(got.Spec.PoolIDs, []string{pl.Meta.ID}) ||
+		len(got.Spec.RateLimits) != 0 || len(got.Spec.Budgets) != 0 {
+		t.Fatalf("policy after the deletes = %+v (err %v), want the pool id kept and the caps gone", got, err)
 	}
 
-	unused := f.rateLimit(t, ctx, "unused-limit", meta.Owner{Kind: meta.OwnerSystem})
-	wantStatus(t, f.deleteRow(t, "rate-limits", unused.Meta.ID, true), http.StatusForbidden)
-	wantStatus(t, f.deleteRow(t, "rate-limits", unused.Meta.ID, false), http.StatusNoContent)
+	f.emitter.Close()
+	updates := 0
+	for _, ev := range f.sink.all() {
+		if ev.Action == "policies.update" && ev.Resource.ID == linking.Meta.ID {
+			updates++
+		}
+	}
+	if updates != 3 {
+		t.Fatalf("audit rows for the policy's lost links = %d, want 3", updates)
+	}
 }
 
-// A policy in a project alice can't see still blocks her rate limit, counted
-// but never named.
-func TestDeleteRateLimit_HiddenReferenceBlocksWithoutItsName(t *testing.T) {
+// A policy in a project alice can't see loses its link to her rate limit
+// too; the answer counts it but never names it.
+func TestDeleteRateLimit_HiddenLinkIsCountedWithoutItsName(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	rl := f.rateLimit(t, ctx, "alice-limit", meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID})
+	link := []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}
 	own := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-flat", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.alice.ID}},
-		Spec: policy.Spec{RateLimitID: rl.Meta.ID},
+		Spec: policy.Spec{RateLimits: link},
 	}
 	hidden := &policy.Policy{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "hidden-flat", Owner: f.projectOwner()},
-		Spec: policy.Spec{RateLimitID: rl.Meta.ID},
+		Spec: policy.Spec{RateLimits: link},
 	}
 	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, own))
 	must(t, "upsert policy", f.stores.Policy.Upsert(ctx, hidden))
 
 	w := f.deleteRow(t, "rate-limits", rl.Meta.ID, true)
+	wantStatus(t, w, http.StatusOK)
 	if strings.Contains(w.Body.String(), hidden.Meta.Name) || strings.Contains(w.Body.String(), hidden.Meta.ID) {
-		t.Fatalf("409 body names a row the caller may not see: %s", w.Body.String())
+		t.Fatalf("delete answer names a row the caller may not see: %s", w.Body.String())
 	}
-	body := wantBlockers(t, w, wantGroup{"policy", "spec.rateLimitId", true, 2})
-	if g := body.Blockers[0]; g.Hidden != 1 || len(g.Items) != 1 || g.Items[0].ID != own.Meta.ID {
-		t.Fatalf("group = %+v, want alice's policy listed and one hidden", g)
+	var body struct {
+		Detached []blockerGroup `json:"detached"`
+	}
+	must(t, "decode delete", json.Unmarshal(w.Body.Bytes(), &body))
+	if len(body.Detached) != 1 || body.Detached[0].Count != 2 || body.Detached[0].Hidden != 1 ||
+		len(body.Detached[0].Items) != 1 || body.Detached[0].Items[0].ID != own.Meta.ID {
+		t.Fatalf("detached = %+v, want alice's policy listed and one hidden", body.Detached)
 	}
 }
 
 func TestDeleteKey_Unreferenced(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	k := f.projectKey(t, ctx, "key-e", "")
+	k := f.projectKey(t, ctx, "key-e")
 	wantStatus(t, f.deleteRow(t, "keys", k.Meta.ID, false), http.StatusNoContent)
 }
 
@@ -416,19 +450,19 @@ func TestDeleteProject_RowsUnderItBlock(t *testing.T) {
 	wantStatus(t, f.deleteRow(t, "projects", empty.Meta.ID, false), http.StatusNoContent)
 }
 
-// A binding can let go of a subject only while it names someone else.
+// A binding can let go of a subject or account only while it names another.
 func TestDeleteServiceAccount_KeysAndBindingsBlock(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
-	f.projectKey(t, ctx, "key-d", "")
+	f.projectKey(t, ctx, "key-d")
 	r := f.customRole(t, ctx, "indexer-role")
-	account := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}
+	sa := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID}
 	f.roleBinding(t, ctx, "shared-grant", r.Meta.ID, f.projectOwner(),
-		account, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: f.alice.ID})
-	f.policyBinding(t, ctx, "sole-grant", f.policy(t, ctx, "bound", f.projectOwner()).Meta.ID, account)
+		sa, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: f.alice.ID})
+	f.policyBinding(t, ctx, "sole-grant", f.policy(t, ctx, "bound", f.projectOwner()).Meta.ID, f.accountOf(t, ctx, f.account))
 
 	wantBlockers(t, f.deleteRow(t, "service-accounts", f.account.Meta.ID, false),
 		wantGroup{"key", "spec.principal.id", false, 1},
-		wantGroup{"policy-binding", "spec.subjects", false, 1},
+		wantGroup{"policy-binding", "spec.accountIds", false, 1},
 		wantGroup{"role-binding", "spec.subjects", true, 1},
 	)
 }
@@ -439,11 +473,8 @@ func TestDeleteGroup_BindingsNamingItBlock(t *testing.T) {
 	must(t, "upsert group", f.stores.Group.Upsert(ctx, g))
 	subject := rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: g.Meta.Name}
 	f.roleBinding(t, ctx, "group-grant", f.customRole(t, ctx, "group-role").Meta.ID, f.projectOwner(), subject)
-	f.policyBinding(t, ctx, "group-policy", f.policy(t, ctx, "group-bound", f.projectOwner()).Meta.ID,
-		subject, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
 
 	wantBlockers(t, f.deleteRow(t, "groups", g.Meta.ID, false),
-		wantGroup{"policy-binding", "spec.subjects", true, 1},
 		wantGroup{"role-binding", "spec.subjects", false, 1},
 	)
 
@@ -511,8 +542,7 @@ func TestDeleteBindings_Unreferenced(t *testing.T) {
 	hb := f.hostBinding(t, ctx, "lone-binding", m.Meta.ID, "")
 	rb := f.roleBinding(t, ctx, "lone-grant", f.customRole(t, ctx, "lone-role").Meta.ID, f.projectOwner(),
 		rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: f.alice.ID})
-	pb := f.policyBinding(t, ctx, "lone-policy", f.policy(t, ctx, "lone-bound", f.projectOwner()).Meta.ID,
-		rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: f.account.Meta.ID})
+	pb := f.policyBinding(t, ctx, "lone-policy", f.policy(t, ctx, "lone-bound", f.projectOwner()).Meta.ID, f.accountOf(t, ctx, f.account))
 
 	wantStatus(t, f.deleteRow(t, "host-bindings", hb.Meta.ID, false), http.StatusNoContent)
 	wantStatus(t, f.deleteRow(t, "role-bindings", rb.Meta.ID, false), http.StatusNoContent)

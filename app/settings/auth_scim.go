@@ -4,11 +4,11 @@ import "fmt"
 
 // AuthSCIM is the auth:scim settings section: inbound SCIM 2.0 provisioning at /scim/v2 on the control listener. Off by default; while it is off the endpoint answers 404 and SCIM client tokens do nothing.
 type AuthSCIM struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" doc:"Serve SCIM 2.0 at /scim/v2; it answers 404 while off."`
 	// DeleteDisables makes a SCIM DELETE of a user disable the account instead of deleting it, keeping its audit trail and bindings.
-	DeleteDisables bool `json:"deleteDisables,omitempty"`
+	DeleteDisables bool `json:"deleteDisables,omitempty" doc:"A SCIM DELETE disables the user instead of deleting it, keeping its audit trail and bindings."`
 	// LinkClaim names the verified id_token claim whose value a first OIDC sign-in matches against a SCIM-provisioned account's externalId: "sub" (the default when empty) or "oid".
-	LinkClaim string `json:"linkClaim,omitempty"`
+	LinkClaim string `json:"linkClaim,omitempty" enum:"sub,oid" doc:"id_token claim a first OIDC sign-in matches against a provisioned user's externalId. Omitted means sub; Entra uses oid."`
 }
 
 // Validate refuses a link claim other than sub or oid: those are the provider's stable ids for the user, and a claim the user can edit, such as an email or a name, would let them link to someone else's account.

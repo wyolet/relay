@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -21,22 +20,15 @@ func TestRun_StampsTheKeyName(t *testing.T) {
 	}))
 	defer up.Close()
 
-	rn, _, policyID := runnerFixture(t)
-	h := *rn.Catalog.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: up.URL, NoAuth: true}
-	if err := rn.Catalog.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	f := runnerFixture(t, up.URL)
 	events := make(usageCapture, 1)
 	reg := lifecycle.New()
 	reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
 	reg.RegisterCollector(events)
-	rn.Pipeline.Lifecycle = reg
+	f.rn.Pipeline.Lifecycle = reg
 
-	k, _ := rn.Catalog.Current().KeyByHash(fixtureKeyHash)
-	attr := keyAttr()
-	attr.CredentialID = k.Meta.ID
-	if _, _, err := rn.Run(context.Background(), "item", fixtureKeyHash, policyID, TokenClaims{}, attr, adapters.OpenAI, []byte(`{"model":"test-model"}`)); err != nil {
+	k := f.key
+	if _, _, err := f.rn.Run(context.Background(), "item", k.Spec.KeyHash, TokenClaims{}, f.keyAttr(), adapters.OpenAI, []byte(`{"model":"test-model"}`)); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -47,5 +39,45 @@ func TestRun_StampsTheKeyName(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no usage event emitted")
+	}
+}
+
+// An item runs in, and its usage event names, the lane its submission switched into; without a switch the key's own.
+func TestRun_RunsInTheSubmissionsLane(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer up.Close()
+
+	f := runnerFixture(t, up.URL)
+	events := make(usageCapture, 1)
+	reg := lifecycle.New()
+	reg.RegisterHook(usagelog.NewUsageHook(nil, ""))
+	reg.RegisterCollector(events)
+	f.rn.Pipeline.Lifecycle = reg
+	member, refused := f.plans.Root().MemberLane(f.userID, f.project.Meta.ID)
+	if refused != nil {
+		t.Fatal(refused)
+	}
+
+	for _, lane := range []string{"", member.Lane.Meta.ID} {
+		attr := f.keyAttr()
+		attr.LaneID = lane
+		if _, _, err := f.rn.Run(context.Background(), "item", f.key.Spec.KeyHash, TokenClaims{}, attr, adapters.OpenAI, []byte(`{"model":"test-model"}`)); err != nil {
+			t.Fatalf("Run in lane %q: %v", lane, err)
+		}
+		want := f.key.Spec.AccountID
+		if lane != "" {
+			want = lane
+		}
+		select {
+		case ev := <-events:
+			if ev.LaneAccountID != want {
+				t.Errorf("lane %q: event lane_account_id = %q, want %q", lane, ev.LaneAccountID, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no usage event emitted")
+		}
 	}
 }

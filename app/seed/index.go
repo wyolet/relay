@@ -33,7 +33,7 @@ const versionFile = ".version"
 func IsLatestAlias(v string) bool { return v == "latest" || v == "auto" }
 
 // Channel is the schema channel key this binary resolves "latest"
-// against: the version segment of the manifest apiVersion ("v1alpha2").
+// against: the version segment of the manifest apiVersion ("v1alpha3").
 func Channel() string { return path.Base(manifest.APIVersion) }
 
 // DirVersion returns the release stamp of a local catalog tree (the

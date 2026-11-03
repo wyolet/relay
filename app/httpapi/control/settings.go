@@ -31,7 +31,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.Inference](api, d, protect, settings.Section{
 		Name:        settings.SectionInference,
-		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets Keys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
+		Description: "Authenticated /v1/* behavior: the cap on a rotated key's grace window.",
 	})
 	registerSettingsSection[settings.PayloadLogging](api, d, protect, settings.Section{
 		Name:        settings.SectionPayloadLogging,
@@ -67,12 +67,16 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.OTLPReceiver](api, d, protect, settings.Section{
 		Name:        settings.SectionOTLPReceiver,
-		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy grant and none of the rate limits of inference apply; export requests are capped per credential. captureContent also stores the message content clients report, in the payload store, while payload logging is enabled; for a credential governed by a policy, only when that policy has payloadLoggingEnabled. Both default off. Hot-reloaded.",
+		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy grant and none of the rate limits of inference apply; export requests are capped per credential. captureContent also stores the message content clients report, in the payload store, while payload logging is enabled, and only where the credential's account allows it: the nearest account on its ladder that sets payloadLogging decides (lane, then project, then team), else the key's own payloadLoggingEnabled. Both default off. Hot-reloaded.",
+	})
+	registerSettingsSection[settings.Accounts](api, d, protect, settings.Section{
+		Name:        settings.SectionAccounts,
+		Description: "Accounts relay keeps for users. personalAccounts (on by default) turns every user's personal account on or off: off closes personal accounts and the provider accounts users own personally, so users act only through their teams, projects and service accounts; nothing is deleted and turning it back on restores them. A user's own personalAccount wins, then their enabled groups' (off wins over on), then this. Admin only.",
 	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
 			Name:        gs,
-			Description: "Mutation guardrail for catalog-managed " + gs[len("governance:"):] + " rows. allowEdit/allowDelete gate generic-CRUD edit/delete; editing defaults on (rare but safe), deleting off (the accidental-click guard). System-owned rows are protected in code regardless; user-owned rows bypass this. Not per-user authz — that arrives with multi-tenant RBAC. Hot-reloaded.",
+			Description: "Mutation guardrail for catalog-managed " + gs[len("governance:"):] + " rows. allowEdit and allowDelete gate API edits and deletes of rows the catalog owns; editing defaults on, deleting off. System-owned rows take an admin regardless; user-, team- and project-owned rows are not governed by it. Not authorization: roles decide who may write at all. Hot-reloaded.",
 		})
 	}
 	registerSettingsList(api, d, protect)
@@ -81,20 +85,20 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 
 type settingsListItem struct {
 	Section settings.SectionName `json:"section"`
-	Value   json.RawMessage      `json:"value"`
+	Value   json.RawMessage      `json:"value" doc:"The section's current value; its shape is the section's schema (see GET /settings/sections)."`
 }
 
 // settingsCatalogItem describes one registered section. SchemaRef points
 // into #/components/schemas/ so clients can resolve the typed shape.
 type settingsCatalogItem struct {
 	Name        settings.SectionName `json:"name"`
-	Description string               `json:"description,omitempty"`
+	Description string               `json:"description,omitempty" doc:"What the section configures."`
 	SchemaRef   string               `json:"schemaRef,omitempty" doc:"OpenAPI component name for this section's typed value."`
 }
 
 type settingsCatalogOutput struct {
 	Body struct {
-		Items []settingsCatalogItem `json:"items"`
+		Items []settingsCatalogItem `json:"items" doc:"Every settings section this relay knows."`
 	}
 }
 
@@ -129,7 +133,7 @@ func registerSettingsSectionsCatalog(api huma.API, d Deps, protect huma.Middlewa
 
 type settingsListOutput struct {
 	Body struct {
-		Items []settingsListItem `json:"items"`
+		Items []settingsListItem `json:"items" doc:"Every section's current value."`
 	}
 }
 
@@ -176,7 +180,7 @@ func registerSettingsList(api huma.API, d Deps, protect huma.Middlewares) {
 // structs produce hint-based names that don't match the emitted $ref.
 type sectionEnvelope[T any] struct {
 	Section settings.SectionName `json:"section"`
-	Value   T                    `json:"value"`
+	Value   T                    `json:"value" doc:"The section's current value."`
 }
 
 // sectionResponse is the typed wrapper returned by GET/PUT for one

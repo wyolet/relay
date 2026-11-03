@@ -65,9 +65,9 @@ help: ## Show this help
 	@echo '════════════════════════════════════════════════════════════════'
 	@echo ''
 	@echo '⚡ Local dev (host-side go run — fastest inner loop):'
-	@echo '  make dev               start valkey in compose, then go run relay on :$(DEV_DATA_PORT)/:$(DEV_CONTROL_PORT)'
-	@echo '  make dev-redis         bring up just the valkey container (host-published on $(RELAY_VALKEY_PORT))'
-	@echo '  make dev-down          stop the valkey container'
+	@echo '  make dev               start dragonfly in compose, then go run relay on :$(DEV_DATA_PORT)/:$(DEV_CONTROL_PORT)'
+	@echo '  make dev-redis         bring up just the dragonfly container (host-published on $(RELAY_VALKEY_PORT))'
+	@echo '  make dev-down          stop the dragonfly container'
 	@echo ''
 	@echo '🐋 Full compose stack (multi-pod + nginx LB — for integration shape):'
 	@echo '  make dev-compose       bring stack up (build relay-a/b locally, PG/CH/Jaeger from dev-stack)'
@@ -113,7 +113,7 @@ help: ## Show this help
 	@echo '  make cover-check       per-package coverage vs scripts/coverage-tiers.txt'
 	@echo '  make bench-gate        allocs/op vs $(BENCH_BASELINE) (±$(BENCH_ALLOC_TOLERANCE)%)'
 	@echo '  make bench-baseline    regenerate $(BENCH_BASELINE)'
-	@echo '  make test-integration  integration tag, race, against ephemeral compose pg + valkey'
+	@echo '  make test-integration  integration tag, race, against ephemeral compose pg + dragonfly'
 	@echo '  make test-integration-run  the same against $$RELAY_TEST_PG_DSN + $$RELAY_TEST_REDIS_ADDR (no compose)'
 	@echo '  make smoke-mock        replay recorded fixtures through relay → RELAY_MOCK_BASE_URL'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
@@ -141,7 +141,7 @@ DEV_DATA_PORT    ?= $(RELAY_LB_PORT)
 DEV_CONTROL_PORT ?= $(RELAY_CONTROL_PORT)
 RELAY_VALKEY_PORT ?= 6379
 
-dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack PG/CH + local valkey
+dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack PG/CH + local dragonfly
 	@echo "▸ building ./relay…"
 	CGO_ENABLED=0 go build -o relay ./cmd/relay
 	@echo "▸ relay-api.wyolet.dev → Mac:$(DEV_DATA_PORT)   control → :$(DEV_CONTROL_PORT)"
@@ -152,17 +152,17 @@ dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack 
 	RELAY_INSTANCE_ID=relay-local \
 	./relay
 
-dev-redis: ## bring up just the valkey container, host-published on $(RELAY_VALKEY_PORT)
-	RELAY_VALKEY_PORT=$(RELAY_VALKEY_PORT) docker compose $(COMPOSE_DEV_ARGS) up -d valkey
-	@until docker exec relay-valkey valkey-cli ping >/dev/null 2>&1; do sleep 0.5; done
-	@echo "valkey ready on 127.0.0.1:$(RELAY_VALKEY_PORT)"
+dev-redis: ## bring up just the dragonfly container, host-published on $(RELAY_VALKEY_PORT)
+	RELAY_VALKEY_PORT=$(RELAY_VALKEY_PORT) docker compose $(COMPOSE_DEV_ARGS) up -d dragonfly
+	@until docker exec relay-dragonfly redis-cli ping >/dev/null 2>&1; do sleep 0.5; done
+	@echo "dragonfly ready on 127.0.0.1:$(RELAY_VALKEY_PORT)"
 
-dev-down: ## stop the valkey container
-	docker compose $(COMPOSE_DEV_ARGS) stop valkey
+dev-down: ## stop the dragonfly container
+	docker compose $(COMPOSE_DEV_ARGS) stop dragonfly
 
-breakers-reset: ## clear all keypool circuit-breaker state in valkey (lets the next request retry from healthy). Token revocations live separately, under limit:{team:<id>}:jti:<jti>
-	@for k in $$(docker exec relay-valkey valkey-cli --scan --pattern 'secret_health:*'); do \
-		docker exec -i relay-valkey valkey-cli del "$$k" >/dev/null; \
+breakers-reset: ## clear all keypool circuit-breaker state in dragonfly (lets the next request retry from healthy). Token revocations live separately, under limit:{team:<id>}:jti:<jti>
+	@for k in $$(docker exec relay-dragonfly redis-cli --scan --pattern 'secret_health:*'); do \
+		docker exec -i relay-dragonfly redis-cli del "$$k" >/dev/null; \
 	done
 	@echo "circuit breakers cleared"
 
@@ -439,7 +439,7 @@ cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 		COVER_ENFORCE=$(COVER_ENFORCE) ./scripts/covcheck.sh $$profiles
 
 # Allocation gate. ns/op is not gated — too noisy on shared runners.
-BENCH_PKGS            := ./app/httpapi/inference ./auth/token ./app/policy ./app/catalog ./app/routing
+BENCH_PKGS            := ./app/httpapi/inference ./auth/token ./app/limits/lua ./app/catalog
 BENCH_BASELINE        := scripts/bench-baseline.txt
 BENCH_ALLOC_TOLERANCE ?= 0
 BENCH_COUNT           ?= 1
@@ -492,8 +492,8 @@ check: ## the light CI tier locally: gofmt, codebase rules, golangci-lint, unit 
 chart-lint: ## helm lint chart/
 	helm lint chart
 
-schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha2/ (relay) and schemas/v1alpha1/ (auth module)
-	go run ./cmd/catalog-schemas schemas/v1alpha2
+schemas: ## regenerate JSON Schemas for manifest kinds → schemas/v1alpha3/ (relay) and schemas/v1alpha1/ (auth module)
+	go run ./cmd/catalog-schemas schemas/v1alpha3
 	go run ./cmd/auth-schemas schemas/v1alpha1
 
 catalog-validate: ## graph-lint and seed-check the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
@@ -506,7 +506,7 @@ COMPOSE_TEST    := deploy/compose/docker-compose.test.yml
 TEST_PG_DSN     := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
 TEST_REDIS_ADDR := 127.0.0.1:6399
 
-test-integration: ## spin up ephemeral pg + valkey, run integration-tagged tests with -race, tear down
+test-integration: ## spin up ephemeral pg + dragonfly, run integration-tagged tests with -race, tear down
 	docker compose -f $(COMPOSE_TEST) up -d --wait
 	$(MAKE) --no-print-directory test-integration-run RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' RELAY_TEST_REDIS_ADDR='$(TEST_REDIS_ADDR)'; \
 		status=$$?; \

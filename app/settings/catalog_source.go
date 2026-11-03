@@ -16,10 +16,10 @@ type CatalogSource struct {
 	// Version is the catalog ref (tag) the last versioned seed ran from,
 	// e.g. "v0.1.0". Empty when the catalog was seeded without a version
 	// (local dir / embedded first-boot seed) or never seeded.
-	Version string `json:"version,omitempty"`
+	Version string `json:"version,omitempty" doc:"Catalog release tag the last versioned seed ran from; empty when seeded from a directory or never. Blank it to force a re-seed on the next boot."`
 
 	// SeededAt is when that seed completed (RFC 3339).
-	SeededAt string `json:"seededAt,omitempty"`
+	SeededAt string `json:"seededAt,omitempty" doc:"When that seed completed, RFC 3339."`
 }
 
 func (c *CatalogSource) Validate() error { return nil }

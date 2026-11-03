@@ -19,16 +19,16 @@ type FacetQuery struct {
 
 // FacetValue is one value of a facet dimension and the number of requests that carry it. Label is the latest non-empty event-time slug for an id dimension (see LabelColumn), empty otherwise.
 type FacetValue struct {
-	Value    string `json:"value"`
-	Label    string `json:"label,omitempty"`
-	Requests int64  `json:"requests"`
+	Value    string `json:"value"           doc:"The dimension value, as filters accept it."`
+	Label    string `json:"label,omitempty" doc:"Display name for an id value, such as its slug."`
+	Requests int64  `json:"requests"        doc:"Requests with this value in the window."`
 }
 
 // FacetsResult maps each requested dimension to its top values, with the window the query covered.
 type FacetsResult struct {
-	Facets map[string][]FacetValue `json:"facets"`
-	From   time.Time               `json:"from"`
-	To     time.Time               `json:"to"`
+	Facets map[string][]FacetValue `json:"facets" doc:"Top values per requested dimension, busiest first."`
+	From   time.Time               `json:"from"   doc:"Start of the window the counts cover."`
+	To     time.Time               `json:"to"     doc:"End of the window the counts cover."`
 }
 
 // Facet request bounds: values per dimension (default and cap) and dimensions per request.
@@ -81,15 +81,15 @@ func Facets(ctx context.Context, r Reader, q EventQuery, dims []string, limit in
 	return out, nil
 }
 
-// TopValues counts the (already-filtered) events by dim and returns the most frequent values, requests desc then value asc. LogOnly events are skipped, as in Summarize.
-func TopValues(events []Event, dim string, limit int) ([]FacetValue, error) {
+// TopValues counts the (already-filtered) events by dim and returns the most frequent values, requests desc then value asc. LogOnly events are skipped, as in Summarize; refusals keeps relay's own refusals among them (CountsRefused).
+func TopValues(events []Event, dim string, limit int, refusals bool) ([]FacetValue, error) {
 	if !IsValidFacetDim(dim) {
 		return nil, fmt.Errorf("usage.TopValues: invalid dim %q", dim)
 	}
 	var labels LatestLabels
 	counts := map[string]int64{}
 	for _, ev := range events {
-		if ev.LogOnly() {
+		if !ev.Aggregated(refusals) {
 			continue
 		}
 		v := groupKey(ev, dim)

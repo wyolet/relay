@@ -127,23 +127,23 @@ func TestValidateGraph_ModelNoSnapshots(t *testing.T) {
 	}
 }
 
-func TestValidateGraph_HostKeyOwnerMismatch(t *testing.T) {
+// A host key's account must be held at the key's own host.
+func TestValidateGraph_HostKeyAccountAtAnotherHost(t *testing.T) {
 	docs := fixture()
-	// Add a second host + a policy owned by it + a hostkey claiming the
-	// first host but pointing at the policy owned by the second.
 	docs = append(docs,
 		manifest.Document{Host: &manifest.HostDTO{
 			Metadata: manifest.WireMeta{Name: "anthropic-host", Owner: manifest.WireOwner{Kind: "system"}},
 			Spec:     manifest.HostSpec{BaseURL: "https://api.anthropic.com"},
 		}},
-		manifest.Document{Policy: &manifest.PolicyDTO{
-			Metadata: manifest.WireMeta{Name: "anthropic-tier-1", Owner: manifest.WireOwner{Kind: "host", Name: "anthropic-host"}},
+		manifest.Document{Account: &manifest.AccountDTO{
+			Metadata: manifest.WireMeta{Name: "acme-anthropic", Owner: manifest.WireOwner{Kind: "system"}},
+			Spec:     manifest.AccountSpec{Host: "anthropic-host"},
 		}},
 		manifest.Document{HostKey: &manifest.HostKeyDTO{
 			Metadata: manifest.WireMeta{Name: "bad-hostkey"},
 			Spec: manifest.HostKeySpec{
-				HostID:    "openai-host",      // claims openai-host
-				PolicyID:  "anthropic-tier-1", // but uses anthropic policy
+				HostID:    "openai-host",
+				Account:   "acme-anthropic",
 				ValueFrom: manifest.HostKeyValueFrom{Kind: "env", Env: "X"},
 			},
 		}},
@@ -154,34 +154,93 @@ func TestValidateGraph_HostKeyOwnerMismatch(t *testing.T) {
 	}
 }
 
-func TestValidateGraph_PolicyMissingHostKey(t *testing.T) {
+func TestValidateGraph_PolicyMissingLinks(t *testing.T) {
 	docs := fixture()
 	docs = append(docs, manifest.Document{Policy: &manifest.PolicyDTO{
 		Metadata: manifest.WireMeta{Name: "user-pol", Owner: manifest.WireOwner{Kind: "user"}},
-		Spec:     manifest.PolicySpec{HostKeys: []string{"ghost-key"}},
+		Spec: manifest.PolicySpec{
+			Pools:      []string{"ghost-pool"},
+			RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "ghost-rl"}},
+			Budgets:    []manifest.PolicyBudgetDTO{{Ref: "ghost-budget"}},
+		},
 	}})
 	issues := ValidateGraph(docs)
-	if !hasRefMissing(issues, "HostKey", "ghost-key") {
-		t.Fatalf("expected ref_missing → HostKey/ghost-key, got:\n%s", Format(issues))
+	for _, want := range [][2]string{{"Pool", "ghost-pool"}, {"RateLimit", "ghost-rl"}, {"Budget", "ghost-budget"}} {
+		if !hasRefMissing(issues, want[0], want[1]) {
+			t.Errorf("expected ref_missing → %s/%s, got:\n%s", want[0], want[1], Format(issues))
+		}
 	}
 }
 
-func TestValidateGraph_PolicyMissingRateLimit(t *testing.T) {
-	docs := fixture()
-	docs = append(docs, manifest.Document{Policy: &manifest.PolicyDTO{
-		Metadata: manifest.WireMeta{Name: "rl-pol", Owner: manifest.WireOwner{Kind: "user"}},
-		Spec:     manifest.PolicySpec{RateLimit: "ghost-rl"},
-	}})
+// A pool's keys must all authenticate to the pool's host.
+func TestValidateGraph_PoolKeyAtAnotherHost(t *testing.T) {
+	docs := append(fixture(),
+		manifest.Document{Host: &manifest.HostDTO{
+			Metadata: manifest.WireMeta{Name: "anthropic-host", Owner: manifest.WireOwner{Kind: "system"}},
+		}},
+		manifest.Document{HostKey: &manifest.HostKeyDTO{
+			Metadata: manifest.WireMeta{Name: "openai-key"},
+			Spec:     manifest.HostKeySpec{HostID: "openai-host", ValueFrom: manifest.HostKeyValueFrom{Kind: "env", Env: "X"}},
+		}},
+		manifest.Document{Pool: &manifest.PoolDTO{
+			Metadata: manifest.WireMeta{Name: "mixed", Owner: manifest.WireOwner{Kind: "system"}},
+			Spec:     manifest.PoolSpec{Host: "anthropic-host", Credentials: []string{"openai-key"}},
+		}},
+	)
 	issues := ValidateGraph(docs)
-	if !hasRefMissing(issues, "RateLimit", "ghost-rl") {
-		t.Fatalf("expected ref_missing → RateLimit/ghost-rl, got:\n%s", Format(issues))
+	if !hasIssue(issues, KindOwnerMismatch) {
+		t.Fatalf("expected owner_mismatch, got:\n%s", Format(issues))
+	}
+}
+
+// A host-owned tier policy caps; it never hands out keys, and a scoped rate
+// limit must name a model its host serves.
+func TestValidateGraph_TierPolicyShape(t *testing.T) {
+	tier := func(spec manifest.PolicySpec) []manifest.Document {
+		return append(fixture(),
+			manifest.Document{RateLimit: &manifest.RateLimitDTO{
+				Metadata: manifest.WireMeta{Name: "tier-rl", Owner: manifest.WireOwner{Kind: "host", Name: "openai-host"}},
+			}},
+			manifest.Document{HostKey: &manifest.HostKeyDTO{
+				Metadata: manifest.WireMeta{Name: "openai-key"},
+				Spec:     manifest.HostKeySpec{HostID: "openai-host", ValueFrom: manifest.HostKeyValueFrom{Kind: "env", Env: "X"}},
+			}},
+			manifest.Document{Policy: &manifest.PolicyDTO{
+				Metadata: manifest.WireMeta{Name: "openai-tier-1", Owner: manifest.WireOwner{Kind: "host", Name: "openai-host"}},
+				Spec:     spec,
+			}},
+		)
+	}
+	for _, tc := range []struct {
+		name string
+		spec manifest.PolicySpec
+		want string // "" = clean
+	}{
+		{"scoped to a served model", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-x"}}}}, ""},
+		{"unscoped", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl"}}}, ""},
+		{"scoped to a model the host does not serve", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-unserved"}}}}, "matches no model host"},
+		{"scoped to a host", manifest.PolicySpec{RateLimits: []manifest.PolicyRateLimitDTO{{Ref: "tier-rl", Models: []string{"openai/gpt-x@other"}}}}, "names a host"},
+		{"links pools", manifest.PolicySpec{Pools: []string{"openai-pool"}}, "links no pools"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issues := ValidateGraph(tier(tc.spec))
+			report := Format(issues)
+			if tc.want == "" {
+				if HasErrors(issues) {
+					t.Fatalf("want clean, got:\n%s", report)
+				}
+				return
+			}
+			if !strings.Contains(report, tc.want) {
+				t.Fatalf("report does not mention %q:\n%s", tc.want, report)
+			}
+		})
 	}
 }
 
 func TestValidateGraph_PolicyBareModelName(t *testing.T) {
 	cases := []struct{ entry, want string }{
 		{"gpt-x", `"openai/gpt-x"`},
-		{"gpt-x@openai-host", `"openai/gpt-x@openai-host"`},
 	}
 	for _, tc := range cases {
 		docs := append(fixture(), manifest.Document{Policy: &manifest.PolicyDTO{
@@ -217,27 +276,6 @@ func TestValidateGraph_PricingMissingTargetModel(t *testing.T) {
 	issues := ValidateGraph(docs)
 	if !hasRefMissing(issues, "Model", "ghost-model") {
 		t.Fatalf("expected ref_missing → Model/ghost-model, got:\n%s", Format(issues))
-	}
-}
-
-func TestValidateGraph_KeyMissingPolicy(t *testing.T) {
-	docs := fixture()
-	docs = append(docs, manifest.Document{Key: &manifest.KeyDTO{
-		Metadata: manifest.WireMeta{Name: "k1"},
-		Spec:     manifest.KeySpec{Policy: "ghost-policy", KeyHash: "x"},
-	}})
-	issues := ValidateGraph(docs)
-	if !hasRefMissing(issues, "Policy", "ghost-policy") {
-		t.Fatalf("expected ref_missing → Policy/ghost-policy, got:\n%s", Format(issues))
-	}
-}
-
-func TestValidateGraph_HostDefaultPolicyMissing(t *testing.T) {
-	docs := fixture()
-	docs[1].Host.Spec.DefaultPolicy = "ghost-policy"
-	issues := ValidateGraph(docs)
-	if !hasRefMissing(issues, "Policy", "ghost-policy") {
-		t.Fatalf("expected ref_missing → Policy/ghost-policy on Host.spec.defaultPolicy, got:\n%s", Format(issues))
 	}
 }
 

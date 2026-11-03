@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -59,13 +60,19 @@ type releasedRow struct {
 func registerDetach(api huma.API, d Deps, protect huma.Middlewares) {
 	for _, plural := range referencedPlurals {
 		singular := authz.Singular(plural)
+		desc := "In one transaction, clears each optional field and drops each list entry naming the row, " +
+			"on the referencing rows the caller may update. Deletes nothing; returns what still references the row."
+		if singular == "account" {
+			desc = "In one transaction, clears each optional field and drops each list entry naming the account, " +
+				"on the referencing rows the caller may update, and deletes the accounts shared from it that nothing else holds " +
+				"(pools drawing on them lose them). Returns what still references the account."
+		}
 		huma.Register(api, huma.Operation{
 			OperationID: "detach_" + singular,
 			Method:      http.MethodPost,
 			Path:        "/" + plural + "/by-id/{id}/detach",
 			Summary:     "Release every reference to this " + singular + " that can let go",
-			Description: "In one transaction, clears each optional field and drops each list entry naming the row, " +
-				"on the referencing rows the caller may update. Deletes nothing; returns what still references the row.",
+			Description: desc,
 			Tags:        []string{plural},
 			Middlewares: protect,
 			Errors:      []int{401, 404, 409, 500},
@@ -157,6 +164,14 @@ func (d Deps) releaseAll(ctx context.Context, t detachTarget) ([]releasedRow, []
 	var released []releasedRow
 	for _, it := range callerLast(ctx, items) {
 		if !it.detachable {
+			continue
+		}
+		if it.Kind == "account" && it.Via == "spec.sourceAccountId" {
+			rows, err := d.releaseShare(ctx, it)
+			if err != nil {
+				return nil, nil, err
+			}
+			released = append(released, rows...)
 			continue
 		}
 		r, err := d.release(ctx, it, t)
@@ -272,6 +287,9 @@ func targetMeta(ctx context.Context, s *appcatalog.Stores, kind, id string) (*me
 	case "role":
 		v, err := s.Role.Get(ctx, id)
 		return rowMeta(v, err, func(v *role.Role) *meta.Metadata { return &v.Meta })
+	case "account":
+		v, err := s.Account.Get(ctx, id)
+		return rowMeta(v, err, func(v *account.Account) *meta.Metadata { return &v.Meta })
 	}
 	return nil, fmt.Errorf("no row lookup for kind %q", kind)
 }

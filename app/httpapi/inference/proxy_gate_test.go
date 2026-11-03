@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/httpheader"
 )
@@ -37,7 +38,7 @@ func poisonedProxyRequest(t *testing.T, relayKey string) *http.Request {
 // gatedEdge is captureEdge recording whether the request got past the middleware.
 func gatedEdge(d Deps, reached *bool) http.Handler {
 	spec := d.Specs.Spec(adapters.OpenAI)
-	return ClassifyMiddleware()(PrincipalMiddleware(d.Catalog, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return ClassifyMiddleware()(PrincipalMiddleware(d.Auth())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*reached = true
 		handleShape(spec, d, w, r)
 	})))
@@ -46,7 +47,6 @@ func gatedEdge(d Deps, reached *bool) http.Handler {
 // The proxy-mode setting ships disabled, so both proxy modes are refused at the credential middleware with the envelope the proxy handler used to answer.
 func TestProxyModeDisabledIsRefusedBeforeTheBody(t *testing.T) {
 	const want = `{"error":{"type":"invalid_request_error","code":"proxy_disabled","message":"proxy mode is not enabled on this relay"}}`
-	on := true
 	for _, tc := range []struct {
 		name     string
 		relayKey string
@@ -55,7 +55,7 @@ func TestProxyModeDisabledIsRefusedBeforeTheBody(t *testing.T) {
 		{"authed passthrough key", captureKeyPlaintext},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, events := captureDeps(t, captureCatalog(t, okUpstream(t).URL, captureCase{policyCaptures: &on}))
+			d, events := captureDeps(t, captureCatalog(t, okUpstream(t).URL, captureCase{keyCaptures: true}))
 			before := rejectionCount(t, "proxy_disabled")
 
 			var reached bool
@@ -85,14 +85,8 @@ func TestProxyModeDisabledIsRefusedBeforeTheBody(t *testing.T) {
 
 // The credential is judged before the setting, so a key that may not bring its own upstream key keeps its own answer.
 func TestProxyModeRefusalComesAfterTheCredential(t *testing.T) {
-	on := true
-	cat := captureCatalog(t, okUpstream(t).URL, captureCase{policyCaptures: &on})
-	k, _ := cat.Current().KeyByHash(sha(captureKeyPlaintext))
-	noPassthrough := *k
-	noPassthrough.Spec.PassthroughAllowed = false
-	if err := cat.ApplyKeyUpsert(&noPassthrough); err != nil {
-		t.Fatalf("key upsert: %v", err)
-	}
+	cat := captureCatalog(t, okUpstream(t).URL, captureCase{keyCaptures: true})
+	rekey(t, cat, func(k *key.Key) { k.Spec.PassthroughAllowed = false })
 	d, events := captureDeps(t, cat)
 
 	for _, tc := range []struct {

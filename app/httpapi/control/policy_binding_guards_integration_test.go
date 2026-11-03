@@ -13,14 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/account"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -37,6 +36,8 @@ type bindingFixture struct {
 	shared  *policy.Policy
 	tier    *policy.Policy
 	account *serviceaccount.ServiceAccount
+	// accountID is the service account's own account, the one a binding names.
+	accountID string
 }
 
 func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
@@ -90,25 +91,25 @@ func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
 	if err := stores.ServiceAccount.Upsert(ctx, w.account); err != nil {
 		t.Fatalf("upsert service account: %v", err)
 	}
+	w.accountID, err = stores.Account.EnsureManaged(ctx, account.ForServiceAccount(w.account.Meta.ID, w.account.Meta.Name, "", w.mine.Meta.ID))
+	if err != nil {
+		t.Fatalf("ensure the service account's account: %v", err)
+	}
 	return w, ctx
 }
 
-// TestGuardPolicyBinding_CrossProject: a binding may hand out only a policy
-// its own project owns or a system-owned shared one. Another project's policy
-// and a host's tier policy are both refused — the first would let a project
-// spend a credential that is not its own, the second has no inbound keys at
-// all.
+// TestGuardPolicyBinding_CrossProject: a binding may hand out a policy its own
+// project owns, a system-owned shared one, or a host's tier preset. Another
+// project's policy is refused: it would let a project spend a credential that
+// is not its own.
 func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 	w, ctx := newBindingFixture(t)
 	guard := guardPolicyBinding(w.deps)
 
 	mkBinding := func(projectID, policyID string) *policybinding.PolicyBinding {
 		return &policybinding.PolicyBinding{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: "b-" + policyID[:8]},
-			Spec: policybinding.Spec{
-				ProjectID: projectID, PolicyID: policyID,
-				Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: w.account.Meta.ID, Name: w.account.Meta.Name}},
-			},
+			Meta: meta.Metadata{ID: meta.NewID(), Name: "b-" + policyID[:8], Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
+			Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{w.accountID}},
 		}
 	}
 
@@ -120,7 +121,7 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 		{name: "its own project's policy", policyID: w.ownPol.Meta.ID},
 		{name: "a system-owned shared policy", policyID: w.shared.Meta.ID},
 		{name: "another project's policy", policyID: w.farPol.Meta.ID, wantErr: w.farPol.Meta.Name},
-		{name: "a host tier policy", policyID: w.tier.Meta.ID, wantErr: w.tier.Meta.Name},
+		{name: "a host tier preset", policyID: w.tier.Meta.ID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := mkBinding(w.mine.Meta.ID, tc.policyID)
@@ -128,15 +129,6 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("guard refused a bindable policy: %v", err)
-				}
-				// The guard re-derives the owner from the project and fills
-				// the default priority, so the row reads back ordering by the
-				// value it was stored with.
-				if b.Meta.Owner.Kind != meta.OwnerProject || b.Meta.Owner.ID != w.mine.Meta.ID {
-					t.Errorf("owner = %+v, want the binding's own project", b.Meta.Owner)
-				}
-				if b.Spec.Priority == nil || *b.Spec.Priority != policybinding.DefaultPriority {
-					t.Errorf("priority = %v, want the default set", b.Spec.Priority)
 				}
 				return
 			}
@@ -152,18 +144,6 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 		})
 	}
 
-	t.Run("an explicit priority is kept", func(t *testing.T) {
-		zero := 0
-		b := mkBinding(w.mine.Meta.ID, w.ownPol.Meta.ID)
-		b.Spec.Priority = &zero
-		if err := guard(ctx, "create", nil, b); err != nil {
-			t.Fatalf("guard: %v", err)
-		}
-		if b.Spec.Priority == nil || *b.Spec.Priority != 0 {
-			t.Fatalf("priority = %v, want the explicit zero kept", b.Spec.Priority)
-		}
-	})
-
 	t.Run("a project that does not exist", func(t *testing.T) {
 		b := mkBinding(meta.NewID(), w.shared.Meta.ID)
 		if err := guard(ctx, "create", nil, b); err == nil {
@@ -171,11 +151,11 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 		}
 	})
 
-	t.Run("a subject that does not exist", func(t *testing.T) {
+	t.Run("an account that does not exist", func(t *testing.T) {
 		b := mkBinding(w.mine.Meta.ID, w.ownPol.Meta.ID)
-		b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectServiceAccount, ID: meta.NewID(), Name: "no-such-account"}}
+		b.Spec.AccountIDs = []string{meta.NewID()}
 		if err := guard(ctx, "create", nil, b); err == nil {
-			t.Fatal("guard accepted a binding naming a subject that does not exist")
+			t.Fatal("guard accepted a binding naming an account that does not exist")
 		}
 	})
 
@@ -184,81 +164,4 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 			t.Fatalf("delete guard: %v", err)
 		}
 	})
-}
-
-// TestPolicyKeysAttach_Guards: attaching a Key to a policy from the policy
-// side goes through the same reference guard, row validation and hand-edit
-// marking a PUT on the key does. That a tier policy is refused and a
-// system-owned one accepted is pinned by
-// TestWriteKeyPolicy_RunsTheGuardAndMarksDirty; what is left is the
-// project-to-project rule, the detach, and a row that fails its own Validate.
-func TestPolicyKeysAttach_Guards(t *testing.T) {
-	w, ctx := newBindingFixture(t)
-
-	k := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "attach-guard-key", Owner: meta.Owner{Kind: meta.OwnerProject, ID: w.mine.Meta.ID}},
-		Spec: key.Spec{
-			Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: w.account.Meta.ID},
-			KeyHash:   strings.Repeat("b", 64), Prefix: "sk-guard",
-		},
-	}
-	if err := w.stores.Key.Upsert(ctx, k); err != nil {
-		t.Fatalf("upsert key: %v", err)
-	}
-
-	for _, tc := range []struct {
-		name     string
-		policyID string
-		accept   bool
-	}{
-		{name: "its own project's policy", policyID: w.ownPol.Meta.ID, accept: true},
-		{name: "another project's policy", policyID: w.farPol.Meta.ID},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			k.Spec.PolicyID = tc.policyID
-			k.Meta.Dirty = false
-			err := writeKeyPolicy(ctx, w.deps, k)
-			if !tc.accept {
-				if err == nil {
-					t.Fatal("the attach bypassed the reference guard")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("writeKeyPolicy: %v", err)
-			}
-			got, err := w.stores.Key.Get(ctx, k.Meta.ID)
-			if err != nil || got == nil {
-				t.Fatalf("read back: %v", err)
-			}
-			if got.Spec.PolicyID != tc.policyID {
-				t.Errorf("policyId = %q, want %q", got.Spec.PolicyID, tc.policyID)
-			}
-			if !got.Meta.Dirty {
-				t.Error("the attach did not mark the row hand-edited; apply would overwrite it silently")
-			}
-		})
-	}
-
-	// Detaching clears the ref, and the cleared row still passes its own
-	// validation — a policy-less key is a valid one.
-	k.Spec.PolicyID = ""
-	if err := writeKeyPolicy(ctx, w.deps, k); err != nil {
-		t.Fatalf("detach: %v", err)
-	}
-	got, err := w.stores.Key.Get(ctx, k.Meta.ID)
-	if err != nil || got == nil {
-		t.Fatalf("read back after detach: %v", err)
-	}
-	if got.Spec.PolicyID != "" {
-		t.Errorf("policyId = %q, want it cleared", got.Spec.PolicyID)
-	}
-
-	// A row the guard lets through but that fails its own Validate is a 400,
-	// not a store write.
-	broken := *k
-	broken.Spec.KeyHash = "too-short"
-	if err := writeKeyPolicy(ctx, w.deps, &broken); statusOf(t, err) != 400 {
-		t.Fatalf("err = %v, want a 400 from the row's own validation", err)
-	}
 }

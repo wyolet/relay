@@ -18,6 +18,8 @@ func TestParse_ValidShapes(t *testing.T) {
 	}{
 		{"anthropic", "anthropic", "", "", false, true, true, KindProvider},
 		{"anthropic@bedrock", "anthropic", "", "bedrock", false, true, false, KindProviderOnHost},
+		{"anthropic/*", "anthropic", "", "", false, true, true, KindProvider},
+		{"anthropic/*@bedrock", "anthropic", "", "bedrock", false, true, false, KindProviderOnHost},
 		{"anthropic/claude-opus-4-7", "anthropic", "claude-opus-4-7", "", false, false, true, KindModel},
 		{"anthropic/claude-opus-4-7@bedrock", "anthropic", "claude-opus-4-7", "bedrock", false, false, false, KindBinding},
 		{"amazon-bedrock/claude-opus-4-7@amazon-bedrock", "amazon-bedrock", "claude-opus-4-7", "amazon-bedrock", false, false, false, KindBinding},
@@ -69,9 +71,9 @@ func TestParse_Errors(t *testing.T) {
 		{"anthropic/", nil, "trailing /"},
 		{"anthropic/claude@", nil, "trailing @"},
 		{"@", nil, "trailing @"},
-		// `*` has no slug-compatible characters → rejected after normalization.
-		{"anthropic/*", nil, "slug-compatible"},
-		{"anthropic/*@bedrock", nil, "slug-compatible"},
+		// A model of `*` is the one pattern spelling; `*` anywhere else has no slug-compatible characters.
+		{"*", nil, "slug-compatible"},
+		{"*/gpt-4o", nil, "slug-compatible"},
 		{"anthropic/claude@*", nil, "slug-compatible"},
 		{"@*", nil, "slug-compatible"},
 		// A * beside other characters is not a pattern; normalizing it away

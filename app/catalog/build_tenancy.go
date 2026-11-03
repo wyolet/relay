@@ -54,9 +54,9 @@ func sanitizeProject(p *project.Project, teams idSet) (*project.Project, bool) {
 //
 // Indexes: serviceAccountsByID, serviceAccountsByName, and
 // serviceAccountsByProject (sorted by account name).
-func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, projects, policies idSet) {
+func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, projects idSet) {
 	for _, sa := range sas {
-		clean, keep := sanitizeServiceAccount(sa, projects, policies)
+		clean, keep := sanitizeServiceAccount(sa, projects)
 		if !keep {
 			continue
 		}
@@ -71,17 +71,10 @@ func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, proj
 	}
 }
 
-// sanitizeServiceAccount drops the account when its Project is missing, or
-// when a set policy override does not resolve — a dangling override would
-// silently fall through to a broader grant.
-func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects, policies idSet) (*serviceaccount.ServiceAccount, bool) {
+// sanitizeServiceAccount drops the account when its Project is missing.
+func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects idSet) (*serviceaccount.ServiceAccount, bool) {
 	if !projects(sa.Spec.ProjectID) {
 		return nil, false
-	}
-	if sa.Spec.PolicyID != "" {
-		if !policies(sa.Spec.PolicyID) {
-			return nil, false
-		}
 	}
 	clean := *sa
 	return &clean, true

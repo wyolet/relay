@@ -34,7 +34,7 @@ A stored section that a later release can no longer accept (for example one nami
 At boot, relay reads `kind: Setting` files from `RELAY_SETTINGS_DIR` (default `<RELAY_CONFIG_DIR>/settings`, read recursively) and writes each section that has **no stored value yet**. A section already in the database is left alone, so a file sets the starting value and the control API stays authoritative afterwards. A file naming an unknown section, failing validation, or holding another kind stops relay at boot.
 
 ```yaml settings/proxy-mode.yaml
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Setting
 metadata:
   name: proxy-mode
@@ -49,7 +49,7 @@ A field a file leaves out takes its zero value (`false`, `0`, empty), not its de
 
 | Section | Controls | Admin only |
 | --- | --- | --- |
-| [`inference`](#inference) | Policy-less relay keys, key rotation grace | |
+| [`inference`](#inference) | Key rotation grace | |
 | [`parsing`](#parsing) | How much of each request body relay parses | |
 | [`proxy-mode`](#proxy-mode) | Callers forwarding their own upstream keys | |
 | [`usage-logging`](#usage-logging) | Usage event backend and retention | yes |
@@ -59,6 +59,7 @@ A field a file leaves out takes its zero value (`false`, `0`, empty), not its de
 | [`auth:oidc`](#authoidc) | Single sign-on | yes |
 | [`auth:scim`](#authscim) | SCIM provisioning | yes |
 | [`auth:tokens`](#authtokens) | Inference tokens | yes |
+| [`accounts`](#accounts) | Personal accounts for every user | yes |
 | [`catalog-source`](#catalog-source) | Which catalog release was seeded | |
 | [`license`](#license) | License installed at runtime | `/api/license` |
 | [`governance:provider`, `governance:host`, `governance:model`, `governance:policy`](#governance) | Editing and deleting catalog rows | |
@@ -67,7 +68,6 @@ A field a file leaves out takes its zero value (`false`, `0`, empty), not its de
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `allowMissingPolicy` | `false` | Lets a relay key with no governing policy reach inference over the relay's shared host keys, with no policy grant or policy rate limit. Read only under `RELAY_AUTHZ=single`; under `rbac` such a key is always refused (`403 policyless_disabled`). See [Policies](/concepts/policies). |
 | `keyRotateMaxGrace` | `86400` | Most seconds a rotated relay key's previous value keeps working. `0` means the default; a rotation asking for more is refused. |
 
 ### parsing
@@ -104,7 +104,7 @@ Admin only.
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `enabled` | `false` | Master switch. A request is captured only when this is on and the request also opts in through its policy (`payloadLoggingEnabled`); see [Payload logging](/concepts/payload-logging) for which flag applies. |
+| `enabled` | `false` | Master switch. A request is captured only when this is on and the request also opts in through its account (`payloadLogging`) or, when no account on its ladder sets it, its relay key (`payloadLoggingEnabled`); see [Payload logging](/concepts/payload-logging). |
 | `backend` | `file` | `file`, `s3` or `clickhouse`. |
 | `maxBytes` | `4194304` (4 MiB) | Cap per stored body, measured after decompression. `0` is unlimited. |
 | `retentionDays` | `30` | Days bodies are kept by the `clickhouse` backend; `0` keeps them forever. Unlike other fields, leaving it out of a seed file keeps 30. |
@@ -121,7 +121,7 @@ See [Payload logging](/concepts/payload-logging).
 | Field | Default | Description |
 | --- | --- | --- |
 | `enabled` | `false` | Accepts OTLP/HTTP exports at `/otlp/v1/traces` and `/otlp/v1/logs` on the inference listener and records the model calls they describe as usage events with source `otlp`. |
-| `captureContent` | `false` | Also stores the message content clients report, in the payload store, while payload logging is enabled and the reporting credential's policy allows it. |
+| `captureContent` | `false` | Also stores the message content clients report, in the payload store, while payload logging is enabled and no account on the reporting credential's ladder sets `payloadLogging: off`. |
 
 See [OTLP receiver](/concepts/otlp-receiver).
 
@@ -177,6 +177,14 @@ See [SCIM provisioning](/concepts/scim).
 | `signingKey`, `previousSigningKey` | _(filled in by relay)_ | References to the stored signing keys. Relay generates the first on boot and moves it to `previousSigningKey` on rotation (`POST /api/auth/token/keys/rotate`), so tokens signed before a rotation keep verifying. |
 
 Only rotation changes the signing-key references. A `PUT` that leaves them out keeps the installed ones, and a `PUT` naming another secret is refused with `400`. TTL changes apply to tokens minted afterwards; tokens already minted keep their `exp`.
+
+### accounts
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `personalAccounts` | `on` | `on` or `off`. Off closes every user's personal account and the provider accounts users own personally, unless a group or the user says otherwise. |
+
+A user's own `personalAccount` wins over it, then their enabled system groups' (`off` over `on`), including groups a SCIM client provisions. Groups an identity provider only asserts at sign-in are not stored and say nothing here. See [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off).
 
 ### catalog-source
 

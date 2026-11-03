@@ -23,6 +23,8 @@ type updateUsers struct {
 	ms    *memstore.Store
 	dir   *directory.Directory
 	ended *endedUsers
+	// personal is the column relay keeps beside the directory row.
+	personal map[string]string
 }
 
 type endedUsers struct{ ids []string }
@@ -40,7 +42,7 @@ func newUpdateUsers(t *testing.T, rows ...*user.User) *updateUsers {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := &updateUsers{t: t, ms: ms, dir: dir, ended: ended}
+	u := &updateUsers{t: t, ms: ms, dir: dir, ended: ended, personal: map[string]string{}}
 	for _, r := range rows {
 		u.put(r)
 	}
@@ -80,14 +82,28 @@ func (u *updateUsers) List(ctx context.Context) ([]*user.User, error) {
 	rows, err := u.ms.Stores().Users.List(ctx)
 	out := make([]*user.User, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, user.FromDirectory(r))
+		row := user.FromDirectory(r)
+		row.PersonalAccount = u.personal[row.ID]
+		out = append(out, row)
 	}
 	return out, err
 }
 
 func (u *updateUsers) Get(ctx context.Context, id string) (*user.User, error) {
 	r, err := u.ms.Stores().Users.Get(ctx, id)
-	return user.FromDirectory(r), err
+	row := user.FromDirectory(r)
+	if row != nil {
+		row.PersonalAccount = u.personal[id]
+	}
+	return row, err
+}
+
+func (u *updateUsers) SetPersonalAccount(ctx context.Context, id, value string) (bool, error) {
+	if r, _ := u.ms.Stores().Users.Get(ctx, id); r == nil {
+		return false, nil
+	}
+	u.personal[id] = value
+	return true, nil
 }
 
 func (u *updateUsers) UpdateUser(ctx context.Context, p *principal.Principal, r *directory.User) error {
@@ -199,6 +215,40 @@ func TestOnlyAnAdminChangesRoles(t *testing.T) {
 	admin := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-0", Roles: []string{user.RoleAdmin}})
 	if _, err := updateUser(admin, users, scopedAllow{}, rolesInput("u-1", user.RoleAdmin)); err != nil {
 		t.Fatalf("admin role change: %v", err)
+	}
+}
+
+func personalAccountInput(id, value string) *userUpdateInput {
+	in := &userUpdateInput{ID: id}
+	in.Body.PersonalAccount = &value
+	return in
+}
+
+// A user's personalAccount decides whether they may act on their own: only an admin sets it, the user themselves never, and setting it leaves the directory row and its sessions alone.
+func TestOnlyAnAdminSetsPersonalAccount(t *testing.T) {
+	users := newUpdateUsers(t, &user.User{ID: "u-1", Username: "alice"})
+	self := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
+	_, err := updateUser(self, users, scopedAllow{}, personalAccountInput("u-1", "on"))
+	var se huma.StatusError
+	if !errors.As(err, &se) || se.GetStatus() != http.StatusForbidden {
+		t.Fatalf("user setting their own personalAccount = %v, want 403", err)
+	}
+	admin := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-0", Roles: []string{user.RoleAdmin}})
+	if _, err := updateUser(admin, users, scopedAllow{}, personalAccountInput("u-1", "sideways")); !errors.As(err, &se) || se.GetStatus() != http.StatusBadRequest {
+		t.Fatalf("an unknown value = %v, want 400", err)
+	}
+	out, err := updateUser(admin, users, scopedAllow{}, personalAccountInput("u-1", "off"))
+	if err != nil || out.Body.PersonalAccount != "off" || users.row("u-1").PersonalAccount != "off" {
+		t.Fatalf("admin sets off = %+v, %v; stored %q", out, err, users.row("u-1").PersonalAccount)
+	}
+	if len(users.ended.ids) != 0 {
+		t.Errorf("setting personalAccount ended sessions of %v", users.ended.ids)
+	}
+	if _, err := updateUser(self, users, scopedAllow{}, personalAccountInput("u-1", "off")); err != nil {
+		t.Errorf("resending the stored value = %v, want no change and no refusal", err)
+	}
+	if _, err := updateUser(admin, users, scopedAllow{}, personalAccountInput("u-1", "")); err != nil || users.row("u-1").PersonalAccount != "" {
+		t.Fatalf("admin clears it = %v; stored %q", err, users.row("u-1").PersonalAccount)
 	}
 }
 

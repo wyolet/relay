@@ -56,8 +56,7 @@ func TestRun_BufferedResponseIsSummarizedOnce(t *testing.T) {
 
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter:   a,
-		Keys:      []*hostkey.HostKey{makeKey("h", "sk")},
-		Policy:    makePolicy(),
+		Hops:      hopOf([]*hostkey.HostKey{makeKey("h", "sk")}),
 		Lifecycle: lc,
 	})
 	if err != nil {

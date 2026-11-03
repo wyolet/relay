@@ -105,7 +105,7 @@ func TestIntegration_SeedVersioned_LatestResolvesToLocal(t *testing.T) {
 	defer cancel()
 
 	idx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("channels:\n    v1alpha2:\n        latest: v8.8.8-test\n"))
+		_, _ = w.Write([]byte("channels:\n    v1alpha3:\n        latest: v8.8.8-test\n"))
 	}))
 	defer idx.Close()
 

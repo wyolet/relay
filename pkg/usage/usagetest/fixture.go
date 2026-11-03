@@ -17,7 +17,7 @@ func Window() usage.EventQuery {
 	return usage.EventQuery{From: at(-60), To: at(120), Limit: usage.MaxEventLimit}
 }
 
-// Fixture returns the events every backend is loaded with. Durations are equal within a model (model-a 200ms, model-b 100ms) and every TTFT truncates to 40ms except r03's 41ms, so percentiles agree across backends on any row holding one model and one TTFT. Some averages are fractional on purpose (key-a: 166.7ms duration, 41.3ms TTFT) to pin truncation on every backend. r00 and r11 are log-only and sit outside the included span, so a backend that aggregates them shifts counts, from/to and buckets. r05 carries no relay key. Only r01/r02 (project-a) and r06/r11 (principal-a) carry attribution, for read-scope cases. Host hid-1 is renamed from host-old to host-new and its newest included event has no slug, so its label is host-new; hid-3 never has a slug and r09 has no host.
+// Fixture returns the events every backend is loaded with. Durations are equal within a model (model-a 200ms, model-b 100ms) and every TTFT truncates to 40ms except r03's 41ms, so percentiles agree across backends on any row holding one model and one TTFT. Some averages are fractional on purpose (key-a: 166.7ms duration, 41.3ms TTFT) to pin truncation on every backend. r00 and r11 are log-only and sit outside the included span, so a backend that aggregates them shifts counts, from/to and buckets. r05 carries no relay key. Only r01/r02 (project-a) and r06/r11 (principal-a) carry attribution, for read-scope cases. r01/r02 were served from pool-a under acct-a in lane lane-a and r03 from pool-b under acct-b in lane-b; the rest carry no pool, account or lane. Of the log-only rows, r00 failed before any upstream (status 0) and r11 is a relay refusal (no_capacity) answered 429. Host hid-1 is renamed from host-old to host-new and its newest included event has no slug, so its label is host-new; hid-3 never has a slug and r09 has no host.
 func Fixture() []usage.Event {
 	upstream := func(responseStartUs int64) *sdkusage.UpstreamTiming {
 		return &sdkusage.UpstreamTiming{Start: 1_000, ResponseStart: responseStartUs, ResponseEnd: 90_000}
@@ -42,6 +42,7 @@ func Fixture() []usage.Event {
 	r01.Tags = map[string]string{"env": "prod"}
 	r01.ProjectID = "project-a"
 	r01.HostID, r01.Host = "hid-1", "host-old"
+	r01.PoolID, r01.AccountID, r01.LaneAccountID = "pool-a", "acct-a", "lane-a"
 
 	r02 := modelA("r02", 10, "pipeline", 200)
 	r02.Upstream, r02.CostNanos = upstream(40_999), cost(3000)
@@ -50,11 +51,14 @@ func Fixture() []usage.Event {
 	r02.Tags = map[string]string{"env": "prod"}
 	r02.ProjectID = "project-a"
 	r02.HostID, r02.Host = "hid-1", "host-old"
+	r02.PoolID, r02.AccountID, r02.LaneAccountID = "pool-a", "acct-a", "lane-a"
+	r02.ViaAccountID = "via-a"
 
 	r03 := modelB("r03", 20, "pipeline", 429)
 	r03.Upstream = upstream(41_999)
 	keyA(&r03)
 	r03.HostID, r03.Host = "hid-2", "host-b"
+	r03.PoolID, r03.AccountID, r03.LaneAccountID = "pool-b", "acct-b", "lane-b"
 
 	// Priced at a true $0: counts as priced, never as unpriced.
 	r04 := modelB("r04", 30, "proxy", 404)
@@ -91,8 +95,8 @@ func Fixture() []usage.Event {
 	r00.DurationMs, r00.ErrorKind = 0, "no_keys"
 	keyA(&r00)
 	r00.HostID, r00.Host = "hid-9", "host-z"
-	r11 := modelB("r11", 119, "proxy", 0)
-	r11.DurationMs, r11.ErrorKind, r11.PrincipalID = 0, "rate_limited", "principal-a"
+	r11 := modelB("r11", 119, "proxy", 429)
+	r11.DurationMs, r11.ErrorKind, r11.PrincipalID, r11.Refusal = 0, "rate_limited", "principal-a", "no_capacity"
 	r11.HostID, r11.Host = "hid-1", "host-log-only"
 
 	return []usage.Event{r00, r01, r02, r03, r04, r05, r06, r07, r08, r09, r10, r11}

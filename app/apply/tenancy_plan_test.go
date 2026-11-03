@@ -99,7 +99,7 @@ func TestTenancyKindsArePrunableWhileSystemOwned(t *testing.T) {
 // A stored host key holds ciphertext (or nothing) where the manifest holds
 // the plaintext it declared, so `value` can never compare equal.
 func TestHostKeyValueIsNeverDrift(t *testing.T) {
-	spec := hostkey.Spec{HostID: "h-1", PolicyID: "p-1"}
+	spec := hostkey.Spec{HostID: "h-1"}
 	stored := &hostkey.HostKey{Meta: meta.Metadata{ID: "k-1", Name: "openai-main"}, Spec: spec}
 	declared := &hostkey.HostKey{Meta: meta.Metadata{ID: "k-1", Name: "openai-main"}, Spec: spec}
 	declared.Spec.Value = "sk-plaintext"

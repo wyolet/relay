@@ -7,7 +7,7 @@
 // Policy still appears (it's just unreachable through PoolModels until
 // someone wires it up). The "enabled" flag is the entire toggle mechanism.
 //
-// Reverse joins (modelsByPolicy, pricingByModelHost, etc.) are derived
+// Reverse joins (pricingByModelHost, bindingsByModel, etc.) are derived
 // indices over the snapshot — they hold pointers to the same rows.
 package catalog
 
@@ -139,18 +139,6 @@ type Snapshot struct {
 	// usersLoaded records that tokenVersionByUser came from a users source,
 	// so an absent id means a disabled or deleted user rather than "unknown".
 	usersLoaded bool
-
-	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
-	// doesn't iterate.
-	modelsByPolicy    map[string][]*model.Model
-	hostKeysByPolicy  map[string][]*hostkey.HostKey
-	rateLimitByPolicy map[string]*ratelimit.RateLimit
-
-	// allowedCombosByPolicy[policyID] is the set of (model, host) pairs an
-	// explicit-grant policy allows — built from its ModelIDs + Models refs so
-	// authorization is an O(1) membership test. Implicit-wildcard policies are
-	// absent (PolicyAllowsCombo returns true). See policy_allow.go.
-	allowedCombosByPolicy map[string]map[comboKey]struct{}
 
 	pricingsByID map[string]*pricing.Pricing
 	// pricingByModelHost keys on modelID+"|"+hostID for O(1) hot-path lookup.

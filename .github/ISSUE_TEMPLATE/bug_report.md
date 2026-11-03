@@ -27,7 +27,7 @@ labels: bug
 
 - Relay version / commit:
 - Deployment: <!-- docker compose / k8s / source build -->
-- Backends: <!-- PG / ClickHouse / Redis versions if relevant -->
+- Backends: <!-- PG / ClickHouse / Dragonfly versions if relevant -->
 - Upstream adapter(s): <!-- openai / anthropic / gemini / ... -->
 
 ## Additional context

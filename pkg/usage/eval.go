@@ -90,6 +90,18 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.PolicyID, ev.PolicyID) {
 		return false
 	}
+	if !inList(q.PoolID, ev.PoolID) {
+		return false
+	}
+	if !inList(q.AccountID, ev.AccountID) {
+		return false
+	}
+	if !inList(q.LaneAccountID, ev.LaneAccountID) {
+		return false
+	}
+	if !inList(q.ViaAccountID, ev.ViaAccountID) {
+		return false
+	}
 	if !inList(q.ProjectID, ev.ProjectID) {
 		return false
 	}
@@ -112,6 +124,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 		return false
 	}
 	if !inList(q.ErrorKind, ev.ErrorKind) {
+		return false
+	}
+	if !inList(q.Refusal, ev.Refusal) {
 		return false
 	}
 	if q.StatusMin > 0 && ev.Status < q.StatusMin {

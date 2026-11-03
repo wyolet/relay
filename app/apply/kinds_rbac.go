@@ -18,8 +18,18 @@ func (b *builder) planGroupsAndRoles(ctx context.Context, grpDocs []*manifest.Gr
 		Kind: "Group", Docs: grpDocs, Names: b.idx.Groups, Rows: b.rows.Groups,
 		To: manifest.ToGroup, Meta: func(g *group.Group) *meta.Metadata { return &g.Meta },
 		Upsert: throughDirectory(b, infallible((*group.Group).ToDirectory)), Delete: deleteThroughDirectory(b, "Group"),
-		Check:       groupChecks(b),
-		CheckDelete: func(g *group.Group) error { return b.refuseManagedGroup(g.Meta.ID) },
+		Check: groupChecks(b),
+		CheckDelete: func(g *group.Group) error {
+			if g.Spec.PersonalAccount != "" && !b.operator {
+				return groupPersonalAccountAdminOnly(g.Meta.Name)
+			}
+			return b.refuseManagedGroup(g.Meta.ID)
+		},
+		// A Group document cannot carry personalAccount, which an admin sets through the API; re-applying the group keeps it.
+		Keep: func(prev, next *group.Group) error {
+			next.Spec.PersonalAccount = prev.Spec.PersonalAccount
+			return nil
+		},
 	}); err != nil {
 		return err
 	}
@@ -47,8 +57,12 @@ func (b *builder) planBindings(ctx context.Context, rbDocs []*manifest.RoleBindi
 	if err := planKind(ctx, b, kindWiring[manifest.PolicyBindingDTO, policybinding.PolicyBinding]{
 		Kind: "PolicyBinding", Docs: pbDocs, Names: b.idx.PolicyBindings, Rows: b.rows.PolicyBindings,
 		To: manifest.ToPolicyBinding, Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
-		Upsert: s.PolicyBinding.Upsert, Delete: s.PolicyBinding.Delete,
-		Check: refsFor(b, refcheck.Checker.PolicyBinding),
+		Upsert: b.upsertPolicyBinding, Delete: s.PolicyBinding.Delete,
+		// Which accounts and policies a binding may name is a rule of the rows, not of the caller, so the seed and the CLI run it too.
+		Check: func() func(context.Context, *policybinding.PolicyBinding) error {
+			c := b.refs()
+			return func(ctx context.Context, pb *policybinding.PolicyBinding) error { return c.PolicyBinding(ctx, pb) }
+		}(),
 	}); err != nil {
 		return err
 	}

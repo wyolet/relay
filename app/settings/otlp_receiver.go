@@ -6,9 +6,9 @@ const SectionOTLPReceiver = "otlp-receiver"
 // OTLPReceiver configures the endpoints that accept telemetry clients report about model calls relay did not carry.
 type OTLPReceiver struct {
 	// Enabled accepts exports at POST /otlp/v1/traces and /otlp/v1/logs. Off by default: reported usage is self-declared by the client and is recorded, never enforced.
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" doc:"Accept OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs on the inference listener and record the calls they describe as usage."`
 	// CaptureContent stores the message content a client reports with a call (instructions, input and output messages, tool definitions) in the payload store. It takes effect only while payload logging is enabled, and a policy governing the reporting credential must allow payload logging. Off by default: content is the client's data and the largest part of an export.
-	CaptureContent bool `json:"captureContent,omitempty"`
+	CaptureContent bool `json:"captureContent,omitempty" doc:"Also store the message content clients report, in the payload store, while payload logging is enabled and the governing policy allows it."`
 }
 
 // Validate is enforced before any write.

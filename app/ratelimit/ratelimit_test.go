@@ -41,6 +41,14 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("ok team-owned", func(t *testing.T) {
+		r := fix("team-rpm", meta.OwnerTeam)
+		r.Meta.Owner.ID = meta.NewID()
+		if err := r.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
+
 	t.Run("ok disabled with no rules", func(t *testing.T) {
 		r := fix("x", meta.OwnerSystem)
 		off := false
@@ -114,6 +122,11 @@ func TestValidate(t *testing.T) {
 				return r
 			}(),
 			want: "owner.id is required",
+		},
+		{
+			name: "team owner missing id",
+			rl:   fix("x", meta.OwnerTeam),
+			want: "owner.id is required (team id)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

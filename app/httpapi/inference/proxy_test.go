@@ -13,8 +13,8 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	apphost "github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/pkg/lifecycle"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 func TestProxyUpstreamPath_DefaultsToSpecPath(t *testing.T) {
@@ -183,10 +183,8 @@ func TestBodyCapture_ConcurrentFinalize(t *testing.T) {
 // path's, and must not report a different error.type/code for it.
 func TestMapProxyErr_RateLimit_UsesTheSharedEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapProxyErr(rec, nil, &pkgratelimit.KeyQuotaExhausted{
-		Rule:       pkgratelimit.Rule{Name: "rpm"},
-		RetryAfter: 2300 * time.Millisecond,
-	})
+	c := limits.Counter{Kind: limits.KindRule, Rung: limits.RungSystem, ID: "r:x"}
+	mapProxyErr(rec, nil, &limits.Refused{Counter: &c, RetryAfter: 2300 * time.Millisecond})
 
 	if rec.Code != 429 {
 		t.Fatalf("status: %d, want 429", rec.Code)

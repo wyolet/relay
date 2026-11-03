@@ -5,19 +5,12 @@ import (
 
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 )
 
 const rlUUID = "0195f8a0-0000-7000-8000-000000000033"
 
 var polResolver = manifest.MapResolver{
 	RateLimits: map[string]string{"burst": rlUUID},
-}
-
-var polRev = manifest.MapReverseResolver{
-	RateLimits: map[string]string{rlUUID: "burst"},
-	Models:     map[string]string{"m-1": "gpt-4o"},
-	Providers:  map[string]string{"prov-1": "openai"},
 }
 
 // apply stores model refs in the canonical form the control API
@@ -28,8 +21,8 @@ func TestToPolicy_CanonicalisesModelRefs(t *testing.T) {
 		Metadata: manifest.WireMeta{Name: "p", Owner: manifest.WireOwner{Kind: meta.OwnerSystem}},
 		Spec: manifest.PolicySpec{
 			Models: []string{"OpenAI/GPT-4o", "openai/gpt-4o", "Anthropic/claude-3.5"},
-			RLBindings: []manifest.RLBindingDTO{
-				{Models: []string{"OpenAI/GPT-4o"}, RateLimit: "burst"},
+			RateLimits: []manifest.PolicyRateLimitDTO{
+				{Ref: "burst", Models: []string{"OpenAI/GPT-4o"}},
 			},
 		},
 	}
@@ -46,23 +39,7 @@ func TestToPolicy_CanonicalisesModelRefs(t *testing.T) {
 			t.Fatalf("models = %v, want %v", p.Spec.Models, want)
 		}
 	}
-	if len(p.Spec.RLBindings) != 1 || p.Spec.RLBindings[0].Models[0] != "openai/gpt-4o" {
-		t.Fatalf("rlBinding models = %v, want [openai/gpt-4o]", p.Spec.RLBindings[0].Models)
-	}
-}
-
-// A row carrying both grant fields renders only Models: emitting the
-// ModelIDs alongside them would widen the grant on the next apply.
-func TestFromPolicy_RendersModelIDsOnlyWhenModelsIsEmpty(t *testing.T) {
-	p := &policy.Policy{
-		Meta: meta.Metadata{ID: "pol-1", Name: "p", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{Models: []string{"openai/gpt-4o"}, ModelIDs: []string{"m-1"}},
-	}
-	if got := manifest.FromPolicy(p, polRev); len(got.Spec.Models) != 1 || got.Spec.Models[0] != "openai/gpt-4o" {
-		t.Fatalf("models = %v, want only the DSL grant", got.Spec.Models)
-	}
-	p.Spec.Models = nil
-	if got := manifest.FromPolicy(p, polRev); len(got.Spec.Models) != 1 {
-		t.Fatalf("models = %v, want the ModelIDs grant rendered when Models is empty", got.Spec.Models)
+	if len(p.Spec.RateLimits) != 1 || p.Spec.RateLimits[0].Models[0] != "openai/gpt-4o" {
+		t.Fatalf("rateLimits models = %v, want [openai/gpt-4o]", p.Spec.RateLimits)
 	}
 }

@@ -3,18 +3,11 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 func waitDone(t *testing.T, ctx context.Context, within time.Duration) {
@@ -115,17 +108,9 @@ func (a timeoutAdapter) Call(ctx context.Context, _ string, _ *string, _ string,
 func TestRunUpstreamTimeout(t *testing.T) {
 	h := newTierFullHarness(t, 2, 0)
 	var left time.Duration
-	_, err := h.p.Run(context.Background(), &Request{
-		Adapter: timeoutAdapter{timeout: 100 * time.Millisecond, deadline: &left},
-		Keys:    h.keys,
-		Policy: &policy.Policy{
-			Meta: meta.Metadata{ID: "pol-caller", Name: "caller"},
-			Spec: policy.Spec{RateLimitID: "rl-inbound", KeySelection: policy.KeySelectionPrioritized},
-		},
-		Model:     &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}},
-		Host:      &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}},
-		Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
-	})
+	req := h.request(lifecycle.NewContext("req", "pipeline", time.Now()), h.hops)
+	req.Adapter = timeoutAdapter{timeout: 100 * time.Millisecond, deadline: &left}
+	_, err := h.p.Run(context.Background(), req)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want deadline exceeded", err)
 	}
@@ -154,23 +139,12 @@ func (deadlineRecorder) Unreachable(context.Context, string, string) {}
 func TestRunPostFlightBound(t *testing.T) {
 	h := newTierFullHarness(t, 1, 0)
 	seen := make(deadlineRecorder, 1)
-	p := &Pipeline{
-		Policy:     policy.NewService(h.snap, keypool.New(h.store, slog.Default(), nil, nil), pkgratelimit.New(h.store, slog.Default(), nil)),
-		Logger:     slog.Default(),
-		HostHealth: seen,
-	}
+	p := h.newPipeline()
+	p.HostHealth = seen
 	ctx, leave := context.WithCancel(context.Background())
-	res, err := p.Run(ctx, &Request{
-		Adapter: reservationTestAdapter{},
-		Keys:    h.keys,
-		Policy: &policy.Policy{
-			Meta: meta.Metadata{ID: "pol-caller", Name: "caller"},
-			Spec: policy.Spec{RateLimitID: "rl-inbound", KeySelection: policy.KeySelectionPrioritized},
-		},
-		Model:     &model.Model{Meta: meta.Metadata{ID: "model-1", Name: "m1"}},
-		Host:      &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "upstream"}},
-		Lifecycle: lifecycle.NewContext("req", "pipeline", time.Now()),
-	})
+	req := h.request(lifecycle.NewContext("req", "pipeline", time.Now()), h.hops)
+	req.Adapter = reservationTestAdapter{}
+	res, err := p.Run(ctx, req)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

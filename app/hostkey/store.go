@@ -8,6 +8,9 @@
 // One Upsert routes to the env or stored path based on Spec.ValueFrom.Kind.
 // List/Get reconstruct Spec from JSONB and populate the runtime-only
 // Resolved/KeyHash fields by resolving the secret Ref.
+//
+// Upsert is the one write path every caller (control API, apply, seed)
+// shares, so it refuses a key that names no account: nothing makes one for it.
 
 package hostkey
 
@@ -70,8 +73,12 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 // Upsert writes k. env rows store the var name; stored rows encrypt the
 // cleartext into secret_values (via the stored resolver) and persist a
 // ciphertext-free secrets row. Cleartext Spec.Value never reaches the
-// secrets table and is cleared after a successful stored write.
+// secrets table and is cleared after a successful stored write. A key
+// that names no account is refused with ErrNoAccount.
 func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
+	if k.Spec.AccountID == "" {
+		return fmt.Errorf("hostkey.Upsert %q: %w", k.Meta.Name, ErrNoAccount)
+	}
 	metaJSON, err := meta.MarshalJSONB(k.Meta)
 	if err != nil {
 		return fmt.Errorf("hostkey.Upsert metadata: %w", err)

@@ -1,7 +1,7 @@
 // Policy model-grant normalization + enabled-resolution guard.
 //
 // At policy create/update the catalog-ref strings in Spec.Models (and each
-// RLBinding's Models) are:
+// rate-limit link's Models) are:
 //
 //  1. slugified to canonical form — operators may paste real-world names
 //     ("openai/GPT-4o", "anthropic/claude-3.5") and they're rewritten to the
@@ -14,8 +14,7 @@
 //
 // Refs that resolve to nothing enabled are rejected with 400. This is the
 // cross-entity check the per-row policy.Validate() (grammar only, no catalog
-// access) can't perform. Host-key / key existence is deliberately NOT
-// checked here — the inference path handles those at request time.
+// access) can't perform. The linked rows are checked by refcheck.
 
 package control
 
@@ -42,7 +41,7 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 				return err
 			}
 		}
-		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {
+		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RateLimits) == 0 {
 			return nil
 		}
 		idx, err := loadResolveIndex(d)
@@ -58,12 +57,15 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 			}
 			incoming.Spec.Models = norm
 		}
-		for i := range incoming.Spec.RLBindings {
-			norm, err := normalizePolicyRefs(idx, incoming.Spec.RLBindings[i].Models, name, "rlBindings")
+		for i := range incoming.Spec.RateLimits {
+			if len(incoming.Spec.RateLimits[i].Models) == 0 {
+				continue
+			}
+			norm, err := normalizePolicyRefs(idx, incoming.Spec.RateLimits[i].Models, name, fmt.Sprintf("rateLimits[%d].models", i))
 			if err != nil {
 				return err
 			}
-			incoming.Spec.RLBindings[i].Models = norm
+			incoming.Spec.RateLimits[i].Models = norm
 		}
 		return nil
 	}

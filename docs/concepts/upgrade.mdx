@@ -69,6 +69,10 @@ docker run --rm --network host \
 
 ## Release notes
 
+### 0.20.0: accounts and the policy ladder (schema 35 to 39)
+
+Policies link pools, rate limits and budgets, and bindings attach them to [accounts](/concepts/accounts): one per team, project and service account, a personal and member accounts per user, and provider accounts. Migration 36 drops the 0.11 policy links without converting them; migration 39 converts the bindings to accounts and stops on the cases it cannot convert. The bundled state store moves to Dragonfly. This is a [stop-and-start upgrade](#stop-and-start-upgrades) with manual steps before and after it; follow [Upgrading to 0.20](/concepts/upgrade-0-20). To return to 0.11, restore the Postgres backup: `relay migrate down 34` does not bring the dropped links back.
+
 ### 0.11.6: data keys for stored secrets (schema 34)
 
 Stored secrets move from the master key to per-scope data keys wrapped by it. The new pods rewrite every stored value, and from migration 34 on the database refuses the old format, so old pods still serving would fail their secret writes and stop reading rewritten values. This is a [stop-and-start upgrade](#stop-and-start-upgrades).

@@ -32,7 +32,7 @@ func ReadinessMiddleware(cat *appcatalog.Catalog) func(http.Handler) http.Handle
 				recordNotReady()
 				w.Header().Set("Retry-After", "5")
 				w.Header().Set("Connection", "close")
-				writeErrorEnvelope(w, http.StatusServiceUnavailable, "server_error", "catalog_unavailable",
+				writeErrorEnvelope(w, http.StatusServiceUnavailable, "server_error", "catalog_unavailable", "",
 					"catalog is still loading; retry shortly")
 				return
 			}

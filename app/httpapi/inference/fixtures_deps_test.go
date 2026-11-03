@@ -10,13 +10,13 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgrelay "github.com/wyolet/relay/sdk/v1"
@@ -59,8 +59,8 @@ func buildTestRegistry() *adapter.Registry {
 		DefaultPath: "/v1/responses",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		Translator:  stubV1Translator{},
-		IsNativePath: func(plan *routing.Plan) bool {
-			return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+		IsNativePath: func(b *binding.Binding, h *host.Host) bool {
+			return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 		},
 	}).Build()
 
@@ -87,24 +87,23 @@ func buildTestRegistry() *adapter.Registry {
 	return adapter.NewRegistry(openaiSpec, responsesSpec, embeddingsSpec, anthropicSpec, canonicalSpec)
 }
 
+// buildDeps wires the data plane over cat with a pipeline that counts nothing; a catalog from buildDispatchCatalog brings its plans too.
 func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	t.Helper()
-	kvStore := kv.NewMem()
-	t.Cleanup(func() { _ = kvStore.Close() })
-
-	limiter := pkgratelimit.New(kvStore, nil, nil)
-	pl := &pipeline.Pipeline{Logger: nil}
-
 	reg := buildTestRegistry()
-
-	return Deps{
+	d := Deps{
 		Catalog:  cat,
-		Resolver: routing.New(cat),
-		Pipeline: pl,
-		Proxy:    proxy.New(limiter, nil, nil),
+		Pipeline: &pipeline.Pipeline{Logger: nil},
+		Proxy:    proxy.New(nil, nil, nil),
 		Adapters: reg.AdapterMap(),
 		Specs:    reg,
 	}
+	fixturesMu.Lock()
+	if f, ok := fixtures[cat]; ok {
+		d.Plans = f.plans.Holder
+	}
+	fixturesMu.Unlock()
+	return d
 }
 
 // useSpecs swaps d's wire-shape registry, keeping the adapter map in step.
@@ -113,19 +112,7 @@ func useSpecs(d *Deps, reg *adapter.Registry) {
 	d.Adapters = reg.AdapterMap()
 }
 
-// catSnapReader adapts *catalog.Catalog to policy.SnapshotReader (mirrors
-// cmd/relay's catalogSnapReader, which lives in the composition root).
-type catSnapReader struct{ cat *catalog.Catalog }
-
-func (r catSnapReader) Policy(_ context.Context, id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
-}
-func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
-}
-
-// buildRunnableDeps is buildDeps with a fully-wired pipeline (policy service
-// over kv.Mem) so tests can complete a real upstream round-trip.
+// buildRunnableDeps is buildDeps with a fully-wired pipeline (Lua limiter and key pool over kv.Mem) so tests can complete a real upstream round-trip.
 func buildRunnableDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	t.Helper()
 	return buildRunnableDepsAt(t, cat, nil)
@@ -137,8 +124,10 @@ func buildRunnableDepsAt(t *testing.T, cat *catalog.Catalog, clock func() time.T
 	d := buildDeps(t, cat)
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
-	svc := policy.NewService(catSnapReader{cat: cat}, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), clock))
-	d.Pipeline = &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}
+	pkgratelimit.RegisterScripts(mem)
+	lim := lua.New(pkgratelimit.New(mem, slog.Default(), clock))
+	d.Pipeline = &pipeline.Pipeline{Limiter: lim, Selector: keypool.New(mem, slog.Default(), nil, nil), Logger: slog.Default()}
+	d.Proxy = proxy.New(lim, nil, nil)
 	return d
 }
 

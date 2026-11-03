@@ -6,22 +6,22 @@ import (
 	"github.com/wyolet/relay/app/modelref"
 )
 
-// validateModelRef parses one policy.spec.models[i] DSL string and checks
-// any explicit provider/host names mentioned actually exist. Wildcard
-// segments are not validated. Parse errors are not surfaced — the
+// validateModelRef parses one model-ref DSL string a policy holds at field
+// and checks any explicit provider/host names mentioned actually exist.
+// Wildcard segments are not validated. Parse errors are not surfaced — the
 // per-entity Validate() catches malformed refs already; here we only
 // pursue cross-graph resolution.
-func validateModelRef(raw, policyName string, index int, g *graph) []Issue {
+func validateModelRef(raw string, policy Ref, field string, g *graph) []Issue {
 	ref, err := modelref.Parse(raw)
 	if err != nil {
 		return nil
 	}
-	src := Ref{
-		Kind:  "Policy",
-		Name:  policyName,
-		Field: fmt.Sprintf("spec.models[%d]", index),
-	}
+	src := Ref{Kind: policy.Kind, Name: policy.Name, Field: field}
 	var out []Issue
+	if !ref.HostWildcard {
+		out = append(out, Issue{Severity: SeverityError, Kind: KindInvariant, Source: src,
+			Message: fmt.Sprintf("modelref %q names a host; a policy names a provider or a provider's model, and its pools decide the hosts", raw)})
+	}
 
 	// Explicit provider slug must resolve.
 	if ref.Provider != "" && !ref.ProviderWildcard {

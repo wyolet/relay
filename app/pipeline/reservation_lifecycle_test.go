@@ -15,29 +15,15 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/plan"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
-
-type reservationTestSnapshot struct {
-	policies   map[string]*policy.Policy
-	rateLimits map[string]*appratelimit.RateLimit
-}
-
-func (s *reservationTestSnapshot) Policy(_ context.Context, id string) (*policy.Policy, bool) {
-	p, ok := s.policies[id]
-	return p, ok
-}
-
-func (s *reservationTestSnapshot) RateLimit(_ context.Context, id string) (*appratelimit.RateLimit, bool) {
-	rl, ok := s.rateLimits[id]
-	return rl, ok
-}
 
 type observedCommit struct {
 	guardKey  string
@@ -113,48 +99,26 @@ func (a reservationTestAdapter) Retryable(*http.Response) (bool, keypool.Failure
 }
 
 type reservationHarness struct {
-	pipeline      *Pipeline
-	store         *observedKV
-	selector      *keypool.Selector
-	requestPolicy *policy.Policy
-	key           *hostkey.HostKey
+	pipeline *Pipeline
+	store    *observedKV
+	selector *keypool.Selector
+	hops     []plan.RouteHop
+	key      *hostkey.HostKey
 }
 
+// newReservationHarness holds a caller concurrency counter and the credential's account concurrency counter: two reservations, one commit each.
 func newReservationHarness() reservationHarness {
 	store := newObservedKV()
 	selector := keypool.New(store, slog.Default(), nil, nil)
-	limiter := pkgratelimit.New(store, slog.Default(), nil)
-
-	inboundRL := concurrencyRateLimit("rl-inbound", "inbound")
-	upstreamRL := concurrencyRateLimit("rl-upstream", "upstream")
-	requestPolicy := &policy.Policy{
-		Meta: meta.Metadata{ID: "pol-request", Name: "request-policy"},
-		Spec: policy.Spec{RateLimitID: inboundRL.Meta.ID, KeySelection: policy.KeySelectionPrioritized},
-	}
-	keyPolicy := &policy.Policy{
-		Meta: meta.Metadata{ID: "pol-key", Name: "key-policy"},
-		Spec: policy.Spec{RateLimitID: upstreamRL.Meta.ID},
-	}
-	snap := &reservationTestSnapshot{
-		policies: map[string]*policy.Policy{keyPolicy.Meta.ID: keyPolicy},
-		rateLimits: map[string]*appratelimit.RateLimit{
-			inboundRL.Meta.ID:  inboundRL,
-			upstreamRL.Meta.ID: upstreamRL,
-		},
-	}
-	key := &hostkey.HostKey{
-		Meta:     meta.Metadata{ID: "host-key-1", Name: "host-key-1"},
-		Spec:     hostkey.Spec{PolicyID: keyPolicy.Meta.ID},
-		Resolved: "sk-test",
-		KeyHash:  "hash-test",
-	}
-
+	key := testKey("host-key-1")
+	hop := buildHop(keypool.KeySelectionPrioritized, callerCounter(concurrencyRateLimit("rl-inbound", "inbound")),
+		testSlot{key: key, acc: accountPlan("acct-1"), upstream: accountCounters("acct-1", concurrencyRateLimit("rl-upstream", "upstream"))})
 	return reservationHarness{
-		pipeline:      &Pipeline{Policy: policy.NewService(snap, selector, limiter), Logger: slog.Default()},
-		store:         store,
-		selector:      selector,
-		requestPolicy: requestPolicy,
-		key:           key,
+		pipeline: &Pipeline{Limiter: lua.New(pkgratelimit.New(store, slog.Default(), nil)), Selector: selector, Logger: slog.Default()},
+		store:    store,
+		selector: selector,
+		hops:     []plan.RouteHop{hop},
+		key:      key,
 	}
 }
 
@@ -194,8 +158,7 @@ func TestRunCancelAfterCallKeepsInboundAndHeldKeyCharge(t *testing.T) {
 		Adapter: reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
 			return nil, context.Canceled
 		}},
-		Keys:   []*hostkey.HostKey{h.key},
-		Policy: h.requestPolicy,
+		Hops: h.hops,
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
@@ -224,8 +187,7 @@ func TestRunUnreachableHostCancelsInboundAndHeldKeyReservations(t *testing.T) {
 		Adapter: reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
 			return nil, dialErr
 		}},
-		Keys:   []*hostkey.HostKey{h.key},
-		Policy: h.requestPolicy,
+		Hops: h.hops,
 	})
 	var unreachable *UpstreamUnreachableError
 	if !errors.As(err, &unreachable) {
@@ -260,8 +222,7 @@ func TestRunSuccessCommitsReservationsOnPostFlightOnce(t *testing.T) {
 
 	res, err := h.pipeline.Run(context.Background(), &Request{
 		Adapter:   reservationTestAdapter{},
-		Keys:      []*hostkey.HostKey{h.key},
-		Policy:    h.requestPolicy,
+		Hops:      h.hops,
 		Lifecycle: lifecycle.NewContext("req-success", "pipeline", time.Now()),
 	})
 	if err != nil {

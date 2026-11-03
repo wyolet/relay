@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/auth/directory"
 )
@@ -49,36 +50,44 @@ const (
 
 // Entry is one planned row change.
 type Entry struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-	ID   string `json:"id,omitempty"`
+	Kind string `json:"kind"         doc:"Manifest kind of the document, such as Policy or HostKey."`
+	Name string `json:"name"         doc:"metadata.name of the row."`
+	ID   string `json:"id,omitempty" doc:"Id of the stored row, when one exists."`
 	// Action is what would happen (or happened) to this row.
-	Action Action `json:"action"`
+	Action Action `json:"action" enum:"create,update,unchanged,skip-dirty,delete,conflict,forbidden" doc:"What happens to the row: skip-dirty leaves an operator-edited row alone (force overrides), conflict means another writer changed it since the plan, forbidden means the caller may not read it."`
 	// ChangedFields lists the authorable JSON paths that differ, in the
 	// same vocabulary an audit row's change.fields uses.
-	ChangedFields []string `json:"changedFields,omitempty"`
+	ChangedFields []string `json:"changedFields,omitempty" doc:"JSON paths that differ from the stored row, named as in audit change.fields."`
 	// IDMismatch reports a metadata.id in the document that does not match
 	// the row its name resolved to. Ids stay server-owned: the document's
 	// id is ignored and the mismatch reported.
-	IDMismatch string `json:"idMismatch,omitempty"`
+	IDMismatch string `json:"idMismatch,omitempty" doc:"The document's metadata.id when it differs from the stored row's; ids stay server-owned, so it is ignored."`
+	// Detached is set on a delete that takes links from policies that stay.
+	Detached *DetachedLinks `json:"detached,omitempty" doc:"On a delete: the policies that lose a link to the row."`
+	// Revokes is set on the delete of a shared account: what revoking it changes.
+	Revokes []RevokeImpact `json:"revokes,omitempty" doc:"On the delete of a shared account (pruned, or pruned with its real account): what revoking it changes. Policy bindings drop it, or go when it was their only account; relay keys whose lane it was move to their principal's own account; pools lose it."`
 
 	plural string
 	owner  meta.Owner
-	write  func(context.Context) error
+	// authorizeAt, when set, is the scope the write is authorized in instead of owner's: a share pruned with its real account is the real account owner's to remove, as detach is.
+	authorizeAt *meta.Owner
+	write       func(context.Context) error
 	// prev is what the row looked like when this entry was planned. Execute
 	// re-reads and refuses the write if it no longer matches.
 	prev rowState
+	// detachedFrom names every policy behind Detached, hidden ones included.
+	detachedFrom []DetachedPolicy
 }
 
 // Counts summarises a plan.
 type Counts struct {
-	Create    int `json:"create"`
-	Update    int `json:"update"`
-	Unchanged int `json:"unchanged"`
-	SkipDirty int `json:"skipDirty"`
-	Delete    int `json:"delete"`
-	Conflict  int `json:"conflict"`
-	Forbidden int `json:"forbidden"`
+	Create    int `json:"create"    doc:"Rows created."`
+	Update    int `json:"update"    doc:"Rows updated."`
+	Unchanged int `json:"unchanged" doc:"Rows already matching."`
+	SkipDirty int `json:"skipDirty" doc:"Operator-edited rows left alone."`
+	Delete    int `json:"delete"    doc:"Rows deleted by prune."`
+	Conflict  int `json:"conflict"  doc:"Rows another writer changed since the plan."`
+	Forbidden int `json:"forbidden" doc:"Rows the caller may not read."`
 }
 
 // Result is the full ordered set of entries one apply would run — the plan.
@@ -135,6 +144,9 @@ type Options struct {
 	// sets it: over the API it would let a caller read the server's
 	// variables into an account's password.
 	EnvPasswords bool
+
+	// PersonalAccountOff reports whether a user's personal account is turned off, as refcheck.Lookup's does; the control plane reads it from the published plans, and nil (the loaders below it) treats every user's as on.
+	PersonalAccountOff func(ctx context.Context, userID string) (off bool, username string)
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -245,7 +257,8 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 	}
 
 	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
-		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License}
+		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License,
+		operator: refcheck.RequireAdmin(ctx, opts.Authz, "") == nil}
 	b.dir, b.dirErr = directoryFor(opts)
 	if err := b.run(ctx, docs); err != nil {
 		return nil, err
@@ -346,6 +359,9 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 	kept := make([]Entry, 0, len(p.Entries))
 	for _, e := range p.Entries {
 		owner := e.owner
+		if e.authorizeAt != nil {
+			owner = *e.authorizeAt
+		}
 		res := authz.Resource{Kind: singularOf(e.plural), ID: e.ID, Name: e.Name, Owner: &owner}
 		if e.write == nil {
 			if authzr.Authorize(ctx, e.plural+".get", res) != nil {
@@ -356,7 +372,7 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 			kept = append(kept, e)
 			continue
 		}
-		if err := authzr.Authorize(ctx, "system.apply", authz.Resource{Kind: "system", Owner: applyScope(e.owner)}); err != nil {
+		if err := authzr.Authorize(ctx, "system.apply", authz.Resource{Kind: "system", Owner: applyScope(owner)}); err != nil {
 			return &AuthzError{Entry: e, Err: err}
 		}
 		if err := authzr.Authorize(ctx, e.plural+"."+string(verbOf(e.Action)), res); err != nil {

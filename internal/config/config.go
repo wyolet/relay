@@ -63,12 +63,8 @@ type Config struct {
 	RedisPostFlightPoolSize    int
 	RedisPostFlightPoolTimeout time.Duration
 	RedisPostFlightReadTimeout time.Duration
-	// RELAY_REDIS_POSTFLIGHT_{BATCH_SIZE,BATCH_DELAY_MS,QUEUE_SIZE}: the queue that coalesces served requests' settles into shared round trips on that client; a queue size of 0 turns it off.
-	RedisPostFlightBatchSize  int
-	RedisPostFlightBatchDelay time.Duration
-	RedisPostFlightQueueSize  int
-	CHDSN                     string
-	OTLPEndpoint              string
+	CHDSN                      string
+	OTLPEndpoint               string
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema
@@ -130,11 +126,24 @@ type Config struct {
 	KeyBreakerThreshold int
 	KeyBreakerWindow    time.Duration
 
+	// Limiter names the limiter that counts rate limits and budgets (RELAY_LIMITER): "lua" (default) reserves every request in the store; "hybrid" counts in pod memory, synced every LimiterSync (RELAY_LIMITER_SYNC_MS, default 1000), and reserves in the store only counters near their cap.
+	Limiter     string
+	LimiterSync time.Duration
+
+	// PlanCellIdle is how long runtime state no published plan links any more (a rotated credential's breaker copy, a deleted pool's rotation) is kept before it is dropped (RELAY_PLAN_CELL_IDLE_S, default 600). A plan that links it again within the window gets it back.
+	PlanCellIdle time.Duration
+
+	// PlanResync is how often the plans are listed again from Postgres and compared with what they hold (RELAY_PLAN_RESYNC_S, default 600; 0 disables), the safety net for a catalog notification that never arrived. It publishes only when a row differs.
+	PlanResync time.Duration
+
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
 	// ProxyBodyIdle is how long a proxy-mode request body may go without a byte before relay answers 408 and aborts the forward (RELAY_PROXY_BODY_IDLE_S, default 30s; 0 disables). The body streams upstream while the request holds an in-flight slot, a rate-limit lease and an upstream connection, and the listener has no read timeout of its own.
 	ProxyBodyIdle time.Duration
+
+	// AccountDomain is the parent domain of the per-account inference hosts (RELAY_ACCOUNT_DOMAIN): a request to <account-name>.<AccountDomain> runs in that account. Empty turns host selection off.
+	AccountDomain string
 
 	// StreamUsage makes same-shape streamed requests ask the upstream for token usage when the wire shape reports it only on request (RELAY_STREAM_USAGE, default on). The extra usage frame is removed from the caller's stream unless the caller asked for it.
 	StreamUsage bool
@@ -451,6 +460,29 @@ func Load() (*Config, error) {
 	} else {
 		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
 	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LIMITER"))); v {
+	case "", "lua":
+		cfg.Limiter = "lua"
+	case "hybrid":
+		cfg.Limiter = v
+	default:
+		return nil, fmt.Errorf(`RELAY_LIMITER must be "lua" or "hybrid", got %q`, v)
+	}
+	if v, err := envPositiveInt("RELAY_LIMITER_SYNC_MS", 1000); err != nil {
+		return nil, fmt.Errorf("RELAY_LIMITER_SYNC_MS must be >= 1")
+	} else {
+		cfg.LimiterSync = time.Duration(v) * time.Millisecond
+	}
+	if v := envInt("RELAY_PLAN_CELL_IDLE_S", 600); v < 1 {
+		return nil, fmt.Errorf("RELAY_PLAN_CELL_IDLE_S must be >= 1")
+	} else {
+		cfg.PlanCellIdle = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_PLAN_RESYNC_S", 600); v < 0 {
+		return nil, fmt.Errorf("RELAY_PLAN_RESYNC_S must be >= 0")
+	} else {
+		cfg.PlanResync = time.Duration(v) * time.Second
+	}
 
 	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
 	if v := envInt("RELAY_STREAM_KEEPALIVE_S", 15); v < 0 {
@@ -462,6 +494,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_PROXY_BODY_IDLE_S must be >= 0")
 	} else {
 		cfg.ProxyBodyIdle = time.Duration(v) * time.Second
+	}
+	cfg.AccountDomain = strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_ACCOUNT_DOMAIN"))), ".")
+	if strings.ContainsAny(cfg.AccountDomain, "/: \t") {
+		return nil, fmt.Errorf("RELAY_ACCOUNT_DOMAIN must be a bare domain such as accounts.example.com, got %q", os.Getenv("RELAY_ACCOUNT_DOMAIN"))
 	}
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_STREAM_USAGE"))); v {
 	case "", "on", "1", "true":

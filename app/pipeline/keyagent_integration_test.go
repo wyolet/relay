@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // tracingRefresher implements appsecret.Refresher and logs every re-resolve so
@@ -77,7 +78,7 @@ func TestKeyAgent_Failover_DoesNotWait(t *testing.T) {
 	healed := make(chan string, 1)
 	ref := &tracingRefresher{t: t, value: "rotated", changed: true, called: healed}
 	p := &pipeline.Pipeline{
-		Policy:   newService(nil),
+		Limiter:  limiterOver(kv.NewMem()),
 		Logger:   slog.Default(),
 		KeyAgent: appsecret.NewAgent(ref, 2*time.Second, slog.New(slog.DiscardHandler)),
 	}
@@ -85,8 +86,7 @@ func TestKeyAgent_Failover_DoesNotWait(t *testing.T) {
 	t.Log("  → Run with keys [key1(old-bad), key2(good)]")
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1, key2},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1, key2}),
 	})
 	if err != nil {
 		t.Fatalf("Run: unexpected error: %v", err)
@@ -120,7 +120,7 @@ func TestKeyAgent_LastCandidate_RotatedWaitsAndRetries(t *testing.T) {
 	ref := &tracingRefresher{t: t, value: "rotated-good", changed: true}
 
 	p := &pipeline.Pipeline{
-		Policy:   newService(nil),
+		Limiter:  limiterOver(kv.NewMem()),
 		Logger:   slog.Default(),
 		KeyAgent: appsecret.NewAgent(ref, 2*time.Second, slog.New(slog.DiscardHandler)),
 	}
@@ -128,8 +128,7 @@ func TestKeyAgent_LastCandidate_RotatedWaitsAndRetries(t *testing.T) {
 	t.Log("  → Run with keys [key1(old-bad)] only")
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1}),
 	})
 	if err != nil {
 		t.Fatalf("Run: unexpected error: %v", err)
@@ -152,7 +151,7 @@ func TestKeyAgent_LastCandidate_StillBadFailsClean(t *testing.T) {
 	ref := &tracingRefresher{t: t, value: "old-bad", changed: false}
 
 	p := &pipeline.Pipeline{
-		Policy:   newService(nil),
+		Limiter:  limiterOver(kv.NewMem()),
 		Logger:   slog.Default(),
 		KeyAgent: appsecret.NewAgent(ref, 2*time.Second, slog.New(slog.DiscardHandler)),
 	}
@@ -160,8 +159,7 @@ func TestKeyAgent_LastCandidate_StillBadFailsClean(t *testing.T) {
 	t.Log("  → Run with keys [key1(old-bad)] only")
 	_, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1}),
 	})
 	if err == nil {
 		t.Fatal("expected an error (key revoked), got nil")

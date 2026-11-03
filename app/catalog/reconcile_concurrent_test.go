@@ -192,9 +192,7 @@ func (w *raceWorld) events() []func() {
 		b := w.pbs[i]
 		add(func() {
 			cp := *b
-			cp.Spec.Subjects = []rolebinding.Subject{
-				{Kind: rolebinding.SubjectGroup, Name: w.grp.Meta.Name},
-			}
+			cp.Spec.AccountIDs = []string{meta.NewID()}
 			_ = c.ApplyPolicyBindingUpsert(&cp)
 		})
 		add(func() { _ = c.ApplyPolicyBindingDelete(b.Meta.ID) })
@@ -229,9 +227,8 @@ func (w *raceWorld) readAccessors(s *Snapshot) int {
 		}
 	}
 	for _, p := range w.pols {
-		n += len(s.ModelsInPolicy(p.Meta.ID)) + len(s.HostKeysInPolicy(p.Meta.ID))
-		if s.RateLimitOfPolicy(p.Meta.ID) != nil {
-			n++
+		if got, ok := s.Policy(p.Meta.ID); ok {
+			n += len(got.Spec.PoolIDs) + len(got.Spec.RateLimits)
 		}
 	}
 	for _, rk := range w.rks {

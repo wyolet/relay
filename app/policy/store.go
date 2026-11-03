@@ -1,9 +1,8 @@
-// store.go is the data-access layer for Policy. Spec.ModelIDs,
-// Spec.HostKeyIDs, and Spec.RateLimitID live in their dedicated columns /
-// junction tables (migration 0009) — not in the JSONB spec column.
-// Upsert fans out across `policies`, `policy_models`, and
-// `policy_host_keys` inside a single transaction so callers see a
-// consistent view.
+// store.go is the data-access layer for Policy. Spec.Models lives in its own
+// column; PoolIDs, RateLimits and Budgets live in junction
+// tables (store_links.go), not in the JSONB spec column. Upsert fans out
+// across `policies` and every junction inside a single transaction so
+// callers see a consistent view.
 
 package policy
 
@@ -29,47 +28,34 @@ type Store struct {
 // NewStore constructs a Store bound to a pool or an open transaction.
 func NewStore(db storage.DB) *Store { return &Store{db: db} }
 
-// List returns every Policy row, hydrating ModelIDs/HostKeyIDs/RateLimitID
-// from their relational sources.
+// List returns every Policy row with its links.
 func (s *Store) List(ctx context.Context) ([]*Policy, error) {
 	q := gen.New(s.db)
-	rows, err := q.ListPoliciesWithRateLimit(ctx)
+	rows, err := q.ListPolicies(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("policy.List: %w", err)
 	}
-	modelRows, err := q.ListPolicyModels(ctx)
+	l, err := listLinks(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("policy.List models: %w", err)
+		return nil, err
 	}
-	keyRows, err := q.ListPolicyHostKeys(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("policy.List hostKeys: %w", err)
-	}
-
-	modelsByPolicy := map[string][]string{}
-	for _, r := range modelRows {
-		modelsByPolicy[r.PolicyID] = append(modelsByPolicy[r.PolicyID], r.ModelID)
-	}
-	keysByPolicy := map[string][]string{}
-	for _, r := range keyRows {
-		keysByPolicy[r.PolicyID] = append(keysByPolicy[r.PolicyID], r.HostKeyID)
-	}
-
 	out := make([]*Policy, 0, len(rows))
 	for _, r := range rows {
 		p, err := fromRow(r)
 		if err != nil {
 			return nil, fmt.Errorf("policy %s: %w", r.Name, err)
 		}
-		p.Spec.ModelIDs = modelsByPolicy[p.Meta.ID]
-		p.Spec.HostKeyIDs = keysByPolicy[p.Meta.ID]
+		p.Spec.PoolIDs = l.pools[p.Meta.ID]
+		p.Spec.RateLimits = l.rateLimits[p.Meta.ID]
+		p.Spec.Budgets = l.budgets[p.Meta.ID]
+		p.Normalize()
 		out = append(out, p)
 	}
 	return out, nil
 }
 
-// Get returns the Policy with the given id, hydrating ModelIDs/HostKeyIDs/RateLimitID.
-// Returns (nil, nil) if not found.
+// Get returns the Policy with the given id and its links, or (nil, nil) if
+// not found.
 func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
 	q := gen.New(s.db)
 	r, err := q.GetPolicy(ctx, id)
@@ -79,40 +65,15 @@ func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
 		}
 		return nil, fmt.Errorf("policy.Get: %w", err)
 	}
-	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	p, err := fromRow(gen.ListPoliciesRow(r))
 	if err != nil {
 		return nil, err
 	}
-	md.CreatedAt = r.CreatedAt.Time
-	md.UpdatedAt = r.UpdatedAt.Time
-	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
-	if err := json.Unmarshal(r.Spec, &spec); err != nil {
-		return nil, fmt.Errorf("spec: %w", err)
+	if err := getLinks(ctx, q, id, &p.Spec); err != nil {
+		return nil, err
 	}
-	if r.RateLimitID.Valid {
-		spec.RateLimitID = r.RateLimitID.String
-	}
-	if len(r.Models) > 0 {
-		if err := json.Unmarshal(r.Models, &spec.Models); err != nil {
-			return nil, fmt.Errorf("models: %w", err)
-		}
-	}
-	modelRows, err := q.GetPolicyModels(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("policy.Get models: %w", err)
-	}
-	for _, mr := range modelRows {
-		spec.ModelIDs = append(spec.ModelIDs, mr.ModelID)
-	}
-	keyRows, err := q.GetPolicyHostKeys(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("policy.Get hostkeys: %w", err)
-	}
-	for _, kr := range keyRows {
-		spec.HostKeyIDs = append(spec.HostKeyIDs, kr.HostKeyID)
-	}
-	return &Policy{Meta: md, Spec: spec}, nil
+	p.Normalize()
+	return p, nil
 }
 
 // Upsert writes p across policies + junction tables in a single tx.
@@ -131,39 +92,8 @@ func (s *Store) Upsert(ctx context.Context, p *Policy) error {
 	if err := meta.StaleIfNoRows(q.UpsertPolicy(ctx, params)); err != nil {
 		return fmt.Errorf("policy.Upsert: policies: %w", err)
 	}
-	rateLimitID := pgtype.Text{}
-	if p.Spec.RateLimitID != "" {
-		rateLimitID = pgtype.Text{String: p.Spec.RateLimitID, Valid: true}
-	}
-	if err := q.SetPolicyRateLimit(ctx, gen.SetPolicyRateLimitParams{
-		ID:          p.Meta.ID,
-		RateLimitID: rateLimitID,
-	}); err != nil {
-		return fmt.Errorf("policy.Upsert: rate_limit_id: %w", err)
-	}
-	if err := q.DeletePolicyModels(ctx, p.Meta.ID); err != nil {
-		return fmt.Errorf("policy.Upsert: clear models: %w", err)
-	}
-	for i, id := range p.Spec.ModelIDs {
-		if err := q.InsertPolicyModel(ctx, gen.InsertPolicyModelParams{
-			PolicyID: p.Meta.ID,
-			ModelID:  id,
-			Position: int32(i),
-		}); err != nil {
-			return fmt.Errorf("policy.Upsert: insert model %s: %w", id, err)
-		}
-	}
-	if err := q.DeletePolicyHostKeys(ctx, p.Meta.ID); err != nil {
-		return fmt.Errorf("policy.Upsert: clear hostKeys: %w", err)
-	}
-	for i, id := range p.Spec.HostKeyIDs {
-		if err := q.InsertPolicyHostKey(ctx, gen.InsertPolicyHostKeyParams{
-			PolicyID:  p.Meta.ID,
-			HostKeyID: id,
-			Position:  int32(i),
-		}); err != nil {
-			return fmt.Errorf("policy.Upsert: insert hostKey %s: %w", id, err)
-		}
+	if err := writeLinks(ctx, q, p); err != nil {
+		return fmt.Errorf("policy.Upsert: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("policy.Upsert: commit: %w", err)
@@ -176,7 +106,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.db).DeletePolicy(ctx, id)
 }
 
-func fromRow(r gen.ListPoliciesWithRateLimitRow) (*Policy, error) {
+func fromRow(r gen.ListPoliciesRow) (*Policy, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -187,9 +117,6 @@ func fromRow(r gen.ListPoliciesWithRateLimitRow) (*Policy, error) {
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
-	}
-	if r.RateLimitID.Valid {
-		spec.RateLimitID = r.RateLimitID.String
 	}
 	if len(r.Models) > 0 {
 		if err := json.Unmarshal(r.Models, &spec.Models); err != nil {
@@ -204,12 +131,8 @@ func toUpsertParams(p *Policy) (gen.UpsertPolicyParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyParams{}, fmt.Errorf("metadata: %w", err)
 	}
-	// Strip relational fields from the JSONB spec — they live in columns / junctions now.
-	specCopy := p.Spec
-	specCopy.ModelIDs = nil
-	specCopy.HostKeyIDs = nil
-	specCopy.RateLimitID = ""
-	specCopy.Models = nil // models lives in its own column
+	// The links and the model grant live in their own column and junctions.
+	specCopy := Spec{Enabled: p.Spec.Enabled}
 	specJSON, err := json.Marshal(specCopy)
 	if err != nil {
 		return gen.UpsertPolicyParams{}, fmt.Errorf("spec: %w", err)

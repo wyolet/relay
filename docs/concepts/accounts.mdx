@@ -1,0 +1,136 @@
+---
+title: "Accounts and lanes"
+description: "Who acts and who is charged: principals, the accounts requests run in, how each account comes to exist, and how a request picks one"
+---
+
+Relay keeps who acts apart from who is charged. A **principal** acts and holds roles: a user or a service account. Groups only bundle users for role grants. An **account** holds a policy and is charged: every request runs in exactly one account, its **lane**, and the lane is what its usage, rate limits and budgets count against. Teams and projects never act; each has an account of its own that sits above the lanes inside it.
+
+A service account has one account. A user has several: a personal account, a member account for each team or project they belong to, and any provider accounts they own. [Policies](/concepts/policies) bind to accounts only, never to a user, a group, a team or a host as such.
+
+## Kinds of account
+
+| Kind | What it is | Owner | Held by | Comes to exist |
+| --- | --- | --- | --- | --- |
+| `team` | The team's own account, a rung above every lane in the team | The team | Nobody | With the team |
+| `project` | The project's own account, a rung above every lane in the project | The project | Nobody | With the project |
+| `personal` | A user's own account | The user | The user | With the user |
+| `member` | A user inside one team or project | That team or project | The user | When a role binding at that team or project names the user, or when the user mints an inference token for a project |
+| `service` | A service account's account | The service account's project | The service account | With the service account |
+| `provider` | One provider organization at one host | The system, a team, a project or a user | Nobody; a share with a service account is held by it | Created explicitly, before the host keys that name it, or by [sharing](/concepts/key-pooling#sharing-an-account) another provider account with the owner |
+
+`spec.kind` is derived from `spec.hostId`, `spec.holder` and the owner, and is read-only. `spec.holder` (`{kind: user | serviceaccount, id}`) names the principal of a personal, member or service account, and the service account a share was made with. Provider accounts are described on [Key pooling](/concepts/key-pooling#accounts).
+
+### Accounts Relay makes
+
+Team, project, personal, member and service accounts are made by Relay, not created through the API: a `POST /api/accounts` without `spec.hostId` answers `400`, and an apply refuses an `Account` document without `host` that names no existing account. They are named after what they stand for, with `-2`, `-3`, … added when the name is taken:
+
+| Kind | Name |
+| --- | --- |
+| `team` | `team-<team>` |
+| `project` | `project-<project>` |
+| `personal` | `user-<username>` |
+| `service` | `sa-<service account>` |
+| `member` | `<username>-team-<team>` or `<username>-project-<project>` |
+
+The name is set once. Renaming the team, project, user or service account later leaves the account's name as it was. An update may change the account's name, display name and [`payloadLogging`](#payload-logging); its owner, holder and kind stay.
+
+These accounts appear about a second after the row they stand for: every pod runs a writer that creates the accounts the published configuration calls for, and pods racing on one account converge on one row. A client that creates a team through the API and binds a policy to its account right away should read the account first, for example `GET /api/accounts?kind=team&owner_id=<team id>`. [`relay apply`](/concepts/gitops) needs no wait: a bundle that declares a team and a binding naming `team-<team>` creates the account before the binding.
+
+They are deleted with the team, project, user or service account they stand for. Deleting one on its own answers `409` with the code `account_managed`, except a closed member account.
+
+### Turning personal accounts off
+
+A deployment can keep users from acting on their own, so they act only through what their teams and projects give them. Whether a user's personal account serves is decided by the first of:
+
+1. the user's own `personalAccount` (`on` or `off`), set with `PUT /api/users/by-id/{id}`;
+2. the `personalAccount` of the enabled groups the user is a stored member of: `off` if any says off, else `on` if any says on;
+3. the [`accounts`](/reference/settings#accounts) settings section's `personalAccounts`, `on` by default.
+
+Only an admin sets them: a user cannot change their own value (`403`). A group's value sits only on a group the system owns (`400` on a user's group, or when moving a group that carries one to a user), and while a group carries one, only an admin changes its members, enabled flag, name or owner, or deletes it, through the API and through apply (`403`). An admin may set it on a group a SCIM client manages, whose members stay the client's. Groups an identity provider only asserts at sign-in are not stored, so they do not count. `GET /api/users` and `GET /api/auth/whoami` carry `personalAccountEffective`: `{"state": "on" | "off", "source": "user" | "group" | "setting", "groupId"}`.
+
+While a user's personal account is off, nothing is deleted:
+
+- Requests in the personal account, and in provider accounts the user owns personally, are refused with `403 personal_account_off`. Keys running in them show the plan issue `personal_account_off`, and so do the personal account and those provider accounts. Their shares serve nothing and show `personal_account_off` too.
+- A new key of the user must name a member account in `accountId`; leaving it out answers `400 lane_required`, and naming the personal account or one of the user's provider accounts `403 personal_account_off`.
+- Creating a provider account owned by the user, or sharing an account with the user, answers `403 personal_account_off`: share with their team or project instead.
+- Revoking a share a key of theirs ran in leaves the key without an account instead of moving it to the personal account; it serves there again once the account is on.
+- `GET /api/me/contexts` leaves the personal context out.
+
+Turning it back on restores all of it.
+
+### Member accounts and role bindings
+
+A [role binding](/concepts/auth#authorization) scoped to a team or a project that names a user directly gives that user a member account there. The account follows those bindings: when the last enabled one naming the user at that scope is removed or disabled, the account closes (`spec.closed: true`). Requests in a closed account are refused with `403 account_closed`, so its keys stop. A new grant reopens it. A closed account keeps its id, so usage recorded against it still resolves; delete it when you no longer need it.
+
+Relay cannot list memberships that come from a group or from a role at the team scope used inside one of its projects. For those, the member account in the project is made when the user mints an [inference token](/concepts/auth#inference-tokens) for that project, after the mint's authorization confirms the membership. Such an account serves tokens only (`tokenOnly: true` in [`GET /api/me/accounts`](#reading-your-accounts)): relay keys cannot be created in it, and removing role bindings does not close it. A role binding that later names the user there directly turns it into an ordinary member account.
+
+## Lanes
+
+### A key's default lane
+
+A relay key belongs to a principal and runs in one of that principal's accounts by default, its `spec.accountId`. Set it when the key is created, or leave it out:
+
+| Principal | Default when omitted | May be set to |
+| --- | --- | --- |
+| Service account | The service account's account | Only that account |
+| User | The user's personal account; `400 lane_required` while it is [turned off](#turning-personal-accounts-off) | The personal account, a member account a role binding grants the user, or a provider account the user owns personally |
+
+Naming any other account answers `403 account_not_held`, and naming a closed account answers `400`. A key cannot land in a team or project account, in a token-only member account, or in a provider account owned by the system, a team or a project. `PUT /api/keys/by-id/{id}` may move a key to another account under the same rules.
+
+A key's lane decides its ladder. A service account's key climbs its team's account, its project's account and its own. A user's key in the personal account climbs nothing above it; the same user's key in a member account climbs that team's (and project's) accounts. A key in a provider account uses that account's host keys directly, under that account's own policy. See [The ladder](/concepts/policies#the-ladder).
+
+### Switching lanes per request
+
+A request can run in another account its credential may use, without another key:
+
+| Form | Example |
+| --- | --- |
+| `X-WR-Account` header | `X-WR-Account: alice-team-ml` |
+| `/a/<account>/` before the inference path | `https://relay.example.com/a/alice-team-ml/openai/v1` as the SDK's base URL |
+| The account's own host, when `RELAY_ACCOUNT_DOMAIN` is set | `https://alice-team-ml.accounts.example.com/openai/v1` with `RELAY_ACCOUNT_DOMAIN=accounts.example.com` |
+
+Each form takes the account's name; the header and the prefix also take its id. When more than one is present the header wins, then the path, then the host; with none, the request runs in the credential's default lane. The prefix works on every inference route, and is removed before routing. The host form reads one DNS label under `RELAY_ACCOUNT_DOMAIN`, case-insensitively, and needs a wildcard DNS record and certificate for that domain pointed at the inference listener; with the variable empty, only the header and the prefix select an account. `X-WR-Account` is never sent upstream.
+
+A key may switch into exactly the accounts it could be saved in (the table above), so a service account's key cannot switch at all. An [inference token](/concepts/auth#inference-tokens) runs in the user's member account in the token's project and cannot leave that project. Any other account, or one that does not exist, answers:
+
+```json
+{"error": {"type": "invalid_request_error", "code": "account_not_held", "refusal": "model_not_allowed", "message": "account_not_held: no account acme-ml held by user:<id>"}}
+```
+
+A WebSocket connection keeps the lane it opened in for every frame, and a [batch](/batch) submitted in a switched lane runs each item in that lane. The usage event of every request records the lane in `lane_account_id`; see [Usage](/concepts/usage).
+
+## Payload logging
+
+`spec.payloadLogging` on an account is `on`, `off` or omitted. The nearest account on the request's ladder that sets it decides whether [payload logging](/concepts/payload-logging) captures the request: the lane, then the project's account, then the team's. When none sets it, the relay key's own `payloadLoggingEnabled` decides. The operator switch in the `payload-logging` settings section must be on either way.
+
+Under `RELAY_AUTHZ=rbac`, whoever may update the account sets it, with two exceptions that keep a user from deciding whether their own bodies are kept: only an admin sets a personal account's, and a member account's own user cannot set it, whatever their role there. Both answer `403`.
+
+## Reading your accounts
+
+`GET /api/me/accounts` lists the accounts the signed-in user can run requests in: the personal account first, then member accounts and provider accounts the user owns personally, each with its bound policy and the user's keys whose default lane it is. Closed and token-only member accounts are included and flagged. The admin token is no user and gets an empty list.
+
+```bash
+curl -H "Cookie: relay_session=<session>" http://localhost:8081/api/me/accounts
+```
+
+```json
+[{
+  "account": {"id": "…", "name": "user-alice", "displayName": "alice", "closed": false},
+  "kind": "personal",
+  "scope": {"kind": "user", "id": "…", "name": "alice"},
+  "policy": {"id": "…", "name": "alice"},
+  "keys": [{"id": "…", "name": "laptop", "prefix": "sk-wr-3f9a"}],
+  "tokenOnly": false
+}]
+```
+
+`GET /api/accounts/{ref}/limits` shows the rungs a request in an account climbs with current usage against every limit, and `GET /api/keys/{ref}/limits` the same for a key's default lane; see [Control API](/reference/control-api#accounts-and-limits).
+
+## Writes the data plane waits for
+
+Inference reads the published configuration, which picks up a write within about a second. Two writes are usually spent at once, so they answer only once the pod that handled them serves the result, waiting up to 5 seconds:
+
+- `POST /api/keys` and `POST /api/keys/by-id/{id}/rotate` answer once the pod authenticates the new value.
+- `POST /api/auth/token` answers once the pod serves the user's member account in the token's project.
+
+When the wait runs out, the answer still goes out and the pod logs a warning; the first request may be refused until the configuration catches up. Behind a load balancer the other pods catch up within about a second.

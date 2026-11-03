@@ -9,7 +9,6 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
@@ -18,12 +17,9 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
-// guardHostKeyPolicyOwnership rejects hostkey create/update when the
-// referenced Policy isn't host-owned by the key's HostID. Cross-entity
-// invariant the per-row hostkey.Validate() can't enforce (it has no
-// access to the policy store). Reads PG directly so disabled rows are
-// considered too — a hostkey rebound to a disabled tier policy is still
-// a structural mismatch, not just a soft drop. Delete is unaffected.
+// guardHostKey checks the key's host and account, which hostkey.Validate
+// cannot reach, and refuses an owner move that would strand the policies
+// linking the key. Stored values rotate through their own endpoint.
 func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 	return func(ctx context.Context, action string, existing, incoming *hostkey.HostKey) error {
 		if action == "delete" || incoming == nil {
@@ -44,31 +40,16 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 	}
 }
 
-// guardKeyPolicy rejects a key mutation whose Spec.PolicyID
-// points at a policy the caller may not see — a key inherits its
-// policy's host-keys, so binding to a foreign policy would route traffic
-// through someone else's credentials. Reported as "not found" to avoid
-// confirming the row exists. Existence of the policy is otherwise still
-// not checked here (the inference path handles missing policies).
-func guardKeyPolicy(d Deps) mutationGuard[key.Key] {
-	return func(ctx context.Context, action string, _, incoming *key.Key) error {
-		if action == "delete" || incoming == nil {
-			return nil
-		}
-		return refErr(refs(d).PolicyRef(ctx, incoming.Spec.PolicyID, incoming.Meta.Owner))
-	}
-}
-
 func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 	return func(ctx context.Context, action string, existing, incoming *serviceaccount.ServiceAccount) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
+		if action == "update" && existing.Spec.ProjectID != incoming.Spec.ProjectID {
+			return refuseServiceAccountMove(existing)
+		}
 		if err := refs(d).ServiceAccount(ctx, incoming); err != nil {
 			return refErr(err)
-		}
-		if action == "update" && existing.Meta.Owner != incoming.Meta.Owner {
-			return refuseServiceAccountMove(ctx, d, incoming)
 		}
 		return nil
 	}
@@ -76,8 +57,8 @@ func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 
 func guardGroup(d Deps) mutationGuard[group.Group] {
 	return func(ctx context.Context, action string, existing, incoming *group.Group) error {
-		if action == "delete" || incoming == nil {
-			return nil
+		if err := guardGroupPersonalAccount(ctx, d.Authz, existing, incoming); err != nil || action == "delete" || incoming == nil {
+			return err
 		}
 		c := refs(d)
 		if err := c.Group(ctx, incoming); err != nil {
@@ -128,6 +109,15 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 			return nil
 		}
 		return refErr(refs(d).RoleBinding(ctx, incoming))
+	}
+}
+
+// policyBindingChecks are the checks the policy-bindings routes run, shared with PUT /accounts/{ref}/policy.
+func policyBindingChecks(d Deps) kindChecks[policybinding.PolicyBinding] {
+	return kindChecks[policybinding.PolicyBinding]{
+		plural: "policy-bindings", singular: "policy-binding", authz: d.Authz, gov: d.Catalog,
+		validate: func(b *policybinding.PolicyBinding) error { return b.Validate() },
+		guard:    guardPolicyBinding(d),
 	}
 }
 

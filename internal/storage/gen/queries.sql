@@ -2,7 +2,7 @@
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers ORDER BY name;
 
 -- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
 SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name;
@@ -292,11 +292,11 @@ DELETE FROM models WHERE id = $1;
 DELETE FROM rate_limits WHERE id = $1;
 
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys ORDER BY name;
 
 -- name: UpsertRelayKey :execrows
-INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, account_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
@@ -304,6 +304,7 @@ ON CONFLICT (id) DO UPDATE SET
     previous_key_hash = EXCLUDED.previous_key_hash,
     principal_sa_id   = EXCLUDED.principal_sa_id,
     principal_user_id = EXCLUDED.principal_user_id,
+    account_id        = EXCLUDED.account_id,
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
     updated_at = NOW()
@@ -352,30 +353,6 @@ WHERE sqlc.narg('expected_version')::bigint IS NULL OR hosts.resource_version = 
 
 -- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1;
-
--- name: SetPolicyRateLimit :exec
-UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1;
-
--- name: ListPolicyModels :many
-SELECT policy_id, model_id, position FROM policy_models ORDER BY policy_id, position;
-
--- name: DeletePolicyModels :exec
-DELETE FROM policy_models WHERE policy_id = $1;
-
--- name: InsertPolicyModel :exec
-INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, $3);
-
--- name: ListPolicyHostKeys :many
-SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position;
-
--- name: DeletePolicyHostKeys :exec
-DELETE FROM policy_host_keys WHERE policy_id = $1;
-
--- name: InsertPolicyHostKey :exec
-INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
-
--- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
@@ -447,7 +424,7 @@ SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_en
 SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits WHERE id = $1;
 
 -- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, models, created_at, updated_at, resource_version FROM policies WHERE id = $1;
 
 -- name: SetPolicyModels :exec
 UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
@@ -456,16 +433,11 @@ UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys WHERE id = $1;
-
--- name: GetPolicyModels :many
-SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version, account_id FROM relay_keys WHERE id = $1;
 
 -- name: GetPricingModels :many
 SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position;
 
--- name: GetPolicyHostKeys :many
-SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position;
 
 
 -- name: ListSettings :many
@@ -537,6 +509,19 @@ SELECT id FROM users WHERE id = ANY($1::text[]);
 -- Names a whole id list in one round trip, for labelling usage rows by user.
 SELECT id, username FROM users WHERE id = ANY($1::text[]);
 
+-- name: GetUserPersonalAccount :one
+SELECT value FROM user_personal_accounts WHERE user_id = $1;
+
+-- name: ListUserPersonalAccounts :many
+SELECT user_id, value FROM user_personal_accounts;
+
+-- name: SetUserPersonalAccount :exec
+INSERT INTO user_personal_accounts (user_id, value) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE SET value = EXCLUDED.value;
+
+-- name: DeleteUserPersonalAccount :exec
+DELETE FROM user_personal_accounts WHERE user_id = $1;
+
 -- name: ListUserTokenVersionsAndDisabled :many
 -- One read feeds both snapshot views of users: enabled accounts' token versions and the ids of disabled ones.
 SELECT id, token_version, disabled FROM users;
@@ -580,42 +565,205 @@ DELETE FROM audit_events WHERE ts < $1;
 -- ── policy bindings (migration 0027) ─────────────────────────────────────────
 
 -- name: ListPolicyBindings :many
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
+SELECT id, name, display_name, project_id, policy_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id
 FROM policy_bindings ORDER BY name;
 
 -- name: GetPolicyBinding :one
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
+SELECT id, name, display_name, project_id, policy_id, metadata, spec, created_at, updated_at, resource_version, team_id, user_id
 FROM policy_bindings WHERE id = $1;
 
 -- name: UpsertPolicyBinding :execrows
-INSERT INTO policy_bindings (id, name, display_name, project_id, policy_id, priority, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+INSERT INTO policy_bindings (id, name, display_name, project_id, team_id, user_id, policy_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name         = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     project_id   = EXCLUDED.project_id,
+    team_id      = EXCLUDED.team_id,
+    user_id      = EXCLUDED.user_id,
     policy_id    = EXCLUDED.policy_id,
-    priority     = EXCLUDED.priority,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
 WHERE sqlc.narg('expected_version')::bigint IS NULL OR policy_bindings.resource_version = sqlc.narg('expected_version')::bigint;
 
+-- name: GetSecretAccountID :one
+SELECT COALESCE(spec->>'accountId', '')::text AS account_id FROM secrets WHERE id = $1;
+
 -- name: DeletePolicyBinding :exec
 DELETE FROM policy_bindings WHERE id = $1;
 
--- name: ListPolicyBindingSubjects :many
-SELECT binding_id, kind, subject_id, subject_name, position
-FROM policy_binding_subjects ORDER BY binding_id, position;
+-- name: ListPolicyBindingAccounts :many
+SELECT binding_id, account_id, position
+FROM policy_binding_accounts ORDER BY binding_id, position;
 
--- name: GetPolicyBindingSubjects :many
-SELECT binding_id, kind, subject_id, subject_name, position
-FROM policy_binding_subjects WHERE binding_id = $1 ORDER BY position;
+-- name: GetPolicyBindingAccounts :many
+SELECT binding_id, account_id, position
+FROM policy_binding_accounts WHERE binding_id = $1 ORDER BY position;
 
--- name: DeletePolicyBindingSubjects :exec
-DELETE FROM policy_binding_subjects WHERE binding_id = $1;
+-- name: GetPolicyBindingIDForAccount :one
+SELECT binding_id FROM policy_binding_accounts WHERE account_id = $1;
 
--- name: InsertPolicyBindingSubject :exec
-INSERT INTO policy_binding_subjects
-    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+-- name: DeletePolicyBindingAccounts :exec
+DELETE FROM policy_binding_accounts WHERE binding_id = $1;
+
+-- name: InsertPolicyBindingAccount :exec
+INSERT INTO policy_binding_accounts (binding_id, account_id, position) VALUES ($1, $2, $3);
+
+-- ── accounts, pools, budgets (migration 0035) ────────────────────────────────
+
+-- name: ListAccounts :many
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, grouped_by_relay
+FROM accounts ORDER BY name;
+
+-- name: GetAccount :one
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, grouped_by_relay
+FROM accounts WHERE id = $1;
+
+-- grouped_by_relay is never written: a new row starts without it, and an update keeps it until the row names its org.
+-- name: UpsertAccount :execrows
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    source_account_id = EXCLUDED.source_account_id,
+    share_receiver    = EXCLUDED.share_receiver,
+    share_user_id     = EXCLUDED.share_user_id,
+    name          = EXCLUDED.name,
+    display_name  = EXCLUDED.display_name,
+    host_id       = EXCLUDED.host_id,
+    metadata      = EXCLUDED.metadata,
+    spec          = EXCLUDED.spec,
+    grouped_by_relay = accounts.grouped_by_relay AND COALESCE(EXCLUDED.spec->>'orgId', '') = '',
+    kind          = EXCLUDED.kind,
+    managed_key   = EXCLUDED.managed_key,
+    holder_user_id = EXCLUDED.holder_user_id,
+    holder_sa_id  = EXCLUDED.holder_sa_id,
+    team_id       = EXCLUDED.team_id,
+    project_id    = EXCLUDED.project_id,
+    closed        = EXCLUDED.closed,
+    follows_role_bindings = EXCLUDED.follows_role_bindings,
+    updated_at    = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR accounts.resource_version = sqlc.narg('expected_version')::bigint;
+
+-- name: GetManagedAccountID :one
+SELECT id FROM accounts WHERE managed_key = $1;
+
+-- A concurrent writer may create the same managed account, or take the name; either conflict inserts nothing and the caller looks again.
+-- name: InsertManagedAccount :execrows
+INSERT INTO accounts (id, name, display_name, metadata, spec, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, follows_role_bindings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT DO NOTHING;
+
+-- A writer working from an older read of the row changes nothing: the row moved on since, and the next plan lists it again.
+-- name: SetAccountMembership :execrows
+UPDATE accounts SET closed = $2, follows_role_bindings = $3, updated_at = NOW()
+WHERE id = $1 AND resource_version = $4 AND (closed <> $2 OR follows_role_bindings <> $3);
+
+-- name: AccountNameTaken :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1);
+
+-- name: DeleteAccount :exec
+DELETE FROM accounts WHERE id = $1;
+
+-- name: ListPools :many
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pools ORDER BY name;
+
+-- name: GetPool :one
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pools WHERE id = $1;
+
+-- name: UpsertPool :execrows
+INSERT INTO pools (id, name, display_name, host_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    host_id      = EXCLUDED.host_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR pools.resource_version = sqlc.narg('expected_version')::bigint;
+
+-- name: DeletePool :exec
+DELETE FROM pools WHERE id = $1;
+
+-- name: ListPoolCredentials :many
+SELECT pool_id, host_key_id, position FROM pool_credentials ORDER BY pool_id, position;
+
+-- name: GetPoolCredentials :many
+SELECT pool_id, host_key_id, position FROM pool_credentials WHERE pool_id = $1 ORDER BY position;
+
+-- name: DeletePoolCredentials :exec
+DELETE FROM pool_credentials WHERE pool_id = $1;
+
+-- name: InsertPoolCredential :exec
+INSERT INTO pool_credentials (pool_id, host_key_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPoolAccounts :many
+SELECT pool_id, account_id, position FROM pool_accounts ORDER BY pool_id, position;
+
+-- name: GetPoolAccounts :many
+SELECT pool_id, account_id, position FROM pool_accounts WHERE pool_id = $1 ORDER BY position;
+
+-- name: DeletePoolAccounts :exec
+DELETE FROM pool_accounts WHERE pool_id = $1;
+
+-- name: InsertPoolAccount :exec
+INSERT INTO pool_accounts (pool_id, account_id, position) VALUES ($1, $2, $3);
+
+-- name: ListBudgets :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM budgets ORDER BY name;
+
+-- name: GetBudget :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM budgets WHERE id = $1;
+
+-- name: UpsertBudget :execrows
+INSERT INTO budgets (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR budgets.resource_version = sqlc.narg('expected_version')::bigint;
+
+-- name: DeleteBudget :exec
+DELETE FROM budgets WHERE id = $1;
+
+-- name: ListPolicyPools :many
+SELECT policy_id, pool_id, position FROM policy_pools ORDER BY policy_id, position;
+
+-- name: GetPolicyPools :many
+SELECT policy_id, pool_id, position FROM policy_pools WHERE policy_id = $1 ORDER BY position;
+
+-- name: DeletePolicyPools :exec
+DELETE FROM policy_pools WHERE policy_id = $1;
+
+-- name: InsertPolicyPool :exec
+INSERT INTO policy_pools (policy_id, pool_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPolicyRateLimits :many
+SELECT policy_id, rate_limit_id, models, position, shared FROM policy_rate_limits ORDER BY policy_id, position;
+
+-- name: GetPolicyRateLimits :many
+SELECT policy_id, rate_limit_id, models, position, shared FROM policy_rate_limits WHERE policy_id = $1 ORDER BY position;
+
+-- name: DeletePolicyRateLimits :exec
+DELETE FROM policy_rate_limits WHERE policy_id = $1;
+
+-- name: InsertPolicyRateLimit :exec
+INSERT INTO policy_rate_limits (policy_id, rate_limit_id, models, position, shared) VALUES ($1, $2, $3, $4, $5);
+
+-- name: ListPolicyBudgets :many
+SELECT policy_id, budget_id, position, shared FROM policy_budgets ORDER BY policy_id, position;
+
+-- name: GetPolicyBudgets :many
+SELECT policy_id, budget_id, position, shared FROM policy_budgets WHERE policy_id = $1 ORDER BY position;
+
+-- name: DeletePolicyBudgets :exec
+DELETE FROM policy_budgets WHERE policy_id = $1;
+
+-- name: InsertPolicyBudget :exec
+INSERT INTO policy_budgets (policy_id, budget_id, position, shared) VALUES ($1, $2, $3, $4);

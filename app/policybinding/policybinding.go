@@ -1,84 +1,63 @@
-// Package policybinding is the domain layer for the PolicyBinding entity —
-// it points a set of subjects inside one Project at one Policy. Several
-// bindings may match a principal; the lowest priority wins, so a principal
-// always resolves to exactly one Policy.
+// Package policybinding is the domain layer for the PolicyBinding entity: it applies one Policy to a set of accounts inside its owner's scope (the system, a team, a project or a user). Accounts are the only subjects: a team-wide cap binds the team's account, a member's the member account. An account is held by at most one binding.
 //
-// Authorization is app/authz's concern; this package validates shape only.
+// Authorization and the cross-row scope rules are app/authz's and app/refcheck's concern; this package validates shape only.
 package policybinding
 
 import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
-// DefaultPriority is applied to a binding that declares none. Lower wins.
-const DefaultPriority = 100
-
-// PolicyBinding attaches Spec.PolicyID to Spec.Subjects inside a Project.
+// PolicyBinding attaches Spec.PolicyID to Spec.AccountIDs inside the scope Meta.Owner names.
 type PolicyBinding struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
-
-	// SubjectKeys is Spec.Subjects rendered as match keys. Derived, so it
-	// stays off the wire and out of manifests; the snapshot builder fills
-	// it so the request path compares strings instead of building them.
-	SubjectKeys []string `json:"-" yaml:"-"`
 }
 
-// IndexSubjects recomputes SubjectKeys. Called wherever a binding enters
-// the snapshot; cheap, and never on the request path.
-func (b *PolicyBinding) IndexSubjects() {
-	keys := make([]string, len(b.Spec.Subjects))
-	for i := range b.Spec.Subjects {
-		keys[i] = b.Spec.Subjects[i].Key()
-	}
-	b.SubjectKeys = keys
-}
-
-// Spec carries the project, the policy, the tie-break priority, the
-// subjects, and the enabled flag.
+// Spec carries the policy, the accounts, and the enabled flag.
 type Spec struct {
-	ProjectID string                `json:"projectId" yaml:"projectId" validate:"required,uuid"`
-	PolicyID  string                `json:"policyId"  yaml:"policyId"  validate:"required,uuid"`
-	Priority  *int                  `json:"priority,omitempty" yaml:"priority,omitempty" validate:"omitempty,gte=0,lte=10000"`
-	Subjects  []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1,dive"`
-	Enabled   *bool                 `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	PolicyID   string   `json:"policyId"   yaml:"policyId"   validate:"required,uuid" doc:"Id of the policy the accounts are bound to."`
+	AccountIDs []string `json:"accountIds" yaml:"accountIds" validate:"required,min=1,dive,uuid" doc:"Ids of the accounts the policy governs, each inside the binding owner's scope. An account is held by at most one binding; a second answers 409 duplicate_binding."`
+	Enabled    *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops the binding from governing its accounts. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (b *PolicyBinding) IsEnabled() bool { return b.Spec.Enabled == nil || *b.Spec.Enabled }
 
-// EffectivePriority reads an unset priority as the default, so a binding
-// authored without one still orders against explicit values. The field is a
-// pointer because 0 is a valid, highest-winning priority and must not read
-// as absent.
-func (b *PolicyBinding) EffectivePriority() int {
-	if b.Spec.Priority == nil {
-		return DefaultPriority
+// ScopeKey names the owner scope ("team:<id>", "project:<id>", "user:<id>"), "" for the system.
+func (b *PolicyBinding) ScopeKey() string {
+	if b.Meta.Owner.Kind == meta.OwnerSystem {
+		return ""
 	}
-	return *b.Spec.Priority
-}
-
-// StampOwner sets Meta.Owner to the binding's Project. Called by every
-// write path so Owner never drifts from ProjectID.
-func (b *PolicyBinding) StampOwner() {
-	b.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: b.Spec.ProjectID}
+	return string(b.Meta.Owner.Kind) + ":" + b.Meta.Owner.ID
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is project; Owner.ID, when set, equals Spec.ProjectID.
-//   - the subject rules shared with RoleBinding.
+//   - Owner.Kind is system (no id), or team, project or user with an id.
+//   - no account is listed twice.
 func (b *PolicyBinding) Validate() error {
 	if err := meta.Validator.Struct(b); err != nil {
 		return err
 	}
-	if b.Meta.Owner.Kind != meta.OwnerProject {
-		return fmt.Errorf("policybinding %q: owner.kind must be project, got %q", b.Meta.Name, b.Meta.Owner.Kind)
+	switch o := b.Meta.Owner; o.Kind {
+	case meta.OwnerSystem:
+		if o.ID != "" {
+			return fmt.Errorf("policybinding %q: a system owner has no id, got %q", b.Meta.Name, o.ID)
+		}
+	case meta.OwnerTeam, meta.OwnerProject, meta.OwnerUser:
+		if meta.Validator.Var(o.ID, "required,uuid") != nil {
+			return fmt.Errorf("policybinding %q: a %s owner needs its id, got %q", b.Meta.Name, o.Kind, o.ID)
+		}
+	default:
+		return fmt.Errorf("policybinding %q: owner.kind must be system, team, project or user, got %q", b.Meta.Name, o.Kind)
 	}
-	if b.Meta.Owner.ID != "" && b.Meta.Owner.ID != b.Spec.ProjectID {
-		return fmt.Errorf("policybinding %q: owner.id %q does not match spec.projectId %q", b.Meta.Name, b.Meta.Owner.ID, b.Spec.ProjectID)
+	seen := make(map[string]struct{}, len(b.Spec.AccountIDs))
+	for i, id := range b.Spec.AccountIDs {
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("policybinding %q: accountIds[%d] %s is listed twice", b.Meta.Name, i, id)
+		}
+		seen[id] = struct{}{}
 	}
-	return rolebinding.ValidateSubjects(b.Meta.Name, b.Spec.Subjects)
+	return nil
 }

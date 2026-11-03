@@ -92,16 +92,20 @@ func seedSettings(bootCtx context.Context, cfg *config.Config, stores *appcatalo
 	}
 }
 
-// hydrateLoop runs Catalog.Hydrate with exponential backoff until it
-// succeeds, then starts the NOTIFY listener. Survives transient PG /
-// seed errors without taking the process down; the data plane returns
-// 503 until the first Hydrate completes. Once successful, the function
+// hydrateLoop runs Catalog.Hydrate and then loadPlans with exponential
+// backoff until both succeed, then starts the NOTIFY listener. Survives
+// transient PG / seed errors without taking the process down; the data
+// plane returns 503 until both have completed. Once successful, the function
 // blocks on Listener.Run until the parent context is cancelled.
-func hydrateLoop(ctx context.Context, cat *appcatalog.Catalog, stores *appcatalog.Stores, opts appcatalog.BootstrapOptions) {
+func hydrateLoop(ctx context.Context, cat *appcatalog.Catalog, stores *appcatalog.Stores, opts appcatalog.BootstrapOptions, loadPlans func(context.Context) error) {
 	delay := time.Second
 	const maxDelay = 30 * time.Second
 	for {
 		listener, err := cat.Hydrate(ctx, stores, opts)
+		if err == nil {
+			// After the seed, so the plans load the rows it wrote.
+			err = loadPlans(ctx)
+		}
 		if err == nil {
 			slog.Info("catalog hydrated", "auto_seed_dir", opts.AutoSeedDir)
 			if err := listener.Run(ctx); err != nil && err != context.Canceled {

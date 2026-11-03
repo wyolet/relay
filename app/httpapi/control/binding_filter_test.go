@@ -62,15 +62,12 @@ func TestRoleBindingFilter(t *testing.T) {
 }
 
 func TestPolicyBindingFilter(t *testing.T) {
-	sa := func(id string) rolebinding.Subject {
-		return rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id}
-	}
+	p1, p2 := meta.Owner{Kind: meta.OwnerProject, ID: "p1"}, meta.Owner{Kind: meta.OwnerProject, ID: "p2"}
 	items := []*policybinding.PolicyBinding{
-		{Meta: meta.Metadata{Name: "search-default"}, Spec: policybinding.Spec{ProjectID: "p1", PolicyID: "pol1",
-			Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}}},
-		{Meta: meta.Metadata{Name: "indexer-override"}, Spec: policybinding.Spec{ProjectID: "p1", PolicyID: "pol2",
-			Subjects: []rolebinding.Subject{sa("sa1")}}},
-		{Meta: meta.Metadata{Name: "lab-default"}, Spec: policybinding.Spec{ProjectID: "p2", PolicyID: "pol1"}},
+		{Meta: meta.Metadata{Name: "search-default", Owner: p1}, Spec: policybinding.Spec{PolicyID: "pol1", AccountIDs: []string{"a-project"}}},
+		{Meta: meta.Metadata{Name: "indexer-override", Owner: p1}, Spec: policybinding.Spec{PolicyID: "pol2", AccountIDs: []string{"a-sa1"}}},
+		{Meta: meta.Metadata{Name: "lab-default", Owner: p2}, Spec: policybinding.Spec{PolicyID: "pol1", AccountIDs: []string{"a-lab"}}},
+		{Meta: meta.Metadata{Name: "tiers", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policybinding.Spec{PolicyID: "pol3", AccountIDs: []string{"a-org", "a-sa1-x"}}},
 	}
 
 	for _, tc := range []struct {
@@ -78,10 +75,12 @@ func TestPolicyBindingFilter(t *testing.T) {
 		want []string
 	}{
 		// DefaultSort is name, so every expectation is in name order.
-		{"project_id=p1", []string{"indexer-override", "search-default"}},
+		{"owner_id=p1", []string{"indexer-override", "search-default"}},
+		{"owner=system", []string{"tiers"}},
 		{"policy_id=pol1", []string{"lab-default", "search-default"}},
-		{"project_id=p1&policy_id=pol2", []string{"indexer-override"}},
-		{"subject=serviceaccount%3Asa1", []string{"indexer-override"}},
+		{"owner_id=p1&policy_id=pol2", []string{"indexer-override"}},
+		{"account_id=a-sa1", []string{"indexer-override"}},
+		{"account_id=a-org", []string{"tiers"}},
 	} {
 		got, _ := applyQ(t, policyBindingFilter, tc.q, items)
 		names := make([]string, len(got))

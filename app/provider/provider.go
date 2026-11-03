@@ -22,13 +22,13 @@ type Provider struct {
 // Hosts (Anthropic direct, Bedrock, Vertex). Per-Host serving info lives
 // on standalone HostBinding entities (app/binding).
 type Spec struct {
-	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False takes the provider out of the serving catalog. Omitted means true."` // nil = true
 
 	// Display metadata — operator-set, optional.
-	HomepageURL   string     `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url"`
-	DocsURL       string     `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url"`
-	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url"`
-	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"`
+	HomepageURL   string     `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url" doc:"Provider homepage."`
+	DocsURL       string     `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url" doc:"Provider documentation."`
+	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url" doc:"Provider status page."`
+	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"          doc:"Icon shown for the provider."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

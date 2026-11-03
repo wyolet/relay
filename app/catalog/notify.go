@@ -55,6 +55,7 @@ var validKinds = map[string]struct{}{
 	"serviceaccount": {}, "group": {},
 	"role": {}, "rolebinding": {}, "policybinding": {},
 	"user": {}, "secretkey": {},
+	"account": {}, "pool": {}, "budget": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -208,6 +209,9 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 	if err := l.reloadAll(ctx); err != nil {
 		return err
 	}
+	if l.cat.forward != nil {
+		l.cat.forward.Attached(ctx)
+	}
 	slog.Info("catalog notify: listening on catalog_events")
 
 	for {
@@ -219,6 +223,9 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 		if !ok {
 			slog.Warn("catalog notify: malformed payload", "payload", n.Payload)
 			continue
+		}
+		if l.cat.forward != nil {
+			l.cat.forward.Event(ev.Kind, ev.Op, ev.ID)
 		}
 		if capped := l.deb.push(ev); capped {
 			// Non-blocking nudge to flush early.

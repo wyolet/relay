@@ -96,10 +96,20 @@ ORDER BY (ts, model_id, policy_id)`
 		"project_id", "project", "team_id", "team",
 		"principal_kind", "principal_id", "principal",
 		"credential_kind", "credential_id", "relay_key",
+		"pool_id", "account_id", "refusal", "lane_account_id", "via_account_id",
 	} {
 		if !have[c] {
 			t.Fatalf("column %q missing after ensureSchema", c)
 		}
+	}
+
+	var indexes uint64
+	if err := conn.QueryRow(ctx,
+		"SELECT count() FROM system.data_skipping_indices WHERE database = ? AND table = ? AND name = 'idx_lane_account_id' AND type = 'bloom_filter'", db, chTable).Scan(&indexes); err != nil {
+		t.Fatalf("describe indexes: %v", err)
+	}
+	if indexes != 1 {
+		t.Fatal("idx_lane_account_id missing after ensureSchema")
 	}
 }
 

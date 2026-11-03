@@ -1,0 +1,122 @@
+{{- if .Values.dragonfly.enabled }}
+{{- if .Values.valkey.enabled }}
+{{- fail "dragonfly.enabled and valkey.enabled are exclusive: relay uses one store" }}
+{{- end }}
+{{- $df := include "relay.dragonfly.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $df }}
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dragonfly
+spec:
+  clusterIP: None
+  selector:
+    {{- include "relay.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dragonfly
+  ports:
+    - name: dragonfly
+      port: 6379
+      targetPort: dragonfly
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $df }}
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dragonfly
+spec:
+  serviceName: {{ $df }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "relay.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dragonfly
+  template:
+    metadata:
+      labels:
+        {{- include "relay.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: dragonfly
+      {{- if and .Values.dragonfly.auth.enabled (not .Values.secrets.existingSecret) }}
+      annotations:
+        checksum/password: {{ include "relay.redisPassword" . | sha256sum }}
+      {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dragonfly
+          image: {{ .Values.dragonfly.image | quote }}
+          {{- if .Values.dragonfly.auth.enabled }}
+          env:
+            # Dragonfly reads DFLY_<flag> from the environment, which keeps the
+            # password off the command line. Optional: an existingSecret without
+            # the key keeps Dragonfly passwordless.
+            - name: DFLY_requirepass
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "relay.secretName" . }}
+                  key: RELAY_REDIS_PASSWORD
+                  optional: true
+          {{- end }}
+          # Relay's kv layout puts every atomic unit under one hash tag; locking
+          # by tag lets Dragonfly run those units on one shard.
+          args:
+            - --cluster_mode=emulated
+            - --lock_on_hashtags
+            - --proactor_threads={{ include "relay.dragonfly.threads" . }}
+            - --dir=/data
+            {{- if .Values.dragonfly.persistence.enabled }}
+            - --dbfilename=dump
+            - {{ printf "--snapshot_cron=%s" .Values.dragonfly.persistence.snapshotCron | quote }}
+            {{- else }}
+            - --dbfilename=
+            {{- end }}
+          ports:
+            - name: dragonfly
+              containerPort: 6379
+          # redis-cli exits 0 on NOAUTH, so the probe compares the reply.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", '[ -z "$DFLY_requirepass" ] || export REDISCLI_AUTH="$DFLY_requirepass"; [ "$(redis-cli ping)" = PONG ]']
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", '[ -z "$DFLY_requirepass" ] || export REDISCLI_AUTH="$DFLY_requirepass"; [ "$(redis-cli ping)" = PONG ]']
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.dragonfly.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  {{- if .Values.dragonfly.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.dragonfly.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.dragonfly.persistence.size | quote }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+{{- end }}
