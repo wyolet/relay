@@ -29,8 +29,9 @@ type CatalogIndex struct {
 }
 
 func (c *controllers) catalogIndex(tx *engine.Txn, _ string) error {
+	models := engine.Members[model.Model](tx)
 	snap := appcatalog.BuildCatalog(
-		engine.Members[provider.Provider](tx), engine.Members[host.Host](tx), engine.Members[model.Model](tx),
+		engine.Members[provider.Provider](tx), engine.Members[host.Host](tx), models,
 		engine.Members[pricing.Pricing](tx), engine.Members[binding.Binding](tx), engine.Members[overlay.Overlay](tx),
 	)
 	idx := &CatalogIndex{Snap: snap, bindingsByHost: map[string][]*binding.Binding{}}
@@ -39,6 +40,7 @@ func (c *controllers) catalogIndex(tx *engine.Txn, _ string) error {
 			idx.bindingsByHost[b.Spec.HostID] = append(idx.bindingsByHost[b.Spec.HostID], b)
 		}
 	}
+	reportUnservableModels(tx, snap, models)
 	engine.Put(tx, idx)
 	return nil
 }
@@ -119,6 +121,8 @@ func (c *controllers) expandedPolicy(tx *engine.Txn, id string) error {
 		}
 		in = append(in, rl)
 		if !rl.IsEnabled() {
+			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueRateLimitDisabled, Source: src, Field: field, Target: engine.Ref{Kind: KindRateLimit, ID: rl.Meta.ID},
+				Message: "rate limit " + rl.Meta.Name + " is disabled; it does not apply to this policy"})
 			continue
 		}
 		ep.RateLimits = append(ep.RateLimits, LinkedRateLimit{RateLimit: rl, Scoped: len(l.Models) > 0, Scope: parseRefs(tx, src, field+".models", l.Models), Models: l.Models, Shared: l.IsShared()})

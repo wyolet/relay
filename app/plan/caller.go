@@ -138,6 +138,11 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 	kind := acc.DerivedKind()
 	if kind == account.KindPersonal || kind == account.KindProvider {
 		if off := personalAccountOff(tx, acc.Meta.Owner); off != nil {
+			// A provider account carries this issue from its account plan already.
+			if kind == account.KindPersonal {
+				tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssuePersonalAccountOff, Source: engine.Ref{Kind: KindAccount, ID: acc.Meta.ID}, Field: "metadata.owner",
+					Message: "personal accounts are turned off for " + off.name() + "; this account and its keys serve nothing until they are on again"})
+			}
 			cp := refusedPlan(acc, &Refusal{Code: CodePersonalAccountOff, Rung: limits.RungLane, SubjectID: subject, Message: off.offMessage()})
 			if h := acc.Spec.Holder; h != nil {
 				cp.Holder = h.Key()

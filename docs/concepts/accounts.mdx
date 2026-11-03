@@ -50,7 +50,7 @@ Only an admin sets them: a user cannot change their own value (`403`). A group's
 
 While a user's personal account is off, nothing is deleted:
 
-- Requests in the personal account, and in provider accounts the user owns personally, are refused with `403 personal_account_off`. Keys running in them show the plan issue `personal_account_off`, and so do those provider accounts. Their shares serve nothing and show `shared_account_missing`.
+- Requests in the personal account, and in provider accounts the user owns personally, are refused with `403 personal_account_off`. Keys running in them show the plan issue `personal_account_off`, and so do the personal account and those provider accounts. Their shares serve nothing and show `personal_account_off` too.
 - A new key of the user must name a member account in `accountId`; leaving it out answers `400 lane_required`, and naming the personal account or one of the user's provider accounts `403 personal_account_off`.
 - Creating a provider account owned by the user, or sharing an account with the user, answers `403 personal_account_off`: share with their team or project instead.
 - Revoking a share a key of theirs ran in leaves the key without an account instead of moving it to the personal account; it serves there again once the account is on.

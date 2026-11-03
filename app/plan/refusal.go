@@ -141,8 +141,28 @@ const (
 	IssuePolicyNotBindable     = "policy_not_bindable"
 	// IssueSharedAccountMissing is a shared account whose real account is gone, or no longer a provider account at its host: it serves nothing.
 	IssueSharedAccountMissing = "shared_account_missing"
-	// IssuePersonalAccountOff is a relay key whose lane, or a provider account whose owner, is a user with personal accounts turned off: it serves nothing until they are on again.
+	// IssuePersonalAccountOff is a relay key whose lane, a personal or provider account whose owner, or a shared account whose real account's owner is a user with personal accounts turned off: it serves nothing until they are on again.
 	IssuePersonalAccountOff = "personal_account_off"
+	// IssueHostDisabled is a pool or credential at a disabled host: requests are not routed to it.
+	IssueHostDisabled = "host_disabled"
+	// IssueHostDisabledInUse is a disabled host that pools or enabled credentials still point at.
+	IssueHostDisabledInUse = "host_disabled_in_use"
+	// IssuePoolMemberUnusable is a credential or account a pool lists that contributes no usable key.
+	IssuePoolMemberUnusable = "pool_member_unusable"
+	// IssuePoolsServeNothing is a policy whose linked pools all serve nothing.
+	IssuePoolsServeNothing = "pools_serve_nothing"
+	// IssuePoolOutsideModels is a policy linking a pool whose host serves none of the policy's models.
+	IssuePoolOutsideModels = "pool_outside_models"
+	// IssueModelRefUnreachable is a policy model entry served at no host the policy's pools reach.
+	IssueModelRefUnreachable = "model_ref_unreachable"
+	// IssueModelRefDisabled is a policy model entry naming a disabled model.
+	IssueModelRefDisabled = "model_ref_disabled"
+	// IssueRateLimitDisabled is a policy linking a disabled rate limit, which does not apply.
+	IssueRateLimitDisabled = "rate_limit_disabled"
+	// IssueRateLimitScopeOutsideModels is a policy rate-limit link scoped only to models the policy does not allow, so it never counts.
+	IssueRateLimitScopeOutsideModels = "rate_limit_scope_outside_models"
+	// IssueModelUnservable is an enabled model with bindings, none of them enabled at an enabled host.
+	IssueModelUnservable = "model_unservable"
 )
 
 // rungRefusal is the refusal a rung's policy imposes, naming the rung.

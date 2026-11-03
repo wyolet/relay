@@ -95,8 +95,11 @@ func TestPersonalAccountOff_ClosesPersonalLaneAndOwnedAccounts(t *testing.T) {
 	if r := h.route(bobKey, "m1"); r.Refused == nil || r.Refused.Code != CodeNoCredentials {
 		t.Errorf("share after: %+v, want no_credentials", r.Refused)
 	}
-	if is := h.issues(KindAccount, shared.Meta.ID); !hasIssue(is, IssueSharedAccountMissing) {
-		t.Errorf("issues on the share = %+v, want %s", is, IssueSharedAccountMissing)
+	if is := h.issues(KindAccount, shared.Meta.ID); !hasIssue(is, IssuePersonalAccountOff) || hasIssue(is, IssueSharedAccountMissing) {
+		t.Errorf("issues on the share = %+v, want %s alone", is, IssuePersonalAccountOff)
+	}
+	if is := h.issues(KindAccount, s.w.personal(s.alice).Meta.ID); !hasIssue(is, IssuePersonalAccountOff) {
+		t.Errorf("issues on alice's personal account = %+v, want %s", is, IssuePersonalAccountOff)
 	}
 	if r := h.keyPlan(memberKey).Caller.Refused; r != nil {
 		t.Errorf("member lane refused: %v", r)
@@ -111,6 +114,9 @@ func TestPersonalAccountOff_ClosesPersonalLaneAndOwnedAccounts(t *testing.T) {
 	}
 	if is := h.issues(KindKey, personalKey.Meta.ID); hasIssue(is, IssuePersonalAccountOff) {
 		t.Errorf("the key still reports %s", IssuePersonalAccountOff)
+	}
+	if is := h.issues(KindAccount, s.w.personal(s.alice).Meta.ID); hasIssue(is, IssuePersonalAccountOff) {
+		t.Errorf("alice's personal account still reports %s", IssuePersonalAccountOff)
 	}
 }
 

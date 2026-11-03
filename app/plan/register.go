@@ -80,6 +80,10 @@ const (
 
 	// A shared account resolved to its real account.
 	KindSharedAccount engine.Kind = "sharedaccount"
+
+	// Checks that only attach issues, to a policy and to a host; no object of these kinds is built.
+	KindPolicyCheck engine.Kind = "policycheck"
+	KindHostCheck   engine.Kind = "hostcheck"
 )
 
 // Sources are the stores each input kind loads from. A nil field loads nothing.
@@ -163,6 +167,8 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[UserPlan](e, KindUserPlan, 64)
 	derived[UserIndex](e, KindUserIndex, 1)
 	derived[PersonalAccount](e, KindPersonalAccount, 64)
+	derived[policyCheck](e, KindPolicyCheck, 1)
+	derived[hostCheck](e, KindHostCheck, 1)
 
 	c := &controllers{cells: cells, rbac: src.RBAC}
 	for _, ctl := range c.all() {

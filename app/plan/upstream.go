@@ -1,8 +1,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
@@ -126,6 +124,10 @@ func (c *controllers) keySlot(tx *engine.Txn, id string) error {
 		tx.Issue(parentMissing(src, "spec.hostId", engine.Ref{Kind: KindHost, ID: cred.Spec.HostID}))
 		engine.Drop(tx)
 		return nil
+	}
+	if !h.IsEnabled() {
+		tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueHostDisabled, Source: src, Field: "spec.hostId", Target: engine.Ref{Kind: KindHost, ID: h.Meta.ID},
+			Message: "host " + h.Meta.Name + " is disabled; this key is not used"})
 	}
 	var acc *AccountPlan
 	if aid := cred.Spec.AccountID; aid != "" {
@@ -267,114 +269,6 @@ func hasCounter(cs []slotCounter, c slotCounter) bool {
 		}
 	}
 	return false
-}
-
-// PoolPlan is one pool: its host, its credentials in pool order, the selection algorithm and the rotation cell. A keyless host's pool holds one anonymous slot; a credential's pool of one has no Pool row and no rotation.
-type PoolPlan struct {
-	Pool      *pool.Pool
-	Host      *host.Host
-	Slots     []*KeySlot
-	Selection keypool.KeySelection
-	Rotation  *keypool.Rotation
-	in        inputs
-}
-
-func (p *PoolPlan) builtFrom() inputs { return p.in }
-
-func (c *controllers) poolPlan(tx *engine.Txn, id string) error {
-	p := engine.Get[pool.Pool](tx, id)
-	if p == nil {
-		engine.Drop(tx)
-		return nil
-	}
-	src := engine.Ref{Kind: KindPool, ID: id}
-	h := engine.Get[host.Host](tx, p.Spec.HostID)
-	if h == nil {
-		tx.Issue(parentMissing(src, "spec.hostId", engine.Ref{Kind: KindHost, ID: p.Spec.HostID}))
-		engine.Drop(tx)
-		return nil
-	}
-	pp := &PoolPlan{Pool: p, Host: h, Selection: p.Spec.Selection}
-	if pp.Selection == "" {
-		pp.Selection = pool.DefaultSelection
-	}
-	pp.in = inputs{p, h}
-	if h.Spec.NoAuth {
-		// A keyless host is reached through a pool linked on purpose, never by a wildcard: the pool is the explicit grant.
-		if len(p.Spec.CredentialIDs) > 0 || len(p.Spec.AccountIDs) > 0 {
-			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueCredentialsIgnored, Source: src, Field: "spec.credentialIds", Message: "the host needs no key; requests go out without the pool's credentials and accounts"})
-		}
-		anon := foldUpstream(tx, hostkey.Anonymous(h.Meta.ID, h.Meta.Name), h, nil)
-		pp.Slots = []*KeySlot{anon}
-		pp.in = append(pp.in, anon.in...)
-	} else {
-		poolSlots(tx, p, h, pp)
-	}
-	pp.Rotation = cell.Acquire(c.cells, tx, keypool.RotationKey(id), keypool.NewRotation)
-	pp.in = append(pp.in, pp.Rotation)
-	engine.Put(tx, SameOr(engine.Get[PoolPlan](tx, id), pp))
-	return nil
-}
-
-// poolSlots fills pp with the pool's slots in prioritized order: every key of each listed account, in account order and each account's keys in creation order, then the listed credentials; a key reached twice the same way keeps its first place. Two shares reaching one key stay apart, as each lane may use only one of them.
-func poolSlots(tx *engine.Txn, p *pool.Pool, h *host.Host, pp *PoolPlan) {
-	src := engine.Ref{Kind: KindPool, ID: p.Meta.ID}
-	placed := make(map[[2]string]struct{}, len(p.Spec.CredentialIDs))
-	add := func(s *KeySlot) {
-		k := [2]string{s.Credential.Meta.ID, s.Via.SubjectID}
-		if _, dup := placed[k]; dup {
-			return
-		}
-		placed[k] = struct{}{}
-		pp.Slots = append(pp.Slots, s)
-	}
-	for i, aid := range p.Spec.AccountIDs {
-		field := fmt.Sprintf("spec.accountIds[%d]", i)
-		a := engine.Get[account.Account](tx, aid)
-		switch {
-		case a == nil:
-			tx.Issue(refMissing(src, field, engine.Ref{Kind: KindAccount, ID: aid}))
-			continue
-		case a.Spec.HostID != h.Meta.ID:
-			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: src, Field: field, Target: engine.Ref{Kind: KindAccount, ID: aid}, Message: "the account is held at another host; it is left out"})
-			continue
-		}
-		// The account's id and host decide its part, so a learned org id or a rename rebuilds no pool.
-		pp.in = append(pp.in, aid, a.Spec.HostID)
-		if a.IsShared() {
-			// A shared account whose real account is gone carries the issue itself.
-			sa := engine.Get[SharedAccount](tx, aid)
-			pp.in = append(pp.in, sa)
-			if sa != nil {
-				for _, s := range sa.Slots {
-					add(s)
-				}
-			}
-			continue
-		}
-		oc := engine.Get[OwnedCredentials](tx, accountSubject(aid))
-		pp.in = append(pp.in, oc)
-		if oc != nil {
-			for _, one := range oc.Pools {
-				add(one.Slots[0])
-			}
-		}
-	}
-	for i, cid := range p.Spec.CredentialIDs {
-		s := engine.Get[KeySlot](tx, cid)
-		if s == nil {
-			if engine.Get[hostkey.HostKey](tx, cid) == nil {
-				tx.Issue(refMissing(src, fmt.Sprintf("spec.credentialIds[%d]", i), engine.Ref{Kind: KindCredential, ID: cid}))
-			}
-			continue
-		}
-		if s.Host.Meta.ID != h.Meta.ID {
-			tx.Issue(engine.Issue{Severity: engine.SeverityWarning, Code: IssueHostMismatch, Source: src, Field: fmt.Sprintf("spec.credentialIds[%d]", i), Target: engine.Ref{Kind: KindCredential, ID: cid}, Message: "the credential authenticates to another host; it is left out"})
-			continue
-		}
-		pp.in = append(pp.in, s)
-		add(s)
-	}
 }
 
 // OwnedCredentials is the credentials one owner scope holds ("user:<id>", "project:<id>", "team:<id>", "system:"), or one provider account holds ("account:<id>"), each as a pool of one in creation order: what a lane reaches when no caller rung links pools.
