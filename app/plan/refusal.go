@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
@@ -170,6 +171,7 @@ func rungRefusal(code string, r *Rung, policyID, msg string) *Refusal {
 	return &Refusal{Code: code, Rung: r.Kind, SubjectID: r.SubjectID, PolicyID: policyID, Message: msg}
 }
 
+// refMissing is ref_missing for a link the row drops. The missing row has no slug left to name it by, so the message names its kind and the id stays in Target.
 func refMissing(src engine.Ref, field string, target engine.Ref) engine.Issue {
 	return engine.Issue{
 		Severity: engine.SeverityWarning,
@@ -177,7 +179,7 @@ func refMissing(src engine.Ref, field string, target engine.Ref) engine.Issue {
 		Source:   src,
 		Target:   target,
 		Field:    field,
-		Message:  fmt.Sprintf("%s %s does not exist; the link is ignored", target.Kind, target.ID),
+		Message:  "links " + withArticle(kindNoun(target.Kind)) + " that was deleted; the link is ignored",
 	}
 }
 
@@ -185,6 +187,38 @@ func refMissing(src engine.Ref, field string, target engine.Ref) engine.Issue {
 func parentMissing(src engine.Ref, field string, target engine.Ref) engine.Issue {
 	i := refMissing(src, field, target)
 	i.Severity = engine.SeverityError
-	i.Message = fmt.Sprintf("%s %s does not exist; %s %s cannot serve", target.Kind, target.ID, src.Kind, src.ID)
+	verb := "names"
+	if field == "metadata.owner" {
+		verb = "belongs to"
+	}
+	i.Message = verb + " " + withArticle(kindNoun(target.Kind)) + " that was deleted; the " + kindNoun(src.Kind) + " cannot serve"
 	return i
+}
+
+// kindNoun is a kind in words, for issue messages.
+func kindNoun(k engine.Kind) string {
+	switch k {
+	case KindPolicyBinding:
+		return "policy binding"
+	case KindRateLimit:
+		return "rate limit"
+	case KindCredential:
+		return "host key"
+	case KindServiceAccount:
+		return "service account"
+	case KindBinding:
+		return "host binding"
+	case KindKey:
+		return "relay key"
+	case "":
+		return "row"
+	}
+	return string(k)
+}
+
+func withArticle(noun string) string {
+	if strings.ContainsRune("aeiou", rune(noun[0])) {
+		return "an " + noun
+	}
+	return "a " + noun
 }
