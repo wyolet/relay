@@ -68,7 +68,7 @@ To give a lane anything beyond this, or a different order, link pools in a calle
 
 A policy is owned by the system, a team, a project, a user or a host. Host-owned policies are the catalog's [tier presets](#tier-presets) and cannot link pools.
 
-A policy links only rows its scope may use. A system-owned row can be linked from any policy; a team's row from the team's policies and its projects' policies; a project's row from that project's policies. Rate limits, pools, budgets and policies can all be owned by a team. A linked row that is missing or out of scope is refused with `400`, and one the caller may not see with `404`.
+A policy links only rows its scope may use. A system-owned row can be linked from any policy; a team's row from the team's policies and its projects' policies; a project's row from that project's policies. A user's pool, account or host key is linked only from that user's own policies and pools, never another user's. Rate limits, pools, budgets and policies can all be owned by a team. A linked row that is missing or out of scope is refused with `400`, and one the caller may not see with `404`.
 
 ## Shared and per-lane counting
 

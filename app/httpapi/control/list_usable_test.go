@@ -103,6 +103,30 @@ func TestListUsableBy(t *testing.T) {
 	}
 }
 
+// An admin sees every pool, but asking what a user's policy may link leaves out another user's pools: no binding of that policy is ever served by them.
+func TestListUsableBy_AdminGetsNoOtherUsersPools(t *testing.T) {
+	h := newUsablePoolsHarness(t)
+	for _, tc := range []struct{ who, scope string }{{"root", "user:u-root"}, {"token", "user:u-bob"}} {
+		w := scopeReq(t, h, tc.who, http.MethodGet, "/pools?usable_by="+tc.scope, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s %s: status %d: %s", tc.who, tc.scope, w.Code, w.Body)
+		}
+		var body struct {
+			Items []pool.Pool `json:"items"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, p := range body.Items {
+			got = append(got, p.Meta.Name)
+		}
+		if slices.Contains(got, "pool-alice") || !slices.Contains(got, "pool-sys") {
+			t.Errorf("%s asking for %s: %v, want the system pool and not alice's", tc.who, tc.scope, got)
+		}
+	}
+}
+
 // The parameter is in the generated document on the linkable kinds only.
 func TestControlOpenAPIHasUsableBy(t *testing.T) {
 	doc := controlDoc(t)

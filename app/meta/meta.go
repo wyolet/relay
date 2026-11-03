@@ -161,6 +161,18 @@ func (o Owner) Tenant() bool {
 	return false
 }
 
+// Holds reports whether a row owned by o may serve scope inner: the system's rows serve every scope, a scope's its own, a team's its projects. teamOf answers a project's team; ok is false when the project is unknown.
+func (o Owner) Holds(inner Owner, teamOf func(projectID string) (teamID string, ok bool)) bool {
+	switch {
+	case o.Kind == OwnerSystem, o == inner:
+		return true
+	case o.Kind == OwnerTeam && inner.Kind == OwnerProject:
+		t, ok := teamOf(inner.ID)
+		return ok && t == o.ID
+	}
+	return false
+}
+
 // Icon describes a visual asset for a catalog entity (Provider, Host).
 // Path is relative — typically "/provider/anthropic.svg" — and the
 // frontend prefixes its own asset-base URL at render time. Relay does

@@ -34,14 +34,12 @@ func bindingsInScope(tx *engine.Txn, acc *account.Account, bs []*policybinding.P
 
 // scopeHolds reports whether scope outer holds inner: the system holds everything, a scope itself, a team its projects.
 func scopeHolds[R *engine.Txn | *engine.View](r R, outer, inner meta.Owner) bool {
-	switch {
-	case outer.Kind == meta.OwnerSystem, outer == inner:
-		return true
-	case outer.Kind == meta.OwnerTeam && inner.Kind == meta.OwnerProject:
-		p := engine.Get[project.Project](r, inner.ID)
-		return p != nil && p.Spec.TeamID == outer.ID
-	}
-	return false
+	return outer.Holds(inner, func(projectID string) (string, bool) {
+		if p := engine.Get[project.Project](r, projectID); p != nil {
+			return p.Spec.TeamID, true
+		}
+		return "", false
+	})
 }
 
 // unusableLinks returns the ids of the pools p links, and of the credentials and accounts inside them, that scope cannot use, sorted, and files an issue on the binding for each. The save check refuses such a binding; a row written around it narrows instead of reaching another scope's credentials.

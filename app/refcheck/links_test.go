@@ -200,6 +200,23 @@ func TestPolicyLinksMustExist(t *testing.T) {
 	}
 }
 
+// A user's policy may link its own and the system's pools, but not another user's, which no binding of it is ever served by; the caller seeing that pool does not change this.
+func TestUserPolicyCannotLinkAnotherUsersPool(t *testing.T) {
+	rows := newLinkRows()
+	for id, u := range map[string]string{"pool-alice": "u-alice", "pool-bob": "u-bob"} {
+		rows.pools[id] = &pool.Pool{Meta: meta.Metadata{ID: id, Name: id, Owner: meta.Owner{Kind: meta.OwnerUser, ID: u}}, Spec: pool.Spec{HostID: "h-1"}}
+	}
+	c := rows.checker(nil)
+	ctx := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true, Username: "admin-token"})
+	alice := meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
+	for id, want := range map[string]int{"pool-alice": 0, "pool-shared": 0, "pool-bob": http.StatusBadRequest} {
+		p := &policy.Policy{Meta: meta.Metadata{Name: "mine", Owner: alice}, Spec: policy.Spec{PoolIDs: []string{id}}}
+		if got := status(c.Policy(ctx, p)); got != want {
+			t.Errorf("%s: status %d, want %d", id, got, want)
+		}
+	}
+}
+
 // A team's pools, budgets and accounts serve the team and its projects; another team's project, or a sibling project's rows, stay out of reach.
 func TestTeamRowsServeTheTeamAndItsProjects(t *testing.T) {
 	c := newLinkRows().checker(nil)
