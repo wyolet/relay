@@ -34,6 +34,7 @@ type index struct {
 	accountByID        map[string]*account.Account
 	keysByAccount      map[string][]*hostkey.HostKey // account id → its keys in creation order
 	providerSlug       string                        // the resolved model's provider slug, for DSL/RL matching
+	personalOff        func(userID string) bool      // nil reads every user as on
 }
 
 // indexConcurrency caps the parallel store reads per index build so a burst
@@ -158,6 +159,7 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		poolByID:           make(map[string]*pool.Pool, len(pools)),
 		accountByID:        make(map[string]*account.Account, len(accounts)),
 		keysByAccount:      map[string][]*hostkey.HostKey{},
+		personalOff:        s.PersonalAccountOff,
 	}
 	for _, k := range keys {
 		idx.hostkeyByID[k.Meta.ID] = k
