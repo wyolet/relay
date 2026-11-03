@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-// A team owns host keys and rate limits like its pools: they serve the team and its projects, the team's keys join the team's own default account, and they keep the team from being deleted.
+// A team owns host keys and rate limits like its pools: they serve the team and its projects, the team's keys join an account of the team's own, and they keep the team from being deleted.
 func TestIntegration_TeamOwnedHostKeysAndRateLimits(t *testing.T) {
 	t.Parallel()
 	st := newStack(t)
@@ -33,14 +33,15 @@ func TestIntegration_TeamOwnedHostKeysAndRateLimits(t *testing.T) {
 		}
 		return row
 	}
-	key := create("/api/host-keys", `{"metadata":{"name":"team-a-key","owner":`+ownerA+`},"spec":{"hostId":"`+hostID+`","valueFrom":{"kind":"env","env":"TEAM_A_UPSTREAM_KEY"}}}`)
+	org := create("/api/accounts", `{"metadata":{"name":"team-a-org","owner":`+ownerA+`},"spec":{"hostId":"`+hostID+`"}}`)
+	key := create("/api/host-keys", `{"metadata":{"name":"team-a-key","owner":`+ownerA+`},"spec":{"hostId":"`+hostID+`","accountId":"`+org.Metadata.ID+`","valueFrom":{"kind":"env","env":"TEAM_A_UPSTREAM_KEY"}}}`)
 	stored, err := st.stores.HostKey.Get(context.Background(), key.Metadata.ID)
 	if err != nil || stored == nil {
 		t.Fatalf("get key: %v", err)
 	}
 	acct, err := st.stores.Account.Get(context.Background(), stored.Spec.AccountID)
-	if err != nil || acct == nil || !acct.Spec.Default || acct.Meta.Owner != (meta.Owner{Kind: meta.OwnerTeam, ID: teamA}) {
-		t.Fatalf("team key's account = %+v, %v; want the team's default account", acct, err)
+	if err != nil || acct == nil || acct.Meta.Owner != (meta.Owner{Kind: meta.OwnerTeam, ID: teamA}) {
+		t.Fatalf("team key's account = %+v, %v; want the team's account", acct, err)
 	}
 	limit := create("/api/rate-limits", `{"metadata":{"name":"team-a-rpm","owner":`+ownerA+`},"spec":{"rules":[{"meter":"requests","amount":60,"window":60,"strategy":"token-bucket"}]}}`)
 	pool := create("/api/pools", `{"metadata":{"name":"team-a-pool","owner":`+ownerA+`},"spec":{"hostId":"`+hostID+`","credentialIds":["`+key.Metadata.ID+`"]}}`)

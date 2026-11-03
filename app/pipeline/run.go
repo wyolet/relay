@@ -305,9 +305,9 @@ const (
 	maxRateLimitCooldown = time.Minute
 )
 
-// coolAccountModel cools the slot's account for the model on an upstream rate limit and reports whether it did. An explicit account's credentials share its capacity, so a sibling would meet the same 429. A credential with no account, or in its owner's default account (keys grouped by owner, not known to share capacity), is left to its own breaker so its siblings still fail over.
+// coolAccountModel cools the slot's account for the model on an upstream rate limit and reports whether it did. An explicit account's credentials share its capacity, so a sibling would meet the same 429. A credential with no account, or in an account relay grouped by owner and host (not known to share capacity), is left to its own breaker so its siblings still fail over.
 func coolAccountModel(s *plan.KeySlot, modelID string, kind keypool.FailureKind, retryAfter time.Duration) bool {
-	if s.Account == nil || s.Account.Default || (kind != keypool.FailureRateLimitShort && kind != keypool.FailureRateLimitLong) {
+	if s.Account == nil || s.Account.GroupedByRelay || (kind != keypool.FailureRateLimitShort && kind != keypool.FailureRateLimitLong) {
 		return false
 	}
 	if retryAfter <= 0 {

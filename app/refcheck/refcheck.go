@@ -501,8 +501,8 @@ func (c Checker) Pool(ctx context.Context, p *pool.Pool) error {
 	return c.credentialRefs(ctx, "pool", p.Spec.CredentialIDs, p.Meta.Owner, p.Spec.HostID)
 }
 
-// HostKey checks the host the key authenticates to and, when named, its
-// account, which must be held at that host.
+// HostKey checks the host the key authenticates to and its account, which
+// the key must name and which must be held at that host.
 func (c Checker) HostKey(ctx context.Context, k *hostkey.HostKey) error {
 	// An env reference reads the relay's own environment; through the key's
 	// health probe it would answer for any variable the caller names.

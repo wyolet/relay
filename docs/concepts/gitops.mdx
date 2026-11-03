@@ -85,7 +85,7 @@ relay apply -f manifests/ --prune --selector env=prod,team=platform
 
 Pruning draws the same membership line as export (below): teams, groups, roles and role bindings are always prunable, except built-in roles; every other kind is prunable only when it is owned by a user, team or project. System-, provider- and host-owned rows, the catalog's own data, are never candidates, whatever labels they carry: a manifest that omits a catalog provider or host is not asking for its removal. Accounts carry no labels, so prune never deletes a user.
 
-A prune never removes rows silently. Pruning a team, project or service account is refused while rows under it or owned by it stay out of the prune, as its delete through the control API is; a [default account](/concepts/key-pooling#default-accounts) no host key names goes with its team or project. For a service account those rows are its keys, the role bindings that name it as a subject, and the policy bindings that hold its account. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
+A prune never removes rows silently. Pruning a team, project or service account is refused while rows under it or owned by it stay out of the prune, as its delete through the control API is; that includes its provider accounts, whether or not a host key names them. For a service account those rows are its keys, the role bindings that name it as a subject, and the policy bindings that hold its account. Select them too, or move them first. A document the same apply would write into a pruned team, project or service account is refused as well.
 
 ## Authorization and partial failure
 

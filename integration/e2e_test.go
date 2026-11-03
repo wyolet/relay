@@ -390,6 +390,7 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
+			AccountID: providerAccount(s.t, s.stores, "test-account", meta.Owner{Kind: meta.OwnerSystem}, hst.Meta.ID),
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}
@@ -783,6 +784,14 @@ func mustUpsert(t *testing.T, err error, kind string) {
 	if err != nil {
 		t.Fatalf("upsert %s: %v", kind, err)
 	}
+}
+
+// providerAccount stores a provider account of owner at hostID and returns its id, for the host keys that name it.
+func providerAccount(t *testing.T, stores *appcatalog.Stores, name string, owner meta.Owner, hostID string) string {
+	t.Helper()
+	a := &account.Account{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: owner}, Spec: account.Spec{HostID: hostID}}
+	mustUpsert(t, stores.Account.Upsert(context.Background(), a), "account "+name)
+	return a.Meta.ID
 }
 
 func sha256Hex(s string) string {

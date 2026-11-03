@@ -121,7 +121,7 @@ A team member's personal account climbs no team rung, so a relay key in it is no
 
 The provider account, the host keys and the pool are system-owned, so any team's policy can link the pool. The rate limit, the budget, the policy and the binding belong to the team, so a `team-admin` can change them. A team that brings its own OpenAI keys can own them, and a pool of them, the same way.
 
-Naming the account on each host key is optional: a host key saved without `account` joins its owner's [default account](/concepts/key-pooling#default-accounts) at the host, here the system's.
+Every host key names its account, so the `Account` comes first in the bundle (or exists already); a host key without `account` is refused.
 
 ## Binding a tier to an account
 

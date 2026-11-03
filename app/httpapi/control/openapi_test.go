@@ -82,7 +82,7 @@ func TestControlOpenAPIHasPolicyModel(t *testing.T) {
 		"PolicyBindingSpec":   {"policyId", "accountIds"},
 		"HostKeySpec":         {"hostId", "accountId"},
 		"KeySpec":             {"principal", "accountId"},
-		"AccountSpec":         {"kind", "holder", "hostId", "orgId", "default", "payloadLogging", "closed"},
+		"AccountSpec":         {"kind", "holder", "hostId", "orgId", "groupedByRelay", "payloadLogging", "closed"},
 		"PoolSpec":            {"hostId", "credentialIds", "selection"},
 		"BudgetSpec":          {"amountUsd", "period", "mode"},
 	}

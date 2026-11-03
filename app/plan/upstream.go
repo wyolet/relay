@@ -32,10 +32,10 @@ type Rung struct {
 // AccountPlan is one provider account and its cooldown cell, shared by every credential of the account.
 type AccountPlan struct {
 	Account *account.Account
-	// Default is the account's Spec.Default: its keys were grouped by owner and host, not declared one provider org, so an upstream 429 stays with the key.
-	Default  bool
-	Cooldown *keypool.CooldownCell
-	in       inputs
+	// GroupedByRelay is the account's Spec.GroupedByRelay: its keys were grouped by owner and host, not declared one provider org, so an upstream 429 stays with the key.
+	GroupedByRelay bool
+	Cooldown       *keypool.CooldownCell
+	in             inputs
 }
 
 func (a *AccountPlan) builtFrom() inputs { return a.in }
@@ -48,8 +48,8 @@ func (c *controllers) accountPlan(tx *engine.Txn, id string) error {
 		return nil
 	}
 	cd := cell.Acquire(c.cells, tx, keypool.CooldownCellKey(id), keypool.NewCooldownCell)
-	// Built from the id, host and default mark alone, so a learned org id written onto the row keeps this plan and everything that reads it.
-	ap := &AccountPlan{Account: acc, Default: acc.Spec.Default, Cooldown: cd, in: inputs{acc.Meta.ID, acc.Spec.HostID, acc.Spec.Default, cd}}
+	// Built from the id, host and grouping mark alone, so a learned org id written onto the row keeps this plan and everything that reads it.
+	ap := &AccountPlan{Account: acc, GroupedByRelay: acc.Spec.GroupedByRelay, Cooldown: cd, in: inputs{acc.Meta.ID, acc.Spec.HostID, acc.Spec.GroupedByRelay, cd}}
 	engine.Put(tx, SameOr(engine.Get[AccountPlan](tx, id), ap))
 	return nil
 }

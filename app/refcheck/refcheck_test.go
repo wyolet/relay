@@ -50,7 +50,7 @@ func TestEnvSourcedHostKeyNeedsAnAdmin(t *testing.T) {
 	c := Checker{Authz: scopingAuthz{}}
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}},
-		Spec: hostkey.Spec{HostID: "h-1", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "HOME"}},
+		Spec: hostkey.Spec{HostID: "h-1", AccountID: "acct-1", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "HOME"}},
 	}
 	member := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
 	if err := c.HostKey(member, k); err == nil {

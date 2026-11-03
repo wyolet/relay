@@ -53,34 +53,16 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// The default mark lives in its column as the owner, not in the spec document, so the unique index sees it.
-func TestDefaultMarkIsTheOwnerColumn(t *testing.T) {
+// The grouping mark is server-managed: a write carrying it puts it nowhere, so no caller can mark an account grouped by relay.
+func TestGroupedByRelayIsNeverWritten(t *testing.T) {
 	a := fix()
-	a.Spec.Default = true
+	a.Spec.GroupedByRelay = true
 	p, err := toUpsertParams(a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "team:" + a.Meta.Owner.ID; !p.DefaultOwner.Valid || p.DefaultOwner.String != want {
-		t.Errorf("default_owner = %+v, want %q", p.DefaultOwner, want)
-	}
-	if strings.Contains(string(p.Spec), "default") {
-		t.Errorf("spec document %s carries the default mark", p.Spec)
-	}
-	a.Spec.Default = false
-	if p, _ := toUpsertParams(a); p.DefaultOwner.Valid {
-		t.Errorf("default_owner = %+v for a plain account, want NULL", p.DefaultOwner)
-	}
-	for owner, want := range map[meta.Owner]string{
-		{}:                                 "system",
-		{Kind: meta.OwnerSystem}:           "system",
-		{Kind: meta.OwnerUser}:             "system",
-		{Kind: meta.OwnerUser, ID: "u1"}:   "user:u1",
-		{Kind: meta.OwnerProject, ID: "p"}: "project:p",
-	} {
-		if got := defaultOwner(owner); got != want {
-			t.Errorf("defaultOwner(%+v) = %q, want %q", owner, got, want)
-		}
+	if strings.Contains(string(p.Spec), "grouped") {
+		t.Errorf("spec document %s carries the grouping mark", p.Spec)
 	}
 }
 
@@ -157,8 +139,7 @@ func TestValidateShare(t *testing.T) {
 		edit func(a *Account)
 		want string
 	}{
-		{name: "org id stays on the real account", edit: func(a *Account) { a.Spec.OrgID = "org" }, want: "orgId and default stay"},
-		{name: "default stays on the real account", edit: func(a *Account) { a.Spec.Default = true }, want: "orgId and default stay"},
+		{name: "org id stays on the real account", edit: func(a *Account) { a.Spec.OrgID = "org" }, want: "orgId stays"},
 		{name: "the system receives no share", edit: func(a *Account) { a.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem} }, want: "owned by the user, team or project"},
 		{name: "a user holder is no share's", edit: func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderUser, ID: meta.NewID()} }, want: "has no holder"},
 		{name: "a service account's share outside a project", edit: func(a *Account) { a.Spec.Holder = &Holder{Kind: HolderServiceAccount, ID: meta.NewID()} }, want: "has no holder"},

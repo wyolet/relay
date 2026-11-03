@@ -1,6 +1,6 @@
 // Package account is the domain layer for the Account entity: what policies bind to and usage is charged to. A provider account is one provider organization at one host, whose tier limits every host key of the organization shares. A caller account is one relay keeps in step with the tenancy rows: one per team and per project, a personal account per user, one per service account, and a member account per user and team or project the user is a member of. A key lands in one account its principal holds, its default lane. A shared account is a provider account owned by the user, team or project it was shared with (a service account's by its project, held by it) that holds no keys and reaches those of the real account it names.
 //
-// This package validates one row's shape, stores it, creates an owner's default provider account at a host on first use (Store.EnsureDefault), and creates a caller account idempotently (Store.EnsureManaged). Out of scope: learning org ids from upstream responses, deciding which caller accounts should exist (app/plan) and applying an account's policy to requests.
+// This package validates one row's shape, stores it, and creates a caller account idempotently (Store.EnsureManaged). A provider account is only ever created on request: a host key names one, and nothing makes one for it. Out of scope: learning org ids from upstream responses, deciding which caller accounts should exist (app/plan) and applying an account's policy to requests.
 package account
 
 import (
@@ -122,8 +122,8 @@ type Spec struct {
 	// OrgID is the provider's organization id: the org, never a person or an email, since one login can belong to several orgs with separate limits. Empty until known.
 	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty" doc:"The provider's organization id (the org, never a person or an email). Provider accounts only; empty until known."`
 
-	// Default marks the provider account a host key of the same owner at HostID joins when it names none. An owner has at most one per host.
-	Default bool `json:"default,omitempty" yaml:"default,omitempty" doc:"The provider account a host key of the same owner at this host joins when it names none. Created on first use; an owner has at most one per host, and a second answers 409."`
+	// GroupedByRelay marks a provider account relay made by grouping an owner's keys at a host, before keys had to name their account: an upstream 429 then stays with the key, since its keys are not known to share one org.
+	GroupedByRelay bool `json:"groupedByRelay,omitempty" yaml:"-" readOnly:"true" doc:"Relay grouped this account's keys by owner and host when it was upgraded; they are not confirmed to be one provider organization, so an upstream 429 cools only the key that met it. Cleared once orgId is set. New accounts never carry it. Server-managed."`
 
 	PayloadLogging PayloadLogging `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" validate:"omitempty,oneof=on off" enum:"on,off" doc:"Capture request and response bodies of requests in this account: on or off. Omitted leaves it to the account above it on the ladder (project, then team), then to the key's own flag. On a personal account only an admin sets it; on a team, project, member or service account an admin of its scope, never the member account's own holder (403)."`
 
@@ -194,7 +194,7 @@ func MemberKey(scope meta.Owner, userID string) string {
 	return "member:" + string(scope.Kind) + ":" + scope.ID + ":" + userID
 }
 
-// Validate runs intra-row rules via the shared meta.Validator, derives Spec.Kind, and enforces each kind's shape: a provider account has a host, an owner of kind system, team, project or user, and no holder; a caller account has no host, org id or default mark.
+// Validate runs intra-row rules via the shared meta.Validator, derives Spec.Kind, and enforces each kind's shape: a provider account has a host, an owner of kind system, team, project or user, and no holder; a caller account has no host or org id.
 //
 // Cross-row checks (the host and holder exist) live in app/refcheck.
 func (a *Account) Validate() error {
@@ -217,12 +217,12 @@ func (a *Account) Validate() error {
 		return fmt.Errorf("account %q: a provider account (spec.hostId set) has no holder, except a service account's share, owned by its project", a.Meta.Name)
 	case k == "":
 		return fmt.Errorf("account %q: spec.hostId is required unless the account is a team's, a project's, a user's personal account, a member account or a service account's", a.Meta.Name)
-	case k != KindProvider && (a.Spec.OrgID != "" || a.Spec.Default):
-		return fmt.Errorf("account %q: orgId and default are for provider accounts only", a.Meta.Name)
+	case k != KindProvider && a.Spec.OrgID != "":
+		return fmt.Errorf("account %q: orgId is for provider accounts only", a.Meta.Name)
 	case a.IsShared() && k != KindProvider:
 		return fmt.Errorf("account %q: only a provider account is shared", a.Meta.Name)
-	case a.IsShared() && (a.Spec.OrgID != "" || a.Spec.Default):
-		return fmt.Errorf("account %q: a shared account takes its org and keys from the real account; orgId and default stay on that one", a.Meta.Name)
+	case a.IsShared() && a.Spec.OrgID != "":
+		return fmt.Errorf("account %q: a shared account takes its org and keys from the real account; orgId stays on that one", a.Meta.Name)
 	case a.IsShared() && o.Kind == meta.OwnerSystem:
 		return fmt.Errorf("account %q: a shared account is owned by the user, team or project it was shared with", a.Meta.Name)
 	case a.IsShared() && a.Spec.SourceAccountID == a.Meta.ID:

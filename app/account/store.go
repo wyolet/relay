@@ -1,4 +1,4 @@
-// Spec.HostID lives in the host_id column so a host delete cascades; Spec.Default lives in default_owner, which holds the owner of a default account so one owner has at most one per host. A shared account's source_account_id keeps the real account until its shares are revoked, its team_id, project_id, holder_sa_id or share_user_id take it along with its receiver, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
+// Spec.HostID lives in the host_id column so a host delete cascades; Spec.GroupedByRelay lives in grouped_by_relay, which no write sets and the query clears once the row names its org. A shared account's source_account_id keeps the real account until its shares are revoked, its team_id, project_id, holder_sa_id or share_user_id take it along with its receiver, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
 
 package account
 
@@ -16,9 +16,6 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
-// ErrDefaultTaken is a write marking a second default account for one owner at one host.
-var ErrDefaultTaken = errors.New("account: the owner already has a default account at this host")
-
 // ErrManagedTaken is a write of a caller account whose place another row holds.
 var ErrManagedTaken = errors.New("account: another account already holds this place")
 
@@ -30,7 +27,6 @@ var ErrShared = errors.New("account: shares still name the account")
 
 const (
 	sourceKey       = "accounts_source_account_id_fkey"
-	oneDefaultIndex = "accounts_one_default"
 	oneManagedIndex = "accounts_managed_key_key"
 	oneShareIndex   = "accounts_one_share"
 	nameIndex       = "accounts_name_key"
@@ -84,8 +80,6 @@ func (s *Store) Upsert(ctx context.Context, a *Account) error {
 	}
 	n, err := s.q.UpsertAccount(ctx, params)
 	switch {
-	case storage.IsUniqueViolation(err, oneDefaultIndex):
-		return fmt.Errorf("%w: account %q", ErrDefaultTaken, a.Meta.Name)
 	case storage.IsUniqueViolation(err, oneManagedIndex):
 		return fmt.Errorf("%w: account %q", ErrManagedTaken, a.Meta.Name)
 	case storage.IsUniqueViolation(err, oneShareIndex):
@@ -175,51 +169,6 @@ func (s *Store) SetMembership(ctx context.Context, a *Account, closed, followsRo
 	return nil
 }
 
-// EnsureDefault returns the id of owner's default account at hostID, creating it on first use: named after the host, suffixed -2, -3, … when the name is taken. Concurrent first saves converge on one row. It returns "" when the host does not exist, since an account cannot outlive its host.
-func (s *Store) EnsureDefault(ctx context.Context, owner meta.Owner, hostID string) (string, error) {
-	if namesNobody(owner) {
-		owner = meta.Owner{Kind: meta.OwnerSystem}
-	}
-	lookup := gen.GetDefaultAccountIDParams{HostID: text(hostID), DefaultOwner: text(defaultOwner(owner))}
-	for attempt := 0; ; attempt++ {
-		id, err := s.q.GetDefaultAccountID(ctx, lookup)
-		if err == nil {
-			return id, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("account.EnsureDefault: %w", err)
-		}
-		if attempt == ensureAttempts {
-			return "", fmt.Errorf("account.EnsureDefault: no default account for %s at host %s after %d attempts", lookup.DefaultOwner.String, hostID, attempt)
-		}
-		h, err := s.q.GetHost(ctx, hostID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
-		}
-		if err != nil {
-			return "", fmt.Errorf("account.EnsureDefault: host: %w", err)
-		}
-		name, err := s.uniqueName(ctx, h.Name)
-		if err != nil {
-			return "", fmt.Errorf("account.EnsureDefault: %w", err)
-		}
-		a := &Account{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: name, DisplayName: h.DisplayName, Owner: owner},
-			Spec: Spec{HostID: hostID, Default: true},
-		}
-		p, err := toUpsertParams(a)
-		if err != nil {
-			return "", fmt.Errorf("account.EnsureDefault: %w", err)
-		}
-		if _, err := s.q.InsertDefaultAccount(ctx, gen.InsertDefaultAccountParams{
-			ID: p.ID, Name: p.Name, DisplayName: p.DisplayName, HostID: p.HostID,
-			Metadata: p.Metadata, Spec: p.Spec, DefaultOwner: p.DefaultOwner,
-		}); err != nil {
-			return "", fmt.Errorf("account.EnsureDefault: insert: %w", err)
-		}
-	}
-}
-
 func (s *Store) uniqueName(ctx context.Context, base string) (string, error) {
 	var nameErr error
 	name := slug.Unique(base, func(c string) bool {
@@ -234,19 +183,6 @@ func (s *Store) uniqueName(ctx context.Context, base string) (string, error) {
 		return "", fmt.Errorf("name: %w", nameErr)
 	}
 	return name, nil
-}
-
-// defaultOwner is the default_owner value of o's default account; migration 000036 writes the same form.
-func defaultOwner(o meta.Owner) string {
-	if namesNobody(o) || o.Kind == meta.OwnerSystem {
-		return string(meta.OwnerSystem)
-	}
-	return string(o.Kind) + ":" + o.ID
-}
-
-// namesNobody reports an owner the write paths stamp as the system: no kind, or a user without an id (refcheck.StampOwnerID).
-func namesNobody(o meta.Owner) bool {
-	return o.Kind == "" || (o.Kind == meta.OwnerUser && o.ID == "")
 }
 
 func fromRow(r gen.Account) (*Account, error) {
@@ -264,7 +200,7 @@ func fromRow(r gen.Account) (*Account, error) {
 	spec.HostID = r.HostID.String
 	spec.SourceAccountID = r.SourceAccountID.String
 	spec.SharedBy = nil
-	spec.Default = r.DefaultOwner.Valid
+	spec.GroupedByRelay = r.GroupedByRelay
 	spec.Kind = Kind(r.Kind)
 	spec.Closed = r.Closed
 	spec.Holder = nil
@@ -308,9 +244,6 @@ func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
 		Closed:              a.Spec.Closed,
 		FollowsRoleBindings: a.FollowsRoleBindings,
 		ExpectedVersion:     pgtype.Int8{Int64: ver, Valid: ok},
-	}
-	if a.Spec.Default && kind == KindProvider {
-		p.DefaultOwner = text(defaultOwner(a.Meta.Owner))
 	}
 	if a.IsShared() {
 		p.SourceAccountID, p.ShareReceiver = text(a.Spec.SourceAccountID), text(a.Receiver().Key())

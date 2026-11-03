@@ -18,7 +18,6 @@ type Account struct {
 	CreatedAt           pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ResourceVersion     int64              `db:"resource_version" json:"resource_version"`
-	DefaultOwner        pgtype.Text        `db:"default_owner" json:"default_owner"`
 	Kind                string             `db:"kind" json:"kind"`
 	ManagedKey          pgtype.Text        `db:"managed_key" json:"managed_key"`
 	HolderUserID        pgtype.Text        `db:"holder_user_id" json:"holder_user_id"`
@@ -30,6 +29,7 @@ type Account struct {
 	SourceAccountID     pgtype.Text        `db:"source_account_id" json:"source_account_id"`
 	ShareReceiver       pgtype.Text        `db:"share_receiver" json:"share_receiver"`
 	ShareUserID         pgtype.Text        `db:"share_user_id" json:"share_user_id"`
+	GroupedByRelay      bool               `db:"grouped_by_relay" json:"grouped_by_relay"`
 }
 
 type AuditEvent struct {

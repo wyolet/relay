@@ -188,8 +188,8 @@ type HostKeySpec struct {
 	// an id when producing the domain shape.
 	HostID string `json:"hostId"            yaml:"hostId"`
 	// Account is the provider account *name* the key belongs to; keys of one
-	// account share its upstream tier limits. Optional: a key without one
-	// joins its owner's default account at the host.
+	// account share its upstream tier limits. Required: declare the Account
+	// in the same bundle or name one that exists.
 	Account     string           `json:"account,omitempty"     yaml:"account,omitempty"`
 	ValueFrom   HostKeyValueFrom `json:"valueFrom"             yaml:"valueFrom"`
 	DefaultTier string           `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty"`

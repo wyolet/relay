@@ -597,18 +597,19 @@ INSERT INTO policy_binding_accounts (binding_id, account_id, position) VALUES ($
 -- ── accounts, pools, budgets (migration 0035) ────────────────────────────────
 
 -- name: ListAccounts :many
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, grouped_by_relay
 FROM accounts ORDER BY name;
 
 -- name: GetAccount :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, grouped_by_relay
 FROM accounts WHERE id = $1;
 
+-- grouped_by_relay is never written: a new row starts without it, and an update keeps it until the row names its org.
 -- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
 ON CONFLICT (id) DO UPDATE SET
     source_account_id = EXCLUDED.source_account_id,
     share_receiver    = EXCLUDED.share_receiver,
@@ -618,7 +619,7 @@ ON CONFLICT (id) DO UPDATE SET
     host_id       = EXCLUDED.host_id,
     metadata      = EXCLUDED.metadata,
     spec          = EXCLUDED.spec,
-    default_owner = EXCLUDED.default_owner,
+    grouped_by_relay = accounts.grouped_by_relay AND COALESCE(EXCLUDED.spec->>'orgId', '') = '',
     kind          = EXCLUDED.kind,
     managed_key   = EXCLUDED.managed_key,
     holder_user_id = EXCLUDED.holder_user_id,
@@ -643,15 +644,6 @@ ON CONFLICT DO NOTHING;
 -- name: SetAccountMembership :execrows
 UPDATE accounts SET closed = $2, follows_role_bindings = $3, updated_at = NOW()
 WHERE id = $1 AND resource_version = $4 AND (closed <> $2 OR follows_role_bindings <> $3);
-
--- name: GetDefaultAccountID :one
-SELECT id FROM accounts WHERE host_id = $1 AND default_owner = $2;
-
--- A concurrent save may create the same default, or take the name; either conflict inserts nothing and the caller looks again.
--- name: InsertDefaultAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT DO NOTHING;
 
 -- name: AccountNameTaken :one
 SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1);

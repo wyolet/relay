@@ -18,7 +18,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
-// teamOwnedRows is a pruned team without projects that owns one row of every kind whose owner lives only in metadata, plus a default account no key names; ownedLabelled decides whether the owned rows match the prune selector too.
+// teamOwnedRows is a pruned team without projects that owns one row of every kind whose owner lives only in metadata; ownedLabelled decides whether the owned rows match the prune selector too.
 func teamOwnedRows(ownedLabelled bool) *Rows {
 	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}, Labels: pruneLabels}}
 	owner := meta.Owner{Kind: meta.OwnerTeam, ID: tm.Meta.ID}
@@ -31,21 +31,19 @@ func teamOwnedRows(ownedLabelled bool) *Rows {
 	}
 	hostID := meta.NewID()
 	named := &account.Account{Meta: md("team-account"), Spec: account.Spec{HostID: hostID}}
-	keyless := &account.Account{Meta: md("team-default"), Spec: account.Spec{HostID: hostID, Default: true}}
-	keyless.Meta.Labels = nil
 	return &Rows{
 		Teams:          []*team.Team{tm},
 		Policies:       []*policy.Policy{{Meta: md("team-policy")}},
 		HostKeys:       []*hostkey.HostKey{{Meta: md("team-key"), Spec: hostkey.Spec{HostID: hostID, AccountID: named.Meta.ID}}},
 		RateLimits:     []*ratelimit.RateLimit{{Meta: md("team-limit")}},
-		Accounts:       []*account.Account{named, keyless},
+		Accounts:       []*account.Account{named},
 		Pools:          []*apppool.Pool{{Meta: md("team-pool"), Spec: apppool.Spec{HostID: hostID}}},
 		Budgets:        []*budget.Budget{{Meta: md("team-budget"), Spec: budget.Spec{AmountUSD: "10"}}},
 		PolicyBindings: []*policybinding.PolicyBinding{{Meta: md("team-binding")}},
 	}
 }
 
-// A team's prune is refused while it owns rows its delete would orphan or cascade to, as the control API's delete is; a default account no key names goes with the team.
+// A team's prune is refused while it owns rows its delete would orphan or cascade to, as the control API's delete is.
 func TestPruneRefusesATeamThatStillOwnsRows(t *testing.T) {
 	err := pruneAll(teamOwnedRows(false)).run(context.Background(), nil)
 	var invalid *InvalidError
@@ -62,7 +60,7 @@ func TestPruneRefusesATeamThatStillOwnsRows(t *testing.T) {
 	}
 }
 
-// Rows the same run prunes do not block their team, and a keyless default account never does.
+// Rows the same run prunes do not block their team.
 func TestPruneDeletesATeamWithTheRowsItOwns(t *testing.T) {
 	b := pruneAll(teamOwnedRows(true))
 	if err := b.run(context.Background(), nil); err != nil {
@@ -76,10 +74,5 @@ func TestPruneDeletesATeamWithTheRowsItOwns(t *testing.T) {
 	}
 	if len(deleted) == 0 || deleted[len(deleted)-1] != "Team/platform" {
 		t.Fatalf("deletes = %v, want the team last", deleted)
-	}
-	for _, d := range deleted {
-		if d == "Account/team-default" {
-			t.Fatalf("deletes = %v: the keyless default account goes with the team, not as its own delete", deleted)
-		}
 	}
 }

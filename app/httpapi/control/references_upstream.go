@@ -140,19 +140,6 @@ func scanBudgetRefs(context.Context, Deps, string) ([]referenceItem, error) {
 	return []referenceItem{}, nil
 }
 
-// accountsInUse reports whether a provider account blocks the delete of its host or owner. A default account no key names does not: autofill made it and the next key recreates it, so it goes with the host (foreign key) or the owner (000036's trigger). A caller account never does itself: it goes with its team or project, and the keys in it are listed instead.
-func accountsInUse(ctx context.Context, d Deps) (func(*account.Account) bool, error) {
-	keys, err := d.Stores.HostKey.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list host-keys: %w", err)
-	}
-	held := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		held[k.Spec.AccountID] = true
-	}
-	return func(a *account.Account) bool { return a.IsProvider() && (!a.Spec.Default || held[a.Meta.ID]) }, nil
-}
-
 // scanUpstreamAtHost lists the accounts and pools held at a host; neither
 // means anything without it.
 func scanUpstreamAtHost(ctx context.Context, d Deps, hostID string) ([]referenceItem, error) {
@@ -162,12 +149,8 @@ func scanUpstreamAtHost(ctx context.Context, d Deps, hostID string) ([]reference
 		if err != nil {
 			return nil, fmt.Errorf("list accounts: %w", err)
 		}
-		inUse, err := accountsInUse(ctx, d)
-		if err != nil {
-			return nil, err
-		}
 		for _, a := range accounts {
-			if a.Spec.HostID == hostID && inUse(a) {
+			if a.Spec.HostID == hostID && a.IsProvider() {
 				out = append(out, referenceItem{Kind: "account", ID: a.Meta.ID, Name: a.Meta.Name, Via: "spec.hostId", owner: a.Meta.Owner})
 			}
 		}
@@ -195,10 +178,7 @@ func scanUpstreamOwnedBy(ctx context.Context, d Deps, kind meta.OwnerKind, id st
 		if err != nil {
 			return nil, fmt.Errorf("list accounts: %w", err)
 		}
-		inUse, err := accountsInUse(ctx, d)
-		if err != nil {
-			return nil, err
-		}
+		// A caller account never blocks itself: it goes with its team or project, and the keys in it are listed instead.
 		callers := map[string]bool{}
 		for _, a := range accounts {
 			switch {
@@ -206,7 +186,7 @@ func scanUpstreamOwnedBy(ctx context.Context, d Deps, kind meta.OwnerKind, id st
 			case !ownedBy(a.Meta.Owner, kind, id), a.IsShared():
 			case !a.IsProvider():
 				callers[a.Meta.ID] = true
-			case inUse(a):
+			default:
 				out = append(out, referenceItem{Kind: "account", ID: a.Meta.ID, Name: a.Meta.Name, Via: "metadata.owner.id", owner: a.Meta.Owner})
 			}
 		}

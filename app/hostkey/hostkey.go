@@ -99,8 +99,8 @@ type Spec struct {
 	// Replaces the pre-refactor Meta.Owner pointing at a Host.
 	HostID string `json:"hostId" yaml:"hostId" validate:"required" doc:"Id of the host this key authenticates to."`
 
-	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits, and the account's bound tier policy caps them. Optional on write: Store.Upsert fills in the owner's default account at HostID. The account must be at HostID, a cross-row check in app/refcheck.
-	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid" doc:"Id of the provider account (organization) the key belongs to. Keys of one account share its upstream limits, and the policy bound to the account caps them. The account must be at hostId and have the key's owner. Omitted on create joins the owner's default account at the host; omitted on update keeps the stored account."`
+	// AccountID is the provider account (organization) the key belongs to; keys of one account share its upstream limits, and the account's bound tier policy caps them. Required: nothing makes an account for a key. The account must be at HostID, a cross-row check in app/refcheck.
+	AccountID string `json:"accountId,omitempty" yaml:"accountId,omitempty" validate:"omitempty,uuid" doc:"Id of the provider account (organization) the key belongs to. Keys of one account share its upstream limits, and the policy bound to the account caps them. The account must be at hostId and have the key's owner. Required on create and update: a key without one answers 400 account_required; create the provider account at the host first."`
 
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required" doc:"Where the secret comes from."`
 	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug" deprecated:"true" doc:"Stored but not applied to requests. Upstream tier limits come from the policy bound to the key's account."`
@@ -155,6 +155,9 @@ var reservedEnvPrefixes = []string{"RELAY_", "WYOLET_"}
 
 // ErrReservedEnv refuses an env ref under a reserved name. It leaves the variable name out: the reason is shown to anyone who can read the key.
 var ErrReservedEnv = errors.New("valueFrom.env names a variable reserved for relay's own configuration (RELAY_*, WYOLET_*)")
+
+// ErrNoAccount refuses a key that names no provider account.
+var ErrNoAccount = errors.New("a host key needs a provider account; create one at this host first")
 
 // reservedEnv reports whether name falls under relay's own configuration. Case is ignored because some platforms resolve env names case-insensitively.
 func reservedEnv(name string) bool {

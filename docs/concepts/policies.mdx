@@ -16,7 +16,7 @@ Every request runs in one account, its [lane](/concepts/accounts#lanes), and cli
 | Personal account | The lane |
 | Provider account used as a lane | None: its own policy applies as the upstream rung of its keys, which are all it reaches |
 
-On the upstream side, each host key's [provider account](/concepts/key-pooling#accounts) is a rung: its policy, usually a [tier preset](#tier-presets), applies to every request a key of that account serves, whoever the caller is. Every host key has an account: one saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host.
+On the upstream side, each host key's [provider account](/concepts/key-pooling#accounts) is a rung: its policy, usually a [tier preset](#tier-presets), applies to every request a key of that account serves, whoever the caller is. Every host key names its account; one that names none is refused.
 
 Refusals, usage and metrics name the rungs `team`, `project`, `lane` and, upstream, `account`.
 
@@ -170,7 +170,7 @@ The delete answers `200` with the links it took, grouped by the kind and field t
   "items": [{"id": "…", "name": "ml"}, {"id": "…", "name": "search"}]}]}
 ```
 
-`GET /api/{plural}/by-id/{id}/references` lists the same before you delete. Some deletes are refused with `409 resource_in_use` instead: a policy still used by a binding, an account still named by host keys, relay keys or a binding, and a host that still has accounts or pools. A default account no host key names never blocks a delete; it goes with its host, team or project.
+`GET /api/{plural}/by-id/{id}/references` lists the same before you delete. Some deletes are refused with `409 resource_in_use` instead: a policy still used by a binding, an account still named by host keys, relay keys or a binding, and a host that still has accounts or pools.
 
 ## Finding problems
 

@@ -98,7 +98,6 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
 		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error {
 			keepHostKeySecret(prev, next)
-			keepAccount(prev, next)
 			return nil
 		},
 	}); err != nil {
@@ -142,10 +141,6 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	})
 }
 
-// keepAccount keeps the account of a key declared without one, as
-// hostkey.Store.Upsert does, so the diff shows what the save writes. A key
-// moved to another owner or host leaves its account for the new owner's
-// default, which the save fills.
 // keepAccountPlace keeps what relay decides about a caller account (its owner, holder, closed mark and kind), so a document edits only its display fields and payload logging; a document cannot give it a host or turn a provider account into one. A share keeps the account it was shared from and its receiver.
 func keepAccountPlace(prev, next *account.Account) error {
 	if prev.IsProvider() != next.IsProvider() {
@@ -217,12 +212,6 @@ func refuseCallerAccountPrune(a *account.Account) error {
 		return nil
 	}
 	return fmt.Errorf("relay keeps this account while its %s exists", a.Meta.Owner.Kind)
-}
-
-func keepAccount(prev, next *hostkey.HostKey) {
-	if next.Spec.AccountID == "" && prev.Spec.HostID == next.Spec.HostID && prev.Meta.Owner == next.Meta.Owner {
-		next.Spec.AccountID = prev.Spec.AccountID
-	}
 }
 
 // keepHostKeySecret keeps the stored secret of a stored or oauth host key
