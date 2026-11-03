@@ -670,6 +670,17 @@ func (q *Queries) GetPolicyBindingAccounts(ctx context.Context, bindingID string
 	return items, nil
 }
 
+const getPolicyBindingIDForAccount = `-- name: GetPolicyBindingIDForAccount :one
+SELECT binding_id FROM policy_binding_accounts WHERE account_id = $1
+`
+
+func (q *Queries) GetPolicyBindingIDForAccount(ctx context.Context, accountID string) (string, error) {
+	row := q.db.QueryRow(ctx, getPolicyBindingIDForAccount, accountID)
+	var binding_id string
+	err := row.Scan(&binding_id)
+	return binding_id, err
+}
+
 const getPolicyBudgets = `-- name: GetPolicyBudgets :many
 SELECT policy_id, budget_id, position, shared FROM policy_budgets WHERE policy_id = $1 ORDER BY position
 `

@@ -81,16 +81,14 @@ func (s *Store) Get(ctx context.Context, id string) (*PolicyBinding, error) {
 
 // Holding returns the binding that holds accountID, nil when none does.
 func (s *Store) Holding(ctx context.Context, accountID string) (*PolicyBinding, error) {
-	rows, err := gen.New(s.db).ListPolicyBindingAccounts(ctx)
+	id, err := gen.New(s.db).GetPolicyBindingIDForAccount(ctx, accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("policybinding.Holding: %w", err)
 	}
-	for _, r := range rows {
-		if r.AccountID == accountID {
-			return s.Get(ctx, r.BindingID)
-		}
-	}
-	return nil, nil
+	return s.Get(ctx, id)
 }
 
 // Upsert writes the binding and its accounts in one transaction.
