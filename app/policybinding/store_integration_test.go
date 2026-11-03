@@ -199,3 +199,28 @@ func TestIntegration_UserOwnedBinding(t *testing.T) {
 		t.Fatalf("user-owned binding after its user was deleted = %v (err %v), want gone", got, err)
 	}
 }
+
+// Holding finds the one binding that holds an account, and nothing once the account leaves it.
+func TestIntegration_Holding(t *testing.T) {
+	f := setupBindings(t, "holding")
+	teamAcct := f.managed(t, account.ForTeam(f.team.Meta.ID, f.team.Meta.Name, ""))
+	projAcct := f.managed(t, account.ForProject(f.project.Meta.ID, f.project.Meta.Name, ""))
+	if got, err := f.store.Holding(f.ctx, teamAcct); err != nil || got != nil {
+		t.Fatalf("Holding of an unbound account = %+v (err %v), want none", got, err)
+	}
+	b, err := f.bind("holder", meta.Owner{Kind: meta.OwnerSystem}, projAcct, teamAcct)
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	got, err := f.store.Holding(f.ctx, teamAcct)
+	if err != nil || got == nil || got.Meta.ID != b.Meta.ID || !slices.Equal(got.Spec.AccountIDs, []string{projAcct, teamAcct}) {
+		t.Fatalf("Holding = %+v (err %v), want %s with both accounts", got, err, b.Meta.ID)
+	}
+	b.Spec.AccountIDs = []string{projAcct}
+	if err := f.store.Upsert(f.ctx, b); err != nil {
+		t.Fatalf("drop the team account: %v", err)
+	}
+	if got, err := f.store.Holding(f.ctx, teamAcct); err != nil || got != nil {
+		t.Fatalf("Holding after the account left = %+v (err %v), want none", got, err)
+	}
+}

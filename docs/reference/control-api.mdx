@@ -196,7 +196,10 @@ GET  /api/pools/{ref}/keys       the pool's host keys in pool order, without val
 GET  /api/accounts/{ref}/keys    the host keys that name the account, without values; a shared account's are its real account's, readOnly
 POST /api/accounts/{ref}/shares  share a provider account: {"receiver": {"kind": "user|team|project|serviceaccount", "id"}}
 GET  /api/accounts/{ref}/shares  its shares, each {sharedAccount: {id, name}, receiver: {kind, id, name}, usage: {requests, costNanos, unpriced}}; since= sets the usage window (default 30d)
+PUT  /api/accounts/{ref}/policy  set the account's policy: {"policyId": "<id>"} or {"policyId": null}; answers {binding, previousBindingId?, previousBindingDeleted?}
 ```
+
+`PUT …/policy` runs in one transaction: it takes the account out of the binding that holds it, deleting that binding if it held no other account, and for a `policyId` creates a binding of its own, owned by the account's owner. It never adds the account to another binding. A holding binding that is enabled and already uses the policy is left as it is. It needs update (or delete) on the old binding and create in the account's scope, and refuses with the answers of a policy-binding save above; a concurrent change answers `409` `conflict` and writes nothing.
 
 A pool's keys and accounts must be at the pool's host, and an account named by a host key must be at that key's host. A shared account is made only by `POST …/shares` (`spec.sourceAccountId` on `POST /api/accounts` answers `400`); a PUT keeps its real account, owner and host. See [Sharing an account](/concepts/key-pooling#sharing-an-account). A host key saved without `accountId` gets its owner's default account at its host, created on first use; an owner has one default account per host, and marking a second `"default": true` answers `409`. See [Default accounts](/concepts/key-pooling#default-accounts).
 

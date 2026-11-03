@@ -181,6 +181,20 @@ func TestControlOpenAPIHasSharing(t *testing.T) {
 	}
 }
 
+// The account pages set an account's policy through one route; its answer is a named schema with the binding the account ends up in.
+func TestControlOpenAPIHasAccountPolicy(t *testing.T) {
+	doc := controlDoc(t)
+	if ref := responseRef(operation(t, doc, "/accounts/{ref}/policy", "put"), "200"); ref != "#/components/schemas/AccountPolicy" {
+		t.Errorf("PUT account policy answers %q, want AccountPolicy", ref)
+	}
+	props := schemaProps(t, doc, "AccountPolicy")
+	for _, f := range []string{"binding", "previousBindingId", "previousBindingDeleted"} {
+		if _, ok := props[f]; !ok {
+			t.Errorf("AccountPolicy lacks %s", f)
+		}
+	}
+}
+
 func controlDoc(t *testing.T) map[string]any {
 	t.Helper()
 	api := Mount(chi.NewRouter(), mountDeps(t))
