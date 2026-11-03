@@ -13,12 +13,10 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
-	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
@@ -167,17 +165,15 @@ func (d Deps) applyAccountPolicy(ctx context.Context, acc *account.Account, poli
 
 // shrinkHeldBinding saves next, held without the account, as PUT /policy-bindings/by-id/{id} would.
 func (d Deps) shrinkHeldBinding(ctx context.Context, held, next *policybinding.PolicyBinding) (audit.Row, error) {
-	if err := d.Authz.Authorize(ctx, "policy-bindings.update", authz.Resource{Kind: "policy-binding", ID: held.Meta.ID, Owner: &held.Meta.Owner}); err != nil {
-		return audit.Row{}, mapAuthzErr(err)
+	checks := policyBindingChecks(d)
+	if err := checks.mayUpdate(ctx, held.Meta.ID, &held.Meta); err != nil {
+		return audit.Row{}, err
 	}
-	if err := settings.Governs(d.Catalog, settings.OpEdit, "policy-binding", string(held.Meta.GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
-		return audit.Row{}, huma.Error403Forbidden(err.Error())
+	if err := checks.valid(next); err != nil {
+		return audit.Row{}, err
 	}
-	if err := next.Validate(); err != nil {
-		return audit.Row{}, huma.Error400BadRequest(err.Error())
-	}
-	if err := guardPolicyBinding(d)(ctx, "update", held, next); err != nil {
-		return audit.Row{}, mapGuardErr(err)
+	if err := checks.guarded(ctx, "update", held, next); err != nil {
+		return audit.Row{}, err
 	}
 	fields := audit.DiffFields(held, next)
 	next.Meta.Dirty = true
@@ -189,14 +185,12 @@ func (d Deps) shrinkHeldBinding(ctx context.Context, held, next *policybinding.P
 
 // deleteHeldBinding deletes held, which holds only the account, as DELETE /policy-bindings/by-id/{id} would.
 func (d Deps) deleteHeldBinding(ctx context.Context, held *policybinding.PolicyBinding) (audit.Row, error) {
-	if err := d.Authz.Authorize(ctx, "policy-bindings.delete", authz.Resource{Kind: "policy-binding", ID: held.Meta.ID, Owner: &held.Meta.Owner}); err != nil {
-		return audit.Row{}, mapAuthzErr(err)
+	checks := policyBindingChecks(d)
+	if err := checks.mayDelete(ctx, held.Meta.ID, &held.Meta); err != nil {
+		return audit.Row{}, err
 	}
-	if err := settings.Governs(d.Catalog, settings.OpDelete, "policy-binding", string(held.Meta.GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
-		return audit.Row{}, huma.Error403Forbidden(err.Error())
-	}
-	if err := guardPolicyBinding(d)(ctx, "delete", held, nil); err != nil {
-		return audit.Row{}, mapGuardErr(err)
+	if err := checks.guarded(ctx, "delete", held, nil); err != nil {
+		return audit.Row{}, err
 	}
 	if _, err := d.refuseInUse(ctx, "policy-binding", held.Meta.ID, held.Meta.Name); err != nil {
 		return audit.Row{}, err
@@ -219,14 +213,15 @@ func (d Deps) createAccountBinding(ctx context.Context, acc *account.Account, po
 		Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{acc.Meta.ID}},
 	}
 	b.Meta.Name = slug.Unique(slug.From(name+"-"+acc.Meta.Name), slugTakenFn(d.Stores.PolicyBinding, pbmeta))
-	if err := guardPolicyBinding(d)(ctx, "create", nil, b); err != nil {
-		return nil, audit.Row{}, mapGuardErr(err)
+	checks := policyBindingChecks(d)
+	if err := checks.guarded(ctx, "create", nil, b); err != nil {
+		return nil, audit.Row{}, err
 	}
-	if err := d.Authz.Authorize(ctx, "policy-bindings.create", authz.Resource{Kind: "policy-binding", Owner: &b.Meta.Owner}); err != nil {
-		return nil, audit.Row{}, mapAuthzErr(err)
+	if err := checks.mayCreate(ctx, &b.Meta.Owner); err != nil {
+		return nil, audit.Row{}, err
 	}
-	if err := b.Validate(); err != nil {
-		return nil, audit.Row{}, huma.Error400BadRequest(err.Error())
+	if err := checks.valid(b); err != nil {
+		return nil, audit.Row{}, err
 	}
 	if err := d.Stores.PolicyBinding.Upsert(ctx, b); err != nil {
 		return nil, audit.Row{}, err

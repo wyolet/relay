@@ -112,6 +112,15 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 	}
 }
 
+// policyBindingChecks are the checks the policy-bindings routes run, shared with PUT /accounts/{ref}/policy.
+func policyBindingChecks(d Deps) kindChecks[policybinding.PolicyBinding] {
+	return kindChecks[policybinding.PolicyBinding]{
+		plural: "policy-bindings", singular: "policy-binding", authz: d.Authz, gov: d.Catalog,
+		validate: func(b *policybinding.PolicyBinding) error { return b.Validate() },
+		guard:    guardPolicyBinding(d),
+	}
+}
+
 func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 	return func(ctx context.Context, action string, _, incoming *policybinding.PolicyBinding) error {
 		if action == "delete" || incoming == nil {

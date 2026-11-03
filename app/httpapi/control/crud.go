@@ -154,6 +154,7 @@ func registerKind[T any](
 ) kindRows {
 	base := "/" + plural
 	tag := plural
+	checks := kindChecks[T]{plural: plural, singular: singular, authz: authzr, gov: gov, validate: validate, guard: guard}
 
 	findRow := func(ctx context.Context, ref string) (*T, authz.Resource, error) {
 		id := ref
@@ -351,24 +352,20 @@ func registerKind[T any](
 			// The guard runs first: on kinds whose owner mirrors a spec field
 			// (Project, ServiceAccount) it is what re-derives
 			// the owner, and the owner is what the decision below turns on.
-			if guard != nil {
-				if err := guard(ctx, "create", nil, v); err != nil {
-					return nil, mapGuardErr(err)
-				}
+			if err := checks.guarded(ctx, "create", nil, v); err != nil {
+				return nil, err
 			}
 			// Authorize AFTER owner stamping so an owner-aware Authorizer can
 			// decide on the row's final provenance (user-owned rows are open to
 			// any authenticated caller; anything else needs a binding).
-			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
-				return nil, mapAuthzErr(err)
+			if err := checks.mayCreate(ctx, &m.Owner); err != nil {
+				return nil, err
 			}
 			// Validate AFTER stamping id+slug so the entity's Validate() sees
 			// the same shape the store will persist. Rejecting here keeps bad
 			// rows out of PG (which would otherwise break Bootstrap).
-			if validate != nil {
-				if err := validate(v); err != nil {
-					return nil, huma.Error400BadRequest(err.Error())
-				}
+			if err := checks.valid(v); err != nil {
+				return nil, err
 			}
 			audit.Changed(ctx, []string{audit.AnyField})
 			create := store.Upsert
@@ -410,11 +407,8 @@ func registerKind[T any](
 		}
 		// Authorize with the fetched row's owner so an owner-aware Authorizer
 		// can enforce owner.id == caller for user-owned rows.
-		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
-		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
-			return nil, huma.Error403Forbidden(err.Error())
+		if err := checks.mayUpdate(ctx, in.ID, metaOf(existing)); err != nil {
+			return nil, err
 		}
 		v := &in.Body
 		m := metaOf(v)
@@ -442,22 +436,18 @@ func registerKind[T any](
 			}
 		}
 		m.CatalogDetachedAt = metaOf(existing).CatalogDetachedAt
-		if validate != nil {
-			if err := validate(v); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
-			}
+		if err := checks.valid(v); err != nil {
+			return nil, err
 		}
-		if guard != nil {
-			if err := guard(ctx, "update", existing, v); err != nil {
-				return nil, mapGuardErr(err)
-			}
+		if err := checks.guarded(ctx, "update", existing, v); err != nil {
+			return nil, err
 		}
 		// A row moved by metadata.owner, or by the spec field its owner mirrors
 		// (re-derived in validate or the guard), lands in a new scope, which
 		// takes the create grant there, as POST of the same body would.
 		if m.Owner != metaOf(existing).Owner {
-			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
-				return nil, mapAuthzErr(err)
+			if err := checks.mayCreate(ctx, &m.Owner); err != nil {
+				return nil, err
 			}
 		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
@@ -507,16 +497,11 @@ func registerKind[T any](
 		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
-			return nil, mapAuthzErr(err)
+		if err := checks.mayDelete(ctx, in.ID, metaOf(existing)); err != nil {
+			return nil, err
 		}
-		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).GovernedOwnerKind()), authz.IsAdmin(ctx)); err != nil {
-			return nil, huma.Error403Forbidden(err.Error())
-		}
-		if guard != nil {
-			if err := guard(ctx, "delete", existing, nil); err != nil {
-				return nil, mapGuardErr(err)
-			}
+		if err := checks.guarded(ctx, "delete", existing, nil); err != nil {
+			return nil, err
 		}
 		var dropped *droppedLinks
 		if refuseInUse != nil {
