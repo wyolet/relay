@@ -174,6 +174,47 @@ func TestReach_AccountMatchesListing(t *testing.T) {
 	}
 }
 
+// Members of one project share their ladder, so the check folds once per project however many are bound, and still counts every account.
+func TestModelRefBlocked_FoldsOncePerLadder(t *testing.T) {
+	folds := func(members int) (int, string) {
+		b, _ := reachWorld()
+		pa := b.w.pool(b.hostA, b.a1)
+		b.w.bindPolicy(b.w.policy("platform-default", policy.Spec{Models: []string{"acme/m1"}}), b.w.teamAccount(b.team))
+		proj2 := b.w.project(b.w.team())
+		pol := b.w.policy("members", policy.Spec{Models: []string{"acme/m2"}, PoolIDs: []string{pa.Meta.ID}})
+		var accts []*account.Account
+		for range members {
+			accts = append(accts, b.w.member(b.w.user(), meta.Owner{Kind: meta.OwnerProject, ID: b.proj.Meta.ID}))
+		}
+		accts = append(accts, b.w.member(b.w.user(), meta.Owner{Kind: meta.OwnerProject, ID: proj2.Meta.ID}))
+		b.w.bindPolicy(pol, accts...)
+
+		n := 0
+		prev := foldBound
+		foldBound = func(tx *engine.Txn, acc *account.Account, over *rungOverride) *CallerPlan {
+			n++
+			return prev(tx, acc, over)
+		}
+		t.Cleanup(func() { foldBound = prev })
+		h := b.w.start(t)
+		foldBound = prev
+		i := issueAt(h.issues(KindPolicy, pol.Meta.ID), IssueModelRefBlocked, "spec.models[0]")
+		if i == nil {
+			t.Fatalf("%d members: no %s", members, IssueModelRefBlocked)
+		}
+		return n, i.Message
+	}
+	few, fewMsg := folds(3)
+	many, manyMsg := folds(60)
+	t.Logf("folds: %d with 3 members, %d with 60", few, many)
+	if few != many {
+		t.Errorf("folds: %d with 3 members, %d with 60; want the same", few, many)
+	}
+	if !strings.HasSuffix(fewMsg, "for 3 of the 4 accounts bound to this policy") || !strings.HasSuffix(manyMsg, "for 60 of the 61 accounts bound to this policy") {
+		t.Errorf("messages %q / %q, want exact counts", fewMsg, manyMsg)
+	}
+}
+
 // model_ref_blocked names the rung above that keeps an entry from the bound accounts, with a count when only some are kept.
 func TestModelRefBlocked(t *testing.T) {
 	b, _ := reachWorld()
