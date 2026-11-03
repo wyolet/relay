@@ -126,7 +126,7 @@ func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
 	}, func(ctx context.Context, in *userUpdateInput) (*userUpdateOutput, error) {
 		var out *userUpdateOutput
 		var err error
-		// personalAccount lives in a column of relay's beside the directory row: both writes commit together or neither does.
+		// personalAccount lives in a table of relay's beside the directory row: both writes commit together or neither does.
 		if in.Body.PersonalAccount != nil && d.Stores != nil {
 			err = d.Stores.InTx(ctx, func(ctx context.Context, tx *appcatalog.Stores) error {
 				txd := d.boundTo(tx)

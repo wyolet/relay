@@ -1,4 +1,4 @@
-// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the reads it has no equivalent for (batched existence and username lookups, the snapshot's token versions and disabled ids, and the personal_account column relay owns) stay on relay's sqlc queries. (nil, nil) on not-found.
+// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the reads it has no equivalent for (batched existence and username lookups, the snapshot's token versions and disabled ids, and the personal-account values in relay's user_personal_accounts table) stay on relay's sqlc queries. (nil, nil) on not-found.
 
 package user
 
@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/wyolet/relay/auth/directory"
 	authpg "github.com/wyolet/relay/auth/store/postgres"
@@ -40,7 +39,6 @@ func (s *Store) Get(ctx context.Context, id string) (*User, error) {
 	if u == nil {
 		return nil, nil
 	}
-	// Read after the row, so a version paired with an older value is never the newest one the plans see.
 	if u.PersonalAccount, err = s.q.GetUserPersonalAccount(ctx, id); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("user.Get: personal account: %w", err)
 	}
@@ -78,7 +76,7 @@ func (s *Store) List(ctx context.Context) ([]*User, error) {
 	}
 	personal := make(map[string]string, len(set))
 	for _, r := range set {
-		personal[r.ID] = r.PersonalAccount
+		personal[r.UserID] = r.Value
 	}
 	out := make([]*User, 0, len(rows))
 	for _, d := range rows {
@@ -91,12 +89,23 @@ func (s *Store) List(ctx context.Context) ([]*User, error) {
 
 // SetPersonalAccount stores the user's own say on their personal account: "on", "off", or "" to leave it to their groups and the deployment. It reports false when no user has id.
 func (s *Store) SetPersonalAccount(ctx context.Context, id, value string) (bool, error) {
-	n, err := s.q.SetUserPersonalAccount(ctx, gen.SetUserPersonalAccountParams{ID: id, PersonalAccount: pgtype.Text{String: value, Valid: value != ""}})
+	var err error
+	if value == "" {
+		err = s.q.DeleteUserPersonalAccount(ctx, id)
+	} else {
+		err = s.q.SetUserPersonalAccount(ctx, gen.SetUserPersonalAccountParams{UserID: id, Value: value})
+	}
+	if storage.IsForeignKeyViolation(err, personalAccountUserKey) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("user.SetPersonalAccount: %w", err)
 	}
-	return n > 0, nil
+	return true, nil
 }
+
+// personalAccountUserKey is the foreign key from user_personal_accounts to users.
+const personalAccountUserKey = "user_personal_accounts_user_id_fkey"
 
 // MissingIDs returns the subset of ids with no users row, in one query.
 // Callers validating a membership list would otherwise issue a Get per

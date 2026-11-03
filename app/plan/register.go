@@ -131,8 +131,9 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	input(e, KindTeam, src.Teams, metaOf(func(r *team.Team) meta.Metadata { return r.Meta }), 1)
 	input(e, KindProject, src.Projects, metaOf(func(r *project.Project) meta.Metadata { return r.Meta }), 16)
 	input(e, KindServiceAccount, src.ServiceAccounts, metaOf(func(r *serviceaccount.ServiceAccount) meta.Metadata { return r.Meta }), 64)
+	// Version 0: a user's personalAccount sits in a table of relay's whose writes leave the user row's version alone, so users are compared by value.
 	input(e, KindUser, src.Users, func(u *user.User) engine.Meta {
-		return engine.Meta{ID: u.ID, Name: u.Username, Version: version(u.ResourceVersion)}
+		return engine.Meta{ID: u.ID, Name: u.Username}
 	}, 64)
 	input(e, KindKey, src.Keys, metaOf(func(r *key.Key) meta.Metadata { return r.Meta }), 256)
 	if !src.RBAC {

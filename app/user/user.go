@@ -28,7 +28,7 @@ type User struct {
 	Roles        []string `json:"roles,omitempty"`
 	Disabled     bool     `json:"disabled,omitempty"`
 
-	// PersonalAccount is the user's own say on their personal account ("on", "off", or "" to inherit), kept in a column relay owns: Get and List fill it, the directory's writes leave it alone.
+	// PersonalAccount is the user's own say on their personal account ("on", "off", or "" to inherit), kept in a table relay owns: Get and List fill it, the directory's writes leave it alone.
 	PersonalAccount string `json:"personalAccount,omitempty"`
 
 	// TokenVersion is the generation every inference token this user holds
