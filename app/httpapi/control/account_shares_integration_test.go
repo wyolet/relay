@@ -49,7 +49,7 @@ type sharesWorld struct {
 	sa                   *serviceaccount.ServiceAccount
 }
 
-func newSharesWorld(t *testing.T) *sharesWorld {
+func newSharesWorld(t *testing.T, opts ...func(*Deps)) *sharesWorld {
 	t.Helper()
 	ctx := t.Context()
 	pgPool := storagetest.Pool(t)
@@ -122,6 +122,9 @@ func newSharesWorld(t *testing.T) *sharesWorld {
 	actors := map[string]*actor.Actor{"root": {AdminToken: true, Username: "admin-token"}}
 	for name, id := range w.users {
 		actors[name] = &actor.Actor{UserID: id, Username: name, SessionID: "s-" + name, Subjects: appcatalog.UserSubjects(id, nil, nil)}
+	}
+	for _, opt := range opts {
+		opt(&deps)
 	}
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-User", actors))

@@ -4,6 +4,7 @@ package control
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -25,10 +27,10 @@ type policyWorld struct {
 	shared             *policybinding.PolicyBinding
 }
 
-func newPolicyWorld(t *testing.T) *policyWorld {
+func newPolicyWorld(t *testing.T, opts ...func(*Deps)) *policyWorld {
 	t.Helper()
 	ctx := t.Context()
-	w := &policyWorld{sharesWorld: newSharesWorld(t)}
+	w := &policyWorld{sharesWorld: newSharesWorld(t, opts...)}
 	teamOne := meta.Owner{Kind: meta.OwnerTeam, ID: w.teamOne.Meta.ID}
 	mkPolicy := func(name string, owner meta.Owner) *policy.Policy {
 		p := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: owner}}
@@ -180,6 +182,48 @@ func TestAccountPolicy_Refusals(t *testing.T) {
 		t.Fatalf("a stranger's change: %d %s, want 404", rec.Code, rec.Body)
 	}
 	unchanged(t)
+}
+
+// Each write is audited as its own policy-bindings call would be: a move out of a binding holding others as its update plus the create, a move out of the last account's binding as its delete plus the create.
+func TestAccountPolicy_Audit(t *testing.T) {
+	sink := &auditSink{}
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
+	w := newPolicyWorld(t, func(d *Deps) { d.Audit = em })
+
+	rec, fromShared := w.setPolicy("dave", w.teamAcct.Meta.ID, &w.polB.Meta.ID)
+	wantStatus(t, rec, http.StatusOK)
+	rec, fromOwn := w.setPolicy("dave", w.daveAcct, &w.polB.Meta.ID)
+	wantStatus(t, rec, http.StatusOK)
+	em.Close()
+
+	type entry struct{ action, id string }
+	var got []entry
+	for _, ev := range sink.all() {
+		if ev.Actor.ID != w.users["dave"] || ev.Outcome.Status != audit.StatusAllowed || ev.Outcome.Code != http.StatusOK || ev.Resource.Kind != "policy-binding" {
+			t.Errorf("event %s on %s: actor %+v outcome %+v kind %q", ev.Action, ev.Resource.ID, ev.Actor, ev.Outcome, ev.Resource.Kind)
+		}
+		var fields []string
+		if ev.Change != nil {
+			fields = ev.Change.Fields
+		}
+		want := []string{audit.AnyField}
+		if ev.Action == "policy-bindings.update" {
+			want = []string{"spec.accountIds"}
+		}
+		if !slices.Equal(fields, want) {
+			t.Errorf("%s on %s changed %v, want %v", ev.Action, ev.Resource.ID, fields, want)
+		}
+		got = append(got, entry{ev.Action, ev.Resource.ID})
+	}
+	want := []entry{
+		{"policy-bindings.update", w.shared.Meta.ID},
+		{"policy-bindings.create", fromShared.Binding.Meta.ID},
+		{"policy-bindings.delete", w.shared.Meta.ID},
+		{"policy-bindings.create", fromOwn.Binding.Meta.ID},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("audit entries = %v, want %v", got, want)
+	}
 }
 
 // Concurrent calls on one account never leave it in two bindings or none: each lands whole or answers 409.
