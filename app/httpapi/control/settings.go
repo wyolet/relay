@@ -69,6 +69,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionOTLPReceiver,
 		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy grant and none of the rate limits of inference apply; export requests are capped per credential. captureContent also stores the message content clients report, in the payload store, while payload logging is enabled, and only where the credential's account allows it: the nearest account on its ladder that sets payloadLogging decides (lane, then project, then team), else the key's own payloadLoggingEnabled. Both default off. Hot-reloaded.",
 	})
+	registerSettingsSection[settings.Accounts](api, d, protect, settings.Section{
+		Name:        settings.SectionAccounts,
+		Description: "Accounts relay keeps for users. personalAccounts (on by default) turns every user's personal account on or off: off closes personal accounts and the provider accounts users own personally, so users act only through their teams, projects and service accounts; nothing is deleted and turning it back on restores them. A user's own personalAccount wins, then their enabled groups' (off wins over on), then this. Admin only.",
+	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
 			Name:        gs,

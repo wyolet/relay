@@ -4,6 +4,7 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pool"
 )
 
@@ -11,7 +12,7 @@ import (
 // Account / Pool / Budget
 // ---------------------------------------------------------------------------
 
-// ToAccount resolves the host name. A document with no host names a caller account, whose holder and kind the loader takes from the stored row.
+// ToAccount resolves the host name. A document with no host names a caller account, whose holder and kind the loader takes from the stored row. A provider account with no owner is the system's, as a host key with none is, so the two documents pair up as written.
 func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 	var hostID string
 	if d.Spec.Host != "" {
@@ -22,10 +23,13 @@ func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 		hostID = id
 	}
 	m := d.Metadata.toMeta()
+	if m.Owner.Kind == "" && hostID != "" {
+		m.Owner.Kind = meta.OwnerSystem
+	}
 	resolveScopeOwner(&m.Owner, idx)
 	a := &account.Account{
 		Meta: m,
-		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID, Default: d.Spec.Default, PayloadLogging: account.PayloadLogging(d.Spec.PayloadLogging)},
+		Spec: account.Spec{HostID: hostID, OrgID: d.Spec.OrgID, PayloadLogging: account.PayloadLogging(d.Spec.PayloadLogging)},
 	}
 	if d.Spec.SourceAccount != "" {
 		id, ok := idx.AccountID(d.Spec.SourceAccount)
@@ -45,7 +49,7 @@ func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 }
 
 func FromAccount(a *account.Account, rev ReverseResolver) AccountDTO {
-	spec := AccountSpec{OrgID: a.Spec.OrgID, Default: a.Spec.Default, PayloadLogging: string(a.Spec.PayloadLogging)}
+	spec := AccountSpec{OrgID: a.Spec.OrgID, PayloadLogging: string(a.Spec.PayloadLogging)}
 	if a.Spec.HostID != "" {
 		spec.Host = nameOr(rev.HostName, a.Spec.HostID)
 	}

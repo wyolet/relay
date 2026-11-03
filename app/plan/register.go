@@ -24,6 +24,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
@@ -53,6 +54,8 @@ const (
 	KindRole           engine.Kind = "role"
 	KindRoleBinding    engine.Kind = "rolebinding"
 	KindGroup          engine.Kind = "group"
+	// KindAccountsSetting is the accounts settings section, one row keyed by its section name.
+	KindAccountsSetting engine.Kind = "accountssetting"
 )
 
 // Derived kinds, built by the controllers.
@@ -73,6 +76,7 @@ const (
 	KindKeyPlanIndex     engine.Kind = "keyplanindex"
 	KindUserPlan         engine.Kind = "userplan"
 	KindUserIndex        engine.Kind = "userindex"
+	KindPersonalAccount  engine.Kind = "personalaccount"
 
 	// A shared account resolved to its real account.
 	KindSharedAccount engine.Kind = "sharedaccount"
@@ -98,10 +102,12 @@ type Sources struct {
 	ServiceAccounts engine.Source[serviceaccount.ServiceAccount]
 	Users           engine.Source[user.User]
 	Keys            engine.Source[key.Key]
-	// RoleBindings decide the member accounts relay keeps; with Roles and Groups they also feed the RBAC re-check of personal policies bound by a team or project, for which Roles and Groups are read only when RBAC is set.
+	// RoleBindings decide the member accounts relay keeps; with Roles and Groups they also feed the RBAC re-check of personal policies bound by a team or project, for which Roles are read only when RBAC is set. Groups are read always: they turn their members' personal accounts on or off.
 	Roles        engine.Source[role.Role]
 	RoleBindings engine.Source[rolebinding.RoleBinding]
 	Groups       engine.Source[group.Group]
+	// AccountsSetting is the accounts settings section; nil reads personal accounts as on.
+	AccountsSetting engine.Source[settings.Accounts]
 	// RBAC is set under the role-based authorizer. Without it every user may manage every policy binding, so the plans do not re-check.
 	RBAC bool
 }
@@ -125,16 +131,19 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	input(e, KindTeam, src.Teams, metaOf(func(r *team.Team) meta.Metadata { return r.Meta }), 1)
 	input(e, KindProject, src.Projects, metaOf(func(r *project.Project) meta.Metadata { return r.Meta }), 16)
 	input(e, KindServiceAccount, src.ServiceAccounts, metaOf(func(r *serviceaccount.ServiceAccount) meta.Metadata { return r.Meta }), 64)
+	// Version 0: a user's personalAccount sits in a table of relay's whose writes leave the user row's version alone, so users are compared by value.
 	input(e, KindUser, src.Users, func(u *user.User) engine.Meta {
-		return engine.Meta{ID: u.ID, Name: u.Username, Version: version(u.ResourceVersion)}
+		return engine.Meta{ID: u.ID, Name: u.Username}
 	}, 64)
 	input(e, KindKey, src.Keys, metaOf(func(r *key.Key) meta.Metadata { return r.Meta }), 256)
 	if !src.RBAC {
-		src.Roles, src.Groups = nil, nil
+		src.Roles = nil
 	}
 	input(e, KindRole, src.Roles, metaOf(func(r *role.Role) meta.Metadata { return r.Meta }), 1)
 	input(e, KindRoleBinding, src.RoleBindings, metaOf(func(r *rolebinding.RoleBinding) meta.Metadata { return r.Meta }), 1)
 	input(e, KindGroup, src.Groups, metaOf(func(r *group.Group) meta.Metadata { return r.Meta }), 1)
+	// Version 0: the section has no row version, so the engine compares it by value.
+	input(e, KindAccountsSetting, src.AccountsSetting, func(*settings.Accounts) engine.Meta { return engine.Meta{ID: settings.SectionAccounts} }, 1)
 
 	derived[CatalogIndex](e, KindCatalogIndex, 1)
 	derived[ManagedAccount](e, KindManagedAccount, 64)
@@ -153,6 +162,7 @@ func Register(e *engine.Engine, cells *cell.Registry, src Sources) {
 	derived[KeyPlanIndex](e, KindKeyPlanIndex, 1)
 	derived[UserPlan](e, KindUserPlan, 64)
 	derived[UserIndex](e, KindUserIndex, 1)
+	derived[PersonalAccount](e, KindPersonalAccount, 64)
 
 	c := &controllers{cells: cells, rbac: src.RBAC}
 	for _, ctl := range c.all() {
@@ -208,6 +218,29 @@ func (s OverlaySource) Get(ctx context.Context, id string) (*overlay.Overlay, er
 	return s.Store.Get(ctx, kind, resourceID)
 }
 
+// AccountsSettingSource reads the accounts settings section from the settings store as the one row of its kind; a section never written reads as its defaults.
+type AccountsSettingSource struct{ Store *settings.Store }
+
+func (s AccountsSettingSource) List(ctx context.Context) ([]*settings.Accounts, error) {
+	a, err := s.Get(ctx, settings.SectionAccounts)
+	if err != nil || a == nil {
+		return nil, err
+	}
+	return []*settings.Accounts{a}, nil
+}
+
+func (s AccountsSettingSource) Get(ctx context.Context, id string) (*settings.Accounts, error) {
+	if id != settings.SectionAccounts {
+		return nil, nil
+	}
+	row, err := s.Store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	a, _ := row.Value.(*settings.Accounts)
+	return a, nil
+}
+
 // Every other store already lists, and fetches by id with (nil, nil) for a missing row, so it is a Source as it is.
 var (
 	_ engine.Source[provider.Provider]             = (*provider.Store)(nil)
@@ -231,4 +264,5 @@ var (
 	_ engine.Source[role.Role]                     = (*role.Store)(nil)
 	_ engine.Source[rolebinding.RoleBinding]       = (*rolebinding.Store)(nil)
 	_ engine.Source[group.Group]                   = (*group.Store)(nil)
+	_ engine.Source[settings.Accounts]             = AccountsSettingSource{}
 )

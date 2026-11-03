@@ -99,7 +99,7 @@ func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
 	}
 }
 
-// Upgrading over host keys without an account gives each its owner's default account at its host: one per owner and host, named after the host and suffixed when taken. A named account is kept; a key whose host is gone is left alone.
+// Upgrading over host keys without an account gives each an account per owner and host, grouped by relay, named after the host and suffixed when taken. A named account is kept and not marked; a key whose host is gone is left alone.
 func TestMigrateUpGivesKeysTheirOwnersDefaultAccount(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -179,16 +179,53 @@ func TestMigrateUpGivesKeysTheirOwnersDefaultAccount(t *testing.T) {
 			t.Fatalf("Get default account %s: %v (row %v)", tc.id, err, a)
 		}
 		names[a.Meta.Name] = true
-		if a.Meta.DisplayName != "Acme" || a.Meta.Owner != tc.owner || !a.Spec.Default || a.Spec.HostID != hst.Meta.ID {
-			t.Errorf("default account = %+v %+v, want one owned by %+v", a.Meta, a.Spec, tc.owner)
-		}
-		// The store finds the account the migration made.
-		if id, err := accounts.EnsureDefault(ctx, tc.owner, hst.Meta.ID); err != nil || id != tc.id {
-			t.Errorf("EnsureDefault(%+v) = %q, %v; want %q", tc.owner, id, err, tc.id)
+		if a.Meta.DisplayName != "Acme" || a.Meta.Owner != tc.owner || !a.Spec.GroupedByRelay || a.Spec.HostID != hst.Meta.ID {
+			t.Errorf("grouped account = %+v %+v, want one owned by %+v and grouped by relay", a.Meta, a.Spec, tc.owner)
 		}
 	}
 	if !names["acme-2"] || !names["acme-3"] {
-		t.Errorf("default account names = %v, want acme-2 and acme-3", names)
+		t.Errorf("grouped account names = %v, want acme-2 and acme-3", names)
+	}
+	if a, err := accounts.Get(ctx, taken.Meta.ID); err != nil || a == nil || a.Spec.GroupedByRelay {
+		t.Errorf("named account = %+v, %v; want it not grouped by relay", a, err)
+	}
+}
+
+// A key left without an account by an earlier upgrade (its host was gone then) joins a grouped account once the host exists; a grouped account whose org is already known is not marked.
+func TestMigrateUpGroupsKeysStillWithoutAnAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := storagetest.EmptyDB(t)
+	if err := storagemod.MigrateTo(dsn, 40); err != nil {
+		t.Fatalf("migrate to 40: %v", err)
+	}
+	conn := testPool(t, dsn)
+	hostID, keyID, knownOrg := meta.NewID(), meta.NewID(), meta.NewID()
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO hosts (id, name, display_name, metadata, spec) VALUES ($1, 'late', 'Late', '{"owner":{"kind":"system"}}', '{"baseUrl":"https://late.example.com"}')`, []any{hostID}},
+		{`INSERT INTO secrets (id, name, value_kind, value_from_env, metadata, spec) VALUES ($1, 'late-key', 'env', 'LATE_API_KEY', '{"owner":{"kind":"system"}}', $2)`, []any{keyID, `{"hostId":"` + hostID + `"}`}},
+		{`INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner) VALUES ($1, 'late-known', 'Late', $2, '{"owner":{"kind":"team","id":"t"}}', '{"orgId":"org-1"}', 'team:t')`, []any{knownOrg, hostID}},
+	} {
+		if _, err := conn.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+	if err := storagemod.MigrateUp(dsn); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+	var accountID string
+	if err := conn.QueryRow(ctx, "SELECT COALESCE(spec->>'accountId', '') FROM secrets WHERE id = $1", keyID).Scan(&accountID); err != nil || accountID == "" {
+		t.Fatalf("key's account = %q, %v; want one", accountID, err)
+	}
+	accounts := account.NewStore(gen.New(conn))
+	if a, err := accounts.Get(ctx, accountID); err != nil || a == nil || !a.Spec.GroupedByRelay || a.Meta.Name != "late" {
+		t.Fatalf("key's account = %+v, %v; want %q grouped by relay", a, err, "late")
+	}
+	if a, err := accounts.Get(ctx, knownOrg); err != nil || a == nil || a.Spec.GroupedByRelay {
+		t.Fatalf("account with a known org = %+v, %v; want it not grouped", a, err)
 	}
 }
 

@@ -38,7 +38,7 @@ func TestGuardHostKeyRefusesAValueOnUpdate(t *testing.T) {
 	mk := func(kind hostkey.ValueKind, value string) *hostkey.HostKey {
 		k := &hostkey.HostKey{}
 		k.Meta = meta.Metadata{ID: meta.NewID(), Name: "k"}
-		k.Spec.HostID = meta.NewID()
+		k.Spec.HostID, k.Spec.AccountID = meta.NewID(), meta.NewID()
 		k.Spec.ValueFrom = hostkey.ValueFrom{Kind: kind}
 		k.Spec.Value = value
 		return k

@@ -13,7 +13,7 @@ import (
 
 // The 409 answers of the generic CRUD operations, by operation.
 const (
-	createConflicts = "A conflict with stored rows: duplicate_binding (an account another policy binding already holds), managed_by_source (a provisioning source owns the row), account_shared (a host key naming a shared account, which holds no keys: add it to the real account), or a second default account for one owner and host."
+	createConflicts = "A conflict with stored rows: duplicate_binding (an account another policy binding already holds), managed_by_source (a provisioning source owns the row), or account_shared (a host key naming a shared account, which holds no keys: add it to the real account)."
 	updateConflicts = "stale_resource_version (metadata.resourceVersion no longer matches; reload and reapply), resource_in_use (an owner move would strand referencing rows; blockers lists them), managed_by_source, duplicate_binding, or account_shared."
 	deleteConflicts = "resource_in_use: other rows still reference the target; blockers lists them, and groups marked detachable can be released with POST …/detach (for a provider account, the accounts shared from it, which detach deletes). Also managed_by_source for a row a provisioning source owns, and account_managed for a team, project, personal, service or open member account, which goes with its own row."
 )

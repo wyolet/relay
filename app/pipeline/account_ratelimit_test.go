@@ -215,14 +215,14 @@ func TestUpstream429WithoutAccountTripsBreaker(t *testing.T) {
 	noBreakerRecord(t, p.Selector, "hash-b")
 }
 
-// A default account groups its owner's keys without declaring one provider org: a 429 on key a trips a's breaker, key b in the same account serves, and the account does not cool.
-func TestUpstream429InDefaultAccountTripsBreaker(t *testing.T) {
+// An account relay grouped by owner and host does not declare one provider org: a 429 on key a trips a's breaker, key b in the same account serves, and the account does not cool.
+func TestUpstream429InGroupedAccountTripsBreaker(t *testing.T) {
 	t.Parallel()
 	p := newPipeline()
 	adp := &statusAdapter{status: http.StatusTooManyRequests, retryAfter: 30 * time.Second,
 		failing: func(key, _ string) bool { return key == "a" }}
 	first, _ := accountRoute()
-	first.Slots[0].Account.Default = true
+	first.Slots[0].Account.GroupedByRelay = true
 	hops := []plan.RouteHop{first}
 
 	res, err := runModel(t, p, adp, hops, modelM)
@@ -233,7 +233,7 @@ func TestUpstream429InDefaultAccountTripsBreaker(t *testing.T) {
 		t.Fatalf("calls %q served by %s, want a/m b/m served by hash-b", got, res.KeyHash)
 	}
 	if first.Slots[0].Account.Cooldown.Cooled(time.Now().UnixMilli(), modelM.Meta.ID) {
-		t.Fatal("the default account is cooling")
+		t.Fatal("the grouped account is cooling")
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {

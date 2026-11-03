@@ -48,7 +48,7 @@ func newTenantPair(t *testing.T) tenantPair {
 	mustUpsert(t, st.stores.Host.Upsert(ctx, hst), "host")
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "victim-hk", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "VICTIM_HK"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: providerAccount(t, st.stores, "victim-org", meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}, hst.Meta.ID), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "VICTIM_HK"}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "victim host key")
 	vpool := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "victim-pool", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.victProj}},

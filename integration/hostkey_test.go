@@ -97,6 +97,7 @@ func (s *stack) seedUnresolvableHostKey(t *testing.T) (*hostkey.HostKey, string)
 		Meta: meta.Metadata{ID: ids.New(), Name: "broken-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
+			AccountID: providerAccount(t, s.stores, "broken-account", meta.Owner{Kind: meta.OwnerSystem}, hst.Meta.ID),
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}

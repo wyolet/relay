@@ -31,6 +31,8 @@ type authResponse struct {
 		Roles    []string `json:"roles,omitempty" doc:"Names of the roles bound to the caller."`
 		Subjects []string `json:"subjects,omitempty" doc:"RBAC subject strings this caller acts under."`
 		Scopes   []string `json:"scopes,omitempty"   doc:"Scopes the caller holds a role binding at, as \"team:<id>\" / \"project:<id>\"."`
+		// PersonalAccountEffective is filled by whoami only.
+		PersonalAccountEffective *PersonalAccountEffective `json:"personalAccountEffective,omitempty" doc:"Whether the caller's personal account serves, and what decided it. whoami only; omitted for the admin token and until the plans are loaded."`
 	}
 }
 
@@ -175,7 +177,7 @@ func registerAuth(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/auth/whoami",
 		Summary:     "Return the authenticated caller, if any",
-		Description: "Returns the caller behind the session cookie or bearer token, with the subjects and scopes its role bindings apply under. 401 when not signed in.",
+		Description: "Returns the caller behind the session cookie or bearer token, with the subjects and scopes its role bindings apply under, and whether the caller's personal account serves (personalAccountEffective). 401 when not signed in.",
 		Tags:        []string{"auth"},
 		Errors:      []int{401},
 	}, func(ctx context.Context, _ *struct{}) (*authResponse, error) {
@@ -189,6 +191,7 @@ func registerAuth(api huma.API, d Deps) {
 		out.Body.Roles = a.Roles
 		out.Body.Subjects = a.Subjects
 		out.Body.Scopes = bindingScopes(d, a)
+		out.Body.PersonalAccountEffective = personalAccountEffective(d, a.UserID)
 		return out, nil
 	})
 }

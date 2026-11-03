@@ -45,9 +45,10 @@ var provisioningSections = map[string]bool{
 	AuthSCIMSection: true,
 }
 
-// credentialSections decide how long an inference token lives and which key signs it, so writing them takes an admin.
+// credentialSections decide how long an inference token lives and which key signs it, and accounts whether users may act on their own, so writing them takes an admin.
 var credentialSections = map[string]bool{
 	AuthTokensSection: true,
+	SectionAccounts:   true,
 }
 
 // AdminOnly reports whether writing section requires an admin caller.

@@ -43,7 +43,7 @@ type deleteDetachedBody struct {
 
 // conflictBody documents a 409: the error envelope, plus blockers when the code is resource_in_use.
 type conflictBody struct {
-	Err      httpapi.APIErrorBody `json:"error"              doc:"The error. code says which conflict: resource_in_use, stale_resource_version, managed_by_source, duplicate_binding, account_shared, share_exists, reshare_refused, already_reachable, or a duplicate default account."`
+	Err      httpapi.APIErrorBody `json:"error"              doc:"The error. code says which conflict: resource_in_use, stale_resource_version, managed_by_source, duplicate_binding, account_shared, share_exists, reshare_refused or already_reachable."`
 	Blockers []blockerGroup       `json:"blockers,omitempty" doc:"With resource_in_use: the rows that still reference the target, grouped by kind and field."`
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/share"
 )
 
@@ -61,7 +62,16 @@ func (d Deps) accountInUse(ctx context.Context, kind, id, name string) (*dropped
 func (d Deps) shareStores() share.Stores {
 	s := share.Stores{Account: d.Stores.Account, PolicyBinding: d.Stores.PolicyBinding, Key: d.Stores.Key, Pool: d.Stores.Pool}
 	if d.Users != nil && d.Stores.ServiceAccount != nil {
-		s.OwnAccount = defaultAccount(d)
+		own := defaultAccount(d)
+		s.OwnAccount = func(ctx context.Context, p key.Principal) (string, error) {
+			// A key moved into a personal account that is off would only stop there; it is left without a lane and serves again in the personal account once it is on.
+			if p.Kind == key.PrincipalUser {
+				if st := personalAccountState(d, p.ID); st != nil && !st.On {
+					return "", nil
+				}
+			}
+			return own(ctx, p)
+		}
 	}
 	return s
 }

@@ -135,11 +135,23 @@ func (c *controllers) callerPlan(tx *engine.Txn, subject string) error {
 		engine.Drop(tx)
 		return nil
 	}
+	kind := acc.DerivedKind()
+	if kind == account.KindPersonal || kind == account.KindProvider {
+		if off := personalAccountOff(tx, acc.Meta.Owner); off != nil {
+			cp := refusedPlan(acc, &Refusal{Code: CodePersonalAccountOff, Rung: limits.RungLane, SubjectID: subject, Message: off.offMessage()})
+			if h := acc.Spec.Holder; h != nil {
+				cp.Holder = h.Key()
+			}
+			cp.in = inputs{acc, off}
+			engine.Put(tx, SameOr(engine.Get[CallerPlan](tx, subject), cp))
+			return nil
+		}
+	}
 	rd := callerReads{in: inputs{acc}}
 	rd.rungs = [3]rungRead{{rung: Rung{Kind: limits.RungTeam}}, {rung: Rung{Kind: limits.RungProject}}, {rung: Rung{Kind: limits.RungLane}}}
 	cp := &CallerPlan{Lane: acc, budgetAt: -1, linkedAt: -1}
 	var scopes []string // owner scopes whose credentials the lane reaches without a linking rung, innermost first
-	switch acc.DerivedKind() {
+	switch kind {
 	case account.KindProvider:
 		scopes = []string{subject}
 	case account.KindPersonal:
