@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
@@ -24,6 +25,21 @@ import (
 
 func newUsablePoolsHarness(t *testing.T) http.Handler {
 	t.Helper()
+	return newUsablePoolsHarnessWith(t, authz.AlwaysAllowAuthenticated{})
+}
+
+// ownUserRowsAuthz lets a caller write a user-owned row only when it is that user or an admin, as RBAC does; everything else is allowed.
+type ownUserRowsAuthz struct{ authz.AlwaysAllowAuthenticated }
+
+func (ownUserRowsAuthz) Authorize(ctx context.Context, action string, r authz.Resource) error {
+	if a := actor.From(ctx); r.Owner != nil && r.Owner.Kind == meta.OwnerUser && !authz.IsAdmin(ctx) && (a == nil || a.UserID != r.Owner.ID) {
+		return authz.ErrForbidden
+	}
+	return authz.AlwaysAllowAuthenticated{}.Authorize(ctx, action, r)
+}
+
+func newUsablePoolsHarnessWith(t *testing.T, az authz.Authorizer) http.Handler {
+	t.Helper()
 	plmeta := func(p *pool.Pool) *meta.Metadata { return &p.Meta }
 	store := &memStore[pool.Pool]{metaOf: plmeta, items: map[string]*pool.Pool{}}
 	for id, o := range map[string]meta.Owner{
@@ -33,6 +49,7 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 		"pool-p1":    {Kind: meta.OwnerProject, ID: "p-1"},
 		"pool-p2":    {Kind: meta.OwnerProject, ID: "p-2"},
 		"pool-alice": {Kind: meta.OwnerUser, ID: "u-alice"},
+		"pool-bob":   {Kind: meta.OwnerUser, ID: "u-bob"},
 	} {
 		store.items[id] = &pool.Pool{Meta: meta.Metadata{ID: id, Name: id, Owner: o}, Spec: pool.Spec{HostID: "h-1"}}
 	}
@@ -41,7 +58,7 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 		"p-2": {Meta: meta.Metadata{ID: "p-2", Name: "p-2"}, Spec: project.Spec{TeamID: "t-2"}},
 	}
 	teams := map[string]*team.Team{"t-1": {Meta: meta.Metadata{ID: "t-1", Name: "t-1"}}, "t-2": {Meta: meta.Metadata{ID: "t-2", Name: "t-2"}}}
-	c := refcheck.Checker{Authz: authz.AlwaysAllowAuthenticated{}, Rows: refcheck.Lookup{
+	c := refcheck.Checker{Authz: az, Rows: refcheck.Lookup{
 		Project: func(_ context.Context, id string) *project.Project { return projects[id] },
 		Team:    func(_ context.Context, id string) *team.Team { return teams[id] },
 		Pool:    getOrNil(store.Get),
@@ -53,7 +70,7 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 		api, "pools", "pool", store, authz.AlwaysAllowAuthenticated{}, plmeta, nil, meta.OwnerUser,
 		listScanResolver[pool.Pool](store, plmeta),
 		nil, nil, nil, nil, nil, noSettings{}, false, nil, &poolFilter,
-		usableFor(c, "a policy", refcheck.Checker.UsablePool),
+		usableFor(c, "policy", refcheck.Checker.UsablePool),
 	)
 	return r
 }
@@ -61,7 +78,7 @@ func newUsablePoolsHarness(t *testing.T) http.Handler {
 // usable_by keeps the rows a policy of that scope may link, composes with the other filters, and refuses a malformed scope.
 func TestListUsableBy(t *testing.T) {
 	h := newUsablePoolsHarness(t)
-	all := []string{"pool-alice", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}
+	all := []string{"pool-alice", "pool-bob", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}
 	for _, tc := range []struct {
 		query string
 		want  []string
@@ -69,7 +86,7 @@ func TestListUsableBy(t *testing.T) {
 		{"", all},
 		{"?usable_by=project:p-1", []string{"pool-p1", "pool-sys", "pool-t1"}},
 		{"?usable_by=team:t-1", []string{"pool-sys", "pool-t1"}},
-		{"?usable_by=user:u-alice", all},
+		{"?usable_by=user:u-alice", []string{"pool-alice", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}},
 		{"?usable_by=system", all},
 		{"?usable_by=project:p-1&name=pool-t1", []string{"pool-t1"}},
 		{"?usable_by=project:p-2&sort=-name", []string{"pool-t2", "pool-sys", "pool-p2"}},
@@ -124,6 +141,34 @@ func TestListUsableBy_AdminGetsNoOtherUsersPools(t *testing.T) {
 		if slices.Contains(got, "pool-alice") || !slices.Contains(got, "pool-sys") {
 			t.Errorf("%s asking for %s: %v, want the system pool and not alice's", tc.who, tc.scope, got)
 		}
+	}
+}
+
+// usable_by takes any scope the caller may write the linking row in: an admin asking for another user gets that user's pools and the system's; a user asking for another user is refused with 403.
+func TestListUsableBy_ScopeTheCallerMayWrite(t *testing.T) {
+	h := newUsablePoolsHarnessWith(t, ownUserRowsAuthz{})
+	w := scopeReq(t, h, "root", http.MethodGet, "/pools?usable_by=user:u-alice", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin for alice: status %d: %s", w.Code, w.Body)
+	}
+	var body struct {
+		Items []pool.Pool `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, p := range body.Items {
+		got = append(got, p.Meta.Name)
+	}
+	if !slices.Contains(got, "pool-alice") || !slices.Contains(got, "pool-sys") || slices.Contains(got, "pool-bob") {
+		t.Errorf("admin for alice: %v, want alice's and the system's pools, not bob's", got)
+	}
+	if w := scopeReq(t, h, "bob", http.MethodGet, "/pools?usable_by=user:u-alice", ""); w.Code != http.StatusForbidden {
+		t.Errorf("bob for alice: status %d, want 403: %s", w.Code, w.Body)
+	}
+	if w := scopeReq(t, h, "alice", http.MethodGet, "/pools?usable_by=user:u-alice", ""); w.Code != http.StatusOK {
+		t.Errorf("alice for herself: status %d", w.Code)
 	}
 }
 
@@ -240,8 +285,8 @@ func TestListAccountsUsableFor(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", tc.query, got, tc.want)
 		}
 	}
-	// A scope a save could not own a row in answers as that save would.
-	for _, bad := range []string{"?usable_by=team:t-9", "?usable_by=project:p-9&usable_for=pool", "?usable_by=user:u-bob"} {
+	// A scope that does not exist answers as a save naming it would; a user scope is the authorizer's to allow (TestListUsableBy_ScopeTheCallerMayWrite).
+	for _, bad := range []string{"?usable_by=team:t-9", "?usable_by=project:p-9&usable_for=pool"} {
 		if w := scopeReq(t, r, "alice", http.MethodGet, "/accounts"+bad, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400: %s", bad, w.Code, w.Body)
 		}

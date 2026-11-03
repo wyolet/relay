@@ -9,7 +9,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
@@ -59,8 +58,8 @@ func registerReachable(api huma.API, d Deps, protect huma.Middlewares) {
 		Tags:        []string{"catalog"}, Middlewares: protect, Errors: []int{400, 401, 403, 404, 503},
 	}, func(ctx context.Context, in *draftReachInput) (*reachableOut, error) {
 		owner := parseOwner(in.Owner)
-		if err := d.Authz.Authorize(ctx, "policies.create", authz.Resource{Kind: "policy", Owner: &owner}); err != nil {
-			return nil, huma.Error403Forbidden("you may not create a policy owned by " + in.Owner)
+		if !mayWriteIn(ctx, d.Authz, "policy", owner) {
+			return nil, huma.Error403Forbidden("you may not write a policy owned by " + in.Owner)
 		}
 		v, err := planView(d)
 		if err != nil {

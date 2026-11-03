@@ -15,12 +15,11 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 )
 
-// UsableScope checks the scope a picker asks for as a save checks the owner it writes: a team or project must exist (400) and be visible (404), and a user is the caller unless the caller is the admin token (400).
+// UsableScope checks the scope a picker asks for exists: a team or project must exist (400) and be visible (404), and a user scope must name a user (400). Whether the caller may write in it is the authorizer's decision, taken by the caller of this check.
 func (c Checker) UsableScope(ctx context.Context, by meta.Owner) error {
 	if by.Kind == meta.OwnerUser {
-		o := by
-		if err := StampOwnerID(ctx, &o); err != nil {
-			return badRequest("%s", err.Error())
+		if by.ID == "" {
+			return badRequest("a user scope names a user id")
 		}
 		return nil
 	}

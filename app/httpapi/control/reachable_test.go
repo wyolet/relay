@@ -25,14 +25,14 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
-// reachAuthz allows every authenticated caller except creating a policy in noCreate, and hides rows owned by hidden.
+// reachAuthz allows every authenticated caller except writing a policy in noCreate, and hides rows owned by hidden.
 type reachAuthz struct {
 	authz.AlwaysAllowAuthenticated
 	noCreate, hidden meta.Owner
 }
 
 func (a reachAuthz) Authorize(ctx context.Context, action string, r authz.Resource) error {
-	if action == "policies.create" && r.Owner != nil && *r.Owner == a.noCreate {
+	if strings.HasPrefix(action, "policies.") && r.Owner != nil && *r.Owner == a.noCreate {
 		return errors.New("forbidden")
 	}
 	return a.AlwaysAllowAuthenticated.Authorize(ctx, action, r)
