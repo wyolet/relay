@@ -364,6 +364,15 @@ func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 	return err
 }
 
+const deleteUserPersonalAccount = `-- name: DeleteUserPersonalAccount :exec
+DELETE FROM user_personal_accounts WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserPersonalAccount(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, deleteUserPersonalAccount, userID)
+	return err
+}
+
 const demoteSecretDataKey = `-- name: DemoteSecretDataKey :exec
 UPDATE secret_data_keys SET state = 'decrypt', demoted_at = NOW(), updated_at = NOW() WHERE id = $1
 `
@@ -383,8 +392,8 @@ func (q *Queries) DestroySecretDataKey(ctx context.Context, id pgtype.UUID) erro
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, grouped_by_relay
 FROM accounts WHERE id = $1
 `
 
@@ -401,7 +410,6 @@ func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ResourceVersion,
-		&i.DefaultOwner,
 		&i.Kind,
 		&i.ManagedKey,
 		&i.HolderUserID,
@@ -413,6 +421,7 @@ func (q *Queries) GetAccount(ctx context.Context, id string) (Account, error) {
 		&i.SourceAccountID,
 		&i.ShareReceiver,
 		&i.ShareUserID,
+		&i.GroupedByRelay,
 	)
 	return i, err
 }
@@ -463,22 +472,6 @@ func (q *Queries) GetBudget(ctx context.Context, id string) (Budget, error) {
 		&i.ResourceVersion,
 	)
 	return i, err
-}
-
-const getDefaultAccountID = `-- name: GetDefaultAccountID :one
-SELECT id FROM accounts WHERE host_id = $1 AND default_owner = $2
-`
-
-type GetDefaultAccountIDParams struct {
-	HostID       pgtype.Text `db:"host_id" json:"host_id"`
-	DefaultOwner pgtype.Text `db:"default_owner" json:"default_owner"`
-}
-
-func (q *Queries) GetDefaultAccountID(ctx context.Context, arg GetDefaultAccountIDParams) (string, error) {
-	row := q.db.QueryRow(ctx, getDefaultAccountID, arg.HostID, arg.DefaultOwner)
-	var id string
-	err := row.Scan(&id)
-	return id, err
 }
 
 const getHost = `-- name: GetHost :one
@@ -1142,6 +1135,17 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 	return i, err
 }
 
+const getUserPersonalAccount = `-- name: GetUserPersonalAccount :one
+SELECT value FROM user_personal_accounts WHERE user_id = $1
+`
+
+func (q *Queries) GetUserPersonalAccount(ctx context.Context, userID string) (string, error) {
+	row := q.db.QueryRow(ctx, getUserPersonalAccount, userID)
+	var value string
+	err := row.Scan(&value)
+	return value, err
+}
+
 type InsertAuditEventParams struct {
 	ID            string             `db:"id" json:"id"`
 	Ts            pgtype.Timestamptz `db:"ts" json:"ts"`
@@ -1163,39 +1167,6 @@ type InsertAuditEventParams struct {
 	Method        pgtype.Text        `db:"method" json:"method"`
 	Path          pgtype.Text        `db:"path" json:"path"`
 	ChangedFields []string           `db:"changed_fields" json:"changed_fields"`
-}
-
-const insertDefaultAccount = `-- name: InsertDefaultAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT DO NOTHING
-`
-
-type InsertDefaultAccountParams struct {
-	ID           string      `db:"id" json:"id"`
-	Name         string      `db:"name" json:"name"`
-	DisplayName  string      `db:"display_name" json:"display_name"`
-	HostID       pgtype.Text `db:"host_id" json:"host_id"`
-	Metadata     []byte      `db:"metadata" json:"metadata"`
-	Spec         []byte      `db:"spec" json:"spec"`
-	DefaultOwner pgtype.Text `db:"default_owner" json:"default_owner"`
-}
-
-// A concurrent save may create the same default, or take the name; either conflict inserts nothing and the caller looks again.
-func (q *Queries) InsertDefaultAccount(ctx context.Context, arg InsertDefaultAccountParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertDefaultAccount,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
-		arg.HostID,
-		arg.Metadata,
-		arg.Spec,
-		arg.DefaultOwner,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const insertManagedAccount = `-- name: InsertManagedAccount :execrows
@@ -1586,8 +1557,8 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 
 const listAccounts = `-- name: ListAccounts :many
 
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version, default_owner,
-       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version,
+       kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, grouped_by_relay
 FROM accounts ORDER BY name
 `
 
@@ -1611,7 +1582,6 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ResourceVersion,
-			&i.DefaultOwner,
 			&i.Kind,
 			&i.ManagedKey,
 			&i.HolderUserID,
@@ -1623,6 +1593,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.SourceAccountID,
 			&i.ShareReceiver,
 			&i.ShareUserID,
+			&i.GroupedByRelay,
 		); err != nil {
 			return nil, err
 		}
@@ -2754,6 +2725,30 @@ func (q *Queries) ListUserIDsIn(ctx context.Context, dollar_1 []string) ([]strin
 	return items, nil
 }
 
+const listUserPersonalAccounts = `-- name: ListUserPersonalAccounts :many
+SELECT user_id, value FROM user_personal_accounts
+`
+
+func (q *Queries) ListUserPersonalAccounts(ctx context.Context) ([]UserPersonalAccount, error) {
+	rows, err := q.db.Query(ctx, listUserPersonalAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UserPersonalAccount
+	for rows.Next() {
+		var i UserPersonalAccount
+		if err := rows.Scan(&i.UserID, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserTokenVersionsAndDisabled = `-- name: ListUserTokenVersionsAndDisabled :many
 SELECT id, token_version, disabled FROM users
 `
@@ -3080,6 +3075,21 @@ func (q *Queries) SetSecretKeyringTarget(ctx context.Context, arg SetSecretKeyri
 	return result.RowsAffected(), nil
 }
 
+const setUserPersonalAccount = `-- name: SetUserPersonalAccount :exec
+INSERT INTO user_personal_accounts (user_id, value) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE SET value = EXCLUDED.value
+`
+
+type SetUserPersonalAccountParams struct {
+	UserID string `db:"user_id" json:"user_id"`
+	Value  string `db:"value" json:"value"`
+}
+
+func (q *Queries) SetUserPersonalAccount(ctx context.Context, arg SetUserPersonalAccountParams) error {
+	_, err := q.db.Exec(ctx, setUserPersonalAccount, arg.UserID, arg.Value)
+	return err
+}
+
 const updateSecretCiphertext = `-- name: UpdateSecretCiphertext :exec
 UPDATE secrets
 SET value_ciphertext  = $2,
@@ -3251,8 +3261,8 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 }
 
 const upsertAccount = `-- name: UpsertAccount :execrows
-INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, default_owner, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+INSERT INTO accounts (id, name, display_name, host_id, metadata, spec, kind, managed_key, holder_user_id, holder_sa_id, team_id, project_id, closed, follows_role_bindings, source_account_id, share_receiver, share_user_id, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
 ON CONFLICT (id) DO UPDATE SET
     source_account_id = EXCLUDED.source_account_id,
     share_receiver    = EXCLUDED.share_receiver,
@@ -3262,7 +3272,7 @@ ON CONFLICT (id) DO UPDATE SET
     host_id       = EXCLUDED.host_id,
     metadata      = EXCLUDED.metadata,
     spec          = EXCLUDED.spec,
-    default_owner = EXCLUDED.default_owner,
+    grouped_by_relay = accounts.grouped_by_relay AND COALESCE(EXCLUDED.spec->>'orgId', '') = '',
     kind          = EXCLUDED.kind,
     managed_key   = EXCLUDED.managed_key,
     holder_user_id = EXCLUDED.holder_user_id,
@@ -3272,7 +3282,7 @@ ON CONFLICT (id) DO UPDATE SET
     closed        = EXCLUDED.closed,
     follows_role_bindings = EXCLUDED.follows_role_bindings,
     updated_at    = NOW()
-WHERE $19::bigint IS NULL OR accounts.resource_version = $19::bigint
+WHERE $18::bigint IS NULL OR accounts.resource_version = $18::bigint
 `
 
 type UpsertAccountParams struct {
@@ -3282,7 +3292,6 @@ type UpsertAccountParams struct {
 	HostID              pgtype.Text `db:"host_id" json:"host_id"`
 	Metadata            []byte      `db:"metadata" json:"metadata"`
 	Spec                []byte      `db:"spec" json:"spec"`
-	DefaultOwner        pgtype.Text `db:"default_owner" json:"default_owner"`
 	Kind                string      `db:"kind" json:"kind"`
 	ManagedKey          pgtype.Text `db:"managed_key" json:"managed_key"`
 	HolderUserID        pgtype.Text `db:"holder_user_id" json:"holder_user_id"`
@@ -3297,6 +3306,7 @@ type UpsertAccountParams struct {
 	ExpectedVersion     pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
+// grouped_by_relay is never written: a new row starts without it, and an update keeps it until the row names its org.
 func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (int64, error) {
 	result, err := q.db.Exec(ctx, upsertAccount,
 		arg.ID,
@@ -3305,7 +3315,6 @@ func (q *Queries) UpsertAccount(ctx context.Context, arg UpsertAccountParams) (i
 		arg.HostID,
 		arg.Metadata,
 		arg.Spec,
-		arg.DefaultOwner,
 		arg.Kind,
 		arg.ManagedKey,
 		arg.HolderUserID,

@@ -308,7 +308,7 @@ func TestIntegration_ApplyPruneReportsLinkedPoolsAndRateLimits(t *testing.T) {
 	t.Cleanup(func() { _ = os.Unsetenv(pruneEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned},
-		Spec: hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, AccountID: providerAccount(t, st.stores, "acme-org", owned, h.Meta.ID), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "host key")
 	pl := &pool.Pool{Meta: meta.Metadata{ID: ids.New(), Name: "acme-pool", Owner: owned, Labels: managed}, Spec: pool.Spec{HostID: h.Meta.ID, CredentialIDs: []string{hk.Meta.ID}}}
@@ -760,11 +760,19 @@ metadata:
 spec: {}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
+metadata:
+  name: tree-org
+spec:
+  host: tree-host
+---
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
 metadata:
   name: tree-key
 spec:
   hostId: tree-host
+  account: tree-org
   valueFrom: {kind: env, env: TREE_UPSTREAM_KEY}
 `
 

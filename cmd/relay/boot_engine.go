@@ -68,6 +68,7 @@ func buildPlanEngine(cfg *config.Config, stores *appcatalog.Stores, users *user.
 		Roles:           stores.Role,
 		RoleBindings:    stores.RoleBinding,
 		Groups:          stores.Group,
+		AccountsSetting: plan.AccountsSettingSource{Store: stores.Settings},
 		RBAC:            cfg.Authz == config.AuthzRBAC,
 	}
 	if stores.Overlay != nil {

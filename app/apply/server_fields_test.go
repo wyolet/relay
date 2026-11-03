@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -30,19 +31,20 @@ func entryFor(t *testing.T, b *builder, kind, name string) Entry {
 	return Entry{}
 }
 
-// storedHostKeyRows is a host and a host key whose secret lives encrypted in
-// the database.
+// storedHostKeyRows is a host, its provider account "acme-org" and a host key
+// in it whose secret lives encrypted in the database.
 func storedHostKeyRows(kind hostkey.ValueKind) (*Rows, *hostkey.HostKey) {
 	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	org := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-org", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: h.Meta.ID}}
 	hk := &hostkey.HostKey{
 		Meta:     meta.Metadata{ID: meta.NewID(), Name: "acme-key", DisplayName: "Acme", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec:     hostkey.Spec{HostID: h.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: kind}},
+		Spec:     hostkey.Spec{HostID: h.Meta.ID, AccountID: org.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: kind}},
 		Resolved: "sk-stored-secret",
 	}
 	if kind == hostkey.ValueKindOAuth {
 		hk.Spec.ValueFrom.Provider = "acme"
 	}
-	return &Rows{Hosts: []*host.Host{h}, HostKeys: []*hostkey.HostKey{hk}}, hk
+	return &Rows{Hosts: []*host.Host{h}, Accounts: []*account.Account{org}, HostKeys: []*hostkey.HostKey{hk}}, hk
 }
 
 // An exported stored or oauth host key carries no value. Applying it back
@@ -57,6 +59,7 @@ func TestApplyUpdatesAStoredHostKeyWithoutItsValue(t *testing.T) {
 			doc.Metadata.DisplayName = "Acme (renamed)"
 			doc.Spec = manifest.HostKeySpec{
 				HostID:    "acme-api",
+				Account:   "acme-org",
 				ValueFrom: manifest.HostKeyValueFrom{Kind: string(kind), Provider: hk.Spec.ValueFrom.Provider},
 			}
 			b := &builder{opts: Options{Stores: &Stores{}}, rows: rows, idx: newIndex(rows)}

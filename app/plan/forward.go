@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/engine"
 )
 
@@ -43,6 +44,11 @@ func NotifyRef(kind, id string) (engine.Ref, bool) {
 		return engine.Ref{Kind: KindKey, ID: id}, true
 	case "hostbinding":
 		return engine.Ref{Kind: KindBinding, ID: id}, true
+	case "settings":
+		// Only the accounts section shapes the plans; the payload id is the section name.
+		if id == settings.SectionAccounts {
+			return engine.Ref{Kind: KindAccountsSetting, ID: id}, true
+		}
 	case "overlay":
 		// The overlay payload id is "<kind>|<resource id>".
 		k, rid, ok := strings.Cut(id, "|")

@@ -1,11 +1,12 @@
 //go:build integration
 
-// store_integration_test.go covers HostKey resolution and the default-account fill against a real Postgres. Run with: make test-integration.
+// store_integration_test.go covers HostKey resolution and the account link against a real Postgres. Run with: make test-integration.
 
 package hostkey_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
@@ -37,7 +38,7 @@ func TestIntegration_StoredReservedEnvRefDoesNotResolve(t *testing.T) {
 			id := meta.NewID()
 			k := &hostkey.HostKey{
 				Meta: meta.Metadata{ID: id, Name: "env-key-" + id[len(id)-8:], Owner: meta.Owner{Kind: meta.OwnerSystem}},
-				Spec: hostkey.Spec{HostID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: tc.env}},
+				Spec: hostkey.Spec{HostID: meta.NewID(), AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: tc.env}},
 			}
 			if err := store.Upsert(ctx, k); err != nil {
 				t.Fatalf("Upsert: %v", err)
@@ -82,7 +83,7 @@ func TestIntegration_AccountIDRoundTrips(t *testing.T) {
 	}
 }
 
-// A key saved without an account joins its owner's default account at its host; keys of one owner share it, another owner gets its own, and a named account is kept.
+// A key saved without an account is refused, on create and on update: nothing makes an account for it. A named account is kept.
 func TestIntegration_SavedKeyAlwaysHasAnAccount(t *testing.T) {
 	ctx := context.Background()
 	pool := storagetest.Pool(t)
@@ -105,72 +106,36 @@ func TestIntegration_SavedKeyAlwaysHasAnAccount(t *testing.T) {
 	if err := account.NewStore(q).Upsert(ctx, named); err != nil {
 		t.Fatalf("upsert account: %v", err)
 	}
-	save := func(name string, owner meta.Owner, accountID string) *hostkey.HostKey {
-		t.Helper()
-		k := &hostkey.HostKey{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: owner},
-			Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: accountID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
-		}
-		if err := store.Upsert(ctx, k); err != nil {
-			t.Fatalf("Upsert %s: %v", name, err)
-		}
-		got, err := store.Get(ctx, k.Meta.ID)
-		if err != nil || got == nil {
-			t.Fatalf("Get %s: %v (row %v)", name, err, got)
-		}
-		if got.Spec.AccountID == "" {
-			t.Fatalf("%s saved without an account", name)
-		}
-		return got
+	k := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "key-a", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_API_KEY"}},
 	}
-	system := meta.Owner{Kind: meta.OwnerSystem}
-	alice := meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}
-	a := save("key-a", system, "")
-	b := save("key-b", system, "")
-	c := save("key-c", alice, "")
-	d := save("key-d", system, named.Meta.ID)
-	if a.Spec.AccountID != b.Spec.AccountID {
-		t.Errorf("keys of one owner joined %q and %q, want one default account", a.Spec.AccountID, b.Spec.AccountID)
+	if err := store.Upsert(ctx, k); !errors.Is(err, hostkey.ErrNoAccount) {
+		t.Fatalf("Upsert without an account = %v, want ErrNoAccount", err)
 	}
-	if c.Spec.AccountID == a.Spec.AccountID {
-		t.Errorf("another owner's key joined the system default account")
+	if got, _ := store.Get(ctx, k.Meta.ID); got != nil {
+		t.Fatalf("key saved without an account: %+v", got)
 	}
-	if d.Spec.AccountID != named.Meta.ID {
-		t.Errorf("named account = %q, want %q kept", d.Spec.AccountID, named.Meta.ID)
-	}
-	def, err := account.NewStore(q).Get(ctx, a.Spec.AccountID)
-	if err != nil || def == nil || !def.Spec.Default || def.Meta.Owner != system || def.Spec.HostID != hst.Meta.ID {
-		t.Fatalf("default account = %+v, %v", def, err)
+	if accounts, _ := account.NewStore(q).List(ctx); len(accounts) != 1 {
+		t.Fatalf("accounts after the refused save = %d, want only the named one", len(accounts))
 	}
 
-	// A team's keys join the team's own default account.
-	platform := meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
-	e := save("key-e", platform, "")
-	f := save("key-f", platform, "")
-	if e.Spec.AccountID != f.Spec.AccountID || e.Spec.AccountID == a.Spec.AccountID || e.Spec.AccountID == c.Spec.AccountID {
-		t.Errorf("team keys joined %q and %q, want one account of the team's own", e.Spec.AccountID, f.Spec.AccountID)
+	k.Spec.AccountID = named.Meta.ID
+	if err := store.Upsert(ctx, k); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
-	if got, err := account.NewStore(q).Get(ctx, e.Spec.AccountID); err != nil || got == nil || !got.Spec.Default || got.Meta.Owner != platform {
-		t.Fatalf("team default account = %+v, %v", got, err)
+	got, err := store.Get(ctx, k.Meta.ID)
+	if err != nil || got == nil || got.Spec.AccountID != named.Meta.ID {
+		t.Fatalf("Get = %+v, %v; want account %q", got, err, named.Meta.ID)
 	}
 
-	// An update that omits the account keeps the one the key has, as an omitted secret is kept.
-	d.Spec.AccountID = ""
-	d.Meta.DisplayName = "renamed"
-	if err := store.Upsert(ctx, d); err != nil {
-		t.Fatalf("Upsert without account: %v", err)
+	// An update that omits the account is refused too, and leaves the stored one.
+	got.Spec.AccountID = ""
+	got.Meta.DisplayName = "renamed"
+	if err := store.Upsert(ctx, got); !errors.Is(err, hostkey.ErrNoAccount) {
+		t.Fatalf("update without an account = %v, want ErrNoAccount", err)
 	}
-	d, _ = store.Get(ctx, d.Meta.ID)
-	if d == nil || d.Spec.AccountID != named.Meta.ID {
-		t.Fatalf("key-d after an update omitting its account = %+v, want %q kept", d, named.Meta.ID)
-	}
-
-	// A key moved to another owner leaves its account for the new owner's default.
-	d.Spec.AccountID, d.Meta.Owner = "", platform
-	if err := store.Upsert(ctx, d); err != nil {
-		t.Fatalf("Upsert moved key: %v", err)
-	}
-	if got, _ := store.Get(ctx, d.Meta.ID); got == nil || got.Spec.AccountID != e.Spec.AccountID {
-		t.Fatalf("key-d moved to the team = %+v, want the team's default %q", got, e.Spec.AccountID)
+	if got, _ := store.Get(ctx, k.Meta.ID); got == nil || got.Spec.AccountID != named.Meta.ID || got.Meta.DisplayName == "renamed" {
+		t.Fatalf("key after the refused update = %+v, want it unchanged", got)
 	}
 }

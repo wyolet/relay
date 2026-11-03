@@ -21,8 +21,8 @@ import (
 // accounts, their keys and its policy bindings, and leave its policies, host
 // keys, rate limits, accounts, pools and budgets owned by a team or project
 // that no longer exists — so apply's prune refuses while any remain, as the
-// control API's delete does. A default account no key names and a caller
-// account are the exceptions: the delete takes them along.
+// control API's delete does. A caller account is the exception: the delete
+// takes it along.
 type Rows struct {
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Keys            []*key.Key
@@ -106,13 +106,6 @@ func (r Rows) addOwned(d *dependents, owner meta.Owner) {
 	for _, x := range r.RateLimits {
 		d.add("RateLimit", x.Meta, x.Meta.Owner == owner)
 	}
-	// A default account no remaining key names goes with its owner.
-	held := map[string]bool{}
-	for _, k := range r.HostKeys {
-		if d.gone == nil || !d.gone("HostKey", k.Meta.ID) {
-			held[k.Spec.AccountID] = true
-		}
-	}
 	// A caller account goes with its team or project too, and takes the keys running in it along, so those keys are what stands in the way.
 	callers := map[string]bool{}
 	for _, x := range r.Accounts {
@@ -124,7 +117,7 @@ func (r Rows) addOwned(d *dependents, owner meta.Owner) {
 		if x.Meta.Owner == owner && x.IsShared() {
 			continue
 		}
-		d.add("Account", x.Meta, x.Meta.Owner == owner && (!x.Spec.Default || held[x.Meta.ID]))
+		d.add("Account", x.Meta, x.Meta.Owner == owner)
 	}
 	for _, x := range r.Keys {
 		d.add("Key", x.Meta, callers[x.Spec.AccountID] && x.Meta.Owner != owner)

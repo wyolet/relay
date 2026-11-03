@@ -84,6 +84,21 @@ func TestUpstreamKinds_RoundTrip(t *testing.T) {
 	}
 }
 
+// A provider account written without an owner is the system's, like a host key written without one, so the pair needs no owner to match.
+func TestProviderAccountWithoutOwnerIsTheSystems(t *testing.T) {
+	docs, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\nkind: Account\nmetadata: {name: acme}\nspec: {host: anthropic-direct}\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	a, err := manifest.ToAccount(*docs[0].Account, testResolver)
+	if err != nil {
+		t.Fatalf("ToAccount: %v", err)
+	}
+	if a.Meta.Owner.Kind != "system" {
+		t.Errorf("owner = %+v, want the system", a.Meta.Owner)
+	}
+}
+
 func TestUpstreamKinds_UnknownNames(t *testing.T) {
 	docs, err := manifest.Parse(strings.NewReader(upstreamYAML))
 	if err != nil {

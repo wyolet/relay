@@ -73,17 +73,32 @@ func newDetectFixture(t *testing.T) (detectFixture, context.Context) {
 	return detectFixture{policyDeleteFixture: f, probes: probes, handler: r}, ctx
 }
 
-// key stores an env-ref host key holding value at host, owned by owner; it joins owner's default account there.
+// key stores an env-ref host key holding value at host, owned by owner, in owner's one account there (made with the first such key).
 func (f detectFixture) key(t *testing.T, ctx context.Context, name, value, hostID string, owner meta.Owner) *hostkey.HostKey {
 	t.Helper()
 	env := "DETECT_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	t.Setenv(env, value)
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: owner},
-		Spec: hostkey.Spec{HostID: hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: env}},
+		Spec: hostkey.Spec{HostID: hostID, AccountID: f.ownersAccount(t, ctx, name, hostID, owner), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: env}},
 	}
 	must(t, "upsert host key "+name, f.stores.HostKey.Upsert(ctx, k))
 	return k
+}
+
+// ownersAccount is owner's provider account at hostID, made under name's org name when owner has none there yet.
+func (f detectFixture) ownersAccount(t *testing.T, ctx context.Context, name, hostID string, owner meta.Owner) string {
+	t.Helper()
+	all, err := f.stores.Account.List(ctx)
+	must(t, "list accounts", err)
+	for _, a := range all {
+		if a.IsProvider() && !a.IsShared() && a.Spec.HostID == hostID && a.Meta.Owner == owner {
+			return a.Meta.ID
+		}
+	}
+	a := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: name + "-org", Owner: owner}, Spec: account.Spec{HostID: hostID}}
+	must(t, "upsert account", f.stores.Account.Upsert(ctx, a))
+	return a.Meta.ID
 }
 
 func (f detectFixture) detect(t *testing.T, ctx context.Context, keyID string) (*httptest.ResponseRecorder, detectedAccount) {
@@ -107,7 +122,7 @@ func (f detectFixture) accountOrg(t *testing.T, ctx context.Context, id string) 
 	return a.Spec.OrgID
 }
 
-// A key alone in its fresh default account names the account's org; a second key of another org is reported without touching the account, and an account holding that org is named as the match. No key moves.
+// A key alone in its fresh account names the account's org; a second key of another org is reported without touching the account, and an account holding that org is named as the match. No key moves.
 func TestDetectAccount(t *testing.T) {
 	f, ctx := newDetectFixture(t)
 	system := meta.Owner{Kind: meta.OwnerSystem}
@@ -119,12 +134,12 @@ func TestDetectAccount(t *testing.T) {
 		t.Fatalf("detect first = %+v, want org-a matching its own account %s", got, first.Spec.AccountID)
 	}
 	if org := f.accountOrg(t, ctx, first.Spec.AccountID); org != "org-a" {
-		t.Fatalf("default account orgId = %q, want filled with org-a", org)
+		t.Fatalf("account orgId = %q, want filled with org-a", org)
 	}
 
 	second := f.key(t, ctx, "detect-second", "sk-b", f.host.Meta.ID, system)
 	if second.Spec.AccountID != first.Spec.AccountID {
-		t.Fatalf("second key account = %s, want the shared default %s", second.Spec.AccountID, first.Spec.AccountID)
+		t.Fatalf("second key account = %s, want the first key's %s", second.Spec.AccountID, first.Spec.AccountID)
 	}
 	w, got = f.detect(t, ctx, second.Meta.ID)
 	wantStatus(t, w, http.StatusOK)
@@ -132,7 +147,7 @@ func TestDetectAccount(t *testing.T) {
 		t.Fatalf("detect second = %+v, want org-b with no matching account", got)
 	}
 	if org := f.accountOrg(t, ctx, first.Spec.AccountID); org != "org-a" {
-		t.Fatalf("default account orgId = %q after a disagreeing key, want org-a kept", org)
+		t.Fatalf("account orgId = %q after a disagreeing key, want org-a kept", org)
 	}
 
 	orgB := &account.Account{

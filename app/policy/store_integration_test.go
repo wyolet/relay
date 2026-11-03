@@ -67,7 +67,7 @@ func setupPolicyStore(t *testing.T) (storeFixture, context.Context) {
 	}
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "store-key-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "STORE_TEST_KEY"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "STORE_TEST_KEY"}},
 	}
 	if err := hostkey.NewStore(pool, nil, nil).Upsert(ctx, hk); err != nil {
 		t.Fatalf("upsert host key: %v", err)

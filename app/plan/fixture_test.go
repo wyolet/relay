@@ -29,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
@@ -79,6 +80,7 @@ type world struct {
 	roles     []*role.Role
 	rbs       []*rolebinding.RoleBinding
 	groups    []*group.Group
+	setting   *settings.Accounts
 	rbac      bool
 }
 
@@ -308,8 +310,16 @@ func (w *world) sources() Sources {
 		Roles:           src(w.roles, func(r *role.Role) meta.Metadata { return r.Meta }),
 		RoleBindings:    src(w.rbs, func(r *rolebinding.RoleBinding) meta.Metadata { return r.Meta }),
 		Groups:          src(w.groups, func(r *group.Group) meta.Metadata { return r.Meta }),
+		AccountsSetting: rows[settings.Accounts]{list: settingRows(w.setting), id: func(*settings.Accounts) string { return settings.SectionAccounts }},
 		RBAC:            w.rbac,
 	}
+}
+
+func settingRows(s *settings.Accounts) []*settings.Accounts {
+	if s == nil {
+		return nil
+	}
+	return []*settings.Accounts{s}
 }
 
 // harness is a loaded engine over a world.

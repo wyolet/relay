@@ -10,23 +10,21 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-// A default account no key names goes with its project, so it is no dependent; a named account, or a default one a key still uses, is.
-func TestDefaultAccountWithoutKeysIsNoDependent(t *testing.T) {
+// Every provider account the project owns is a dependent, whether or not a key names it: nothing makes one implicitly, so none goes with its project unasked.
+func TestProviderAccountsAreDependents(t *testing.T) {
 	id := meta.NewID()
 	owned := meta.Owner{Kind: meta.OwnerProject, ID: id}
-	acct := func(name string, def bool) *account.Account {
-		return &account.Account{Meta: meta.Metadata{ID: name, Name: name, Owner: owned}, Spec: account.Spec{HostID: "h-1", Default: def}}
+	acct := func(name string, grouped bool) *account.Account {
+		return &account.Account{Meta: meta.Metadata{ID: name, Name: name, Owner: owned}, Spec: account.Spec{HostID: "h-1", GroupedByRelay: grouped}}
 	}
 	rows := Rows{
-		Accounts: []*account.Account{acct("keyless-default", true), acct("used-default", true), acct("named", false)},
+		Accounts: []*account.Account{acct("keyless-grouped", true), acct("used", false)},
 		HostKeys: []*hostkey.HostKey{
-			{Meta: meta.Metadata{ID: "k-1", Name: "elsewhere-key", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: hostkey.Spec{AccountID: "used-default"}},
-			{Meta: meta.Metadata{ID: "k-2", Name: "pruned-key", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: hostkey.Spec{AccountID: "keyless-default"}},
+			{Meta: meta.Metadata{ID: "k-1", Name: "elsewhere-key", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: hostkey.Spec{AccountID: "used"}},
 		},
 	}
-	gone := func(kind, id string) bool { return kind == "HostKey" && id == "k-2" }
-	named, hidden := rows.Dependents(id, gone, nil)
-	want := []string{"Account/used-default", "Account/named"}
+	named, hidden := rows.Dependents(id, nil, nil)
+	want := []string{"Account/keyless-grouped", "Account/used"}
 	if hidden != 0 || !slices.Equal(named, want) {
 		t.Fatalf("dependents = %v (+%d hidden), want %v", named, hidden, want)
 	}

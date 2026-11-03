@@ -163,6 +163,9 @@ func (c *controllers) keyPlan(tx *engine.Txn, id string) error {
 		return nil
 	}
 	kp := &KeyPlan{Key: k, Principal: k.Spec.Principal, Caller: cp, in: inputs{k, cp}}
+	if r := cp.Refused; r != nil && r.Code == CodePersonalAccountOff {
+		tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssuePersonalAccountOff, Source: src, Field: "spec.accountId", Target: engine.Ref{Kind: KindAccount, ID: laneID}, Message: r.Message + "; the key serves nothing until they are on again"})
+	}
 	principal := principalKey(k.Spec.Principal)
 	switch {
 	// Re-read on every lane change, so a key whose account stops taking it (a membership no longer followed, an owner moved) is refused.

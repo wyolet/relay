@@ -102,26 +102,24 @@ func TestUpstreamKinds_CRUD(t *testing.T) {
 	}
 }
 
-// A host-key PUT that omits accountId keeps the key in its account, as an omitted secret is kept: a client unaware of accounts must not move a key out of its provider org.
-func TestHostKeyUpdateKeepsItsAccount(t *testing.T) {
+// A host-key PUT must name the key's account, as a create must: one that omits it is refused and leaves the key in its account.
+func TestHostKeyUpdateNeedsItsAccount(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	hk := f.hostKey(t, ctx, "kept-key")
-	w := f.adminSend(t, http.MethodPost, "/accounts", `{"metadata":{"name":"kept-org"},"spec":{"hostId":"`+f.host.Meta.ID+`"}}`)
-	wantStatus(t, w, http.StatusCreated)
-	var acct struct {
-		Metadata meta.Metadata `json:"metadata"`
-	}
-	must(t, "decode account", json.Unmarshal(w.Body.Bytes(), &acct))
-	hk.Spec.AccountID = acct.Metadata.ID
-	must(t, "upsert host key", f.stores.HostKey.Upsert(ctx, hk))
 
-	w = f.adminSend(t, http.MethodPut, "/host-keys/by-id/"+hk.Meta.ID, `{"metadata":{"name":"kept-key","displayName":"Renamed"},"spec":{"hostId":"`+f.host.Meta.ID+`","valueFrom":{"kind":"env","env":"DEL_HOSTKEY_VALUE"}}}`)
-	wantStatus(t, w, http.StatusOK)
+	w := f.adminSend(t, http.MethodPut, "/host-keys/by-id/"+hk.Meta.ID, `{"metadata":{"name":"kept-key","displayName":"Renamed"},"spec":{"hostId":"`+f.host.Meta.ID+`","valueFrom":{"kind":"env","env":"DEL_HOSTKEY_VALUE"}}}`)
+	wantStatus(t, w, http.StatusBadRequest)
+	if code := errorCode(t, w); code != "account_required" {
+		t.Fatalf("code = %q, want account_required", code)
+	}
 	got, err := f.stores.HostKey.Get(ctx, hk.Meta.ID)
 	must(t, "get host key", err)
-	if got.Meta.DisplayName != "Renamed" || got.Spec.AccountID != acct.Metadata.ID {
-		t.Fatalf("after a PUT without accountId: displayName %q, account %q; want Renamed in %q", got.Meta.DisplayName, got.Spec.AccountID, acct.Metadata.ID)
+	if got.Meta.DisplayName == "Renamed" || got.Spec.AccountID != hk.Spec.AccountID {
+		t.Fatalf("after a refused PUT: displayName %q, account %q; want it unchanged in %q", got.Meta.DisplayName, got.Spec.AccountID, hk.Spec.AccountID)
 	}
+
+	w = f.adminSend(t, http.MethodPut, "/host-keys/by-id/"+hk.Meta.ID, `{"metadata":{"name":"kept-key","displayName":"Renamed"},"spec":{"hostId":"`+f.host.Meta.ID+`","accountId":"`+hk.Spec.AccountID+`","valueFrom":{"kind":"env","env":"DEL_HOSTKEY_VALUE"}}}`)
+	wantStatus(t, w, http.StatusOK)
 }
 
 // A project's host key may not join a system account: the account's counters and 429 cooldown are the system keys' too. Its own project's account is fine.

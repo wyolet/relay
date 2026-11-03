@@ -23,6 +23,14 @@ import (
 // stores. A store that is not wired skips the checks needing it.
 func refs(d Deps) refcheck.Checker {
 	c := refcheck.Checker{Authz: d.Authz}
+	if d.PlanView != nil {
+		c.Rows.PersonalAccountOff = func(_ context.Context, userID string) (bool, string) {
+			if p := personalAccountState(d, userID); p != nil && !p.On {
+				return true, p.Username
+			}
+			return false, ""
+		}
+	}
 	if d.Users != nil {
 		c.Rows.MissingUsers = d.Users.MissingIDs
 		c.Rows.UserVisible = d.userVisible

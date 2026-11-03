@@ -51,6 +51,10 @@ func (c *controllers) all() []*engine.Controller {
 	pending := engine.NewController("pending-accounts", KindPendingAccounts, c.pendingAccounts)
 	engine.Watch(pending, pendingKey)
 
+	personal := engine.NewController("personal-account", KindPersonalAccount, c.personalAccount)
+	engine.Watch(personal, func(u *user.User) []string { return []string{u.ID} })
+	engine.Watch(personal, groupMembers)
+
 	expanded := engine.NewController("expanded-policy", KindExpandedPolicy, c.expandedPolicy)
 	engine.Watch(expanded, func(p *policy.Policy) []string { return []string{p.Meta.ID} })
 
@@ -98,5 +102,5 @@ func (c *controllers) all() []*engine.Controller {
 	users := engine.NewController("user-index", KindUserIndex, c.userIndex)
 	engine.Watch(users, toSingleton[UserPlan])
 
-	return []*engine.Controller{catalog, managed, pending, expanded, rung, acct, slot, owned, shared, pl, caller, lanes, kp, shard, index, up, users}
+	return []*engine.Controller{catalog, managed, pending, personal, expanded, rung, acct, slot, owned, shared, pl, caller, lanes, kp, shard, index, up, users}
 }

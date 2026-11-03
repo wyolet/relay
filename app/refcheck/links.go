@@ -4,6 +4,7 @@ package refcheck
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/hostkey"
@@ -24,9 +25,15 @@ func (c Checker) hostRef(ctx context.Context, hostID string) error {
 	return nil
 }
 
-// accountRef checks the account a host key names: visible, owned by the key's own owner, and held at the key's host.
+// CodeAccountRequired refuses a host key that names no provider account.
+const CodeAccountRequired = "account_required"
+
+// accountRef checks the account a host key names: present, visible, owned by the key's own owner, and held at the key's host.
 func (c Checker) accountRef(ctx context.Context, k *hostkey.HostKey) error {
-	if k.Spec.AccountID == "" || c.Rows.Account == nil {
+	if k.Spec.AccountID == "" {
+		return &Error{Status: http.StatusBadRequest, Code: CodeAccountRequired, Msg: hostkey.ErrNoAccount.Error(), Err: hostkey.ErrNoAccount}
+	}
+	if c.Rows.Account == nil {
 		return nil
 	}
 	a := c.Rows.Account(ctx, k.Spec.AccountID)

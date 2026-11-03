@@ -99,12 +99,17 @@ func (s *Service) accountsByID(ctx context.Context) (map[string]*account.Account
 	return out, nil
 }
 
+// keyHolder is the id of the account whose keys a contributes: a shared account's real account, else a itself.
+func keyHolder(a *account.Account) string {
+	if a.IsShared() {
+		return a.Spec.SourceAccountID
+	}
+	return a.Meta.ID
+}
+
 // keysOf returns the keys a holds in creation order: a shared account's are its real account's.
 func keysOf(keys []*hostkey.HostKey, a *account.Account) []*hostkey.HostKey {
-	holder := a.Meta.ID
-	if a.IsShared() {
-		holder = a.Spec.SourceAccountID
-	}
+	holder := keyHolder(a)
 	var out []*hostkey.HostKey
 	for _, k := range keys {
 		if k.Spec.AccountID == holder {

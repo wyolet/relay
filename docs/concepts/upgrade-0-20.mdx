@@ -24,7 +24,7 @@ This is a [stop-and-start upgrade](/concepts/upgrade#stop-and-start-upgrades): a
 | Policy `includeDeprecated` | Gone. `provider` references grant deprecated and sunset models like any other. |
 | Policy `payloadLoggingEnabled` | `payloadLogging: on \| off` on the [accounts](/concepts/accounts#payload-logging) the policy is bound to. |
 | Relay key `policyId`, service account `policyId` | A policy binding on the key's account: the service account's account, or the user's personal account. Every key now has `accountId`. |
-| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [provider account](/concepts/key-pooling#accounts). A key without an account joins its owner's [default account](/concepts/key-pooling#default-accounts). |
+| Host key `policyId` (its tier policy) | Host key `accountId` (`account`), and a policy binding of the tier on that [provider account](/concepts/key-pooling#accounts). The upgrade gives every key an account; after it, a key that names none is refused with `400 account_required`. |
 | Policy binding `projectId` (`project`) and `subjects` | `metadata.owner` and `accountIds` (`accounts`, names). Only accounts are bound. |
 | Policy binding `priority`, several bindings per subject | One binding per account. `priority` is gone: the control API refuses it with `422` and manifests ignore it. |
 | Group subjects in policy bindings, `system:authenticated` as a project default | Gone. Bind the accounts of the team, the project or the members instead. |
@@ -44,7 +44,7 @@ Behaviour that changes at request time:
 - **Bindings on users apply to their member accounts.** A 0.11 binding owned by a project and naming a user becomes a binding of that user's member account in the project. It governs requests in that account: the user's inference tokens for the project, and relay keys created in the account. The user's existing keys run in the personal account and are not governed by it.
 - **Inference tokens run in a member account.** A token runs in its user's member account in the token's project. A user who holds a role in that project directly, or whom a 0.11 project binding names, has one after the upgrade. A user whose access to the project comes only through a group or a team-level role has none until the next mint creates it: tokens minted before the upgrade answer `403 account_not_held`, and the user mints new ones.
 - **Rate-limit and budget counters start over.** They are now kept per account, so the counts and spend of the current windows and periods begin at zero at the upgrade.
-- **Every host key has an account.** Migration 36 puts each host key without one into its owner's default account at its host, and a key saved later without one joins it too. A `429` from the provider on a key in a default account still goes to that key's breaker and the request fails over to the next key, as in 0.11. Only accounts you create cool on a `429`: put keys that share one provider organization into such an account to have a `429` on one skip the others for the requested model. See [Accounts](/concepts/key-pooling#accounts).
+- **Every host key has an account.** The upgrade puts each host key without one into an account per owner and host, marked `groupedByRelay`. A key saved later must name its account (`400 account_required` otherwise): create the account, then add keys. A `429` from the provider on a key in a grouped account still goes to that key's breaker and the request fails over to the next key, as in 0.11; a `429` in any other account cools the account for the requested model. Set a grouped account's `orgId` once you know its keys share one provider organization, or split its keys into an account per organization. See [Accounts grouped by the upgrade](/concepts/key-pooling#accounts-grouped-by-the-upgrade).
 - **Deprecated models are granted like any other.** A `provider` reference covers them, and a request whose ladder lists no models may call them.
 - **Usage events** carry `lane_account_id`, the account the request ran in, and `refusal` on the requests Relay refused itself, which are now recorded with the status and message the caller received. `policy_id` records the innermost caller policy: the lane's, else the project's, else the team's. See [Usage](/concepts/usage).
 - **Proxy mode** refuses a model that is not in the catalog, also for a key that had no policy, instead of forwarding it unpriced.
@@ -81,7 +81,9 @@ Before it drops them, it logs each link it removes by the names of both ends, on
 000036: binding narrows to project tokens: policy binding "project-alice" (policy "users") -> user "alice" governs only tokens in project "dev", not personal keys
 ```
 
-It then gives every host key without an account its owner's default account at the key's host, creating one account per owner and host, named after the host (suffixed `-2`, `-3`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account. Keys whose host no longer exists are left without one.
+It then gives every host key without an account an account of its owner at the key's host, creating one account per owner and host, named after the host (suffixed `-2`, `-3`, … when the name is taken). A key created with the admin token is system-owned and joins the system's account. Keys whose host no longer exists are left without one. **Migration 41** marks these accounts `groupedByRelay` unless they already name an `orgId`, groups the same way any key still without an account whose host exists, and stops Relay from creating accounts for keys.
+
+After migration 41, every provider account blocks deleting its host, its team or its project, including an account grouped by relay that no host key names any more: before 0.20 such an account went with its owner. Deleting one of those answers `409` listing the accounts; delete them first (`DELETE /api/accounts/by-id/{id}`), or list them in the same apply's prune.
 
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
 
@@ -270,7 +272,7 @@ Migration 39 ends with two log lines:
 
 7. **Write the new manifests** in `relay.wyolet.dev/v1alpha3`, from the exports; [Re-creating the dropped links](#re-creating-the-dropped-links) maps each dropped link to its replacement:
 
-   - An `Account` for each provider organization, and `account` on each of its host keys. A key you leave without one stays in the default account migration 36 gave it.
+   - An `Account` for each provider organization, and `account` on each of its host keys. A key you leave without one stays in the account the upgrade grouped it into.
    - A `PolicyBinding` of a tier preset (or your own tier policy) on each provider account, replacing the host keys' `policyId`. List a host's presets with `GET /api/hosts/{host}/policies`.
    - A `Pool` for each set of host keys a policy listed, with the old `keySelection` as its `selection`.
    - Each policy with `pools`, `rateLimits` and, where you want spend caps, `budgets` (`[{ref}]` entries). `models` names providers and models, never hosts.
@@ -326,7 +328,7 @@ The catalog's tier policies, owned by their host, get their rate limits back whe
 
 ### A host key's tier
 
-Migration 36 put each host key in its owner's default account at its host, named after the host. List the accounts with `GET /api/accounts?kind=provider` and an account's keys with `GET /api/accounts/{ref}/keys`. Bind the tier to the account with a binding owned by the system:
+The upgrade put each host key in an account of its owner at its host, named after the host and marked `groupedByRelay`. List the accounts with `GET /api/accounts?kind=provider` and an account's keys with `GET /api/accounts/{ref}/keys`. Bind the tier to the account with a binding owned by the system:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -339,7 +341,7 @@ spec:
   accounts: [anthropic]
 ```
 
-An account has one policy. Host keys of one owner at one host share a default account, so if they had different tiers, they belong to different provider organizations: create an account for each, name it on its keys, and bind each tier to its own account:
+An account has one policy. Host keys of one owner at one host share a grouped account, so if they had different tiers, they belong to different provider organizations: create an account for each, name it on its keys, and bind each tier to its own account:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha3
@@ -370,7 +372,7 @@ spec:
   accounts: [openai-build-org]
 ```
 
-Accounts you create cool on a provider `429`, unlike default accounts; see [Accounts](/concepts/key-pooling#accounts).
+Accounts you create cool on a provider `429`, unlike grouped ones; set `orgId` on a grouped account to make it cool the same way. See [Accounts grouped by the upgrade](/concepts/key-pooling#accounts-grouped-by-the-upgrade).
 
 ### A relay key's policy
 

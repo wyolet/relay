@@ -132,11 +132,11 @@ func TestCheckHostKeyRefsVisible_PersonalRowCannotReferenceProjectHostKey(t *tes
 
 	projectHostKey := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "project-hostkey", Owner: meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
 	}
 	userHostKey := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "user-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
 	}
 	for _, k := range []*hostkey.HostKey{projectHostKey, userHostKey} {
 		if err := stores.HostKey.Upsert(ctx, k); err != nil {
