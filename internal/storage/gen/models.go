@@ -424,3 +424,8 @@ type User struct {
 	UpdatedAt    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	TokenVersion int32              `db:"token_version" json:"token_version"`
 }
+
+type UserPersonalAccount struct {
+	UserID string `db:"user_id" json:"user_id"`
+	Value  string `db:"value" json:"value"`
+}

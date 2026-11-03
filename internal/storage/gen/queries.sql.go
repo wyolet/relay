@@ -364,6 +364,15 @@ func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 	return err
 }
 
+const deleteUserPersonalAccount = `-- name: DeleteUserPersonalAccount :exec
+DELETE FROM user_personal_accounts WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserPersonalAccount(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, deleteUserPersonalAccount, userID)
+	return err
+}
+
 const demoteSecretDataKey = `-- name: DemoteSecretDataKey :exec
 UPDATE secret_data_keys SET state = 'decrypt', demoted_at = NOW(), updated_at = NOW() WHERE id = $1
 `
@@ -1113,6 +1122,17 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 	var i Setting
 	err := row.Scan(&i.Section, &i.Value, &i.UpdatedAt)
 	return i, err
+}
+
+const getUserPersonalAccount = `-- name: GetUserPersonalAccount :one
+SELECT value FROM user_personal_accounts WHERE user_id = $1
+`
+
+func (q *Queries) GetUserPersonalAccount(ctx context.Context, userID string) (string, error) {
+	row := q.db.QueryRow(ctx, getUserPersonalAccount, userID)
+	var value string
+	err := row.Scan(&value)
+	return value, err
 }
 
 type InsertAuditEventParams struct {
@@ -2694,6 +2714,30 @@ func (q *Queries) ListUserIDsIn(ctx context.Context, dollar_1 []string) ([]strin
 	return items, nil
 }
 
+const listUserPersonalAccounts = `-- name: ListUserPersonalAccounts :many
+SELECT user_id, value FROM user_personal_accounts
+`
+
+func (q *Queries) ListUserPersonalAccounts(ctx context.Context) ([]UserPersonalAccount, error) {
+	rows, err := q.db.Query(ctx, listUserPersonalAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UserPersonalAccount
+	for rows.Next() {
+		var i UserPersonalAccount
+		if err := rows.Scan(&i.UserID, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserTokenVersionsAndDisabled = `-- name: ListUserTokenVersionsAndDisabled :many
 SELECT id, token_version, disabled FROM users
 `
@@ -3018,6 +3062,21 @@ func (q *Queries) SetSecretKeyringTarget(ctx context.Context, arg SetSecretKeyri
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setUserPersonalAccount = `-- name: SetUserPersonalAccount :exec
+INSERT INTO user_personal_accounts (user_id, value) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE SET value = EXCLUDED.value
+`
+
+type SetUserPersonalAccountParams struct {
+	UserID string `db:"user_id" json:"user_id"`
+	Value  string `db:"value" json:"value"`
+}
+
+func (q *Queries) SetUserPersonalAccount(ctx context.Context, arg SetUserPersonalAccountParams) error {
+	_, err := q.db.Exec(ctx, setUserPersonalAccount, arg.UserID, arg.Value)
+	return err
 }
 
 const updateSecretCiphertext = `-- name: UpdateSecretCiphertext :exec

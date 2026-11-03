@@ -245,7 +245,7 @@ The account read is open to whoever may read the account and to the user who act
 GET /api/plan-issues?kind=&id=   what Relay found wrong while folding the configuration
 ```
 
-Each issue is `{code, message, kind, id, name, severity, refs: [{kind, id}]}`, sorted by kind, name and code. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include `ref_missing` (a link to a row that does not exist), `subject_out_of_scope` (a binding naming an account outside its owner's scope), `link_out_of_scope` (a policy linking a pool its binding's scope may not use), `duplicate_binding`, `model_ref_invalid`, `credential_unresolved` (a host key whose value cannot be read), `shared_account_missing` (a shared account whose real account is gone) and `unpriced_under_budget`. `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, …), and `id` together with `kind` narrows to one row.
+Each issue is `{code, message, kind, id, name, severity, refs: [{kind, id}]}`, sorted by kind, name and code. `severity` is `error` when the row cannot serve and `warning` when it serves but something is likely wrong. Codes include `ref_missing` (a link to a row that does not exist), `subject_out_of_scope` (a binding naming an account outside its owner's scope), `link_out_of_scope` (a policy linking a pool its binding's scope may not use), `duplicate_binding`, `model_ref_invalid`, `credential_unresolved` (a host key whose value cannot be read), `shared_account_missing` (a shared account whose real account is gone, or belongs to a user whose personal accounts are turned off), `personal_account_off` (a relay key running in, or a provider account owned by, a user whose personal accounts are turned off) and `unpriced_under_budget`. `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, …), and `id` together with `kind` narrows to one row.
 
 Issues on rows the caller may not read are left out, and a ref to such a row keeps its kind with an empty id. Under `RELAY_AUTHZ=rbac` the route takes a role whose rules include the kind `*`, such as the built-in `admin`.
 
@@ -331,14 +331,14 @@ The token runs in the user's member account in the project; the mint creates tha
 
 ```
 GET  /api/users                              list users (never a password hash)
-PUT  /api/users/by-id/{id}                   edit disabled and roles
+PUT  /api/users/by-id/{id}                   edit disabled, roles and personalAccount
 POST /api/users/by-id/{id}/revoke-tokens     revoke every inference token the user holds
 POST /api/access-review                      explain whether a user or service account may perform an action
 GET  /api/audit                              audit events, newest first; filter by actor_id, actor_name, action,
                                              resource_kind, resource_id, scope, status, from, to
 ```
 
-User endpoints authorize at the global scope. Disabling a user signs them out on their next request, refuses their login with `401` `account_disabled`, and revokes their inference tokens; re-enabling does not bring the tokens back. The access review answers `501` under `RELAY_AUTHZ=single`. See [Checking access](/concepts/auth#checking-access) and [Audit log](/concepts/audit).
+User endpoints authorize at the global scope. Disabling a user signs them out on their next request, refuses their login with `401` `account_disabled`, and revokes their inference tokens; re-enabling does not bring the tokens back. `personalAccount` (`on`, `off`, or `""` to inherit) on a user, and on a group through `PUT /api/groups/by-id/{id}`, is an admin's to set (`403` otherwise); user reads and `GET /api/auth/whoami` carry `personalAccountEffective`. See [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off). The access review answers `501` under `RELAY_AUTHZ=single`. See [Checking access](/concepts/auth#checking-access) and [Audit log](/concepts/audit).
 
 ## SCIM clients
 

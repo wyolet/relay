@@ -47,6 +47,12 @@ func (c *controllers) accountPlan(tx *engine.Txn, id string) error {
 		engine.Drop(tx)
 		return nil
 	}
+	if off := personalAccountOff(tx, acc.Meta.Owner); off != nil {
+		tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssuePersonalAccountOff, Source: engine.Ref{Kind: KindAccount, ID: id}, Field: "metadata.owner",
+			Message: "personal accounts are turned off for " + off.name() + ", who owns this account; its keys and shares serve nothing until they are on again"})
+		engine.Drop(tx)
+		return nil
+	}
 	cd := cell.Acquire(c.cells, tx, keypool.CooldownCellKey(id), keypool.NewCooldownCell)
 	// Built from the id, host and grouping mark alone, so a learned org id written onto the row keeps this plan and everything that reads it.
 	ap := &AccountPlan{Account: acc, GroupedByRelay: acc.Spec.GroupedByRelay, Cooldown: cd, in: inputs{acc.Meta.ID, acc.Spec.HostID, acc.Spec.GroupedByRelay, cd}}
@@ -124,6 +130,11 @@ func (c *controllers) keySlot(tx *engine.Txn, id string) error {
 	var acc *AccountPlan
 	if aid := cred.Spec.AccountID; aid != "" {
 		if acc = engine.Get[AccountPlan](tx, aid); acc == nil {
+			// An account turned off with its owner's personal accounts carries the issue itself.
+			if a := engine.Get[account.Account](tx, aid); a != nil && personalAccountOff(tx, a.Meta.Owner) != nil {
+				engine.Drop(tx)
+				return nil
+			}
 			tx.Issue(parentMissing(src, "spec.accountId", engine.Ref{Kind: KindAccount, ID: aid}))
 			engine.Drop(tx)
 			return nil

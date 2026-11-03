@@ -509,6 +509,19 @@ SELECT id FROM users WHERE id = ANY($1::text[]);
 -- Names a whole id list in one round trip, for labelling usage rows by user.
 SELECT id, username FROM users WHERE id = ANY($1::text[]);
 
+-- name: GetUserPersonalAccount :one
+SELECT value FROM user_personal_accounts WHERE user_id = $1;
+
+-- name: ListUserPersonalAccounts :many
+SELECT user_id, value FROM user_personal_accounts;
+
+-- name: SetUserPersonalAccount :exec
+INSERT INTO user_personal_accounts (user_id, value) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE SET value = EXCLUDED.value;
+
+-- name: DeleteUserPersonalAccount :exec
+DELETE FROM user_personal_accounts WHERE user_id = $1;
+
 -- name: ListUserTokenVersionsAndDisabled :many
 -- One read feeds both snapshot views of users: enabled accounts' token versions and the ids of disabled ones.
 SELECT id, token_version, disabled FROM users;

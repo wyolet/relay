@@ -38,7 +38,7 @@ func registerMyContexts(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodGet,
 		Path:        "/me/contexts",
 		Summary:     "List the scopes the caller may create rows in",
-		Description: "The contexts the caller may act in: their personal scope first, then each team, then each project, each list by slug, where the caller may create at least one policy, pool, account, host key, budget, rate limit, policy binding, key, service account or role binding. Grants through groups and through a team-level role count, so a team admin is listed with the team's projects. The admin token is no user: it gets every team and project with admin true and no personal scope. Read from the in-memory catalog, so a write shows within about a second.",
+		Description: "The contexts the caller may act in: their personal scope first (left out while their personal account is turned off), then each team, then each project, each list by slug, where the caller may create at least one policy, pool, account, host key, budget, rate limit, policy binding, key, service account or role binding. Grants through groups and through a team-level role count, so a team admin is listed with the team's projects. The admin token is no user: it gets every team and project with admin true and no personal scope. Read from the in-memory catalog, so a write shows within about a second.",
 		Tags:        []string{"accounts"},
 		Middlewares: protect,
 		Errors:      []int{401, 503},
@@ -51,7 +51,11 @@ func registerMyContexts(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error503ServiceUnavailable("the catalog is not loaded yet")
 		}
 		// Unaudited: the probes are reads of what the caller may do, not decisions on this request.
-		return &myContextsOut{Body: myContexts(ctx, unaudited(d.Authz), d.Catalog.Current(), a)}, nil
+		personalOn := true
+		if st := personalAccountState(d, a.UserID); st != nil && !st.On {
+			personalOn = false
+		}
+		return &myContextsOut{Body: myContexts(ctx, unaudited(d.Authz), d.Catalog.Current(), a, personalOn)}, nil
 	})
 }
 
@@ -62,9 +66,10 @@ type contextSource interface {
 	RoleByName(name string) (*role.Role, bool)
 }
 
-func myContexts(ctx context.Context, az authz.Authorizer, src contextSource, a *actor.Actor) []MyContext {
+// myContexts lists a's contexts; the personal one only while personalOn, since rows created there would serve nothing.
+func myContexts(ctx context.Context, az authz.Authorizer, src contextSource, a *actor.Actor, personalOn bool) []MyContext {
 	out := []MyContext{}
-	if !a.AdminToken && a.UserID != "" {
+	if !a.AdminToken && a.UserID != "" && personalOn {
 		out = append(out, MyContext{Kind: "personal", ID: a.UserID, Name: a.Username, DisplayName: a.Username, Admin: true})
 	}
 	teamAdmin, _ := src.RoleByName(role.BuiltinTeamAdmin)
