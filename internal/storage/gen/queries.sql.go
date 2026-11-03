@@ -1115,6 +1115,17 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 	return i, err
 }
 
+const getUserPersonalAccount = `-- name: GetUserPersonalAccount :one
+SELECT COALESCE(personal_account, '')::text FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserPersonalAccount(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getUserPersonalAccount, id)
+	var column_1 string
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 type InsertAuditEventParams struct {
 	ID            string             `db:"id" json:"id"`
 	Ts            pgtype.Timestamptz `db:"ts" json:"ts"`
@@ -2694,6 +2705,35 @@ func (q *Queries) ListUserIDsIn(ctx context.Context, dollar_1 []string) ([]strin
 	return items, nil
 }
 
+const listUserPersonalAccounts = `-- name: ListUserPersonalAccounts :many
+SELECT id, personal_account::text AS personal_account FROM users WHERE personal_account IS NOT NULL
+`
+
+type ListUserPersonalAccountsRow struct {
+	ID              string `db:"id" json:"id"`
+	PersonalAccount string `db:"personal_account" json:"personal_account"`
+}
+
+func (q *Queries) ListUserPersonalAccounts(ctx context.Context) ([]ListUserPersonalAccountsRow, error) {
+	rows, err := q.db.Query(ctx, listUserPersonalAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserPersonalAccountsRow
+	for rows.Next() {
+		var i ListUserPersonalAccountsRow
+		if err := rows.Scan(&i.ID, &i.PersonalAccount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserTokenVersionsAndDisabled = `-- name: ListUserTokenVersionsAndDisabled :many
 SELECT id, token_version, disabled FROM users
 `
@@ -3014,6 +3054,23 @@ type SetSecretKeyringTargetParams struct {
 
 func (q *Queries) SetSecretKeyringTarget(ctx context.Context, arg SetSecretKeyringTargetParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setSecretKeyringTarget, arg.Target, arg.Expected)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setUserPersonalAccount = `-- name: SetUserPersonalAccount :execrows
+UPDATE users SET personal_account = $2, updated_at = now() WHERE id = $1
+`
+
+type SetUserPersonalAccountParams struct {
+	ID              string      `db:"id" json:"id"`
+	PersonalAccount pgtype.Text `db:"personal_account" json:"personal_account"`
+}
+
+func (q *Queries) SetUserPersonalAccount(ctx context.Context, arg SetUserPersonalAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserPersonalAccount, arg.ID, arg.PersonalAccount)
 	if err != nil {
 		return 0, err
 	}

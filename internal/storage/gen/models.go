@@ -413,14 +413,15 @@ type Team struct {
 }
 
 type User struct {
-	ID           string             `db:"id" json:"id"`
-	Username     string             `db:"username" json:"username"`
-	Email        pgtype.Text        `db:"email" json:"email"`
-	PasswordHash pgtype.Text        `db:"password_hash" json:"password_hash"`
-	OidcSubject  pgtype.Text        `db:"oidc_subject" json:"oidc_subject"`
-	Roles        []string           `db:"roles" json:"roles"`
-	Disabled     bool               `db:"disabled" json:"disabled"`
-	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	TokenVersion int32              `db:"token_version" json:"token_version"`
+	ID              string             `db:"id" json:"id"`
+	Username        string             `db:"username" json:"username"`
+	Email           pgtype.Text        `db:"email" json:"email"`
+	PasswordHash    pgtype.Text        `db:"password_hash" json:"password_hash"`
+	OidcSubject     pgtype.Text        `db:"oidc_subject" json:"oidc_subject"`
+	Roles           []string           `db:"roles" json:"roles"`
+	Disabled        bool               `db:"disabled" json:"disabled"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	TokenVersion    int32              `db:"token_version" json:"token_version"`
+	PersonalAccount pgtype.Text        `db:"personal_account" json:"personal_account"`
 }

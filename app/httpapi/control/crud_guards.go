@@ -60,6 +60,9 @@ func guardGroup(d Deps) mutationGuard[group.Group] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
+		if err := guardGroupPersonalAccount(ctx, d.Authz, existing, incoming); err != nil {
+			return err
+		}
 		c := refs(d)
 		if err := c.Group(ctx, incoming); err != nil {
 			return refErr(err)

@@ -94,6 +94,8 @@ type Lookup struct {
 	UserMayBindIn func(ctx context.Context, userID string, scope meta.Owner) (bool, error)
 	// UserName returns a user's username for refusal wording, empty when unknown.
 	UserName func(ctx context.Context, userID string) string
+	// PersonalAccountOff reports whether a user's personal account is turned off, with the username for refusal wording; nil treats every user's as on.
+	PersonalAccountOff func(ctx context.Context, userID string) (off bool, username string)
 }
 
 // Checker applies the rules for the caller in ctx. A nil Authz is a loader
@@ -430,6 +432,12 @@ func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
 		if c.Rows.DefaultAccount == nil {
 			return nil
 		}
+		if k.Spec.Principal.Kind == key.PrincipalUser {
+			if off, name := c.personalAccountOff(ctx, k.Spec.Principal.ID); off {
+				return &Error{Status: http.StatusBadRequest, Code: CodeLaneRequired, Msg: fmt.Sprintf(
+					"personal accounts are turned off for %s, so a key needs an account to run in: set accountId to a member account in one of their teams or projects", name)}
+			}
+		}
 		id, err := c.Rows.DefaultAccount(ctx, k.Spec.Principal)
 		if err != nil {
 			return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
@@ -452,6 +460,46 @@ func (c Checker) KeyAccount(ctx context.Context, k *key.Key) error {
 		return &Error{Status: http.StatusForbidden, Code: CodeAccountNotHeld, Msg: fmt.Sprintf(
 			"%s cannot run in %s: a key runs in its principal's personal or service account, a member account a role binding grants, or a provider account its user owns. Leave accountId empty to use the principal's own account.",
 			c.principalKeys(ctx, k.Spec.Principal), c.rowText(ctx, "account", a.Meta))}
+	}
+	if kind := a.DerivedKind(); (kind == account.KindPersonal || kind == account.KindProvider) && a.Meta.Owner.Kind == meta.OwnerUser {
+		if off, name := c.personalAccountOff(ctx, a.Meta.Owner.ID); off {
+			return personalAccountOffError("personal accounts are turned off for %s, so a key cannot run in %s; use a team or project key", name, c.rowText(ctx, "account", a.Meta))
+		}
+	}
+	return nil
+}
+
+// Codes of the refusals a turned-off personal account answers with.
+const (
+	// CodeLaneRequired refuses a key with no account while its user's personal account, the one it would default to, is off.
+	CodeLaneRequired = "lane_required"
+	// CodePersonalAccountOff refuses a write that would put something in, or share something with, a user whose personal account is off.
+	CodePersonalAccountOff = "personal_account_off"
+)
+
+func personalAccountOffError(format string, args ...any) error {
+	return &Error{Status: http.StatusForbidden, Code: CodePersonalAccountOff, Msg: fmt.Sprintf(format, args...)}
+}
+
+// personalAccountOff reports whether userID's personal account is turned off, with a name for the refusal.
+func (c Checker) personalAccountOff(ctx context.Context, userID string) (bool, string) {
+	if c.Rows.PersonalAccountOff == nil || userID == "" {
+		return false, ""
+	}
+	off, name := c.Rows.PersonalAccountOff(ctx, userID)
+	if name == "" {
+		name = "user " + userID
+	}
+	return off, name
+}
+
+// PersonalProviderAccount refuses a provider account owned by a user whose personal account is turned off: it would serve nothing.
+func (c Checker) PersonalProviderAccount(ctx context.Context, a *account.Account) error {
+	if !a.IsProvider() || a.Meta.Owner.Kind != meta.OwnerUser {
+		return nil
+	}
+	if off, name := c.personalAccountOff(ctx, a.Meta.Owner.ID); off {
+		return personalAccountOffError("personal accounts are turned off for %s, so they cannot own a provider account; create it in a team or project", name)
 	}
 	return nil
 }

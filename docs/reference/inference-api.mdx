@@ -300,7 +300,7 @@ Relay writes errors in one envelope:
 | `400` | `missing_upstream_host`, `unknown_upstream_host` | Proxy mode: an anonymous request without `X-WR-Upstream-Host`, or a pinned host that does not exist or that the caller may not use. |
 | `401` | `unauthenticated` | Missing, unknown, disabled, expired, revoked or rotated-out relay key or inference token. |
 | `401` | `token_revoked` | The inference token was revoked. |
-| `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding`, `account_closed` | A rung of the caller's ladder refuses. See [Policy refusals](#policy-refusals). |
+| `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off` | A rung of the caller's ladder refuses. See [Policy refusals](#policy-refusals). |
 | `403` | `account_not_held` | The request names an account its credential may not run in, or the inference token's project has no account for its user. See [Lanes](/concepts/accounts#lanes). |
 | `403` | `model_not_allowed`, `model_disabled` | A policy on the ladder does not allow the model, or the model is disabled. |
 | `403` | `unpriced_under_budget` | The model's binding has no pricing and a budget applies. |
@@ -323,7 +323,7 @@ When Relay refuses a request itself, `error.refusal` classes the code into what 
 
 | `refusal` | Meaning | Codes |
 | --- | --- | --- |
-| `model_not_allowed` | A policy, account or principal refuses the model. Use another model or account. | `policy_disabled`, `model_not_allowed`, `unpriced_under_budget`, `subject_disabled`, `duplicate_binding`, `account_closed`, `account_not_held` |
+| `model_not_allowed` | A policy, account or principal refuses the model. Use another model or account. | `policy_disabled`, `model_not_allowed`, `unpriced_under_budget`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off`, `account_not_held` |
 | `host_not_reachable` | No host the caller can reach serves the model, including a pinned `@host` none of its pools is at, or none of them accepted a connection. Use another model or host. | `model_not_found`, `model_disabled`, `no_host_binding`, `no_keys`, and `upstream_unreachable` when no candidate host connected |
 | `no_capacity` | A rate limit, a budget, an account cooldown, or every host key out of rotation. Retry later. | `rate_limit_exceeded`, `budget_exceeded`, `no_healthy_keys` |
 
@@ -353,6 +353,7 @@ The rung is `team`, `project` or `lane` on the caller side, and `account` for a 
 | `403` | `subject_disabled` | The caller's team or project is disabled. A disabled user or service account gets `401` instead. | Enable the team or project. |
 | `403` | `duplicate_binding` | Two policy bindings reach one account on that rung. Saving such a binding is normally refused with `409`. | Remove the account from all but one binding. |
 | `403` | `account_closed` | The request's account is a member account whose membership ended: no role binding grants the user that team or project any more. | Grant the membership again, or use another account. |
+| `403` | `personal_account_off` | The request runs in a user's personal account, or a provider account they own personally, while that user's personal accounts are turned off. | Use a key in a team or project account; see [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off). |
 | `403` | `account_not_held` | The request names an account its credential may not run in, or one that does not exist. A key's default account that stopped taking its keys answers the same. | Name an account the credential may use; see [Lanes](/concepts/accounts#lanes). |
 | `403` | `model_not_allowed` | A policy on the ladder does not allow the model. The message names the rung and the policy: `model "<model>" is not allowed by the <rung> policy <policy-id>`. | Add the model to that policy's `models`, or empty the list. |
 | `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no pricing. | Add pricing for the binding. |

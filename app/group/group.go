@@ -39,7 +39,13 @@ type Spec struct {
 
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False stops role bindings on the group from granting anything. Omitted means true."`
+
+	// PersonalAccount is the group's say on its members' personal accounts; empty leaves it to the deployment's accounts setting.
+	PersonalAccount string `json:"personalAccount,omitempty" yaml:"-" validate:"omitempty,oneof=on off" enum:"on,off" doc:"Turns its members' personal accounts on or off. A member's own value wins over it; between groups, off wins. Omitted leaves it to the deployment's accounts setting; a disabled group says nothing. Set by an admin only, whoever owns the group (403 otherwise); a non-admin's write that leaves it out keeps the stored value."`
 }
+
+// PersonalAccountAttribute is the directory attribute the group's PersonalAccount is stored under.
+const PersonalAccountAttribute = "personalAccount"
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (g *Group) IsEnabled() bool { return g.Spec.Enabled == nil || *g.Spec.Enabled }

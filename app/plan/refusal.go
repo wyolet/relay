@@ -40,6 +40,8 @@ const (
 	CodeAccountClosed = "account_closed"
 	// CodeAccountNotHeld refuses a lane the key's principal does not hold.
 	CodeAccountNotHeld = "account_not_held"
+	// CodePersonalAccountOff refuses a user's personal lane, or a provider account they own personally, while their personal account is turned off.
+	CodePersonalAccountOff = "personal_account_off"
 )
 
 // Codes relay refuses with once a route is found: a caller limit, or no credential of the route with room.
@@ -66,7 +68,7 @@ const (
 // KindOf is the class of a refusal code; "" for a code that is not a relay refusal, such as an upstream's own error.
 func KindOf(code string) RefusalKind {
 	switch code {
-	case CodePolicyDisabled, CodeModelNotAllowed, CodeUnpricedUnderBudget, CodeSubjectDisabled, CodeAccountClosed, CodeAccountNotHeld, CodeDuplicateBinding:
+	case CodePolicyDisabled, CodeModelNotAllowed, CodeUnpricedUnderBudget, CodeSubjectDisabled, CodeAccountClosed, CodeAccountNotHeld, CodeDuplicateBinding, CodePersonalAccountOff:
 		return RefusalModelNotAllowed
 	case CodeModelNotFound, CodeModelDisabled, CodeNoBinding, CodeNoCredentials, CodeUpstreamUnreachable:
 		return RefusalHostNotReachable
@@ -139,6 +141,8 @@ const (
 	IssuePolicyNotBindable     = "policy_not_bindable"
 	// IssueSharedAccountMissing is a shared account whose real account is gone, or no longer a provider account at its host: it serves nothing.
 	IssueSharedAccountMissing = "shared_account_missing"
+	// IssuePersonalAccountOff is a relay key whose lane, or a provider account whose owner, is a user with personal accounts turned off: it serves nothing until they are on again.
+	IssuePersonalAccountOff = "personal_account_off"
 )
 
 // rungRefusal is the refusal a rung's policy imposes, naming the rung.

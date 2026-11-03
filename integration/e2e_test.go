@@ -159,6 +159,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		Credentials: stores.HostKey, Teams: stores.Team, Projects: stores.Project, ServiceAccounts: stores.ServiceAccount,
 		Users: usersStore, Keys: stores.Key,
 		Roles: stores.Role, RoleBindings: stores.RoleBinding, Groups: stores.Group, RBAC: mode == "rbac",
+		AccountsSetting: plan.AccountsSettingSource{Store: stores.Settings},
 	})
 	if err := eng.Load(ctx); err != nil {
 		t.Fatalf("plans load: %v", err)
@@ -286,6 +287,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		Catalog:       cat,
 		Stores:        stores,
 		Plans:         plans,
+		PlanView:      eng.View,
 		Audit:         auditEmitter,
 		AuditReader:   auditStore,
 		TokenSigner:   signer,

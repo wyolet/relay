@@ -509,6 +509,15 @@ SELECT id FROM users WHERE id = ANY($1::text[]);
 -- Names a whole id list in one round trip, for labelling usage rows by user.
 SELECT id, username FROM users WHERE id = ANY($1::text[]);
 
+-- name: GetUserPersonalAccount :one
+SELECT COALESCE(personal_account, '')::text FROM users WHERE id = $1;
+
+-- name: ListUserPersonalAccounts :many
+SELECT id, personal_account::text AS personal_account FROM users WHERE personal_account IS NOT NULL;
+
+-- name: SetUserPersonalAccount :execrows
+UPDATE users SET personal_account = sqlc.narg('personal_account'), updated_at = now() WHERE id = $1;
+
 -- name: ListUserTokenVersionsAndDisabled :many
 -- One read feeds both snapshot views of users: enabled accounts' token versions and the ids of disabled ones.
 SELECT id, token_version, disabled FROM users;
