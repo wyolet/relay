@@ -39,6 +39,7 @@ var poolFilter = filter.Schema[pool.Pool]{
 		{Name: "owner", Kind: filter.String, Get: func(p *pool.Pool) string { return string(p.Meta.Owner.Kind) }},
 		{Name: "host_id", Kind: filter.String, Repeat: true, Get: func(p *pool.Pool) string { return p.Spec.HostID }},
 		{Name: "credential_id", Kind: filter.String, Repeat: true, GetMulti: func(p *pool.Pool) []string { return p.Spec.CredentialIDs }},
+		{Name: "account_id", Kind: filter.String, Repeat: true, GetMulti: func(p *pool.Pool) []string { return p.Spec.AccountIDs }},
 		{Name: "selection", Kind: filter.String, Enum: []string{"prioritized", "round-robin", "least-recently-used"},
 			Get: func(p *pool.Pool) string { return string(p.Spec.Selection) }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(p *pool.Pool) time.Time { return p.Meta.CreatedAt }},

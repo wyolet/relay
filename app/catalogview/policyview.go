@@ -38,6 +38,7 @@ type HostKeyRef struct {
 	Name                  string `json:"name"                  doc:"Host key slug."`
 	Enabled               bool   `json:"enabled"               doc:"Whether the key is enabled."`
 	SharedWithPolicyCount int    `json:"sharedWithPolicyCount" doc:"How many other policies link this key, directly or through a pool."` // # of OTHER policies linking this key, directly or through a pool
+	ReadOnly              bool   `json:"readOnly,omitempty"    doc:"The key belongs to the real account of a shared account one of the policy's pools draws on: it counts as reaching the host, but is never edited or revealed through the share."`
 }
 
 // PolicyBindingRow — one concrete (provider, model, host) binding this policy
@@ -239,8 +240,8 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 
 	keysByHost := map[string][]HostKeyRef{}
 	hostIDs := map[string]struct{}{}
-	for _, id := range idx.policyCredentials(p) {
-		k, ok := idx.hostkeyByID[id]
+	for _, link := range idx.policyCredentials(p) {
+		k, ok := idx.hostkeyByID[link.id]
 		if !ok {
 			continue
 		}
@@ -250,6 +251,7 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 			Name:                  k.Meta.Name,
 			Enabled:               hostKeyEnabled(k),
 			SharedWithPolicyCount: idx.keyShareCount(k.Meta.ID, p.Meta.ID),
+			ReadOnly:              link.readOnly,
 		})
 	}
 	for hid := range idx.policyReachHosts(p) {
@@ -299,8 +301,8 @@ func (idx *index) keyShareCount(keyID, excludeID string) int {
 		if p.Meta.ID == excludeID {
 			continue
 		}
-		for _, id := range idx.policyCredentials(p) {
-			if id == keyID {
+		for _, link := range idx.policyCredentials(p) {
+			if link.id == keyID {
 				n++
 				break
 			}

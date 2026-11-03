@@ -66,19 +66,39 @@ func (idx *index) policyReachHosts(p *policy.Policy) map[string]struct{} {
 	return out
 }
 
-// policyCredentials lists the host keys the policy links through its pools,
-// in order, each once.
-func (idx *index) policyCredentials(p *policy.Policy) []string {
+// credentialLink is a host key a policy reaches through a pool; readOnly when
+// it comes through a shared account, so it is never edited or revealed.
+type credentialLink struct {
+	id       string
+	readOnly bool
+}
+
+// policyCredentials lists the host keys the policy reaches through its pools
+// in pool order (each pool's accounts' keys, then its listed keys), each once
+// at its first place, as PoolKeys lists them.
+func (idx *index) policyCredentials(p *policy.Policy) []credentialLink {
 	seen := map[string]bool{}
-	var out []string
+	var out []credentialLink
+	add := func(id string, readOnly bool) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, credentialLink{id: id, readOnly: readOnly})
+		}
+	}
 	for _, pid := range p.Spec.PoolIDs {
-		if pl, ok := idx.poolByID[pid]; ok {
-			for _, id := range pl.Spec.CredentialIDs {
-				if !seen[id] {
-					seen[id] = true
-					out = append(out, id)
+		pl, ok := idx.poolByID[pid]
+		if !ok {
+			continue
+		}
+		for _, aid := range pl.Spec.AccountIDs {
+			if a, ok := idx.accountByID[aid]; ok {
+				for _, k := range idx.keysByAccount[keyHolder(a)] {
+					add(k.Meta.ID, a.IsShared())
 				}
 			}
+		}
+		for _, id := range pl.Spec.CredentialIDs {
+			add(id, false)
 		}
 	}
 	return out

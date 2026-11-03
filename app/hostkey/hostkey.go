@@ -44,11 +44,10 @@ type HostKey struct {
 	// KeyHash is sha256 hex (first 6 bytes) of Resolved, for telemetry.
 	KeyHash string `json:"-" yaml:"-"`
 
-	// Derived: populated by the control-API enrich step from the catalog
-	// snapshot; not stored and not loaded from YAML. Lists every Policy
-	// linking this HostKey in Spec.CredentialIDs, so the admin UI can show
-	// where a key is in use.
-	Policies []PolicyRef `json:"policies,omitempty" yaml:"-" readOnly:"true" doc:"Policies that link this key, directly or through a pool. Derived on read; ignored on write."`
+	// Derived: populated by the control-API enrich step from the stores; not
+	// stored and not loaded from YAML. Lists every Policy whose pools reach
+	// this HostKey, so the admin UI can show where a key is in use.
+	Policies []PolicyRef `json:"policies,omitempty" yaml:"-" readOnly:"true" doc:"Policies whose pools reach this key: listing it, or drawing on its account or a share of it. Derived on read; ignored on write."`
 }
 
 // AnonIDPrefix prefixes the synthetic anonymous key's id, KeyHash, and name so
