@@ -106,15 +106,35 @@ func TestPoolOutsideModels(t *testing.T) {
 	}
 }
 
+// An unservable model is reported only while an enabled policy grants it, once per granting policy, naming it.
 func TestModelUnservable(t *testing.T) {
 	r := newReach()
 	m2b := r.w.bindings[len(r.w.bindings)-1]
 	m2b.Spec.Enabled = boolp(false)
 	unbound := r.w.model(r.prov, "unbound")
+	byName := r.w.policy("names-m2", policy.Spec{Models: []string{"acme/m2", "acme/unbound"}})
+	byProvider := r.w.policy("all-acme", policy.Spec{Models: []string{"acme"}})
+	off := r.w.policy("off", policy.Spec{Models: []string{"acme/m2"}, Enabled: boolp(false)})
 	h := r.w.start(t)
-	if i := h.issues(KindModel, r.m2.Meta.ID); len(i) != 1 || i[0].Code != IssueModelUnservable || i[0].Severity != engine.SeverityError || !strings.Contains(i[0].Message, r.hostB.Meta.Name) {
-		t.Errorf("m2 issues = %+v, want %s naming host-b", i, IssueModelUnservable)
+	is := h.issues(KindModel, r.m2.Meta.ID)
+	if len(is) != 2 {
+		t.Fatalf("m2 issues = %+v, want one per enabled granting policy", is)
 	}
+	for _, i := range is {
+		if i.Code != IssueModelUnservable || i.Severity != engine.SeverityError || !strings.Contains(i.Message, r.hostB.Meta.Name) || i.Target.Kind != KindPolicy || i.Target.ID == off.Meta.ID {
+			t.Errorf("m2 issue = %+v, want %s naming host-b and an enabled policy", i, IssueModelUnservable)
+		}
+	}
+	if !strings.Contains(is[0].Message+is[1].Message, byName.Meta.Name) || !strings.Contains(is[0].Message+is[1].Message, byProvider.Meta.Name) {
+		t.Errorf("m2 issues = %+v, want both granting policies named", is)
+	}
+
+	del(h, KindPolicy, byName.Meta.ID)
+	del(h, KindPolicy, byProvider.Meta.ID)
+	if is := h.issues(KindModel, r.m2.Meta.ID); len(is) > 0 {
+		t.Fatalf("m2 granted by no enabled policy: %+v", is)
+	}
+	apply(h, r.w.policy("again", policy.Spec{Models: []string{"acme/m2"}}))
 	if is := h.issues(KindModel, unbound.Meta.ID); len(is) > 0 {
 		t.Errorf("a model with no binding: %+v", is)
 	}

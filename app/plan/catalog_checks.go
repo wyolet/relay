@@ -1,4 +1,4 @@
-// Diagnostics on catalog rows: a model no binding can serve, and a disabled host that pools or keys still point at. They attach issues and build nothing the request path reads.
+// Diagnostics on catalog rows: the models no binding can serve, and a disabled host that pools or keys still point at. They attach issues and build nothing the request path reads.
 
 package plan
 
@@ -15,8 +15,15 @@ import (
 	"github.com/wyolet/relay/pkg/engine"
 )
 
-// reportUnservableModels files model_unservable on each enabled model whose bindings, of which it has at least one, are all disabled or at hosts requests are not routed to.
-func reportUnservableModels(tx *engine.Txn, snap *appcatalog.Snapshot, rows []*model.Model) {
+// unservableModel is an enabled model with bindings, none of them enabled at a host requests are routed to; hosts names its bindings' hosts, for the message.
+type unservableModel struct {
+	model *model.Model
+	hosts string
+}
+
+// unservableModels lists the enabled models whose bindings, of which each has at least one, are all disabled or at hosts requests are not routed to. The policies granting one report it (checkGrantedModels): a model nobody grants is no fault.
+func unservableModels(snap *appcatalog.Snapshot, rows []*model.Model) []unservableModel {
+	var out []unservableModel
 	for _, row := range rows {
 		m, ok := snap.Model(row.Meta.ID)
 		if !ok || !m.IsEnabled() {
@@ -42,13 +49,10 @@ func reportUnservableModels(tx *engine.Txn, snap *appcatalog.Snapshot, rows []*m
 		if served {
 			continue
 		}
-		msg := "no enabled binding at an enabled host serves it; requests for it are refused with no_binding"
-		if len(hosts) > 0 {
-			slices.Sort(hosts)
-			msg = "no enabled binding at an enabled host serves it (its bindings are at " + strings.Join(slices.Compact(hosts), ", ") + "); requests for it are refused with no_binding"
-		}
-		tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssueModelUnservable, Source: engine.Ref{Kind: KindModel, ID: m.Meta.ID}, Message: msg})
+		slices.Sort(hosts)
+		out = append(out, unservableModel{model: m, hosts: strings.Join(slices.Compact(hosts), ", ")})
 	}
+	return out
 }
 
 // hostCheck is the kind of the host checks' output, which they never build: a check only attaches issues to the host.
