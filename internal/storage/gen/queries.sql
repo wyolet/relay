@@ -601,6 +601,9 @@ FROM policy_binding_accounts ORDER BY binding_id, position;
 SELECT binding_id, account_id, position
 FROM policy_binding_accounts WHERE binding_id = $1 ORDER BY position;
 
+-- name: GetPolicyBindingIDForAccount :one
+SELECT binding_id FROM policy_binding_accounts WHERE account_id = $1;
+
 -- name: DeletePolicyBindingAccounts :exec
 DELETE FROM policy_binding_accounts WHERE binding_id = $1;
 

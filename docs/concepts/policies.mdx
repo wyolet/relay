@@ -141,7 +141,7 @@ A binding may use a policy owned by its own scope, an enclosing scope (a project
 
 ### One binding per account
 
-Saving a binding that names an account another binding already holds answers `409` with the code `duplicate_binding` and names the other binding when you may see it. Remove the account from one binding first. If two bindings do reach one account, the rung refuses every request with `duplicate_binding` until one is removed.
+Saving a binding that names an account another binding already holds answers `409` with the code `duplicate_binding` and names the other binding when you may see it. Remove the account from one binding first, or move it in one step with `PUT /api/accounts/{ref}/policy`, which gives it a binding of its own (see [Control API](/reference/control-api#accounts-and-pools)). If two bindings do reach one account, the rung refuses every request with `duplicate_binding` until one is removed.
 
 ## Tier presets
 
