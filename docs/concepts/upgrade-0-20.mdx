@@ -83,6 +83,8 @@ Before it drops them, it logs each link it removes by the names of both ends, on
 
 It then gives every host key without an account an account of its owner at the key's host, creating one account per owner and host, named after the host (suffixed `-2`, `-3`, … when the name is taken). A key created with the admin token is system-owned and joins the system's account. Keys whose host no longer exists are left without one. **Migration 41** marks these accounts `groupedByRelay` unless they already name an `orgId`, groups the same way any key still without an account whose host exists, and stops Relay from creating accounts for keys.
 
+After migration 41, every provider account blocks deleting its host, its team or its project, including an account grouped by relay that no host key names any more: before 0.20 such an account went with its owner. Deleting one of those answers `409` listing the accounts; delete them first (`DELETE /api/accounts/by-id/{id}`), or list them in the same apply's prune.
+
 The catalog's tier policies lose their rate limits with this migration. They get them back, as `rateLimits` entries scoped to models, when a catalog release with the v1alpha3 schema is seeded.
 
 **Migration 37** adds the owner of a user's own policy binding; deleting the user deletes it. **Migration 38** moves every binding subject that names a host key to the key's account. A 0.11 database has no bindings either one changes.
