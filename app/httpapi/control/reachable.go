@@ -17,6 +17,16 @@ type Reachable struct {
 	Refused       *ReachRefusal   `json:"refused,omitempty"       doc:"Set when the whole ladder refuses (a disabled policy or scope, personal accounts turned off); models and excluded are then empty."`
 	Models        []ReachedModel  `json:"models"                  doc:"Models the lane reaches, by model slug."`
 	Excluded      []ExcludedModel `json:"excluded"                doc:"Models bound at a host the lane reaches that it may not use, each with the rung that refuses it."`
+	Dropped       []ReachDropped  `json:"dropped"                 doc:"Pools the policy links, and accounts and keys they list, that bring the lane nothing, each with why."`
+}
+
+// ReachDropped is one link that brings the lane nothing.
+type ReachDropped struct {
+	Pool       *ReachRef `json:"pool,omitempty"       doc:"The pool, or the pool listing the account or key; only its id when the caller may not read it or it is gone."`
+	Account    *ReachRef `json:"account,omitempty"    doc:"The account the pool lists, when the account is what is dropped."`
+	Credential *ReachRef `json:"credential,omitempty" doc:"The host key the pool lists, when the key is what is dropped."`
+	Code       string    `json:"code"                 doc:"Why: ref_missing, link_out_of_scope, host_disabled, host_mismatch, pool_member_unusable, held_for_another_lane (a share that serves one service account's lane) or narrowed_by_rung (another rung's pools leave it out); not_found for a pool id the caller may not read."`
+	Reason     string    `json:"reason"               doc:"The same in words, with what to change."`
 }
 
 // ReachRef names a row the reach goes through.
@@ -62,6 +72,7 @@ type ReachedModel struct {
 	Hosts    []ReachRef      `json:"hosts"    doc:"Hosts serving it for the lane, in failover order."`
 	Via      []ReachVia      `json:"via"      doc:"What brings it, in failover order."`
 	Upstream []ReachUpstream `json:"upstream" doc:"Each provider account whose keys could serve it, with its tier's verdict."`
+	Accounts []ReachRef      `json:"accounts,omitempty" doc:"For a bound policy: the bound accounts that reach it."`
 }
 
 // ExcludedModel is one model at a reached host the lane may not use.
@@ -71,6 +82,7 @@ type ExcludedModel struct {
 	Model    ReachModelRef   `json:"model"    doc:"The model."`
 	Hosts    []ReachRef      `json:"hosts"    doc:"The reached hosts that bind it."`
 	Upstream []ReachUpstream `json:"upstream" doc:"Each provider account whose keys could serve it, with its tier's verdict."`
+	Accounts []ReachRef      `json:"accounts,omitempty" doc:"For a bound policy: the bound accounts it is refused for; none of the bound accounts reaches it. The reason is one of their ladders'."`
 }
 
 // reachView projects a plan reach for a caller, leaving out rows they may not read.
@@ -85,7 +97,7 @@ func (rv reachView) sees(kind, id string, owner meta.Owner) bool {
 }
 
 func (rv reachView) project(r *plan.Reach) Reachable {
-	out := Reachable{Models: []ReachedModel{}, Excluded: []ExcludedModel{}}
+	out := Reachable{Models: []ReachedModel{}, Excluded: []ExcludedModel{}, Dropped: []ReachDropped{}}
 	if a := r.Account; a != nil {
 		out.Account = rv.accountRef(a)
 	}
@@ -94,11 +106,21 @@ func (rv reachView) project(r *plan.Reach) Reachable {
 		out.Refused = &ref
 		return out
 	}
+	for _, d := range r.Dropped {
+		rd := ReachDropped{Pool: &ReachRef{ID: d.PoolID}, Account: rv.accountRef(d.Account), Code: d.Code, Reason: d.Reason}
+		if p := d.Pool; p != nil && rv.sees("pool", p.Meta.ID, p.Meta.Owner) {
+			rd.Pool = &ReachRef{ID: p.Meta.ID, Name: p.Meta.Name, DisplayName: p.Meta.DisplayName}
+		}
+		if k := d.Credential; k != nil && rv.sees("host-key", k.Meta.ID, k.Meta.Owner) {
+			rd.Credential = &ReachRef{ID: k.Meta.ID, Name: k.Meta.Name, DisplayName: k.Meta.DisplayName}
+		}
+		out.Dropped = append(out.Dropped, rd)
+	}
 	for _, m := range r.Models {
 		if !rv.sees("model", m.Model.Meta.ID, m.Model.Meta.Owner) {
 			continue
 		}
-		rm := ReachedModel{Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Via: []ReachVia{}, Upstream: rv.upstream(m.Upstream)}
+		rm := ReachedModel{Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Via: []ReachVia{}, Upstream: rv.upstream(m.Upstream), Accounts: rv.accountRefs(m.Accounts)}
 		for _, via := range m.Via {
 			rvia := ReachVia{Account: rv.accountRef(via.Account)}
 			if p := via.Pool; p != nil && rv.sees("pool", p.Meta.ID, p.Meta.Owner) {
@@ -114,7 +136,17 @@ func (rv reachView) project(r *plan.Reach) Reachable {
 		if !rv.sees("model", m.Model.Meta.ID, m.Model.Meta.Owner) {
 			continue
 		}
-		out.Excluded = append(out.Excluded, ExcludedModel{ReachRefusal: rv.refusal(m.Refused), Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Upstream: rv.upstream(m.Upstream)})
+		out.Excluded = append(out.Excluded, ExcludedModel{ReachRefusal: rv.refusal(m.Refused), Provider: providerRef(m), Model: modelRef(m), Hosts: rv.hosts(m), Upstream: rv.upstream(m.Upstream), Accounts: rv.accountRefs(m.Accounts)})
+	}
+	return out
+}
+
+func (rv reachView) accountRefs(as []*account.Account) []ReachRef {
+	var out []ReachRef
+	for _, a := range as {
+		if ref := rv.accountRef(a); ref != nil {
+			out = append(out, *ref)
+		}
 	}
 	return out
 }

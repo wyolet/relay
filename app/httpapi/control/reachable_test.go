@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
@@ -104,6 +106,12 @@ func TestReachable_DraftMatchesSaved(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("saved = %d", code)
 	}
+	for i, m := range saved.Models {
+		if len(m.Accounts) != 1 || m.Accounts[0].ID != f.teamAcctID {
+			t.Errorf("saved %s reached by %+v, want the team account", m.Model.Name, m.Accounts)
+		}
+		saved.Models[i].Accounts = nil
+	}
 	a, _ := json.Marshal([]any{draft.Models, draft.Excluded})
 	b, _ := json.Marshal([]any{saved.Models, saved.Excluded})
 	if string(a) != string(b) {
@@ -147,5 +155,82 @@ func TestReachable_OmitsUnreadablePools(t *testing.T) {
 	}
 	if len(r.Models) != 2 {
 		t.Errorf("models = %+v, want m1 and m2 through pool a", r.Models)
+	}
+	if len(r.Dropped) != 1 || r.Dropped[0].Code != "not_found" || r.Dropped[0].Pool.ID != f.hide.Meta.ID || r.Dropped[0].Pool.Name != "" {
+		t.Errorf("dropped = %+v, want the hidden pool by id alone", r.Dropped)
+	}
+}
+
+// saShareFixture is project policy web-ci bound to service account ci-bot, whose pool lists an account shared to ci-bot.
+type saShareFixture struct {
+	reachFixture
+	proj   string
+	pool   *pool.Pool
+	pol    *policy.Policy
+	saAcct string
+}
+
+func newSAShareFixture(t *testing.T) *saShareFixture {
+	t.Helper()
+	w := &plantest.World{}
+	h := w.Host("openai", "http://openai.example")
+	w.Bind(w.Model(w.Provider("acme"), "gpt-4o-mini"), h, adapters.OpenAI)
+	real := w.Account(h)
+	w.Credential(h, real, plantest.System, "sk-real")
+	tm := w.Team()
+	p := w.Project(tm)
+	sa := w.ServiceAccount(p)
+	projOwner := meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}
+	share := account.Share(real, account.Receiver{Kind: account.ReceiverServiceAccount, ID: sa.Meta.ID}, projOwner, sa.Meta.Name)
+	share.Meta.ID = meta.NewID()
+	w.Accounts = append(w.Accounts, share)
+	f := &saShareFixture{proj: p.Meta.ID, saAcct: w.ServiceAccountAccount(sa).Meta.ID}
+	f.pool = w.Pool(h)
+	f.pool.Meta.Owner = projOwner
+	f.pool.Spec.AccountIDs = []string{share.Meta.ID}
+	f.pol = w.Policy("web-ci", policy.Spec{PoolIDs: []string{f.pool.Meta.ID}})
+	f.pol.Meta.Owner = projOwner
+	w.BindPolicy(f.pol, w.ServiceAccountAccount(sa))
+	f.team = w.Team()
+	f.teamAcctID = w.TeamAccount(f.team).Meta.ID
+
+	r := chi.NewRouter()
+	r.Use(withTestActor("X-Test-Actor", map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}}))
+	api := humachi.New(r, huma.DefaultConfig("reach-test", "0"))
+	registerReachable(api, Deps{Authz: authz.AlwaysAllowAuthenticated{}, PlanView: w.Load(t).Engine.View}, nil)
+	f.h = r
+	return f
+}
+
+// Read in the project's account, the share serves nothing, and dropped says why and what to pass.
+func TestReachable_SAShare_DraftInProjectAccount(t *testing.T) {
+	f := newSAShareFixture(t)
+	_, r := f.get(t, "/catalog/reachable?owner=project:"+f.proj+"&pool="+f.pool.Meta.ID)
+	if len(r.Models) != 0 {
+		t.Fatalf("models = %+v, want none in the project's account", r.Models)
+	}
+	if len(r.Dropped) != 1 || r.Dropped[0].Code != "held_for_another_lane" || !strings.HasSuffix(r.Dropped[0].Reason, "pass account="+f.saAcct) {
+		t.Errorf("dropped = %+v, want the share held for ci-bot", r.Dropped)
+	}
+}
+
+// With account set to the service account's, the draft reaches gpt-4o-mini; an account outside the owner scope is a 400.
+func TestReachable_SAShare_DraftInItsAccount(t *testing.T) {
+	f := newSAShareFixture(t)
+	code, r := f.get(t, "/catalog/reachable?owner=project:"+f.proj+"&pool="+f.pool.Meta.ID+"&account="+f.saAcct)
+	if code != http.StatusOK || len(r.Models) != 1 || r.Models[0].Model.Name != "gpt-4o-mini" || len(r.Dropped) != 0 {
+		t.Errorf("%d models %+v dropped %+v, want gpt-4o-mini", code, r.Models, r.Dropped)
+	}
+	if code, _ := f.get(t, "/catalog/reachable?owner=project:"+f.proj+"&account="+f.teamAcctID); code != http.StatusBadRequest {
+		t.Errorf("an account of another team = %d, want 400", code)
+	}
+}
+
+// The saved policy is read in the service account it is bound to.
+func TestReachable_SAShare_Saved(t *testing.T) {
+	f := newSAShareFixture(t)
+	code, r := f.get(t, "/policies/"+f.pol.Meta.ID+"/reachable")
+	if code != http.StatusOK || len(r.Models) != 1 || len(r.Models[0].Accounts) != 1 || r.Models[0].Accounts[0].ID != f.saAcct {
+		t.Errorf("%d %+v, want gpt-4o-mini reached by ci-bot's account", code, r)
 	}
 }

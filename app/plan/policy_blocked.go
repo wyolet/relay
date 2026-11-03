@@ -115,7 +115,7 @@ type ladderKey struct {
 	unusable string
 }
 
-func ladderKeyOf(tx *engine.Txn, acc *account.Account) ladderKey {
+func ladderKeyOf[R *engine.Txn | *engine.View](tx R, acc *account.Account) ladderKey {
 	k := ladderKey{kind: acc.DerivedKind(), owner: acc.Meta.Owner, closed: acc.Spec.Closed}
 	if acc.IsProvider() {
 		k.own = acc.Meta.ID

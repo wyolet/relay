@@ -26,12 +26,16 @@ type Reach struct {
 	Refused  *Refusal
 	Models   []ModelReach
 	Excluded []ModelReach
+	// Dropped are the links of the policy read that bring the lane nothing.
+	Dropped []DroppedLink
 }
 
 // ModelReach is one model and how the lane reaches it, or, with Refused set, why it does not.
 type ModelReach struct {
 	Model    *model.Model
 	Provider *provider.Provider
+	// Accounts are, for a saved policy read in the accounts bound to it, the bound accounts that reach the model (or, excluded, that may not use it).
+	Accounts []*account.Account
 	// Hosts serve it for the lane, in failover order; for an excluded model, the reached hosts that bind it.
 	Hosts []*host.Host
 	// Via is what brings it, hop by hop: the pool (nil for a key reached by ownership) and the account each key draws on.
@@ -65,7 +69,10 @@ func ReachOf(v *engine.View, accountID string, over *Override) *Reach {
 		if ro == nil {
 			return nil
 		}
-		return walkReach(foldSystem(v, ro), nil)
+		cp := foldSystem(v, ro)
+		r := walkReach(cp, nil)
+		r.Dropped = droppedLinks(v, cp, ro.policy, meta.Owner{Kind: meta.OwnerSystem}, nil)
+		return r
 	}
 	acc := engine.Get[account.Account](v, accountID)
 	if acc == nil {
@@ -81,8 +88,15 @@ func ReachOf(v *engine.View, accountID string, over *Override) *Reach {
 	if cp == nil {
 		return nil
 	}
-	return walkReach(cp, acc)
+	r := walkReach(cp, acc)
+	if ro != nil {
+		r.Dropped = droppedLinks(v, cp, ro.policy, acc.Meta.Owner, ro.unusable)
+	}
+	return r
 }
+
+// ScopeHolds reports whether scope outer holds inner in v: the system holds everything, a scope itself, a team its projects.
+func ScopeHolds(v *engine.View, outer, inner meta.Owner) bool { return scopeHolds(v, outer, inner) }
 
 // OwnerAccount returns the account a policy owned by owner is previewed in: a team's or project's own account, a user's personal account. ok is false when owner is another kind or its account is not made yet; the system scope answers nil, true, as it has no account.
 func OwnerAccount(v *engine.View, owner meta.Owner) (acc *account.Account, ok bool) {

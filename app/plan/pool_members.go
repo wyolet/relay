@@ -23,7 +23,7 @@ func usableSlot(slots []*KeySlot) bool {
 }
 
 // accountUnusable says why account a, listed in a pool, adds no usable key, given the slots it added; "" when one of them is usable. shareMissing is a shared account with no resolved real account.
-func accountUnusable(tx *engine.Txn, a *account.Account, slots []*KeySlot, shareMissing bool) string {
+func accountUnusable[R *engine.Txn | *engine.View](tx R, a *account.Account, slots []*KeySlot, shareMissing bool) string {
 	if usableSlot(slots) {
 		return ""
 	}
@@ -49,7 +49,7 @@ func accountUnusable(tx *engine.Txn, a *account.Account, slots []*KeySlot, share
 }
 
 // credentialUnusable says why credential k, listed in a pool, has no slot.
-func credentialUnusable(tx *engine.Txn, k *hostkey.HostKey) string {
+func credentialUnusable[R *engine.Txn | *engine.View](tx R, k *hostkey.HostKey) string {
 	switch {
 	case !k.IsEnabled():
 		return "is disabled"
