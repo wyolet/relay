@@ -189,7 +189,7 @@ func (t *RouteTable) ResolveUnkeyed(ref string) *Unkeyed {
 				continue
 			}
 			h, ok := snap.Host(b.Spec.HostID)
-			if !ok || !h.Routable() {
+			if !ok || !servesRequests(h) {
 				continue
 			}
 			if i := cp.Allow.rejects(prov, m, h.Meta.Name); i >= 0 {
@@ -307,6 +307,9 @@ func (b *refusalAt) note(step int, r *Refusal) {
 	}
 }
 
+// servesRequests reports whether requests are routed to h: it is enabled and has an upstream to dial.
+func servesRequests(h *host.Host) bool { return h.IsEnabled() && h.Routable() }
+
 // served is one binding that can serve the model, at its effective host.
 type served struct {
 	b       *binding.Binding
@@ -329,7 +332,7 @@ func (t *RouteTable) route(models []*model.Model, sn *model.Snapshot, pinHostID 
 				continue
 			}
 			h, ok := snap.Host(b.Spec.HostID)
-			if !ok || !h.Routable() {
+			if !ok || !servesRequests(h) {
 				continue
 			}
 			if i := cp.Allow.rejects(prov, m, h.Meta.Name); i >= 0 {
