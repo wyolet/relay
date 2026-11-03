@@ -394,8 +394,13 @@ func (t *RouteTable) hops(m *model.Model, prov string, cands []served, best *ref
 			hops = append(hops, hop)
 		}
 	}
-	if !reached {
-		r := &Refusal{Code: CodeNoCredentials, Message: "no reachable pool serves " + m.Meta.Name}
+	// A reached pool with no slot notes nothing on its own; without this the route would answer with its starting refusal, model_disabled.
+	if len(hops) == 0 {
+		msg := "no reachable pool serves " + m.Meta.Name
+		if reached {
+			msg = "no pool serving " + m.Meta.Name + " has a usable key"
+		}
+		r := &Refusal{Code: CodeNoCredentials, Message: msg}
 		if cp.linkedAt >= 0 {
 			rg := &cp.Rungs[cp.linkedAt]
 			r = rungRefusal(CodeNoCredentials, rg, rg.Policy.Policy.Meta.ID, r.Message)
