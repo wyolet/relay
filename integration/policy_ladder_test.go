@@ -35,6 +35,7 @@ import (
 type ladderStack struct {
 	*stack
 	hostID    string
+	accountID string // the system provider account every credential() joins
 	userID    string
 	bearer    string
 	systemKey string
@@ -61,6 +62,7 @@ func newLadderStack(t *testing.T) *ladderStack {
 	hst := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "ladder-host", Owner: system}, Spec: host.Spec{BaseURL: up.URL}}
 	mustUpsert(t, ls.stores.Host.Upsert(ctx, hst), "host")
 	ls.hostID = hst.Meta.ID
+	ls.accountID = providerAccount(t, ls.stores, "ladder-account", system, hst.Meta.ID)
 	mdl := &model.Model{
 		Meta: meta.Metadata{ID: ids.New(), Name: "ladder-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "ladder-model"}}, Pointer: "ladder-model"},
@@ -99,7 +101,7 @@ func (ls *ladderStack) credential(t *testing.T, name string) string {
 	t.Cleanup(func() { _ = os.Unsetenv(env) })
 	mustUpsert(t, ls.stores.HostKey.Upsert(context.Background(), &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: ls.hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: env}},
+		Spec: hostkey.Spec{HostID: ls.hostID, AccountID: ls.accountID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: env}},
 	}), "host key")
 	return value
 }
@@ -418,9 +420,10 @@ func TestIntegration_TeamOwnsEveryLinkableKind(t *testing.T) {
 		{"budgets", `{"metadata":{"name":"ladder-team-budget","owner":` + owner + `},"spec":{"amountUsd":"5"}}`},
 		{"accounts", `{"metadata":{"name":"ladder-team-account","owner":` + owner + `},"spec":{"hostId":"` + ls.hostID + `"}}`},
 		{"rate-limits", `{"metadata":{"name":"ladder-team-limit","owner":` + owner + `},"spec":{"rules":[{"meter":"requests","amount":5,"window":60,"strategy":"fixed-window"}]}}`},
-		{"host-keys", `{"metadata":{"name":"ladder-team-key","owner":` + owner + `},"spec":{"hostId":"` + ls.hostID + `","valueFrom":{"kind":"env","env":"` + env + `"}}}`},
+		{"host-keys", `{"metadata":{"name":"ladder-team-key","owner":` + owner + `},"spec":{"hostId":"` + ls.hostID + `","accountId":"{account}","valueFrom":{"kind":"env","env":"` + env + `"}}}`},
 	} {
-		code, raw := ls.adminDo(http.MethodPost, "/api/"+tc.plural, tc.body)
+		// The host key joins the team's account created above.
+		code, raw := ls.adminDo(http.MethodPost, "/api/"+tc.plural, strings.ReplaceAll(tc.body, "{account}", created["accounts"]))
 		if code != http.StatusCreated {
 			t.Errorf("team-owned %s = %d %s, want 201", tc.plural, code, raw)
 			continue

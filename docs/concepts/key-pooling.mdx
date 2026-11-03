@@ -43,13 +43,13 @@ A host marked `noAuth` (a self-hosted Ollama, for example) needs no host key: Re
 
 ## Accounts
 
-A **provider account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host. Accounts of other kinds stand for teams, projects, users and service accounts on the caller side; see [Accounts and lanes](/concepts/accounts).
+A **provider account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host and have the key's owner. The account is required: create the account, then add keys to it. A key that names none is refused with `400 account_required`, on create and on update, and Relay never creates an account for it. Accounts of other kinds stand for teams, projects, users and service accounts on the caller side; see [Accounts and lanes](/concepts/accounts).
 
 | Field (API) | Field (manifest) | Meaning |
 | --- | --- | --- |
 | `hostId` | `host` (name) | The host the organization is held at. |
 | `orgId` | `orgId` | The provider's organization id. Optional and informational. |
-| `default` | `default` | Marks the owner's default account at the host. See [Default accounts](#default-accounts). |
+| `groupedByRelay` (read-only) | | Set on accounts the 0.20 upgrade made by grouping an owner's keys at a host. See [Accounts grouped by the upgrade](#accounts-grouped-by-the-upgrade). |
 | `sourceAccountId` (read-only) | `sourceAccount` (name) | On a [shared account](#sharing-an-account): the real account whose keys it reaches. |
 | `holder` (read-only) | `serviceAccount` (name) | On a share with a service account: that service account, the only lane that draws on it. |
 
@@ -60,7 +60,7 @@ That is why tier limits belong on the account. Bind a [tier preset](/concepts/po
 Two cooldowns skip a whole account. Both live in each pod and are learned from that pod's own requests:
 
 - **An account-wide limit refuses.** When the account's own request or token window is spent, the account is skipped for every model until the window has room.
-- **The provider answers `429`.** A `429` from a key of an account you created cools the account for the requested model only, since providers limit each model separately within an organization. The cooldown lasts for the response's `Retry-After`, 5 seconds when it has none, and at most 60 seconds; after it, one request learns whether the limit still holds. The key's breaker is not written. A key in its owner's default account, or with no account, has no `429` cooldown on the account: the `429` goes to the key's breaker as in the table below, and the request fails over to the next key.
+- **The provider answers `429`.** A `429` from a key cools its account for the requested model only, since providers limit each model separately within an organization. The cooldown lasts for the response's `Retry-After`, 5 seconds when it has none, and at most 60 seconds; after it, one request learns whether the limit still holds. The key's breaker is not written. A key in an account [grouped by the upgrade](#accounts-grouped-by-the-upgrade) has no `429` cooldown on the account: the `429` goes to the key's breaker as in the table below, and the request fails over to the next key.
 
 When every key of the route is over a limit or cooling, the request fails with `429 rate_limit_exceeded` and a `Retry-After` for the first one that frees up.
 
@@ -84,7 +84,7 @@ The receiver gets a provider account of its own (`anthropic-for-platform`) whose
 - **Who reaches it.** Nobody until the receiving scope links it: a share never changes routing by itself. A pool of the receiving scope lists it in `accountIds`, and a policy linking that pool brings it to the lanes under its binding; a user may also run keys in a share made with them, as their own provider account. A service account's share is owned by its project and held by the service account, so only that service account's lane draws on it, even through a project pool.
 - **Limits.** Requests through it count on the real account's tier, one ceiling for the owner and every share. A policy bound to the shared account only narrows: its rate limits and budgets count on the share, in the same store call as the tier.
 - **Usage.** Rows keep `account_id` on the real account and add `via_account_id`. `GET /api/accounts/{ref}/shares?since=30d` lists the real account's shares with each receiver and the requests and cost it drew.
-- **Revoking it.** Delete the shared account, as the real account's owner or as an admin of the receiving scope. Revoking always goes through: policy bindings holding it let go of it (a binding left with no account is deleted), relay keys whose lane it was move to their principal's personal account and keep working, and pools lose it. The answer lists each change, by name where the caller may see the row and as a count otherwise. The real account cannot be deleted while shares name it: `POST /api/accounts/by-id/{id}/detach` revokes them the same way, and an apply that prunes the real account lists each share as a delete of its own, with what revoking it changes (`revokes`); a bundle that still declares one refuses the prune. A share also goes with its receiver: deleting the user, team, project or service account it was shared with deletes it, and the answer lists the pools that lose it. A share whose real account is gone serves nothing and shows the plan issue `shared_account_missing`.
+- **Revoking it.** Delete the shared account, as the real account's owner or as an admin of the receiving scope. Revoking always goes through: policy bindings holding it let go of it (a binding left with no account is deleted), relay keys whose lane it was move to their principal's personal account and keep working (unless that account is [turned off](/concepts/accounts#turning-personal-accounts-off): the key is left without an account and stops until it is on), and pools lose it. The answer lists each change, by name where the caller may see the row and as a count otherwise. The real account cannot be deleted while shares name it: `POST /api/accounts/by-id/{id}/detach` revokes them the same way, and an apply that prunes the real account lists each share as a delete of its own, with what revoking it changes (`revokes`); a bundle that still declares one refuses the prune. A share also goes with its receiver: deleting the user, team, project or service account it was shared with deletes it, and the answer lists the pools that lose it. A share whose real account is gone serves nothing and shows the plan issue `shared_account_missing`.
 
 In a manifest, a shared account names its real account by name and repeats its host:
 
@@ -95,15 +95,11 @@ metadata: {name: anthropic-for-indexer, owner: {kind: project, name: ml-search}}
 spec: {host: anthropic, sourceAccount: anthropic, serviceAccount: search-indexer}
 ```
 
-### Default accounts
+### Accounts grouped by the upgrade
 
-A host key saved without `accountId` joins its owner's default account at its host, so keys of one owner at one host share their account rung unless you split them. Relay creates the default account with the first such key, owned like the key and named after the host (`openai`, then `openai-2`, … when the name is taken). A key created with the admin token is system-owned and joins the system's default account.
+The upgrade to 0.20 put every host key without an account into an account per owner and host, named after the host (`openai`, then `openai-2`, …). Those accounts carry `groupedByRelay: true`: they group keys by owner, not by provider organization, so Relay does not assume their keys share capacity. A provider `429` on one of them goes to that key's breaker and the request fails over to the next key, so independent keys pooled at one host keep failing over for each other. Limits bound to such an account still count across all of its keys.
 
-Each owner has at most one default account per host; marking a second one `default` answers `409`. To group keys by real provider organizations instead, create the accounts and name one on each key.
-
-A default account groups keys by owner, not by provider organization, so Relay does not assume its keys share capacity: a provider `429` on one of them goes to that key's breaker and the request fails over to the next key, so independent keys pooled at one host keep failing over for each other. Limits bound to a default account still count across all of its keys. To have a `429` cool every key of one provider organization for the model, put those keys into an account you create.
-
-A default account no host key names never blocks a delete: deleting its host, its team or its project takes it along. One that keys still name blocks like any other account.
+Setting the account's `orgId` confirms it is one provider organization and clears the mark; from then on a `429` cools the account like any other. If its keys belong to different organizations, create an account for each and move the keys. No new account carries the mark, and these accounts are otherwise ordinary: one no key names stays until you delete it, and blocks deleting its host, team or project like any other.
 
 ## Circuit breakers
 
@@ -114,9 +110,9 @@ Each key has its own breaker, keyed by a hash of the key's value. The upstream r
 | `401` | Opens | 30 s, then 1 min, 5 min, 15 min, and 1 h for every further failure |
 | `403` | Opens | 1 s, doubling per repeated failure up to 60 s |
 | `5xx`, or a network error after the connection was made | Opens after 5 such errors within 30 s with no success between them | 1 s, doubling per repeated failure up to 60 s |
-| `429` from a key in an account you created | Unchanged | The account cools for the model, see [Accounts](#accounts) |
-| `429` with `Retry-After` of 5 s or less, from a key in a default account or with no account | Stays closed | None; the request moves to the next key |
-| `429` with `Retry-After` over 5 s, from a key in a default account or with no account | Opens | The `Retry-After` duration |
+| `429` from a key in any other account | Unchanged | The account cools for the model, see [Accounts](#accounts) |
+| `429` with `Retry-After` of 5 s or less, from a key in an account grouped by the upgrade | Stays closed | None; the request moves to the next key |
+| `429` with `Retry-After` over 5 s, from a key in an account grouped by the upgrade | Opens | The `Retry-After` duration |
 | Connection could not be established (refused, DNS, TLS) | Unchanged | None; this is a host problem, see below |
 | The caller disconnected or cancelled during the call | Unchanged | None; the request stops without trying another key |
 

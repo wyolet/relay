@@ -45,7 +45,7 @@ func TestIntegration_ProviderAccountBindingCountsAcrossItsKeys(t *testing.T) {
 	userKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
 	f := &tokenFixture{stack: st}
 
-	// A second system key at the happy path's host joins the same default account as the first.
+	// A second system key at the happy path's host joins the first one's account.
 	keys, err := st.stores.HostKey.List(ctx)
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("list host keys: %d, %v", len(keys), err)
@@ -58,12 +58,9 @@ func TestIntegration_ProviderAccountBindingCountsAcrossItsKeys(t *testing.T) {
 	t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	second := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey-2", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: first.Spec.HostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName}},
+		Spec: hostkey.Spec{HostID: first.Spec.HostID, AccountID: first.Spec.AccountID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, second), "hostkey")
-	if second.Spec.AccountID != first.Spec.AccountID || first.Spec.AccountID == "" {
-		t.Fatalf("accounts %q and %q, want one default account", first.Spec.AccountID, second.Spec.AccountID)
-	}
 	account := first.Spec.AccountID
 
 	code, raw := st.adminDo(http.MethodPost, "/api/rate-limits", `{"metadata":{"name":"one-a-minute"},"spec":{"rules":[{"meter":"requests","amount":1,"window":60,"strategy":"fixed-window"}]}}`)

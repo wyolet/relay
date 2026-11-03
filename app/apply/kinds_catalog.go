@@ -98,7 +98,6 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
 		Check: b.refs().HostKey, Keep: func(prev, next *hostkey.HostKey) error {
 			keepHostKeySecret(prev, next)
-			keepAccount(prev, next)
 			return nil
 		},
 	}); err != nil {
@@ -142,10 +141,6 @@ func (b *builder) planCatalog(ctx context.Context, d catalogDocs) error {
 	})
 }
 
-// keepAccount keeps the account of a key declared without one, as
-// hostkey.Store.Upsert does, so the diff shows what the save writes. A key
-// moved to another owner or host leaves its account for the new owner's
-// default, which the save fills.
 // keepAccountPlace keeps what relay decides about a caller account (its owner, holder, closed mark and kind), so a document edits only its display fields and payload logging; a document cannot give it a host or turn a provider account into one. A share keeps the account it was shared from and its receiver.
 func keepAccountPlace(prev, next *account.Account) error {
 	if prev.IsProvider() != next.IsProvider() {
@@ -184,15 +179,23 @@ func (b *builder) checkAccount() func(context.Context, *account.Account) error {
 	if check == nil {
 		return nil
 	}
-	stored := make(map[string]bool, len(b.rows.Accounts))
+	stored := make(map[string]meta.Owner, len(b.rows.Accounts))
 	for _, a := range b.rows.Accounts {
-		stored[a.Meta.ID] = true
+		stored[a.Meta.ID] = a.Meta.Owner
 	}
 	return func(ctx context.Context, a *account.Account) error {
 		if err := check(ctx, a); err != nil {
 			return err
 		}
-		if !a.IsShared() || stored[a.Meta.ID] {
+		owner, ok := stored[a.Meta.ID]
+		if !a.IsShared() {
+			// A new provider account of a user, or one moved to a user, must find that user's personal account on, as the control API requires.
+			if !ok || owner != a.Meta.Owner {
+				return b.refs().PersonalProviderAccount(ctx, a)
+			}
+			return nil
+		}
+		if ok {
 			return nil
 		}
 		c := b.refs()
@@ -217,12 +220,6 @@ func refuseCallerAccountPrune(a *account.Account) error {
 		return nil
 	}
 	return fmt.Errorf("relay keeps this account while its %s exists", a.Meta.Owner.Kind)
-}
-
-func keepAccount(prev, next *hostkey.HostKey) {
-	if next.Spec.AccountID == "" && prev.Spec.HostID == next.Spec.HostID && prev.Meta.Owner == next.Meta.Owner {
-		next.Spec.AccountID = prev.Spec.AccountID
-	}
 }
 
 // keepHostKeySecret keeps the stored secret of a stored or oauth host key

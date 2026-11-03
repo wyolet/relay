@@ -180,22 +180,22 @@ func TestInvalidation_LearnedOrgIDTouchesNothing(t *testing.T) {
 	sameSlots(t, before, after, l.a1.Meta.ID, l.a2.Meta.ID, l.b1.Meta.ID)
 }
 
-// The default mark decides whether an upstream 429 cools the account, so flipping it rebuilds the plan; the cooldown cell stays.
-func TestInvalidation_DefaultMarkRebuildsAccountPlan(t *testing.T) {
+// The grouping mark decides whether an upstream 429 cools the account, so flipping it rebuilds the plan; the cooldown cell stays.
+func TestInvalidation_GroupingMarkRebuildsAccountPlan(t *testing.T) {
 	l := newLadder(t)
 	ap := get[AccountPlan](l.h, l.acctA.Meta.ID)
-	if ap.Default {
-		t.Fatal("an explicit account planned as default")
+	if ap.GroupedByRelay {
+		t.Fatal("an explicit account planned as grouped by relay")
 	}
 	marked := clone(l.acctA)
-	marked.Spec.Default = true
+	marked.Spec.GroupedByRelay = true
 	apply(l.h, marked)
 	got := get[AccountPlan](l.h, l.acctA.Meta.ID)
-	if got == ap || !got.Default {
-		t.Fatalf("default mark: plan rebuilt %v, Default %v; want rebuilt with Default", got != ap, got.Default)
+	if got == ap || !got.GroupedByRelay {
+		t.Fatalf("grouping mark: plan rebuilt %v, GroupedByRelay %v; want rebuilt with it", got != ap, got.GroupedByRelay)
 	}
 	if got.Cooldown != ap.Cooldown {
-		t.Error("the default mark moved the cooldown cell")
+		t.Error("the grouping mark moved the cooldown cell")
 	}
 	if s := get[KeySlot](l.h, l.a1.Meta.ID); s.Account != got {
 		t.Error("the credential plan still holds the old account plan")

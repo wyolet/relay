@@ -47,6 +47,11 @@ func guardAccount(d Deps) mutationGuard[account.Account] {
 		if err := refs(d).Account(ctx, incoming); err != nil {
 			return refErr(err)
 		}
+		if action == "create" || existing.Meta.Owner != incoming.Meta.Owner {
+			if err := refs(d).PersonalProviderAccount(ctx, incoming); err != nil {
+				return refErr(err)
+			}
+		}
 		if action == "update" {
 			if err := refs(d).AccountPayloadLogging(ctx, existing, incoming); err != nil {
 				return refErr(err)

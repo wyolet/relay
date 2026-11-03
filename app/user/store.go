@@ -1,10 +1,13 @@
-// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the reads it has no equivalent for (batched existence and username lookups, and the snapshot's token versions and disabled ids) stay on relay's sqlc queries. (nil, nil) on not-found.
+// store.go is the data-access layer for User. Accounts are stored by the auth module's directory store; the reads it has no equivalent for (batched existence and username lookups, the snapshot's token versions and disabled ids, and the personal-account values in relay's user_personal_accounts table) stay on relay's sqlc queries. (nil, nil) on not-found.
 
 package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/wyolet/relay/auth/directory"
 	authpg "github.com/wyolet/relay/auth/store/postgres"
@@ -26,13 +29,20 @@ func NewStore(db storage.DB) *Store {
 // Directory is the auth module's store under this one, for writes that run through the directory.
 func (s *Store) Directory() directory.UserStore { return s.rows }
 
-// Get returns the user with the given id, or (nil, nil) if not found.
+// Get returns the user with the given id, with its PersonalAccount, or (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*User, error) {
-	u, err := s.rows.Get(ctx, id)
+	d, err := s.rows.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("user.Get: %w", err)
 	}
-	return FromDirectory(u), nil
+	u := FromDirectory(d)
+	if u == nil {
+		return nil, nil
+	}
+	if u.PersonalAccount, err = s.q.GetUserPersonalAccount(ctx, id); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("user.Get: personal account: %w", err)
+	}
+	return u, nil
 }
 
 // ByUsername returns the user with the given username, or (nil, nil).
@@ -54,18 +64,48 @@ func (s *Store) ByOIDCSubject(ctx context.Context, subject string) (*User, error
 	return FromDirectory(u), nil
 }
 
-// List returns every user, oldest first.
+// List returns every user, oldest first, with its PersonalAccount.
 func (s *Store) List(ctx context.Context) ([]*User, error) {
 	rows, err := s.rows.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("user.List: %w", err)
 	}
+	set, err := s.q.ListUserPersonalAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("user.List: personal accounts: %w", err)
+	}
+	personal := make(map[string]string, len(set))
+	for _, r := range set {
+		personal[r.UserID] = r.Value
+	}
 	out := make([]*User, 0, len(rows))
-	for _, u := range rows {
-		out = append(out, FromDirectory(u))
+	for _, d := range rows {
+		u := FromDirectory(d)
+		u.PersonalAccount = personal[u.ID]
+		out = append(out, u)
 	}
 	return out, nil
 }
+
+// SetPersonalAccount stores the user's own say on their personal account: "on", "off", or "" to leave it to their groups and the deployment. It reports false when no user has id.
+func (s *Store) SetPersonalAccount(ctx context.Context, id, value string) (bool, error) {
+	var err error
+	if value == "" {
+		err = s.q.DeleteUserPersonalAccount(ctx, id)
+	} else {
+		err = s.q.SetUserPersonalAccount(ctx, gen.SetUserPersonalAccountParams{UserID: id, Value: value})
+	}
+	if storage.IsForeignKeyViolation(err, personalAccountUserKey) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("user.SetPersonalAccount: %w", err)
+	}
+	return true, nil
+}
+
+// personalAccountUserKey is the foreign key from user_personal_accounts to users.
+const personalAccountUserKey = "user_personal_accounts_user_id_fkey"
 
 // MissingIDs returns the subset of ids with no users row, in one query.
 // Callers validating a membership list would otherwise issue a Get per

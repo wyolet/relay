@@ -84,8 +84,9 @@ func TestPruneRefusesAHostKeyOwnedByAPrunedProject(t *testing.T) {
 	rows := prunedScopeRows(false)
 	h := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://acme.example.com"}}
 	rows.Hosts = []*host.Host{h}
+	rows.Accounts = []*account.Account{{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-org", Owner: meta.Owner{Kind: meta.OwnerProject, ID: rows.Projects[0].Meta.ID}, Labels: pruneLabels}, Spec: account.Spec{HostID: h.Meta.ID}}}
 	doc := "kind: HostKey\nmetadata: {name: ml-key, owner: {kind: project, name: ml-search}}\n" +
-		"spec: {hostId: acme-api, valueFrom: {kind: env, env: ML_KEY}}\n"
+		"spec: {hostId: acme-api, account: ml-org, valueFrom: {kind: env, env: ML_KEY}}\n"
 	wantRefused(t, planPruned(t, rows, doc), "HostKey", "ml-key", errOwnerPruned)
 }
 

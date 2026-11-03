@@ -77,7 +77,7 @@ func newCooldownStack(t *testing.T) *cooldownStack {
 	return cs
 }
 
-// credentialIn stores a system-owned env credential at the host in accountID ("" leaves the account to the store's default) and returns the account it landed in.
+// credentialIn stores a system-owned env credential at the host in accountID and returns that account.
 func (cs *cooldownStack) credentialIn(t *testing.T, name, accountID string) string {
 	t.Helper()
 	env := uniqueEnvName("COOLDOWN_")
@@ -130,18 +130,20 @@ func (cs *cooldownStack) upstreamCalls() int {
 	return cs.calls
 }
 
-// Keys saved without an account share their owner's default account, which groups them without declaring one provider org: a provider 429 on one trips its breaker and the request fails over to the sibling.
-func TestIntegration_Upstream429InDefaultAccountFailsOver(t *testing.T) {
+// An account the upgrade grouped by owner and host does not declare one provider org: a provider 429 on one of its keys trips that key's breaker and the request fails over to the sibling.
+func TestIntegration_Upstream429InGroupedAccountFailsOver(t *testing.T) {
 	t.Parallel()
 	cs := newCooldownStack(t)
-	accA := cs.credentialIn(t, "cooldown-key-a", "")
-	accB := cs.credentialIn(t, "cooldown-key-b", "")
-	if accA == "" || accA != accB {
-		t.Fatalf("accounts %q and %q, want one default account for both keys", accA, accB)
+	grouped := cs.account(t, "cooldown-grouped")
+	ctx := context.Background()
+	if _, err := testPool(t, cs.dsn).Exec(ctx, `UPDATE accounts SET grouped_by_relay = TRUE WHERE id = $1`, grouped); err != nil {
+		t.Fatal(err)
 	}
-	acc, err := cs.stores.Account.Get(context.Background(), accA)
-	if err != nil || !acc.Spec.Default {
-		t.Fatalf("account %q = %+v, %v; want a default account", accA, acc, err)
+	cs.credentialIn(t, "cooldown-key-a", grouped)
+	cs.credentialIn(t, "cooldown-key-b", grouped)
+	acc, err := cs.stores.Account.Get(ctx, grouped)
+	if err != nil || !acc.Spec.GroupedByRelay {
+		t.Fatalf("account %q = %+v, %v; want it grouped by relay", grouped, acc, err)
 	}
 	cs.sync(t)
 

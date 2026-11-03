@@ -37,6 +37,14 @@ func (c *controllers) sharedAccount(tx *engine.Txn, id string) error {
 		engine.Drop(tx)
 		return nil
 	}
+	if off := personalAccountOff(tx, src.Meta.Owner); off != nil {
+		tx.Issue(engine.Issue{
+			Severity: engine.SeverityError, Code: IssueSharedAccountMissing, Source: ref, Field: "spec.sourceAccountId", Target: engine.Ref{Kind: KindAccount, ID: srcID},
+			Message: "the account it was shared from belongs to " + off.name() + ", whose personal accounts are turned off; the shared account serves nothing until they are on again",
+		})
+		engine.Drop(tx)
+		return nil
+	}
 	h := engine.Get[host.Host](tx, acc.Spec.HostID)
 	if h == nil {
 		tx.Issue(parentMissing(ref, "spec.hostId", engine.Ref{Kind: KindHost, ID: acc.Spec.HostID}))

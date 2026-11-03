@@ -48,10 +48,15 @@ func (c Checker) shareRef(ctx context.Context, a *account.Account) error {
 	return c.receiverExists(ctx, a)
 }
 
-// newShare checks what only a new share must meet: the caller sees the receiver, so ids cannot be probed and names do not leak through the share's name, and the receiver does not already reach the account by ownership, which would let it bypass the share's narrowing.
+// newShare checks what only a new share must meet: the caller sees the receiver, so ids cannot be probed and names do not leak through the share's name; a user receiver's personal account is on; and the receiver does not already reach the account by ownership, which would let it bypass the share's narrowing.
 func (c Checker) newShare(ctx context.Context, src, share *account.Account) error {
 	if err := c.receiverVisible(ctx, share.Receiver()); err != nil {
 		return err
+	}
+	if r := share.Receiver(); r.Kind == account.ReceiverUser {
+		if off, name := c.personalAccountOff(ctx, r.ID); off {
+			return personalAccountOffError("personal accounts are turned off for %s, so a share with them would serve nothing; share with their team or project instead", name)
+		}
 	}
 	if c.containsScope(ctx, src.Meta.Owner, share.Meta.Owner) {
 		return conflict(CodeAlreadyReachable, "%s already reaches %s as its owner or a scope inside it, so a share adds nothing. List the account in a pool of %s instead.",

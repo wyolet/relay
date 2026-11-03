@@ -75,6 +75,25 @@ func (k directoryKind[T, D]) write(ctx context.Context, t *T, op directoryOp[D])
 	return meta.FromDirectoryError(op(dir, ctx, principalOf(ctx, k.ops.authz), row))
 }
 
+// updateGroup writes a group through the directory, except a change of personalAccount alone on a group a provisioning source manages: that attribute is relay's, not the source's, so it is written to the row directly, keeping the source's members and its mark (the guard has already required an admin).
+func updateGroup(rows *group.Store) directoryOp[directory.Group] {
+	return func(dir *directory.Directory, ctx context.Context, p *principal.Principal, row *directory.Group) error {
+		stored, err := rows.Get(ctx, row.Meta.ID)
+		if err != nil {
+			return err
+		}
+		next := group.FromDirectory(row)
+		if stored != nil && stored.External != nil && next.Spec.PersonalAccount != stored.Spec.PersonalAccount && group.SameExceptPersonalAccount(stored, next) {
+			stored.Spec.PersonalAccount = next.Spec.PersonalAccount
+			stored.Meta.ResourceVersion, stored.Meta.Dirty = next.Meta.ResourceVersion, next.Meta.Dirty
+			d := stored.ToDirectory()
+			d.Spec.External = directory.External{Source: stored.External.Source, ID: stored.External.ID}
+			return meta.FromDirectoryError(rows.Directory().Upsert(ctx, d))
+		}
+		return dir.UpdateGroup(ctx, p, row)
+	}
+}
+
 func infallible[T, D any](to func(*T) *D) func(*T) (*D, error) {
 	return func(t *T) (*D, error) { return to(t), nil }
 }
@@ -113,7 +132,7 @@ func newDirectoryKinds(d Deps, ops directoryOps) directoryKinds {
 		},
 		groups: directoryKind[group.Group, directory.Group]{
 			entityStore: s.Group, ops: ops, toRow: infallible((*group.Group).ToDirectory),
-			create: (*dir).CreateGroup, update: (*dir).UpdateGroup, remove: (*dir).DeleteGroup,
+			create: (*dir).CreateGroup, update: updateGroup(s.Group), remove: (*dir).DeleteGroup,
 		},
 		roles: directoryKind[role.Role, directory.Role]{
 			entityStore: s.Role, ops: ops, toRow: infallible((*role.Role).ToDirectory),

@@ -144,9 +144,11 @@ func (f policyDeleteFixture) rateLimit(t *testing.T, ctx context.Context, name s
 func (f policyDeleteFixture) hostKey(t *testing.T, ctx context.Context, name string) *hostkey.HostKey {
 	t.Helper()
 	t.Setenv("DEL_HOSTKEY_VALUE", "sk-test-value")
+	acct := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: name + "-org", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: f.host.Meta.ID}}
+	must(t, "upsert account", f.stores.Account.Upsert(ctx, acct))
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: hostkey.Spec{HostID: f.host.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "DEL_HOSTKEY_VALUE"}},
+		Spec: hostkey.Spec{HostID: f.host.Meta.ID, AccountID: acct.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "DEL_HOSTKEY_VALUE"}},
 	}
 	must(t, "upsert host key", f.stores.HostKey.Upsert(ctx, k))
 	return k

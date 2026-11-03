@@ -1,4 +1,4 @@
-// Package share revokes a shared provider account. Revoking always succeeds: the policy bindings holding the share let go of it (a binding left with no account goes), relay keys whose lane it was move to their principal's own account and keep working, and pools drawing on it lose it. Each change is reported, so whoever revokes sees the impact without needing to see or edit the rows.
+// Package share revokes a shared provider account. Revoking always succeeds: the policy bindings holding the share let go of it (a binding left with no account goes), relay keys whose lane it was move to their principal's own account and keep working (or stop, when that is a personal account turned off), and pools drawing on it lose it. Each change is reported, so whoever revokes sees the impact without needing to see or edit the rows.
 //
 // Out of scope: who may revoke (the callers check), and making shares (app/refcheck and the control API).
 package share
@@ -62,7 +62,7 @@ type Stores struct {
 	PolicyBinding *policybinding.Store
 	Key           *key.Store
 	Pool          *pool.Store
-	// OwnAccount returns the id of a principal's own account (a user's personal account, a service account's account), making it on first use.
+	// OwnAccount returns the id of a principal's own account (a user's personal account, a service account's account), making it on first use; "" leaves the key with no lane, which stops it while that account is turned off.
 	OwnAccount func(ctx context.Context, p key.Principal) (string, error)
 }
 

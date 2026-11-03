@@ -261,6 +261,7 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
+			AccountID: providerAccount(s.t, s.stores, "mock-account", meta.Owner{Kind: meta.OwnerSystem}, hst.Meta.ID),
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}

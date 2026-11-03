@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/auth/directory"
 )
@@ -143,6 +144,9 @@ type Options struct {
 	// sets it: over the API it would let a caller read the server's
 	// variables into an account's password.
 	EnvPasswords bool
+
+	// PersonalAccountOff reports whether a user's personal account is turned off, as refcheck.Lookup's does; the control plane reads it from the published plans, and nil (the loaders below it) treats every user's as on.
+	PersonalAccountOff func(ctx context.Context, userID string) (off bool, username string)
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -253,7 +257,8 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 	}
 
 	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
-		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License}
+		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License,
+		operator: refcheck.RequireAdmin(ctx, opts.Authz, "") == nil}
 	b.dir, b.dirErr = directoryFor(opts)
 	if err := b.run(ctx, docs); err != nil {
 		return nil, err

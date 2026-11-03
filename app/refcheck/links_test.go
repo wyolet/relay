@@ -142,7 +142,7 @@ func TestHostKeyAccountIsAtTheKeysHost(t *testing.T) {
 		name, account string
 		want          int
 	}{
-		{"no account", "", 0},
+		{"no account", "", http.StatusBadRequest},
 		{"an account of the key's host", "acct-shared", 0},
 		{"an account of another host", "acct-h2", http.StatusBadRequest},
 		{"an account that does not exist", "acct-gone", http.StatusBadRequest},
@@ -151,8 +151,12 @@ func TestHostKeyAccountIsAtTheKeysHost(t *testing.T) {
 			Meta: meta.Metadata{Name: "k", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 			Spec: hostkey.Spec{HostID: "h-1", AccountID: tc.account},
 		}
-		if got := status(c.HostKey(ctx, k)); got != tc.want {
+		err := c.HostKey(ctx, k)
+		if got := status(err); got != tc.want {
 			t.Errorf("%s: status %d, want %d", tc.name, got, tc.want)
+		}
+		if tc.account == "" && code(err) != CodeAccountRequired {
+			t.Errorf("%s: code %q, want %q", tc.name, code(err), CodeAccountRequired)
 		}
 	}
 	if got := status(c.Account(ctx, &account.Account{Spec: account.Spec{HostID: "h-9"}})); got != http.StatusBadRequest {

@@ -12,9 +12,9 @@ import (
 // The refusal holds for the admin token too: no caller may point a key at relay's own configuration, on create or update.
 func TestHostKeyRefusesReservedEnvRef(t *testing.T) {
 	h := newSharedCatalogHarness(t)
-	hostID := ids.New()
+	hostID, accountID := ids.New(), ids.New()
 	body := func(env string) string {
-		return fmt.Sprintf(`{"metadata":{"name":"env-key"},"spec":{"hostId":%q,"valueFrom":{"kind":"env","env":%q}}}`, hostID, env)
+		return fmt.Sprintf(`{"metadata":{"name":"env-key"},"spec":{"hostId":%q,"accountId":%q,"valueFrom":{"kind":"env","env":%q}}}`, hostID, accountID, env)
 	}
 
 	if w := scopeReq(t, h, "token", http.MethodPost, "/host-keys", body("RELAY_MASTER_KEY")); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "reserved") {

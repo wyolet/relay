@@ -14,11 +14,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/refcheck"
@@ -91,7 +91,8 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			License:  applyLicense(d),
 			Authz:    d.Authz,
 			// The handlers' directory: grant probes skip the audit wrapper and an account change ends its sessions.
-			Directory: newDirectoryOps(d).dir,
+			Directory:          newDirectoryOps(d).dir,
+			PersonalAccountOff: refs(d).Rows.PersonalAccountOff,
 		})
 		if err != nil {
 			return nil, planFailure(ctx, d.Authz, err)
@@ -130,7 +131,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 				status, msg := http.StatusInternalServerError, se.Error()
 				if me, ok := errors.AsType[*directory.ManagedError](err); ok {
 					status, msg = http.StatusConflict, managedMessage(me)
-				} else if errors.Is(err, directory.ErrStaleResourceVersion) || errors.Is(err, account.ErrDefaultTaken) {
+				} else if errors.Is(err, directory.ErrStaleResourceVersion) {
 					status = http.StatusConflict
 				} else if errors.Is(err, authz.ErrForbidden) {
 					status = http.StatusForbidden
@@ -166,6 +167,10 @@ func planFailure(ctx context.Context, a authz.Authorizer, err error) error {
 		errors.As(err, &re) && re.Status == http.StatusNotFound,
 		errors.As(err, &nf) && scoped && !authz.IsAdmin(ctx):
 		return &applyFailure{status: http.StatusForbidden, Message: "forbidden"}
+	}
+	// A refusal with a code answers as the control API's own write would, so a client reads one code for both.
+	if re != nil && re.Code != "" {
+		return &httpapi.APIError{Err: httpapi.APIErrorBody{Type: "invalid_request_error", Code: re.Code, Message: err.Error()}, HTTPStatus: re.Status}
 	}
 	var ge *apply.GovernanceError
 	if errors.As(err, &ge) {

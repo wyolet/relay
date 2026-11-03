@@ -102,7 +102,7 @@ A **host key** is an upstream credential, such as your OpenAI or Anthropic API k
 
 An env reference is read from the relay process's environment. Names starting with `RELAY_` or `WYOLET_` are refused, because a host key's value is sent to its host and those names hold Relay's own configuration.
 
-A host key names the provider [account](/concepts/key-pooling#accounts) it belongs to in `accountId`, so that the account's tier limits count across all of its keys; a key saved without one joins its owner's [default account](/concepts/key-pooling#default-accounts) at its host. Policies reach host keys through [pools](/concepts/key-pooling#pools), through a direct link, or through ownership.
+A host key names the provider [account](/concepts/key-pooling#accounts) it belongs to in `accountId`, so that the account's tier limits count across all of its keys. The account is required: create it at the host, then add keys to it. Policies reach host keys through [pools](/concepts/key-pooling#pools), through a direct link, or through ownership.
 
 A stored value is encrypted under a data key of the host key's owner, and the data keys are wrapped by `RELAY_MASTER_KEY`; only ciphertext reaches the database, and reads never return the value. `POST /api/host-keys/by-id/{id}/rotate` replaces a stored value. See [Stored secrets and key rotation](/concepts/secret-keys) for the scheme and the rotation procedures.
 

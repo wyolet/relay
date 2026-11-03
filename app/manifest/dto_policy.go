@@ -49,10 +49,8 @@ type AccountDTO struct {
 }
 
 type AccountSpec struct {
-	Host  string `json:"host,omitempty"  yaml:"host,omitempty"`
-	OrgID string `json:"orgId,omitempty" yaml:"orgId,omitempty"`
-	// Default marks the account its owner's keys at the host join when they name none; at most one per owner and host.
-	Default        bool   `json:"default,omitempty"        yaml:"default,omitempty"`
+	Host           string `json:"host,omitempty"  yaml:"host,omitempty"`
+	OrgID          string `json:"orgId,omitempty" yaml:"orgId,omitempty"`
 	PayloadLogging string `json:"payloadLogging,omitempty" yaml:"payloadLogging,omitempty" enum:"on,off"`
 	// SourceAccount names the real account a shared account reaches; host names the same host. Fixed once created.
 	SourceAccount string `json:"sourceAccount,omitempty" yaml:"sourceAccount,omitempty"`

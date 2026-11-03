@@ -93,10 +93,16 @@ spec: {}
 // key at the host, and a team's policy.
 func operatorDocs(env string) string {
 	return `apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
+metadata: {name: acme-org}
+spec: {host: acme}
+---
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
 metadata: {name: acme-key}
 spec:
   hostId: acme
+  account: acme-org
   valueFrom: {kind: env, env: ` + env + `}
 ---
 apiVersion: relay.wyolet.dev/v1alpha3
