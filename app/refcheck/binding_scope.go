@@ -171,11 +171,13 @@ func bindReachText(owner meta.Owner) string {
 
 // containsScope reports whether scope outer holds scope inner: the same scope, the system above everything, or a team above its projects. Without a project lookup a team is taken to hold every project.
 func (c Checker) containsScope(ctx context.Context, outer, inner meta.Owner) bool {
-	switch {
-	case outer.Kind == meta.OwnerSystem, outer == inner:
+	if c.Rows.Project == nil && outer.Kind == meta.OwnerTeam && inner.Kind == meta.OwnerProject {
 		return true
-	case outer.Kind == meta.OwnerTeam && inner.Kind == meta.OwnerProject:
-		return c.projectInTeam(ctx, inner.ID, outer.ID)
 	}
-	return false
+	return outer.Holds(inner, func(projectID string) (string, bool) {
+		if p := c.Rows.Project(ctx, projectID); p != nil {
+			return p.Spec.TeamID, true
+		}
+		return "", false
+	})
 }

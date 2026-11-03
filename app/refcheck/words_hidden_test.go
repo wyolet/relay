@@ -107,7 +107,8 @@ func TestUsableRunsTheWholeSaveCheck(t *testing.T) {
 		{"a project that does not exist", c, meta.Owner{Kind: meta.OwnerProject, ID: "p-9"}, http.StatusBadRequest},
 		{"a project the caller cannot see", hidden, meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}, http.StatusNotFound},
 		{"a team that does not exist", c, meta.Owner{Kind: meta.OwnerTeam, ID: "t-9"}, http.StatusBadRequest},
-		{"another user", c, meta.Owner{Kind: meta.OwnerUser, ID: "u-else"}, http.StatusBadRequest},
+		{"another user, whom the authorizer decides on", c, meta.Owner{Kind: meta.OwnerUser, ID: "u-else"}, 0},
+		{"a user scope with no id", c, meta.Owner{Kind: meta.OwnerUser}, http.StatusBadRequest},
 		{"the caller", c, meta.Owner{Kind: meta.OwnerUser, ID: meID}, 0},
 		{"the system", c, meta.Owner{Kind: meta.OwnerSystem}, 0},
 	} {

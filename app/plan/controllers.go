@@ -104,6 +104,7 @@ func (c *controllers) all() []*engine.Controller {
 
 	policyChecks := engine.NewController("policy-check", KindPolicyCheck, c.policyCheck)
 	engine.Watch(policyChecks, func(p *policy.Policy) []string { return []string{p.Meta.ID} })
+	engine.Watch(policyChecks, policyBound)
 
 	hostChecks := engine.NewController("host-check", KindHostCheck, c.hostCheck)
 	engine.Watch(hostChecks, func(h *host.Host) []string { return []string{h.Meta.ID} })

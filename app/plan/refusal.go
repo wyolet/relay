@@ -162,6 +162,8 @@ const (
 	IssueRateLimitDisabled = "rate_limit_disabled"
 	// IssueRateLimitScopeOutsideModels is a policy rate-limit link scoped only to models the policy does not allow, so it never counts.
 	IssueRateLimitScopeOutsideModels = "rate_limit_scope_outside_models"
+	// IssueModelRefBlocked is a policy model entry that a rung above the policy, or an upstream tier, keeps from accounts bound to it.
+	IssueModelRefBlocked = "model_ref_blocked"
 	// IssueModelUnservable is an enabled model with bindings, none of them enabled at an enabled host.
 	IssueModelUnservable = "model_unservable"
 )

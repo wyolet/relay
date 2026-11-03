@@ -68,7 +68,7 @@ A signed-in user who creates a team or a project gets a role binding of the scop
 
 #### Listing what a scope may use
 
-`usable_by` narrows the lists of pools, policies, rate limits, budgets, accounts and host keys to the rows a row owned by one scope may link, by the same rule a save of that row applies. The value is `system`, `user:<id>`, `team:<id>` or `project:<id>`; it composes with the other filters, and a malformed value answers `400`.
+`usable_by` narrows the lists of pools, policies, rate limits, budgets, accounts and host keys to the rows a row owned by one scope may link, by the same rule a save of that row applies. The value is `system`, `user:<id>`, `team:<id>` or `project:<id>`; it composes with the other filters, and a malformed value answers `400`. The caller must be allowed to create or update the linking row (a policy, a pool or a policy binding) in that scope, else `403`; a team or project that does not exist answers `400`, one the caller may not see `404`.
 
 | List | What `usable_by=<scope>` keeps |
 | --- | --- |
@@ -242,6 +242,16 @@ The limits reads answer the account's caller rungs, outermost first, as the publ
 
 The account read is open to whoever may read the account and to the user who acts in it; the key read to whoever may read the key and to the user it authenticates as. Anyone else gets `404`. Both answer `503` before the configuration has loaded.
 
+### Reach
+
+```
+GET /api/accounts/{ref}/reachable                       what a request in the account may use now
+GET /api/catalog/reachable?owner=kind:id&pool=<id>&…&account=<id>   what a draft policy owned there, linking those pools, would reach
+GET /api/policies/{ref}/reachable                       the same for a saved policy, with the accounts bound to it
+```
+
+All three run the fold and route fill a request runs on the loaded configuration, and answer `{account?, boundAccounts?, refused?, models, excluded, dropped}`. Each of `models` is `{provider, model: {id, name, displayName, labels}, hosts, via: [{pool?, account?}], upstream: [{account, sharedAs?, policy?, allowed, reason?, rung?}]}`, with hosts and `via` in failover order; each of `excluded` is a model bound at a reached host the lane may not use, `{code, reason, rung, provider, model, hosts, upstream}`, where `rung` is `team`, `project`, `lane` or `account` (an upstream tier) and `reason` names the policy, as in `not allowed by team platform's policy platform-default`. `refused` is set instead when the whole ladder refuses, such as a disabled policy or personal accounts turned off. `dropped` lists each pool the policy links, and each account or key a pool lists, that brings the lane nothing: `{pool?, account?, credential?, code, reason}`, with `code` one of `ref_missing`, `link_out_of_scope`, `host_disabled`, `host_mismatch`, `pool_member_unusable`, `held_for_another_lane` (a share held for one service account, which serves only that account's lane), `narrowed_by_rung` or `not_found` (a pool id the caller may not read). A draft is read as the policy of `account` when given, an account inside `owner` (`400` otherwise), else of the owner's own account (a team's or project's account, a user's personal account), under the rungs above it; a system-owned draft read in no account sits alone above system-owned keys. A saved policy is read in each account bound to it, once per distinct ladder, and merged: a model is in `models` when any bound account reaches it, with `accounts` naming them, and in `excluded` only when none does, with one ladder's reason and the `accounts` it is refused for; bound nowhere, it is read in its owner's own account as a draft is. The draft read needs `policies.create` or `policies.update` in `owner` (`403` otherwise); the account read is open as the limits read is; the policy read to whoever may read the policy. Rows the caller may not read are left out.
+
 ### Plan issues
 
 ```
@@ -267,6 +277,7 @@ Each issue is `{code, message, kind, id, name, field, severity, refs: [{kind, id
 | `pool_outside_models` | policy | a linked pool's host serves none of the policy's models |
 | `model_ref_unreachable` | policy | a model entry served at no host the linked pools reach; an error when no entry is reachable |
 | `model_ref_disabled` | policy | a model entry naming a disabled model |
+| `model_ref_blocked` | policy | a model entry that a rung above the policy, or an upstream tier, keeps from the accounts bound to it; names the rung and policy (in refs), with a count when only some bound accounts are kept |
 | `rate_limit_disabled` | policy | a linked rate limit is disabled and does not apply |
 | `rate_limit_scope_outside_models` | policy | a rate-limit link scoped only to models the policy does not allow, so it never counts |
 | `model_unservable` | model | an enabled policy grants the model, but no enabled binding at an enabled host serves it; one issue per granting policy, naming it in refs. A model no policy's model list grants gets none |

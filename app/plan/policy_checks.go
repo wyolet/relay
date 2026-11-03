@@ -64,6 +64,7 @@ func checkPolicy(tx *engine.Txn, p *policy.Policy) {
 	checkPoolHosts(tx, src, idx, entries, pools)
 	if p.IsEnabled() {
 		checkGrantedModels(tx, p, idx, entries)
+		checkBlockedEntries(tx, p, idx, entries)
 	}
 }
 

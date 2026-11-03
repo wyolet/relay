@@ -13,6 +13,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 )
@@ -28,6 +29,8 @@ type usablePurpose[T any] struct {
 	name string
 	// linker names the linking row in descriptions, such as "a policy binding".
 	linker string
+	// kind is the linking row's singular kind, such as "policy-binding": the caller must be allowed to create or update one in the usable_by scope.
+	kind string
 	// check is a refcheck.Checker method, such as refcheck.Checker.UsablePool, run on the request's checker.
 	check func(c refcheck.Checker, ctx context.Context, t *T, by meta.Owner) error
 }
@@ -38,8 +41,23 @@ type usableFilter[T any] struct {
 	purposes []usablePurpose[T]
 }
 
-func usableFor[T any](c refcheck.Checker, linker string, check func(refcheck.Checker, context.Context, *T, meta.Owner) error) *usableFilter[T] {
-	return &usableFilter[T]{checker: c, purposes: []usablePurpose[T]{{linker: linker, check: check}}}
+func usableFor[T any](c refcheck.Checker, kind string, check func(refcheck.Checker, context.Context, *T, meta.Owner) error) *usableFilter[T] {
+	return &usableFilter[T]{checker: c, purposes: []usablePurpose[T]{{linker: linkerText(kind), kind: kind, check: check}}}
+}
+
+func linkerText(kind string) string {
+	return "a " + strings.ReplaceAll(kind, "-", " ")
+}
+
+// mayWriteIn reports whether the caller may create or update a row of kind owned by scope, as a save of that row decides. The probe is not audited: it answers a picker, not a write.
+func mayWriteIn(ctx context.Context, az authz.Authorizer, kind string, scope meta.Owner) bool {
+	az = unaudited(az)
+	for _, verb := range []string{".create", ".update"} {
+		if az.Authorize(ctx, authz.Plural(kind)+verb, authz.Resource{Kind: kind, Owner: &scope}) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (u *usableFilter[T]) params(plural string) []*huma.Param {
@@ -76,12 +94,15 @@ type usableQuery[T any] struct {
 	checker refcheck.Checker
 }
 
-// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal (refcheck.Checker.UsableScope) when no row could be saved in it. The checker's reads are memoized for this one answer, so checking every row reads each stored row once.
+// keep returns the items a row owned by q.by may link for q's purpose, or the scope's own refusal (refcheck.Checker.UsableScope) when it does not exist, or 403 when the caller may not write the linking row there. The checker's reads are memoized for this one answer, so checking every row reads each stored row once.
 func (q *usableQuery[T]) keep(ctx context.Context, items []*T) ([]*T, error) {
 	c := q.checker
 	c.Rows = c.Rows.Memoized()
 	if err := c.UsableScope(ctx, q.by); err != nil {
 		return nil, refErr(err)
+	}
+	if !mayWriteIn(ctx, c.Authz, q.purpose.kind, q.by) {
+		return nil, huma.Error403Forbidden(fmt.Sprintf("you may not write %s owned by %s", q.purpose.linker, ownerKeyOf(q.by)))
 	}
 	out := items[:0:0]
 	for _, it := range items {

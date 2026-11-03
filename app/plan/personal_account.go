@@ -81,11 +81,11 @@ func (c *controllers) personalAccount(tx *engine.Txn, userID string) error {
 }
 
 // personalAccountOff returns the state of a user owner whose personal account is off, nil for any other owner. Reading it records the dependency, so the caller rebuilds when it turns.
-func personalAccountOff(tx *engine.Txn, owner meta.Owner) *PersonalAccount {
+func personalAccountOff[R *engine.Txn | *engine.View](r R, owner meta.Owner) *PersonalAccount {
 	if owner.Kind != meta.OwnerUser || owner.ID == "" {
 		return nil
 	}
-	if p := engine.Get[PersonalAccount](tx, owner.ID); p != nil && !p.On {
+	if p := engine.Get[PersonalAccount](r, owner.ID); p != nil && !p.On {
 		return p
 	}
 	return nil
