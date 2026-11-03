@@ -39,16 +39,17 @@ type PlanIssue struct {
 }
 
 type planIssuesInput struct {
-	Kind   string `query:"kind"   optional:"true" doc:"Filter by object kind, such as key or policybinding. Omit for all kinds."`
-	ID     string `query:"id"     optional:"true" doc:"Filter by object id (UUIDv7). Takes effect only together with kind."`
-	Target string `query:"target" optional:"true" pattern:"^[a-z]+:[^:]+$" doc:"Only issues whose refs name this object, as kind:id (e.g. ratelimit:<id>): the issues other objects have because of it."`
-	About  string `query:"about"  optional:"true" pattern:"^[a-z]+:[^:]+$" doc:"Only issues on this object or naming it in their refs, as kind:id: everything a page for one object shows, in one call."`
+	Kind   string   `query:"kind"   optional:"true" doc:"Filter by object kind, such as key or policybinding. Omit for all kinds."`
+	ID     string   `query:"id"     optional:"true" doc:"Filter by object id (UUIDv7). Takes effect only together with kind."`
+	Target string   `query:"target" optional:"true" pattern:"^[a-z]+:[^:]+$" doc:"Only issues whose refs name this object, as kind:id (e.g. ratelimit:<id>): the issues other objects have because of it."`
+	About  []string `query:"about,explode" doc:"Only issues on one of these objects or naming one in their refs, each as kind:id (repeatable, any may match): a policy page passes the policy and its pools to get every issue it shows in one call."`
 }
 
 // issueFilter is the query's filters; an issue passes when it passes every one set.
 type issueFilter struct {
-	kind, id      string
-	target, about engine.Ref
+	kind, id string
+	target   engine.Ref
+	about    []engine.Ref
 }
 
 func (f issueFilter) keeps(iss engine.Issue) bool {
@@ -56,10 +57,23 @@ func (f issueFilter) keeps(iss engine.Issue) bool {
 	case f.kind != "" && string(iss.Source.Kind) != f.kind,
 		f.kind != "" && f.id != "" && iss.Source.ID != f.id,
 		f.target != (engine.Ref{}) && iss.Target != f.target,
-		f.about != (engine.Ref{}) && iss.Source != f.about && iss.Target != f.about:
+		len(f.about) > 0 && !slices.ContainsFunc(f.about, func(r engine.Ref) bool { return iss.Source == r || iss.Target == r }):
 		return false
 	}
 	return true
+}
+
+// parseAbout reads each about value as kind:id; an error names the first malformed one.
+func parseAbout(raw []string) ([]engine.Ref, error) {
+	out := make([]engine.Ref, 0, len(raw))
+	for _, s := range raw {
+		kind, id, ok := strings.Cut(s, ":")
+		if !ok || kind == "" || id == "" || strings.Contains(id, ":") {
+			return nil, huma.Error422UnprocessableEntity("about " + s + " is not kind:id")
+		}
+		out = append(out, engine.Ref{Kind: engine.Kind(kind), ID: id})
+	}
+	return out, nil
 }
 
 // parseObjectRef reads "kind:id"; the zero Ref for "".
@@ -78,11 +92,15 @@ func registerPlanIssues(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      "GET",
 		Path:        "/plan-issues",
 		Summary:     "List plan-engine diagnostics",
-		Description: "Returns every issue the plan engine has recorded for relay objects (keys, policies, bindings, …) that the caller may see, sorted by kind, name and code. Errors mean the object cannot serve; warnings mean it serves but something is likely wrong. Filter by kind, or by kind and id to narrow to one object; target keeps the issues naming an object in their refs, and about the issues on an object or naming it. Filters combine.",
+		Description: "Returns every issue the plan engine has recorded for relay objects (keys, policies, bindings, …) that the caller may see, sorted by kind, name and code. Errors mean the object cannot serve; warnings mean it serves but something is likely wrong. Filter by kind, or by kind and id to narrow to one object; target keeps the issues naming an object in their refs, and about (repeatable) the issues on any of the given objects or naming one. Filters combine.",
 		Tags:        []string{"catalog"},
 		Middlewares: protect,
 		Errors:      []int{401, 422, 500},
 	}, func(ctx context.Context, in *planIssuesInput) (*planIssuesOutput, error) {
+		about, err := parseAbout(in.About)
+		if err != nil {
+			return nil, err
+		}
 		if d.PlanView == nil {
 			return &planIssuesOutput{Body: []PlanIssue{}}, nil
 		}
@@ -90,7 +108,7 @@ func registerPlanIssues(api huma.API, d Deps, protect huma.Middlewares) {
 		if v == nil {
 			return &planIssuesOutput{Body: []PlanIssue{}}, nil
 		}
-		f := issueFilter{kind: in.Kind, id: in.ID, target: parseObjectRef(in.Target), about: parseObjectRef(in.About)}
+		f := issueFilter{kind: in.Kind, id: in.ID, target: parseObjectRef(in.Target), about: about}
 		return &planIssuesOutput{Body: planIssues(ctx, d.Authz, v, f)}, nil
 	})
 }

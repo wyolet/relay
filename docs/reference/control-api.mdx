@@ -268,7 +268,7 @@ Each issue is `{code, message, kind, id, name, field, severity, refs: [{kind, id
 | `rate_limit_scope_outside_models` | policy | a rate-limit link scoped only to models the policy does not allow, so it never counts |
 | `model_unservable` | model | no enabled binding at an enabled host serves the model |
 
-`kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, `pool`, `credential`, `host`, `model`, `ratelimit`, …), and `id` together with `kind` narrows to one row. `target=kind:id` keeps the issues whose refs name that row, and `about=kind:id` the issues on that row or naming it: what a page for one row shows, in one call. Filters combine.
+`kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, `pool`, `credential`, `host`, `model`, `ratelimit`, …), and `id` together with `kind` narrows to one row. `target=kind:id` keeps the issues whose refs name that row, and `about=kind:id` the issues on that row or naming it. `about` repeats and matches any of its rows, so a policy page asks for `about=policy:<id>&about=pool:<id>&…` to get its own and its pools' issues in one call. Filters combine.
 
 Issues on rows the caller may not read are left out, and a ref to such a row keeps its kind with an empty id and name. Under `RELAY_AUTHZ=rbac` the route takes a role whose rules include the kind `*`, such as the built-in `admin`.
 

@@ -101,3 +101,30 @@ func TestPlanIssues_TargetAndAbout(t *testing.T) {
 		t.Errorf("target without a kind = %d, want 422", code)
 	}
 }
+
+// Repeated about values match any of them: a policy page asks for the policy and its pools at once.
+func TestPlanIssues_AboutRepeats(t *testing.T) {
+	w := &plantest.World{}
+	off := false
+	rl := w.RateLimit(plantest.Rule(ratelimit.MeterRequests, 10, time.Minute))
+	rl.Spec.Enabled = &off
+	h := w.Host("down", "http://down.example")
+	h.Spec.Enabled = &off
+	p := w.Pool(h)
+	pol := w.Policy("limited", policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}})
+	d := mountDeps(t)
+	d.PlanView = w.Load(t).Engine.View
+
+	_, items := getIssues(t, d, "?about=policy:"+pol.Meta.ID+"&about=pool:"+p.Meta.ID)
+	got := map[string]string{}
+	for _, it := range items {
+		got[it.Kind] = it.Code
+	}
+	want := map[string]string{"policy": plan.IssueRateLimitDisabled, "pool": plan.IssueHostDisabled}
+	if len(items) != 2 || got["policy"] != want["policy"] || got["pool"] != want["pool"] {
+		t.Errorf("items = %+v, want the policy's %s and the pool's %s", items, want["policy"], want["pool"])
+	}
+	if code, _ := getIssues(t, d, "?about=policy:"+pol.Meta.ID+"&about="+p.Meta.ID); code != http.StatusUnprocessableEntity {
+		t.Errorf("an about without a kind = %d, want 422", code)
+	}
+}
