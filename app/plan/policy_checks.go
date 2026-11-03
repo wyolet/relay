@@ -1,4 +1,4 @@
-// Policy checks report what a policy's own links leave unserved: linked pools that all serve nothing, a pool whose host serves none of its models, model entries no linked pool reaches or that name a disabled model, and rate limits scoped only to models it does not allow. They attach issues to the policy and build nothing, so no plan the request path reads depends on them.
+// Policy checks report what a policy's own links leave unserved: linked pools that all serve nothing, a pool whose host serves none of its models, model entries no linked pool reaches or that name a disabled model, rate limits scoped only to models it does not allow, and (on the model) the unservable models it grants. They attach issues to the policy and build nothing, so no plan the request path reads depends on them.
 
 package plan
 
@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
@@ -61,6 +62,33 @@ func checkPolicy(tx *engine.Txn, p *policy.Policy) {
 	}
 	checkModelEntries(tx, src, idx, entries, pools)
 	checkPoolHosts(tx, src, idx, entries, pools)
+	if p.IsEnabled() {
+		checkGrantedModels(tx, p, idx, entries)
+	}
+}
+
+// entryMatches reports whether model entry r grants model m served at h: the one place policy checks resolve an entry against the catalog.
+func entryMatches(idx *CatalogIndex, r modelref.Ref, m *model.Model, h *host.Host) bool {
+	prov, _ := idx.Snap.ProviderSlug(m.Meta.Owner.ID)
+	return r.Matches(prov, m.Meta.Name, h.Meta.Name)
+}
+
+// checkGrantedModels files model_unservable on each unservable model one of the policy's entries grants, naming the policy; a model nobody grants gets none.
+func checkGrantedModels(tx *engine.Txn, p *policy.Policy, idx *CatalogIndex, entries []modelEntry) {
+	for _, u := range idx.unservable {
+		if !slices.ContainsFunc(idx.Snap.BindingsForModel(u.model.Meta.ID), func(b *binding.Binding) bool {
+			h, ok := idx.Snap.Host(b.Spec.HostID)
+			return ok && slices.ContainsFunc(entries, func(e modelEntry) bool { return entryMatches(idx, e.ref, u.model, h) })
+		}) {
+			continue
+		}
+		msg := "policy " + p.Meta.Name + " grants it, but no enabled binding at an enabled host serves it"
+		if u.hosts != "" {
+			msg += " (its bindings are at " + u.hosts + ")"
+		}
+		tx.Issue(engine.Issue{Severity: engine.SeverityError, Code: IssueModelUnservable, Source: engine.Ref{Kind: KindModel, ID: u.model.Meta.ID}, Target: engine.Ref{Kind: KindPolicy, ID: p.Meta.ID},
+			Message: msg + "; requests for it are refused with no_binding"})
+	}
 }
 
 // modelEntries parses a model list, leaving out the entries that cannot match (the expanded policy reports those).
@@ -174,7 +202,7 @@ func disabledModel(idx *CatalogIndex, r modelref.Ref) *model.Model {
 // servedAtAny reports whether an enabled binding of an enabled model r matches is at one of hosts.
 func servedAtAny(idx *CatalogIndex, r modelref.Ref, hosts []*host.Host) bool {
 	for _, h := range hosts {
-		if servedAt(idx, h, func(prov string, m *model.Model) bool { return r.Matches(prov, m.Meta.Name, h.Meta.Name) }) {
+		if servedAt(idx, h, func(m *model.Model) bool { return entryMatches(idx, r, m, h) }) {
 			return true
 		}
 	}
@@ -182,13 +210,9 @@ func servedAtAny(idx *CatalogIndex, r modelref.Ref, hosts []*host.Host) bool {
 }
 
 // servedAt reports whether an enabled binding at h serves an enabled model match accepts.
-func servedAt(idx *CatalogIndex, h *host.Host, match func(prov string, m *model.Model) bool) bool {
+func servedAt(idx *CatalogIndex, h *host.Host, match func(m *model.Model) bool) bool {
 	for _, b := range idx.bindingsByHost[h.Meta.ID] {
-		m, ok := idx.Snap.Model(b.Spec.ModelID)
-		if !ok || !m.IsEnabled() {
-			continue
-		}
-		if prov, _ := idx.Snap.ProviderSlug(m.Meta.Owner.ID); match(prov, m) {
+		if m, ok := idx.Snap.Model(b.Spec.ModelID); ok && m.IsEnabled() && match(m) {
 			return true
 		}
 	}
@@ -202,8 +226,8 @@ func checkPoolHosts(tx *engine.Txn, src engine.Ref, idx *CatalogIndex, entries [
 		if !ok {
 			continue
 		}
-		if servedAt(idx, h, func(prov string, m *model.Model) bool {
-			return slices.ContainsFunc(entries, func(e modelEntry) bool { return e.ref.Matches(prov, m.Meta.Name, h.Meta.Name) })
+		if servedAt(idx, h, func(m *model.Model) bool {
+			return slices.ContainsFunc(entries, func(e modelEntry) bool { return entryMatches(idx, e.ref, m, h) })
 		}) {
 			continue
 		}

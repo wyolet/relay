@@ -26,6 +26,8 @@ import (
 type CatalogIndex struct {
 	Snap           *appcatalog.Snapshot
 	bindingsByHost map[string][]*binding.Binding
+	// unservable is what policy checks report model_unservable from.
+	unservable []unservableModel
 }
 
 func (c *controllers) catalogIndex(tx *engine.Txn, _ string) error {
@@ -40,7 +42,7 @@ func (c *controllers) catalogIndex(tx *engine.Txn, _ string) error {
 			idx.bindingsByHost[b.Spec.HostID] = append(idx.bindingsByHost[b.Spec.HostID], b)
 		}
 	}
-	reportUnservableModels(tx, snap, models)
+	idx.unservable = unservableModels(snap, models)
 	engine.Put(tx, idx)
 	return nil
 }

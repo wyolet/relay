@@ -269,7 +269,7 @@ Each issue is `{code, message, kind, id, name, field, severity, refs: [{kind, id
 | `model_ref_disabled` | policy | a model entry naming a disabled model |
 | `rate_limit_disabled` | policy | a linked rate limit is disabled and does not apply |
 | `rate_limit_scope_outside_models` | policy | a rate-limit link scoped only to models the policy does not allow, so it never counts |
-| `model_unservable` | model | no enabled binding at an enabled host serves the model |
+| `model_unservable` | model | an enabled policy grants the model, but no enabled binding at an enabled host serves it; one issue per granting policy, naming it in refs. A model no policy's model list grants gets none |
 
 `kind` filters by the row's kind (`key`, `policy`, `policybinding`, `account`, `pool`, `credential`, `host`, `model`, `ratelimit`, …), and `id` together with `kind` narrows to one row. `target=kind:id` keeps the issues whose refs name that row, and `about=kind:id` the issues on that row or naming it. `about` repeats and matches any of its rows, so a policy page asks for `about=policy:<id>&about=pool:<id>&…` to get its own and its pools' issues in one call. Filters combine.
 
