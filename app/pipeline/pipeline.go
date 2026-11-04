@@ -2,7 +2,7 @@
 //
 // The pipeline is ignorant of the catalog, wire shapes and the policy ladder: which counters apply and which credentials may serve come from the route (app/plan), counting from a limits.Limiter.
 //
-// Expected store calls per request: one round trip carrying the caller's hold and the first pick's breaker reads when the limiter is a limits.BatchAdmitter (else one each), then one per credential tried for its upstream counters (none for a side with no counters) and one per later pick. Post-flight: the held reservations' commits and, only when the picked record changes on success, the breaker's success write; with a settle queue they ride one round trip shared with other requests' settles, else one settle per held reservation and the write on its own.
+// Expected store calls per request: one round trip carrying the caller's hold and the first pick's breaker reads when the limiter is a limits.BatchAdmitter (else one each), then one per credential tried for its upstream counters (none for a side with no counters) and one per later pick. A pick whose selector holds the records fresh in a keypool.PickState reads nothing, and a hold or admit the hybrid limiter answers from memory sends nothing, so a request can reach the upstream with no store call. Post-flight: the held reservations' commits and, only when the picked record changes on success, the breaker's success write; with a settle queue they ride one round trip shared with other requests' settles, else one settle per held reservation and the write on its own.
 package pipeline
 
 import (

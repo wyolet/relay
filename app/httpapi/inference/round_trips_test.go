@@ -34,16 +34,30 @@ func memScriptStore(t *testing.T) kvtest.ScriptStore {
 	return m
 }
 
-// A plain request, a user key reaching one credential in a provider account whose policy limits it, spends two store round trips before the upstream sees it: the pick's breaker read, with the caller hold when the caller's own policy limits it, then the account's admit.
+// A plain request, a user key reaching one credential in a provider account whose policy limits it, spends these store round trips before the upstream sees it. Cold: the pick's breaker read, with the caller hold when the caller's own policy limits it, then the account's admit. With the pick state warm the breaker read is gone, so a caller with no limits of its own makes only the account's admit.
 func TestPlainRequestRoundTrips(t *testing.T) { runPlainRequestRoundTrips(t, memScriptStore) }
 
 func runPlainRequestRoundTrips(t *testing.T, store newScriptStore) {
-	t.Run("account_limit", func(t *testing.T) { plainRequestRoundTrips(t, store, false, 2) })
-	t.Run("caller_and_account_limits", func(t *testing.T) { plainRequestRoundTrips(t, store, true, 2) })
+	for _, tc := range []struct {
+		name               string
+		callerLimited      bool
+		pickState          bool
+		wantCold, wantWarm int
+	}{
+		{"account_limit", false, false, 2, 2},
+		{"caller_and_account_limits", true, false, 2, 2},
+		{"account_limit_pick_state", false, true, 2, 1},
+		{"caller_and_account_limits_pick_state", true, true, 2, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plainRequestRoundTrips(t, store, tc.callerLimited, tc.pickState, tc.wantCold, tc.wantWarm)
+		})
+	}
 }
 
-func plainRequestRoundTrips(t *testing.T, newStore newScriptStore, callerLimited bool, want int) {
-	rec := kvtest.NewRecording(newStore(t))
+func plainRequestRoundTrips(t *testing.T, newStore newScriptStore, callerLimited, pickState bool, wantCold, wantWarm int) {
+	s := newStore(t)
+	rec := kvtest.NewRecording(s)
 	var atCall atomic.Int64
 	atCall.Store(-1)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -78,31 +92,40 @@ func plainRequestRoundTrips(t *testing.T, newStore newScriptStore, callerLimited
 		t.Fatalf("route refused: %+v", hop.Refused)
 	}
 
+	discard := slog.New(slog.DiscardHandler)
+	sel := keypool.New(rec, discard, nil, nil)
+	if pickState {
+		sel.WithPickState(keypool.NewPickState(s, 0, discard))
+	}
 	reg := buildTestRegistry()
 	d := Deps{
 		Catalog: cat, Plans: plans.Holder, Adapters: reg.AdapterMap(), Specs: reg,
-		Pipeline: &pipeline.Pipeline{
-			Limiter:  lua.New(pkgratelimit.New(rec, slog.New(slog.DiscardHandler), nil)),
-			Selector: keypool.New(rec, slog.New(slog.DiscardHandler), nil, nil),
-			Logger:   slog.New(slog.DiscardHandler),
-		},
+		Pipeline: &pipeline.Pipeline{Limiter: lua.New(pkgratelimit.New(rec, discard, nil)), Selector: sel, Logger: discard},
 	}
-	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), pr)
-	rw := httptest.NewRecorder()
-	Dispatch(d, rw, r, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(`{"model":"test-model"}`), ModelName: "test-model"})
-	if rw.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rw.Code, rw.Body)
+	reserves := 0
+	send := func(want int) {
+		t.Helper()
+		before, reservesBefore := rec.RoundTrips(), len(rec.Named("limit.reserve"))
+		r := withNormalContext(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), pr)
+		rw := httptest.NewRecorder()
+		Dispatch(d, rw, r, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(`{"model":"test-model"}`), ModelName: "test-model"})
+		if rw.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rw.Code, rw.Body)
+		}
+		if n := atCall.Load() - int64(before); n != int64(want) {
+			t.Fatalf("store round trips before the upstream call = %d, want %d (batches %v)", n, want, rec.Batches())
+		}
+		reserves = len(rec.Named("limit.reserve")) - reservesBefore
 	}
-	if n := atCall.Load(); n != int64(want) {
-		t.Fatalf("store round trips before the upstream call = %d, want %d (batches %v)", n, want, rec.Batches())
-	}
-	reserves := 1
+	wantReserves := 1
 	if callerLimited {
-		reserves++
+		wantReserves++
 	}
-	if n := len(rec.Named("limit.reserve")); n != reserves {
-		t.Fatalf("reserve scripts = %d, want %d: one per limited side", n, reserves)
+	send(wantCold)
+	if reserves != wantReserves {
+		t.Fatalf("reserve scripts = %d, want %d: one per limited side", reserves, wantReserves)
 	}
+	send(wantWarm)
 }
 
 // An authed proxy request holds the caller's counters and the system ceiling, two atomicity groups, in one round trip before the upstream sees it.

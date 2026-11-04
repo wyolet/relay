@@ -13,6 +13,7 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/limits/hybrid"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
@@ -142,6 +143,54 @@ func TestRunSettleSharesOneRoundTrip(t *testing.T) {
 	}
 	if rec, found := sel.ReadCircuit(context.Background(), key.KeyHash); !found || rec.State != keypool.CircuitClosed {
 		t.Fatalf("record after the served probe = %+v (found %v), want closed", rec, found)
+	}
+}
+
+// With the hybrid limiter counting every counter in memory and the pick state warm, a round-robin request makes no store call before the upstream: the caller hold, the pick and the account's admit all answer from this process.
+func TestRunWarmMakesNoStoreCall(t *testing.T) { runWarmMakesNoStoreCall(t, memScriptStore(t)) }
+
+func runWarmMakesNoStoreCall(t *testing.T, s kvtest.ScriptStore) {
+	// Admission and picks run on the recorded store; the sync and refreshes on s, as on the post-flight client.
+	store := kvtest.NewRecording(s)
+	ps := keypool.NewPickState(s, time.Minute, slog.Default())
+	h := hybrid.New(lua.New(pkgratelimit.New(store, slog.Default(), nil)), store, s, time.Second)
+	p := &Pipeline{Limiter: h, Selector: keypool.New(store, slog.Default(), nil, nil).WithPickState(ps), Logger: slog.Default()}
+
+	// An hour's window leaves far more room than one sync interval spends, so the counters stay local.
+	requests := func(id string) *appratelimit.RateLimit {
+		return &appratelimit.RateLimit{Meta: meta.Metadata{ID: id, Name: id}, Spec: appratelimit.Spec{Rules: []appratelimit.Rule{
+			{Meter: appratelimit.MeterRequests, Amount: 1000, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyFixedWindow},
+		}}}
+	}
+	account := accountCounters("acct", requests("rl-tier"))
+	hop := buildHop(keypool.KeySelectionRoundRobin, callerCounter(requests("rl-caller")),
+		testSlot{key: testKey("key-a"), upstream: account}, testSlot{key: testKey("key-b"), upstream: account})
+	run := func() int {
+		var atCall int
+		before := store.RoundTrips()
+		res, err := p.Run(context.Background(), &Request{
+			Adapter: reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
+				atCall = store.RoundTrips() - before
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+			}},
+			Hops: []plan.RouteHop{hop},
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		_ = res.Body.Close()
+		return atCall
+	}
+
+	if n := run(); n == 0 {
+		t.Fatal("a cold request made no store call: the counters and breaker records were never read")
+	}
+	// The final sync reads every counter's total, so from here each one counts in memory.
+	h.Close()
+	for i := range 4 {
+		if n := run(); n != 0 {
+			t.Fatalf("warm request %d made %d store round trips before the upstream, want 0 (%v)", i, n, store.Batches())
+		}
 	}
 }
 

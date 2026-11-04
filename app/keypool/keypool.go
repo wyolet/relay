@@ -5,8 +5,13 @@
 //   - "round-robin" — distribute traffic evenly using a counter.
 //   - "least-recently-used" — pick the key with the oldest last-used timestamp.
 //
+// A Selector with a PickState picks from the process's memory instead: breaker records are copies reread once per refresh interval, and the round-robin counters and LRU stamps live there alone, so rotation is per process rather than fleet-wide. Its own transitions apply to the copy at once; another process's reach it within one interval, so it may send up to an interval of requests to a key another process has just seen fail. The probe claim stays a store script: it needs fleet-wide exclusion.
+//
 // Expected kv ops per request:
-//   - Pick: one kv.Batch round trip with a GET of each candidate's breaker record and, for round-robin, the counter's INCR and EXPIRE NX. Prioritized reads only the first candidate in the batch; the ones behind it cost a GET each, and only while the keys ahead are open. Promoting an expired open key to half-open adds a SET; least-recently-used adds a GET per healthy candidate and a SET. PreparePick queues the same reads on a caller's batch (policy admission sends them with the rate-limit reserve).
+//   - Pick with a PickState: none while the records it reads are fresh (read or written within two intervals). A record not yet held, or stale, is read through: a GET queued on the pick's batch.
+//   - Pick without one: one kv.Batch round trip with a GET of each candidate's breaker record and, for round-robin, the counter's INCR and EXPIRE NX. Prioritized reads only the first candidate in the batch; the ones behind it cost a GET each, and only while the keys ahead are open. Least-recently-used adds a GET per healthy candidate and a SET. PreparePick queues the same reads on a caller's batch (the pipeline sends them with the caller's hold).
+//   - Either way, claiming the probe of a key whose cooldown ended: one script.
+//   - PickState refresh, per interval and off the request path: one pipelined round trip with a GET per record picked since the last refresh.
 //   - RecordSuccess: one script; PrepareRecordSuccess queues it on a caller's batch. A key's record exists only once it has failed: post-flight writes a success only for a half-open probe, a record with a backoff step, or a failure count (Candidate.SuccessNeedsWrite). RecordFailure: one script; PrepareRecordFailure queues it on a caller's batch. Claiming a half-open probe in Pick: one script.
 //
 // The KeySelection enum lives in this package (not policy) so policy can
@@ -59,6 +64,22 @@ type Selector struct {
 
 	failureThreshold int
 	failureWindow    time.Duration
+
+	// local, when set, serves picks from this pod's memory: breaker records refreshed per interval, rotation and LRU stamps kept here alone.
+	local *PickState
+}
+
+// WithPickState makes s pick from ps instead of reading the store per pick, and write its own transitions through to ps. Give every selector of the process the same ps. Call before serving.
+func (s *Selector) WithPickState(ps *PickState) *Selector {
+	s.local = ps
+	return s
+}
+
+// wrote keeps rec, the record a transition left in the store, in the PickState.
+func (s *Selector) wrote(keyHash string, rec CircuitRecord) {
+	if s.local != nil {
+		s.local.remember(keyHash, rec, true, s.clock(), false)
+	}
 }
 
 // New constructs a Selector. clock and rng may be nil.

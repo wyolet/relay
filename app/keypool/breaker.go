@@ -92,7 +92,7 @@ func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 		}
 		return applySuccess(rec, now)
 	})
-	s.finishSuccess(ctx, keyHash, raw, err)
+	s.finishSuccess(ctx, keyHash, now, raw, err)
 }
 
 // runRecordScript runs a breaker script. With no script runner it applies the same transition from Go, without the atomicity.
@@ -103,8 +103,8 @@ func (s *Selector) runRecordScript(ctx context.Context, call kv.ScriptCall, appl
 	return applyRecord(ctx, s.state, call.Keys[0], apply, ttlFlat)
 }
 
-// finishSuccess logs the outcome of a success script.
-func (s *Selector) finishSuccess(ctx context.Context, keyHash string, raw []byte, err error) {
+// finishSuccess logs the outcome of a success script and keeps the record it left; a failed script still closes the key in the PickState, since this pod saw it serve.
+func (s *Selector) finishSuccess(ctx context.Context, keyHash string, now time.Time, raw []byte, err error) {
 	var out recordOutcome
 	if err == nil {
 		out, err = decodeOutcome(raw)
@@ -112,8 +112,14 @@ func (s *Selector) finishSuccess(ctx context.Context, keyHash string, raw []byte
 	if err != nil {
 		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", err)
+		if s.local != nil {
+			if rec, changed := applySuccess(s.local.current(keyHash), now); changed {
+				s.wrote(keyHash, rec)
+			}
+		}
 		return
 	}
+	s.wrote(keyHash, out.rec)
 	if !out.changed {
 		return
 	}
@@ -183,7 +189,7 @@ func (s *Selector) recordFailure(ctx context.Context, keyHash string, op failure
 	s.finishFailure(ctx, keyHash, op, logReason, raw, err)
 }
 
-// finishFailure logs a failure script's outcome and counts a key it opened.
+// finishFailure logs a failure script's outcome, counts a key it opened and keeps the record it left; a failed script still applies the failure in the PickState, so this pod's own failures hold at once.
 func (s *Selector) finishFailure(ctx context.Context, keyHash string, op failureOp, logReason string, raw []byte, err error) {
 	var out recordOutcome
 	if err == nil {
@@ -192,8 +198,14 @@ func (s *Selector) finishFailure(ctx context.Context, keyHash string, op failure
 	if err != nil {
 		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: record failure script failed", "key_hash", keyHash, "err", err)
+		if s.local != nil {
+			if rec, changed := applyFailure(s.local.current(keyHash), op); changed {
+				s.wrote(keyHash, rec)
+			}
+		}
 		return
 	}
+	s.wrote(keyHash, out.rec)
 	openFor := 0
 	if out.changed && out.rec.State == CircuitOpen {
 		metrics.ProviderKeyDown(string(out.rec.Reason))

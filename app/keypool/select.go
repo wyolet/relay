@@ -88,7 +88,12 @@ func pickRoundRobin(rotation *kv.BatchResult, healthy []Candidate) Candidate {
 	default:
 		idx = rotation.Int
 	}
-	i := (idx - 1) % int64(len(healthy))
+	return pickTurn(idx, healthy)
+}
+
+// pickTurn selects the candidate the rotation counter's value turn points at, counting from 1.
+func pickTurn(turn int64, healthy []Candidate) Candidate {
+	i := (turn - 1) % int64(len(healthy))
 	if i < 0 { // negative counter (int64 wraparound or external edit)
 		i += int64(len(healthy))
 	}
@@ -98,6 +103,9 @@ func pickRoundRobin(rotation *kv.BatchResult, healthy []Candidate) Candidate {
 // pickLRU selects the healthy candidate with the oldest last-use timestamp
 // (or never-used) and updates its timestamp.
 func (s *Selector) pickLRU(ctx context.Context, scope string, healthy []Candidate) Candidate {
+	if s.local != nil {
+		return s.pickLRULocal(scope, healthy)
+	}
 	var (
 		chosen    = -1
 		chosenTS  int64
@@ -145,5 +153,22 @@ func (s *Selector) pickLRU(ctx context.Context, scope string, healthy []Candidat
 		metrics.KVError("key_rotation", metrics.KVDropped)
 	}
 
+	return healthy[chosen]
+}
+
+// pickLRULocal is pickLRU over this pod's own last-use stamps: a never-used candidate first, else the oldest.
+func (s *Selector) pickLRULocal(scope string, healthy []Candidate) Candidate {
+	chosen, chosenTS := 0, int64(0)
+	for i, c := range healthy {
+		ts, used := s.local.lastUsed(scope, c.Key.KeyHash)
+		if !used {
+			chosen = i
+			break
+		}
+		if i == 0 || ts < chosenTS {
+			chosen, chosenTS = i, ts
+		}
+	}
+	s.local.stampUse(scope, healthy[chosen].Key.KeyHash, s.clock().UnixMilli())
 	return healthy[chosen]
 }
