@@ -11,15 +11,15 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 )
 
-// DefaultRefreshInterval is how often a PickState rereads the breaker records of the keys picked since its last refresh. It bounds how late another pod's breaker transition reaches this one.
+// DefaultRefreshInterval is how often a PickState rereads every breaker record it holds. It bounds how late another pod's breaker transition reaches this one.
 const DefaultRefreshInterval = time.Second
 
-// pickStateIdle is how long a record nobody picks stays in a PickState once read.
+// pickStateIdle is how long a record, rotation counter or LRU stamp nobody picks stays in a PickState.
 const pickStateIdle = 5 * time.Minute
 
-// PickState is the pick state a pod keeps in memory instead of reading the store per request: a copy of the breaker records of the keys it picks, reread off the request path once per interval, and the round-robin rotation and least-recently-used stamps of each pick scope, which are this pod's own. Selectors sharing one PickState (the request path's and the post-flight one) see each other's transitions at once.
+// PickState is the pick state a pod keeps in memory instead of reading the store per request: a copy of the breaker records of the keys it picks, all reread off the request path once per interval, and the round-robin rotation and least-recently-used stamps of each pick scope, which are this pod's own. Selectors sharing one PickState (the request path's and the post-flight one) see each other's transitions at once.
 //
-// A record not yet read, or last read more than two intervals ago (refreshes failing), is read through by the pick that needs it.
+// A record not yet read, or last read more than two intervals ago (refreshes failing), is read through by the pick that needs it. A transition the store failed to run is applied here alone and holds against older store reads: an open until its OpenUntil, a success until the store shows a transition after it.
 type PickState struct {
 	// store is where refreshes read, off the admission pool.
 	store    kv.Store
@@ -27,10 +27,9 @@ type PickState struct {
 	clock    func() time.Time
 	log      *slog.Logger
 
-	records sync.Map // key hash → *cachedRecord
-	// rotation is each scope's round-robin counter; lastUse each scope and key's last pick, unix ms.
-	rotation sync.Map // scope → *atomic.Int64
-	lastUse  sync.Map // lastUseKey → *atomic.Int64
+	records  sync.Map // key hash → *cachedRecord
+	rotation sync.Map // scope → *rotationCounter
+	lastUse  sync.Map // lastUseKey → *atomic.Int64, the last pick in unix ms
 
 	stop     chan struct{}
 	done     chan struct{}
@@ -40,15 +39,21 @@ type PickState struct {
 
 type cachedRecord struct {
 	snap atomic.Pointer[recordSnap]
-	// picked is set by every pick that reads the record and cleared by the refresh that rereads it.
-	picked atomic.Bool
+	// pickedAt is when a pick last read the record, unix ns; a record unpicked for pickStateIdle is forgotten.
+	pickedAt atomic.Int64
 }
 
-// recordSnap is a record as the store held it at a moment: a read, or a transition this pod wrote.
+// recordSnap is a record as this pod knows it at a moment: a store read, a transition the store ran, or one the store failed to run and this pod applied alone (heldSince set).
 type recordSnap struct {
-	rec   CircuitRecord
-	found bool
-	at    int64 // unix ns
+	rec       CircuitRecord
+	found     bool
+	at        int64 // unix ns
+	heldSince int64 // unix ns of a transition applied here alone; 0 otherwise
+}
+
+type rotationCounter struct {
+	n      atomic.Int64
+	usedAt atomic.Int64 // unix ms
 }
 
 type lastUseKey struct{ scope, keyHash string }
@@ -100,16 +105,17 @@ func (ps *PickState) Close() {
 	}
 }
 
-// Refresh rereads, in one pipelined round trip, the records of the keys picked since the last refresh, and forgets the ones nobody picked for pickStateIdle. A read that fails leaves its record as it was, to age into a read-through.
+// Refresh rereads every record held, in one pipelined round trip, and forgets the records, rotation counters and LRU stamps nobody picked for pickStateIdle. A read that fails leaves its record as it was, to age into a read-through.
 func (ps *PickState) Refresh(ctx context.Context) {
 	now := ps.clock()
+	idleBefore := now.Add(-pickStateIdle)
+	ps.forgetIdle(idleBefore)
 	var keys []string
 	ps.records.Range(func(k, v any) bool {
-		c := v.(*cachedRecord)
-		if c.picked.Swap(false) {
-			keys = append(keys, k.(string))
-		} else if s := c.snap.Load(); s != nil && now.UnixNano()-s.at > int64(pickStateIdle) {
+		if v.(*cachedRecord).pickedAt.Load() < idleBefore.UnixNano() {
 			ps.records.Delete(k)
+		} else {
+			keys = append(keys, k.(string))
 		}
 		return true
 	})
@@ -130,21 +136,37 @@ func (ps *PickState) Refresh(ctx context.Context) {
 			continue
 		}
 		rec, found := recordFrom(r.Value, r.Err)
-		ps.remember(k, rec, found, now, false)
+		ps.put(k, recordSnap{rec: rec, found: found, at: now.UnixNano()}, false, false)
 	}
 	if failed > 0 {
 		ps.log.Debug("keypool: breaker refresh reads failed", "failed", failed, "keys", len(keys))
 	}
 }
 
-// fresh returns keyHash's record when it was read or written within two intervals of now, marking it picked so the next refresh rereads it.
+func (ps *PickState) forgetIdle(before time.Time) {
+	ms := before.UnixMilli()
+	ps.rotation.Range(func(k, v any) bool {
+		if v.(*rotationCounter).usedAt.Load() < ms {
+			ps.rotation.Delete(k)
+		}
+		return true
+	})
+	ps.lastUse.Range(func(k, v any) bool {
+		if v.(*atomic.Int64).Load() < ms {
+			ps.lastUse.Delete(k)
+		}
+		return true
+	})
+}
+
+// fresh returns keyHash's record when it was read or written within two intervals of now, marking it picked.
 func (ps *PickState) fresh(keyHash string, now time.Time) (CircuitRecord, bool, bool) {
 	v, ok := ps.records.Load(keyHash)
 	if !ok {
 		return CircuitRecord{}, false, false
 	}
 	c := v.(*cachedRecord)
-	c.picked.Store(true)
+	c.pickedAt.Store(now.UnixNano())
 	s := c.snap.Load()
 	if s == nil || now.UnixNano()-s.at > int64(2*ps.interval) {
 		return CircuitRecord{}, false, false
@@ -152,26 +174,58 @@ func (ps *PickState) fresh(keyHash string, now time.Time) (CircuitRecord, bool, 
 	return s.rec, s.found, true
 }
 
-// remember stores rec as keyHash's record as of at, unless the state already holds a newer one: a refresh read that left before this pod's own transition must not undo it. picked marks the record for the next refresh.
+// remember keeps rec, read from the store at at, marking it picked when a pick read it.
 func (ps *PickState) remember(keyHash string, rec CircuitRecord, found bool, at time.Time, picked bool) {
+	ps.put(keyHash, recordSnap{rec: rec, found: found, at: at.UnixNano()}, picked, false)
+}
+
+// wrote keeps rec, the record a transition the store ran left there, as of at.
+func (ps *PickState) wrote(keyHash string, rec CircuitRecord, at time.Time) {
+	ps.put(keyHash, recordSnap{rec: rec, found: true, at: at.UnixNano()}, false, true)
+}
+
+// applied keeps rec, a transition the store failed to run, as this pod's own until the store shows a newer one.
+func (ps *PickState) applied(keyHash string, rec CircuitRecord, at time.Time) {
+	ps.put(keyHash, recordSnap{rec: rec, found: true, at: at.UnixNano(), heldSince: at.UnixNano()}, false, true)
+}
+
+// put stores next unless the state holds a newer snapshot: a refresh read that left before this pod's transition must not undo it. A store read (not written) that is no newer than a transition applied here alone keeps that transition, now as of the read.
+func (ps *PickState) put(keyHash string, next recordSnap, picked, written bool) {
 	v, ok := ps.records.Load(keyHash)
 	if !ok {
-		v, _ = ps.records.LoadOrStore(keyHash, &cachedRecord{})
+		c := &cachedRecord{}
+		c.pickedAt.Store(next.at)
+		v, _ = ps.records.LoadOrStore(keyHash, c)
 	}
 	c := v.(*cachedRecord)
 	if picked {
-		c.picked.Store(true)
+		c.pickedAt.Store(next.at)
 	}
-	next := &recordSnap{rec: rec, found: found, at: at.UnixNano()}
 	for {
 		cur := c.snap.Load()
 		if cur != nil && cur.at > next.at {
 			return
 		}
-		if c.snap.CompareAndSwap(cur, next) {
+		snap := next
+		if cur != nil && !written && cur.holds(next) {
+			snap = *cur
+			snap.at = next.at
+		}
+		if c.snap.CompareAndSwap(cur, &snap) {
 			return
 		}
 	}
+}
+
+// holds reports whether s, a transition applied here alone, still stands against read: an open until its OpenUntil, any transition until the store shows one after it.
+func (s *recordSnap) holds(read recordSnap) bool {
+	if s.heldSince == 0 {
+		return false
+	}
+	if s.rec.State == CircuitOpen && read.at >= s.rec.OpenUntil.UnixNano() {
+		return false
+	}
+	return !read.found || read.rec.LastTransition.UnixNano() <= s.heldSince
 }
 
 // current returns keyHash's record as this pod last saw it, closed when it has none, for a transition the store could not run.
@@ -185,12 +239,14 @@ func (ps *PickState) current(keyHash string) CircuitRecord {
 }
 
 // nextRotation advances scope's round-robin counter and returns its new value, from 1.
-func (ps *PickState) nextRotation(scope string) int64 {
+func (ps *PickState) nextRotation(scope string, nowMs int64) int64 {
 	v, ok := ps.rotation.Load(scope)
 	if !ok {
-		v, _ = ps.rotation.LoadOrStore(scope, new(atomic.Int64))
+		v, _ = ps.rotation.LoadOrStore(scope, new(rotationCounter))
 	}
-	return v.(*atomic.Int64).Add(1)
+	r := v.(*rotationCounter)
+	r.usedAt.Store(nowMs)
+	return r.n.Add(1)
 }
 
 // lastUsed returns when this pod last picked keyHash in scope, unix ms; false if never.

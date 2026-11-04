@@ -2,7 +2,7 @@
 //
 // Scope: queueing, batching, the full and closed queue fallbacks, resending a settle whose shared round trip failed in transport, and draining at close. Out of scope: what a settle writes; the limiter's commits and the key pool's success write queue themselves on the batch.
 //
-// Expected kv ops per request: none of its own. A settle's writes ride a shared pipelined round trip, or one of their own when the queue is full or closed; a settle with nothing to write makes none and does not wait. One whose shared round trip failed in transport is sent once more on its own.
+// Expected kv ops per request: none of its own. A settle's writes ride a shared pipelined round trip, or one of their own when the queue is full or closed; a settle with nothing to write makes none and does not wait. One whose round trip failed in transport has its limit commits sent once more on their own; the key's success write is never resent.
 package settle
 
 import (
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
@@ -22,7 +23,7 @@ type Writes interface {
 	TransportFailed() bool
 	// Finish reads the outcome once the batch has run.
 	Finish(ctx context.Context)
-	// Resend writes the settle again on a round trip of its own; the commit guard makes a commit that already ran a no-op.
+	// Resend writes again, on a round trip of its own, what is safe to repeat: the limit commits, which the commit guard makes a no-op where the first send ran. A write that would apply twice is not sent again; Resend reads its first outcome instead.
 	Resend(ctx context.Context)
 }
 
@@ -41,10 +42,8 @@ type Config struct {
 const (
 	// writers is the number of batches in flight at once: a stall on one connection (a TCP retransmit) leaves the others draining the queue, and the pool keeps its other connections for host-health writes and the settles a full queue turns away.
 	writers = 4
-	// batchTimeout bounds one batch's round trip, as the post-flight deadline bounds a direct settle.
+	// batchTimeout bounds one round trip of a settle: its batch, a resend, or one sent alone.
 	batchTimeout = 5 * time.Second
-	// drainTimeout bounds how long Close waits for the queued settles to land.
-	drainTimeout = 5 * time.Second
 	// settleOps sizes one settle's batch: two commits and a success write.
 	settleOps = 4
 )
@@ -63,6 +62,8 @@ type Queue struct {
 	in      chan *queued
 	batches chan []*queued
 	done    sync.WaitGroup
+	// pending counts the settles queued or in flight that have not landed.
+	pending atomic.Int64
 }
 
 type queued struct {
@@ -124,8 +125,7 @@ func (q *Queue) Settle(ctx context.Context, b *kv.Batch, w Writes) {
 	if !q.enqueue(it) {
 		it.reset()
 		queuedPool.Put(it)
-		b.Exec(ctx)
-		w.Finish(ctx)
+		q.sendAlone(ctx, b, w)
 		return
 	}
 	select {
@@ -143,13 +143,28 @@ func (q *Queue) enqueue(it *queued) bool {
 	if q.closed {
 		return false
 	}
+	q.pending.Add(1)
 	select {
 	case q.in <- it:
 		return true
 	default:
+		q.pending.Add(-1)
 		metrics.SettleQueueFull.Inc()
 		return false
 	}
+}
+
+// sendAlone sends one settle on a round trip of its own, under a deadline of its own and with the batched path's resend.
+func (q *Queue) sendAlone(logCtx context.Context, b *kv.Batch, w Writes) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(logCtx), batchTimeout)
+	defer cancel()
+	b.Exec(ctx)
+	if w.TransportFailed() {
+		metrics.SettleRetries.Inc()
+		q.resend(logCtx, w)
+		return
+	}
+	w.Finish(logCtx)
 }
 
 // collect groups queued settles into batches until in is closed and drained.
@@ -229,14 +244,20 @@ func (q *Queue) run(batch []*queued) {
 			metrics.SettleRetries.Inc()
 			resends.Go(func() {
 				q.resend(logCtx, w)
-				it.landed <- struct{}{}
+				q.land(it)
 			})
 			continue
 		}
 		w.Finish(logCtx)
-		it.landed <- struct{}{}
+		q.land(it)
 	}
 	resends.Wait()
+}
+
+// land signals it's caller; pending drops first, since the caller may reuse it once signalled.
+func (q *Queue) land(it *queued) {
+	q.pending.Add(-1)
+	it.landed <- struct{}{}
 }
 
 // resend writes w again under a post-flight deadline of its own, keeping the caller's log fields but not its cancellation.
@@ -246,7 +267,7 @@ func (q *Queue) resend(logCtx context.Context, w Writes) {
 	w.Resend(ctx)
 }
 
-// Close stops taking settles and waits, up to drainTimeout, for the queued ones to land. Settle keeps working afterwards, on round trips of its own.
+// Close stops taking settles and waits for every queued and in-flight one to land, as long as the writers need to send them all with a resend each (drainTimeout). It logs how many it gave up on. Settle keeps working afterwards, on round trips of its own.
 func (q *Queue) Close() {
 	q.mu.Lock()
 	if q.closed {
@@ -264,9 +285,16 @@ func (q *Queue) Close() {
 	}()
 	select {
 	case <-drained:
-	case <-time.After(drainTimeout):
-		q.log.Warn("settle: queue closed before draining", "pending", len(q.in))
+	case <-time.After(q.drainTimeout(q.pending.Load())):
+		q.log.Warn("settle: queue closed before draining", "dropped", q.pending.Load())
 	}
+}
+
+// drainTimeout is how long pending settles take at worst: rounds of the writers sending a full batch each, every round waiting out its delay, a batch timeout and a resend's.
+func (q *Queue) drainTimeout(pending int64) time.Duration {
+	batches := (pending + int64(q.batchSize) - 1) / int64(q.batchSize)
+	rounds := max((batches+int64(q.writers)-1)/int64(q.writers), 1)
+	return time.Duration(rounds) * (q.maxDelay + 2*batchTimeout)
 }
 
 // TransportError reports a command failure after which whether the command ran is unknown: the store took it and never answered, or the deadline ran out.

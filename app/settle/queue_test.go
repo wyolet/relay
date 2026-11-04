@@ -275,6 +275,23 @@ func runQueueSuite(t *testing.T, newStore func(t *testing.T) kvtest.ScriptStore)
 		f.reserve(t, "team-1", 1)
 	})
 
+	t.Run("settle_sent_alone_is_resent", func(t *testing.T) {
+		store := &unavailableOnce{ScriptStore: newStore(t)}
+		f := newFixture(t, store, leases(1))
+		q := f.queue(t, settle.Config{BatchSize: 8, QueueSize: 16})
+		q.Close() // a closed queue sends each settle alone
+		res := f.reserve(t, "team-1", 1)
+		retries := testutil.ToFloat64(metrics.SettleRetries)
+		store.arm()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // the caller's cancellation does not reach the send
+		settleOn(ctx, q, res[0], limits.Usage{})
+		if got := testutil.ToFloat64(metrics.SettleRetries) - retries; got != 1 {
+			t.Fatalf("settle_retries_total moved by %v, want 1", got)
+		}
+		f.reserve(t, "team-1", 1)
+	})
+
 	t.Run("resent_commit_that_ran_counts_once", func(t *testing.T) {
 		store := &unavailableOnce{ScriptStore: newStore(t), ran: true}
 		f := newFixture(t, store, ratelimit.Rule{Meter: ratelimit.MeterTokens, Strategy: ratelimit.StrategyFixedWindow, Amount: 100, Window: ratelimit.Window(time.Hour)})
@@ -335,3 +352,17 @@ func memStore(t *testing.T) kvtest.ScriptStore {
 }
 
 func TestQueue_Mem(t *testing.T) { runQueueSuite(t, memStore) }
+
+// Close waits as long as the pending settles need at worst: one round of the writers per four full batches, each round a delay, a batch and a resend.
+func TestQueue_DrainTimeout(t *testing.T) {
+	q := settle.New(kv.NewMem(), settle.Config{BatchSize: 64, MaxDelay: 2 * time.Millisecond, QueueSize: 4096}, discard())
+	round := 2*time.Millisecond + 10*time.Second
+	for _, tc := range []struct {
+		pending int64
+		want    time.Duration
+	}{{0, round}, {1, round}, {256, round}, {257, 2 * round}, {4096, 16 * round}} {
+		if got := q.DrainTimeout(tc.pending); got != tc.want {
+			t.Errorf("DrainTimeout(%d) = %v, want %v", tc.pending, got, tc.want)
+		}
+	}
+}

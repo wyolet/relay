@@ -31,7 +31,7 @@ type reservation struct {
 
 // Settle commits every group with the real tokens and cost: token meters are trued up, concurrency leases freed, budgets charged.
 func (r *reservation) Settle(actual limits.Usage) {
-	r.commit(context.Background(), pkgratelimit.Observations{Tokens: actual.Tokens, CostNanos: actual.CostNanos})
+	_ = r.commit(context.Background(), pkgratelimit.Observations{Tokens: actual.Tokens, CostNanos: actual.CostNanos})
 }
 
 // PrepareSettle queues Settle's commits on b, a batch on the post-flight store.
@@ -74,25 +74,33 @@ func (p *preparedSettle) Finish(context.Context) {
 	}
 }
 
-func (p *preparedSettle) Resend(ctx context.Context) { p.r.commit(ctx, p.obs) }
+func (p *preparedSettle) Resend(ctx context.Context) { _ = p.r.commit(ctx, p.obs) }
 
 // Release commits every group as cancelled: leases freed, request counts refunded, nothing charged.
 func (r *reservation) Release() {
-	r.commit(context.Background(), pkgratelimit.Observations{Cancelled: true})
+	_ = r.commit(context.Background(), pkgratelimit.Observations{Cancelled: true})
 }
 
 // commit runs on the post-flight limiter, bounded and immune to the caller's cancellation, and reports the budgets the charge took to their cap. A failed commit is counted by pkg/ratelimit and otherwise dropped: a lease left behind expires with its window.
-func (r *reservation) commit(ctx context.Context, obs pkgratelimit.Observations) {
+func (r *reservation) commit(ctx context.Context, obs pkgratelimit.Observations) error {
 	if len(r.held) == 0 {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
-	crossed, _ := r.lim.post.CommitAll(ctx, obs, r.held...)
+	crossed, err := r.lim.post.CommitAll(ctx, obs, r.held...)
 	for _, rule := range crossed {
 		if c := r.counter(rule.Key); c != nil {
 			r.lim.reportCrossing(c)
 		}
+	}
+	return err
+}
+
+// releaseRefused takes back the groups a refused admission reserved. A release that fails is sent once more on a fresh deadline; the commit guard makes the second a no-op for a group the first one reached.
+func (r *reservation) releaseRefused(ctx context.Context) {
+	if r.commit(ctx, pkgratelimit.Observations{Cancelled: true}) != nil {
+		_ = r.commit(ctx, pkgratelimit.Observations{Cancelled: true})
 	}
 }
 

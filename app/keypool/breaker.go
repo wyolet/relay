@@ -112,11 +112,7 @@ func (s *Selector) finishSuccess(ctx context.Context, keyHash string, now time.T
 	if err != nil {
 		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", err)
-		if s.local != nil {
-			if rec, changed := applySuccess(s.local.current(keyHash), now); changed {
-				s.wrote(keyHash, rec)
-			}
-		}
+		s.applyAlone(keyHash, func(rec CircuitRecord) (CircuitRecord, bool) { return applySuccess(rec, now) })
 		return
 	}
 	s.wrote(keyHash, out.rec)
@@ -198,11 +194,7 @@ func (s *Selector) finishFailure(ctx context.Context, keyHash string, op failure
 	if err != nil {
 		metrics.KVError("breaker_write", metrics.KVDropped)
 		s.log.Error("keypool: record failure script failed", "key_hash", keyHash, "err", err)
-		if s.local != nil {
-			if rec, changed := applyFailure(s.local.current(keyHash), op); changed {
-				s.wrote(keyHash, rec)
-			}
-		}
+		s.applyAlone(keyHash, func(rec CircuitRecord) (CircuitRecord, bool) { return applyFailure(rec, op) })
 		return
 	}
 	s.wrote(keyHash, out.rec)

@@ -5,13 +5,13 @@
 //   - "round-robin" — distribute traffic evenly using a counter.
 //   - "least-recently-used" — pick the key with the oldest last-used timestamp.
 //
-// A Selector with a PickState picks from the process's memory instead: breaker records are copies reread once per refresh interval, and the round-robin counters and LRU stamps live there alone, so rotation is per process rather than fleet-wide. Its own transitions apply to the copy at once; another process's reach it within one interval, so it may send up to an interval of requests to a key another process has just seen fail. The probe claim stays a store script: it needs fleet-wide exclusion.
+// A Selector with a PickState picks from the process's memory instead: breaker records are copies, every one reread once per refresh interval, and the round-robin counters and LRU stamps live there alone, so rotation is per process rather than fleet-wide. Its own transitions apply to the copy at once, also when the store failed to run them; another process's reach it within one interval and a round trip, so it may send up to that long of requests to a key another process has just seen fail. A success served on a copy that does not yet show another process's failures skips the success write (Candidate.SuccessNeedsWrite reads the copy), so it may leave that failure count standing. Only when refreshes fail does a copy age, up to two intervals, before picks read through. The probe claim stays a store script: it needs fleet-wide exclusion.
 //
 // Expected kv ops per request:
-//   - Pick with a PickState: none while the records it reads are fresh (read or written within two intervals). A record not yet held, or stale, is read through: a GET queued on the pick's batch.
+//   - Pick with a PickState: none while the records it reads are fresh (read or written within two intervals). A record not yet held, or stale, is read through: a GET queued on the pick's batch for the candidates PreparePick reads, and under prioritized, a GET each for the keys behind the first, one at a time and only while the keys ahead are open.
 //   - Pick without one: one kv.Batch round trip with a GET of each candidate's breaker record and, for round-robin, the counter's INCR and EXPIRE NX. Prioritized reads only the first candidate in the batch; the ones behind it cost a GET each, and only while the keys ahead are open. Least-recently-used adds a GET per healthy candidate and a SET. PreparePick queues the same reads on a caller's batch (the pipeline sends them with the caller's hold).
 //   - Either way, claiming the probe of a key whose cooldown ended: one script.
-//   - PickState refresh, per interval and off the request path: one pipelined round trip with a GET per record picked since the last refresh.
+//   - PickState refresh, per interval and off the request path: one pipelined round trip with a GET per record held; a record nobody picked for five minutes is dropped, as are idle rotation counters and LRU stamps.
 //   - RecordSuccess: one script; PrepareRecordSuccess queues it on a caller's batch. A key's record exists only once it has failed: post-flight writes a success only for a half-open probe, a record with a backoff step, or a failure count (Candidate.SuccessNeedsWrite). RecordFailure: one script; PrepareRecordFailure queues it on a caller's batch. Claiming a half-open probe in Pick: one script.
 //
 // The KeySelection enum lives in this package (not policy) so policy can
@@ -78,7 +78,17 @@ func (s *Selector) WithPickState(ps *PickState) *Selector {
 // wrote keeps rec, the record a transition left in the store, in the PickState.
 func (s *Selector) wrote(keyHash string, rec CircuitRecord) {
 	if s.local != nil {
-		s.local.remember(keyHash, rec, true, s.clock(), false)
+		s.local.wrote(keyHash, rec, s.clock())
+	}
+}
+
+// applyAlone applies a transition the store failed to run to the PickState, where it holds against older store reads, so this pod's own failures and successes take effect at once.
+func (s *Selector) applyAlone(keyHash string, apply func(CircuitRecord) (CircuitRecord, bool)) {
+	if s.local == nil {
+		return
+	}
+	if rec, changed := apply(s.local.current(keyHash)); changed {
+		s.local.applied(keyHash, rec, s.clock())
 	}
 }
 

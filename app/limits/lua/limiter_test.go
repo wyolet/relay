@@ -319,6 +319,26 @@ func runSuite(t *testing.T, store newStore) {
 
 	t.Run("OneRoundTrip", func(t *testing.T) { admitOneRoundTrip(t, store, start) })
 
+	t.Run("FailedReleaseIsRetried", func(t *testing.T) {
+		now := start
+		fs := &failingStore{ScriptStore: store(t), fail: func(int64) bool { return false }}
+		l := newLimiter(fs, &now)
+		lease := callerCounter(rule(ratelimit.MeterConcurrency, ratelimit.StrategySlidingWindow, 1), "project:x")
+		full := upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "a")
+		admit(t, l, full).Settle(limits.Usage{})
+		// The admit's two scripts run, then the first release fails: the retry must free the lease.
+		fs.calls.Store(0)
+		fs.fail = func(n int64) bool { return n == 3 }
+		if r := refused(t, l, lease, full); r.Counter.ID != full.ID {
+			t.Fatalf("refused by %s, want the full account", r.Counter.ID)
+		}
+		if n := fs.calls.Load(); n != 4 {
+			t.Fatalf("script calls = %d, want the admit's two and two releases", n)
+		}
+		fs.fail = func(int64) bool { return false }
+		admit(t, l, lease)
+	})
+
 	t.Run("NoCounters", func(t *testing.T) {
 		now := start
 		res := admit(t, newLimiter(store(t), &now))

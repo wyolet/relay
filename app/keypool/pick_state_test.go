@@ -142,6 +142,70 @@ func runPickStateSuite(t *testing.T, factory pickStoreFactory) {
 			t.Fatalf("pod B picked %s after the record was cleared, want hA", got.KeyHash)
 		}
 	})
+
+	t.Run("refresh_rereads_records_not_picked_since", func(t *testing.T) {
+		now := t0
+		store := factory(t)
+		a, b := newPod(store, &now), newPod(store, &now)
+		ks := keys()
+		mustPick(t, b.sel, KeySelectionPrioritized, ks)
+		now = now.Add(time.Second)
+		b.state.Refresh(ctx)
+		// B picks nothing until its next refresh, which must still reread hA.
+		a.sel.RecordFailure(ctx, "hA", FailureAuth, 0)
+		now = now.Add(time.Second)
+		b.state.Refresh(ctx)
+		if got := mustPick(t, b.sel, KeySelectionPrioritized, ks); got.KeyHash != "hB" {
+			t.Fatalf("pod B picked %s one interval after another pod's trip, want hB", got.KeyHash)
+		}
+	})
+
+	t.Run("own_failure_the_store_missed_holds_its_window", func(t *testing.T) {
+		now := t0
+		p := newPod(&failureScriptDown{ScriptStore: factory(t)}, &now)
+		ks := keys()
+		mustPick(t, p.sel, KeySelectionPrioritized, ks)
+		p.sel.RecordFailure(ctx, "hA", FailureAuth, 0)
+		// Reads work and show no record; the pod's own open must outlast them for its 30 s cooldown.
+		for range 3 {
+			now = now.Add(time.Second)
+			p.state.Refresh(ctx)
+			if got := mustPick(t, p.sel, KeySelectionPrioritized, ks); got.KeyHash != "hB" {
+				t.Fatalf("picked %s %v after a failure the store missed, want hB", got.KeyHash, now.Sub(t0))
+			}
+		}
+		now = t0.Add(authCooldowns[0] + time.Second)
+		p.state.Refresh(ctx)
+		if got := mustPick(t, p.sel, KeySelectionPrioritized, ks); got.KeyHash != "hA" {
+			t.Fatalf("picked %s once the cooldown ended, want hA back from the store's record", got.KeyHash)
+		}
+	})
+
+	t.Run("idle_rotation_is_forgotten", func(t *testing.T) {
+		now := t0
+		p := newPod(factory(t), &now)
+		ks := keys()
+		mustPick(t, p.sel, KeySelectionRoundRobin, ks)
+		mustPick(t, p.sel, KeySelectionLeastRecentlyUsed, ks)
+		now = now.Add(pickStateIdle + time.Second)
+		p.state.Refresh(ctx)
+		if _, used := p.state.lastUsed("scope", "hA"); used {
+			t.Fatal("an idle LRU stamp survived the refresh")
+		}
+		if got := mustPick(t, p.sel, KeySelectionRoundRobin, ks); got.KeyHash != "hA" {
+			t.Fatalf("picked %s after the rotation went idle, want it to start over at hA", got.KeyHash)
+		}
+	})
+}
+
+// failureScriptDown fails the breaker's failure script as a store that took it and never answered; reads and other scripts work.
+type failureScriptDown struct{ kvtest.ScriptStore }
+
+func (f *failureScriptDown) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
+	if name == scriptRecordFailure {
+		return nil, kv.ErrUnavailable
+	}
+	return f.ScriptStore.RunScript(ctx, name, script, keys, args...)
 }
 
 func mustPick(t *testing.T, sel *Selector, algo KeySelection, ks []*hostkey.HostKey) *hostkey.HostKey {

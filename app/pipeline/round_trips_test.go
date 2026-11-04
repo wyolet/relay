@@ -111,6 +111,42 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 // With a settle queue, a served request's post-flight writes go out in one round trip: the caller's and the account's token commits and the success write closing the probe it was picked on.
 func TestRunSettleSharesOneRoundTrip(t *testing.T) {
 	store := kvtest.NewRecording(memScriptStore(t))
+	trips := runServedProbe(t, store, func() {})
+	if batches := store.Batches(); trips != 1 || batches[len(batches)-1] != 3 {
+		t.Fatalf("post-flight round trips = %d, batches %v; want one batch of two commits and the success write", trips, batches)
+	}
+}
+
+// replyLost runs a batch armed with lose and then fails every command in transport, as a connection dropped after sending would.
+type replyLost struct {
+	kvtest.ScriptStore
+	lose atomic.Bool
+}
+
+func (r *replyLost) ExecBatch(ctx context.Context, ops []kv.BatchOp) {
+	kv.ExecInOrder(ctx, r.ScriptStore, ops)
+	if r.lose.CompareAndSwap(true, false) {
+		for _, op := range ops {
+			op.Result.Value, op.Result.Err = nil, kv.ErrUnavailable
+		}
+	}
+}
+
+// A settle whose shared round trip lost its replies resends the guarded commits but never the success write, which would take a second backoff step off.
+func TestRunSettleNeverResendsSuccess(t *testing.T) {
+	lossy := &replyLost{ScriptStore: memScriptStore(t)}
+	store := kvtest.NewRecording(lossy)
+	runServedProbe(t, store, func() { lossy.lose.Store(true) })
+	if n := len(store.Named("keypool.record_success")); n != 1 {
+		t.Fatalf("success writes = %d, want 1", n)
+	}
+	if n := len(store.Named("limit.commit")); n != 4 {
+		t.Fatalf("commits = %d, want the two batched and both resent", n)
+	}
+}
+
+// runServedProbe serves one request on a key whose cooldown ended, so its settle carries the caller's and the account's token commits and the success write closing the probe; arm runs just before the settle. It returns the post-flight's round trips.
+func runServedProbe(t *testing.T, store *kvtest.Recording, arm func()) (postFlightTrips int) {
 	now := time.Now()
 	sel := keypool.New(store, slog.Default(), func() time.Time { return now }, nil)
 	q := settle.New(store, settle.Config{BatchSize: 64, QueueSize: 16}, slog.Default())
@@ -130,6 +166,7 @@ func TestRunSettleSharesOneRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	arm()
 	before := store.RoundTrips()
 	_ = res.Body.Close()
 	select {
@@ -137,13 +174,11 @@ func TestRunSettleSharesOneRoundTrip(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("post-flight never finished")
 	}
-	batches := store.Batches()
-	if trips := store.RoundTrips() - before; trips != 1 || batches[len(batches)-1] != 3 {
-		t.Fatalf("post-flight round trips = %d, batches %v; want one batch of two commits and the success write", trips, batches)
-	}
+	postFlightTrips = store.RoundTrips() - before
 	if rec, found := sel.ReadCircuit(context.Background(), key.KeyHash); !found || rec.State != keypool.CircuitClosed {
 		t.Fatalf("record after the served probe = %+v (found %v), want closed", rec, found)
 	}
+	return postFlightTrips
 }
 
 // With the hybrid limiter counting every counter in memory and the pick state warm, a round-robin request makes no store call before the upstream: the caller hold, the pick and the account's admit all answer from this process.

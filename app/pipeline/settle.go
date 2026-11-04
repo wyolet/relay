@@ -5,7 +5,6 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/settle"
 )
 
 // settleQueued settles a served request through the settle queue: the caller's and the attempt's commits and, when the picked record needs it, the key's success write, in one shared round trip. false when there is no queue or a reservation cannot queue its settle; the caller then settles directly.
@@ -53,33 +52,37 @@ type servedWrites struct {
 	success *keypool.PreparedSuccess
 }
 
+// TransportFailed looks at the commits only: the success write is never resent, so its failure asks for nothing.
 func (w *servedWrites) TransportFailed() bool {
 	for _, p := range w.parts {
 		if p.TransportFailed() {
 			return true
 		}
 	}
-	return w.success != nil && settle.TransportError(w.success.Err())
+	return false
 }
 
-// Finish reads the outcome; a success write the store could not batch is made on its own.
 func (w *servedWrites) Finish(ctx context.Context) {
 	for _, p := range w.parts {
 		p.Finish(ctx)
 	}
-	switch {
-	case w.success != nil:
-		w.success.Finish(ctx)
-	case w.key != "":
-		w.sel.RecordSuccess(ctx, w.key)
-	}
+	w.finishSuccess(ctx)
 }
 
+// Resend writes the commits again. The success write is not sent again: it takes a backoff step off and clears failure counts other processes added, so a second run would apply twice.
 func (w *servedWrites) Resend(ctx context.Context) {
 	for _, p := range w.parts {
 		p.Resend(ctx)
 	}
-	if w.key != "" {
+	w.finishSuccess(ctx)
+}
+
+// finishSuccess reads the batched success write's outcome, or makes one the store could not batch on its own.
+func (w *servedWrites) finishSuccess(ctx context.Context) {
+	switch {
+	case w.success != nil:
+		w.success.Finish(ctx)
+	case w.key != "":
 		w.sel.RecordSuccess(ctx, w.key)
 	}
 }

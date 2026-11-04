@@ -76,7 +76,7 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 	}
 	if algo == KeySelectionRoundRobin {
 		if s.local != nil {
-			p.turn = s.local.nextRotation(scope)
+			p.turn = s.local.nextRotation(scope, p.at.UnixMilli())
 			return p
 		}
 		p.rotation = b.Incr(roundRobinKey(scope), 1)

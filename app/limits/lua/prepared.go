@@ -61,7 +61,7 @@ func (p *PreparedAdmit) Finish(ctx context.Context) (limits.Reservation, error) 
 		res.held = append(res.held, r)
 	}
 	if failed != nil {
-		res.commit(ctx, pkgratelimit.Observations{Cancelled: true})
+		res.releaseRefused(ctx)
 		return nil, refusal(p.counters, group, failed)
 	}
 	return res, nil
