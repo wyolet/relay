@@ -12,7 +12,7 @@ func TestLimiter(t *testing.T) {
 		wantSync        time.Duration
 		wantErr         bool
 	}{
-		{"", "", "lua", time.Second, false},
+		{"", "", "hybrid", time.Second, false},
 		{"hybrid", "250", "hybrid", 250 * time.Millisecond, false},
 		{"Lua", "", "lua", time.Second, false},
 		{"local", "", "", 0, true},
