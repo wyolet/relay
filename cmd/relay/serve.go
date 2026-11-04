@@ -14,7 +14,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 )
 
-// serve binds srv.Addr before it returns, so the caller learns the bound address, and serves in the background. A bind failure arrives on the channel the way a serve failure does. A non-nil admission caps the open connections, queueing and refusing past the cap, and takes over srv.ConnState.
+// serve binds srv.Addr before it returns, so the caller learns the bound address, and serves in the background. A bind failure arrives on the channel the way a serve failure does. A non-nil admission caps the open connections, queueing and refusing past the cap; with CloseIdle it takes over srv.ConnState.
 func serve(srv *http.Server, admission *connadmit.Config) (net.Addr, <-chan error) {
 	errs := make(chan error, 1)
 	ln, err := net.Listen("tcp", srv.Addr)
@@ -24,7 +24,9 @@ func serve(srv *http.Server, admission *connadmit.Config) (net.Addr, <-chan erro
 	}
 	if admission != nil {
 		admitted := connadmit.New(ln, *admission)
-		srv.ConnState = admitted.ConnState
+		if admission.CloseIdle {
+			srv.ConnState = admitted.ConnState
+		}
 		ln = admitted
 	}
 	go func() { errs <- srv.Serve(ln) }()
@@ -38,6 +40,7 @@ func inferenceAdmission(cfg *config.Config) *connadmit.Config {
 		MaxConns:     inferenceMaxConns(cfg.MaxConns),
 		QueueSize:    cfg.ConnQueue,
 		QueueTimeout: cfg.ConnQueueTimeout,
+		CloseIdle:    cfg.ConnCloseIdle,
 		Body:         body,
 		RetryAfter:   httpapi.RetryAfterShed,
 		Header: http.Header{

@@ -30,15 +30,18 @@ type Config struct {
 	RetryAfter string
 	// Header holds extra headers of the refusal.
 	Header http.Header
+	// CloseIdle closes the oldest keep-alive connection idle for minIdleAge when a connection is queued, and needs ConnState set on the server. Off, a client's spare keep-alive connections stay open: closing them makes it dial again on its next burst, which feeds a reconnect herd.
+	CloseIdle bool
 }
 
 // Listener wraps a net.Listener with connection admission. Accept returns *Conn values.
 type Listener struct {
-	inner    net.Listener
-	maxConns int
-	wait     time.Duration
-	refusal  []byte
-	refusers chan struct{}
+	inner     net.Listener
+	maxConns  int
+	wait      time.Duration
+	refusal   []byte
+	refusers  chan struct{}
+	closeIdle bool
 
 	notify  chan struct{}
 	stopped chan struct{}
@@ -70,14 +73,15 @@ func New(inner net.Listener, cfg Config) *Listener {
 		panic("connadmit: MaxConns must be positive")
 	}
 	l := &Listener{
-		inner:    inner,
-		maxConns: cfg.MaxConns,
-		wait:     cfg.QueueTimeout,
-		refusal:  buildRefusal(cfg),
-		refusers: make(chan struct{}, maxRefusers),
-		notify:   make(chan struct{}, 1),
-		stopped:  make(chan struct{}),
-		queue:    make([]queued, max(cfg.QueueSize, 0)),
+		inner:     inner,
+		maxConns:  cfg.MaxConns,
+		wait:      cfg.QueueTimeout,
+		refusal:   buildRefusal(cfg),
+		closeIdle: cfg.CloseIdle,
+		refusers:  make(chan struct{}, maxRefusers),
+		notify:    make(chan struct{}, 1),
+		stopped:   make(chan struct{}),
+		queue:     make([]queued, max(cfg.QueueSize, 0)),
 	}
 	l.timer = time.AfterFunc(time.Hour, l.expireQueued)
 	l.timer.Stop()
@@ -205,7 +209,7 @@ func (l *Listener) admit(raw net.Conn) {
 		l.timer.Reset(l.wait)
 	}
 	victim := l.idleHead
-	if victim != nil && now.Sub(victim.idleSince) >= minIdleAge {
+	if l.closeIdle && victim != nil && now.Sub(victim.idleSince) >= minIdleAge {
 		l.unlinkIdle(victim)
 	} else {
 		victim = nil

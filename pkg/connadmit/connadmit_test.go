@@ -21,7 +21,7 @@ func listen(t *testing.T, maxConns, queue int, wait time.Duration) *Listener {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := New(inner, Config{MaxConns: maxConns, QueueSize: queue, QueueTimeout: wait, Body: testBody, RetryAfter: "1", Header: http.Header{"X-Test": {"yes"}}})
+	l := New(inner, Config{MaxConns: maxConns, QueueSize: queue, QueueTimeout: wait, Body: testBody, RetryAfter: "1", Header: http.Header{"X-Test": {"yes"}}, CloseIdle: true})
 	t.Cleanup(func() { _ = l.Close() })
 	return l
 }

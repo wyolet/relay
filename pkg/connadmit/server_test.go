@@ -94,6 +94,25 @@ func TestOldestIdleConnClosedForQueued(t *testing.T) {
 	}
 }
 
+func TestIdleConnKeptWithoutCloseIdle(t *testing.T) {
+	l := listen(t, 1, 1, 5*time.Second)
+	l.closeIdle = false
+	startServer(t, l, noContent)
+	before := testutil.ToFloat64(idleClosed)
+
+	old := newClient(t, l)
+	old.mustGet(t)
+	time.Sleep(minIdleAge + 100*time.Millisecond)
+	waiting := newClient(t, l)
+	if _, err := get(waiting.c, waiting.br, 200*time.Millisecond); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("conn past the cap: %v, want it to wait", err)
+	}
+	old.mustGet(t)
+	if got := testutil.ToFloat64(idleClosed) - before; got != 0 {
+		t.Fatalf("idle closed = %v, want 0", got)
+	}
+}
+
 func TestHijackedConnHoldsSlot(t *testing.T) {
 	l := listen(t, 1, 1, 5*time.Second)
 	hijacked := make(chan net.Conn, 1)
