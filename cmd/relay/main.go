@@ -116,7 +116,8 @@ func main() {
 	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)
-	postFlight.selector.WithPickState(pickState)
+	// Failures are recorded post-flight, so this selector needs the same breaker bounds as the one that picks.
+	postFlight.selector.WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow).WithPickState(pickState)
 	limiter.ReleaseUnansweredOn(postFlight.limiter)
 	counting, closeLimiter := buildLimiter(cfg, limiter, kvStore, postFlightKV, postFlight)
 	defer closeLimiter()
