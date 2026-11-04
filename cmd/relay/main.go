@@ -115,8 +115,13 @@ func main() {
 	limiter.ReleaseUnansweredOn(postFlight.limiter)
 	counting, closeLimiter := buildLimiter(cfg, limiter, kvStore, postFlightKV, postFlight)
 	defer closeLimiter()
+	// Deferred after the limiter's close, so it runs first: queued settles land before a hybrid limiter's last sync and before the post-flight store closes.
+	settles, closeSettles := buildSettleQueue(cfg, postFlightKV)
+	defer closeSettles()
 	pl, lifecycleReg := buildPipeline(counting, selector, postFlight, cat, stores.HostKey, plans)
+	pl.Settles = settles
 	proxyPipeline := buildProxy(cfg, counting, lifecycleReg)
+	proxyPipeline.Settles = settles
 	revoked := buildRevocations(listenerCtx, kvStore)
 
 	specs := buildAdapterSpecs()

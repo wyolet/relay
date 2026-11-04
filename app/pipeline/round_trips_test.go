@@ -17,6 +17,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/settle"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -103,6 +104,44 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 	}
 	if len(store.Named("keypool.claim_probe")) != 1 || called.Load() != 1 {
 		t.Fatalf("probe claims = %d, upstream calls = %d; want 1 each", len(store.Named("keypool.claim_probe")), called.Load())
+	}
+}
+
+// With a settle queue, a served request's post-flight writes go out in one round trip: the caller's and the account's token commits and the success write closing the probe it was picked on.
+func TestRunSettleSharesOneRoundTrip(t *testing.T) {
+	store := kvtest.NewRecording(memScriptStore(t))
+	now := time.Now()
+	sel := keypool.New(store, slog.Default(), func() time.Time { return now }, nil)
+	q := settle.New(store, settle.Config{BatchSize: 64, QueueSize: 16}, slog.Default())
+	q.Start()
+	t.Cleanup(q.Close)
+	reached := make(hostReached, 1)
+	p := &Pipeline{Limiter: lua.New(pkgratelimit.New(store, slog.Default(), nil)), Selector: sel, Logger: slog.Default(), HostHealth: reached, Settles: q}
+
+	key := testKey("key-a")
+	sel.RecordFailure(context.Background(), key.KeyHash, keypool.FailureAuth, 0)
+	now = now.Add(time.Hour)
+	tokens := func(id string) *appratelimit.RateLimit {
+		return perMinute(id, appratelimit.MeterTokens, appratelimit.StrategySlidingWindow, 1<<20)
+	}
+	hop := buildHop(keypool.KeySelectionPrioritized, callerCounter(tokens("rl-caller")), testSlot{key: key, upstream: accountCounters("acct", tokens("rl-tier"))})
+	res, err := p.Run(context.Background(), &Request{Adapter: reservationTestAdapter{}, Hops: []plan.RouteHop{hop}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	before := store.RoundTrips()
+	_ = res.Body.Close()
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-flight never finished")
+	}
+	batches := store.Batches()
+	if trips := store.RoundTrips() - before; trips != 1 || batches[len(batches)-1] != 3 {
+		t.Fatalf("post-flight round trips = %d, batches %v; want one batch of two commits and the success write", trips, batches)
+	}
+	if rec, found := sel.ReadCircuit(context.Background(), key.KeyHash); !found || rec.State != keypool.CircuitClosed {
+		t.Fatalf("record after the served probe = %+v (found %v), want closed", rec, found)
 	}
 }
 

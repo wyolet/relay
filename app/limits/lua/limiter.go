@@ -6,6 +6,7 @@
 //   - Admit: one round trip: a pipeline of one script per group that checks something, or a single script call when the request has one group; a group of alert budgets alone queues none, so a request of alert budgets only makes no call. A refusal or failure in any group while others reserved adds one batched round trip, on the post-flight store, releasing them.
 //   - PrepareAdmit: the same scripts queued on the caller's kv.Batch, no round trip of its own; a refusal adds the same release.
 //   - Settle: one batched round trip committing the groups that settle something (a concurrency lease, a token meter, a spend charge); none when nothing does.
+//   - PrepareSettle: the same commits queued on the caller's kv.Batch (app/settle shares it across requests), no round trip of its own.
 //   - Release: one batched round trip.
 //   - Peek (admin reads, off the request path): one batched round trip of read-only scripts, one per group.
 //
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -106,3 +108,12 @@ type noCounters struct{}
 
 func (noCounters) Settle(limits.Usage) {}
 func (noCounters) Release()            {}
+
+func (noCounters) PrepareSettle(*kv.Batch, limits.Usage) limits.PreparedSettle { return NoWrites{} }
+
+// NoWrites is the prepared settle of a reservation that writes nothing.
+type NoWrites struct{}
+
+func (NoWrites) TransportFailed() bool  { return false }
+func (NoWrites) Finish(context.Context) {}
+func (NoWrites) Resend(context.Context) {}

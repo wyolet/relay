@@ -3,6 +3,7 @@ package hybrid
 import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
+	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -30,6 +31,20 @@ func (r *reservation) Settle(actual limits.Usage) {
 	if r.exact != nil {
 		r.exact.Settle(actual)
 	}
+}
+
+// PrepareSettle charges the local counters now and queues the exact counters' commits on b, a batch on the post-flight store.
+func (r *reservation) PrepareSettle(b *kv.Batch, actual limits.Usage) limits.PreparedSettle {
+	if len(r.local) > 0 {
+		r.lim.settleLocal(r, actual)
+	}
+	if bs, ok := r.exact.(limits.BatchSettler); ok {
+		return bs.PrepareSettle(b, actual)
+	}
+	if r.exact != nil {
+		r.exact.Settle(actual)
+	}
+	return lua.NoWrites{}
 }
 
 // Release takes back the request counts counted here and releases the exact counters.

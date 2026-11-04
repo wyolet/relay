@@ -9,7 +9,7 @@
 // Expected kv ops per request:
 //   - Admit: none when every counter is local. Otherwise one pipelined round trip: an INCRBY and EXPIRE NX per bucket whose unsynced count is handed over, then one script per group of exact counters. A refusal after a group reserved adds one batched round trip releasing it.
 //   - PrepareAdmit: the same commands queued on the caller's kv.Batch, no round trip of its own.
-//   - Settle and Release: none for local counters; the Lua limiter's batched commit for exact ones.
+//   - Settle and Release: none for local counters; the Lua limiter's batched commit for exact ones. PrepareSettle queues those commits on the caller's kv.Batch instead.
 //   - Peek (admin reads, off the request path): none for counters with a synced local slot; the Lua limiter's one batched read for the rest.
 //
 // Per pod and interval, whatever the request rate: one pipelined round trip covering the counters touched since the last sync, an INCRBY and EXPIRE NX per bucket with an unsynced count and a GET per other bucket read.
@@ -387,3 +387,5 @@ type noCounters struct{}
 
 func (noCounters) Settle(limits.Usage) {}
 func (noCounters) Release()            {}
+
+func (noCounters) PrepareSettle(*kv.Batch, limits.Usage) limits.PreparedSettle { return lua.NoWrites{} }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/settle"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -31,6 +33,48 @@ type reservation struct {
 func (r *reservation) Settle(actual limits.Usage) {
 	r.commit(context.Background(), pkgratelimit.Observations{Tokens: actual.Tokens, CostNanos: actual.CostNanos})
 }
+
+// PrepareSettle queues Settle's commits on b, a batch on the post-flight store.
+func (r *reservation) PrepareSettle(b *kv.Batch, actual limits.Usage) limits.PreparedSettle {
+	p := &preparedSettle{r: r, obs: pkgratelimit.Observations{Tokens: actual.Tokens, CostNanos: actual.CostNanos}}
+	for _, h := range r.held {
+		// A commit that cannot be built is dropped, as Settle drops it.
+		if pc, err := r.lim.post.PrepareCommit(b, h, p.obs); err == nil && pc != nil {
+			p.commits = append(p.commits, pc)
+		}
+	}
+	return p
+}
+
+type preparedSettle struct {
+	r       *reservation
+	obs     pkgratelimit.Observations
+	commits []*pkgratelimit.PreparedCommit
+}
+
+func (p *preparedSettle) TransportFailed() bool {
+	for _, pc := range p.commits {
+		if settle.TransportError(pc.Err()) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *preparedSettle) Finish(context.Context) {
+	for _, pc := range p.commits {
+		if pc.Finish() != nil {
+			continue
+		}
+		for _, rule := range pc.Crossed() {
+			if c := p.r.counter(rule.Key); c != nil {
+				p.r.lim.reportCrossing(c)
+			}
+		}
+	}
+}
+
+func (p *preparedSettle) Resend(ctx context.Context) { p.r.commit(ctx, p.obs) }
 
 // Release commits every group as cancelled: leases freed, request counts refunded, nothing charged.
 func (r *reservation) Release() {
