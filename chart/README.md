@@ -106,7 +106,7 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `resources` | requests 250m / 256Mi, limits 1 CPU / 1Gi | Relay container. |
 | `initResources` | requests 10m / 16Mi, limits 100m / 32Mi | The wait-for-stores init containers. |
 | `goMemLimit` | `900MiB` | `GOMEMLIMIT`; keep it below the memory limit. |
-| `goGC` | `"100"` | `GOGC`. |
+| `goGC` | `"400"` | `GOGC`. |
 | `podAnnotations`, `podLabels` | `{}` | |
 | `podSecurityContext`, `securityContext` | non-root 65532, read-only root filesystem, no capabilities | |
 | `nodeSelector`, `tolerations`, `affinity` | empty | |
