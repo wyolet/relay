@@ -92,8 +92,13 @@ hops:
 		if len(hop.Slots) == 0 {
 			continue
 		}
-		if err = p.holdCaller(ctx, st, hop); err != nil {
-			return nil, err
+		// A new caller hold rides with the hop's first pick when the limiter can queue it; otherwise it is taken before any pick.
+		admitter := p.batchAdmitter()
+		holdWithPick := admitter != nil && attempts < maxAttempts && st.needsHold(hop)
+		if !holdWithPick {
+			if err = p.holdCaller(ctx, st, hop); err != nil {
+				return nil, err
+			}
 		}
 		// Most hops hold a few credentials: their exclusions fit a stack buffer.
 		var exBuf [8]bool
@@ -107,7 +112,19 @@ hops:
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
 			}
-			i, cand, perr := p.pick(ctx, hop, modelID, excluded, &limited)
+			var (
+				i    int
+				cand keypool.Candidate
+				perr error
+			)
+			if holdWithPick {
+				holdWithPick = false
+				if i, cand, perr, err = p.holdCallerAndPick(ctx, st, hop, admitter, modelID, excluded, &limited); err != nil {
+					return nil, err
+				}
+			} else {
+				i, cand, perr = p.pick(ctx, hop, modelID, excluded, &limited)
+			}
 			if i < 0 {
 				if perr != nil {
 					pickErr = perr
@@ -353,21 +370,39 @@ func untried(excluded []bool, i int) bool {
 
 // holdCaller holds the caller's counters for hop, keeping the hold it has when the counters are the same (they differ only for caller rules scoped to models at a host).
 func (p *Pipeline) holdCaller(ctx context.Context, st *runState, hop *plan.RouteHop) error {
-	cs := hop.CallerCounters()
-	if st.caller != nil && sameCounters(st.callerCS, cs) {
+	if !st.needsHold(hop) {
 		return nil
 	}
+	cs := hop.CallerCounters()
 	st.releaseCaller()
 	res, err := p.Limiter.Admit(ctx, cs, limits.Usage{})
 	if err != nil {
-		var refused *limits.Refused
-		if errors.As(err, &refused) {
-			return &CallerLimitedError{Refused: refused}
-		}
-		return err
+		return callerHoldError(err)
 	}
 	st.caller, st.callerCS = res, cs
 	return nil
+}
+
+// needsHold reports whether hop's caller counters differ from the ones held.
+func (st *runState) needsHold(hop *plan.RouteHop) bool {
+	return st.caller == nil || !sameCounters(st.callerCS, hop.CallerCounters())
+}
+
+func callerHoldError(err error) error {
+	var refused *limits.Refused
+	if errors.As(err, &refused) {
+		return &CallerLimitedError{Refused: refused}
+	}
+	return err
+}
+
+// batchAdmitter returns the limiter as a BatchAdmitter when a caller hold can share the pick's round trip: the limiter queues on a batch and a selector makes the pick. Both run on one store in every composition.
+func (p *Pipeline) batchAdmitter() limits.BatchAdmitter {
+	if p.Selector == nil {
+		return nil
+	}
+	a, _ := p.Limiter.(limits.BatchAdmitter)
+	return a
 }
 
 func sameCounters(a, b []limits.Counter) bool {
@@ -384,48 +419,90 @@ func sameCounters(a, b []limits.Counter) bool {
 
 // pick returns the index in hop.Slots of the credential to call next and the breaker record it was picked on; -1 when none is left. Excluded slots are skipped, and so are slots whose account is cooling for modelID, noting when it ends on lim.
 func (p *Pipeline) pick(ctx context.Context, hop *plan.RouteHop, modelID string, excluded []bool, lim **UpstreamLimitedError) (int, keypool.Candidate, error) {
-	nowMs := time.Now().UnixMilli()
-	// The common pick is over the whole hop: its own credential list then serves, and no slice is built.
-	keys, at := hop.Credentials, []int(nil)
-	if len(keys) != len(hop.Slots) || skipsAny(hop, modelID, excluded, nowMs) {
-		keys = make([]*hostkey.HostKey, 0, len(hop.Slots))
-		at = make([]int, 0, len(hop.Slots))
-		for i, s := range hop.Slots {
-			if excluded[i] {
-				continue
-			}
-			if s.Account != nil {
-				if until := s.Account.Cooldown.Until(modelID); nowMs < until {
-					*lim = noteLimited(*lim, time.Duration(until-nowMs)*time.Millisecond, nil)
-					continue
-				}
-			}
-			keys = append(keys, s.Credential)
-			at = append(at, i)
-		}
-	}
-	if len(keys) == 0 {
+	c := pickCandidates(hop, modelID, excluded, lim)
+	if len(c.keys) == 0 {
 		return -1, keypool.Candidate{}, nil
 	}
-	slotOf := func(j int) int {
-		if at == nil {
-			return j
-		}
-		return at[j]
-	}
 	if p.Selector == nil {
-		return slotOf(0), keypool.Candidate{Key: keys[0]}, nil
+		return c.slot(0), keypool.Candidate{Key: c.keys[0]}, nil
 	}
-	c, err := p.Selector.PickCandidate(ctx, pickScope(hop), hop.Pool.Selection, keys, nil)
+	picked, err := p.Selector.PickCandidate(ctx, pickScope(hop), hop.Pool.Selection, c.keys, nil)
+	return c.slotOf(picked, err)
+}
+
+// candidates are the credentials of a hop a pick chooses from, with their slot indexes when they are not the whole hop.
+type candidates struct {
+	keys []*hostkey.HostKey
+	at   []int
+}
+
+// pickCandidates lists the slots of hop a pick may choose: not excluded, and not in an account cooling for modelID, noting when the cooling ends on lim.
+func pickCandidates(hop *plan.RouteHop, modelID string, excluded []bool, lim **UpstreamLimitedError) candidates {
+	nowMs := time.Now().UnixMilli()
+	// The common pick is over the whole hop: its own credential list then serves, and no slice is built.
+	if len(hop.Credentials) == len(hop.Slots) && !skipsAny(hop, modelID, excluded, nowMs) {
+		return candidates{keys: hop.Credentials}
+	}
+	c := candidates{keys: make([]*hostkey.HostKey, 0, len(hop.Slots)), at: make([]int, 0, len(hop.Slots))}
+	for i, s := range hop.Slots {
+		if excluded[i] {
+			continue
+		}
+		if s.Account != nil {
+			if until := s.Account.Cooldown.Until(modelID); nowMs < until {
+				*lim = noteLimited(*lim, time.Duration(until-nowMs)*time.Millisecond, nil)
+				continue
+			}
+		}
+		c.keys = append(c.keys, s.Credential)
+		c.at = append(c.at, i)
+	}
+	return c
+}
+
+func (c candidates) slot(j int) int {
+	if c.at == nil {
+		return j
+	}
+	return c.at[j]
+}
+
+// slotOf maps the selector's pick to its slot index; -1 when the pick failed.
+func (c candidates) slotOf(picked keypool.Candidate, err error) (int, keypool.Candidate, error) {
 	if err != nil {
 		return -1, keypool.Candidate{}, err
 	}
-	for j, k := range keys {
-		if k == c.Key {
-			return slotOf(j), c, nil
+	for j, k := range c.keys {
+		if k == picked.Key {
+			return c.slot(j), picked, nil
 		}
 	}
 	return -1, keypool.Candidate{}, keypool.ErrNoHealthyKeys
+}
+
+// holdCallerAndPick takes a new caller hold for hop and makes the hop's first pick, the hold's scripts and the pick's breaker reads in one round trip. A refused or failed hold returns its error alone and the pick is never made: its reads went out, but no probe is claimed and only a round-robin rotation moved.
+func (p *Pipeline) holdCallerAndPick(ctx context.Context, st *runState, hop *plan.RouteHop, admitter limits.BatchAdmitter, modelID string, excluded []bool, lim **UpstreamLimitedError) (int, keypool.Candidate, error, error) {
+	c := pickCandidates(hop, modelID, excluded, lim)
+	if len(c.keys) == 0 {
+		return -1, keypool.Candidate{}, nil, p.holdCaller(ctx, st, hop)
+	}
+	cs := hop.CallerCounters()
+	st.releaseCaller()
+	scope, algo := pickScope(hop), hop.Pool.Selection
+	b := p.Selector.NewBatch(keypool.PickOps(algo, len(c.keys)) + 2)
+	held, err := admitter.PrepareAdmit(b, cs)
+	if err != nil {
+		return -1, keypool.Candidate{}, nil, callerHoldError(err)
+	}
+	pp := p.Selector.PreparePick(b, scope, algo, c.keys, nil)
+	b.Exec(ctx)
+	res, err := held.Finish(ctx)
+	if err != nil {
+		return -1, keypool.Candidate{}, nil, callerHoldError(err)
+	}
+	st.caller, st.callerCS = res, cs
+	i, cand, perr := c.slotOf(pp.Finish(ctx))
+	return i, cand, perr, nil
 }
 
 // skipsAny reports whether a pick over hop must leave a slot out: excluded, or its account cooling for modelID.

@@ -16,12 +16,17 @@ type PreparedAdmit struct {
 	reserves []*pkgratelimit.PreparedReserve
 }
 
-// PrepareAdmit queues the reserve of every group of cs on b; the caller runs b, then calls Finish. Unlike Admit, a group is reserved even when an earlier one refuses, and Finish releases it. When cs holds a caller group, b sheds while the store's connection queue is full, as Admit sheds caller groups.
-func (l *Limiter) PrepareAdmit(b *kv.Batch, cs []limits.Counter) (*PreparedAdmit, error) {
+// PrepareAdmit queues the reserve of every group of cs on b, as Admit does on a batch of its own; the caller runs b, then calls Finish. A group is reserved even when an earlier one refuses, and Finish releases it. When cs holds a caller group, b sheds while the store's connection queue is full.
+func (l *Limiter) PrepareAdmit(b *kv.Batch, cs []limits.Counter) (limits.PreparedAdmit, error) {
 	groups, err := groupCounters(cs)
 	if err != nil {
 		return nil, err
 	}
+	return l.prepare(b, cs, groups)
+}
+
+func (l *Limiter) prepare(b *kv.Batch, cs []limits.Counter, groups []group) (*PreparedAdmit, error) {
+	var err error
 	p := &PreparedAdmit{lim: l, counters: cs, names: make([]string, len(groups)), reserves: make([]*pkgratelimit.PreparedReserve, len(groups))}
 	for i, g := range groups {
 		if !g.upstream {

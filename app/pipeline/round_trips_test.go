@@ -2,14 +2,17 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
@@ -25,7 +28,7 @@ type hostReached chan struct{}
 func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
 func (hostReached) Unreachable(context.Context, string, string) {}
 
-// A round-robin request on a healthy key with only caller counters: before the upstream call, the caller hold and the pick's breaker reads with the rotation counter, one round trip each; the credential has no counters, so its hold costs none. Post-flight writes no success for a key that never failed, and settles in one more round trip only when a rule has something to settle.
+// A round-robin request on a healthy key with only caller counters: before the upstream call, one round trip carrying the caller hold and the pick's breaker reads with the rotation counter; the credential has no counters, so its hold costs none. Post-flight writes no success for a key that never failed, and settles in one more round trip only when a rule has something to settle.
 func TestRunRoundTrips(t *testing.T) {
 	requests := appratelimit.Rule{
 		Meter: appratelimit.MeterRequests, Amount: 100,
@@ -35,8 +38,72 @@ func TestRunRoundTrips(t *testing.T) {
 		Meter: appratelimit.MeterTokens, Amount: 1 << 20,
 		Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategySlidingWindow,
 	}
-	t.Run("requests_only", func(t *testing.T) { runRoundTrips(t, 2, requests) })
-	t.Run("with_tokens", func(t *testing.T) { runRoundTrips(t, 3, requests, tokens) })
+	t.Run("requests_only", func(t *testing.T) { runRoundTrips(t, 1, requests) })
+	t.Run("with_tokens", func(t *testing.T) { runRoundTrips(t, 2, requests, tokens) })
+}
+
+// The caller hold rides with the first pick's reads, but a refused hold ends the request there: in that one round trip, with no probe claimed on a key whose cooldown ended and the account's counters untouched.
+func TestRunCallerRefusalMakesNoPick(t *testing.T) { runCallerRefusalMakesNoPick(t, memScriptStore(t)) }
+
+// memScriptStore is a kv.Mem running the limiter's and key pool's scripts through a wrapper.
+func memScriptStore(t *testing.T) kvtest.ScriptStore {
+	mem := kv.NewMem()
+	t.Cleanup(func() { _ = mem.Close() })
+	pkgratelimit.RegisterScripts(mem)
+	keypool.RegisterScripts(mem)
+	return mem
+}
+
+func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
+	store := kvtest.NewRecording(s)
+	now := time.Now()
+	sel := keypool.New(store, slog.Default(), func() time.Time { return now }, nil)
+	lim := lua.New(pkgratelimit.New(store, slog.Default(), nil))
+	p := &Pipeline{Limiter: lim, Selector: sel, Logger: slog.Default()}
+
+	key := testKey("key-a")
+	sel.RecordFailure(context.Background(), key.KeyHash, keypool.FailureAuth, 0)
+	now = now.Add(time.Hour) // the key's cooldown ended: the next pick claims its probe
+	account := accountCounters("acct", perMinute("rl-tier", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 100))
+	full := callerCounter(perMinute("rl-full", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 1))
+	spent, err := lim.Admit(context.Background(), full, limits.Usage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent.Settle(limits.Usage{})
+
+	var called atomic.Int32
+	adapter := reservationTestAdapter{call: func(context.Context) (*http.Response, error) {
+		called.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+	}}
+	run := func(caller []limits.Counter) error {
+		res, err := p.Run(context.Background(), &Request{Adapter: adapter, Hops: []plan.RouteHop{buildHop(keypool.KeySelectionPrioritized, caller, testSlot{key: key, upstream: account})}})
+		if err == nil {
+			_ = res.Body.Close()
+		}
+		return err
+	}
+
+	before, reserves := store.RoundTrips(), len(store.Named("limit.reserve"))
+	var refused *CallerLimitedError
+	if err := run(full); !errors.As(err, &refused) {
+		t.Fatalf("Run = %v, want the caller's refusal", err)
+	}
+	if trips := store.RoundTrips() - before; trips != 1 {
+		t.Fatalf("a refused caller took %d round trips, want 1 (%v)", trips, store.Batches())
+	}
+	if n := len(store.Named("limit.reserve")) - reserves; n != 1 || len(store.Named("keypool.claim_probe")) != 0 || called.Load() != 0 {
+		t.Fatalf("reserves = %d, probe claims = %d, upstream calls = %d; want the caller's reserve alone", n, len(store.Named("keypool.claim_probe")), called.Load())
+	}
+
+	// With room, the same pick claims the probe and the request is served.
+	if err := run(callerCounter(perMinute("rl-open", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 100))); err != nil {
+		t.Fatalf("Run with room: %v", err)
+	}
+	if len(store.Named("keypool.claim_probe")) != 1 || called.Load() != 1 {
+		t.Fatalf("probe claims = %d, upstream calls = %d; want 1 each", len(store.Named("keypool.claim_probe")), called.Load())
+	}
 }
 
 func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
@@ -67,8 +134,8 @@ func runRoundTrips(t *testing.T, want int, rules ...appratelimit.Rule) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if tripsAtCall != 2 {
-		t.Fatalf("kv round trips before the upstream call = %d, want 2 (%v)", tripsAtCall, store.Batches())
+	if tripsAtCall != 1 {
+		t.Fatalf("kv round trips before the upstream call = %d, want 1 (%v)", tripsAtCall, store.Batches())
 	}
 	_ = res.Body.Close()
 	select {
