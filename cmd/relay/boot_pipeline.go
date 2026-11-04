@@ -10,7 +10,6 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/hybrid"
@@ -130,10 +129,7 @@ func upstreamMaxIdlePerHost(cfg *config.Config) int {
 	if cfg.UpstreamMaxIdlePerHost > 0 {
 		return cfg.UpstreamMaxIdlePerHost
 	}
-	if cfg.MaxInflight > 0 {
-		return cfg.MaxInflight
-	}
-	return httpapi.DefaultMaxInflight
+	return inferenceMaxInflight(cfg.MaxInflight)
 }
 
 // keyRefresher re-resolves a credential's secret after an upstream auth failure and heals the plans with it, so a rotated key recovers without a restart.
