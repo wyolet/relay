@@ -130,7 +130,7 @@ type Config struct {
 	KeyBreakerThreshold int
 	KeyBreakerWindow    time.Duration
 
-	// Limiter names the limiter that counts rate limits and budgets (RELAY_LIMITER): "lua" (default) reserves every request in the store; "hybrid" counts in pod memory, synced every LimiterSync (RELAY_LIMITER_SYNC_MS, default 1000), and reserves in the store only counters near their cap.
+	// Limiter names the limiter that counts rate limits and budgets (RELAY_LIMITER): "hybrid" (default) counts in pod memory, synced every LimiterSync (RELAY_LIMITER_SYNC_MS, default 1000), and reserves in the store only counters near their cap; "lua" reserves every request in the store.
 	Limiter     string
 	LimiterSync time.Duration
 
@@ -465,9 +465,9 @@ func Load() (*Config, error) {
 		cfg.KeyBreakerWindow = time.Duration(v) * time.Second
 	}
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LIMITER"))); v {
-	case "", "lua":
-		cfg.Limiter = "lua"
-	case "hybrid":
+	case "", "hybrid":
+		cfg.Limiter = "hybrid"
+	case "lua":
 		cfg.Limiter = v
 	default:
 		return nil, fmt.Errorf(`RELAY_LIMITER must be "lua" or "hybrid", got %q`, v)

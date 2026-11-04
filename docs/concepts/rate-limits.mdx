@@ -129,9 +129,11 @@ With `RELAY_STATE_BACKEND=memory`, counters live in each pod, so every pod enfor
 
 ## Hybrid counting
 
-With `RELAY_LIMITER=hybrid`, each pod counts in memory and syncs with Dragonfly every `RELAY_LIMITER_SYNC_MS` (1000 by default): one pipelined round trip per pod adds the pod's counts to the shared counters and reads the totals back. A request is checked against the totals of the last sync plus the pod's own counts since, and one whose counters are all counted this way makes no Dragonfly call before the upstream.
+By default (`RELAY_LIMITER=hybrid`), each pod counts in memory and syncs with Dragonfly every `RELAY_LIMITER_SYNC_MS` (1000 by default): one pipelined round trip per pod adds the pod's counts to the shared counters and reads the totals back. A request is checked against the totals of the last sync plus the pod's own counts since, and one whose counters are all counted this way makes no Dragonfly call before the upstream.
 
 A counter is counted in memory when it is a `fixed-window` or `sliding-window` `requests` rule, a token meter, or a [budget](/concepts/budgets), its `amount` is at least 100, and, for a rule, its `window` is longer than the sync interval. Every other counter (`token-bucket`, `leaky-bucket`, `session-window`, `concurrency`, and small caps or short windows) is checked and reserved in Dragonfly per request, as with `lua`.
+
+`RELAY_LIMITER=lua` checks and reserves every counter in Dragonfly per request: exact at the cap, at the cost of a Dragonfly round trip before every upstream call.
 
 A counter counted in memory switches to the per-request check at the sync where it has used 80% of its `amount`, or where less room is left than one interval spends at the rate of the last one, whichever comes first. A new window or period, or a later sync that finds it clear of both, switches it back. Its counts the pod had not yet synced go to Dragonfly ahead of its first per-request check, so they count once. A pod's first request on a counter, and requests on a counter whose totals are older than two intervals, are checked in Dragonfly as well.
 

@@ -235,7 +235,7 @@ The limits reads answer the account's caller rungs, outermost first, as the publ
 }
 ```
 
-- `used` and `spentUsd` are read without counting anything. With `shared: true` they are what every lane under that rung's account spent together; with `shared: false`, this lane's own. Under `RELAY_LIMITER=hybrid` they are the answering pod's view, which may lag other pods by up to one sync interval.
+- `used` and `spentUsd` are read without counting anything. With `shared: true` they are what every lane under that rung's account spent together; with `shared: false`, this lane's own. Under the default hybrid limiter they are the answering pod's view, which may lag other pods by up to one sync interval.
 - Read for a team's or project's own account, the answer holds the rungs above and including it. A link with `shared: false` has no single count there, so it is marked `perLane: true` and carries no `used`, `remaining`, `spentUsd` or `remainingUsd`.
 - `tightest` is the hard limit with the least left as a share of its cap; alert budgets and `perLane` links are never it. It is omitted when no rung caps anything.
 - A provider account answers with no rungs: its own policy caps its host keys upstream.
