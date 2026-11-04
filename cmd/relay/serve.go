@@ -1,27 +1,50 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
 	"net"
 	"net/http"
 	"runtime/debug"
 
-	"golang.org/x/net/netutil"
+	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/pkg/connadmit"
+	"github.com/wyolet/relay/pkg/httpheader"
 )
 
-// serve binds srv.Addr before it returns, so the caller learns the bound address, and serves in the background. A bind failure arrives on the channel the way a serve failure does. maxConns > 0 caps the open connections: past it, new ones wait in the kernel's accept queue until one closes.
-func serve(srv *http.Server, maxConns int) (net.Addr, <-chan error) {
+// serve binds srv.Addr before it returns, so the caller learns the bound address, and serves in the background. A bind failure arrives on the channel the way a serve failure does. A non-nil admission caps the open connections, queueing and refusing past the cap, and takes over srv.ConnState.
+func serve(srv *http.Server, admission *connadmit.Config) (net.Addr, <-chan error) {
 	errs := make(chan error, 1)
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
 		errs <- err
 		return nil, errs
 	}
-	if maxConns > 0 {
-		ln = netutil.LimitListener(ln, maxConns)
+	if admission != nil {
+		admitted := connadmit.New(ln, *admission)
+		srv.ConnState = admitted.ConnState
+		ln = admitted
 	}
 	go func() { errs <- srv.Serve(ln) }()
 	return ln.Addr(), errs
+}
+
+// inferenceAdmission refuses connections past the cap with the answer the in-flight shed gives a request in relay's own shape.
+func inferenceAdmission(cfg *config.Config) *connadmit.Config {
+	body, _ := json.Marshal(httpapi.APIError{Err: httpapi.APIErrorBody{Type: "server_error", Code: "overloaded", Message: httpapi.OverloadMessage}})
+	return &connadmit.Config{
+		MaxConns:     inferenceMaxConns(cfg.MaxConns),
+		QueueSize:    cfg.ConnQueue,
+		QueueTimeout: cfg.ConnQueueTimeout,
+		Body:         body,
+		RetryAfter:   httpapi.RetryAfterShed,
+		Header: http.Header{
+			inference.HeaderOrigin:       {"relay"},
+			httpheader.HeaderShouldRetry: {"true"},
+		},
+	}
 }
 
 // connBudgetBytes is the memory budgeted per open connection: one stopped mid-request holds about 31 KiB live (23 KiB heap, 8 KiB stack; an idle keep-alive one about 19 KiB), doubled for the garbage the heap carries between collections.
