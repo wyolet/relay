@@ -10,6 +10,7 @@ import (
 
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/sdk/usage"
 )
 
@@ -123,6 +124,34 @@ type Limiter interface {
 	Admit(ctx context.Context, cs []Counter, est Usage) (Reservation, error)
 	// Peek reads every counter's current count, one Reading per counter in order, without counting anything: no store write and no TTL change. For admin reads, never the request path.
 	Peek(ctx context.Context, cs []Counter) ([]Reading, error)
+}
+
+// BatchAdmitter is a Limiter that can queue an admission on a kv batch the caller runs, so the caller's own store calls share its round trip.
+type BatchAdmitter interface {
+	// PrepareAdmit queues Admit's store calls for cs on b, which must be on the store the limiter admits on; the caller runs b, then calls Finish. On an error b must not run: it may hold part of the admission.
+	PrepareAdmit(b *kv.Batch, cs []Counter) (PreparedAdmit, error)
+}
+
+// PreparedAdmit is an admission queued on a kv batch.
+type PreparedAdmit interface {
+	// Finish returns what Admit would have, once the batch has run.
+	Finish(ctx context.Context) (Reservation, error)
+}
+
+// BatchSettler is a Reservation that can queue its Settle on a kv batch the caller runs, so the settles of many requests share a round trip.
+type BatchSettler interface {
+	// PrepareSettle does Settle's in-memory part now and queues its store writes on b, which must be on the store the limiter settles on; the caller runs b, then calls Finish on the result.
+	PrepareSettle(b *kv.Batch, actual Usage) PreparedSettle
+}
+
+// PreparedSettle is a Settle queued on a kv batch.
+type PreparedSettle interface {
+	// TransportFailed reports whether a queued write failed in transport rather than with its own error reply: whether it ran is unknown.
+	TransportFailed() bool
+	// Finish reads the outcome once the batch has run.
+	Finish(ctx context.Context)
+	// Resend writes the settle again on a round trip of its own; a commit that already ran is a no-op.
+	Resend(ctx context.Context)
 }
 
 // Reading is a counter's count as Admit would compare it with the cap, before a new request: requests, tokens or concurrency slots for a rule, USD nanos spent this period for a budget. Fractional counts round up.

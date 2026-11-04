@@ -8,7 +8,8 @@
 //
 // Expected kv ops per request:
 //   - Admit: none when every counter is local. Otherwise one pipelined round trip: an INCRBY and EXPIRE NX per bucket whose unsynced count is handed over, then one script per group of exact counters. A refusal after a group reserved adds one batched round trip releasing it.
-//   - Settle and Release: none for local counters; the Lua limiter's batched commit for exact ones.
+//   - PrepareAdmit: the same commands queued on the caller's kv.Batch, no round trip of its own.
+//   - Settle and Release: none for local counters; the Lua limiter's batched commit for exact ones. PrepareSettle queues those commits on the caller's kv.Batch instead.
 //   - Peek (admin reads, off the request path): none for counters with a synced local slot; the Lua limiter's one batched read for the rest.
 //
 // Per pod and interval, whatever the request rate: one pipelined round trip covering the counters touched since the last sync, an INCRBY and EXPIRE NX per bucket with an unsynced count and a GET per other bucket read.
@@ -60,7 +61,10 @@ type Limiter struct {
 	stopOnce sync.Once
 }
 
-var _ limits.Limiter = (*Limiter)(nil)
+var (
+	_ limits.Limiter       = (*Limiter)(nil)
+	_ limits.BatchAdmitter = (*Limiter)(nil)
+)
 
 // New returns a Limiter whose exact counters go through exact, which admits on store; syncs run on syncStore, which may be store. interval 0 means DefaultInterval. Call Start to run the sync loop.
 func New(exact *lua.Limiter, store, syncStore kv.Store, interval time.Duration) *Limiter {
@@ -113,16 +117,77 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 	if len(cs) == 0 {
 		return noCounters{}, nil
 	}
-	now := l.clock()
-	res := &reservation{lim: l, counters: cs}
-	res.local = res.localBuf[:0]
 	var (
 		exactBuf   [8]int
 		staleBuf   [4]hold
 		handoffBuf [4]push
 	)
-	exact, stale, handoffs := exactBuf[:0], staleBuf[:0], handoffBuf[:0]
+	now := l.clock()
+	res := &reservation{lim: l, counters: cs}
+	exact, handoffs, err := l.checkLocal(res, now, exactBuf[:0], staleBuf[:0], handoffBuf[:0])
+	if err != nil || len(exact) == 0 {
+		return okReservation(res, err)
+	}
+	b := kv.NewBatch(l.store, 2*len(handoffs)+2)
+	prepared, err := l.queueExact(b, res, exact, handoffs, now)
+	if err != nil {
+		return nil, err
+	}
+	b.Exec(ctx)
+	return l.finishExact(ctx, res, handoffs, prepared)
+}
 
+func okReservation(res *reservation, err error) (limits.Reservation, error) {
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// PrepareAdmit is Admit queued on b, a batch on the store the Lua limiter admits on: the local counters are checked now, and the handed-over counts and exact scripts ride b. A local refusal returns at once with nothing queued.
+func (l *Limiter) PrepareAdmit(b *kv.Batch, cs []limits.Counter) (limits.PreparedAdmit, error) {
+	if len(cs) == 0 {
+		return &admission{done: noCounters{}}, nil
+	}
+	now := l.clock()
+	a := &admission{lim: l, res: &reservation{lim: l, counters: cs}}
+	exact, handoffs, err := l.checkLocal(a.res, now, nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(exact) == 0 {
+		a.done = a.res
+		return a, nil
+	}
+	a.handoffs = handoffs
+	if a.prepared, err = l.queueExact(b, a.res, exact, handoffs, now); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// admission is a PrepareAdmit waiting for its batch.
+type admission struct {
+	lim      *Limiter
+	res      *reservation
+	handoffs []push
+	prepared limits.PreparedAdmit
+	// done is the reservation when nothing went on the batch.
+	done limits.Reservation
+}
+
+// Finish returns the reservation once a's batch has run.
+func (a *admission) Finish(ctx context.Context) (limits.Reservation, error) {
+	if a.done != nil {
+		return a.done, nil
+	}
+	return a.lim.finishExact(ctx, a.res, a.handoffs, a.prepared)
+}
+
+// checkLocal admits res's local counters against their synced totals, refusing with no store call, and appends the rest to exact with the unsynced counts they take over to handoffs.
+func (l *Limiter) checkLocal(res *reservation, now time.Time, exact []int, stale []hold, handoffs []push) ([]int, []push, error) {
+	cs := res.counters
+	res.local = res.localBuf[:0]
 	l.mu.Lock()
 	for i := range cs {
 		c := &cs[i]
@@ -132,7 +197,7 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 		r, err := lua.Rule(c)
 		if err != nil {
 			l.mu.Unlock()
-			return nil, err
+			return nil, nil, err
 		}
 		idx, ok := l.localSlot(c, r, now)
 		if !ok {
@@ -147,7 +212,7 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 		}
 		if retry, fits := pkgratelimit.CheckPlain(r, s.cur.total(), s.prev.total(), now); !fits {
 			l.mu.Unlock()
-			return nil, &limits.Refused{Counter: c, RetryAfter: retry}
+			return nil, nil, &limits.Refused{Counter: c, RetryAfter: retry}
 		}
 		res.local = append(res.local, hold{counter: i, slot: idx, gen: s.gen, bucket: s.cur.start})
 	}
@@ -161,10 +226,12 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 		handoffs = l.takePending(handoffs, h.slot, h.counter)
 	}
 	l.mu.Unlock()
+	return exact, handoffs, nil
+}
 
-	if len(exact) == 0 {
-		return res, nil
-	}
+// queueExact queues the handoffs and then the exact counters' scripts on b. On an error the local counts are undone and b must not run.
+func (l *Limiter) queueExact(b *kv.Batch, res *reservation, exact []int, handoffs []push, now time.Time) (limits.PreparedAdmit, error) {
+	cs := res.counters
 	sub := cs
 	if len(res.local) > 0 {
 		sub = make([]limits.Counter, len(exact))
@@ -172,7 +239,6 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 			sub[j] = cs[i]
 		}
 	}
-	b := kv.NewBatch(l.store, 2*len(handoffs)+2)
 	queuePushes(b, handoffs, func(p *push) (string, pkgratelimit.Rule, bool) {
 		c := &cs[p.ref]
 		r, err := lua.Rule(c)
@@ -184,7 +250,11 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 		res.undoLocal()
 		return nil, err
 	}
-	b.Exec(ctx)
+	return prepared, nil
+}
+
+// finishExact completes res once the batch carrying its handoffs and exact scripts has run; an exact refusal or store failure undoes the local counts.
+func (l *Limiter) finishExact(ctx context.Context, res *reservation, handoffs []push, prepared limits.PreparedAdmit) (limits.Reservation, error) {
 	l.ackPushes(handoffs, true)
 	held, err := prepared.Finish(ctx)
 	if err != nil {
@@ -317,3 +387,5 @@ type noCounters struct{}
 
 func (noCounters) Settle(limits.Usage) {}
 func (noCounters) Release()            {}
+
+func (noCounters) PrepareSettle(*kv.Batch, limits.Usage) limits.PreparedSettle { return lua.NoWrites{} }

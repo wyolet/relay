@@ -40,6 +40,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/settle"
 	"github.com/wyolet/relay/pkg/contentcoding"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
@@ -160,6 +161,8 @@ type Pipeline struct {
 	Lifecycle *lifecycle.Registry
 	Client    *http.Client
 	Logger    *slog.Logger
+	// Settles shares a served request's commits with other requests' in one round trip on the post-flight store; nil settles each on its own.
+	Settles *settle.Queue
 }
 
 // New constructs a Pipeline with a sensible http.Client default. The
@@ -368,7 +371,13 @@ func (p *Pipeline) runPostFlight(req *Request, res limits.Reservation, body []by
 	if res == nil {
 		return
 	}
-	res.Settle(limits.Usage{Tokens: tokens, CostNanos: costNanos(req.Pricing, req.Lifecycle, tokens)})
+	u := limits.Usage{Tokens: tokens, CostNanos: costNanos(req.Pricing, req.Lifecycle, tokens)}
+	if bs, ok := res.(limits.BatchSettler); ok && p.Settles != nil {
+		b := p.Settles.NewBatch()
+		p.Settles.Settle(ctx, b, bs.PrepareSettle(b, u))
+		return
+	}
+	res.Settle(u)
 }
 
 // costNanos prices tokens at pr, at the service tier the upstream reported; 0 when unpriced.

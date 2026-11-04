@@ -108,15 +108,25 @@ func main() {
 
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
-	selector := keypool.New(kvStore, slog.Default(), nil, nil).WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow)
+	// Picks read breaker records from this process's copy, refreshed on the post-flight store; both selectors write their transitions through to it.
+	pickState := keypool.NewPickState(postFlightKV, keypool.DefaultRefreshInterval, slog.Default())
+	pickState.Start()
+	defer pickState.Close()
+	selector := keypool.New(kvStore, slog.Default(), nil, nil).WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow).WithPickState(pickState)
 	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)
+	postFlight.selector.WithPickState(pickState)
 	limiter.ReleaseUnansweredOn(postFlight.limiter)
 	counting, closeLimiter := buildLimiter(cfg, limiter, kvStore, postFlightKV, postFlight)
 	defer closeLimiter()
+	// Deferred after the limiter's close, so it runs first: queued settles land before a hybrid limiter's last sync and before the post-flight store closes.
+	settles, closeSettles := buildSettleQueue(cfg, postFlightKV)
+	defer closeSettles()
 	pl, lifecycleReg := buildPipeline(counting, selector, postFlight, cat, stores.HostKey, plans)
+	pl.Settles = settles
 	proxyPipeline := buildProxy(cfg, counting, lifecycleReg)
+	proxyPipeline.Settles = settles
 	revoked := buildRevocations(listenerCtx, kvStore)
 
 	specs := buildAdapterSpecs()

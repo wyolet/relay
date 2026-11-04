@@ -2,6 +2,7 @@ package keypool
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/wyolet/relay/app/hostkey"
@@ -32,18 +33,29 @@ type PreparedPick struct {
 	algo  KeySelection
 	keys  []*hostkey.HostKey
 	skip  map[string]struct{}
-	// reads has one entry per key; nil where the batch read nothing (an excluded or anonymous key, or a prioritized key behind the first).
-	reads       []*kv.BatchResult
+	// reads has one entry per key; empty where the pick read nothing yet (an excluded or anonymous key, or a prioritized key behind the first).
+	reads       []pickRead
+	at          time.Time
 	rotation    *kv.BatchResult
 	rotationTTL *kv.BatchResult
+	// turn is the rotation counter's value when the selector keeps rotation in memory.
+	turn int64
 }
 
-// PreparePick queues Pick's reads for keys on b: each candidate's breaker record (prioritized: the first candidate's only) and, for round-robin, the rotation counter. The caller runs b, then calls Finish.
+// pickRead is one key's breaker record for a pick: served by the PickState, or read on the batch.
+type pickRead struct {
+	result *kv.BatchResult
+	rec    CircuitRecord
+	found  bool
+	held   bool // rec came from the PickState
+}
+
+// PreparePick queues Pick's reads for keys on b: each candidate's breaker record (prioritized: the first candidate's only) that the PickState does not hold fresh and, for round-robin without a PickState, the rotation counter. The caller runs b, then calls Finish.
 func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, keys, exclude []*hostkey.HostKey) *PreparedPick {
 	if algo != KeySelectionRoundRobin && algo != KeySelectionLeastRecentlyUsed {
 		algo = KeySelectionPrioritized
 	}
-	p := &PreparedPick{s: s, scope: scope, algo: algo, keys: keys, reads: make([]*kv.BatchResult, len(keys))}
+	p := &PreparedPick{s: s, scope: scope, algo: algo, keys: keys, reads: make([]pickRead, len(keys)), at: s.clock()}
 	if len(exclude) > 0 {
 		p.skip = make(map[string]struct{}, len(exclude))
 		for _, k := range exclude {
@@ -55,7 +67,7 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 			continue
 		}
 		if !isAnonymous(k.KeyHash) {
-			p.reads[i] = b.Get(circuitKey(k.KeyHash))
+			p.reads[i] = s.queueRead(b, k.KeyHash, p.at)
 		}
 		// Prioritized takes the first fit key in order; the ones behind it are read by Finish only while it is open.
 		if algo == KeySelectionPrioritized {
@@ -63,11 +75,45 @@ func (s *Selector) PreparePick(b *kv.Batch, scope string, algo KeySelection, key
 		}
 	}
 	if algo == KeySelectionRoundRobin {
+		if s.local != nil {
+			p.turn = s.local.nextRotation(scope, p.at.UnixMilli())
+			return p
+		}
 		p.rotation = b.Incr(roundRobinKey(scope), 1)
 		// NX leaves a live counter's deadline alone and gives one that lost its TTL a new one, without a round trip of its own.
 		p.rotationTTL = b.ExpireNX(roundRobinKey(scope), ttlRoundRobin)
 	}
 	return p
+}
+
+// queueRead serves keyHash's record from the PickState when it holds it fresh, else queues its read on b.
+func (s *Selector) queueRead(b *kv.Batch, keyHash string, now time.Time) pickRead {
+	if s.local != nil {
+		if rec, found, ok := s.local.fresh(keyHash, now); ok {
+			return pickRead{rec: rec, found: found, held: true}
+		}
+	}
+	return pickRead{result: b.Get(circuitKey(keyHash))}
+}
+
+// record returns keyHash's record for a pick: from the PickState when fresh, else read through and kept.
+func (s *Selector) record(ctx context.Context, keyHash string, now time.Time) (CircuitRecord, bool) {
+	if s.local != nil {
+		if rec, found, ok := s.local.fresh(keyHash, now); ok {
+			return rec, found
+		}
+	}
+	b, err := s.state.Get(ctx, circuitKey(keyHash))
+	return s.keepRead(keyHash, b, err, now)
+}
+
+// keepRead decodes a breaker read and, when the store answered, keeps it in the PickState as of now.
+func (s *Selector) keepRead(keyHash string, b []byte, err error, now time.Time) (CircuitRecord, bool) {
+	rec, found := recordFrom(b, err)
+	if s.local != nil && (err == nil || errors.Is(err, kv.ErrNotFound)) {
+		s.local.remember(keyHash, rec, found, now, true)
+	}
+	return rec, found
 }
 
 // Finish chooses the key from the batch's results, reading on its own only the prioritized candidates the batch skipped.
@@ -91,10 +137,13 @@ func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 			healthy = append(healthy, Candidate{Key: k, Record: CircuitRecord{State: CircuitClosed}})
 		} else {
 			var c Candidate
-			if r := p.reads[i]; r != nil {
-				c.Record, c.Stored = recordFrom(r.Value, r.Err)
-			} else {
-				c.Record, c.Stored = recordFrom(s.state.Get(ctx, circuitKey(k.KeyHash)))
+			switch r := &p.reads[i]; {
+			case r.held:
+				c.Record, c.Stored = r.rec, r.found
+			case r.result != nil:
+				c.Record, c.Stored = s.keepRead(k.KeyHash, r.result.Value, r.result.Err, p.at)
+			default:
+				c.Record, c.Stored = s.record(ctx, k.KeyHash, now)
 			}
 			c.Key = k
 			c, ok := s.eligible(ctx, c, now)
@@ -112,6 +161,9 @@ func (p *PreparedPick) Finish(ctx context.Context) (Candidate, error) {
 	}
 	switch p.algo {
 	case KeySelectionRoundRobin:
+		if s.local != nil {
+			return pickTurn(p.turn, healthy), nil
+		}
 		return pickRoundRobin(p.rotation, healthy), nil
 	case KeySelectionLeastRecentlyUsed:
 		return s.pickLRU(ctx, p.scope, healthy), nil
@@ -161,6 +213,7 @@ func (s *Selector) claimProbe(ctx context.Context, keyHash string, read CircuitR
 		read.State = CircuitHalfOpen
 		return read, true
 	}
+	s.wrote(keyHash, out.rec)
 	if !out.changed {
 		return CircuitRecord{}, false
 	}

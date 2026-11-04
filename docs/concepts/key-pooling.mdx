@@ -30,10 +30,12 @@ Host keys, pools, accounts and budgets may be owned by the system, a team, a pro
 | Selection | Behavior |
 | --- | --- |
 | `prioritized` | The first healthy key in pool order: the keys of `accountIds` first, account by account and each account's keys in the order they were created, then `credentialIds`. A key listed directly and through its account keeps its first place. Later keys take traffic only when earlier ones are unhealthy or over a limit. |
-| `round-robin` | Rotates across healthy keys using a counter in the state backend, one per pool, shared by every policy that links the pool. |
-| `least-recently-used` | Picks the healthy key whose last use is oldest. |
+| `round-robin` | Rotates across healthy keys using a counter per pool, shared by every policy that links the pool. Each pod keeps its own counter, so keys take turns on every pod but not in one fleet-wide order. |
+| `least-recently-used` | Picks the healthy key whose last use on this pod is oldest. |
 
 Breaker state is shared across pods through the state backend (Dragonfly when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
+
+Picking a key usually reads no state backend on the request path. Each pod keeps a copy of the breaker records of the keys it picks and rereads all of them once a second, off the request path. A pod's own breaker changes apply to its copy at once, even when the state backend fails to record them. A breaker another pod opens reaches this pod within about a second, so this pod may send up to a second of requests to a key another pod has just seen fail. A success served on a copy that does not yet show another pod's failures may leave that pod's failure count standing. The state backend is still read on the request path for a key this pod has not picked yet, for a copy more than two seconds old because the rereads fail, and for the probe of a key whose cooldown has ended, which one request claims across all pods.
 
 After picking a key, Relay reserves the key's upstream limits: the rate limits and budgets of the policy bound to its account. A key over one of them is skipped without touching its breaker, and the next key is tried. When the refusing limit is an account-wide request or token window (no model scope), every key of that account is skipped on this pod until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-rungs).
 
@@ -176,6 +178,6 @@ If every key in the pool is open, requests fail with `502` and the message `no h
 
 1. Fix the cause, for example by giving the key a new value or adding another key to the pool. A stored key is rotated with `POST /api/host-keys/by-id/<id>/rotate` and body `{"value": "<new value>"}`; an env-ref key takes the new value from its environment variable after a restart. Either way the new value gets a closed breaker.
 2. Otherwise wait out the cooldown: at most 60 s for `403`, `5xx` and network failures, at most 1 h for `401`.
-3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with Dragonfly, delete the `secret_health:*` keys.
+3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with Dragonfly, delete the `secret_health:*` keys. Pods pick the keys again within a second, when their copies are next reread.
 
 See [Troubleshooting](/troubleshooting) for related errors.

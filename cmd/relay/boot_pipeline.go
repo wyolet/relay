@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/proxy"
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/app/settle"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/engine"
@@ -53,6 +54,21 @@ func buildLimiter(cfg *config.Config, limiter *pkgratelimit.Limiter, shared, pos
 	h.Start()
 	slog.Info("limiter", "kind", "hybrid", "sync_interval", cfg.LimiterSync)
 	return h, h.Close
+}
+
+// buildSettleQueue coalesces served requests' settles on the post-flight store; nil with RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE=0. The returned func drains it.
+func buildSettleQueue(cfg *config.Config, postFlightKV kv.Store) (*settle.Queue, func()) {
+	q := settle.New(postFlightKV, settle.Config{
+		BatchSize: cfg.RedisPostFlightBatchSize,
+		MaxDelay:  cfg.RedisPostFlightBatchDelay,
+		QueueSize: cfg.RedisPostFlightQueueSize,
+		PoolSize:  cfg.RedisPostFlightPoolSize,
+	}, slog.Default())
+	if q == nil {
+		return nil, func() {}
+	}
+	q.Start()
+	return q, q.Close
 }
 
 // buildPipeline wires the realtime pipeline.

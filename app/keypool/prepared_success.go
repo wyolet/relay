@@ -2,6 +2,7 @@ package keypool
 
 import (
 	"context"
+	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -10,6 +11,7 @@ import (
 type PreparedSuccess struct {
 	s       *Selector
 	keyHash string
+	now     time.Time
 	result  *kv.BatchResult
 }
 
@@ -18,7 +20,8 @@ func (s *Selector) PrepareRecordSuccess(b *kv.Batch, keyHash string) *PreparedSu
 	if s.runner == nil {
 		return nil
 	}
-	return &PreparedSuccess{s: s, keyHash: keyHash, result: b.Script(successCall(keyHash, s.clock()))}
+	now := s.clock()
+	return &PreparedSuccess{s: s, keyHash: keyHash, now: now, result: b.Script(successCall(keyHash, now))}
 }
 
 // Err is the success write's outcome as the batch left it, before Finish logs it.
@@ -26,5 +29,5 @@ func (p *PreparedSuccess) Err() error { return p.result.Err }
 
 // Finish logs the success write's outcome.
 func (p *PreparedSuccess) Finish(ctx context.Context) {
-	p.s.finishSuccess(ctx, p.keyHash, p.result.Value, p.result.Err)
+	p.s.finishSuccess(ctx, p.keyHash, p.now, p.result.Value, p.result.Err)
 }

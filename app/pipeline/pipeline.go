@@ -2,7 +2,7 @@
 //
 // The pipeline is ignorant of the catalog, wire shapes and the policy ladder: which counters apply and which credentials may serve come from the route (app/plan), counting from a limits.Limiter.
 //
-// Expected store calls per request: one limiter script for the caller's counters and one per credential tried for its upstream counters (none for a side with no counters), plus the key pool's breaker reads per pick. Post-flight: one settle per held reservation and, only when the picked record changes on success, the breaker's success write.
+// Expected store calls per request: one round trip carrying the caller's hold and the first pick's breaker reads when the limiter is a limits.BatchAdmitter (else one each), then one per credential tried for its upstream counters (none for a side with no counters) and one per later pick. A pick whose selector holds the records fresh in a keypool.PickState reads nothing, and a hold or admit the hybrid limiter answers from memory sends nothing, so a request can reach the upstream with no store call. Post-flight: the held reservations' commits and, only when the picked record changes on success, the breaker's success write; with a settle queue they ride one round trip shared with other requests' settles, else one settle per held reservation and the write on its own.
 package pipeline
 
 import (
@@ -25,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/settle"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -133,6 +134,9 @@ type Pipeline struct {
 
 	// Orgs is told the organization a served response names, when the adapter reads one; nil skips the read.
 	Orgs OrgObserver
+
+	// Settles shares a served request's post-flight writes (its commits and the key's success write) with other requests' in one round trip on the post-flight store; nil sends each request's on round trips of its own.
+	Settles *settle.Queue
 }
 
 // HostHealth records observed host reachability. Implemented by
@@ -459,10 +463,13 @@ func (p *Pipeline) runPostFlight(
 	// client path, so ordering them last is safe.
 	body = nil
 
-	st.settle(limits.Usage{Tokens: limitTokens, CostNanos: st.cost(req.Lifecycle, limitTokens)})
-	if st.cur.cand.SuccessNeedsWrite() {
-		if sel := p.postSelector(); sel != nil {
-			sel.RecordSuccess(ctx, st.cur.slot.Credential.KeyHash)
+	u := limits.Usage{Tokens: limitTokens, CostNanos: st.cost(req.Lifecycle, limitTokens)}
+	if !p.settleQueued(ctx, st, u) {
+		st.settle(u)
+		if st.cur.cand.SuccessNeedsWrite() {
+			if sel := p.postSelector(); sel != nil {
+				sel.RecordSuccess(ctx, st.cur.slot.Credential.KeyHash)
+			}
 		}
 	}
 

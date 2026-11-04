@@ -317,6 +317,28 @@ func runSuite(t *testing.T, store newStore) {
 		admit(t, l, lease) // the settle freed the lease
 	})
 
+	t.Run("OneRoundTrip", func(t *testing.T) { admitOneRoundTrip(t, store, start) })
+
+	t.Run("FailedReleaseIsRetried", func(t *testing.T) {
+		now := start
+		fs := &failingStore{ScriptStore: store(t), fail: func(int64) bool { return false }}
+		l := newLimiter(fs, &now)
+		lease := callerCounter(rule(ratelimit.MeterConcurrency, ratelimit.StrategySlidingWindow, 1), "project:x")
+		full := upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "a")
+		admit(t, l, full).Settle(limits.Usage{})
+		// The admit's two scripts run, then the first release fails: the retry must free the lease.
+		fs.calls.Store(0)
+		fs.fail = func(n int64) bool { return n == 3 }
+		if r := refused(t, l, lease, full); r.Counter.ID != full.ID {
+			t.Fatalf("refused by %s, want the full account", r.Counter.ID)
+		}
+		if n := fs.calls.Load(); n != 4 {
+			t.Fatalf("script calls = %d, want the admit's two and two releases", n)
+		}
+		fs.fail = func(int64) bool { return false }
+		admit(t, l, lease)
+	})
+
 	t.Run("NoCounters", func(t *testing.T) {
 		now := start
 		res := admit(t, newLimiter(store(t), &now))
@@ -335,13 +357,44 @@ func TestLimiter_StoreCalls(t *testing.T) {
 	caller := callerCounter(rule(ratelimit.MeterConcurrency, ratelimit.StrategySlidingWindow, 5), "project:x")
 	alert := limits.BudgetCounter(limits.RungAccount, &budget.Budget{Meta: meta.Metadata{ID: "b2"}, Spec: budget.Spec{AmountUSD: "5", Mode: budget.ModeAlert}}, "p2", "account:a", "account:a")
 	res := admit(t, l, caller, alert)
-	if n := rec.RoundTrips(); n != 1 {
-		t.Fatalf("Admit made %d round trips, want 1", n)
+	if n, b := rec.RoundTrips(), rec.Batches(); n != 1 || len(b) != 1 || b[0] != 1 {
+		t.Fatalf("Admit: %d round trips, batches %v; want one batch carrying the caller group's script", n, b)
 	}
 	res.Settle(limits.Usage{CostNanos: usd})
-	if n, b := rec.RoundTrips(), rec.Batches(); n != 2 || len(b) != 1 || b[0] != 2 {
+	if n, b := rec.RoundTrips(), rec.Batches(); n != 2 || len(b) != 2 || b[1] != 2 {
 		t.Fatalf("Settle: %d round trips total, batches %v; want one batch of two commits", n, b)
 	}
+}
+
+// admitOneRoundTrip pins that Admit sends every group's script in one round trip, refused or not, and that a refusal in any group leaves every other group's count as it was.
+func admitOneRoundTrip(t *testing.T, store newStore, now time.Time) {
+	rec := kvtest.NewRecording(store(t))
+	l := newLimiter(rec, &now)
+	caller := callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "project:x")
+	lease := upstreamCounter(rule(ratelimit.MeterConcurrency, ratelimit.StrategySlidingWindow, 1), "a")
+	full := upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1), "b")
+	admit(t, l, full).Settle(limits.Usage{})
+
+	trips := rec.RoundTrips()
+	if r := refused(t, l, caller, lease, full); r.Counter.ID != full.ID {
+		t.Fatalf("refused by %s, want the full account %s", r.Counter.ID, full.ID)
+	}
+	// One round trip for the three groups, one releasing the two that reserved.
+	if n := rec.RoundTrips() - trips; n != 2 {
+		t.Fatalf("a refused three-group admit took %d round trips, want 2 (batches %v)", n, rec.Batches())
+	}
+
+	trips = rec.RoundTrips()
+	res := admit(t, l, caller, lease)
+	if n := rec.RoundTrips() - trips; n != 1 {
+		t.Fatalf("a two-group admit took %d round trips, want 1", n)
+	}
+	// The caller is refused while the account lease is free: the caller's refusal is reported and the lease reserved beside it is released again.
+	if r := refused(t, l, caller, upstreamCounter(rule(ratelimit.MeterConcurrency, ratelimit.StrategySlidingWindow, 1), "c")); r.Counter.ID != caller.ID {
+		t.Fatalf("refused by %s, want the caller %s", r.Counter.ID, caller.ID)
+	}
+	res.Release()
+	admit(t, l, caller, upstreamCounter(rule(ratelimit.MeterConcurrency, ratelimit.StrategySlidingWindow, 1), "c"))
 }
 
 func TestGroupCounters_Order(t *testing.T) {

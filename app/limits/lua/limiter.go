@@ -1,11 +1,12 @@
-// Package lua implements limits.Limiter over the Lua rate limiter in pkg/ratelimit: each atomicity group of a request's counters is reserved by one script whose keys share the group's hash tag, caller groups first and then upstream groups in list order. A refusal or store failure in a later group releases the groups already reserved, so a refused request holds nothing. Budgets are spend meters in the same scripts: a hard budget is checked at admission (refused once spent ≥ cap, retry-after at the next period start), an alert budget is not, and both are charged the real cost at Settle.
+// Package lua implements limits.Limiter over the Lua rate limiter in pkg/ratelimit: each atomicity group of a request's counters is reserved by one script whose keys share the group's hash tag, and every group's script goes out in one pipelined round trip. A refusal or store failure in any group releases the groups that reserved, so a refused request holds nothing once the release lands: until then, about one round trip, its other groups stay counted, concurrency leases included, and may refuse a concurrent request. A release that fails is sent once more on a fresh deadline. When several groups refuse, the first in order (caller groups, then upstream groups, each in list order) is the one reported. Budgets are spend meters in the same scripts: a hard budget is checked at admission (refused once spent ≥ cap, retry-after at the next period start), an alert budget is not, and both are charged the real cost at Settle.
 //
 // Scope: grouping, ordering and rollback across groups, mapping counters to limiter rules and refusals to counters, settlement, and reporting a budget's first crossing per period. Out of scope: which counters a request touches (app/plan), key and window arithmetic (pkg/ratelimit), and batching settles across requests.
 //
 // Expected kv ops per request:
-//   - Admit: one script call per group that checks something, sequentially; a group of alert budgets alone makes none. A refusal or failure after a group reserved adds one batched round trip releasing them.
+//   - Admit: one round trip: a pipeline of one script per group that checks something, or a single script call when the request has one group; a group of alert budgets alone queues none, so a request of alert budgets only makes no call. A refusal or failure in any group while others reserved adds one batched round trip, on the post-flight store, releasing them, and one more when that release fails.
 //   - PrepareAdmit: the same scripts queued on the caller's kv.Batch, no round trip of its own; a refusal adds the same release.
 //   - Settle: one batched round trip committing the groups that settle something (a concurrency lease, a token meter, a spend charge); none when nothing does.
+//   - PrepareSettle: the same commits queued on the caller's kv.Batch (app/settle shares it across requests), no round trip of its own.
 //   - Release: one batched round trip.
 //   - Peek (admin reads, off the request path): one batched round trip of read-only scripts, one per group.
 //
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -33,7 +35,10 @@ type Limiter struct {
 	crossed func(*limits.Counter)
 }
 
-var _ limits.Limiter = (*Limiter)(nil)
+var (
+	_ limits.Limiter       = (*Limiter)(nil)
+	_ limits.BatchAdmitter = (*Limiter)(nil)
+)
 
 // New returns a Limiter that admits and settles on lim.
 func New(lim *pkgratelimit.Limiter) *Limiter { return &Limiter{admit: lim, post: lim} }
@@ -50,7 +55,7 @@ func (l *Limiter) OnBudgetCrossed(fn func(*limits.Counter)) *Limiter {
 	return l
 }
 
-// Admit reserves every group of cs in order. Caller groups shed while the store's connection queue is full, as inbound admission does; upstream groups wait for a connection.
+// Admit reserves every group of cs in one round trip. With a caller group the call sheds while the store's connection queue is full, as inbound admission does; upstream groups alone wait for a connection.
 func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage) (limits.Reservation, error) {
 	if len(cs) == 0 {
 		return noCounters{}, nil
@@ -59,21 +64,29 @@ func (l *Limiter) Admit(ctx context.Context, cs []limits.Counter, _ limits.Usage
 	if err != nil {
 		return nil, err
 	}
-	res := &reservation{lim: l, counters: cs, held: make([]*pkgratelimit.Reservation, 0, len(groups))}
-	for _, g := range groups {
-		reserve := l.admit.ReserveOrShed
-		if g.upstream {
-			reserve = l.admit.Reserve
-		}
-		r, err := reserve(ctx, g.name, g.rules)
-		if err != nil {
-			// Released before the refusal returns, so a caller retrying at once does not meet its own hold.
-			res.commit(ctx, pkgratelimit.Observations{Cancelled: true})
-			return nil, refusal(cs, g.name, err)
-		}
-		res.held = append(res.held, r)
+	if len(groups) == 1 {
+		return l.admitGroup(ctx, cs, &groups[0])
 	}
-	return res, nil
+	b := l.admit.NewBatch(len(groups))
+	p, err := l.prepare(b, cs, groups)
+	if err != nil {
+		return nil, err
+	}
+	b.Exec(ctx)
+	return p.Finish(ctx)
+}
+
+// admitGroup reserves a request's only group with one script call, sparing the batch.
+func (l *Limiter) admitGroup(ctx context.Context, cs []limits.Counter, g *group) (limits.Reservation, error) {
+	reserve := l.admit.ReserveOrShed
+	if g.upstream {
+		reserve = l.admit.Reserve
+	}
+	r, err := reserve(ctx, g.name, g.rules)
+	if err != nil {
+		return nil, refusal(cs, g.name, err)
+	}
+	return &reservation{lim: l, counters: cs, held: []*pkgratelimit.Reservation{r}}, nil
 }
 
 // refusal names the counter a group's reserve refused. Any other failure passes through: a limit that cannot be checked refuses the request.
@@ -95,3 +108,12 @@ type noCounters struct{}
 
 func (noCounters) Settle(limits.Usage) {}
 func (noCounters) Release()            {}
+
+func (noCounters) PrepareSettle(*kv.Batch, limits.Usage) limits.PreparedSettle { return NoWrites{} }
+
+// NoWrites is the prepared settle of a reservation that writes nothing.
+type NoWrites struct{}
+
+func (NoWrites) TransportFailed() bool  { return false }
+func (NoWrites) Finish(context.Context) {}
+func (NoWrites) Resend(context.Context) {}

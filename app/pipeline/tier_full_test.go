@@ -154,7 +154,7 @@ func TestRunServesPastFullAccount(t *testing.T) {
 		t.Fatalf("reserve scripts = %d, want 3 (caller, the full account's refusal, key-4's account)", got)
 	}
 
-	// The cooled account costs nothing: the caller hold, key-4's breaker read, its account hold, then the post-flight settle of the token meter.
+	// The cooled account costs nothing: the caller hold with key-4's breaker read, its account hold, then the post-flight settle of the token meter.
 	before := h.store.RoundTrips()
 	h.used = nil
 	if _, err := h.run(t); err != nil {
@@ -163,8 +163,8 @@ func TestRunServesPastFullAccount(t *testing.T) {
 	if len(h.used) != 1 || h.used[0] != "sk-key-4" {
 		t.Fatalf("second request used %v, want key-4", h.used)
 	}
-	if trips := h.store.RoundTrips() - before; trips != 4 {
-		t.Fatalf("kv round trips = %d, want 4 (%v)", trips, h.store.Batches())
+	if trips := h.store.RoundTrips() - before; trips != 3 {
+		t.Fatalf("kv round trips = %d, want 3 (%v)", trips, h.store.Batches())
 	}
 }
 
