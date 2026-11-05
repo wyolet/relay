@@ -38,23 +38,27 @@ func TestAdjustLimit(t *testing.T) {
 		inflight    int
 		p99         time.Duration
 		samples     uint64
+		breaches    int
 		want        int64
 	}{
-		{"overloaded drops to 90% of in flight", 2048, 2048, 1000, overloaded, 500, 900},
-		{"overloaded drops to 90% of the limit when it is lower", 2048, 500, 800, overloaded, 500, 450},
-		{"overloaded stops at the floor", 2048, 2048, 10, overloaded, 500, adaptiveFloor},
-		{"floor never exceeds the hard cap", 10, 10, 5, overloaded, 500, 10},
-		{"too few samples count as healthy", 2048, 900, 900, time.Second, minSchedSamples - 1, 990},
-		{"p99 at the target is healthy", 2048, 900, 0, testTarget, 500, 990},
-		{"healthy grows by a tenth", 2048, 900, 0, healthy, 500, 990},
-		{"healthy grows by at least the minimum step", 2048, 64, 0, healthy, 500, 64 + adaptiveMinStep},
-		{"healthy stops at the hard cap", 2048, 2040, 0, healthy, 500, 2048},
+		{"overloaded drops to 90% of in flight", 2048, 2048, 1000, overloaded, 500, breachWindows - 1, 900},
+		{"overloaded drops to 90% of the limit when it is lower", 2048, 500, 800, overloaded, 500, breachWindows - 1, 450},
+		{"overloaded stops at the floor", 2048, 2048, 10, overloaded, 500, breachWindows - 1, adaptiveFloor},
+		{"floor never exceeds the hard cap", 10, 10, 5, overloaded, 500, breachWindows - 1, 10},
+		{"too few samples count as healthy", 2048, 900, 900, time.Second, minSchedSamples - 1, 0, 990},
+		{"p99 at the target is healthy", 2048, 900, 0, testTarget, 500, 0, 990},
+		{"healthy grows by a tenth", 2048, 900, 0, healthy, 500, 0, 990},
+		{"healthy grows by at least the minimum step", 2048, 64, 0, healthy, 500, 0, 64 + adaptiveMinStep},
+		{"a breach shorter than breachWindows holds the limit", 2048, 900, 900, overloaded, 500, breachWindows - 2, 900},
+		{"a healthy window resets the breach and grows", 2048, 900, 0, healthy, 500, breachWindows - 1, 990},
+		{"healthy stops at the hard cap", 2048, 2040, 0, healthy, 500, 0, 2048},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := NewAdmission(int(tc.hard))
 			a.limit.Store(tc.hard)
 			holdN(t, a, tc.inflight)
 			a.limit.Store(tc.limit)
+			a.breaches = tc.breaches
 			a.adjustLimit(tc.p99, tc.samples, testTarget)
 			if got := a.limit.Load(); got != tc.want {
 				t.Fatalf("limit = %d, want %d", got, tc.want)

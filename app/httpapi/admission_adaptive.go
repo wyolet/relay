@@ -17,6 +17,8 @@ const (
 	adaptiveMinStep = 16
 	// minSchedSamples: a p99 over fewer samples is a window's maximum, and an idle pod's few wakeups say nothing about load.
 	minSchedSamples = 100
+	// breachWindows: one window's p99 spikes past the target at moderate load on a few cores, so the limit only drops once the breach holds this many windows in a row; until then it holds.
+	breachWindows = 3
 )
 
 // SchedLatency returns the p99 scheduler latency since its previous call and how many samples it covers.
@@ -82,12 +84,16 @@ func (a *Admission) AdaptLimit(ctx context.Context, target time.Duration, sched 
 	}
 }
 
-// adjustLimit applies one window: overloaded drops the limit to 90 % of what is in flight (or of the limit, when lower) so the pod sheds right away; healthy raises it by a tenth, at least adaptiveMinStep. Only AdaptLimit calls it, so the load and store don't race another writer.
+// adjustLimit applies one window: from the breachWindows-th overloaded window in a row it drops the limit to 90 % of what is in flight (or of the limit, when lower) so the pod sheds right away, and holds it before that; healthy raises it by a tenth, at least adaptiveMinStep. Only AdaptLimit calls it, so the load and store and breaches don't race another writer.
 func (a *Admission) adjustLimit(p99 time.Duration, samples uint64, target time.Duration) {
 	limit, hard := a.limit.Load(), int64(cap(a.sem))
 	if samples >= minSchedSamples && p99 > target {
-		limit = max(min(adaptiveFloor, hard), min(limit, int64(len(a.sem)))*9/10)
+		a.breaches++
+		if a.breaches >= breachWindows {
+			limit = max(min(adaptiveFloor, hard), min(limit, int64(len(a.sem)))*9/10)
+		}
 	} else {
+		a.breaches = 0
 		limit = min(hard, limit+max(limit/10, adaptiveMinStep))
 	}
 	a.limit.Store(limit)
