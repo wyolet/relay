@@ -70,6 +70,32 @@ func BenchmarkResponseUsage(b *testing.B) {
 	}
 }
 
+// BenchmarkDecodeSummary measures each shape's narrow decoder alone on its recorded text response grown to about 4 KB of content.
+func BenchmarkDecodeSummary(b *testing.B) {
+	cases := []struct{ shape, dir string }{
+		{"openai-chat", "testdata/openai/chat-text"},
+		{"openai-responses", "testdata/openai/responses-text"},
+		{"anthropic", "testdata/anthropic/text"},
+	}
+	for _, c := range cases {
+		resp, err := os.ReadFile(filepath.Join(c.dir, responseInput))
+		if err != nil {
+			b.Fatal(err)
+		}
+		body := inflateJSON(resp, 4<<10)
+		d := shapeByName(c.shape).tr.(v1.SummaryDecoder)
+		b.Run(c.shape, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(body)))
+			for b.Loop() {
+				if _, err := d.DecodeSummary(body); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // inflateLastText grows the last text-like string value of body by about size.
 func inflateLastText(body []byte, size int) []byte {
 	locs := textValue.FindAllIndex(body, -1)

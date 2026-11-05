@@ -3,15 +3,21 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/pkg/httpheader"
 )
 
 // Both listeners bind the configured host through the same path boot uses, and answer there.
@@ -29,7 +35,7 @@ func TestListenersBindTheConfiguredHost(t *testing.T) {
 			srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			})}
-			bound, errs := serve(srv, 0)
+			bound, errs := serve(srv, nil)
 			if bound == nil {
 				t.Fatalf("serve %s: %v", addr, <-errs)
 			}
@@ -62,7 +68,7 @@ func TestServeReportsABindFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	bound, errs := serve(&http.Server{Addr: ln.Addr().String()}, 0)
+	bound, errs := serve(&http.Server{Addr: ln.Addr().String()}, nil)
 	if bound != nil {
 		t.Fatalf("serve bound %v on a taken address", bound)
 	}
@@ -71,50 +77,79 @@ func TestServeReportsABindFailure(t *testing.T) {
 	}
 }
 
-// Past the cap a new connection waits for an open one to close instead of being served.
-func TestServeCapsOpenConnections(t *testing.T) {
+// serveCapped serves a 204 handler with the inference admission built from cfg.
+func serveCapped(t *testing.T, cfg *config.Config) string {
+	t.Helper()
 	srv := &http.Server{Addr: "127.0.0.1:0", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})}
-	bound, errs := serve(srv, 1)
+	bound, errs := serve(srv, inferenceAdmission(cfg))
 	if bound == nil {
 		t.Fatalf("serve: %v", <-errs)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
+	return bound.String()
+}
 
-	get := func(conn net.Conn, wait time.Duration) error {
-		if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n")); err != nil {
-			return err
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(wait))
-		_, err := http.ReadResponse(bufio.NewReader(conn), nil)
-		return err
+func getOn(conn net.Conn, wait time.Duration) (*http.Response, []byte, error) {
+	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n")); err != nil {
+		return nil, nil, err
 	}
-	first, err := net.Dial("tcp", bound.String())
+	_ = conn.SetReadDeadline(time.Now().Add(wait))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	return resp, body, err
+}
+
+func dialT(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := get(first, 5*time.Second); err != nil {
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// Past the cap and the queue a connection gets relay's overload answer.
+func TestServeRefusesPastTheCap(t *testing.T) {
+	addr := serveCapped(t, &config.Config{MaxConns: 1, ConnQueue: 0, ConnQueueTimeout: time.Second})
+	if _, _, err := getOn(dialT(t, addr), 5*time.Second); err != nil {
 		t.Fatalf("first connection: %v", err)
 	}
-	second, err := net.Dial("tcp", bound.String())
+	resp, body, err := getOn(dialT(t, addr), 5*time.Second)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("second connection: %v", err)
 	}
-	defer second.Close()
-	if err := get(second, 300*time.Millisecond); err == nil {
-		t.Fatal("a second connection was served while the first held the only slot")
+	var apiErr httpapi.APIError
+	if err := json.Unmarshal(body, &apiErr); err != nil || apiErr.Err.Code != "overloaded" || apiErr.Err.Message != httpapi.OverloadMessage {
+		t.Fatalf("refusal body %q: %v", body, err)
 	}
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != httpapi.RetryAfterShed ||
+		resp.Header.Get(httpheader.HeaderShouldRetry) != "true" || resp.Header.Get(inference.HeaderOrigin) != "relay" || !resp.Close {
+		t.Fatalf("refusal = %d %v", resp.StatusCode, resp.Header)
+	}
+}
 
-	first.Close()
-	third, err := net.Dial("tcp", bound.String())
-	if err != nil {
-		t.Fatal(err)
+// Past the cap a new connection waits in the queue for an open one to close instead of being served.
+func TestServeQueuesPastTheCap(t *testing.T) {
+	addr := serveCapped(t, &config.Config{MaxConns: 1, ConnQueue: 1, ConnQueueTimeout: 5 * time.Second})
+	first := dialT(t, addr)
+	if _, _, err := getOn(first, 5*time.Second); err != nil {
+		t.Fatalf("first connection: %v", err)
 	}
-	defer third.Close()
-	_ = second.Close()
-	if err := get(third, 5*time.Second); err != nil {
-		t.Fatalf("a connection after the first closed: %v", err)
+	second := dialT(t, addr)
+	if _, _, err := getOn(second, 300*time.Millisecond); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("second connection while the first held the only slot: %v, want it to wait", err)
+	}
+	_ = first.Close()
+	_ = second.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(second), nil)
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("queued connection after the first closed: %v", err)
 	}
 }
 

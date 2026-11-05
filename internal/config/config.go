@@ -128,6 +128,11 @@ type Config struct {
 
 	// MaxConns caps the open connections the inference listener accepts (RELAY_MAX_CONNS); 0 = derived from the memory limit at boot.
 	MaxConns int
+	// ConnQueue is how many connections past MaxConns wait for a slot (RELAY_CONN_QUEUE, default 1024; 0 = refuse them at once), each for at most ConnQueueTimeout (RELAY_CONN_QUEUE_TIMEOUT, default 1s).
+	ConnQueue        int
+	ConnQueueTimeout time.Duration
+	// ConnCloseIdle closes an idle keep-alive connection for each queued one (RELAY_CONN_CLOSE_IDLE, default off).
+	ConnCloseIdle bool
 
 	// KeyBreakerThreshold and KeyBreakerWindow set how many upstream server or network errors within the window open a host key's breaker (RELAY_KEY_BREAKER_THRESHOLD, RELAY_KEY_BREAKER_WINDOW_S); 0 = keypool defaults. 401 and 403 open it at once.
 	KeyBreakerThreshold int
@@ -460,6 +465,17 @@ func Load() (*Config, error) {
 	} else {
 		cfg.MaxConns = v
 	}
+	if v := envInt("RELAY_CONN_QUEUE", 1024); v < 0 {
+		return nil, fmt.Errorf("RELAY_CONN_QUEUE must be >= 0")
+	} else {
+		cfg.ConnQueue = v
+	}
+	if v, err := envDuration("RELAY_CONN_QUEUE_TIMEOUT", time.Second); err != nil || v <= 0 {
+		return nil, fmt.Errorf("RELAY_CONN_QUEUE_TIMEOUT must be a positive duration such as 1s or 500ms")
+	} else {
+		cfg.ConnQueueTimeout = v
+	}
+	cfg.ConnCloseIdle = os.Getenv("RELAY_CONN_CLOSE_IDLE") == "1"
 	if v := envInt("RELAY_KEY_BREAKER_THRESHOLD", 0); v < 0 {
 		return nil, fmt.Errorf("RELAY_KEY_BREAKER_THRESHOLD must be >= 0")
 	} else {

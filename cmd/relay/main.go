@@ -42,6 +42,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "relay:", err)
 		os.Exit(1)
 	}
+	applyGCPercent()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
 	exitCode := 0
 	defer func() {
