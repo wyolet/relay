@@ -148,6 +148,8 @@ The control listener refuses to be framed (`frame-ancestors 'none'`, `X-Frame-Op
 | `RELAY_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. Logs are JSON on stdout. |
 | `RELAY_INSTANCE_ID` | _(empty)_ | Name of this instance, recorded on usage events (`extras.instance`), including those from the OTLP receiver. The Helm chart sets it to the pod name. |
 | `RELAY_PPROF_ADDR` | _(empty: off)_ | `host:port` of a separate listener serving the Go runtime profiling endpoints under `/debug/pprof/`. They have no authentication, so the address must not be reachable from outside the host or cluster: bind `127.0.0.1` and use `kubectl port-forward`, for example. On the Helm chart, set it through `relay.extraEnv`. |
+| `RELAY_PPROF_MUTEX_FRACTION` | `0` (off) | Samples 1 in N mutex contention events into `/debug/pprof/mutex`. Takes effect only with `RELAY_PPROF_ADDR` set; `5` is a reasonable value while looking for lock contention. |
+| `RELAY_PPROF_BLOCK_RATE` | `0` (off) | Records goroutine blocking events (channel waits, locks, `select`) into `/debug/pprof/block`, about one per N nanoseconds spent blocked; `1` records every event. Takes effect only with `RELAY_PPROF_ADDR` set; `10000` keeps the overhead small. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Accepted and validated, but has no effect: `/healthz` gives Postgres a fixed 2 seconds to answer. |
 
 ## Standalone image only

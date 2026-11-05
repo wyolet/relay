@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"time"
 
 	"github.com/wyolet/relay/internal/config"
@@ -31,7 +32,10 @@ func startPprof(cfg *config.Config) (*http.Server, <-chan error) {
 		ReadHeaderTimeout: 10 * time.Second,
 		// WriteTimeout stays 0: /profile and /trace write for as many seconds as the caller asks.
 	}
-	slog.Info("relay pprof listening", "addr", srv.Addr)
+	// Both profiles cost a little on every contended lock or blocking wait, so they stay off unless asked for.
+	runtime.SetMutexProfileFraction(cfg.PprofMutexFraction)
+	runtime.SetBlockProfileRate(cfg.PprofBlockRate)
+	slog.Info("relay pprof listening", "addr", srv.Addr, "mutex_fraction", cfg.PprofMutexFraction, "block_rate", cfg.PprofBlockRate)
 	_, errs := serve(srv, nil)
 	return srv, errs
 }

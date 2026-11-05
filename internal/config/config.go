@@ -195,6 +195,10 @@ type Config struct {
 	// PprofAddr is the host:port the runtime profiling listener binds (RELAY_PPROF_ADDR). Empty disables it.
 	PprofAddr string
 
+	// PprofMutexFraction and PprofBlockRate turn on the mutex and block profiles (RELAY_PPROF_MUTEX_FRACTION, RELAY_PPROF_BLOCK_RATE; 0 = off). They take effect only with PprofAddr set.
+	PprofMutexFraction int
+	PprofBlockRate     int
+
 	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
 	// separated list of exact origin strings (no wildcards — credentialed
 	// CORS forbids them). Empty disables CORS entirely.
