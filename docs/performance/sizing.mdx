@@ -37,7 +37,7 @@ With short requests the default stops costing throughput at 8 cores and below. O
 
 - Set `GOMEMLIMIT` to about 90 % of the container memory limit. The chart sets it from `goMemLimit` (default `900MiB`, against a `1Gi` limit in `resources.limits.memory`); raise the two together.
 - `RELAY_MAX_CONNS` defaults to as many connections as fit in 40 % of `GOMEMLIMIT`, so it follows a raised limit without being set. Connections past it wait up to `RELAY_CONN_QUEUE_TIMEOUT` in a queue of `RELAY_CONN_QUEUE`, and the rest are refused with `503`, so clients that open a new connection per request get an answer they can retry instead of a stalled connect.
-- `GOGC` stays at `100` by default (chart value `goGC`). Setting `GOGC=400` is a tuning override for pods with spare memory: on 16 and 32 cores it used 9–16 % fewer cores per request and cut p99 overhead by a quarter to a half, for 0.7–1.6 GiB more working set. Keep `GOMEMLIMIT` set when you raise it, so the heap still has a bound.
+- Relay runs with `GOGC=400` when `GOGC` is unset (chart value `goGC`). On 16 and 32 cores it used 9–16 % fewer cores per request than Go's default of `100` and cut p99 overhead by a quarter to a half, for 0.7–1.6 GiB more working set. Keep `GOMEMLIMIT` set, so the heap still has a bound; on a pod short of memory, set `GOGC=100`.
 - The in-memory state backend (`RELAY_STATE_BACKEND=memory`) is for single-pod use; under load it is GC-bound.
 
 ## Upstream connections

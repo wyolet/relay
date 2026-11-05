@@ -318,7 +318,7 @@ initResources:
 # -- GOMEMLIMIT/GOGC are part of relay's deployment story (allocation-conscious
 # hot path). Defaults track the memory limit; tune for your traffic.
 goMemLimit: "900MiB"
-goGC: "100"
+goGC: "400"
 
 autoscaling:
   enabled: true
