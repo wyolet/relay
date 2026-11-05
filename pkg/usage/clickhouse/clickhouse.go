@@ -220,8 +220,10 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 // and usage.Closer.
 type Sink struct {
 	conn clickhouse.Conn
-	// native is nil for an HTTP DSN, whose inserts go through conn.
-	native *nativeInserter
+	// native holds one inserter per WAL flush worker, since a ch-go client
+	// serves one query at a time. Nil for an HTTP DSN, whose inserts go
+	// through conn's pool.
+	native chan *nativeInserter
 	wal    *segmentQueue
 	log    *slog.Logger
 }
@@ -281,7 +283,10 @@ func New(cfg Config) (*Sink, error) {
 			_ = conn.Close()
 			return nil, fmt.Errorf("usage/clickhouse: current database: %w", err)
 		}
-		s.native = newNativeInserter(opts, database)
+		s.native = make(chan *nativeInserter, flushWorkers)
+		for range flushWorkers {
+			s.native <- newNativeInserter(opts, database)
+		}
 	}
 
 	wal, err := newSegmentQueue(
@@ -318,8 +323,9 @@ func (s *Sink) Close() error {
 	if err := s.wal.Close(); err != nil {
 		s.log.Warn("usage/clickhouse: wal close", "err", err)
 	}
-	if s.native != nil {
-		s.native.close()
+	// The WAL is closed, so no flush holds an inserter.
+	for range cap(s.native) {
+		(<-s.native).close()
 	}
 	return s.conn.Close()
 }
@@ -340,7 +346,9 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 	defer cancel()
 
 	if s.native != nil {
-		return s.native.insert(ctx, events)
+		n := <-s.native
+		defer func() { s.native <- n }()
+		return n.insert(ctx, events)
 	}
 	batch, err := s.conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {

@@ -44,7 +44,10 @@ func newSegmentQueue(
 		// Bodies are MB-scale: decoding and inserting a whole tick's worth at
 		// once spikes heap and CPU on a busy pod.
 		FlushOnRotate: true,
-		Kind:          "payload",
-		Logger:        log,
+		// One segment at a time: the dedup path's written-pieces set is not
+		// synchronized, and each concurrent flush would hold a decoded segment.
+		FlushWorkers: 1,
+		Kind:         "payload",
+		Logger:       log,
 	}, flushFn)
 }

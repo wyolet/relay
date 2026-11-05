@@ -196,15 +196,18 @@ func TestIntegration_InsertRedialsClosedConnection(t *testing.T) {
 		t.Skip("HTTP DSN inserts through clickhouse-go")
 	}
 	events := sampleEvents()
-	if err := s.insertBatch(events[:1]); err != nil {
+	ctx := context.Background()
+	inserter := <-s.native
+	defer func() { s.native <- inserter }()
+	if err := inserter.insert(ctx, events[:1]); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	_ = s.native.client.Close()
-	if err := s.insertBatch(events[1:2]); err != nil {
+	_ = inserter.client.Close()
+	if err := inserter.insert(ctx, events[1:2]); err != nil {
 		t.Fatalf("insert after the connection closed: %v", err)
 	}
 	var n uint64
-	if err := s.conn.QueryRow(context.Background(), "SELECT count() FROM "+chTable).Scan(&n); err != nil || n != 2 {
+	if err := s.conn.QueryRow(ctx, "SELECT count() FROM "+chTable).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("count: %d, %v", n, err)
 	}
 }
