@@ -59,7 +59,7 @@ func TestAdjustLimit(t *testing.T) {
 			holdN(t, a, tc.inflight)
 			a.limit.Store(tc.limit)
 			a.breaches = tc.breaches
-			a.adjustLimit(tc.p99, tc.samples, testTarget)
+			a.adjustLimit(Load{SchedP99: tc.p99, Samples: tc.samples}, testTarget)
 			if got := a.limit.Load(); got != tc.want {
 				t.Fatalf("limit = %d, want %d", got, tc.want)
 			}
@@ -118,14 +118,14 @@ func TestAdaptLimit_RunsUntilContextEnds(t *testing.T) {
 	a := NewAdmission(1000)
 	var mu sync.Mutex
 	p99 := 50 * time.Millisecond
-	sched := func() (time.Duration, uint64) {
+	load := func() Load {
 		mu.Lock()
 		defer mu.Unlock()
-		return p99, 1000
+		return Load{SchedP99: p99, Samples: 1000}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { a.AdaptLimit(ctx, testTarget, sched); close(done) }()
+	go func() { a.AdaptLimit(ctx, testTarget, load); close(done) }()
 
 	waitFor(t, func() bool { return a.Limit() == adaptiveFloor }, "limit at the floor while overloaded")
 	if got := testutil.ToFloat64(metrics.SchedLatencyP99Seconds); got != 0.05 {
@@ -194,5 +194,37 @@ func TestRuntimeSchedLatency(t *testing.T) {
 	}
 	if _, again := sched(); again >= first {
 		t.Fatalf("second read counted %d samples, want fewer than the first read's %d", again, first)
+	}
+}
+
+// CPU share at or past cpuBusyShare is overload even when the scheduler looks calm; below it, a calm scheduler is healthy.
+func TestAdjustLimit_CPUShare(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		share float64
+		want  int64
+	}{
+		{"busy", cpuBusyShare, 900},
+		{"below busy", cpuBusyShare - 0.05, 2048},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewAdmission(2048)
+			holdN(t, a, 1000)
+			a.breaches = breachWindows - 1
+			a.adjustLimit(Load{CPUShare: tc.share}, testTarget)
+			if got := a.limit.Load(); got != tc.want {
+				t.Fatalf("limit = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeLoad_CPUShare(t *testing.T) {
+	load := RuntimeLoad()
+	for deadline := time.Now().Add(50 * time.Millisecond); time.Now().Before(deadline); {
+	}
+	w := load()
+	if w.CPUShare <= 0 || w.CPUShare > 1.5 {
+		t.Fatalf("CPU share after a busy loop = %v, want in (0, 1.5]", w.CPUShare)
 	}
 }

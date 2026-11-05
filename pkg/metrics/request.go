@@ -84,7 +84,7 @@ var (
 		prometheus.GaugeOpts{
 			Namespace: Namespace,
 			Name:      "inflight_adaptive_limit",
-			Help:      "Effective per-pod in-flight admission limit: relay_inflight_limit, lowered while scheduler latency p99 is above its target. Compare against relay_inflight_requests for shed headroom.",
+			Help:      "Effective per-pod in-flight admission limit: relay_inflight_limit, lowered while the process is CPU-saturated. Compare against relay_inflight_requests for shed headroom.",
 		},
 	)
 
@@ -94,6 +94,15 @@ var (
 			Namespace: Namespace,
 			Name:      "sched_latency_p99_seconds",
 			Help:      "p99 time a runnable goroutine waited for a CPU over the adaptive limit's last 100ms window. 0 while the adaptive limit is off.",
+		},
+	)
+
+	// ProcessCPUShare is the adaptive limit's main signal, published so an operator can see what it saw.
+	ProcessCPUShare = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "process_cpu_share",
+			Help:      "Process CPU time (user + system) over the adaptive limit's last 100ms window, as a share of GOMAXPROCS. 0 while the adaptive limit is off.",
 		},
 	)
 
@@ -139,7 +148,7 @@ var (
 )
 
 func init() {
-	Register(RequestsTotal, RequestSeconds, OverheadSeconds, InflightRequests, InflightLimit, InflightAdaptiveLimit, SchedLatencyP99Seconds, AdmissionSeconds, PostFlightSeconds)
+	Register(RequestsTotal, RequestSeconds, OverheadSeconds, InflightRequests, InflightLimit, InflightAdaptiveLimit, SchedLatencyP99Seconds, ProcessCPUShare, AdmissionSeconds, PostFlightSeconds)
 }
 
 // SetInflightLimit publishes the admission cap. Called once at boot where
@@ -148,6 +157,9 @@ func SetInflightLimit(n int) { InflightLimit.Set(float64(n)) }
 
 // SetInflightAdaptiveLimit publishes the effective in-flight limit.
 func SetInflightAdaptiveLimit(n int) { InflightAdaptiveLimit.Set(float64(n)) }
+
+// SetProcessCPUShare publishes the process CPU share of the last window.
+func SetProcessCPUShare(share float64) { ProcessCPUShare.Set(share) }
 
 // SetSchedLatencyP99 publishes the scheduler latency p99 of the last window.
 func SetSchedLatencyP99(d time.Duration) { SchedLatencyP99Seconds.Set(d.Seconds()) }

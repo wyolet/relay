@@ -105,7 +105,7 @@ func registerAdmission(ctx context.Context, cfg *config.Config, lifecycleReg *li
 	// Must stay registered after the usage, payload and tokencount collectors: collectors run in order, so a request holds its slot until their post-flight work is done and the in-flight cap also bounds the post-flight backlog.
 	lifecycleReg.RegisterCollector(admission)
 	if cfg.InflightSchedP99 > 0 {
-		go admission.AdaptLimit(ctx, cfg.InflightSchedP99, httpapi.RuntimeSchedLatency())
+		go admission.AdaptLimit(ctx, cfg.InflightSchedP99, httpapi.RuntimeLoad())
 	}
 	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap(), "sched_p99_target", cfg.InflightSchedP99)
 	return admission
