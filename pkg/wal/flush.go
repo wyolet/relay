@@ -55,8 +55,13 @@ func (q *Queue[T]) FlushPending() {
 			for seg := range next {
 				// A worker records its failure before taking the next segment,
 				// so none starts once the sink has refused one.
-				if failed.Load() || !q.flushSegment(seg) {
+				if failed.Load() {
+					continue
+				}
+				if !q.flushSegment(seg) {
+					// Set at once, not at the end of the pass, so rotations stop retrying while the rest finish.
 					failed.Store(true)
+					q.failing.Store(true)
 				}
 			}
 		})
@@ -69,7 +74,9 @@ func (q *Queue[T]) FlushPending() {
 	}
 	close(next)
 	wg.Wait()
-	q.failing.Store(failed.Load())
+	if !failed.Load() {
+		q.failing.Store(false)
+	}
 }
 
 // flushSegment reads one segment, hands it to the flush function and deletes
