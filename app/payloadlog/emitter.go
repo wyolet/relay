@@ -4,9 +4,19 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wyolet/relay/pkg/metrics"
 )
+
+// drainLinger is how long the drain waits after a Record arrives for more to
+// share its write: 5 ms caps a trickle at 200 sink writes a second and holds
+// no Record longer than that.
+const drainLinger = 5 * time.Millisecond
+
+// drainLingerBytes ends the wait early: a batch this large already costs at
+// least one full write buffer, so waiting longer saves no write calls.
+const drainLingerBytes = 64 << 10
 
 // DefaultQueueBytes is the served queue's budget when EmitterOptions leaves
 // it zero. Drop-on-full still protects the post-flight goroutine.
@@ -34,11 +44,13 @@ type EmitterOptions struct {
 
 // Emitter fans captured Records to its Sinks via a single drain goroutine,
 // which takes everything queued at once and hands it to each Sink as one
-// batch. The queues are bounded by the bytes their Records hold, not by
-// count: record sizes span three orders of magnitude, so a count sized for
-// large bodies drops small ones in a burst. Drop-on-full preserves the
-// "post-flight never blocks" invariant; the drop count is exposed via
-// Dropped().
+// batch. After a Record arrives on an idle queue the drain waits up to
+// drainLinger, or until drainLingerBytes are queued, so a trickle shares one
+// write; Close writes at once. The queues are bounded by the bytes their
+// Records hold, not by count: record sizes span three orders of magnitude,
+// so a count sized for large bodies drops small ones in a burst. Drop-on-full
+// preserves the "post-flight never blocks" invariant; the drop count is
+// exposed via Dropped().
 //
 // Records of requests that never reached an upstream wait in a separate,
 // smaller queue that the drain reads only while the main one is empty, so a
@@ -50,6 +62,7 @@ type Emitter struct {
 	stop    chan struct{}
 	sinks   []Sink
 	log     *slog.Logger
+	linger  time.Duration
 	// spare is the drain's empty batch slice, swapped with a queue's.
 	spare []Record
 
@@ -62,6 +75,12 @@ type Emitter struct {
 // NewEmitter constructs an Emitter and starts its drain goroutine. Close
 // it at shutdown to flush in-flight Records.
 func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
+	return newEmitter(opts, drainLinger, sinks...)
+}
+
+// newEmitter is NewEmitter with the batch linger given; 0 writes what is
+// already queued without waiting.
+func newEmitter(opts EmitterOptions, linger time.Duration, sinks ...Sink) *Emitter {
 	qbytes := opts.QueueBytes
 	if qbytes <= 0 {
 		qbytes = DefaultQueueBytes
@@ -81,6 +100,7 @@ func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
 		stop:    make(chan struct{}),
 		sinks:   sinks,
 		log:     log,
+		linger:  linger,
 	}
 	e.wg.Add(1)
 	go e.drain()
@@ -185,6 +205,9 @@ func (e *Emitter) Close() {
 
 func (e *Emitter) drain() {
 	defer e.wg.Done()
+	// One timer for the emitter's life; Reset and Stop leave no stale tick.
+	linger := time.NewTimer(time.Hour)
+	linger.Stop()
 	for {
 		// Served Records first: a refused one is written only when none waits.
 		if e.writeQueued(&e.served) || e.writeQueued(&e.refused) {
@@ -192,12 +215,32 @@ func (e *Emitter) drain() {
 		}
 		select {
 		case <-e.ready:
+			e.waitForBatch(linger)
 		case <-e.stop:
 			// Flush what was queued before Close; later racing Emits are lost.
 			for e.writeQueued(&e.served) {
 			}
 			for e.writeQueued(&e.refused) {
 			}
+			return
+		}
+	}
+}
+
+// waitForBatch lets more Records join the queued ones until the linger
+// expires, drainLingerBytes are queued, or Close is called.
+func (e *Emitter) waitForBatch(linger *time.Timer) {
+	if e.linger <= 0 {
+		return
+	}
+	linger.Reset(e.linger)
+	defer linger.Stop()
+	for e.served.held()+e.refused.held() < drainLingerBytes {
+		select {
+		case <-e.ready:
+		case <-linger.C:
+			return
+		case <-e.stop:
 			return
 		}
 	}

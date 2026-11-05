@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wyolet/relay/pkg/metrics"
 )
@@ -24,6 +25,10 @@ const DefaultRefusedQueueSize = 4_096
 // drainBatchMax caps how many queued events one sink call carries.
 const drainBatchMax = 512
 
+// drainLinger is how long a part-full batch waits for more events: 5 ms caps
+// a trickle at 200 sink writes a second and holds no event longer than that.
+const drainLinger = 5 * time.Millisecond
+
 // EmitterOptions tunes Emitter behavior. Zero values are sensible
 // defaults for typical deployments.
 type EmitterOptions struct {
@@ -40,7 +45,9 @@ type EmitterOptions struct {
 
 // Emitter is the fan-out point: hooks Emit() events; a single
 // background goroutine drains the queue in batches and writes each batch
-// to every Sink (WriteBatch when the Sink implements BatchWriter).
+// to every Sink (WriteBatch when the Sink implements BatchWriter). A batch
+// is written once it holds drainBatchMax events or drainLinger after its
+// first one, whichever comes first; Close writes at once.
 //
 // Drop-on-full preserves the "post-flight never blocks" invariant.
 // Drop counter is exposed via Dropped() for /metrics or assertions.
@@ -54,6 +61,7 @@ type Emitter struct {
 	stop    chan struct{}
 	sinks   []Sink
 	log     *slog.Logger
+	linger  time.Duration
 
 	wg             sync.WaitGroup
 	stopped        atomic.Bool
@@ -64,6 +72,12 @@ type Emitter struct {
 // NewEmitter constructs an Emitter and starts its drain goroutine.
 // The Emitter must be Closed at shutdown to flush in-flight events.
 func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
+	return newEmitter(opts, drainLinger, sinks...)
+}
+
+// newEmitter is NewEmitter with the batch linger given; 0 writes what is
+// already queued without waiting.
+func newEmitter(opts EmitterOptions, linger time.Duration, sinks ...Sink) *Emitter {
 	qsize := opts.QueueSize
 	if qsize <= 0 {
 		qsize = DefaultQueueSize
@@ -82,6 +96,7 @@ func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
 		stop:    make(chan struct{}),
 		sinks:   sinks,
 		log:     log,
+		linger:  linger,
 	}
 	e.wg.Add(1)
 	go e.drain()
@@ -184,15 +199,22 @@ func (e *Emitter) Close() {
 func (e *Emitter) drain() {
 	defer e.wg.Done()
 	batch := make([]Event, 0, drainBatchMax)
+	// One timer for the emitter's life; Reset and Stop leave no stale tick.
+	linger := time.NewTimer(time.Hour)
+	linger.Stop()
 	for {
+		stopping := false
 		select {
 		case ev := <-e.queue:
-			batch = e.fillBatch(append(batch[:0], ev))
+			batch, stopping = e.collect(append(batch[:0], ev), linger)
 			e.write(batch)
 		case ev := <-e.refused:
-			batch = e.fillBatch(append(batch[:0], ev))
+			batch, stopping = e.collect(append(batch[:0], ev), linger)
 			e.write(batch)
 		case <-e.stop:
+			stopping = true
+		}
+		if stopping {
 			// Flush what was queued before Close; later racing Emits are lost.
 			for {
 				batch = e.fillBatch(batch[:0])
@@ -203,6 +225,31 @@ func (e *Emitter) drain() {
 			}
 		}
 	}
+}
+
+// collect fills batch until it is full or the linger since its first event
+// expires, and reports whether Close cut the wait short. Every wakeup refills
+// served events first, as fillBatch does.
+func (e *Emitter) collect(batch []Event, linger *time.Timer) ([]Event, bool) {
+	batch = e.fillBatch(batch)
+	if len(batch) == cap(batch) || e.linger <= 0 {
+		return batch, false
+	}
+	linger.Reset(e.linger)
+	defer linger.Stop()
+	for len(batch) < cap(batch) {
+		select {
+		case ev := <-e.queue:
+			batch = e.fillBatch(append(batch, ev))
+		case ev := <-e.refused:
+			batch = e.fillBatch(append(batch, ev))
+		case <-linger.C:
+			return batch, false
+		case <-e.stop:
+			return batch, true
+		}
+	}
+	return batch, false
 }
 
 // fillBatch appends whatever is already queued, up to the batch capacity,
