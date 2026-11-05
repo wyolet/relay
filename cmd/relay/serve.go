@@ -76,3 +76,24 @@ func inferenceMaxConns(configured int) int {
 	}
 	return max(minDerivedMaxConns, int(limit/connMemoryShareDen*connMemoryShareNum/connBudgetBytes))
 }
+
+// inflightBudgetBytes is the memory budgeted per inference request in flight, on top of its connection: one streaming a 64 KiB request translated to another wire shape holds about 100 KiB live (84 KiB heap, 19 KiB stack; 69 KiB untranslated), doubled for garbage and rounded up. The same request waiting for a non-streamed answer holds about 250 KiB, which this still covers before garbage.
+const inflightBudgetBytes = 256 << 10
+
+// Requests in flight may take inflightMemoryShareNum/inflightMemoryShareDen (40 %) of the memory limit.
+const (
+	inflightMemoryShareNum = 2
+	inflightMemoryShareDen = 5
+)
+
+// inferenceMaxInflight is RELAY_MAX_INFLIGHT when set, else as many requests as fit in 40 % of the Go memory limit (GOMEMLIMIT) at inflightBudgetBytes each, never below httpapi.DefaultMaxInflight, which also applies when no memory limit is set.
+func inferenceMaxInflight(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 {
+		return httpapi.DefaultMaxInflight
+	}
+	return max(httpapi.DefaultMaxInflight, int(limit/inflightMemoryShareDen*inflightMemoryShareNum/inflightBudgetBytes))
+}

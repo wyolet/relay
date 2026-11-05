@@ -150,7 +150,7 @@ func main() {
 	defer payloadCtl.Close()
 
 	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
-	admission := registerAdmission(cfg, lifecycleReg)
+	admission := registerAdmission(listenerCtx, cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints

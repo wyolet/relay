@@ -113,7 +113,10 @@ type Config struct {
 	// PayloadRefusedQueueBytes is the same for records of requests that never reached an upstream (RELAY_PAYLOAD_REFUSED_QUEUE_BYTES); 0 = payloadlog.DefaultRefusedQueueBytes.
 	PayloadRefusedQueueBytes int
 	MaxRequestBytes          int64 // 0 = use httpmw.DefaultMaxRequestBytes
-	MaxInflight              int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
+	MaxInflight              int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = derived from the memory limit at boot
+
+	// InflightSchedP99 is the scheduler latency p99 above which the effective in-flight limit is lowered (RELAY_INFLIGHT_SCHED_P99, default 5ms); 0 = the hard cap only.
+	InflightSchedP99 time.Duration
 
 	// UpstreamMaxIdlePerHost caps idle keep-alive connections the upstream
 	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST); 0 = the
@@ -432,10 +435,13 @@ func Load() (*Config, error) {
 		cfg.MaxRequestBytes = v
 	}
 
-	// RELAY_MAX_INFLIGHT bounds concurrent in-flight inference requests per pod
-	// (the admission cap). 0 = derived default (app/httpapi.DefaultMaxInflight),
-	// applied where the Admission is constructed.
+	// RELAY_MAX_INFLIGHT bounds concurrent in-flight inference requests per pod (the admission cap). 0 = derived from the memory limit where the Admission is constructed.
 	cfg.MaxInflight = envInt("RELAY_MAX_INFLIGHT", 0)
+	if v, err := envDuration("RELAY_INFLIGHT_SCHED_P99", 5*time.Millisecond); err != nil || v < 0 {
+		return nil, fmt.Errorf("RELAY_INFLIGHT_SCHED_P99 must be a non-negative Go duration (e.g. 5ms), or 0 to turn the adaptive in-flight limit off")
+	} else {
+		cfg.InflightSchedP99 = v
+	}
 
 	if v, err := envPositiveInt("RELAY_BATCH_MAX_ITEMS", 50000); err != nil {
 		return nil, fmt.Errorf("RELAY_BATCH_MAX_ITEMS must be >= 1")

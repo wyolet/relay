@@ -25,6 +25,8 @@ package httpapi
 // releases only when that mark is present, so a shed request (which never
 // acquired) can't drive the semaphore negative, and Finalize's once-per-
 // request guarantee means the release runs exactly once.
+//
+// Two limits apply. The semaphore's capacity is the hard cap, sized for memory. The effective limit, at most the hard cap, is lowered by AdaptLimit while the pod is CPU-saturated; both stages shed once the requests in flight reach it.
 
 import (
 	"context"
@@ -39,17 +41,7 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
-// DefaultMaxInflight is the derived cap when RELAY_MAX_INFLIGHT is unset
-// (or <= 0). Justification from the 2026-07-08 load test (12-core ARM pod):
-// healthy load cleared ~1k rps at ~20ms → ~20 concurrent, and the achieved
-// knee (~2,856 rps) sat far below this while still fast. So this cap never
-// throttles healthy load — it only engages once latency degrades enough that
-// concurrency climbs three orders of magnitude toward the observed 53k-
-// goroutine / 1.3GB blowup, converting that spiral into a bounded ceiling.
-// It is a fixed number, not 256×GOMAXPROCS: the binding constraint is per-pod
-// memory (set by GOMEMLIMIT / the container limit), which does not scale with
-// core count, so a per-core multiple is the wrong axis and runs loose on big
-// pods.
+// DefaultMaxInflight is the hard cap when no memory limit is set, and the floor of the cap derived from one. It is not a per-core multiple: the hard cap bounds memory, which does not scale with core count; CPU is the adaptive limit's job.
 const DefaultMaxInflight = 2048
 
 // RetryAfterShed is the Retry-After header value (seconds) sent when relay
@@ -134,7 +126,8 @@ func RecordShed(stage string) {
 // Admission bounds concurrent in-flight inference requests via a buffered
 // channel used as a counting semaphore.
 type Admission struct {
-	sem chan struct{}
+	sem   chan struct{}
+	limit atomic.Int64
 }
 
 // NewAdmission returns an Admission capped at max concurrent in-flight
@@ -147,27 +140,33 @@ func NewAdmission(max int) *Admission {
 	// requests_shed_total fires when it's already too late; the ratio is
 	// the leading signal.
 	metrics.SetInflightLimit(max)
-	return &Admission{sem: make(chan struct{}, max)}
+	metrics.SetInflightAdaptiveLimit(max)
+	a := &Admission{sem: make(chan struct{}, max)}
+	a.limit.Store(int64(max))
+	return a
 }
 
-// Cap reports the configured in-flight ceiling.
+// Cap reports the hard in-flight cap.
 func (a *Admission) Cap() int { return cap(a.sem) }
 
-// Full reports whether every slot is held. A lock-free snapshot that takes no
-// slot: a request it lets through can still be shed by PreFlight. Nil-safe
-// (never full).
+// Limit reports the effective in-flight limit.
+func (a *Admission) Limit() int { return int(a.limit.Load()) }
+
+// Full reports whether the requests in flight have reached the effective limit. A lock-free snapshot that takes no slot: a request it lets through can still be shed by PreFlight. Nil-safe (never full).
 func (a *Admission) Full() bool {
-	return a != nil && len(a.sem) >= cap(a.sem)
+	return a != nil && int64(len(a.sem)) >= a.limit.Load()
 }
 
-// PreFlight is a lifecycle.PreFlightMiddleware: it acquires a slot without
-// blocking. On success it marks lc so the Collector knows to release; when the
-// cap is reached it counts the shed and returns ErrShed for the dispatch to
-// map to the route's overload answer. A request whose Context can't carry the release mark is
-// admitted rather than held (never take a slot we can't return).
+// PreFlight is a lifecycle.PreFlightMiddleware: it acquires a slot without blocking. On success it marks lc so the Collector knows to release; when the effective limit or the hard cap is reached it counts the shed and returns ErrShed for the dispatch to map to the route's overload answer. A request whose Context can't carry the release mark is admitted rather than held (never take a slot we can't return).
+//
+// The effective-limit check and the acquire are two steps, so concurrent requests can overshoot the effective limit by a few; the hard cap is exact.
 func (a *Admission) PreFlight(_ context.Context, lc *lifecycle.Context, _ *lifecycle.PreFlightEvent) error {
 	if lc == nil || lc.Metadata == nil {
 		return nil
+	}
+	if a.Full() {
+		RecordShed(ShedStageLate)
+		return ErrShed
 	}
 	select {
 	case a.sem <- struct{}{}:
