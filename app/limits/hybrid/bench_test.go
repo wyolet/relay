@@ -1,6 +1,9 @@
 package hybrid
 
 import (
+	"context"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +66,57 @@ func benchmarkAdmitSettle(b *testing.B, s kvtest.ScriptStore, cs []limits.Counte
 		res.Settle(benchUsage)
 	}
 	b.ReportMetric(float64(rec.RoundTrips()-trips)/float64(b.N), "trips/op")
+}
+
+// subjectSets is n requests like localSet, each counted for an account of its own.
+func subjectSets(n int) [][]limits.Counter {
+	sets := make([][]limits.Counter, n)
+	for i := range sets {
+		subject := "account:a" + strconv.Itoa(i)
+		sets[i] = []limits.Counter{
+			limits.CallerRule(limits.RungProject, testRateLimit, rule(ratelimit.MeterRequests, ratelimit.StrategySlidingWindow, many, time.Minute), "p1", subject, subject),
+			limits.CallerRule(limits.RungProject, testRateLimit, rule(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, many, time.Minute), "p1", subject, subject),
+			upstreamCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, many, time.Minute)),
+		}
+	}
+	return sets
+}
+
+// benchmarkParallel admits and settles from every goroutine at once, cycling through sets, all counted locally after one sync.
+func benchmarkParallel(b *testing.B, sets [][]limits.Counter) {
+	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
+	s := memStore(b)
+	clock := func() time.Time { return now }
+	h := New(lua.New(pkgratelimit.New(s, discardLog(), clock)), s, s, time.Second).WithClock(clock)
+	for _, cs := range sets {
+		res, err := h.Admit(b.Context(), cs, limits.Usage{})
+		if err != nil {
+			b.Fatal(err)
+		}
+		res.Settle(benchUsage)
+	}
+	h.sync()
+	var next atomic.Uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := next.Add(1) * 7919
+		for pb.Next() {
+			i++
+			res, err := h.Admit(context.Background(), sets[i%uint64(len(sets))], limits.Usage{})
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			res.Settle(benchUsage)
+		}
+	})
+}
+
+// BenchmarkAdmitSettleParallel_Mem runs every goroutine on the same counters (one hot set) and on 1024 sets that share only an upstream counter.
+func BenchmarkAdmitSettleParallel_Mem(b *testing.B) {
+	b.Run("same", func(b *testing.B) { benchmarkParallel(b, [][]limits.Counter{localSet()}) })
+	b.Run("many", func(b *testing.B) { benchmarkParallel(b, subjectSets(1024)) })
 }
 
 func BenchmarkAdmitSettle_Mem(b *testing.B) {
