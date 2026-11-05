@@ -402,6 +402,8 @@ func (l *Limiter) addSlot(c *limits.Counter, lk *lookup) {
 	}
 	s.cur.start = lk.start
 	s.prev.start = previousStart(s.shape(), s.cur.start)
+	// Touched now, or the sync could free it as idle before its caller relocks and counts in it.
+	s.touchedAt.Store(lk.at)
 }
 
 // current records a request for lk's counter at now on s, its slot, when s needs no change for it: same rule fields, and now in its current bucket or, for a clock read just before another caller moved s on, its previous one. It returns the time s counts the request at, as roll does. Called with s read-locked.

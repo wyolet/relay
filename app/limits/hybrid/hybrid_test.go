@@ -573,3 +573,22 @@ func TestCloseSyncsUnsyncedCounts(t *testing.T) {
 		t.Fatalf("store holds %d after Close, want 6", got)
 	}
 }
+
+func TestAddedSlotSurvivesIdleDrop(t *testing.T) {
+	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
+	p := newPod(memStore(t), &now)
+	c := callerCounter(rule(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1_000_000, time.Hour))
+	r, _ := lua.Rule(&c)
+	lk, ok := p.lookupOf(&c, r, now)
+	if !ok {
+		t.Fatal("counter is not counted locally")
+	}
+	lk.hash = p.tab.hash(c.Group, c.ID, r.Meter)
+	p.mu.Lock()
+	p.addSlot(&c, &lk)
+	p.mu.Unlock()
+	p.dropIdle(now)
+	if _, found, _ := p.tab.find(lk.hash, c.Group, c.ID, r.Meter); !found {
+		t.Fatal("the sync freed a slot added for a request still counting in it")
+	}
+}
