@@ -32,6 +32,6 @@ func startPprof(cfg *config.Config) (*http.Server, <-chan error) {
 		// WriteTimeout stays 0: /profile and /trace write for as many seconds as the caller asks.
 	}
 	slog.Info("relay pprof listening", "addr", srv.Addr)
-	_, errs := serve(srv, 0)
+	_, errs := serve(srv, nil)
 	return srv, errs
 }

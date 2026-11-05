@@ -2,9 +2,11 @@
 // JSON array in raw bytes without decoding them, for the vendor adapters'
 // per-frame checks on stream hot paths. Keys compare the way encoding/json
 // matches struct fields (case-insensitively); a key holding an escape
-// sequence is reported as unreadable instead of being decoded. It does not
-// validate: a scan of invalid JSON may succeed, so callers must only draw
-// conclusions that hold when encoding/json rejects the same input.
+// sequence is reported as unreadable instead of being decoded. Object and
+// Array do not validate: a scan of invalid JSON may succeed, so callers must
+// only draw conclusions that hold when encoding/json rejects the same input.
+// Reader checks syntax as it reads, for callers that must reject what
+// encoding/json rejects.
 package jsonscan
 
 import "bytes"
