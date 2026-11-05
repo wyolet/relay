@@ -17,6 +17,7 @@ package hybrid
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -49,12 +50,12 @@ type Limiter struct {
 	interval  time.Duration
 	clock     func() time.Time
 
-	mu       sync.Mutex
-	tab      table
-	seq      uint32
-	lastSync int64 // unix ns the last sync was sent
+	// mu guards the table's structure. Requests hold it and their slots' locks shared and count with atomic adds, so requests on the same counter do not wait on one another; adding and dropping slots take it exclusively.
+	mu  sync.RWMutex
+	tab table
 
 	syncing  sync.Mutex
+	lastSync int64 // unix ns the last sync was sent; under syncing
 	stop     chan struct{}
 	done     chan struct{}
 	started  bool
@@ -188,7 +189,8 @@ func (a *admission) Finish(ctx context.Context) (limits.Reservation, error) {
 func (l *Limiter) checkLocal(res *reservation, now time.Time, exact []int, stale []hold, handoffs []push) ([]int, []push, error) {
 	cs := res.counters
 	res.local = res.localBuf[:0]
-	l.mu.Lock()
+	var lkBuf [8]lookup
+	lks := lkBuf[:0]
 	for i := range cs {
 		c := &cs[i]
 		if counted(cs[:i], c) {
@@ -196,37 +198,76 @@ func (l *Limiter) checkLocal(res *reservation, now time.Time, exact []int, stale
 		}
 		r, err := lua.Rule(c)
 		if err != nil {
-			l.mu.Unlock()
 			return nil, nil, err
 		}
-		idx, ok := l.localSlot(c, r, now)
+		lk, ok := l.lookupOf(c, r, now)
 		if !ok {
 			exact = append(exact, i)
 			continue
 		}
-		s := &l.tab.slots[idx]
-		if !l.usable(s, now) {
-			exact = append(exact, i)
-			stale = append(stale, hold{counter: i, slot: idx})
+		lk.counter = i
+		lks = append(lks, lk)
+	}
+	if len(lks) == 0 {
+		return exact, handoffs, nil
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	lks, exact = l.findSlots(cs, lks, exact)
+	for j := range lks {
+		lk := &lks[j]
+		s := &l.tab.slots[lk.slot]
+		start, usable, err := l.admitIn(s, lk, &cs[lk.counter], now)
+		if err != nil {
+			l.undoHolds(res, now)
+			return nil, nil, err
+		}
+		if !usable {
+			exact = append(exact, lk.counter)
+			stale = append(stale, hold{counter: lk.counter, slot: lk.slot})
 			continue
 		}
-		if retry, fits := pkgratelimit.CheckPlain(r, s.cur.total(), s.prev.total(), now); !fits {
-			l.mu.Unlock()
-			return nil, nil, &limits.Refused{Counter: c, RetryAfter: retry}
-		}
-		res.local = append(res.local, hold{counter: i, slot: idx, gen: s.gen, bucket: s.cur.start})
-	}
-	for _, h := range res.local {
-		if s := &l.tab.slots[h.slot]; countsRequests(s.kind) {
-			s.cur.delta++
-		}
+		res.local = append(res.local, hold{counter: lk.counter, slot: lk.slot, gen: s.gen, bucket: start})
 	}
 	// An exact counter's unsynced count goes to the store ahead of its script, so the script sees it.
 	for _, h := range stale {
+		s := &l.tab.slots[h.slot]
+		s.mu.Lock()
 		handoffs = l.takePending(handoffs, h.slot, h.counter)
+		s.mu.Unlock()
 	}
-	l.mu.Unlock()
+	// exact was gathered in three passes; the Lua limiter names the first refusing counter in the request's order.
+	slices.Sort(exact)
 	return exact, handoffs, nil
+}
+
+// admitIn checks lk's request against s, its slot, and counts it there when it fits, returning the bucket counted in. usable is false when s must count exactly. A request count is added before the check, so concurrent requests each see the others' counts; a refusal takes it back. Called with mu read-locked.
+func (l *Limiter) admitIn(s *slot, lk *lookup, c *limits.Counter, now time.Time) (start int64, usable bool, err error) {
+	s.mu.RLock()
+	at, ok := l.current(s, lk, now)
+	if ok {
+		defer s.mu.RUnlock()
+	} else {
+		s.mu.RUnlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		at = l.touch(s, lk, now)
+	}
+	if !l.usable(s, now) {
+		return 0, false, nil
+	}
+	reserve := countsRequests(s.kind)
+	cur := s.cur.total()
+	if reserve {
+		cur = s.cur.global + s.cur.delta.Add(1) - 1
+	}
+	if retry, fits := pkgratelimit.CheckPlain(lk.rule, cur, s.prev.total(), at); !fits {
+		if reserve {
+			s.cur.delta.Add(-1)
+		}
+		return 0, true, &limits.Refused{Counter: c, RetryAfter: retry}
+	}
+	return s.cur.start, true, nil
 }
 
 // queueExact queues the handoffs and then the exact counters' scripts on b. On an error the local counts are undone and b must not run.
@@ -279,40 +320,112 @@ func countsRequests(k pkgratelimit.PlainCounter) bool {
 	return k == pkgratelimit.PlainFixedWindow || k == pkgratelimit.PlainSlidingWindow
 }
 
-// localSlot returns the slot that counts c here, moved to the bucket containing now, and false for a counter that is always exact.
-func (l *Limiter) localSlot(c *limits.Counter, r pkgratelimit.Rule, now time.Time) (uint32, bool) {
+// lookup is one counter of a request with what finding and moving its slot needs, worked out before any lock is taken.
+type lookup struct {
+	counter int // index into the request's counters
+	rule    pkgratelimit.Rule
+	kind    pkgratelimit.PlainCounter
+	rung    uint8
+	start   int64 // the bucket containing now, unix ms
+	at      int64 // now, unix ns
+	hash    uint64
+	slot    uint32
+	found   bool
+}
+
+// lookupOf returns c's lookup at now, and false for a counter that is always exact.
+func (l *Limiter) lookupOf(c *limits.Counter, r pkgratelimit.Rule, now time.Time) (lookup, bool) {
 	kind := pkgratelimit.PlainCounterOf(r)
-	if kind == pkgratelimit.NotPlain || r.Amount < minLocalAmount || (kind != pkgratelimit.PlainSpend && r.Window <= l.interval) {
-		return 0, false
+	if kind == pkgratelimit.NotPlain || r.Amount < minLocalAmount || (kind != pkgratelimit.PlainSpend && r.Window <= l.interval) || !identFits(c.Group, c.ID, r.Meter) {
+		return lookup{}, false
 	}
-	h := l.tab.hash(c.Group, c.ID, r.Meter)
-	idx, found, collided := l.tab.find(h, c.Group, c.ID, r.Meter)
-	if collided {
-		return 0, false
+	start, err := pkgratelimit.BucketStart(r, now)
+	if err != nil {
+		return lookup{}, false
 	}
-	if !found {
-		start, err := pkgratelimit.BucketStart(r, now)
-		if err != nil {
-			return 0, false
+	return lookup{rule: r, kind: kind, rung: rungCode(c.Rung), start: start.UnixMilli(), at: now.UnixNano()}, true
+}
+
+// findSlots sets the slot of each lookup, adding the slots the table lacks, and returns the lookups that have one; the counters of the others, which cannot be counted here, go to exact. Called with mu read-locked, which it drops and retakes to add.
+func (l *Limiter) findSlots(cs []limits.Counter, lks []lookup, exact []int) ([]lookup, []int) {
+	for i := range lks {
+		c := &cs[lks[i].counter]
+		lks[i].hash = l.tab.hash(c.Group, c.ID, lks[i].rule.Meter)
+	}
+	for attempt := 0; ; attempt++ {
+		n, missing := 0, false
+		for i := range lks {
+			lk := &lks[i]
+			c := &cs[lk.counter]
+			idx, found, collided := l.tab.find(lk.hash, c.Group, c.ID, lk.rule.Meter)
+			// A slot added for it and freed again before this pass is left to the exact path rather than retried.
+			if collided || (!found && attempt > 0) {
+				exact = append(exact, lk.counter)
+				continue
+			}
+			lk.slot, lk.found = idx, found
+			missing = missing || !found
+			if n != i {
+				lks[n] = *lk
+			}
+			n++
 		}
-		var ok bool
-		if idx, ok = l.tab.add(h, c.Group, c.ID, r.Meter); !ok {
-			return 0, false
+		lks = lks[:n]
+		if !missing {
+			return lks, exact
 		}
-		s := &l.tab.slots[idx]
-		s.kind, s.window, s.period = kind, r.Window, periodCode(r.Period)
-		if kind == pkgratelimit.PlainSpend {
-			s.window = 0
+		l.mu.RUnlock()
+		l.mu.Lock()
+		for i := range lks {
+			if !lks[i].found {
+				l.addSlot(&cs[lks[i].counter], &lks[i])
+			}
 		}
-		s.cur.start = start.UnixMilli()
-		s.prev.start = previousStart(s.shape(), s.cur.start)
+		l.mu.Unlock()
+		l.mu.RLock()
+	}
+}
+
+// addSlot adds the slot of c unless another request added it first. Called with mu locked.
+func (l *Limiter) addSlot(c *limits.Counter, lk *lookup) {
+	if _, found, collided := l.tab.find(lk.hash, c.Group, c.ID, lk.rule.Meter); found || collided {
+		return
+	}
+	idx, ok := l.tab.add(lk.hash, c.Group, c.ID, lk.rule.Meter)
+	if !ok {
+		return
 	}
 	s := &l.tab.slots[idx]
+	s.kind, s.window, s.period = lk.kind, lk.rule.Window, periodCode(lk.rule.Period)
+	if lk.kind == pkgratelimit.PlainSpend {
+		s.window = 0
+	}
+	s.cur.start = lk.start
+	s.prev.start = previousStart(s.shape(), s.cur.start)
+}
+
+// current records a request for lk's counter at now on s, its slot, when s needs no change for it: same rule fields, and now in its current bucket or, for a clock read just before another caller moved s on, its previous one. It returns the time s counts the request at, as roll does. Called with s read-locked.
+func (l *Limiter) current(s *slot, lk *lookup, now time.Time) (time.Time, bool) {
+	if s.amount != lk.rule.Amount || s.alert != lk.rule.Alert || s.rung != lk.rung {
+		return now, false
+	}
+	switch lk.start {
+	case s.cur.start:
+	case s.prev.start:
+		now = time.UnixMilli(s.cur.start)
+	default:
+		return now, false
+	}
+	s.touchedAt.Store(lk.at)
+	return now, true
+}
+
+// touch records a request for lk's counter at now on s, its slot, and moves s to now's bucket. It returns the time s counts the request at. Called with s write-locked.
+func (l *Limiter) touch(s *slot, lk *lookup, now time.Time) time.Time {
 	// An amount or budget-mode edit keeps the counter's identity, so these follow the latest request.
-	s.amount, s.alert, s.rung = r.Amount, r.Alert, rungCode(c.Rung)
-	s.touchedAt = now.UnixNano()
-	l.roll(s, now)
-	return idx, true
+	s.amount, s.alert, s.rung = lk.rule.Amount, lk.rule.Alert, lk.rung
+	s.touchedAt.Store(lk.at)
+	return l.roll(s, lk.start, now)
 }
 
 // usable reports whether s may admit from memory at now: in local mode, with totals read within the last two intervals.
@@ -320,25 +433,32 @@ func (l *Limiter) usable(s *slot, now time.Time) bool {
 	return !s.exact && s.syncedAt != 0 && now.UnixNano()-s.syncedAt <= int64(2*l.interval)
 }
 
-// roll moves s to the bucket containing now. A move by one bucket keeps the current bucket as the previous one, unsynced count included; a longer gap leaves s unread, so it counts exactly until the next sync.
-func (l *Limiter) roll(s *slot, now time.Time) {
-	shape := s.shape()
-	t, err := pkgratelimit.BucketStart(shape, now)
-	if err != nil {
-		return
+// roll moves s to the bucket starting at start, the one containing now, and returns the time s counts now at. A move by one bucket keeps the current bucket as the previous one, unsynced count included; a longer gap leaves s unread, so it counts exactly until the next sync. Called with s write-locked.
+func (l *Limiter) roll(s *slot, start int64, now time.Time) time.Time {
+	switch {
+	case start == s.cur.start:
+		return now
+	case start == s.prev.start:
+		// now was read before another caller moved s on; moving back would drop the newer bucket's counts, so now counts at that bucket's start.
+		return time.UnixMilli(s.cur.start)
 	}
-	start := t.UnixMilli()
-	if start == s.cur.start {
-		return
-	}
-	prevStart := previousStart(shape, start)
+	prevStart := previousStart(s.shape(), start)
 	if prevStart == s.cur.start {
-		s.prev, s.cur = s.cur, bucket{start: start}
+		s.prev.copyFrom(&s.cur)
 	} else {
-		s.prev, s.cur = bucket{start: prevStart}, bucket{start: start}
+		s.prev.reset(prevStart)
 		s.syncedAt = 0
 	}
+	s.cur.reset(start)
 	s.exact = l.nearCap(s, now)
+	return now
+}
+
+// rollTo moves s to the bucket containing now. Called with s write-locked.
+func (l *Limiter) rollTo(s *slot, now time.Time) {
+	if t, err := pkgratelimit.BucketStart(s.shape(), now); err == nil {
+		l.roll(s, t.UnixMilli(), now)
+	}
 }
 
 func previousStart(shape pkgratelimit.Rule, start int64) int64 {

@@ -3,6 +3,8 @@ package hybrid
 import (
 	"hash/maphash"
 	"math"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -15,27 +17,43 @@ type bucket struct {
 	global  int64
 	readSeq uint32
 	// delta is counted here and not yet acknowledged by the store; inflight is the part of it a running push carries.
-	delta    int64
+	delta    atomic.Int64
 	inflight int64
 }
 
-func (b *bucket) total() int64 { return b.global + b.delta }
+func (b *bucket) total() int64 { return b.global + b.delta.Load() }
 
-func (b *bucket) pending() int64 { return b.delta - b.inflight }
+func (b *bucket) pending() int64 { return b.delta.Load() - b.inflight }
+
+// reset empties b for the bucket starting at start.
+func (b *bucket) reset(start int64) {
+	b.start, b.global, b.readSeq, b.inflight = start, 0, 0, 0
+	b.delta.Store(0)
+}
+
+// copyFrom makes b a copy of o.
+func (b *bucket) copyFrom(o *bucket) {
+	b.start, b.global, b.readSeq, b.inflight = o.start, o.global, o.readSeq, o.inflight
+	b.delta.Store(o.delta.Load())
+}
 
 // slot is one counter's state. It holds no pointers, so the slot slice and the index map are never scanned by the garbage collector; the counter's identity lives in the table's byte arena.
+//
+// hash, the identity fields, kind, window, period, live and gen change only under the table's write lock. The rest is guarded by mu, taken with the table read-locked: a request holds mu's read lock and changes only the atomic delta and touchedAt; a move to a new bucket, a rule edit and the sync take its write lock.
 type slot struct {
+	mu        sync.RWMutex
 	hash      uint64
 	cur, prev bucket
 	amount    int64
 	window    time.Duration // window rules; zero for spend
 	syncedAt  int64         // unix ns the last sync that read the totals was sent; zero = never read
-	touchedAt int64         // unix ns
+	touchedAt atomic.Int64  // unix ns
 	// The last sync's view of the current bucket, from which the next one estimates perSync: what the fleet spends in one interval.
 	sampleStart int64
 	sampleTotal int64
 	sampleAt    int64
 	perSync     int64
+	seq         uint32 // numbers the slot's pushes, which readSeq orders
 	identOff    uint32
 	groupLen    uint16
 	idLen       uint16
@@ -62,7 +80,7 @@ func (s *slot) bucket(start int64) *bucket {
 }
 
 func (s *slot) settled() bool {
-	return s.cur.delta == 0 && s.cur.inflight == 0 && s.prev.delta == 0 && s.prev.inflight == 0
+	return s.cur.delta.Load() == 0 && s.cur.inflight == 0 && s.prev.delta.Load() == 0 && s.prev.inflight == 0
 }
 
 // shape is the rule s counts, with what bucket and window arithmetic reads and no key.
@@ -134,9 +152,14 @@ func (t *table) find(h uint64, group, id, meter string) (idx uint32, found, coll
 	return idx, true, false
 }
 
+// identFits reports whether a slot can store the identity's lengths.
+func identFits(group, id, meter string) bool {
+	return len(group) <= math.MaxUint16 && len(id) <= math.MaxUint16 && len(meter) <= math.MaxUint8
+}
+
 // add stores a new slot for the identity, or reports false when the identity is too long to store.
 func (t *table) add(h uint64, group, id, meter string) (uint32, bool) {
-	if len(group) > math.MaxUint16 || len(id) > math.MaxUint16 || len(meter) > math.MaxUint8 || len(t.ident) > math.MaxUint32-len(group)-len(id)-len(meter) {
+	if !identFits(group, id, meter) || len(t.ident) > math.MaxUint32-len(group)-len(id)-len(meter) {
 		return 0, false
 	}
 	off := uint32(len(t.ident))

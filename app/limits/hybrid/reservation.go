@@ -1,6 +1,8 @@
 package hybrid
 
 import (
+	"time"
+
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/pkg/kv"
@@ -57,10 +59,11 @@ func (r *reservation) Release() {
 
 func (l *Limiter) settleLocal(r *reservation, actual limits.Usage) {
 	now := l.clock()
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	for i := range r.local {
-		c := &r.counters[r.local[i].counter]
+		h := &r.local[i]
+		c := &r.counters[h.counter]
 		rule, err := lua.Rule(c)
 		if err != nil {
 			continue
@@ -75,11 +78,35 @@ func (l *Limiter) settleLocal(r *reservation, actual limits.Usage) {
 		if charge <= 0 {
 			continue
 		}
-		// Found again by identity: a long request may outlive its slot, which the sync frees once idle.
-		if idx, ok := l.localSlot(c, rule, now); ok {
-			l.tab.slots[idx].cur.delta += charge
+		lk, ok := l.lookupOf(c, rule, now)
+		if !ok {
+			continue
 		}
+		lk.counter = h.counter
+		s := l.liveSlot(h)
+		if s == nil {
+			// Found again by identity: a long request may outlive its slot, which the sync frees once idle.
+			if s = l.slotOf(r.counters, lk); s == nil {
+				continue
+			}
+		}
+		l.chargeIn(s, &lk, charge, now)
 	}
+}
+
+// chargeIn adds charge to the current bucket of s, lk's slot. Called with mu read-locked.
+func (l *Limiter) chargeIn(s *slot, lk *lookup, charge int64, now time.Time) {
+	s.mu.RLock()
+	if _, ok := l.current(s, lk, now); ok {
+		s.cur.delta.Add(charge)
+		s.mu.RUnlock()
+		return
+	}
+	s.mu.RUnlock()
+	s.mu.Lock()
+	l.touch(s, lk, now)
+	s.cur.delta.Add(charge)
+	s.mu.Unlock()
 }
 
 // undoLocal takes back the request counts Admit added for fixed and sliding windows, in the bucket each went into; a bucket the counter has moved past is no longer read and keeps its count.
@@ -89,28 +116,64 @@ func (r *reservation) undoLocal() {
 		return
 	}
 	now := l.clock()
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	l.undoHolds(r, now)
+}
+
+// undoHolds is undoLocal with mu read-locked.
+func (l *Limiter) undoHolds(r *reservation, now time.Time) {
 	for i := range r.local {
 		h := &r.local[i]
-		s := &l.tab.slots[h.slot]
-		if !s.live || s.gen != h.gen {
-			c := &r.counters[h.counter]
-			rule, err := lua.Rule(c)
-			if err != nil {
-				continue
+		if s := l.liveSlot(h); s != nil {
+			if countsRequests(s.kind) {
+				s.mu.RLock()
+				if bk := s.bucket(h.bucket); bk != nil {
+					bk.delta.Add(-1)
+				}
+				s.mu.RUnlock()
 			}
-			idx, ok := l.localSlot(c, rule, now)
-			if !ok {
-				continue
-			}
-			s = &l.tab.slots[idx]
-		}
-		if !countsRequests(s.kind) {
 			continue
 		}
-		if bk := s.bucket(h.bucket); bk != nil {
-			bk.delta--
+		c := &r.counters[h.counter]
+		rule, err := lua.Rule(c)
+		if err != nil {
+			continue
 		}
+		lk, ok := l.lookupOf(c, rule, now)
+		if !ok {
+			continue
+		}
+		lk.counter = h.counter
+		s := l.slotOf(r.counters, lk)
+		if s == nil {
+			continue
+		}
+		s.mu.Lock()
+		l.touch(s, &lk, now)
+		if countsRequests(s.kind) {
+			if bk := s.bucket(h.bucket); bk != nil {
+				bk.delta.Add(-1)
+			}
+		}
+		s.mu.Unlock()
 	}
+}
+
+// liveSlot returns h's slot while it still counts h's counter, and nil once the sync has freed it. Called with mu read-locked.
+func (l *Limiter) liveSlot(h *hold) *slot {
+	if s := &l.tab.slots[h.slot]; s.live && s.gen == h.gen {
+		return s
+	}
+	return nil
+}
+
+// slotOf returns lk's slot, adding it when the table has none, and nil when lk's counter cannot be counted here. Called with mu read-locked, which it may drop and retake.
+func (l *Limiter) slotOf(cs []limits.Counter, lk lookup) *slot {
+	var none [1]int
+	lks, _ := l.findSlots(cs, []lookup{lk}, none[:0])
+	if len(lks) == 0 {
+		return nil
+	}
+	return &l.tab.slots[lks[0].slot]
 }

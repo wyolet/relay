@@ -18,12 +18,10 @@ func (l *Limiter) Peek(ctx context.Context, cs []limits.Counter) ([]limits.Readi
 		stored []limits.Counter
 		at     []int
 	)
-	l.mu.Lock()
 	for i := range cs {
 		c := &cs[i]
 		r, err := lua.Rule(c)
 		if err != nil {
-			l.mu.Unlock()
 			return nil, err
 		}
 		out[i].Amount = r.Amount
@@ -33,7 +31,6 @@ func (l *Limiter) Peek(ctx context.Context, cs []limits.Counter) ([]limits.Readi
 		}
 		stored, at = append(stored, *c), append(at, i)
 	}
-	l.mu.Unlock()
 	if len(stored) == 0 {
 		return out, nil
 	}
@@ -47,16 +44,21 @@ func (l *Limiter) Peek(ctx context.Context, cs []limits.Counter) ([]limits.Readi
 	return out, nil
 }
 
-// localCount is c's count at now from its slot, without moving the slot to now's bucket; false when the slot is missing, never read, or too far behind now to know the previous bucket. Called with mu held.
+// localCount is c's count at now from its slot, without moving the slot to now's bucket; false when the slot is missing, never read, or too far behind now to know the previous bucket.
 func (l *Limiter) localCount(c *limits.Counter, r pkgratelimit.Rule, now time.Time) (int64, bool) {
 	if pkgratelimit.PlainCounterOf(r) == pkgratelimit.NotPlain {
 		return 0, false
 	}
-	idx, found, _ := l.tab.find(l.tab.hash(c.Group, c.ID, r.Meter), c.Group, c.ID, r.Meter)
+	h := l.tab.hash(c.Group, c.ID, r.Meter)
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	idx, found, _ := l.tab.find(h, c.Group, c.ID, r.Meter)
 	if !found {
 		return 0, false
 	}
 	s := &l.tab.slots[idx]
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.syncedAt == 0 {
 		return 0, false
 	}

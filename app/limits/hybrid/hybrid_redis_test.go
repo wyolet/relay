@@ -25,6 +25,8 @@ func TestPeek_Redis(t *testing.T) { runPeekSuite(t, redisStore) }
 
 func TestConcurrent_Redis(t *testing.T) { runConcurrent(t, redisStore) }
 
+func TestHammer_Redis(t *testing.T) { runHammer(t, redisStore) }
+
 func BenchmarkAdmitSettle_Redis(b *testing.B) {
 	b.Run("local/lua", func(b *testing.B) { benchmarkAdmitSettle(b, redisStore(b), localSet(), true) })
 	b.Run("local/hybrid", func(b *testing.B) { benchmarkAdmitSettle(b, redisStore(b), localSet(), false) })
