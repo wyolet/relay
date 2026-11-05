@@ -128,6 +128,8 @@ func RecordShed(stage string) {
 type Admission struct {
 	sem   chan struct{}
 	limit atomic.Int64
+	// breaches counts consecutive overloaded windows; only the AdaptLimit goroutine touches it.
+	breaches int
 }
 
 // NewAdmission returns an Admission capped at max concurrent in-flight

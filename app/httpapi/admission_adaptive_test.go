@@ -38,24 +38,28 @@ func TestAdjustLimit(t *testing.T) {
 		inflight    int
 		p99         time.Duration
 		samples     uint64
+		breaches    int
 		want        int64
 	}{
-		{"overloaded drops to 90% of in flight", 2048, 2048, 1000, overloaded, 500, 900},
-		{"overloaded drops to 90% of the limit when it is lower", 2048, 500, 800, overloaded, 500, 450},
-		{"overloaded stops at the floor", 2048, 2048, 10, overloaded, 500, adaptiveFloor},
-		{"floor never exceeds the hard cap", 10, 10, 5, overloaded, 500, 10},
-		{"too few samples count as healthy", 2048, 900, 900, time.Second, minSchedSamples - 1, 990},
-		{"p99 at the target is healthy", 2048, 900, 0, testTarget, 500, 990},
-		{"healthy grows by a tenth", 2048, 900, 0, healthy, 500, 990},
-		{"healthy grows by at least the minimum step", 2048, 64, 0, healthy, 500, 64 + adaptiveMinStep},
-		{"healthy stops at the hard cap", 2048, 2040, 0, healthy, 500, 2048},
+		{"overloaded drops to 90% of in flight", 2048, 2048, 1000, overloaded, 500, breachWindows - 1, 900},
+		{"overloaded drops to 90% of the limit when it is lower", 2048, 500, 800, overloaded, 500, breachWindows - 1, 450},
+		{"overloaded stops at the floor", 2048, 2048, 10, overloaded, 500, breachWindows - 1, adaptiveFloor},
+		{"floor never exceeds the hard cap", 10, 10, 5, overloaded, 500, breachWindows - 1, 10},
+		{"too few samples count as healthy", 2048, 900, 900, time.Second, minSchedSamples - 1, 0, 990},
+		{"p99 at the target is healthy", 2048, 900, 0, testTarget, 500, 0, 990},
+		{"healthy grows by a tenth", 2048, 900, 0, healthy, 500, 0, 990},
+		{"healthy grows by at least the minimum step", 2048, 64, 0, healthy, 500, 0, 64 + adaptiveMinStep},
+		{"a breach shorter than breachWindows holds the limit", 2048, 900, 900, overloaded, 500, breachWindows - 2, 900},
+		{"a healthy window resets the breach and grows", 2048, 900, 0, healthy, 500, breachWindows - 1, 990},
+		{"healthy stops at the hard cap", 2048, 2040, 0, healthy, 500, 0, 2048},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := NewAdmission(int(tc.hard))
 			a.limit.Store(tc.hard)
 			holdN(t, a, tc.inflight)
 			a.limit.Store(tc.limit)
-			a.adjustLimit(tc.p99, tc.samples, testTarget)
+			a.breaches = tc.breaches
+			a.adjustLimit(Load{SchedP99: tc.p99, Samples: tc.samples}, testTarget)
 			if got := a.limit.Load(); got != tc.want {
 				t.Fatalf("limit = %d, want %d", got, tc.want)
 			}
@@ -114,14 +118,14 @@ func TestAdaptLimit_RunsUntilContextEnds(t *testing.T) {
 	a := NewAdmission(1000)
 	var mu sync.Mutex
 	p99 := 50 * time.Millisecond
-	sched := func() (time.Duration, uint64) {
+	load := func() Load {
 		mu.Lock()
 		defer mu.Unlock()
-		return p99, 1000
+		return Load{SchedP99: p99, Samples: 1000}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { a.AdaptLimit(ctx, testTarget, sched); close(done) }()
+	go func() { a.AdaptLimit(ctx, testTarget, load); close(done) }()
 
 	waitFor(t, func() bool { return a.Limit() == adaptiveFloor }, "limit at the floor while overloaded")
 	if got := testutil.ToFloat64(metrics.SchedLatencyP99Seconds); got != 0.05 {
@@ -190,5 +194,37 @@ func TestRuntimeSchedLatency(t *testing.T) {
 	}
 	if _, again := sched(); again >= first {
 		t.Fatalf("second read counted %d samples, want fewer than the first read's %d", again, first)
+	}
+}
+
+// CPU share at or past cpuBusyShare is overload even when the scheduler looks calm; below it, a calm scheduler is healthy.
+func TestAdjustLimit_CPUShare(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		share float64
+		want  int64
+	}{
+		{"busy", cpuBusyShare, 900},
+		{"below busy", cpuBusyShare - 0.05, 2048},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewAdmission(2048)
+			holdN(t, a, 1000)
+			a.breaches = breachWindows - 1
+			a.adjustLimit(Load{CPUShare: tc.share}, testTarget)
+			if got := a.limit.Load(); got != tc.want {
+				t.Fatalf("limit = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeLoad_CPUShare(t *testing.T) {
+	load := RuntimeLoad()
+	for deadline := time.Now().Add(50 * time.Millisecond); time.Now().Before(deadline); {
+	}
+	w := load()
+	if w.CPUShare <= 0 || w.CPUShare > 1.5 {
+		t.Fatalf("CPU share after a busy loop = %v, want in (0, 1.5]", w.CPUShare)
 	}
 }

@@ -11,7 +11,7 @@ func TestInflightSchedP99(t *testing.T) {
 		want    time.Duration
 		wantErr bool
 	}{
-		{"", 5 * time.Millisecond, false},
+		{"", 20 * time.Millisecond, false},
 		{"2ms", 2 * time.Millisecond, false},
 		{"0", 0, false},
 		{"-1ms", 0, true},
