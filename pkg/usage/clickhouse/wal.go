@@ -26,6 +26,11 @@ import (
 // segment on its own.
 type segmentQueue = wal.Queue[usage.Event]
 
+// flushWorkers is how many segments the WAL decodes and inserts at once. One
+// at a time, the drain decodes on a single core and idles through every
+// insert round trip, which caps it below what a busy pod writes.
+const flushWorkers = 4
+
 func newSegmentQueue(
 	dir string,
 	maxLines int,
@@ -39,6 +44,7 @@ func newSegmentQueue(
 		MaxLines:      maxLines,
 		FlushInterval: flushInterval,
 		MaxSegments:   maxSegments,
+		FlushWorkers:  flushWorkers,
 		Kind:          "usage",
 		Logger:        log,
 	}, flushFn)
