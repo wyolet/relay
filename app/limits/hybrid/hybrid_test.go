@@ -538,6 +538,28 @@ func TestSlotHoldsNoPointers(t *testing.T) {
 	}
 }
 
+// A request whose clock was read just before another moved the counter to the next bucket counts there, rather than moving the counter back and dropping the newer counts.
+func TestLateClockCountsInNewerBucket(t *testing.T) {
+	now := time.Date(2026, 11, 4, 10, 0, 59, 500*int(time.Millisecond), time.UTC)
+	s := memStore(t)
+	c := callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1000, time.Minute))
+	p := newPod(s, &now)
+	p.admitN(t, 1, c)
+	p.sync()
+	late := now
+	now = now.Add(time.Second)
+	p.admitN(t, 5, c)
+	now = late
+	if trips := p.admitN(t, 1, c); trips != 0 {
+		t.Fatalf("late admit made %d round trips, want 0 (still local)", trips)
+	}
+	now = late.Add(time.Second)
+	p.sync()
+	if got := stored(t, s, c, now); got != 6 {
+		t.Fatalf("store holds %d in the newer bucket, want 6", got)
+	}
+}
+
 func TestCloseSyncsUnsyncedCounts(t *testing.T) {
 	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
 	s := memStore(t)
@@ -549,5 +571,24 @@ func TestCloseSyncsUnsyncedCounts(t *testing.T) {
 	p.Close()
 	if got := stored(t, s, c, now); got != 6 {
 		t.Fatalf("store holds %d after Close, want 6", got)
+	}
+}
+
+func TestAddedSlotSurvivesIdleDrop(t *testing.T) {
+	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
+	p := newPod(memStore(t), &now)
+	c := callerCounter(rule(ratelimit.MeterTokens, ratelimit.StrategySlidingWindow, 1_000_000, time.Hour))
+	r, _ := lua.Rule(&c)
+	lk, ok := p.lookupOf(&c, r, now)
+	if !ok {
+		t.Fatal("counter is not counted locally")
+	}
+	lk.hash = p.tab.hash(c.Group, c.ID, r.Meter)
+	p.mu.Lock()
+	p.addSlot(&c, &lk)
+	p.mu.Unlock()
+	p.dropIdle(now)
+	if _, found, _ := p.tab.find(lk.hash, c.Group, c.ID, r.Meter); !found {
+		t.Fatal("the sync freed a slot added for a request still counting in it")
 	}
 }
