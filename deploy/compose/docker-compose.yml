@@ -7,7 +7,7 @@
 # The dev-stack `dev-net` external network lives in docker-compose.dev.yml so a
 # fresh `docker compose up` doesn't require a network it can't have.
 
-name: wyolet-relay
+name: relay-dev
 
 volumes:
   dragonfly-data:
