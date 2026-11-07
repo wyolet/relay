@@ -59,6 +59,11 @@ type Config struct {
 	// failed flush only the tick retries.
 	FlushOnRotate bool
 
+	// FlushWorkers is how many segments a flush pass reads and flushes at
+	// once; above 1 the flush function must be safe for concurrent calls.
+	// 0 or 1 flushes one at a time.
+	FlushWorkers int
+
 	// Kind labels the flush-lag metric and this queue's log lines
 	// ("usage", "payload").
 	Kind string

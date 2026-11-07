@@ -5,14 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
-// FlushPending finds all pending segments and flushes them oldest-first.
-// Before flushing it enforces MaxSegments by dropping the oldest excess. A
-// segment whose flush fails is left on disk for the next pass.
+// FlushPending finds all pending segments and flushes them oldest-first,
+// FlushWorkers at a time. Before flushing it enforces MaxSegments by dropping
+// the oldest excess. A segment whose read or flush fails is left on disk for
+// the next pass, and no further segment is started in this one.
 func (q *Queue[T]) FlushPending() {
 	q.flushMu.Lock()
 	defer q.flushMu.Unlock()
@@ -44,26 +47,56 @@ func (q *Queue[T]) FlushPending() {
 		segments = segments[len(segments)-q.cfg.MaxSegments:]
 	}
 
-	for _, seg := range segments {
-		records, err := readSegment[T](seg, q.segmentLineCount(seg), q.log)
-		if err != nil {
-			q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
-			q.failing.Store(true)
-			return
-		}
-		if err := q.flush(records); err != nil {
-			// Do NOT delete — leave for retry on next tick.
-			q.log.Warn("wal: flush failed, will retry", "file", filepath.Base(seg), "err", err)
-			q.failing.Store(true)
-			return
-		}
-		if err := os.Remove(seg); err != nil {
-			q.log.Warn("wal: remove segment", "file", filepath.Base(seg), "err", err)
-		} else {
-			q.forgetSegment(seg)
-		}
+	var failed atomic.Bool
+	next := make(chan string)
+	var wg sync.WaitGroup
+	for range min(max(q.cfg.FlushWorkers, 1), len(segments)) {
+		wg.Go(func() {
+			for seg := range next {
+				// A worker records its failure before taking the next segment,
+				// so none starts once the sink has refused one.
+				if failed.Load() {
+					continue
+				}
+				if !q.flushSegment(seg) {
+					// Set at once, not at the end of the pass, so rotations stop retrying while the rest finish.
+					failed.Store(true)
+					q.failing.Store(true)
+				}
+			}
+		})
 	}
-	q.failing.Store(false)
+	for _, seg := range segments {
+		if failed.Load() {
+			break
+		}
+		next <- seg
+	}
+	close(next)
+	wg.Wait()
+	if !failed.Load() {
+		q.failing.Store(false)
+	}
+}
+
+// flushSegment reads one segment, hands it to the flush function and deletes
+// it once that succeeds. It reports false when the segment stays on disk.
+func (q *Queue[T]) flushSegment(seg string) bool {
+	records, err := readSegment[T](seg, q.segmentLineCount(seg), q.log)
+	if err != nil {
+		q.log.Warn("wal: read segment", "file", filepath.Base(seg), "err", err)
+		return false
+	}
+	if err := q.flush(records); err != nil {
+		q.log.Warn("wal: flush failed, will retry", "file", filepath.Base(seg), "err", err)
+		return false
+	}
+	if err := os.Remove(seg); err != nil {
+		q.log.Warn("wal: remove segment", "file", filepath.Base(seg), "err", err)
+	} else {
+		q.forgetSegment(seg)
+	}
+	return true
 }
 
 // segmentLineCount returns the line count recorded when this process rotated
