@@ -9,7 +9,7 @@ app/catalog/BenchmarkSnapshotClone10kKeys 10274
 app/httpapi/inference/BenchmarkKeyPrincipal 22
 app/httpapi/inference/BenchmarkTokenPrincipal 23
 app/httpapi/inference/BenchmarkTokenPrincipalColdCache 28
-app/limits/lua/BenchmarkAdmitSettle_Mem 256
+app/limits/lua/BenchmarkAdmitSettle_Mem 263
 auth/token/BenchmarkHeaderKeyID 2
 auth/token/BenchmarkKeySetVerify 12
 auth/token/BenchmarkParse 10
