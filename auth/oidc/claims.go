@@ -41,6 +41,11 @@ func (c Claims) StringClaim(name string) string {
 	return s
 }
 
+// Claim returns the named claim of the verified id_token as JSON decoded it (string, bool, float64, []any, map[string]any), or nil when absent. A login with no id_token has no verified claims, so it reads nil for every name.
+func (c Claims) Claim(name string) any {
+	return c.verified[name]
+}
+
 type idTokenPayload struct {
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`

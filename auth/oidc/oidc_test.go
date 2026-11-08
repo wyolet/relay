@@ -765,6 +765,33 @@ func TestStringClaim(t *testing.T) {
 	}
 }
 
+// Claim reads any claim of the verified id_token with its JSON type and nothing from an inline profile.
+func TestClaim(t *testing.T) {
+	f := newFixture(t)
+	f.p.claims = map[string]any{"email_verified": false, "n": 7}
+	if w := f.login("good"); w.Code != http.StatusFound {
+		t.Fatalf("status %d", w.Code)
+	}
+	c := f.rec.provisioned[0]
+	if got, ok := c.Claim("email_verified").(bool); !ok || got {
+		t.Errorf("Claim(email_verified) = %#v, want false", c.Claim("email_verified"))
+	}
+	if got := c.Claim("n"); got != float64(7) {
+		t.Errorf("Claim(n) = %#v, want 7", got)
+	}
+	if got := c.Claim("missing"); got != nil {
+		t.Errorf("Claim(missing) = %#v, want nil", got)
+	}
+
+	f.p.tokenBody = map[string]any{"access_token": "at", "token_type": "bearer", "user": map[string]any{"id": "u9", "email_verified": true}}
+	if w := f.login("good"); w.Code != http.StatusFound {
+		t.Fatalf("status %d", w.Code)
+	}
+	if got := f.rec.provisioned[1].Claim("email_verified"); got != nil {
+		t.Fatalf("inline profile claim was read: %#v", got)
+	}
+}
+
 func TestFailureError(t *testing.T) {
 	cause := errors.New("cause")
 	f := &Failure{Message: "m", Err: cause}
