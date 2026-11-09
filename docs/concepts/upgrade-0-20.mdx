@@ -215,7 +215,7 @@ Migration 39 ends with two log lines:
 
    For each row, decide which binding keeps the subject and remove it from the others, on 0.11, before upgrading.
 
-5. **Check for policies that migration 36 would refuse.** A policy with rows in `policy_models` and an empty `models` field, or rows in `policy_host_keys` and no pools or credentials, would become unrestricted once those tables are dropped; if it is bound to a non-group subject—disabled bindings count—the migration stops. Run this against the 0.11 database to find them:
+5. **Check for policies that migration 36 would refuse.** A policy with rows in `policy_models` and an empty `models` field, or any rows in `policy_host_keys` (a 0.11 database has no pools or credentials to keep a restriction), would become unrestricted once those tables are dropped; if it is bound to a non-group subject—disabled bindings count—the migration stops. Run this against the 0.11 database to find them:
 
    ```sql
    SELECT p.name AS policy, l.lost AS would_lose, l.bindings
@@ -226,8 +226,6 @@ Migration 39 ends with two log lines:
                         AND (CASE WHEN jsonb_typeof(p.models) = 'array' THEN jsonb_array_length(p.models) ELSE 0 END) = 0
                        THEN 'model ids' END,
                   CASE WHEN EXISTS (SELECT 1 FROM policy_host_keys phk WHERE phk.policy_id = p.id)
-                        AND NOT EXISTS (SELECT 1 FROM policy_pools pp WHERE pp.policy_id = p.id)
-                        AND NOT EXISTS (SELECT 1 FROM policy_credentials pc WHERE pc.policy_id = p.id)
                        THEN 'host keys' END) AS lost,
               (SELECT string_agg(DISTINCT b.name, ', ' ORDER BY b.name)
                FROM policy_bindings b JOIN policy_binding_subjects s ON s.binding_id = b.id
