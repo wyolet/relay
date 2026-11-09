@@ -49,7 +49,7 @@ func runConcurrencyLeaseSuite(t *testing.T, name string, factory func(t *testing
 		l := factory(t, &now)
 		const scope = "lease-lost-reserve"
 		rules := []Rule{conRule("Route:lease:lost-reserve", "concurrency", 1, window)}
-		call, err := l.buildReserveCall(scope, rules, "lost-token")
+		call, err := l.buildReserveCall(scope, rules, "lost-token", l.clock())
 		if err != nil {
 			t.Fatal(err)
 		}

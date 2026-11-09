@@ -17,7 +17,9 @@
 //   - SinkCollector: the lifecycle.Collector (janitor / store). Reads the
 //     attached Event back off the Context and pushes it onto the Emitter.
 //   - Emitter: bounded-queue dispatcher. One drain goroutine writes
-//     batches of queued events to each Sink. Drop-on-full with counter —
+//     batches of queued events to each Sink, each once full or a few
+//     milliseconds after its first event, so a trickle of events costs one
+//     sink write per batch, not per event. Drop-on-full with counter —
 //     never blocks the post-flight goroutine.
 //
 // The split is what lets a pre-send reader (usage echo) and the sink

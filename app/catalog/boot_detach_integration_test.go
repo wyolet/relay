@@ -24,22 +24,22 @@ import (
 
 // detachBase is what every release of the test catalog ships: the provider,
 // the host, one model and a dirty-to-be tier the operator edits.
-const detachBase = `apiVersion: relay.wyolet.dev/v1alpha2
+const detachBase = `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Provider
 metadata: {name: acme}
 spec: {homepageURL: "https://acme.test"}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Host
 metadata: {name: acme}
 spec: {baseURL: "https://api.acme.test"}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Model
 metadata: {name: acme-chat, owner: {kind: provider, name: acme}}
 spec: {snapshots: [{name: acme-chat}], pointer: acme-chat}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: acme-tier-4, owner: {kind: host, name: acme}}
 spec: {}
@@ -49,29 +49,29 @@ spec: {}
 // policy with its rate limit, a second and a third tier, and a model with its
 // binding and pricing.
 const detachDroppedDocs = `---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: RateLimit
 metadata: {name: acme-tier-1-rl, owner: {kind: host, name: acme}}
 spec:
   enabled: true
   rules: [{meter: requests, amount: 500, window: 1m, strategy: sliding-window}]
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: acme-tier-1, owner: {kind: host, name: acme}}
-spec: {rateLimit: acme-tier-1-rl}
+spec: {rateLimits: [{ref: acme-tier-1-rl}]}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Model
 metadata: {name: acme-old, owner: {kind: provider, name: acme}}
 spec: {snapshots: [{name: acme-old}], pointer: acme-old}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostBinding
 metadata: {name: acme-old-on-acme}
 spec: {model: acme-old, host: acme, adapter: openai, enabled: true}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Pricing
 metadata: {name: acme-acme-old, owner: {kind: host, name: acme}}
 spec:
@@ -82,7 +82,7 @@ spec:
 
 func tierDoc(name, displayName string) string {
 	return `---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: ` + name + `, displayName: "` + displayName + `", owner: {kind: host, name: acme}}
 spec: {}
@@ -90,27 +90,32 @@ spec: {}
 }
 
 // operatorDocs are rows the operator seeds themselves (relay seed): a host
-// key on the first tier, and a team's policy.
+// key at the host, and a team's policy.
 func operatorDocs(env string) string {
-	return `apiVersion: relay.wyolet.dev/v1alpha2
+	return `apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
+metadata: {name: acme-org}
+spec: {host: acme}
+---
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: HostKey
 metadata: {name: acme-key}
 spec:
   hostId: acme
-  policyId: acme-tier-1
+  account: acme-org
   valueFrom: {kind: env, env: ` + env + `}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Team
 metadata: {name: platform, owner: {kind: user}}
 spec: {enabled: true}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Project
 metadata: {name: search}
 spec: {team: platform}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: search-default, owner: {kind: project, name: search}}
 spec: {}
@@ -280,22 +285,24 @@ func TestIntegration_SeedVersioned_DetachesWhatAReleaseDrops(t *testing.T) {
 		t.Fatal("detaching cleared the dirty flag on tier 3")
 	}
 
-	// The host key keeps its tier: the detached policy and its rate limit
-	// still serve.
+	// The host key stays, and the detached tier still links its rate limit,
+	// so an account bound to it keeps its caps.
 	keys, err := stores.HostKey.List(ctx)
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("host keys: %v (%d)", err, len(keys))
 	}
 	snap := cat.Current()
-	hk, ok := snap.HostKey(keys[0].Meta.ID)
-	if !ok {
+	if _, ok := snap.HostKey(keys[0].Meta.ID); !ok {
 		t.Fatal("the host key dropped out of the snapshot")
 	}
-	tier, ok := snap.Policy(hk.Spec.PolicyID)
-	if !ok || tier.Meta.Name != "acme-tier-1" || tier.Meta.CatalogDetachedAt == nil {
-		t.Fatalf("host key tier = %+v (found %v), want the detached acme-tier-1", tier, ok)
+	tier, ok := snap.PolicyByName("acme-tier-1")
+	if !ok || tier.Meta.CatalogDetachedAt == nil {
+		t.Fatalf("tier = %+v (found %v), want the detached acme-tier-1", tier, ok)
 	}
-	if rl := snap.RateLimitOfPolicy(tier.Meta.ID); rl == nil || rl.Meta.Name != "acme-tier-1-rl" {
+	if len(tier.Spec.RateLimits) != 1 {
+		t.Fatalf("tier rate limits = %+v, want its one link kept", tier.Spec.RateLimits)
+	}
+	if rl, ok := snap.RateLimit(tier.Spec.RateLimits[0].RateLimitID); !ok || rl.Meta.Name != "acme-tier-1-rl" {
 		t.Fatalf("tier rate limit = %+v, want acme-tier-1-rl", rl)
 	}
 
@@ -339,13 +346,13 @@ func TestIntegration_SeedVersioned_DetachesWhatAReleaseDrops(t *testing.T) {
 func TestIntegration_SeedVersioned_FailedReleaseDetachesNothing(t *testing.T) {
 	v1Dir := writeTree(t, "v1.0.0-test", detachBase+detachDroppedDocs)
 	parseError := archiveServer(t, map[string]string{
-		"providers/broken/provider.yaml": "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Provider\nmetadata: [unclosed\n",
+		"providers/broken/provider.yaml": "apiVersion: relay.wyolet.dev/v1alpha3\nkind: Provider\nmetadata: [unclosed\n",
 	})
 	planError := archiveServer(t, map[string]string{
-		"hosts/acme/policies/tier-9.yaml": `apiVersion: relay.wyolet.dev/v1alpha2
+		"hosts/acme/policies/tier-9.yaml": `apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: acme-tier-9, owner: {kind: host, name: acme}}
-spec: {rateLimit: no-such-rate-limit}
+spec: {rateLimits: [{ref: no-such-rate-limit}]}
 `,
 	})
 	cases := []struct{ name, url string }{

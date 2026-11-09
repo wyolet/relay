@@ -49,6 +49,14 @@ var (
 	}
 )
 
+// refusedRow is r11 alone, relay's refusal answered 429: an error, throttled, with no tokens or cost.
+func refusedRow(group map[string]string) usage.SummaryRow {
+	return usage.SummaryRow{
+		Group: group, Requests: 1, ErrorCount: 1, Errors4xx: 1, Throttled: 1,
+		DurationMs: flat(0), FirstSeen: at(119), LastSeen: at(119), Unpriced: 1,
+	}
+}
+
 func withGroup(r usage.SummaryRow, group map[string]string) usage.SummaryRow {
 	r.Group = group
 	return r
@@ -81,6 +89,29 @@ var summaryCases = []summaryCase{
 			DurationMs: mixed(160, 200), TTFTMs: ptr(mixed(40, 41)),
 			FirstSeen: at(0), LastSeen: at(110), CostNanos: 6750, Unpriced: 4,
 		}}, From: at(0), To: at(110)},
+	},
+	{
+		name: "group by refusal counts relay's refusals beside the served rows",
+		q:    summaryQuery("refusal"),
+		want: usage.SummaryResult{Rows: []usage.SummaryRow{
+			{
+				Group: map[string]string{"refusal": ""}, Requests: 10,
+				ErrorCount: 5, Errors4xx: 3, Errors5xx: 2, Throttled: 2,
+				Tokens:     map[string]int64{"input": 66, "output": 37, "cache_read": 7},
+				DurationMs: mixed(160, 200), TTFTMs: ptr(mixed(40, 41)),
+				FirstSeen: at(0), LastSeen: at(110), CostNanos: 6750, Unpriced: 4,
+			},
+			refusedRow(map[string]string{"refusal": "no_capacity"}),
+		}, From: at(0), To: at(119)},
+	},
+	{
+		name: "a refusal filter counts the refusals it matches",
+		q: func() usage.SummaryQuery {
+			q := summaryQuery("source")
+			q.Refusal = []string{"no_capacity"}
+			return q
+		}(),
+		want: usage.SummaryResult{Rows: []usage.SummaryRow{refusedRow(map[string]string{"source": "proxy"})}, From: at(119), To: at(119)},
 	},
 	{
 		name: "group by none applies the filter first",

@@ -33,7 +33,7 @@ func seedHostTiers(t *testing.T, st *stack) (hostID, rateLimitID string, tiers m
 	mustUpsert(t, st.stores.RateLimit.Upsert(ctx, rl), "rate limit")
 	tiers = map[string]string{}
 	for _, name := range []string{"acme-pristine", "acme-edited"} {
-		p := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: owner}, Spec: policy.Spec{RateLimitID: rl.Meta.ID}}
+		p := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: owner}, Spec: policy.Spec{RateLimits: []policy.RateLimitLink{{RateLimitID: rl.Meta.ID}}}}
 		mustUpsert(t, st.stores.Policy.Upsert(ctx, p), "policy "+name)
 		tiers[name] = p.Meta.ID
 	}
@@ -63,7 +63,7 @@ func TestIntegration_ExportIncludeSystem(t *testing.T) {
 	ctx := context.Background()
 
 	_, rateLimitID, tiers := seedHostTiers(t, st)
-	edit := `{"metadata":{"name":"acme-edited","displayName":"Edited by admin"},"spec":{"rateLimitId":"` + rateLimitID + `"}}`
+	edit := `{"metadata":{"name":"acme-edited","displayName":"Edited by admin"},"spec":{"rateLimits":[{"rateLimitId":"` + rateLimitID + `"}]}}`
 	if code, raw := st.adminDo(http.MethodPut, "/api/policies/by-id/"+tiers["acme-edited"], edit); code != http.StatusOK {
 		t.Fatalf("PUT catalog policy = %d: %s", code, raw)
 	}
@@ -123,7 +123,7 @@ func TestIntegration_ExportIncludeSystem(t *testing.T) {
 	}
 	if restored.Meta.DisplayName != "Edited by admin" ||
 		restored.Meta.Owner != (meta.Owner{Kind: meta.OwnerHost, ID: freshHostID}) ||
-		restored.Spec.RateLimitID != freshRateLimitID {
+		len(restored.Spec.RateLimits) != 1 || restored.Spec.RateLimits[0].RateLimitID != freshRateLimitID {
 		t.Fatalf("restored policy = %+v %+v", restored.Meta, restored.Spec)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -36,8 +35,7 @@ func TestRunPostFlight_FinalizeBeforeCommits_HookSeesBody(t *testing.T) {
 
 	res, err := h.pipeline.Run(context.Background(), &Request{
 		Adapter:   reservationTestAdapter{},
-		Keys:      []*hostkey.HostKey{h.key},
-		Policy:    h.requestPolicy,
+		Hops:      h.hops,
 		Lifecycle: lifecycle.NewContext("req-order", "pipeline", time.Now()),
 	})
 	if err != nil {

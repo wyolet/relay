@@ -42,3 +42,11 @@ func (p *PreparedCommit) Finish() error {
 	p.l.logCommit(p.res, p.obs, p.result.Value)
 	return nil
 }
+
+// Crossed returns the spend rules whose cap this commit's charge reached, as CommitAll does, once the batch has run.
+func (p *PreparedCommit) Crossed() []Rule {
+	if p.result.Err != nil {
+		return nil
+	}
+	return crossedSpends(p.result.Value, p.res)
+}

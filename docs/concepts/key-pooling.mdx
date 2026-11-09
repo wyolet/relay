@@ -1,41 +1,107 @@
 ---
 title: "Key Pooling"
-description: "How Relay spreads traffic over several host keys and routes around failing ones"
+description: "Pools, provider accounts, failover across keys and hosts, and the circuit breakers that take failing keys out"
 ---
 
-A provider API key has one rate limit and fails on its own. Relay lets a policy list several host keys for the same host, picks one per request, and takes a failing key out of rotation with a per-key circuit breaker, so one throttled or revoked key does not stop your traffic.
+A provider API key has its own failures, and the provider counts its limits per organization, not per key. Relay groups host keys into **pools** that a policy draws from, groups them by provider **account** so limits count where the provider counts them, and takes a failing key out of rotation with a per-key circuit breaker.
 
 <Frame caption="One relay key draws from a pool of host keys; unhealthy keys are skipped automatically.">
   <img className="block dark:hidden" src="/images/architecture/key-pooling.svg" alt="Key pooling and failover" />
   <img className="hidden dark:block" src="/images/architecture/key-pooling-dark.svg" alt="Key pooling and failover" />
 </Frame>
 
-## The pool
+## Pools
 
-A **host key** is one upstream credential, and it belongs to one host. The pool for a request is the set of host keys the governing [policy](/concepts/policies) lists in `hostKeyIds` that belong to the host routing chose, minus disabled keys and keys whose tier policy does not serve the requested model. Your callers never see which key served them.
+A **pool** is an ordered set of host keys at one host, with the algorithm that picks among them:
 
-Two consequences:
+| Field (API) | Field (manifest) | Meaning |
+| --- | --- | --- |
+| `hostId` | `host` (name) | The host every key in the pool authenticates to. |
+| `accountIds` | `accounts` (names) | Provider [accounts](#accounts) the pool draws on whole: each brings every host key it holds, including keys added later, and a [shared account](#sharing-an-account) brings its real account's keys. An account at another host is refused on save. May be empty. |
+| `credentialIds` | `credentials` (names) | The host keys, in order. A key at another host is refused on save. May be empty. |
+| `selection` | `selection` | `prioritized` (default), `round-robin` or `least-recently-used`. |
 
-- A policy has to list host keys. A host key that no policy lists is never used by policy-governed traffic.
-- Policies that list the same host key share it, along with its circuit breaker and its tier limit.
+A caller [policy](/concepts/policies) links pools in `pools`, in the order they are tried. Many policies may link one pool and draw on it first come, first served: nothing in a pool is reserved for one of them, and to keep one caller from using all of it, cap each caller with its own [rate limits](/concepts/rate-limits) or [budgets](/concepts/budgets). To give a policy a single host key, make a pool of that one key.
 
-A host marked `noAuth` (a self-hosted Ollama, for example) needs no host key: Relay uses a built-in anonymous credential that sends no auth header and is never taken out by a breaker.
+Host keys, pools, accounts and budgets may be owned by the system, a team, a project or a user. Your callers never see which key served them.
 
-Requests with no governing policy draw from the host's system-owned keys plus the caller's own. Only a personal key with no project can make them, only when the `inference` setting `allowMissingPolicy` is on, and never under `RELAY_AUTHZ=rbac`. See [Policies](/concepts/policies#requests-without-a-policy).
+### Picking a key
 
-## Picking a key
-
-The policy's `keySelection` sets the algorithm:
-
-| Strategy | Behavior |
+| Selection | Behavior |
 | --- | --- |
-| `prioritized` (default) | The first healthy key in the order the policy lists them. Later keys take traffic only when earlier ones are unhealthy or saturated. |
-| `round-robin` | Rotates across healthy keys using a shared counter in the state backend. |
-| `least-recently-used` | Picks the healthy key whose last use is oldest. |
+| `prioritized` | The first healthy key in pool order: the keys of `accountIds` first, account by account and each account's keys in the order they were created, then `credentialIds`. A key listed directly and through its account keeps its first place. Later keys take traffic only when earlier ones are unhealthy or over a limit. |
+| `round-robin` | Rotates across healthy keys using a counter per pool, shared by every policy that links the pool. Each pod keeps its own counter, so keys take turns on every pod but not in one fleet-wide order. |
+| `least-recently-used` | Picks the healthy key whose last use on this pod is oldest. |
 
-Breaker state is shared across pods through the state backend (Valkey when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
+Breaker state is shared across pods through the state backend (Dragonfly when `RELAY_STATE_BACKEND=redis`). Every change to a key's breaker is one atomic script, so pods recording failures on the same key add to one count.
 
-After picking a key, Relay reserves the key's tier rate limit if its tier policy has one. A key over its tier limit is skipped without touching its breaker, and the next key is tried. Each pod then skips that key for the requested model until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-limits-per-host-key).
+Picking a key usually reads no state backend on the request path. Each pod keeps a copy of the breaker records of the keys it picks and rereads all of them once a second, off the request path. A pod's own breaker changes apply to its copy at once, even when the state backend fails to record them. A breaker another pod opens reaches this pod within about a second, so this pod may send up to a second of requests to a key another pod has just seen fail. A success served on a copy that does not yet show another pod's failures may leave that pod's failure count standing. The state backend is still read on the request path for a key this pod has not picked yet, for a copy more than two seconds old because the rereads fail, and for the probe of a key whose cooldown has ended, which one request claims across all pods.
+
+After picking a key, Relay reserves the key's upstream limits: the rate limits and budgets of the policy bound to its account. A key over one of them is skipped without touching its breaker, and the next key is tried. When the refusing limit is an account-wide request or token window (no model scope), every key of that account is skipped on this pod until the limit's retry time. See [Rate limits](/concepts/rate-limits#upstream-rungs).
+
+### Keyless hosts
+
+A host marked `noAuth` (a self-hosted Ollama, for example) needs no host key: Relay uses a built-in anonymous credential that sends no auth header and is never taken out by a breaker. Because no key gates it, a keyless host is reached only through a pool at that host linked by a caller policy; the pool may list no keys. Model wildcards and the ownership reach never cover it.
+
+## Accounts
+
+A **provider account** is one provider organization at one host. A host key names its account in `accountId` (`account` in manifests), which must be at the key's host and have the key's owner. The account is required: create the account, then add keys to it. A key that names none is refused with `400 account_required`, on create and on update, and Relay never creates an account for it. Accounts of other kinds stand for teams, projects, users and service accounts on the caller side; see [Accounts and lanes](/concepts/accounts).
+
+| Field (API) | Field (manifest) | Meaning |
+| --- | --- | --- |
+| `hostId` | `host` (name) | The host the organization is held at. |
+| `orgId` | `orgId` | The provider's organization id. Optional and informational. |
+| `groupedByRelay` (read-only) | | Set on accounts the 0.20 upgrade made by grouping an owner's keys at a host. See [Accounts grouped by the upgrade](#accounts-grouped-by-the-upgrade). |
+| `sourceAccountId` (read-only) | `sourceAccount` (name) | On a [shared account](#sharing-an-account): the real account whose keys it reaches. |
+| `holder` (read-only) | `serviceAccount` (name) | On a share with a service account: that service account, the only lane that draws on it. |
+
+An account is the organization, not a person: one login can belong to several organizations with separate limits, and each is its own account. Keys of one account share its capacity. Adding a second key to an account gives failover on key-level failures and lets you rotate without downtime (add the new key, then revoke the old one); it does not add throughput.
+
+That is why tier limits belong on the account. Bind a [tier preset](/concepts/policies#tier-presets), or a tier policy of your own, to the account, and its rate limits count once across every key of the account and every caller that reaches them.
+
+Two cooldowns skip a whole account. Both live in each pod and are learned from that pod's own requests:
+
+- **An account-wide limit refuses.** When the account's own request or token window is spent, the account is skipped for every model until the window has room.
+- **The provider answers `429`.** A `429` from a key cools its account for the requested model only, since providers limit each model separately within an organization. The cooldown lasts for the response's `Retry-After`, 5 seconds when it has none, and at most 60 seconds; after it, one request learns whether the limit still holds. The key's breaker is not written. A key in an account [grouped by the upgrade](#accounts-grouped-by-the-upgrade) has no `429` cooldown on the account: the `429` goes to the key's breaker as in the table below, and the request fails over to the next key.
+
+When every key of the route is over a limit or cooling, the request fails with `429 rate_limit_exceeded` and a `Retry-After` for the first one that frees up.
+
+Deleting an account that host keys, relay keys or a policy binding still name is refused with `409`. Read an account's keys with `GET /api/accounts/{ref}/keys` and a pool's with `GET /api/pools/{ref}/keys`.
+
+A user may also run requests directly in a provider account they own personally, as a [lane](/concepts/accounts#lanes): such a request reaches only that account's host keys, under the account's own policy.
+
+### Sharing an account
+
+To let a user, team, project or service account use a provider account without giving them its keys, share it:
+
+```bash
+curl -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"receiver": {"kind": "team", "id": "<team id>"}}' \
+  http://localhost:8081/api/accounts/anthropic/shares
+```
+
+The receiver gets a provider account of its own (`anthropic-for-platform`) whose `spec.sourceAccountId` names the real account and `spec.sharedBy` its owner. It holds no host keys and never shows a secret: it reaches every key of the real account, including keys added later and rotated values, and `GET /api/accounts/{ref}/keys` lists them read-only, each with only the key format's fixed prefix and its last 4 characters (`prefix`, such as `sk-proj-...a1b2`); the receiver may read their breaker state with `GET /api/host-keys/by-id/{id}/health`. A host key cannot be added to it (`409 account_shared`).
+
+- **Who shares.** The real account's owner: a personal account by its user alone (not an admin), a team's, project's or the system's account by an admin of that scope. The sharer must be able to see the receiver; one it cannot see answers `404`, like one that does not exist. A shared account is not shared on (`409 reshare_refused`), one account is shared with one receiver once (`409 share_exists`), and a scope that already reaches the account through ownership (a team's projects reach the team's accounts, every scope reaches the system's) is refused with `409 already_reachable`: a pool there can list the account itself.
+- **Who reaches it.** Nobody until the receiving scope links it: a share never changes routing by itself. A pool of the receiving scope lists it in `accountIds`, and a policy linking that pool brings it to the lanes under its binding; a user may also run keys in a share made with them, as their own provider account. A service account's share is owned by its project and held by the service account, so only that service account's lane draws on it, even through a project pool.
+- **Limits.** Requests through it count on the real account's tier, one ceiling for the owner and every share. A policy bound to the shared account only narrows: its rate limits and budgets count on the share, in the same store call as the tier.
+- **Usage.** Rows keep `account_id` on the real account and add `via_account_id`. `GET /api/accounts/{ref}/shares?since=30d` lists the real account's shares with each receiver and the requests and cost it drew.
+- **Revoking it.** Delete the shared account, as the real account's owner or as an admin of the receiving scope. Revoking always goes through: policy bindings holding it let go of it (a binding left with no account is deleted), relay keys whose lane it was move to their principal's personal account and keep working (unless that account is [turned off](/concepts/accounts#turning-personal-accounts-off): the key is left without an account and stops until it is on), and pools lose it. The answer lists each change, by name where the caller may see the row and as a count otherwise. The real account cannot be deleted while shares name it: `POST /api/accounts/by-id/{id}/detach` revokes them the same way, and an apply that prunes the real account lists each share as a delete of its own, with what revoking it changes (`revokes`); a bundle that still declares one refuses the prune. A share also goes with its receiver: deleting the user, team, project or service account it was shared with deletes it, and the answer lists the pools that lose it. A share whose real account is gone serves nothing and shows the plan issue `shared_account_missing`.
+
+In a manifest, a shared account names its real account by name and repeats its host:
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha3
+kind: Account
+metadata: {name: anthropic-for-indexer, owner: {kind: project, name: ml-search}}
+spec: {host: anthropic, sourceAccount: anthropic, serviceAccount: search-indexer}
+```
+
+### Accounts grouped by the upgrade
+
+The upgrade to 0.20 put every host key without an account into an account per owner and host, named after the host (`openai`, then `openai-2`, …). Those accounts carry `groupedByRelay: true`: they group keys by owner, not by provider organization, so Relay does not assume their keys share capacity. A provider `429` on one of them goes to that key's breaker and the request fails over to the next key, so independent keys pooled at one host keep failing over for each other. Limits bound to such an account still count across all of its keys.
+
+Setting the account's `orgId` confirms it is one provider organization and clears the mark; from then on a `429` cools the account like any other. If its keys belong to different organizations, create an account for each and move the keys. No new account carries the mark, and these accounts are otherwise ordinary: one no key names stays until you delete it, and blocks deleting its host, team or project like any other.
 
 ## Circuit breakers
 
@@ -46,8 +112,9 @@ Each key has its own breaker, keyed by a hash of the key's value. The upstream r
 | `401` | Opens | 30 s, then 1 min, 5 min, 15 min, and 1 h for every further failure |
 | `403` | Opens | 1 s, doubling per repeated failure up to 60 s |
 | `5xx`, or a network error after the connection was made | Opens after 5 such errors within 30 s with no success between them | 1 s, doubling per repeated failure up to 60 s |
-| `429` with `Retry-After` of 5 s or less | Stays closed | None; the request moves to the next key |
-| `429` with `Retry-After` over 5 s | Opens | The `Retry-After` duration |
+| `429` from a key in any other account | Unchanged | The account cools for the model, see [Accounts](#accounts) |
+| `429` with `Retry-After` of 5 s or less, from a key in an account grouped by the upgrade | Stays closed | None; the request moves to the next key |
+| `429` with `Retry-After` over 5 s, from a key in an account grouped by the upgrade | Opens | The `Retry-After` duration |
 | Connection could not be established (refused, DNS, TLS) | Unchanged | None; this is a host problem, see below |
 | The caller disconnected or cancelled during the call | Unchanged | None; the request stops without trying another key |
 
@@ -59,13 +126,13 @@ An open key is skipped during selection. When its cooldown ends, one request pro
 Because breakers are keyed by value hash, rotating a key to a new value gives it a fresh, closed breaker. The old record expires on its own.
 </Info>
 
-When the host cannot be reached at all, the key is not blamed: Relay re-dials the same host up to three times with a short backoff, then returns `502 upstream_unreachable`. Every key on that host shares the same base URL, so switching keys would not help.
+When the host cannot be reached at all, the key is not blamed: Relay re-dials the same host up to three times with a short backoff, then moves to the next pool, or returns `502 upstream_unreachable` when none is left. Every key on that host shares the same base URL, so switching keys would not help.
 
-## Failover happens before the first byte
+## Failover
 
-A request tries at most three host keys. If the upstream answers with a retryable failure (`401`, `403`, `429`, `5xx`, or a network error) before any response bytes reach the caller, Relay records the failure and moves to the next healthy key in the pool. Once bytes start flowing back, the request is committed and there is no mid-stream failover.
+A route is the caller's pools, in order, that are at a host serving the model. A request tries at most three host keys in total. If the upstream answers with a retryable failure (`401`, `403`, `429`, `5xx`, or a network error) before any response bytes reach the caller, Relay records the failure and moves to the next healthy key in the pool, and to the next pool once the pool has none left or its host is unreachable. That is how a policy that links pools on two hosts fails over from one to the other. Only pools whose binding speaks the same wire shape as the first one are tried, since the request body is built once.
 
-Failover stays within the chosen host. Routing picks one binding per request, and Relay does not switch to another host or provider when that host's keys fail. When the attempts run out, the caller gets the last upstream response with its status and body; when no healthy key is left to try, the caller gets a `502` with `no healthy keys in pool`.
+Once bytes start flowing back, the request is committed and there is no mid-stream failover. When the attempts run out, the caller gets the last upstream response with its status and body; when no healthy key is left to try, the caller gets a `502` with `no healthy keys in pool`.
 
 ## Recovery after a `401`
 
@@ -74,6 +141,27 @@ A `401` can mean the value Relay holds is stale, for example after a stored key 
 - **Other healthy keys remain:** the request fails over at once, and the re-read runs in the background so the key rejoins the pool if its value changed.
 - **It was the last candidate:** the request waits for one re-read and retries the same key if the value changed.
 - **The value is unchanged:** the key is treated as revoked, the caller gets the upstream error, and the key is probed again after each cooldown.
+
+## Detect a key's account
+
+Keys of one provider organization share that organization's rate limits, so they belong in one account. To find out which organization a key belongs to, ask its host:
+
+```bash
+curl -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/host-keys/by-id/<id>/detect-account
+```
+
+Relay makes one models-list request to the key's host with that key and reads the organization id from the response header: `openai-organization` on OpenAI, `anthropic-organization-id` on Anthropic. Hosts that send no such header (Gemini, most OpenAI-compatible hosts) answer `422`; a key the host refuses answers `502` with the host's status.
+
+```json
+{ "orgId": "org-abc123", "currentAccountId": "<account id>", "matchingAccountId": "<account id>" }
+```
+
+`matchingAccountId` is the account of the key's owner at the same host whose `orgId` is the detected one; it is absent when there is none. The call never moves the key. To move it, update the key with `spec.accountId` set to that account, or create an account with the detected `orgId` first.
+
+When the key's current account has no `orgId` and no other account of the owner at the host claims the organization, Relay fills it in, but only after asking every other key of that account (up to 8) and getting the same organization from each. The answer then names the current account as the match.
+
+Relay also reads the same header on live responses and remembers, per pod, the organization each key last named. When two keys of one account name different organizations, it logs a warning naming both keys and counts [`relay_account_org_mismatch_total`](/reference/metrics). It never moves a key on its own.
 
 ## Inspecting and recovering keys
 
@@ -88,8 +176,8 @@ The response gives `state` (`closed`, `open`, `half_open`, or `unknown` when the
 
 If every key in the pool is open, requests fail with `502` and the message `no healthy keys in pool`. That almost always points at a real upstream problem: a revoked credential, an exhausted quota, an outage. To recover:
 
-1. Fix the cause, for example by giving the key a new value or adding another key to the policy. A stored key is rotated with `POST /api/host-keys/by-id/<id>/rotate` and body `{"value": "<new value>"}`; an env-ref key takes the new value from its environment variable after a restart. Either way the new value gets a closed breaker.
+1. Fix the cause, for example by giving the key a new value or adding another key to the pool. A stored key is rotated with `POST /api/host-keys/by-id/<id>/rotate` and body `{"value": "<new value>"}`; an env-ref key takes the new value from its environment variable after a restart. Either way the new value gets a closed breaker.
 2. Otherwise wait out the cooldown: at most 60 s for `403`, `5xx` and network failures, at most 1 h for `401`.
-3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with Valkey, delete the `secret_health:*` keys.
+3. To clear all breaker state immediately: with `RELAY_STATE_BACKEND=memory`, restart the pods; with Dragonfly, delete the `secret_health:*` keys. Pods pick the keys again within a second, when their copies are next reread.
 
 See [Troubleshooting](/troubleshooting) for related errors.

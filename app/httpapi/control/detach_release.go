@@ -8,18 +8,16 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/share"
 )
 
 // release makes the referencing row it let go of t, mirroring the detachable
@@ -29,40 +27,6 @@ import (
 func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*releasedRow, error) {
 	s := d.Stores
 	switch it.Kind {
-	case "key":
-		return rowEdit[key.Key]{
-			plural: "keys", store: s.Key, validate: (*key.Key).Validate, guard: guardKeyPolicy(d),
-			metaOf: func(k *key.Key) *meta.Metadata { return &k.Meta },
-			drop:   func(k *key.Key) bool { return clearID(&k.Spec.PolicyID, t.id) },
-		}.apply(ctx, d, it)
-	case "service-account":
-		return rowEdit[serviceaccount.ServiceAccount]{
-			plural: "service-accounts", store: s.ServiceAccount, validate: (*serviceaccount.ServiceAccount).Validate, guard: guardServiceAccount(d),
-			metaOf: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
-			drop:   func(sa *serviceaccount.ServiceAccount) bool { return clearID(&sa.Spec.PolicyID, t.id) },
-		}.apply(ctx, d, it)
-	case "host":
-		return rowEdit[host.Host]{
-			plural: "hosts", store: s.Host, validate: (*host.Host).Validate,
-			metaOf: func(h *host.Host) *meta.Metadata { return &h.Meta },
-			drop: func(h *host.Host) bool {
-				listed := dropEntries(&h.Spec.Policies, is(t.id))
-				isDefault := clearID(&h.Spec.DefaultPolicy, t.id)
-				return listed || isDefault
-			},
-		}.apply(ctx, d, it)
-	case "policy":
-		return rowEdit[policy.Policy]{
-			plural: "policies", store: s.Policy, validate: (*policy.Policy).Validate, guard: guardPolicyModels(d),
-			metaOf: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
-			drop: func(p *policy.Policy) bool {
-				models := dropEntries(&p.Spec.ModelIDs, is(t.id))
-				hostKeys := dropEntries(&p.Spec.HostKeyIDs, is(t.id))
-				limit := clearID(&p.Spec.RateLimitID, t.id)
-				limits := dropEntries(&p.Spec.RLBindings, func(b policy.RLBinding) bool { return b.RateLimitID == t.id })
-				return models || hostKeys || limit || limits
-			},
-		}.apply(ctx, d, it)
 	case "pricing":
 		return rowEdit[pricing.Pricing]{
 			plural: "pricings", store: s.Pricing, validate: (*pricing.Pricing).Validate,
@@ -83,15 +47,51 @@ func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*r
 			drop:     func(b *rolebinding.RoleBinding) bool { return dropKeepingOne(&b.Spec.Subjects, t.isSubject) },
 		}.apply(ctx, d, it)
 	case "policy-binding":
+		held, err := d.accountsOf(ctx, t)
+		if err != nil {
+			return nil, err
+		}
 		return rowEdit[policybinding.PolicyBinding]{
 			plural: "policy-bindings", store: s.PolicyBinding, validate: (*policybinding.PolicyBinding).Validate, guard: guardPolicyBinding(d),
 			metaOf: func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta },
-			drop:   func(b *policybinding.PolicyBinding) bool { return dropKeepingOne(&b.Spec.Subjects, t.isSubject) },
+			drop: func(b *policybinding.PolicyBinding) bool {
+				return dropKeepingOne(&b.Spec.AccountIDs, func(id string) bool { return slices.Contains(held, id) })
+			},
 		}.apply(ctx, d, it)
 	case "user":
 		return d.releaseRole(ctx, it, t)
 	}
 	return nil, nil
+}
+
+// releaseShare revokes an account shared from the target, as its own delete does: by a caller who may share the real account or delete in the receiver's scope, always going through. It returns the share and every row the revoke changed.
+func (d Deps) releaseShare(ctx context.Context, it referenceItem) ([]releasedRow, error) {
+	a, err := d.Stores.Account.Get(ctx, it.ID)
+	if err != nil || a == nil || !a.IsShared() {
+		return nil, err
+	}
+	src, err := d.Stores.Account.Get(ctx, a.Spec.SourceAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if src == nil || refs(d).MayShare(ctx, src) != nil {
+		if err := d.Authz.Authorize(ctx, "accounts.delete", authz.Resource{Kind: "account", ID: a.Meta.ID, Owner: &a.Meta.Owner}); err != nil {
+			return nil, failOrKeep(mapAuthzErr(err))
+		}
+	}
+	changes, err := share.Revoke(ctx, d.shareStores(), a.Meta.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := []releasedRow{{item: it, action: "accounts.delete", fields: []string{audit.AnyField}}}
+	for _, c := range revokeItems(changes) {
+		action := authz.Plural(c.Kind) + ".update"
+		if c.deleted {
+			action = authz.Plural(c.Kind) + ".delete"
+		}
+		out = append(out, releasedRow{item: c, action: action, fields: []string{c.Via}})
+	}
+	return out, nil
 }
 
 // rowEdit lets one referencing row of type T go of the target through the
@@ -187,14 +187,35 @@ func failOrKeep(err error) error {
 	return err
 }
 
-// isSubject reports whether a role or policy binding subject names t: a
-// service account by id, a group by name.
+// isSubject reports whether a role binding subject names t: a service
+// account by id, a group by name.
 func (t detachTarget) isSubject(s rolebinding.Subject) bool {
 	want := rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: t.id}
 	if t.kind == "group" {
 		want = rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: t.name}
 	}
 	return s.Key() == want.Key()
+}
+
+// accountsOf is the accounts a detach target stands for in policy bindings: an account itself, or a service account's own account.
+func (d Deps) accountsOf(ctx context.Context, t detachTarget) ([]string, error) {
+	switch t.kind {
+	case "account":
+		return []string{t.id}, nil
+	case "service-account":
+		accounts, err := d.Stores.Account.List(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		var out []string
+		for _, a := range accounts {
+			if h := a.Spec.Holder; h != nil && h.Kind == account.HolderServiceAccount && h.ID == t.id {
+				out = append(out, a.Meta.ID)
+			}
+		}
+		return out, nil
+	}
+	return nil, nil
 }
 
 // clearID empties ref when it names id.

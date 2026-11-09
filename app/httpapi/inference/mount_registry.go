@@ -35,15 +35,17 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 					Method:      http.MethodPost,
 					Path:        path.Path,
 					Summary:     path.Summary,
+					Description: generationDescription(spec),
 					Tags:        []string{"inference"},
 					Middlewares: specMW,
-					Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
+					Responses:   generationResponses(api, spec),
 				}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
 					return &huma.StreamResponse{Body: func(hctx huma.Context) {
 						r, w := humachi.Unwrap(hctx)
 						handleShape(spec, d, w, r)
 					}}, nil
 				})
+				documentRequestBody(api, path.Path, spec)
 				mountProfileAliases(api, d, specMW, spec, path)
 			}
 		}
@@ -140,7 +142,7 @@ func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Requ
 // handleProxyShape is handleShape for proxy mode: the body is read only until its model is known, and the rest streams upstream as it arrives, checked on the way (scannedBody). The stream flag is not needed: the proxy path takes it from the response's Content-Type.
 func handleProxyShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
 	cls := ClassificationFrom(r.Context())
-	// An anonymous pinned request is routed and metered without its model, so nothing waits for it.
+	// An anonymous pinned request is routed without its model: no policy governs a host, so nothing waits for it.
 	needModel := cls.Mode == ModeProxyAuthed || cls.UpstreamHost == ""
 	src := io.Reader(r.Body)
 	if d.ProxyBodyIdle > 0 {

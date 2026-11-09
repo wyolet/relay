@@ -17,7 +17,7 @@ const CodeInUse = "resource_in_use"
 // maxNamedBindings caps how many bindings a refusal lists by name.
 const maxNamedBindings = 10
 
-// GroupRename refuses changing a group's name while a role or policy binding
+// GroupRename refuses changing a group's name while a role binding
 // names the old one. Group subjects match by name, so the rename would
 // silently detach every such binding from the group's members.
 func (c Checker) GroupRename(ctx context.Context, oldName, newName string) error {
@@ -44,15 +44,6 @@ func (c Checker) GroupRename(ctx context.Context, oldName, newName string) error
 		}
 		for _, rb := range rbs {
 			add("role-binding", rb.Meta.ID, rb.Meta.Name, rb.Meta.Owner, rb.Spec.Subjects)
-		}
-	}
-	if c.Rows.PolicyBindings != nil {
-		pbs, err := c.Rows.PolicyBindings(ctx)
-		if err != nil {
-			return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
-		}
-		for _, pb := range pbs {
-			add("policy-binding", pb.Meta.ID, pb.Meta.Name, pb.Meta.Owner, pb.Spec.Subjects)
 		}
 	}
 	if total == 0 {

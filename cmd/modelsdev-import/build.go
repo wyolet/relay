@@ -9,7 +9,8 @@ import (
 	"github.com/wyolet/relay/app/model"
 )
 
-const apiVersion = "relay.wyolet.dev/v1alpha2"
+// The catalog repo holds one apiVersion per tree, so drafts follow the relay's.
+const apiVersion = manifest.APIVersion
 
 func boolPtr(b bool) *bool { return &b }
 

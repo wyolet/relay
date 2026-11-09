@@ -76,6 +76,15 @@ func (b *Batch) Script(call ScriptCall) *BatchResult {
 	return b.add(BatchOp{Kind: OpScript, Script: call})
 }
 
+// Len returns the number of commands queued.
+func (b *Batch) Len() int { return len(b.ops) }
+
+// Append moves the commands queued on o to the end of b, leaving o empty; their results fill when b runs. o's shed setting is not carried over.
+func (b *Batch) Append(o *Batch) {
+	b.ops = append(b.ops, o.ops...)
+	o.ops = nil
+}
+
 // ShedWhenPoolBusy makes every later Exec of b refuse at once, each result failing with ErrPoolBusy and nothing sent, while the store is a PoolShedder whose connection wait queue is at its bound.
 func (b *Batch) ShedWhenPoolBusy() { b.orShed = true }
 

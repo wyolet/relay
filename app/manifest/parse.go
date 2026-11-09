@@ -22,6 +22,9 @@ type Document struct {
 	Model       *ModelDTO
 	HostKey     *HostKeyDTO
 	Policy      *PolicyDTO
+	Account     *AccountDTO
+	Pool        *PoolDTO
+	Budget      *BudgetDTO
 	RateLimit   *RateLimitDTO
 	Key         *KeyDTO
 	Pricing     *PricingDTO
@@ -60,6 +63,12 @@ func (d Document) Kind() string {
 		return "HostKey"
 	case d.Policy != nil:
 		return "Policy"
+	case d.Account != nil:
+		return "Account"
+	case d.Pool != nil:
+		return "Pool"
+	case d.Budget != nil:
+		return "Budget"
 	case d.RateLimit != nil:
 		return "RateLimit"
 	case d.Key != nil:
@@ -146,8 +155,8 @@ func Parse(r io.Reader) ([]Document, error) {
 			docIdx++
 			continue
 		}
-		if env.APIVersion != APIVersion {
-			return nil, fmt.Errorf("wire: doc %d: unsupported apiVersion %q (want %q)", docIdx, env.APIVersion, APIVersion)
+		if err := checkAPIVersion(env.APIVersion, env.Kind); err != nil {
+			return nil, fmt.Errorf("wire: doc %d: %w", docIdx, err)
 		}
 		if env.Metadata.Name == "" {
 			return nil, fmt.Errorf("wire: doc %d kind=%s: metadata.name required", docIdx, env.Kind)
@@ -211,107 +220,4 @@ func LoadDir(dir string) ([]Document, error) {
 		return nil, err
 	}
 	return all, nil
-}
-
-func dispatchKind(env *rawEnvelope) (Document, error) {
-	if doc, ok, err := decodeRelayAuthKind(env); ok {
-		return doc, err
-	}
-	switch env.Kind {
-	case "Provider":
-		var spec ProviderSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Provider: &ProviderDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Host":
-		var spec HostSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Host: &HostDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Model":
-		var spec ModelSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Model: &ModelDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "HostKey":
-		var spec HostKeySpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{HostKey: &HostKeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Policy":
-		var spec PolicySpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Policy: &PolicyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "RateLimit":
-		var spec RateLimitSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{RateLimit: &RateLimitDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Key":
-		var spec KeySpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Key: &KeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Pricing":
-		var spec PricingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Pricing: &PricingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "HostBinding":
-		var spec HostBindingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{HostBinding: &HostBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "PolicyBinding":
-		var spec PolicyBindingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{PolicyBinding: &PolicyBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Overlay":
-		var spec OverlaySpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Overlay: &OverlayDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Setting":
-		// Spec stays a raw node — its shape is per-section and is validated
-		// when the settings store decodes it against the named section.
-		return Document{Setting: &SettingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: env.Spec}}, nil
-
-	default:
-		return Document{}, fmt.Errorf("unknown kind %q", env.Kind)
-	}
-}
-
-// isForeignKind reports kinds owned by sibling subsystems that the catalog
-// manifest loader should pass through silently. Keep this list narrow —
-// silent skips can mask typos in catalog YAML.
-func isForeignKind(kind string) bool {
-	switch kind {
-	case "User":
-		return true
-	}
-	return false
 }

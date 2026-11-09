@@ -252,21 +252,16 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	}
 	mustUpsert(s.t, s.stores.Host.Upsert(ctx, hst), "host")
 
-	hostTier := &policy.Policy{
-		Meta: meta.Metadata{ID: ids.New(), Name: "mock-host-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
-	}
-	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, hostTier), "host-tier")
-
 	envName := uniqueEnvName("HK_")
 	if err := os.Setenv(envName, hostKeyValue); err != nil {
 		s.t.Fatalf("setenv: %v", err)
 	}
 	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  hostTier.Meta.ID,
+			AccountID: providerAccount(s.t, s.stores, "mock-account", meta.Owner{Kind: meta.OwnerSystem}, hst.Meta.ID),
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}
@@ -288,11 +283,7 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: policy.Spec{
-			ModelIDs:     []string{mdl.Meta.ID},
-			HostKeyIDs:   []string{hk.Meta.ID},
-			KeySelection: policy.KeySelectionPrioritized,
-		},
+		Spec: policy.Spec{Models: []string{prov.Meta.Name + "/" + mdl.Meta.Name}},
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 
@@ -302,13 +293,12 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 		Meta: meta.Metadata{ID: ids.New(), Name: "rk-mock", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
-			PolicyID:  pol.Meta.ID,
 			KeyHash:   sha256Hex(keyPlain),
 			Prefix:    "rk_mock",
 		},
 	}
 	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
-	if err := s.cat.Reload(ctx); err != nil {
+	if err := s.reload(ctx); err != nil {
 		s.t.Fatalf("Reload: %v", err)
 	}
 	return keyPlain

@@ -34,42 +34,42 @@ import (
 )
 
 type graphProvider struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
+	ID          string `json:"id"                    doc:"Provider id."`
+	Name        string `json:"name"                  doc:"Provider slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
 }
 
 type graphHost struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
-	IconPath    string `json:"iconPath,omitempty"`
+	ID          string `json:"id"                    doc:"Host id."`
+	Name        string `json:"name"                  doc:"Host slug."`
+	DisplayName string `json:"displayName,omitempty" doc:"Display name."`
+	IconPath    string `json:"iconPath,omitempty"    doc:"Icon asset path."`
 }
 
 type graphBinding struct {
-	HostID  string `json:"hostId"`
-	Adapter string `json:"adapter"`
+	HostID  string `json:"hostId"  doc:"Id of a host serving the model."`
+	Adapter string `json:"adapter" doc:"Wire shape relay speaks to that host for the model."`
 }
 
 type graphModel struct {
-	ID                 string             `json:"id"`
-	Name               string             `json:"name"`
-	DisplayName        string             `json:"displayName,omitempty"`
-	ProviderID         string             `json:"providerId"`
-	Featured           bool               `json:"featured,omitempty"`
-	Deprecated         string             `json:"deprecated,omitempty"`
-	Capabilities       model.Capabilities `json:"capabilities,omitempty"`
-	ContextWindowTotal int                `json:"contextWindowTotal,omitempty"`
-	ContextWindowInput int                `json:"contextWindowInput,omitempty"`
-	Pointer            string             `json:"pointer,omitempty"`
-	Bindings           []graphBinding     `json:"bindings"`
+	ID                 string             `json:"id"                           doc:"Model id."`
+	Name               string             `json:"name"                         doc:"Model slug."`
+	DisplayName        string             `json:"displayName,omitempty"        doc:"Display name."`
+	ProviderID         string             `json:"providerId"                   doc:"Id of the model's provider."`
+	Featured           bool               `json:"featured,omitempty"           doc:"The catalog marks the model as featured."`
+	Deprecated         string             `json:"deprecated,omitempty"         doc:"Deprecation status, when not active."`
+	Capabilities       model.Capabilities `json:"capabilities,omitempty"       doc:"What the model supports."`
+	ContextWindowTotal int                `json:"contextWindowTotal,omitempty" doc:"Context window in tokens."`
+	ContextWindowInput int                `json:"contextWindowInput,omitempty" doc:"Published input cap in tokens."`
+	Pointer            string             `json:"pointer,omitempty"            doc:"Snapshot the bare model name resolves to."`
+	Bindings           []graphBinding     `json:"bindings"                     doc:"Enabled hosts serving the model."`
 }
 
 type graphOutput struct {
 	Body struct {
-		Providers []graphProvider `json:"providers"`
-		Hosts     []graphHost     `json:"hosts"`
-		Models    []graphModel    `json:"models"`
+		Providers []graphProvider `json:"providers" doc:"Providers in the catalog."`
+		Hosts     []graphHost     `json:"hosts"     doc:"Hosts in the catalog."`
+		Models    []graphModel    `json:"models"    doc:"Models, each with the hosts that serve it."`
 	}
 }
 
@@ -85,9 +85,10 @@ func registerCatalogGraph(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      "GET",
 		Path:        "/catalog/graph",
 		Summary:     "Minimal catalog graph (providers, hosts, models + bindings) for the picker",
+		Description: "Providers, hosts and models with their enabled bindings in one call, read from what the data plane serves now: disabled rows are absent. Deprecated models are left out unless includeDeprecated is set. The CRUD lists show every row.",
 		Tags:        []string{"catalog"},
 		Middlewares: protect,
-		Errors:      []int{401, 500},
+		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *graphQuery) (*graphOutput, error) {
 		sel, err := parseLabelSelector(in.Label)
 		if err != nil {

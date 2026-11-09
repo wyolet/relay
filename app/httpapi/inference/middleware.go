@@ -7,6 +7,9 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/app/revocation"
+	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 // requestState is the one context value the middleware chain gives a request: ClassifyMiddleware sets it and the credential middleware fills it in, so the chain adds no further context layers or request copies.
@@ -17,6 +20,8 @@ type requestState struct {
 	snap      *appcatalog.Snapshot
 	// snapSet tells a pinned nil snapshot from none.
 	snapSet bool
+	// lane is the account the request asked to run in (LaneMiddleware); empty runs it in the credential's default.
+	lane string
 }
 
 type ctxStateT struct{}
@@ -75,20 +80,6 @@ func SnapshotFrom(ctx context.Context) *appcatalog.Snapshot {
 	return nil
 }
 
-// reserveIdentity returns what the inbound reservation is scoped by: the
-// caller's team (the kv hash tag) and, for a token, the jti whose denylist
-// entry rides the same script.
-func reserveIdentity(ctx context.Context) (teamID, tokenJTI string) {
-	p := PrincipalFrom(ctx)
-	if p == nil {
-		return "", ""
-	}
-	if p.CredentialKind == CredentialToken {
-		return p.TeamID, p.CredentialID
-	}
-	return p.TeamID, ""
-}
-
 // KeyFromContext returns the authenticated relay key from ctx, or
 // nil if no key middleware fired.
 func KeyFromContext(ctx context.Context) *key.Key {
@@ -127,14 +118,15 @@ func PrincipalFrom(ctx context.Context) *Principal {
 //
 // The bearer is either a key or a relay-minted token, told apart by shape
 // (looksLikeToken); both resolve to the same Principal and only the lookup
-// differs. Every read is against the in-memory snapshot, re-read per request
-// so admin edits take effect within the NOTIFY debounce window.
-func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(http.Handler) http.Handler {
+// differs. Every read is against the published plans and the in-memory
+// revoked-token set, re-read per request so admin edits take effect within
+// the NOTIFY debounce window.
+func PrincipalMiddleware(a *Auth) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cls := ClassificationFrom(r.Context())
 			if cls.Mode == ModeProxyAnonymous {
-				if authorizeProxyMode(w, cat, cls.Mode) {
+				if authorizeProxyMode(w, a.Catalog, cls.Mode) {
 					next.ServeHTTP(w, r)
 				}
 				return
@@ -143,24 +135,23 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			snap := cat.Current()
-			p, k, ok := authenticate(w, snap, tokens, cls.Key)
+			p, k, ok := a.authenticate(w, r, cls.Key, laneFrom(r.Context()))
 			if !ok {
 				return
 			}
-			if !authorizePrincipal(w, snap, p, cls.Mode) {
+			if !a.authorizePrincipal(w, r, p, cls.Mode) {
 				return
 			}
-			if !authorizeProxyMode(w, cat, cls.Mode) {
+			if !authorizeProxyMode(w, a.Catalog, cls.Mode) {
 				return
 			}
-			next.ServeHTTP(w, fillPrincipal(r, snap, p, k))
+			next.ServeHTTP(w, fillPrincipal(r, a.Catalog.Current(), p, k))
 		})
 	}
 }
 
-// AuthenticateMiddleware resolves who the caller is exactly as PrincipalMiddleware does, but resolves no policy: for endpoints that record what a caller reports and route nothing, where a credential without a policy is still a valid reporter. A credential is always required.
-func AuthenticateMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(http.Handler) http.Handler {
+// AuthenticateMiddleware resolves who the caller is exactly as PrincipalMiddleware does, but refuses nothing its caller ladder would: for endpoints that record what a caller reports and route nothing, where any valid credential is a valid reporter. A credential is always required.
+func AuthenticateMiddleware(a *Auth) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cls := ClassificationFrom(r.Context())
@@ -168,23 +159,48 @@ func AuthenticateMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			snap := cat.Current()
-			p, k, ok := authenticate(w, snap, tokens, cls.Key)
+			// A report refused here is not a model request, so it leaves no usage row.
+			p, k, ok := a.authenticate(w, nil, cls.Key, laneFrom(r.Context()))
 			if !ok {
 				return
 			}
-			next.ServeHTTP(w, fillPrincipal(r, snap, p, k))
+			next.ServeHTTP(w, fillPrincipal(r, a.Catalog.Current(), p, k))
 		})
 	}
 }
 
-// authenticate resolves a bearer, a key or a relay-minted token, to its principal. Reports false after writing the 401.
-func authenticate(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *TokenVerifier, bearer string) (*Principal, *key.Key, bool) {
+// Auth is what the credential middleware reads: the published plans, the revoked-token set, the token verifier, and the catalog for the proxy-mode setting.
+type Auth struct {
+	Catalog *appcatalog.Catalog
+	Plans   PlanSource
+	Revoked *revocation.Set
+	Tokens  *TokenVerifier
+	// Lifecycle receives the usage row of a request refused once its credential is known; nil records none.
+	Lifecycle *lifecycle.Registry
+}
+
+// PlanSource is where the request path loads the published plans; *plan.Holder implements it.
+type PlanSource interface{ Load() *plan.Root }
+
+// authenticate resolves a bearer, a key or a relay-minted token, to its principal acting in lane (an account id or name; empty for the credential's default). Reports false after writing the response: 401 for a bad credential, 403 for a lane the credential may not use, recorded against rec (nil records nothing), 503 before the first plans are published.
+func (a *Auth) authenticate(w http.ResponseWriter, rec *http.Request, bearer, lane string) (*Principal, *key.Key, bool) {
+	root := a.root()
+	if root == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "not_ready", "relay is starting; retry shortly")
+		return nil, nil, false
+	}
 	if looksLikeToken(bearer) {
-		p, ok := tokenPrincipal(w, snap, tokens, bearer)
+		p, ok := tokenPrincipal(w, a, rec, root, bearer, lane)
 		return p, nil, ok
 	}
-	return keyPrincipal(w, snap, bearer)
+	return a.keyPrincipal(w, rec, root, bearer, lane)
+}
+
+func (a *Auth) root() *plan.Root {
+	if a == nil || a.Plans == nil {
+		return nil
+	}
+	return a.Plans.Load()
 }
 
 // fillPrincipal records the resolved principal, its key when it has one, and the snapshot it resolved against on r's state.
@@ -211,9 +227,12 @@ func (s *requestState) setPrincipal(snap *appcatalog.Snapshot, p *Principal, k *
 	}
 }
 
-// authorizePrincipal resolves p's policy and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.
-func authorizePrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principal, mode Mode) bool {
-	if !resolvePolicy(w, snap, p) {
+// authorizePrincipal answers a caller ladder that fails closed, recording the refusal against r, and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.
+func (a *Auth) authorizePrincipal(w http.ResponseWriter, r *http.Request, p *Principal, mode Mode) bool {
+	if refused := p.Caller.Refused; refused != nil {
+		a.recordRefusal(r, p, refused)
+	}
+	if !admitCaller(w, p.Caller) {
 		return false
 	}
 	if mode == ModeProxyAuthed && !p.PassthroughAllowed {

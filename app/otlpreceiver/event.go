@@ -56,6 +56,7 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c report
 		CredentialKind: reporter.CredentialKind,
 		CredentialID:   reporter.CredentialID,
 		RelayKey:       reporter.RelayKeyName,
+		LaneAccountID:  reporter.LaneAccountID,
 		Extras:         extras(inf, from),
 	}
 	if ev.Timestamp.IsZero() {

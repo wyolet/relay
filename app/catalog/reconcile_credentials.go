@@ -22,7 +22,7 @@ func (c *Catalog) ApplyHostKeyUpsert(k *hostkey.HostKey) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), snapIDs(s.projectsByID), s.policyLookup)
+	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), snapIDs(s.projectsByID))
 	if !keep {
 		deleteHostKey(s, k.Meta.ID)
 		c.snap.Store(s)
@@ -45,14 +45,10 @@ func (c *Catalog) ApplyHostKeyDelete(id string) error {
 func insertHostKey(s *Snapshot, k *hostkey.HostKey) {
 	if old, ok := s.hostKeysByID[k.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refHostKey, ID: old.Meta.ID}, outboundHostKeyRefs(old))
-		for polID, keys := range s.hostKeysByPolicy {
-			s.hostKeysByPolicy[polID] = removeHostKeyFromSlice(keys, old.Meta.ID)
-		}
 		delete(s.hostKeysByID, old.Meta.ID)
 	}
 	s.hostKeysByID[k.Meta.ID] = k
 	s.registerRefs(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
-	rebuildHostKeysByPolicy(s)
 	s.rebuildHostKeysByHost()
 }
 
@@ -63,12 +59,8 @@ func deleteHostKey(s *Snapshot, id string) {
 	}
 	s.unregisterRefs(refKey{Kind: refHostKey, ID: id}, outboundHostKeyRefs(k))
 	delete(s.hostKeysByID, id)
-	for polID, keys := range s.hostKeysByPolicy {
-		s.hostKeysByPolicy[polID] = removeHostKeyFromSlice(keys, id)
-	}
 	s.rebuildHostKeysByHost()
 	cascadeDelete(s, refHostKey, id)
-	resanitizePoliciesAfterParentChange(s)
 }
 
 // ── Key ──────────────────────────────────────────────────────────────
@@ -93,7 +85,7 @@ func (c *Catalog) ApplyKeyUpsert(k *key.Key) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeKey(k, s.policyResolvable, snapIDs(s.serviceAccountsByID))
+	clean, keep := sanitizeKey(k, snapIDs(s.serviceAccountsByID))
 	if !keep {
 		deleteKey(s, k.Meta.ID)
 		c.snap.Store(s)

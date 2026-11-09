@@ -27,7 +27,7 @@ func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *
 	}
 	m := *models[0]
 	m.Spec.Aliases = []string{"test-model[1m]", "test-modelx[*]"}
-	if err := cat.ApplyModelUpsert(&m); err != nil {
+	if err := applyModel(t, cat, &m); err != nil {
 		t.Fatalf("model upsert: %v", err)
 	}
 	return cat, pr

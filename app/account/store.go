@@ -1,0 +1,279 @@
+// Spec.HostID lives in the host_id column so a host delete cascades; Spec.GroupedByRelay lives in grouped_by_relay, which no write sets and the query clears once the row names its org. A shared account's source_account_id keeps the real account until its shares are revoked, its team_id, project_id, holder_sa_id or share_user_id take it along with its receiver, and share_receiver keeps one share per receiver. A caller account's kind, holder, scope and managed key are columns too, so a deleted team, project, user or service account takes its accounts along and one place holds one row. The spec JSONB carries the rest.
+
+package account
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/slug"
+)
+
+// ErrManagedTaken is a write of a caller account whose place another row holds.
+var ErrManagedTaken = errors.New("account: another account already holds this place")
+
+// ErrShareTaken is a second share of one account with one receiver.
+var ErrShareTaken = errors.New("account: the account is already shared with this receiver")
+
+// ErrShared is a delete of a real account shares still name: they are revoked first, never taken along.
+var ErrShared = errors.New("account: shares still name the account")
+
+const (
+	sourceKey       = "accounts_source_account_id_fkey"
+	oneManagedIndex = "accounts_managed_key_key"
+	oneShareIndex   = "accounts_one_share"
+	nameIndex       = "accounts_name_key"
+)
+
+// ensureAttempts bounds the retries when a concurrent save takes the minted name.
+const ensureAttempts = 3
+
+// Store is the Account data-access type.
+type Store struct {
+	q *gen.Queries
+}
+
+// NewStore constructs a Store from an existing sqlc Queries handle.
+func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+
+// List returns every Account row.
+func (s *Store) List(ctx context.Context) ([]*Account, error) {
+	rows, err := s.q.ListAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("account.List: %w", err)
+	}
+	out := make([]*Account, 0, len(rows))
+	for _, r := range rows {
+		a, err := fromRow(r)
+		if err != nil {
+			return nil, fmt.Errorf("account %s: %w", r.Name, err)
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// Get returns the Account with the given id, or (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*Account, error) {
+	r, err := s.q.GetAccount(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("account.Get: %w", err)
+	}
+	return fromRow(r)
+}
+
+// Upsert writes a. The caller sets Meta.ID.
+func (s *Store) Upsert(ctx context.Context, a *Account) error {
+	params, err := toUpsertParams(a)
+	if err != nil {
+		return fmt.Errorf("account.Upsert: %w", err)
+	}
+	n, err := s.q.UpsertAccount(ctx, params)
+	switch {
+	case storage.IsUniqueViolation(err, oneManagedIndex):
+		return fmt.Errorf("%w: account %q", ErrManagedTaken, a.Meta.Name)
+	case storage.IsUniqueViolation(err, oneShareIndex):
+		return fmt.Errorf("%w: account %q", ErrShareTaken, a.Meta.Name)
+	}
+	return meta.StaleIfNoRows(n, err)
+}
+
+// CreateShare writes the new shared account a under a fresh id, with a's name suffixed -2, -3, … when taken. A second share with one receiver is ErrShareTaken.
+func (s *Store) CreateShare(ctx context.Context, a *Account) error {
+	base := a.Meta.Name
+	for attempt := 0; ; attempt++ {
+		name, err := s.uniqueName(ctx, base)
+		if err != nil {
+			return fmt.Errorf("account.CreateShare: %w", err)
+		}
+		a.Meta.ID, a.Meta.Name, a.Meta.ResourceVersion = meta.NewID(), name, ""
+		err = s.Upsert(ctx, a)
+		// A concurrent save took the name between the check and the insert.
+		if storage.IsUniqueViolation(err, nameIndex) && attempt < ensureAttempts {
+			continue
+		}
+		return err
+	}
+}
+
+// Delete removes an Account by id.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	err := s.q.DeleteAccount(ctx, id)
+	if storage.IsForeignKeyViolation(err, sourceKey) {
+		return fmt.Errorf("%w: account %s", ErrShared, id)
+	}
+	return err
+}
+
+// EnsureManaged returns the id of the caller account want describes, creating it on first use with want's name, suffixed -2, -3, … when taken, and want's id when it carries one. Concurrent first saves converge on one row, whose id the caller gets back.
+func (s *Store) EnsureManaged(ctx context.Context, want *Account) (string, error) {
+	key := want.ManagedKey()
+	if key == "" {
+		return "", fmt.Errorf("account.EnsureManaged: %q is not a caller account", want.Meta.Name)
+	}
+	lookup := pgtype.Text{String: key, Valid: true}
+	for attempt := 0; ; attempt++ {
+		id, err := s.q.GetManagedAccountID(ctx, lookup)
+		if err == nil {
+			return id, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("account.EnsureManaged: %w", err)
+		}
+		if attempt == ensureAttempts {
+			return "", fmt.Errorf("account.EnsureManaged: no account for %s after %d attempts", key, attempt)
+		}
+		name, err := s.uniqueName(ctx, want.Meta.Name)
+		if err != nil {
+			return "", fmt.Errorf("account.EnsureManaged: %w", err)
+		}
+		a := *want
+		a.Meta.Name = name
+		if a.Meta.ID == "" || attempt > 0 {
+			a.Meta.ID = meta.NewID()
+		}
+		p, err := toUpsertParams(&a)
+		if err != nil {
+			return "", fmt.Errorf("account.EnsureManaged: %w", err)
+		}
+		if _, err := s.q.InsertManagedAccount(ctx, gen.InsertManagedAccountParams{
+			ID: p.ID, Name: p.Name, DisplayName: p.DisplayName, Metadata: p.Metadata, Spec: p.Spec,
+			Kind: p.Kind, ManagedKey: p.ManagedKey, HolderUserID: p.HolderUserID, HolderSaID: p.HolderSaID,
+			TeamID: p.TeamID, ProjectID: p.ProjectID, FollowsRoleBindings: p.FollowsRoleBindings,
+		}); err != nil {
+			return "", fmt.Errorf("account.EnsureManaged: insert: %w", err)
+		}
+	}
+}
+
+// SetMembership marks member account a closed or open and whether it follows role bindings, only while the row is still at the version a was read at: a decision made from an older read (a close racing a reopen) changes nothing. A row already so is left alone.
+func (s *Store) SetMembership(ctx context.Context, a *Account, closed, followsRoleBindings bool) error {
+	version, ok, err := a.Meta.ExpectedVersion()
+	if err != nil || !ok {
+		return fmt.Errorf("account.SetMembership: account %q carries no version to guard the write", a.Meta.Name)
+	}
+	_, err = s.q.SetAccountMembership(ctx, gen.SetAccountMembershipParams{ID: a.Meta.ID, Closed: closed, FollowsRoleBindings: followsRoleBindings, ResourceVersion: version})
+	if err != nil {
+		return fmt.Errorf("account.SetMembership: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) uniqueName(ctx context.Context, base string) (string, error) {
+	var nameErr error
+	name := slug.Unique(base, func(c string) bool {
+		taken, err := s.q.AccountNameTaken(ctx, c)
+		if err != nil {
+			nameErr = err
+			return false
+		}
+		return taken
+	})
+	if nameErr != nil {
+		return "", fmt.Errorf("name: %w", nameErr)
+	}
+	return name, nil
+}
+
+func fromRow(r gen.Account) (*Account, error) {
+	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	spec.HostID = r.HostID.String
+	spec.SourceAccountID = r.SourceAccountID.String
+	spec.SharedBy = nil
+	spec.GroupedByRelay = r.GroupedByRelay
+	spec.Kind = Kind(r.Kind)
+	spec.Closed = r.Closed
+	spec.Holder = nil
+	switch {
+	case r.HolderUserID.Valid:
+		spec.Holder = &Holder{Kind: HolderUser, ID: r.HolderUserID.String}
+	case r.HolderSaID.Valid:
+		spec.Holder = &Holder{Kind: HolderServiceAccount, ID: r.HolderSaID.String}
+	}
+	return &Account{Meta: md, Spec: spec, FollowsRoleBindings: r.FollowsRoleBindings}, nil
+}
+
+func toUpsertParams(a *Account) (gen.UpsertAccountParams, error) {
+	metaJSON, err := meta.MarshalJSONB(a.Meta)
+	if err != nil {
+		return gen.UpsertAccountParams{}, fmt.Errorf("metadata: %w", err)
+	}
+	// Only the flags with no column of their own stay in the document.
+	stored := Spec{PayloadLogging: a.Spec.PayloadLogging, OrgID: a.Spec.OrgID}
+	specJSON, err := json.Marshal(stored)
+	if err != nil {
+		return gen.UpsertAccountParams{}, fmt.Errorf("spec: %w", err)
+	}
+	ver, ok, err := a.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertAccountParams{}, err
+	}
+	kind := a.DerivedKind()
+	if kind == "" {
+		return gen.UpsertAccountParams{}, fmt.Errorf("account %q fits no kind", a.Meta.Name)
+	}
+	p := gen.UpsertAccountParams{
+		ID:                  a.Meta.ID,
+		Name:                a.Meta.Name,
+		DisplayName:         a.Meta.DisplayName,
+		HostID:              text(a.Spec.HostID),
+		Metadata:            metaJSON,
+		Spec:                specJSON,
+		Kind:                string(kind),
+		ManagedKey:          text(a.ManagedKey()),
+		Closed:              a.Spec.Closed,
+		FollowsRoleBindings: a.FollowsRoleBindings,
+		ExpectedVersion:     pgtype.Int8{Int64: ver, Valid: ok},
+	}
+	if a.IsShared() {
+		p.SourceAccountID, p.ShareReceiver = text(a.Spec.SourceAccountID), text(a.Receiver().Key())
+		if a.Meta.Owner.Kind == meta.OwnerUser {
+			p.ShareUserID = text(a.Meta.Owner.ID)
+		}
+	}
+	if h := a.Spec.Holder; h != nil {
+		switch h.Kind {
+		case HolderUser:
+			p.HolderUserID = text(h.ID)
+		case HolderServiceAccount:
+			p.HolderSaID = text(h.ID)
+		}
+	}
+	// A share fills its receiving team or project too: it is a link, so it goes with the receiver instead of blocking its delete.
+	if kind != KindProvider || a.IsShared() {
+		switch a.Meta.Owner.Kind {
+		case meta.OwnerTeam:
+			p.TeamID = text(a.Meta.Owner.ID)
+		case meta.OwnerProject:
+			p.ProjectID = text(a.Meta.Owner.ID)
+		}
+	}
+	return p, nil
+}
+
+func text(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
+}

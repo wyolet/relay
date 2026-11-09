@@ -55,6 +55,8 @@ type Attribution struct {
 	PrincipalID    string
 	CredentialKind string
 	CredentialID   string
+	// LaneID is the account the submission switched into, empty for the credential's default lane. It rides the items only; the batch row does not keep it.
+	LaneID string
 }
 
 // Caller is the identity a batch request arrives with, resolved by the

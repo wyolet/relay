@@ -2,15 +2,18 @@ package catalogview
 
 import (
 	"context"
+	"sort"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
@@ -27,7 +30,11 @@ type index struct {
 	rlByID             map[string]*ratelimit.RateLimit
 	providerByID       map[string]*provider.Provider
 	hostkeyByID        map[string]*hostkey.HostKey
-	providerSlug       string // the resolved model's provider slug, for DSL/RL matching
+	poolByID           map[string]*pool.Pool
+	accountByID        map[string]*account.Account
+	keysByAccount      map[string][]*hostkey.HostKey // account id → its keys in creation order
+	providerSlug       string                        // the resolved model's provider slug, for DSL/RL matching
+	personalOff        func(userID string) bool      // nil reads every user as on
 }
 
 // indexConcurrency caps the parallel store reads per index build so a burst
@@ -82,6 +89,8 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		rls      []*ratelimit.RateLimit
 		provs    []*provider.Provider
 		keys     []*hostkey.HostKey
+		pools    []*pool.Pool
+		accounts []*account.Account
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(indexConcurrency)
@@ -120,6 +129,20 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		keys, err = s.HostKeys.List(gctx)
 		return err
 	})
+	if s.Pools != nil {
+		g.Go(func() error {
+			var err error
+			pools, err = s.Pools.List(gctx)
+			return err
+		})
+	}
+	if s.Accounts != nil {
+		g.Go(func() error {
+			var err error
+			accounts, err = s.Accounts.List(gctx)
+			return err
+		})
+	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
@@ -133,9 +156,26 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		rlByID:             make(map[string]*ratelimit.RateLimit, len(rls)),
 		providerByID:       make(map[string]*provider.Provider, len(provs)),
 		hostkeyByID:        make(map[string]*hostkey.HostKey, len(keys)),
+		poolByID:           make(map[string]*pool.Pool, len(pools)),
+		accountByID:        make(map[string]*account.Account, len(accounts)),
+		keysByAccount:      map[string][]*hostkey.HostKey{},
+		personalOff:        s.PersonalAccountOff,
 	}
 	for _, k := range keys {
 		idx.hostkeyByID[k.Meta.ID] = k
+		if k.Spec.AccountID != "" {
+			idx.keysByAccount[k.Spec.AccountID] = append(idx.keysByAccount[k.Spec.AccountID], k)
+		}
+	}
+	for _, ks := range idx.keysByAccount {
+		// Ids are UUIDv7, so id order is creation order.
+		sort.Slice(ks, func(i, j int) bool { return ks[i].Meta.ID < ks[j].Meta.ID })
+	}
+	for _, a := range accounts {
+		idx.accountByID[a.Meta.ID] = a
+	}
+	for _, p := range pools {
+		idx.poolByID[p.Meta.ID] = p
 	}
 	for _, h := range hosts {
 		idx.hostByID[h.Meta.ID] = h
@@ -186,18 +226,6 @@ func (idx *index) modelHostSet(modelID string) map[string]string {
 	for _, b := range idx.bindingsByModel[modelID] {
 		if h, ok := idx.hostByID[b.Spec.HostID]; ok {
 			out[h.Meta.ID] = h.Meta.Name
-		}
-	}
-	return out
-}
-
-// policyKeyHosts is the set of host ids the policy's hostkeys authenticate to
-// — the coverage gate for customer-policy reachability.
-func (idx *index) policyKeyHosts(p *policy.Policy) map[string]struct{} {
-	out := make(map[string]struct{}, len(p.Spec.HostKeyIDs))
-	for _, id := range p.Spec.HostKeyIDs {
-		if k, ok := idx.hostkeyByID[id]; ok {
-			out[k.Spec.HostID] = struct{}{}
 		}
 	}
 	return out

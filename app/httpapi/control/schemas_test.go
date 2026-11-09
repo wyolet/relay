@@ -49,8 +49,8 @@ func TestSchemasEndpointServesEveryKind(t *testing.T) {
 	// The kinds the loader can parse and the kinds we publish are the same
 	// set; a new DTO without a regenerated schema fails here.
 	want := []string{
-		"Group", "Host", "HostBinding", "HostKey", "Key", "Model", "Overlay", "Policy",
-		"PolicyBinding", "Pricing", "Project", "Provider", "RateLimit",
+		"Account", "Budget", "Group", "Host", "HostBinding", "HostKey", "Key", "Model", "Overlay", "Policy",
+		"PolicyBinding", "Pool", "Pricing", "Project", "Provider", "RateLimit",
 		"Role", "RoleBinding", "ServiceAccount", "Team",
 	}
 	if !reflect.DeepEqual(index.Kinds, want) {
@@ -104,7 +104,7 @@ func TestSchemasEndpointRejectsUnknown(t *testing.T) {
 // says so; without the enum a typo in a role rule is caught at apply time
 // instead of while writing the YAML.
 func TestGeneratedSchemasCarryTheClosedSets(t *testing.T) {
-	raw, err := schemas.FS.ReadFile("v1alpha2/Role.schema.json")
+	raw, err := schemas.FS.ReadFile(manifest.SchemaVersion + "/Role.schema.json")
 	if err != nil {
 		t.Fatalf("read Role schema: %v", err)
 	}

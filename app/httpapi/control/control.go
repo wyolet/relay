@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -22,12 +23,14 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/license"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
+	"github.com/wyolet/relay/pkg/engine"
 )
 
 // Deps is the typed dependency bundle for the admin plane.
@@ -53,9 +56,9 @@ type Deps struct {
 	// signer) disables minting and revoke-by-token.
 	TokenSigner *TokenSigner
 
-	// TokenDenylist is where a revoked token's jti is written for the data
-	// plane to read. nil disables per-token revocation (the token-version
-	// bump still works).
+	// TokenDenylist records a revoked token's jti for the data plane to
+	// refuse. nil disables per-token revocation (the token-version bump
+	// still works).
 	TokenDenylist TokenDenylist
 
 	// MintLimiter caps how often one user may mint an inference token.
@@ -91,6 +94,9 @@ type Deps struct {
 	// Stores is the bundle of typed stores used by CRUD writes.
 	Stores *appcatalog.Stores
 
+	// Plans lets a token mint or key create answer once this pod serves what it wrote; nil answers at once.
+	Plans PlanWaiter
+
 	// CookieSecure controls the Secure attribute on the session cookie.
 	// Surfaced here so the OpenAPI doc can reflect deployment posture.
 	CookieSecure bool
@@ -124,10 +130,19 @@ type Deps struct {
 	// it. nil disables that endpoint.
 	Selector *keypool.Selector
 
+	// Adapters is the wire-shape registry; detecting a host key's account probes the key's host through it. nil answers that detection with 422.
+	Adapters *adapter.Registry
+
 	// HostHealth reads per-host runtime reachability (observed state), shared
 	// with the data plane. Overlays host.Status on host reads. nil disables
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
+
+	// PlanView returns the plan engine's current view: plan issues, the caller's accounts and their limits are read from it. nil answers the issues read with an empty list and the account reads 503.
+	PlanView func() *engine.View
+
+	// Counters reads current counts for the limits reads; the data plane's limiter. nil answers them 503.
+	Counters CounterReader
 
 	// PublicURL is the deployment's externally reachable control-plane
 	// origin. Exported manifests reference the schema endpoint under it;
@@ -142,6 +157,11 @@ type Deps struct {
 // Pinger reports one backend's health for /healthz.
 type Pinger interface {
 	Ping(ctx context.Context) error
+}
+
+// CounterReader reads counters without counting. Implemented by every limits.Limiter.
+type CounterReader interface {
+	Peek(ctx context.Context, cs []limits.Counter) ([]limits.Reading, error)
 }
 
 // HostHealthReader reads observed host reachability. Implemented by
@@ -203,14 +223,20 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerHostKeyRotate(api, d, protect)
 	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
+	registerHostKeyDetectAccount(api, d, protect)
 	registerReferences(api, d, protect)
 	registerDetach(api, d, protect)
-	registerPolicyKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
 	registerOverlayRoutes(api, d, protect) // /models/by-id/{id}/overlay
 	registerCatalogGraph(api, d, protect)
+	registerMyAccounts(api, d, protect)
+	registerMyContexts(api, d, protect)
+	registerLimits(api, d, protect)
+	registerReachable(api, d, protect)
+	registerAccountPolicy(api, d, protect)
+	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
 	registerUsageFacets(api, d, protect)
@@ -231,9 +257,14 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// `meter` enum comes from the domain const set; `window` is documented as
 	// seconds (ratelimit.Window marshals as integer seconds). No-op if renamed.
 	patchProp(api, "RateLimitRule", "meter", func(s *huma.Schema) { s.Enum = meterEnum() })
+	patchProp(api, "LimitsRule", "meter", func(s *huma.Schema) { s.Enum = meterEnum() })
 	patchProp(api, "RateLimitRule", "window", func(s *huma.Schema) {
 		s.Description = "Measurement period, in whole seconds."
 	})
+	documentDomainSchemas(api)
+	entityEnvelope(api)
+	describeErrors(api)
+	api.OpenAPI().Tags = controlTags
 
 	// The control API is mounted in front of the SPA's NotFound fallback,
 	// which answers HTML. A client calling a renamed or removed endpoint

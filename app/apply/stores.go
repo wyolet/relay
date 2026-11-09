@@ -7,7 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -17,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
@@ -45,6 +48,9 @@ type Stores struct {
 	Key         *key.Store
 	Team        *team.Store
 	Project     *project.Store
+	Account     *account.Store
+	Pool        *apppool.Store
+	Budget      *budget.Store
 
 	ServiceAccount *serviceaccount.Store
 	Group          *group.Store
@@ -79,6 +85,9 @@ func NewStores(pool *pgxpool.Pool, sec *appsecret.Secrets) *Stores {
 		Key:         key.NewStore(q),
 		Team:        team.NewStore(pool),
 		Project:     project.NewStore(pool),
+		Account:     account.NewStore(q),
+		Pool:        apppool.NewStore(pool),
+		Budget:      budget.NewStore(q),
 
 		ServiceAccount: serviceaccount.NewStore(pool),
 		Group:          group.NewStore(pool),
@@ -105,6 +114,9 @@ type Rows struct {
 	Keys       []*key.Key
 	Teams      []*team.Team
 	Projects   []*project.Project
+	Accounts   []*account.Account
+	Pools      []*apppool.Pool
+	Budgets    []*budget.Budget
 
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Groups          []*group.Group
@@ -161,6 +173,15 @@ func rowStates(r *Rows) map[string]map[string]rowState {
 	}
 	for _, x := range r.Policies {
 		add("Policy", &x.Meta)
+	}
+	for _, x := range r.Accounts {
+		add("Account", &x.Meta)
+	}
+	for _, x := range r.Pools {
+		add("Pool", &x.Meta)
+	}
+	for _, x := range r.Budgets {
+		add("Budget", &x.Meta)
 	}
 	for _, x := range r.Keys {
 		add("Key", &x.Meta)
@@ -229,6 +250,15 @@ func Load(ctx context.Context, s *Stores) (*Rows, error) {
 	}
 	if r.Keys, err = s.Key.List(ctx); err != nil {
 		return nil, fmt.Errorf("apply: list keys: %w", err)
+	}
+	if r.Accounts, err = s.Account.List(ctx); err != nil {
+		return nil, fmt.Errorf("apply: list accounts: %w", err)
+	}
+	if r.Pools, err = s.Pool.List(ctx); err != nil {
+		return nil, fmt.Errorf("apply: list pools: %w", err)
+	}
+	if r.Budgets, err = s.Budget.List(ctx); err != nil {
+		return nil, fmt.Errorf("apply: list budgets: %w", err)
 	}
 	if r.ServiceAccounts, err = s.ServiceAccount.List(ctx); err != nil {
 		return nil, fmt.Errorf("apply: list serviceaccounts: %w", err)

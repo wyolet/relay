@@ -65,14 +65,16 @@ func sanitizeRoleBinding(b *rolebinding.RoleBinding, roles, teams, projects idSe
 //
 // Indexes: policyBindingsByID and policyBindingsByProject (sorted by
 // effective priority, then name — the order resolution reads them in).
-func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, projects, policies idSet) {
+func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, scopes func(meta.Owner) bool, policies idSet) {
 	for _, b := range bindings {
-		clean, keep := sanitizePolicyBinding(b, projects, policies)
+		clean, keep := sanitizePolicyBinding(b, scopes, policies)
 		if !keep {
 			continue
 		}
 		s.policyBindingsByID[clean.Meta.ID] = clean
-		s.policyBindingsByProject[clean.Spec.ProjectID] = append(s.policyBindingsByProject[clean.Spec.ProjectID], clean)
+		if pid := owningProject(clean); pid != "" {
+			s.policyBindingsByProject[pid] = append(s.policyBindingsByProject[pid], clean)
+		}
 		s.registerRefs(refKey{Kind: refPolicyBinding, ID: clean.Meta.ID}, outboundPolicyBindingRefs(clean))
 	}
 	for projectID := range s.policyBindingsByProject {
@@ -80,19 +82,41 @@ func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, pr
 	}
 }
 
-// sanitizePolicyBinding drops the binding when its Project or its Policy is
-// missing: both edges are hard, a dangling one would resolve a principal to
-// nothing.
-func sanitizePolicyBinding(b *policybinding.PolicyBinding, projects, policies idSet) (*policybinding.PolicyBinding, bool) {
-	if !projects(b.Spec.ProjectID) {
+// ownerScopeExists reports whether a policy binding's owner scope is in the snapshot: its project, its team, or the system. Users are not snapshot rows; a user-owned binding goes with its user through the foreign key.
+func (s *Snapshot) ownerScopeExists(o meta.Owner) bool {
+	switch o.Kind {
+	case meta.OwnerProject:
+		_, ok := s.projectsByID[o.ID]
+		return ok
+	case meta.OwnerTeam:
+		_, ok := s.teamsByID[o.ID]
+		return ok
+	case meta.OwnerUser:
+		return o.ID != ""
+	}
+	return o.Kind == meta.OwnerSystem
+}
+
+// sanitizePolicyBinding drops the binding when its owner scope or its Policy
+// is missing: both edges are hard, a dangling one would resolve a principal
+// to nothing.
+func sanitizePolicyBinding(b *policybinding.PolicyBinding, scopes func(meta.Owner) bool, policies idSet) (*policybinding.PolicyBinding, bool) {
+	if !scopes(b.Meta.Owner) {
 		return nil, false
 	}
 	if !policies(b.Spec.PolicyID) {
 		return nil, false
 	}
 	clean := *b
-	clean.IndexSubjects()
 	return &clean, true
+}
+
+// owningProject is the id of the project owning b, "" when a team, a user or the system does.
+func owningProject(b *policybinding.PolicyBinding) string {
+	if b.Meta.Owner.Kind == meta.OwnerProject {
+		return b.Meta.Owner.ID
+	}
+	return ""
 }
 
 func sortRoleBindings(list []*rolebinding.RoleBinding) {
@@ -100,11 +124,5 @@ func sortRoleBindings(list []*rolebinding.RoleBinding) {
 }
 
 func sortPolicyBindings(list []*policybinding.PolicyBinding) {
-	sort.Slice(list, func(i, j int) bool {
-		pi, pj := list[i].EffectivePriority(), list[j].EffectivePriority()
-		if pi != pj {
-			return pi < pj
-		}
-		return list[i].Meta.Name < list[j].Meta.Name
-	})
+	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
 }

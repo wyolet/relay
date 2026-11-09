@@ -14,8 +14,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -23,13 +25,13 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
-	"github.com/wyolet/relay/pkg/ids"
 )
 
 type exportInput struct {
@@ -49,9 +51,9 @@ type exportOutput struct {
 // then the bindings that reference those, then the catalog overlays. A
 // bundle replayed top to bottom never forward-references.
 var exportOrder = []string{
-	"teams", "projects", "groups", "roles", "rate-limits", "policies",
-	"host-keys", "service-accounts", "keys", "role-bindings",
-	"policy-bindings", "overlays",
+	"teams", "projects", "groups", "roles", "rate-limits", "budgets",
+	"accounts", "host-keys", "pools", "policies", "service-accounts", "keys",
+	"role-bindings", "policy-bindings", "overlays",
 }
 
 func registerExport(api huma.API, d Deps, protect huma.Middlewares) {
@@ -265,6 +267,34 @@ func (e *exporter) documents(ctx context.Context) ([]manifest.Document, error) {
 					dto := manifest.FromRateLimit(r, e.rev)
 					return manifest.Document{RateLimit: &dto}
 				})
+		case "budgets":
+			docs = appendKind(ctx, e, docs, plural, "budget", e.rows.Budgets,
+				func(b *budget.Budget) *meta.Metadata { return &b.Meta },
+				func(b *budget.Budget) manifest.Document {
+					dto := manifest.FromBudget(b, e.rev)
+					return manifest.Document{Budget: &dto}
+				})
+		case "accounts":
+			// Caller accounts follow the tenancy rows they stand for, so a bundle carries only provider accounts; bindings and keys still name caller accounts.
+			providers := make([]*account.Account, 0, len(e.rows.Accounts))
+			for _, a := range e.rows.Accounts {
+				if a.IsProvider() {
+					providers = append(providers, a)
+				}
+			}
+			docs = appendKind(ctx, e, docs, plural, "account", providers,
+				func(a *account.Account) *meta.Metadata { return &a.Meta },
+				func(a *account.Account) manifest.Document {
+					dto := manifest.FromAccount(a, e.rev)
+					return manifest.Document{Account: &dto}
+				})
+		case "pools":
+			docs = appendKind(ctx, e, docs, plural, "pool", e.rows.Pools,
+				func(p *pool.Pool) *meta.Metadata { return &p.Meta },
+				func(p *pool.Pool) manifest.Document {
+					dto := manifest.FromPool(p, e.rev)
+					return manifest.Document{Pool: &dto}
+				})
 		case "policies":
 			docs = appendKind(ctx, e, docs, plural, "policy", e.rows.Policies,
 				func(p *policy.Policy) *meta.Metadata { return &p.Meta },
@@ -352,89 +382,6 @@ func appendKind[T any](
 		docs = append(docs, d)
 	}
 	return docs
-}
-
-// nameOwner rewrites an owner reference from the stored id to the slug the
-// manifest names it by, so a bundle in git reads as slugs, not UUIDs.
-func (e *exporter) nameOwner(m *manifest.WireMeta) {
-	if m == nil || !ids.Valid(m.Owner.Name) {
-		return
-	}
-	var (
-		name string
-		ok   bool
-	)
-	switch m.Owner.Kind {
-	case meta.OwnerTeam:
-		name, ok = e.rev.TeamName(m.Owner.Name)
-	case meta.OwnerProject:
-		name, ok = e.rev.ProjectName(m.Owner.Name)
-	case meta.OwnerUser:
-		name, ok = e.rev.Username(m.Owner.Name)
-	case meta.OwnerHost:
-		name, ok = e.rev.HostName(m.Owner.Name)
-	}
-	if ok {
-		m.Owner.Name = name
-	}
-}
-
-// reverseResolver builds the id→name index the From* renderers need.
-func reverseResolver(r *apply.Rows) manifest.MapReverseResolver {
-	rev := manifest.MapReverseResolver{
-		Providers: map[string]string{}, Hosts: map[string]string{},
-		Policies: map[string]string{}, Models: map[string]string{},
-		HostKeys: map[string]string{}, RateLimits: map[string]string{},
-		Pricings: map[string]string{}, Bindings: map[string]string{},
-		Teams: map[string]string{}, Projects: map[string]string{},
-		ServiceAccounts: map[string]string{}, Groups: map[string]string{},
-		Roles: map[string]string{}, Users: map[string]string{},
-		ModelProviders: map[string]string{},
-	}
-	for _, x := range r.Providers {
-		rev.Providers[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Hosts {
-		rev.Hosts[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Policies {
-		rev.Policies[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Models {
-		rev.Models[x.Meta.ID] = x.Meta.Name
-		rev.ModelProviders[x.Meta.ID] = x.Meta.Owner.ID
-	}
-	for _, x := range r.HostKeys {
-		rev.HostKeys[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.RateLimits {
-		rev.RateLimits[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Pricings {
-		rev.Pricings[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Bindings {
-		rev.Bindings[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Teams {
-		rev.Teams[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Projects {
-		rev.Projects[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.ServiceAccounts {
-		rev.ServiceAccounts[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Groups {
-		rev.Groups[x.Meta.ID] = x.Meta.Name
-	}
-	for _, x := range r.Roles {
-		rev.Roles[x.Meta.ID] = x.Meta.Name
-	}
-	for _, u := range r.Users {
-		rev.Users[u.ID] = u.Username
-	}
-	return rev
 }
 
 func sliceHas(list []string, want string) bool {

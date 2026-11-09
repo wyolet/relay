@@ -4,81 +4,74 @@ import (
 	"net/http"
 	"time"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/auth/apikey"
 )
 
-// keyPrincipal authenticates a key bearer, writing the 401 and reporting
-// false when the key is unknown or no longer usable.
-func keyPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, bearer string) (*Principal, *key.Key, bool) {
+// keyPrincipal authenticates a key bearer against the published key plans, writing the 401 and reporting false when no active key has its hash (unknown, disabled, revoked, expired, or a rotated-out hash past its grace), and the 403 when lane names an account the key may not run in, recorded against rec.
+func (a *Auth) keyPrincipal(w http.ResponseWriter, rec *http.Request, root *plan.Root, bearer, lane string) (*Principal, *key.Key, bool) {
 	hash := apikey.Hash(bearer)
-	k, matchedPrevious := snap.KeyByHash(hash)
-	if k == nil {
+	kp := root.Keys.Lookup(hash, time.Now())
+	if kp == nil {
 		writeAuthErr(w, "invalid api key")
 		return nil, nil, false
 	}
-	now := time.Now()
-	switch {
-	case !k.IsEnabled():
-		writeAuthErr(w, "api key disabled")
-		return nil, nil, false
-	case k.Spec.RevokedAt != nil:
-		writeAuthErr(w, "api key revoked")
-		return nil, nil, false
-	case k.Spec.ExpiresAt != nil && !now.Before(*k.Spec.ExpiresAt):
-		writeAuthErr(w, "api key expired")
-		return nil, nil, false
-	case matchedPrevious && !k.InGrace(now):
-		writeAuthErr(w, "api key rotated")
-		return nil, nil, false
-	case !keyUserEnabled(snap, k):
-		writeAuthErr(w, "api key disabled")
+	p, refused := keyPrincipalIn(root, kp, hash, lane)
+	if refused != nil {
+		a.refuseLane(w, rec, laneless(principalOf(kp, hash)), refused)
 		return nil, nil, false
 	}
-	return buildPrincipal(snap, k, hash), k, true
+	return p, kp.Key, true
 }
 
-// buildPrincipal resolves the key's identity and tenancy from the snapshot.
-// Subjects is the precomputed list, taken by slice header — never rebuilt
-// per request.
-func buildPrincipal(snap *appcatalog.Snapshot, k *key.Key, hash string) *Principal {
+// refuseLane answers a credential that may not run in the lane it asked for, recording the refusal against rec for the credential's principal.
+func (a *Auth) refuseLane(w http.ResponseWriter, rec *http.Request, who *Principal, refused *plan.Refusal) {
+	a.recordRefusal(rec, who, refused)
+	writeForbidden(w, refused.Code, refused.Error())
+}
+
+// laneless is p without a lane: a refused switch ran in no account, so its row names the principal and credential only.
+func laneless(p *Principal) *Principal {
+	p.Caller, p.ProjectID, p.TeamID = nil, "", ""
+	return p
+}
+
+// keyPrincipalIn is the principal kp authenticates, acting in lane; account_not_held when the key may not run there.
+func keyPrincipalIn(root *plan.Root, kp *plan.KeyPlan, hash, lane string) (*Principal, *plan.Refusal) {
+	if lane == "" {
+		return principalOf(kp, hash), nil
+	}
+	cp, refused := root.LaneFor(kp, lane)
+	if refused != nil {
+		return nil, refused
+	}
+	p := principalIn(kp, hash, cp)
+	p.SwitchedLaneID = cp.Lane.Meta.ID
+	return p, nil
+}
+
+// principalOf is the principal a key plan authenticates, in the key's default lane.
+func principalOf(kp *plan.KeyPlan, hash string) *Principal { return principalIn(kp, hash, kp.Caller) }
+
+// principalIn is the principal a key plan authenticates, acting in lane cp; the tenancy comes from the caller plan, never from a per-request lookup.
+func principalIn(kp *plan.KeyPlan, hash string, cp *plan.CallerPlan) *Principal {
 	p := &Principal{
-		Subjects:           snap.SubjectsForKey(k.Meta.ID),
 		CredentialKind:     CredentialKey,
-		CredentialID:       k.Meta.ID,
+		CredentialID:       kp.Key.Meta.ID,
 		KeyHash:            hash,
-		Key:                k,
-		PassthroughAllowed: k.Spec.PassthroughAllowed,
-		PayloadLogging:     k.Spec.PayloadLoggingEnabled,
+		Key:                kp.Key,
+		Caller:             cp,
+		PassthroughAllowed: kp.Key.Spec.PassthroughAllowed,
+		PayloadLogging:     kp.Key.Spec.PayloadLoggingEnabled,
+		ProjectID:          cp.Project().ID(),
+		TeamID:             cp.Team().ID(),
 	}
-	if k.Spec.PolicyID != "" {
-		if pol, ok := policyOrDisabled(snap, k.Spec.PolicyID); ok {
-			p.Policy = pol
-		}
-	}
-	switch k.Spec.Principal.Kind {
+	switch kp.Principal.Kind {
 	case key.PrincipalServiceAccount:
-		p.ServiceAccountID = k.Spec.Principal.ID
-		if sa, ok := snap.ServiceAccount(k.Spec.Principal.ID); ok {
-			p.ServiceAccount = sa
-			p.ProjectID = sa.Spec.ProjectID
-			if proj, ok := snap.Project(sa.Spec.ProjectID); ok {
-				p.TeamID = proj.Spec.TeamID
-			}
-		}
+		p.ServiceAccountID = kp.Principal.ID
 	case key.PrincipalUser:
-		p.UserID = k.Spec.Principal.ID
-		// A personal key on a project-owned policy spends that project's
-		// upstream credentials (its owner was allowed to point it there), so
-		// the request carries the project's attribution and limits.
-		if p.Policy != nil && p.Policy.Meta.Owner.Kind == meta.OwnerProject {
-			p.ProjectID = p.Policy.Meta.Owner.ID
-			if proj, ok := snap.Project(p.ProjectID); ok {
-				p.TeamID = proj.Spec.TeamID
-			}
-		}
+		p.UserID = kp.Principal.ID
 	}
 	return p
 }

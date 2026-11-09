@@ -17,6 +17,8 @@ Relay also reads the credential from `X-WR-API-Key` (checked first) and `x-api-k
 
 Relay tells the two credentials apart by shape: an inference token looks like a JWT (starts `ey`, two `.` separators), a relay key never does. Both are accepted on every inference route. Relay keys are minted in the admin UI or with `POST /api/keys`; the plaintext is returned once and Relay stores only its SHA-256. Inference tokens are minted with `POST /api/auth/token`, are scoped to one project, and expire on their own. See [Authentication](/concepts/auth#inference-tokens).
 
+Each request runs in one [account](/concepts/accounts), the credential's default unless the request names another the credential may use: the `X-WR-Account` header, a `/a/<account>/` prefix before any path on this page, or the account's own host when `RELAY_ACCOUNT_DOMAIN` is set. See [Switching lanes per request](/concepts/accounts#switching-lanes-per-request).
+
 Rotating a relay key (`POST /api/keys/by-id/{id}/rotate`) accepts `{"graceSeconds": N}`: the previous plaintext keeps authenticating for that long, so callers can be redeployed without a window of `401`s. `0` cuts over immediately; the ceiling is the `keyRotateMaxGrace` setting (24 hours by default).
 
 ## Endpoints
@@ -140,14 +142,14 @@ When the inbound shape matches the upstream's, the response streams from the ups
 
 ## Models
 
-The `model` field is resolved against your catalog. A model is reachable only if the policy that governs your credential grants it **and** the model has an enabled host binding with a usable host key. List what your credential can reach:
+The `model` field is resolved against your catalog. A model is reachable only if every [policy on your ladder](/concepts/policies#the-ladder) allows it **and** one of the pools you reach is at a host with an enabled binding for it. List what your credential can reach:
 
 ```bash
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer <relay-key>"
 ```
 
-When several hosts serve a model, append `@<host>` to pin one (`"model": "claude-sonnet-4-6@anthropic"`), or send `X-WR-Upstream-Host: <host>`. An `@host` already in the model wins over the header.
+When several hosts serve a model, append `@<host>` to pin one (`"model": "claude-sonnet-4-6@anthropic"`), or send `X-WR-Upstream-Host: <host>`. An `@host` already in the model wins over the header. A pin narrows routing to that host; when none of the pools you reach is at it, the request is refused with `refusal: host_not_reachable`.
 
 ## Canonical shape
 
@@ -264,7 +266,7 @@ A canonical system message can instead opt into full system authority with `"hoi
 
 ## Catalog
 
-`GET /v1/catalog` returns the catalog document the Go SDK reads (hosts with their model bindings and pricing, plus `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential without a policy gets the same `403` when policy-less traffic is off.
+`GET /v1/catalog` returns the catalog document the Go SDK reads (hosts with their model bindings and pricing, plus `models` and `providers` metadata), built from this deployment's live catalog and cut down to the bindings your credential can route to. It authenticates like `/v1/models` and lists the same models: every `hosts[].models[].model` is an id `/v1/models` returns for the same credential, and a credential whose caller ladder refuses (a disabled policy, team or project, an account bound twice, a closed account) gets the same `403`. Both answer for the request's account, so a switched lane lists that account's models.
 
 The document omits each host's `baseURL`, `path` and `consoleURL`, since calls go through Relay rather than to the upstream. `version` is `deployment@<tag>` when the catalog was seeded from a release tag, else `deployment`; `generatedAt` is when the document was rendered.
 
@@ -282,7 +284,7 @@ In Go, `client.Relay(...).Catalog(ctx)` fetches and revalidates it, and `Models(
 Relay writes errors in one envelope:
 
 ```json
-{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed by this policy"}}
+{"error": {"type": "invalid_request_error", "code": "model_not_allowed", "refusal": "model_not_allowed", "message": "model \"gpt-4o\" is not allowed by the team policy <policy-id>"}}
 ```
 
 | Status | `code` | Cause |
@@ -298,28 +300,68 @@ Relay writes errors in one envelope:
 | `400` | `missing_upstream_host`, `unknown_upstream_host` | Proxy mode: an anonymous request without `X-WR-Upstream-Host`, or a pinned host that does not exist or that the caller may not use. |
 | `401` | `unauthenticated` | Missing, unknown, disabled, expired, revoked or rotated-out relay key or inference token. |
 | `401` | `token_revoked` | The inference token was revoked. |
-| `403` | `no_policy`, `policy_not_found`, `policy_disabled` | No policy governs the credential, or the governing policy is missing or disabled. |
-| `403` | `policyless_disabled` | The relay key has no policy and policy-less traffic is off. |
-| `403` | `model_not_allowed`, `model_disabled` | The policy does not grant the model, or the model is disabled. |
-| `403` | `project_unavailable` | The inference token's project no longer exists. |
+| `403` | `policy_disabled`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off` | A rung of the caller's ladder refuses. See [Policy refusals](#policy-refusals). |
+| `403` | `account_not_held` | The request names an account its credential may not run in, or the inference token's project has no account for its user. See [Lanes](/concepts/accounts#lanes). |
+| `403` | `model_not_allowed`, `model_disabled` | A policy on the ladder does not allow the model, or the model is disabled. |
+| `403` | `unpriced_under_budget` | The model's binding has no pricing and a budget applies. |
 | `403` | `passthrough_forbidden`, `proxy_disabled` | Proxy mode: the relay key lacks `passthroughAllowed`, or proxy mode is off. |
 | `404` | `model_not_found` | No model matches the reference. |
 | `408` | `request_timeout` | Proxy mode: the request body sent no bytes for `RELAY_PROXY_BODY_IDLE_S` seconds (default 30). |
 | `413` | `request_too_large` | The body exceeds `RELAY_MAX_REQUEST_BYTES` (default 32 MiB), or in proxy mode has no top-level `model` in its first 32 MiB. |
-| `429` | `rate_limit_exceeded` | A rate limit on the governing policy is spent, or every host key for the model is over its tier limit. `Retry-After` says when it refills. |
+| `429` | `rate_limit_exceeded`, `budget_exceeded` | A rate limit or budget on a caller rung is spent, or every host key for the model is over an upstream limit or cooling. `Retry-After` says when it refills, or when the budget's next period starts. |
 | `502` | `upstream_unreachable` | The upstream host could not be dialled. |
 | `502` | `upstream_stalled` | Proxy mode: the request body stopped moving for `RELAY_PROXY_BODY_IDLE_S` seconds, the upstream no longer reading it. |
 | `502` | `upstream_unavailable`, `upstream_error` | Every key failed without a usable upstream response, or the upstream call failed. |
 | `503` | `no_host_binding` | The model has no enabled host binding. |
-| `503` | `no_keys` | No usable host key for the chosen host. |
+| `503` | `no_keys` | None of the pools the caller reaches is at a host that serves the model, or none of them is usable. |
+| `503` | `no_healthy_keys` | Every host key that could serve the model is out of rotation after failing (its circuit breaker is open). Retry later. |
 | `503` | `catalog_unavailable` | The catalog is still loading. `Retry-After: 5`. |
-| `503`; `529` on Anthropic-shaped routes | `overloaded`; `overloaded_error` on Anthropic-shaped routes | Relay is out of capacity: the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`), or Valkey did not answer a rate-limit check in time. `Retry-After: 1`. `/anthropic/v1/messages` and profile routes in that shape answer like Anthropic's API, `529` with `{"type":"error","error":{"type":"overloaded_error","message":"..."}}`, so its SDKs retry it as an overload. |
+| `503`; `529` on Anthropic-shaped routes | `overloaded`; `overloaded_error` on Anthropic-shaped routes | Relay is out of capacity: the pod is at its in-flight cap (`RELAY_MAX_INFLIGHT`), or Dragonfly did not answer a rate-limit check in time. `Retry-After: 1`. `/anthropic/v1/messages` and profile routes in that shape answer like Anthropic's API, `529` with `{"type":"error","error":{"type":"overloaded_error","message":"..."}}`, so its SDKs retry it as an overload. |
 | upstream's | upstream's | The upstream rejected the request on every key. Relay returns the last upstream status and body unchanged. |
+
+When Relay refuses a request itself, `error.refusal` classes the code into what a client can do about it:
+
+| `refusal` | Meaning | Codes |
+| --- | --- | --- |
+| `model_not_allowed` | A policy, account or principal refuses the model. Use another model or account. | `policy_disabled`, `model_not_allowed`, `unpriced_under_budget`, `subject_disabled`, `duplicate_binding`, `account_closed`, `personal_account_off`, `account_not_held` |
+| `host_not_reachable` | No host the caller can reach serves the model, including a pinned `@host` none of its pools is at, or none of them accepted a connection. Use another model or host. | `model_not_found`, `model_disabled`, `no_host_binding`, `no_keys`, and `upstream_unreachable` when no candidate host connected |
+| `no_capacity` | A rate limit, a budget, an account cooldown, or every host key out of rotation. Retry later. | `rate_limit_exceeded`, `budget_exceeded`, `no_healthy_keys` |
+
+`refusal` is absent on every other error, an upstream's own included. `code` stays alongside it with the detail. The same value is recorded on the request's [usage event](/concepts/usage#failed-requests).
 
 When an upstream failure is forwarded, Relay keeps only `Retry-After` (rewritten to whole seconds), `X-Should-Retry`, `X-Request-Id`, `Content-Type` and the upstream's rate-limit headers (`Anthropic-Ratelimit-*`, `X-Ratelimit-*`), and adds `X-WR-Upstream-Status` with the upstream's status.
 
 `X-WR-Origin` says who produced a response: `relay` when Relay wrote it, `upstream` when the status and body came from the provider. A `401` from Relay therefore means your relay key, while a `401` with `X-WR-Origin: upstream` means the provider rejected the host key or your own upstream key. Relay also sets `X-Should-Retry: true|false` on the errors it writes (`true` for `408`, `429` and `5xx`) unless the upstream already sent one. The `401` and `403` responses from the credential check carry neither header.
 
 <Warning>
-Relay does not fail over mid-stream. Failover across the keys of the chosen host happens **before the first byte** reaches you. Once bytes flow, an upstream error reaches you as the upstream sent it.
+Relay does not fail over mid-stream. Failover across the keys of a pool, and on to the next pool, happens **before the first byte** reaches you. Once bytes flow, an upstream error reaches you as the upstream sent it.
 </Warning>
+
+### Policy refusals
+
+A refusal by the [policy ladder](/concepts/policies#the-ladder) names the rung, the account and the policy that decided it, so it can be traced to one binding. Codes without a fixed message carry it in this form:
+
+```
+<code>: <reason> (<rung> rung account:<account-id>, policy <policy-id>)
+```
+
+The rung is `team`, `project` or `lane` on the caller side, and `account` for a host key's provider account.
+
+| Status | `code` | Cause | Fix |
+| --- | --- | --- | --- |
+| `403` | `policy_disabled` | The policy bound on that rung is disabled. Relay does not fall back to another rule. | Enable the policy, or bind the account to another one. |
+| `403` | `subject_disabled` | The caller's team or project is disabled. A disabled user or service account gets `401` instead. | Enable the team or project. |
+| `403` | `duplicate_binding` | Two policy bindings reach one account on that rung. Saving such a binding is normally refused with `409`. | Remove the account from all but one binding. |
+| `403` | `account_closed` | The request's account is a member account whose membership ended: no role binding grants the user that team or project any more. | Grant the membership again, or use another account. |
+| `403` | `personal_account_off` | The request runs in a user's personal account, or a provider account they own personally, while that user's personal accounts are turned off. | Use a key in a team or project account; see [Turning personal accounts off](/concepts/accounts#turning-personal-accounts-off). |
+| `403` | `account_not_held` | The request names an account its credential may not run in, or one that does not exist. A key's default account that stopped taking its keys answers the same. | Name an account the credential may use; see [Lanes](/concepts/accounts#lanes). |
+| `403` | `model_not_allowed` | A policy on the ladder does not allow the model. The message names the rung and the policy: `model "<model>" is not allowed by the <rung> policy <policy-id>`. | Add the model to that policy's `models`, or empty the list. |
+| `403` | `unpriced_under_budget` | A budget applies on that rung and the binding has no pricing. | Add pricing for the binding. |
+| `429` | `budget_exceeded` | A hard budget on a caller rung is spent for this period. `Retry-After` is the time to the next period. | Raise the cap, or wait. |
+| `429` | `rate_limit_exceeded` | A rate limit on a caller rung is spent, or every host key is over an upstream limit or its account is cooling. | Wait for `Retry-After`. |
+| `503` | `no_keys` | No pool the caller reaches is at a host serving the model. When a caller policy links pools, its rung is the one named in the logs. | Link a pool at a serving host in the caller's policy, or give the caller's scope a host key there. |
+| `503` | `no_healthy_keys` | Every host key of the route is out of rotation after failing. | Retry later; check the keys' [health](/concepts/key-pooling#circuit-breakers). |
+
+Model and binding refusals (`model_not_found`, `model_disabled`, `no_host_binding`) name no rung. The rung, account and policy of every refusal are also written to Relay's log with the requested model.
+
+A refusal at the credential check, once the credential is known (a disabled policy or team on the ladder, a closed account, an account the credential may not use), is recorded as a usage event like a routing refusal; a missing or invalid credential is not. See [Failed requests](/concepts/usage#failed-requests).

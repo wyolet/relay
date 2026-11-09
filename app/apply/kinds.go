@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/auth/directory"
@@ -23,6 +24,9 @@ var KindRoutes = map[string]struct{ Plural, Singular string }{
 	"Pricing":        {"pricings", "pricing"},
 	"HostBinding":    {"host-bindings", "host-binding"},
 	"Policy":         {"policies", "policy"},
+	"Account":        {"accounts", "account"},
+	"Pool":           {"pools", "pool"},
+	"Budget":         {"budgets", "budget"},
 	"Group":          {"groups", "group"},
 	"Role":           {"roles", "role"},
 	"ServiceAccount": {"service-accounts", "service-account"},
@@ -51,6 +55,8 @@ type builder struct {
 	// admin relaxes the rules an operator may cross: only re-parenting a row
 	// onto a different owner.
 	admin bool
+	// operator is what refcheck.RequireAdmin passes: an admin, or any caller when nothing scopes reads. It guards groups that turn personal accounts on or off.
+	operator bool
 	// lic gates the features a manifest may declare. Nil is no gate — see
 	// Options.License.
 	lic license.Checker
@@ -62,6 +68,8 @@ type builder struct {
 	// declared holds the rows this run writes, by id, so a later kind's
 	// reference checks see what an earlier kind in the same bundle declared.
 	declared map[string]any
+	// callerAccounts are the caller accounts this run plans by id; see planCallerAccounts.
+	callerAccounts map[string]*account.Account
 
 	entries []Entry
 	// deletes are collected per kind in the same order the upserts run and
@@ -82,6 +90,9 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		prDocs   []*manifest.PricingDTO
 		bndDocs  []*manifest.HostBindingDTO
 		polDocs  []*manifest.PolicyDTO
+		accDocs  []*manifest.AccountDTO
+		poolDocs []*manifest.PoolDTO
+		budDocs  []*manifest.BudgetDTO
 		saDocs   []*manifest.ServiceAccountDTO
 		grpDocs  []*manifest.GroupDTO
 		roleDocs []*manifest.RoleDTO
@@ -116,6 +127,12 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 			bndDocs = append(bndDocs, d.HostBinding)
 		case d.Policy != nil:
 			polDocs = append(polDocs, d.Policy)
+		case d.Account != nil:
+			accDocs = append(accDocs, d.Account)
+		case d.Pool != nil:
+			poolDocs = append(poolDocs, d.Pool)
+		case d.Budget != nil:
+			budDocs = append(budDocs, d.Budget)
 		case d.ServiceAccount != nil:
 			saDocs = append(saDocs, d.ServiceAccount)
 		case d.Group != nil:
@@ -147,6 +164,9 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	mintIDs(b.idx.Pricings, prDocs, docName[manifest.PricingDTO])
 	mintIDs(b.idx.Bindings, bndDocs, docName[manifest.HostBindingDTO])
 	mintIDs(b.idx.Policies, polDocs, docName[manifest.PolicyDTO])
+	mintIDs(b.idx.Accounts, accDocs, docName[manifest.AccountDTO])
+	mintIDs(b.idx.Pools, poolDocs, docName[manifest.PoolDTO])
+	mintIDs(b.idx.Budgets, budDocs, docName[manifest.BudgetDTO])
 	mintIDs(b.idx.ServiceAccounts, saDocs, docName[manifest.ServiceAccountDTO])
 	mintIDs(b.idx.Groups, grpDocs, docName[manifest.GroupDTO])
 	mintIDs(b.idx.Roles, roleDocs, docName[manifest.RoleDTO])
@@ -163,7 +183,13 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planTenancy(ctx, teamDocs, projDocs); err != nil {
 		return err
 	}
-	if err := b.planCatalog(ctx, provDocs, hostDocs, rlDocs, hkDocs, mDocs, prDocs, bndDocs, polDocs); err != nil {
+	if err := b.planServiceAccounts(ctx, saDocs); err != nil {
+		return err
+	}
+	if err := b.planCatalog(ctx, catalogDocs{
+		providers: provDocs, hosts: hostDocs, accounts: accDocs, rateLimits: rlDocs, budgets: budDocs,
+		hostKeys: hkDocs, pools: poolDocs, models: mDocs, pricings: prDocs, bindings: bndDocs, policies: polDocs,
+	}); err != nil {
 		return err
 	}
 	// Accounts before groups, keys and bindings, which name them.
@@ -173,7 +199,8 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planGroupsAndRoles(ctx, grpDocs, roleDocs); err != nil {
 		return err
 	}
-	if err := b.planServiceAccountsAndKeys(ctx, saDocs, keyDocs); err != nil {
+	b.planCallerAccounts(teamDocs, projDocs, saDocs, userDocs, rbDocs)
+	if err := b.planKeys(ctx, keyDocs); err != nil {
 		return err
 	}
 	// Bindings last: they name roles, tenancy rows, policies, and the
@@ -187,6 +214,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.checkPrunedTenancy(ctx); err != nil {
 		return err
 	}
+	b.reportDetached(ctx)
 
 	for i := len(b.deletes) - 1; i >= 0; i-- {
 		b.entries = append(b.entries, b.deletes[i]...)
@@ -220,6 +248,12 @@ func docMeta[D any](d *D) manifest.WireMeta {
 	case *manifest.HostBindingDTO:
 		return v.Metadata
 	case *manifest.PolicyDTO:
+		return v.Metadata
+	case *manifest.AccountDTO:
+		return v.Metadata
+	case *manifest.PoolDTO:
+		return v.Metadata
+	case *manifest.BudgetDTO:
 		return v.Metadata
 	case *manifest.GroupDTO:
 		return v.Metadata

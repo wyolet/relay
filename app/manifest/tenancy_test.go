@@ -16,10 +16,7 @@ metadata:
   owner: {kind: system}
   annotations:
     wyolet.com/owner-email: platform@example.com
-spec:
-  budget:
-    amount: "2500.00"
-    period: month
+spec: {}
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Project
@@ -30,7 +27,6 @@ metadata:
     wyolet.com/cost-center: "1042"
 spec:
   team: platform
-  budget: {amount: "500.00", period: month}
 `
 
 const teamUUID = "0195f8a0-0000-7000-8000-000000000001"
@@ -54,14 +50,11 @@ func TestRoundTrip_TeamAndProject(t *testing.T) {
 	if tm.Meta.Annotations["wyolet.com/owner-email"] != "platform@example.com" {
 		t.Errorf("team annotations = %v", tm.Meta.Annotations)
 	}
-	if tm.Spec.Budget == nil || tm.Spec.Budget.Amount != "2500.00" || tm.Spec.Budget.Period != "month" {
-		t.Errorf("team budget = %+v", tm.Spec.Budget)
-	}
 	if err := tm.Validate(); err != nil {
 		t.Errorf("team Validate: %v", err)
 	}
 	back := manifest.FromTeam(tm, tenancyRev)
-	if back.Metadata.Annotations["wyolet.com/owner-email"] != "platform@example.com" || back.Spec.Budget.Amount != "2500.00" {
+	if back.Metadata.Annotations["wyolet.com/owner-email"] != "platform@example.com" {
 		t.Errorf("team round-trip lost fields: %+v", back)
 	}
 
@@ -82,7 +75,7 @@ func TestRoundTrip_TeamAndProject(t *testing.T) {
 		t.Errorf("project Validate: %v", err)
 	}
 	backP := manifest.FromProject(p, tenancyRev)
-	if backP.Spec.Team != "platform" || backP.Spec.Budget.Amount != "500.00" ||
+	if backP.Spec.Team != "platform" ||
 		backP.Metadata.Annotations["wyolet.com/cost-center"] != "1042" {
 		t.Errorf("project round-trip lost fields: %+v", backP)
 	}

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 // envInt reads an integer env var, returning def if unset or invalid.
@@ -25,6 +26,14 @@ func envPositiveInt(key string, def int) (int, error) {
 			}
 			return v, nil
 		}
+	}
+	return def, nil
+}
+
+// envDuration reads a Go duration env var (e.g. "1s", "500ms"), returning def if unset.
+func envDuration(key string, def time.Duration) (time.Duration, error) {
+	if s := os.Getenv(key); s != "" {
+		return time.ParseDuration(s)
 	}
 	return def, nil
 }

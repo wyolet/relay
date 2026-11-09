@@ -65,6 +65,7 @@ func TestIntegration_ConcurrentRotatesLeaveOneLiveHash(t *testing.T) {
 
 	deps := mountDeps(t)
 	deps.Stores = stores
+	deps.Users = users
 	r := chi.NewRouter()
 	Mount(r, deps)
 

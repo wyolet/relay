@@ -1,0 +1,62 @@
+---
+title: "Budgets"
+description: "Spend caps in dollars per day, week or month: how they count, reset, refuse, and what they need from pricing"
+---
+
+A **budget** caps spend in US dollars over a calendar period. A [policy](/concepts/policies) links budgets in `budgets`, and every request under that policy must fit each of them. A budget is a cap, not a balance: no money moves, nothing is topped up, and unused room does not carry over.
+
+## Fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `amountUsd` | required | The cap, as a decimal string with at most two fractional digits (`"2000"`, `"12.50"`). `"0"` is valid: a hard zero budget refuses every priced request. |
+| `period` | `month` | `day`, `week` or `month`. Periods are calendar periods in UTC; a week starts on Monday. |
+| `mode` | `hard` | `hard` refuses requests once the cap is spent; `alert` never refuses and only reports the crossing. |
+
+A budget is owned by the system, a team, a project or a user, and may be linked by policies of that scope, as described in [What a policy holds](/concepts/policies#what-a-policy-holds).
+
+## How spend counts
+
+A request's cost is computed from the provider's reported token counts and the binding's [pricing](/concepts/usage#token-counts-and-cost), and charged to every budget on its ladder after the response ends. Spend counts in the period the charge lands in.
+
+Like a [rate limit](/concepts/rate-limits#where-rate-limits-apply), a budget counts per bound account. A policy bound to a team's account gives the team one spend count; the same policy bound to two projects' accounts gives each project its own. Linking one budget from the policies of two accounts gives each account its own count of the same cap. A link with `shared: false` gives every lane under the bound account its own count instead, so a team policy can cap each member at the same amount; see [Shared and per-lane counting](/concepts/policies#shared-and-per-lane-counting).
+
+At each period start the count begins again from zero and the full cap is available. Editing a budget mid-period:
+
+- **Raising or lowering `amountUsd`, or switching `mode`,** keeps the count. A raised cap gives room at once; a cap lowered below what is already spent refuses until the period ends.
+- **Changing `period`** starts a new count.
+
+Counts live in the state backend. With `RELAY_STATE_BACKEND=memory`, each pod counts its own spend, so every pod allows the full cap.
+
+## Hard and alert
+
+A **hard** budget is checked when the request is admitted: once the period's spend has reached the cap, the request is refused. Requests already in flight are charged when they finish, so spend can pass the cap by what those requests cost.
+
+A refusal by a budget on a caller rung (team, project or lane) answers:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 302400
+
+{"error": {"type": "rate_limit_error", "code": "budget_exceeded", "refusal": "no_capacity", "message": "the budget of the project policy <policy-id> is exhausted; try again in 302400s"}}
+```
+
+`Retry-After` is the time left until the next period starts.
+
+A budget on an upstream rung (a provider account) caps the total spend through that account's host keys, whoever the caller is; linked with `shared: false`, it caps each caller lane's spend through them. When it is spent, Relay skips that host key the way it skips one over an upstream rate limit, and the request fails with `429 rate_limit_exceeded` only when no other key can serve it.
+
+An **alert** budget is never checked at admission. Both modes report the charge that takes a budget to its cap, once per budget and period, in the `relay_limits_budget_crossings_total` counter, labelled by `rung` and `mode`.
+
+## Models without pricing
+
+A budget can only count what has a price. While any budget applies to a request, on any rung, a binding that has no pricing is refused with `403 unpriced_under_budget`, naming the rung and policy whose budget applies. Requests for priced models under the same policy are unaffected, and so are unpriced models for callers with no budget on their ladder.
+
+To allow such a model under a budget, add a pricing for its binding (`/api/pricings`). Pricing is shared catalog data, so under `RELAY_AUTHZ=rbac` writing it takes the `admin` or `catalog-editor` role; see [Ownership](/concepts/catalog#ownership).
+
+## Deleting a budget
+
+A linked budget can be deleted. The policies that linked it act as if they never had it, and the delete lists them; see [Deleting what a policy links](/concepts/policies#deleting-what-a-policy-links).
+
+## Examples
+
+A team-wide monthly cap, a weekly cap per project with an alert below it, and a daily cap on one service account are in [Policy examples](/policy-examples).

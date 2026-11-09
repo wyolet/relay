@@ -1,27 +1,53 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
 	"net"
 	"net/http"
 	"runtime/debug"
 
-	"golang.org/x/net/netutil"
+	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/pkg/connadmit"
+	"github.com/wyolet/relay/pkg/httpheader"
 )
 
-// serve binds srv.Addr before it returns, so the caller learns the bound address, and serves in the background. A bind failure arrives on the channel the way a serve failure does. maxConns > 0 caps the open connections: past it, new ones wait in the kernel's accept queue until one closes.
-func serve(srv *http.Server, maxConns int) (net.Addr, <-chan error) {
+// serve binds srv.Addr before it returns, so the caller learns the bound address, and serves in the background. A bind failure arrives on the channel the way a serve failure does. A non-nil admission caps the open connections, queueing and refusing past the cap; with CloseIdle it takes over srv.ConnState.
+func serve(srv *http.Server, admission *connadmit.Config) (net.Addr, <-chan error) {
 	errs := make(chan error, 1)
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
 		errs <- err
 		return nil, errs
 	}
-	if maxConns > 0 {
-		ln = netutil.LimitListener(ln, maxConns)
+	if admission != nil {
+		admitted := connadmit.New(ln, *admission)
+		if admission.CloseIdle {
+			srv.ConnState = admitted.ConnState
+		}
+		ln = admitted
 	}
 	go func() { errs <- srv.Serve(ln) }()
 	return ln.Addr(), errs
+}
+
+// inferenceAdmission refuses connections past the cap with the answer the in-flight shed gives a request in relay's own shape.
+func inferenceAdmission(cfg *config.Config) *connadmit.Config {
+	body, _ := json.Marshal(httpapi.APIError{Err: httpapi.APIErrorBody{Type: "server_error", Code: "overloaded", Message: httpapi.OverloadMessage}})
+	return &connadmit.Config{
+		MaxConns:     inferenceMaxConns(cfg.MaxConns),
+		QueueSize:    cfg.ConnQueue,
+		QueueTimeout: cfg.ConnQueueTimeout,
+		CloseIdle:    cfg.ConnCloseIdle,
+		Body:         body,
+		RetryAfter:   httpapi.RetryAfterShed,
+		Header: http.Header{
+			inference.HeaderOrigin:       {"relay"},
+			httpheader.HeaderShouldRetry: {"true"},
+		},
+	}
 }
 
 // connBudgetBytes is the memory budgeted per open connection: one stopped mid-request holds about 31 KiB live (23 KiB heap, 8 KiB stack; an idle keep-alive one about 19 KiB), doubled for the garbage the heap carries between collections.
@@ -49,4 +75,25 @@ func inferenceMaxConns(configured int) int {
 		return noMemLimitMaxConns
 	}
 	return max(minDerivedMaxConns, int(limit/connMemoryShareDen*connMemoryShareNum/connBudgetBytes))
+}
+
+// inflightBudgetBytes is the memory budgeted per inference request in flight, on top of its connection: one streaming a 64 KiB request translated to another wire shape holds about 100 KiB live (84 KiB heap, 19 KiB stack; 69 KiB untranslated), doubled for garbage and rounded up. The same request waiting for a non-streamed answer holds about 250 KiB, which this still covers before garbage.
+const inflightBudgetBytes = 256 << 10
+
+// Requests in flight may take inflightMemoryShareNum/inflightMemoryShareDen (40 %) of the memory limit.
+const (
+	inflightMemoryShareNum = 2
+	inflightMemoryShareDen = 5
+)
+
+// inferenceMaxInflight is RELAY_MAX_INFLIGHT when set, else as many requests as fit in 40 % of the Go memory limit (GOMEMLIMIT) at inflightBudgetBytes each, never below httpapi.DefaultMaxInflight, which also applies when no memory limit is set.
+func inferenceMaxInflight(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 {
+		return httpapi.DefaultMaxInflight
+	}
+	return max(httpapi.DefaultMaxInflight, int(limit/inflightMemoryShareDen*inflightMemoryShareNum/inflightBudgetBytes))
 }

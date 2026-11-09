@@ -73,7 +73,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}
-      valkey: {condition: service_healthy}
+      dragonfly: {condition: service_healthy}
 
   relay-b:
     image: relay:local
@@ -89,4 +89,4 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}
-      valkey: {condition: service_healthy}
+      dragonfly: {condition: service_healthy}

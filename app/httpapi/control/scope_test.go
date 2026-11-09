@@ -104,6 +104,7 @@ func newScopeHarness(t *testing.T, authzr authz.Authorizer, seed ...*scopedThing
 		false,
 		nil, // protect — actor injection above stands in for the auth chain
 		nil, // filterSchema
+		nil, // usable
 	)
 	return r, store
 }

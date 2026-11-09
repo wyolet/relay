@@ -40,7 +40,7 @@ import (
 )
 
 const (
-	apiVersion    = "v1alpha2"
+	apiVersion    = "v1alpha3"
 	schemaIDBase  = "https://relay-api.wyolet.dev/schemas/" + apiVersion + "/"
 	draft         = "https://json-schema.org/draft/2020-12/schema"
 	refPrefix     = "#/$defs/"
@@ -59,6 +59,9 @@ var kinds = []kind{
 	{Name: "Model", Type: reflect.TypeOf(manifest.ModelDTO{})},
 	{Name: "HostKey", Type: reflect.TypeOf(manifest.HostKeyDTO{})},
 	{Name: "Policy", Type: reflect.TypeOf(manifest.PolicyDTO{})},
+	{Name: "Account", Type: reflect.TypeOf(manifest.AccountDTO{})},
+	{Name: "Pool", Type: reflect.TypeOf(manifest.PoolDTO{})},
+	{Name: "Budget", Type: reflect.TypeOf(manifest.BudgetDTO{})},
 	{Name: "RateLimit", Type: reflect.TypeOf(manifest.RateLimitDTO{})},
 	{Name: "Pricing", Type: reflect.TypeOf(manifest.PricingDTO{})},
 	{Name: "HostBinding", Type: reflect.TypeOf(manifest.HostBindingDTO{})},

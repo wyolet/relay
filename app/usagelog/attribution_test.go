@@ -17,6 +17,7 @@ func TestAttributionCopiedFromContext(t *testing.T) {
 	lc.TeamID, lc.TeamName = "t1", "platform"
 	lc.PrincipalKind, lc.PrincipalID, lc.PrincipalName = "serviceaccount", "sa1", "indexer"
 	lc.CredentialKind, lc.CredentialID, lc.RelayKeyName = "key", "k1", "indexer-prod"
+	lc.AccountID, lc.ViaAccountID = "acct-real", "acct-share"
 
 	hooked, _ := NewUsageHook(nil, "").Fill(lc, &lifecycle.PostFlightEvent{Status: 200})
 	streamed, _ := NewStreamUsageFactory(nil, "").NewObserver(lc).Result()
@@ -36,6 +37,9 @@ func TestAttributionCopiedFromContext(t *testing.T) {
 		}
 		if got.RelayKeyHash != "hash" {
 			t.Fatalf("%s relay_key_hash: %q", name, got.RelayKeyHash)
+		}
+		if got.AccountID != "acct-real" || got.ViaAccountID != "acct-share" {
+			t.Fatalf("%s account %q via %q, want the real account and the share", name, got.AccountID, got.ViaAccountID)
 		}
 	}
 }

@@ -12,7 +12,7 @@ func (s *Sink) Facet(ctx context.Context, q usage.FacetQuery) ([]usage.FacetValu
 	if !usage.IsValidFacetDim(q.Dim) {
 		return nil, fmt.Errorf("usage/clickhouse: invalid facet dim %q", q.Dim)
 	}
-	where, args := buildWhere(q.EventQuery, true)
+	where, args := buildWhere(q.EventQuery, aggregateRows(q.EventQuery, q.Dim))
 	dimExpr := q.Dim // column name matches the dimension in this schema
 	if column, key, ok := usage.MapGroupKey(q.Dim); ok {
 		// The key precedes the WHERE args: placeholders bind in text order.

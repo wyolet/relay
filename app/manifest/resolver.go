@@ -32,6 +32,9 @@ type Resolver interface {
 	GroupID(name string) (string, bool)
 	RoleID(name string) (string, bool)
 	UserID(username string) (string, bool)
+	AccountID(name string) (string, bool)
+	PoolID(name string) (string, bool)
+	BudgetID(name string) (string, bool)
 }
 
 // ReverseResolver resolves entity ids to names. Used to render domain structs
@@ -51,6 +54,9 @@ type ReverseResolver interface {
 	GroupName(id string) (string, bool)
 	RoleName(id string) (string, bool)
 	Username(id string) (string, bool)
+	AccountName(id string) (string, bool)
+	PoolName(id string) (string, bool)
+	BudgetName(id string) (string, bool)
 }
 
 // MapResolver is a convenience implementation of Resolver backed by plain
@@ -71,7 +77,14 @@ type MapResolver struct {
 	Groups          map[string]string
 	Roles           map[string]string
 	Users           map[string]string
+	Accounts        map[string]string
+	Pools           map[string]string
+	Budgets         map[string]string
 }
+
+func (m MapResolver) AccountID(name string) (string, bool) { v, ok := m.Accounts[name]; return v, ok }
+func (m MapResolver) PoolID(name string) (string, bool)    { v, ok := m.Pools[name]; return v, ok }
+func (m MapResolver) BudgetID(name string) (string, bool)  { v, ok := m.Budgets[name]; return v, ok }
 
 func (m MapResolver) ProviderID(name string) (string, bool) { v, ok := m.Providers[name]; return v, ok }
 func (m MapResolver) HostID(name string) (string, bool)     { v, ok := m.Hosts[name]; return v, ok }
@@ -112,15 +125,18 @@ type MapReverseResolver struct {
 	Groups          map[string]string
 	Roles           map[string]string
 	Users           map[string]string
-	// ModelProviders maps modelID -> providerID, letting FromPolicy emit the
-	// provider-qualified "provider/model" ref for legacy ModelIDs grants
-	// (a bare modelref token means "provider", so a bare model slug would
-	// re-import as the wrong grant). Optional; unset falls back to bare name.
-	ModelProviders map[string]string
+	Accounts        map[string]string
+	Pools           map[string]string
+	Budgets         map[string]string
 }
 
-func (m MapReverseResolver) ModelProviderID(modelID string) (string, bool) {
-	v, ok := m.ModelProviders[modelID]
+func (m MapReverseResolver) AccountName(id string) (string, bool) {
+	v, ok := m.Accounts[id]
+	return v, ok
+}
+func (m MapReverseResolver) PoolName(id string) (string, bool) { v, ok := m.Pools[id]; return v, ok }
+func (m MapReverseResolver) BudgetName(id string) (string, bool) {
+	v, ok := m.Budgets[id]
 	return v, ok
 }
 

@@ -21,41 +21,41 @@ const SectionPayloadLogging = "payload-logging"
 type PayloadLogging struct {
 	// Enabled is the global master switch. When false the observer
 	// produces nothing regardless of per-request opt-in.
-	Enabled bool `json:"enabled"`
+	Enabled bool `json:"enabled" doc:"Master switch; while off nothing is captured whatever a key or policy asks."`
 
 	// Backend selects the sink: "file" (default), "s3", or "clickhouse".
-	Backend string `json:"backend"`
+	Backend string `json:"backend" enum:",file,s3,clickhouse" doc:"Where captured bodies are stored. Empty means file."`
 
 	// MaxBytes caps each stored body, measured on the DECODED plaintext
 	// (compressed upstream bodies are decoded before capture); 0 = unlimited.
-	MaxBytes int `json:"maxBytes"`
+	MaxBytes int `json:"maxBytes" doc:"Cap on each stored body in decoded bytes; 0 is unlimited."`
 
 	// RetentionDays bounds how long captured bodies are kept by the
 	// clickhouse backend; 0 keeps them forever. A stored row without the
 	// field decodes to DefaultPayloadRetentionDays, not to keep-forever.
-	RetentionDays int `json:"retentionDays"`
+	RetentionDays int `json:"retentionDays" doc:"Days the clickhouse backend keeps bodies; 0 keeps them forever. A section saved without it reads as 30."`
 
-	File PayloadFile       `json:"file"`
-	S3   PayloadS3         `json:"s3"`
-	CH   PayloadClickHouse `json:"clickhouse"`
+	File PayloadFile       `json:"file"       doc:"File backend settings."`
+	S3   PayloadS3         `json:"s3"         doc:"S3 backend settings."`
+	CH   PayloadClickHouse `json:"clickhouse" doc:"ClickHouse backend settings."`
 }
 
 // PayloadFile configures the JSONL file backend.
 type PayloadFile struct {
-	Path string `json:"path"`
+	Path string `json:"path" doc:"JSONL file path; empty uses the boot default."`
 }
 
 // PayloadS3 configures the object-store backend. AccessKey/SecretKey are
 // secret.Refs resolved at sink-build time: env names under RELAY_PAYLOAD_S3_
 // or stored ids under "payload-logging:".
 type PayloadS3 struct {
-	Endpoint  string     `json:"endpoint"`
-	Bucket    string     `json:"bucket"`
-	Region    string     `json:"region,omitempty"`
-	Prefix    string     `json:"prefix,omitempty"`
-	UseSSL    bool       `json:"useSSL"`
-	AccessKey secret.Ref `json:"accessKey"`
-	SecretKey secret.Ref `json:"secretKey"`
+	Endpoint  string     `json:"endpoint"         doc:"S3 endpoint host, such as s3.amazonaws.com."`
+	Bucket    string     `json:"bucket"           doc:"Bucket name; required for the s3 backend."`
+	Region    string     `json:"region,omitempty" doc:"Bucket region."`
+	Prefix    string     `json:"prefix,omitempty" doc:"Key prefix for stored objects."`
+	UseSSL    bool       `json:"useSSL"           doc:"Use TLS; required unless plain HTTP is allowed by the deployment."`
+	AccessKey secret.Ref `json:"accessKey"        doc:"Reference to the access key id: an environment variable (RELAY_PAYLOAD_S3_*) or a stored secret."`
+	SecretKey secret.Ref `json:"secretKey"        doc:"Reference to the secret access key, like accessKey."`
 }
 
 // PayloadClickHouse configures the ClickHouse backend (Langfuse-style: text
@@ -66,12 +66,12 @@ type PayloadS3 struct {
 type PayloadClickHouse struct {
 	// WALDir overrides the local WAL segment directory; empty uses the
 	// boot default.
-	WALDir string `json:"walDir,omitempty"`
+	WALDir string `json:"walDir,omitempty" doc:"Local write-ahead-log directory; empty uses the boot default."`
 
 	// Dedup stores each distinct message, tool list and system prompt once
 	// and request bodies as references to them. Rows written either way
 	// stay readable.
-	Dedup bool `json:"dedup,omitempty"`
+	Dedup bool `json:"dedup,omitempty" doc:"Store each distinct message, tool list and system prompt once, with request bodies referencing them. Rows written either way stay readable."`
 }
 
 // Validate is enforced before any write. Only meaningful when Enabled —

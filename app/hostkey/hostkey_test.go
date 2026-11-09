@@ -16,7 +16,6 @@ func fix(name string, kind ValueKind) *HostKey {
 		},
 		Spec: Spec{
 			HostID:    meta.NewID(),
-			PolicyID:  meta.NewID(),
 			ValueFrom: ValueFrom{Kind: kind},
 		},
 	}
@@ -48,6 +47,20 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
+	t.Run("ok team-owned", func(t *testing.T) {
+		k := fix("k", ValueKindEnv)
+		k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
+		if err := k.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
+	t.Run("ok with account", func(t *testing.T) {
+		k := fix("k", ValueKindEnv)
+		k.Spec.AccountID = meta.NewID()
+		if err := k.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
 
 	for _, tc := range []struct {
 		name string
@@ -57,7 +70,16 @@ func TestValidate(t *testing.T) {
 		{
 			name: "host owner rejected",
 			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerHost; return k }(),
-			want: "owner.kind must be user, system or project",
+			want: "owner.kind must be user, system, team or project",
+		},
+		{
+			name: "team owner without id",
+			k: func() *HostKey {
+				k := fix("k", ValueKindEnv)
+				k.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam}
+				return k
+			}(),
+			want: "a team owner needs the team's id",
 		},
 		{
 			name: "missing host id",
@@ -65,9 +87,9 @@ func TestValidate(t *testing.T) {
 			want: "HostID",
 		},
 		{
-			name: "missing policy id",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.PolicyID = ""; return k }(),
-			want: "PolicyID",
+			name: "account must be an id",
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.AccountID = "acme-openai"; return k }(),
+			want: "AccountID",
 		},
 		{
 			name: "env mode missing env",

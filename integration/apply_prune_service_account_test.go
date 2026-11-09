@@ -15,7 +15,7 @@ func TestIntegration_ApplyPruneOfAServiceAccountRefusesSilentCascades(t *testing
 	st := newStack(t)
 	ctx := context.Background()
 	seedBuiltinRoles(t, st)
-	const header = "apiVersion: relay.wyolet.dev/v1alpha2\n"
+	const header = "apiVersion: relay.wyolet.dev/v1alpha3\n"
 	kept := header + "kind: Team\nmetadata: {name: alpha, owner: {kind: system}}\nspec: {}\n" +
 		"---\n" + header + "kind: Project\nmetadata: {name: search}\nspec: {team: alpha}\n" +
 		"---\n" + header + "kind: Policy\nmetadata: {name: search-policy, owner: {kind: project, name: search}}\nspec: {}\n"
@@ -26,7 +26,7 @@ func TestIntegration_ApplyPruneOfAServiceAccountRefusesSilentCascades(t *testing
 			"---\n" + header + "kind: RoleBinding\nmetadata: {name: indexer-readers, owner: {kind: project, name: search}" + rbLabels + "}\n" +
 			"spec: {role: viewer, scope: {kind: project, name: search}, subjects: [{kind: serviceaccount, name: indexer}]}\n" +
 			"---\n" + header + "kind: PolicyBinding\nmetadata: {name: indexer-policy, owner: {kind: project, name: search}" + pbLabels + "}\n" +
-			"spec: {project: search, policy: search-policy, subjects: [{kind: serviceaccount, name: indexer}]}\n"
+			"spec: {policy: search-policy, accounts: [sa-indexer]}\n"
 	}
 	const selected = ", labels: {managed: gitops}"
 	const prune = "prune=true&selector=managed=gitops"

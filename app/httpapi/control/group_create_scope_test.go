@@ -38,6 +38,7 @@ func newGroupsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 		false,
 		nil,
 		nil,
+		nil,
 	)
 	return r
 }
@@ -57,6 +58,7 @@ func newTeamsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 		nil, nil, nil, nil, nil,
 		noSettings{},
 		false,
+		nil,
 		nil,
 		nil,
 	)
@@ -107,11 +109,11 @@ func TestGroupCreateNeedsAnAdminNotAPersonalRow(t *testing.T) {
 	}
 }
 
-// A team budget takes no onExceed: nothing enforces budgets, so the field would promise an action that never happens.
-func TestTeamCreateRefusesOnExceed(t *testing.T) {
+// A team carries no budget of its own: its cap is a Budget its policy links, so a stray spec.budget is refused rather than dropped.
+func TestTeamCreateRefusesABudget(t *testing.T) {
 	h := newTeamsHarness(t, testRBAC())
-	w := scopeReq(t, h, "root", http.MethodPost, "/teams", `{"metadata":{"name":"eng","displayName":"Eng"},"spec":{"budget":{"amount":"100","onExceed":"block"}}}`)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "onExceed") {
-		t.Fatalf("create with budget.onExceed = %d, want 422 naming the field: %s", w.Code, w.Body)
+	w := scopeReq(t, h, "root", http.MethodPost, "/teams", `{"metadata":{"name":"eng","displayName":"Eng"},"spec":{"budget":{"amount":"100"}}}`)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "budget") {
+		t.Fatalf("create with spec.budget = %d, want 422 naming the field: %s", w.Code, w.Body)
 	}
 }

@@ -4,8 +4,8 @@ package catalog
 // reconciler can mutate the clone without affecting the live snapshot. Rows
 // themselves are immutable and shared.
 //
-// Slice-valued maps (modelsByName, modelsByPolicy, hostKeysByPolicy) also have
-// their slices copied so append doesn't bleed back.
+// Slice-valued maps (modelsByName, hostKeysByHost, ...) also have their
+// slices copied so append doesn't bleed back.
 //
 // The refsBy* maps carry a second level of copying: the outer map is new and
 // each inner refSet is also copied, because the reconciler mutates them.
@@ -56,11 +56,6 @@ func (s *Snapshot) clone() *Snapshot {
 		usersLoaded:        s.usersLoaded,
 		// Replaced wholesale on a users reload, never written in place.
 		disabledUsers: s.disabledUsers,
-
-		modelsByPolicy:        copySliceMap(s.modelsByPolicy),
-		hostKeysByPolicy:      copySliceMap(s.hostKeysByPolicy),
-		rateLimitByPolicy:     shallowMap(s.rateLimitByPolicy),
-		allowedCombosByPolicy: shallowMap(s.allowedCombosByPolicy),
 
 		pricingsByID:       shallowMap(s.pricingsByID),
 		pricingByModelHost: shallowMap(s.pricingByModelHost),

@@ -16,13 +16,14 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
-// registerCRUD wires the eight kinds onto api and returns how each finds its rows. metaOf closures + slug resolvers are supplied per kind.
+// registerCRUD wires the CRUD kinds onto api and returns how each finds its rows. metaOf closures + slug resolvers are supplied per kind.
 func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rows := kindIndex{}
 	pmeta := func(p *provider.Provider) *meta.Metadata { return &p.Meta }
@@ -42,6 +43,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 	rbmeta := func(b *rolebinding.RoleBinding) *meta.Metadata { return &b.Meta }
 	pbmeta := func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta }
 	dk := newDirectoryKinds(d, newDirectoryOps(d))
+	c := refs(d)
 
 	rows.add(registerKind[team.Team](
 		api, "teams", "team", dk.teams, d.Authz, tmeta,
@@ -57,6 +59,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&teamFilter,
+		nil,
 	))
 
 	rows.add(registerKind[project.Project](
@@ -73,6 +76,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&projectFilter,
+		nil,
 	))
 
 	rows.add(registerKind[serviceaccount.ServiceAccount](
@@ -89,6 +93,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&serviceAccountFilter,
+		nil,
 	))
 
 	rows.add(registerKind[group.Group](
@@ -105,6 +110,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&groupFilter,
+		nil,
 	))
 
 	rows.add(registerKind[role.Role](
@@ -121,6 +127,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&roleFilter,
+		nil,
 	))
 
 	rows.add(registerKind[rolebinding.RoleBinding](
@@ -139,14 +146,17 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&roleBindingFilter,
+		nil,
 	))
 
+	pbc := policyBindingChecks(d)
 	rows.add(registerKind[policybinding.PolicyBinding](
-		api, "policy-bindings", "policy-binding", d.Stores.PolicyBinding, d.Authz, pbmeta,
-		func(b *policybinding.PolicyBinding) error { return b.Validate() },
-		meta.OwnerProject,
+		api, pbc.plural, pbc.singular, d.Stores.PolicyBinding, d.Authz, pbmeta,
+		pbc.validate,
+		// As for policies: an omitted owner is the caller's own, or system for the admin token.
+		meta.OwnerUser,
 		listScanResolver(d.Stores.PolicyBinding, pbmeta),
-		guardPolicyBinding(d),
+		pbc.guard,
 		nil,
 		nil,
 		d.refuseInUse,
@@ -155,6 +165,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyBindingFilter,
+		nil,
 	))
 
 	rows.add(registerKind[provider.Provider](
@@ -171,6 +182,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&providerFilter,
+		nil,
 	))
 
 	rows.add(registerKind[host.Host](
@@ -187,6 +199,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostFilter,
+		nil,
 	))
 
 	rows.add(registerKind[model.Model](
@@ -203,6 +216,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&modelFilter,
+		nil,
 	))
 
 	rows.add(registerKind[hostkey.HostKey](
@@ -219,6 +233,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&hostKeyFilter,
+		usableFor(c, "pool", refcheck.Checker.UsableHostKey),
 	))
 
 	rows.add(registerKind[ratelimit.RateLimit](
@@ -235,6 +250,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&rateLimitFilter,
+		usableFor(c, "policy", refcheck.Checker.UsableRateLimit),
 	))
 
 	rows.add(registerKind[policy.Policy](
@@ -251,6 +267,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&policyFilter,
+		usableFor(c, "policy-binding", refcheck.Checker.UsablePolicy),
 	))
 
 	rows.add(registerKind[pricing.Pricing](
@@ -267,6 +284,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&pricingFilter,
+		nil,
 	))
 
 	rows.add(registerKind[binding.Binding](
@@ -283,6 +301,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		false,
 		protect,
 		&bindingFilter,
+		nil,
 	))
 
 	// keys uses a custom POST handler (registerKeyCreate) that
@@ -293,24 +312,30 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) kindIndex {
 		func(k *key.Key) error { return k.Validate() },
 		meta.OwnerProject,
 		listScanResolver(d.Stores.Key, rkmeta),
-		guardKeyPolicy(d),
-		nil,
-		nil,
+		guardKeyAccount(d),
+		enrichKey(d),
+		enrichKeys(d),
 		d.refuseInUse,
 		// Credential material is server-managed: PUT can neither wipe nor
 		// overwrite it. Rotation goes through POST /keys/by-id/{id}/rotate.
+		// An omitted accountId keeps the key's lane.
 		func(existing, incoming *key.Key) {
 			incoming.Spec.KeyHash = existing.Spec.KeyHash
 			incoming.Spec.Prefix = existing.Spec.Prefix
 			incoming.Spec.PreviousKeyHash = existing.Spec.PreviousKeyHash
 			incoming.Spec.GraceUntil = existing.Spec.GraceUntil
 			incoming.Spec.Principal = existing.Spec.Principal
+			if incoming.Spec.AccountID == "" {
+				incoming.Spec.AccountID = existing.Spec.AccountID
+			}
 		},
 		d.Catalog,
 		true, // skipCreate
 		protect,
 		&keyFilter,
+		nil,
 	))
 	registerKeyCreate(api, d, protect)
+	registerUpstreamCRUD(api, d, protect, rows)
 	return rows
 }

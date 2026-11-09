@@ -41,7 +41,8 @@ relay:
   clusterMode: "on"
   # -- Usage/payload event sink. "clickhouse" wires the bundled CH below.
   eventlogBackend: clickhouse
-  # -- Hot state + rate-limit counters. "redis" wires the bundled Valkey below.
+  # -- Hot state + rate-limit counters. "redis" wires the bundled Dragonfly below
+  # (the store speaks the Redis protocol, hence the name).
   stateBackend: redis
   logLevel: info
   # -- Cookies are Secure (set false only for plain-HTTP testing).
@@ -78,13 +79,13 @@ relay:
   pgMinConns: ""
   # -- go-redis pool sizing (RELAY_REDIS_POOL_SIZE / RELAY_REDIS_MIN_IDLE_CONNS).
   # Empty = relay defaults: pool 25 per CPU of the pod's limit, NO idle floor, so
-  # request bursts on a fresh pod dial Valkey connections cold (TCP + uncached
+  # request bursts on a fresh pod dial store connections cold (TCP + uncached
   # DNS) inside the request budget. Set redisMinIdleConns to keep a warm floor,
   # mirroring pgMinConns. A pool smaller than the default caps the pod's
-  # throughput well before Valkey is busy.
+  # throughput well before the store is busy.
   redisPoolSize: ""
   redisMinIdleConns: ""
-  # -- Valkey client bounds in milliseconds (RELAY_REDIS_*_TIMEOUT_MS); empty =
+  # -- Store client bounds in milliseconds (RELAY_REDIS_*_TIMEOUT_MS); empty =
   # relay defaults: dial 2000, read 1000, write 500, pool 250. A rate-limit
   # check that gets no reply in time refuses the request as overloaded (503).
   redisDialTimeoutMs: ""
@@ -95,10 +96,10 @@ relay:
   # (RELAY_REDIS_POOL_MAX_WAITERS); empty = twice the pool size. Past it new
   # requests are refused as overloaded (503) at once instead of after the pool wait.
   redisPoolMaxWaiters: ""
-  # -- Resends of a failed Valkey command (RELAY_REDIS_MAX_RETRIES); empty = 0.
+  # -- Resends of a failed store command (RELAY_REDIS_MAX_RETRIES); empty = 0.
   # A resent rate-limit check can count one request twice.
   redisMaxRetries: ""
-  # -- The second Valkey client that settles a request after its response
+  # -- The second store client that settles a request after its response
   # (RELAY_REDIS_POSTFLIGHT_*); empty = relay defaults: pool 25 per CPU, pool wait 1000,
   # read 1000. Its own pool keeps rate-limit commits from being dropped while
   # admission holds every connection of the shared one.
@@ -172,7 +173,7 @@ secrets:
   #   RELAY_MASTER_KEY, RELAY_ADMIN_TOKEN, RELAY_PG_DSN, RELAY_CH_DSN
   #   (and postgres-password / clickhouse-password if bundling those stores,
   #    RELAY_ADMIN_PASSWORD if auth.adminUser.enabled, and optionally
-  #    RELAY_REDIS_PASSWORD for Valkey auth).
+  #    RELAY_REDIS_PASSWORD for the store's auth).
   existingSecret: ""
   # -- AES-GCM master key. base64-std of 32 random bytes:
   #   openssl rand -base64 32
@@ -244,10 +245,39 @@ clickhouse:
     limits:   { cpu: "2",  memory: 4Gi }
 
 # ----------------------------------------------------------------------------
-# Bundled Valkey — hot state, rate-limit counters, and control-plane sessions.
+# Bundled Dragonfly — hot state, rate-limit counters, and control-plane sessions.
+# ----------------------------------------------------------------------------
+dragonfly:
+  enabled: true
+  image: docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2
+  # -- Worker threads (--proactor_threads). Empty = the whole CPUs of
+  # resources.limits.cpu, at least 1. Dragonfly takes 80% of the memory limit
+  # as maxmemory and refuses to start below 256 MiB per thread.
+  threads: ""
+  auth:
+    # -- Require a password (requirepass); relay gets it as RELAY_REDIS_PASSWORD.
+    enabled: true
+    # -- Explicit password. Empty derives a stable one from secrets.masterKey
+    # (sha256), so no extra value is needed. With secrets.existingSecret, put
+    # RELAY_REDIS_PASSWORD in that Secret; without that key Dragonfly stays
+    # passwordless.
+    password: ""
+  persistence:
+    # -- Snapshot to a PVC on snapshotCron and at shutdown, loaded at start.
+    # Disabled: no snapshots, the store starts empty after every restart.
+    enabled: true
+    snapshotCron: "* * * * *"
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: "2",  memory: 1Gi }
+
+# ----------------------------------------------------------------------------
+# Bundled Valkey, the previous default store. Exclusive with dragonfly.enabled.
 # ----------------------------------------------------------------------------
 valkey:
-  enabled: true
+  enabled: false
   image: valkey/valkey:8-alpine
   auth:
     # -- Require a password (requirepass); relay gets it as RELAY_REDIS_PASSWORD.
@@ -272,7 +302,7 @@ valkey:
 external:
   pgDsn: ""        # postgres://user:pw@host:5432/relay?sslmode=require
   chDsn: ""        # clickhouse://user:pw@host:9000/relay
-  redisAddr: ""    # host:6379 — Redis 7.0 or later, or any Valkey version
+  redisAddr: ""    # host:6379 — Dragonfly (or another Redis-protocol store)
   redisPassword: "" # AUTH password for redisAddr, if it requires one
 
 # ----------------------------------------------------------------------------
@@ -288,7 +318,7 @@ initResources:
 # -- GOMEMLIMIT/GOGC are part of relay's deployment story (allocation-conscious
 # hot path). Defaults track the memory limit; tune for your traffic.
 goMemLimit: "900MiB"
-goGC: "100"
+goGC: "400"
 
 autoscaling:
   enabled: true
@@ -371,7 +401,7 @@ gateway:
 networkPolicy:
   enabled: true
   # Per-datastore extra ingress rules, appended verbatim to the generated
-  # policy for that component ("postgresql" | "clickhouse" | "valkey").
+  # policy for that component ("postgresql" | "clickhouse" | "dragonfly" | "valkey").
   # The app decides who may read its datastores — e.g. a cluster Grafana:
   #   extraIngress:
   #     clickhouse:

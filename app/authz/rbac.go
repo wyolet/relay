@@ -39,7 +39,7 @@ func SharedCatalogKind(kind string) bool { return sharedCatalogKinds[plural(kind
 var scopedKinds = map[string]bool{
 	"keys": true, "policies": true, "host-keys": true, "service-accounts": true,
 	"policy-bindings": true, "role-bindings": true, "projects": true,
-	"teams": true, "groups": true,
+	"teams": true, "groups": true, "accounts": true, "pools": true, "budgets": true,
 }
 
 // plurals maps the singular Resource.Kind handlers pass to the API plural a
@@ -54,6 +54,9 @@ var plurals = map[string]string{
 	"rate-limit":      "rate-limits",
 	"policy":          "policies",
 	"host-key":        "host-keys",
+	"account":         "accounts",
+	"pool":            "pools",
+	"budget":          "budgets",
 	"key":             "keys",
 	"team":            "teams",
 	"project":         "projects",
@@ -67,6 +70,9 @@ var plurals = map[string]string{
 	"scim-client":     "scim-clients",
 	"secret-key":      "secret-keys",
 }
+
+// Plural renders a Resource.Kind as its API plural, the inverse of Singular.
+func Plural(kind string) string { return plural(kind) }
 
 // plural renders kind as the API plural a Role rule names.
 func plural(kind string) string {

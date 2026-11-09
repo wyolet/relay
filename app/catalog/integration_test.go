@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -37,6 +38,17 @@ import (
 )
 
 const flushPad = 1500 * time.Millisecond // 1s debounce + safety margin
+
+// providerAccountAt stores a system provider account at hostID and returns its id, for a host key to name.
+func providerAccountAt(t *testing.T, ctx context.Context, stores *Stores, hostID string) string {
+	t.Helper()
+	id := meta.NewID()
+	a := &account.Account{Meta: meta.Metadata{ID: id, Name: "acct-" + id[len(id)-8:], Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: hostID}}
+	if err := stores.Account.Upsert(ctx, a); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	return a.Meta.ID
+}
 
 func setupDB(t *testing.T) (*pgxpool.Pool, context.Context, context.CancelFunc) {
 	t.Helper()
@@ -227,7 +239,7 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "stored-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  tier.Meta.ID,
+			AccountID: providerAccountAt(t, ctx, stores, hst.Meta.ID),
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored},
 			Value:     "sk-test-secret",
 		},
@@ -284,7 +296,7 @@ func TestIntegration_UnresolvedEnvHostKey(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "unset-env-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
-			PolicyID:  tier.Meta.ID,
+			AccountID: providerAccountAt(t, ctx, stores, hst.Meta.ID),
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "ACME_TEST_UNSET_ENV_KEY"},
 		},
 	}

@@ -81,6 +81,8 @@ var expectedColumns = []string{
 	"principal_kind", "principal_id", "principal",
 	"credential_kind", "credential_id",
 	"relay_key",
+	"pool_id", "account_id",
+	"refusal", "lane_account_id", "via_account_id",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -124,7 +126,12 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     principal                text         NOT NULL DEFAULT '',
     credential_kind          text         NOT NULL DEFAULT '',
     credential_id            text         NOT NULL DEFAULT '',
-    relay_key                text         NOT NULL DEFAULT ''
+    relay_key                text         NOT NULL DEFAULT '',
+    pool_id                  text         NOT NULL DEFAULT '',
+    account_id               text         NOT NULL DEFAULT '',
+    refusal                  text         NOT NULL DEFAULT '',
+    lane_account_id          text         NOT NULL DEFAULT '',
+    via_account_id           text         NOT NULL DEFAULT ''
 )`
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -150,6 +157,11 @@ var alterTableSQL = []string{
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_kind text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS credential_id text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS relay_key text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS pool_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS refusal text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS lane_account_id text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS via_account_id text NOT NULL DEFAULT ''`,
 }
 
 const createIndexSQL = `
@@ -454,6 +466,11 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.CredentialKind,
 			ev.CredentialID,
 			ev.RelayKey,
+			ev.PoolID,
+			ev.AccountID,
+			ev.Refusal,
+			ev.LaneAccountID,
+			ev.ViaAccountID,
 		})
 	}
 
@@ -479,7 +496,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		limit = usage.MaxEventLimit
 	}
 
-	where, args := buildWhere(q, false)
+	where, args := buildWhere(q, allRows)
 	sql := fmt.Sprintf(
 		`SELECT request_id, source, ts, status, duration_ms, streamed,
 		        finish_reason, attempts, error_kind, error_message,
@@ -490,7 +507,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        provider, cost_nanos, cost_breakdown, pricing,
 		        project_id, project, team_id, team,
 		        principal_kind, principal_id, principal,
-		        credential_kind, credential_id, relay_key
+		        credential_kind, credential_id, relay_key,
+		        pool_id, account_id, refusal, lane_account_id, via_account_id
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -556,6 +574,11 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.CredentialKind,
 			&ev.CredentialID,
 			&ev.RelayKey,
+			&ev.PoolID,
+			&ev.AccountID,
+			&ev.Refusal,
+			&ev.LaneAccountID,
+			&ev.ViaAccountID,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -601,12 +624,29 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	return events, rows.Err()
 }
 
+// rowSet is which rows a query reads: an event listing every row, an aggregate (Summary/TimeSeries/Facet) the rows usage.Event.Aggregated keeps.
+type rowSet int
+
+const (
+	allRows rowSet = iota
+	usageRows
+	usageAndRefusals
+)
+
+// aggregateRows is the row set of an aggregate over q grouped by groupBy (usage.CountsRefused).
+func aggregateRows(q usage.EventQuery, groupBy string) rowSet {
+	if usage.CountsRefused(q, groupBy) {
+		return usageAndRefusals
+	}
+	return usageRows
+}
+
 // buildWhere generates a WHERE clause and positional args ($1, $2, …) for an
-// EventQuery. The clause is empty string when no filters are set. With
-// aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
-// rejections, status 0 + error_kind — are excluded: they belong to the logs
-// view, not usage stats. Event listings (aggregate=false) keep them.
-func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
+// EventQuery. The clause is empty string when no filters are set. An
+// aggregate's row set excludes LogOnly events — pre-upstream rejections,
+// status 0 + error_kind — which belong to the logs view, not usage stats,
+// except relay refusals when it counts them. Event listings keep them all.
+func buildWhere(q usage.EventQuery, rows rowSet) (string, []any) {
 	var clauses []string
 	var args []any
 	n := 0
@@ -667,6 +707,10 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	any("relay_key_hash", q.RelayKeyHash)
 	any("policy_id", q.PolicyID)
+	any("pool_id", q.PoolID)
+	any("account_id", q.AccountID)
+	any("lane_account_id", q.LaneAccountID)
+	any("via_account_id", q.ViaAccountID)
 	any("project_id", q.ProjectID)
 	any("team_id", q.TeamID)
 	any("principal_id", q.PrincipalID)
@@ -675,6 +719,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	any("source", q.Source)
 	any("finish_reason", q.FinishReason)
 	any("error_kind", q.ErrorKind)
+	any("refusal", q.Refusal)
 	if q.StatusMin > 0 {
 		add("status >= $%d", int16(q.StatusMin))
 	}
@@ -743,9 +788,12 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		))
 		args = append(args, needle)
 	}
-	if aggregate {
-		// Mirrors usage.Event.LogOnly.
-		clauses = append(clauses, "NOT (status = 0 AND error_kind != '')")
+	// Mirrors usage.Event.Aggregated.
+	switch rows {
+	case usageRows:
+		clauses = append(clauses, "refusal = '' AND NOT (status = 0 AND error_kind != '')")
+	case usageAndRefusals:
+		clauses = append(clauses, "NOT (status = 0 AND error_kind != '' AND refusal = '')")
 	}
 
 	if len(clauses) == 0 {

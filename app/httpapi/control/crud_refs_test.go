@@ -2,10 +2,12 @@ package control
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
 )
 
@@ -22,5 +24,14 @@ func TestRefErrKeepsTheRefusalCode(t *testing.T) {
 	}
 	if err := mapGuardErr(err); err != error(ae) {
 		t.Fatalf("guard mapping replaced the refusal: %v", err)
+	}
+}
+
+// A binding write the store refuses because another binding holds the account is the caller's conflict, as the save-time check answers it.
+func TestWriteOfAnAlreadyBoundAccountIsAConflict(t *testing.T) {
+	err := mapWriteErr("policy-binding", "pb-1", fmt.Errorf("%w: account a-1", policybinding.ErrAccountBound))
+	var ae *httpapi.APIError
+	if !errors.As(err, &ae) || ae.HTTPStatus != http.StatusConflict || ae.Err.Code != refcheck.CodeDuplicateBinding {
+		t.Fatalf("err = %v, want a 409 duplicate_binding", err)
 	}
 }

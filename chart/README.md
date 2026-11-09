@@ -1,6 +1,6 @@
 # relay Helm chart
 
-Deploys [Wyolet Relay](https://github.com/wyolet/relay): one binary serving the inference API and the control plane, with its own bundled PostgreSQL, ClickHouse and Valkey by default. The guide to deciding values, exposing the two planes, scaling and monitoring is [Kubernetes](https://docs.wyolet.com/deploy/kubernetes) in the docs; this README is the values reference.
+Deploys [Wyolet Relay](https://github.com/wyolet/relay): one binary serving the inference API and the control plane, with its own bundled PostgreSQL, ClickHouse and Dragonfly by default. The guide to deciding values, exposing the two planes, scaling and monitoring is [Kubernetes](https://docs.wyolet.com/deploy/kubernetes) in the docs; this README is the values reference.
 
 > **Relay owns its data stores.** Point it at stores dedicated to it, never a shared cluster Postgres. If you disable the bundled Postgres, set `external.pgDsn` to a relay-only database.
 
@@ -12,7 +12,8 @@ Deploys [Wyolet Relay](https://github.com/wyolet/relay): one binary serving the 
 | Migrations | Job (pre-upgrade hook) | `relay migrate up` before the pods roll | `migrations.job.enabled` |
 | PostgreSQL | StatefulSet + PVC | configuration | `postgresql.enabled` |
 | ClickHouse | StatefulSet + PVC | usage events and captured request bodies | `clickhouse.enabled` |
-| Valkey | StatefulSet + PVC | sessions, rate-limit counters, key breaker state | `valkey.enabled` |
+| Dragonfly | StatefulSet + PVC | sessions, rate-limit counters, key breaker state | `dragonfly.enabled` |
+| Valkey | StatefulSet + PVC | the previous store, exclusive with Dragonfly | `valkey.enabled` |
 | HPA / PDB | autoscaling/v2, policy/v1 | scaling and disruption budget | `autoscaling.enabled`, `podDisruptionBudget.enabled` |
 | Ingress | networking.k8s.io/v1 | one rule per plane | `ingress.enabled` |
 | Gateway + HTTPRoutes | gateway.networking.k8s.io/v1 | Gateway API alternative to the Ingress | `gateway.enabled` |
@@ -44,7 +45,7 @@ helm upgrade --install relay oci://ghcr.io/wyolet/charts/relay --version <versio
 
 The chart version pins the image: `image.tag` defaults to the chart's `appVersion`, which each release sets to the same version. Use the lean image (`ghcr.io/wyolet/relay:<version>`); the `:standalone` image embeds its own Postgres and is for `docker run`. Images are built for `linux/amd64` only.
 
-Required values (the template fails otherwise): `secrets.masterKey`, `secrets.adminToken`, and `postgresql.auth.password` / `clickhouse.auth.password` for the bundled stores. Or set `secrets.existingSecret` to a Secret holding `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN`, `RELAY_CH_DSN`, plus `postgres-password` / `clickhouse-password` when bundling those stores, `RELAY_ADMIN_PASSWORD` when `auth.adminUser.enabled`, and optionally `RELAY_REDIS_PASSWORD` for Valkey.
+Required values (the template fails otherwise): `secrets.masterKey`, `secrets.adminToken`, and `postgresql.auth.password` / `clickhouse.auth.password` for the bundled stores. Or set `secrets.existingSecret` to a Secret holding `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN`, `RELAY_CH_DSN`, plus `postgres-password` / `clickhouse-password` when bundling those stores, `RELAY_ADMIN_PASSWORD` when `auth.adminUser.enabled`, and optionally `RELAY_REDIS_PASSWORD` for the store.
 
 Validate before applying:
 
@@ -71,7 +72,7 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.mode` | `oss` | `RELAY_MODE`, read only by the admin UI. |
 | `relay.clusterMode` | `"on"` | Sets `RELAY_CLUSTER_MODE`, which has no effect: every pod listens for catalog changes on Postgres regardless. |
 | `relay.eventlogBackend` | `clickhouse` | Usage backend used while the `usage-logging` section names none (`RELAY_EVENTLOG_BACKEND`). Set `postgres` when ClickHouse is off. |
-| `relay.stateBackend` | `redis` | `RELAY_STATE_BACKEND`. `redis` uses the bundled or external Valkey. |
+| `relay.stateBackend` | `redis` | `RELAY_STATE_BACKEND`. `redis` uses the bundled or external store (Dragonfly speaks the Redis protocol, hence the name). |
 | `relay.logLevel` | `info` | `RELAY_LOG_LEVEL`. |
 | `relay.cookieSecure` | `"true"` | `RELAY_COOKIE_SECURE`. `false` only for plain-HTTP testing. |
 | `relay.maxRequestBytes` | `""` | `RELAY_MAX_REQUEST_BYTES`; empty keeps relay's 32 MiB. |
@@ -86,9 +87,9 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.batchPayloadDir` | `/var/lib/relay/batch-payloads` | Batch payload directory (`RELAY_BATCH_PAYLOAD_DIR`), on the pod's `emptyDir`. See the caveats below. |
 | `relay.settingsDir` | `/var/lib/relay/settings` | Where the settings ConfigMap is mounted (`RELAY_SETTINGS_DIR`). |
 | `relay.pgMaxConns`, `relay.pgMinConns` | `""` | Postgres pool size per pod; empty keeps relay's 10 / 2. Keep `pgMaxConns` × replicas below Postgres `max_connections` (100 on the bundled one). |
-| `relay.redisPoolSize`, `relay.redisMinIdleConns` | `""` | Valkey client pool size and idle floor; empty keeps relay's 25 connections per CPU and no idle floor. |
+| `relay.redisPoolSize`, `relay.redisMinIdleConns` | `""` | Store client pool size and idle floor; empty keeps relay's 25 connections per CPU and no idle floor. |
 | `relay.redisPoolMaxWaiters` | `""` | `RELAY_REDIS_POOL_MAX_WAITERS`: callers that may wait for a shared-pool connection before new requests are refused as overloaded at once; empty keeps twice the pool size. |
-| `relay.redisPostFlightPoolSize`, `relay.redisPostFlightPoolTimeoutMs`, `relay.redisPostFlightReadTimeoutMs` | `""` | `RELAY_REDIS_POSTFLIGHT_*`: the pool size, pool wait and read bound of the Valkey client that writes after the response; empty keeps relay's 25 per CPU / 1000 / 1000. |
+| `relay.redisPostFlightPoolSize`, `relay.redisPostFlightPoolTimeoutMs`, `relay.redisPostFlightReadTimeoutMs` | `""` | `RELAY_REDIS_POSTFLIGHT_*`: the pool size, pool wait and read bound of the store client that writes after the response; empty keeps relay's 25 per CPU / 1000 / 1000. |
 | `relay.redisPostFlightBatchSize`, `relay.redisPostFlightBatchDelayMs`, `relay.redisPostFlightQueueSize` | `""` | `RELAY_REDIS_POSTFLIGHT_BATCH_SIZE`, `_BATCH_DELAY_MS`, `_QUEUE_SIZE`: how many requests' settles share one round trip on that client, how long a batch waits to fill, and how many may wait; empty keeps relay's 64 / 2 / 4096. A queue size of `0` turns batching off. |
 | `relay.payloadLogging.enabled` | `true` | Seeds `payload-logging.enabled`. Capture still needs a per-policy opt-in. |
 | `relay.payloadLogging.backend` | `clickhouse` | `file`, `s3` or `clickhouse`. `clickhouse` reuses `RELAY_CH_DSN`. |
@@ -105,7 +106,7 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `resources` | requests 250m / 256Mi, limits 1 CPU / 1Gi | Relay container. |
 | `initResources` | requests 10m / 16Mi, limits 100m / 32Mi | The wait-for-stores init containers. |
 | `goMemLimit` | `900MiB` | `GOMEMLIMIT`; keep it below the memory limit. |
-| `goGC` | `"100"` | `GOGC`. |
+| `goGC` | `"400"` | `GOGC`. |
 | `podAnnotations`, `podLabels` | `{}` | |
 | `podSecurityContext`, `securityContext` | non-root 65532, read-only root filesystem, no capabilities | |
 | `nodeSelector`, `tolerations`, `affinity` | empty | |
@@ -146,16 +147,19 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `clickhouse.auth.password` | `""` | Required when bundled. |
 | `clickhouse.persistence.enabled`, `.size`, `.storageClass` | `true`, `50Gi`, `""` | |
 | `clickhouse.resources` | requests 500m / 1Gi, limits 2 CPU / 4Gi | |
-| `valkey.enabled` | `true` | Bundled Valkey (`valkey/valkey:8-alpine`). |
-| `valkey.auth.enabled` | `true` | Require a password. |
-| `valkey.auth.password` | `""` | Empty derives a stable password from `secrets.masterKey`. With `existingSecret`, put `RELAY_REDIS_PASSWORD` there; without it Valkey runs without a password. |
-| `valkey.persistence.enabled`, `.size`, `.storageClass` | `true`, `5Gi`, `""` | |
-| `valkey.resources` | requests 100m / 128Mi, limits 500m / 512Mi | |
+| `dragonfly.enabled` | `true` | Bundled Dragonfly (`docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2`), one StatefulSet run with `--cluster_mode=emulated --lock_on_hashtags`. |
+| `dragonfly.threads` | `""` | `--proactor_threads`; empty takes the whole CPUs of `dragonfly.resources.limits.cpu`, at least 1. Dragonfly sets maxmemory to 80% of its memory limit and refuses to start below 256 MiB per thread. |
+| `dragonfly.auth.enabled` | `true` | Require a password. |
+| `dragonfly.auth.password` | `""` | Empty derives a stable password from `secrets.masterKey`. With `existingSecret`, put `RELAY_REDIS_PASSWORD` there; without it Dragonfly runs without a password. |
+| `dragonfly.persistence.enabled`, `.snapshotCron`, `.size`, `.storageClass` | `true`, `* * * * *`, `5Gi`, `""` | Snapshots to the PVC on the cron and at shutdown, loaded at start. Disabled, Dragonfly takes no snapshots and starts empty. |
+| `dragonfly.resources` | requests 250m / 512Mi, limits 2 CPU / 1Gi | |
+| `valkey.enabled` | `false` | Bundled Valkey (`valkey/valkey:8-alpine`) instead of Dragonfly; set `dragonfly.enabled: false` with it. |
+| `valkey.auth.enabled`, `.password`, `.persistence.*`, `.resources` | as for `dragonfly` | `persistence` turns on the append-only file; requests 100m / 128Mi, limits 500m / 512Mi. |
 | `external.pgDsn` | `""` | Required when `postgresql.enabled` is false. |
 | `external.chDsn` | `""` | ClickHouse DSN when `clickhouse.enabled` is false. |
-| `external.redisAddr`, `external.redisPassword` | `""` | Valkey or Redis when `valkey.enabled` is false. |
+| `external.redisAddr`, `external.redisPassword` | `""` | A Dragonfly of your own when no bundled store is enabled. |
 | `networkPolicy.enabled` | `true` | Bundled stores accept connections from relay pods only. |
-| `networkPolicy.extraIngress` | `{}` | Extra ingress rules per store (`postgresql`, `clickhouse`, `valkey`), for readers such as Grafana or backup jobs. |
+| `networkPolicy.extraIngress` | `{}` | Extra ingress rules per store (`postgresql`, `clickhouse`, `dragonfly`, `valkey`), for readers such as Grafana or backup jobs. |
 
 ### Scaling, exposure and monitoring
 
@@ -212,10 +216,14 @@ Some upgrades, such as the one to 0.11.6 (schema 34), must not run old and new p
 
 ## Data store access
 
-- **Valkey requires a password** (`valkey.auth.enabled`, default on). Set `valkey.auth.password`, or leave it empty to derive a stable one from `secrets.masterKey`. With `secrets.existingSecret`, add `RELAY_REDIS_PASSWORD` to that Secret; while the key is missing, Valkey keeps running without a password. `scripts/gen-secret.sh` mints the key with the Secret, and `scripts/gen-secret.sh --add-redis-password` adds it to a Secret minted without it. Then restart the relay pods before Valkey: relay sends the password when it connects, which a Valkey without one accepts, so only the Valkey restart interrupts requests. External Valkey or Redis: `external.redisPassword`, or the same Secret key with `secrets.existingSecret`.
-- **NetworkPolicy is on by default** (`networkPolicy.enabled`): the bundled PostgreSQL, ClickHouse and Valkey accept connections from relay pods only. Anything else that reads them (Grafana on ClickHouse, backup jobs) needs a `networkPolicy.extraIngress` entry. It has no effect on a CNI that does not enforce NetworkPolicy.
+- **The store requires a password** (`dragonfly.auth.enabled`, default on). Set `dragonfly.auth.password`, or leave it empty to derive a stable one from `secrets.masterKey`. With `secrets.existingSecret`, add `RELAY_REDIS_PASSWORD` to that Secret; while the key is missing, Dragonfly keeps running without a password. `scripts/gen-secret.sh` mints the key with the Secret, and `scripts/gen-secret.sh --add-redis-password` adds it to a Secret minted without it. Then restart the relay pods before Dragonfly: relay sends the password when it connects, which a Dragonfly without one accepts, so only the Dragonfly restart interrupts requests. An external store: `external.redisPassword`, or the same Secret key with `secrets.existingSecret`.
+- **NetworkPolicy is on by default** (`networkPolicy.enabled`): the bundled PostgreSQL, ClickHouse and Dragonfly accept connections from relay pods only. Anything else that reads them (Grafana on ClickHouse, backup jobs) needs a `networkPolicy.extraIngress` entry. It has no effect on a CNI that does not enforce NetworkPolicy.
 
-Upgrading an install from a chart without these defaults restarts Valkey with the password and rolls the relay pods; relay pods still on the old spec lose Valkey access until they are replaced, so expect rate-limit and session errors for the length of the rollout. With `valkey.persistence` enabled, sessions and counters survive the Valkey restart. Add `extraIngress` entries for other readers before upgrading, or set `networkPolicy.enabled: false` / `valkey.auth.enabled: false` to keep the previous behaviour.
+Upgrading an install from a chart without these defaults restarts the store with the password and rolls the relay pods; relay pods still on the old spec lose store access until they are replaced, so expect rate-limit and session errors for the length of the rollout. With persistence enabled, sessions and counters survive the store restart. Add `extraIngress` entries for other readers before upgrading, or set `networkPolicy.enabled: false` / `dragonfly.auth.enabled: false` to keep the previous behaviour.
+
+### Moving from the bundled Valkey
+
+Charts before Dragonfly bundled Valkey. Upgrading with the new defaults replaces the Valkey StatefulSet with an empty Dragonfly one and points relay at it: control-plane sessions end (users sign in again), rate-limit windows and key breaker state start fresh, and revoked relay tokens are accepted again until they expire. To stay on Valkey, set `valkey.enabled: true` and `dragonfly.enabled: false`. After the move, the Valkey PVC (`data-<fullname>-valkey-0`) is left in place; delete it once it is no longer needed.
 
 ## catalog-server
 

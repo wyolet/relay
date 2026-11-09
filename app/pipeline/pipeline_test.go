@@ -17,13 +17,12 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
@@ -50,8 +49,7 @@ func TestHappyPath_SinglePass(t *testing.T) {
 
 	req := &pipeline.Request{
 		Adapter:   adp,
-		Keys:      []*hostkey.HostKey{key},
-		Policy:    makePolicy(),
+		Hops:      hopOf([]*hostkey.HostKey{key}),
 		Lifecycle: lifecycle.NewContext("req-happy", "pipeline", time.Now()),
 	}
 
@@ -103,8 +101,7 @@ func TestPostFlight_TimingMarks(t *testing.T) {
 
 	req := &pipeline.Request{
 		Adapter:   adp,
-		Keys:      []*hostkey.HostKey{key},
-		Policy:    makePolicy(),
+		Hops:      hopOf([]*hostkey.HostKey{key}),
 		Stream:    true,
 		Lifecycle: lifecycle.NewContext("req-timing", "pipeline", time.Now()),
 	}
@@ -153,8 +150,7 @@ func TestRun_NoKeysEmitsFailureEvent(t *testing.T) {
 
 	_, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter:   &fakeAdapter{},
-		Keys:      nil, // → ErrNoKeys
-		Policy:    makePolicy(),
+		Hops:      nil, // → ErrNoKeys
 		Lifecycle: lifecycle.NewContext("req-nokeys", "pipeline", time.Now()),
 	})
 	if err == nil {
@@ -164,8 +160,9 @@ func TestRun_NoKeysEmitsFailureEvent(t *testing.T) {
 	if gotKind != "no_keys" {
 		t.Errorf("ErrorKind = %q, want no_keys", gotKind)
 	}
-	if gotStatus != 0 {
-		t.Errorf("Status = %d, want 0 (upstream never reached)", gotStatus)
+	// A refusal records the status relay answered, not an upstream's.
+	if gotStatus != http.StatusServiceUnavailable {
+		t.Errorf("Status = %d, want 503 (relay's answer to no key)", gotStatus)
 	}
 }
 
@@ -196,8 +193,7 @@ func TestRun_UpstreamFailureEmitsEvent(t *testing.T) {
 	}
 	_, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter:   adp,
-		Keys:      []*hostkey.HostKey{makeKey("h1", "sk-1")},
-		Policy:    makePolicy(),
+		Hops:      hopOf([]*hostkey.HostKey{makeKey("h1", "sk-1")}),
 		Lifecycle: lifecycle.NewContext("req-upfail", "pipeline", time.Now()),
 	})
 	if err == nil {
@@ -234,8 +230,7 @@ func TestRetryOnTransient_RotatesKey(t *testing.T) {
 	p := newPipeline()
 	req := &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1, key2},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1, key2}),
 	}
 
 	res, err := p.Run(context.Background(), req)
@@ -276,8 +271,7 @@ func TestRetryOn429_Long_RecordsRateLimit(t *testing.T) {
 	p := newPipeline()
 	req := &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1, key2},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1, key2}),
 	}
 
 	res, err := p.Run(context.Background(), req)
@@ -318,8 +312,7 @@ func TestRetryOn5xx_ServerError(t *testing.T) {
 	p := newPipeline()
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1, key2},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1, key2}),
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -357,8 +350,7 @@ func TestRetryOn401_AuthFail(t *testing.T) {
 	p := newPipeline()
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1, key2},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1, key2}),
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -383,15 +375,12 @@ func TestConnRefused_RetriesSameHost_NoBreakerTrip(t *testing.T) {
 
 	mem := kv.NewMem()
 	sel := keypool.New(mem, slog.Default(), nil, nil)
-	lim := pkgratelimit.New(mem, slog.Default(), nil)
 	hh := newFakeHostHealth()
-	p := &pipeline.Pipeline{Policy: policy.NewService(&fakeSnap{}, sel, lim), Logger: slog.Default(), HostHealth: hh}
+	p := &pipeline.Pipeline{Limiter: limiterOver(mem), Selector: sel, Logger: slog.Default(), HostHealth: hh}
 
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key},
-		Policy:  makePolicy(),
-		Host:    &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "myhost"}},
+		Hops:    []plan.RouteHop{hopAt(&host.Host{Meta: meta.Metadata{ID: "host-1", Name: "myhost"}}, []*hostkey.HostKey{key})},
 	})
 	if res != nil {
 		drainResult(t, res)
@@ -422,6 +411,44 @@ func TestConnRefused_RetriesSameHost_NoBreakerTrip(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("host was not recorded unreachable")
+	}
+}
+
+// A dial failure is relay's host_not_reachable refusal only when no candidate accepted a connection; a host that answered before the last one failed to dial leaves it an upstream failure.
+func TestUnreachable_RefusalOnlyWhenNoCandidateConnected(t *testing.T) {
+	t.Parallel()
+	dialErr := &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}
+	down := &host.Host{Meta: meta.Metadata{ID: "down", Name: "down"}, Spec: host.Spec{BaseURL: "http://down"}}
+	up := &host.Host{Meta: meta.Metadata{ID: "up", Name: "up"}, Spec: host.Spec{BaseURL: "http://up"}}
+	adp := &fakeAdapter{
+		callFn: func(_ context.Context, baseURL, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+			if baseURL == "http://down" {
+				return nil, dialErr
+			}
+			return errResp(500), nil
+		},
+		retryFn: func(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
+			return resp.StatusCode >= 500, keypool.FailureServerError, 0
+		},
+	}
+	for name, tc := range map[string]struct {
+		hops []plan.RouteHop
+		want plan.RefusalKind
+	}{
+		"every host down": {[]plan.RouteHop{hopAt(down, []*hostkey.HostKey{makeKey("d1", "sk-d1")})}, plan.RefusalHostNotReachable},
+		"an earlier host answered": {[]plan.RouteHop{
+			hopAt(up, []*hostkey.HostKey{makeKey("u2", "sk-u2")}),
+			hopAt(down, []*hostkey.HostKey{makeKey("d2", "sk-d2")}),
+		}, ""},
+	} {
+		_, err := newPipeline().Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: tc.hops})
+		var unreachable *pipeline.UpstreamUnreachableError
+		if !errors.As(err, &unreachable) {
+			t.Fatalf("%s: err = %v, want *UpstreamUnreachableError", name, err)
+		}
+		if got := pipeline.RefusalOf(err); got != tc.want {
+			t.Errorf("%s: RefusalOf = %q, want %q", name, got, tc.want)
+		}
 	}
 }
 
@@ -470,8 +497,7 @@ func TestNonRetryable_4xx_PassesThrough(t *testing.T) {
 	p := newPipeline()
 	res, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key1, key2},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{key1, key2}),
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -519,8 +545,7 @@ func TestAllKeysExhausted_StopsAtMaxAttempts(t *testing.T) {
 			p := newPipeline()
 			res, err := p.Run(context.Background(), &pipeline.Request{
 				Adapter:     adp,
-				Keys:        keys,
-				Policy:      makePolicy(),
+				Hops:        hopOf(keys),
 				MaxAttempts: tc.maxAttempts,
 			})
 			if res != nil {
@@ -564,8 +589,7 @@ func TestAllKeysExhausted_KeepsLastUpstreamResponse(t *testing.T) {
 	p := newPipeline()
 	_, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter:     adp,
-		Keys:        []*hostkey.HostKey{makeKey("h1", "sk-1"), makeKey("h2", "sk-2")},
-		Policy:      makePolicy(),
+		Hops:        hopOf([]*hostkey.HostKey{makeKey("h1", "sk-1"), makeKey("h2", "sk-2")}),
 		MaxAttempts: 2,
 	})
 
@@ -601,8 +625,7 @@ func TestNoKeys_Returns_ErrNoKeys(t *testing.T) {
 	adp := &fakeAdapter{}
 	_, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: adp,
-		Keys:    nil,
-		Policy:  makePolicy(),
+		Hops:    nil,
 	})
 	if !errors.Is(err, pipeline.ErrNoKeys) {
 		t.Errorf("err = %v, want ErrNoKeys", err)
@@ -618,46 +641,27 @@ func TestAdapterMissing_ReturnsErr(t *testing.T) {
 	p := newPipeline()
 	_, err := p.Run(context.Background(), &pipeline.Request{
 		Adapter: nil,
-		Keys:    []*hostkey.HostKey{makeKey("h1", "sk-1")},
-		Policy:  makePolicy(),
+		Hops:    hopOf([]*hostkey.HostKey{makeKey("h1", "sk-1")}),
 	})
 	if !errors.Is(err, pipeline.ErrAdapterMissing) {
 		t.Errorf("err = %v, want ErrAdapterMissing", err)
 	}
 }
 
-func TestReserveFails_BubblesUp(t *testing.T) {
+func TestCallerRefusalEndsTheRequest(t *testing.T) {
 	t.Parallel()
 
-	// Policy with an RL whose single rule has Amount=0 → always exhausted.
-	rl := &ratelimit.RateLimit{
-		Meta: meta.Metadata{ID: "rl-zero", Name: "zero"},
-		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{
-			Meter: ratelimit.MeterRequests, Amount: 0,
-			Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategySlidingWindow,
-		}}},
-	}
-	pol := makePolicy()
-	pol.Spec.RateLimitID = rl.Meta.ID
-
-	svc := newService(&fakeSnap{rls: map[string]*ratelimit.RateLimit{rl.Meta.ID: rl}})
-	p := &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}
-
+	p := newPipeline()
 	adp := &fakeAdapter{}
-	_, err := p.Run(context.Background(), &pipeline.Request{
-		Adapter: adp,
-		Keys:    []*hostkey.HostKey{makeKey("h1", "sk-1")},
-		Policy:  pol,
-	})
+	hop := counted(hopOf([]*hostkey.HostKey{makeKey("h1", "sk-1"), makeKey("h2", "sk-2")})[0], []limits.Counter{callerRule(0)}, nil)
+	_, err := p.Run(context.Background(), &pipeline.Request{Adapter: adp, Hops: []plan.RouteHop{hop}})
 
-	if err == nil {
-		t.Fatal("expected error from Reserve, got nil")
-	}
-	if !errors.Is(err, pkgratelimit.ErrExceeded) {
-		t.Errorf("err = %v, want wrapping ErrExceeded", err)
+	var refused *pipeline.CallerLimitedError
+	if !errors.As(err, &refused) || refused.Refused.Counter.Rung != limits.RungProject || refused.Refused.Counter.PolicyID != "pol-caller" {
+		t.Fatalf("err = %v, want a caller refusal naming the project rung and its policy", err)
 	}
 	if adp.callCount.Load() != 0 {
-		t.Errorf("callCount = %d, want 0 (Reserve rejected before Call)", adp.callCount.Load())
+		t.Errorf("callCount = %d, want 0 (refused before any call)", adp.callCount.Load())
 	}
 }
 
@@ -686,8 +690,7 @@ func TestPostFlight_CommitsOnBodyClose(t *testing.T) {
 	p.Lifecycle = reg
 	req := &pipeline.Request{
 		Adapter:   adp,
-		Keys:      []*hostkey.HostKey{key},
-		Policy:    makePolicy(),
+		Hops:      hopOf([]*hostkey.HostKey{key}),
 		Lifecycle: lifecycle.NewContext("req-pf", "pipeline", time.Now()),
 	}
 
@@ -748,8 +751,7 @@ func TestOAuthFlag_DerivedFromKeyKind(t *testing.T) {
 			p.Lifecycle = lifecycle.New()
 			req := &pipeline.Request{
 				Adapter:   adp,
-				Keys:      []*hostkey.HostKey{key},
-				Policy:    makePolicy(),
+				Hops:      hopOf([]*hostkey.HostKey{key}),
 				Lifecycle: lifecycle.NewContext("req-oauth", "pipeline", time.Now()),
 			}
 			res, err := p.Run(context.Background(), req)

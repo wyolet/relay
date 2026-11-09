@@ -49,13 +49,14 @@ type Options struct {
 }
 
 // nonCatalogKinds are the kinds a catalog tree may not carry: they name
-// principals, credentials or grants rather than shared catalog templates. A
-// HostKey is a credential: an env-sourced one would resolve any relay
-// variable and send it to a host the same tree defines.
+// principals, credentials, grants or a tenant's own accounts and caps rather
+// than shared catalog templates. A HostKey is a credential: an env-sourced
+// one would resolve any relay variable and send it to a host the same tree
+// defines.
 var nonCatalogKinds = map[string]bool{
 	"Team": true, "Project": true, "Group": true, "ServiceAccount": true,
 	"Key": true, "HostKey": true, "Role": true, "RoleBinding": true, "PolicyBinding": true,
-	"User": true,
+	"User": true, "Account": true, "Pool": true, "Budget": true,
 }
 
 // Result summarises a seed run. Per-kind counts are the rows the run
@@ -79,6 +80,9 @@ type Result struct {
 	Keys            int
 	Overlays        int
 	Users           int
+	Accounts        int
+	Pools           int
+	Budgets         int
 	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
 	Detached        int // catalog rows the tree no longer declares, marked this run
 	Reattached      int // detached rows the tree declares again, unmarked this run
@@ -179,7 +183,7 @@ func tally(p *apply.Result) *Result {
 		"Policy": &res.Policies, "ServiceAccount": &res.ServiceAccounts,
 		"Group": &res.Groups, "Role": &res.Roles, "RoleBinding": &res.RoleBindings,
 		"PolicyBinding": &res.PolicyBindings, "Key": &res.Keys, "Overlay": &res.Overlays,
-		"User": &res.Users,
+		"User": &res.Users, "Account": &res.Accounts, "Pool": &res.Pools, "Budget": &res.Budgets,
 	}
 	for _, e := range p.Entries {
 		if e.Action == apply.ActionSkipDirty {

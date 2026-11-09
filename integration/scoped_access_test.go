@@ -52,44 +52,42 @@ func TestIntegration_ScopedListsAndParentTeamReads(t *testing.T) {
 	}
 }
 
-// A developer's personal key may name their project's policy: they may
-// create keys there, and the key then carries the project. Someone outside
-// the project is still refused.
-func TestIntegration_PersonalKeyOnAProjectPolicy(t *testing.T) {
+// A project admin's pool serves the project's policies; a personal policy
+// of someone outside the project cannot draw on it.
+func TestIntegration_ProjectPoolOnlyForTheProject(t *testing.T) {
 	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 	teamA := st.mkTeam(t, "alpha")
 	projA := st.mkProject(t, "alpha-one", teamA)
-	devID := st.seedLogin(t, "dev", "pw-dev")
-	outsiderID := st.seedLogin(t, "outsider", "pw-outsider")
-	st.bindRole(t, "alpha-devs", roles["developer"].Meta.ID, devID, "project", projA)
-
-	code, raw := st.adminDo(http.MethodPost, "/api/policies",
-		`{"metadata":{"name":"alpha-pol","owner":{"kind":"project","id":"`+projA+`"}},"spec":{}}`)
-	if code != http.StatusCreated {
-		t.Fatalf("POST /api/policies = %d: %s", code, raw)
-	}
-	var pol tenancyRow
-	if err := json.Unmarshal(raw, &pol); err != nil {
-		t.Fatalf("decode policy: %v", err)
-	}
+	adminID := st.seedLogin(t, "padmin", "pw-padmin")
+	st.seedLogin(t, "outsider", "pw-outsider")
+	st.bindRole(t, "alpha-admins", roles["project-admin"].Meta.ID, adminID, "project", projA)
+	hostID, _, _ := seedHostTiers(t, st)
 	if err := st.cat.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 
-	dev := st.login(t, "dev", "pw-dev")
-	body := func(name, userID string) string {
-		return `{"metadata":{"name":"` + name + `"},` +
-			`"spec":{"principal":{"kind":"user","id":"` + userID + `"},"policyId":"` + pol.Metadata.ID + `"}}`
+	padmin := st.login(t, "padmin", "pw-padmin")
+	code, raw := padmin.do(http.MethodPost, "/api/pools",
+		`{"metadata":{"name":"alpha-pool","owner":{"kind":"project","id":"`+projA+`"}},"spec":{"hostId":"`+hostID+`"}}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/pools = %d: %s", code, raw)
 	}
-	if code, raw := dev.do(http.MethodPost, "/api/keys", body("dev-personal", devID)); code != http.StatusCreated {
-		t.Fatalf("developer's personal key on their project's policy = %d, want 201: %s", code, raw)
+	var pl tenancyRow
+	if err := json.Unmarshal(raw, &pl); err != nil {
+		t.Fatalf("decode pool: %v", err)
+	}
+	body := func(name, owner string) string {
+		return `{"metadata":{"name":"` + name + `"` + owner + `},"spec":{"poolIds":["` + pl.Metadata.ID + `"]}}`
+	}
+	if code, raw := padmin.do(http.MethodPost, "/api/policies", body("alpha-pol", `,"owner":{"kind":"project","id":"`+projA+`"}`)); code != http.StatusCreated {
+		t.Fatalf("project policy on the project's pool = %d, want 201: %s", code, raw)
 	}
 
 	outsider := st.login(t, "outsider", "pw-outsider")
-	if code, raw := outsider.do(http.MethodPost, "/api/keys", body("outsider-personal", outsiderID)); code == http.StatusCreated {
-		t.Fatalf("a personal key outside the project was accepted: %s", raw)
+	if code, raw := outsider.do(http.MethodPost, "/api/policies", body("stolen-pool", "")); code == http.StatusCreated {
+		t.Fatalf("a personal policy outside the project drew on its pool: %s", raw)
 	}
 }
 
@@ -110,7 +108,7 @@ func TestIntegration_ProjectPolicyOnACatalogRateLimit(t *testing.T) {
 
 	padmin := st.login(t, "padmin", "pw-padmin")
 	body := `{"metadata":{"name":"alpha-limited","owner":{"kind":"project","id":"` + projA + `"}},` +
-		`"spec":{"rateLimitId":"` + rateLimitID + `"}}`
+		`"spec":{"rateLimits":[{"rateLimitId":"` + rateLimitID + `"}]}}`
 	if code, raw := padmin.do(http.MethodPost, "/api/policies", body); code != http.StatusCreated {
 		t.Fatalf("project policy on a host-owned rate limit = %d, want 201: %s", code, raw)
 	}

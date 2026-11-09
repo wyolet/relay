@@ -12,6 +12,7 @@ Relay reads a small set of `X-WR-*` request headers to control routing and recor
 | `Authorization` | `Bearer <relay-key-or-token>` in normal mode. In [proxy mode](/concepts/proxy-mode) it carries **your own upstream key**, forwarded to the provider. |
 | `X-WR-API-Key` | Your relay key or inference token. Checked before `Authorization`, and the only place for it in proxy mode. |
 | `x-api-key` | Relay-key fallback, for Anthropic-SDK-style clients that send the key here. |
+| `X-WR-Account` | The [account](/concepts/accounts) the request runs in and is charged to, by name or id, instead of the credential's default. It wins over a `/a/<account>/` path prefix and over the account's own host. An account the credential may not use answers `403 account_not_held`. See [Switching lanes per request](/concepts/accounts#switching-lanes-per-request). |
 | `X-WR-Proxy-Mode` | `Proxy` turns on [proxy mode](/concepts/proxy-mode). Omit it, or send `No-Proxy`, for normal routing. Any other value is a `400`. |
 | `X-WR-Upstream-Host` | A host slug. In normal mode it pins the host when several serve the model, like `model@host` in the body (an `@host` in the body wins). In proxy mode it names the upstream; anonymous proxy requests must send it. |
 | `X-WR-Usage` | `full` adds a `relay_usage` block (request id, tokens, attempts, timing) to the response. Canonical-shape requests only. |

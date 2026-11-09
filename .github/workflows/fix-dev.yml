@@ -107,7 +107,7 @@ jobs:
       pull-requests: write
       issues: write
       actions: read
-    # The cluster pool runs Postgres, Valkey and ClickHouse as pod sidecars on
+    # The cluster pool runs Postgres, the kv store and ClickHouse as pod sidecars on
     # the same addresses. An empty image skips a service.
     services:
       postgres:
@@ -123,12 +123,18 @@ jobs:
           --health-interval 2s
           --health-timeout 2s
           --health-retries 30
-      valkey:
-        image: ${{ vars.CI_POOL != 'cluster' && 'valkey/valkey:8-alpine' || '' }}
+      # A service container takes no arguments; Dragonfly reads DFLY_<flag> from the environment.
+      dragonfly:
+        image: ${{ vars.CI_POOL != 'cluster' && 'docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2' || '' }}
+        env:
+          DFLY_cluster_mode: emulated
+          DFLY_lock_on_hashtags: 'true'
+          DFLY_proactor_threads: '2'
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "valkey-cli ping"
+          --ulimit memlock=-1
+          --health-cmd "redis-cli ping"
           --health-interval 2s
           --health-timeout 2s
           --health-retries 30
@@ -261,7 +267,7 @@ jobs:
 
           Read CLAUDE.md and .claude/ci.md first. You are on branch fix/dev-$SHORT, created at the failing commit.
 
-          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres, Valkey and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
+          1. Reproduce. From the log, find the failing test or check and run only that, e.g. \`go test ./<pkg> -run '^<Test>$'\`; add \`-tags=integration\` for integration tests. Postgres, Dragonfly and ClickHouse are running; RELAY_TEST_PG_DSN, RELAY_TEST_REDIS_ADDR and RELAY_TEST_CH_DSN are set.
           2. Bisect the range with that test only (\`git bisect start <bad> <good>\`, \`git bisect run ...\`) to find the culprit commit, then \`git bisect reset\` and \`git switch fix/dev-$SHORT\`.
           3. Take exactly one outcome.
 

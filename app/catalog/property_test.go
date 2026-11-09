@@ -120,9 +120,8 @@ func runProperty(t *testing.T, seed int64, events int) {
 			pr0.Spec.Enabled = cp.Spec.Enabled
 			_ = c.ApplyPricingUpsert(&cp)
 		},
-		// A policy owned by a project the snapshot does not hold: it is
-		// dropped, and every key naming it has to go with it (build and
-		// reconcile must reach the same fixpoint here).
+		// A policy owned by a project the snapshot does not hold is dropped
+		// (build and reconcile must reach the same fixpoint here).
 		func() {
 			cp := *pols[0]
 			cp.Meta.ID = orphanPolID
@@ -136,7 +135,6 @@ func runProperty(t *testing.T, seed int64, events int) {
 			cp.Meta.ID = orphanKeyID
 			cp.Meta.Name = "key-on-orphan-policy"
 			cp.Spec.KeyHash = "orphan-hash"
-			cp.Spec.PolicyID = orphanPolID
 			_ = c.ApplyKeyUpsert(&cp)
 		},
 		// Hard deletes (the reconciler treats absent as no-op on second call).
@@ -250,37 +248,7 @@ func assertSnapshotInvariants(t *testing.T, s *Snapshot, step int) {
 		}
 	}
 
-	// 5. Reverse-join maps only reference present rows.
-	for pid, ms := range s.modelsByPolicy {
-		if _, ok := s.policiesByID[pid]; !ok {
-			t.Errorf("step %d: modelsByPolicy[%s]: policy not present", step, pid)
-		}
-		for _, m := range ms {
-			if _, ok := s.modelsByID[m.Meta.ID]; !ok {
-				t.Errorf("step %d: modelsByPolicy[%s]: model %s not present", step, pid, m.Meta.ID)
-			}
-		}
-	}
-	for pid, ks := range s.hostKeysByPolicy {
-		if _, ok := s.policiesByID[pid]; !ok {
-			t.Errorf("step %d: hostKeysByPolicy[%s]: policy not present", step, pid)
-		}
-		for _, k := range ks {
-			if _, ok := s.hostKeysByID[k.Meta.ID]; !ok {
-				t.Errorf("step %d: hostKeysByPolicy[%s]: key %s not present", step, pid, k.Meta.ID)
-			}
-		}
-	}
-	for pid, r := range s.rateLimitByPolicy {
-		if _, ok := s.policiesByID[pid]; !ok {
-			t.Errorf("step %d: rateLimitByPolicy[%s]: policy not present", step, pid)
-		}
-		if _, ok := s.rateLimitsByID[r.Meta.ID]; !ok {
-			t.Errorf("step %d: rateLimitByPolicy[%s]: rl %s not present", step, pid, r.Meta.ID)
-		}
-	}
-
-	// 6. pricingByModelHost values are present.
+	// 5. pricingByModelHost values are present.
 	for key, p := range s.pricingByModelHost {
 		if _, ok := s.pricingsByID[p.Meta.ID]; !ok {
 			t.Errorf("step %d: pricingByModelHost[%s]: pricing %s not present", step, key, p.Meta.ID)

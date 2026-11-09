@@ -19,7 +19,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -44,9 +44,11 @@ type Deps struct {
 	// token bearer, which is the posture when tokens are disabled.
 	Tokens *TokenVerifier
 
-	// Resolver translates inbound model+policy refs into a pipeline-
-	// ready Plan against the snapshot.
-	Resolver *routing.Resolver
+	// Plans are the published key, caller and route plans authentication and routing read.
+	Plans PlanSource
+
+	// Revoked is the in-memory set of revoked relay-minted tokens. Nil revokes nothing.
+	Revoked *revocation.Set
 
 	// Pipeline orchestrates one normal-mode inference request.
 	Pipeline *pipeline.Pipeline
@@ -110,6 +112,9 @@ type Deps struct {
 	// ProxyBodyIdle bounds the wait for each read of a proxy-mode request body (RELAY_PROXY_BODY_IDLE_S); a client silent that long gets 408. 0 disables it.
 	ProxyBodyIdle time.Duration
 
+	// AccountDomain is the parent domain of the per-account hosts (RELAY_ACCOUNT_DOMAIN): a request to <account-name>.<AccountDomain> runs in that account. Empty turns host selection off; the header and the /a/{account}/ prefix work regardless.
+	AccountDomain string
+
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
 	// tooling only; off by default.
@@ -126,6 +131,9 @@ type Pinger interface {
 // Returns the huma.API so the caller can attach test-only operations.
 func Mount(r chi.Router, d Deps) huma.API {
 	httpapi.InstallErrorRewriter()
+
+	// First, so the profile middleware and the router see the path without its /a/{account} prefix.
+	r.Use(LaneMiddleware(d.AccountDomain))
 
 	// Ahead of every route on r (chi requires middleware before routes), so
 	// header- and User-Agent-selected profiles reach handlers that carry no
@@ -152,10 +160,11 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// The readiness gate runs ahead of both — until the catalog has
 	// completed its first Reload, /v1/* returns 503 instead of an
 	// empty-snapshot 404. /healthz stays unaffected.
+	auth := d.Auth()
 	mw := huma.Middlewares{
 		httpapi.HumaAuth(ReadinessMiddleware(d.Catalog)),
 		httpapi.HumaAuth(ClassifyMiddleware()),
-		httpapi.HumaAuth(PrincipalMiddleware(d.Catalog, d.Tokens)),
+		httpapi.HumaAuth(PrincipalMiddleware(auth)),
 	}
 	for _, mount := range d.RouteMounters {
 		mount(api, d, mw)
@@ -163,6 +172,9 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerModels(api, d, mw)
 	registerCatalog(api, d, mw)
 	registerProxyHosts(api, d, mw)
+	describeListingErrors(api)
+	describeCatalogSchemas(api)
+	api.OpenAPI().Tags = inferenceTags
 
 	// /v1/ws is a raw upgrade, not a huma POST operation, so it mounts
 	// directly on the chi router. It reuses the identical net/http
@@ -172,7 +184,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	r.With(
 		ReadinessMiddleware(d.Catalog),
 		ClassifyMiddleware(),
-		PrincipalMiddleware(d.Catalog, d.Tokens),
+		PrincipalMiddleware(auth),
 	).Get("/v1/ws", wsHandler(d))
 
 	mountProfileRoutes(r, d)
@@ -200,8 +212,13 @@ func mountProfileRoutes(r chi.Router, d Deps) {
 			r.With(
 				ReadinessMiddleware(d.Catalog),
 				ClassifyMiddleware(),
-				PrincipalMiddleware(d.Catalog, d.Tokens),
+				PrincipalMiddleware(d.Auth()),
 			).Method(route.Method, path, route.Handler)
 		}
 	}
+}
+
+// Auth is the credential middleware's view of d.
+func (d Deps) Auth() *Auth {
+	return &Auth{Catalog: d.Catalog, Plans: d.Plans, Revoked: d.Revoked, Tokens: d.Tokens, Lifecycle: d.Lifecycle}
 }

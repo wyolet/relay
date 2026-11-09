@@ -80,31 +80,31 @@ func newSharedCatalogHarness(t *testing.T) http.Handler {
 	hosts := &memStore[host.Host]{metaOf: hmeta, items: map[string]*host.Host{}}
 	registerKind[host.Host](api, "hosts", "host", hosts, rbac, hmeta,
 		func(h *host.Host) error { return h.Validate() }, "",
-		listScanResolver[host.Host](hosts, hmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil)
+		listScanResolver[host.Host](hosts, hmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil)
 
 	bmeta := func(b *binding.Binding) *meta.Metadata { return &b.Meta }
 	bindings := &memStore[binding.Binding]{metaOf: bmeta, items: map[string]*binding.Binding{}}
 	registerKind[binding.Binding](api, "host-bindings", "host-binding", bindings, rbac, bmeta,
 		func(b *binding.Binding) error { return b.Validate() }, "",
-		listScanResolver[binding.Binding](bindings, bmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil)
+		listScanResolver[binding.Binding](bindings, bmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil)
 
 	kmeta := func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta }
 	hostKeys := &memStore[hostkey.HostKey]{metaOf: kmeta, items: map[string]*hostkey.HostKey{}}
 	registerKind[hostkey.HostKey](api, "host-keys", "host-key", hostKeys, rbac, kmeta,
 		func(k *hostkey.HostKey) error { return k.Validate() }, meta.OwnerUser,
-		listScanResolver[hostkey.HostKey](hostKeys, kmeta), guardHostKey(d), nil, nil, nil, nil, noSettings{}, false, nil, nil)
+		listScanResolver[hostkey.HostKey](hostKeys, kmeta), guardHostKey(d), nil, nil, nil, nil, noSettings{}, false, nil, nil, nil)
 
 	rlmeta := func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }
 	limits := &memStore[ratelimit.RateLimit]{metaOf: rlmeta, items: map[string]*ratelimit.RateLimit{}}
 	registerKind[ratelimit.RateLimit](api, "rate-limits", "rate-limit", limits, rbac, rlmeta,
 		func(r *ratelimit.RateLimit) error { return r.Validate() }, meta.OwnerUser,
-		listScanResolver[ratelimit.RateLimit](limits, rlmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil)
+		listScanResolver[ratelimit.RateLimit](limits, rlmeta), nil, nil, nil, nil, nil, noSettings{}, false, nil, nil, nil)
 
 	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
 	policies := &memStore[policy.Policy]{metaOf: polmeta, items: map[string]*policy.Policy{}}
 	registerKind[policy.Policy](api, "policies", "policy", policies, rbac, polmeta,
 		func(p *policy.Policy) error { return p.Validate() }, meta.OwnerUser,
-		listScanResolver[policy.Policy](policies, polmeta), guardPolicyModels(d), nil, nil, nil, nil, noSettings{}, false, nil, nil)
+		listScanResolver[policy.Policy](policies, polmeta), guardPolicyModels(d), nil, nil, nil, nil, noSettings{}, false, nil, nil, nil)
 
 	return r
 }
@@ -207,7 +207,7 @@ func TestPersonalKindsStillCreatedAsCallersOwn(t *testing.T) {
 	for _, tc := range []struct {
 		plural, body string
 	}{
-		{"host-keys", fmt.Sprintf(`{"metadata":{"name":"my-key"},"spec":{"hostId":%q,"policyId":%q,"valueFrom":{"kind":"stored"},"value":"sk-test"}}`, ids.New(), ids.New())},
+		{"host-keys", fmt.Sprintf(`{"metadata":{"name":"my-key"},"spec":{"hostId":%q,"accountId":%q,"valueFrom":{"kind":"stored"},"value":"sk-test"}}`, ids.New(), ids.New())},
 		{"rate-limits", `{"metadata":{"name":"my-limit"},"spec":{"rules":[{"meter":"requests","amount":10,"window":60,"strategy":"token-bucket"}]}}`},
 		{"policies", `{"metadata":{"name":"my-policy"},"spec":{}}`},
 	} {

@@ -37,7 +37,7 @@ func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {
 			}
 		}
 	}
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -46,7 +46,7 @@ func (c *Catalog) ApplyProviderDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteProvider(s, id)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -76,7 +76,8 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	}
 	s := c.snap.Load().clone()
 
-	clean := sanitizeHost(h, s.policiesByID)
+	copied := *h
+	clean := &copied
 	renamed := false
 	if old, ok := s.hostsByID[h.Meta.ID]; ok {
 		renamed = old.Meta.Name != clean.Meta.Name
@@ -92,7 +93,7 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 			}
 		}
 	}
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -101,7 +102,7 @@ func (c *Catalog) ApplyHostDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteHost(s, id)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -133,13 +134,13 @@ func (c *Catalog) ApplyModelUpsert(m *model.Model) error {
 	clean, keep := sanitizeModel(m, snapIDs(s.providersByID))
 	if !keep {
 		deleteModel(s, m.Meta.ID)
-		c.commitWithGrants(s)
+		c.snap.Store(s)
 		return nil
 	}
 	// clean is the TEMPLATE; index the overlay-merged effective row
 	// (identity when no overlay exists). See overlay_apply.go.
 	insertModel(s, s.overlaidModel(clean))
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -148,7 +149,7 @@ func (c *Catalog) ApplyModelDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteModel(s, id)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -158,18 +159,12 @@ func insertModel(s *Snapshot, m *model.Model) {
 		s.unregisterRefs(refKey{Kind: refModel, ID: old.Meta.ID}, outboundModelRefs(old))
 		s.modelsByName[old.Meta.Name] = removeModelFromSlice(s.modelsByName[old.Meta.Name], old.Meta.ID)
 		s.deindexModelSnapshots(old)
-		// Remove from any policy reverse joins.
-		for polID, models := range s.modelsByPolicy {
-			s.modelsByPolicy[polID] = removeModelFromSlice(models, old.Meta.ID)
-		}
 		delete(s.modelsByID, old.Meta.ID)
 	}
 	s.modelsByID[m.Meta.ID] = m
 	s.modelsByName[m.Meta.Name] = append(s.modelsByName[m.Meta.Name], m)
 	s.indexModelSnapshots(m)
 	s.registerRefs(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
-	// Rebuild policy reverse joins for policies that reference this model.
-	rebuildModelsByPolicy(s)
 }
 
 func deleteModel(s *Snapshot, id string) {
@@ -184,10 +179,6 @@ func deleteModel(s *Snapshot, id string) {
 	// The overlay row (if any) stays registered — inert until the model
 	// reappears; only the stashed template goes with the model.
 	delete(s.modelTemplates, id)
-	// Remove from policy joins.
-	for polID, models := range s.modelsByPolicy {
-		s.modelsByPolicy[polID] = removeModelFromSlice(models, id)
-	}
 	// Remove pricingByModelHost entries targeting this model.
 	for k, p := range s.pricingByModelHost {
 		_ = p
@@ -197,7 +188,6 @@ func deleteModel(s *Snapshot, id string) {
 		}
 	}
 	cascadeDelete(s, refModel, id)
-	resanitizePoliciesAfterParentChange(s)
 }
 
 // ── Binding ───────────────────────────────────────────────────────────────

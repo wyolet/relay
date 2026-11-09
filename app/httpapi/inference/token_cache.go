@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/crypto"
 )
@@ -18,36 +17,12 @@ import (
 // pick a shard.
 const cacheShards = 16
 
-// cacheEntry is one verified bearer. claims, typ and exp are fixed at insert;
-// subjects is recomputed whenever the snapshot they were derived from is
-// replaced, so a membership change is not held until the token expires.
-// The snapshot is remembered by generation, never by pointer: an entry lives
-// until its token expires and would otherwise keep every catalog it ever saw
-// reachable.
+// cacheEntry is one verified bearer, fixed at insert.
 type cacheEntry struct {
 	claims crypto.TokenClaims
 	// typ is the header's, kept so the per-request check never re-reads it.
 	typ string
 	exp time.Time
-
-	mu       sync.Mutex
-	snapGen  uint64
-	subjects []string
-}
-
-func (e *cacheEntry) subjectsFor(snap *appcatalog.Snapshot) ([]string, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.snapGen != snap.Generation() || e.subjects == nil {
-		return nil, false
-	}
-	return e.subjects, true
-}
-
-func (e *cacheEntry) setSubjects(snap *appcatalog.Snapshot, subs []string) {
-	e.mu.Lock()
-	e.snapGen, e.subjects = snap.Generation(), subs
-	e.mu.Unlock()
 }
 
 // claimsCache is a sharded, bounded map. Each shard keeps two generations:

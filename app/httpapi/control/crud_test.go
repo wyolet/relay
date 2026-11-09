@@ -134,6 +134,7 @@ func newRoleBindingsHarness(t *testing.T) http.Handler {
 		false,
 		nil,
 		nil,
+		nil,
 	)
 	return r
 }

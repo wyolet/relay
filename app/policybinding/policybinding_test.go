@@ -5,83 +5,40 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/rolebinding"
 )
 
 func fix() *PolicyBinding {
-	b := &PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-search-everyone"},
-		Spec: Spec{
-			ProjectID: meta.NewID(),
-			PolicyID:  meta.NewID(),
-			Subjects: []rolebinding.Subject{
-				{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"},
-			},
-		},
+	return &PolicyBinding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-eval", Owner: meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}},
+		Spec: Spec{PolicyID: meta.NewID(), AccountIDs: []string{meta.NewID()}},
 	}
-	b.StampOwner()
-	return b
 }
 
 func TestValidate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		b    *PolicyBinding
+		edit func(b *PolicyBinding)
 		want string // "" = valid
 	}{
-		{
-			name: "project owner mirrors projectId",
-			b:    fix(),
-		},
-		{
-			name: "explicit priority",
-			b: func() *PolicyBinding {
-				b := fix()
-				fifty := 50
-				b.Spec.Priority = &fifty
-				return b
-			}(),
-		},
-		{
-			name: "priority above the ceiling",
-			b: func() *PolicyBinding {
-				b := fix()
-				overCeiling := 10001
-				b.Spec.Priority = &overCeiling
-				return b
-			}(),
-			want: "Priority",
-		},
-		{
-			name: "team owner rejected",
-			b: func() *PolicyBinding {
-				b := fix()
-				b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()}
-				return b
-			}(),
-			want: "owner.kind must be project",
-		},
-		{
-			name: "owner id drifted from projectId",
-			b: func() *PolicyBinding {
-				b := fix()
-				b.Meta.Owner.ID = meta.NewID()
-				return b
-			}(),
-			want: "does not match spec.projectId",
-		},
-		{
-			name: "group subject carrying an id",
-			b: func() *PolicyBinding {
-				b := fix()
-				b.Spec.Subjects[0].ID = meta.NewID()
-				return b
-			}(),
-			want: "group subject names a group",
-		},
+		{name: "project owner"},
+		{name: "team owner", edit: func(b *PolicyBinding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: meta.NewID()} }},
+		{name: "user owner", edit: func(b *PolicyBinding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()} }},
+		{name: "system owner", edit: func(b *PolicyBinding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem} }},
+		{name: "several accounts", edit: func(b *PolicyBinding) { b.Spec.AccountIDs = append(b.Spec.AccountIDs, meta.NewID()) }},
+		{name: "system owner with an id", edit: func(b *PolicyBinding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem, ID: meta.NewID()} }, want: "has no id"},
+		{name: "team owner without an id", edit: func(b *PolicyBinding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam} }, want: "needs its id"},
+		{name: "host owner", edit: func(b *PolicyBinding) { b.Meta.Owner = meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()} }, want: "owner.kind must be"},
+		{name: "no accounts", edit: func(b *PolicyBinding) { b.Spec.AccountIDs = nil }, want: "AccountIDs"},
+		{name: "an account that is not an id", edit: func(b *PolicyBinding) { b.Spec.AccountIDs = []string{"team-ml"} }, want: "AccountIDs"},
+		{name: "an account twice", edit: func(b *PolicyBinding) { b.Spec.AccountIDs = append(b.Spec.AccountIDs, b.Spec.AccountIDs[0]) }, want: "listed twice"},
+		{name: "policy required", edit: func(b *PolicyBinding) { b.Spec.PolicyID = "" }, want: "PolicyID"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.b.Validate()
+			b := fix()
+			if tc.edit != nil {
+				tc.edit(b)
+			}
+			err := b.Validate()
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatalf("Validate() = %v, want nil", err)
@@ -94,27 +51,13 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestEffectivePriority(t *testing.T) {
+func TestScopeKey(t *testing.T) {
 	b := fix()
-	if got := b.EffectivePriority(); got != DefaultPriority {
-		t.Errorf("unset priority = %d, want %d", got, DefaultPriority)
+	if got, want := b.ScopeKey(), "project:"+b.Meta.Owner.ID; got != want {
+		t.Errorf("ScopeKey() = %q, want %q", got, want)
 	}
-	ten := 10
-	b.Spec.Priority = &ten
-	if got := b.EffectivePriority(); got != 10 {
-		t.Errorf("explicit priority = %d, want 10", got)
-	}
-}
-
-// 0 is the highest-winning priority; it must not read as "not set".
-func TestEffectivePriorityKeepsExplicitZero(t *testing.T) {
-	b := fix()
-	zero := 0
-	b.Spec.Priority = &zero
-	if got := b.EffectivePriority(); got != 0 {
-		t.Errorf("explicit priority 0 = %d, want 0", got)
-	}
-	if err := b.Validate(); err != nil {
-		t.Errorf("priority 0: %v", err)
+	b.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	if got := b.ScopeKey(); got != "" {
+		t.Errorf("system ScopeKey() = %q, want empty", got)
 	}
 }

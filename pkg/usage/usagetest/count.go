@@ -29,7 +29,7 @@ var countCases = []countCase{
 	{
 		name: "status filter",
 		q:    windowWith(func(q *usage.EventQuery) { q.Status = []int{429} }),
-		want: 2,
+		want: 3,
 	},
 	{
 		name: "relay_key filter includes its log-only event",

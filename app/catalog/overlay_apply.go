@@ -83,7 +83,7 @@ func (c *Catalog) ApplyOverlayUpsert(o *overlay.Overlay) error {
 			insertModel(s, s.overlaidModel(tmpl))
 		}
 	}
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -99,7 +99,7 @@ func (c *Catalog) ApplyOverlayDelete(kind, resourceID string) error {
 			insertModel(s, s.overlaidModel(tmpl))
 		}
 	}
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 

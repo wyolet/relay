@@ -3,7 +3,7 @@ title: "Kubernetes"
 description: "Install Relay with the Helm chart: required values, data stores, exposure, migrations, scaling and monitoring"
 ---
 
-The Helm chart deploys the lean image as a Deployment with two Services (inference and control), plus, by default, its own PostgreSQL, ClickHouse and Valkey. Each release publishes the chart to `oci://ghcr.io/wyolet/charts/relay`. The chart version equals the relay version without the leading `v`, and the image tag defaults to it, so the chart version you install pins the relay release. The images are built for `linux/amd64` only.
+The Helm chart deploys the lean image as a Deployment with two Services (inference and control), plus, by default, its own PostgreSQL, ClickHouse and Dragonfly. Each release publishes the chart to `oci://ghcr.io/wyolet/charts/relay`. The chart version equals the relay version without the leading `v`, and the image tag defaults to it, so the chart version you install pins the relay release. The images are built for `linux/amd64` only.
 
 This page covers what to decide and why. Every value, with its default, is in the [chart README](https://github.com/wyolet/relay/blob/main/chart/README.md).
 
@@ -61,25 +61,29 @@ The chart refuses to render without them:
 | `postgresql.auth.password` | When the bundled Postgres is on (the default). |
 | `clickhouse.auth.password` | When the bundled ClickHouse is on (the default). |
 
-Instead of inlining secrets, create a Secret yourself and set `secrets.existingSecret` to its name. It must hold `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN` and `RELAY_CH_DSN`; `postgres-password` and `clickhouse-password` when those stores are bundled; `RELAY_ADMIN_PASSWORD` when `auth.adminUser.enabled`; and optionally `RELAY_REDIS_PASSWORD` for Valkey. The chart then creates no Secret.
+Instead of inlining secrets, create a Secret yourself and set `secrets.existingSecret` to its name. It must hold `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN` and `RELAY_CH_DSN`; `postgres-password` and `clickhouse-password` when those stores are bundled; `RELAY_ADMIN_PASSWORD` when `auth.adminUser.enabled`; and optionally `RELAY_REDIS_PASSWORD` for Dragonfly. The chart then creates no Secret.
 
 The admin token always works. For username and password sign-in to the admin UI, set `auth.adminUser.enabled: true` and `auth.adminUser.password`; the chart mounts a `kind: User` file that reads the password from the Secret. For single sign-on, see [SSO](/concepts/sso).
 
 ## Data stores
 
-Relay keeps its configuration in Postgres, hot state (sessions, rate-limit counters, breaker state) in Valkey, and usage events and captured request bodies in ClickHouse. The chart bundles one single-node StatefulSet with a PersistentVolumeClaim for each, which suits a first production install. For high availability, point relay at managed stores:
+Relay keeps its configuration in Postgres, hot state (sessions, rate-limit counters, breaker state) in Dragonfly, and usage events and captured request bodies in ClickHouse. The chart bundles one single-node StatefulSet with a PersistentVolumeClaim for each, which suits a first production install. For high availability, point relay at managed stores:
 
 | Store | Bundled toggle | External value |
 | --- | --- | --- |
 | Postgres | `postgresql.enabled` | `external.pgDsn` (required when the bundled one is off) |
 | ClickHouse | `clickhouse.enabled` | `external.chDsn` |
-| Valkey | `valkey.enabled` | `external.redisAddr`, `external.redisPassword` |
+| Dragonfly | `dragonfly.enabled` | `external.redisAddr`, `external.redisPassword` |
+
+The bundled Dragonfly runs with `--cluster_mode=emulated --lock_on_hashtags`, one thread per whole CPU of `dragonfly.resources.limits.cpu` (or `dragonfly.threads`), and snapshots to its volume every minute (`dragonfly.persistence.snapshotCron`) and at shutdown. It sets its memory cap to 80 % of the container's memory limit and will not start with less than 256 MiB per thread. An external Dragonfly needs the same two flags.
 
 Give relay stores of its own rather than a shared database.
 
 ClickHouse is optional, but two values default to it: `relay.eventlogBackend` (the usage backend) and `relay.payloadLogging.backend`. Without ClickHouse, set `relay.eventlogBackend: postgres` and either `relay.payloadLogging.enabled: false` or another payload backend. The usage backends are described in [Usage](/concepts/usage), the payload backends in [Payload logging](/concepts/payload-logging).
 
-The bundled Valkey requires a password by default (`valkey.auth.enabled`). Leave `valkey.auth.password` empty and the chart derives a stable one from the master key. With `secrets.existingSecret`, add `RELAY_REDIS_PASSWORD` to that Secret; without it Valkey runs without a password.
+The bundled Dragonfly requires a password by default (`dragonfly.auth.enabled`). Leave `dragonfly.auth.password` empty and the chart derives a stable one from the master key. With `secrets.existingSecret`, add `RELAY_REDIS_PASSWORD` to that Secret; without it Dragonfly runs without a password.
+
+Charts before Dragonfly bundled Valkey. Upgrading an install that used it replaces the Valkey StatefulSet with an empty Dragonfly one: users sign in again, rate-limit windows and key breaker state start fresh, and revoked relay tokens are accepted again until they expire. The [chart README](https://github.com/wyolet/relay/blob/main/chart/README.md#moving-from-the-bundled-valkey) has the values that keep Valkey.
 
 `networkPolicy.enabled` (on by default) lets only relay pods connect to the bundled stores. Anything else that reads them, such as a Grafana reading ClickHouse or a backup job, needs an entry in `networkPolicy.extraIngress.<store>`. It has no effect on a CNI that does not enforce NetworkPolicy.
 
@@ -120,7 +124,7 @@ Procedures for upgrades that need every old pod stopped, for rolling the schema 
 - A deleted pod keeps serving for `relay.preStopSleepS` (default 5 s) before relay gets `SIGTERM`, so the ingress stops routing to it before its listener closes; relay then waits up to `relay.shutdownDeadlineS` (default 15 s) for in-flight requests. The hook uses the `preStop` sleep action, which needs Kubernetes 1.30 or later; on an older cluster set `relay.preStopSleepS: 0`.
 - `goMemLimit` (default `900MiB`) sets `GOMEMLIMIT`; keep it below the container memory limit (`resources.limits.memory`, default `1Gi`).
 - Each pod caps open inference connections at 40 % of `goMemLimit` at 64 KiB each (5760 at the default); set `relay.maxConns` to change it. Past the cap, new connections wait until one closes. The startup and readiness probes wait too, so a pod held at the cap leaves the Service; liveness probes the control port and does not restart it.
-- Each pod caps in-flight inference requests at 2048 and answers the excess as overloaded, `503` (`529` on Anthropic-shaped routes) with `Retry-After: 1`. To change the cap, set `RELAY_MAX_INFLIGHT` through `relay.extraEnv`.
+- Each pod caps in-flight inference requests at 40 % of `goMemLimit` at 256 KiB each, at least 2048 (2048 at the default), and answers the excess as overloaded, `503` (`529` on Anthropic-shaped routes) with `Retry-After: 1`. The pod sheds below the cap while it is short of CPU (`RELAY_INFLIGHT_SCHED_P99`). To change the cap, set `RELAY_MAX_INFLIGHT` through `relay.extraEnv`.
 - Keep `relay.pgMaxConns` (default 10 per pod) times the replica count below the Postgres `max_connections` (100 on the bundled Postgres).
 - Catalog and settings changes made through any pod reach every other pod through Postgres `LISTEN`/`NOTIFY`, usually within about a second. No configuration is needed for this.
 

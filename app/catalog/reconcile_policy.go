@@ -60,14 +60,7 @@ func deleteRateLimit(s *Snapshot, id string) {
 	s.unregisterRefs(refKey{Kind: refRateLimit, ID: id}, outboundRateLimitRefs(r))
 	delete(s.rateLimitsByID, id)
 	delete(s.rateLimitsByName, r.Meta.Name)
-	// Remove from policy reverse join.
-	for polID, rl := range s.rateLimitByPolicy {
-		if rl.Meta.ID == id {
-			delete(s.rateLimitByPolicy, polID)
-		}
-	}
 	cascadeDelete(s, refRateLimit, id)
-	resanitizePoliciesAfterParentChange(s)
 }
 
 // ── Policy ────────────────────────────────────────────────────────────────
@@ -85,22 +78,22 @@ func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
+	clean, keep := sanitizePolicy(p, snapIDs(s.projectsByID))
 	if !keep {
 		deletePolicy(s, p.Meta.ID)
-		c.commitWithGrants(s)
+		c.snap.Store(s)
 		return nil
 	}
 	if !clean.IsEnabled() {
 		disablePolicy(s, clean)
-		c.commitWithGrants(s)
+		c.snap.Store(s)
 		return nil
 	}
 	insertPolicy(s, clean)
-	// The row that just landed may invalidate its dependents — an owner or
-	// host change can leave a host key's tier policy no longer its host's.
+	// The row that just landed may invalidate its dependents: an owner
+	// change can leave a binding's policy outside its scope.
 	cascadeDelete(s, refPolicy, clean.Meta.ID)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -109,21 +102,17 @@ func (c *Catalog) ApplyPolicyDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deletePolicy(s, id)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
-// disablePolicy takes the row out of every routing index but keeps it, and
-// every row naming it, in the snapshot: those requests answer 403
-// policy_disabled instead of falling through to a broader grant.
+// disablePolicy takes the row out of the enabled indices but keeps it, and
+// every binding naming it, in the snapshot.
 func disablePolicy(s *Snapshot, p *policy.Policy) {
 	if old, ok := s.policiesByID[p.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
 		delete(s.policiesByID, old.Meta.ID)
 		delete(s.policiesByName, old.Meta.Name)
-		delete(s.modelsByPolicy, old.Meta.ID)
-		delete(s.hostKeysByPolicy, old.Meta.ID)
-		delete(s.rateLimitByPolicy, old.Meta.ID)
 	}
 	if old, ok := s.disabledPoliciesByID[p.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
@@ -132,7 +121,6 @@ func disablePolicy(s *Snapshot, p *policy.Policy) {
 	// Still a ref holder: losing its project has to evict it, or the rows
 	// naming it keep answering 403 against a policy nothing can reach.
 	s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	resanitizeHostsAfterPolicyChange(s)
 }
 
 func insertPolicy(s *Snapshot, p *policy.Policy) {
@@ -144,29 +132,10 @@ func insertPolicy(s *Snapshot, p *policy.Policy) {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
 		delete(s.policiesByID, old.Meta.ID)
 		delete(s.policiesByName, old.Meta.Name)
-		delete(s.modelsByPolicy, old.Meta.ID)
-		delete(s.hostKeysByPolicy, old.Meta.ID)
-		delete(s.rateLimitByPolicy, old.Meta.ID)
 	}
 	s.policiesByID[p.Meta.ID] = p
 	s.policiesByName[p.Meta.Name] = p
 	s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	// Populate reverse joins.
-	for _, id := range p.Spec.ModelIDs {
-		if m, ok := s.modelsByID[id]; ok {
-			s.modelsByPolicy[p.Meta.ID] = append(s.modelsByPolicy[p.Meta.ID], m)
-		}
-	}
-	for _, id := range p.Spec.HostKeyIDs {
-		if k, ok := s.hostKeysByID[id]; ok {
-			s.hostKeysByPolicy[p.Meta.ID] = append(s.hostKeysByPolicy[p.Meta.ID], k)
-		}
-	}
-	if p.Spec.RateLimitID != "" {
-		if r, ok := s.rateLimitsByID[p.Spec.RateLimitID]; ok {
-			s.rateLimitByPolicy[p.Meta.ID] = r
-		}
-	}
 }
 
 func deletePolicy(s *Snapshot, id string) {
@@ -182,11 +151,7 @@ func deletePolicy(s *Snapshot, id string) {
 	s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(p))
 	delete(s.policiesByID, id)
 	delete(s.policiesByName, p.Meta.Name)
-	delete(s.modelsByPolicy, id)
-	delete(s.hostKeysByPolicy, id)
-	delete(s.rateLimitByPolicy, id)
 	cascadeDelete(s, refPolicy, id)
-	resanitizeHostsAfterPolicyChange(s)
 }
 
 // ── Pricing ───────────────────────────────────────────────────────────────

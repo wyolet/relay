@@ -21,9 +21,9 @@ const Wildcard = rbac.Wildcard
 // Kinds is the closed set a rule may name: the control-API plurals plus
 // the wildcard. Sorted — membership is a binary search.
 var Kinds = []string{
-	"*", "audit", "debug", "groups", "host-bindings", "host-keys", "hosts",
+	"*", "accounts", "audit", "budgets", "debug", "groups", "host-bindings", "host-keys", "hosts",
 	"keys", "license", "logs", "master-key", "models", "policies",
-	"policy-bindings", "pricings", "projects", "providers", "rate-limits",
+	"policy-bindings", "pools", "pricings", "projects", "providers", "rate-limits",
 	"role-bindings", "roles", "scim-clients", "secret-keys", "service-accounts", "settings",
 	"system", "teams", "tokens", "usage", "users",
 }
@@ -55,8 +55,8 @@ func inSet(set []string, v string) bool {
 
 // Rule grants every verb in Verbs on every kind in Kinds.
 type Rule struct {
-	Kinds []string `json:"kinds" yaml:"kinds" validate:"required,min=1,dive,rbackind"`
-	Verbs []string `json:"verbs" yaml:"verbs" validate:"required,min=1,dive,rbacverb"`
+	Kinds []string `json:"kinds" yaml:"kinds" validate:"required,min=1,dive,rbackind" doc:"Control-API kinds (plurals, such as policies or host-keys) the rule covers; * covers every kind."`
+	Verbs []string `json:"verbs" yaml:"verbs" validate:"required,min=1,dive,rbacverb" doc:"Verbs the rule grants on those kinds, such as list, get, create, update, delete, rotate; * grants every verb."`
 }
 
 // Role is a named rule set. Owner is system for the built-ins and user for
@@ -68,8 +68,8 @@ type Role struct {
 
 // Spec carries the rules and the enabled flag.
 type Spec struct {
-	Rules   []Rule `json:"rules"             yaml:"rules"             validate:"required,min=1,dive"`
-	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Rules   []Rule `json:"rules"             yaml:"rules"             validate:"required,min=1,dive" doc:"Rules the role grants; a request is allowed when any rule covers its kind and verb."`
+	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"False makes bindings of this role grant nothing. Omitted means true."`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

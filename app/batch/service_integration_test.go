@@ -185,6 +185,7 @@ func TestIntegration_SubmitRecordsAttribution(t *testing.T) {
 			PrincipalID:    job.Meta(metaPrincipalID),
 			CredentialKind: job.Meta(metaCredentialKind),
 			CredentialID:   job.Meta(metaCredentialID),
+			LaneID:         job.Meta(metaLaneID),
 		}
 		return job.Input(), nil
 	}
@@ -196,6 +197,7 @@ func TestIntegration_SubmitRecordsAttribution(t *testing.T) {
 	c.ProjectID, c.TeamID = "p1", "t1"
 	c.PrincipalKind, c.PrincipalID = string(key.PrincipalServiceAccount), "sa1"
 	c.CredentialKind, c.CredentialID = "key", "k1"
+	c.LaneID = "acct1"
 	id, err := svc.Submit(ctx, c, "openai", [][]byte{[]byte("a")})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -216,6 +218,11 @@ func TestIntegration_SubmitRecordsAttribution(t *testing.T) {
 	}
 
 	waitCounts(t, svc, id, hash, jobq.StateCompleted, 1, 3*time.Second)
+	// The lane rides the items only.
+	if seen.LaneID != "acct1" {
+		t.Fatalf("execution read lane %q from job metadata, want acct1", seen.LaneID)
+	}
+	seen.LaneID = ""
 	if seen != b.Attribution {
 		t.Fatalf("execution read %+v from job metadata, want %+v", seen, b.Attribution)
 	}

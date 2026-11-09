@@ -73,37 +73,19 @@ func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {
 	if k.Spec.HostID != "" {
 		refs = append(refs, refKey{Kind: refHost, ID: k.Spec.HostID})
 	}
-	if k.Spec.PolicyID != "" {
-		refs = append(refs, refKey{Kind: refPolicy, ID: k.Spec.PolicyID})
-	}
 	if len(refs) == 0 {
 		return nil
 	}
 	return refs
 }
 
+// outboundPolicyRefs returns the owning Project of a project-owned policy.
+// Its links are soft: the plan builder reports a missing one.
 func outboundPolicyRefs(p *policy.Policy) []refKey {
-	refs := make([]refKey, 0, len(p.Spec.ModelIDs)+len(p.Spec.HostKeyIDs)+2)
 	if p.Meta.Owner.Kind == meta.OwnerProject && p.Meta.Owner.ID != "" {
-		refs = append(refs, refKey{Kind: refProject, ID: p.Meta.Owner.ID})
+		return []refKey{{Kind: refProject, ID: p.Meta.Owner.ID}}
 	}
-	for _, id := range p.Spec.ModelIDs {
-		refs = append(refs, refKey{Kind: refModel, ID: id})
-	}
-	for _, id := range p.Spec.HostKeyIDs {
-		refs = append(refs, refKey{Kind: refHostKey, ID: id})
-	}
-	if p.Spec.RateLimitID != "" {
-		refs = append(refs, refKey{Kind: refRateLimit, ID: p.Spec.RateLimitID})
-	}
-	// Per-model bindings name rate limits too; unregistered, deleting one
-	// would not re-sanitize the policies still pointing at it.
-	for _, b := range p.Spec.RLBindings {
-		if b.RateLimitID != "" {
-			refs = append(refs, refKey{Kind: refRateLimit, ID: b.RateLimitID})
-		}
-	}
-	return refs
+	return nil
 }
 
 func outboundPricingRefs(p *pricing.Pricing) []refKey {
@@ -147,31 +129,20 @@ func outboundProjectRefs(p *project.Project) []refKey {
 	return []refKey{{Kind: refTeam, ID: p.Spec.TeamID}}
 }
 
-// outboundKeyRefs returns the Policy override (when set) and the
-// ServiceAccount principal. A project-owned key reaches its project
-// through the account, so there is no separate project edge.
+// outboundKeyRefs returns the ServiceAccount principal. A project-owned key
+// reaches its project through the account, so there is no separate project
+// edge.
 func outboundKeyRefs(k *key.Key) []refKey {
-	refs := make([]refKey, 0, 2)
-	if k.Spec.PolicyID != "" {
-		refs = append(refs, refKey{Kind: refPolicy, ID: k.Spec.PolicyID})
-	}
 	if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Spec.Principal.ID != "" {
-		refs = append(refs, refKey{Kind: refServiceAccount, ID: k.Spec.Principal.ID})
+		return []refKey{{Kind: refServiceAccount, ID: k.Spec.Principal.ID}}
 	}
-	if len(refs) == 0 {
-		return nil
-	}
-	return refs
+	return nil
 }
 
-// outboundServiceAccountRefs returns the owning Project and the optional
-// policy override. Both are hard: a dangling either way drops the row.
+// outboundServiceAccountRefs returns the owning Project; a dangling one drops
+// the row.
 func outboundServiceAccountRefs(sa *serviceaccount.ServiceAccount) []refKey {
-	refs := []refKey{{Kind: refProject, ID: sa.Spec.ProjectID}}
-	if sa.Spec.PolicyID != "" {
-		refs = append(refs, refKey{Kind: refPolicy, ID: sa.Spec.PolicyID})
-	}
-	return refs
+	return []refKey{{Kind: refProject, ID: sa.Spec.ProjectID}}
 }
 
 // outboundRoleBindingRefs returns the granted Role and, for a scoped
@@ -188,13 +159,17 @@ func outboundRoleBindingRefs(b *rolebinding.RoleBinding) []refKey {
 	return refs
 }
 
-// outboundPolicyBindingRefs returns the Project the binding lives in and
-// the Policy it points at. Both hard.
+// outboundPolicyBindingRefs returns the Policy the binding points at and
+// the Project or Team owning it. All hard.
 func outboundPolicyBindingRefs(b *policybinding.PolicyBinding) []refKey {
-	return []refKey{
-		{Kind: refProject, ID: b.Spec.ProjectID},
-		{Kind: refPolicy, ID: b.Spec.PolicyID},
+	refs := []refKey{{Kind: refPolicy, ID: b.Spec.PolicyID}}
+	switch b.Meta.Owner.Kind {
+	case meta.OwnerProject:
+		refs = append(refs, refKey{Kind: refProject, ID: b.Meta.Owner.ID})
+	case meta.OwnerTeam:
+		refs = append(refs, refKey{Kind: refTeam, ID: b.Meta.Owner.ID})
 	}
+	return refs
 }
 
 // registerRefs records that `child` depends on every entry in `parents`.

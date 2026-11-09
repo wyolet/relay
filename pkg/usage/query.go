@@ -83,16 +83,21 @@ type EventQuery struct {
 
 	// Categorical filters — match any value in the slice (SQL IN / set
 	// membership). Empty slice means no filter on that dimension.
-	RelayKeyHash []string
-	PolicyID     []string
-	ProjectID    []string
-	TeamID       []string
-	PrincipalID  []string
-	ModelID      []string
-	HostID       []string
-	Source       []string // "pipeline" | "proxy" | "ws" | "batch" | "count" | "otlp"
-	FinishReason []string
-	ErrorKind    []string
+	RelayKeyHash  []string
+	PolicyID      []string
+	PoolID        []string
+	AccountID     []string
+	LaneAccountID []string
+	ViaAccountID  []string
+	ProjectID     []string
+	TeamID        []string
+	PrincipalID   []string
+	ModelID       []string
+	HostID        []string
+	Source        []string // "pipeline" | "proxy" | "ws" | "batch" | "count" | "otlp"
+	FinishReason  []string
+	ErrorKind     []string
+	Refusal       []string
 
 	// StatusMin / StatusMax restrict by HTTP status. Zero values mean
 	// unbounded on that side. StatusMin=400 picks errors only;
@@ -172,8 +177,8 @@ type SummaryQuery struct {
 	EventQuery
 
 	// GroupBy is the dimension to group on. Valid values:
-	// "relay_key_hash", "policy_id", "model_id", "host_id",
-	// "host_key_id", "source", "finish_reason", "error_kind",
+	// "relay_key_hash", "policy_id", "pool_id", "account_id", "lane_account_id", "via_account_id", "model_id", "host_id",
+	// "host_key_id", "source", "finish_reason", "error_kind", "refusal",
 	// "model", "host", "policy", "provider", "project", "team",
 	// "principal", "relay_key" (event-time slugs), "project_id", "team_id",
 	// "principal_id", "credential_id",
@@ -197,55 +202,55 @@ const MaxEventLimit = 10_000
 // grouping dimension(s) keyed by their column name — single-key today,
 // extensible to multi-key grouping later without changing the type.
 type SummaryRow struct {
-	Group      map[string]string `json:"group"`
-	Requests   int64             `json:"requests"`
-	ErrorCount int64             `json:"error_count"`
+	Group      map[string]string `json:"group"       doc:"The group's dimension values, keyed by dimension; empty for group_by=none."`
+	Requests   int64             `json:"requests"    doc:"Requests in the group."`
+	ErrorCount int64             `json:"error_count" doc:"Requests with status 400 or above; equals errors_4xx + errors_5xx."`
 	// ErrorCount counts status >= 400 and always equals Errors4xx + Errors5xx: every status >= 500 (600+ included) lands in Errors5xx. Throttled counts status 429 and is a subset of Errors4xx.
-	Errors4xx  int64            `json:"errors_4xx"`
-	Errors5xx  int64            `json:"errors_5xx"`
-	Throttled  int64            `json:"throttled"`
-	Tokens     map[string]int64 `json:"tokens"`
-	DurationMs DurationStats    `json:"duration_ms"`
+	Errors4xx  int64            `json:"errors_4xx"  doc:"Requests with a 4xx status."`
+	Errors5xx  int64            `json:"errors_5xx"  doc:"Requests with a status of 500 or above."`
+	Throttled  int64            `json:"throttled"   doc:"Requests answered 429; part of errors_4xx."`
+	Tokens     map[string]int64 `json:"tokens"      doc:"Token sums by kind."`
+	DurationMs DurationStats    `json:"duration_ms" doc:"Request duration statistics in milliseconds."`
 	// TTFTMs aggregates upstream time-to-first-byte (ms, derived from
 	// Upstream.ResponseStart) over the subset of events that carry upstream
 	// timing. Nil when no event in the group has it — a pointer so "no
 	// samples" is distinguishable from "all-zero latency".
-	TTFTMs    *DurationStats `json:"ttft_ms,omitempty"`
-	FirstSeen time.Time      `json:"first_seen"`
-	LastSeen  time.Time      `json:"last_seen"`
+	TTFTMs    *DurationStats `json:"ttft_ms,omitempty" doc:"Upstream time-to-first-byte statistics in milliseconds; absent when no request carried upstream timing."`
+	FirstSeen time.Time      `json:"first_seen"        doc:"Earliest request in the group."`
+	LastSeen  time.Time      `json:"last_seen"         doc:"Latest request in the group."`
 	// CostNanos sums Event.CostNanos over the group's priced events
 	// (nano-USD). Unpriced counts the events that carried no cost stamp —
 	// reported instead of folding them into the sum as silent zeros, so a
 	// cost total always says how complete it is.
-	CostNanos int64 `json:"cost_nanos"`
-	Unpriced  int64 `json:"unpriced"`
+	CostNanos int64 `json:"cost_nanos" doc:"Cost of the priced requests, in nano-USD."`
+	Unpriced  int64 `json:"unpriced"   doc:"Requests with no cost, left out of cost_nanos."`
 	// Previous is the same group over the previous window, set only by SummaryWithPrevious. Nil when the group had no traffic there; a group seen only in the previous window has no row at all.
-	Previous *SummaryPrevious `json:"previous,omitempty"`
+	Previous *SummaryPrevious `json:"previous,omitempty" doc:"The same group over the previous window, with compare=previous; absent when the group had no traffic there."`
 
 	Distinct *int64 `json:"distinct,omitempty" doc:"Number of distinct non-empty values of the distinct dimension among this row's events (keyless traffic is not a key). Present only with distinct set."`
 }
 
 // DurationStats holds latency aggregates in milliseconds.
 type DurationStats struct {
-	Avg int64 `json:"avg"`
-	P50 int64 `json:"p50"`
-	P95 int64 `json:"p95"`
-	P99 int64 `json:"p99"`
-	Max int64 `json:"max"`
+	Avg int64 `json:"avg" doc:"Mean."`
+	P50 int64 `json:"p50" doc:"Median."`
+	P95 int64 `json:"p95" doc:"95th percentile."`
+	P99 int64 `json:"p99" doc:"99th percentile."`
+	Max int64 `json:"max" doc:"Maximum."`
 }
 
 // SummaryResult wraps the rows with the resolved time range so the
 // caller can render "events from X to Y" without re-deriving from
 // the query.
 type SummaryResult struct {
-	Rows []SummaryRow `json:"rows"`
+	Rows []SummaryRow `json:"rows" doc:"One row per group, by request count descending."`
 	// Labels maps a group value to the latest non-empty event-time slug beside it when GroupBy is an id dimension (see LabelColumn); flat because the ids are UUIDs or hashes. Nil for any other grouping.
-	Labels map[string]string `json:"labels,omitempty"`
-	From   time.Time         `json:"from"`
-	To     time.Time         `json:"to"`
+	Labels map[string]string `json:"labels,omitempty" doc:"For an id group_by: each group value's latest slug, or its current name. Absent for other groupings."`
+	From   time.Time         `json:"from"             doc:"Start of the window."`
+	To     time.Time         `json:"to"               doc:"End of the window."`
 	// PreviousFrom / PreviousTo bound the window rows' Previous covers: the one the caller gave, or the requested window's length ending where it starts. PreviousTo is exclusive. Zero unless SummaryWithPrevious built the result.
-	PreviousFrom time.Time `json:"previous_from,omitzero"`
-	PreviousTo   time.Time `json:"previous_to,omitzero"`
+	PreviousFrom time.Time `json:"previous_from,omitzero" doc:"Start of the window rows' previous covers; with a comparison only."`
+	PreviousTo   time.Time `json:"previous_to,omitzero"   doc:"End (exclusive) of the window rows' previous covers; with a comparison only."`
 }
 
 // TimeSeriesQuery is EventQuery + a bucket width + optional group
@@ -269,41 +274,41 @@ type TimeSeriesQuery struct {
 // start instant (UTC, epoch-aligned). Empty buckets are omitted — the
 // frontend zero-fills gaps against the resolved From/To range.
 type TimeSeriesPoint struct {
-	Bucket     time.Time `json:"bucket"`
-	Requests   int64     `json:"requests"`
-	ErrorCount int64     `json:"error_count"`
+	Bucket     time.Time `json:"bucket"      doc:"Start of the bucket."`
+	Requests   int64     `json:"requests"    doc:"Requests in the bucket."`
+	ErrorCount int64     `json:"error_count" doc:"Requests with status 400 or above; equals errors_4xx + errors_5xx."`
 	// Errors4xx / Errors5xx / Throttled — same invariant as SummaryRow: ErrorCount = Errors4xx + Errors5xx, Throttled (429) within Errors4xx.
-	Errors4xx  int64            `json:"errors_4xx"`
-	Errors5xx  int64            `json:"errors_5xx"`
-	Throttled  int64            `json:"throttled"`
-	Tokens     map[string]int64 `json:"tokens"`
-	DurationMs DurationStats    `json:"duration_ms"`
+	Errors4xx  int64            `json:"errors_4xx"  doc:"Requests with a 4xx status."`
+	Errors5xx  int64            `json:"errors_5xx"  doc:"Requests with a status of 500 or above."`
+	Throttled  int64            `json:"throttled"   doc:"Requests answered 429; part of errors_4xx."`
+	Tokens     map[string]int64 `json:"tokens"      doc:"Token sums by kind."`
+	DurationMs DurationStats    `json:"duration_ms" doc:"Request duration statistics in milliseconds."`
 	// TTFTMs — see SummaryRow.TTFTMs; nil when no event in the bucket
 	// carries upstream timing.
-	TTFTMs *DurationStats `json:"ttft_ms,omitempty"`
+	TTFTMs *DurationStats `json:"ttft_ms,omitempty" doc:"Upstream time-to-first-byte statistics in milliseconds; absent when no request carried upstream timing."`
 	// CostNanos / Unpriced — see SummaryRow.
-	CostNanos int64 `json:"cost_nanos"`
-	Unpriced  int64 `json:"unpriced"`
+	CostNanos int64 `json:"cost_nanos" doc:"Cost of the priced requests, in nano-USD."`
+	Unpriced  int64 `json:"unpriced"   doc:"Requests with no cost, left out of cost_nanos."`
 
 	Distinct *int64 `json:"distinct,omitempty" doc:"Number of distinct non-empty values of the distinct dimension among this bucket's events. Per-bucket values cannot be summed across buckets; use /usage/summary for a window total. Present only with distinct set."`
 }
 
 // TimeSeriesRow is one series. Group is nil for the single-series case, {} for GroupByNone, and carries the grouping dimension keyed by column name otherwise; omitzero drops only the nil case, so none still emits "group": {}.
 type TimeSeriesRow struct {
-	Group  map[string]string `json:"group,omitzero"`
-	Points []TimeSeriesPoint `json:"points"`
+	Group  map[string]string `json:"group,omitzero" doc:"The series' dimension values; absent without group_by."`
+	Points []TimeSeriesPoint `json:"points"         doc:"Non-empty buckets in time order; zero-fill the gaps."`
 }
 
 // TimeSeriesResult wraps the series with the resolved interval (echoed as
 // a string, e.g. "1h") and time range so the caller can zero-fill and
 // label the axis without re-deriving from the query.
 type TimeSeriesResult struct {
-	Rows []TimeSeriesRow `json:"rows"`
+	Rows []TimeSeriesRow `json:"rows" doc:"One series per group, or a single series without group_by."`
 	// Labels — see SummaryResult.Labels; the slug is the latest across the whole window, not per bucket.
-	Labels   map[string]string `json:"labels,omitempty"`
-	Interval string            `json:"interval"`
-	From     time.Time         `json:"from"`
-	To       time.Time         `json:"to"`
+	Labels   map[string]string `json:"labels,omitempty" doc:"For an id group_by: each series value's latest slug across the window."`
+	Interval string            `json:"interval"         doc:"Bucket width, as requested."`
+	From     time.Time         `json:"from"             doc:"Start of the window."`
+	To       time.Time         `json:"to"               doc:"End of the window."`
 }
 
 // MaxBuckets caps the number of time buckets a single TimeSeries query may

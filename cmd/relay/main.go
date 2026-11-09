@@ -17,13 +17,15 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hosthealth"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
+	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
@@ -40,6 +42,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "relay:", err)
 		os.Exit(1)
 	}
+	applyGCPercent()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
 	exitCode := 0
 	defer func() {
@@ -77,6 +80,11 @@ func main() {
 
 	cat.UseTokenVersions(usersStore)
 
+	plans := buildPlanEngine(cfg, stores, usersStore)
+	defer plans.engine.Close()
+	cat.ForwardEvents(plan.Forwarder{Engine: plans.engine})
+	go plans.expireCells(listenerCtx)
+
 	tokenSigner, tokenVerifier := buildTokenSigning(bootCtx, cfg, st, stores)
 	// PUT /license writes the section; the watcher is what carries the change
 	// to the other pods (and back to this one after a NOTIFY).
@@ -101,15 +109,27 @@ func main() {
 
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
-	selector := keypool.New(kvStore, slog.Default(), nil, nil).WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow)
+	// Picks read breaker records from this process's copy, refreshed on the post-flight store; both selectors write their transitions through to it.
+	pickState := keypool.NewPickState(postFlightKV, keypool.DefaultRefreshInterval, slog.Default())
+	pickState.Start()
+	defer pickState.Close()
+	selector := keypool.New(kvStore, slog.Default(), nil, nil).WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow).WithPickState(pickState)
 	// The control plane only reads host health; the data plane's writes go through the post-flight store.
 	hostHealth := hosthealth.New(kvStore, nil)
 	postFlight := newPostFlightWriters(postFlightKV)
+	// Failures are recorded post-flight, so this selector needs the same breaker bounds as the one that picks.
+	postFlight.selector.WithBreaker(cfg.KeyBreakerThreshold, cfg.KeyBreakerWindow).WithPickState(pickState)
 	limiter.ReleaseUnansweredOn(postFlight.limiter)
-	pl, lifecycleReg := buildPipeline(cfg, cat, stores, limiter, selector, postFlight)
-	// Deferred after the post-flight store's Close, so it runs first: queued settles land before the store closes.
-	defer pl.Policy.CloseSettleQueue()
-	proxyPipeline := buildProxy(cfg, limiter, postFlight.limiter, pl.Policy, lifecycleReg)
+	counting, closeLimiter := buildLimiter(cfg, limiter, kvStore, postFlightKV, postFlight)
+	defer closeLimiter()
+	// Deferred after the limiter's close, so it runs first: queued settles land before a hybrid limiter's last sync and before the post-flight store closes.
+	settles, closeSettles := buildSettleQueue(cfg, postFlightKV)
+	defer closeSettles()
+	pl, lifecycleReg := buildPipeline(counting, selector, postFlight, cat, stores.HostKey, plans)
+	pl.Settles = settles
+	proxyPipeline := buildProxy(cfg, counting, lifecycleReg)
+	proxyPipeline.Settles = settles
+	revoked := buildRevocations(listenerCtx, kvStore)
 
 	specs := buildAdapterSpecs()
 	profiles := buildClientProfiles()
@@ -130,7 +150,7 @@ func main() {
 	defer payloadCtl.Close()
 
 	tokenCalibrator := buildTokenCalibrator(kvStore, postFlightKV, lifecycleReg)
-	admission := registerAdmission(cfg, lifecycleReg)
+	admission := registerAdmission(listenerCtx, cfg, lifecycleReg)
 	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
@@ -146,12 +166,12 @@ func main() {
 	// All settings-change subscribers are now registered; start background
 	// hydration. Its first Hydrate runs settings.reload → notifies them with
 	// the stored values (the data plane gates on IsReady until it completes).
-	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
+	go hydrateLoop(listenerCtx, cat, stores, bootOpts, plans.load)
 
-	routingOpts := routingOptions(cfg)
-	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
+	auth := &inference.Auth{Catalog: cat, Plans: plans.plans, Revoked: revoked.Set(), Tokens: tokenVerifier, Lifecycle: lifecycleReg}
+	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, auth, pl, specRegistry, cfg.BatchMaxItems)
 
-	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
+	inferSrv, inferErr := startInference(cfg, st, auth, pl, proxyPipeline, lifecycleReg,
 		specRegistry, profiles, tokenCalibrator, admission, kvPoolBusy(kvStore), batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
@@ -161,7 +181,7 @@ func main() {
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
 			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
-			selector, hostHealth)
+			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View, counting)
 	}
 
 	pprofSrv, pprofErr := startPprof(cfg)
@@ -181,6 +201,9 @@ func buildAdapterSpecs() []*adapter.Spec {
 		ExtraHeaders: map[string]string{"Anthropic-Version": "2023-06-01"},
 	}
 	geminiAuth := adapter.AuthStrategy{Header: "X-Goog-Api-Key"}
+	// The response header naming the credential's organization, per each vendor's API reference; Gemini documents none, so its spec has no probe.
+	openaiOrg := &adapter.OrgProbe{Path: "/v1/models", OrgHeader: "Openai-Organization"}
+	anthropicOrg := &adapter.OrgProbe{Path: "/v1/models", OrgHeader: "Anthropic-Organization-Id"}
 	// Gemini encodes the model and the sync/stream choice in the URL path
 	// rather than the request body, so its upstream path is resolved per call.
 	geminiUpstreamPath := func(model string, stream bool) string {
@@ -197,6 +220,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 				{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion (OpenAI Chat Completions shape)"},
 			},
 			DefaultPath:   "/v1/chat/completions",
+			Org:           openaiOrg,
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -209,13 +233,14 @@ func buildAdapterSpecs() []*adapter.Spec {
 				{Path: "/openai/v1/responses", OperationID: "openai_responses_create", Summary: "Create a response (OpenAI Responses API)"},
 			},
 			DefaultPath:   "/v1/responses",
+			Org:           openaiOrg,
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.ResponsesTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
 			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p"},
 			UseHTTP1:      true,
-			IsNativePath: func(plan *routing.Plan) bool {
-				return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+			IsNativePath: func(b *binding.Binding, h *host.Host) bool {
+				return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 			},
 		}).Build(),
 		(&adapter.Spec{
@@ -224,6 +249,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 				{Path: "/openai/v1/embeddings", OperationID: "openai_embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"},
 			},
 			DefaultPath:   "/v1/embeddings",
+			Org:           openaiOrg,
 			Auth:          openaiAuth,
 			BytePass:      true,
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -235,6 +261,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 			},
 			DefaultPath:   "/v1/messages",
 			CountPath:     "/v1/messages/count_tokens",
+			Org:           anthropicOrg,
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
@@ -312,25 +339,4 @@ func runtimeConfig(cfg *config.Config) control.RuntimeConfig {
 		}
 	}
 	return rc
-}
-
-// KeyAgent to recover from upstream key rotation without a restart.
-type keyRefresher struct {
-	store *hostkey.Store
-	cat   *appcatalog.Catalog
-}
-
-func (r keyRefresher) Refresh(ctx context.Context, keyID string) (string, bool, error) {
-	k, err := r.store.Get(ctx, keyID)
-	if err != nil || k == nil {
-		return "", false, err
-	}
-	cur, ok := r.cat.Current().HostKey(keyID)
-	changed := !ok || cur.Resolved != k.Resolved
-	if changed {
-		if err := r.cat.ApplyHostKeyUpsert(k); err != nil {
-			return k.Resolved, true, err
-		}
-	}
-	return k.Resolved, changed, nil
 }

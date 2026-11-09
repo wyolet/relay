@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
@@ -19,20 +20,24 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
+type createKeyMetadata struct {
+	Name        string `json:"name,omitempty"        doc:"Slug for the key; derived from displayName when omitted."`
+	DisplayName string `json:"displayName,omitempty" doc:"Free-text name shown in the UI."`
+}
+
+type createKeySpec struct {
+	Principal             key.Principal `json:"principal,omitempty"             doc:"The service account or user the key acts as. Its owner becomes the key's owner. Omitted: the signed-in user; the admin token must name one."`
+	AccountID             string        `json:"accountId,omitempty"             format:"uuid" doc:"Id of the account the key's requests run in by default: the service account's account, the user's personal account, a member account a role binding grants the user, or a provider account the user owns personally. Any other answers 403 account_not_held. Omitted: the service account's account, or the user's personal account. While the user's personal accounts are turned off, omitting it answers 400 lane_required, and naming the personal account or one of the user's provider accounts 403 personal_account_off."`
+	ExpiresAt             *time.Time    `json:"expiresAt,omitempty"             doc:"When the key stops authenticating. Omitted never expires."`
+	Enabled               *bool         `json:"enabled,omitempty"               doc:"False creates the key disabled. Omitted means true."`
+	PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"    doc:"Let the key send its own upstream credential in proxy mode."`
+	PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty" doc:"Capture request and response bodies of this key's requests. An account on the request's ladder that sets payloadLogging decides instead."`
+}
+
 type createKeyInput struct {
 	Body struct {
-		Metadata struct {
-			Name        string `json:"name,omitempty"`
-			DisplayName string `json:"displayName,omitempty"`
-		} `json:"metadata"`
-		Spec struct {
-			Principal             key.Principal `json:"principal"`
-			PolicyID              string        `json:"policyId,omitempty"`
-			ExpiresAt             *time.Time    `json:"expiresAt,omitempty"`
-			Enabled               *bool         `json:"enabled,omitempty"`
-			PassthroughAllowed    bool          `json:"passthroughAllowed,omitempty"`
-			PayloadLoggingEnabled bool          `json:"payloadLoggingEnabled,omitempty"`
-		} `json:"spec"`
+		Metadata createKeyMetadata `json:"metadata" doc:"Name of the new key."`
+		Spec     createKeySpec     `json:"spec"     doc:"The new key's principal and flags."`
 	} `json:"body"`
 }
 
@@ -42,8 +47,8 @@ type createKeyResponse struct {
 		// inbound API key. Returned exactly once on create — never
 		// retrievable again. Persist this on the client side
 		// immediately.
-		Plaintext string   `json:"plaintext"`
-		Key       *key.Key `json:"key"`
+		Plaintext string   `json:"plaintext" doc:"The bearer token to send as Authorization: Bearer. Returned only here; store it now."`
+		Key       *key.Key `json:"key"       doc:"The stored key."`
 	}
 }
 
@@ -78,7 +83,14 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			k.Meta.Name = slug.Unique(base, slugTakenFn(d.Stores.Key, func(rk *key.Key) *meta.Metadata { return &rk.Meta }))
 		}
-		k.Spec.Principal = in.Body.Spec.Principal
+		k.Spec.Principal = key.Principal{Kind: in.Body.Spec.Principal.Kind, ID: in.Body.Spec.Principal.ID}
+		if k.Spec.Principal == (key.Principal{}) {
+			a := actor.From(ctx)
+			if a == nil || a.AdminToken || a.UserID == "" {
+				return nil, huma.Error400BadRequest("spec.principal is required here: the admin token is no user, so name the service account or user the key acts as")
+			}
+			k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: a.UserID}
+		}
 		if err := refs(d).KeyOwner(ctx, k); err != nil {
 			return nil, refErr(err)
 		}
@@ -86,11 +98,10 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := checkPolicyRefVisible(ctx, d, in.Body.Spec.PolicyID, k.Meta.Owner); err != nil {
-			return nil, err
+		k.Spec.AccountID = in.Body.Spec.AccountID
+		if err := refs(d).KeyAccount(ctx, k); err != nil {
+			return nil, refErr(err)
 		}
-
-		k.Spec.PolicyID = in.Body.Spec.PolicyID
 		k.Spec.ExpiresAt = in.Body.Spec.ExpiresAt
 		k.Spec.Enabled = in.Body.Spec.Enabled
 		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed
@@ -108,9 +119,14 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
 		}
+		// The plaintext is often spent at once; answer when this pod authenticates it.
+		if d.Plans != nil {
+			awaitServed(ctx, "key", k.Meta.ID, func(ctx context.Context) bool { return d.Plans.AwaitKey(ctx, k.Spec.KeyHash) })
+		}
 
 		out := &createKeyResponse{}
 		out.Body.Plaintext = gen.Plaintext
+		enrichKey(d)(ctx, created)
 		out.Body.Key = created
 		return out, nil
 	})

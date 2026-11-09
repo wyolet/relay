@@ -37,6 +37,7 @@ func sampleEvents() []usage.Event {
 			ProjectID:     "proj-1", Project: "indexer", TeamID: "team-1", Team: "search",
 			PrincipalKind: "service_account", PrincipalID: "sa-1", Principal: "indexer-bot",
 			CredentialKind: "key", CredentialID: "key-1", RelayKey: "indexer-prod",
+			PoolID: "pool-1", AccountID: "acct-1", LaneAccountID: "lane-1", ViaAccountID: "via-1",
 		},
 		{},
 		{
@@ -47,7 +48,7 @@ func sampleEvents() []usage.Event {
 		},
 		{
 			RequestID: "req-rejected", Source: "pipeline", Timestamp: time.Unix(1_800_000_000, 1),
-			ErrorKind: "rate_limited", ErrorMessage: "too many requests — retry later",
+			ErrorKind: "rate_limited", Refusal: "no_capacity", ErrorMessage: "too many requests — retry later",
 			Tags: map[string]string{"leg": "translate"}, Model: "gpt-x", RelayKey: "indexer-prod",
 		},
 		{

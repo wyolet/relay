@@ -25,7 +25,7 @@ func underAuthAPIVersion(bundle string) string {
 	docs := strings.Split(bundle, "---\n")
 	for i, d := range docs {
 		if !strings.Contains(d, "kind: Policy\n") {
-			d = strings.Replace(d, "apiVersion: relay.wyolet.dev/v1alpha2", "apiVersion: auth.wyolet.dev/v1alpha1", 1)
+			d = strings.Replace(d, "apiVersion: relay.wyolet.dev/v1alpha3", "apiVersion: auth.wyolet.dev/v1alpha1", 1)
 			docs[i] = strings.ReplaceAll(d, ", owner: {kind: user}", "")
 		}
 	}
@@ -73,18 +73,18 @@ func TestIntegration_AuthKindsWriteTheSameRowsUnderEitherAPIVersion(t *testing.T
 	diff(t, authRows, relayRows)
 }
 
-// mixedBundle has relay kinds naming auth kinds (a policy owned by a project, keys for a service account and a user, a policy binding) and auth kinds naming relay kinds (a service account's policy), plus an account; DANA_HASH stands for its password hash.
+// mixedBundle has relay kinds naming auth kinds (a policy owned by a project, keys for a service account and a user, a policy binding) plus an account; DANA_HASH stands for its password hash.
 const mixedBundle = `apiVersion: auth.wyolet.dev/v1alpha1
 kind: Team
 metadata: {name: data}
-spec: {budget: {amount: "10"}}
+spec: {}
 ---
 apiVersion: auth.wyolet.dev/v1alpha1
 kind: Project
 metadata: {name: etl}
 spec: {team: data}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata: {name: etl-default, owner: {kind: project, name: etl}}
 spec: {}
@@ -92,7 +92,7 @@ spec: {}
 apiVersion: auth.wyolet.dev/v1alpha1
 kind: ServiceAccount
 metadata: {name: loader}
-spec: {project: etl, policy: etl-default}
+spec: {project: etl}
 ---
 apiVersion: auth.wyolet.dev/v1alpha1
 kind: User
@@ -101,20 +101,20 @@ spec:
   email: dana@example.com
   password: {hash: "DANA_HASH"}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Key
 metadata: {name: loader-key, owner: {kind: project, name: etl}}
 spec: {principal: {kind: serviceaccount, name: loader}, keyHash: "d47712cceb4c780603026e6325221c1bcff90679ebc076baa51c71ebe796717c", prefix: rk-loader}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Key
 metadata: {name: dana-key, owner: {kind: user, name: dana}}
 spec: {principal: {kind: user, name: dana}, keyHash: "2c9e0a2585dc7406589a3724f0027811506e0f133726303a15d6779d532a2573", prefix: rk-dana}
 ---
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: PolicyBinding
-metadata: {name: etl-users}
-spec: {project: etl, policy: etl-default, subjects: [{kind: user, name: dana}, {kind: serviceaccount, name: loader}]}
+metadata: {name: etl-users, owner: {kind: project, name: etl}}
+spec: {policy: etl-default, accounts: [dana-project-etl, sa-loader]}
 ---
 apiVersion: auth.wyolet.dev/v1alpha1
 kind: RoleBinding
@@ -161,7 +161,7 @@ func TestIntegration_ApplyMixesRelayAndAuthKinds(t *testing.T) {
 		}
 	}
 	sas, err := st.stores.ServiceAccount.List(ctx)
-	if err != nil || len(sas) != 1 || sas[0].Spec.PolicyID == "" {
+	if err != nil || len(sas) != 1 || sas[0].Spec.ProjectID == "" {
 		t.Fatalf("service accounts = %+v, %v", sas, err)
 	}
 
@@ -177,7 +177,7 @@ func TestIntegration_ApplyMixesRelayAndAuthKinds(t *testing.T) {
 		t.Fatalf("export = %d: %s", code, body)
 	}
 	if !strings.Contains(string(body), "policy: etl-default") || !strings.Contains(string(body), "team: data") {
-		t.Errorf("export lacks the service account's policy or the project's team:\n%s", body)
+		t.Errorf("export lacks the binding's policy or the project's team:\n%s", body)
 	}
 	_, fromExport, raw := st.applyBundle(string(body), "dryRun=true")
 	if fromExport.Counts.Create != 0 || fromExport.Counts.Update != 0 {

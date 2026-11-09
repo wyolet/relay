@@ -11,17 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // principalStack wires a catalog holding one team → project → service
@@ -29,6 +34,9 @@ import (
 // records the principal the middleware resolved.
 type principalStack struct {
 	cat     *catalog.Catalog
+	plans   *plantest.Plans
+	auth    *Auth
+	revoked *revocation.List
 	handler http.Handler
 	seen    *Principal
 }
@@ -40,11 +48,15 @@ type principalFixture struct {
 	group   *group.Group
 	user    string
 
-	// saPol is the service account's own policy; the others exist so a test
-	// can attach them to a key or a binding and pin the resolution order.
+	// saPol, keyPol and boundPol are project policies a test can bind to the
+	// service account, the key's principal or the project.
 	saPol, keyPol, boundPol *policy.Policy
 	bindings                []*policybinding.PolicyBinding
 	versions                stubVersions
+
+	// The accounts relay keeps for the team, the project, the service account, and the user's personal and member (in the project) places.
+	teamAcct, projAcct, saAcct, personalAcct, memberAcct *account.Account
+	extraAccounts                                        []*account.Account
 
 	tokens *TokenVerifier
 	signer ed25519.PrivateKey
@@ -81,22 +93,31 @@ func newPrincipalFixture() principalFixture {
 		Spec: group.Spec{MemberIDs: []string{user}},
 	}
 	saPol := testPolicy("sa-pol", proj.Meta.ID)
-	sa.Spec.PolicyID = saPol.Meta.ID
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		panic(err)
 	}
 	verifier := &TokenVerifier{}
 	verifier.SetKey(pub)
+	withID := func(a *account.Account) *account.Account { a.Meta.ID = meta.NewID(); return a }
 	return principalFixture{
 		team: tm, project: proj, sa: sa, group: g, user: user,
-		saPol:    saPol,
-		keyPol:   testPolicy("key-pol", proj.Meta.ID),
-		boundPol: testPolicy("bound-pol", proj.Meta.ID),
-		versions: stubVersions{user: 1},
-		tokens:   verifier,
-		signer:   priv,
+		saPol:        saPol,
+		keyPol:       testPolicy("key-pol", proj.Meta.ID),
+		boundPol:     testPolicy("bound-pol", proj.Meta.ID),
+		versions:     stubVersions{user: 1},
+		tokens:       verifier,
+		signer:       priv,
+		teamAcct:     withID(account.ForTeam(tm.Meta.ID, tm.Meta.Name, "")),
+		projAcct:     withID(account.ForProject(proj.Meta.ID, proj.Meta.Name, "")),
+		saAcct:       withID(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", proj.Meta.ID)),
+		personalAcct: withID(account.Personal(user, "u-"+user)),
+		memberAcct:   withID(account.Member(user, "u-"+user, meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}, proj.Meta.Name, "")),
 	}
+}
+
+func (f principalFixture) accounts() []*account.Account {
+	return append([]*account.Account{f.teamAcct, f.projAcct, f.saAcct, f.personalAcct, f.memberAcct}, f.extraAccounts...)
 }
 
 // mint signs a token for this fixture's user + project with the claims a
@@ -121,12 +142,27 @@ func (f principalFixture) stack(t testing.TB, keys ...*key.Key) *principalStack 
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	st := &principalStack{cat: c}
+	w := plantest.World{
+		Policies:        []*policy.Policy{f.saPol, f.keyPol, f.boundPol},
+		PolicyBindings:  f.bindings,
+		Accounts:        f.accounts(),
+		Teams:           []*team.Team{f.team},
+		Projects:        []*project.Project{f.project},
+		ServiceAccounts: []*serviceaccount.ServiceAccount{f.sa},
+		Keys:            keys,
+	}
+	for id, ver := range f.versions {
+		w.Users = append(w.Users, &user.User{ID: id, Username: "u-" + id, TokenVersion: ver})
+	}
+	mem := kv.NewMem()
+	t.Cleanup(func() { _ = mem.Close() })
+	st := &principalStack{cat: c, plans: w.Load(t), revoked: revocation.New(mem)}
+	st.auth = &Auth{Catalog: c, Plans: st.plans.Holder, Revoked: st.revoked.Set(), Tokens: f.tokens}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		st.seen = PrincipalFrom(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-	st.handler = ClassifyMiddleware()(PrincipalMiddleware(c, f.tokens)(inner))
+	st.handler = ClassifyMiddleware()(PrincipalMiddleware(st.auth)(inner))
 	return st
 }
 
@@ -176,11 +212,10 @@ func TestPrincipalMiddleware_Rejections(t *testing.T) {
 		mutate func(*key.Key)
 		want   string
 	}{
-		// A disabled key never reaches the snapshot (build reads enabled
-		// rows only), so it is rejected as unknown rather than as disabled.
+		// A disabled or revoked key has no plan and an expired one is not looked up, so each is rejected as unknown: the answer does not tell a guesser which keys exist.
 		{name: "disabled", mutate: func(k *key.Key) { k.Spec.Enabled = &fls }, want: "invalid api key"},
-		{name: "revoked", mutate: func(k *key.Key) { k.Spec.RevokedAt = &past }, want: "api key revoked"},
-		{name: "expired", mutate: func(k *key.Key) { k.Spec.ExpiresAt = &past }, want: "api key expired"},
+		{name: "revoked", mutate: func(k *key.Key) { k.Spec.RevokedAt = &past }, want: "invalid api key"},
+		{name: "expired", mutate: func(k *key.Key) { k.Spec.ExpiresAt = &past }, want: "invalid api key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k := saKey(f, "sk-wr-live")
@@ -206,7 +241,7 @@ func TestPrincipalMiddleware_Rejections(t *testing.T) {
 	})
 }
 
-// A service account's key acts as the account: disabling the account refuses the key, whether the disable reaches the snapshot through a full reload or a NOTIFY-driven copy-on-write apply.
+// A service account's key acts as the account: disabling the account refuses the key, whether the disable is in the plans' first load or arrives as a write.
 func TestPrincipalMiddleware_DisabledServiceAccountKey(t *testing.T) {
 	fls := false
 	wantRefused := func(t *testing.T, w *httptest.ResponseRecorder) {
@@ -214,12 +249,12 @@ func TestPrincipalMiddleware_DisabledServiceAccountKey(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401: %s", w.Code, w.Body)
 		}
-		if got := authCode(t, w.Body.Bytes()); got != "invalid api key" {
-			t.Errorf("message = %q, want %q", got, "invalid api key")
+		if got := authCode(t, w.Body.Bytes()); got != "api key disabled" {
+			t.Errorf("message = %q, want %q", got, "api key disabled")
 		}
 	}
 
-	t.Run("full reload", func(t *testing.T) {
+	t.Run("first load", func(t *testing.T) {
 		f := newPrincipalFixture()
 		disabled := *f.sa
 		disabled.Spec.Enabled = &fls
@@ -227,7 +262,7 @@ func TestPrincipalMiddleware_DisabledServiceAccountKey(t *testing.T) {
 		wantRefused(t, f.stack(t, saKey(f, "sk-wr-live")).do("sk-wr-live"))
 	})
 
-	t.Run("incremental apply", func(t *testing.T) {
+	t.Run("write", func(t *testing.T) {
 		f := newPrincipalFixture()
 		st := f.stack(t, saKey(f, "sk-wr-live"))
 		if w := st.do("sk-wr-live"); w.Code != http.StatusOK {
@@ -235,9 +270,7 @@ func TestPrincipalMiddleware_DisabledServiceAccountKey(t *testing.T) {
 		}
 		disabled := *f.sa
 		disabled.Spec.Enabled = &fls
-		if err := st.cat.ApplyServiceAccountUpsert(&disabled); err != nil {
-			t.Fatalf("apply service account: %v", err)
-		}
+		plantest.Apply(t, st.plans, &disabled)
 		wantRefused(t, st.do("sk-wr-live"))
 	})
 }
@@ -274,8 +307,8 @@ func TestPrincipalMiddleware_RotationGrace(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401", w.Code)
 		}
-		if got := authCode(t, w.Body.Bytes()); got != "api key rotated" {
-			t.Errorf("message = %q, want %q", got, "api key rotated")
+		if got := authCode(t, w.Body.Bytes()); got != "invalid api key" {
+			t.Errorf("message = %q, want %q", got, "invalid api key")
 		}
 	})
 }

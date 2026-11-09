@@ -41,6 +41,7 @@ func (*UsageHook) Name() string { return Namespace }
 // records), so every finalized request yields exactly one row.
 func (h *UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 	out := buildEvent(lc, ev.Status, ev.ErrorKind, ev.ErrorMessage, ev.ResponseBody, h.pricer)
+	out.Refusal = ev.Refusal
 	stampInstance(out, h.instance)
 	return out, nil
 }
@@ -116,6 +117,9 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		RequestedModel: lc.RequestedModel,
 		HostID:         lc.HostID,
 		HostKeyID:      lc.HostKeyID,
+		PoolID:         lc.PoolID,
+		AccountID:      lc.AccountID,
+		ViaAccountID:   lc.ViaAccountID,
 		ProjectID:      lc.ProjectID,
 		Project:        lc.ProjectName,
 		TeamID:         lc.TeamID,
@@ -125,6 +129,7 @@ func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg st
 		Principal:      lc.PrincipalName,
 		CredentialKind: lc.CredentialKind,
 		CredentialID:   lc.CredentialID,
+		LaneAccountID:  lc.LaneAccountID,
 		Model:          lc.ModelName,
 		Host:           lc.HostName,
 		Policy:         lc.PolicyName,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -18,10 +19,9 @@ import (
 	"github.com/wyolet/relay/app/user"
 )
 
-// TokenDenylist writes the per-token revocation entries the data plane's
-// Reserve script reads. Satisfied by kv.Store.
+// TokenDenylist records a revoked token until its expiry, for every pod's data plane to refuse it. Satisfied by *revocation.List.
 type TokenDenylist interface {
-	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+	Revoke(ctx context.Context, jti string, exp time.Time) error
 }
 
 // tokenDeps is the slice of Deps the token handlers need, resolved once at
@@ -35,6 +35,17 @@ type tokenDeps struct {
 	audit    audit.Reader
 	authz    authz.Authorizer
 	limiter  MintLimiter
+	// accounts makes the user's member account in the token's project on first mint; nil skips it.
+	accounts memberAccounts
+	// plans holds a mint until this pod serves the member account; nil answers at once.
+	plans PlanWaiter
+}
+
+// memberAccounts is the account-store surface minting needs.
+type memberAccounts interface {
+	EnsureManaged(ctx context.Context, want *account.Account) (string, error)
+	Get(ctx context.Context, id string) (*account.Account, error)
+	SetMembership(ctx context.Context, a *account.Account, closed, followsRoleBindings bool) error
 }
 
 // tokenUserStore is the narrow user-store surface minting and revocation
@@ -53,9 +64,13 @@ func newTokenDeps(d Deps) tokenDeps {
 		audit:    d.AuditReader,
 		authz:    d.Authz,
 		limiter:  d.MintLimiter,
+		plans:    d.Plans,
 	}
 	if d.Users != nil {
 		td.users = d.Users
+	}
+	if d.Stores != nil && d.Stores.Account != nil {
+		td.accounts = d.Stores.Account
 	}
 	return td
 }
@@ -69,13 +84,13 @@ type mintTokenInput struct {
 
 type mintTokenOutput struct {
 	Body struct {
-		Token     string    `json:"token"`
-		JTI       string    `json:"jti"`
-		ExpiresAt time.Time `json:"expiresAt"`
-		Project   string    `json:"project"`
+		Token     string    `json:"token"     doc:"The signed inference token, sent as Authorization: Bearer to the inference API."`
+		JTI       string    `json:"jti"       doc:"The token's id, for revoking it with DELETE /auth/token/{jti}."`
+		ExpiresAt time.Time `json:"expiresAt" doc:"When the token expires."`
+		Project   string    `json:"project"   doc:"Id of the project the token acts in."`
 		// TeamID lets a caller revoke this jti even after the mint's audit
 		// row is pruned or dropped — the denylist entry is keyed by team.
-		TeamID string `json:"teamId"`
+		TeamID string `json:"teamId" doc:"Id of the project's team, which revoking the jti needs."`
 	}
 }
 
@@ -114,7 +129,7 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 403, 404, 503},
 	}, func(ctx context.Context, in *struct {
-		JTI    string `path:"jti"`
+		JTI    string `path:"jti" doc:"The token's jti, from the mint response."`
 		TeamID string `query:"team_id" doc:"Team the token was minted under, from the mint response. Used only when no mint is recorded; requires admin."`
 		Exp    string `query:"exp"     doc:"Token expiry (RFC3339), from the mint response. Used only when no mint is recorded; requires admin."`
 	}) (*emptyOutput, error) {
@@ -140,6 +155,7 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodPost,
 		Path:        "/auth/token/revoke-all",
 		Summary:     "Invalidate every inference token the caller holds",
+		Description: "Bumps the caller's token version, so every token minted before it stops authenticating within about a second. Needs a user session, not the admin token.",
 		Tags:        []string{"auth"},
 		Middlewares: protect,
 		Errors:      []int{401, 503},
@@ -171,11 +187,12 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 		Method:      http.MethodPost,
 		Path:        "/users/by-id/{id}/revoke-tokens",
 		Summary:     "Invalidate every inference token a user holds",
+		Description: "Bumps the user's token version, so every token minted for them before it stops authenticating. Needs permission to update users.",
 		Tags:        []string{"users"},
 		Middlewares: protect,
 		Errors:      []int{401, 403, 404, 503},
 	}, func(ctx context.Context, in *struct {
-		ID string `path:"id"`
+		ID string `path:"id" doc:"User id."`
 	}) (*emptyOutput, error) {
 		if err := td.authz.Authorize(ctx, "users.update", authz.Resource{Kind: "user", ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)

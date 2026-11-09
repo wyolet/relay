@@ -26,7 +26,7 @@ type pbList []*policybinding.PolicyBinding
 func (l pbList) List(context.Context) ([]*policybinding.PolicyBinding, error) { return l, nil }
 
 // rbacFixture is one team with a live and a disabled project, one role, and
-// the bindings that exercise membership, subject indexing, and priority.
+// the bindings that exercise membership, subject indexing, and ordering.
 type rbacFixture struct {
 	team     *team.Team
 	live     *project.Project
@@ -77,16 +77,11 @@ func newRBACFixture() rbacFixture {
 		b.StampOwner()
 		return b
 	}
-	pbinding := func(name, projectID, policyID string, priority int) *policybinding.PolicyBinding {
-		b := &policybinding.PolicyBinding{
-			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
-			Spec: policybinding.Spec{
-				ProjectID: projectID, PolicyID: policyID, Priority: &priority,
-				Subjects: []rolebinding.Subject{group("system:authenticated")},
-			},
+	pbinding := func(name, projectID, policyID string) *policybinding.PolicyBinding {
+		return &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
+			Spec: policybinding.Spec{PolicyID: policyID, AccountIDs: []string{meta.NewID()}},
 		}
-		b.StampOwner()
-		return b
 	}
 
 	eng := group("platform-eng")
@@ -99,11 +94,11 @@ func newRBACFixture() rbacFixture {
 		noRole:    binding("dangling-role", meta.NewID(), meta.Owner{Kind: meta.OwnerSystem}, eng),
 		onDead:    binding("on-disabled", r.Meta.ID, meta.Owner{Kind: meta.OwnerProject, ID: dead.Meta.ID}, eng),
 
-		low:     pbinding("zeta-low", live.Meta.ID, pol.Meta.ID, 10),
-		highA:   pbinding("alpha-high", live.Meta.ID, pol.Meta.ID, 500),
-		highB:   pbinding("beta-high", live.Meta.ID, pol.Meta.ID, 500),
-		noPol:   pbinding("dangling-policy", live.Meta.ID, meta.NewID(), 0),
-		onDeadP: pbinding("on-disabled", dead.Meta.ID, pol.Meta.ID, 0),
+		low:     pbinding("zeta-low", live.Meta.ID, pol.Meta.ID),
+		highA:   pbinding("alpha-high", live.Meta.ID, pol.Meta.ID),
+		highB:   pbinding("beta-high", live.Meta.ID, pol.Meta.ID),
+		noPol:   pbinding("dangling-policy", live.Meta.ID, meta.NewID()),
+		onDeadP: pbinding("on-disabled", dead.Meta.ID, pol.Meta.ID),
 	}
 }
 
@@ -188,9 +183,9 @@ func TestSnapshot_PolicyBindingsForProject(t *testing.T) {
 	s := f.catalog(t).Current()
 
 	got := policyBindingNames(s.PolicyBindingsForProject(f.live.Meta.ID))
-	want := []string{"zeta-low", "alpha-high", "beta-high"}
+	want := []string{"alpha-high", "beta-high", "zeta-low"}
 	if !equalStrings(got, want) {
-		t.Errorf("PolicyBindingsForProject = %v, want %v (priority, then name)", got, want)
+		t.Errorf("PolicyBindingsForProject = %v, want %v (by name)", got, want)
 	}
 }
 
@@ -267,7 +262,7 @@ func TestApplyPolicyBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
 	c := f.catalog(t)
 
 	stripped := *f.highA
-	stripped.Spec.Subjects = nil
+	stripped.Spec.AccountIDs = nil
 	if err := c.ApplyPolicyBindingUpsert(&stripped); err != nil {
 		t.Fatalf("ApplyPolicyBindingUpsert: %v", err)
 	}

@@ -38,6 +38,7 @@ func registerHealth(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/livez",
 		Summary:     "Process liveness (no backend dependency)",
+		Description: "Unauthenticated. Answers ok while the process serves, whatever its backends' state.",
 		Tags:        []string{"system"},
 	}, func(_ context.Context, _ *struct{}) (*livezOutput, error) {
 		out := &livezOutput{}
@@ -51,6 +52,7 @@ func registerHealth(api huma.API, d Deps) {
 		Method:      "GET",
 		Path:        "/healthz",
 		Summary:     "Readiness: process + backend health",
+		Description: "Unauthenticated. Pings each backend and answers 503 when one is unreachable. Signed-in callers also see whether a master key is configured.",
 		Tags:        []string{"system"},
 		Responses: map[string]*huma.Response{
 			"503": {

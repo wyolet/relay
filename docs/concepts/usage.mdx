@@ -14,13 +14,17 @@ Events wait in a bounded in-memory queue for the store (`RELAY_USAGE_QUEUE_SIZE`
 | `request_id` | Relay's request id, also returned as `X-Relay-Request-ID`. A caller's own `X-Request-ID` is kept in `extras.client_request_id`. |
 | `source` | The runner that handled the request: `pipeline` (normal mode), `proxy` ([proxy mode](/concepts/proxy-mode)), `ws` (WebSocket frame), `batch`, `count` (a count-tokens request) or `otlp` ([reported usage](/concepts/otlp-receiver)). |
 | `ts`, `duration_ms` | Request start, and total time until the response body closed. |
-| `status`, `error_kind`, `error_message` | The provider's HTTP status, or `0` when no provider answered. See [Failed requests](#failed-requests). |
+| `status`, `error_kind`, `error_message` | The HTTP status the caller received: the provider's, or Relay's own when Relay refused the request. `0` when Relay failed it before any provider answered for another reason. See [Failed requests](#failed-requests). |
+| `refusal` | Set when Relay refused the request itself: `model_not_allowed`, `host_not_reachable` or `no_capacity`. See [Failed requests](#failed-requests). |
 | `streamed`, `finish_reason`, `attempts` | Whether the response streamed, why generation stopped (`stop`, `length`, `tool_calls`, `content_filter`, `refusal`, `other`), and how many upstream tries the request took. |
 | `upstream` | `start`, `response_start`, `response_end`: microseconds from request start to the upstream handoff, the first response byte, and the end of the upstream response. Absent when the request never reached a provider. |
 | `reasoning` | `start`, `end`: microseconds from request start to the first and last reasoning frame, on streams that carried reasoning. |
 | `model`, `model_id`, `requested_model`, `provider` | The catalog model the request resolved to, its provider, and the model string as the caller sent it. |
 | `host`, `host_id`, `host_key_id` | The host that served it, and a hash of the host key's value (not the host key's id), so a rotated key appears as a new value. It names the key the request last tried, also on failed and streamed requests. |
 | `policy`, `policy_id` | The [policy](/concepts/policies) that governed the request. |
+| `pool_id`, `account_id` | The pool the serving credential was drawn from and the provider account it belongs to. Empty when the credential was linked on its own or holds no account. A request through a [shared account](/concepts/key-pooling#sharing-an-account) records the real account here. |
+| `via_account_id` | The shared account the request reached the credential through; empty when it used the real account directly. Group by `account_id` for everything drawn on a provider account, by `via_account_id` for each share's part. |
+| `lane_account_id` | The account the request ran in and was charged to: its credential's default, or the one it switched into with `X-WR-Account`, a `/a/<account>/` base URL or the account's own host. |
 | `project`, `team`, `principal` and their `_id` fields, `principal_kind` | Who made the request. `principal` is empty for a user; the read API labels users by username. |
 | `credential_kind`, `credential_id`, `relay_key`, `relay_key_hash` | The credential that authenticated: a relay key (its slug and the SHA-256 of its value) or an inference token. |
 | `tokens` | Token counts the provider reported. See [Token counts and cost](#token-counts-and-cost). |
@@ -66,9 +70,9 @@ Every endpoint above takes these query parameters. List parameters are repeatabl
 | Parameter | Matches |
 | --- | --- |
 | `since` (default `1h`), `from`, `to` | The window: a relative duration, or RFC3339 bounds. `from` overrides `since`. |
-| `model_id`, `host_id`, `policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`, `relay_key_hash` | Ids. |
+| `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `lane_account_id`, `via_account_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`, `relay_key_hash` | Ids. |
 | `model`, `host`, `policy`, `provider`, `relay_key`, `requested_model` | Slugs as recorded on the event, or the requested model string. |
-| `source`, `finish_reason`, `error_kind` | The field's values. |
+| `source`, `finish_reason`, `error_kind`, `refusal` | The field's values. |
 | `status`, `status_min`, `status_max`, `status_class` | Exact statuses, a range, or a band (`2xx`, `4xx`, `5xx`). |
 | `streamed`, `error` | `true` or `false`. `error=true` matches a status of 400 or above, or any `error_kind`. |
 | `attempts_min`, `duration_ms_min`, `duration_ms_max`, `ttft_ms_min`, `ttft_ms_max` | Retried and slow requests. The TTFT filters skip events with no upstream timing. |
@@ -80,9 +84,9 @@ Every endpoint above takes these query parameters. List parameters are repeatabl
 
 `summary` and `timeseries` take `group_by`:
 
-- `source` (the `summary` default), `finish_reason`, `error_kind`
+- `source` (the `summary` default), `finish_reason`, `error_kind`, `refusal`
 - slugs as recorded: `model`, `host`, `policy`, `provider`, `project`, `team`, `principal`, `relay_key`
-- ids: `model_id`, `host_id`, `policy_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`
+- ids: `model_id`, `host_id`, `policy_id`, `pool_id`, `account_id`, `lane_account_id`, `via_account_id`, `project_id`, `team_id`, `principal_id`, `credential_id`, `relay_key_hash`, `host_key_id`
 - `tags.<key>` (a caller tag) or `extras.<key>` (a Relay-added value such as `extras.instance`)
 - `none`: one row over everything the filters match, with `group` set to `{}`
 
@@ -125,7 +129,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ### Distinct counts
 
-`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
+`summary` and `timeseries` take `distinct`, one of `relay_key_hash`, `relay_key`, `principal_id`, `credential_id`, `pool_id`, `account_id`, `lane_account_id`, `via_account_id`, `project_id`, `team_id`, `model_id` or `host_id`. Each row or point then carries `distinct`: the number of different non-empty values of that field among its events, so traffic without a relay key is not counted as a key. A value seen in two buckets counts in both, so per-bucket values do not add up to a window total; read that from `summary`, with `group_by=none` for a single number. When comparing, `previous` carries its own `distinct`.
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
@@ -164,7 +168,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 `error_count` in summaries and time series counts events with a status of 400 or above, split into `errors_4xx` and `errors_5xx`. `throttled` counts the 429s, which are also in `errors_4xx`.
 
-A request Relay refused before calling a provider has status `0` and an `error_kind` naming why: `rate_limited`, `no_keys`, `keys_exhausted`, `model_not_found`, `model_not_allowed`, `no_host_binding`, and so on. It is listed by `/api/usage/events` and `/api/logs` and left out of `summary`, `timeseries` and `facets`, since it carries no usage.
+A request Relay rejected before calling a provider has an `error_kind` naming why: `rate_limited`, `no_keys`, `keys_exhausted`, `model_not_found`, `model_not_allowed`, `no_host_binding`, and so on. A refusal (one with `refusal` set) records the status and message the caller received, such as `429` and `the rate limit of the lane policy … is exhausted; try again in 12s`; any other such request has status `0`. It is listed by `/api/usage/events` and `/api/logs` and left out of `summary`, `timeseries` and `facets`, since it carries no usage, unless the query groups, facets or filters by `refusal`: then the refusals among them are counted, with no tokens and no cost. A request whose credential is valid but may not run in the account it asked for, or whose account, policy or principal refuses it, is recorded the same way; an invalid or missing credential is not. `refusal` classes the refusals a client acts on, as the error body's `error.refusal` does: `model_not_allowed` (a policy, account or principal refuses the model: `policy_disabled`, `model_not_allowed`, `unpriced_under_budget`, `subject_disabled`, `account_closed`, `account_not_held`), `host_not_reachable` (no host the caller can reach serves it: `model_not_found`, `model_disabled`, `no_host_binding`, `no_keys`, or none of them accepted a connection: `upstream_unreachable`) and `no_capacity` (`rate_limited`: a rate limit, a budget or a cooldown, or `no_healthy_keys`: every host key out of rotation). A provider's own error carries none. A refused request keeps the model it asked for: `requested_model` as sent, and `model_id`, `model` and `provider` when the catalog resolves that name.
 
 When the provider answered with an error status, the event has that status and `error_kind` `upstream_error`, whether Relay passed the response to the caller or returned it after every key failed. That includes a 4xx the request itself caused, such as an invalid parameter or a prompt over the context window; `status` tells them apart. `error_message` is `upstream returned <status>`, or, when every key failed, the start of the provider's error body. Only [payload logging](/concepts/payload-logging) keeps the full body. Other provider-side kinds are `upstream_unreachable` (no connection to the host), `timeout` and `client_canceled`. In proxy mode a request that failed before the provider answered (a refused connection, a TLS error) is recorded as `upstream_error` with status `0`.
 

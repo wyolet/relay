@@ -10,7 +10,6 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
 )
@@ -97,20 +96,18 @@ func revokeTokenByValue(ctx context.Context, d tokenDeps, raw string) (*emptyOut
 	return denyToken(ctx, d, proj.Spec.TeamID, claims.Jti, time.Unix(claims.Exp, 0))
 }
 
-// denyToken writes the denylist entry the inbound Reserve script checks. Its
-// TTL is the token's remaining life: past that the claims expire anyway.
+// denyToken records the revocation until the token's expiry: past that the claims expire anyway.
 func denyToken(ctx context.Context, d tokenDeps, teamID, jti string, exp time.Time) (*emptyOutput, error) {
-	remaining := time.Until(exp)
-	if remaining <= 0 {
+	if time.Until(exp) <= 0 {
 		// Already expired — nothing to deny, and a zero TTL would be a
 		// permanent key.
 		audit.Record(ctx, "tokens.revoke", audit.Resource{Kind: "token", ID: jti}, audit.StatusAllowed)
 		return &emptyOutput{}, nil
 	}
 	if d.denylist == nil {
-		return nil, huma.Error503ServiceUnavailable("no kv store is configured for token revocation")
+		return nil, huma.Error503ServiceUnavailable("token revocation is not configured")
 	}
-	if err := d.denylist.Set(ctx, policy.RevokedKey(teamID, jti), []byte("1"), remaining); err != nil {
+	if err := d.denylist.Revoke(ctx, jti, exp); err != nil {
 		return nil, huma.Error500InternalServerError("revocation write failed: " + err.Error())
 	}
 	audit.Record(ctx, "tokens.revoke", audit.Resource{

@@ -9,13 +9,11 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/batch"
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/otlpreceiver"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
@@ -25,8 +23,8 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
-func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Catalog, tokenVerifier *inference.TokenVerifier,
-	routingOpts []routing.Option, pl *pipeline.Pipeline, proxyPipeline *proxy.Pipeline, lifecycleReg *lifecycle.Registry,
+func startInference(cfg *config.Config, st *storagemod.Storage, auth *inference.Auth,
+	pl *pipeline.Pipeline, proxyPipeline *proxy.Pipeline, lifecycleReg *lifecycle.Registry,
 	specRegistry *adapter.Registry, profiles *clientprofile.Registry, tokenCalibrator *tokencount.Calibrator,
 	admission *httpapi.Admission, kvPoolBusy func() bool, batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
@@ -39,9 +37,10 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 	inferRouter.Use(httpmw.LimitBody(maxBody))
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:             st,
-		Catalog:            cat,
-		Tokens:             tokenVerifier,
-		Resolver:           routing.New(cat, routingOpts...),
+		Catalog:            auth.Catalog,
+		Tokens:             auth.Tokens,
+		Plans:              auth.Plans,
+		Revoked:            auth.Revoked,
 		Pipeline:           pl,
 		Proxy:              proxyPipeline,
 		Lifecycle:          lifecycleReg,
@@ -57,6 +56,7 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		RequestStreamUsage: cfg.StreamUsage,
 		MaxRequestBytes:    maxBody,
 		ProxyBodyIdle:      cfg.ProxyBodyIdle,
+		AccountDomain:      cfg.AccountDomain,
 		TrustEventTime:     cfg.DevTrustEventTime,
 	})
 
@@ -64,16 +64,16 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 	// key auth), mounted directly on chi like /v1/ws since it isn't a
 	// huma operation.
 	inferRouter.With(
-		inference.ReadinessMiddleware(cat),
+		inference.ReadinessMiddleware(auth.Catalog),
 		inference.ClassifyMiddleware(),
-		inference.PrincipalMiddleware(cat, tokenVerifier),
+		inference.PrincipalMiddleware(auth),
 	).Mount("/v1/batches", batchSvc.Routes())
 
-	// OpenTelemetry exports authenticate like /v1/* but resolve no policy: a reporter needs a credential, not a route.
+	// OpenTelemetry exports authenticate like /v1/* but refuse nothing the caller ladder would: a reporter needs a credential, not a route.
 	otlpRoutes := inferRouter.With(
-		inference.ReadinessMiddleware(cat),
+		inference.ReadinessMiddleware(auth.Catalog),
 		inference.ClassifyMiddleware(),
-		inference.AuthenticateMiddleware(cat, tokenVerifier),
+		inference.AuthenticateMiddleware(auth),
 	)
 	otlpRoutes.Method(http.MethodPost, otlpreceiver.TracesPath, otlpReceiver.Traces())
 	otlpRoutes.Method(http.MethodPost, otlpreceiver.LogsPath, otlpReceiver.Logs())
@@ -89,8 +89,8 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 		// mid-flight. Header/idle limits plus the in-flight admission cap bound
 		// resource use instead of a response-duration cap.
 	}
-	maxConns := inferenceMaxConns(cfg.MaxConns)
-	slog.Info("relay inference listening", "addr", inferSrv.Addr, "max_conns", maxConns)
-	_, inferErr := serve(inferSrv, maxConns)
+	connAdmission := inferenceAdmission(cfg)
+	slog.Info("relay inference listening", "addr", inferSrv.Addr, "max_conns", connAdmission.MaxConns, "conn_queue", connAdmission.QueueSize, "conn_queue_timeout", connAdmission.QueueTimeout)
+	_, inferErr := serve(inferSrv, connAdmission)
 	return inferSrv, inferErr
 }

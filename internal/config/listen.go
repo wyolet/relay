@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -45,6 +46,20 @@ func loadPprofAddr(cfg *Config) error {
 		return fmt.Errorf("RELAY_PPROF_ADDR must be host:port (e.g. 127.0.0.1:6060), got %q", v)
 	}
 	cfg.PprofAddr = v
+	for _, k := range []struct {
+		key string
+		dst *int
+	}{{"RELAY_PPROF_MUTEX_FRACTION", &cfg.PprofMutexFraction}, {"RELAY_PPROF_BLOCK_RATE", &cfg.PprofBlockRate}} {
+		s := strings.TrimSpace(os.Getenv(k.key))
+		if s == "" {
+			continue
+		}
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 0 {
+			return fmt.Errorf("%s must be a non-negative integer, got %q", k.key, s)
+		}
+		*k.dst = n
+	}
 	return nil
 }
 

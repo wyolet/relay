@@ -91,7 +91,7 @@ func buildTokenCalibrator(kvStore, postFlightKV kv.Store, lifecycleReg *lifecycl
 	return tokencount.NewCalibrator(kvStore)
 }
 
-func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) *httpapi.Admission {
+func registerAdmission(ctx context.Context, cfg *config.Config, lifecycleReg *lifecycle.Registry) *httpapi.Admission {
 	// Admission control: a per-pod in-flight cap on inference requests. Rides
 	// the lifecycle spine — PreFlight (acquire) registered FIRST, before the
 	// metrics pre-flight, so a shed request has marked nothing and needs no
@@ -99,12 +99,15 @@ func registerAdmission(cfg *config.Config, lifecycleReg *lifecycle.Registry) *ht
 	// (release) fires from Finalize at response-body close so a streamed request
 	// holds its slot for the whole stream. Scope is Dispatch only (inference +
 	// each WS frame), never /healthz or the control plane. RELAY_MAX_INFLIGHT
-	// tunes the cap; 0 = httpapi.DefaultMaxInflight.
-	admission := httpapi.NewAdmission(cfg.MaxInflight)
+	// sets the hard cap (unset, derived from the memory limit); RELAY_INFLIGHT_SCHED_P99 starts the adaptive limit below it, stopped with the listeners.
+	admission := httpapi.NewAdmission(inferenceMaxInflight(cfg.MaxInflight))
 	lifecycleReg.RegisterPreFlight(admission.PreFlight)
 	// Must stay registered after the usage, payload and tokencount collectors: collectors run in order, so a request holds its slot until their post-flight work is done and the in-flight cap also bounds the post-flight backlog.
 	lifecycleReg.RegisterCollector(admission)
-	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
+	if cfg.InflightSchedP99 > 0 {
+		go admission.AdaptLimit(ctx, cfg.InflightSchedP99, httpapi.RuntimeLoad())
+	}
+	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap(), "sched_p99_target", cfg.InflightSchedP99)
 	return admission
 }
 

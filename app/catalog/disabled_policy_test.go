@@ -9,7 +9,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -39,25 +38,20 @@ func newDisabledPolicyFixture(enabled bool) disabledPolicyFixture {
 	}
 	f.sa = &serviceaccount.ServiceAccount{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "svc"},
-		Spec: serviceaccount.Spec{ProjectID: f.project.Meta.ID, PolicyID: f.pol.Meta.ID},
+		Spec: serviceaccount.Spec{ProjectID: f.project.Meta.ID},
 	}
 	f.sa.StampOwner()
 	f.key = &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "k", Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.project.Meta.ID}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: f.sa.Meta.ID},
-			PolicyID:  f.pol.Meta.ID, KeyHash: "hash-k",
+			KeyHash:   "hash-k",
 		},
 	}
-	prio := 10
 	f.binding = &policybinding.PolicyBinding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb"},
-		Spec: policybinding.Spec{
-			ProjectID: f.project.Meta.ID, PolicyID: f.pol.Meta.ID, Priority: &prio,
-			Subjects: []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}},
-		},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb", Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.project.Meta.ID}},
+		Spec: policybinding.Spec{PolicyID: f.pol.Meta.ID, AccountIDs: []string{meta.NewID()}},
 	}
-	f.binding.StampOwner()
 	return f
 }
 
@@ -73,10 +67,9 @@ func (f disabledPolicyFixture) catalog(t *testing.T) *Catalog {
 	return c
 }
 
-// A key, service account, and policy binding that name a
-// disabled policy all stay in the snapshot; the policy itself is out of every
-// routing index but resolvable, so a request answers policy_disabled rather
-// than falling through to a broader grant or a 401.
+// A policy binding naming a disabled policy stays in the snapshot, with the
+// project's key and service account; the policy itself is out of the enabled
+// index but resolvable.
 func TestDisabledPolicyKeepsDependentRows(t *testing.T) {
 	f := newDisabledPolicyFixture(false)
 	s := f.catalog(t).Current()
@@ -176,6 +169,6 @@ func TestDeletingTheProjectEvictsItsDisabledPolicy(t *testing.T) {
 		t.Error("the disabled policy outlived its project")
 	}
 	if k, _ := s.KeyByHash("hash-k"); k != nil {
-		t.Error("the key outlived the policy it names")
+		t.Error("the key outlived its project")
 	}
 }

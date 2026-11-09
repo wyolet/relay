@@ -83,7 +83,7 @@ func TestCheckPolicyRefVisible_PersonalRowCannotReferenceProjectPolicy(t *testin
 		// project, depending on what the caller may see; both are 400s that
 		// keep the reference out.
 		got := err.Error()
-		if !strings.Contains(got, "personal rows cannot reference project resources") &&
+		if !strings.Contains(got, "a personal row uses a project's rows only where you may create keys") &&
 			!strings.Contains(got, "not found") {
 			t.Fatalf("err = %q, want the reference refused", got)
 		}
@@ -132,11 +132,11 @@ func TestCheckHostKeyRefsVisible_PersonalRowCannotReferenceProjectHostKey(t *tes
 
 	projectHostKey := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "project-hostkey", Owner: meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
 	}
 	userHostKey := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "user-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, AccountID: meta.NewID(), ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "POLICYREF_TEST_KEY"}},
 	}
 	for _, k := range []*hostkey.HostKey{projectHostKey, userHostKey} {
 		if err := stores.HostKey.Upsert(ctx, k); err != nil {
@@ -145,24 +145,24 @@ func TestCheckHostKeyRefsVisible_PersonalRowCannotReferenceProjectHostKey(t *tes
 	}
 
 	t.Run("user-owned key referencing a project-owned host-key is rejected", func(t *testing.T) {
-		err := checkHostKeyRefsVisible(visibleCtx(ctx), d, []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"})
+		err := refErr(refs(d).CredentialRefs(visibleCtx(ctx), []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}))
 		if err == nil {
 			t.Fatal("want an error, got nil")
 		}
-		if got := err.Error(); !strings.Contains(got, "personal rows cannot reference project resources") {
-			t.Fatalf("err = %q, want it to mention personal rows cannot reference project resources", got)
+		if got := err.Error(); !strings.Contains(got, "cannot hold a project's host keys") {
+			t.Fatalf("err = %q, want it to say a personal row cannot hold a project's host keys", got)
 		}
 	})
 
 	t.Run("project-owned key referencing a project-owned host-key is allowed", func(t *testing.T) {
-		if err := checkHostKeyRefsVisible(visibleCtx(ctx), d, []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerProject, ID: projectHostKey.Meta.Owner.ID}); err != nil {
-			t.Fatalf("checkHostKeyRefsVisible: %v", err)
+		if err := refs(d).CredentialRefs(visibleCtx(ctx), []string{projectHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerProject, ID: projectHostKey.Meta.Owner.ID}); err != nil {
+			t.Fatalf("CredentialRefs: %v", err)
 		}
 	})
 
 	t.Run("user-owned key referencing a user-owned host-key is allowed", func(t *testing.T) {
-		if err := checkHostKeyRefsVisible(visibleCtx(ctx), d, []string{userHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}); err != nil {
-			t.Fatalf("checkHostKeyRefsVisible: %v", err)
+		if err := refs(d).CredentialRefs(visibleCtx(ctx), []string{userHostKey.Meta.ID}, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}); err != nil {
+			t.Fatalf("CredentialRefs: %v", err)
 		}
 	})
 }

@@ -42,9 +42,12 @@
               "concepts/architecture",
               "concepts/catalog",
               "concepts/overlays",
+              "concepts/accounts",
               "concepts/policies",
               "concepts/rate-limits",
+              "concepts/budgets",
               "concepts/key-pooling",
+              "policy-examples",
               "concepts/proxy-mode"
             ]
           },
@@ -56,7 +59,15 @@
               "configuration",
               "reference/settings",
               "concepts/gitops",
-              "concepts/upgrade"
+              "concepts/upgrade",
+              "concepts/upgrade-0-20"
+            ]
+          },
+          {
+            "group": "Performance",
+            "pages": [
+              "performance/sizing",
+              "performance/benchmarks"
             ]
           },
           {

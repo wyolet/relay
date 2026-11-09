@@ -91,11 +91,11 @@ curl http://localhost:8080/v1/batches/<id>/results \
 
 An item fails when:
 
-- the upstream answers with a non-`2xx` status, or every key of the chosen host fails;
-- routing rejects it (unknown model, model not granted by the policy, no binding), or its shape does not match the binding;
-- the policy's rate limit is spent when it runs. Items do not wait for the limit to refill;
+- the upstream answers with a non-`2xx` status, or every key it may use fails;
+- routing rejects it (unknown model, model not allowed by a policy on the ladder, no binding or reachable pool), or its shape does not match the binding;
+- a rate limit or budget on the ladder is spent when it runs. Items do not wait for the limit to refill;
 - the submitting credential stopped working: the relay key was disabled, revoked, expired or rotated out, or the inference token expired or was revoked;
-- the policy the batch was submitted under was deleted or disabled;
+- a policy, team or project on the caller's ladder is disabled, or its account is closed, when it runs;
 - it runs longer than 5 minutes.
 
 ## Cancel
@@ -113,7 +113,7 @@ Items that have not started become `cancelled`. An item running on the replica t
 
 ## Access, policy and limits
 
-A batch authenticates like any inference request, with a relay key or an inference token. The policy that governs the credential at submit time is recorded on the batch and applies to every item: its model grants, its rate limits, and its host-key pool, key selection and circuit breakers. The credential itself is checked again when each item runs.
+A batch authenticates like any inference request, with a relay key or an inference token. The credential is checked again when each item runs, and the item runs under the [policy ladder](/concepts/policies#the-ladder) as it is at that moment: its model grants, rate limits and budgets, pools, key selection and circuit breakers. A policy edited after submission applies to the items that have not run yet. A batch submitted in a switched [account](/concepts/accounts#switching-lanes-per-request) (`X-WR-Account` or a `/a/<account>/` prefix) runs every item in that account.
 
 Only the submitter can read or cancel a batch: the same relay key, or, for an inference token, any token of the same user. Anyone else gets `404`. Because access follows the relay key itself, a rotated key cannot read the batches its previous value submitted.
 
@@ -126,7 +126,7 @@ Only the submitter can read or cancel a batch: the same relay key, or, for an in
 
 ## Usage and logging
 
-Every item produces a usage event with `source=batch`, attributed to the submitting credential, its project and team, and the batch's policy, and priced at the binding's normal rates. Filter with `source=batch` in the [usage API](/concepts/usage). Item request and response bodies are not captured by [payload logging](/concepts/payload-logging); the results endpoint is where a batch's responses live.
+Every item produces a usage event with `source=batch`, attributed to the submitting credential, its project and team, and the innermost caller policy when the item ran, and priced at the binding's normal rates. Filter with `source=batch` in the [usage API](/concepts/usage). Item request and response bodies are not captured by [payload logging](/concepts/payload-logging); the results endpoint is where a batch's responses live.
 
 ## Running batches on more than one replica
 

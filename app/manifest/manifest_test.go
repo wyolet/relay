@@ -4,11 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 )
 
@@ -19,7 +19,10 @@ var testResolver = manifest.MapResolver{
 	Policies:   map[string]string{"cheap-tier": "policy-ddd"},
 	Models:     map[string]string{"openai/gpt-4o": "model-eee", "claude-3-5-sonnet": "model-fff"},
 	HostKeys:   map[string]string{"openai-key-1": "hk-ggg", "bedrock-key-prod": "hk-hhh"},
-	RateLimits: map[string]string{"cheap-tier-rpm": "rl-iii"},
+	RateLimits: map[string]string{"cheap-tier-rpm": "rl-iii", "gpt-4o-tpm": "rl-jjj"},
+	Pools:      map[string]string{"bedrock-claude": "pool-kkk"},
+	Budgets:    map[string]string{"monthly": "budget-lll"},
+	Accounts:   map[string]string{"acme-anthropic": "acc-mmm"},
 }
 
 var testRev = manifest.MapReverseResolver{
@@ -28,11 +31,14 @@ var testRev = manifest.MapReverseResolver{
 	Policies:   map[string]string{"policy-ddd": "cheap-tier"},
 	Models:     map[string]string{"model-eee": "openai/gpt-4o", "model-fff": "claude-3-5-sonnet"},
 	HostKeys:   map[string]string{"hk-ggg": "openai-key-1", "hk-hhh": "bedrock-key-prod"},
-	RateLimits: map[string]string{"rl-iii": "cheap-tier-rpm"},
+	RateLimits: map[string]string{"rl-iii": "cheap-tier-rpm", "rl-jjj": "gpt-4o-tpm"},
+	Pools:      map[string]string{"pool-kkk": "bedrock-claude"},
+	Budgets:    map[string]string{"budget-lll": "monthly"},
+	Accounts:   map[string]string{"acc-mmm": "acme-anthropic"},
 }
 
 const policyYAML = `
-apiVersion: relay.wyolet.dev/v1alpha2
+apiVersion: relay.wyolet.dev/v1alpha3
 kind: Policy
 metadata:
   name: cheap-tier
@@ -40,10 +46,14 @@ spec:
   models:
     - openai/gpt-4o
     - anthropic/claude-3-5-sonnet
-  hostKeys:
-    - openai-key-1
-    - bedrock-key-prod
-  rateLimit: cheap-tier-rpm
+  pools: [bedrock-claude]
+  rateLimits:
+    - ref: cheap-tier-rpm
+    - ref: gpt-4o-tpm
+      models: [openai/gpt-4o]
+      shared: false
+  budgets:
+    - ref: monthly
 `
 
 func TestParse_Policy(t *testing.T) {
@@ -64,8 +74,8 @@ func TestParse_Policy(t *testing.T) {
 	if len(p.Spec.Models) != 2 {
 		t.Errorf("models: want 2, got %d", len(p.Spec.Models))
 	}
-	if p.Spec.RateLimit != "cheap-tier-rpm" {
-		t.Errorf("rateLimit: got %q", p.Spec.RateLimit)
+	if len(p.Spec.RateLimits) != 2 || p.Spec.RateLimits[1].Ref != "gpt-4o-tpm" {
+		t.Errorf("rateLimits: got %+v", p.Spec.RateLimits)
 	}
 }
 
@@ -75,86 +85,81 @@ func TestToPolicy_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToPolicy: %v", err)
 	}
-	if len(pol.Spec.Models) != 2 {
-		t.Errorf("models: want 2, got %d", len(pol.Spec.Models))
-	}
 	if pol.Spec.Models[0] != "openai/gpt-4o" {
 		t.Errorf("models[0]: want openai/gpt-4o (verbatim ref), got %q", pol.Spec.Models[0])
 	}
-	if pol.Spec.RateLimitID != "rl-iii" {
-		t.Errorf("rateLimitID: want rl-iii, got %q", pol.Spec.RateLimitID)
+	shared, each := true, false
+	want := policy.Spec{
+		Models:     []string{"openai/gpt-4o", "anthropic/claude-3-5-sonnet"},
+		PoolIDs:    []string{"pool-kkk"},
+		RateLimits: []policy.RateLimitLink{{RateLimitID: "rl-iii", Shared: &shared}, {RateLimitID: "rl-jjj", Models: []string{"openai/gpt-4o"}, Shared: &each}},
+		Budgets:    []policy.BudgetLink{{BudgetID: "budget-lll", Shared: &shared}},
 	}
-	if len(pol.Spec.HostKeyIDs) != 2 {
-		t.Errorf("hostKeyIDs: want 2, got %d", len(pol.Spec.HostKeyIDs))
+	if !reflect.DeepEqual(pol.Spec, want) {
+		t.Errorf("spec = %+v\nwant   %+v", pol.Spec, want)
 	}
 }
 
-func TestToPolicy_MissingHostKey(t *testing.T) {
+func TestToPolicy_MissingLink(t *testing.T) {
 	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
-	emptyResolver := manifest.MapResolver{
-		HostKeys:   map[string]string{},
-		RateLimits: map[string]string{},
-	}
-	_, err := manifest.ToPolicy(*docs[0].Policy, emptyResolver)
-	if err == nil {
-		t.Fatal("expected error for missing hostKey ref, got nil")
+	for _, drop := range []string{"pools", "rateLimits", "budgets"} {
+		r := testResolver
+		switch drop {
+		case "pools":
+			r.Pools = nil
+		case "rateLimits":
+			r.RateLimits = nil
+		case "budgets":
+			r.Budgets = nil
+		}
+		var notFound *manifest.RefNotFoundError
+		if _, err := manifest.ToPolicy(*docs[0].Policy, r); !errors.As(err, &notFound) {
+			t.Errorf("unresolvable %s: err = %v, want RefNotFoundError", drop, err)
+		}
 	}
 }
 
+// Export then apply must not lose a link: every one renders by name and
+// translates back to the same ids.
 func TestFromPolicy_RoundTrip(t *testing.T) {
 	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
 	pol, _ := manifest.ToPolicy(*docs[0].Policy, testResolver)
 	dto := manifest.FromPolicy(pol, testRev)
-	if len(dto.Spec.Models) != 2 {
-		t.Errorf("models: want 2, got %d", len(dto.Spec.Models))
+	if dto.APIVersion != manifest.APIVersion {
+		t.Errorf("apiVersion = %q, want %q", dto.APIVersion, manifest.APIVersion)
 	}
-	if dto.Spec.Models[0] != "openai/gpt-4o" {
-		t.Errorf("models[0]: want openai/gpt-4o (round-tripped verbatim), got %q", dto.Spec.Models[0])
+	back, err := manifest.ToPolicy(dto, testResolver)
+	if err != nil {
+		t.Fatalf("ToPolicy of the export: %v", err)
 	}
-	if dto.Spec.RateLimit != "cheap-tier-rpm" {
-		t.Errorf("rateLimit: want cheap-tier-rpm, got %q", dto.Spec.RateLimit)
+	if !reflect.DeepEqual(back.Spec, pol.Spec) {
+		t.Errorf("round trip = %+v\nwant         %+v", back.Spec, pol.Spec)
 	}
 }
 
-func TestFromPolicy_LegacyModelIDsUseProviderQualifiedRefs(t *testing.T) {
-	pol := &policy.Policy{
-		Meta: meta.Metadata{Name: "legacy-grant"},
-		Spec: policy.Spec{ModelIDs: []string{"model-fff"}},
-	}
-
-	tests := []struct {
-		name string
-		rev  manifest.MapReverseResolver
-		want string
-	}{
-		{
-			name: "provider known",
-			rev: manifest.MapReverseResolver{
-				Providers:      map[string]string{"provider-aaa": "anthropic"},
-				Models:         map[string]string{"model-fff": "claude-3-5-sonnet"},
-				ModelProviders: map[string]string{"model-fff": "provider-aaa"},
-			},
-			want: "anthropic/claude-3-5-sonnet",
-		},
-		{
-			name: "provider unknown falls back to bare model name",
-			rev: manifest.MapReverseResolver{
-				Providers: map[string]string{"provider-aaa": "anthropic"},
-				Models:    map[string]string{"model-fff": "claude-3-5-sonnet"},
-			},
-			want: "claude-3-5-sonnet",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dto := manifest.FromPolicy(pol, tt.rev)
-			if len(dto.Spec.Models) != 1 {
-				t.Fatalf("models = %v, want one ref %q", dto.Spec.Models, tt.want)
-			}
-			if got := dto.Spec.Models[0]; got != tt.want {
-				t.Fatalf("models[0] = %q, want %q", got, tt.want)
+// A pre-v0.20 Policy is refused with a pointer to the new shape, and a
+// v1alpha3 one still carrying a removed field is refused by name: ignoring
+// either would drop a restriction the author meant.
+func TestParse_RefusesThePreviousPolicyShape(t *testing.T) {
+	for _, tc := range []struct{ name, doc, want string }{
+		{"old apiVersion", strings.Replace(policyYAML, manifest.APIVersion, manifest.PreviousAPIVersion, 1), "pre-v0.20 shape"},
+		{"removed field", policyYAML + "  hostKeys: [openai-key-1]\n", "spec.hostKeys"},
+		{"removed rate limit", policyYAML + "  rlBindings: []\n", "spec.rlBindings"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := manifest.Parse(strings.NewReader(tc.doc))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Parse = %v, want an error mentioning %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// Kinds v1alpha3 left unchanged still parse under the previous apiVersion.
+func TestParse_AcceptsUnchangedKindsUnderThePreviousAPIVersion(t *testing.T) {
+	doc := strings.Replace(rateLimitYAML, manifest.APIVersion, manifest.PreviousAPIVersion, 1)
+	if _, err := manifest.Parse(strings.NewReader(doc)); err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
 }
 

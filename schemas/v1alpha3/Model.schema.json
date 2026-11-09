@@ -1,0 +1,377 @@
+{
+  "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "assistantPrefill": {
+          "description": "Continues from a prefilled assistant message.",
+          "type": "boolean"
+        },
+        "audio": {
+          "description": "Handles audio, in either direction.",
+          "type": "boolean"
+        },
+        "audioInput": {
+          "description": "Accepts audio input.",
+          "type": "boolean"
+        },
+        "audioOutput": {
+          "description": "Produces audio output.",
+          "type": "boolean"
+        },
+        "batch": {
+          "description": "Available through the provider's batch API.",
+          "type": "boolean"
+        },
+        "chat": {
+          "description": "Generates chat or text responses.",
+          "type": "boolean"
+        },
+        "computerUse": {
+          "description": "Supports computer-use tools.",
+          "type": "boolean"
+        },
+        "defaultReasoningEffort": {
+          "description": "Effort level used when a request names none; one of reasoningEfforts.",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        },
+        "embeddings": {
+          "description": "Produces embeddings.",
+          "type": "boolean"
+        },
+        "fileInput": {
+          "description": "Accepts file input, such as PDFs.",
+          "type": "boolean"
+        },
+        "jsonMode": {
+          "description": "Supports JSON output mode.",
+          "type": "boolean"
+        },
+        "parallelTools": {
+          "description": "Calls several tools in one turn.",
+          "type": "boolean"
+        },
+        "promptCache": {
+          "description": "Supports prompt caching.",
+          "type": "boolean"
+        },
+        "reasoning": {
+          "description": "Produces reasoning before answering.",
+          "type": "boolean"
+        },
+        "reasoningEfforts": {
+          "description": "Reasoning effort levels the model accepts, low to high. Empty means no effort control. Needs reasoning.",
+          "items": {
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "streaming": {
+          "description": "Streams responses.",
+          "type": "boolean"
+        },
+        "structuredOutputs": {
+          "description": "Follows a supplied JSON schema for its output.",
+          "type": "boolean"
+        },
+        "systemMessages": {
+          "description": "Accepts system instructions.",
+          "type": "boolean"
+        },
+        "tools": {
+          "description": "Calls tools.",
+          "type": "boolean"
+        },
+        "unsupportedParams": {
+          "description": "Request parameters (canonical sampling names such as temperature, top_p, top_k) the upstream rejects for this model; relay strips them before sending and reports the drop.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "vision": {
+          "description": "Accepts image input.",
+          "type": "boolean"
+        },
+        "webSearch": {
+          "description": "Supports the provider's web search tool.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Deprecation": {
+      "additionalProperties": false,
+      "properties": {
+        "replacement": {
+          "description": "Id of the model that replaces this one.",
+          "type": "string"
+        },
+        "status": {
+          "description": "active, deprecated (still served, left out of policy wildcards) or sunset (retired by the vendor).",
+          "enum": [
+            "active",
+            "deprecated",
+            "sunset"
+          ],
+          "type": "string"
+        },
+        "sunsetDate": {
+          "description": "Date the vendor stops serving the model, YYYY-MM-DD.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Modalities": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "description": "Media the model accepts, such as text, image, audio, video, pdf.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "output": {
+          "description": "Media the model produces.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ModelSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "contextWindowInput": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "contextWindowOutput": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "contextWindowTotal": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/Deprecation"
+        },
+        "deprecationDate": {
+          "type": "string"
+        },
+        "documentation": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "family": {
+          "type": "string"
+        },
+        "knowledgeCutoff": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "maxOutputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "modalities": {
+          "$ref": "#/$defs/Modalities"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "productLine": {
+          "type": "string"
+        },
+        "providerModelPageURL": {
+          "type": "string"
+        },
+        "releaseDate": {
+          "type": "string"
+        },
+        "snapshots": {
+          "items": {
+            "$ref": "#/$defs/Snapshot"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshots",
+        "pointer"
+      ],
+      "type": "object"
+    },
+    "Snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Snapshot slug, usable as a model name in requests.",
+          "type": "string"
+        },
+        "originalName": {
+          "description": "The vendor's own name for the snapshot when it differs from name.",
+          "type": "string"
+        },
+        "releasedAt": {
+          "description": "Snapshot release date, YYYY-MM-DD.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/WireOwner"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha3/Model.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/WireMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/ModelSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Model",
+  "type": "object"
+}

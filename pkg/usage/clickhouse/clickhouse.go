@@ -98,7 +98,12 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     principal                LowCardinality(String),
     credential_kind          LowCardinality(String),
     credential_id            String,
-    relay_key                LowCardinality(String)
+    relay_key                LowCardinality(String),
+    pool_id                  String,
+    account_id               String,
+    refusal                  LowCardinality(String),
+    lane_account_id          String,
+    via_account_id           String
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)`
@@ -119,6 +124,8 @@ var insertColumns = []string{
 	"principal_kind", "principal_id", "principal",
 	"credential_kind", "credential_id",
 	"relay_key",
+	"pool_id", "account_id",
+	"refusal", "lane_account_id", "via_account_id",
 }
 
 var insertSQL = "INSERT INTO " + chTable + " (" + strings.Join(insertColumns, ", ") + ")"
@@ -146,12 +153,18 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_kind LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_id String`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS relay_key LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pool_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS account_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS refusal LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS lane_account_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS via_account_id String`,
 	// Scoped reads (one project's events, one team's, one key's) filter on
 	// columns the ORDER BY does not lead with, so without a skip index every
 	// partition in the window is read.
 	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_project_id project_id TYPE bloom_filter GRANULARITY 4`,
 	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_team_id team_id TYPE bloom_filter GRANULARITY 4`,
 	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_relay_key_hash relay_key_hash TYPE bloom_filter GRANULARITY 4`,
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_lane_account_id lane_account_id TYPE bloom_filter GRANULARITY 4`,
 }
 
 // ensureSchema creates the table if absent, then verifies its columns match
@@ -207,8 +220,10 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 // and usage.Closer.
 type Sink struct {
 	conn clickhouse.Conn
-	// native is nil for an HTTP DSN, whose inserts go through conn.
-	native *nativeInserter
+	// native holds one inserter per WAL flush worker, since a ch-go client
+	// serves one query at a time. Nil for an HTTP DSN, whose inserts go
+	// through conn's pool.
+	native chan *nativeInserter
 	wal    *segmentQueue
 	log    *slog.Logger
 }
@@ -268,7 +283,10 @@ func New(cfg Config) (*Sink, error) {
 			_ = conn.Close()
 			return nil, fmt.Errorf("usage/clickhouse: current database: %w", err)
 		}
-		s.native = newNativeInserter(opts, database)
+		s.native = make(chan *nativeInserter, flushWorkers)
+		for range flushWorkers {
+			s.native <- newNativeInserter(opts, database)
+		}
 	}
 
 	wal, err := newSegmentQueue(
@@ -305,8 +323,9 @@ func (s *Sink) Close() error {
 	if err := s.wal.Close(); err != nil {
 		s.log.Warn("usage/clickhouse: wal close", "err", err)
 	}
-	if s.native != nil {
-		s.native.close()
+	// The WAL is closed, so no flush holds an inserter.
+	for range cap(s.native) {
+		(<-s.native).close()
 	}
 	return s.conn.Close()
 }
@@ -327,7 +346,9 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 	defer cancel()
 
 	if s.native != nil {
-		return s.native.insert(ctx, events)
+		n := <-s.native
+		defer func() { s.native <- n }()
+		return n.insert(ctx, events)
 	}
 	batch, err := s.conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
@@ -422,6 +443,11 @@ func insertValues(ev usage.Event) []any {
 		ev.CredentialKind,
 		ev.CredentialID,
 		ev.RelayKey,
+		ev.PoolID,
+		ev.AccountID,
+		ev.Refusal,
+		ev.LaneAccountID,
+		ev.ViaAccountID,
 	}
 }
 
@@ -435,10 +461,10 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		limit = usage.MaxEventLimit
 	}
 
-	where, args := buildWhere(q, false)
+	where, args := buildWhere(q, allRows)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id, relay_key FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id, relay_key, pool_id, account_id, refusal, lane_account_id, via_account_id FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -504,6 +530,11 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.CredentialKind,
 			&ev.CredentialID,
 			&ev.RelayKey,
+			&ev.PoolID,
+			&ev.AccountID,
+			&ev.Refusal,
+			&ev.LaneAccountID,
+			&ev.ViaAccountID,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -533,11 +564,28 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	return events, rows.Err()
 }
 
+// rowSet is which rows a query reads: an event listing every row, an aggregate (Summary/TimeSeries/Facet) the rows usage.Event.Aggregated keeps.
+type rowSet int
+
+const (
+	allRows rowSet = iota
+	usageRows
+	usageAndRefusals
+)
+
+// aggregateRows is the row set of an aggregate over q grouped by groupBy (usage.CountsRefused).
+func aggregateRows(q usage.EventQuery, groupBy string) rowSet {
+	if usage.CountsRefused(q, groupBy) {
+		return usageAndRefusals
+	}
+	return usageRows
+}
+
 // buildWhere generates the WHERE clause and positional args for an EventQuery.
-// With aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
-// rejections, status 0 + error_kind — are excluded: they belong to the logs
-// view, not usage stats. Event listings (aggregate=false) keep them.
-func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
+// An aggregate's row set excludes LogOnly events — pre-upstream rejections,
+// status 0 + error_kind — which belong to the logs view, not usage stats,
+// except relay refusals when it counts them. Event listings keep them all.
+func buildWhere(q usage.EventQuery, rows rowSet) (string, []any) {
 	var clauses []string
 	var args []any
 
@@ -604,6 +652,10 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	in("relay_key_hash", q.RelayKeyHash)
 	in("policy_id", q.PolicyID)
+	in("pool_id", q.PoolID)
+	in("account_id", q.AccountID)
+	in("lane_account_id", q.LaneAccountID)
+	in("via_account_id", q.ViaAccountID)
 	in("project_id", q.ProjectID)
 	in("team_id", q.TeamID)
 	in("principal_id", q.PrincipalID)
@@ -612,6 +664,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	in("source", q.Source)
 	in("finish_reason", q.FinishReason)
 	in("error_kind", q.ErrorKind)
+	in("refusal", q.Refusal)
 	if q.StatusMin > 0 {
 		clauses = append(clauses, "status >= ?")
 		args = append(args, uint16(q.StatusMin))
@@ -693,9 +746,12 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		args = append(args, needle, needle, needle, needle)
 	}
 
-	if aggregate {
-		// Mirrors usage.Event.LogOnly.
-		clauses = append(clauses, "NOT (status = 0 AND error_kind != '')")
+	// Mirrors usage.Event.Aggregated.
+	switch rows {
+	case usageRows:
+		clauses = append(clauses, "refusal = '' AND NOT (status = 0 AND error_kind != '')")
+	case usageAndRefusals:
+		clauses = append(clauses, "NOT (status = 0 AND error_kind != '' AND refusal = '')")
 	}
 
 	if len(clauses) == 0 {

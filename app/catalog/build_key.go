@@ -4,11 +4,11 @@ import (
 	"github.com/wyolet/relay/app/key"
 )
 
-func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
+func (s *Snapshot) addKeys(rks []*key.Key, sas idSet) {
 	now := s.clock()
 	for _, k := range rks {
 		s.indexUserKeyHashes(k)
-		clean, keep := sanitizeKey(k, pols, sas)
+		clean, keep := sanitizeKey(k, sas)
 		if !keep {
 			continue
 		}
@@ -25,18 +25,11 @@ func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
 	}
 }
 
-// sanitizeKey keeps the key when it's policy-less (PolicyID empty — the
-// inference settings flag decides runtime behavior) or when its target
-// Policy resolves. A serviceaccount principal must resolve too; user
-// principals are unchecked because users aren't in the snapshot.
-func sanitizeKey(k *key.Key, pols, sas idSet) (*key.Key, bool) {
+// sanitizeKey drops a key whose service-account principal does not resolve;
+// user principals are unchecked because users aren't in the snapshot.
+func sanitizeKey(k *key.Key, sas idSet) (*key.Key, bool) {
 	if k.Spec.Principal.Kind == key.PrincipalServiceAccount {
 		if !sas(k.Spec.Principal.ID) {
-			return nil, false
-		}
-	}
-	if k.Spec.PolicyID != "" {
-		if !pols(k.Spec.PolicyID) {
 			return nil, false
 		}
 	}
