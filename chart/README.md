@@ -232,7 +232,8 @@ Charts before Dragonfly bundled Valkey. Upgrading with the new defaults replaces
 - **Config.** Every setting has a default; override with `RELAY_CATALOG_SERVER_*` variables in `catalogServer.env`. The listen address stays `:8080`.
 - **State.** The git mirror and build scratch live on an emptyDir at `/tmp` (`catalogServer.tmpSizeLimit`), so the root filesystem stays read-only. A restarted pod clones again (about a second).
 - **Readiness.** `/readyz` turns 200 once the first sync has verified the latest release of every channel; each replica syncs on its own.
-- **Egress.** HTTPS to the repository host and its release downloads (for GitHub, `github.com` and the host its release downloads redirect to).
+- **Egress.** HTTPS to the repository host and its release downloads (for GitHub, `github.com` and the host its release downloads redirect to), and to the public addresses of relays that register for release webhooks.
+- **Webhooks.** Registrations are rate-limited per client address; set `RELAY_TRUSTED_PROXIES` in `catalogServer.env` to the proxies in front of the pods so `X-Forwarded-For` is believed. Each replica holds and nudges its own subscriptions.
 - **Exposure.** `catalogServer.ingress` or `catalogServer.httpRoute` (attached to a Gateway you name in `parentRefs`). The proxy must not compress `/releases/*`: clients check the sha256 of the stored `.gz` bytes.
 - **NetworkPolicy.** `catalogServer.networkPolicy` admits only the `from` peers (typically the ingress controller) to the server port.
 
