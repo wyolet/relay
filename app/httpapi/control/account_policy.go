@@ -101,26 +101,31 @@ func (d Deps) setAccountPolicy(ctx context.Context, ref string, policyID *string
 		return err
 	})
 	if err != nil {
-		if storage.IsConflict(err) || errors.Is(err, meta.ErrStaleResourceVersion) {
-			return nil, &httpapi.APIError{
-				Err: httpapi.APIErrorBody{
-					Type:    "invalid_request_error",
-					Code:    "conflict",
-					Message: "another change touched this account's policy binding at the same time; nothing was changed, retry the request",
-				},
-				HTTPStatus: http.StatusConflict,
-			}
-		}
-		var se huma.StatusError
-		if errors.As(err, &se) {
-			return nil, err
-		}
-		return nil, mapWriteErr("policy-binding", "", err)
+		return nil, bindingTxErr(err, "this account's policy binding")
 	}
 	if len(rows) > 0 {
 		audit.RecordEach(ctx, rows)
 	}
 	return &accountPolicyOutput{Body: out}, nil
+}
+
+// bindingTxErr answers a failed binding transaction: a concurrent write as 409 conflict, a check's own answer as is, anything else as a write error. what names the rows the conflict touched.
+func bindingTxErr(err error, what string) error {
+	if storage.IsConflict(err) || errors.Is(err, meta.ErrStaleResourceVersion) {
+		return &httpapi.APIError{
+			Err: httpapi.APIErrorBody{
+				Type:    "invalid_request_error",
+				Code:    "conflict",
+				Message: "another change touched " + what + " at the same time; nothing was changed, retry the request",
+			},
+			HTTPStatus: http.StatusConflict,
+		}
+	}
+	var se huma.StatusError
+	if errors.As(err, &se) {
+		return err
+	}
+	return mapWriteErr("policy-binding", "", err)
 }
 
 // applyAccountPolicy makes the writes planPolicyChange decides, each through its policy-bindings call's checks. d is bound to the transaction.
