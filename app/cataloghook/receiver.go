@@ -35,9 +35,9 @@ type hookMessage struct {
 }
 
 // ReleaseHandler answers the catalog server's challenge and release
-// messages. A release on channel calls nudge at most once per 10 s and never
-// waits for the check it starts.
-func ReleaseHandler(channel string, nudge func()) http.Handler {
+// messages. A release on channel calls nudge with its tag at most once per
+// 10 s; nudge must not wait for the check it starts.
+func ReleaseHandler(channel string, nudge func(tag string)) http.Handler {
 	return newReceiver(channel, nudge, time.Now)
 }
 
@@ -46,7 +46,7 @@ type receiver struct {
 	nudge   *debouncer
 }
 
-func newReceiver(channel string, nudge func(), now func() time.Time) *receiver {
+func newReceiver(channel string, nudge func(tag string), now func() time.Time) *receiver {
 	return &receiver{channel: channel, nudge: &debouncer{fn: nudge, every: nudgeInterval, now: now}}
 }
 
@@ -73,7 +73,7 @@ func (h *receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}{msg.Challenge})
 	case "release":
 		if msg.Channel == h.channel {
-			h.nudge.fire()
+			h.nudge.fire(msg.Tag)
 		}
 		w.WriteHeader(http.StatusAccepted)
 	default:
@@ -81,9 +81,10 @@ func (h *receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// debouncer calls fn at most once per every; calls in between are dropped.
+// debouncer calls fn at most once per every; calls in between are dropped
+// with their tag.
 type debouncer struct {
-	fn    func()
+	fn    func(tag string)
 	every time.Duration
 	now   func() time.Time
 
@@ -91,7 +92,7 @@ type debouncer struct {
 	last time.Time
 }
 
-func (d *debouncer) fire() {
+func (d *debouncer) fire(tag string) {
 	d.mu.Lock()
 	n := d.now()
 	if !d.last.IsZero() && n.Sub(d.last) < d.every {
@@ -100,5 +101,5 @@ func (d *debouncer) fire() {
 	}
 	d.last = n
 	d.mu.Unlock()
-	d.fn()
+	d.fn(tag)
 }

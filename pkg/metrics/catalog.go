@@ -21,6 +21,9 @@ const (
 	CatalogCheckFailed        = "failed"
 	CatalogCheckSkippedLocked = "skipped_locked"
 	CatalogCheckSkippedOlder  = "skipped_older"
+	// CatalogCheckHintUnseen is a re-check after a release webhook whose
+	// index still didn't list the announced release.
+	CatalogCheckHintUnseen = "hint_unseen"
 )
 
 // CatalogChecks counts the catalog index checks a relay following the latest
@@ -29,7 +32,7 @@ var CatalogChecks = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Namespace: Namespace,
 		Name:      "catalog_checks_total",
-		Help:      "Catalog index checks made while running, by result (unchanged, updated, failed, skipped_locked, skipped_older).",
+		Help:      "Catalog index checks made while running, by result (unchanged, updated, failed, skipped_locked, skipped_older, hint_unseen).",
 	},
 	[]string{"result"},
 )
@@ -47,7 +50,7 @@ var CatalogSeededVersion = prometheus.NewGaugeVec(
 
 func init() {
 	Register(CatalogApplyErrors, CatalogChecks, CatalogSeededVersion)
-	for _, r := range []string{CatalogCheckUnchanged, CatalogCheckUpdated, CatalogCheckFailed, CatalogCheckSkippedLocked, CatalogCheckSkippedOlder} {
+	for _, r := range []string{CatalogCheckUnchanged, CatalogCheckUpdated, CatalogCheckFailed, CatalogCheckSkippedLocked, CatalogCheckSkippedOlder, CatalogCheckHintUnseen} {
 		CatalogChecks.WithLabelValues(r)
 	}
 }

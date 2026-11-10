@@ -129,6 +129,12 @@ func (rs *releaseServer) fetchCount(v string) int {
 	return rs.fetches[v]
 }
 
+func (rs *releaseServer) indexReads() int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return len(rs.sentETag)
+}
+
 func (rs *releaseServer) lastSentETag() string {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -247,6 +253,53 @@ func TestIntegration_Follower_SeedsANewRelease(t *testing.T) {
 	}
 	if cur := catalogSource(t, ctx, stores); cur.Version != "v1.1.0" || cur.SeededAt == "" {
 		t.Fatalf("catalog-source = %+v", cur)
+	}
+}
+
+// A webhook for a release the index doesn't list yet, as when it is read from
+// a catalog server replica that hasn't synced, is seeded by the one re-check.
+func TestIntegration_Follower_RecheckSeedsALaggingRelease(t *testing.T) {
+	pool, ctx, cancel := setupDB(t)
+	defer cancel()
+	rs := newReleaseServer(t)
+	rs.release("v1.0.0", "acme")
+	opts := rs.opts(pool, "latest")
+	_, stores, _ := hydrate(t, ctx, opts)
+	rs.release("v1.1.0", "acme", "beta")
+	rs.setLatest("v1.0.0")
+	reads := rs.indexReads()
+
+	f := NewFollower(stores, opts)
+	f.recheckDelay = 100 * time.Millisecond
+	runCtx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { f.Run(runCtx, 0); close(done) }()
+	defer func() { stop(); <-done }()
+
+	f.Nudge("v1.1.0")
+	deadline := time.Now().Add(5 * time.Second)
+	for rs.indexReads() < reads+1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the nudge started no check")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	rs.setLatest("v1.1.0")
+	for catalogSource(t, ctx, stores).Version != "v1.1.0" {
+		if time.Now().After(deadline) {
+			t.Fatal("the re-check never seeded v1.1.0")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(3 * f.recheckDelay)
+	if n := rs.indexReads() - reads; n != 2 {
+		t.Fatalf("index reads = %d, want 2 (the check and one re-check)", n)
+	}
+	if n := rs.fetchCount("v1.1.0"); n != 1 {
+		t.Fatalf("v1.1.0 fetched %d times, want 1", n)
+	}
+	if got := providerNames(t, ctx, stores); got != "acme,beta" {
+		t.Fatalf("providers = %s", got)
 	}
 }
 
