@@ -94,6 +94,10 @@ type Deps struct {
 	// Stores is the bundle of typed stores used by CRUD writes.
 	Stores *appcatalog.Stores
 
+	// CatalogSync runs one catalog check for POST /catalog/sync. nil means the
+	// relay doesn't follow the catalog, and the endpoint answers 409.
+	CatalogSync func(ctx context.Context) (appcatalog.CheckResult, error)
+
 	// Plans lets a token mint or key create answer once this pod serves what it wrote; nil answers at once.
 	Plans PlanWaiter
 
@@ -217,6 +221,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
+	registerCatalogSync(api, d, protect)
 	registerSecretKeys(api, d, protect)
 	// Generic CRUD for every registered kind; the rows are how each kind finds one.
 	rows := registerCRUD(api, d, protect)

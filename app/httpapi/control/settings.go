@@ -51,7 +51,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.CatalogSource](api, d, protect, settings.Section{
 		Name:        settings.SectionCatalogSource,
-		Description: "Provenance of the seeded public catalog: the version last seeded and when. Compared against RELAY_CATALOG_VERSION at boot; a mismatch triggers a re-seed (operator-edited rows are skipped, overlays re-apply). Blank the version to force a re-seed on the next boot.",
+		Description: "Provenance of the seeded public catalog: the version last seeded and when, and the last check a relay following latest made while running. Compared against RELAY_CATALOG_VERSION at boot; a mismatch triggers a re-seed (operator-edited rows are skipped, overlays re-apply), unless the stored version is newer. Blank the version to force a re-seed on the next boot.",
 	})
 	registerSettingsSection[settings.AuthOIDC](api, d, protect, settings.Section{
 		Name:        settings.AuthOIDCSection,
