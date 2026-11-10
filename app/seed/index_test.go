@@ -8,11 +8,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wyolet/relay/sdk/catalogsource"
 )
 
 func TestChannel(t *testing.T) {
 	if got := Channel(); got != "v1alpha3" {
 		t.Fatalf("Channel() = %q, want v1alpha3", got)
+	}
+}
+
+// The SDK resolves "latest" within its own channel constant; it must track the
+// schema relay parses, or SDK clients read an older channel's releases.
+func TestChannelMatchesSDK(t *testing.T) {
+	if Channel() != catalogsource.Channel {
+		t.Fatalf("seed.Channel() = %q, sdk catalogsource.Channel = %q", Channel(), catalogsource.Channel)
 	}
 }
 
