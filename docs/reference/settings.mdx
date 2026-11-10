@@ -190,8 +190,10 @@ A user's own `personalAccount` wins over it, then their enabled system groups' (
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `version` | _(empty)_ | Catalog release the database was last seeded from. Relay compares it with `RELAY_CATALOG_VERSION` at boot and re-seeds on a mismatch. Blank it to force a re-seed on the next boot. |
+| `version` | _(empty)_ | Catalog release the database was last seeded from. Relay compares it with `RELAY_CATALOG_VERSION` at boot and re-seeds on a mismatch, unless this release is newer. Blank it to force a re-seed on the next boot. |
 | `seededAt` | _(empty)_ | When that seed finished (RFC 3339). |
+| `checkedAt` | _(empty)_ | When a relay with `RELAY_CATALOG_VERSION=latest` last checked the catalog index while running (RFC 3339). |
+| `lastError` | _(empty)_ | Why that check failed: the index could not be read, or the release could not be downloaded, verified or seeded. Empty after a check or seed that succeeded. |
 
 Relay writes this section itself. See [Pinning a catalog version](/concepts/catalog#pinning-a-catalog-version).
 
