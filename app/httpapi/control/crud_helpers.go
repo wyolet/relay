@@ -10,10 +10,10 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func stampOwnerID(ctx context.Context, o *meta.Owner) error { return refcheck.StampOwnerID(ctx, o) }

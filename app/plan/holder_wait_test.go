@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/plan/plantest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A writer waiting on a lane returns once a publish carries it, and a closed lane is not open; with nothing published it gives up when its context ends.

@@ -3,8 +3,8 @@ package group
 import (
 	"encoding/json"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ToDirectory is g as the directory stores it. External is left out: the directory keeps the stored one when a write carries none, and a caller must not be able to set it.

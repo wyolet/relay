@@ -24,8 +24,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {

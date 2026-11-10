@@ -18,10 +18,10 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 type detachResponse struct {

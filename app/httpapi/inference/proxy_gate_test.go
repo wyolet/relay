@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/httpheader"
 )
 

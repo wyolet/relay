@@ -9,12 +9,12 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // credentialSubjectsAt37 writes a host, one account with two keys, a policy and the bindings named, then goes back to 37, where policy bindings could still name a host key, and gives each binding the subjects subjects(keys, account) returns.

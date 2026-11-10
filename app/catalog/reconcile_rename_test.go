@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/slug"
 )
 

@@ -1,9 +1,9 @@
 package rolebinding
 
 import (
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ToDirectory is b as the directory stores it.

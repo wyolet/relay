@@ -3,8 +3,8 @@ package policy_test
 import (
 	"testing"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A provider wildcard ("anthropic/*") is a valid grant and a valid rate-limit scope, as the Policy shape shows.

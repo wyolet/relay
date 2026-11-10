@@ -3,8 +3,8 @@ package adapter
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/pkg/adapters"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 

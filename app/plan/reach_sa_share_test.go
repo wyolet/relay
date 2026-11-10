@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // saShare is a project policy bound to its service account, whose only pool lists an account shared to that service account.

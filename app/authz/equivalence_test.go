@@ -16,7 +16,6 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -26,6 +25,7 @@ import (
 	coreauthz "github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/rbac"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // eqPlurals are the action kinds the matrix covers: every role-rule kind, catalog and shared catalog kinds among them.

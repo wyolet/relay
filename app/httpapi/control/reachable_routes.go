@@ -9,12 +9,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 type reachableOut struct {

@@ -6,8 +6,8 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // render is the explanation with every id the reader would otherwise have to look up named.

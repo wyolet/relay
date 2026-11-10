@@ -22,12 +22,12 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // auditSink collects the events an audited request produced.

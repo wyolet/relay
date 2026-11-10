@@ -7,13 +7,13 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // AccountAction is what a ManagedAccount needs done to its row.

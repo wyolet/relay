@@ -15,9 +15,9 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {

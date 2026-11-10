@@ -7,8 +7,8 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Caller accounts are relay's: none is created through the API, and only a closed member account is deleted on its own; a provider account is the caller's to create and delete.

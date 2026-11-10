@@ -11,8 +11,8 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A host key names its provider account on create and on update; one that names none is refused and no account appears for it.

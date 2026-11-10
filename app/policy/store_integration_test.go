@@ -14,13 +14,13 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // storeFixture is the row graph a policy needs before it can link anything:

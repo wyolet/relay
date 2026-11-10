@@ -11,8 +11,8 @@ import (
 	"sort"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Wildcard matches any kind or verb inside a rule.

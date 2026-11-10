@@ -11,7 +11,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -20,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // CatalogIndex is the catalog a route fill resolves against: a snapshot of the catalog kinds alone, with each host's enabled bindings for expanding scoped upstream rules.

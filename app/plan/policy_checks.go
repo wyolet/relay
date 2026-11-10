@@ -10,11 +10,11 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // policyCheck is the kind of the policy checks' output, which they never build: a check only attaches issues to the policy.

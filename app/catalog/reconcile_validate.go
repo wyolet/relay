@@ -5,7 +5,6 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -13,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // "Required-ref" validators used by the COW reconciler. A required ref is

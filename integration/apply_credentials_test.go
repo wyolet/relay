@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // users.update with system.apply is not a grant to sign in as an account: a password or identity set through apply, on another account or on a new one, needs an admin. The refusal comes at plan time, so nothing in the bundle is written.

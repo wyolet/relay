@@ -6,11 +6,11 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/slug"
 )
 

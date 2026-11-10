@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func managedGroupRows() *Rows {

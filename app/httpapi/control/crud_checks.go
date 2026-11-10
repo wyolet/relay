@@ -6,8 +6,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // kindChecks are the grant, governance and row checks a kind's CRUD routes run before a write. Routes that write rows of the kind on the way to something else call the same ones, so the two never drift.

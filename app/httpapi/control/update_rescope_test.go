@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/refcheck"
@@ -23,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // rescopeFixture is team T with projects P1 and P2. The caller is

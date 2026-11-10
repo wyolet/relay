@@ -22,8 +22,8 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // --- read scoping ---

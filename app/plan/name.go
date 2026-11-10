@@ -8,7 +8,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -23,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // NameOf returns the slug of the input object ref names in v: a user's username, every other input kind's metadata name. Empty when the object is absent, and for overlays and derived kinds, which have no slug.

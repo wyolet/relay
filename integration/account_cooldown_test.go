@@ -13,15 +13,15 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // cooldownStack serves "cooldown-model" at one host whose upstream answers its first call 429 (Retry-After 30 s) and every later one 200; a user's key reaches the host's system-owned credentials by ownership.

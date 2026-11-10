@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // aliasDispatchCatalog rebuilds the standard dispatch fixture so the host

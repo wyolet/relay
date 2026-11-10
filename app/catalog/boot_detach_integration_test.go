@@ -15,11 +15,11 @@ import (
 
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // detachBase is what every release of the test catalog ships: the provider,

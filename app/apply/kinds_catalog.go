@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	apppool "github.com/wyolet/relay/app/pool"
@@ -20,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // catalogDocs are the catalog and upstream documents of one bundle, by kind.

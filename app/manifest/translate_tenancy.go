@@ -2,10 +2,10 @@ package manifest
 
 import (
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ---------------------------------------------------------------------------

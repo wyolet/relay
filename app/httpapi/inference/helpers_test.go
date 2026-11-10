@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/auth/apikey"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 

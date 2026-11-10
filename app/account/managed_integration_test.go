@@ -8,12 +8,12 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Concurrent first saves of one caller account converge on one row; a second place whose name is taken gets a suffix; the membership marks round-trip; deleting the user or the project takes the accounts along.

@@ -31,7 +31,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/provider"
@@ -39,6 +38,7 @@ import (
 	"github.com/wyolet/relay/app/seed"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // bundle is the fixture manifest: one team, its project, and rows owned by

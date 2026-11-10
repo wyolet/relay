@@ -8,9 +8,9 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // resource builds the authz.Resource the real request would authorize: a named row through its kind's own lookup, a collection with the owner its list or create route uses. Rows and owners the caller cannot see answer 404, as their routes do, so a review never reveals them.

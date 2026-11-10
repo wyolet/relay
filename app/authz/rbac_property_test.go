@@ -17,7 +17,6 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
@@ -25,6 +24,7 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // probe is one (kind, verb) pair the properties evaluate. Kinds are the

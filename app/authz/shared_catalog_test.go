@@ -6,9 +6,9 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 var sharedCatalogPlurals = []string{"hosts", "host-bindings", "providers", "models", "pricings"}

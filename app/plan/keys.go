@@ -9,10 +9,10 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Root is what the request path loads: the indexes of one published generation.

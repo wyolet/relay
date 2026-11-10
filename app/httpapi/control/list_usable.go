@@ -14,8 +14,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const (

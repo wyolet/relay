@@ -12,8 +12,8 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // newGroupsHarness mounts registerKind for the real group kind — Team,

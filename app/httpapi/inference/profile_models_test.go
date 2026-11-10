@@ -4,19 +4,19 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/clientprofile"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // entriesFixture builds one model served by a keyed, priced host and a

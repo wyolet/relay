@@ -9,13 +9,13 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Codes of a dropped link, besides the issue codes ref_missing, link_out_of_scope, host_disabled, host_mismatch and pool_member_unusable.

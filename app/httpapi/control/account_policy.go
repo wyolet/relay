@@ -15,10 +15,10 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/slug"
 )
 

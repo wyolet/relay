@@ -10,8 +10,8 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func systemGroup(value string, members ...string) *group.Group {

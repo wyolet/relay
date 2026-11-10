@@ -9,12 +9,12 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settings/settingstest"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // teamPlan runs one Team document set through planKind against the given

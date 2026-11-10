@@ -7,9 +7,9 @@ import (
 
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // benchKeys builds n user-principal keys across m groups, the shape a

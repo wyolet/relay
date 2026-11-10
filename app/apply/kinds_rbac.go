@@ -6,11 +6,11 @@ import (
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func (b *builder) planGroupsAndRoles(ctx context.Context, grpDocs []*manifest.GroupDTO, roleDocs []*manifest.RoleDTO) error {

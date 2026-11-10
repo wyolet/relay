@@ -20,8 +20,8 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // newDiscardUpstream stands in for a provider these tests never call: the

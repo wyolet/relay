@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
@@ -17,6 +16,7 @@ import (
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgrelay "github.com/wyolet/relay/sdk/v1"

@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func groupSubject(name string) []rolebinding.Subject {

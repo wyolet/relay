@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // planWithReload builds a one-entry update plan for a Team and points its

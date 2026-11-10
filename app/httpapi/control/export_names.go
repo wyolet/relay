@@ -3,8 +3,8 @@ package control
 import (
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // nameOwner rewrites an owner reference from the stored id to the slug the

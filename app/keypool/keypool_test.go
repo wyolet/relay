@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // poolRef is a tiny test-only struct that mirrors what Pick now takes:

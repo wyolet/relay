@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // rowStore is the shared row every plan targets: one Team, guarded, with an

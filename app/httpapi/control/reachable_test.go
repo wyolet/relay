@@ -16,13 +16,13 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // reachAuthz allows every authenticated caller except writing a policy in noCreate, and hides rows owned by hidden.

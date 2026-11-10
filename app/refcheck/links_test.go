@@ -13,13 +13,13 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // hidingAuthz scopes reads and hides the listed row ids.

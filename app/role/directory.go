@@ -1,9 +1,9 @@
 package role
 
 import (
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ToDirectory is r as the directory stores it.

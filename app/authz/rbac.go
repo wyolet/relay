@@ -4,12 +4,12 @@ import (
 	"context"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // catalogKinds are the shared template kinds every authenticated caller may

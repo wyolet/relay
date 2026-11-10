@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
@@ -16,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // dispatchFixture is the plans behind one buildDispatchCatalog catalog, so a later edit (pointHostAt) reaches the principal the test already holds.

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestVerifiedClaimsAreCachedPerBearer(t *testing.T) {

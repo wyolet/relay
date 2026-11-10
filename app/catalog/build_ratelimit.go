@@ -1,8 +1,8 @@
 package catalog
 
 import (
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func (s *Snapshot) addRateLimits(rls []*ratelimit.RateLimit, projects idSet) {

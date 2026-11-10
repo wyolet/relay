@@ -9,7 +9,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
@@ -17,6 +16,7 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func applyQ[T any](t *testing.T, s filter.Schema[T], q string, items []*T) ([]*T, int) {

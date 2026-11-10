@@ -16,7 +16,6 @@ import (
 	"os"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
@@ -30,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/pkg/adapters"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"

@@ -13,13 +13,11 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
@@ -34,8 +32,10 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/apikey"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/slug"
 )
 

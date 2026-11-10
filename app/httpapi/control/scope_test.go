@@ -17,8 +17,8 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // scopedThing is a minimal entity for exercising registerKind's owner

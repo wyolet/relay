@@ -5,9 +5,9 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/refcheck"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // registerUpstreamCRUD wires accounts, pools and budgets: the rows a policy

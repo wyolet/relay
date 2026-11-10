@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A SCIM token creates accounts and decides group membership, so managing SCIM clients takes an admin: a custom role holding every scim-clients verb is refused. A revoked client's name is not issued again, so no new token takes over what the old one provisioned.

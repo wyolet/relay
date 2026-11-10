@@ -9,17 +9,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits/lua"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
+	"github.com/wyolet/relay/pkg/meta"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 

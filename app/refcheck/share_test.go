@@ -11,9 +11,9 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // editsOnly lets the caller edit accounts of the listed owners and see every row but the hidden ids; every other action passes.

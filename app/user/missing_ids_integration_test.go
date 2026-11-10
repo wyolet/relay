@@ -10,9 +10,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func setupUserDB(t *testing.T) (*user.Store, context.Context) {

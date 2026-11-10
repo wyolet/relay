@@ -7,10 +7,10 @@ import (
 	"slices"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/auth/principal"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // grantCreatorAdmin binds the signed-in user who created a team or project to that scope's built-in admin role, so they can run what they made and the plans open their member account there. The admin token is no user and gets none; a binding already granting the role is left alone. Apply does not come here: a manifest states its bindings.

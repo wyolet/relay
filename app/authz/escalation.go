@@ -7,9 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // CheckGrant reports whether the caller may bind r at scope. Every (kind,

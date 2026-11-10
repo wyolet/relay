@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // asAlice is a Visible predicate for the tests: alice sees non-user rows

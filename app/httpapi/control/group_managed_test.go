@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // managedGroups refuses every write the way the directory refuses one to a group a provisioning source manages.

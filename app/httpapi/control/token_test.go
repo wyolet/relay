@@ -22,7 +22,6 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/settings"
@@ -30,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	authtoken "github.com/wyolet/relay/auth/token"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // tokenUsers is the in-memory user store the token handlers read versions

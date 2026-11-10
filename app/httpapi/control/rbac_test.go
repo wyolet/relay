@@ -8,9 +8,9 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/license"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func customRole(name string) *role.Role {

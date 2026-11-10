@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/meta"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
 )
 

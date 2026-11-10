@@ -15,10 +15,10 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

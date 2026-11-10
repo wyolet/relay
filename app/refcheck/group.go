@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // CodeInUse is the error code of a write refused because other rows still

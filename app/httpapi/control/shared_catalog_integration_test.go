@@ -14,12 +14,12 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // The whole control API in roles mode over Postgres: a signed-in user with no
