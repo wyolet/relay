@@ -75,9 +75,6 @@ app/                       — the application: domain + composition + handlers
                              on pristine TEMPLATE rows, merged to EFFECTIVE
                              rows at snapshot load (survives re-seed). See
                              .tmp/design/overlays.md.
-  modelref/                — parses the catalog model-reference DSL + aliases
-  meta/                    — identity primitives every entity carries (id/
-                             name/displayName, owner)
   settings/                — typed-sectioned config layer (DB-backed settings,
                              incl. governance:* sections). See .tmp/design/settings.md.
   settingswatch/           — applies a value-typed settings section to a live
@@ -87,7 +84,6 @@ app/                       — the application: domain + composition + handlers
                              parameterised by upstream URL + auth strategy.
                              ONE Spec literal per wire shape lives in
                              cmd/relay/main.go.
-  adapters/                — vocabulary only: Name constants
   pipeline/                — pure orchestration: reserve → pick key →
                              Adapter.Call → stream → post-flight emit
   proxy/                   — second inference flow: transparent forwarding
@@ -121,6 +117,10 @@ app/                       — the application: domain + composition + handlers
                              → usage events (source="otlp"); records, never enforces
 
 pkg/                       — server-internal shared libs (NOT the SDK)
+  meta/                    — identity primitives every entity carries (id/
+                             name/displayName, owner)
+  modelref/                — parses the catalog model-reference DSL + aliases
+  adapters/                — vocabulary only: Name constants
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   lifecycle/               — per-request Context + PreFlightMiddleware +
@@ -418,7 +418,7 @@ multi-tenancy lands the Route + Org/Project hierarchy comes back per
 
 ### Identity model (every catalog resource)
 
-Three-field identity (`app/meta`), each with a distinct role:
+Three-field identity (`pkg/meta`), each with a distinct role:
 
 - `metadata.id` — UUIDv7, **immutable**, server-stamped on create. PG
   primary key. Used in all id-routed admin URLs.
@@ -434,7 +434,7 @@ collision suffix) are pure helpers.
 
 ### Model resolution + aliases
 
-Model references resolve through `app/modelref` (the catalog reference
+Model references resolve through `pkg/modelref` (the catalog reference
 DSL). Resolution-only **aliases** are last-priority matchers attached to a
 Model (`spec.aliases`, e.g. `gpt-5-5[1m]`, wildcard `[*]`); a matched
 alias routes to that model but the upstream model name is sent verbatim.

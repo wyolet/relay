@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // planOverlays diffs the model overlays. Overlays carry no metadata of their

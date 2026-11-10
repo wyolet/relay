@@ -5,8 +5,8 @@ import (
 	"sort"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // The catalog repo holds one apiVersion per tree, so drafts follow the relay's.

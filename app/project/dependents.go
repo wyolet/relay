@@ -8,12 +8,12 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Rows are the rows that can live under a team or project. Deleting the

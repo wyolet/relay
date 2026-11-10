@@ -14,7 +14,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -31,6 +30,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Stores bundles every store a plan reads or writes. Declared here rather

@@ -6,11 +6,11 @@ import (
 	"slices"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // errEnvPassword refuses an environment-sourced password where the environment is the server's and the caller is not its operator.

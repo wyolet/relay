@@ -6,7 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // hostview.go is the host-detail mirror of the model/policy projections. A Host

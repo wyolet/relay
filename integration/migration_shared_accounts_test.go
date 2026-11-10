@@ -11,13 +11,13 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Rolling back below 000040 deletes the shares an older release cannot route and keeps the real account, the pool, which loses the accounts it listed, and a key whose lane was a share, which falls back to its principal's account; upgrading again adds the columns and the junction back, and a share writes as before.

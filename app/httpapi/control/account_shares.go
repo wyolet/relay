@@ -16,11 +16,11 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // defaultShareUsageWindow is how far back a share list counts usage when since is omitted.

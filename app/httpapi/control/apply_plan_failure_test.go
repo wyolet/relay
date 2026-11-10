@@ -11,8 +11,8 @@ import (
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // unresolvedUserErr is the plan error for a Group naming an unknown user.

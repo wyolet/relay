@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // mutModList is a ModelLister whose contents can change after the initial

@@ -13,11 +13,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/secret"
 )
 

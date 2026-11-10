@@ -10,7 +10,7 @@ package project
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // LegacyID is the id of the `legacy` project the tenancy migration creates

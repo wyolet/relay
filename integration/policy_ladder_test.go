@@ -19,16 +19,16 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ladderStack is a stack serving "ladder-model" (one USD per token, so each answer of one input and one output token costs two dollars) at a host whose upstream records the credential each call used, a system-owned credential every principal reaches by ownership, and a user's key.

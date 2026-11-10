@@ -4,11 +4,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // personalPolicy is a policy owned by u.

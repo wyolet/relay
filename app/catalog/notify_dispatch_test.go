@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Every kind parseEvent accepts must reach a handler. A kind added to

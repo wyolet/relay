@@ -12,12 +12,12 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/auth/apikey"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func emptyPlanView(t *testing.T) func() *engine.View {

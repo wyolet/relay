@@ -19,17 +19,17 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestOperatorWalk(t *testing.T) {

@@ -3,9 +3,9 @@ package control
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func overlayTmpl() *model.Model {

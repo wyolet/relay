@@ -9,8 +9,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A user who creates a team or project through the API administers it, and so has a member account there; the admin token and apply create no binding.

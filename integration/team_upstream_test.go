@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A team owns host keys and rate limits like its pools: they serve the team and its projects, the team's keys join an account of the team's own, and they keep the team from being deleted.

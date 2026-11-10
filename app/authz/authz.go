@@ -18,8 +18,8 @@ import (
 	"context"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
 	coreauthz "github.com/wyolet/relay/auth/authz"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ErrUnauthenticated is returned when the call has no actor in context.

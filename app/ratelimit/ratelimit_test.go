@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func fix(name string, owner meta.OwnerKind) *RateLimit {

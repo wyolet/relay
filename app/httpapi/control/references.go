@@ -24,10 +24,10 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 type referenceItem struct {

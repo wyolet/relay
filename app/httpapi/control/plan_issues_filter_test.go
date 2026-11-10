@@ -9,11 +9,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // disabledLimitDeps mounts a view in which a policy links a disabled rate limit: one issue on the policy, naming the rate limit.

@@ -16,12 +16,12 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/meta"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )

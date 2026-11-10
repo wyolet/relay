@@ -3,7 +3,7 @@ package audit
 import (
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Actor kinds. Anonymous covers unauthenticated callers — notably a failed

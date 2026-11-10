@@ -9,11 +9,11 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
 	appteam "github.com/wyolet/relay/app/team"
 	appuser "github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A share round-trips with its real account and receiver, takes a free name, is refused a second time for one receiver, goes with its receiving team or user, and keeps its real account from being deleted under it.

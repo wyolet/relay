@@ -27,7 +27,7 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalogview"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // viewService builds the read-projection service for one request. When the

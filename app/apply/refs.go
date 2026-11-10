@@ -7,7 +7,6 @@ import (
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	apppool "github.com/wyolet/relay/app/pool"
@@ -19,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // refs is the control API's cross-row rule set over this run's rows: the

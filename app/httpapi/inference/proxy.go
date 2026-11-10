@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	apphost "github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/limits"
@@ -18,6 +17,7 @@ import (
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/auth/apikey"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"

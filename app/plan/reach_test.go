@@ -3,11 +3,11 @@ package plan_test
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Without a caller policy a service account reaches the credentials its own scopes own (its project's, its team's) and the system's, innermost owner first, and nothing another scope owns.

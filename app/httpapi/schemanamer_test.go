@@ -4,11 +4,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Re-declared here with the same name as control.listBody so the

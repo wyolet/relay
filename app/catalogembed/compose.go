@@ -8,10 +8,10 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/meta"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 

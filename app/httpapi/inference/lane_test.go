@@ -9,12 +9,12 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // laneStack is the principal stack behind LaneMiddleware, recording the path the routes saw.

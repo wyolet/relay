@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/meta"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // Policy is the access gate. Composition enforces that every linked id

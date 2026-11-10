@@ -7,10 +7,10 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A request through a shared account records the real account, whose bill it is, and the share it went through.

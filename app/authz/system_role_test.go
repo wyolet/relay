@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Creating a role binding means reading the Role it names. The built-ins are

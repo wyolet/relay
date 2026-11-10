@@ -74,7 +74,7 @@ echo "Rule 4b — no vendor names in Go identifier declarations (app/, pkg/, int
 # anthropicStreamHead) — these are about vendor wire formats, not shared infrastructure.
 #
 # Allowlist (explicit, justified):
-#   app/adapters/name.go           — OpenAI/Anthropic/Gemini/OpenAIResponses/OpenAIEmbeddings
+#   pkg/adapters/name.go           — OpenAI/Anthropic/Gemini/OpenAIResponses/OpenAIEmbeddings
 #                                    are the adapter-vocabulary Name constants; vendor names
 #                                    here are the deliberate public identity of each wire protocol.
 #   pkg/clientprofile/claudecode.go — anthropicModel/anthropicModelList implement the Anthropic
@@ -85,7 +85,7 @@ vendor_id_hits=$(
     '^\s*(type\s+\w*(openai|anthropic|gemini)|func\s+(\([^)]*\)\s*)?\w*(openai|anthropic|gemini)|(var|const)\s+\w*(openai|anthropic|gemini))\w*' \
     app/ pkg/ internal/ --include='*.go' \
   | grep -v '_test\.go:' \
-  | grep -v 'app/adapters/name\.go:' \
+  | grep -v 'pkg/adapters/name\.go:' \
   | grep -v 'pkg/clientprofile/claudecode\.go:' \
   || true
 )

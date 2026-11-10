@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // The owner shapes a Policy accepts differ by rung: a host-owned row is a

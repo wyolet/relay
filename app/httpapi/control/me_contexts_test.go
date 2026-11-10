@@ -12,11 +12,11 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A team admin gets the team and its projects as admin contexts; a developer reached through a group gets that project alone; a viewer gets nothing to create in; the admin token gets every scope and no personal one.

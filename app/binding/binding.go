@@ -16,8 +16,8 @@ package binding
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Binding declares how one Host serves one Model.

@@ -1,7 +1,7 @@
 package apply
 
 import (
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // index is a mutable name→id map per kind, populated from the existing rows

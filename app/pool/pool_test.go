@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func fix() *Pool {

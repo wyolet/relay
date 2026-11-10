@@ -7,11 +7,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // An item runs under the plans it started with: plans published while it runs (the submitter disabled, its fallback credential gone) do not reach it, so its failover still goes to the credential its route held.

@@ -7,9 +7,9 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // kindWiring is the per-kind glue planKind needs: the documents, the name→id

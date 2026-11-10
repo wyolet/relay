@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // linkedRows holds a system policy linking a pool, a rate limit and a

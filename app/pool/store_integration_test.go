@@ -13,10 +13,10 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/secret"
 )
 

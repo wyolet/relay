@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/wyolet/relay/app/meta"
+import "github.com/wyolet/relay/pkg/meta"
 
 // global is the outermost scope every chain ends in.
 var global = meta.Owner{Kind: meta.OwnerSystem}

@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func wantHops(t *testing.T, r *Route, want ...[]string) {

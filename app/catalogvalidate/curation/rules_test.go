@@ -5,8 +5,8 @@ import (
 
 	"github.com/wyolet/relay/app/catalogvalidate"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestRuleNames(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Without an authorizer (the seed, the CLI) apply still keeps a binding to accounts inside its owner's scope: a project binds its own service account's account and not another project's.

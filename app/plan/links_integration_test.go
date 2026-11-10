@@ -11,7 +11,6 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -22,6 +21,7 @@ import (
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // loadPlans runs a plan engine over the stores, as boot does, and returns the view it published.

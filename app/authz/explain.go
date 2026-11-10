@@ -5,9 +5,9 @@ import (
 	"errors"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ErrNoExplanation is Explain's error from an authorizer that cannot say why it decides, such as the single-user one, which allows every authenticated caller everything.

@@ -8,11 +8,11 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // UsableScope checks the scope a picker asks for exists: a team or project must exist (400) and be visible (404), and a user scope must name a user (400). Whether the caller may write in it is the authorizer's decision, taken by the caller of this check.

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const rlUUID = "0195f8a0-0000-7000-8000-000000000033"

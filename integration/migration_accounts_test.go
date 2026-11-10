@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
@@ -26,6 +25,7 @@ import (
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A database with a subject already in two policy bindings stops the upgrade with a message naming the subject and both bindings, rather than failing on the unique index.

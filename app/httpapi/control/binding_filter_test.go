@@ -10,9 +10,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestRoleBindingFilter(t *testing.T) {

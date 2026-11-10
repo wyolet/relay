@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // labelSelector is an equality-only label match: every pair must be present

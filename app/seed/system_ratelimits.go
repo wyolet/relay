@@ -8,8 +8,8 @@ import (
 	"sort"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // systemRateLimitStore is the part of ratelimit.Store the system seed uses.

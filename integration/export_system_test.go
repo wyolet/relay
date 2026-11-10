@@ -11,10 +11,10 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // seedHostTiers writes what a catalog seed leaves for one host: the host, a

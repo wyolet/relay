@@ -5,8 +5,8 @@ package catalog
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Hydrate runs the initial Reload and only constructs the Listener; LISTEN

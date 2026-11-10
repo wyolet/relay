@@ -3,8 +3,8 @@ package manifest
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // These convert between relay's wire DTOs for the module's kinds and the module's documents. They carry every field across; the module owns what the fields mean.

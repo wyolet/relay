@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const validHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

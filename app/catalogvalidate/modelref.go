@@ -3,7 +3,7 @@ package catalogvalidate
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // validateModelRef parses one model-ref DSL string a policy holds at field

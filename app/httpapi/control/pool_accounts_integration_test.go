@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A pool naming only an account reaches its keys on every read: the policy's hosts, the key's policies and the pool list's account_id filter. Through a share the keys are read-only, and the sharer is not told the receiver's policies.

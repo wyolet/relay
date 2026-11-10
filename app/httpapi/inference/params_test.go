@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/httpheader"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )

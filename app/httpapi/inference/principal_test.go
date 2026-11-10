@@ -16,7 +16,6 @@ import (
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
@@ -27,6 +26,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // principalStack wires a catalog holding one team → project → service

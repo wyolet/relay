@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A rotated key's previous hash is indexed only while its grace window is

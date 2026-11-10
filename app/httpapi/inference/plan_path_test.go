@@ -10,19 +10,19 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // listingWorld serves "allowed" and "denied" at a keyed host through a system credential, and "keyless" at a host that needs no key and no pool reaches; the user's policy grants "allowed" and "keyless".

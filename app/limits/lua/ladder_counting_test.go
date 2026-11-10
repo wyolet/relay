@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
@@ -21,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )

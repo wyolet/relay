@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // buildTimeoutSpec returns a spec whose deadlines are shortened to test speed. The fields are unexported and set post-Build on purpose: the production values come from the constants + SetUpstreamStreamIdleTimeout.

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // Anthropic's clients retry a 529 overloaded_error as an overload; a 429 reads to them as their own rate limit.

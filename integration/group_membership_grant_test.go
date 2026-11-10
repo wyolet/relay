@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/audit"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A member of a group acts under every binding naming it, so adding one takes the grant check of those bindings. The caller may edit groups everywhere but holds team-admin only in team alpha: it may fill a group bound within alpha, not one bound to admin globally.

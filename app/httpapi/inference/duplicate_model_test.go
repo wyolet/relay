@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 const duplicateModelBody = `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"model":"other-model"}`

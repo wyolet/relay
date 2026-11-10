@@ -11,9 +11,9 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestIntegration_AccountStoreRoundTrip(t *testing.T) {

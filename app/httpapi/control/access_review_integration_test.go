@@ -15,7 +15,6 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -23,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // The whole control API over Postgres: for each request, the access review's answer for the caller matches what the request itself then gets.

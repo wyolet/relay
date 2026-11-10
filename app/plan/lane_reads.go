@@ -5,12 +5,12 @@ package plan
 import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // readLane reads what the caller fold of acc needs: its rungs with their policies and linked pools, and what its scopes own when no rung links. A team's or project's own account reads the rungs above and including it with no lane under them, as a preview of a policy owned there does. over, when set, stands in for the policy bound to one rung's account. issue receives the issues a reconcile files. ok is false when the account heads no ladder: its holder or scope is gone, or it is no caller or provider account.

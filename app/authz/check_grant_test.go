@@ -6,9 +6,9 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // builtinRole returns the named built-in rule set.

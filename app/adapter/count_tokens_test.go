@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // A spec that declares no CountPath has no counting endpoint to offer, and the capability assertion must fail so the caller estimates instead.

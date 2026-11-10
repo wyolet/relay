@@ -19,7 +19,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
@@ -32,6 +31,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // sharesWorld is the control API in roles mode over Postgres: alice owns a personal provider account with a key; team one owns one, administered by dave, with erin as a viewer; bob administers team two, which holds project two and its service account; carol holds no role.

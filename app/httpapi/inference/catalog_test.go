@@ -17,7 +17,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
@@ -25,12 +24,13 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/meta"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 

@@ -6,7 +6,7 @@ package policybinding
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // PolicyBinding attaches Spec.PolicyID to Spec.AccountIDs inside the scope Meta.Owner names.

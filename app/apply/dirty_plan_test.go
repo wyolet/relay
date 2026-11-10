@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/license"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // dirtyRateLimit is the stored row rateLimitDoc("burst") declares, marked as edited through the control API.

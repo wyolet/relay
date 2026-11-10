@@ -9,13 +9,13 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // teamOwnedRows is a pruned team without projects that owns one row of every kind whose owner lives only in metadata; ownedLabelled decides whether the owned rows match the prune selector too.

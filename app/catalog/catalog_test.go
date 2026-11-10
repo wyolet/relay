@@ -2,7 +2,7 @@ package catalog
 
 import (
 	"context"
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	"strings"
 	"testing"
 
@@ -10,12 +10,12 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // In-memory listers; one each implements the narrow Lister interface

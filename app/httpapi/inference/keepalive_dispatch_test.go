@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"

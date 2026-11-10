@@ -5,11 +5,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
@@ -17,7 +15,9 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // org is one provider serving m1, m2 and m3 at one priced host, and a team with a project, a service account and its key.

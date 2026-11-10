@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func tierPolicy(name string, owner meta.Owner) *policy.Policy {

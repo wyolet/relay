@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/pkg/adapters"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 

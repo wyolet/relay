@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestGroupBlockers_GroupsByKindAndFieldAndHidesUnseenRows(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	pkgrelay "github.com/wyolet/relay/sdk/v1"

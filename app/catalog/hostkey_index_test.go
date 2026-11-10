@@ -6,8 +6,8 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // HostKeysForHost reads a materialized index and answers the same
