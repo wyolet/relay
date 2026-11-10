@@ -61,7 +61,8 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 	now := time.Now()
 	sel := keypool.New(store, slog.Default(), func() time.Time { return now }, nil)
 	lim := lua.New(pkgratelimit.New(store, slog.Default(), nil))
-	p := &Pipeline{Limiter: lim, Selector: sel, Logger: slog.Default()}
+	reached := make(hostReached, 1)
+	p := &Pipeline{Limiter: lim, Selector: sel, Logger: slog.Default(), HostHealth: reached}
 
 	key := testKey("key-a")
 	sel.RecordFailure(context.Background(), key.KeyHash, keypool.FailureAuth, 0)
@@ -102,6 +103,11 @@ func runCallerRefusalMakesNoPick(t *testing.T, s kvtest.ScriptStore) {
 	// With room, the same pick claims the probe and the request is served.
 	if err := run(callerCounter(perMinute("rl-open", appratelimit.MeterRequests, appratelimit.StrategyFixedWindow, 100))); err != nil {
 		t.Fatalf("Run with room: %v", err)
+	}
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-flight never finished")
 	}
 	if len(store.Named("keypool.claim_probe")) != 1 || called.Load() != 1 {
 		t.Fatalf("probe claims = %d, upstream calls = %d; want 1 each", len(store.Named("keypool.claim_probe")), called.Load())
