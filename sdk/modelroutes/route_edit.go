@@ -90,8 +90,18 @@ func RemoveRoute(path, name string) error {
 	})
 }
 
-// SetRouteDisplayName sets, replaces or, with displayName "", removes the displayName line of a [routes.<name>] table. Routes written as inline entries under [routes] are refused: editing inside an inline table is not a line edit.
+// SetRouteDisplayName sets, replaces or, with displayName "", removes a route's displayName.
 func SetRouteDisplayName(path, name, displayName string) error {
+	return setRouteField(path, name, "displayName", displayName, func(r *Route) { r.DisplayName = displayName })
+}
+
+// SetRouteAccount sets, replaces or, with account "", removes a route's account.
+func SetRouteAccount(path, name, account string) error {
+	return setRouteField(path, name, "account", account, func(r *Route) { r.Account = account })
+}
+
+// setRouteField edits one string key of route name. In a [routes.<name>] table that key's line is set, replaced or removed; an inline entry under [routes] is rewritten on its own line, keeping its key and any trailing comment.
+func setRouteField(path, name, field, value string, set func(*Route)) error {
 	return editFile(path, func(f *File, lines []srcLine) ([]srcLine, error) {
 		i := slices.IndexFunc(f.Routes, func(r Route) bool { return r.Name == name })
 		if i < 0 {
@@ -101,26 +111,31 @@ func SetRouteDisplayName(path, name, displayName string) error {
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := b.inline[name]; ok {
-			return nil, f.wrap(fmt.Errorf("route %q is an inline entry under [routes]; move it to a [routes.%s] table or edit by hand", name, tomlKey(name)))
-		}
-		t, ok := b.tables[name]
-		if !ok {
-			return nil, f.wrap(fmt.Errorf("route %q: no [routes.%s] table; edit by hand", name, tomlKey(name)))
-		}
-		f.Routes[i].DisplayName = displayName
-		line, has := t.fields["displayName"]
-		switch {
-		case has && displayName == "":
-			return slices.Delete(lines, line, line+1), nil
-		case has:
-			text, err := replaceStringValue(lines[line].text, displayName)
+		set(&f.Routes[i])
+		if line, ok := b.inline[name]; ok {
+			text, err := replaceInlineTable(lines[line].text, "{ "+strings.Join(routeFields(f.Routes[i]), ", ")+" }")
 			if err != nil {
 				return nil, f.wrap(fmt.Errorf("line %d: %w", line+1, err))
 			}
 			lines[line].text = text
 			return lines, nil
-		case displayName == "":
+		}
+		t, ok := b.tables[name]
+		if !ok {
+			return nil, f.wrap(fmt.Errorf("route %q: no [routes.%s] table; edit by hand", name, tomlKey(name)))
+		}
+		line, has := t.fields[field]
+		switch {
+		case has && value == "":
+			return slices.Delete(lines, line, line+1), nil
+		case has:
+			text, err := replaceStringValue(lines[line].text, value)
+			if err != nil {
+				return nil, f.wrap(fmt.Errorf("line %d: %w", line+1, err))
+			}
+			lines[line].text = text
+			return lines, nil
+		case value == "":
 			return lines, nil
 		}
 		last := &lines[t.lastField]
@@ -130,24 +145,64 @@ func SetRouteDisplayName(path, name, displayName string) error {
 		}
 		eol := lineEnding(lines)
 		last.eol = eol
-		return slices.Insert(lines, t.lastField+1, srcLine{text: indent + "displayName = " + quote(displayName), eol: eol}), nil
+		return slices.Insert(lines, t.lastField+1, srcLine{text: indent + field + " = " + quote(value), eol: eol}), nil
 	})
 }
 
-// routeTable renders r as a [routes.<name>] table, keys in a fixed order so equal routes render identically.
+// replaceInlineTable swaps the { ... } value on a key line for value, keeping the key, spacing and any trailing comment.
+func replaceInlineTable(text, value string) (string, error) {
+	start, depth := -1, 0
+	var inString byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case inString != 0:
+			if c == '\\' && inString == '"' {
+				i++
+			} else if c == inString {
+				inString = 0
+			}
+		case c == '"' || c == '\'':
+			inString = c
+		case c == '#':
+			return "", errors.New("no inline table to replace")
+		case c == '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case c == '}' && depth > 0:
+			if depth--; depth == 0 {
+				return text[:start] + value + text[i+1:], nil
+			}
+		}
+	}
+	return "", errors.New("no inline table to replace")
+}
+
+// routeTable renders r as a [routes.<name>] table.
 func routeTable(r Route, eol string) []srcLine {
 	out := []srcLine{{text: "[routes." + tomlKey(r.Name) + "]", eol: eol}}
+	for _, kv := range routeFields(r) {
+		out = append(out, srcLine{text: kv, eol: eol})
+	}
+	return out
+}
+
+// routeFields renders r's set keys as `key = value`, in a fixed order so equal routes render identically.
+func routeFields(r Route) []string {
+	var out []string
 	for _, kv := range [][2]string{{"host", r.Host}, {"url", r.URL}, {"auth", r.Auth}, {"adapter", r.Adapter}} {
 		if kv[1] != "" {
-			out = append(out, srcLine{text: kv[0] + " = " + quote(kv[1]), eol: eol})
+			out = append(out, kv[0]+" = "+quote(kv[1]))
 		}
 	}
 	if r.Passthrough {
-		out = append(out, srcLine{text: "passthrough = true", eol: eol})
+		out = append(out, "passthrough = true")
 	}
 	for _, kv := range [][2]string{{"account", r.Account}, {"displayName", r.DisplayName}} {
 		if kv[1] != "" {
-			out = append(out, srcLine{text: kv[0] + " = " + quote(kv[1]), eol: eol})
+			out = append(out, kv[0]+" = "+quote(kv[1]))
 		}
 	}
 	return out
