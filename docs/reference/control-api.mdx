@@ -62,6 +62,8 @@ DELETE /api/{plural}/by-id/{id}      delete
 
 List endpoints accept `q` (free text), `sort`, `limit`, `offset`, `label=key=value` (repeatable), and per-kind field filters; an unknown filter answers `400`. The OpenAPI document lists each kind's filters.
 
+Policies, pools, rate limits, budgets, accounts, host keys, relay keys, service accounts and policy bindings also filter by `owner` (the owner's kind) and `owner_id` (repeatable; a row matches any of them). `GET /api/policies?owner_id=<team-id>` lists the policies that team owns; `usable_by` below differs in also listing rows the scope may link but does not own.
+
 A create that leaves out `metadata.owner` makes the row the caller's own: owned by the signed-in user, or by the system for the admin token. Teams and groups are always owned by the system and a role without an owner is too; a project by its `spec.teamId`, a service account by its `spec.projectId`, a role binding by its `spec.scope`, and a relay key by its principal. To create a row in a team or project, set `metadata.owner` to it.
 
 A signed-in user who creates a team or a project gets a role binding of the scope's built-in admin role there (`team-admin`, `project-admin`), and with it a member account. The admin token gets none, and [`apply`](/concepts/gitops) creates only the bindings a bundle declares.

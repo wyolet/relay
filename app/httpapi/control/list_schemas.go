@@ -88,6 +88,7 @@ var policyFilter = filter.Schema[policy.Policy]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(p *policy.Policy) string { return p.Meta.Name }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(p *policy.Policy) bool { return enabledTrue(p.Spec.Enabled) }},
 		{Name: "owner", Kind: filter.String, Get: func(p *policy.Policy) string { return string(p.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(p *policy.Policy) string { return p.Meta.Owner.ID }},
 		{Name: "pool_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.PoolIDs }},
 		{Name: "rate_limit_id", Kind: filter.String, Repeat: true, GetMulti: policyRateLimitIDs},
 		{Name: "budget_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.BudgetIDs() }},
@@ -156,6 +157,8 @@ var hostFilter = filter.Schema[host.Host]{
 var hostKeyFilter = filter.Schema[hostkey.HostKey]{
 	Fields: []filter.Field[hostkey.HostKey]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(k *hostkey.HostKey) string { return k.Meta.Name }},
+		{Name: "owner", Kind: filter.String, Get: func(k *hostkey.HostKey) string { return string(k.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(k *hostkey.HostKey) string { return k.Meta.Owner.ID }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(k *hostkey.HostKey) bool { return enabledTrue(k.Spec.Enabled) }},
 		{Name: "host_id", Kind: filter.String, Repeat: true, Get: func(k *hostkey.HostKey) string { return k.Spec.HostID }},
 		{Name: "account_id", Kind: filter.String, Repeat: true, Get: func(k *hostkey.HostKey) string { return k.Spec.AccountID }},
@@ -238,6 +241,8 @@ var bindingFilter = filter.Schema[binding.Binding]{
 var rateLimitFilter = filter.Schema[ratelimit.RateLimit]{
 	Fields: []filter.Field[ratelimit.RateLimit]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(r *ratelimit.RateLimit) string { return r.Meta.Name }},
+		{Name: "owner", Kind: filter.String, Get: func(r *ratelimit.RateLimit) string { return string(r.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(r *ratelimit.RateLimit) string { return r.Meta.Owner.ID }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(r *ratelimit.RateLimit) bool { return enabledTrue(r.Spec.Enabled) }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(r *ratelimit.RateLimit) time.Time { return r.Meta.CreatedAt }},
 		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(r *ratelimit.RateLimit) time.Time { return r.Meta.UpdatedAt }},
@@ -252,6 +257,8 @@ var rateLimitFilter = filter.Schema[ratelimit.RateLimit]{
 var keyFilter = filter.Schema[key.Key]{
 	Fields: []filter.Field[key.Key]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(k *key.Key) string { return k.Meta.Name }},
+		{Name: "owner", Kind: filter.String, Get: func(k *key.Key) string { return string(k.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Meta.Owner.ID }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return enabledTrue(k.Spec.Enabled) }},
 		{Name: "revoked", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.RevokedAt != nil }},
 		{Name: "passthrough", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.PassthroughAllowed }},
@@ -298,6 +305,8 @@ var projectFilter = filter.Schema[project.Project]{
 var serviceAccountFilter = filter.Schema[serviceaccount.ServiceAccount]{
 	Fields: []filter.Field[serviceaccount.ServiceAccount]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }},
+		{Name: "owner", Kind: filter.String, Get: func(sa *serviceaccount.ServiceAccount) string { return string(sa.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Owner.ID }},
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(sa *serviceaccount.ServiceAccount) bool { return enabledTrue(sa.Spec.Enabled) }},
 		{Name: "project_id", Kind: filter.String, Repeat: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Spec.ProjectID }},
 	},

@@ -37,6 +37,7 @@ var poolFilter = filter.Schema[pool.Pool]{
 	Fields: []filter.Field[pool.Pool]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(p *pool.Pool) string { return p.Meta.Name }},
 		{Name: "owner", Kind: filter.String, Get: func(p *pool.Pool) string { return string(p.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(p *pool.Pool) string { return p.Meta.Owner.ID }},
 		{Name: "host_id", Kind: filter.String, Repeat: true, Get: func(p *pool.Pool) string { return p.Spec.HostID }},
 		{Name: "credential_id", Kind: filter.String, Repeat: true, GetMulti: func(p *pool.Pool) []string { return p.Spec.CredentialIDs }},
 		{Name: "account_id", Kind: filter.String, Repeat: true, GetMulti: func(p *pool.Pool) []string { return p.Spec.AccountIDs }},
@@ -54,6 +55,7 @@ var budgetFilter = filter.Schema[budget.Budget]{
 	Fields: []filter.Field[budget.Budget]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *budget.Budget) string { return b.Meta.Name }},
 		{Name: "owner", Kind: filter.String, Get: func(b *budget.Budget) string { return string(b.Meta.Owner.Kind) }},
+		{Name: "owner_id", Kind: filter.String, Repeat: true, Get: func(b *budget.Budget) string { return b.Meta.Owner.ID }},
 		{Name: "period", Kind: filter.String, Enum: []string{"day", "week", "month"}, Get: func(b *budget.Budget) string { return string(b.Spec.Period) }},
 		{Name: "mode", Kind: filter.String, Enum: []string{"hard", "alert"}, Get: func(b *budget.Budget) string { return string(b.Spec.Mode) }},
 		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(b *budget.Budget) time.Time { return b.Meta.CreatedAt }},
