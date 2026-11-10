@@ -1,32 +1,33 @@
 //go:build integration
 
-// store_integration_test.go covers the Policy store against a real Postgres:
+// policy_integration_test.go covers the Policy store against a real Postgres:
 // Upsert fans a single row out across `policies` and the link junctions in
 // one transaction, and the read path reassembles it. There is no fake seam
 // for that — the relational split is the behaviour.
 // Run with: make test-integration.
 
-package policy_test
+package catalogstore_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
 // storeFixture is the row graph a policy needs before it can link anything:
 // a provider and host, a host key, and two rate limits.
 type storeFixture struct {
-	store          *policy.Store
+	store          *catalogstore.PolicyStore
 	db             storage.DB
 	hostID         string
 	hostKeyID      string
@@ -40,18 +41,18 @@ func setupPolicyStore(t *testing.T) (storeFixture, context.Context) {
 	pool := storagetest.Pool(t)
 	q := gen.New(pool)
 	prov := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "store-prov-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	if err := provider.NewStore(q).Upsert(ctx, prov); err != nil {
+	if err := catalogstore.NewProviderStore(q).Upsert(ctx, prov); err != nil {
 		t.Fatalf("upsert provider: %v", err)
 	}
 	hst := &host.Host{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "store-host-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: host.Spec{BaseURL: "https://api.example.com"},
 	}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
-	f := storeFixture{store: policy.NewStore(pool), db: pool, hostID: hst.Meta.ID}
-	rls := ratelimit.NewStore(q)
+	f := storeFixture{store: catalogstore.NewPolicyStore(pool), db: pool, hostID: hst.Meta.ID}
+	rls := catalogstore.NewRateLimitStore(q)
 	for i, id := range []*string{&f.rateLimitID, &f.otherRateLimit} {
 		rl := &ratelimit.RateLimit{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "store-rl-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}},

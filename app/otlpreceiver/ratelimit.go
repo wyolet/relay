@@ -7,7 +7,7 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	apprl "github.com/wyolet/relay/app/ratelimit"
+	apprl "github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/slug"
 )
 

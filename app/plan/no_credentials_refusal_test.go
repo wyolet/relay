@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
 // A policy whose pools reach the model's host but hold no usable key refuses with no_credentials, naming the rung that links them, not model_disabled.

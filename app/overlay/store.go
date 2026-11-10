@@ -1,4 +1,4 @@
-// store.go is the data-access layer for Overlay. Mirrors app/model/store.go.
+// store.go is the data-access layer for Overlay. Mirrors app/catalogstore/model.go.
 
 package overlay
 

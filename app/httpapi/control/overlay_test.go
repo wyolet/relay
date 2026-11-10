@@ -3,8 +3,8 @@ package control
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

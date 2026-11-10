@@ -1,9 +1,9 @@
-// store.go is the data-access layer for Pricing. TargetModelIDs live in the
+// pricing.go is the data-access layer for Pricing. TargetModelIDs live in the
 // pricing_models junction (not JSONB), so Upsert fans out across pricings +
 // pricing_models inside a single transaction. host_id is a real column,
 // hydrated alongside the rest of the row on List.
 
-package pricing
+package catalogstore
 
 import (
 	"context"
@@ -16,21 +16,23 @@ import (
 
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// Store is the Pricing data-access type. Holds a DB rather than Queries so
-// Upsert can run a multi-table transaction.
-type Store struct {
+// PricingStore is the Pricing data-access type. Holds a DB rather than
+// Queries so Upsert can run a multi-table transaction.
+type PricingStore struct {
 	db storage.DB
 }
 
-// NewStore constructs a Store bound to a pool or an open transaction.
-func NewStore(db storage.DB) *Store { return &Store{db: db} }
+// NewPricingStore constructs a PricingStore bound to a pool or an open
+// transaction.
+func NewPricingStore(db storage.DB) *PricingStore { return &PricingStore{db: db} }
 
 // List returns every Pricing row with Spec.TargetModelIDs hydrated from the
 // pricing_models junction in declaration order.
-func (s *Store) List(ctx context.Context) ([]*Pricing, error) {
+func (s *PricingStore) List(ctx context.Context) ([]*pricing.Pricing, error) {
 	q := gen.New(s.db)
 	rows, err := q.ListPricings(ctx)
 	if err != nil {
@@ -44,9 +46,9 @@ func (s *Store) List(ctx context.Context) ([]*Pricing, error) {
 	for _, r := range modelRows {
 		modelsByPricing[r.PricingID] = append(modelsByPricing[r.PricingID], r.ModelID)
 	}
-	out := make([]*Pricing, 0, len(rows))
+	out := make([]*pricing.Pricing, 0, len(rows))
 	for _, r := range rows {
-		p, err := fromRow(r)
+		p, err := pricingFromRow(r)
 		if err != nil {
 			return nil, fmt.Errorf("pricing %s: %w", r.Name, err)
 		}
@@ -58,7 +60,7 @@ func (s *Store) List(ctx context.Context) ([]*Pricing, error) {
 
 // Get returns the Pricing with the given id, hydrating TargetModelIDs.
 // Returns (nil, nil) if not found.
-func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
+func (s *PricingStore) Get(ctx context.Context, id string) (*pricing.Pricing, error) {
 	q := gen.New(s.db)
 	r, err := q.GetPricing(ctx, id)
 	if err != nil {
@@ -74,7 +76,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
 	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec pricing.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
@@ -86,13 +88,13 @@ func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
 	for _, mr := range modelRows {
 		spec.TargetModelIDs = append(spec.TargetModelIDs, mr.ModelID)
 	}
-	return &Pricing{Meta: md, Spec: spec}, nil
+	return &pricing.Pricing{Meta: md, Spec: spec}, nil
 }
 
 // Upsert writes p across pricings + pricing_models in a single tx.
 // Caller stamps Meta.ID and Owner.ID (host id).
-func (s *Store) Upsert(ctx context.Context, p *Pricing) error {
-	params, err := toUpsertParams(p)
+func (s *PricingStore) Upsert(ctx context.Context, p *pricing.Pricing) error {
+	params, err := pricingUpsertParams(p)
 	if err != nil {
 		return fmt.Errorf("pricing.Upsert: %w", err)
 	}
@@ -125,11 +127,11 @@ func (s *Store) Upsert(ctx context.Context, p *Pricing) error {
 }
 
 // Delete removes a Pricing by id. Junction rows cascade via FK.
-func (s *Store) Delete(ctx context.Context, id string) error {
+func (s *PricingStore) Delete(ctx context.Context, id string) error {
 	return gen.New(s.db).DeletePricing(ctx, id)
 }
 
-func fromRow(r gen.Pricing) (*Pricing, error) {
+func pricingFromRow(r gen.Pricing) (*pricing.Pricing, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -137,16 +139,16 @@ func fromRow(r gen.Pricing) (*Pricing, error) {
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
 	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec pricing.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
 	// host_id is a column — overrides anything in JSONB.
 	md.Owner = meta.Owner{Kind: meta.OwnerHost, ID: r.HostID}
-	return &Pricing{Meta: md, Spec: spec}, nil
+	return &pricing.Pricing{Meta: md, Spec: spec}, nil
 }
 
-func toUpsertParams(p *Pricing) (gen.UpsertPricingParams, error) {
+func pricingUpsertParams(p *pricing.Pricing) (gen.UpsertPricingParams, error) {
 	metaJSON, err := meta.MarshalJSONB(p.Meta)
 	if err != nil {
 		return gen.UpsertPricingParams{}, fmt.Errorf("metadata: %w", err)

@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/secret"
 )
@@ -96,7 +97,7 @@ func TestIntegration_SavedKeyAlwaysHasAnAccount(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: host.Spec{BaseURL: "https://api.example.com"},
 	}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	named := &account.Account{

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

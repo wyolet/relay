@@ -1,10 +1,10 @@
 package catalog
 
 import (
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
 )
 
 func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {

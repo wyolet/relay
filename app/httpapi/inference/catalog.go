@@ -16,11 +16,11 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalogembed"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 

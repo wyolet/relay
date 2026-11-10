@@ -9,8 +9,8 @@ import (
 	"net/http"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

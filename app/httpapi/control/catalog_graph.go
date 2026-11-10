@@ -28,9 +28,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
 )
 
 type graphProvider struct {

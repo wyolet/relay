@@ -7,7 +7,7 @@ import (
 func fp(v float64) *float64 { return &v }
 
 // knownMeters mirrors the meters relay's cost engine understands
-// (sdk/catalog cost.go meterForUsageKey + app/pricing). A generated meter
+// (sdk/catalog cost.go meterForUsageKey + pkg/catalogkind/pricing). A generated meter
 // outside this set computes to $0 silently — the closure test guards it.
 var knownMeters = map[string]bool{
 	"tokens.input": true, "tokens.output": true,

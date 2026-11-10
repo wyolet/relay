@@ -11,21 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
@@ -37,6 +31,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/scim"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	sdkoauth "github.com/wyolet/relay/sdk/oauth"
@@ -100,14 +95,14 @@ type BootstrapOptions struct {
 // so callers (admin handlers, seed CLI re-runs, tests) can reach the same
 // underlying stores without re-wiring.
 type Stores struct {
-	Provider  *provider.Store
-	Host      *host.Store
-	Model     *model.Store
+	Provider  *catalogstore.ProviderStore
+	Host      *catalogstore.HostStore
+	Model     *catalogstore.ModelStore
 	HostKey   *hostkey.Store
-	RateLimit *ratelimit.Store
-	Policy    *policy.Store
-	Pricing   *pricing.Store
-	Binding   *binding.Store
+	RateLimit *catalogstore.RateLimitStore
+	Policy    *catalogstore.PolicyStore
+	Pricing   *catalogstore.PricingStore
+	Binding   *catalogstore.BindingStore
 	Key       *key.Store
 	Overlay   *overlay.Store
 	Settings  *settings.Store

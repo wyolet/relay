@@ -5,7 +5,7 @@ package catalog
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

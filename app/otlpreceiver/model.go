@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/otlp"
 	"github.com/wyolet/relay/pkg/slug"
 )

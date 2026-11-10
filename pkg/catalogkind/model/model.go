@@ -5,7 +5,7 @@
 // in /v1/models.
 //
 // Host serving info (which Hosts can serve this Model) lives in standalone
-// HostBinding entities (app/binding), not embedded in the Model spec.
+// HostBinding entities (pkg/catalogkind/binding), not embedded in the Model spec.
 //
 // Pricing and RateLimit attachments are deferred until those packages land.
 package model
@@ -30,7 +30,7 @@ type Model struct {
 // there is no separate spec.providerId field.
 //
 // Per-Host serving info (which Hosts can serve this Model) lives in
-// standalone HostBinding entities (app/binding), not in Spec.
+// standalone HostBinding entities (pkg/catalogkind/binding), not in Spec.
 type Spec struct {
 	Family string `json:"family,omitempty" yaml:"family,omitempty" doc:"Model family, such as claude or gpt."`
 	// ProductLine is the vendor's named tier or variant inside Family (opus, flash-lite); never a version or size. Allowed values are checked by the catalog validator, not here.

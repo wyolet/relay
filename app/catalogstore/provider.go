@@ -1,12 +1,8 @@
-// store.go is the data-access layer for Provider. It maps Provider domain
+// provider.go is the data-access layer for Provider. It maps Provider domain
 // structs to and from the sqlc-generated row types. Metadata JSONB encoding
-// is delegated to app/meta; this file only knows about Provider's Spec.
-//
-// Store is concrete — no interface declared here. Consumers (snapshot
-// composer, admin handlers, seed) each declare their own narrow interface
-// locally if they want a test seam.
+// is delegated to pkg/meta; this file only knows about Provider's Spec.
 
-package provider
+package catalogstore
 
 import (
 	"context"
@@ -17,27 +13,29 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// Store is the Provider data-access type. Holds a sqlc Queries handle.
-type Store struct {
+// ProviderStore is the Provider data-access type. Holds a sqlc Queries handle.
+type ProviderStore struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle. The
-// caller owns the pgxpool / transaction; Store performs no connection mgmt.
-func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+// NewProviderStore constructs a ProviderStore from an existing sqlc Queries
+// handle. The caller owns the pgxpool / transaction; the store performs no
+// connection mgmt.
+func NewProviderStore(q *gen.Queries) *ProviderStore { return &ProviderStore{q: q} }
 
 // List returns every Provider row in slug order. Cheap — catalog is small.
-func (s *Store) List(ctx context.Context) ([]*Provider, error) {
+func (s *ProviderStore) List(ctx context.Context) ([]*provider.Provider, error) {
 	rows, err := s.q.ListProviders(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("provider.List: %w", err)
 	}
-	out := make([]*Provider, 0, len(rows))
+	out := make([]*provider.Provider, 0, len(rows))
 	for _, r := range rows {
-		p, err := fromRow(r)
+		p, err := providerFromRow(r)
 		if err != nil {
 			return nil, fmt.Errorf("provider %s: %w", r.Name, err)
 		}
@@ -47,8 +45,8 @@ func (s *Store) List(ctx context.Context) ([]*Provider, error) {
 }
 
 // Upsert writes p. Caller is responsible for stamping Meta.ID.
-func (s *Store) Upsert(ctx context.Context, p *Provider) error {
-	params, err := toUpsertParams(p)
+func (s *ProviderStore) Upsert(ctx context.Context, p *provider.Provider) error {
+	params, err := providerUpsertParams(p)
 	if err != nil {
 		return fmt.Errorf("provider.Upsert: %w", err)
 	}
@@ -56,7 +54,7 @@ func (s *Store) Upsert(ctx context.Context, p *Provider) error {
 }
 
 // Get returns the Provider with the given id, or (nil, nil) if not found.
-func (s *Store) Get(ctx context.Context, id string) (*Provider, error) {
+func (s *ProviderStore) Get(ctx context.Context, id string) (*provider.Provider, error) {
 	r, err := s.q.GetProvider(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -71,20 +69,20 @@ func (s *Store) Get(ctx context.Context, id string) (*Provider, error) {
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
 	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec provider.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return &Provider{Meta: m, Spec: spec}, nil
+	return &provider.Provider{Meta: m, Spec: spec}, nil
 }
 
 // Delete removes a Provider by id. sqlc returns nil on a no-rows delete;
 // callers can pre-check existence via the snapshot if they need a 404.
-func (s *Store) Delete(ctx context.Context, id string) error {
+func (s *ProviderStore) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteProvider(ctx, id)
 }
 
-func fromRow(r gen.ListProvidersRow) (*Provider, error) {
+func providerFromRow(r gen.ListProvidersRow) (*provider.Provider, error) {
 	m, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -92,14 +90,14 @@ func fromRow(r gen.ListProvidersRow) (*Provider, error) {
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
 	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec provider.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return &Provider{Meta: m, Spec: spec}, nil
+	return &provider.Provider{Meta: m, Spec: spec}, nil
 }
 
-func toUpsertParams(p *Provider) (gen.UpsertProviderParams, error) {
+func providerUpsertParams(p *provider.Provider) (gen.UpsertProviderParams, error) {
 	metaJSON, err := meta.MarshalJSONB(p.Meta)
 	if err != nil {
 		return gen.UpsertProviderParams{}, fmt.Errorf("metadata: %w", err)

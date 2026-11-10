@@ -3,7 +3,7 @@ package catalogembed
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 	"github.com/wyolet/relay/sdk/usage"
 )

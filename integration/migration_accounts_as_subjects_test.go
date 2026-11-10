@@ -9,10 +9,9 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
@@ -22,6 +21,8 @@ import (
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -72,7 +73,7 @@ func writeSubjectsAtHead(t *testing.T) *subjectsRoundTrip {
 		{"project", func() error { return project.NewStore(db).Upsert(ctx, f.project) }},
 		{"service account", func() error { return serviceaccount.NewStore(db).Upsert(ctx, f.sa) }},
 		{"user", func() error { return user.NewStore(db).Upsert(ctx, f.alice) }},
-		{"host", func() error { return host.NewStore(q).Upsert(ctx, hst) }},
+		{"host", func() error { return catalogstore.NewHostStore(q).Upsert(ctx, hst) }},
 		{"provider account", func() error { return accounts.Upsert(ctx, f.provider) }},
 		{"host key", func() error { return hostkey.NewStore(db, nil, nil).Upsert(ctx, f.hostKey) }},
 	} {
@@ -101,7 +102,7 @@ func writeSubjectsAtHead(t *testing.T) *subjectsRoundTrip {
 		"on-acme-org": {system, f.provider.Meta.ID},
 	}
 	personal := managed(account.Personal(f.alice.ID, f.alice.Username))
-	policies := policy.NewStore(db)
+	policies := catalogstore.NewPolicyStore(db)
 	for name, lane := range lanes {
 		pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: name + "-policy", Owner: system}}
 		if err := policies.Upsert(ctx, pol); err != nil {
@@ -216,7 +217,7 @@ func TestMigrateDownAndUpAcrossAccountsAsSubjects(t *testing.T) {
 		t.Errorf("alice's member account = %+v, want payload logging on from its policy", m)
 	}
 
-	wide, err := policy.NewStore(st.Pool()).Get(ctx, f.wide.Meta.ID)
+	wide, err := catalogstore.NewPolicyStore(st.Pool()).Get(ctx, f.wide.Meta.ID)
 	if err != nil || wide == nil {
 		t.Fatalf("read the provider account's policy: %v", err)
 	}

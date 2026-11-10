@@ -15,22 +15,16 @@ import (
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/payloadlog"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
@@ -41,6 +35,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -80,14 +75,14 @@ func mountDeps(t *testing.T) Deps {
 		t.Fatal(err)
 	}
 	stores := &appcatalog.Stores{
-		Provider:       provider.NewStore(q),
-		Host:           host.NewStore(q),
-		Model:          model.NewStore(q),
+		Provider:       catalogstore.NewProviderStore(q),
+		Host:           catalogstore.NewHostStore(q),
+		Model:          catalogstore.NewModelStore(q),
 		HostKey:        hostkey.NewStore(pool, sec.Registry, sec.Stored),
-		RateLimit:      ratelimit.NewStore(q),
-		Policy:         policy.NewStore(pool),
-		Pricing:        pricing.NewStore(pool),
-		Binding:        binding.NewStore(pool),
+		RateLimit:      catalogstore.NewRateLimitStore(q),
+		Policy:         catalogstore.NewPolicyStore(pool),
+		Pricing:        catalogstore.NewPricingStore(pool),
+		Binding:        catalogstore.NewBindingStore(pool),
 		Key:            key.NewStore(q),
 		Overlay:        overlay.NewStore(q),
 		Settings:       settings.NewStore(q),

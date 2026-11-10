@@ -1,7 +1,7 @@
-// store.go is the data-access layer for Model. Mirrors app/provider/store.go;
-// metadata JSONB encoding is delegated to app/meta.
+// model.go is the data-access layer for Model. Mirrors provider.go; metadata
+// JSONB encoding is delegated to pkg/meta.
 
-package model
+package catalogstore
 
 import (
 	"context"
@@ -12,26 +12,27 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// Store is the Model data-access type.
-type Store struct {
+// ModelStore is the Model data-access type.
+type ModelStore struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
-func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+// NewModelStore constructs a ModelStore from an existing sqlc Queries handle.
+func NewModelStore(q *gen.Queries) *ModelStore { return &ModelStore{q: q} }
 
 // List returns every Model row.
-func (s *Store) List(ctx context.Context) ([]*Model, error) {
+func (s *ModelStore) List(ctx context.Context) ([]*model.Model, error) {
 	rows, err := s.q.ListModels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("model.List: %w", err)
 	}
-	out := make([]*Model, 0, len(rows))
+	out := make([]*model.Model, 0, len(rows))
 	for _, r := range rows {
-		m, err := fromRow(r)
+		m, err := modelFromRow(r)
 		if err != nil {
 			return nil, fmt.Errorf("model %s: %w", r.Name, err)
 		}
@@ -41,8 +42,8 @@ func (s *Store) List(ctx context.Context) ([]*Model, error) {
 }
 
 // Upsert writes m. Caller is responsible for stamping Meta.ID.
-func (s *Store) Upsert(ctx context.Context, m *Model) error {
-	params, err := toUpsertParams(m)
+func (s *ModelStore) Upsert(ctx context.Context, m *model.Model) error {
+	params, err := modelUpsertParams(m)
 	if err != nil {
 		return fmt.Errorf("model.Upsert: %w", err)
 	}
@@ -50,7 +51,7 @@ func (s *Store) Upsert(ctx context.Context, m *Model) error {
 }
 
 // Get returns the Model with the given id, or (nil, nil) if not found.
-func (s *Store) Get(ctx context.Context, id string) (*Model, error) {
+func (s *ModelStore) Get(ctx context.Context, id string) (*model.Model, error) {
 	r, err := s.q.GetModel(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -65,19 +66,19 @@ func (s *Store) Get(ctx context.Context, id string) (*Model, error) {
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
 	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec model.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return &Model{Meta: m, Spec: spec}, nil
+	return &model.Model{Meta: m, Spec: spec}, nil
 }
 
 // Delete removes a Model by id.
-func (s *Store) Delete(ctx context.Context, id string) error {
+func (s *ModelStore) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteModel(ctx, id)
 }
 
-func fromRow(r gen.ListModelsRow) (*Model, error) {
+func modelFromRow(r gen.ListModelsRow) (*model.Model, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -85,14 +86,14 @@ func fromRow(r gen.ListModelsRow) (*Model, error) {
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
 	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec model.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return &Model{Meta: md, Spec: spec}, nil
+	return &model.Model{Meta: md, Spec: spec}, nil
 }
 
-func toUpsertParams(m *Model) (gen.UpsertModelParams, error) {
+func modelUpsertParams(m *model.Model) (gen.UpsertModelParams, error) {
 	metaJSON, err := meta.MarshalJSONB(m.Meta)
 	if err != nil {
 		return gen.UpsertModelParams{}, fmt.Errorf("metadata: %w", err)

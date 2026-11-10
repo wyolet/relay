@@ -14,8 +14,7 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/project"
@@ -25,6 +24,8 @@ import (
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -52,7 +53,7 @@ func TestMigrateUpRefusesASubjectInTwoBindings(t *testing.T) {
 		{"team", func() error { return team.NewStore(db).Upsert(ctx, tm) }},
 		{"project", func() error { return project.NewStore(db).Upsert(ctx, prj) }},
 		{"service account", func() error { return serviceaccount.NewStore(db).Upsert(ctx, sa) }},
-		{"policy", func() error { return policy.NewStore(db).Upsert(ctx, pol) }},
+		{"policy", func() error { return catalogstore.NewPolicyStore(db).Upsert(ctx, pol) }},
 		{"accounts", func() (err error) {
 			if saAccount.Meta.ID, err = accounts.EnsureManaged(ctx, saAccount); err != nil {
 				return err
@@ -111,7 +112,7 @@ func TestMigrateUpGivesKeysTheirOwnersDefaultAccount(t *testing.T) {
 	q := gen.New(st.Pool())
 	hst := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", DisplayName: "Acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
 	taken := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: hst.Meta.ID}}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	if err := account.NewStore(q).Upsert(ctx, taken); err != nil {
@@ -501,11 +502,11 @@ func TestMigrateDownBelowAccountsKeepsBindings(t *testing.T) {
 		{"team", func() error { return team.NewStore(db).Upsert(ctx, tm) }},
 		{"project", func() error { return project.NewStore(db).Upsert(ctx, prj) }},
 		{"service account", func() error { return serviceaccount.NewStore(db).Upsert(ctx, sa) }},
-		{"host", func() error { return host.NewStore(q).Upsert(ctx, hst) }},
+		{"host", func() error { return catalogstore.NewHostStore(q).Upsert(ctx, hst) }},
 		{"account", func() error { return accounts.Upsert(ctx, acct) }},
 		{"pool", func() error { return pool.NewStore(db).Upsert(ctx, pl) }},
 		{"budget", func() error { return budget.NewStore(q).Upsert(ctx, bg) }},
-		{"policy", func() error { return policy.NewStore(db).Upsert(ctx, pol) }},
+		{"policy", func() error { return catalogstore.NewPolicyStore(db).Upsert(ctx, pol) }},
 		{"project account", func() error { return bindAccount(account.ForProject(prj.Meta.ID, prj.Meta.Name, "")) }},
 		{"service account's account", func() error { return bindAccount(account.ForServiceAccount(sa.Meta.ID, sa.Meta.Name, "", prj.Meta.ID)) }},
 		{"binding", func() error {

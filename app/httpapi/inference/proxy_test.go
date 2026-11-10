@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapter"
-	apphost "github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/limits"
+	apphost "github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 

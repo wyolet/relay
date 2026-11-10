@@ -3,7 +3,7 @@ package policy_test
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 )
 
 // fixture is a tiny in-memory catalog scaffold; tests start from a clean

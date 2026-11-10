@@ -1,6 +1,6 @@
-// store_links.go reads and writes a policy's pool, rate-limit and budget junctions (migrations 0035, 0039).
+// policy_links.go reads and writes a policy's pool, rate-limit and budget junctions (migrations 0035, 0039).
 
-package policy
+package catalogstore
 
 import (
 	"context"
@@ -8,17 +8,18 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
 // links holds every policy's pool, rate-limit and budget junction rows, keyed by policy id.
 type links struct {
 	pools      map[string][]string
-	rateLimits map[string][]RateLimitLink
-	budgets    map[string][]BudgetLink
+	rateLimits map[string][]policy.RateLimitLink
+	budgets    map[string][]policy.BudgetLink
 }
 
 func listLinks(ctx context.Context, q *gen.Queries) (links, error) {
-	l := links{pools: map[string][]string{}, rateLimits: map[string][]RateLimitLink{}, budgets: map[string][]BudgetLink{}}
+	l := links{pools: map[string][]string{}, rateLimits: map[string][]policy.RateLimitLink{}, budgets: map[string][]policy.BudgetLink{}}
 	pools, err := q.ListPolicyPools(ctx)
 	if err != nil {
 		return l, fmt.Errorf("policy.List pools: %w", err)
@@ -42,13 +43,13 @@ func listLinks(ctx context.Context, q *gen.Queries) (links, error) {
 		return l, fmt.Errorf("policy.List budgets: %w", err)
 	}
 	for _, r := range budgets {
-		l.budgets[r.PolicyID] = append(l.budgets[r.PolicyID], BudgetLink{BudgetID: r.BudgetID, Shared: &r.Shared})
+		l.budgets[r.PolicyID] = append(l.budgets[r.PolicyID], policy.BudgetLink{BudgetID: r.BudgetID, Shared: &r.Shared})
 	}
 	return l, nil
 }
 
 // getLinks fills spec's pool, rate-limit and budget lists for one policy.
-func getLinks(ctx context.Context, q *gen.Queries, id string, spec *Spec) error {
+func getLinks(ctx context.Context, q *gen.Queries, id string, spec *policy.Spec) error {
 	pools, err := q.GetPolicyPools(ctx, id)
 	if err != nil {
 		return fmt.Errorf("policy.Get pools: %w", err)
@@ -72,13 +73,13 @@ func getLinks(ctx context.Context, q *gen.Queries, id string, spec *Spec) error 
 		return fmt.Errorf("policy.Get budgets: %w", err)
 	}
 	for _, r := range budgets {
-		spec.Budgets = append(spec.Budgets, BudgetLink{BudgetID: r.BudgetID, Shared: &r.Shared})
+		spec.Budgets = append(spec.Budgets, policy.BudgetLink{BudgetID: r.BudgetID, Shared: &r.Shared})
 	}
 	return nil
 }
 
 // writeLinks replaces p's pool, rate-limit and budget junction rows; q must be inside the Upsert transaction.
-func writeLinks(ctx context.Context, q *gen.Queries, p *Policy) error {
+func writeLinks(ctx context.Context, q *gen.Queries, p *policy.Policy) error {
 	id := p.Meta.ID
 	if err := q.DeletePolicyPools(ctx, id); err != nil {
 		return fmt.Errorf("clear pools: %w", err)
@@ -114,8 +115,8 @@ func writeLinks(ctx context.Context, q *gen.Queries, p *Policy) error {
 	return nil
 }
 
-func rateLimitLinkFromRow(rateLimitID string, models []byte, shared bool) (RateLimitLink, error) {
-	link := RateLimitLink{RateLimitID: rateLimitID, Shared: &shared}
+func rateLimitLinkFromRow(rateLimitID string, models []byte, shared bool) (policy.RateLimitLink, error) {
+	link := policy.RateLimitLink{RateLimitID: rateLimitID, Shared: &shared}
 	if err := json.Unmarshal(models, &link.Models); err != nil {
 		return link, fmt.Errorf("models: %w", err)
 	}

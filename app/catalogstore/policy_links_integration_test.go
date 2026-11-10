@@ -1,8 +1,8 @@
 //go:build integration
 
-// links_integration_test.go covers a Policy's links to pools, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement, the shared mark and what a deleted target leaves behind (nothing for a cap, its id for a pool) are the behaviour. Run with: make test-integration.
+// policy_links_integration_test.go covers a Policy's links to pools, rate limits and budgets against a real Postgres: each lives in a junction, so order, replacement, the shared mark and what a deleted target leaves behind (nothing for a cap, its id for a pool) are the behaviour. Run with: make test-integration.
 
-package policy_test
+package catalogstore_test
 
 import (
 	"context"
@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -91,7 +91,7 @@ func TestIntegration_PolicyLinksRoundTrip(t *testing.T) {
 	if err := budgets.Delete(ctx, b.Meta.ID); err != nil {
 		t.Fatalf("delete budget: %v", err)
 	}
-	if err := ratelimit.NewStore(gen.New(f.db)).Delete(ctx, f.otherRateLimit); err != nil {
+	if err := catalogstore.NewRateLimitStore(gen.New(f.db)).Delete(ctx, f.otherRateLimit); err != nil {
 		t.Fatalf("delete rate limit: %v", err)
 	}
 	got, err = f.store.Get(ctx, p.Meta.ID)
@@ -122,7 +122,7 @@ func assertLinks(t *testing.T, step string, got, want policy.Spec) {
 	}
 }
 
-func listedPolicy(t *testing.T, ctx context.Context, s *policy.Store, id string) *policy.Policy {
+func listedPolicy(t *testing.T, ctx context.Context, s *catalogstore.PolicyStore, id string) *policy.Policy {
 	t.Helper()
 	rows, err := s.List(ctx)
 	if err != nil {

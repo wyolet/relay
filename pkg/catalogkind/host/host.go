@@ -6,7 +6,7 @@
 //
 // Hosts are operator-defined infrastructure (Owner.Kind=system). HostKeys
 // belong to Hosts. Which Hosts can serve a Model is declared by standalone
-// HostBinding entities (app/binding), not on the Model.
+// HostBinding entities (pkg/catalogkind/binding), not on the Model.
 //
 // Storage: not yet wired to PG (needs a new hosts table + sqlc queries).
 // The catalog composition layer consumes a HostLister interface; tests

@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/metrics"
 )

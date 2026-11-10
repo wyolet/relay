@@ -4,9 +4,9 @@ package plan
 
 import (
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/engine"
 )
 

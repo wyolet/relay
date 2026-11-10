@@ -12,12 +12,12 @@ app/apply			77
 app/audit			87
 app/authz			95
 app/catalog			83
+app/catalogstore		66
 app/catalogvalidate		74
 app/httpapi/control		55
 app/httpapi/inference		76
 app/key				77
 app/manifest			69
-app/policy			85
 app/policybinding		77
 app/role			82
 app/rolebinding			81
@@ -26,6 +26,7 @@ app/settings			61
 cmd/relay			23
 internal/config			63
 internal/license		83
+pkg/catalogkind/policy		85
 pkg/crypto			81
 pkg/ratelimit			81
 

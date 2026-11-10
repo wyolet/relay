@@ -8,11 +8,11 @@ import (
 	"sort"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// systemRateLimitStore is the part of ratelimit.Store the system seed uses.
+// systemRateLimitStore is the part of catalogstore.RateLimitStore the system seed uses.
 type systemRateLimitStore interface {
 	List(ctx context.Context) ([]*ratelimit.RateLimit, error)
 	Upsert(ctx context.Context, rl *ratelimit.RateLimit) error

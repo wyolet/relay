@@ -8,12 +8,12 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/settings"
 	relayconfig "github.com/wyolet/relay/config"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
 // catalogSeedLock is the advisory-lock id the catalog seed serializes on.

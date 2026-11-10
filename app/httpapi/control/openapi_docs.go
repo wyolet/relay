@@ -7,8 +7,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
 // The 409 answers of the generic CRUD operations, by operation.
