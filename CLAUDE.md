@@ -101,7 +101,8 @@ app/                       — the application: domain + composition + handlers
   transport/ws/            — customer-facing WebSocket inference transport
   batch/                   — batch consumer: reuses Pipeline.Run (source="batch")
                              over the jobq module. See .tmp/design/ + roadmap.
-  manifest/                — YAML DTOs + translate ↔ domain
+  manifest/                — relay's other kinds + render, on top of
+                             pkg/catalogkind/manifest
   seed/                    — YAML → Postgres orchestration
   session/                 — scs wrapper, kv-backed
   authz/                   — Authorizer; RELAY_AUTHZ=single (allow
@@ -122,6 +123,8 @@ pkg/                       — server-internal shared libs (NOT the SDK)
     {provider,host,model,    pricing cost, RateLimit Resolve(policy, rl) →
      pricing,binding,        Rules. `binding` is the first-class HostBinding
      policy,ratelimit}/      join (Model×Host×adapter). Stores: app/catalogstore.
+    manifest/              — catalog-kind YAML DTOs, the extensible kind
+                             parser (LoadDir), To<Kind> translations
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   lifecycle/               — per-request Context + PreFlightMiddleware +

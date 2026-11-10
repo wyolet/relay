@@ -1,0 +1,25 @@
+{
+  "tree": "1644ef54953c43b2a67d87a303a496b94df12d883387b6b50da95714058e1080",
+  "kinds": {
+    "Host": 16,
+    "HostBinding": 635,
+    "Model": 562,
+    "Policy": 38,
+    "Pricing": 196,
+    "Provider": 43,
+    "RateLimit": 58
+  },
+  "first": {
+    "Host": "alibaba",
+    "HostBinding": "qvq-max-on-alibaba",
+    "Model": "yi-coder-1-5b",
+    "Policy": "alibaba-default",
+    "Pricing": "alibaba-qvq-max",
+    "Provider": "01ai",
+    "RateLimit": "alibaba-default-rl"
+  },
+  "parsed": "e9d3f976f32f9b2a6f47ab916113057bf292f9c270df48e6d2d2bc669aa5f7fa",
+  "translated": "0d262b8a44224b0c01f0de54f067ec00aabcdef9cae7e22e2ece3ac27681f05a",
+  "rendered": "23cd5c6bddc1dea273ae9aaf82219856d317de0fe1da2c07e62f902034e28d99",
+  "embed": "8d3a01c1d30a92d89ef5f426c0a491c67768b6291641455a6e31a3fd5ea56521"
+}

@@ -50,7 +50,7 @@ func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindin
 
 // ToPolicyBinding resolves the owner, the policy and the accounts by name.
 func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBinding, error) {
-	m := d.Metadata.toMeta()
+	m := d.Metadata.ToMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	policyID, ok := idx.PolicyID(d.Spec.Policy)
 	if !ok {

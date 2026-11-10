@@ -1,31 +1,23 @@
 package manifest
 
-import "fmt"
+import catalogmanifest "github.com/wyolet/relay/pkg/catalogkind/manifest"
 
 // RefNotFoundError is a name a document references that the Resolver does
 // not know. Typed so a caller scoped to part of the deployment can be
 // answered as for a row it may not see.
-type RefNotFoundError struct{ msg string }
-
-func (e *RefNotFoundError) Error() string { return e.msg }
+type RefNotFoundError = catalogmanifest.RefNotFoundError
 
 func refNotFound(format string, args ...any) error {
-	return &RefNotFoundError{msg: fmt.Sprintf(format, args...)}
+	return catalogmanifest.RefNotFound(format, args...)
 }
 
-// Resolver resolves entity names to ids. The caller builds one from their
-// name→id index (a snapshot, a seed index built against live PG state, etc.).
-// Wire needs only this narrow interface — it never touches a full catalog or
-// storage layer.
+// Resolver resolves entity names to ids: the catalog kinds' and relay's own.
+// The caller builds one from their name→id index (a snapshot, a seed index
+// built against live PG state, etc.). Wire needs only this narrow interface —
+// it never touches a full catalog or storage layer.
 type Resolver interface {
-	ProviderID(name string) (string, bool)
-	HostID(name string) (string, bool)
-	PolicyID(name string) (string, bool)
-	ModelID(name string) (string, bool)
+	catalogmanifest.Resolver
 	HostKeyID(name string) (string, bool)
-	RateLimitID(name string) (string, bool)
-	PricingID(name string) (string, bool)
-	BindingID(name string) (string, bool)
 	TeamID(name string) (string, bool)
 	ProjectID(name string) (string, bool)
 	ServiceAccountID(name string) (string, bool)
@@ -60,7 +52,8 @@ type ReverseResolver interface {
 }
 
 // MapResolver is a convenience implementation of Resolver backed by plain
-// maps. Useful in tests and seed tooling.
+// maps. Useful in tests and seed tooling. It repeats catalogmanifest.MapResolver's
+// fields rather than embedding it, so a literal can still name them directly.
 type MapResolver struct {
 	Providers  map[string]string
 	Hosts      map[string]string

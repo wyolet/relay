@@ -9,7 +9,7 @@ import (
 
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 
-	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
 func TestCompose_SkipsDrafts(t *testing.T) {

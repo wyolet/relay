@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/catalogembed"
-	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
 func main() {

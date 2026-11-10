@@ -1,118 +1,101 @@
 package manifest
 
-import "fmt"
+import (
+	"gopkg.in/yaml.v3"
 
-func dispatchKind(env *rawEnvelope) (Document, error) {
-	if doc, ok, err := decodeRelayAuthKind(env); ok {
-		return doc, err
-	}
-	switch env.Kind {
-	case "Provider":
-		var spec ProviderSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Provider: &ProviderDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+	catalogmanifest "github.com/wyolet/relay/pkg/catalogkind/manifest"
+)
 
-	case "Host":
-		var spec HostSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Host: &HostDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Model":
-		var spec ModelSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Model: &ModelDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "HostKey":
-		var spec HostKeySpec
-		if err := decodeSpec(env, &spec); err != nil {
-			return Document{}, err
-		}
-		return Document{HostKey: &HostKeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Policy":
-		var spec PolicySpec
-		if err := decodeSpec(env, &spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Policy: &PolicyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Account":
+// newRelayParser is the catalog parser plus relay's own kinds, the auth module's documents and the foreign kinds.
+func newRelayParser() *catalogmanifest.Parser {
+	p := catalogmanifest.NewParser()
+	p.Intercept(interceptAuthAndForeign)
+	p.Register("HostKey", catalogmanifest.KindDecoder{
+		Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+			var spec HostKeySpec
+			if err := env.Spec.Decode(&spec); err != nil {
+				return catalogmanifest.Document{}, err
+			}
+			return toParsed(Document{HostKey: &HostKeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+		},
+		RemovedFields: removedFields["HostKey"],
+		ReshapedHint:  "policyId is gone: name the provider account in spec.account and bind its tier policy with a PolicyBinding",
+	})
+	p.Register("Account", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec AccountSpec
 		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
+			return catalogmanifest.Document{}, err
 		}
-		return Document{Account: &AccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Pool":
+		return toParsed(Document{Account: &AccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
+	p.Register("Pool", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec PoolSpec
 		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
+			return catalogmanifest.Document{}, err
 		}
-		return Document{Pool: &PoolDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Budget":
+		return toParsed(Document{Pool: &PoolDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
+	p.Register("Budget", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec BudgetSpec
 		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
+			return catalogmanifest.Document{}, err
 		}
-		return Document{Budget: &BudgetDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "RateLimit":
-		var spec RateLimitSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{RateLimit: &RateLimitDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Key":
-		var spec KeySpec
-		if err := decodeSpec(env, &spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Key: &KeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Pricing":
-		var spec PricingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{Pricing: &PricingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "HostBinding":
-		var spec HostBindingSpec
-		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
-		}
-		return Document{HostBinding: &HostBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "PolicyBinding":
-		var spec PolicyBindingSpec
-		if err := decodeSpec(env, &spec); err != nil {
-			return Document{}, err
-		}
-		return Document{PolicyBinding: &PolicyBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
-
-	case "Overlay":
+		return toParsed(Document{Budget: &BudgetDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
+	p.Register("Key", catalogmanifest.KindDecoder{
+		Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+			var spec KeySpec
+			if err := env.Spec.Decode(&spec); err != nil {
+				return catalogmanifest.Document{}, err
+			}
+			return toParsed(Document{Key: &KeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+		},
+		RemovedFields: removedFields["Key"],
+		ReshapedHint:  "policy is gone: bind the key's principal with a PolicyBinding",
+	})
+	p.Register("PolicyBinding", catalogmanifest.KindDecoder{
+		Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+			var spec PolicyBindingSpec
+			if err := env.Spec.Decode(&spec); err != nil {
+				return catalogmanifest.Document{}, err
+			}
+			return toParsed(Document{PolicyBinding: &PolicyBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+		},
+		RemovedFields: removedFields["PolicyBinding"],
+		ReshapedHint:  "a binding governs only requests inside its owner's scope and binds a subject once; re-check owners and subjects",
+	})
+	p.Register("Overlay", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec OverlaySpec
 		if err := env.Spec.Decode(&spec); err != nil {
-			return Document{}, err
+			return catalogmanifest.Document{}, err
 		}
-		return Document{Overlay: &OverlayDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+		return toParsed(Document{Overlay: &OverlayDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
+	// Spec stays a raw node — its shape is per-section and is validated
+	// when the settings store decodes it against the named section.
+	p.Register("Setting", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+		return toParsed(Document{Setting: &SettingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: env.Spec}}), nil
+	}})
+	registerRelayAuthKinds(p)
+	return p
+}
 
-	case "Setting":
-		// Spec stays a raw node — its shape is per-section and is validated
-		// when the settings store decodes it against the named section.
-		return Document{Setting: &SettingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: env.Spec}}, nil
-
-	default:
-		return Document{}, fmt.Errorf("unknown kind %q", env.Kind)
+// interceptAuthAndForeign takes the auth module's documents and the foreign kinds before the apiVersion check: each carries its own apiVersion.
+func interceptAuthAndForeign(index int, env *catalogmanifest.Envelope, node *yaml.Node) (catalogmanifest.Document, bool, error) {
+	if authKind(env.APIVersion, env.Kind) {
+		doc, err := parseAuthDoc(index, node)
+		if err != nil {
+			return catalogmanifest.Document{}, true, err
+		}
+		return toParsed(doc), true, nil
 	}
+	// Identity (User) lives in config/users/ alongside catalog YAML and
+	// carries its own apiVersion — the catalog seeder must walk past it
+	// without enforcing the manifest schema version.
+	if isForeignKind(env.Kind) {
+		return catalogmanifest.Document{Foreign: env.Kind}, true, nil
+	}
+	return catalogmanifest.Document{}, false, nil
 }
 
 // isForeignKind reports kinds owned by sibling subsystems that the catalog

@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/provider"
@@ -110,7 +110,6 @@ func newIndex() *embedIndex {
 			Hosts:      map[string]string{},
 			Policies:   map[string]string{},
 			Models:     map[string]string{},
-			HostKeys:   map[string]string{},
 			RateLimits: map[string]string{},
 			Pricings:   map[string]string{},
 			Bindings:   map[string]string{},
