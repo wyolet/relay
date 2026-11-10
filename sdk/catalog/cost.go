@@ -8,7 +8,7 @@ import (
 
 // Cost returns total cost in the rate sheet's currency and ok=false when the
 // binding carries no pricing. Tier axis = prompt length, usage.Tokens.PromptTokens
-// (matches app/pricing).
+// (matches pkg/catalogkind/pricing).
 // It is the terse form of CostBreakdown, discarding the unpriced-meter list;
 // callers rendering an estimate should prefer CostBreakdown so unpriced meters
 // don't silently deflate the total.
@@ -45,7 +45,7 @@ func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []st
 // CostBreakdownForServiceTier is CostBreakdown for a response served in
 // serviceTier. For each meter a rate carrying that service tier wins over the
 // base rate whenever one qualifies at the request's prompt length; a meter the
-// tier does not price bills at the base rate. Matches app/pricing.
+// tier does not price bills at the base rate. Matches pkg/catalogkind/pricing.
 func (b Binding) CostBreakdownForServiceTier(tokens usage.Tokens, serviceTier string) (cost float64, unpriced []string, ok bool) {
 	if len(b.Pricing) == 0 || len(tokens) == 0 {
 		return 0, nil, false

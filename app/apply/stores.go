@@ -8,21 +8,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	apppool "github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
@@ -30,6 +24,13 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -37,14 +38,14 @@ import (
 // than reused from app/catalog: app/catalog depends on the boot seed, which
 // depends on this package.
 type Stores struct {
-	Provider    *provider.Store
-	Host        *host.Store
-	RateLimit   *ratelimit.Store
+	Provider    *catalogstore.ProviderStore
+	Host        *catalogstore.HostStore
+	RateLimit   *catalogstore.RateLimitStore
 	HostKey     *hostkey.Store
-	Model       *model.Store
-	Policy      *policy.Store
-	Pricing     *pricing.Store
-	HostBinding *binding.Store
+	Model       *catalogstore.ModelStore
+	Policy      *catalogstore.PolicyStore
+	Pricing     *catalogstore.PricingStore
+	HostBinding *catalogstore.BindingStore
 	Key         *key.Store
 	Team        *team.Store
 	Project     *project.Store
@@ -74,14 +75,14 @@ func NewStores(pool *pgxpool.Pool, sec *appsecret.Secrets) *Stores {
 		sec, _ = appsecret.Wire(pool, nil)
 	}
 	return &Stores{
-		Provider:    provider.NewStore(q),
-		Host:        host.NewStore(q),
-		RateLimit:   ratelimit.NewStore(q),
+		Provider:    catalogstore.NewProviderStore(q),
+		Host:        catalogstore.NewHostStore(q),
+		RateLimit:   catalogstore.NewRateLimitStore(q),
 		HostKey:     hostkey.NewStore(pool, sec.Registry, sec.Stored),
-		Model:       model.NewStore(q),
-		Policy:      policy.NewStore(pool),
-		Pricing:     pricing.NewStore(pool),
-		HostBinding: binding.NewStore(pool),
+		Model:       catalogstore.NewModelStore(q),
+		Policy:      catalogstore.NewPolicyStore(pool),
+		Pricing:     catalogstore.NewPricingStore(pool),
+		HostBinding: catalogstore.NewBindingStore(pool),
 		Key:         key.NewStore(q),
 		Team:        team.NewStore(pool),
 		Project:     project.NewStore(pool),

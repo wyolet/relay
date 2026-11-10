@@ -7,10 +7,10 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
 // ladder is two teams over two pools: team one (projects one and two) links pools A and B, team two links pool B only.

@@ -1,9 +1,9 @@
 package manifest
 
 import (
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

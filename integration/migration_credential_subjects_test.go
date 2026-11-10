@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/policybinding"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -31,13 +32,13 @@ func credentialSubjectsAt37(t *testing.T, bindings []string, subjects func(keys 
 	hst := &host.Host{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://api.example.com"}}
 	a := &account.Account{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme-org", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: account.Spec{HostID: hst.Meta.ID}}
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "key-cap", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	if err := account.NewStore(q).Upsert(ctx, a); err != nil {
 		t.Fatalf("upsert account: %v", err)
 	}
-	if err := policy.NewStore(db).Upsert(ctx, pol); err != nil {
+	if err := catalogstore.NewPolicyStore(db).Upsert(ctx, pol); err != nil {
 		t.Fatalf("upsert policy: %v", err)
 	}
 	ids = map[string]string{}

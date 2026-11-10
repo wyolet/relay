@@ -4,8 +4,8 @@ import (
 	"context"
 	"sort"
 
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
 // PolicyRateLimitRow — one rate-limit rule set the policy links. Default is

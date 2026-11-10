@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/meta"
 	sdkusage "github.com/wyolet/relay/sdk/usage"

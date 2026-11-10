@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/meta"
 )

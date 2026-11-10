@@ -1,6 +1,7 @@
-// store.go is the data-access layer for RateLimit. Mirrors the other entities.
+// ratelimit.go is the data-access layer for RateLimit. Mirrors the other
+// catalog kinds.
 
-package ratelimit
+package catalogstore
 
 import (
 	"context"
@@ -11,26 +12,28 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// Store is the RateLimit data-access type.
-type Store struct {
+// RateLimitStore is the RateLimit data-access type.
+type RateLimitStore struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
-func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+// NewRateLimitStore constructs a RateLimitStore from an existing sqlc Queries
+// handle.
+func NewRateLimitStore(q *gen.Queries) *RateLimitStore { return &RateLimitStore{q: q} }
 
 // List returns every RateLimit row.
-func (s *Store) List(ctx context.Context) ([]*RateLimit, error) {
+func (s *RateLimitStore) List(ctx context.Context) ([]*ratelimit.RateLimit, error) {
 	rows, err := s.q.ListRateLimits(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ratelimit.List: %w", err)
 	}
-	out := make([]*RateLimit, 0, len(rows))
+	out := make([]*ratelimit.RateLimit, 0, len(rows))
 	for _, r := range rows {
-		rl, err := fromRow(r)
+		rl, err := rateLimitFromRow(r)
 		if err != nil {
 			return nil, fmt.Errorf("ratelimit %s: %w", r.Name, err)
 		}
@@ -40,8 +43,8 @@ func (s *Store) List(ctx context.Context) ([]*RateLimit, error) {
 }
 
 // Upsert writes rl. Caller is responsible for stamping Meta.ID.
-func (s *Store) Upsert(ctx context.Context, rl *RateLimit) error {
-	params, err := toUpsertParams(rl)
+func (s *RateLimitStore) Upsert(ctx context.Context, rl *ratelimit.RateLimit) error {
+	params, err := rateLimitUpsertParams(rl)
 	if err != nil {
 		return fmt.Errorf("ratelimit.Upsert: %w", err)
 	}
@@ -49,7 +52,7 @@ func (s *Store) Upsert(ctx context.Context, rl *RateLimit) error {
 }
 
 // Get returns the RateLimit with the given id, or (nil, nil) if not found.
-func (s *Store) Get(ctx context.Context, id string) (*RateLimit, error) {
+func (s *RateLimitStore) Get(ctx context.Context, id string) (*ratelimit.RateLimit, error) {
 	r, err := s.q.GetRateLimit(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -64,19 +67,19 @@ func (s *Store) Get(ctx context.Context, id string) (*RateLimit, error) {
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
 	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec ratelimit.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return &RateLimit{Meta: m, Spec: spec}, nil
+	return &ratelimit.RateLimit{Meta: m, Spec: spec}, nil
 }
 
 // Delete removes a RateLimit by id.
-func (s *Store) Delete(ctx context.Context, id string) error {
+func (s *RateLimitStore) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteRateLimit(ctx, id)
 }
 
-func fromRow(r gen.ListRateLimitsRow) (*RateLimit, error) {
+func rateLimitFromRow(r gen.ListRateLimitsRow) (*ratelimit.RateLimit, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -84,14 +87,14 @@ func fromRow(r gen.ListRateLimitsRow) (*RateLimit, error) {
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
 	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
-	var spec Spec
+	var spec ratelimit.Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return &RateLimit{Meta: md, Spec: spec}, nil
+	return &ratelimit.RateLimit{Meta: md, Spec: spec}, nil
 }
 
-func toUpsertParams(rl *RateLimit) (gen.UpsertRateLimitParams, error) {
+func rateLimitUpsertParams(rl *ratelimit.RateLimit) (gen.UpsertRateLimitParams, error) {
 	metaJSON, err := meta.MarshalJSONB(rl.Meta)
 	if err != nil {
 		return gen.UpsertRateLimitParams{}, fmt.Errorf("metadata: %w", err)

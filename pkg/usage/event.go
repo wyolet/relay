@@ -12,7 +12,7 @@ import (
 // fact computed from the pricing in effect when the request ran — never
 // recomputed at read time (pricing is mutable config). This package only
 // carries the stamped fields; pricing resolution and the cost math live
-// app-side (app/usagelog + app/pricing).
+// elsewhere (app/usagelog + pkg/catalogkind/pricing).
 //
 // It lives in pkg/usage (not app/) so every sink/reader backend
 // (file, ClickHouse, valkey, postgres) can consume it as a vendorable

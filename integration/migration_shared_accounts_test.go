@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/app/team"
@@ -17,6 +17,7 @@ import (
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -42,7 +43,7 @@ func TestMigrateDownAndUpAcrossSharedAccounts(t *testing.T) {
 	if err := team.NewStore(db).Upsert(ctx, tm); err != nil {
 		t.Fatalf("upsert team: %v", err)
 	}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	if err := accounts.Upsert(ctx, org); err != nil {

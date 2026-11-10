@@ -13,9 +13,9 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 )
 
 // maxSiblingProbes bounds the upstream calls one detect makes for the other keys of the account before filling its orgId; an account with more keys is left for the operator to fill.

@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/wyolet/relay/app/provider"
+import "github.com/wyolet/relay/pkg/catalogkind/provider"
 
 // Providers carry no cross-refs in v1, so there's nothing to sanitize.
 func (s *Snapshot) addProviders(provs []*provider.Provider) {

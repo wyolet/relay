@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

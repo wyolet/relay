@@ -5,9 +5,9 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/engine"
 )
 

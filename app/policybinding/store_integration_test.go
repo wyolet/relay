@@ -11,8 +11,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/team"
@@ -20,6 +19,8 @@ import (
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -50,7 +51,7 @@ func setupBindings(t *testing.T, name string) *bindingFixture {
 		t.Fatalf("upsert project: %v", err)
 	}
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	if err := policy.NewStore(db).Upsert(ctx, pol); err != nil {
+	if err := catalogstore.NewPolicyStore(db).Upsert(ctx, pol); err != nil {
 		t.Fatalf("upsert policy: %v", err)
 	}
 	q := gen.New(db)
@@ -81,7 +82,7 @@ func TestIntegration_AccountsRoundTripAndDropOut(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "pb-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: host.Spec{BaseURL: "https://api.example.com"},
 	}
-	if err := host.NewStore(f.q).Upsert(f.ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(f.q).Upsert(f.ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	provider := &account.Account{
@@ -104,7 +105,7 @@ func TestIntegration_AccountsRoundTripAndDropOut(t *testing.T) {
 		t.Fatalf("Get = %+v (err %v), want accounts %v", got, err, ids)
 	}
 
-	if err := host.NewStore(f.q).Delete(f.ctx, hst.Meta.ID); err != nil {
+	if err := catalogstore.NewHostStore(f.q).Delete(f.ctx, hst.Meta.ID); err != nil {
 		t.Fatalf("delete host: %v", err)
 	}
 	if err := project.NewStore(f.db).Delete(f.ctx, f.project.Meta.ID); err != nil {

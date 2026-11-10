@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/wyolet/relay/app/pricing"
+import "github.com/wyolet/relay/pkg/catalogkind/pricing"
 
 func (s *Snapshot) addPricings(pricings []*pricing.Pricing, hosts, models idSet) {
 	for _, p := range pricings {

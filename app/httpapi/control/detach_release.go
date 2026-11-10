@@ -11,12 +11,12 @@ import (
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/share"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

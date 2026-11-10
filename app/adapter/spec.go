@@ -18,9 +18,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )

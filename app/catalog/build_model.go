@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/wyolet/relay/app/model"
+import "github.com/wyolet/relay/pkg/catalogkind/model"
 
 func (s *Snapshot) addModels(models []*model.Model, providers idSet) {
 	for _, m := range models {

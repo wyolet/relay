@@ -16,7 +16,7 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/ids"
 )

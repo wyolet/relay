@@ -5,20 +5,14 @@ import (
 	"errors"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -35,13 +29,13 @@ import (
 func rowStores(db storage.DB) *Stores {
 	q := gen.New(db)
 	return &Stores{
-		Provider:  provider.NewStore(q),
-		Host:      host.NewStore(q),
-		Model:     model.NewStore(q),
-		RateLimit: ratelimit.NewStore(q),
-		Policy:    policy.NewStore(db),
-		Pricing:   pricing.NewStore(db),
-		Binding:   binding.NewStore(db),
+		Provider:  catalogstore.NewProviderStore(q),
+		Host:      catalogstore.NewHostStore(q),
+		Model:     catalogstore.NewModelStore(q),
+		RateLimit: catalogstore.NewRateLimitStore(q),
+		Policy:    catalogstore.NewPolicyStore(db),
+		Pricing:   catalogstore.NewPricingStore(db),
+		Binding:   catalogstore.NewBindingStore(db),
 		Key:       key.NewStore(q),
 		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),

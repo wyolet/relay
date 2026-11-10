@@ -6,8 +6,8 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
 // unpricedOrg adds a model "free" served at the org's host with no pricing.

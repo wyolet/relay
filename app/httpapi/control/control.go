@@ -19,17 +19,17 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/payloadlog"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 )
 
@@ -252,7 +252,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSCIMClients(api, d, protect) // the /scim/v2 endpoint itself is MountSCIM, outside /api
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
-	// deliberately don't carry (no huma tags in app/ratelimit). The spec is
+	// deliberately don't carry (no huma tags in pkg/catalogkind/ratelimit). The spec is
 	// marshalled lazily on first /openapi.json hit, so patching here lands.
 	// `meter` enum comes from the domain const set; `window` is documented as
 	// seconds (ratelimit.Window marshals as integer seconds). No-op if renamed.

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/ratelimit"
 	relayconfig "github.com/wyolet/relay/config"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
 )
 

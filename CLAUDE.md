@@ -56,13 +56,11 @@ app/                       — the application: domain + composition + handlers
   catalogserver/           — serves catalog releases from a git mirror of the
                              catalog repo (cmd/catalog-server)
   families/                — families.yaml loader shared by curation + import
-  {provider,host,model,
-   hostkey,ratelimit,
-   policy,pricing,binding,
-   key}/                   — catalog + credential entities. Each: domain types,
+  catalogstore/            — Postgres stores for the pkg/catalogkind kinds
+                             (ProviderStore, HostStore, …, PolicyStore)
+  {hostkey,key}/           — credential entities. Each: domain types,
                              Validate(), Store{List,Get,Upsert,Delete}.
-                             `binding` is the first-class HostBinding join
-                             (Model×Host×adapter); `key` is the inbound key.
+                             `key` is the inbound key.
   {team,project,group,
    serviceaccount,user,
    role,rolebinding,
@@ -92,7 +90,6 @@ app/                       — the application: domain + composition + handlers
   keypool/                 — key selection + per-key circuit breaker
                              (state at `secret_health:*` in kv)
   hosthealth/              — per-host runtime reachability (kv-backed)
-  ratelimit/               — RateLimit entity + Resolve(policy, rl) → Rules
   secret/                  — KeyAgent (out-of-band heal/failover) + wiring;
                              stored/ = the key-ring-backed PG secret store
   httpapi/                 — the HTTP layer
@@ -121,6 +118,10 @@ pkg/                       — server-internal shared libs (NOT the SDK)
                              name/displayName, owner)
   modelref/                — parses the catalog model-reference DSL + aliases
   adapters/                — vocabulary only: Name constants
+  catalogkind/             — catalog kinds without storage: types, Validate(),
+    {provider,host,model,    pricing cost, RateLimit Resolve(policy, rl) →
+     pricing,binding,        Rules. `binding` is the first-class HostBinding
+     policy,ratelimit}/      join (Model×Host×adapter). Stores: app/catalogstore.
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   lifecycle/               — per-request Context + PreFlightMiddleware +
@@ -405,7 +406,7 @@ A Key is a credential OF a principal — a ServiceAccount (which lives in a
 Project) or a User — not an identity of its own, so rotating one leaves
 everything bound to that principal untouched.
 
-HostBinding is its own entity (`app/binding`), not an array embedded in
+HostBinding is its own entity (`pkg/catalogkind/binding`), not an array embedded in
 `model.Spec`. The promotion gives pricing and routing a real addressable
 row, and lets one Model be served by many Hosts (incl. aggregators
 re-serving another provider's model). It's a join owned by no single side

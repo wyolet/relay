@@ -9,8 +9,8 @@ package catalog
 import (
 	"log/slog"
 
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 )
 
 // applyOverlays registers ovls and swaps every overlaid model's snapshot

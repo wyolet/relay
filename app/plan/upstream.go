@@ -2,13 +2,13 @@ package plan
 
 import (
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
 	"github.com/wyolet/relay/pkg/meta"
