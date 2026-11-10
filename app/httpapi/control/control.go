@@ -236,6 +236,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerLimits(api, d, protect)
 	registerReachable(api, d, protect)
 	registerAccountPolicy(api, d, protect)
+	registerPolicyAccounts(api, d, protect)
 	registerPlanIssues(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
