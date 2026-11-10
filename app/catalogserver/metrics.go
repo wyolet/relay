@@ -56,7 +56,7 @@ func newMetrics(s *Server) *metrics {
 		}, []string{"result"}),
 		nudges: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: ns, Name: "webhook_nudges_total",
-			Help: "Release nudge sends by result: delivered or failed per attempt, gave_up once a receiver's retries for a tag ran out.",
+			Help: "Release nudge sends by result: delivered or failed per attempt, gave_up once a receiver's retries for a tag ran out, superseded when a newer tag replaced a pending retry.",
 		}, []string{"result"}),
 		githubHooks: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: ns, Name: "github_hooks_total",

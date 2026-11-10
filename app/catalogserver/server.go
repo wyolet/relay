@@ -191,6 +191,7 @@ func New(cfg Config) (*Server, error) {
 			subs:        newSubscriptions(),
 			retryDelays: nudgeRetryDelays,
 			sendSlots:   make(chan struct{}, nudgeSenders),
+			deliverySeq: map[string]uint64{},
 		}
 	}
 	s.metrics = newMetrics(s)

@@ -72,7 +72,7 @@ curl -X POST https://catalog.example.com/v1/webhooks \
 
 Before it answers, the server resolves the host once and sends the challenge to that address; every later request to the receiver dials the same address, with the URL's host for TLS and the `Host` header, and never follows a redirect. The challenge is `POST <url>` with `{"type": "challenge", "challenge": "<32 hex chars>"}`; the receiver must answer `200` with `{"challenge": "<same value>"}` within 5 seconds.
 
-When a channel's latest tag moves to a newer tag whose files all serve, each live receiver of that channel gets `POST <url>` with `{"type": "release", "channel": "v1alpha3", "tag": "v0.2.3"}`. Any `2xx` counts as delivered. A failure or a 5-second timeout is retried after 10 seconds, 1 minute and 5 minutes, then given up for that tag; a receiver that misses 3 tags in a row is removed. Requests carry `User-Agent: wyolet-catalog-server/<version>` and `Content-Type: application/json`. A server that restarts sends nothing for the tags it finds at startup.
+When a channel's latest tag moves to a newer tag whose files all serve, each live receiver of that channel gets `POST <url>` with `{"type": "release", "channel": "v1alpha3", "tag": "v0.2.3"}`. Any `2xx` counts as delivered. A failure or a 5-second timeout is retried 10 seconds, 1 minute and 5 minutes after that receiver's own failed attempt, then given up for that tag; a receiver that misses 3 tags in a row is removed. Once a newer tag of the channel is sent, pending retries for the older tag stop. At most 32 nudge requests are in flight at once. Requests carry `User-Agent: wyolet-catalog-server/<version>` and `Content-Type: application/json`. A server that restarts sends nothing for the tags it finds at startup.
 
 Subscriptions live in the memory of the replica that took the registration, which is also the one that sends to it. A restarted replica forgets them until relays renew, so a relay that registers should also poll.
 
@@ -164,7 +164,7 @@ At every sync the server fetches the mirror, reads each new release tag's channe
 | `catalog_server_cache_bytes` | gauge | | Bytes of release files in memory. |
 | `catalog_server_webhook_subscriptions` | gauge | `channel` | Live receivers this replica holds. |
 | `catalog_server_webhook_registrations_total` | counter | `result` | Registrations: `created`, `renewed`, `invalid`, `refused`, `challenge_failed`, `rate_limited`, `full`. |
-| `catalog_server_webhook_nudges_total` | counter | `result` | Nudge requests `delivered` or `failed`, and `gave_up` once a receiver's retries for a tag ran out. |
+| `catalog_server_webhook_nudges_total` | counter | `result` | Nudge requests `delivered` or `failed`, `gave_up` once a receiver's retries for a tag ran out, and `superseded` when a newer tag replaced a pending retry. |
 | `catalog_server_github_hooks_total` | counter | | Calls to `POST /hooks/github`. |
 
 ### Building a release's files
