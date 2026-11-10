@@ -24,7 +24,7 @@ import (
 
 const (
 	// Channel is the catalog schema channel this SDK reads. "Latest" resolves within it, so a schema bump never hands this SDK a catalog it cannot parse.
-	Channel = "v1alpha2"
+	Channel = "v1alpha3"
 	// DefaultIndexURL maps each schema channel to its newest catalog release.
 	DefaultIndexURL = "https://catalog.wyolet.com/index.yaml"
 	// DefaultDownloadURL is the release download base; assets live at <base>/<tag>/<asset>.
