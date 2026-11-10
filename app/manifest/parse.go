@@ -1,17 +1,10 @@
 package manifest
 
 import (
-	"errors"
-	"fmt"
 	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	authmanifest "github.com/wyolet/relay/auth/manifest"
+	catalogmanifest "github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
 // Document is a discriminated union over all supported wire kinds. Exactly one
@@ -104,120 +97,50 @@ func (d Document) Kind() string {
 	}
 }
 
-// rawEnvelope is decoded first to determine the kind, then the spec node is
-// decoded into the kind-specific struct.
-type rawEnvelope struct {
-	APIVersion string    `yaml:"apiVersion"`
-	Kind       string    `yaml:"kind"`
-	Metadata   WireMeta  `yaml:"metadata"`
-	Spec       yaml.Node `yaml:"spec"`
-}
+// relayParser reads every kind relay knows: the catalog's and the ones newRelayParser registers.
+var relayParser = newRelayParser()
 
 // Parse reads one or more YAML documents from r and returns a Document slice.
 // Multi-doc YAML (--- separated) is fully supported. The auth module's kinds
 // are decoded by the module, strictly, under either apiVersion.
 func Parse(r io.Reader) ([]Document, error) {
-	dec := yaml.NewDecoder(r)
-	var docs []Document
-	docIdx := 0
-	for {
-		var node yaml.Node
-		err := dec.Decode(&node)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		var env rawEnvelope
-		if err == nil {
-			err = node.Decode(&env)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("wire: doc %d: %w", docIdx, err)
-		}
-		if env.Kind == "" && env.APIVersion == "" {
-			docIdx++
-			continue
-		}
-		if authKind(env.APIVersion, env.Kind) {
-			doc, err := parseAuthDoc(docIdx, &node)
-			if err != nil {
-				return nil, fmt.Errorf("wire: %w", err)
-			}
-			docs = append(docs, doc)
-			docIdx++
-			continue
-		}
-		// Skip kinds owned by sibling subsystems that share the config tree.
-		// Identity (User) lives in config/users/ alongside catalog YAML and
-		// carries its own apiVersion — the catalog seeder must walk past it
-		// without enforcing the manifest schema version.
-		if isForeignKind(env.Kind) {
-			docs = append(docs, Document{Foreign: env.Kind})
-			docIdx++
-			continue
-		}
-		if err := checkAPIVersion(env.APIVersion, env.Kind); err != nil {
-			return nil, fmt.Errorf("wire: doc %d: %w", docIdx, err)
-		}
-		if env.Metadata.Name == "" {
-			return nil, fmt.Errorf("wire: doc %d kind=%s: metadata.name required", docIdx, env.Kind)
-		}
-		doc, err := dispatchKind(&env)
-		if err != nil {
-			return nil, fmt.Errorf("wire: doc %d kind=%s name=%s: %w", docIdx, env.Kind, env.Metadata.Name, err)
-		}
-		docs = append(docs, doc)
-		docIdx++
-	}
-	return docs, nil
+	docs, err := relayParser.Parse(r)
+	return fromParsed(docs), err
 }
 
-// LoadDir walks dir for .yaml / .yml files and parses each. Documents from
-// all files are merged into a single slice. File order is deterministic
-// (lexicographic).
-//
-// Any directory named "drafts" at any depth is skipped, as is any file
-// matching "*.draft.yaml" / "*.draft.yml". The catalog uses these to gate
-// resources that have been imported but not yet curated (e.g. unverified
-// baseURL/adapter). Promote by moving the subtree out of drafts/ or by
-// dropping the .draft suffix.
+// LoadDir walks dir for .yaml / .yml files and parses each, skipping drafts;
+// see catalogmanifest.Parser.LoadDir. Foreign kinds are dropped.
 func LoadDir(dir string) ([]Document, error) {
-	var all []Document
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if d.Name() == "drafts" {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		name := d.Name()
-		ext := filepath.Ext(name)
-		if ext != ".yaml" && ext != ".yml" {
-			return nil
-		}
-		if strings.HasSuffix(name, ".draft"+ext) {
-			return nil
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("wire: open %s: %w", path, err)
-		}
-		defer f.Close()
-		docs, err := Parse(f)
-		if err != nil {
-			return fmt.Errorf("wire: %s: %w", path, err)
-		}
-		for _, doc := range docs {
-			if doc.Foreign == "" {
-				all = append(all, doc)
-			}
-		}
+	docs, err := relayParser.LoadDir(dir)
+	return fromParsed(docs), err
+}
+
+// fromParsed lifts parsed documents into relay's Document: the kinds this package registers carry theirs in Ext.
+func fromParsed(docs []catalogmanifest.Document) []Document {
+	if docs == nil {
 		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return all, nil
+	out := make([]Document, len(docs))
+	for i, d := range docs {
+		if ext, ok := d.Ext.(Document); ok {
+			out[i] = ext
+			continue
+		}
+		out[i] = Document{
+			Provider:    d.Provider,
+			Host:        d.Host,
+			Model:       d.Model,
+			Policy:      d.Policy,
+			RateLimit:   d.RateLimit,
+			Pricing:     d.Pricing,
+			HostBinding: d.HostBinding,
+			Foreign:     d.Foreign,
+		}
+	}
+	return out
+}
+
+// toParsed wraps a Document of a kind this package registers for the catalog parser.
+func toParsed(d Document) catalogmanifest.Document {
+	return catalogmanifest.Document{Ext: d}
 }

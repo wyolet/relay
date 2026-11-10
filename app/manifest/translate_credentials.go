@@ -15,7 +15,7 @@ import (
 
 // ToHostKey resolves Spec.HostID and Spec.Account (name → id).
 func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
-	m := d.Metadata.toMeta()
+	m := d.Metadata.ToMeta()
 	if m.Owner.Kind == "" {
 		m.Owner.Kind = meta.OwnerSystem
 	}
@@ -112,7 +112,7 @@ func ToKey(d KeyDTO, idx Resolver) (*key.Key, error) {
 		accountID = id
 	}
 
-	m := d.Metadata.toMeta()
+	m := d.Metadata.ToMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	return &key.Key{
 		Meta: m,

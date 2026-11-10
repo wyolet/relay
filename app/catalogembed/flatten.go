@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/catalogkind/provider"

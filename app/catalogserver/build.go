@@ -19,8 +19,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/wyolet/relay/app/catalogembed"
-	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/seed"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 

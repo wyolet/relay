@@ -22,7 +22,7 @@ func ToAccount(d AccountDTO, idx Resolver) (*account.Account, error) {
 		}
 		hostID = id
 	}
-	m := d.Metadata.toMeta()
+	m := d.Metadata.ToMeta()
 	if m.Owner.Kind == "" && hostID != "" {
 		m.Owner.Kind = meta.OwnerSystem
 	}
@@ -82,7 +82,7 @@ func ToPool(d PoolDTO, idx Resolver) (*pool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := d.Metadata.toMeta()
+	m := d.Metadata.ToMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	p := &pool.Pool{
 		Meta: m,
@@ -114,7 +114,7 @@ func FromPool(p *pool.Pool, rev ReverseResolver) PoolDTO {
 // ToBudget fills the default period and mode, so the stored row and its
 // manifest converge.
 func ToBudget(d BudgetDTO, idx Resolver) (*budget.Budget, error) {
-	m := d.Metadata.toMeta()
+	m := d.Metadata.ToMeta()
 	resolveScopeOwner(&m.Owner, idx)
 	b := &budget.Budget{
 		Meta: m,
