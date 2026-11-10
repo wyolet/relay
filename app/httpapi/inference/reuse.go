@@ -6,7 +6,7 @@ package inference
 // strip. Single source of truth stays here.
 
 import (
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/metrics"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )

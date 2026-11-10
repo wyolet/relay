@@ -3,7 +3,7 @@ package inference
 import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 

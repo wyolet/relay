@@ -13,8 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 type Store struct {

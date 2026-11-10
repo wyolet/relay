@@ -1,8 +1,8 @@
 package catalog
 
 import (
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func (s *Snapshot) addPolicies(pols []*policy.Policy, projects idSet) {

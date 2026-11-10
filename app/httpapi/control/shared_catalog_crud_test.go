@@ -13,18 +13,18 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // catalogEditorRBAC is the enforcing authorizer over a catalog holding the

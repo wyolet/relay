@@ -2,10 +2,10 @@ package catalogview
 
 import (
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/modelref"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // policyGrantsModel mirrors one rung of the plan's reach and model rules, so

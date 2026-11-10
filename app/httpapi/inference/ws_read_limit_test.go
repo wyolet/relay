@@ -12,7 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // A frame carries one request body, so a body the HTTP routes accept must fit in a frame too.

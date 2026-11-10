@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/app/catalogembed"
-	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/embed"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
 func main() {
@@ -61,12 +61,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	cat, err := catalogembed.Compose(docs, at)
+	cat, err := embed.Compose(docs, at)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compose: %v\n", err)
 		os.Exit(2)
 	}
-	if err := catalogembed.ValidateAdapters(cat); err != nil {
+	if err := embed.ValidateAdapters(cat); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -74,7 +74,7 @@ func main() {
 		cat.Version = version
 	}
 
-	data, err := catalogembed.MarshalJSON(cat)
+	data, err := embed.MarshalJSON(cat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marshal: %v\n", err)
 		os.Exit(2)

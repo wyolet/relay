@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // kindWord renders an API kind as words: "host-key" is "host key".

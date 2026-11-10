@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // mintFor runs the auth stack for plaintext and mints the lifecycle Context

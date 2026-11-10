@@ -5,8 +5,8 @@ package user_test
 import (
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A user's personalAccount sits in a table of relay's beside the directory row: Get and List read it back, "" removes it, a user that does not exist reports false, and deleting the user takes it along.

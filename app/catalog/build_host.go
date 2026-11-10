@@ -1,7 +1,7 @@
 package catalog
 
 import (
-	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 )
 
 // addHosts indexes a copy of each host, so the snapshot never shares a row

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestUsernamesNamesOnlyExistingUsers(t *testing.T) {

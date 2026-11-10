@@ -18,9 +18,9 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 )
 
 type overlayIDInput struct {

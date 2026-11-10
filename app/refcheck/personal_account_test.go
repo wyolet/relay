@@ -7,7 +7,7 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // personalOffRows is bob's personal account and a provider account he owns, with bob's personal account turned off and alice's on.

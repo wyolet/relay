@@ -39,8 +39,8 @@ import (
 
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/plan"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/settle"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/contentcoding"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"

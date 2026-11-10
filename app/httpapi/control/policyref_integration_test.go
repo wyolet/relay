@@ -2,7 +2,7 @@
 
 // policyref_integration_test.go exercises checkPolicyRefVisible and
 // checkHostKeyRefsVisible against a real Postgres: both read through
-// concrete *policy.Store / *hostkey.Store, which have no fake seam. Run
+// concrete *catalogstore.PolicyStore / *hostkey.Store, which have no fake seam. Run
 // with: make test-integration (or RELAY_TEST_PG_DSN + `go test -tags=integration`).
 
 package control
@@ -16,11 +16,11 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func setupPolicyRefDB(t *testing.T) (*pgxpool.Pool, context.Context) {

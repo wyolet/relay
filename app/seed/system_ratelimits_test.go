@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/ratelimit"
 	relayconfig "github.com/wyolet/relay/config"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const shippedYAML = `apiVersion: relay.wyolet.dev/v1alpha2

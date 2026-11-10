@@ -15,8 +15,8 @@ import (
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/payloadlog"
+	"github.com/wyolet/relay/pkg/meta"
 	payloadfile "github.com/wyolet/relay/pkg/payload/file"
 )
 

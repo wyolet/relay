@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A bulk drain falls back to one full Reload, which rebuilds catalog rows

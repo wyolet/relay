@@ -5,8 +5,8 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // DetachedLinks lists the policies a prune takes a link from. The prune is

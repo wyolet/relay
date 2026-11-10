@@ -8,10 +8,10 @@ import (
 
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settings/settingstest"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // detachedModel is a provider-owned catalog row a catalog upgrade dropped.

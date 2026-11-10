@@ -18,9 +18,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/wyolet/relay/app/catalogembed"
-	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/seed"
+	catalogarchive "github.com/wyolet/relay/pkg/catalogkind/archive"
+	"github.com/wyolet/relay/pkg/catalogkind/embed"
+	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
@@ -46,7 +46,7 @@ func BuildCatalog(archive []byte, generatedAt time.Time, version string) ([]byte
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	if err := seed.ExtractCatalogArchive(bytes.NewReader(archive), dir); err != nil {
+	if err := catalogarchive.Extract(bytes.NewReader(archive), dir); err != nil {
 		return nil, fmt.Errorf("extract: %w", err)
 	}
 	dataDir := filepath.Join(dir, "data")
@@ -54,15 +54,15 @@ func BuildCatalog(archive []byte, generatedAt time.Time, version string) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("load: %w", err)
 	}
-	cat, err := catalogembed.Compose(docs, generatedAt)
+	cat, err := embed.Compose(docs, generatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("compose: %w", err)
 	}
-	if err := catalogembed.ValidateAdapters(cat); err != nil {
+	if err := embed.ValidateAdapters(cat); err != nil {
 		return nil, err
 	}
 	cat.Version = version
-	data, err := catalogembed.MarshalJSON(cat)
+	data, err := embed.MarshalJSON(cat)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
@@ -120,7 +120,7 @@ func ArchiveChannel(archive []byte) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(dir)
-	if err := seed.ExtractCatalogArchive(bytes.NewReader(archive), dir); err != nil {
+	if err := catalogarchive.Extract(bytes.NewReader(archive), dir); err != nil {
 		return "", fmt.Errorf("extract: %w", err)
 	}
 	apiVersion, err := treeAPIVersion(filepath.Join(dir, "data"))

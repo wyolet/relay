@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A manifest may not choose who owns a Team, Group or Role: those rows name a

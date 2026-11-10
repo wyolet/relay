@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A key's lane passes the same checks on create and on update: the user's personal account, a member account a role binding grants and a provider account the user owns take it; a member account opened on first use, a team's provider account, another user's account and a closed account do not.

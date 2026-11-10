@@ -144,6 +144,15 @@ relay:
   # admin-edited rows and overlays re-apply, so user changes survive. Empty
   # keeps the image-baked seed-if-empty behavior only.
   catalogVersion: ""
+  # -- With catalogVersion "latest": how often a running relay checks the
+  # catalog server for a newer release on its schema channel (Go duration;
+  # "0" turns the timer off). Empty uses the relay default (1h).
+  catalogPollInterval: ""
+  # -- With catalogVersion "latest": this relay's public base URL. The relay
+  # registers <url>/catalog/hooks/release with the catalog server, which then
+  # nudges it on every new release. Must be https and reachable from the
+  # catalog server. Empty = polling only.
+  catalogWebhookUrl: ""
   # -- Override the catalog archive URL template ("{version}" substituted).
   # For airgapped mirrors; empty uses https://catalog.wyolet.com. The archive
   # must have its sha256sum file at the same URL plus ".sha256".

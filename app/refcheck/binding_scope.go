@@ -9,9 +9,9 @@ import (
 	"net/http"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // BindablePolicy checks the policy a binding owned by scope uses. A host's tier preset is shared like a system policy (a team binds the provider's tier to its own account). A personal policy is bound by its owner: to their own accounts, or from a team or project where its owner may manage policy bindings.

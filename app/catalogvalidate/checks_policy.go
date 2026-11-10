@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // checkPolicyRefs validates Policy outbound refs:

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/audit"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Rotating a SCIM client's token kills the old token at once and keeps the client's name, so the users and groups it provisioned stay its own under the new token. Only an admin rotates, a revoked client is never rotated back to life, and the rotation is audited.

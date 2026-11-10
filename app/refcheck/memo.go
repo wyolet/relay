@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Memoized returns l with every read cached for the life of the returned value; nil funcs stay nil. DefaultAccount stays uncached: it may create the account it returns. PersonalAccountOff reads the published plans in memory, so it is passed on as is.

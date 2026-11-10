@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 )
 
 func TestSnapshotCreated(t *testing.T) {

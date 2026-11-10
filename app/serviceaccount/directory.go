@@ -1,8 +1,8 @@
 package serviceaccount
 
 import (
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/auth/directory"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ToDirectory is s as the directory stores it.

@@ -152,23 +152,23 @@ func NewRegistry() huma.Registry {
 	return huma.NewMapRegistry("#/components/schemas/", schemaNamer)
 }
 
-// entityNameByPkg maps each app/<entity> package path to the
+// entityNameByPkg maps each entity package path to the
 // PascalCase name of its top-level entity type. Sub-types in these
 // packages get the entity name prepended in OpenAPI schema ids; the
 // entity type itself stays bare. Update this when adding a new
 // catalog entity package.
 var entityNameByPkg = map[string]string{
-	"github.com/wyolet/relay/app/provider":  "Provider",
-	"github.com/wyolet/relay/app/host":      "Host",
-	"github.com/wyolet/relay/app/model":     "Model",
-	"github.com/wyolet/relay/app/hostkey":   "HostKey",
-	"github.com/wyolet/relay/app/ratelimit": "RateLimit",
-	"github.com/wyolet/relay/app/policy":    "Policy",
-	"github.com/wyolet/relay/app/pricing":   "Pricing",
-	"github.com/wyolet/relay/app/binding":   "Binding",
-	"github.com/wyolet/relay/app/key":       "Key",
-	"github.com/wyolet/relay/app/team":      "Team",
-	"github.com/wyolet/relay/app/project":   "Project",
+	"github.com/wyolet/relay/pkg/catalogkind/provider":  "Provider",
+	"github.com/wyolet/relay/pkg/catalogkind/host":      "Host",
+	"github.com/wyolet/relay/pkg/catalogkind/model":     "Model",
+	"github.com/wyolet/relay/app/hostkey":               "HostKey",
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit": "RateLimit",
+	"github.com/wyolet/relay/pkg/catalogkind/policy":    "Policy",
+	"github.com/wyolet/relay/pkg/catalogkind/pricing":   "Pricing",
+	"github.com/wyolet/relay/pkg/catalogkind/binding":   "Binding",
+	"github.com/wyolet/relay/app/key":                   "Key",
+	"github.com/wyolet/relay/app/team":                  "Team",
+	"github.com/wyolet/relay/app/project":               "Project",
 
 	"github.com/wyolet/relay/app/serviceaccount": "ServiceAccount",
 	"github.com/wyolet/relay/app/group":          "Group",
@@ -195,7 +195,7 @@ func schemaNamer(t reflect.Type, hint string) string {
 		return hint
 	}
 	// Generic instantiation: reflect.Type.Name() returns
-	// "listBody[github.com/wyolet/relay/app/policy.Policy]". Reduce to
+	// "listBody[github.com/wyolet/relay/pkg/catalogkind/policy.Policy]". Reduce to
 	// a clean "<Entity><Suffix>" form so downstream codegen produces
 	// usable type names instead of `listBody_github_com_...`.
 	if i := strings.Index(name, "["); i >= 0 {

@@ -4,10 +4,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A token runs in the user's member account in its project, under the project's and the team's accounts: all three narrow, while the user's personal key carries only the personal account.

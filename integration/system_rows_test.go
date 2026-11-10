@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // The admin token names no user, so what it creates — through CRUD or

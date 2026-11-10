@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const docHeader = "apiVersion: relay.wyolet.dev/v1alpha3\n"

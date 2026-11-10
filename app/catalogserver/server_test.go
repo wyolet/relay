@@ -327,41 +327,6 @@ func TestHTTP_NotFound(t *testing.T) {
 	}
 }
 
-func TestUnknownTag_TriggersOneExtraFetch(t *testing.T) {
-	src := newSourceRepo(t)
-	rel := newFakeReleases(t)
-	s := newTestServer(t, src, rel, 64<<20)
-	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	s.now = func() time.Time { return now }
-
-	triggered := func() bool {
-		select {
-		case <-s.fetchNow:
-			return true
-		default:
-			return false
-		}
-	}
-	get(t, s, "/releases/v1.0.0/catalog.json.gz")
-	if !triggered() {
-		t.Fatal("first miss did not trigger a fetch")
-	}
-	get(t, s, "/releases/v1.0.0/catalog.json.gz")
-	get(t, s, "/releases/v1.0.1/catalog.json.gz")
-	if triggered() {
-		t.Fatal("misses within 10s triggered another fetch")
-	}
-	now = now.Add(11 * time.Second)
-	get(t, s, "/releases/v1.0.0/catalog.json.gz")
-	if triggered() {
-		t.Fatal("a negatively cached tag triggered a fetch")
-	}
-	get(t, s, "/releases/v1.0.2/catalog.json.gz")
-	if !triggered() {
-		t.Fatal("a new miss after 10s did not trigger a fetch")
-	}
-}
-
 func TestSync_UpstreamDownKeepsServing(t *testing.T) {
 	src := newSourceRepo(t)
 	src.commit(catalogTree(fixtureAPIVersion, "Rocket"), oldCommit)

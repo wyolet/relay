@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func hashKey(id, name, hash, prev string, grace *time.Time) *key.Key {

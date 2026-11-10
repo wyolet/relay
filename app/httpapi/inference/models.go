@@ -10,12 +10,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
-	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/plan"
-	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/ids"
 )

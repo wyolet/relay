@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func mustMerge(t *testing.T, tmpl, patch string) map[string]any {

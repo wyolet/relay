@@ -16,11 +16,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalogembed"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/embed"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
@@ -127,9 +128,9 @@ func renderCatalog(cat *sdkcatalog.Catalog, version string, at time.Time) (*cata
 	}, nil
 }
 
-// compactCatalogJSON encodes through catalogembed.MarshalJSON, whose sorted order is what keeps the ETag stable across renders.
+// compactCatalogJSON encodes through embed.MarshalJSON, whose sorted order is what keeps the ETag stable across renders.
 func compactCatalogJSON(cat *sdkcatalog.Catalog) ([]byte, error) {
-	indented, err := catalogembed.MarshalJSON(cat)
+	indented, err := embed.MarshalJSON(cat)
 	if err != nil {
 		return nil, err
 	}

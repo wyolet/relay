@@ -11,14 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // at38 is a fresh database at 38, the schema before accounts were what policies bind.
@@ -242,7 +243,7 @@ func TestMigrateDownKeepsOneBindingPerUserAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "shared", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	mustUpsert(t, policy.NewStore(db).Upsert(ctx, pol), "policy")
+	mustUpsert(t, catalogstore.NewPolicyStore(db).Upsert(ctx, pol), "policy")
 	bindings := policybinding.NewStore(db)
 	older := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "older", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policybinding.Spec{PolicyID: pol.Meta.ID, AccountIDs: []string{personal}}}
 	mustUpsert(t, bindings.Upsert(ctx, older), "older binding")

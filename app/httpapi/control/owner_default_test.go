@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Every kind a person creates in a context lands in the caller's personal scope when the body names no owner (the system for the admin token): the UI has no owner picker, so a kind that defaulted elsewhere would put a row out of its creator's reach.

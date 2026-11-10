@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
 // testResolver is a fixed-set Resolver for unit tests.

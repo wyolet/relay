@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -12,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/principal"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // kindWriter is a store whose create and update are distinct operations. The CRUD factory calls them instead of Upsert when the store has them.

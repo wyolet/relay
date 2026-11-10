@@ -9,9 +9,9 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A refusal names no row the caller cannot see and no other user by name: they read as "an account you cannot see", "another team", "another user's".

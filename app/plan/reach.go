@@ -4,13 +4,13 @@ package plan
 
 import (
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/engine"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Override stands in for the policy bound to one account during a reach read. AccountID "" is the system scope, which no account holds: the policy then sits alone above a lane reaching only system-owned keys.

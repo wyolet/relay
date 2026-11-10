@@ -51,18 +51,16 @@ app/                       — the application: domain + composition + handlers
                              overlay merge applied here (overlay_apply.go)
   catalogview/             — PG-backed consumer read projections for admin/UX
                              endpoints (NOT the hot-path snapshot)
-  catalogembed/            — composes manifest YAML → SDK catalog embed schema
+  catalogembed/            — flattens the live Snapshot via pkg/catalogkind/embed
   catalogvalidate/         — cross-entity graph linter for the catalog
   catalogserver/           — serves catalog releases from a git mirror of the
-                             catalog repo (cmd/catalog-server)
-  families/                — families.yaml loader shared by curation + import
-  {provider,host,model,
-   hostkey,ratelimit,
-   policy,pricing,binding,
-   key}/                   — catalog + credential entities. Each: domain types,
+                             catalog repo (cmd/catalog-server); imports only
+                             pkg/ and sdk/ (make lint-rules)
+  catalogstore/            — Postgres stores for the pkg/catalogkind kinds
+                             (ProviderStore, HostStore, …, PolicyStore)
+  {hostkey,key}/           — credential entities. Each: domain types,
                              Validate(), Store{List,Get,Upsert,Delete}.
-                             `binding` is the first-class HostBinding join
-                             (Model×Host×adapter); `key` is the inbound key.
+                             `key` is the inbound key.
   {team,project,group,
    serviceaccount,user,
    role,rolebinding,
@@ -75,9 +73,6 @@ app/                       — the application: domain + composition + handlers
                              on pristine TEMPLATE rows, merged to EFFECTIVE
                              rows at snapshot load (survives re-seed). See
                              .tmp/design/overlays.md.
-  modelref/                — parses the catalog model-reference DSL + aliases
-  meta/                    — identity primitives every entity carries (id/
-                             name/displayName, owner)
   settings/                — typed-sectioned config layer (DB-backed settings,
                              incl. governance:* sections). See .tmp/design/settings.md.
   settingswatch/           — applies a value-typed settings section to a live
@@ -87,7 +82,6 @@ app/                       — the application: domain + composition + handlers
                              parameterised by upstream URL + auth strategy.
                              ONE Spec literal per wire shape lives in
                              cmd/relay/main.go.
-  adapters/                — vocabulary only: Name constants
   pipeline/                — pure orchestration: reserve → pick key →
                              Adapter.Call → stream → post-flight emit
   proxy/                   — second inference flow: transparent forwarding
@@ -96,7 +90,6 @@ app/                       — the application: domain + composition + handlers
   keypool/                 — key selection + per-key circuit breaker
                              (state at `secret_health:*` in kv)
   hosthealth/              — per-host runtime reachability (kv-backed)
-  ratelimit/               — RateLimit entity + Resolve(policy, rl) → Rules
   secret/                  — KeyAgent (out-of-band heal/failover) + wiring;
                              stored/ = the key-ring-backed PG secret store
   httpapi/                 — the HTTP layer
@@ -108,7 +101,8 @@ app/                       — the application: domain + composition + handlers
   transport/ws/            — customer-facing WebSocket inference transport
   batch/                   — batch consumer: reuses Pipeline.Run (source="batch")
                              over the jobq module. See .tmp/design/ + roadmap.
-  manifest/                — YAML DTOs + translate ↔ domain
+  manifest/                — relay's other kinds + render, on top of
+                             pkg/catalogkind/manifest
   seed/                    — YAML → Postgres orchestration
   session/                 — scs wrapper, kv-backed
   authz/                   — Authorizer; RELAY_AUTHZ=single (allow
@@ -121,6 +115,21 @@ app/                       — the application: domain + composition + handlers
                              → usage events (source="otlp"); records, never enforces
 
 pkg/                       — server-internal shared libs (NOT the SDK)
+  meta/                    — identity primitives every entity carries (id/
+                             name/displayName, owner)
+  modelref/                — parses the catalog model-reference DSL + aliases
+  adapters/                — vocabulary only: Name constants
+  catalogkind/             — catalog kinds without storage: types, Validate(),
+    {provider,host,model,    pricing cost, RateLimit Resolve(policy, rl) →
+     pricing,binding,        Rules. `binding` is the first-class HostBinding
+     policy,ratelimit}/      join (Model×Host×adapter). Stores: app/catalogstore.
+    manifest/              — catalog-kind YAML DTOs, the extensible kind
+                             parser (LoadDir), To<Kind> translations
+    embed/                 — catalog kinds → SDK catalog document
+    archive/               — release tarball extraction (seed + server)
+    families/              — families.yaml loader shared by curation + import
+                             Nothing under catalogkind/ imports app/ or
+                             internal/, tests included (make lint-rules).
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   lifecycle/               — per-request Context + PreFlightMiddleware +
@@ -268,7 +277,12 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
   (`RELAY_CATALOG_URL` template overrides the default) and
   re-seeded, then the marker updated. Layering-safe: dirty rows skipped,
   overlays re-merge. Fetch failure on a non-empty catalog logs and boots
-  with existing rows. This is the production catalog-upgrade path.
+  with existing rows. Never seeds a version older than the stored one
+  (`RELAY_CATALOG_ALLOW_DOWNGRADE=1` for one boot). `latest` follows this
+  relay's schema channel while running: hourly check
+  (`RELAY_CATALOG_POLL_INTERVAL`), webhook nudges from the catalog server
+  (`RELAY_CATALOG_WEBHOOK_URL`), `POST /api/catalog/sync`; one pod seeds
+  under a PG advisory lock.
 - The recursive `manifest.LoadDir` is layout-agnostic — dispatches on
   each YAML's `kind` field, so the nested catalog tree just works.
 
@@ -405,7 +419,7 @@ A Key is a credential OF a principal — a ServiceAccount (which lives in a
 Project) or a User — not an identity of its own, so rotating one leaves
 everything bound to that principal untouched.
 
-HostBinding is its own entity (`app/binding`), not an array embedded in
+HostBinding is its own entity (`pkg/catalogkind/binding`), not an array embedded in
 `model.Spec`. The promotion gives pricing and routing a real addressable
 row, and lets one Model be served by many Hosts (incl. aggregators
 re-serving another provider's model). It's a join owned by no single side
@@ -418,7 +432,7 @@ multi-tenancy lands the Route + Org/Project hierarchy comes back per
 
 ### Identity model (every catalog resource)
 
-Three-field identity (`app/meta`), each with a distinct role:
+Three-field identity (`pkg/meta`), each with a distinct role:
 
 - `metadata.id` — UUIDv7, **immutable**, server-stamped on create. PG
   primary key. Used in all id-routed admin URLs.
@@ -434,7 +448,7 @@ collision suffix) are pure helpers.
 
 ### Model resolution + aliases
 
-Model references resolve through `app/modelref` (the catalog reference
+Model references resolve through `pkg/modelref` (the catalog reference
 DSL). Resolution-only **aliases** are last-priority matchers attached to a
 Model (`spec.aliases`, e.g. `gpt-5-5[1m]`, wildcard `[*]`); a matched
 alias routes to that model but the upstream model name is sent verbatim.

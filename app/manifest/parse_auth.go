@@ -4,9 +4,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	authmanifest "github.com/wyolet/relay/auth/manifest"
+	catalogmanifest "github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
-// authKind reports a document the auth module decodes, strictly: one of its kinds under its own apiVersion. The same kinds under relay's apiVersion keep relay's lenient decode (decodeRelayAuthKind), and a User under any other apiVersion stays the identity loader's (see isForeignKind).
+// authKind reports a document the auth module decodes, strictly: one of its kinds under its own apiVersion. The same kinds under relay's apiVersion keep relay's lenient decode (registerRelayAuthKinds), and a User under any other apiVersion stays the identity loader's (see isForeignKind).
 func authKind(apiVersion, kind string) bool {
 	return apiVersion == authmanifest.APIVersion && authmanifest.IsKind(kind)
 }
@@ -23,38 +24,57 @@ func parseAuthDoc(index int, node *yaml.Node) (Document, error) {
 	return doc, nil
 }
 
-// decodeRelayAuthKind decodes the auth module's kinds written under relay's apiVersion as relay always has: stray fields are ignored and metadata.owner is accepted. ok is false for any other kind.
-func decodeRelayAuthKind(env *rawEnvelope) (doc Document, ok bool, err error) {
-	switch env.Kind {
-	case "Team":
-		var spec TeamSpec
-		err = decodeSpec(env, &spec)
-		doc = Document{Team: &TeamDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
-	case "Project":
-		var spec ProjectSpec
-		err = decodeSpec(env, &spec)
-		doc = Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
-	case "ServiceAccount":
-		var spec ServiceAccountSpec
-		err = decodeSpec(env, &spec)
-		doc = Document{ServiceAccount: &ServiceAccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
-	case "Group":
+// registerRelayAuthKinds registers the auth module's kinds written under relay's apiVersion, decoded as relay always has: stray fields are ignored and metadata.owner is accepted.
+func registerRelayAuthKinds(p *catalogmanifest.Parser) {
+	p.Register("Team", catalogmanifest.KindDecoder{
+		Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+			var spec TeamSpec
+			if err := env.Spec.Decode(&spec); err != nil {
+				return catalogmanifest.Document{}, err
+			}
+			return toParsed(Document{Team: &TeamDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+		},
+		RemovedFields: removedFields["Team"],
+	})
+	p.Register("Project", catalogmanifest.KindDecoder{
+		Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+			var spec ProjectSpec
+			if err := env.Spec.Decode(&spec); err != nil {
+				return catalogmanifest.Document{}, err
+			}
+			return toParsed(Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+		},
+		RemovedFields: removedFields["Project"],
+	})
+	p.Register("ServiceAccount", catalogmanifest.KindDecoder{
+		Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
+			var spec ServiceAccountSpec
+			if err := env.Spec.Decode(&spec); err != nil {
+				return catalogmanifest.Document{}, err
+			}
+			return toParsed(Document{ServiceAccount: &ServiceAccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+		},
+		RemovedFields: removedFields["ServiceAccount"],
+	})
+	p.Register("Group", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec GroupSpec
-		err = env.Spec.Decode(&spec)
-		doc = Document{Group: &GroupDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
-	case "Role":
+		if err := env.Spec.Decode(&spec); err != nil {
+			return catalogmanifest.Document{}, err
+		}
+		return toParsed(Document{Group: &GroupDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
+	p.Register("Role", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec RoleSpec
-		err = env.Spec.Decode(&spec)
-		doc = Document{Role: &RoleDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
-	case "RoleBinding":
+		if err := env.Spec.Decode(&spec); err != nil {
+			return catalogmanifest.Document{}, err
+		}
+		return toParsed(Document{Role: &RoleDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
+	p.Register("RoleBinding", catalogmanifest.KindDecoder{Decode: func(env *catalogmanifest.Envelope) (catalogmanifest.Document, error) {
 		var spec RoleBindingSpec
-		err = env.Spec.Decode(&spec)
-		doc = Document{RoleBinding: &RoleBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}
-	default:
-		return Document{}, false, nil
-	}
-	if err != nil {
-		return Document{}, true, err
-	}
-	return doc, true, nil
+		if err := env.Spec.Decode(&spec); err != nil {
+			return catalogmanifest.Document{}, err
+		}
+		return toParsed(Document{RoleBinding: &RoleBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}), nil
+	}})
 }

@@ -1,8 +1,9 @@
 //go:build integration
 
 // policy_guards_integration_test.go covers the policy-reference guards
-// against a real Postgres: they read through concrete *policy.Store /
-// *ratelimit.Store, which have no fake seam.
+// against a real Postgres: they read through concrete
+// *catalogstore.PolicyStore / *catalogstore.RateLimitStore, which have no
+// fake seam.
 
 package control
 
@@ -14,10 +15,10 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {

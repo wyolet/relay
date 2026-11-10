@@ -7,8 +7,8 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Authorizer wraps the configured authorizer and feeds every decision into

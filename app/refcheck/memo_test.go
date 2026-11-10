@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Every lookup a Lookup has is carried by Memoized: a field it dropped would turn its checks off in the lists that use it.

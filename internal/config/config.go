@@ -102,8 +102,19 @@ type Config struct {
 	CatalogVersion  string
 	CatalogURL      string
 	CatalogIndexURL string
-	InstanceID      string
-	EventlogDir     string
+	// CatalogPollInterval is how often a relay on RELAY_CATALOG_VERSION=latest
+	// re-checks the catalog index while running (RELAY_CATALOG_POLL_INTERVAL,
+	// default 1h; 0 disables the timer).
+	CatalogPollInterval time.Duration
+	// CatalogAllowDowngrade lets this boot seed a release older than the one
+	// the database holds (RELAY_CATALOG_ALLOW_DOWNGRADE=1).
+	CatalogAllowDowngrade bool
+	// CatalogWebhookURL is this relay's public inference base the catalog
+	// server sends release webhooks to (RELAY_CATALOG_WEBHOOK_URL); empty
+	// registers none.
+	CatalogWebhookURL string
+	InstanceID        string
+	EventlogDir       string
 	// UsageQueueSize is how many usage events wait in memory for the sink before new ones are dropped (RELAY_USAGE_QUEUE_SIZE); 0 = usagelog.DefaultQueueSize.
 	UsageQueueSize int
 	// UsageRefusedQueueSize is the same for events of requests that never reached an upstream (RELAY_USAGE_REFUSED_QUEUE_SIZE); 0 = usagelog.DefaultRefusedQueueSize.
@@ -393,8 +404,9 @@ func Load() (*Config, error) {
 	// CatalogVersion pins the seeded catalog to a published relay-catalog
 	// ref (e.g. "v0.1.0"), or tracks the newest release for this binary's
 	// schema channel as "latest"/"auto" (resolved via CatalogIndexURL at
-	// every boot). At boot the stored catalog-source marker is compared
-	// against the concrete version; on mismatch the tree is seeded — from
+	// every boot and re-checked while running). At boot the stored
+	// catalog-source marker is compared against the concrete version; on
+	// mismatch the tree is seeded, unless the marker is newer — from
 	// the local CatalogDir when its .version stamp matches (baked image
 	// or self-stamped custom catalog, no network), else fetched from
 	// CatalogURL (default seed.DefaultCatalogURLTemplate) — no
@@ -411,6 +423,9 @@ func Load() (*Config, error) {
 	}
 	cfg.CatalogURL = os.Getenv("RELAY_CATALOG_URL")
 	cfg.CatalogIndexURL = os.Getenv("RELAY_CATALOG_INDEX_URL")
+	if err := loadCatalogFollow(cfg); err != nil {
+		return nil, err
+	}
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")

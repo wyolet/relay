@@ -3,7 +3,7 @@ package catalog
 import (
 	"sort"
 
-	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
 )
 
 // addBindings folds HostBindings into the snapshot. A binding is dropped if

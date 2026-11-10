@@ -4,7 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts, projects idSet) {

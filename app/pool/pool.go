@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // DefaultSelection is the selection a pool that names none uses.

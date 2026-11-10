@@ -26,7 +26,11 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/catalogserver"
+	"github.com/wyolet/relay/pkg/httpmw"
 )
+
+// version is stamped at release build time with -ldflags "-X main.version=<tag>".
+var version = "dev"
 
 const usage = `usage:
   catalog-server serve
@@ -70,7 +74,30 @@ func loadServeConfig() (serveConfig, error) {
 	if cfg.CacheBytes, err = parseBytes(envOr("RELAY_CATALOG_SERVER_CACHE_BYTES", "64Mi")); err != nil {
 		return cfg, fmt.Errorf("RELAY_CATALOG_SERVER_CACHE_BYTES: %w", err)
 	}
+	webhooks, err := envSwitch("RELAY_CATALOG_SERVER_WEBHOOKS", true)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.DisableWebhooks = !webhooks
+	if cfg.AllowLoopbackWebhooks, err = envSwitch("RELAY_CATALOG_SERVER_WEBHOOK_ALLOW_LOOPBACK", false); err != nil {
+		return cfg, err
+	}
+	cfg.TrustedProxies = httpmw.TrustedProxies()
+	cfg.Version = version
 	return cfg, nil
+}
+
+func envSwitch(key string, def bool) (bool, error) {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(key))); v {
+	case "":
+		return def, nil
+	case "on", "1", "true":
+		return true, nil
+	case "off", "0", "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf(`%s: want "on" or "off", got %q`, key, v)
+	}
 }
 
 func serve() int {
@@ -102,7 +129,10 @@ func serve() int {
 	}
 	httpErr := make(chan error, 1)
 	go func() { httpErr <- httpSrv.ListenAndServe() }()
-	slog.Info("catalog-server: listening", "addr", cfg.addr, "repo", cfg.RepoURL, "mirror", cfg.MirrorDir)
+	slog.Info("catalog-server: listening", "addr", cfg.addr, "repo", cfg.RepoURL, "mirror", cfg.MirrorDir, "version", version, "webhooks", !cfg.DisableWebhooks)
+	if cfg.AllowLoopbackWebhooks && !cfg.DisableWebhooks {
+		slog.Warn("catalog-server: accepting http:// and loopback webhook receivers; for local development only")
+	}
 
 	code := 0
 	select {

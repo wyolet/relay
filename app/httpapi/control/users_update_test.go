@@ -10,11 +10,11 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/directory/memstore"
 	"github.com/wyolet/relay/auth/principal"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // updateUsers is an in-memory userWriter: a directory over the auth module's memstore, read back as relay users. ended records the users whose sessions the directory ended.

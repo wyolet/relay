@@ -1,7 +1,7 @@
 package usagelog
 
 import (
-	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 

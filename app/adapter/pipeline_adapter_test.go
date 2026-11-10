@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // Failover hands the same forwarded headers to every attempt; each attempt sets its own credential.

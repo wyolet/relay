@@ -11,9 +11,9 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintTokenOutput, error) {

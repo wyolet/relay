@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func TestIntegration_AccountStoreRoundTrip(t *testing.T) {
@@ -23,7 +24,7 @@ func TestIntegration_AccountStoreRoundTrip(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "acct-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: host.Spec{BaseURL: "https://api.example.com"},
 	}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	store := account.NewStore(q)
@@ -59,7 +60,7 @@ func TestIntegration_AccountStoreRoundTrip(t *testing.T) {
 		t.Fatalf("List = %+v, %v; want the one updated account", list, err)
 	}
 
-	if err := host.NewStore(q).Delete(ctx, hst.Meta.ID); err != nil {
+	if err := catalogstore.NewHostStore(q).Delete(ctx, hst.Meta.ID); err != nil {
 		t.Fatalf("delete host: %v", err)
 	}
 	if got, err := store.Get(ctx, a.Meta.ID); err != nil || got != nil {
@@ -76,7 +77,7 @@ func TestIntegration_GroupedByRelay(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: host.Spec{BaseURL: "https://api.example.com"},
 	}
-	if err := host.NewStore(q).Upsert(ctx, hst); err != nil {
+	if err := catalogstore.NewHostStore(q).Upsert(ctx, hst); err != nil {
 		t.Fatalf("upsert host: %v", err)
 	}
 	store := account.NewStore(q)

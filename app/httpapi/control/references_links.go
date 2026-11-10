@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // droppedLinkScans maps a kind to the scan listing the rows a delete of one of its rows takes a link from without refusing it: a rate limit or budget a policy stops counting, or a pool a policy stops reaching (the policy keeps the id and narrows, never widens). A host key drops out of the pools holding it, an account out of the pools drawing on it, and the shares a team, project or service account received out of theirs.

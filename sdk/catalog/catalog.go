@@ -78,8 +78,8 @@ type ProviderInfo struct {
 	Icon          string `json:"icon,omitempty"`
 }
 
-// Capabilities mirrors app/model.Capabilities (same json tags) so the embed can
-// carry it by a plain json round-trip without the SDK importing app/. The yaml
+// Capabilities mirrors pkg/catalogkind/model.Capabilities (same json tags) so the embed can
+// carry it by a plain json round-trip without the SDK importing the server module. The yaml
 // tags keep the same keys in sdk/modeldir model files.
 type Capabilities struct {
 	UnsupportedParams []string `json:"unsupportedParams,omitempty" yaml:"unsupportedParams,omitempty"`
@@ -109,7 +109,7 @@ type Capabilities struct {
 	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty" yaml:"defaultReasoningEffort,omitempty"`
 }
 
-// Modalities mirrors app/model.Modalities.
+// Modalities mirrors pkg/catalogkind/model.Modalities.
 type Modalities struct {
 	Input  []string `json:"input,omitempty" yaml:"input,omitempty"`
 	Output []string `json:"output,omitempty" yaml:"output,omitempty"`

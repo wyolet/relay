@@ -8,10 +8,10 @@ import (
 
 	"github.com/wyolet/relay/app/budget"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A policy saved in one project may not link another project's pool or budget: the plans follow the link with no check of their own, so the save is the only gate.

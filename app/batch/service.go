@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/jobq"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // Queue is the jobq queue name batch items run on. The Service registers its

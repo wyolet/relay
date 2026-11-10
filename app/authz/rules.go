@@ -4,10 +4,10 @@ import (
 	"context"
 	"slices"
 
-	"github.com/wyolet/relay/app/meta"
 	coreauthz "github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Relay's shortcuts ahead of the role bindings, listed here in the order the evaluation runs them. Each also answers ScopeOf with the rows it admits. The admin actor is the engine's Admin flag, checked before all of them.

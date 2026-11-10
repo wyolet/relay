@@ -22,12 +22,12 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/audit"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"
 	"github.com/wyolet/relay/auth/oidc"
 	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/slug"
 )
 

@@ -5,10 +5,10 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
 )
 
 // enrichHostStatus returns an enrichFn that overlays observed runtime health

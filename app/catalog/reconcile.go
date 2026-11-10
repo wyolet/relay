@@ -3,7 +3,7 @@ package catalog
 import (
 	"context"
 
-	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
 )
 
 // recoverAbsentLocked degrades an upsert for an id the snapshot doesn't hold

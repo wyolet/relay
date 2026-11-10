@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // scopeChecker is the link rows with a policy per owner, the caller accounts of t-1, p-1, p-2, a service account of p-1 and a member of p-1 ("u-member") who may manage p-1's policy bindings, plus that member's personal account; t-1 holds p-1, t-2 holds p-2.

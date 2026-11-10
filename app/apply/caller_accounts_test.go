@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A bundle declaring a project and its service account can bind their accounts in the same run: the names resolve to accounts the run plans, owned where relay keeps them.

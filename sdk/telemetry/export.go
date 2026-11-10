@@ -118,6 +118,10 @@ func (e *Emitter) send(ctx context.Context, path string, body []byte) (int, http
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if resp.StatusCode/100 == 2 {
+		// A web server or SPA fallback answers 200 to any POST; counting that as delivered would lose every record without a trace.
+		if len(raw) < maxResponseBytes && len(bytes.TrimSpace(raw)) > 0 && !json.Valid(raw) {
+			return resp.StatusCode, resp.Header, fmt.Errorf("telemetry: export %s: HTTP %d with a non-JSON body (%s); the endpoint is not an OTLP receiver", path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
 		e.readPartialSuccess(raw)
 	}
 	return resp.StatusCode, resp.Header, nil

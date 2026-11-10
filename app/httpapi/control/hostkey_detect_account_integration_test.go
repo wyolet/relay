@@ -15,11 +15,11 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/audit"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // detectFixture is the policy-delete fixture whose host is an httptest upstream naming an organization per key value, mounted with an adapter registry that probes it.

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // kindRows is how one kind's routes find a row and build the resource they authorize. The access review reads it so its answer is about the same resource the real request would authorize.

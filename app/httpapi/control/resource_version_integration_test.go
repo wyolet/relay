@@ -22,9 +22,9 @@ import (
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/license"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // licensedHandler mounts the control API over f's stores with custom roles

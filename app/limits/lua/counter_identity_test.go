@@ -6,8 +6,8 @@ import (
 
 	"github.com/wyolet/relay/app/budget"
 	"github.com/wyolet/relay/app/plan/plantest"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
 var noon = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)

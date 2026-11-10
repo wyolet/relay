@@ -9,7 +9,7 @@ package team
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Team is the outer tenancy scope. Owner is the user who created it

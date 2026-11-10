@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/proxy"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )

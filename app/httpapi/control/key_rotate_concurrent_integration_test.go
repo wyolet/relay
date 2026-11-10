@@ -23,9 +23,9 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/apikey"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // N clients rotate the same key at once, with a plain PUT racing them. A rotation

@@ -5,10 +5,10 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/auth/rbac"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Principal is the caller in ctx as the auth module's directory sees it. Admin is RequireAdmin's rule (the admin role or token, any caller in single-user mode, or a loader with no authorizer), so the directory's admin-only paths open exactly where relay's do.

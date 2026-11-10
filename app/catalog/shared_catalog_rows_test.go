@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 type hostsByID map[string]*host.Host

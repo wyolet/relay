@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func hostDoc(name string, owner manifest.WireOwner) *manifest.HostDTO {

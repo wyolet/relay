@@ -6,12 +6,23 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/wyolet/relay/sdk/catalogsource"
 )
 
 func TestChannel(t *testing.T) {
 	if got := Channel(); got != "v1alpha3" {
 		t.Fatalf("Channel() = %q, want v1alpha3", got)
+	}
+}
+
+// The SDK resolves "latest" within its own channel constant; it must track the
+// schema relay parses, or SDK clients read an older channel's releases.
+func TestChannelMatchesSDK(t *testing.T) {
+	if Channel() != catalogsource.Channel {
+		t.Fatalf("seed.Channel() = %q, sdk catalogsource.Channel = %q", Channel(), catalogsource.Channel)
 	}
 }
 
@@ -71,5 +82,51 @@ func TestResolveLatest_HTTPError(t *testing.T) {
 
 	if _, err := ResolveLatest(context.Background(), srv.URL, "v1alpha2"); err == nil {
 		t.Fatal("expected error on HTTP 404")
+	}
+}
+
+// A known validator goes out as If-None-Match; the server's 304 answers
+// NotModified, and a changed index answers its new release and validator.
+func TestFetchLatest_ConditionalGET(t *testing.T) {
+	etag, latest := `"a"`, "v0.2.1"
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = append(sent, r.Header.Get("If-None-Match"))
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		_, _ = w.Write([]byte("channels:\n    v1alpha3:\n        latest: " + latest + "\n"))
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	first, err := FetchLatest(ctx, srv.URL, "v1alpha3", "")
+	if err != nil || first.NotModified || first.Latest != "v0.2.1" || first.ETag != `"a"` {
+		t.Fatalf("first read = %+v, %v", first, err)
+	}
+	again, err := FetchLatest(ctx, srv.URL, "v1alpha3", first.ETag)
+	if err != nil || !again.NotModified || again.Latest != "" || again.ETag != `"a"` {
+		t.Fatalf("unchanged read = %+v, %v", again, err)
+	}
+	etag, latest = `"b"`, "v0.2.2"
+	changed, err := FetchLatest(ctx, srv.URL, "v1alpha3", first.ETag)
+	if err != nil || changed.NotModified || changed.Latest != "v0.2.2" || changed.ETag != `"b"` {
+		t.Fatalf("changed read = %+v, %v", changed, err)
+	}
+	if want := []string{"", `"a"`, `"a"`}; strings.Join(sent, ",") != strings.Join(want, ",") {
+		t.Fatalf("If-None-Match sent = %q, want %q", sent, want)
+	}
+}
+
+// A 304 to a request that sent no validator is not a valid answer.
+func TestFetchLatest_UnaskedNotModifiedIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+	if _, err := FetchLatest(context.Background(), srv.URL, "v1alpha3", ""); err == nil {
+		t.Fatal("expected an error")
 	}
 }

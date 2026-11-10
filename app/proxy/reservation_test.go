@@ -16,11 +16,11 @@ import (
 
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/lua"
-	"github.com/wyolet/relay/app/meta"
-	appratelimit "github.com/wyolet/relay/app/ratelimit"
+	appratelimit "github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )

@@ -10,9 +10,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/tokencount"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/kv"

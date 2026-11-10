@@ -19,16 +19,16 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ErrNotFound is returned when {ref} resolves to no model/host. Handlers map

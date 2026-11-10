@@ -25,15 +25,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/secret/aead"
 )
 

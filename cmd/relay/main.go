@@ -16,10 +16,7 @@ import (
 	"os"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -30,6 +27,9 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
@@ -167,12 +167,16 @@ func main() {
 	// hydration. Its first Hydrate runs settings.reload → notifies them with
 	// the stored values (the data plane gates on IsReady until it completes).
 	go hydrateLoop(listenerCtx, cat, stores, bootOpts, plans.load)
+	catalogFollower := buildCatalogFollower(cfg, stores, bootOpts)
+	catalogRegistrar := buildCatalogRegistrar(cfg, catalogFollower)
 
 	auth := &inference.Auth{Catalog: cat, Plans: plans.plans, Revoked: revoked.Set(), Tokens: tokenVerifier, Lifecycle: lifecycleReg}
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, auth, pl, specRegistry, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, auth, pl, proxyPipeline, lifecycleReg,
-		specRegistry, profiles, tokenCalibrator, admission, kvPoolBusy(kvStore), batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter))
+		specRegistry, profiles, tokenCalibrator, admission, kvPoolBusy(kvStore), batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, payloadCtl, kvStore, limiter),
+		catalogFollower)
+	runCatalogFollow(listenerCtx, cfg, cat, catalogFollower, catalogRegistrar)
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
 	// RELAY_CONTROL_PORT. Disabled when empty or "off".
@@ -181,7 +185,7 @@ func main() {
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
 			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
-			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View, counting)
+			selector, hostHealth, revoked, specRegistry, plans.plans, plans.engine.View, counting, catalogSync(catalogFollower))
 	}
 
 	pprofSrv, pprofErr := startPprof(cfg)

@@ -5,30 +5,31 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/budget"
+	"github.com/wyolet/relay/app/catalogstore"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pool"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
+	"github.com/wyolet/relay/pkg/catalogkind/model"
+	"github.com/wyolet/relay/pkg/catalogkind/policy"
+	"github.com/wyolet/relay/pkg/catalogkind/pricing"
+	"github.com/wyolet/relay/pkg/catalogkind/provider"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/engine"
 	"github.com/wyolet/relay/pkg/engine/cell"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Input kinds, loaded from the stores.
@@ -249,15 +250,15 @@ func (s AccountsSettingSource) Get(ctx context.Context, id string) (*settings.Ac
 
 // Every other store already lists, and fetches by id with (nil, nil) for a missing row, so it is a Source as it is.
 var (
-	_ engine.Source[provider.Provider]             = (*provider.Store)(nil)
-	_ engine.Source[host.Host]                     = (*host.Store)(nil)
-	_ engine.Source[model.Model]                   = (*model.Store)(nil)
-	_ engine.Source[binding.Binding]               = (*binding.Store)(nil)
-	_ engine.Source[pricing.Pricing]               = (*pricing.Store)(nil)
+	_ engine.Source[provider.Provider]             = (*catalogstore.ProviderStore)(nil)
+	_ engine.Source[host.Host]                     = (*catalogstore.HostStore)(nil)
+	_ engine.Source[model.Model]                   = (*catalogstore.ModelStore)(nil)
+	_ engine.Source[binding.Binding]               = (*catalogstore.BindingStore)(nil)
+	_ engine.Source[pricing.Pricing]               = (*catalogstore.PricingStore)(nil)
 	_ engine.Source[overlay.Overlay]               = OverlaySource{}
-	_ engine.Source[policy.Policy]                 = (*policy.Store)(nil)
+	_ engine.Source[policy.Policy]                 = (*catalogstore.PolicyStore)(nil)
 	_ engine.Source[policybinding.PolicyBinding]   = (*policybinding.Store)(nil)
-	_ engine.Source[ratelimit.RateLimit]           = (*ratelimit.Store)(nil)
+	_ engine.Source[ratelimit.RateLimit]           = (*catalogstore.RateLimitStore)(nil)
 	_ engine.Source[budget.Budget]                 = (*budget.Store)(nil)
 	_ engine.Source[pool.Pool]                     = (*pool.Store)(nil)
 	_ engine.Source[account.Account]               = (*account.Store)(nil)

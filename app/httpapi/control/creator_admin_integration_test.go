@@ -9,10 +9,10 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Granting the creator twice leaves one binding; the admin token gets none.
