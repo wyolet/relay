@@ -1,6 +1,8 @@
 package catalogserver
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -13,6 +15,9 @@ type metrics struct {
 	buildFailures   *prometheus.CounterVec
 	mismatches      *prometheus.CounterVec
 	releaseFailures *prometheus.CounterVec
+	registrations   *prometheus.CounterVec
+	nudges          *prometheus.CounterVec
+	githubHooks     prometheus.Counter
 }
 
 // newMetrics uses its own registry, so a Server never shares series with
@@ -45,6 +50,18 @@ func newMetrics(s *Server) *metrics {
 			Namespace: ns, Name: "release_fetch_failures_total",
 			Help: "Published sums or files that could not be fetched or failed their sum, by asset.",
 		}, []string{"asset"}),
+		registrations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns, Name: "webhook_registrations_total",
+			Help: "Receiver registrations by result (created, renewed, invalid, refused, challenge_failed, rate_limited, full).",
+		}, []string{"result"}),
+		nudges: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns, Name: "webhook_nudges_total",
+			Help: "Release nudge sends by result: delivered or failed per attempt, gave_up once a receiver's retries for a tag ran out.",
+		}, []string{"result"}),
+		githubHooks: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: ns, Name: "github_hooks_total",
+			Help: "Repository push hooks received; each asks for an early sync.",
+		}),
 	}
 	m.registry.MustRegister(
 		collectors.NewGoCollector(),
@@ -63,6 +80,14 @@ func newMetrics(s *Server) *metrics {
 			Help: "Bytes of release files held in memory, pinned channel-latest files included.",
 		}, func() float64 { return float64(s.cache.bytes()) }),
 	)
+	if s.hooks != nil {
+		m.registry.MustRegister(m.registrations, m.nudges, m.githubHooks, subscriptionsCollector{
+			desc: prometheus.NewDesc(prometheus.BuildFQName(ns, "", "webhook_subscriptions"),
+				"Live receiver subscriptions held by this replica, by channel.", []string{"channel"}, nil),
+			subs: s.hooks.subs,
+			now:  func() time.Time { return s.now() },
+		})
+	}
 	return m
 }
 

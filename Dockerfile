@@ -100,11 +100,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # --- catalog-builder: catalog-server + catalog-validate; no UI or catalog assets ---
 FROM source AS catalog-builder
 ARG GO_CACHE_MOUNTS=1
+# VERSION goes into the User-Agent of webhook requests; "dev" when unset.
+ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
     set -a; . ./build.env; set +a; \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/catalog-server ./cmd/catalog-validate
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/ ./cmd/catalog-server ./cmd/catalog-validate
 
 # --- final (lean): distroless, nonroot — production image, external Postgres ---
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS lean

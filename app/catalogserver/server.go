@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/mod/semver"
@@ -19,15 +21,13 @@ import (
 
 const (
 	// CI publishes a tag's files a minute or two after the push.
-	freshTagAge    = 24 * time.Hour
-	staleSumRetry  = time.Hour
-	failureRetry   = 5 * time.Minute
-	unknownTagTTL  = 60 * time.Second
-	extraFetchGap  = 10 * time.Second
-	maxUnknownTags = 10_000
-	maxBuilds      = 2
-	buildTime      = 2 * time.Minute
-	sumFetchers    = 4
+	freshTagAge   = 24 * time.Hour
+	staleSumRetry = time.Hour
+	failureRetry  = 5 * time.Minute
+	extraFetchGap = 10 * time.Second
+	maxBuilds     = 2
+	buildTime     = 2 * time.Minute
+	sumFetchers   = 4
 )
 
 var errUnavailable = errors.New("unavailable")
@@ -104,6 +104,17 @@ type Config struct {
 	CacheBytes   int64
 	HTTPClient   *http.Client // nil: a client with a one-minute timeout
 	Logger       *slog.Logger // nil: slog.Default()
+
+	// DisableWebhooks turns off receiver registration, release nudges and
+	// the repository push hook.
+	DisableWebhooks bool
+	// AllowLoopbackWebhooks admits http:// receivers on loopback addresses.
+	// For local development only; every other refused range stays refused.
+	AllowLoopbackWebhooks bool
+	// TrustedProxies are the peers whose X-Forwarded-For names the client
+	// a registration is rate-limited by.
+	TrustedProxies []*net.IPNet
+	Version        string // sent in the User-Agent to receivers
 }
 
 // Server mirrors the catalog repository and serves its releases.
@@ -118,6 +129,12 @@ type Server struct {
 	slots    chan struct{}
 	now      func() time.Time
 	fetchNow chan struct{}
+	syncReqs syncRequests
+	running  atomic.Bool
+	syncMu   sync.Mutex // one sync at a time, whatever asked for it
+
+	hooks      *webhooks // nil when webhooks are disabled
+	deliveries sync.WaitGroup
 
 	mu        sync.RWMutex
 	tags      map[string]*tagState
@@ -125,10 +142,6 @@ type Server struct {
 	index     []byte
 	indexETag string
 	synced    bool
-
-	unknownMu      sync.Mutex
-	unknown        map[string]time.Time
-	lastExtraFetch time.Time
 }
 
 // New validates cfg and returns a Server; Run starts it.
@@ -160,23 +173,49 @@ func New(cfg Config) (*Server, error) {
 		slots:    make(chan struct{}, maxBuilds),
 		now:      time.Now,
 		fetchNow: make(chan struct{}, 1),
+		syncReqs: syncRequests{gap: extraFetchGap},
 		tags:     map[string]*tagState{},
 		latest:   map[string]string{},
-		unknown:  map[string]time.Time{},
+	}
+	if !cfg.DisableWebhooks {
+		policy := receiverPolicy{resolver: net.DefaultResolver, allowLoopback: cfg.AllowLoopbackWebhooks}
+		version := cfg.Version
+		if version == "" {
+			version = "dev"
+		}
+		s.hooks = &webhooks{
+			policy:      policy,
+			client:      newReceiverClient(policy, nil),
+			userAgent:   "wyolet-catalog-server/" + version,
+			timeout:     hookTimeout,
+			subs:        newSubscriptions(),
+			retryDelays: nudgeRetryDelays,
+			sendSlots:   make(chan struct{}, nudgeSenders),
+		}
 	}
 	s.metrics = newMetrics(s)
 	return s, nil
 }
 
-// Run initialises the mirror and syncs it every SyncInterval until ctx ends.
+// Run initialises the mirror and syncs it every SyncInterval, and whenever
+// an early sync is asked for, until ctx ends.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.mirror.Init(ctx); err != nil {
 		return fmt.Errorf("catalogserver: init mirror %s: %w", s.cfg.MirrorDir, err)
 	}
+	s.running.Store(true)
+	defer s.running.Store(false)
 	ticker := time.NewTicker(s.cfg.SyncInterval)
 	defer ticker.Stop()
 	for {
+		answered := s.takeSyncWaiters()
 		s.sync(ctx)
+		if answered != nil {
+			close(answered)
+		}
+		if s.hooks != nil {
+			s.hooks.subs.sweep(s.now())
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -189,6 +228,8 @@ func (s *Server) Run(ctx context.Context) error {
 // sync keeps everything it already holds when the fetch fails, so an
 // unreachable upstream never moves the index or drops a served tag.
 func (s *Server) sync(ctx context.Context) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	if err := s.mirror.Fetch(ctx); err != nil {
 		s.metrics.fetchFailures.Inc()
 		s.log.Warn("catalog-server: fetch failed; serving held tags", "err", err)
@@ -346,14 +387,24 @@ func (s *Server) updateIndex(ctx context.Context) {
 	}
 
 	index := renderIndex(latest)
+	moved := map[string]string{}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for channel, tag := range latest {
-		if s.latest[channel] != tag {
+		prev := s.latest[channel]
+		if prev != tag {
 			s.log.Info("catalog-server: channel latest", "channel", channel, "tag", tag)
+		}
+		// A channel's first latest since start is no news: relays already
+		// had it, and nudging them after every restart would be a herd.
+		if prev != "" && semver.Compare(tag, prev) > 0 {
+			moved[channel] = tag
 		}
 	}
 	s.latest, s.index, s.indexETag = latest, index, `"`+sha256Hex(index)+`"`
+	s.mu.Unlock()
+	for channel, tag := range moved {
+		s.nudge(ctx, channel, tag)
+	}
 }
 
 func (s *Server) verifyTag(ctx context.Context, tag string) bool {
@@ -383,35 +434,19 @@ func renderIndex(latest map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// noteUnknown remembers a missed tag for unknownTagTTL and asks for one
-// extra fetch at most every extraFetchGap, so a tag pushed seconds ago is
-// found before the next poll.
-func (s *Server) noteUnknown(tag string) {
-	s.unknownMu.Lock()
-	defer s.unknownMu.Unlock()
-	now := s.now()
-	if exp, ok := s.unknown[tag]; ok && now.Before(exp) {
-		return
+// publishedSum returns tag's sum file for a or, on a miss, whether an early
+// sync could still find it: the tag is unknown here, or its sum is due.
+func (s *Server) publishedSum(tag string, a asset) (file []byte, catchUp bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st := s.tags[tag]
+	switch {
+	case st == nil:
+		return nil, true
+	case st.sums[a].file != nil:
+		return st.sums[a].file, false
 	}
-	if len(s.unknown) >= maxUnknownTags {
-		for t, exp := range s.unknown {
-			if !now.Before(exp) {
-				delete(s.unknown, t)
-			}
-		}
-		if len(s.unknown) >= maxUnknownTags {
-			clear(s.unknown)
-		}
-	}
-	s.unknown[tag] = now.Add(unknownTagTTL)
-	if now.Sub(s.lastExtraFetch) < extraFetchGap {
-		return
-	}
-	s.lastExtraFetch = now
-	select {
-	case s.fetchNow <- struct{}{}:
-	default:
-	}
+	return nil, sumDue(st.Committed, st.sums[a].checkedAt, s.now())
 }
 
 func (s *Server) ready() bool {
