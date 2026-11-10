@@ -63,6 +63,26 @@ echo "catalogview isolation — the hot path never imports the UX read-model:"
 hits=$(grep -rn 'wyolet/relay/app/catalogview' app/plan/ app/pipeline/ app/keypool/ --include='*.go' || true)
 if [ -n "$hits" ]; then note "plan/pipeline/keypool imports app/catalogview (UX views must stay off the hot path):"; echo "$hits"; else ok "clean"; fi
 
+# Import graphs, not greps: a transitive import through another pkg/ package
+# counts too. A go list failure fails the check rather than passing it empty.
+server_pkgs='^github\.com/wyolet/relay/(app|internal)/'
+
+echo "catalog kinds — pkg/catalogkind/ links nothing from app/ or internal/, tests included:"
+if ! deps=$(go list -deps -test ./pkg/catalogkind/... 2>&1); then
+  note "go list failed:"; echo "$deps"
+else
+  hits=$(echo "$deps" | grep -E "$server_pkgs" | sort -u || true)
+  if [ -n "$hits" ]; then note "pkg/catalogkind/ depends on server code:"; echo "$hits"; else ok "clean"; fi
+fi
+
+echo "catalog tools — catalog-server and catalog-embed link no app/ or internal/ package but app/catalogserver:"
+if ! deps=$(go list -deps ./cmd/catalog-server ./cmd/catalog-embed 2>&1); then
+  note "go list failed:"; echo "$deps"
+else
+  hits=$(echo "$deps" | grep -E "$server_pkgs" | grep -vx 'github.com/wyolet/relay/app/catalogserver' || true)
+  if [ -n "$hits" ]; then note "a catalog tool depends on server code (share it through pkg/catalogkind/):"; echo "$hits"; else ok "clean"; fi
+fi
+
 echo "Rule 4b — no vendor names in Go identifier declarations (app/, pkg/, internal/):"
 # Vendor names (openai/anthropic/gemini, case-insensitive) must not appear in
 # declared Go identifiers: types, functions, methods, variables, constants.

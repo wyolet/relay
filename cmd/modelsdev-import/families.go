@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/wyolet/relay/app/families"
+	"github.com/wyolet/relay/pkg/catalogkind/families"
 )
 
 // familyList is the catalog's families.yaml allowlist, with the importer's mapping of models.dev family values onto it.

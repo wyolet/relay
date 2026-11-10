@@ -1,4 +1,4 @@
-package catalogembed
+package embed
 
 import (
 	"testing"

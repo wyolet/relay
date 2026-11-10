@@ -31,8 +31,8 @@ import (
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/catalogvalidate"
 	"github.com/wyolet/relay/app/catalogvalidate/curation"
-	"github.com/wyolet/relay/app/families"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/families"
 )
 
 type stringSlice []string

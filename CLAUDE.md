@@ -51,11 +51,11 @@ app/                       — the application: domain + composition + handlers
                              overlay merge applied here (overlay_apply.go)
   catalogview/             — PG-backed consumer read projections for admin/UX
                              endpoints (NOT the hot-path snapshot)
-  catalogembed/            — composes manifest YAML → SDK catalog embed schema
+  catalogembed/            — flattens the live Snapshot via pkg/catalogkind/embed
   catalogvalidate/         — cross-entity graph linter for the catalog
   catalogserver/           — serves catalog releases from a git mirror of the
-                             catalog repo (cmd/catalog-server)
-  families/                — families.yaml loader shared by curation + import
+                             catalog repo (cmd/catalog-server); imports only
+                             pkg/ and sdk/ (make lint-rules)
   catalogstore/            — Postgres stores for the pkg/catalogkind kinds
                              (ProviderStore, HostStore, …, PolicyStore)
   {hostkey,key}/           — credential entities. Each: domain types,
@@ -125,6 +125,11 @@ pkg/                       — server-internal shared libs (NOT the SDK)
      policy,ratelimit}/      join (Model×Host×adapter). Stores: app/catalogstore.
     manifest/              — catalog-kind YAML DTOs, the extensible kind
                              parser (LoadDir), To<Kind> translations
+    embed/                 — catalog kinds → SDK catalog document
+    archive/               — release tarball extraction (seed + server)
+    families/              — families.yaml loader shared by curation + import
+                             Nothing under catalogkind/ imports app/ or
+                             internal/, tests included (make lint-rules).
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   lifecycle/               — per-request Context + PreFlightMiddleware +

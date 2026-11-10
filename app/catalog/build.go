@@ -34,7 +34,7 @@ import (
 )
 
 // Build assembles a Snapshot from entity slices using the same sanitize rules
-// as Reload. Used by catalog-embed and tests; callers supply only the kinds
+// as Reload. Used by tests; callers supply only the kinds
 // they need — pass nil/empty slices for the rest.
 func Build(
 	provs []*provider.Provider,
