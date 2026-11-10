@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/ratelimit"
 )
 

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/internal/storage/storagetest"
 )

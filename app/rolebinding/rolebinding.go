@@ -9,7 +9,7 @@ package rolebinding
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // SubjectKind enumerates what a binding can name.

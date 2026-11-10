@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqbody"

@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/team"

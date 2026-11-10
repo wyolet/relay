@@ -9,7 +9,7 @@ package serviceaccount
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // ServiceAccount is a Project-owned machine principal.

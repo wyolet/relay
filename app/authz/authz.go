@@ -18,7 +18,7 @@ import (
 	"context"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	coreauthz "github.com/wyolet/relay/auth/authz"
 )
 

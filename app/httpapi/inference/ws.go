@@ -9,7 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	transportws "github.com/wyolet/relay/app/transport/ws"
 	"github.com/wyolet/relay/pkg/httpmw"

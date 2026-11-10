@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/pkg/slug"
 )

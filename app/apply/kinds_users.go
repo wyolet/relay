@@ -6,7 +6,7 @@ import (
 	"slices"
 
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/directory"

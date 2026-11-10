@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/wyolet/relay/app/actor"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	coreauthz "github.com/wyolet/relay/auth/authz"
 	"github.com/wyolet/relay/auth/principal"
 	"github.com/wyolet/relay/auth/rbac"

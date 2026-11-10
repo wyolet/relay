@@ -6,7 +6,7 @@ package policy
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/modelref"
 )
 
 // CanonicalizeModelRefs slugifies every ref to its shortest canonical form

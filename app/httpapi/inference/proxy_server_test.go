@@ -19,7 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	dto "github.com/prometheus/client_model/go"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv/kvtest"

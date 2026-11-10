@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/secret/stored"
 	"github.com/wyolet/relay/internal/storage/storagetest"

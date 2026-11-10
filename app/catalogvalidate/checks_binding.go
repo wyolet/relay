@@ -3,7 +3,7 @@ package catalogvalidate
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // checkPricingRefs validates Pricing outbound refs:

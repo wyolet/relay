@@ -9,7 +9,7 @@ import (
 
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	appteam "github.com/wyolet/relay/app/team"
 	appuser "github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"

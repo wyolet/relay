@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // SystemPrefix marks the built-in virtual groups

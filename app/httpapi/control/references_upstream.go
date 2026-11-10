@@ -6,7 +6,7 @@ import (
 	"slices"
 
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // scanAccountRefs lists the host keys that name the account, which would point at an organization that no longer exists, the accounts shared from it, which detach deletes, the relay keys whose lane it is, which would go with it, and the policy bindings holding it.

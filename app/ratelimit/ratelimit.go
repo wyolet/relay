@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // RateLimit is a named rule set. Owners:

@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // tenancyRowsQuery renders every row of the tables the auth module owns, server timestamps left out. JSONB prints in its canonical key order, so the rows compare whatever order a writer marshalled the keys in.

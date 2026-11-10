@@ -15,7 +15,7 @@ import (
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/limits/hybrid"
 	"github.com/wyolet/relay/app/limits/lua"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/plan"
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settle"

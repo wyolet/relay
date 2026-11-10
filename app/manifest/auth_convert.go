@@ -3,7 +3,7 @@ package manifest
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	authmanifest "github.com/wyolet/relay/auth/manifest"
 )
 

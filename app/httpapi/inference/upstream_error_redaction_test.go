@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 )
 
 // A host that refuses connections is reported to the caller by slug; its base URL and dial target stay in the logs.

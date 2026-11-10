@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/adapters"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policybinding"
 	authtoken "github.com/wyolet/relay/auth/token"

@@ -24,7 +24,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/app/policy"
 )
 

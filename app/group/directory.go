@@ -3,7 +3,7 @@ package group
 import (
 	"encoding/json"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
 )
 

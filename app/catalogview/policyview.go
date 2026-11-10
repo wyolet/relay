@@ -7,7 +7,7 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
 )

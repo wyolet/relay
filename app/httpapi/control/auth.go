@@ -9,7 +9,7 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/auth/password"
 	"github.com/wyolet/relay/internal/identity"

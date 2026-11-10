@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func fix() *Budget {

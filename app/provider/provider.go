@@ -8,7 +8,7 @@ package provider
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // Provider is the vendor that authors Models.

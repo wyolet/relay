@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 func rule(m Meter, s Strategy, w time.Duration, amount int64) Rule {

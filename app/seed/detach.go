@@ -8,7 +8,7 @@ import (
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"

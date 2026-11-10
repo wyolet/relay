@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 // A user's own read scope covers every key they own, disabled ones

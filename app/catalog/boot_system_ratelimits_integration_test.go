@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/seed"
 	relayconfig "github.com/wyolet/relay/config"

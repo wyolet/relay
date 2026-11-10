@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/auth/directory"
 	authpg "github.com/wyolet/relay/auth/store/postgres"
 	"github.com/wyolet/relay/internal/storage"

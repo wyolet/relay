@@ -2,9 +2,9 @@ package catalogview
 
 import (
 	"github.com/wyolet/relay/app/account"
-	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/meta"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/pkg/modelref"
 	"github.com/wyolet/relay/app/policy"
 )
 

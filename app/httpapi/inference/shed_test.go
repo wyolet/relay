@@ -22,7 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/clientprofile"
