@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/mod/semver"
@@ -19,15 +21,13 @@ import (
 
 const (
 	// CI publishes a tag's files a minute or two after the push.
-	freshTagAge    = 24 * time.Hour
-	staleSumRetry  = time.Hour
-	failureRetry   = 5 * time.Minute
-	unknownTagTTL  = 60 * time.Second
-	extraFetchGap  = 10 * time.Second
-	maxUnknownTags = 10_000
-	maxBuilds      = 2
-	buildTime      = 2 * time.Minute
-	sumFetchers    = 4
+	freshTagAge   = 24 * time.Hour
+	staleSumRetry = time.Hour
+	failureRetry  = 5 * time.Minute
+	extraFetchGap = 10 * time.Second
+	maxBuilds     = 2
+	buildTime     = 2 * time.Minute
+	sumFetchers   = 4
 )
 
 var errUnavailable = errors.New("unavailable")
@@ -104,6 +104,17 @@ type Config struct {
 	CacheBytes   int64
 	HTTPClient   *http.Client // nil: a client with a one-minute timeout
 	Logger       *slog.Logger // nil: slog.Default()
+
+	// DisableWebhooks turns off receiver registration, release nudges and
+	// the repository push hook.
+	DisableWebhooks bool
+	// AllowLoopbackWebhooks admits http:// receivers on loopback addresses.
+	// For local development only; every other refused range stays refused.
+	AllowLoopbackWebhooks bool
+	// TrustedProxies are the peers whose X-Forwarded-For names the client
+	// a registration is rate-limited by.
+	TrustedProxies []*net.IPNet
+	Version        string // sent in the User-Agent to receivers
 }
 
 // Server mirrors the catalog repository and serves its releases.
@@ -118,6 +129,12 @@ type Server struct {
 	slots    chan struct{}
 	now      func() time.Time
 	fetchNow chan struct{}
+	syncReqs syncRequests
+	running  atomic.Bool
+	syncMu   sync.Mutex // one sync at a time, whatever asked for it
+
+	hooks      *webhooks // nil when webhooks are disabled
+	deliveries sync.WaitGroup
 
 	mu        sync.RWMutex
 	tags      map[string]*tagState
@@ -125,10 +142,6 @@ type Server struct {
 	index     []byte
 	indexETag string
 	synced    bool
-
-	unknownMu      sync.Mutex
-	unknown        map[string]time.Time
-	lastExtraFetch time.Time
 }
 
 // New validates cfg and returns a Server; Run starts it.
@@ -160,23 +173,49 @@ func New(cfg Config) (*Server, error) {
 		slots:    make(chan struct{}, maxBuilds),
 		now:      time.Now,
 		fetchNow: make(chan struct{}, 1),
+		syncReqs: syncRequests{gap: extraFetchGap},
 		tags:     map[string]*tagState{},
 		latest:   map[string]string{},
-		unknown:  map[string]time.Time{},
+	}
+	if !cfg.DisableWebhooks {
+		policy := receiverPolicy{resolver: net.DefaultResolver, allowLoopback: cfg.AllowLoopbackWebhooks}
+		version := cfg.Version
+		if version == "" {
+			version = "dev"
+		}
+		s.hooks = &webhooks{
+			policy:      policy,
+			client:      newReceiverClient(policy, nil),
+			userAgent:   "wyolet-catalog-server/" + version,
+			timeout:     hookTimeout,
+			subs:        newSubscriptions(),
+			retryDelays: nudgeRetryDelays,
+			sendSlots:   make(chan struct{}, nudgeSenders),
+		}
 	}
 	s.metrics = newMetrics(s)
 	return s, nil
 }
 
-// Run initialises the mirror and syncs it every SyncInterval until ctx ends.
+// Run initialises the mirror and syncs it every SyncInterval, and whenever
+// an early sync is asked for, until ctx ends.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.mirror.Init(ctx); err != nil {
 		return fmt.Errorf("catalogserver: init mirror %s: %w", s.cfg.MirrorDir, err)
 	}
+	s.running.Store(true)
+	defer s.running.Store(false)
 	ticker := time.NewTicker(s.cfg.SyncInterval)
 	defer ticker.Stop()
 	for {
+		answered := s.takeSyncWaiters()
 		s.sync(ctx)
+		if answered != nil {
+			close(answered)
+		}
+		if s.hooks != nil {
+			s.hooks.subs.sweep(s.now())
+		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -189,6 +228,8 @@ func (s *Server) Run(ctx context.Context) error {
 // sync keeps everything it already holds when the fetch fails, so an
 // unreachable upstream never moves the index or drops a served tag.
 func (s *Server) sync(ctx context.Context) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	if err := s.mirror.Fetch(ctx); err != nil {
 		s.metrics.fetchFailures.Inc()
 		s.log.Warn("catalog-server: fetch failed; serving held tags", "err", err)
@@ -346,14 +387,24 @@ func (s *Server) updateIndex(ctx context.Context) {
 	}
 
 	index := renderIndex(latest)
+	moved := map[string]string{}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for channel, tag := range latest {
-		if s.latest[channel] != tag {
+		prev := s.latest[channel]
+		if prev != tag {
 			s.log.Info("catalog-server: channel latest", "channel", channel, "tag", tag)
+		}
+		// A channel's first latest since start is no news: relays already
+		// had it, and nudging them after every restart would be a herd.
+		if prev != "" && semver.Compare(tag, prev) > 0 {
+			moved[channel] = tag
 		}
 	}
 	s.latest, s.index, s.indexETag = latest, index, `"`+sha256Hex(index)+`"`
+	s.mu.Unlock()
+	for channel, tag := range moved {
+		s.nudge(ctx, channel, tag)
+	}
 }
 
 func (s *Server) verifyTag(ctx context.Context, tag string) bool {
@@ -383,149 +434,19 @@ func renderIndex(latest map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// file returns the verified bytes of one release file. Concurrent callers
-// share one build.
-func (s *Server) file(ctx context.Context, tag string, a asset) ([]byte, error) {
-	k := fileKey{tag, a}
-	if b, ok := s.cache.get(k); ok {
-		return b, nil
-	}
-	ch := s.builds.DoChan(tag+"/"+a.label(), func() (any, error) {
-		if b, ok := s.cache.get(k); ok {
-			return b, nil
-		}
-		b, err := s.produce(tag, a)
-		if err != nil {
-			return nil, err
-		}
-		s.cache.put(k, b)
-		return b, nil
-	})
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case r := <-ch:
-		if r.Err != nil {
-			return nil, r.Err
-		}
-		return r.Val.([]byte), nil
-	}
-}
-
-// produce runs detached from any one request because callers share it.
-func (s *Server) produce(tag string, a asset) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), buildTime)
-	defer cancel()
+// publishedSum returns tag's sum file for a or, on a miss, whether an early
+// sync could still find it: the tag is unknown here, or its sum is due.
+func (s *Server) publishedSum(tag string, a asset) (file []byte, catchUp bool) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	st := s.tags[tag]
-	if st == nil {
-		s.mu.RUnlock()
-		return nil, errNotPublished
+	switch {
+	case st == nil:
+		return nil, true
+	case st.sums[a].file != nil:
+		return st.sums[a].file, false
 	}
-	t, want, prev, failedAt := st.Tag, st.sums[a].sum, st.verified[a], st.failedAt[a]
-	s.mu.RUnlock()
-	if want == "" {
-		return nil, errNotPublished
-	}
-	if !failedAt.IsZero() && s.now().Sub(failedAt) < failureRetry {
-		return nil, errUnavailable
-	}
-	if err := s.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer s.release()
-
-	name := a.fileName(tag)
-	if prev == nil || !prev.fromRelease {
-		data, err := s.rebuild(ctx, t, a)
-		if err == nil && sha256Hex(data) == want {
-			s.setVerified(st, a, &verifiedFile{})
-			return data, nil
-		}
-		if prev == nil {
-			if err != nil {
-				s.log.Warn("catalog-server: rebuild failed; serving the published file", "tag", tag, "file", name, "err", err)
-			} else {
-				s.metrics.mismatches.WithLabelValues(a.label()).Inc()
-				s.log.Warn("catalog-server: rebuild differs from the published file; serving the published file", "tag", tag, "file", name)
-			}
-		}
-	}
-	data, err := s.releases.get(ctx, tag, name, maxAssetBytes)
-	if err == nil && sha256Hex(data) != want {
-		err = errors.New("does not match its published sha256")
-	}
-	if err != nil {
-		s.metrics.releaseFailures.WithLabelValues(a.label()).Inc()
-		s.log.Error("catalog-server: published file unavailable", "tag", tag, "file", name, "err", err)
-		s.mu.Lock()
-		st.failedAt[a] = s.now()
-		s.mu.Unlock()
-		return nil, errUnavailable
-	}
-	s.setVerified(st, a, &verifiedFile{fromRelease: true})
-	return data, nil
-}
-
-func (s *Server) rebuild(ctx context.Context, t Tag, a asset) ([]byte, error) {
-	s.metrics.builds.WithLabelValues(a.label()).Inc()
-	data, err := s.mirror.Archive(ctx, t.Commit)
-	if err == nil && a == assetCatalog {
-		data, err = BuildCatalog(data, t.Committed, t.Name)
-	}
-	if err != nil {
-		s.metrics.buildFailures.WithLabelValues(a.label()).Inc()
-	}
-	return data, err
-}
-
-func (s *Server) setVerified(st *tagState, a asset, v *verifiedFile) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st.verified[a] = v
-	st.failedAt[a] = time.Time{}
-}
-
-func (s *Server) acquire(ctx context.Context) error {
-	select {
-	case s.slots <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *Server) release() { <-s.slots }
-
-// noteUnknown remembers a missed tag for unknownTagTTL and asks for one
-// extra fetch at most every extraFetchGap, so a tag pushed seconds ago is
-// found before the next poll.
-func (s *Server) noteUnknown(tag string) {
-	s.unknownMu.Lock()
-	defer s.unknownMu.Unlock()
-	now := s.now()
-	if exp, ok := s.unknown[tag]; ok && now.Before(exp) {
-		return
-	}
-	if len(s.unknown) >= maxUnknownTags {
-		for t, exp := range s.unknown {
-			if !now.Before(exp) {
-				delete(s.unknown, t)
-			}
-		}
-		if len(s.unknown) >= maxUnknownTags {
-			clear(s.unknown)
-		}
-	}
-	s.unknown[tag] = now.Add(unknownTagTTL)
-	if now.Sub(s.lastExtraFetch) < extraFetchGap {
-		return
-	}
-	s.lastExtraFetch = now
-	select {
-	case s.fetchNow <- struct{}{}:
-	default:
-	}
+	return nil, sumDue(st.Committed, st.sums[a].checkedAt, s.now())
 }
 
 func (s *Server) ready() bool {

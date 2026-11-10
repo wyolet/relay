@@ -9,7 +9,12 @@
 // aren't published and verified. The same Build steps produce the files the
 // release publishes, so CI and the server share one builder.
 //
-// Out of scope: unreleased commits and branches, pre-release tags, webhooks,
-// and signing. The server holds no credentials and no state beyond the
-// mirror directory and memory.
+// Relays may register a receiver URL per channel; when a channel's latest
+// tag moves, each receiver gets a nudge to re-read the index. Receivers are
+// held in memory per replica and expire unless renewed. A repository push
+// hook only asks for an early sync.
+//
+// Out of scope: unreleased commits and branches, pre-release tags, signing,
+// and any shared state between replicas. The server holds no credentials and
+// no state beyond the mirror directory and memory.
 package catalogserver

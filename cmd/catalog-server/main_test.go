@@ -79,7 +79,7 @@ func TestParseBytes(t *testing.T) {
 }
 
 func TestLoadServeConfig(t *testing.T) {
-	for _, k := range []string{"ADDR", "REPO", "RELEASES_URL", "SYNC_INTERVAL", "CACHE_BYTES", "MIRROR_DIR"} {
+	for _, k := range []string{"ADDR", "REPO", "RELEASES_URL", "SYNC_INTERVAL", "CACHE_BYTES", "MIRROR_DIR", "WEBHOOKS", "WEBHOOK_ALLOW_LOOPBACK"} {
 		t.Setenv("RELAY_CATALOG_SERVER_"+k, "")
 	}
 	cfg, err := loadServeConfig()
@@ -88,9 +88,20 @@ func TestLoadServeConfig(t *testing.T) {
 	}
 	if cfg.addr != ":8080" || cfg.SyncInterval != time.Minute || cfg.CacheBytes != 64<<20 ||
 		cfg.RepoURL != "https://github.com/wyolet/relay-catalog.git" ||
-		cfg.ReleasesURL != "https://github.com/wyolet/relay-catalog/releases/download" {
+		cfg.ReleasesURL != "https://github.com/wyolet/relay-catalog/releases/download" ||
+		cfg.DisableWebhooks || cfg.AllowLoopbackWebhooks {
 		t.Fatalf("defaults %+v", cfg)
 	}
+	t.Setenv("RELAY_CATALOG_SERVER_WEBHOOKS", "off")
+	t.Setenv("RELAY_CATALOG_SERVER_WEBHOOK_ALLOW_LOOPBACK", "on")
+	if cfg, err = loadServeConfig(); err != nil || !cfg.DisableWebhooks || !cfg.AllowLoopbackWebhooks {
+		t.Fatalf("switches: %+v, %v", cfg, err)
+	}
+	t.Setenv("RELAY_CATALOG_SERVER_WEBHOOKS", "maybe")
+	if _, err := loadServeConfig(); err == nil {
+		t.Fatal("an unknown switch value accepted")
+	}
+	t.Setenv("RELAY_CATALOG_SERVER_WEBHOOKS", "")
 	t.Setenv("RELAY_CATALOG_SERVER_SYNC_INTERVAL", "0s")
 	if _, err := loadServeConfig(); err == nil {
 		t.Fatal("zero sync interval accepted")

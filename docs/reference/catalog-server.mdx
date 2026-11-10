@@ -17,6 +17,7 @@ Relay defaults to the public server at `https://catalog.wyolet.com`. The example
 | `/releases/<tag>/<file>.sha256` | The sum file published with the release on GitHub, byte for byte. | As above. |
 | `/channels/<channel>/latest/<file>` | `302` to `/releases/<tag>/<file>` for the channel's latest tag. `<file>` is `catalog.json.gz` or `relay-catalog-data.tar.gz`, optionally with `.sha256`. For curl and people; clients read the index. | `public, max-age=60` |
 | `/livez`, `/readyz`, `/metrics` | Health and Prometheus metrics; see [Running catalog-server](#running-catalog-server). | none |
+| `POST /v1/webhooks`, `POST /hooks/github` | Release webhook registration and the repository push hook; see [Release webhooks](#release-webhooks). | none |
 
 Release files are served as `Content-Type: application/gzip` with no `Content-Encoding`: the body is the stored `.gz` file, and clients check the sha256 of exactly those bytes. A proxy in front of the server must not compress or decompress `/releases/*`, or every checksum fails.
 
@@ -46,10 +47,36 @@ A tag's channel is the last segment of the `apiVersion` every document in its da
 
 ## Status codes
 
-- **404**: an unknown tag, a tag that isn't a release tag, a file name other than the two above, or a file the release didn't publish. v0.1.0 to v0.1.9 publish no files, and v0.1.10 to v0.1.14 only `catalog.json.gz`.
+- **404**: an unknown tag, a tag that isn't a release tag, a file name other than the two above, or a file the release didn't publish. v0.1.0 to v0.1.9 publish no files, and v0.1.10 to v0.1.14 only `catalog.json.gz`. A 404 for a release tag's file is sent with `Cache-Control: no-store`, since the file may be published later.
 - **503**: `/index.yaml` before the first sync has finished; or a release file that is published but couldn't be verified, because the published file failed its own sum or couldn't be fetched. A release file's `503` is sent with `Retry-After: 60`.
 
-A tag pushed moments ago can return 404 until the server's next fetch, at most one sync interval later. A request for an unknown tag triggers an early fetch, at most once every 10 seconds.
+Replicas sync on their own, so one may index a tag another hasn't fetched yet. A request for a tag the server doesn't hold, or whose sums it is still waiting for, waits for an early sync (at most one every 10 seconds, up to 20 seconds) before it is answered, so a file the index names never answers 404 from a replica that is behind.
+
+## Release webhooks
+
+A relay that can receive HTTPS requests can register to hear about new releases instead of waiting for its next poll. The nudge carries no data a relay acts on: it only prompts the relay to re-read the index and verify the files itself.
+
+```bash
+curl -X POST https://catalog.example.com/v1/webhooks \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://relay.example.com/catalog/hooks/release", "channel": "v1alpha3"}'
+```
+
+| Answer | Meaning |
+| --- | --- |
+| `202 {"expiresAt": "<RFC 3339>"}` | Registered for 24 hours. Registering the same `url` and `channel` again renews it. |
+| `400` | The body isn't JSON, the URL isn't an absolute `https` URL without credentials, its host doesn't resolve, or the index has no such channel. |
+| `403` | The host resolves to a loopback, private, link-local, CGNAT, unique-local, multicast or reserved address, or the challenge failed. |
+| `429` | More than 10 registrations from one client address in a minute. |
+| `503` | The replica holds its limit of 10,000 subscriptions. |
+
+Before it answers, the server resolves the host once and sends the challenge to that address; every later request to the receiver dials the same address, with the URL's host for TLS and the `Host` header, and never follows a redirect. The challenge is `POST <url>` with `{"type": "challenge", "challenge": "<32 hex chars>"}`; the receiver must answer `200` with `{"challenge": "<same value>"}` within 5 seconds.
+
+When a channel's latest tag moves to a newer tag whose files all serve, each live receiver of that channel gets `POST <url>` with `{"type": "release", "channel": "v1alpha3", "tag": "v0.2.3"}`. Any `2xx` counts as delivered. A failure or a 5-second timeout is retried after 10 seconds, 1 minute and 5 minutes, then given up for that tag; a receiver that misses 3 tags in a row is removed. Requests carry `User-Agent: wyolet-catalog-server/<version>` and `Content-Type: application/json`. A server that restarts sends nothing for the tags it finds at startup.
+
+Subscriptions live in the memory of the replica that took the registration, which is also the one that sends to it. A restarted replica forgets them until relays renew, so a relay that registers should also poll.
+
+`POST /hooks/github` asks for an early sync and answers `202`; point the catalog repository's push webhook at it to pick up a new tag in seconds rather than at the next poll. Its payload is never read and it needs no secret: a forged call costs one fetch. Calls are coalesced to at most one sync every 10 seconds, and a call inside that window is synced at its end, not dropped.
 
 ## Stability
 
@@ -111,6 +138,9 @@ It needs the `git` binary on `PATH`: the data tarball is `git archive` output, a
 | `RELAY_CATALOG_SERVER_SYNC_INTERVAL` | `60s` | How often the mirror is fetched, as a Go duration. Matches the index's `max-age`. |
 | `RELAY_CATALOG_SERVER_CACHE_BYTES` | `64Mi` | Memory budget for release files, in bytes or with a `Ki`, `Mi` or `Gi` suffix. |
 | `RELAY_CATALOG_SERVER_MIRROR_DIR` | `<temp dir>/relay-catalog-mirror` | The bare clone. |
+| `RELAY_CATALOG_SERVER_WEBHOOKS` | `on` | `off` turns off `POST /v1/webhooks`, release nudges and `POST /hooks/github`. |
+| `RELAY_CATALOG_SERVER_WEBHOOK_ALLOW_LOOPBACK` | `off` | `on` also accepts `http://` receivers on loopback addresses. For local development only; private and other refused ranges stay refused. |
+| `RELAY_TRUSTED_PROXIES` | empty | Comma-separated IPs or CIDRs of the proxies in front of the server. Their `X-Forwarded-For` names the client the registration limit counts; when empty, the limit counts the connecting peer, so behind a proxy every client shares one limit. |
 | `RELAY_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. Logs are JSON on stdout. |
 
 The mirror defaults to the temp directory because it is a disposable cache: a few MB that clone again in about a second, and the temp directory is writable for any user. Point it at a volume to skip the clone after a container restart.
@@ -132,6 +162,10 @@ At every sync the server fetches the mirror, reads each new release tag's channe
 | `catalog_server_rebuild_mismatch_total` | counter | `asset` | Rebuilds whose sha256 differs from the published sum; the published file is served. |
 | `catalog_server_release_fetch_failures_total` | counter | `asset` | Published sums or files that couldn't be fetched or failed their sum. |
 | `catalog_server_cache_bytes` | gauge | | Bytes of release files in memory. |
+| `catalog_server_webhook_subscriptions` | gauge | `channel` | Live receivers this replica holds. |
+| `catalog_server_webhook_registrations_total` | counter | `result` | Registrations: `created`, `renewed`, `invalid`, `refused`, `challenge_failed`, `rate_limited`, `full`. |
+| `catalog_server_webhook_nudges_total` | counter | `result` | Nudge requests `delivered` or `failed`, and `gave_up` once a receiver's retries for a tag ran out. |
+| `catalog_server_github_hooks_total` | counter | | Calls to `POST /hooks/github`. |
 
 ### Building a release's files
 
