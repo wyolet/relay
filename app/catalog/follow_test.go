@@ -42,7 +42,7 @@ func TestFollowerNudgeNeverBlocks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 5; i++ {
-			f.Nudge()
+			f.Nudge("")
 		}
 		close(done)
 	}()
@@ -80,7 +80,7 @@ func TestFollowerRunChecksOnNudge(t *testing.T) {
 	if n := reads.Load(); n != 0 {
 		t.Fatalf("index reads before a nudge = %d, want 0", n)
 	}
-	f.Nudge()
+	f.Nudge("")
 	deadline := time.Now().Add(5 * time.Second)
 	for reads.Load() < 1 || testutil.ToFloat64(metrics.CatalogChecks.WithLabelValues(metrics.CatalogCheckFailed)) < failed+1 {
 		if time.Now().After(deadline) {
