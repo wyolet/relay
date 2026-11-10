@@ -90,6 +90,12 @@ data:
   {{- with .Values.relay.catalogUrl }}
   RELAY_CATALOG_URL: {{ . | quote }}
   {{- end }}
+  {{- with .Values.relay.catalogPollInterval }}
+  RELAY_CATALOG_POLL_INTERVAL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.catalogWebhookUrl }}
+  RELAY_CATALOG_WEBHOOK_URL: {{ . | quote }}
+  {{- end }}
   {{- $inferenceUrl := .Values.relay.inferenceApiUrl }}
   {{- if and (not $inferenceUrl) .Values.gateway.enabled .Values.gateway.inference.host }}
   {{- $inferenceUrl = printf "https://%s" .Values.gateway.inference.host }}

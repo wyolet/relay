@@ -2,11 +2,9 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -61,7 +59,8 @@ type BootstrapOptions struct {
 	// resolves the newest release for this binary's schema channel via
 	// the channel index (CatalogIndexURL) at every hydrate. Once
 	// concrete, the stored "catalog-source" marker is compared against
-	// it; on mismatch (or an empty catalog) the tree is seeded — from
+	// it; on mismatch (or an empty catalog) the tree is seeded, unless the
+	// marker names a newer release (see AllowDowngrade) — from
 	// AutoSeedDir when its .version stamp matches (no network), else
 	// fetched from CatalogURL — and the marker updated. The seed is
 	// layering-safe: operator-edited (dirty) rows are skipped and
@@ -86,6 +85,14 @@ type BootstrapOptions struct {
 	// pod sharing the database, so pods booting together against an empty
 	// catalog seed it once. Nil runs unserialized: safe for one process only.
 	SeedLock func(ctx context.Context, fn func(context.Context) error) error
+
+	// SeedTryLock is SeedLock for a seed that skips when another pod holds the
+	// lock, reporting whether fn ran. The follower uses it; nil runs fn.
+	SeedTryLock func(ctx context.Context, fn func(context.Context) error) (bool, error)
+
+	// AllowDowngrade lets the boot seed replace a catalog seeded from a newer
+	// release than CatalogVersion resolves to. The follower never downgrades.
+	AllowDowngrade bool
 
 	// SystemRateLimits are the system-owned rate limits the binary looks up by name. Every hydrate creates the ones with no row and leaves existing rows alone.
 	SystemRateLimits []*ratelimit.RateLimit
@@ -174,6 +181,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	cat.UseTenancy(stores.Team, stores.Project, stores.ServiceAccount, stores.Group,
 		stores.Role, stores.RoleBinding, stores.PolicyBinding)
 	cat.settings.store = stores.Settings
+	cat.OnSettingsChange(settings.SectionCatalogSource, cat.publishSeededVersion)
 
 	// OAuth credential resolver: stores its token blob via the same AES-GCM
 	// path as KindStored, and refreshes on expiry using the live
@@ -325,28 +333,20 @@ func seedCatalog(ctx context.Context, stores *Stores, opts BootstrapOptions) err
 }
 
 // seedVersioned reconciles the seeded catalog with opts.CatalogVersion:
-// resolve "latest"/"auto" to a concrete release via the channel index,
-// then seed + marker update when the stored catalog-source marker
-// disagrees (or the catalog is empty), no-op otherwise. A version that
-// matches the local tree's .version stamp seeds from disk without a
-// fetch. See the BootstrapOptions.CatalogVersion doc for the failure
-// policy.
+// resolve "latest"/"auto" to a concrete release via the channel index, then
+// seed it through seedRelease. See the BootstrapOptions.CatalogVersion doc for
+// the failure policy.
 func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) error {
-	row, err := stores.Settings.Get(ctx, settings.SectionCatalogSource)
+	st, err := readSeedState(ctx, stores)
 	if err != nil {
-		return fmt.Errorf("read catalog-source marker: %w", err)
-	}
-	cur, _ := row.Value.(*settings.CatalogSource)
-	empty, err := isCatalogEmpty(ctx, stores)
-	if err != nil {
-		return fmt.Errorf("check empty: %w", err)
+		return err
 	}
 
 	version := opts.CatalogVersion
 	if seed.IsLatestAlias(version) {
 		resolved, err := seed.ResolveLatest(ctx, opts.CatalogIndexURL, seed.Channel())
 		if err != nil {
-			if !empty {
+			if !st.empty {
 				slog.Error("catalog: latest resolution failed; keeping existing catalog",
 					"channel", seed.Channel(), "err", err)
 				return nil
@@ -356,39 +356,22 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 		version = resolved
 	}
 
-	if cur != nil && cur.Version == version && !empty {
-		return nil
-	}
-
-	// The baked/local tree already holds this exact release — seed from
-	// disk, no network.
-	if v := seed.DirVersion(opts.AutoSeedDir); v != "" && v == version {
-		return keepServingOnSeedError(empty, version,
-			seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local"))
-	}
-
-	tmp, err := os.MkdirTemp("", "relay-catalog-*")
-	if err != nil {
-		return fmt.Errorf("catalog fetch tmpdir: %w", err)
-	}
-	defer os.RemoveAll(tmp)
-
-	dataDir, fetchErr := seed.FetchCatalog(ctx, opts.CatalogURL, version, tmp)
-	if fetchErr != nil {
-		if !empty {
+	_, err = seedRelease(ctx, stores, opts, version, st, opts.AllowDowngrade)
+	var fetchErr *fetchError
+	if errors.As(err, &fetchErr) {
+		if !st.empty {
 			// Availability over freshness: the existing rows keep serving;
 			// the mismatch is retried on the next boot.
 			slog.Error("catalog: versioned fetch failed; keeping existing catalog",
-				"version", version, "err", fetchErr)
+				"version", version, "err", fetchErr.err)
 			return nil
 		}
 		if opts.AutoSeedDir != "" {
-			return seedLocalFallback(ctx, stores, opts, fetchErr)
+			return seedLocalFallback(ctx, stores, opts, fetchErr.err)
 		}
-		return fmt.Errorf("fetch catalog %s: %w; %s", version, fetchErr, seedHint)
+		return fmt.Errorf("fetch catalog %s: %w; %s", version, fetchErr.err, seedHint)
 	}
-	return keepServingOnSeedError(empty, version,
-		seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched"))
+	return keepServingOnSeedError(st.empty, version, err)
 }
 
 // seedHint tells the operator how to seed an empty catalog that has nothing to fetch from.
@@ -424,45 +407,6 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 	}
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
 		return writeCatalogSource(ctx, stores, v)
-	}
-	return nil
-}
-
-// seedAndMark runs the seed from dataDir and records version in the
-// catalog-source marker. Rows the release no longer ships are detached; a
-// failed seed writes no marker, so the next boot retries.
-func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
-	res, err := seed.Run(ctx, seed.Options{
-		Pool: opts.Pool, YAMLDir: dataDir, Secrets: stores.secrets(),
-		CatalogKindsOnly: true, DetachDropped: true,
-	})
-	if err != nil {
-		return fmt.Errorf("seed catalog %s: %w", version, err)
-	}
-	if err := writeCatalogSource(ctx, stores, version); err != nil {
-		return err
-	}
-	prev := ""
-	if cur != nil {
-		prev = cur.Version
-	}
-	slog.Info("catalog: seeded version",
-		"version", version, "previous", prev, "source", source,
-		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
-		"skipped_dirty", res.Skipped, "detached", res.Detached, "reattached", res.Reattached)
-	return nil
-}
-
-func writeCatalogSource(ctx context.Context, stores *Stores, version string) error {
-	marker, err := json.Marshal(settings.CatalogSource{
-		Version:  version,
-		SeededAt: time.Now().UTC().Format(time.RFC3339),
-	})
-	if err != nil {
-		return fmt.Errorf("marshal catalog-source marker: %w", err)
-	}
-	if _, err := stores.Settings.Upsert(ctx, settings.SectionCatalogSource, marker); err != nil {
-		return fmt.Errorf("write catalog-source marker: %w", err)
 	}
 	return nil
 }

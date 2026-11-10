@@ -16,7 +16,8 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
-// catalogSeedLock is the advisory-lock id the catalog seed serializes on.
+// catalogSeedLock is the advisory-lock id every catalog seed, at boot or by
+// the running follower, serializes on ("RELAY_SE" in ASCII).
 const catalogSeedLock int64 = 0x52454C41595F5345
 
 func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.BootstrapOptions {
@@ -24,9 +25,15 @@ func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.B
 		Pool:           st.Pool(),
 		MasterKey:      cfg.MasterKey,
 		MasterKeyExtra: cfg.MasterKeyExtra,
+		// Boot waits for a seed running on another pod, then re-reads the
+		// marker inside the lock; the follower skips the round instead.
 		SeedLock: func(ctx context.Context, fn func(context.Context) error) error {
 			return storagemod.WithAdvisoryLock(ctx, st.Pool(), catalogSeedLock, fn)
 		},
+		SeedTryLock: func(ctx context.Context, fn func(context.Context) error) (bool, error) {
+			return storagemod.TryAdvisoryLock(ctx, st.Pool(), catalogSeedLock, fn)
+		},
+		AllowDowngrade: cfg.CatalogAllowDowngrade,
 	}
 	if cfg.AutoSeedIfEmpty && cfg.CatalogDir != "" {
 		bootOpts.AutoSeedDir = cfg.CatalogDir

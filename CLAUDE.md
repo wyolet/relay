@@ -277,7 +277,12 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
   (`RELAY_CATALOG_URL` template overrides the default) and
   re-seeded, then the marker updated. Layering-safe: dirty rows skipped,
   overlays re-merge. Fetch failure on a non-empty catalog logs and boots
-  with existing rows. This is the production catalog-upgrade path.
+  with existing rows. Never seeds a version older than the stored one
+  (`RELAY_CATALOG_ALLOW_DOWNGRADE=1` for one boot). `latest` follows this
+  relay's schema channel while running: hourly check
+  (`RELAY_CATALOG_POLL_INTERVAL`), webhook nudges from the catalog server
+  (`RELAY_CATALOG_WEBHOOK_URL`), `POST /api/catalog/sync`; one pod seeds
+  under a PG advisory lock.
 - The recursive `manifest.LoadDir` is layout-agnostic — dispatches on
   each YAML's `kind` field, so the nested catalog tree just works.
 
