@@ -331,6 +331,22 @@ func TestClientErrorDropsWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestNonJSONSuccessDropsWithoutRetry(t *testing.T) {
+	c := newCollector(t)
+	c.respond = func(path string, n int, w http.ResponseWriter) bool {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "<!doctype html><html></html>")
+		return true
+	}
+	e := newTestEmitter(t, c)
+	e.Record(call("m"))
+	_ = e.Flush(context.Background())
+	if spans, _, _ := c.counts(); spans != 1 || e.Dropped() != 1 {
+		t.Errorf("sent %d dropped %d, want one attempt and a drop", spans, e.Dropped())
+	}
+}
+
 func TestNetworkErrorIsRetriedThenDropped(t *testing.T) {
 	e := New(WithEndpoint("http://127.0.0.1:1/otlp"), WithAPIKey("k"))
 	e.backoff = time.Millisecond
