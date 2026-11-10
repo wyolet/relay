@@ -197,3 +197,105 @@ func TestNudge_OnlyForReadyTagsAndNotAtStartup(t *testing.T) {
 		t.Fatal("nudged again for an unchanged latest")
 	}
 }
+
+// putReceiver subscribes rc for testChannel without a challenge.
+func putReceiver(s *Server, rc *receiver) subscription {
+	k := subKey{url: rc.srv.URL + "/h", channel: testChannel}
+	addr := netip.MustParseAddr("127.0.0.1")
+	s.hooks.subs.put(k, addr, s.now())
+	return subscription{subKey: k, addr: addr}
+}
+
+func TestNudge_RetryWaitsFromItsOwnFailure(t *testing.T) {
+	s, _ := newHookServer(t, true)
+	s.hooks.timeout = 400 * time.Millisecond
+	delays := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 150 * time.Millisecond}
+	s.hooks.retryDelays = delays
+
+	slow := newReceiver(t, false)
+	slowFirst := true
+	slow.onRelease = func(string) {
+		slow.mu.Lock()
+		first := slowFirst
+		slowFirst = false
+		slow.mu.Unlock()
+		if first {
+			time.Sleep(600 * time.Millisecond) // past the timeout
+		}
+	}
+	failing := newReceiver(t, false)
+	failing.failReleases = -1
+	var attempts []time.Time
+	failing.onRelease = func(string) {
+		failing.mu.Lock()
+		attempts = append(attempts, time.Now())
+		failing.mu.Unlock()
+	}
+	failingSub := putReceiver(s, failing)
+
+	s.deliver(t.Context(), testChannel, "v0.1.1", []subscription{putReceiver(s, slow), failingSub})
+
+	failing.mu.Lock()
+	defer failing.mu.Unlock()
+	if len(attempts) != 1+len(delays) {
+		t.Fatalf("%d attempts at the failing receiver, want 1 + %d retries", len(attempts), len(delays))
+	}
+	// Counted from the slow receiver's timeout, the first retry would come
+	// after timeout + delay; each must follow its own failure instead.
+	for i, d := range delays {
+		gap := attempts[i+1].Sub(attempts[i])
+		if gap < d || gap > d+250*time.Millisecond {
+			t.Errorf("retry %d came %v after the failed attempt, want about %v", i+1, gap, d)
+		}
+	}
+	if n, ok := failedTags(s, failingSub.subKey); !ok || n != 1 {
+		t.Fatalf("failing receiver: failed tags %d (kept %v), want 1", n, ok)
+	}
+	if n := slow.releaseCount(); n != 2 {
+		t.Fatalf("%d attempts at the slow receiver, want 2", n)
+	}
+	if n := testutil.ToFloat64(s.metrics.nudges.WithLabelValues("gave_up")); n != 1 {
+		t.Fatalf("gave_up %v, want 1", n)
+	}
+}
+
+func TestNudge_NewerTagSupersedesPendingRetries(t *testing.T) {
+	s, _ := newHookServer(t, true)
+	s.hooks.retryDelays = []time.Duration{500 * time.Millisecond, time.Millisecond, time.Millisecond}
+	rc := newReceiver(t, false)
+	rc.failReleases = 1
+	sub := putReceiver(s, rc)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.deliver(t.Context(), testChannel, "v0.1.1", []subscription{sub})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for rc.releaseCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("first nudge never arrived")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.deliver(t.Context(), testChannel, "v0.1.2", []subscription{sub})
+	<-done
+
+	rc.mu.Lock()
+	var tags []string
+	for _, r := range rc.releases {
+		tags = append(tags, r["tag"])
+	}
+	rc.mu.Unlock()
+	if len(tags) != 2 || tags[0] != "v0.1.1" || tags[1] != "v0.1.2" {
+		t.Fatalf("nudged tags %v, want [v0.1.1 v0.1.2]", tags)
+	}
+	for result, want := range map[string]float64{"superseded": 1, "gave_up": 0, "delivered": 1} {
+		if n := testutil.ToFloat64(s.metrics.nudges.WithLabelValues(result)); n != want {
+			t.Errorf("%s nudges %v, want %v", result, n, want)
+		}
+	}
+	if n, _ := failedTags(s, sub.subKey); n != 0 {
+		t.Fatalf("failed tags %d, want 0", n)
+	}
+}

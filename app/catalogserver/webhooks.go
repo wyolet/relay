@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -28,6 +29,9 @@ type webhooks struct {
 	subs        *subscriptions
 	retryDelays []time.Duration // waits before each retry of a failed nudge
 	sendSlots   chan struct{}
+
+	mu          sync.Mutex
+	deliverySeq map[string]uint64 // per channel, the newest delivery's number
 }
 
 type registerRequest struct {
