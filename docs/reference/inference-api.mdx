@@ -81,6 +81,7 @@ These need no credential.
 | `GET` | `/livez` | Liveness: the process is serving. No dependency checks. |
 | `GET` | `/openapi.json` | Generated OpenAPI document for the data plane |
 | `GET` | `/docs` | API reference UI rendered from `/openapi.json` |
+| `POST` | `/catalog/hooks/release` | Catalog release webhook from the catalog server. Mounted only with `RELAY_CATALOG_VERSION=latest`; `404` otherwise. See [Release webhooks](/concepts/catalog#release-webhooks). |
 
 Until the catalog has loaded, every authenticated route answers `503 catalog_unavailable` with `Retry-After: 5`.
 

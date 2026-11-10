@@ -20,6 +20,11 @@ type CatalogSource struct {
 
 	// SeededAt is when that seed completed (RFC 3339).
 	SeededAt string `json:"seededAt,omitempty" doc:"When that seed completed, RFC 3339."`
+
+	// CheckedAt and LastError are written by a relay following "latest" after
+	// each check of the catalog index it makes while running.
+	CheckedAt string `json:"checkedAt,omitempty" doc:"When a relay with RELAY_CATALOG_VERSION=latest last checked the catalog index while running, RFC 3339."`
+	LastError string `json:"lastError,omitempty" doc:"Why that check failed to read the index or to fetch, verify or seed the release; empty when it succeeded."`
 }
 
 func (c *CatalogSource) Validate() error { return nil }
@@ -27,7 +32,7 @@ func (c *CatalogSource) Validate() error { return nil }
 func init() {
 	Register(Section{
 		Name:        SectionCatalogSource,
-		Description: "Provenance of the seeded public catalog (version marker for boot-time re-seed).",
+		Description: "Provenance of the seeded public catalog (version marker for re-seeds) and the last catalog check.",
 		Defaults:    func() any { return &CatalogSource{} },
 		Decode:      decodeAndValidate[CatalogSource, *CatalogSource],
 	})

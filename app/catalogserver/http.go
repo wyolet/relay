@@ -36,6 +36,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.metrics.registry, promhttp.HandlerOpts{}))
+	if s.hooks != nil {
+		mux.HandleFunc("POST /v1/webhooks", s.serveRegister)
+		mux.HandleFunc("POST /hooks/github", s.serveGitHubHook)
+	}
 	return mux
 }
 
@@ -62,20 +66,14 @@ func (s *Server) serveRelease(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.mu.RLock()
-	st := s.tags[tag]
-	var sumFile []byte
-	if st != nil {
-		sumFile = st.sums[a].file
-	}
-	s.mu.RUnlock()
-	if st == nil {
-		s.noteUnknown(tag)
-		http.NotFound(w, r)
-		return
+	// Another replica may already index a tag this one hasn't fetched yet:
+	// catch up before answering rather than 404 a file the index names.
+	sumFile, catchUp := s.publishedSum(tag, a)
+	if sumFile == nil && catchUp && s.awaitSync(r.Context()) {
+		sumFile, _ = s.publishedSum(tag, a)
 	}
 	if sumFile == nil {
-		http.NotFound(w, r)
+		notFoundUncached(w, r)
 		return
 	}
 	if isSum {
@@ -85,7 +83,7 @@ func (s *Server) serveRelease(w http.ResponseWriter, r *http.Request) {
 	data, err := s.file(r.Context(), tag, a)
 	switch {
 	case errors.Is(err, errNotPublished):
-		http.NotFound(w, r)
+		notFoundUncached(w, r)
 	case err != nil:
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "file unavailable", http.StatusServiceUnavailable)
@@ -115,6 +113,13 @@ func (s *Server) serveChannelLatest(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", shortCache)
 	http.Redirect(w, r, "/releases/"+tag+"/"+name, http.StatusFound)
+}
+
+// notFoundUncached answers a release file that may be published later. A
+// 404 is heuristically cacheable, and a cached one would outlive the release.
+func notFoundUncached(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.NotFound(w, r)
 }
 
 // serveBytes answers If-None-Match with 304 and serves no Last-Modified, so

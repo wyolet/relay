@@ -60,6 +60,23 @@ type catalogIndex struct {
 // channel. A channel absent from the index is an error — it means no
 // catalog release exists for this binary's schema version.
 func ResolveLatest(ctx context.Context, indexURL, channel string) (string, error) {
+	res, err := FetchLatest(ctx, indexURL, channel, "")
+	return res.Latest, err
+}
+
+// IndexResult is one read of the channel index.
+type IndexResult struct {
+	// Latest is the channel's newest release; empty when NotModified.
+	Latest string
+	// ETag is the index's validator, sent back as If-None-Match next time.
+	ETag string
+	// NotModified reports a 304: the index is unchanged since ETag.
+	NotModified bool
+}
+
+// FetchLatest is ResolveLatest as a conditional GET: a non-empty etag is sent
+// as If-None-Match, and a 304 answers NotModified with no Latest.
+func FetchLatest(ctx context.Context, indexURL, channel, etag string) (IndexResult, error) {
 	if indexURL == "" {
 		indexURL = DefaultCatalogIndexURL
 	}
@@ -67,27 +84,33 @@ func ResolveLatest(ctx context.Context, indexURL, channel string) (string, error
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("seed: catalog index: %w", err)
+		return IndexResult{}, fmt.Errorf("seed: catalog index: %w", err)
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("seed: catalog index %s: %w", indexURL, err)
+		return IndexResult{}, fmt.Errorf("seed: catalog index %s: %w", indexURL, err)
 	}
 	defer resp.Body.Close()
+	if etag != "" && resp.StatusCode == http.StatusNotModified {
+		return IndexResult{ETag: etag, NotModified: true}, nil
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("seed: catalog index %s: HTTP %d", indexURL, resp.StatusCode)
+		return IndexResult{}, fmt.Errorf("seed: catalog index %s: HTTP %d", indexURL, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", fmt.Errorf("seed: catalog index %s: %w", indexURL, err)
+		return IndexResult{}, fmt.Errorf("seed: catalog index %s: %w", indexURL, err)
 	}
 	var idx catalogIndex
 	if err := yaml.Unmarshal(body, &idx); err != nil {
-		return "", fmt.Errorf("seed: catalog index %s: %w", indexURL, err)
+		return IndexResult{}, fmt.Errorf("seed: catalog index %s: %w", indexURL, err)
 	}
 	ch, ok := idx.Channels[channel]
 	if !ok || ch.Latest == "" {
-		return "", fmt.Errorf("seed: catalog index %s: no release for channel %q", indexURL, channel)
+		return IndexResult{}, fmt.Errorf("seed: catalog index %s: no release for channel %q", indexURL, channel)
 	}
-	return ch.Latest, nil
+	return IndexResult{Latest: ch.Latest, ETag: resp.Header.Get("ETag")}, nil
 }

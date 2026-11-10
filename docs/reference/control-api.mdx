@@ -431,8 +431,11 @@ GET  /api/version        build version (public; license details only for authent
 GET  /api/healthz        readiness: process and backends (public)
 GET  /api/livez          liveness: process only (public)
 POST /api/reload         rebuild the in-memory catalog from Postgres
+POST /api/catalog/sync   check for a newer catalog release now and seed it (admin)
 GET  /api/openapi.json   OpenAPI document
 GET  /api/docs           API reference UI
 ```
 
 `/api/reload` is a fallback; normal writes reach every pod on their own.
+
+`/api/catalog/sync` runs the check a relay with `RELAY_CATALOG_VERSION=latest` makes every `RELAY_CATALOG_POLL_INTERVAL`, and answers when it is done: `{"previous": "v0.2.1", "current": "v0.2.2", "changed": true}`. It answers `409` on a relay with any other `RELAY_CATALOG_VERSION`, `503` while another pod is seeding the catalog, and `502` when the index or the release could not be read, verified or seeded; the seeded catalog stays as it was. See [Following the latest release](/concepts/catalog#following-the-latest-release).

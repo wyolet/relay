@@ -101,6 +101,8 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 | `relay.controlAllowOrigins` | `""` | `RELAY_CONTROL_ALLOW_ORIGINS`, for a UI served from another origin. |
 | `relay.inferenceApiUrl` | `""` | `RELAY_INFERENCE_API_URL`; empty derives `https://<inference host>` from `gateway.*` or `ingress.*`. |
 | `relay.catalogVersion` | `""` | `RELAY_CATALOG_VERSION`: pin the catalog to a relay-catalog release tag; a change re-seeds at the next boot. |
+| `relay.catalogPollInterval` | `""` | `RELAY_CATALOG_POLL_INTERVAL`: with `catalogVersion: latest`, how often a running relay checks for a newer release (default 1h, `0` off). |
+| `relay.catalogWebhookUrl` | `""` | `RELAY_CATALOG_WEBHOOK_URL`: with `catalogVersion: latest`, this relay's public https base URL; it registers for release nudges from the catalog server. |
 | `relay.catalogUrl` | `""` | `RELAY_CATALOG_URL`, for a mirror. The archive needs its `.sha256` file next to it. |
 | `relay.extraEnv` | `[]` | Extra `name`/`value` env vars for the relay container and the migration Job (for example `RELAY_MAX_INFLIGHT`, `RELAY_PPROF_ADDR`). |
 | `resources` | requests 250m / 256Mi, limits 1 CPU / 1Gi | Relay container. |
@@ -232,7 +234,8 @@ Charts before Dragonfly bundled Valkey. Upgrading with the new defaults replaces
 - **Config.** Every setting has a default; override with `RELAY_CATALOG_SERVER_*` variables in `catalogServer.env`. The listen address stays `:8080`.
 - **State.** The git mirror and build scratch live on an emptyDir at `/tmp` (`catalogServer.tmpSizeLimit`), so the root filesystem stays read-only. A restarted pod clones again (about a second).
 - **Readiness.** `/readyz` turns 200 once the first sync has verified the latest release of every channel; each replica syncs on its own.
-- **Egress.** HTTPS to the repository host and its release downloads (for GitHub, `github.com` and the host its release downloads redirect to).
+- **Egress.** HTTPS to the repository host and its release downloads (for GitHub, `github.com` and the host its release downloads redirect to), and to the public addresses of relays that register for release webhooks.
+- **Webhooks.** Registrations are rate-limited per client address; set `RELAY_TRUSTED_PROXIES` in `catalogServer.env` to the proxies in front of the pods so `X-Forwarded-For` is believed. Each replica holds and nudges its own subscriptions.
 - **Exposure.** `catalogServer.ingress` or `catalogServer.httpRoute` (attached to a Gateway you name in `parentRefs`). The proxy must not compress `/releases/*`: clients check the sha256 of the stored `.gz` bytes.
 - **NetworkPolicy.** `catalogServer.networkPolicy` admits only the `from` peers (typically the ingress controller) to the server port.
 
