@@ -1,10 +1,9 @@
-package catalogembed
+package embed
 
 import (
 	"fmt"
 	"time"
 
-	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/manifest"
@@ -15,10 +14,10 @@ import (
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
-// Compose loads manifest documents into a catalog snapshot and flattens it to
+// Compose translates manifest documents to catalog kinds and flattens them to
 // the SDK embed schema. Cross-refs resolve via minted ids (no Postgres).
 func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catalog, error) {
-	idx := newIndex()
+	idx := newResolver()
 	var (
 		provDocs    []*manifest.ProviderDTO
 		hostDocs    []*manifest.HostDTO
@@ -95,16 +94,15 @@ func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catal
 		bindings = append(bindings, b)
 	}
 
-	snap := catalog.Build(provs, hosts, nil, nil, models, nil, nil, pricings, bindings)
-	return flatten(snap, generatedAt), nil
+	return Flatten(NewIndex(provs, hosts, models, pricings, bindings), generatedAt, nil), nil
 }
 
-type embedIndex struct {
+type embedResolver struct {
 	manifest.MapResolver
 }
 
-func newIndex() *embedIndex {
-	return &embedIndex{
+func newResolver() *embedResolver {
+	return &embedResolver{
 		MapResolver: manifest.MapResolver{
 			Providers:  map[string]string{},
 			Hosts:      map[string]string{},

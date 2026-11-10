@@ -1,4 +1,4 @@
-package catalogembed
+package embed
 
 import (
 	"encoding/json"
@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
+	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/manifest"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/pricing"
@@ -16,12 +16,21 @@ import (
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
-func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
-	return FlattenScoped(snap, at, nil)
+// Source is the catalog read surface Flatten needs. Relay's runtime snapshot
+// implements it; Index builds one from plain kind slices.
+type Source interface {
+	// EnabledHosts and EnabledModels are sorted by Meta.Name.
+	EnabledHosts() []*host.Host
+	EnabledModels() []*model.Model
+	Provider(id string) (*provider.Provider, bool)
+	ProviderSlug(providerID string) (string, bool)
+	// BindingsForModel is sorted by binding name.
+	BindingsForModel(modelID string) []*binding.Binding
+	PricingForBinding(b *binding.Binding) (*pricing.Pricing, bool)
 }
 
-// FlattenScoped projects the snapshot into the SDK catalog schema, keeping only the enabled bindings keep accepts; nil keep keeps all. Hosts left without a binding and sidecars for unserved slugs drop out, so a scoped document never names what keep refused.
-func FlattenScoped(snap *catalog.Snapshot, at time.Time, keep func(*model.Model, *binding.Binding) bool) *sdkcatalog.Catalog {
+// Flatten projects snap into the SDK catalog schema, keeping only the enabled bindings keep accepts; nil keep keeps all. Hosts left without a binding and sidecars for unserved slugs drop out, so a scoped document never names what keep refused.
+func Flatten(snap Source, at time.Time, keep func(*model.Model, *binding.Binding) bool) *sdkcatalog.Catalog {
 	version := "relay-catalog@" + strings.TrimPrefix(manifest.APIVersion, "relay.wyolet.dev/")
 	out := &sdkcatalog.Catalog{
 		Version:     version,

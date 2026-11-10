@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/catalogembed"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/pkg/catalogkind/embed"
 	catalogmanifest "github.com/wyolet/relay/pkg/catalogkind/manifest"
 )
 
@@ -71,15 +71,15 @@ func TestCatalogTreeGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	got.Rendered = digest(rendered)
-	cat, err := catalogembed.Compose(catalogDocs, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	cat, err := embed.Compose(catalogDocs, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	embed, err := catalogembed.MarshalJSON(cat)
+	embedded, err := embed.MarshalJSON(cat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got.Embed = digest(embed)
+	got.Embed = digest(embedded)
 
 	if *updateCatalogGolden {
 		b, err := json.MarshalIndent(got, "", "  ")

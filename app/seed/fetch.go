@@ -1,9 +1,7 @@
 package seed
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,21 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	catalogarchive "github.com/wyolet/relay/pkg/catalogkind/archive"
 )
 
 // DefaultCatalogURLTemplate is where versioned catalog trees are fetched
 // from when RELAY_CATALOG_URL is unset. "{version}" is replaced with the
 // requested release tag.
 const DefaultCatalogURLTemplate = "https://catalog.wyolet.com/releases/{version}/relay-catalog-data-{version}.tar.gz"
-
-// maxCatalogBytes caps the decompressed archive size. The real catalog is
-// a few MB of YAML; the cap only exists so a mispointed URL (or a
-// hostile mirror) can't fill the disk.
-const maxCatalogBytes = 512 << 20
-
-// maxCatalogEntries caps the archive's entry count; the real catalog has a
-// few thousand files at most.
-const maxCatalogEntries = 50_000
 
 // maxArchiveBytes caps the compressed download, which is held in memory until
 // its sha256 is checked. A release's data tarball is about 100 KB.
@@ -74,7 +65,7 @@ func FetchCatalog(ctx context.Context, urlTemplate, version, destDir string) (st
 	if got := sha256.Sum256(archive); got != want {
 		return "", fmt.Errorf("seed: catalog %s: sha256 %x does not match the published %x", url, got, want)
 	}
-	if err := extractTarGz(bytes.NewReader(archive), destDir, maxCatalogBytes, maxCatalogEntries); err != nil {
+	if err := catalogarchive.Extract(bytes.NewReader(archive), destDir); err != nil {
 		return "", fmt.Errorf("seed: extract catalog %s: %w", url, err)
 	}
 	return findDataRoot(destDir)
@@ -115,83 +106,6 @@ func parseSHA256Sum(b []byte) ([sha256.Size]byte, error) {
 		return sum, fmt.Errorf("not sha256sum output")
 	}
 	return sum, nil
-}
-
-// ExtractCatalogArchive extracts a gzipped catalog tarball under destDir
-// with FetchCatalog's size, entry-count and path limits.
-func ExtractCatalogArchive(r io.Reader, destDir string) error {
-	return extractTarGz(r, destDir, maxCatalogBytes, maxCatalogEntries)
-}
-
-// extractTarGz writes at most maxBytes of file content (sparse holes count
-// at their logical size) and at most maxEntries entries under destDir.
-func extractTarGz(r io.Reader, destDir string, maxBytes int64, maxEntries int) error {
-	gz, err := gzip.NewReader(r)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	var written int64
-	var entries int
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if entries++; entries > maxEntries {
-			return fmt.Errorf("archive exceeds %d entries", maxEntries)
-		}
-		target, err := securePath(destDir, hdr.Name)
-		if err != nil {
-			return err
-		}
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			// Compared against the remaining budget, never summed first:
-			// a declared size near MaxInt64 would wrap the running total.
-			remaining := maxBytes - written
-			if hdr.Size < 0 || hdr.Size > remaining {
-				return fmt.Errorf("archive exceeds %d bytes", maxBytes)
-			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-			if err != nil {
-				return err
-			}
-			n, err := io.Copy(f, io.LimitReader(tr, remaining))
-			written += n
-			if cerr := f.Close(); err == nil {
-				err = cerr
-			}
-			if err != nil {
-				return err
-			}
-		default:
-			// Symlinks, hardlinks, devices: never present in a catalog
-			// archive; skipping (not following) keeps extraction safe.
-		}
-	}
-}
-
-// securePath joins name under destDir and rejects entries that would
-// escape it (path traversal via "..").
-func securePath(destDir, name string) (string, error) {
-	target := filepath.Join(destDir, filepath.FromSlash(name))
-	if rel, err := filepath.Rel(destDir, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("archive entry %q escapes destination", name)
-	}
-	return target, nil
 }
 
 func findDataRoot(destDir string) (string, error) {

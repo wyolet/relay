@@ -1,6 +1,8 @@
-// Package catalogembed composes manifest YAML into the SDK catalog embed schema.
-// Server-module only — imports app/* and writes sdk/catalog/catalog.json.
-package catalogembed
+// Package embed flattens catalog kinds into the SDK catalog document
+// (sdk/catalog): from a parsed catalog tree (Compose) or from any Source,
+// such as relay's live snapshot (Flatten). It imports nothing from app/ or
+// internal/, so the catalog tools build without the relay server.
+package embed
 
 import (
 	"encoding/json"

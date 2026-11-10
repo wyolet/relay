@@ -1,4 +1,4 @@
-package seed
+package archive
 
 import (
 	"archive/tar"
