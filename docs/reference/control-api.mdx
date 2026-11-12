@@ -199,12 +199,9 @@ GET  /api/accounts/{ref}/keys    the host keys that name the account, without va
 POST /api/accounts/{ref}/shares  share a provider account: {"receiver": {"kind": "user|team|project|serviceaccount", "id"}}
 GET  /api/accounts/{ref}/shares  its shares, each {sharedAccount: {id, name}, receiver: {kind, id, name}, usage: {requests, costNanos, unpriced}}; since= sets the usage window (default 30d)
 PUT  /api/accounts/{ref}/policy  set the account's policy: {"policyId": "<id>"} or {"policyId": null}; answers {binding, previousBindingId?, previousBindingDeleted?}
-PUT  /api/policies/{ref}/accounts  set every account a policy applies to: {"accountIds": [...]}; answers {accounts: [{accountId, removed?, binding, previousBindingId?, previousBindingDeleted?}]}
 ```
 
 `PUT …/policy` runs in one transaction: it takes the account out of the binding that holds it, deleting that binding if it held no other account, and for a `policyId` creates a binding of its own, owned by the account's owner. It never adds the account to another binding. A holding binding that is enabled and already uses the policy is left as it is. It needs update (or delete) on the old binding and create in the account's scope, and refuses with the answers of a policy-binding save above; a concurrent change answers `409` `conflict` and writes nothing.
-
-`PUT /api/policies/{ref}/accounts` applies the same move to each listed account and unbinds the policy's accounts left out of the list, all in one transaction: any refusal writes nothing. Sending the same list again changes nothing, so a failed save can be retried as is.
 
 A pool's keys and accounts must be at the pool's host, and an account named by a host key must be at that key's host. A shared account is made only by `POST …/shares` (`spec.sourceAccountId` on `POST /api/accounts` answers `400`); a PUT keeps its real account, owner and host. See [Sharing an account](/concepts/key-pooling#sharing-an-account). A host key needs `accountId` on create and on update: create the provider account at the host first (`POST /api/accounts`); a key without one answers `400 account_required`. `spec.groupedByRelay` is read-only and cleared by setting `orgId`; see [Accounts grouped by the upgrade](/concepts/key-pooling#accounts-grouped-by-the-upgrade).
 
