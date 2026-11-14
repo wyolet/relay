@@ -132,7 +132,6 @@ func TestReachable_DraftSavedAndAccountAgree(t *testing.T) {
 }
 
 func TestReachable_ListsAreNeverNull(t *testing.T) {
-	t.Skip(`bug: GET /catalog/reachable with every pool readable answers "dropped":null, not []`)
 	f := newReachFixture(t)
 	for _, path := range []string{"/catalog/reachable?owner=team:" + f.team.Meta.ID + "&pool=" + f.pa.Meta.ID, "/policies/" + f.saved.Meta.ID + "/reachable", "/accounts/" + f.teamAcct.ID + "/reachable"} {
 		if body := scopeReq(t, f.h, "u", http.MethodGet, path, "").Body.String(); strings.Contains(body, "null") {
