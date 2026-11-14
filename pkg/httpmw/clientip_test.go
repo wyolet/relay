@@ -67,6 +67,7 @@ func TestClientIP(t *testing.T) {
 		{"trusted hops are skipped from the right", trusted, "10.0.0.1:443", []string{"6.6.6.6,203.0.113.7 , 192.168.1.1, 10.9.9.9"}, "203.0.113.7", true},
 		{"every hop trusted: the peer", trusted, "10.0.0.1:443", []string{"10.0.0.3, 10.0.0.2"}, "10.0.0.1", true},
 		{"an unparseable entry is skipped", trusted, "10.0.0.1:443", []string{"203.0.113.7, unknown"}, "203.0.113.7", true},
+		{"trusted hops are skipped across header lines", trusted, "10.0.0.1:443", []string{"6.6.6.6, 203.0.113.7", "10.9.9.9", ""}, "203.0.113.7", true},
 		{"IPv6 peer and client", trusted, "[::1]:443", []string{"2001:DB8::1"}, "2001:db8::1", true},
 		{"peer address without a port", trusted, "10.0.0.1", []string{"203.0.113.7"}, "203.0.113.7", true},
 		{"peer address that is no IP", trusted, "garbage", []string{"203.0.113.7"}, "garbage", false},
@@ -87,7 +88,6 @@ func TestClientIP(t *testing.T) {
 }
 
 func TestClientIPReadsEveryForwardedHeaderLine(t *testing.T) {
-	t.Skip("bug: trusted peer sends two X-Forwarded-For lines, the client's own [6.6.6.6] and the proxy's [203.0.113.7] → ClientIP 6.6.6.6; only the first line is read, so a proxy that adds its entry as a separate line lets the client pick its IP")
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.0.0.1:443"
 	r.Header["X-Forwarded-For"] = []string{"6.6.6.6", "203.0.113.7"}
