@@ -230,6 +230,17 @@ func ccToolChoiceToCanonical(raw json.RawMessage) (*v1.ToolChoice, error) {
 	return choice, nil
 }
 
+// defaultSchemaName fills the name OpenAI requires on a json_schema format; nameless schemas come from shapes without one (Anthropic output_config.format).
+const defaultSchemaName = "response"
+
+// jsonSchemaName returns the format's name, or defaultSchemaName when it has none.
+func jsonSchemaName(f *v1.Format) string {
+	if f.Name == "" {
+		return defaultSchemaName
+	}
+	return f.Name
+}
+
 // ccFormatToResponseFormat converts a canonical v1.Format to a CC ResponseFormat.
 func ccFormatToResponseFormat(f *v1.Format) (*ResponseFormat, error) {
 	switch f.Type {
@@ -239,7 +250,7 @@ func ccFormatToResponseFormat(f *v1.Format) (*ResponseFormat, error) {
 		return &ResponseFormat{Type: "json_object"}, nil
 	case "json_schema":
 		inner := map[string]any{
-			"name":   f.Name,
+			"name":   jsonSchemaName(f),
 			"schema": f.Schema,
 		}
 		if f.Description != "" {

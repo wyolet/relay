@@ -280,6 +280,9 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 					Schema:      f.Schema,
 					Strict:      f.Strict,
 				}
+				if f.Type == "json_schema" {
+					tc.Format.Name = jsonSchemaName(f)
+				}
 			}
 			rreq.Text = tc
 		}
