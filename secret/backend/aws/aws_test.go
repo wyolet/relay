@@ -107,7 +107,6 @@ func TestResolver_Resolve(t *testing.T) {
 	}
 
 	t.Run("empty json value", func(t *testing.T) {
-		t.Skip(`bug: path "s:apiKey" over secret {"apiKey":""} (or null) → resolves to an empty value with no error; the "json key is empty" branch is unreachable`)
 		srv := fakeSecretsManager(t, Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}, map[string]string{
 			id("s"): `200 {"SecretString":"{\"apiKey\":\"\",\"org\":null}"}`,
 		})

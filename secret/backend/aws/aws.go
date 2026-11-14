@@ -232,12 +232,12 @@ func extractJSONKey(raw []byte, key string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("secret/aws: json key %q not found in secret", key)
 	}
-	if len(val) == 0 {
-		return nil, fmt.Errorf("secret/aws: json key %q is empty", key)
-	}
-	// String values are quoted in JSON; unwrap when the value is a JSON string.
+	// String values are quoted in JSON; unwrap when the value is a JSON string. null decodes to "" here too.
 	var s string
 	if err := json.Unmarshal(val, &s); err == nil {
+		if s == "" {
+			return nil, fmt.Errorf("secret/aws: json key %q is empty", key)
+		}
 		return []byte(s), nil
 	}
 	return val, nil
