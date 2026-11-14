@@ -2,12 +2,11 @@ package otlpreceiver_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"github.com/wyolet/relay/pkg/payload"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 
@@ -87,10 +86,7 @@ func TestSDKReportsMatchProxiedUsage(t *testing.T) {
 			c := tc.build(upstream.URL, client.WithTelemetry(emitter))
 			req := &v1.Request{Model: v1.ModelRefs{"acme-large"}, Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "Say hello."}}}}}
 			if tc.stream {
-				s, err := c.GenerateStream(context.Background(), req)
-				if err != nil {
-					t.Fatal(err)
-				}
+				s := must(c.GenerateStream(context.Background(), req))(t)
 				for {
 					if _, err := s.Recv(); err != nil {
 						if !errors.Is(err, io.EOF) {
@@ -122,16 +118,15 @@ func TestSDKReportsMatchProxiedUsage(t *testing.T) {
 			if ev.FinishReason != "stop" || ev.Streamed != tc.stream || ev.Status != http.StatusOK || ev.ErrorKind != "" {
 				t.Errorf("finish %q streamed %v status %d error %q", ev.FinishReason, ev.Streamed, ev.Status, ev.ErrorKind)
 			}
-			// The content event collapses into the same call and its content is stored.
-			if len(fx.payloads.records) != 1 || fx.payloads.records[0].RequestID != ev.RequestID {
-				t.Fatalf("payload records = %d, want one for %s", len(fx.payloads.records), ev.RequestID)
-			}
-			var request, response map[string]json.RawMessage
-			if json.Unmarshal(fx.payloads.records[0].RequestBody, &request) != nil || json.Unmarshal(fx.payloads.records[0].ResponseBody, &response) != nil {
-				t.Fatalf("stored bodies are not JSON objects: %s / %s", fx.payloads.records[0].RequestBody, fx.payloads.records[0].ResponseBody)
-			}
-			if !strings.Contains(string(request["gen_ai.input.messages"]), "Say hello.") || !strings.Contains(string(response["gen_ai.output.messages"]), "Hello.") {
-				t.Errorf("stored content: %s / %s", fx.payloads.records[0].RequestBody, fx.payloads.records[0].ResponseBody)
+			// The content event collapses into the same call and its content is stored, the same bytes whichever provider shape carried it.
+			want := []payload.Record{{
+				RequestID: ev.RequestID, Timestamp: ev.Timestamp,
+				ProjectID: fx.project.Meta.ID, PrincipalID: fx.sa.Meta.ID, RelayKeyHash: fx.keyRow.Spec.KeyHash,
+				RequestBody:  []byte(`{"gen_ai.input.messages":[{"parts":[{"content":"Say hello.","type":"text"}],"role":"user"}]}`),
+				ResponseBody: []byte(`{"gen_ai.output.messages":[{"finish_reason":"stop","parts":[{"content":"Hello.","type":"text"}],"role":"assistant"}]}`),
+			}}
+			if diff := cmp.Diff(want, fx.payloads.records); diff != "" {
+				t.Errorf("payload records (-want +got):\n%s", diff)
 			}
 		})
 	}
