@@ -47,7 +47,6 @@ func TestUnmarshalResponse(t *testing.T) {
 }
 
 func TestUnmarshalResponse_KeepsEveryMarshalledField(t *testing.T) {
-	t.Skip("bug: UnmarshalResponse(Marshal(resp)) drops service_tier and relay_usage (ParseResponse keeps both)")
 	got, err := UnmarshalResponse([]byte(fullResponseWire))
 	if err != nil {
 		t.Fatal(err)
