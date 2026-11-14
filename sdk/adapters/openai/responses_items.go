@@ -139,7 +139,13 @@ func (f *ResponsesFunctionCallOutput) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	f.CallID = raw.CallID
-	if len(raw.Output) > 0 {
+	if len(raw.Output) > 0 && raw.Output[0] == '[' {
+		parts, err := responsesUnmarshalContent(raw.Output)
+		if err != nil {
+			return fmt.Errorf("function_call_output.output: %w", err)
+		}
+		f.Content = parts
+	} else if len(raw.Output) > 0 {
 		if err := json.Unmarshal(raw.Output, &f.Output); err != nil {
 			return fmt.Errorf("function_call_output.output: %w", err)
 		}

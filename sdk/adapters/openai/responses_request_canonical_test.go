@@ -257,7 +257,6 @@ func TestResponsesParseRequest_TopK(t *testing.T) {
 
 // The Responses API types function_call_output.output as a string or an array of input_text/input_image/input_file parts; there is no content member.
 func TestResponsesParseRequest_FunctionCallOutputArray(t *testing.T) {
-	t.Skip(`bug: ParseRequest function_call_output {"output":[{"type":"input_image",…}]} → error "cannot unmarshal array into Go value of type string"`)
 	req := respParseRequest(t, `{"model":"m","input":[{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`)
 	respJSONEq(t, req.Input, `[{"type":"function_call_output","call_id":"c","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`)
 }
