@@ -10,15 +10,11 @@ import (
 func TestApply_HostDeleteKeepsModelIndicesCoherent(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 
 	m := models[0]
 
-	if err := c.ApplyHostDelete(hosts[0].Meta.ID); err != nil {
-		t.Fatalf("ApplyHostDelete: %v", err)
-	}
+	must(t, c.ApplyHostDelete(hosts[0].Meta.ID))
 
 	s := c.Current()
 	byID, ok := s.Model(m.Meta.ID)

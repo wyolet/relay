@@ -61,9 +61,7 @@ func (f disabledPolicyFixture) catalog(t *testing.T) *Catalog {
 		rkList{f.key}, rcList{}, bndList{})
 	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{},
 		roleList{}, rbList{}, pbList{f.binding})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	return c
 }
 
@@ -99,9 +97,7 @@ func TestDisablePolicyViaReconcileKeepsDependentRows(t *testing.T) {
 	off := false
 	turnedOff := *f.pol
 	turnedOff.Spec.Enabled = &off
-	if err := c.ApplyPolicyUpsert(&turnedOff); err != nil {
-		t.Fatalf("disable policy: %v", err)
-	}
+	must(t, c.ApplyPolicyUpsert(&turnedOff))
 	s := c.Current()
 	if _, ok := s.Policy(f.pol.Meta.ID); ok {
 		t.Error("a disabled policy is still in the routing index")
@@ -117,9 +113,7 @@ func TestDisablePolicyViaReconcileKeepsDependentRows(t *testing.T) {
 	}
 
 	// Re-enabling puts it back in the routing index.
-	if err := c.ApplyPolicyUpsert(f.pol); err != nil {
-		t.Fatalf("re-enable policy: %v", err)
-	}
+	must(t, c.ApplyPolicyUpsert(f.pol))
 	if _, ok := c.Current().Policy(f.pol.Meta.ID); !ok {
 		t.Error("re-enabling did not restore the policy")
 	}
@@ -139,9 +133,7 @@ func TestReEnablingADisabledPolicyDoesNotFullReload(t *testing.T) {
 	on := true
 	turnedOn := *f.pol
 	turnedOn.Spec.Enabled = &on
-	if err := c.ApplyPolicyUpsert(&turnedOn); err != nil {
-		t.Fatalf("re-enable policy: %v", err)
-	}
+	must(t, c.ApplyPolicyUpsert(&turnedOn))
 	if _, ok := c.Current().Policy(f.pol.Meta.ID); !ok {
 		t.Fatal("re-enabling did not restore the policy")
 	}
@@ -161,9 +153,7 @@ func TestDeletingTheProjectEvictsItsDisabledPolicy(t *testing.T) {
 	if _, ok := c.Current().DisabledPolicy(f.pol.Meta.ID); !ok {
 		t.Fatal("the disabled policy is missing before the project delete")
 	}
-	if err := c.ApplyProjectDelete(f.project.Meta.ID); err != nil {
-		t.Fatalf("delete project: %v", err)
-	}
+	must(t, c.ApplyProjectDelete(f.project.Meta.ID))
 	s := c.Current()
 	if _, ok := s.DisabledPolicy(f.pol.Meta.ID); ok {
 		t.Error("the disabled policy outlived its project")

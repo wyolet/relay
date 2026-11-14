@@ -10,7 +10,9 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,33 +107,11 @@ func (c *tenancyChain) catalog(t *testing.T) *Catalog {
 		mutableRows[rolebinding.RoleBinding]{&[]*rolebinding.RoleBinding{}},
 		mutableRows[policybinding.PolicyBinding]{&[]*policybinding.PolicyBinding{}},
 	)
-	if err := cat.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, cat.Reload(context.Background()))
 	return cat
 }
 
-func flip(p *bool) *bool {
-	cur := true
-	if p != nil {
-		cur = *p
-	}
-	next := !cur
-	return &next
-}
-
-func on() *bool { v := true; return &v }
-
 func enabledFlag(p *bool) bool { return p == nil || *p }
-
-// mustApply panics on a reconcile error. Every row this property writes is a
-// valid one, so a rejected write is a broken fixture — and a swallowed one
-// would look like a snapshot that lost a row.
-func mustApply(err error) {
-	if err != nil {
-		panic("catalog: property event rejected: " + err.Error())
-	}
-}
 
 // TestProperty_CredentialChainSurvivesTenancyChurn applies a random sequence
 // of tenancy, policy and key events and checks after each one that the
@@ -149,79 +129,38 @@ func runTenancyProperty(t *testing.T, seed int64, events int) {
 	c := newTenancyChain()
 	cat := c.catalog(t)
 
-	all := propertyActions(c, cat)
+	all := propertyActions(t, c, cat)
 
 	for i := 0; i < events; i++ {
 		all[r.Intn(len(all))]()
-		assertSnapshotInvariants(t, cat.Current(), i)
+		assertRefsSymmetric(t, cat.Current(), fmt.Sprint("step ", i))
 		assertChainConsistency(t, cat.Current(), c, i)
 		if t.Failed() {
 			return
 		}
 	}
-	assertSameMembership(t, cat.Current(), c.catalog(t).Current(), c)
+	assertSameMembership(t, cat.Current(), c.catalog(t).Current())
 }
 
-// propertyActions are the events the property draws from. Each mutates the
-// row slices the same way a control-plane write would mutate Postgres, then
-// applies the matching incremental update.
-func propertyActions(c *tenancyChain, cat *Catalog) []func() {
-	return []func(){
-		// A toggle is an upsert, so it also puts the row back in the store —
-		// exactly what a control-plane PUT of a previously deleted row does.
-		func() {
-			c.team.Spec.Enabled = flip(c.team.Spec.Enabled)
-			c.teams = []*team.Team{c.team}
-			cp := *c.team
-			mustApply(cat.ApplyTeamUpsert(&cp))
-		},
-		func() {
-			c.project.Spec.Enabled = flip(c.project.Spec.Enabled)
-			c.projects = []*project.Project{c.project}
-			cp := *c.project
-			mustApply(cat.ApplyProjectUpsert(&cp))
-		},
-		func() {
-			c.policy.Spec.Enabled = flip(c.policy.Spec.Enabled)
-			c.policies = []*policy.Policy{c.policy}
-			cp := *c.policy
-			mustApply(cat.ApplyPolicyUpsert(&cp))
-		},
-		func() {
-			c.key.Spec.Enabled = flip(c.key.Spec.Enabled)
-			c.keys = []*key.Key{c.key}
-			cp := *c.key
-			mustApply(cat.ApplyKeyUpsert(&cp))
-		},
-		func() { c.teams = nil; mustApply(cat.ApplyTeamDelete(c.team.Meta.ID)) },
-		func() { c.projects = nil; mustApply(cat.ApplyProjectDelete(c.project.Meta.ID)) },
-		func() { c.policies = nil; mustApply(cat.ApplyPolicyDelete(c.policy.Meta.ID)) },
-		func() { c.keys = nil; mustApply(cat.ApplyKeyDelete(c.key.Meta.ID)) },
-		func() {
-			c.team.Spec.Enabled = on()
-			c.teams = []*team.Team{c.team}
-			cp := *c.team
-			mustApply(cat.ApplyTeamUpsert(&cp))
-		},
-		func() {
-			c.project.Spec.Enabled = on()
-			c.projects = []*project.Project{c.project}
-			cp := *c.project
-			mustApply(cat.ApplyProjectUpsert(&cp))
-		},
-		func() {
-			c.policy.Spec.Enabled = on()
-			c.policies = []*policy.Policy{c.policy}
-			cp := *c.policy
-			mustApply(cat.ApplyPolicyUpsert(&cp))
-		},
-		func() {
-			c.key.Spec.Enabled = on()
-			c.keys = []*key.Key{c.key}
-			cp := *c.key
-			mustApply(cat.ApplyKeyUpsert(&cp))
-		},
+// propertyActions are the events the property draws from. Each mutates the row slices the way a control-plane write would mutate Postgres, then applies the matching incremental update, which must be accepted: every row written is valid. A toggle or a revive is an upsert, so it also puts a deleted row back in the store.
+func propertyActions(t *testing.T, c *tenancyChain, cat *Catalog) []func() {
+	on := true
+	var out []func()
+	add := func(enabled **bool, restore func(), upsert func() error, remove func(), del func(string) error, id string) {
+		out = append(out,
+			func() { *enabled = flip(*enabled); restore(); must(t, upsert()) },
+			func() { *enabled = &on; restore(); must(t, upsert()) },
+			func() { remove(); must(t, del(id)) })
 	}
+	add(&c.team.Spec.Enabled, func() { c.teams = []*team.Team{c.team} },
+		func() error { cp := *c.team; return cat.ApplyTeamUpsert(&cp) }, func() { c.teams = nil }, cat.ApplyTeamDelete, c.team.Meta.ID)
+	add(&c.project.Spec.Enabled, func() { c.projects = []*project.Project{c.project} },
+		func() error { cp := *c.project; return cat.ApplyProjectUpsert(&cp) }, func() { c.projects = nil }, cat.ApplyProjectDelete, c.project.Meta.ID)
+	add(&c.policy.Spec.Enabled, func() { c.policies = []*policy.Policy{c.policy} },
+		func() error { cp := *c.policy; return cat.ApplyPolicyUpsert(&cp) }, func() { c.policies = nil }, cat.ApplyPolicyDelete, c.policy.Meta.ID)
+	add(&c.key.Spec.Enabled, func() { c.keys = []*key.Key{c.key} },
+		func() error { cp := *c.key; return cat.ApplyKeyUpsert(&cp) }, func() { c.keys = nil }, cat.ApplyKeyDelete, c.key.Meta.ID)
+	return out
 }
 
 // assertChainConsistency checks the rule the chain exists to express: a
@@ -264,33 +203,40 @@ func assertChainConsistency(t *testing.T, s *Snapshot, c *tenancyChain, step int
 	}
 }
 
-// assertSameMembership is the build == reconcile fixpoint over the rows this
-// property touches.
-func assertSameMembership(t *testing.T, reconciled, built *Snapshot, c *tenancyChain) {
+// assertSameMembership is the build == reconcile fixpoint: both snapshots hold the same rows of every kind.
+func assertSameMembership(t *testing.T, reconciled, built *Snapshot) {
 	t.Helper()
-	_, rTeam := reconciled.Team(c.team.Meta.ID)
-	_, bTeam := built.Team(c.team.Meta.ID)
-	if rTeam != bTeam {
-		t.Errorf("team: reconcile %v, build %v", rTeam, bTeam)
+	if got, want := membership(reconciled), membership(built); !slices.Equal(got, want) {
+		t.Errorf("reconciled snapshot holds\n%v\na build from the same rows holds\n%v", got, want)
 	}
-	_, rProj := reconciled.Project(c.project.Meta.ID)
-	_, bProj := built.Project(c.project.Meta.ID)
-	if rProj != bProj {
-		t.Errorf("project: reconcile %v, build %v", rProj, bProj)
+}
+
+// membership lists the rows a snapshot holds as sorted "kind/id" entries.
+func membership(s *Snapshot) []string {
+	var out []string
+	add := func(kind string, ids ...string) {
+		for _, id := range ids {
+			out = append(out, kind+"/"+id)
+		}
 	}
-	_, rPol := reconciled.Policy(c.policy.Meta.ID)
-	_, bPol := built.Policy(c.policy.Meta.ID)
-	if rPol != bPol {
-		t.Errorf("policy: reconcile %v, build %v", rPol, bPol)
-	}
-	_, rDis := reconciled.DisabledPolicy(c.policy.Meta.ID)
-	_, bDis := built.DisabledPolicy(c.policy.Meta.ID)
-	if rDis != bDis {
-		t.Errorf("disabled policy: reconcile %v, build %v", rDis, bDis)
-	}
-	rKey, _ := reconciled.KeyByHash(c.key.Spec.KeyHash)
-	bKey, _ := built.KeyByHash(c.key.Spec.KeyHash)
-	if (rKey != nil) != (bKey != nil) {
-		t.Errorf("key: reconcile %v, build %v", rKey != nil, bKey != nil)
-	}
+	add("provider", slices.Collect(maps.Keys(s.providersByID))...)
+	add("host", slices.Collect(maps.Keys(s.hostsByID))...)
+	add("model", slices.Collect(maps.Keys(s.modelsByID))...)
+	add("hostkey", slices.Collect(maps.Keys(s.hostKeysByID))...)
+	add("ratelimit", slices.Collect(maps.Keys(s.rateLimitsByID))...)
+	add("policy", slices.Collect(maps.Keys(s.policiesByID))...)
+	add("disabled-policy", slices.Collect(maps.Keys(s.disabledPoliciesByID))...)
+	add("pricing", slices.Collect(maps.Keys(s.pricingsByID))...)
+	add("binding", slices.Collect(maps.Keys(s.bindingsByID))...)
+	add("key", slices.Collect(maps.Keys(s.keysByID))...)
+	add("key-hash", slices.Collect(maps.Keys(s.keysByHash))...)
+	add("team", slices.Collect(maps.Keys(s.teamsByID))...)
+	add("project", slices.Collect(maps.Keys(s.projectsByID))...)
+	add("serviceaccount", slices.Collect(maps.Keys(s.serviceAccountsByID))...)
+	add("group", slices.Collect(maps.Keys(s.groupsByID))...)
+	add("role", slices.Collect(maps.Keys(s.rolesByID))...)
+	add("rolebinding", slices.Collect(maps.Keys(s.roleBindingsByID))...)
+	add("policybinding", slices.Collect(maps.Keys(s.policyBindingsByID))...)
+	slices.Sort(out)
+	return out
 }

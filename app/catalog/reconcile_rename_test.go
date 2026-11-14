@@ -15,9 +15,7 @@ import (
 func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 
 	snapName := "gpt-4o-2025-01-01"
 	if _, _, _, ok := c.Current().ResolveSnapshot(slug.From("openai/" + snapName)); !ok {
@@ -28,9 +26,7 @@ func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
 		Meta: meta.Metadata{ID: provs[0].Meta.ID, Name: "openai-renamed", Owner: provs[0].Meta.Owner},
 		Spec: provs[0].Spec,
 	}
-	if err := c.ApplyProviderUpsert(renamed); err != nil {
-		t.Fatalf("ApplyProviderUpsert: %v", err)
-	}
+	must(t, c.ApplyProviderUpsert(renamed))
 
 	s := c.Current()
 	if _, ok := s.ProviderByName("openai-renamed"); !ok {
@@ -49,9 +45,7 @@ func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
 func TestApply_HostRenameReindexesSnapshotAliases(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 
 	snapName := "gpt-4o-2025-01-01"
 	if _, _, _, ok := c.Current().ResolveSnapshot(slug.From(snapName + "@openai-direct")); !ok {
@@ -62,9 +56,7 @@ func TestApply_HostRenameReindexesSnapshotAliases(t *testing.T) {
 		Meta: meta.Metadata{ID: hosts[0].Meta.ID, Name: "openai-direct-renamed", Owner: hosts[0].Meta.Owner},
 		Spec: hosts[0].Spec,
 	}
-	if err := c.ApplyHostUpsert(renamed); err != nil {
-		t.Fatalf("ApplyHostUpsert: %v", err)
-	}
+	must(t, c.ApplyHostUpsert(renamed))
 
 	s := c.Current()
 	if _, ok := s.HostByName("openai-direct-renamed"); !ok {

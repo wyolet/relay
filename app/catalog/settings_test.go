@@ -43,9 +43,7 @@ func TestSettingsHolder_NotifiesOnUpsertAndDelete(t *testing.T) {
 
 	// Upsert: callback runs, and the new value is visible inside it.
 	h.rows()[settings.SectionParsing] = &settings.Row{Section: settings.SectionParsing, Value: &settings.Parsing{RichParsing: false}}
-	if err := h.applyUpsert(context.Background(), settings.SectionParsing); err != nil {
-		t.Fatalf("applyUpsert: %v", err)
-	}
+	must(t, h.applyUpsert(context.Background(), settings.SectionParsing))
 	if fired != 1 {
 		t.Fatalf("upsert fired %d, want 1", fired)
 	}
@@ -77,9 +75,7 @@ func TestSettingsHolder_ReloadNotifiesSubscribers(t *testing.T) {
 
 	// reload is the boot path: subscribers registered beforehand get the
 	// stored value via notifyAll.
-	if err := h.reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, h.reload(context.Background()))
 	if fired != 1 {
 		t.Fatalf("reload fired %d, want 1", fired)
 	}

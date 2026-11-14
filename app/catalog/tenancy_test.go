@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
@@ -75,18 +76,12 @@ func (f tenancyFixture) catalog(t *testing.T) *Catalog {
 	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
 	c.UseTenancy(teamList{f.team, f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{},
 		roleList{}, rbList{}, pbList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	return c
 }
 
 func projectNames(ps []*project.Project) []string {
-	out := make([]string, 0, len(ps))
-	for _, p := range ps {
-		out = append(out, p.Meta.Name)
-	}
-	return out
+	return namesOf(ps, func(p *project.Project) string { return p.Meta.Name })
 }
 
 // Rule 3: a project whose team is absent (or disabled) is dropped, and
@@ -156,77 +151,28 @@ func TestScopeChain(t *testing.T) {
 	}
 }
 
-// Rule 5: deleting (or disabling) a team evicts its projects and every
-// project-owned row; moving a project re-indexes projectsByTeam.
-func TestApplyTeamDelete_EvictsSubtree(t *testing.T) {
-	f := newTenancyFixture()
-	c := f.catalog(t)
-
-	if err := c.ApplyTeamDelete(f.team.Meta.ID); err != nil {
-		t.Fatalf("ApplyTeamDelete: %v", err)
-	}
-	s := c.Current()
-	if _, ok := s.Team(f.team.Meta.ID); ok {
-		t.Error("team still present")
-	}
-	for _, p := range []*project.Project{f.zeta, f.alpha} {
-		if _, ok := s.Project(p.Meta.ID); ok {
-			t.Errorf("project %q survived its team", p.Meta.Name)
-		}
-	}
-	if _, ok := s.Policy(f.pol.Meta.ID); ok {
-		t.Error("project-owned policy survived its team")
-	}
-	if _, ok := s.RateLimit(f.rl.Meta.ID); ok {
-		t.Error("project-owned rate limit survived its team")
-	}
-}
-
-// Invariant: the reconcile fixpoint after a delete equals a fresh build of
-// the same inputs.
-func TestApplyTeamDelete_MatchesBuild(t *testing.T) {
-	f := newTenancyFixture()
-	c := f.catalog(t)
-	if err := c.ApplyTeamDelete(f.team.Meta.ID); err != nil {
-		t.Fatalf("ApplyTeamDelete: %v", err)
-	}
-	reconciled := c.Current()
-
-	fresh := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
-	fresh.UseTenancy(teamList{f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{},
-		roleList{}, rbList{}, pbList{})
-	if err := fresh.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	built := fresh.Current()
-
-	if len(reconciled.AllProjects()) != len(built.AllProjects()) {
-		t.Errorf("projects: reconcile %v, build %v", projectNames(reconciled.AllProjects()), projectNames(built.AllProjects()))
-	}
-	if len(reconciled.AllPolicies()) != len(built.AllPolicies()) {
-		t.Errorf("policies: reconcile %d, build %d", len(reconciled.AllPolicies()), len(built.AllPolicies()))
-	}
-	if len(reconciled.AllRateLimits()) != len(built.AllRateLimits()) {
-		t.Errorf("rate limits: reconcile %d, build %d", len(reconciled.AllRateLimits()), len(built.AllRateLimits()))
-	}
-}
-
-func TestApplyTeamUpsert_DisabledIsDelete(t *testing.T) {
-	f := newTenancyFixture()
-	c := f.catalog(t)
-
-	disabled := false
-	off := *f.team
-	off.Spec.Enabled = &disabled
-	if err := c.ApplyTeamUpsert(&off); err != nil {
-		t.Fatalf("ApplyTeamUpsert: %v", err)
-	}
-	s := c.Current()
-	if _, ok := s.Team(f.team.Meta.ID); ok {
-		t.Error("disabled team still present")
-	}
-	if _, ok := s.Project(f.zeta.Meta.ID); ok {
-		t.Error("project of a disabled team still present")
+// Rule 5: deleting or disabling a team evicts its projects and every project-owned row, leaving exactly what a fresh build without the team holds.
+func TestApplyTeamDeleteOrDisable_EvictsSubtreeAsABuildWould(t *testing.T) {
+	for name, remove := range map[string]func(*Catalog, *team.Team) error{
+		"delete": func(c *Catalog, tm *team.Team) error { return c.ApplyTeamDelete(tm.Meta.ID) },
+		"disabled upsert": func(c *Catalog, tm *team.Team) error {
+			off, cp := false, *tm
+			cp.Spec.Enabled = &off
+			return c.ApplyTeamUpsert(&cp)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newTenancyFixture()
+			c := f.catalog(t)
+			must(t, remove(c, f.team))
+			if got, want := membership(c.Current()), []string{"team/" + f.other.Meta.ID}; !slices.Equal(got, want) {
+				t.Errorf("snapshot holds %v, want only the other team %v", got, want)
+			}
+			fresh := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
+			fresh.UseTenancy(teamList{f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{}, roleList{}, rbList{}, pbList{})
+			must(t, fresh.Reload(context.Background()))
+			assertSameMembership(t, c.Current(), fresh.Current())
+		})
 	}
 }
 
@@ -237,9 +183,7 @@ func TestApplyProjectUpsert_MovesTeam(t *testing.T) {
 	moved := *f.zeta
 	moved.Spec.TeamID = f.other.Meta.ID
 	moved.StampOwner()
-	if err := c.ApplyProjectUpsert(&moved); err != nil {
-		t.Fatalf("ApplyProjectUpsert: %v", err)
-	}
+	must(t, c.ApplyProjectUpsert(&moved))
 	s := c.Current()
 	if got := projectNames(s.ProjectsInTeam(f.team.Meta.ID)); !reflect.DeepEqual(got, []string{"alpha"}) {
 		t.Errorf("old team projects = %v, want [alpha]", got)
@@ -261,16 +205,12 @@ func TestApplyEvent_Tenancy(t *testing.T) {
 	renamed := *f.team
 	renamed.Meta.DisplayName = "Platform Engineering"
 	l.stores.team = teamGetter{&renamed}
-	if err := l.applyEvent(context.Background(), drainedEvent{Kind: "team", ID: f.team.Meta.ID, Op: "upsert"}); err != nil {
-		t.Fatalf("applyEvent team upsert: %v", err)
-	}
+	must(t, l.applyEvent(context.Background(), drainedEvent{Kind: "team", ID: f.team.Meta.ID, Op: "upsert"}))
 	if got, _ := c.Current().Team(f.team.Meta.ID); got.Meta.DisplayName != "Platform Engineering" {
 		t.Errorf("team upsert did not reach ApplyTeamUpsert")
 	}
 
-	if err := l.applyEvent(context.Background(), drainedEvent{Kind: "project", ID: f.zeta.Meta.ID, Op: "delete"}); err != nil {
-		t.Fatalf("applyEvent project delete: %v", err)
-	}
+	must(t, l.applyEvent(context.Background(), drainedEvent{Kind: "project", ID: f.zeta.Meta.ID, Op: "delete"}))
 	if _, ok := c.Current().Project(f.zeta.Meta.ID); ok {
 		t.Error("project delete did not reach ApplyProjectDelete")
 	}

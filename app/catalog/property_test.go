@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -15,254 +16,84 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// TestProperty_InvariantsHoldUnderRandomEvents fuzzes the reconciler. It
-// starts from the standard fixture and applies a deterministic random
-// sequence of Apply* calls. After every event the snapshot must satisfy:
-//
-//  1. Every outbound ref of every present row resolves to a present row.
-//  2. Every dependent entry in every refsBy* map points at a present row.
-//  3. No duplicate Pricing claim on any (model, host) pair.
-//  4. No alias collision in modelsByName beyond what aliases legitimately allow.
-//  5. modelsByPolicy / hostKeysByPolicy / rateLimitByPolicy only reference
-//     rows that are themselves present.
-//  6. pricingByModelHost values are present in pricingsByID.
-//
-// The reconciler's correctness invariant is "no stale state". This test
-// hammers it from random angles to surface any reconcile path that
-// forgets to clean up.
+func flip(p *bool) *bool {
+	next := p != nil && !*p
+	return &next
+}
+
+// toggled flips row's enabled flag in place, as its store row would change, and applies a copy.
+func toggled[T any](row *T, enabled func(*T) **bool, apply func(*T) error) func() error {
+	return func() error {
+		e := enabled(row)
+		*e = flip(*e)
+		cp := *row
+		return apply(&cp)
+	}
+}
+
+// revived applies a copy of row with its enabled flag on.
+func revived[T any](row *T, enabled func(*T) **bool, apply func(*T) error) func() error {
+	return func() error {
+		on := true
+		*enabled(row) = &on
+		cp := *row
+		return apply(&cp)
+	}
+}
+
+// The reconciler leaves no stale state: after every one of a random sequence of writes over the fixture, each of which must be accepted, the ref graph is symmetric and no pricing slot is claimed twice.
 func TestProperty_InvariantsHoldUnderRandomEvents(t *testing.T) {
 	for _, seed := range []int64{1, 42, 1337, 9999} {
-		t.Run("seed", func(t *testing.T) { runProperty(t, seed, 500) })
+		t.Run(fmt.Sprint("seed ", seed), func(t *testing.T) { runProperty(t, seed, 500) })
 	}
 }
 
 func runProperty(t *testing.T, seed int64, events int) {
 	r := rand.New(rand.NewSource(seed))
-
-	// Boot a Catalog from the fixture so the initial snapshot is non-empty
-	// and validating.
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	pr0 := &pricing.Pricing{
-		Meta: meta.Metadata{
-			ID: meta.NewID(), Name: "p0",
-			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hosts[0].Meta.ID},
-		},
-		Spec: pricing.Spec{
-			Currency:       "USD",
-			TargetModelIDs: []string{models[0].Meta.ID},
-			Rates: []pricing.Rate{
-				{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 1},
-			},
-		},
-	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr0}, bnds)
-	if err := c.Reload(t.Context()); err != nil {
-		t.Fatalf("initial reload: %v", err)
-	}
+	pr0 := pricingFor("p0", hosts[0].Meta.ID, models[0].Meta.ID)
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr0}, bnds)
+	must(t, c.Reload(t.Context()))
 
-	orphanPolID, orphanProjID, orphanKeyID := meta.NewID(), meta.NewID(), meta.NewID()
+	// A policy owned by a project the snapshot does not hold is dropped: build and reconcile must reach the same fixpoint.
+	orphanPol := *pols[0]
+	orphanPol.Meta = meta.Metadata{ID: meta.NewID(), Name: "orphan-project-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}}
+	extraKey := *rks[0]
+	extraKey.Meta.ID, extraKey.Meta.Name, extraKey.Spec.KeyHash = meta.NewID(), "second-key", hex64("b")
 
-	// Operate on the same set of ids the fixture established. The reconciler
-	// is exercised via toggle-disable, toggle-enable, delete, and re-upsert.
-	all := []func(){
-		// Toggle provider 0 enabled state by upserting a flipped copy.
-		func() {
-			cp := *provs[0]
-			cp.Spec.Enabled = togglePtr(provs[0].Spec.Enabled)
-			provs[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyProviderUpsert(&cp)
-		},
-		func() {
-			cp := *hosts[0]
-			cp.Spec.Enabled = togglePtr(hosts[0].Spec.Enabled)
-			hosts[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyHostUpsert(&cp)
-		},
-		func() {
-			cp := *models[0]
-			cp.Spec.Enabled = togglePtr(models[0].Spec.Enabled)
-			models[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyModelUpsert(&cp)
-		},
-		func() {
-			cp := *models[1]
-			cp.Spec.Enabled = togglePtr(models[1].Spec.Enabled)
-			models[1].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyModelUpsert(&cp)
-		},
-		func() {
-			cp := *keys[0]
-			cp.Spec.Enabled = togglePtr(keys[0].Spec.Enabled)
-			keys[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyHostKeyUpsert(&cp)
-		},
-		func() {
-			cp := *rls[0]
-			cp.Spec.Enabled = togglePtr(rls[0].Spec.Enabled)
-			rls[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyRateLimitUpsert(&cp)
-		},
-		func() {
-			cp := *pols[0]
-			cp.Spec.Enabled = togglePtr(pols[0].Spec.Enabled)
-			pols[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyPolicyUpsert(&cp)
-		},
-		func() {
-			cp := *rks[0]
-			cp.Spec.Enabled = togglePtr(rks[0].Spec.Enabled)
-			rks[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyKeyUpsert(&cp)
-		},
-		func() {
-			cp := *pr0
-			cp.Spec.Enabled = togglePtr(pr0.Spec.Enabled)
-			pr0.Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyPricingUpsert(&cp)
-		},
-		// A policy owned by a project the snapshot does not hold is dropped
-		// (build and reconcile must reach the same fixpoint here).
-		func() {
-			cp := *pols[0]
-			cp.Meta.ID = orphanPolID
-			cp.Meta.Name = "orphan-project-policy"
-			cp.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: orphanProjID}
-			cp.Spec.Enabled = togglePtr(cp.Spec.Enabled)
-			_ = c.ApplyPolicyUpsert(&cp)
-		},
-		func() {
-			cp := *rks[0]
-			cp.Meta.ID = orphanKeyID
-			cp.Meta.Name = "key-on-orphan-policy"
-			cp.Spec.KeyHash = "orphan-hash"
-			_ = c.ApplyKeyUpsert(&cp)
-		},
-		// Hard deletes (the reconciler treats absent as no-op on second call).
-		func() { _ = c.ApplyModelDelete(models[0].Meta.ID) },
-		func() { _ = c.ApplyHostKeyDelete(keys[0].Meta.ID) },
-		func() { _ = c.ApplyPricingDelete(pr0.Meta.ID) },
-		// Re-upsert (revive). The fixture-row may have been deleted/disabled.
-		func() {
-			enable := true
-			cp := *models[0]
-			cp.Spec.Enabled = &enable
-			models[0].Spec.Enabled = &enable
-			_ = c.ApplyModelUpsert(&cp)
-		},
-		func() {
-			enable := true
-			cp := *keys[0]
-			cp.Spec.Enabled = &enable
-			keys[0].Spec.Enabled = &enable
-			_ = c.ApplyHostKeyUpsert(&cp)
-		},
-		func() {
-			enable := true
-			cp := *pr0
-			cp.Spec.Enabled = &enable
-			pr0.Spec.Enabled = &enable
-			_ = c.ApplyPricingUpsert(&cp)
-		},
+	all := []struct {
+		name string
+		run  func() error
+	}{
+		{"toggle provider", toggled(provs[0], func(p *provider.Provider) **bool { return &p.Spec.Enabled }, c.ApplyProviderUpsert)},
+		{"toggle host", toggled(hosts[0], func(h *host.Host) **bool { return &h.Spec.Enabled }, c.ApplyHostUpsert)},
+		{"toggle model 0", toggled(models[0], func(m *model.Model) **bool { return &m.Spec.Enabled }, c.ApplyModelUpsert)},
+		{"toggle model 1", toggled(models[1], func(m *model.Model) **bool { return &m.Spec.Enabled }, c.ApplyModelUpsert)},
+		{"toggle host key", toggled(keys[0], func(k *hostkey.HostKey) **bool { return &k.Spec.Enabled }, c.ApplyHostKeyUpsert)},
+		{"toggle rate limit", toggled(rls[0], func(r *ratelimit.RateLimit) **bool { return &r.Spec.Enabled }, c.ApplyRateLimitUpsert)},
+		{"toggle policy", toggled(pols[0], func(p *policy.Policy) **bool { return &p.Spec.Enabled }, c.ApplyPolicyUpsert)},
+		{"toggle key", toggled(rks[0], func(k *key.Key) **bool { return &k.Spec.Enabled }, c.ApplyKeyUpsert)},
+		{"toggle pricing", toggled(pr0, func(p *pricing.Pricing) **bool { return &p.Spec.Enabled }, c.ApplyPricingUpsert)},
+		{"toggle orphan policy", toggled(&orphanPol, func(p *policy.Policy) **bool { return &p.Spec.Enabled }, c.ApplyPolicyUpsert)},
+		{"upsert second key", func() error { cp := extraKey; return c.ApplyKeyUpsert(&cp) }},
+		{"delete model", func() error { return c.ApplyModelDelete(models[0].Meta.ID) }},
+		{"delete host key", func() error { return c.ApplyHostKeyDelete(keys[0].Meta.ID) }},
+		{"delete pricing", func() error { return c.ApplyPricingDelete(pr0.Meta.ID) }},
+		{"revive model", revived(models[0], func(m *model.Model) **bool { return &m.Spec.Enabled }, c.ApplyModelUpsert)},
+		{"revive host key", revived(keys[0], func(k *hostkey.HostKey) **bool { return &k.Spec.Enabled }, c.ApplyHostKeyUpsert)},
+		{"revive pricing", revived(pr0, func(p *pricing.Pricing) **bool { return &p.Spec.Enabled }, c.ApplyPricingUpsert)},
 	}
-
-	for i := 0; i < events; i++ {
-		all[r.Intn(len(all))]()
-		s := c.Current()
+	for i := range events {
+		ev := all[r.Intn(len(all))]
+		if err := ev.run(); err != nil {
+			t.Fatalf("step %d: %s: %v", i, ev.name, err)
+		}
+		assertRefsSymmetric(t, c.Current(), fmt.Sprintf("step %d (%s)", i, ev.name))
+		if _, ok := c.Current().Policy(orphanPol.Meta.ID); ok {
+			t.Fatalf("step %d: a policy of a project the snapshot does not hold was kept", i)
+		}
 		if t.Failed() {
 			return
 		}
-		assertSnapshotInvariants(t, s, i)
 	}
 }
-
-func togglePtr(p *bool) *bool {
-	cur := true
-	if p != nil {
-		cur = *p
-	}
-	next := !cur
-	return &next
-}
-
-func assertSnapshotInvariants(t *testing.T, s *Snapshot, step int) {
-	t.Helper()
-
-	// 1. Every outbound ref of every present row resolves.
-	check := func(child refKey, parents []refKey) {
-		for _, p := range parents {
-			if !s.rowExists(p) {
-				t.Errorf("step %d: %s/%s -> %s/%s: parent missing",
-					step, child.Kind, child.ID, p.Kind, p.ID)
-			}
-		}
-	}
-	for _, m := range s.modelsByID {
-		check(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
-	}
-	for _, k := range s.hostKeysByID {
-		check(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
-	}
-	for _, p := range s.policiesByID {
-		check(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	}
-	for _, p := range s.pricingsByID {
-		check(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
-	}
-	for _, k := range s.keysByID {
-		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
-	}
-
-	// 2. Every dependent in every refsBy* set points at a present row.
-	for name, m := range map[string]map[string]refSet{
-		"refsByProvider":  s.refsByProvider,
-		"refsByHost":      s.refsByHost,
-		"refsByModel":     s.refsByModel,
-		"refsByHostKey":   s.refsByHostKey,
-		"refsByRateLimit": s.refsByRateLimit,
-		"refsByPolicy":    s.refsByPolicy,
-	} {
-		for parentID, set := range m {
-			for child := range set {
-				if !s.rowExists(child) {
-					t.Errorf("step %d: %s[%s]: dangling dependent %s/%s",
-						step, name, parentID, child.Kind, child.ID)
-				}
-			}
-		}
-	}
-
-	// 3. No duplicate Pricing claim on (model, host).
-	seen := map[string]string{} // key → pricingID
-	for _, p := range s.pricingsByID {
-		hostID := p.Meta.Owner.ID
-		for _, mid := range p.Spec.TargetModelIDs {
-			if _, ok := s.modelsByID[mid]; !ok {
-				continue
-			}
-			key := mid + "|" + hostID
-			if other, exists := seen[key]; exists && other != p.Meta.ID {
-				t.Errorf("step %d: duplicate Pricing claim on (%s, %s): %s and %s",
-					step, mid, hostID, other, p.Meta.ID)
-			}
-			seen[key] = p.Meta.ID
-		}
-	}
-
-	// 5. pricingByModelHost values are present.
-	for key, p := range s.pricingByModelHost {
-		if _, ok := s.pricingsByID[p.Meta.ID]; !ok {
-			t.Errorf("step %d: pricingByModelHost[%s]: pricing %s not present", step, key, p.Meta.ID)
-		}
-	}
-}
-
-// Sanity: keep imports referenced.
-var (
-	_ = host.Spec{}
-	_ = hostkey.Spec{}
-	_ = model.Spec{}
-	_ = policy.Spec{}
-	_ = provider.Spec{}
-	_ = ratelimit.Spec{}
-	_ = key.Spec{}
-)

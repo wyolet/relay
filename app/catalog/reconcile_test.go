@@ -363,49 +363,7 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 		t.Fatalf("ApplyModelDelete: %v", err)
 	}
 
-	s := c.Current()
-
-	// Invariant 1: every outbound ref resolves.
-	check := func(child refKey, parents []refKey) {
-		for _, p := range parents {
-			if !s.rowExists(p) {
-				t.Errorf("invariant: %s/%s -> %s/%s: parent missing", child.Kind, child.ID, p.Kind, p.ID)
-			}
-		}
-	}
-	for _, mm := range s.modelsByID {
-		check(refKey{Kind: refModel, ID: mm.Meta.ID}, outboundModelRefs(mm))
-	}
-	for _, k := range s.hostKeysByID {
-		check(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
-	}
-	for _, p := range s.policiesByID {
-		check(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	}
-	for _, p := range s.pricingsByID {
-		check(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
-	}
-	for _, k := range s.keysByID {
-		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
-	}
-
-	// Invariant 2: every dependent in refsBy* exists.
-	checkMap := func(name string, mm map[string]refSet) {
-		for parentID, set := range mm {
-			for child := range set {
-				if !s.rowExists(child) {
-					t.Errorf("invariant: %s[%s]: dependent %s/%s not in snapshot",
-						name, parentID, child.Kind, child.ID)
-				}
-			}
-		}
-	}
-	checkMap("refsByProvider", s.refsByProvider)
-	checkMap("refsByHost", s.refsByHost)
-	checkMap("refsByModel", s.refsByModel)
-	checkMap("refsByHostKey", s.refsByHostKey)
-	checkMap("refsByRateLimit", s.refsByRateLimit)
-	checkMap("refsByPolicy", s.refsByPolicy)
+	assertRefsSymmetric(t, c.Current(), "after upserting and deleting the extra model")
 }
 
 // emptySnap returns a Snapshot with all maps initialized but empty.
