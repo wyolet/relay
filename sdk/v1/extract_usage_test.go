@@ -168,7 +168,6 @@ func TestExtractSummary_LargeFrameBeforeUsage(t *testing.T) {
 }
 
 func TestExtractSummary_StreamOpeningWithAComment(t *testing.T) {
-	t.Skip(`bug: a stream whose first line is an SSE comment (": keepalive") is not recognised as SSE, so its usage is lost (empty Summary)`)
 	got, err := ExtractSummary(IdentityTranslator{}, []byte(": keepalive\n\n"+completedFrame))
 	if diff := cmp.Diff(completedSummary, got); diff != "" || err != nil {
 		t.Errorf("err %v (-want +got):\n%s", err, diff)
@@ -188,7 +187,12 @@ func TestLooksLikeSSE(t *testing.T) {
 		"":                                   false,
 		"dat":                                false,
 		"Event: x":                           false,
-		strings.Repeat("x", 300) + "\ndata: late": false,
+		strings.Repeat("x", 300) + "\ndata: late":  false,
+		": keepalive\n\ndata: x":                   true,
+		": OPENROUTER PROCESSING\r\n: x\r\nevent:": true,
+		strings.Repeat(": k\n", 100) + "data: x":   true,
+		": keepalive\n\n{\"id\":\"r\"}":            false,
+		": no line end":                            false,
 	}
 	for body, want := range cases {
 		if got := looksLikeSSE([]byte(body)); got != want {
