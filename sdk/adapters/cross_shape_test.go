@@ -91,7 +91,6 @@ func TestCrossShapeRequest(t *testing.T) {
 }
 
 func TestCrossShapeRequest_NamelessSchemaGetsAName(t *testing.T) {
-	t.Skip(`bug: Messages output_config.format (which has no name) → chat response_format.json_schema.name "" and responses text.format.name ""; OpenAI requires a non-empty name`)
 	req, err := shapeByName("anthropic").tr.ParseRequest([]byte(`{"model":"m","max_tokens":1024,` + messagesHiTurns + `,` + messagesFormat + `}`))
 	if err != nil {
 		t.Fatal(err)
