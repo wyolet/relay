@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policybinding"
 	authtoken "github.com/wyolet/relay/auth/token"
@@ -50,79 +53,36 @@ func TestTokenPrincipal_Rejections(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name       string
-		token      func() string
-		wantStatus int
-		wantMsg    string
-		wantCode   string // checked when set
+		name   string
+		token  func() string
+		status int
+		want   httpapi.APIErrorBody
 	}{
-		{
-			name:       "another key's signature",
-			token:      func() string { return signedWith(t, f, otherPriv, "") },
-			wantStatus: http.StatusUnauthorized, wantMsg: "invalid token",
-		},
-		{
-			name:       "not issued by this relay",
-			token:      func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Iss = "someone-else" }) },
-			wantStatus: http.StatusUnauthorized, wantMsg: "invalid token",
-		},
-		{
-			name: "expired",
-			token: func() string {
-				return f.mint(t, func(c *crypto.TokenClaims) { c.Exp = time.Now().Add(-time.Minute).Unix() })
-			},
-			wantStatus: http.StatusUnauthorized, wantMsg: "token expired",
-		},
-		{
-			// Signing out everywhere (a token-version bump) answers the same
-			// code as a per-jti revocation, so a client has one thing to key on.
-			name:       "token version behind the user's",
-			token:      func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Ver = 0 }) },
-			wantStatus: http.StatusUnauthorized, wantMsg: "token revoked", wantCode: "token_revoked",
-		},
-		{
-			name:       "unknown user",
-			token:      func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Sub = "user:" + meta.NewID() }) },
-			wantStatus: http.StatusUnauthorized, wantMsg: "token revoked",
-		},
-		{
-			name:       "a project the user holds no account in",
-			token:      func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Prj = meta.NewID() }) },
-			wantStatus: http.StatusForbidden, wantCode: "account_not_held",
-		},
-		{
-			name:       "garbage bearer",
-			token:      func() string { return "eyJ.not.atoken" },
-			wantStatus: http.StatusUnauthorized, wantMsg: "invalid token",
-		},
+		{"another key's signature", func() string { return signedWith(t, f, otherPriv, "") }, 401, unauthenticated("invalid token")},
+		{"a kid naming no held key", func() string { return signedWith(t, f, f.signer, "deadbeefdeadbeef") }, 401, unauthenticated("invalid token")},
+		{"not issued by this relay", func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Iss = "someone-else" }) }, 401, unauthenticated("invalid token")},
+		{"garbage bearer", func() string { return "eyJ.not.atoken" }, 401, unauthenticated("invalid token")},
+		{"expired", func() string {
+			return f.mint(t, func(c *crypto.TokenClaims) { c.Exp = time.Now().Add(-time.Minute).Unix() })
+		}, 401, unauthenticated("token expired")},
+		// Signing out everywhere (a token-version bump) answers the same code as a per-jti revocation, so a client has one thing to key on.
+		{"token version behind the user's", func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Ver = 0 }) }, 401,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "token_revoked", Message: "token revoked"}},
+		{"unknown user", func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Sub = "user:" + meta.NewID() }) }, 401,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "token_revoked", Message: "token revoked"}},
+		{"a project the user holds no account in", func() string { return f.mint(t, func(c *crypto.TokenClaims) { c.Prj = "no-such-project" }) }, 403,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "account_not_held", Refusal: "model_not_allowed", Message: "account_not_held: user:" + f.user + " holds no account in project no-such-project"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := f.stack(t).do(tc.token())
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body)
-			}
-			if got := authCode(t, w.Body.Bytes()); tc.wantMsg != "" && got != tc.wantMsg {
-				t.Errorf("message = %q, want %q", got, tc.wantMsg)
-			}
-			if tc.wantCode != "" {
-				var body struct {
-					Error struct {
-						Code string `json:"code"`
-					} `json:"error"`
-				}
-				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-					t.Fatalf("decode: %v", err)
-				}
-				if body.Error.Code != tc.wantCode {
-					t.Errorf("code = %q, want %q", body.Error.Code, tc.wantCode)
-				}
+			if diff := cmp.Diff(tc.want, envelopeOf(t, w)); diff != "" || w.Code != tc.status {
+				t.Errorf("status %d, want %d; envelope (-want +got):\n%s", w.Code, tc.status, diff)
 			}
 		})
 	}
 }
 
-// TestTokenPrincipal_DisabledProject: a disabled project leaves the snapshot,
-// so its tokens stop resolving exactly like a deleted one's.
+// A disabled project refuses its tokens as a disabled subject, unlike a deleted one's, which hold no account.
 func TestTokenPrincipal_DisabledProject(t *testing.T) {
 	f := newPrincipalFixture()
 	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
@@ -130,8 +90,8 @@ func TestTokenPrincipal_DisabledProject(t *testing.T) {
 	f.project.Spec.Enabled = &disabled
 
 	w := f.stack(t).do(f.mint(t, nil))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body)
+	if w.Code != http.StatusForbidden || envelopeOf(t, w).Code != "subject_disabled" {
+		t.Fatalf("response = %d %s, want 403 subject_disabled", w.Code, w.Body)
 	}
 }
 
@@ -195,10 +155,9 @@ func TestTokenProxyMode_Forbidden(t *testing.T) {
 	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "bind-all", f.boundPol.Meta.ID, "group:system:authenticated")}
 	st := f.stack(t)
 
-	r := proxyRequest(f.mint(t, nil))
-	w := recordRequest(st, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body)
+	w := recordRequest(st, proxyRequest(f.mint(t, nil)))
+	if w.Code != http.StatusForbidden || envelopeOf(t, w).Code != "passthrough_forbidden" {
+		t.Fatalf("response = %d %s, want 403 passthrough_forbidden", w.Code, w.Body)
 	}
 }
 
@@ -359,8 +318,8 @@ func TestSigningKeyRotationKeepsThePreviousKeyLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.tokens.SetKey(thirdPub)
-	if w := st.do(old); w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 once the key is two rotations old", w.Code)
+	if w := st.do(old); w.Code != http.StatusUnauthorized || envelopeOf(t, w).Message != "invalid token" {
+		t.Fatalf("response = %d %s, want 401 invalid token once the key is two rotations old", w.Code, w.Body)
 	}
 }
 
@@ -405,20 +364,8 @@ func TestAccessTokenTypIsRefused(t *testing.T) {
 	if w := st.do(signed(authtoken.TypeJWT)); w.Code != http.StatusOK {
 		t.Fatalf("JWT header: status %d, want 200: %s", w.Code, w.Body)
 	}
-	w := st.do(signed(authtoken.TypeAccessToken))
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("at+jwt header: status %d, want 401: %s", w.Code, w.Body)
-	}
-	if got := authCode(t, w.Body.Bytes()); got != "invalid token" {
-		t.Errorf("message = %q, want invalid token", got)
-	}
-}
-
-func TestUnknownKidIsRefused(t *testing.T) {
-	f := newPrincipalFixture()
-	tok := signedWith(t, f, f.signer, "deadbeefdeadbeef")
-	if w := f.stack(t).do(tok); w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 for a kid naming no held key", w.Code)
+	if w := st.do(signed(authtoken.TypeAccessToken)); w.Code != http.StatusUnauthorized || envelopeOf(t, w).Message != "invalid token" {
+		t.Fatalf("at+jwt header: %d %s, want 401 invalid token", w.Code, w.Body)
 	}
 }
 

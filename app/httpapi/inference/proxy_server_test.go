@@ -339,7 +339,7 @@ func TestProxyEdge_StalledBodyIsCutOff(t *testing.T) {
 	}
 	start := time.Now()
 	res, msg := readStatus(t, br)
-	if res.StatusCode != http.StatusRequestTimeout || !strings.Contains(msg, "request_timeout") {
+	if res.StatusCode != http.StatusRequestTimeout || errCode(t, []byte(msg)) != "request_timeout" {
 		t.Fatalf("status %d %s, want 408 request_timeout", res.StatusCode, msg)
 	}
 	if waited := time.Since(start); waited > 5*time.Second {
@@ -364,7 +364,7 @@ func TestProxyEdge_OverTheBodyLimit(t *testing.T) {
 	conn, br := rawPost(t, e.addr, len(body))
 	go func() { _, _ = conn.Write(body) }()
 	res, msg := readStatus(t, br)
-	if res.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(msg, "request_too_large") {
+	if res.StatusCode != http.StatusRequestEntityTooLarge || errCode(t, []byte(msg)) != "request_too_large" {
 		t.Fatalf("status %d %s, want 413 request_too_large", res.StatusCode, msg)
 	}
 	if s := awaitPostFlight(t, e.seen); s.errorKind != "request_too_large" {
@@ -403,7 +403,7 @@ func TestProxyEdge_RefusedAfterAnEarlyAnswer(t *testing.T) {
 			next := proxyTestBody("test-model", 1<<10, false)
 			conn2, br2 := rawPost(t, e.addr, len(next))
 			_, _ = conn2.Write(next)
-			if res, msg := readStatus(t, br2); res.StatusCode != http.StatusTooManyRequests || !strings.Contains(msg, "rate_limit_exceeded") {
+			if res, msg := readStatus(t, br2); res.StatusCode != http.StatusTooManyRequests || errCode(t, []byte(msg)) != "rate_limit_exceeded" {
 				t.Fatalf("next request = %d %s, want 429 rate_limit_exceeded: the refused request's charge was refunded", res.StatusCode, msg)
 			}
 			assertNotRefunded(t, e.store)

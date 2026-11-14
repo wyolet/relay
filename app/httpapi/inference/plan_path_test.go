@@ -251,8 +251,5 @@ func TestDisabledUserKeyIsRefused(t *testing.T) {
 	k.Meta.ID, k.Meta.Name = "k-personal", "personal"
 	st := f.stack(t, k)
 	plantest.Apply(t, st.plans, &user.User{ID: f.user, Username: "u-" + f.user, TokenVersion: 1, Disabled: true})
-	w := st.do("sk-wr-personal")
-	if w.Code != http.StatusUnauthorized || authCode(t, w.Body.Bytes()) != "api key disabled" {
-		t.Fatalf("status %d %s, want 401 api key disabled", w.Code, w.Body)
-	}
+	wantUnauthenticated(t, st.do("sk-wr-personal"), "api key disabled")
 }

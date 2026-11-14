@@ -2,6 +2,7 @@ package inference
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -301,15 +302,16 @@ func TestLane_RecheckRunsInTheSwitchedLane(t *testing.T) {
 	if err != nil || p.Caller.Lane.Meta.ID != f.teamMember.Meta.ID || p.SwitchedLaneID != f.teamMember.Meta.ID {
 		t.Fatalf("key item lane = %v, %v", p, err)
 	}
-	if _, err := st.auth.Recheck(sha("sk-wr-alice"), "", "", "", 0, 0, f.otherPersonal.Meta.ID, now); err == nil {
-		t.Fatal("a key item ran in an account its principal does not hold")
+	var refused *plan.Refusal
+	if _, err := st.auth.Recheck(sha("sk-wr-alice"), "", "", "", 0, 0, f.otherPersonal.Meta.ID, now); !errors.As(err, &refused) || refused.Code != plan.CodeAccountNotHeld {
+		t.Fatalf("a key item in an account its principal does not hold: err = %v, want account_not_held", err)
 	}
 	p, err = st.auth.Recheck("", f.user, "", "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now)
 	if err != nil || p.Caller.Lane.Meta.ID != f.personalAcct.Meta.ID {
 		t.Fatalf("token item lane = %v, %v", p, err)
 	}
-	if _, err := st.auth.Recheck("", f.user, f.project.Meta.ID, "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now); err == nil {
-		t.Fatal("a project token's item ran outside its project")
+	if _, err := st.auth.Recheck("", f.user, f.project.Meta.ID, "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now); !errors.As(err, &refused) || refused.Code != plan.CodeAccountNotHeld {
+		t.Fatalf("a project token's item outside its project: err = %v, want account_not_held", err)
 	}
 }
 
