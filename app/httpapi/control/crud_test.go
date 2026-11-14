@@ -205,6 +205,17 @@ func decodeMeta(t *testing.T, w *httptest.ResponseRecorder, status int) meta.Met
 	return out.Metadata
 }
 
+// wantJSON checks the answer's status and decodes its body into out.
+func wantJSON(t *testing.T, w *httptest.ResponseRecorder, status int, out any) {
+	t.Helper()
+	if w.Code != status {
+		t.Fatalf("status = %d, want %d: %s", w.Code, status, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), out); err != nil {
+		t.Fatalf("decode %s: %v", w.Body, err)
+	}
+}
+
 func createdID(t *testing.T, w interface{ Bytes() []byte }) string {
 	t.Helper()
 	var out struct {

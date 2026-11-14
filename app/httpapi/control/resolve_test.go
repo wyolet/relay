@@ -1,113 +1,62 @@
 package control
 
 import (
+	"net/http"
 	"testing"
 
-	"github.com/wyolet/relay/app/catalog/catalogtest"
-	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/pkg/catalogkind/binding"
-	"github.com/wyolet/relay/pkg/catalogkind/host"
-	"github.com/wyolet/relay/pkg/catalogkind/model"
-	"github.com/wyolet/relay/pkg/catalogkind/provider"
-	"github.com/wyolet/relay/pkg/meta"
-	"github.com/wyolet/relay/pkg/modelref"
+	"github.com/google/go-cmp/cmp"
 )
 
-// enabledIndex mirrors a real snapshot (enabled providers/hosts/models only):
-//
-//	openai (P1) on host cloud (H1)
-//	  gpt-4o   (M1) → binding enabled
-//	  gpt-3-5  (M2) → binding DISABLED
-//	  legacy   (M3, DEPRECATED) → binding enabled
-func enabledIndex() *resolveIndex {
-	p1 := &provider.Provider{Meta: meta.Metadata{ID: "P1", Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	h1 := &host.Host{Meta: meta.Metadata{ID: "H1", Name: "cloud", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "http://x.example"}}
+func TestCatalogResolve(t *testing.T) {
+	r, api := testAPI(t, scopeActors)
+	registerResolve(api, Deps{Catalog: resolveCatalog().Load(t)}, nil)
+	gpt4oCloud, gpt4oEdge, legacyCloud := resolveBindingRef{ModelID: "M2", HostID: "H1"}, resolveBindingRef{ModelID: "M2", HostID: "H2"}, resolveBindingRef{ModelID: "M3", HostID: "H1"}
+	gpt4o := refResult{Ref: "openai/gpt-4o", Expanded: []string{"openai/gpt-4o@cloud", "openai/gpt-4o@edge"}, ModelIDs: []string{"M2"}, HostIDs: []string{"H1", "H2"}, Bindings: []resolveBindingRef{gpt4oCloud, gpt4oEdge}}
+	dead := func(ref string) refResult {
+		return refResult{Ref: ref, Expanded: []string{}, ModelIDs: []string{}, HostIDs: []string{}, Bindings: []resolveBindingRef{}}
+	}
+	provider := gpt4o
+	provider.Ref = "openai"
 
-	m1 := &model.Model{
-		Meta: meta.Metadata{ID: "M1", Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "gpt-4o"}}, Pointer: "gpt-4o"},
-	}
-	m2 := &model.Model{
-		Meta: meta.Metadata{ID: "M2", Name: "gpt-3-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "gpt-3-5"}}, Pointer: "gpt-3-5"},
-	}
-	m3 := &model.Model{
-		Meta: meta.Metadata{ID: "M3", Name: "legacy", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}},
-		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "legacy"}}, Pointer: "legacy"},
-	}
-	m3.Spec.DeprecationDate = "2025-01-01"
-
-	enabled := true
-	disabled := false
-	b1 := &binding.Binding{
-		Meta: meta.Metadata{ID: "B1", Name: "b1", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: "M1", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &enabled},
-	}
-	b2 := &binding.Binding{
-		Meta: meta.Metadata{ID: "B2", Name: "b2", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: "M2", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &disabled},
-	}
-	b3 := &binding.Binding{
-		Meta: meta.Metadata{ID: "B3", Name: "b3", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: binding.Spec{ModelID: "M3", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &enabled},
+	// Dead references are listed and add nothing; the union lists each model, host and binding once.
+	var want, got resolveOutput
+	want.Body.Refs = []string{"openai/legacy", "openai/gpt-4o", "acme/old", "openai"}
+	want.Body.Results = []refResult{dead("openai/legacy"), gpt4o, dead("acme/old"), provider}
+	want.Body.Unresolved = []string{"openai/legacy", "acme/old"}
+	want.Body.Models = []resolveEntity{{ID: "M2", Name: "gpt-4o", DisplayName: "GPT-4o"}}
+	want.Body.Hosts = []resolveEntity{{ID: "H1", Name: "cloud", DisplayName: "Cloud"}, {ID: "H2", Name: "edge"}}
+	want.Body.Bindings = []resolveBindingRef{gpt4oCloud, gpt4oEdge}
+	want.Body.Expanded = gpt4o.Expanded
+	wantJSON(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/resolve?ref=openai/legacy&ref=openai/gpt-4o&ref=acme/old&ref=openai", ""), http.StatusOK, &got.Body)
+	if diff := cmp.Diff(want.Body, got.Body); diff != "" {
+		t.Errorf("default (-want +got):\n%s", diff)
 	}
 
-	snap := catalogtest.Catalog{
-		Providers: []*provider.Provider{p1},
-		Hosts:     []*host.Host{h1},
-		Models:    []*model.Model{m1, m2, m3},
-		Bindings:  []*binding.Binding{b1, b2, b3},
-	}.Snapshot()
-
-	return &resolveIndex{
-		snap:             snap,
-		providersByID:    map[string]*provider.Provider{"P1": p1},
-		providersByName:  map[string]*provider.Provider{"openai": p1},
-		hostsByID:        map[string]*host.Host{"H1": h1},
-		allModels:        []*model.Model{m1, m2, m3},
-		modelsByID:       map[string]*model.Model{"M1": m1, "M2": m2, "M3": m3},
-		modelsByProvider: map[string][]*model.Model{"P1": {m1, m2, m3}},
+	// The union keeps the order the references reach a row in; expanded is sorted.
+	want.Body.Refs = []string{"openai/legacy", "openai"}
+	want.Body.Results = []refResult{
+		{Ref: "openai/legacy", Expanded: []string{"openai/legacy@cloud"}, ModelIDs: []string{"M3"}, HostIDs: []string{"H1"}, Bindings: []resolveBindingRef{legacyCloud}},
+		{Ref: "openai", Expanded: []string{"openai/gpt-4o@cloud", "openai/gpt-4o@edge", "openai/legacy@cloud"}, ModelIDs: []string{"M2", "M3"}, HostIDs: []string{"H1", "H2"}, Bindings: []resolveBindingRef{gpt4oCloud, gpt4oEdge, legacyCloud}},
+	}
+	want.Body.Unresolved = []string{}
+	want.Body.Models = []resolveEntity{{ID: "M3", Name: "legacy", Deprecated: "deprecated"}, {ID: "M2", Name: "gpt-4o", DisplayName: "GPT-4o"}}
+	want.Body.Bindings = []resolveBindingRef{legacyCloud, gpt4oCloud, gpt4oEdge}
+	want.Body.Expanded = []string{"openai/gpt-4o@cloud", "openai/gpt-4o@edge", "openai/legacy@cloud"}
+	got = resolveOutput{}
+	wantJSON(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/resolve?ref=openai/legacy&ref=openai&includeDeprecated=true", ""), http.StatusOK, &got.Body)
+	if diff := cmp.Diff(want.Body, got.Body); diff != "" {
+		t.Errorf("includeDeprecated (-want +got):\n%s", diff)
 	}
 }
 
-func expand(t *testing.T, idx *resolveIndex, raw string, includeDeprecated bool) refResult {
-	t.Helper()
-	return expandOne(idx, raw, modelref.MustParse(raw), includeDeprecated)
-}
+func TestCatalogResolveRefusals(t *testing.T) {
+	r, api := testAPI(t, scopeActors)
+	registerResolve(api, Deps{Catalog: resolveCatalog().Load(t)}, nil)
+	wantAPIError(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/resolve?ref=openai&ref=openai/", ""), http.StatusBadRequest, "", `modelref "openai/": trailing / requires a model`)
+	wantAPIError(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/resolve?ref=openai&ref=", ""), http.StatusBadRequest, "", "ref is required")
+	wantFieldError(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/resolve", ""), "query.ref", "required query parameter is missing")
 
-func TestExpandOne_Grouping(t *testing.T) {
-	idx := enabledIndex()
-	r := expand(t, idx, "openai/gpt-4o", false)
-	if len(r.Expanded) != 1 || r.Expanded[0] != "openai/gpt-4o@cloud" {
-		t.Fatalf("expanded = %v", r.Expanded)
-	}
-	if len(r.ModelIDs) != 1 || r.ModelIDs[0] != "M1" {
-		t.Fatalf("modelIds = %v", r.ModelIDs)
-	}
-	if len(r.HostIDs) != 1 || r.HostIDs[0] != "H1" {
-		t.Fatalf("hostIds = %v", r.HostIDs)
-	}
-}
-
-func TestExpandOne_DeadRef(t *testing.T) {
-	idx := enabledIndex()
-	// gpt-3-5's only binding is disabled → dead.
-	if r := expand(t, idx, "openai/gpt-3-5", false); len(r.Expanded) != 0 {
-		t.Fatalf("expected dead ref, got %v", r.Expanded)
-	}
-}
-
-func TestExpandOne_Deprecation(t *testing.T) {
-	idx := enabledIndex()
-	if r := expand(t, idx, "openai/legacy", false); len(r.Expanded) != 0 {
-		t.Fatalf("deprecated excluded by default, got %v", r.Expanded)
-	}
-	if r := expand(t, idx, "openai/legacy", true); len(r.Expanded) != 1 {
-		t.Fatalf("deprecated included with flag, got %v", r.Expanded)
-	}
-	// Provider wildcard, deprecated off: only gpt-4o (gpt-3-5 binding disabled,
-	// legacy deprecated).
-	if r := expand(t, idx, "openai", false); len(r.Expanded) != 1 || r.Expanded[0] != "openai/gpt-4o@cloud" {
-		t.Fatalf("provider expansion = %v", r.Expanded)
-	}
+	r, api = testAPI(t, scopeActors)
+	registerResolve(api, Deps{}, nil)
+	wantAPIError(t, scopeReq(t, r, "alice", http.MethodGet, "/catalog/resolve?ref=openai", ""), http.StatusInternalServerError, "internal_error", "catalog not ready")
 }
