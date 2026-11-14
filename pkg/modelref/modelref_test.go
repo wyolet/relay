@@ -111,7 +111,6 @@ func TestParseRejections(t *testing.T) {
 }
 
 func TestParseRejectsARepeatedSeparator(t *testing.T) {
-	t.Skip(`bug: Parse("anthropic@bedrock@vertex") → Ref{Provider: "anthropic-bedrock", Host: "vertex"}, no error; an extra @ is slugged into the provider, so the ref is accepted and names nothing`)
 	for _, in := range []string{"anthropic@bedrock@vertex", "@bedrock@vertex", "anthropic/claude@bedrock@vertex"} {
 		got, err := Parse(in)
 		var se *SyntaxError
