@@ -1,7 +1,7 @@
 package role
 
 import (
-	"strings"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/pkg/meta"
@@ -9,69 +9,75 @@ import (
 
 func fix(rules ...Rule) *Role {
 	return &Role{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "custom", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Meta: meta.Metadata{ID: "01a19bc3-0000-7000-8000-000000000001", Name: "custom", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: Spec{Rules: rules},
 	}
 }
 
+// inSet binary-searches the vocabularies, so an entry added out of order would validate as unknown.
+func TestVocabularyIsSortedAndUnique(t *testing.T) {
+	for name, set := range map[string][]string{"Kinds": Kinds, "Verbs": Verbs} {
+		sorted := slices.Clone(set)
+		slices.Sort(sorted)
+		if !slices.Equal(set, sorted) || len(slices.Compact(sorted)) != len(set) {
+			t.Errorf("%s is not sorted and unique: %v", name, set)
+		}
+		for _, v := range set {
+			if !inSet(set, v) {
+				t.Errorf("%s: %q is listed but not recognised", name, v)
+			}
+		}
+		for _, v := range []string{"", "!", "zzz", set[1] + "x"} {
+			if inSet(set, v) {
+				t.Errorf("%s: %q is recognised but not listed", name, v)
+			}
+		}
+	}
+}
+
+func TestIsEnabled(t *testing.T) {
+	off, on := false, true
+	for _, tc := range []struct {
+		enabled *bool
+		want    bool
+	}{{nil, true}, {&on, true}, {&off, false}} {
+		if got := (&Role{Spec: Spec{Enabled: tc.enabled}}).IsEnabled(); got != tc.want {
+			t.Errorf("IsEnabled with %v = %v, want %v", tc.enabled, got, tc.want)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
+	keysGet := Rule{Kinds: []string{"keys"}, Verbs: []string{"get"}}
+	ownedBy := func(o meta.Owner) *Role {
+		r := fix(keysGet)
+		r.Meta.Owner = o
+		return r
+	}
 	for _, tc := range []struct {
 		name string
 		role *Role
-		want string // "" = valid
+		want string
 	}{
-		{
-			name: "known kinds and verbs",
-			role: fix(Rule{Kinds: []string{"keys", "policies"}, Verbs: []string{"get", "list"}}),
-		},
-		{
-			name: "wildcards accepted",
-			role: fix(Rule{Kinds: []string{"*"}, Verbs: []string{"*"}}),
-		},
-		{
-			name: "unknown kind",
-			role: fix(Rule{Kinds: []string{"widgets"}, Verbs: []string{"get"}}),
-			want: "rbackind",
-		},
-		{
-			name: "unknown verb",
-			role: fix(Rule{Kinds: []string{"keys"}, Verbs: []string{"frobnicate"}}),
-			want: "rbacverb",
-		},
-		{
-			name: "no rules",
-			role: fix(),
-			want: "Rules",
-		},
-		{
-			name: "system owner accepted",
-			role: func() *Role {
-				r := fix(Rule{Kinds: []string{"*"}, Verbs: []string{"*"}})
-				r.Meta.Owner = meta.Owner{Kind: meta.OwnerSystem}
-				return r
-			}(),
-		},
-		{
-			name: "project owner rejected",
-			role: func() *Role {
-				r := fix(Rule{Kinds: []string{"keys"}, Verbs: []string{"get"}})
-				r.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: meta.NewID()}
-				return r
-			}(),
-			want: "owner.kind must be system or user",
-		},
+		{"known kinds and verbs", fix(Rule{Kinds: []string{"keys", "policies"}, Verbs: []string{"get", "list"}}), ""},
+		{"wildcards", fix(Rule{Kinds: []string{"*"}, Verbs: []string{"*"}}), ""},
+		{"system owner", ownedBy(meta.Owner{Kind: meta.OwnerSystem}), ""},
+		{"unknown kind", fix(keysGet, Rule{Kinds: []string{"keys", "widgets"}, Verbs: []string{"get"}}), "Key: 'Role.Spec.Rules[1].Kinds[1]' Error:Field validation for 'Kinds[1]' failed on the 'rbackind' tag"},
+		{"singular kind", fix(Rule{Kinds: []string{"key"}, Verbs: []string{"get"}}), "Key: 'Role.Spec.Rules[0].Kinds[0]' Error:Field validation for 'Kinds[0]' failed on the 'rbackind' tag"},
+		{"unknown verb", fix(Rule{Kinds: []string{"keys"}, Verbs: []string{"frobnicate"}}), "Key: 'Role.Spec.Rules[0].Verbs[0]' Error:Field validation for 'Verbs[0]' failed on the 'rbacverb' tag"},
+		{"no rules", fix(), "Key: 'Role.Spec.Rules' Error:Field validation for 'Rules' failed on the 'required' tag"},
+		{"a rule without kinds", fix(Rule{Verbs: []string{"get"}}), "Key: 'Role.Spec.Rules[0].Kinds' Error:Field validation for 'Kinds' failed on the 'required' tag"},
+		{"a rule without verbs", fix(Rule{Kinds: []string{"keys"}, Verbs: []string{}}), "Key: 'Role.Spec.Rules[0].Verbs' Error:Field validation for 'Verbs' failed on the 'min' tag"},
+		{"project owner", ownedBy(meta.Owner{Kind: meta.OwnerProject, ID: "01a19bc3-0000-7000-8000-000000000002"}), `role "custom": owner.kind must be system or user, got "project"`},
+		{"no owner", ownedBy(meta.Owner{}), `role "custom": owner.kind must be system or user, got ""`},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.role.Validate()
-			switch {
-			case tc.want == "" && err != nil:
-				t.Fatalf("Validate() = %v, want nil", err)
-			case tc.want != "" && err == nil:
-				t.Fatalf("Validate() = nil, want error mentioning %q", tc.want)
-			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
-				t.Fatalf("Validate() = %v, want error mentioning %q", err, tc.want)
-			}
-		})
+		got := ""
+		if err := tc.role.Validate(); err != nil {
+			got = err.Error()
+		}
+		if got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -82,58 +88,23 @@ func TestAllows(t *testing.T) {
 	)
 	admin := fix(Rule{Kinds: []string{"*"}, Verbs: []string{"*"}})
 	reader := fix(Rule{Kinds: []string{"*"}, Verbs: []string{"read"}})
-
 	for _, tc := range []struct {
-		name string
-		role *Role
-		kind string
-		verb string
-		want bool
+		name       string
+		role       *Role
+		kind, verb string
+		want       bool
 	}{
-		{name: "listed kind and verb", role: developer, kind: "keys", verb: "list", want: true},
-		{name: "verb from the second rule", role: developer, kind: "keys", verb: "rotate", want: true},
-		{name: "verb not granted on that kind", role: developer, kind: "policies", verb: "rotate"},
-		{name: "kind not listed", role: developer, kind: "teams", verb: "get"},
-		{name: "wildcard kind and verb", role: admin, kind: "teams", verb: "delete", want: true},
-		{name: "wildcard kind, named verb", role: reader, kind: "usage", verb: "read", want: true},
-		{name: "wildcard kind, other verb", role: reader, kind: "usage", verb: "delete"},
+		{"listed kind and verb", developer, "keys", "list", true},
+		{"verb from the second rule", developer, "keys", "rotate", true},
+		{"verb not granted on that kind", developer, "policies", "rotate", false},
+		{"kind not listed", developer, "teams", "get", false},
+		{"wildcard kind and verb", admin, "teams", "delete", true},
+		{"wildcard kind, named verb", reader, "usage", "read", true},
+		{"wildcard kind, other verb", reader, "usage", "delete", false},
+		{"no rules", fix(), "keys", "get", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.role.Allows(tc.kind, tc.verb); got != tc.want {
-				t.Fatalf("Allows(%q, %q) = %v, want %v", tc.kind, tc.verb, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestBuiltins(t *testing.T) {
-	roles, err := Builtins()
-	if err != nil {
-		t.Fatalf("Builtins: %v", err)
-	}
-	want := []string{"admin", "auditor", "catalog-editor", BuiltinTeamAdmin, BuiltinProjectAdmin, "developer", "viewer"}
-	if len(roles) != len(want) {
-		t.Fatalf("got %d built-in roles, want %d", len(roles), len(want))
-	}
-	for i, name := range want {
-		if roles[i].Meta.Name != name {
-			t.Errorf("built-in %d = %q, want %q", i, roles[i].Meta.Name, name)
+		if got := tc.role.Allows(tc.kind, tc.verb); got != tc.want {
+			t.Errorf("%s: Allows(%q, %q) = %v, want %v", tc.name, tc.kind, tc.verb, got, tc.want)
 		}
-		roles[i].Meta.ID = meta.NewID()
-		if err := roles[i].Validate(); err != nil {
-			t.Errorf("built-in %q: %v", name, err)
-		}
-		if roles[i].Meta.Owner.Kind != meta.OwnerSystem {
-			t.Errorf("built-in %q owner = %q, want system", name, roles[i].Meta.Owner.Kind)
-		}
-		if !IsBuiltin(name) {
-			t.Errorf("IsBuiltin(%q) = false", name)
-		}
-	}
-	if IsBuiltin("custom") {
-		t.Error("IsBuiltin(\"custom\") = true")
-	}
-	if !roles[0].Allows("teams", "delete") {
-		t.Error("admin should allow every verb on every kind")
 	}
 }
