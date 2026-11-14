@@ -37,6 +37,7 @@ type canonicalToResponsesStream struct {
 	closedItems []ResponsesItem
 	seq         int // next sequence_number; per-stream state, never on the Translator (rule 6)
 	custom      *responsesCustomLowering
+	terminated  bool // a terminal response.* event was written
 }
 
 type responsesStreamItem struct {
@@ -206,14 +207,8 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			return nil, fmt.Errorf("responses from_canonical stream: generation.completed: %w", err)
 		}
 
-		finalResp := &ResponsesResponse{
-			ID:          s.responseID,
-			Object:      "response",
-			CreatedAt:   s.created,
-			Model:       s.model,
-			Output:      append([]ResponsesItem{}, s.closedItems...),
-			ServiceTier: ev.ServiceTier,
-		}
+		finalResp := s.terminalResponse()
+		finalResp.ServiceTier = ev.ServiceTier
 		finalResp.Status, finalResp.IncompleteDetails = canonicalResponsesStatus(ev.Status, ev.FinishReason, ev.IncompleteDetails)
 		// The refusal text already streamed as output_text deltas; the terminal
 		// response is the one place left to type it as a refusal.
@@ -225,24 +220,49 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		}
 
 		var finalEvent string
-		if finalResp.Status == ResponsesStatusIncomplete {
+		switch finalResp.Status {
+		case ResponsesStatusIncomplete:
 			finalEvent = ResponsesEventIncomplete
-		} else {
+		case ResponsesStatusFailed:
+			finalEvent = ResponsesEventFailed
+		default:
 			finalEvent = ResponsesEventCompleted
 		}
 		completedData, _ := json.Marshal(ResponsesCompletedEvent{Response: finalResp})
 		frames = append(frames, ResponsesSSEFrame{Event: finalEvent, Data: completedData})
+		s.terminated = true
 
 	case v1.EventError:
 		var ev v1.ErrorEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return nil, fmt.Errorf("responses from_canonical stream: error event: %w", err)
 		}
+		// A canonical error ends the generation, and Responses ends a failed one with response.failed; only an error after that terminal is left as a bare error event.
+		if !s.terminated {
+			failedResp := s.terminalResponse()
+			failedResp.Status = ResponsesStatusFailed
+			failedResp.Error = &ResponsesError{Code: ev.Code, Message: ev.Message}
+			failedData, _ := json.Marshal(ResponsesFailedEvent{Response: failedResp})
+			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventFailed, Data: failedData})
+			s.terminated = true
+			break
+		}
 		errData, _ := json.Marshal(ResponsesErrorEvent{Code: ev.Code, Message: ev.Message})
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventError, Data: errData})
 	}
 
 	return s.marshalFrames(frames), nil
+}
+
+// terminalResponse is the response object a terminal event carries, holding every item closed so far.
+func (s *canonicalToResponsesStream) terminalResponse() *ResponsesResponse {
+	return &ResponsesResponse{
+		ID:        s.responseID,
+		Object:    "response",
+		CreatedAt: s.created,
+		Model:     s.model,
+		Output:    append([]ResponsesItem{}, s.closedItems...),
+	}
 }
 
 // marshalFrames stamps the stream envelope onto each frame and serializes them to wire bytes.

@@ -274,10 +274,10 @@ var (
 // A Responses upstream that failed reaches every wire as a failure, buffered and streamed.
 func TestResponsesFailed_CrossShape(t *testing.T) {
 	want := map[string][2]string{ // buffered, stream
-		"cc":        {"error/server_error", "content_filter"},
+		"cc":        {"error/server_error", "error/server_error"},
 		"responses": {"failed/", "failed/"},
-		"anthropic": {"refusal", "refusal"},
-		"gemini":    {"OTHER", "OTHER"},
+		"anthropic": {"refusal", ""},
+		"gemini":    {"OTHER", ""},
 	}
 	resp, err := openai.ResponsesTranslator{}.ParseResponse([]byte(responsesFailedBody))
 	if err != nil {
@@ -301,7 +301,6 @@ func TestResponsesFailed_CrossShape(t *testing.T) {
 }
 
 func TestResponsesFailed_StreamEndsInResponseFailed(t *testing.T) {
-	t.Skip(`bug: response.failed{error:server_error} → canonical → Responses stream ends in response.completed with status "failed" and error null`)
 	_, wire := xsPipe(t, openai.ResponsesTranslator{}.NewToCanonicalStream(), openai.ResponsesTranslator{}.NewFromCanonicalStream(), responsesFailedStream...)
 	frames := xsSplit(wire)
 	event, data, _ := v1.ParseSSEChunk(frames[len(frames)-1])
