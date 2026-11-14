@@ -178,6 +178,18 @@ func wantAPIError(t *testing.T, w *httptest.ResponseRecorder, status int, code, 
 	}
 }
 
+// wantFieldError checks a 422 that names exactly one field and what is wrong with it.
+func wantFieldError(t *testing.T, w *httptest.ResponseRecorder, location, message string) {
+	t.Helper()
+	var got struct {
+		Error httpapi.APIErrorBody `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 422 || got.Error.Code != "unprocessable_entity" ||
+		len(got.Error.Details) != 1 || got.Error.Details[0].Location != location || got.Error.Details[0].Message != message {
+		t.Fatalf("got %d %s (%v), want a 422 with one detail at %s: %s", w.Code, w.Body, err, location, message)
+	}
+}
+
 // decodeMeta returns the metadata of the row a 2xx answer carries.
 func decodeMeta(t *testing.T, w *httptest.ResponseRecorder, status int) meta.Metadata {
 	t.Helper()
@@ -494,14 +506,7 @@ func TestCRUDCreate(t *testing.T) {
 	})
 	// A team's cap is a Budget its policy links, so a stray spec.budget is refused rather than dropped.
 	t.Run("an unknown spec field is a 422 naming it", func(t *testing.T) {
-		w := scopeReq(t, h, "root", "POST", "/teams", `{"metadata":{"name":"capped"},"spec":{"budget":{"amount":"100"}}}`)
-		var got struct {
-			Error httpapi.APIErrorBody `json:"error"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 422 || got.Error.Code != "unprocessable_entity" ||
-			len(got.Error.Details) != 1 || got.Error.Details[0].Location != "body.spec.budget" || got.Error.Details[0].Message != "unexpected property" {
-			t.Fatalf("got %d %s (%v), want a 422 with one detail at body.spec.budget", w.Code, w.Body, err)
-		}
+		wantFieldError(t, scopeReq(t, h, "root", "POST", "/teams", `{"metadata":{"name":"capped"},"spec":{"budget":{"amount":"100"}}}`), "body.spec.budget", "unexpected property")
 	})
 }
 
