@@ -58,13 +58,18 @@ func TestStreamSummarizer(t *testing.T) {
 }
 
 func TestStreamSummarizer_MergesCompletedFrames(t *testing.T) {
-	t.Skip("bug: usage in one generation.completed frame and finish_reason in a later one → StreamSummarizer keeps only the later frame (no tokens), ExtractSummary merges both")
 	body := "event: generation.completed\ndata: {\"usage\":{\"input\":1},\"finish_reason\":\"length\"}\n\n" +
 		"event: generation.completed\ndata: {\"finish_reason\":\"stop\"}\n\n"
-	s := NewStreamSummarizer(IdentityTranslator{})
-	observeAll(s, body)
 	want := Summary{Tokens: usage.Tokens{"input": 1}, FinishReason: FinishReasonStop}
-	if diff := cmp.Diff(want, s.Summary()); diff != "" {
-		t.Errorf("summary (-want +got):\n%s", diff)
+	for _, tr := range []Translator{IdentityTranslator{}, passTranslator{}} {
+		s := NewStreamSummarizer(tr)
+		observeAll(s, body)
+		if diff := cmp.Diff(want, s.Summary()); diff != "" {
+			t.Errorf("%T summary (-want +got):\n%s", tr, diff)
+		}
+		batch, err := ExtractSummary(tr, []byte(body))
+		if diff := cmp.Diff(want, batch); diff != "" || err != nil {
+			t.Errorf("%T ExtractSummary, err %v (-want +got):\n%s", tr, err, diff)
+		}
 	}
 }
