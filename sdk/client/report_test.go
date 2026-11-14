@@ -167,20 +167,20 @@ func fakeProvider(t *testing.T, status int) *httptest.Server {
 	return srv
 }
 
-// catalogClient is a For-resolved client pointed at the fake provider.
-func catalogClient(t *testing.T, provider string, opts ...Option) *Client {
+// reportingClient is a catalog-resolved client pointed at the fake provider.
+func reportingClient(t *testing.T, provider string, opts ...Option) *Client {
 	t.Helper()
-	return forFromCatalog(t, testCatalog(t), "gpt-4o", "sk-provider", WithBaseURL(provider), WithClient(opts...))
+	return catalogClient(t, "gpt-4o", provider, WithClient(opts...))
 }
 
 func TestTelemetryOffLeavesCallsUnchanged(t *testing.T) {
 	provider := fakeProvider(t, http.StatusOK)
 	sink := newExportSink(t)
-	plain, err := catalogClient(t, provider.URL).Generate(context.Background(), sampleReq())
+	plain, err := reportingClient(t, provider.URL).Generate(context.Background(), sampleReq())
 	if err != nil {
 		t.Fatal(err)
 	}
-	reported, err := catalogClient(t, provider.URL, WithTelemetry(sink.emitter(t, true))).Generate(context.Background(), sampleReq())
+	reported, err := reportingClient(t, provider.URL, WithTelemetry(sink.emitter(t, true))).Generate(context.Background(), sampleReq())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestGenerateRecordsOneCall(t *testing.T) {
 	sink := newExportSink(t)
 	e := sink.emitter(t, true)
 	ctx := telemetry.ContextWithConversation(context.Background(), "conv-7")
-	if _, err := catalogClient(t, provider.URL, WithTelemetry(e)).Generate(ctx, sampleReq()); err != nil {
+	if _, err := reportingClient(t, provider.URL, WithTelemetry(e)).Generate(ctx, sampleReq()); err != nil {
 		t.Fatal(err)
 	}
 	got := sink.one(t, e)
@@ -235,7 +235,7 @@ func TestStreamToEOFRecordsOneCall(t *testing.T) {
 	provider := fakeProvider(t, http.StatusOK)
 	sink := newExportSink(t)
 	e := sink.emitter(t, false)
-	drain(t, catalogClient(t, provider.URL, WithTelemetry(e)))
+	drain(t, reportingClient(t, provider.URL, WithTelemetry(e)))
 	got := sink.one(t, e)
 	for k, v := range map[string]string{
 		"gen_ai.request.stream":          "true",
@@ -258,7 +258,7 @@ func TestStreamClosedEarlyIsMarkedCanceled(t *testing.T) {
 	provider := fakeProvider(t, http.StatusOK)
 	sink := newExportSink(t)
 	e := sink.emitter(t, false)
-	s, err := catalogClient(t, provider.URL, WithTelemetry(e)).GenerateStream(context.Background(), sampleReq())
+	s, err := reportingClient(t, provider.URL, WithTelemetry(e)).GenerateStream(context.Background(), sampleReq())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestErrorStatusIsRecorded(t *testing.T) {
 	provider := fakeProvider(t, http.StatusTooManyRequests)
 	sink := newExportSink(t)
 	e := sink.emitter(t, false)
-	c := catalogClient(t, provider.URL, WithTelemetry(e))
+	c := reportingClient(t, provider.URL, WithTelemetry(e))
 	if _, err := c.Generate(context.Background(), sampleReq()); err == nil {
 		t.Fatal("want the 429")
 	}
@@ -301,7 +301,7 @@ func TestErrorStatusIsRecorded(t *testing.T) {
 func TestNetworkErrorIsRecordedAsUnreachable(t *testing.T) {
 	sink := newExportSink(t)
 	e := sink.emitter(t, false)
-	if _, err := catalogClient(t, "http://127.0.0.1:1", WithTelemetry(e)).Generate(context.Background(), sampleReq()); err == nil {
+	if _, err := reportingClient(t, "http://127.0.0.1:1", WithTelemetry(e)).Generate(context.Background(), sampleReq()); err == nil {
 		t.Fatal("want a dial error")
 	}
 	got := sink.one(t, e)
@@ -319,7 +319,7 @@ func TestTimeoutIsRecorded(t *testing.T) {
 	e := sink.emitter(t, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := catalogClient(t, slow.URL, WithTelemetry(e)).Generate(ctx, sampleReq()); err == nil {
+	if _, err := reportingClient(t, slow.URL, WithTelemetry(e)).Generate(ctx, sampleReq()); err == nil {
 		t.Fatal("want a timeout")
 	}
 	if got := sink.one(t, e); got["error.type"] != telemetry.ErrorTimeout {
@@ -345,7 +345,7 @@ func TestMisconfiguredEmitterFailsTheFirstCall(t *testing.T) {
 	t.Setenv(telemetry.EnvOTLPEndpoint, "")
 	t.Setenv(telemetry.EnvRelayBaseURL, "")
 	e := telemetry.New()
-	_, err := catalogClient(t, "http://127.0.0.1:1", WithTelemetry(e)).Generate(context.Background(), sampleReq())
+	_, err := reportingClient(t, "http://127.0.0.1:1", WithTelemetry(e)).Generate(context.Background(), sampleReq())
 	if err == nil || err != e.Err() {
 		t.Errorf("err = %v, want the emitter's config error", err)
 	}
@@ -355,7 +355,7 @@ func TestContentIsNotBuiltWhileItWouldNotBeSent(t *testing.T) {
 	provider := fakeProvider(t, http.StatusOK)
 	sink := newExportSink(t)
 	e := sink.emitter(t, false)
-	if _, err := catalogClient(t, provider.URL, WithTelemetry(e)).Generate(context.Background(), sampleReq()); err != nil {
+	if _, err := reportingClient(t, provider.URL, WithTelemetry(e)).Generate(context.Background(), sampleReq()); err != nil {
 		t.Fatal(err)
 	}
 	sink.one(t, e)

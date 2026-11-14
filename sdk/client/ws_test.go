@@ -3,42 +3,34 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/coder/websocket"
+	"github.com/google/go-cmp/cmp"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// wsReply is one mock response: a status and the chunk-frame payloads to
-// emit between start and end.
-type wsReply struct {
-	status int
-	chunks []string
-}
-
-// wsMock stands up a WebSocket server speaking the /v1/ws frame protocol.
-// It records the upgrade Authorization header and the number of accepted
-// connections so tests can assert auth + connection reuse.
+// wsMock speaks the /v1/ws frame protocol: for each request frame it writes the frames reply returns, stamped with the request's id. It records every upgrade and request frame.
 type wsMock struct {
 	srv      *httptest.Server
 	mu       sync.Mutex
-	conns    int
-	lastAuth string
+	upgrades []sentRequest
+	frames   []wsRequestFrame
 }
 
-func newWSMock(t *testing.T, reply func(payload []byte) wsReply) *wsMock {
+func newWSMock(t *testing.T, reply func(payload []byte) []wsResponseFrame) *wsMock {
+	t.Helper()
 	m := &wsMock{}
 	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
-		m.conns++
-		m.lastAuth = r.Header.Get("Authorization")
+		m.upgrades = append(m.upgrades, sentRequest{Path: r.URL.Path, Header: r.Header.Clone()})
 		m.mu.Unlock()
-
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			t.Errorf("mock accept: %v", err)
@@ -46,172 +38,187 @@ func newWSMock(t *testing.T, reply func(payload []byte) wsReply) *wsMock {
 		}
 		ctx := context.Background()
 		for {
-			typ, data, err := conn.Read(ctx)
+			_, data, err := conn.Read(ctx)
 			if err != nil {
 				return
 			}
-			if typ != websocket.MessageText {
-				continue
-			}
 			var rf wsRequestFrame
 			if err := json.Unmarshal(data, &rf); err != nil {
-				continue
+				t.Errorf("request frame is not JSON: %s", data)
+				return
 			}
-			rep := reply(rf.Payload)
-			write := func(f wsResponseFrame) {
+			m.mu.Lock()
+			m.frames = append(m.frames, rf)
+			m.mu.Unlock()
+			// A binary frame and a frame for another request must both be ignored by the client.
+			_ = conn.Write(ctx, websocket.MessageBinary, []byte{0})
+			_ = conn.Write(ctx, websocket.MessageText, []byte(`{"id":"someone-else","event":"start","status":500}`))
+			for _, f := range reply(rf.Payload) {
+				f.ID = rf.ID
 				b, _ := json.Marshal(f)
 				_ = conn.Write(ctx, websocket.MessageText, b)
 			}
-			write(wsResponseFrame{ID: rf.ID, Event: "start", Status: rep.status})
-			for _, c := range rep.chunks {
-				write(wsResponseFrame{ID: rf.ID, Event: "chunk", Data: c})
-			}
-			write(wsResponseFrame{ID: rf.ID, Event: "end", Status: rep.status})
 		}
 	}))
 	t.Cleanup(m.srv.Close)
 	return m
 }
 
-func (m *wsMock) connCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.conns
-}
-
-func (m *wsMock) upgradeAuth() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastAuth
-}
-
-func TestRelayWS_Sync(t *testing.T) {
-	resp := &v1.Response{
-		ID: "resp_ws", Object: "response", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hi over ws"}}}},
+// ok answers 200 with body split into the given chunks.
+func ok(chunks ...string) []wsResponseFrame {
+	frames := []wsResponseFrame{{Event: "start", Status: 200}}
+	for _, c := range chunks {
+		frames = append(frames, wsResponseFrame{Event: "chunk", Data: c})
 	}
-	body, _ := json.Marshal(resp)
-	m := newWSMock(t, func([]byte) wsReply {
-		return wsReply{status: 200, chunks: []string{string(body)}}
-	})
+	return append(frames, wsResponseFrame{Event: "end", Status: 200})
+}
 
-	c := RelayWS(m.srv.URL, "rk-ws")
+func (m *wsMock) sent() (ids, payloads []string, upgrades []sentRequest) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, f := range m.frames {
+		ids, payloads = append(ids, f.ID), append(payloads, string(f.Payload))
+	}
+	return ids, payloads, m.upgrades
+}
+
+func TestRelayWS_Generate(t *testing.T) {
+	// The body arrives in two chunk frames; the client must join them.
+	m := newWSMock(t, func([]byte) []wsResponseFrame { return ok(canonicalReply[:20], canonicalReply[20:]) })
+	t.Setenv(EnvHeaders, "")
+	c := RelayWS(m.srv.URL, "rk-ws", WithHeader("X-Team", "red"))
 	defer c.Close()
 
-	got, err := c.Generate(context.Background(), sampleReq())
+	want, err := v1.ParseResponse([]byte(canonicalReply))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "resp_ws" || outputText(got) != "hi over ws" {
-		t.Errorf("response: %+v", got)
+	for range 3 {
+		got, err := c.Generate(context.Background(), sampleReq())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(want, got.Response); diff != "" {
+			t.Errorf("response (-want +got):\n%s", diff)
+		}
 	}
-	if got := m.upgradeAuth(); got != "Bearer rk-ws" {
-		t.Errorf("upgrade auth: %q", got)
+
+	ids, payloads, upgrades := m.sent()
+	if diff := cmp.Diff([]string{"1", "2", "3"}, ids); diff != "" {
+		t.Errorf("frame ids (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{sampleWire("sync"), sampleWire("sync"), sampleWire("sync")}, payloads); diff != "" {
+		t.Errorf("frame payloads (-want +got):\n%s", diff)
+	}
+	if len(upgrades) != 1 || upgrades[0].Path != "/v1/ws" || upgrades[0].Header.Get("Authorization") != "Bearer rk-ws" || upgrades[0].Header.Get("X-Team") != "red" {
+		t.Errorf("upgrades = %+v, want one to /v1/ws carrying the key and headers", upgrades)
 	}
 }
 
 func TestRelayWS_Stream(t *testing.T) {
-	frames := []v1.SSEFrame{
-		{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"resp_1"}`)},
-		{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"msg_1","kind":"output_text"}`)},
-		{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"resp_1","status":"completed","finish_reason":"stop"}`)},
-	}
-	var chunks []string
-	for _, f := range frames {
-		chunks = append(chunks, string(f.Bytes()))
-	}
-	m := newWSMock(t, func([]byte) wsReply {
-		return wsReply{status: 200, chunks: chunks}
-	})
-
-	c := RelayWS(m.srv.URL, "rk")
-	defer c.Close()
-
-	got := drain(t, c)
-	assertEvents(t, got, []string{v1.EventGenerationCreated, v1.EventItemDelta, v1.EventGenerationCompleted})
-}
-
-func TestRelayWS_APIError(t *testing.T) {
-	m := newWSMock(t, func([]byte) wsReply {
-		return wsReply{status: 400, chunks: []string{`{"error":{"code":"translate_request","message":"input is required"}}`}}
-	})
-
-	c := RelayWS(m.srv.URL, "rk")
-	defer c.Close()
-
-	_, err := c.Generate(context.Background(), sampleReq())
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		t.Fatalf("want *APIError, got %T: %v", err, err)
-	}
-	if apiErr.StatusCode != 400 || apiErr.Code != "translate_request" {
-		t.Errorf("apiErr: %+v", apiErr)
-	}
-}
-
-func TestRelayWS_ConnectionReuse(t *testing.T) {
-	resp := &v1.Response{ID: "r", Object: "response", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "ok"}}}}}
-	body, _ := json.Marshal(resp)
-	m := newWSMock(t, func([]byte) wsReply {
-		return wsReply{status: 200, chunks: []string{string(body)}}
-	})
-
-	c := RelayWS(m.srv.URL, "rk")
-	defer c.Close()
-
-	for i := 0; i < 3; i++ {
-		if _, err := c.Generate(context.Background(), sampleReq()); err != nil {
-			t.Fatalf("call %d: %v", i, err)
+	m := newWSMock(t, func(payload []byte) []wsResponseFrame {
+		if string(payload) == sampleWire("stream") {
+			return ok(strings.SplitAfter(canonicalStream, "\n\n")...)
 		}
-	}
-	if n := m.connCount(); n != 1 {
-		t.Errorf("expected 1 reused connection across 3 calls, got %d", n)
-	}
-}
-
-// TestRelayWS_StreamEarlyClose closes the stream before draining all
-// events; the next request must still succeed on the reused connection.
-func TestRelayWS_StreamEarlyClose(t *testing.T) {
-	frames := []v1.SSEFrame{
-		{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"r"}`)},
-		{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"m","kind":"output_text"}`)},
-		{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r","status":"completed","finish_reason":"stop"}`)},
-	}
-	var chunks []string
-	for _, f := range frames {
-		chunks = append(chunks, string(f.Bytes()))
-	}
-	syncResp, _ := json.Marshal(&v1.Response{ID: "r2", Object: "response", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "done"}}}}})
-	m := newWSMock(t, func(payload []byte) wsReply {
-		var probe struct {
-			OutputMode string `json:"output_mode"`
-		}
-		_ = json.Unmarshal(payload, &probe)
-		if probe.OutputMode == "stream" {
-			return wsReply{status: 200, chunks: chunks}
-		}
-		return wsReply{status: 200, chunks: []string{string(syncResp)}}
+		return ok(canonicalReply)
 	})
-
 	c := RelayWS(m.srv.URL, "rk")
 	defer c.Close()
 
+	want := []string{v1.EventGenerationCreated, v1.EventItemDelta, v1.EventGenerationCompleted}
+	if diff := cmp.Diff(want, eventTypes(drain(t, c))); diff != "" {
+		t.Errorf("events (-want +got):\n%s", diff)
+	}
+
+	// A stream closed before its end frame must leave the connection clean for the next request.
 	stream, err := c.GenerateStream(context.Background(), sampleReq())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := stream.Recv(); err != nil && err != io.EOF { // read one, then bail
+	if ev, err := stream.Recv(); err != nil || ev.Type != v1.EventGenerationCreated {
+		t.Fatalf("first event = %v, %v", ev, err)
+	}
+	if err := stream.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_ = stream.Close() // drains remaining frames to keep the conn clean
-
-	// Reused connection must serve a fresh request cleanly.
-	if _, err := c.Generate(context.Background(), sampleReq()); err != nil {
-		t.Fatalf("request after early close failed: %v", err)
+	resp, err := c.Generate(context.Background(), sampleReq())
+	if err != nil || resp.ID != "resp_1" {
+		t.Fatalf("request after an early close: %v, %v", resp, err)
 	}
-	if n := m.connCount(); n != 1 {
-		t.Errorf("expected connection reuse, got %d connections", n)
+	if ids, _, upgrades := m.sent(); len(upgrades) != 1 || len(ids) != 3 {
+		t.Errorf("%d connections for %d requests, want one reused connection for 3", len(upgrades), len(ids))
+	}
+}
+
+func TestRelayWS_APIError(t *testing.T) {
+	m := newWSMock(t, func([]byte) []wsResponseFrame {
+		return []wsResponseFrame{{Event: "start", Status: 400}, {Event: "chunk", Data: `{"error":{"code":"translate_request","message":"input is required"}}`}, {Event: "end", Status: 400}}
+	})
+	c := RelayWS(m.srv.URL, "rk")
+	defer c.Close()
+
+	_, err := c.Generate(context.Background(), sampleReq())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want an *APIError", err)
+	}
+	want := &APIError{StatusCode: 400, Host: strings.TrimPrefix(m.srv.URL, "http://"), Code: "translate_request", Message: "input is required",
+		Raw: []byte(`{"error":{"code":"translate_request","message":"input is required"}}`)}
+	if diff := cmp.Diff(want, apiErr); diff != "" {
+		t.Errorf("error (-want +got):\n%s", diff)
+	}
+}
+
+// A reply that does not open with a start frame fails the call and drops the connection, so the next call dials again.
+func TestRelayWS_ProtocolErrorResetsTheConnection(t *testing.T) {
+	bad := true
+	m := newWSMock(t, func([]byte) []wsResponseFrame {
+		if bad {
+			bad = false
+			return []wsResponseFrame{{Event: "chunk", Data: "x"}}
+		}
+		return ok(canonicalReply)
+	})
+	c := RelayWS(m.srv.URL, "rk")
+	defer c.Close()
+
+	if _, err := c.Generate(context.Background(), sampleReq()); errText(err) != `relay client: expected start frame, got "chunk"` {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := c.Generate(context.Background(), sampleReq()); err != nil {
+		t.Fatalf("call after a protocol error: %v", err)
+	}
+	if _, _, upgrades := m.sent(); len(upgrades) != 2 {
+		t.Errorf("%d connections, want a fresh one after the protocol error", len(upgrades))
+	}
+}
+
+func TestRelayWS_DialFailure(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	c := RelayWS(srv.URL, "rk")
+	if _, err := c.Generate(context.Background(), sampleReq()); err == nil || !strings.HasPrefix(err.Error(), "relay client: ws dial: ") {
+		t.Errorf("err = %v, want a ws dial error", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Errorf("Close without a connection = %v", err)
+	}
+}
+
+func TestWSAndHTTPURL(t *testing.T) {
+	for _, tc := range []struct{ base, ws, http string }{
+		{"https://relay.example/x", "wss://relay.example/x", "https://relay.example/x"},
+		{"http://relay.example", "ws://relay.example", "http://relay.example"},
+		{"wss://relay.example", "wss://relay.example", "https://relay.example"},
+		{"ws://relay.example", "ws://relay.example", "http://relay.example"},
+		{"relay.example", "relay.example", "relay.example"},
+		{"", "", ""},
+	} {
+		if got := wsURL(tc.base); got != tc.ws {
+			t.Errorf("wsURL(%q) = %q, want %q", tc.base, got, tc.ws)
+		}
+		if got := httpURL(tc.base); got != tc.http {
+			t.Errorf("httpURL(%q) = %q, want %q", tc.base, got, tc.http)
+		}
 	}
 }
