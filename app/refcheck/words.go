@@ -14,11 +14,11 @@ import (
 // kindWord renders an API kind as words: "host-key" is "host key".
 func kindWord(kind string) string { return strings.ReplaceAll(kind, "-", " ") }
 
-// kindWords is the plural of kindWord.
+// kindWords is the plural of kindWord: a consonant before the final "y" makes it "ies" ("policies"), a vowel keeps it ("host keys").
 func kindWords(kind string) string {
 	w := kindWord(kind)
-	if strings.HasSuffix(w, "y") {
-		return strings.TrimSuffix(w, "y") + "ies"
+	if n := len(w); n >= 2 && w[n-1] == 'y' && !strings.ContainsRune("aeiou", rune(w[n-2])) {
+		return w[:n-1] + "ies"
 	}
 	return w + "s"
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/account"
@@ -111,12 +110,10 @@ func refused(err error) string {
 	case !errors.As(err, &re):
 		return "not a refusal: " + err.Error()
 	}
-	// kindWords misspells this plural (TestKindWords); spelled right here so the tables hold the intended text.
-	msg := strings.ReplaceAll(re.Msg, "host keies", "host keys")
 	if re.Code == "" {
-		return fmt.Sprintf("%d: %s", re.Status, msg)
+		return fmt.Sprintf("%d: %s", re.Status, re.Msg)
 	}
-	return fmt.Sprintf("%d %s: %s", re.Status, re.Code, msg)
+	return fmt.Sprintf("%d %s: %s", re.Status, re.Code, re.Msg)
 }
 
 func wantRefused(t *testing.T, name string, err error, want string) {
