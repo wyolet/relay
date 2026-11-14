@@ -353,16 +353,55 @@ func memStore(t *testing.T) kvtest.ScriptStore {
 
 func TestQueue_Mem(t *testing.T) { runQueueSuite(t, memStore) }
 
-// Close waits as long as the pending settles need at worst: one round of the writers per four full batches, each round a delay, a batch and a resend.
+func TestNew(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		if q := settle.New(kv.NewMem(), settle.Config{BatchSize: 8, QueueSize: size}, nil); q != nil {
+			t.Errorf("New with QueueSize %d = %v, want nil (queue off)", size, q)
+		}
+	}
+}
+
+// Close waits as long as the pending settles need at worst: one round of the writers per full batch each, every round a delay, a batch and a resend.
 func TestQueue_DrainTimeout(t *testing.T) {
-	q := settle.New(kv.NewMem(), settle.Config{BatchSize: 64, MaxDelay: 2 * time.Millisecond, QueueSize: 4096}, discard())
-	round := 2*time.Millisecond + 10*time.Second
+	const delay = 2 * time.Millisecond
+	round := delay + 10*time.Second
 	for _, tc := range []struct {
+		name    string
+		cfg     settle.Config
 		pending int64
 		want    time.Duration
-	}{{0, round}, {1, round}, {256, round}, {257, 2 * round}, {4096, 16 * round}} {
-		if got := q.DrainTimeout(tc.pending); got != tc.want {
-			t.Errorf("DrainTimeout(%d) = %v, want %v", tc.pending, got, tc.want)
+	}{
+		{"nothing pending still waits a round", settle.Config{BatchSize: 64, MaxDelay: delay}, 0, round},
+		{"one settle", settle.Config{BatchSize: 64, MaxDelay: delay}, 1, round},
+		{"four full batches fit the four writers", settle.Config{BatchSize: 64, MaxDelay: delay}, 256, round},
+		{"a fifth batch needs a second round", settle.Config{BatchSize: 64, MaxDelay: delay}, 257, 2 * round},
+		{"many rounds", settle.Config{BatchSize: 64, MaxDelay: delay}, 4096, 16 * round},
+		{"a smaller pool caps the writers", settle.Config{BatchSize: 64, MaxDelay: delay, PoolSize: 2}, 256, 2 * round},
+		{"a larger pool does not add writers", settle.Config{BatchSize: 64, MaxDelay: delay, PoolSize: 16}, 257, 2 * round},
+		{"batch size below one is one", settle.Config{BatchSize: 0, MaxDelay: delay}, 5, 2 * round},
+		{"negative delay is none", settle.Config{BatchSize: 64, MaxDelay: -time.Second}, 1, 10 * time.Second},
+	} {
+		tc.cfg.QueueSize = 4096
+		if got := settle.New(kv.NewMem(), tc.cfg, nil).DrainTimeout(tc.pending); got != tc.want {
+			t.Errorf("%s: DrainTimeout(%d) = %v, want %v", tc.name, tc.pending, got, tc.want)
+		}
+	}
+}
+
+func TestTransportError(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errInjected, false},
+		{kv.ErrUnavailable, true},
+		{fmt.Errorf("exec: %w", kv.ErrUnavailable), true},
+		{context.DeadlineExceeded, true},
+		{fmt.Errorf("exec: %w", context.Canceled), true},
+	} {
+		if got := settle.TransportError(tc.err); got != tc.want {
+			t.Errorf("TransportError(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
 }
