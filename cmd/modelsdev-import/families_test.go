@@ -122,7 +122,7 @@ func TestLoadFamiliesMissing(t *testing.T) {
 // TestModelFamilyMapped checks spec.family carries the resolved family, the
 // family label is gone, and unmatched models are reported.
 func TestModelFamilyMapped(t *testing.T) {
-	r, _ := Translate([]MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{
+	r := translateOK(t, []MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{
 		"mapped":   {ID: "mapped", Family: "gemini-flash"},
 		"unmapped": {ID: "unmapped", Family: "mystery"},
 	})}, Opts{Families: testFamilies(t)})
@@ -146,7 +146,7 @@ func TestModelFamilyMapped(t *testing.T) {
 // TestModelProductLineMapped checks spec.productLine carries the resolved line
 // and only a named-but-unlisted line is reported.
 func TestModelProductLineMapped(t *testing.T) {
-	r, _ := Translate([]MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{
+	r := translateOK(t, []MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{
 		"lined":   {ID: "lined", Family: "gemini-flash-lite"},
 		"bare":    {ID: "bare", Family: "claude"},
 		"version": {ID: "version", Family: "qwen3.6"},

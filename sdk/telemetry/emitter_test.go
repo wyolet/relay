@@ -158,18 +158,26 @@ func TestBatchesAreCutAtTheBatchSize(t *testing.T) {
 	}
 }
 
-func TestIntervalExportsWithoutFlush(t *testing.T) {
-	c := newCollector(t)
-	e := newTestEmitter(t, c, WithBatch(100, 20*time.Millisecond))
-	e.Record(call("m"))
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if spans, _, _ := c.counts(); spans == 1 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+// A call is exported without Flush once its batch fills, or else when the interval passes.
+func TestExportsWithoutFlush(t *testing.T) {
+	for name, batch := range map[string]Option{
+		"full batch": WithBatch(1, time.Hour),
+		"interval":   WithBatch(100, 20*time.Millisecond),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newCollector(t)
+			e := newTestEmitter(t, c, batch)
+			e.Record(call("m"))
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if spans, _, _ := c.counts(); spans == 1 {
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			t.Error("the call was not exported")
+		})
 	}
-	t.Error("the interval did not export the call")
 }
 
 func TestFullQueueDropsAndCounts(t *testing.T) {

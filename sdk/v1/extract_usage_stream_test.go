@@ -1,76 +1,70 @@
 package v1
 
 import (
-	"bytes"
-	"encoding/json"
-	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/sdk/usage"
 )
 
-// feedFrames splits a full SSE body on the blank-line separator and feeds
-// each frame (separator stripped, as a dispatch scanner would) to the
-// summarizer — the same shape a live stream observer sees.
-func feedFrames(s *StreamSummarizer, body []byte) {
-	for _, frame := range bytes.Split(body, []byte("\n\n")) {
-		if len(bytes.TrimSpace(frame)) == 0 {
-			continue
-		}
-		s.Observe(frame)
+// observeAll feeds each frame of body, blank-line separator stripped, as a stream session does.
+func observeAll(s *StreamSummarizer, body string) {
+	for _, frame := range strings.Split(body, "\n\n") {
+		s.Observe([]byte(frame))
 	}
 }
 
-// The incremental summarizer must land the SAME Summary as the batch
-// ExtractSummary for the same stream — parity is the whole point.
-func TestStreamSummarizer_ParityWithExtractSummary(t *testing.T) {
-	completed, _ := json.Marshal(GenerationCompletedEvent{
-		ID:           "resp_1",
-		Status:       "completed",
-		Usage:        usage.Tokens{"input": 100, "output": 50, "cache_read": 25},
-		FinishReason: FinishReasonStop,
-	})
-	body := bytes.Join([][]byte{
-		SSEFrame{Event: EventGenerationCreated, Data: []byte(`{}`)}.Bytes(),
-		SSEFrame{Event: EventGenerationCompleted, Data: completed}.Bytes(),
-	}, nil)
-
-	batch, err := ExtractSummary(fakeTranslator{}, body)
-	if err != nil {
-		t.Fatalf("ExtractSummary: %v", err)
+// The incremental summarizer lands the same Summary as ExtractSummary over the whole body.
+func TestStreamSummarizer(t *testing.T) {
+	var seen []string
+	tests := []struct {
+		name string
+		tr   Translator
+		body string
+		want Summary
+	}{
+		{"canonical stream", IdentityTranslator{}, createdFrame + deltaFrame + completedFrame, completedSummary},
+		{"translated stream", passTranslator{}, createdFrame + deltaFrame + completedFrame, completedSummary},
+		{"filtered stream", filterTranslator{seen: &seen}, createdFrame + deltaFrame + completedFrame, completedSummary},
+		{"no generation.completed", IdentityTranslator{}, createdFrame + deltaFrame, Summary{}},
+		{"a later frame without a summary keeps the one found", IdentityTranslator{}, completedFrame + deltaFrame, completedSummary},
+		{"translator error on every chunk", failingTranslator{}, completedFrame, Summary{}},
+		{"nil translator", nil, completedFrame, Summary{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStreamSummarizer(tc.tr)
+			observeAll(s, tc.body)
+			if diff := cmp.Diff(tc.want, s.Summary()); diff != "" {
+				t.Errorf("summary (-want +got):\n%s", diff)
+			}
+			batch, err := ExtractSummary(tc.tr, []byte(tc.body))
+			if diff := cmp.Diff(batch, s.Summary()); diff != "" || err != nil {
+				t.Errorf("differs from ExtractSummary, err %v (-batch +incremental):\n%s", err, diff)
+			}
+		})
+	}
+	// One chunk per walk: the incremental and the batch walk each translate only the completed frame.
+	if diff := cmp.Diff([]string{completedFrame, completedFrame}, seen); diff != "" {
+		t.Errorf("chunks the filtered stream translated (-want +got):\n%s", diff)
 	}
 
-	s := NewStreamSummarizer(fakeTranslator{})
-	feedFrames(s, body)
-	got := s.Summary()
-
-	if !reflect.DeepEqual(got.Tokens, batch.Tokens) {
-		t.Fatalf("tokens: incremental %+v != batch %+v", got.Tokens, batch.Tokens)
-	}
-	if got.FinishReason != batch.FinishReason {
-		t.Fatalf("finish: incremental %q != batch %q", got.FinishReason, batch.FinishReason)
-	}
-	if got.Tokens["input"] != 100 || got.Tokens["output"] != 50 || got.Tokens["cache_read"] != 25 {
-		t.Fatalf("tokens: %+v", got.Tokens)
-	}
-}
-
-// A stream that never carries a usage block leaves the Summary zero — the
-// same nothing ExtractSummary returns.
-func TestStreamSummarizer_NoUsage(t *testing.T) {
-	body := SSEFrame{Event: EventGenerationCreated, Data: []byte(`{}`)}.Bytes()
-	s := NewStreamSummarizer(fakeTranslator{})
-	feedFrames(s, body)
-	if got := s.Summary(); len(got.Tokens) != 0 || got.FinishReason != "" {
-		t.Fatalf("want zero summary, got %+v", got)
+	var nilSummarizer *StreamSummarizer
+	nilSummarizer.Observe([]byte(completedFrame))
+	if got := nilSummarizer.Summary(); !got.isEmpty() {
+		t.Errorf("nil summarizer: %+v, want an empty summary", got)
 	}
 }
 
-// A nil translator is a no-op summarizer, matching ExtractSummary(nil, …).
-func TestStreamSummarizer_NilTranslator(t *testing.T) {
-	s := NewStreamSummarizer(nil)
-	s.Observe([]byte("event: x\ndata: {}"))
-	if got := s.Summary(); len(got.Tokens) != 0 || got.FinishReason != "" {
-		t.Fatalf("nil translator must summarize nothing, got %+v", got)
+func TestStreamSummarizer_MergesCompletedFrames(t *testing.T) {
+	t.Skip("bug: usage in one generation.completed frame and finish_reason in a later one → StreamSummarizer keeps only the later frame (no tokens), ExtractSummary merges both")
+	body := "event: generation.completed\ndata: {\"usage\":{\"input\":1},\"finish_reason\":\"length\"}\n\n" +
+		"event: generation.completed\ndata: {\"finish_reason\":\"stop\"}\n\n"
+	s := NewStreamSummarizer(IdentityTranslator{})
+	observeAll(s, body)
+	want := Summary{Tokens: usage.Tokens{"input": 1}, FinishReason: FinishReasonStop}
+	if diff := cmp.Diff(want, s.Summary()); diff != "" {
+		t.Errorf("summary (-want +got):\n%s", diff)
 	}
 }

@@ -2,407 +2,137 @@ package v1
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-// --- Model field: string vs array ---
-
-func TestParseModelString(t *testing.T) {
-	body := `{"model":"x","input":"hi"}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
+func TestParse(t *testing.T) {
+	hi := []Item{&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "hi"}}}}
+	temp, maxTok, parallel := 0.5, 512, false
+	tests := []struct {
+		name string
+		body string
+		want *Request
+	}{
+		{
+			name: "string model and string input",
+			body: `{"model":"x","input":"hi"}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi},
+		},
+		{
+			name: "single-element model array",
+			body: `{"model":["x"],"input":"hi"}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi},
+		},
+		{
+			name: "array input",
+			body: `{"model":"x","input":[{"type":"message","role":"user","content":"hi"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: []Item{hi[0], &Message{Role: RoleAssistant, Content: []Part{&OutputTextPart{Text: "hello"}}}}},
+		},
+		{
+			name: "scalar members",
+			body: `{"model":"x","input":"hi","instructions":"be concise","output_mode":"stream","user":"u1","metadata":{"k":"v"},"extensions":{"safety":{"level":2}}}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi, Instructions: "be concise", OutputMode: OutputModeStream, User: "u1",
+				Metadata: map[string]string{"k": "v"}, Extensions: map[string]json.RawMessage{"safety": json.RawMessage(`{"level":2}`)}},
+		},
+		{
+			name: "model_config for the requested model",
+			body: `{"model":"x","input":"hi","model_config":{"x":{"sampling":{"temperature":0.5,"max_tokens":512,"stop":["a"]},"reasoning":{"effort":"high","summary":"auto"},"output":{"format":{"type":"json_schema","name":"n","schema":{"type":"object"}},"verbosity":"low"}}}}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi, ModelConfig: map[string]*ModelOpts{"x": {
+				Sampling:  &SamplingParams{Temperature: &temp, MaxTokens: &maxTok, Stop: []string{"a"}},
+				Reasoning: &ReasoningConfig{Effort: "high", Summary: "auto"},
+				Output:    &OutputConfig{Format: &Format{Type: "json_schema", Name: "n", Schema: json.RawMessage(`{"type":"object"}`)}, Verbosity: "low"},
+			}}},
+		},
+		{
+			name: "model_config null entry stays present and nil",
+			body: `{"model":"x","input":"hi","model_config":{"x":null}}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi, ModelConfig: map[string]*ModelOpts{"x": nil}},
+		},
+		{
+			name: "model_config empty entry",
+			body: `{"model":"x","input":"hi","model_config":{"x":{}}}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi, ModelConfig: map[string]*ModelOpts{"x": {}}},
+		},
+		{
+			name: "tools of every kind with choice and parallel",
+			body: `{"model":"x","input":"hi","tools":{"definitions":[{"type":"function","name":"get_weather","parameters":{"type":"object"}},{"type":"server","name":"web_search"},{"type":"mcp","server_url":"https://mcp.example.com"}],"choice":{"type":"function","name":"get_weather"},"parallel":false}}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi, Tools: &ToolsConfig{
+				Definitions: Tools{&FunctionTool{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)}, &ServerTool{Name: "web_search"}, &MCPTool{ServerURL: "https://mcp.example.com"}},
+				Choice:      &ToolChoice{Mode: "function", FunctionName: "get_weather"},
+				Parallel:    &parallel,
+			}},
+		},
+		{
+			name: "request and item cache_config",
+			body: `{"model":"x","cache_config":{"instructions":true,"tools":true,"history":true,"key":"conv-1","ttl":"1h"},"input":[{"type":"message","role":"user","content":"stable","cache_config":{"anchor":true}},{"type":"message","role":"user","content":"latest"}]}`,
+			want: &Request{Model: ModelRefs{"x"},
+				CacheConfig: &CacheConfig{Instructions: true, Tools: true, History: true, Key: "conv-1", TTL: "1h"},
+				Input: []Item{
+					&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "stable"}}, CacheConfig: &ItemCacheConfig{Anchor: true}},
+					&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "latest"}}},
+				}},
+		},
+		{
+			name: "unknown top-level members are ignored",
+			body: `{"model":"x","input":"hi","temperature":1,"stream":true}`,
+			want: &Request{Model: ModelRefs{"x"}, Input: hi},
+		},
 	}
-	if len(req.Model) != 1 || req.Model[0] != "x" {
-		t.Errorf("model: %v", req.Model)
-	}
-}
-
-func TestParseModelSingleArray(t *testing.T) {
-	body := `{"model":["x"],"input":"hi"}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Model) != 1 || req.Model[0] != "x" {
-		t.Errorf("model: %v", req.Model)
-	}
-}
-
-func TestParseModelArrayMultiplex(t *testing.T) {
-	body := `{"model":["x","y"],"input":"hi"}`
-	_, err := Parse([]byte(body))
-	if err != ErrMultiplexNotImplemented {
-		t.Errorf("expected ErrMultiplexNotImplemented, got %v", err)
-	}
-}
-
-func TestParseModelMissing(t *testing.T) {
-	body := `{"input":"hi"}`
-	_, err := Parse([]byte(body))
-	if err == nil {
-		t.Error("expected error when model is missing")
-	}
-}
-
-func TestParseModelEmptyString(t *testing.T) {
-	body := `{"model":"","input":"hi"}`
-	_, err := Parse([]byte(body))
-	if err == nil {
-		t.Error("expected error for empty model string")
-	}
-}
-
-func TestParseModelEmptyInArray(t *testing.T) {
-	body := `{"model":[""],"input":"hi"}`
-	_, err := Parse([]byte(body))
-	if err == nil {
-		t.Error("expected error for empty model name in array")
-	}
-}
-
-// --- ModelConfig ---
-
-func TestParseModelConfigKeyNotInModel(t *testing.T) {
-	body := `{"model":"x","input":"hi","model_config":{"y":{}}}`
-	_, err := Parse([]byte(body))
-	if err == nil {
-		t.Error("expected error for model_config key not in model list")
-	}
-}
-
-func TestParseModelConfigMatchingKey(t *testing.T) {
-	body := `{"model":"x","input":"hi","model_config":{"x":{"sampling":{"temperature":0.5}}}}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["x"]
-	if opts == nil {
-		t.Fatal("expected model_config[x]")
-	}
-	if opts.Sampling == nil {
-		t.Fatal("expected sampling")
-	}
-	if opts.Sampling.Temperature == nil || *opts.Sampling.Temperature != 0.5 {
-		t.Errorf("temperature: %v", opts.Sampling.Temperature)
-	}
-}
-
-func TestParseCacheConfig(t *testing.T) {
-	body := `{"model":"x","cache_config":{"instructions":true,"tools":true},"input":[` +
-		`{"type":"message","role":"user","content":"stable","cache_config":{"anchor":true}},` +
-		`{"type":"message","role":"user","content":"latest"}]}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.CacheConfig == nil || !req.CacheConfig.Instructions || !req.CacheConfig.Tools {
-		t.Fatalf("request cache_config: %+v", req.CacheConfig)
-	}
-	anchored, ok := req.Input[0].(*Message)
-	if !ok || anchored.CacheConfig == nil || !anchored.CacheConfig.Anchor {
-		t.Errorf("item[0] cache_config anchor: %+v", req.Input[0])
-	}
-	if m, ok := req.Input[1].(*Message); !ok || m.CacheConfig != nil {
-		t.Errorf("item[1] should have no cache_config: %+v", req.Input[1])
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse([]byte(tc.body))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("request (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
-func TestParseModelConfigNullValue(t *testing.T) {
-	body := `{"model":"x","input":"hi","model_config":{"x":null}}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
+func TestParse_Errors(t *testing.T) {
+	tests := []struct{ name, body, want string }{
+		{"invalid JSON", `{not json}`, "invalid JSON: …"},
+		{"empty body", ``, "invalid JSON: unexpected end of JSON input"},
+		{"model missing", `{"input":"hi"}`, "model required"},
+		{"model null", `{"model":null,"input":"hi"}`, "model required"},
+		{"model empty array", `{"model":[],"input":"hi"}`, "model required"},
+		{"model empty string", `{"model":"","input":"hi"}`, "model: empty model name"},
+		{"model empty in array", `{"model":[""],"input":"hi"}`, "model: empty model name"},
+		{"model number", `{"model":5,"input":"hi"}`, `invalid JSON: model: expected string or array, got "5"`},
+		{"model array of numbers", `{"model":[1],"input":"hi"}`, "invalid JSON: model: json: cannot unmarshal number…"},
+		{"two models", `{"model":["x","y"],"input":"hi"}`, "multiplex_not_implemented"},
+		{"an empty name outranks multiplex", `{"model":["x",""],"input":"hi"}`, "model: empty model name"},
+		{"model_config for another model", `{"model":"x","input":"hi","model_config":{"y":{}}}`, `model_config has key "y" not in model list`},
+		{"input missing", `{"model":"x"}`, "input is required"},
+		{"input number", `{"model":"x","input":5}`, "input: input array: json: cannot unmarshal number…"},
+		{"input with unsupported item", `{"model":"x","input":[{"type":"computer_call"}]}`, `input: unsupported item type "computer_call"`},
+		{"unsupported tool", `{"model":"x","input":"hi","tools":{"definitions":[{"type":"code_interpreter"}]}}`, `invalid JSON: unsupported tool type "code_interpreter"`},
 	}
-	// null config entry is allowed; value is nil (use vendor defaults)
-	if opts, ok := req.ModelConfig["x"]; !ok || opts != nil {
-		t.Errorf("expected nil model_config[x], got %v (present=%v)", opts, ok)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse([]byte(tc.body))
+			if got != nil || err == nil {
+				t.Fatalf("Parse = %+v, %v; want nil and an error", got, err)
+			}
+			wantErr(t, err, tc.want)
+		})
+	}
+
+	if _, err := Parse([]byte(`{"model":["x","y"],"input":"hi"}`)); !errors.Is(err, ErrMultiplexNotImplemented) {
+		t.Errorf("two models: %v, want ErrMultiplexNotImplemented", err)
 	}
 }
 
-func TestParseModelConfigEmptyObject(t *testing.T) {
-	body := `{"model":"x","input":"hi","model_config":{"x":{}}}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["x"]
-	if opts == nil {
-		t.Fatal("expected non-nil model_config[x] for empty object")
-	}
-	if opts.Sampling != nil || opts.Reasoning != nil || opts.Output != nil {
-		t.Errorf("expected all fields nil for empty object opts: %+v", opts)
-	}
-}
-
-// --- OutputMode ---
-
-func TestParseOutputModeStream(t *testing.T) {
-	body := `{"model":"x","input":"hi","output_mode":"stream"}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.OutputMode != OutputModeStream {
-		t.Errorf("output_mode: %q", req.OutputMode)
-	}
-}
-
-func TestParseOutputModeOmitted(t *testing.T) {
-	body := `{"model":"x","input":"hi"}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.OutputMode != "" {
-		t.Errorf("expected empty output_mode, got %q", req.OutputMode)
-	}
-}
-
-// --- String input normalization ---
-
-func TestParseStringInput(t *testing.T) {
-	body := `{"model":"gpt-4o","input":"hello"}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Model) != 1 || req.Model[0] != "gpt-4o" {
-		t.Errorf("model: %v", req.Model)
-	}
-	if len(req.Input) != 1 {
-		t.Fatalf("expected 1 item, got %d", len(req.Input))
-	}
-	msg, ok := req.Input[0].(*Message)
-	if !ok {
-		t.Fatalf("expected *Message, got %T", req.Input[0])
-	}
-	if msg.Role != RoleUser {
-		t.Errorf("role: %q", msg.Role)
-	}
-	if len(msg.Content) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(msg.Content))
-	}
-	tp, ok := msg.Content[0].(*TextPart)
-	if !ok {
-		t.Fatalf("expected *TextPart, got %T", msg.Content[0])
-	}
-	if tp.Text != "hello" {
-		t.Errorf("text: %q", tp.Text)
-	}
-}
-
-func TestParseArrayInput(t *testing.T) {
-	body := `{"model":"gpt-4o","input":[{"type":"message","role":"user","content":"hi"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Input) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(req.Input))
-	}
-}
-
-func TestParseRequiresInput(t *testing.T) {
-	body := `{"model":"gpt-4o"}`
-	_, err := Parse([]byte(body))
-	if err == nil {
-		t.Error("expected error when input is missing")
-	}
-}
-
-// --- Tools (top-level on Request) ---
-
-func TestParseWithTools(t *testing.T) {
-	body := `{
-		"model": "gpt-4o",
-		"input": "what is the weather?",
-		"tools": {
-			"definitions": [{"type":"function","name":"get_weather","parameters":{"type":"object"}}],
-			"choice": "auto"
+func TestParse_RejectsEmptyInput(t *testing.T) {
+	t.Skip(`bug: {"model":"x","input":null} and "input":[] parse into a request with no input items instead of "input is required"`)
+	for _, body := range []string{`{"model":"x","input":null}`, `{"model":"x","input":[]}`} {
+		if got, err := Parse([]byte(body)); err == nil {
+			t.Errorf("Parse(%s) = %+v, want an error", body, got)
 		}
-	}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil {
-		t.Fatal("expected tools config")
-	}
-	if len(req.Tools.Definitions) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(req.Tools.Definitions))
-	}
-	if req.Tools.Definitions[0].ToolType() != ToolTypeFunction {
-		t.Errorf("tool type: %v", req.Tools.Definitions[0].ToolType())
-	}
-	if req.Tools.Choice == nil {
-		t.Fatal("expected tool choice")
-	}
-	if req.Tools.Choice.Mode != "auto" {
-		t.Errorf("tool choice mode: %q", req.Tools.Choice.Mode)
-	}
-}
-
-func TestParseWithServerAndMCPTools(t *testing.T) {
-	body := `{
-		"model": "gpt-4o",
-		"input": "search for cats",
-		"tools": {
-			"definitions": [
-				{"type":"server","name":"web_search"},
-				{"type":"mcp","server_url":"https://mcp.example.com"}
-			]
-		}
-	}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil {
-		t.Fatal("expected tools config")
-	}
-	defs := req.Tools.Definitions
-	if len(defs) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(defs))
-	}
-	if defs[0].ToolType() != ToolTypeServer {
-		t.Errorf("tool[0] type: %v", defs[0].ToolType())
-	}
-	if defs[1].ToolType() != ToolTypeMCP {
-		t.Errorf("tool[1] type: %v", defs[1].ToolType())
-	}
-}
-
-// --- Extensions ---
-
-func TestParseWithExtensions(t *testing.T) {
-	body := `{"model":"gpt-4o","input":"hi","extensions":{"cache_control":{"type":"ephemeral"}}}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Extensions) != 1 {
-		t.Fatalf("expected 1 extension, got %d", len(req.Extensions))
-	}
-	if _, ok := req.Extensions["cache_control"]; !ok {
-		t.Error("expected cache_control extension")
-	}
-}
-
-// --- Reasoning (now in ModelConfig) ---
-
-func TestParseReasoningConfig(t *testing.T) {
-	body := `{"model":"o3","input":"think hard","model_config":{"o3":{"reasoning":{"effort":"high"}}}}`
-	req, err := Parse([]byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["o3"]
-	if opts == nil || opts.Reasoning == nil {
-		t.Fatal("expected reasoning config")
-	}
-	if opts.Reasoning.Effort != "high" {
-		t.Errorf("effort: %q", opts.Reasoning.Effort)
-	}
-}
-
-// --- Invalid JSON ---
-
-func TestParseInvalidJSON(t *testing.T) {
-	_, err := Parse([]byte(`{not json}`))
-	if err == nil {
-		t.Error("expected error for invalid JSON")
-	}
-}
-
-// --- Round-trip ---
-
-func TestParseRoundTrip(t *testing.T) {
-	temp := 0.7
-	maxTok := 512
-	req := &Request{
-		Model: ModelRefs{"gpt-4o"},
-		Input: []Item{
-			&Message{
-				Role:    RoleUser,
-				Content: []Part{&TextPart{Text: "hi"}},
-			},
-		},
-		Instructions: "be concise",
-		ModelConfig: map[string]*ModelOpts{
-			"gpt-4o": {
-				Sampling: &SamplingParams{
-					Temperature: &temp,
-					MaxTokens:   &maxTok,
-				},
-			},
-		},
-		OutputMode: OutputModeSync,
-		User:       "u1",
-		Metadata:   map[string]string{"k": "v"},
-		Extensions: map[string]json.RawMessage{
-			"cache_control": json.RawMessage(`{"type":"ephemeral"}`),
-		},
-	}
-
-	// Marshal to wire (exclude Input since it's json:"-")
-	type wireReq struct {
-		Model        ModelRefs                  `json:"model"`
-		Instructions string                     `json:"instructions,omitempty"`
-		ModelConfig  map[string]*ModelOpts      `json:"model_config,omitempty"`
-		OutputMode   string                     `json:"output_mode,omitempty"`
-		User         string                     `json:"user,omitempty"`
-		Metadata     map[string]string          `json:"metadata,omitempty"`
-		Extensions   map[string]json.RawMessage `json:"extensions,omitempty"`
-		Input        string                     `json:"input"`
-	}
-	wire := wireReq{
-		Model:        req.Model,
-		Instructions: req.Instructions,
-		ModelConfig:  req.ModelConfig,
-		OutputMode:   req.OutputMode,
-		User:         req.User,
-		Metadata:     req.Metadata,
-		Extensions:   req.Extensions,
-		Input:        "hi",
-	}
-	b, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req2, err := Parse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(req2.Model) != 1 || req2.Model[0] != "gpt-4o" {
-		t.Errorf("model: %v", req2.Model)
-	}
-	if req2.Instructions != "be concise" {
-		t.Errorf("instructions: %q", req2.Instructions)
-	}
-	if req2.OutputMode != OutputModeSync {
-		t.Errorf("output_mode: %q", req2.OutputMode)
-	}
-	if req2.User != "u1" {
-		t.Errorf("user: %q", req2.User)
-	}
-	if req2.Metadata["k"] != "v" {
-		t.Errorf("metadata: %v", req2.Metadata)
-	}
-	opts := req2.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Sampling == nil {
-		t.Fatal("expected sampling in round-tripped request")
-	}
-	if opts.Sampling.Temperature == nil || *opts.Sampling.Temperature != 0.7 {
-		t.Errorf("temperature: %v", opts.Sampling.Temperature)
-	}
-	if opts.Sampling.MaxTokens == nil || *opts.Sampling.MaxTokens != 512 {
-		t.Errorf("max_tokens: %v", opts.Sampling.MaxTokens)
-	}
-	if len(req2.Extensions) != 1 {
-		t.Fatalf("expected 1 extension, got %d", len(req2.Extensions))
 	}
 }

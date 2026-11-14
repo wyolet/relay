@@ -1,93 +1,59 @@
 package v1
 
 import (
-	"bytes"
-	"encoding/json"
-	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestIdentityTranslator_ParseRequestRoundTrip(t *testing.T) {
-	body := []byte(`{"model":"m","cache_config":{"instructions":true,"tools":true},` +
-		`"input":[{"type":"message","role":"user","content":"hi","cache_config":{"anchor":true}}]}`)
+func TestIdentityTranslator_Request(t *testing.T) {
+	body := `{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}],"cache_config":{"anchor":true}}],` +
+		`"tools":{"definitions":[{"type":"function","name":"search","parameters":{}}]},"cache_config":{"instructions":true,"tools":true},"output_mode":"stream"}`
+	tr := IdentityTranslator{}
 
-	req, err := IdentityTranslator{}.ParseRequest(body)
+	req, err := tr.ParseRequest([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.CacheConfig == nil || !req.CacheConfig.Instructions || !req.CacheConfig.Tools {
-		t.Errorf("request cache_config lost through identity parse: %+v", req.CacheConfig)
+	want, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m, ok := req.Input[0].(*Message); !ok || m.CacheConfig == nil || !m.CacheConfig.Anchor {
-		t.Errorf("item cache_config lost: %+v", req.Input[0])
+	if diff := cmp.Diff(want, req); diff != "" {
+		t.Errorf("ParseRequest differs from Parse (-want +got):\n%s", diff)
+	}
+	out, err := tr.SerializeRequest(req)
+	if err != nil || string(out) != body {
+		t.Errorf("SerializeRequest = %s, %v\nwant %s", out, err, body)
+	}
+
+	if _, err := tr.ParseRequest([]byte(`{"input":"hi"}`)); err == nil || err.Error() != "model required" {
+		t.Errorf("ParseRequest without a model: %v, want Parse's error", err)
 	}
 }
 
-func TestIdentityTranslator_SerializeResponse(t *testing.T) {
-	resp := &Response{ID: "resp_1", Object: "response", Status: StatusCompleted, FinishReason: FinishReasonStop}
-	out, err := IdentityTranslator{}.SerializeResponse(resp, nil)
+func TestIdentityTranslator_Response(t *testing.T) {
+	tr := IdentityTranslator{}
+	resp, err := tr.ParseResponse([]byte(fullResponseWire))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out), `"id":"resp_1"`) || !strings.Contains(string(out), `"finish_reason":"stop"`) {
-		t.Errorf("canonical response not marshalled as-is: %s", out)
+	if diff := cmp.Diff(fullResponse(), resp); diff != "" {
+		t.Errorf("ParseResponse (-want +got):\n%s", diff)
+	}
+	// The request is not consulted: a canonical response serializes the same for any caller.
+	out, err := tr.SerializeResponse(resp, &Request{Model: ModelRefs{"other"}})
+	if err != nil || string(out) != fullResponseWire {
+		t.Errorf("SerializeResponse = %s, %v\nwant %s", out, err, fullResponseWire)
 	}
 }
 
-func TestIdentityTranslator_StreamFactoriesAreIdentity(t *testing.T) {
-	if (IdentityTranslator{}).NewToCanonicalStream() != nil {
-		t.Error("NewToCanonicalStream should be nil (identity)")
+func TestIdentityTranslator_Streams(t *testing.T) {
+	tr := IdentityTranslator{}
+	if tr.NewToCanonicalStream() != nil || tr.NewFromCanonicalStream() != nil {
+		t.Error("stream factories must be nil: canonical chunks pass through untranslated")
 	}
-	if (IdentityTranslator{}).NewFromCanonicalStream() != nil {
-		t.Error("NewFromCanonicalStream should be nil (identity)")
-	}
-}
-
-func TestIdentityTranslator_RequestRoundTrip(t *testing.T) {
-	// Client-side use: SerializeRequest then ParseRequest must round-trip.
-	req := &Request{
-		Model:       ModelRefs{"m"},
-		CacheConfig: &CacheConfig{Tools: true},
-		Tools: &ToolsConfig{Definitions: Tools{
-			&FunctionTool{Name: "search", Parameters: json.RawMessage(`{}`)},
-		}},
-		Input: []Item{&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "hi"}}}},
-	}
-	wire, err := IdentityTranslator{}.SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Tools are top-level, never nested under model_config.
-	if bytes.Contains(wire, []byte(`"model_config"`)) {
-		t.Errorf("tools leaked into model_config: %s", wire)
-	}
-	got, err := IdentityTranslator{}.ParseRequest(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CacheConfig == nil || !got.CacheConfig.Tools {
-		t.Errorf("cache_config lost in round-trip: %+v", got.CacheConfig)
-	}
-	if got.Tools == nil || len(got.Tools.Definitions) != 1 {
-		t.Errorf("top-level tools lost in round-trip: %+v", got.Tools)
-	}
-	if len(got.Input) != 1 {
-		t.Errorf("input lost: %+v", got.Input)
-	}
-}
-
-func TestIdentityTranslator_ParseResponseRoundTrip(t *testing.T) {
-	resp := &Response{ID: "r1", Object: "response", Status: StatusCompleted,
-		Output: []Item{&Message{Role: RoleAssistant, Content: []Part{&OutputTextPart{Text: "hi"}}}}}
-	wire, err := IdentityTranslator{}.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := IdentityTranslator{}.ParseResponse(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.ID != "r1" || len(got.Output) != 1 {
-		t.Errorf("response round-trip lost data: %+v", got)
+	if got, want := tr.RequestKeys(), (RequestKeys{Stream: "output_mode", StreamOn: "stream"}); got != want {
+		t.Errorf("RequestKeys = %+v, want %+v", got, want)
 	}
 }

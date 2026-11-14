@@ -1,63 +1,73 @@
 package v1
 
 import (
-	"encoding/json"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestSystemMarkerRoundTrip(t *testing.T) {
-	wrapped := WrapSystemMarker("rule")
-	inner, ok := UnwrapSystemMarker(wrapped)
-	if !ok || inner != "rule" {
-		t.Fatalf("round-trip: got %q ok=%v", inner, ok)
+func TestSystemMarker(t *testing.T) {
+	if got := WrapSystemMarker("rule"); got != "<system>\nrule\n</system>" {
+		t.Errorf("WrapSystemMarker = %q", got)
 	}
-	if _, ok := UnwrapSystemMarker("prefix " + wrapped); ok {
-		t.Error("substring must not unwrap")
+	tests := []struct {
+		name, text, want string
+		ok               bool
+	}{
+		{"wrapped", "<system>\nrule\n</system>", "rule", true},
+		{"wrapped multi-line", "<system>\na\nb\n</system>", "a\nb", true},
+		{"nested marker unwraps one level", "<system>\n<system>\nx\n</system>\n</system>", "<system>\nx\n</system>", true},
+		{"text before", "prefix <system>\nrule\n</system>", "", false},
+		{"text after", "<system>\nrule\n</system> suffix", "", false},
+		{"empty body", "<system>\n\n</system>", "", false},
+		{"open and close sharing their newline", "<system>\n</system>", "", false},
+		{"no newline after the open tag", "<system>rule\n</system>", "", false},
+		{"plain text", "rule", "", false},
+		{"empty", "", "", false},
 	}
-	if _, ok := UnwrapSystemMarker(wrapped + " suffix"); ok {
-		t.Error("substring must not unwrap")
-	}
-	if _, ok := UnwrapSystemMarker(SystemMarkerOpen + SystemMarkerClose); ok {
-		t.Error("empty body must not unwrap")
-	}
-}
-
-func TestMessageHoistJSONRoundTrip(t *testing.T) {
-	m := &Message{Role: RoleSystem, Hoist: true, Content: []Part{&TextPart{Text: "x"}}}
-	b, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var back Message
-	if err := json.Unmarshal(b, &back); err != nil {
-		t.Fatal(err)
-	}
-	if !back.Hoist {
-		t.Error("hoist flag lost in JSON round-trip")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := UnwrapSystemMarker(tc.text); got != tc.want || ok != tc.ok {
+				t.Errorf("UnwrapSystemMarker = %q, %v; want %q, %v", got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 
 func TestSplitHoistedSystem(t *testing.T) {
-	hoisted := &Message{Role: RoleSystem, Hoist: true, Content: []Part{&TextPart{Text: "h1"}}}
-	hoistedDev := &Message{Role: RoleDeveloper, Hoist: true, Content: []Part{&TextPart{Text: "h2"}}}
-	positional := &Message{Role: RoleSystem, Content: []Part{&TextPart{Text: "keep"}}}
-	user := &Message{Role: RoleUser, Hoist: true, Content: []Part{&TextPart{Text: "u"}}} // ignored on user
+	text := func(role Role, hoist bool, parts ...Part) *Message {
+		return &Message{Role: role, Hoist: hoist, Content: parts}
+	}
+	user := text(RoleUser, true, &TextPart{Text: "u"}) // the flag is ignored on a user message
+	positional := text(RoleSystem, false, &TextPart{Text: "keep"})
+	call := &FunctionCall{CallID: "c"}
 
-	items, text := SplitHoistedSystem([]Item{user, hoisted, positional, hoistedDev})
-	if text != "h1\nh2" {
-		t.Errorf("hoisted text: %q", text)
+	items := []Item{
+		user,
+		text(RoleSystem, true, &TextPart{Text: "h1a"}, &ImagePart{ImageURL: "u"}, &OutputTextPart{Text: "h1b"}),
+		positional,
+		text(RoleDeveloper, true, &TextPart{Text: "h2"}),
+		text(RoleSystem, true),
+		call,
 	}
-	if len(items) != 2 {
-		t.Fatalf("items: got %d want 2", len(items))
+	rest, hoisted := SplitHoistedSystem(items)
+	if hoisted != "h1ah1b\nh2" {
+		t.Errorf("hoisted text = %q, want parts concatenated per message and messages joined by a newline", hoisted)
 	}
-	if items[0].(*Message).Role != RoleUser || items[1].(*Message).Content[0].(*TextPart).Text != "keep" {
-		t.Errorf("wrong items kept: %v", items)
+	if diff := cmp.Diff([]Item{user, positional, call}, rest); diff != "" {
+		t.Errorf("remaining items (-want +got):\n%s", diff)
+	}
+	if len(items) != 6 || items[1].(*Message).Role != RoleSystem {
+		t.Error("the input slice was modified")
 	}
 
-	// no flags → original slice returned untouched
+	// Nothing flagged: the very same slice comes back.
 	orig := []Item{user, positional}
-	same, text := SplitHoistedSystem(orig)
-	if text != "" || len(same) != 2 {
-		t.Errorf("no-flag path: %q %d", text, len(same))
+	same, hoisted := SplitHoistedSystem(orig)
+	if hoisted != "" || len(same) != 2 || &same[0] != &orig[0] {
+		t.Errorf("no-flag path: text %q, items %v; want the input slice itself", hoisted, same)
+	}
+	if rest, hoisted := SplitHoistedSystem(nil); rest != nil || hoisted != "" {
+		t.Errorf("nil input: %v, %q", rest, hoisted)
 	}
 }

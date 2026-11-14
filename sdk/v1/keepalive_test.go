@@ -1,28 +1,31 @@
 package v1
 
-import (
-	"bytes"
-	"testing"
-)
+import "testing"
 
-type keepAliveTranslator struct{ IdentityTranslator }
-
-func (keepAliveTranslator) KeepAliveFrame() []byte { return []byte("event: ping\ndata: {}\n\n") }
-
-func TestKeepAliveFrameFor_DeclaredFrame(t *testing.T) {
-	got := KeepAliveFrameFor(keepAliveTranslator{})
-	if !bytes.Equal(got, []byte("event: ping\ndata: {}\n\n")) {
-		t.Fatalf("frame = %q, want the translator's own", got)
-	}
+type keepAliveTranslator struct {
+	IdentityTranslator
+	frame string
 }
 
-func TestKeepAliveFrameFor_FallsBackToComment(t *testing.T) {
-	got := KeepAliveFrameFor(IdentityTranslator{})
-	if !bytes.Equal(got, DefaultKeepAliveFrame) {
-		t.Fatalf("frame = %q, want the default SSE comment", got)
+func (k keepAliveTranslator) KeepAliveFrame() []byte { return []byte(k.frame) }
+
+func TestKeepAliveFrameFor(t *testing.T) {
+	const comment = ": keepalive\n\n"
+	tests := []struct {
+		name string
+		tr   Translator
+		want string
+	}{
+		{"shape declares its own frame", keepAliveTranslator{frame: "event: ping\ndata: {}\n\n"}, "event: ping\ndata: {}\n\n"},
+		{"shape declares an empty frame", keepAliveTranslator{}, comment},
+		{"shape declares none", IdentityTranslator{}, comment},
+		{"nil translator", nil, comment},
 	}
-	// An SSE comment line: no field name, so every conforming consumer drops it.
-	if !bytes.HasPrefix(got, []byte(":")) || !bytes.HasSuffix(got, []byte("\n\n")) {
-		t.Fatalf("default frame %q is not a terminated SSE comment", got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(KeepAliveFrameFor(tc.tr)); got != tc.want {
+				t.Errorf("frame = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
