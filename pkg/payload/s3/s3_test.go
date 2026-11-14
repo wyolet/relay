@@ -186,7 +186,6 @@ func TestSinkWriteThenReaderGet(t *testing.T) {
 }
 
 func TestReaderGetWithoutPrefixMatchesWholeIDs(t *testing.T) {
-	t.Skip(`bug: with no key prefix, Get("req-1") returns the record stored as 2026/05/26/other-req-1.json; the id is matched as a bare key suffix, so it also matches the tail of a longer id`)
 	_, cfg := newFakeS3(t)
 	ctx := context.Background()
 	sink, err := New(ctx, cfg)
