@@ -2,9 +2,10 @@ package apply
 
 import (
 	"context"
-	"reflect"
+	"slices"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/app/budget"
 	apppool "github.com/wyolet/relay/app/pool"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
@@ -35,52 +36,37 @@ func linkedRows() (*Rows, *policy.Policy) {
 	}, pol
 }
 
-// Pruning a row a policy links is allowed, and the plan names the policy and
-// the field that loses the link, like the API's delete answer.
+// Pruning a row a policy links is allowed. The plan names the policy and the
+// field that loses the link, like the API's delete answer, and the entry
+// keeps the policy in the field vocabulary the delete is audited with.
 func TestPruneReportsThePoliciesThatLoseALink(t *testing.T) {
-	rows, _ := linkedRows()
-	b := pruneAll(rows)
-	if err := b.run(context.Background(), nil); err != nil {
-		t.Fatalf("plan: %v", err)
-	}
-	want := map[string]string{"Pool": "spec.pools", "RateLimit": "spec.rateLimits", "Budget": "spec.budgets"}
-	for _, e := range b.entries {
-		field, ok := want[e.Kind]
-		if !ok || e.Action != ActionDelete {
-			continue
-		}
-		delete(want, e.Kind)
-		if e.Detached == nil || e.Detached.Field != field || !reflect.DeepEqual(e.Detached.Policies, []string{"team-gate"}) {
-			t.Errorf("%s delete reported %+v, want team-gate losing %s", e.Kind, e.Detached, field)
-		}
-	}
-	if len(want) != 0 {
-		t.Fatalf("no delete planned for %v", want)
-	}
-}
-
-// The policies a prune takes links from are kept on the entry, in the field
-// vocabulary the control API's delete audits them with.
-func TestPruneKeepsThePoliciesToAudit(t *testing.T) {
 	rows, pol := linkedRows()
 	b := pruneAll(rows)
 	if err := b.run(context.Background(), nil); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	want := map[string]string{"Pool": "spec.poolIds", "RateLimit": "spec.rateLimits[].rateLimitId", "Budget": "spec.budgets[].budgetId"}
-	for _, e := range b.entries {
-		field, ok := want[e.Kind]
-		if !ok || e.Action != ActionDelete {
-			continue
-		}
-		delete(want, e.Kind)
-		got := e.DetachedPolicies()
-		if len(got) != 1 || got[0] != (DetachedPolicy{ID: pol.Meta.ID, Name: pol.Meta.Name, Owner: pol.Meta.Owner, Field: field}) {
-			t.Errorf("%s delete keeps %+v, want %s losing %s", e.Kind, got, pol.Meta.Name, field)
-		}
+	type report struct {
+		Kind     string
+		Detached DetachedLinks
+		Audit    []DetachedPolicy
 	}
-	if len(want) != 0 {
-		t.Fatalf("no delete planned for %v", want)
+	audit := func(field string) []DetachedPolicy {
+		return []DetachedPolicy{{ID: pol.Meta.ID, Name: "team-gate", Owner: pol.Meta.Owner, Field: field}}
+	}
+	want := []report{
+		{"Pool", DetachedLinks{Field: "spec.pools", Policies: []string{"team-gate"}}, audit("spec.poolIds")},
+		{"Budget", DetachedLinks{Field: "spec.budgets", Policies: []string{"team-gate"}}, audit("spec.budgets[].budgetId")},
+		{"RateLimit", DetachedLinks{Field: "spec.rateLimits", Policies: []string{"team-gate"}}, audit("spec.rateLimits[].rateLimitId")},
+	}
+	var got []report
+	for _, e := range b.entries {
+		if e.Action != ActionDelete || e.Detached == nil {
+			t.Fatalf("entry %s %q = %s with %+v, want a delete reporting its links", e.Kind, e.Name, e.Action, e.Detached)
+		}
+		got = append(got, report{e.Kind, *e.Detached, e.DetachedPolicies()})
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("deletes (-want +got):\n%s", diff)
 	}
 }
 
@@ -93,9 +79,17 @@ func TestPruneReportsAgainstThePolicyTheBundleDeclares(t *testing.T) {
 	if err := b.run(context.Background(), userDocs(t, docHeader+doc)); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
+	var deletes []string
 	for _, e := range b.entries {
-		if e.Action == ActionDelete && e.Detached != nil {
+		if e.Action != ActionDelete {
+			continue
+		}
+		deletes = append(deletes, e.Kind)
+		if e.Detached != nil || e.DetachedPolicies() != nil {
 			t.Errorf("%s %s reported %+v though the declared policy no longer links it", e.Kind, e.Name, e.Detached)
 		}
+	}
+	if want := []string{"Pool", "Budget", "RateLimit"}; !slices.Equal(deletes, want) {
+		t.Fatalf("deletes = %v, want %v", deletes, want)
 	}
 }

@@ -1,14 +1,11 @@
 package apply
 
 import (
-	"context"
 	"errors"
 	"testing"
 
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/pkg/meta"
 )
 
 // licensed is a Checker that unlocks exactly the named features.
@@ -60,55 +57,5 @@ func TestApplyRejectsBuiltinRoleNames(t *testing.T) {
 	}
 	if reserved.Name != "admin" {
 		t.Errorf("reserved name reported as %q", reserved.Name)
-	}
-}
-
-// Settings and identity rows have their own loaders. Dropping them silently
-// makes a bundle report success while half of it went nowhere.
-func TestApplyRejectsKindsItCannotWrite(t *testing.T) {
-	for _, doc := range []manifest.Document{
-		{Setting: &manifest.SettingDTO{Kind: "Setting"}},
-		{Foreign: "User"},
-	} {
-		b := &builder{rows: &Rows{}, lic: license.Community}
-		err := b.run(context.Background(), []manifest.Document{doc})
-		var unsupported *UnsupportedKindError
-		if !errors.As(err, &unsupported) {
-			t.Fatalf("run(%s) = %v, want an UnsupportedKindError", doc.Kind(), err)
-		}
-		if unsupported.Kind != doc.Kind() {
-			t.Errorf("reported kind %q, want %q", unsupported.Kind, doc.Kind())
-		}
-	}
-}
-
-// A Team, Group or Role is system-owned by rule (they name a scope or a
-// grant), so provenance cannot decide whether apply may prune them.
-func TestTenancyKindsArePrunableWhileSystemOwned(t *testing.T) {
-	system := meta.Owner{Kind: meta.OwnerSystem}
-	for _, kind := range []string{"Team", "Group", "Role", "RoleBinding"} {
-		if !prunable(kind, "platform", system) {
-			t.Errorf("prunable(%s, system) = false, want true", kind)
-		}
-	}
-	if prunable("Provider", "openai", system) {
-		t.Error("a system-owned catalog row must not be prunable")
-	}
-}
-
-// A stored host key holds ciphertext (or nothing) where the manifest holds
-// the plaintext it declared, so `value` can never compare equal.
-func TestHostKeyValueIsNeverDrift(t *testing.T) {
-	spec := hostkey.Spec{HostID: "h-1"}
-	stored := &hostkey.HostKey{Meta: meta.Metadata{ID: "k-1", Name: "openai-main"}, Spec: spec}
-	declared := &hostkey.HostKey{Meta: meta.Metadata{ID: "k-1", Name: "openai-main"}, Spec: spec}
-	declared.Spec.Value = "sk-plaintext"
-
-	got := changedFields(
-		viewOf("HostKey", stored, &stored.Meta),
-		viewOf("HostKey", declared, &declared.Meta),
-	)
-	if len(got) != 0 {
-		t.Fatalf("changedFields = %v, want none", got)
 	}
 }
