@@ -74,11 +74,17 @@ func canonicalUsageToCC(t usage.Tokens) *Usage {
 		CompletionTokens: completion,
 		TotalTokens:      prompt + completion,
 	}
-	if cached > 0 {
-		cu.PromptDetails = &PromptTokenDetails{CachedTokens: cached}
+	if pd := (PromptTokenDetails{CachedTokens: cached, AudioTokens: int(t["audio_input"])}); pd != (PromptTokenDetails{}) {
+		cu.PromptDetails = &pd
 	}
-	if r := int(t["reasoning"]); r > 0 {
-		cu.CompletionDetails = &CompletionTokenDetails{ReasoningTokens: r}
+	cd := CompletionTokenDetails{
+		ReasoningTokens:          int(t["reasoning"]),
+		AudioTokens:              int(t["audio_output"]),
+		AcceptedPredictionTokens: int(t["accepted_prediction"]),
+		RejectedPredictionTokens: int(t["rejected_prediction"]),
+	}
+	if cd != (CompletionTokenDetails{}) {
+		cu.CompletionDetails = &cd
 	}
 	return cu
 }

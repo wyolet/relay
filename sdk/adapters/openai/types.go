@@ -56,6 +56,8 @@ type ChatMessage struct {
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
 	Refusal    string          `json:"refusal,omitempty"`
+	// FunctionCall is the deprecated single-call form a "function" role message answers; read on parse, never written.
+	FunctionCall *ToolCallFunction `json:"function_call,omitempty"`
 }
 
 // ContentPart is one element of a multimodal content array.

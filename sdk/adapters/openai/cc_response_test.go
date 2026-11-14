@@ -176,7 +176,6 @@ func TestCCSerializeResponse(t *testing.T) {
 
 // Chat Completions has a wire field for every usage detail it reports, so a parse → serialize round trip must keep them all.
 func TestCCResponse_UsageDetailsRoundTrip(t *testing.T) {
-	t.Skip("bug: prompt audio_tokens and completion audio/accepted/rejected prediction tokens → dropped by canonicalUsageToCC")
 	usageJSON := `{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,"prompt_tokens_details":{"cached_tokens":20,"audio_tokens":10},
 		"completion_tokens_details":{"reasoning_tokens":5,"audio_tokens":3,"accepted_prediction_tokens":7,"rejected_prediction_tokens":2}}`
 	resp, err := CCTranslator{}.ParseResponse([]byte(ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}}`, `,"usage":`+usageJSON)))
