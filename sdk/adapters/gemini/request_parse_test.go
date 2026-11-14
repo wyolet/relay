@@ -76,6 +76,14 @@ func TestParseRequest_Contents(t *testing.T) {
 			`[{"role":"user","parts":[{"fileData":{"mimeType":"image/png","fileUri":"https://example.com/x"}}]}]`,
 			`[{"type":"message","role":"user","content":[{"type":"input_file","file_url":"https://example.com/x","media_type":"image/png"}]}]`,
 		},
+		{
+			"proto field names on parts",
+			`[{"role":"model","parts":[{"function_call":{"id":"c1","name":"f","args":{"a":1}},"thought_signature":"sig"}]},
+			  {"role":"user","parts":[{"function_response":{"id":"c1","name":"f","response":{"ok":true}}},{"file_data":{"mime_type":"application/pdf","file_uri":"https://example.com/x"}}]}]`,
+			`[{"type":"function_call","call_id":"c1","name":"f","arguments":"{\"a\":1}","provider_data":{"thoughtSignature":"sig"}},
+			  {"type":"function_call_output","call_id":"c1","output":"{\"ok\":true}"},
+			  {"type":"message","role":"user","content":[{"type":"input_file","file_url":"https://example.com/x","media_type":"application/pdf"}]}]`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -110,6 +118,13 @@ func TestParseRequest_Config(t *testing.T) {
 			"declaration without parameters, unrecognised mode reads as auto",
 			`{"tools":[{"functionDeclarations":[{"name":"f"}]}],"toolConfig":{"functionCallingConfig":{"mode":"VALIDATED"}}}`,
 			`{"model":null,"input":null,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":"auto"}}`,
+		},
+		{
+			"proto field names in config and tools",
+			`{"generation_config":{"top_p":0.9,"response_mime_type":"application/json","thinking_config":{"thinking_budget":512}},
+			  "tools":[{"function_declarations":[{"name":"f"}]}],"tool_config":{"function_calling_config":{"mode":"ANY","allowed_function_names":["f"]}}}`,
+			`{"model":null,"input":null,"model_config":{"*":{"sampling":{"top_p":0.9},"reasoning":{"budget_tokens":512},"output":{"format":{"type":"json_object"}}}},
+			  "tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":{"type":"function","name":"f"}}}`,
 		},
 	}
 	for _, c := range cases {
@@ -178,7 +193,6 @@ func TestParseRequest_RolelessContentKeepsMedia(t *testing.T) {
 }
 
 func TestParseRequest_SnakeCaseFieldNames(t *testing.T) {
-	t.Skip("bug: proto field names (system_instruction, generation_config, inline_data, as in Google's REST examples) are ignored without an error")
 	req := parseRequest(t, `{"system_instruction":{"parts":[{"text":"Be terse."}]},"generation_config":{"max_output_tokens":64},
 		"contents":[{"role":"user","parts":[{"inline_data":{"mime_type":"image/png","data":"iVBO"}}]}]}`)
 	assertJSON(t, req, `{"model":null,"instructions":"Be terse.",
