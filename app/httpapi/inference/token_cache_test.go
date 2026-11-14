@@ -90,7 +90,6 @@ func TestClaimsCache_StaysWithinItsBound(t *testing.T) {
 }
 
 func TestClaimsCache_SpreadsOverEveryShard(t *testing.T) {
-	t.Skip("bug: shardOf masks the digest's first hex character → digests starting a–f land in shards 1–6, shards 10–15 stay empty: 10 of 16 shards hold entries")
 	used := map[int]bool{}
 	for i := range 4096 {
 		used[shardOf(sha(strconv.Itoa(i)))] = true
