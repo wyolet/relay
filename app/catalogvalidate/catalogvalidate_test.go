@@ -532,7 +532,6 @@ func TestValidateGraph_DuplicateBinding(t *testing.T) {
 
 // The document declared later is the duplicate, whatever order the graph is walked in.
 func TestValidateGraph_DuplicateBindingBlamesTheLaterDocument(t *testing.T) {
-	t.Skip(`bug: two bindings of one (model, host) → which is reported as "first declared" follows map order, so the report changes between runs`)
 	want := []string{`error invariant HostBinding/gpt-x-openai-host-2: duplicate (model="gpt-x", host="openai-host") binding; first declared by "gpt-x-openai-host"`}
 	for range 50 {
 		if diff := cmp.Diff(want, lines(ValidateGraph(append(fixture(), secondBinding())))); diff != "" {

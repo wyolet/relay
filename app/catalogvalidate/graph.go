@@ -27,6 +27,10 @@ type graph struct {
 	RoleBindings    map[string]*manifest.RoleBindingDTO
 	PolicyBindings  map[string]*manifest.PolicyBindingDTO
 
+	// hostBindingNames lists HostBindings' names in document order, so
+	// "first declared" in the duplicate-pair check means first in the docs.
+	hostBindingNames []string
+
 	// duplicates tracks names that appeared more than once within a kind.
 	// Each entry holds the kind + name; checkDuplicateNames emits issues.
 	duplicates []Ref
@@ -170,6 +174,9 @@ func buildGraph(docs []manifest.Document) *graph {
 			indexOne(g, "HostBinding", d.HostBinding.Metadata.Name, func() bool {
 				_, dup := g.HostBindings[d.HostBinding.Metadata.Name]
 				g.HostBindings[d.HostBinding.Metadata.Name] = d.HostBinding
+				if !dup {
+					g.hostBindingNames = append(g.hostBindingNames, d.HostBinding.Metadata.Name)
+				}
 				return dup
 			})
 		}

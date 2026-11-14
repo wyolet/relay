@@ -63,7 +63,8 @@ func checkBindingRefs(g *graph) []Issue {
 	// Track (model, host) pairs to detect duplicates.
 	seen := map[[2]string]string{} // value = first binding name that claimed the pair
 
-	for _, b := range g.HostBindings {
+	for _, name := range g.hostBindingNames {
+		b := g.HostBindings[name]
 		src := Ref{Kind: "HostBinding", Name: b.Metadata.Name}
 
 		// spec.model
