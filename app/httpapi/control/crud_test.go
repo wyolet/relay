@@ -407,7 +407,7 @@ func TestCRUDGovernanceSectionDecidesCatalogRows(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	detached := seedThings()[2]
 	detached.Meta.CatalogDetachedAt = &at
-	h, store = newThingHarness(t, testRBAC(), "rate-limits", "rate-limit", locked, detached)
+	h, _ = newThingHarness(t, testRBAC(), "rate-limits", "rate-limit", locked, detached)
 	if got := decodeMeta(t, scopeReq(t, h, "root", "PUT", "/rate-limits/by-id/"+catalogID, `{"metadata":{"name":"renamed"}}`), 200); got.Name != "renamed" || got.CatalogDetachedAt == nil || !got.CatalogDetachedAt.Equal(at) {
 		t.Fatalf("edit of a detached row = %+v, want renamed and still detached", got)
 	}
