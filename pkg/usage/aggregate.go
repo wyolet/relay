@@ -102,7 +102,10 @@ func SummarizeWithDistinct(events []Event, groupBy, distinct string, refusals bo
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Requests > rows[j].Requests
+		if rows[i].Requests != rows[j].Requests {
+			return rows[i].Requests > rows[j].Requests
+		}
+		return rows[i].Group[groupBy] < rows[j].Group[groupBy]
 	})
 	return SummaryResult{Rows: rows, Labels: labels.Map(), From: from, To: to}, nil
 }
