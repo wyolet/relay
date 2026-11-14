@@ -135,14 +135,11 @@ for i, r in ipairs(rules) do
     if rate > amount then
       local retry_ms = win_ms - elapsed_ms
       if prev_val > 0 then
-        local need = (amount - cur_val) / prev_val
-        local frac_t = 1.0 - need
-        if frac_t > 0 and frac_t < 1.0 then
-          local wait = frac_t * win_ms - elapsed_ms
-          if wait > 0 and wait < retry_ms then retry_ms = wait end
-        end
+        -- Fits once the previous bucket's weight decays to amount - new_cur; dividing last keeps a whole-ms wait exact.
+        local wait = retry_ms - (amount - new_cur) * win_ms / prev_val
+        if wait > 0 and wait < retry_ms then retry_ms = wait end
       end
-      return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
+      return cjson.encode({exceeded=true, retry_after_ms=math.ceil(retry_ms),
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
     table.insert(pending, {kind="sw_req", key=cur_key, ttl_ms=ttl_ms})
@@ -699,18 +696,14 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					if rate > float64(amount) {
 						retryMs := float64(winMs) - float64(elapsedMs)
 						if prevVal > 0 {
-							need := float64(amount-curVal) / float64(prevVal)
-							fracT := 1.0 - need
-							if fracT > 0 && fracT < 1.0 {
-								wait := fracT*float64(winMs) - float64(elapsedMs)
-								if wait > 0 && wait < retryMs {
-									retryMs = wait
-								}
+							wait := retryMs - float64(amount-newCur)*float64(winMs)/float64(prevVal)
+							if wait > 0 && wait < retryMs {
+								retryMs = wait
 							}
 						}
 						result = reserveResult{
 							Exceeded:     true,
-							RetryAfterMs: int64(math.Floor(retryMs)),
+							RetryAfterMs: int64(math.Ceil(retryMs)),
 							RuleKey:      r.RuleKey,
 							RuleName:     r.RuleName,
 							Meter:        r.Meter,

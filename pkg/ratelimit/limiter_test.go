@@ -203,7 +203,6 @@ func TestReserveCommitPerStrategy(t *testing.T) {
 }
 
 func TestSlidingWindowRetryAfterIsEarliestAdmission(t *testing.T) {
-	t.Skip("bug: sliding window 10/min with previous bucket 10 and current 5, refused at half-window → RetryAfter 30s, but a reserve 6s later is admitted")
 	now := scenarioStart.Add(500 * time.Millisecond)
 	l := newTestLimiter(t, &now)
 	rules := []Rule{reqRule("rule", "the rule", 10, time.Minute)}
