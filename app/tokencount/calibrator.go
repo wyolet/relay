@@ -166,7 +166,7 @@ func (c *Calibrator) Ratio(ctx context.Context, sessionID, modelID string) (floa
 	return 0, false
 }
 
-// read returns the stored ratio at key. A missing, unreadable or non-positive record reads as "unknown" — the caller then estimates, which is never worse than the fallback it replaces.
+// read returns the stored ratio at key. A missing, unreadable, non-finite or non-positive record reads as "unknown" — the caller then estimates, which is never worse than the fallback it replaces.
 func (c *Calibrator) read(ctx context.Context, key string) (float64, bool) {
 	raw, err := c.state.Get(ctx, key)
 	if err != nil && !errors.Is(err, kv.ErrNotFound) {
@@ -176,7 +176,7 @@ func (c *Calibrator) read(ctx context.Context, key string) (float64, bool) {
 		return 0, false
 	}
 	r, err := strconv.ParseFloat(string(raw), 64)
-	if err != nil || r <= 0 {
+	if err != nil || r <= 0 || math.IsNaN(r) || math.IsInf(r, 0) {
 		return 0, false
 	}
 	return r, true

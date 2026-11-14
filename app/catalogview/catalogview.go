@@ -265,7 +265,7 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 		if !s.visible("policy", p.Meta.ID, p.Meta.Owner) {
 			continue
 		}
-		hostSlug, granted, _ := idx.policyGrantsModel(p, m, provSlug, modelHosts)
+		hostSlugs, granted, _ := idx.policyGrantsModel(p, m, provSlug, modelHosts)
 		if !granted {
 			continue
 		}
@@ -273,7 +273,7 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 			ID:     p.Meta.ID,
 			Name:   p.Meta.Name,
 			Owner:  idx.ownerRefOf(p.Meta.Owner),
-			Limits: idx.limitsFor(p, provSlug, m.Meta.Name, hostSlug),
+			Limits: idx.limitsOnAnyHost(p, provSlug, m.Meta.Name, hostSlugs),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })

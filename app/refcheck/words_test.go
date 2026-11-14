@@ -108,7 +108,6 @@ func TestScopeRefusalsSayWhatToDo(t *testing.T) {
 }
 
 func TestKindWords(t *testing.T) {
-	t.Skip(`bug: kindWords("host-key") = "host keies", want "host keys": refusals read "a team's pool can use host keies of the team or the system"`)
 	for kind, want := range map[string]string{"host-key": "host keys", "policy": "policies", "pool": "pools", "rate-limit": "rate limits", "budget": "budgets", "account": "accounts"} {
 		if got := kindWords(kind); got != want {
 			t.Errorf("kindWords(%q) = %q, want %q", kind, got, want)

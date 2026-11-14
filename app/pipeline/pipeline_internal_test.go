@@ -82,7 +82,6 @@ func TestReadBodyCapped(t *testing.T) {
 }
 
 func TestReadBodyCapped_BodyMislabelledAsGzipIsKept(t *testing.T) {
-	t.Skip(`bug: an error body sent with Content-Encoding: gzip that is not gzip ("plain") is retained as empty: the failed gzip header read consumes the bytes the fallback then reads`)
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader("plain")), Header: http.Header{"Content-Encoding": {"gzip"}}}
 	if got := readBodyCapped(resp, 64); string(got) != "plain" {
 		t.Errorf("read %q, want the body as sent", got)

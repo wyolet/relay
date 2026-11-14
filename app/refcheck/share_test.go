@@ -147,7 +147,6 @@ func TestShare(t *testing.T) {
 
 // A receiver the sharer may not see answers exactly as one that does not exist, or the answer tells the two apart.
 func TestShareHiddenServiceAccountAnswersAsMissing(t *testing.T) {
-	t.Skip(`bug: share with a hidden service account answers 404 serviceaccount "sa-1" not found, a missing one 404 service-account "sa-gone" not found: the kind word tells hidden from missing`)
 	rows := shareRows()
 	src := rows.accounts["acct-alice"]
 	share := account.Share(src, account.Receiver{Kind: account.ReceiverServiceAccount, ID: "sa-1"}, projectOne, "x")
