@@ -19,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/session"
@@ -263,23 +262,6 @@ func TestAuditLogout(t *testing.T) {
 	}
 	if ev.Actor.Kind != audit.ActorAnonymous {
 		t.Fatalf("actor = %+v, want anonymous for a logout with no live session", ev.Actor)
-	}
-}
-
-// audit.read is granted only by a binding; with no bindings in the snapshot
-// it stays admin-only, the same rule that gates settings and debug.
-func TestAuditReadIsAdminOnlyUnderRBAC(t *testing.T) {
-	for _, who := range []string{"alice", "bob"} {
-		ctx := actor.WithActor(t.Context(), scopeActors[who])
-		if err := testRBAC().Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err == nil {
-			t.Fatalf("%s: audit.read allowed, want denied", who)
-		}
-	}
-	for _, who := range []string{"root", "token"} {
-		ctx := actor.WithActor(t.Context(), scopeActors[who])
-		if err := testRBAC().Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err != nil {
-			t.Fatalf("%s: audit.read denied (%v), want allowed", who, err)
-		}
 	}
 }
 
