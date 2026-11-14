@@ -2,13 +2,7 @@ package anthropic
 
 import (
 	"testing"
-
-	v1 "github.com/wyolet/relay/sdk/v1"
 )
-
-// translateAll hides a translator's v1.SummaryStream so summaries built on it
-// translate every frame.
-type translateAll struct{ v1.Translator }
 
 func TestAnthropicSummaryFrame(t *testing.T) {
 	cases := []struct {
