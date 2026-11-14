@@ -150,7 +150,7 @@ func TestModelFilter(t *testing.T) {
 		filterCase{q: "created_from=2026-02-01T00:00:00Z", want: []string{"haiku"}},
 		filterCase{q: "sort=-context_window", want: []string{"claude", "big", "small", "haiku"}},
 		filterCase{q: "sort=product_line", want: []string{"big", "small", "haiku", "claude"}},
-		filterCase{q: "sort=-released", want: []string{"claude", "big", "haiku", "small"}},
+		filterCase{q: "sort=-released", want: []string{"claude", "big", "small", "haiku"}},
 		filterCase{q: "capability=telepathy", refused: `capability: invalid value "telepathy" (allowed: chat, embeddings, streaming, tools, parallelTools, vision, audio, promptCache, reasoning, jsonMode, structuredOutputs, batch)`},
 		filterCase{q: "context_window_min=lots", refused: "context_window_min: must be an integer"},
 		filterCase{q: "released_from=yesterday", refused: "released_from: must be an RFC3339 timestamp"},

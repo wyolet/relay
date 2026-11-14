@@ -203,7 +203,6 @@ func TestParseRejections(t *testing.T) {
 }
 
 func TestSortDescendingKeepsTiesInInputOrder(t *testing.T) {
-	t.Skip("bug: sort=-context_window over beta and delta (both 200, beta first in the input) → [gamma delta beta alpha]; the descending comparator reports equal items as out of order, so the stable sort reverses ties")
 	q, err := schema().Parse(url.Values{"sort": {"-context_window"}})
 	if err != nil {
 		t.Fatal(err)
