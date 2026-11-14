@@ -20,18 +20,14 @@ var ctx = context.Background()
 func newKEK(t testing.TB, b byte) *local.KEK {
 	t.Helper()
 	k, err := local.New(bytes.Repeat([]byte{b}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return k
 }
 
 func newSet(t testing.TB, keks ...kek.KEK) *kek.Set {
 	t.Helper()
 	s, err := kek.NewSet(keks...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return s
 }
 
@@ -198,9 +194,7 @@ func (g *gated) Get(ctx context.Context, id [16]byte) (keyring.DataKey, error) {
 func newRing(t testing.TB, st keyring.Store, c *clock, keks ...kek.KEK) *keyring.Ring {
 	t.Helper()
 	r, err := keyring.New(ctx, st, newSet(t, keks...), keyring.Options{Now: c.Now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return r
 }
 
@@ -228,9 +222,7 @@ func mustDecrypt(t testing.TB, r *keyring.Ring, scope string, sealed []byte, aad
 func keysOfScope(t testing.TB, st keyring.Store, scope string) []keyring.DataKey {
 	t.Helper()
 	all, err := st.List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	var out []keyring.DataKey
 	for _, k := range all {
 		if k.Scope == scope {
@@ -247,4 +239,11 @@ func keyInfo(r *keyring.Ring, id [16]byte) (keyring.KeyInfo, bool) {
 		}
 	}
 	return keyring.KeyInfo{}, false
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

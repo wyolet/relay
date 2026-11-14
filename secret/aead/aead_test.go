@@ -16,9 +16,7 @@ var (
 func mustSeal(t testing.TB, plaintext, aad []byte) []byte {
 	t.Helper()
 	sealed, err := Seal(testKey, testKeyID, plaintext, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return sealed
 }
 
@@ -223,9 +221,7 @@ func TestParseKey(t *testing.T) {
 
 func TestGenerateKey(t *testing.T) {
 	a, err := GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	k, err := ParseKey(a)
 	if err != nil || len(k) != KeySize {
 		t.Fatalf("ParseKey(GenerateKey()) = %d bytes, %v", len(k), err)
@@ -255,4 +251,11 @@ func FuzzOpen(f *testing.F) {
 		_, _ = KeyID(sealed)
 		_, _ = OpenLegacy(testKey, sealed, aad)
 	})
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

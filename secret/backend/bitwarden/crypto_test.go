@@ -66,9 +66,7 @@ func cbcEncrypt(t *testing.T, encKey, plaintext []byte) (iv, ct []byte) {
 	padLen := aes.BlockSize - len(plaintext)%aes.BlockSize
 	padded := append(bytes.Clone(plaintext), bytes.Repeat([]byte{byte(padLen)}, padLen)...)
 	block, err := aes.NewCipher(encKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	iv, ct = seq(100, 16), make([]byte, len(padded))
 	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, padded)
 	return iv, ct
@@ -77,9 +75,7 @@ func cbcEncrypt(t *testing.T, encKey, plaintext []byte) (iv, ct []byte) {
 func rsaEncrypt(t *testing.T, typ string, h hash.Hash, plaintext []byte) string {
 	t.Helper()
 	ct, err := rsa.EncryptOAEP(h, rand.Reader, &testRSAKey().PublicKey, plaintext, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return typ + "." + b64(ct)
 }
 
@@ -130,9 +126,7 @@ func TestCipherString_Decrypt(t *testing.T) {
 	const plain = "Hello, Vaultwarden!"
 	parse := func(s string) *cipherString {
 		cs, err := parseCipherString(s)
-		if err != nil {
-			t.Fatal(err)
-		}
+		must(t, err)
 		return cs
 	}
 	with := func(f func(*cipherString)) *cipherString {
@@ -223,5 +217,12 @@ func TestDecryptStr(t *testing.T) {
 		if got, err := decryptStr(tc.in, key); got != tc.want || !wantErr(err, tc.wantErr) {
 			t.Errorf("%s: decryptStr = %q, %v; want %q, %q", tc.name, got, err, tc.want, tc.wantErr)
 		}
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

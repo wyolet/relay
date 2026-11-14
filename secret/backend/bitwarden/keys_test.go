@@ -129,9 +129,7 @@ func TestStretchKey(t *testing.T) {
 func TestDecryptSymmetricKey(t *testing.T) {
 	master := seq(7, 32)
 	stretched, err := stretchKey(master)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	user := symKey(1)
 	userBytes := append(bytes.Clone(user.encKey), user.macKey...)
 	const failed = "bitwarden: decrypt symmetric key: bitwarden: MAC key required for type 2 decryption"
@@ -161,17 +159,11 @@ func TestDecryptSymmetricKey(t *testing.T) {
 func TestDecryptPrivateKey(t *testing.T) {
 	key := symKey(0)
 	der, err := x509.MarshalPKCS8PrivateKey(testRSAKey())
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	ec, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	ecDER, err := x509.MarshalPKCS8PrivateKey(ec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 
 	got, err := decryptPrivateKey(encryptType2(t, key, der), key)
 	if err != nil || !got.Equal(testRSAKey()) {
@@ -197,9 +189,7 @@ func TestDecryptOrgKey(t *testing.T) {
 	org := symKey(100)
 	orgBytes := append(bytes.Clone(org.encKey), org.macKey...)
 	other, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	for _, tc := range []struct {
 		name, in string
 		priv     *rsa.PrivateKey

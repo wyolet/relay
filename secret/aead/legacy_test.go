@@ -16,9 +16,7 @@ type legacyVector struct {
 func readLegacyVectors(t *testing.T) []legacyVector {
 	t.Helper()
 	f, err := os.Open("testdata/legacy.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	defer f.Close()
 	var out []legacyVector
 	sc := bufio.NewScanner(f)
@@ -34,9 +32,7 @@ func readLegacyVectors(t *testing.T) []legacyVector {
 		}
 		out = append(out, legacyVector{fields[0], mustHex(t, fields[1]), mustHex(t, fields[2])})
 	}
-	if err := sc.Err(); err != nil {
-		t.Fatal(err)
-	}
+	must(t, sc.Err())
 	return out
 }
 

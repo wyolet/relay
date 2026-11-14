@@ -51,9 +51,7 @@ func (v *vault) enc(s string) string { return encryptType2String(v.t, v.userKey,
 func jsonOf(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return string(b)
 }
 
@@ -61,17 +59,11 @@ func newVault(t *testing.T) *vault {
 	t.Helper()
 	v := &vault{t: t, userKey: symKey(1), orgKey: symKey(100)}
 	master, err := makeMasterKey(vaultPassword, vaultEmail, kdfPBKDF2, 1000, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	stretched, err := stretchKey(master)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	privDER, err := x509.MarshalPKCS8PrivateKey(testRSAKey())
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	org := func(s string) string { return encryptType2String(t, v.orgKey, s) }
 
 	v.prelogin = reply{200, `{"kdf":0,"kdfIterations":1000}`}
@@ -256,9 +248,7 @@ func TestResolver_TokenLifecycle(t *testing.T) {
 	)
 	userKeyOf := func(v *vault) string {
 		var tok struct{ Key string }
-		if err := json.Unmarshal([]byte(v.token.body), &tok); err != nil {
-			t.Fatal(err)
-		}
+		must(t, json.Unmarshal([]byte(v.token.body), &tok))
 		return jsonOf(t, tok.Key)
 	}
 	for _, tc := range []struct {
@@ -349,9 +339,7 @@ func TestResolver_SyncFailures(t *testing.T) {
 func mustPKCS8(t *testing.T) []byte {
 	t.Helper()
 	der, err := x509.MarshalPKCS8PrivateKey(testRSAKey())
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return der
 }
 

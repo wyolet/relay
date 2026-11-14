@@ -22,9 +22,7 @@ var (
 func mustNew(t testing.TB, key []byte) *KEK {
 	t.Helper()
 	k, err := New(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return k
 }
 
@@ -63,9 +61,7 @@ func TestNewCopiesAndChecksKey(t *testing.T) {
 	key := bytes.Repeat([]byte{7}, 32)
 	k := mustNew(t, key)
 	wrapped, err := k.Wrap(context.Background(), []byte("dek"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	key[0] ^= 0xff
 	if got, err := k.Unwrap(context.Background(), wrapped, nil); err != nil || string(got) != "dek" {
 		t.Fatalf("Unwrap after caller mutated key: %q, %v", got, err)
@@ -78,9 +74,7 @@ func TestWrapUnwrap(t *testing.T) {
 	dek := bytes.Repeat([]byte{0xd0}, 32)
 	aad := append([]byte("0123456789abcdef"), "user:7"...)
 	wrapped, err := k.Wrap(ctx, dek, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if id, err := aead.KeyID(wrapped); err != nil || id != k.ID() {
 		t.Fatalf("wrapped header id = %x, %v", id, err)
 	}
@@ -90,9 +84,7 @@ func TestWrapUnwrap(t *testing.T) {
 	}
 	// The wrap label is bound: a plain Seal with the same aad does not unwrap.
 	plain, err := aead.Seal(bytes.Repeat([]byte{1}, 32), k.ID(), dek, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if _, err := k.Unwrap(ctx, plain, aad); !errors.Is(err, aead.ErrAuthFailed) {
 		t.Fatalf("unlabelled seal unwrapped: %v", err)
 	}
@@ -104,9 +96,7 @@ func TestUnwrapAADBinding(t *testing.T) {
 	id1 := []byte("0123456789abcdef")
 	id2 := []byte("0123456789abcdeX")
 	wrapped, err := k.Wrap(ctx, []byte("dek"), append(append([]byte(nil), id1...), "user:7"...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	for name, aad := range map[string][]byte{
 		"other id":    append(append([]byte(nil), id2...), "user:7"...),
 		"other scope": append(append([]byte(nil), id1...), "user:8"...),
@@ -124,9 +114,7 @@ func TestUnwrapRejects(t *testing.T) {
 	a := mustNew(t, bytes.Repeat([]byte{1}, 32))
 	b := mustNew(t, bytes.Repeat([]byte{2}, 32))
 	wrapped, err := a.Wrap(ctx, []byte("dek"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	// b's id written over a's: the right KEK is named, but its key never sealed this.
 	relabelled := bytes.Clone(wrapped)
 	bID := b.ID()
@@ -161,13 +149,9 @@ func TestUnwrapRejects(t *testing.T) {
 func TestOpenLegacy(t *testing.T) {
 	key := bytes.Repeat([]byte{3}, 32)
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	g, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	nonce := bytes.Repeat([]byte{9}, g.NonceSize())
 	ct := g.Seal(nil, nonce, []byte("sk-legacy"), nil)
 	got, err := mustNew(t, key).OpenLegacy(ct, nonce)
@@ -194,4 +178,11 @@ func FuzzUnwrap(f *testing.F) {
 			t.Fatalf("Unwrap accepted forged input: %x", in)
 		}
 	})
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

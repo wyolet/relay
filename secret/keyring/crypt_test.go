@@ -63,9 +63,7 @@ func TestRingWithoutTargetRefusesCreateButDecrypts(t *testing.T) {
 	if _, err := both.Rewrap(ctx, k2.ID()); err != nil {
 		t.Fatal(err)
 	}
-	if err := oldOnly.ReloadAll(ctx); err != nil {
-		t.Fatal(err)
-	}
+	must(t, oldOnly.ReloadAll(ctx))
 	mustDecrypt(t, oldOnly, "a", sealed, "row", "v")
 	if _, _, err := oldOnly.Encrypt(ctx, "b", []byte("x"), nil); !errors.Is(err, keyring.ErrTargetKEKUnavailable) {
 		t.Fatalf("Encrypt new scope: err = %v, want ErrTargetKEKUnavailable", err)
@@ -265,14 +263,10 @@ func TestMissedRotateWriteRetries(t *testing.T) {
 	k1 := newKEK(t, 1)
 	a := newRing(t, rs.ms, c, k1)
 	b := newRing(t, rs.ms, c, k1)
-	if err := b.EncryptAndWrite(ctx, "p", []byte("v1"), []byte("x"), rs.writer("x", "p")); err != nil {
-		t.Fatal(err)
-	}
+	must(t, b.EncryptAndWrite(ctx, "p", []byte("v1"), []byte("x"), rs.writer("x", "p")))
 	oldID := rs.get("x").keyID
 	nk, err := a.Rotate(ctx, "p") // b is not told
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	sealed, id := mustEncrypt(t, b, "p", "v2", "y")
 	if id != oldID {
 		t.Fatal("b should still believe the old key is Primary")
@@ -331,9 +325,7 @@ func TestLockedPrimaryEncryptFails(t *testing.T) {
 	early := newRing(t, ms, c, k2) // has never seen scope a
 	sealed, _ := mustEncrypt(t, newRing(t, ms, c, k1), "a", "v", "")
 	// The target moves to k2, but scope a's Primary stays under k1 (a rewrap that has not reached it).
-	if err := ms.SetTargetKEK(ctx, k2.ID(), k1.ID()); err != nil {
-		t.Fatal(err)
-	}
+	must(t, ms.SetTargetKEK(ctx, k2.ID(), k1.ID()))
 	late := newRing(t, ms, c, k2)
 	for name, r := range map[string]*keyring.Ring{"early": early, "late": late} {
 		if _, _, err := r.Encrypt(ctx, "a", []byte("x"), nil); !errors.Is(err, keyring.ErrKEKUnavailable) {
