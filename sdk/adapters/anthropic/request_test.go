@@ -608,7 +608,6 @@ func TestMarkHistoryBreakpoint_SkipsThinking(t *testing.T) {
 }
 
 func TestParseRequest_ThinkingPrecedesTheTextItFollowsOnTheWire(t *testing.T) {
-	t.Skip(`bug: assistant content [thinking, text, tool_use] → items [message, reasoning, function_call]; the reasoning item is moved after the text it preceded`)
 	wire := body(`"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"SIG"},{"type":"text","text":"calling"},{"type":"tool_use","id":"t1","name":"f","input":{}}]}]`)
 	want := request(input(signedThinking("plan", "SIG"), assistantText("calling"), &v1.FunctionCall{ID: "t1", CallID: "t1", Name: "f", Arguments: `{}`}))
 	got, err := AnthropicTranslator{}.ParseRequest([]byte(wire))
