@@ -576,6 +576,34 @@ func TestCloseSyncsUnsyncedCounts(t *testing.T) {
 	}
 }
 
+// Counts a failed sync left behind are sent again by the next one, with no request touching the counter in between.
+func TestUnansweredCountsAreSentAgainWithoutNewTraffic(t *testing.T) {
+	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
+	s := memStore(t)
+	syncOn := &failing{ScriptStore: s}
+	c := callerCounter(rule(ratelimit.MeterRequests, ratelimit.StrategyFixedWindow, 1000, time.Minute))
+	p := newPodOn(s, syncOn, &now)
+	p.admitN(t, 1, c)
+	p.sync()
+	p.admitN(t, 5, c)
+	syncOn.fail.Store(true)
+	now = now.Add(time.Second)
+	p.sync()
+	if got := stored(t, s, c, now); got != 1 {
+		t.Fatalf("store holds %d after a failed sync, want 1", got)
+	}
+	syncOn.fail.Store(false)
+	now = now.Add(time.Second)
+	p.sync()
+	if got := stored(t, s, c, now); got != 6 {
+		t.Fatalf("store holds %d after the next sync, want 6", got)
+	}
+	p.sync()
+	if got := stored(t, s, c, now); got != 6 {
+		t.Fatalf("store holds %d after one more sync, want 6 (sent once)", got)
+	}
+}
+
 func TestAddedSlotSurvivesIdleDrop(t *testing.T) {
 	now := time.Date(2026, 11, 4, 10, 0, 10, 0, time.UTC)
 	p := newPod(memStore(t), &now)
