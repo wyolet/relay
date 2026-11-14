@@ -26,6 +26,7 @@ import (
 type hidingAuthz struct{ hidden map[string]bool }
 
 func (hidingAuthz) Authorize(context.Context, string, authz.Resource) error { return nil }
+
 func (h hidingAuthz) Visible(_ context.Context, _ string, id string, _ meta.Owner) bool {
 	return !h.hidden[id]
 }
@@ -101,12 +102,16 @@ func (r *linkRows) checker(a authz.Authorizer) Checker {
 	}}
 }
 
+// status is a refusal's HTTP status, 0 for an accepted row, and -1 for an error that is not a refusal.
 func status(err error) int {
 	var re *Error
-	if errors.As(err, &re) {
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &re):
 		return re.Status
 	}
-	return 0
+	return -1
 }
 
 // A pool is one host's keys; a key of another host, or one that does not exist, is refused.

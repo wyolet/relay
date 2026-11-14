@@ -3,54 +3,76 @@ package settings
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/settings/settingstest"
 )
 
+// The owner tier decides: a system row is an admin's (unless it is a Team,
+// Group or Role, which are system-owned only because nobody owns them
+// personally), a tenant's row is the tenant's whatever the section says, and
+// a catalog-managed row follows its governance section, which binds an admin too.
 func TestGoverns(t *testing.T) {
-	tests := []struct {
+	const (
+		allowed     = ""
+		systemOwned = "system"
+		sectionOff  = "section"
+	)
+	locked := map[string]any{SectionGovernancePolicy: &Governance{}}
+	open := map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: true, AllowDelete: true}}
+	wrongType := map[string]any{SectionGovernancePolicy: "not a governance section"}
+
+	for _, tc := range []struct {
 		name      string
 		op        Op
 		kind      string
 		ownerKind string
-		reader    map[string]any
-		wantErr   bool
+		admin     bool
+		sections  map[string]any
+		want      string
 	}{
-		{name: "system delete always denied", op: OpDelete, kind: "rate-limit", ownerKind: "system", wantErr: true},
-		{name: "system edit denied via generic CRUD", op: OpEdit, kind: "host", ownerKind: "system", wantErr: true},
-		{name: "user delete allowed", op: OpDelete, kind: "policy", ownerKind: "user", wantErr: false},
-		{name: "user edit allowed", op: OpEdit, kind: "key", ownerKind: "user", wantErr: false},
+		{"system host: edit", OpEdit, "host", "system", false, nil, systemOwned},
+		{"system host: delete", OpDelete, "host", "system", false, nil, systemOwned},
+		{"system policy: delete", OpDelete, "policy", "system", false, open, systemOwned},
+		{"system rate limit: edit", OpEdit, "rate-limit", "system", false, nil, systemOwned},
+		{"system host: admin edits", OpEdit, "host", "system", true, nil, allowed},
+		{"system policy: admin deletes under a locked section", OpDelete, "policy", "system", true, locked, allowed},
+		{"system team: edit", OpEdit, "team", "system", false, nil, allowed},
+		{"system team: delete", OpDelete, "team", "system", false, nil, allowed},
+		{"system group: delete", OpDelete, "group", "system", false, nil, allowed},
+		{"system role: delete", OpDelete, "role", "system", false, nil, allowed},
 
-		// Catalog-managed (host/provider-owned), no section present → safe default.
-		{name: "catalog edit default allowed", op: OpEdit, kind: "model", ownerKind: "provider", wantErr: false},
-		{name: "catalog delete default denied", op: OpDelete, kind: "model", ownerKind: "provider", wantErr: true},
+		{"user policy: delete", OpDelete, "policy", "user", false, locked, allowed},
+		{"user key: edit", OpEdit, "key", "user", false, nil, allowed},
+		{"team project: delete", OpDelete, "project", "team", false, locked, allowed},
+		{"project policy: edit under a locked section", OpEdit, "policy", "project", false, locked, allowed},
+		{"project policy: delete under a locked section", OpDelete, "policy", "project", false, locked, allowed},
 
-		// Section override.
-		{
-			name: "catalog delete enabled via section", op: OpDelete, kind: "policy", ownerKind: "host",
-			reader:  map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: true, AllowDelete: true}},
-			wantErr: false,
-		},
-		{
-			name: "catalog edit disabled via section", op: OpEdit, kind: "policy", ownerKind: "host",
-			reader:  map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
-			wantErr: true,
-		},
-
-		// Tenancy rows are the tenant's, like user rows.
-		{name: "project delete allowed", op: OpDelete, kind: "project", ownerKind: "project", wantErr: false},
-		{name: "team delete allowed", op: OpDelete, kind: "team", ownerKind: "team", wantErr: false},
-		{
-			name: "project-owned policy delete allowed", op: OpDelete, kind: "policy", ownerKind: "project",
-			reader:  map[string]any{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Governs(settingstest.Sections(tt.reader), tt.op, tt.kind, tt.ownerKind, false)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Governs(%s,%s,%s) err=%v, wantErr=%v", tt.op, tt.kind, tt.ownerKind, err, tt.wantErr)
+		{"provider model: edit by default", OpEdit, "model", "provider", false, nil, allowed},
+		{"provider model: delete by default", OpDelete, "model", "provider", false, nil, sectionOff},
+		{"host policy: delete once the section allows it", OpDelete, "policy", "host", false, open, allowed},
+		{"host policy: edit under a locked section", OpEdit, "policy", "host", false, locked, sectionOff},
+		{"host policy: admin edit under a locked section", OpEdit, "policy", "host", true, locked, sectionOff},
+		{"host policy: a section of another type is the default", OpDelete, "policy", "host", false, wrongType, sectionOff},
+		{"host policy: another kind's section does not apply", OpDelete, "host", "host", false, open, sectionOff},
+		{"unknown owner kind: the catalog default", OpDelete, "policy", "", false, nil, sectionOff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var want error
+			switch tc.want {
+			case systemOwned:
+				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
+					Reason: tc.kind + " is system-owned: only an admin may " + string(tc.op) + " it"}
+			case sectionOff:
+				want = &MutationError{Op: tc.op, Kind: tc.kind, OwnerKind: tc.ownerKind,
+					Reason: string(tc.op) + " of " + tc.kind + " is disabled on this relay; enable it via the governance:" + tc.kind + " settings section"}
+			}
+			got := Governs(settingstest.Sections(tc.sections), tc.op, tc.kind, tc.ownerKind, tc.admin)
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Fatalf("Governs (-want +got):\n%s", diff)
+			}
+			if got != nil && got.Error() != want.(*MutationError).Reason {
+				t.Fatalf("message = %q", got.Error())
 			}
 		})
 	}

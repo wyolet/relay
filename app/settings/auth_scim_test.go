@@ -36,8 +36,9 @@ func TestAuthSCIMIsOffByDefaultAndAdminOnly(t *testing.T) {
 func TestAuthSCIMLinkClaimIsSubOrOid(t *testing.T) {
 	sec, _ := Lookup(AuthSCIMSection)
 	for _, claim := range []string{"email", "preferred_username", "name", "SUB", "oid "} {
-		if _, err := sec.Decode([]byte(`{"enabled":true,"linkClaim":"` + claim + `"}`)); err == nil {
-			t.Errorf("linkClaim %q was accepted", claim)
+		want := `auth:scim: linkClaim "` + claim + `": must be sub or oid`
+		if _, err := sec.Decode([]byte(`{"enabled":true,"linkClaim":"` + claim + `"}`)); errMsg(err) != want {
+			t.Errorf("linkClaim %q: %v, want %q", claim, err, want)
 		}
 	}
 	for _, claim := range []string{"", "sub", "oid"} {
