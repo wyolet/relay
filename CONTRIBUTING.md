@@ -61,9 +61,9 @@ as the architectural orientation doc. In short:
   crypto, secret, …).
 - `sdk/` — the public client library (canonical protocol, vendor
   adapters, catalog, client).
-- `internal/` — composition root / boundary (config, storage).
-- `cmd/relay/` — the binary entrypoint and the **only** place vendor
-  names appear in code.
+- `internal/` — composition root / boundary (config, storage, and
+  `adapterspecs`, the **only** place vendor adapters are wired in code).
+- `cmd/relay/` — the binary entrypoint.
 - `docs/` — the public documentation site (Mintlify; published at
   docs.wyolet.com).
 
@@ -77,7 +77,7 @@ ones a PR is most likely to trip on:
 2. **Vendors import canonical.** Each `sdk/adapters/<vendor>/` implements
    `v1.Translator`; vendor adapters never import each other.
 3. **No vendor names in `app/` code.** Dispatch/routing/pipeline must not
-   branch on a vendor. Only `cmd/relay/main.go`, catalog data strings,
+   branch on a vendor. Only `internal/adapterspecs`, catalog data strings,
    URL paths, and error messages may name one.
 4. **SDK module purity.** The `sdk/` module stays standalone and
    vendorable; `pkg/` imports nothing from `app/`/`internal/`.

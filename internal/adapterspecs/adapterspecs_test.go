@@ -1,4 +1,4 @@
-package main
+package adapterspecs
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 
 // Anthropic's clients retry a 529 overloaded_error as an overload; a 429 reads to them as their own rate limit.
 func TestAnthropicSpecAnswersOverloadAs529(t *testing.T) {
-	for _, s := range buildAdapterSpecs() {
+	for _, s := range Specs() {
 		if s.Name != adapters.Anthropic {
 			continue
 		}

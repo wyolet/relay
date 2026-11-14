@@ -10,8 +10,6 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/sdk/adapters/anthropic"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -26,13 +24,13 @@ func keepAliveRegistry() *adapter.Registry {
 		Name:        adapters.Anthropic,
 		DefaultPath: "/v1/messages",
 		Auth:        adapter.AuthStrategy{Header: "x-api-key"},
-		Translator:  anthropic.AnthropicTranslator{},
+		Translator:  productionSpec(adapters.Anthropic).Translator,
 	}).Build()
 	cc := (&adapter.Spec{
 		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  openai.CCTranslator{},
+		Translator:  productionSpec(adapters.OpenAI).Translator,
 	}).Build()
 	canonical := (&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build()
 	return adapter.NewRegistry(anth, cc, canonical)

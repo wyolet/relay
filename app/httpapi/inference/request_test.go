@@ -14,21 +14,20 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/wyolet/relay/sdk/adapters/anthropic"
-	"github.com/wyolet/relay/sdk/adapters/openai"
+	"github.com/wyolet/relay/pkg/adapters"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 var (
-	vendorKeys    = openai.CCTranslator{}.RequestKeys()
+	vendorKeys    = productionSpec(adapters.OpenAI).RequestKeys()
 	canonicalKeys = v1.IdentityTranslator{}.RequestKeys()
 )
 
 func TestRequestKeysPerShape(t *testing.T) {
 	for name, got := range map[string]v1.RequestKeys{
-		"chat":      openai.CCTranslator{}.RequestKeys(),
-		"responses": openai.ResponsesTranslator{}.RequestKeys(),
-		"messages":  anthropic.AnthropicTranslator{}.RequestKeys(),
+		"chat":      productionSpec(adapters.OpenAI).RequestKeys(),
+		"responses": productionSpec(adapters.OpenAIResponses).RequestKeys(),
+		"messages":  productionSpec(adapters.Anthropic).RequestKeys(),
 	} {
 		if got != (v1.RequestKeys{Stream: "stream"}) {
 			t.Errorf("%s: %+v, want the stream bool", name, got)
@@ -364,7 +363,7 @@ func onePassBody(body []byte, upstreamModel string, usageOptIn bool, unsupported
 	}
 	var edits []memberEdit
 	if usageOptIn {
-		if key, value, ok := openai.RequestStreamUsage(req.Member); ok {
+		if key, value, ok := productionSpec(adapters.OpenAI).StreamUsage.Request(req.Member); ok {
 			edits = append(edits, memberEdit{key: key, value: value})
 			usage = true
 		}

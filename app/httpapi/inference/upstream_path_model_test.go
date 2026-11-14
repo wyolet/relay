@@ -6,8 +6,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/pkg/adapters"
-	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
-	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
 )
 
 // pathModelRegistry pairs an OpenAI CC inbound with an upstream shape that puts the model in the URL path, as cmd/relay registers it.
@@ -16,7 +14,7 @@ func pathModelRegistry() *adapter.Registry {
 		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  pkgopenai.CCTranslator{},
+		Translator:  productionSpec(adapters.OpenAI).Translator,
 	}).Build()
 	pathModel := (&adapter.Spec{
 		Name: adapters.Gemini,
@@ -27,8 +25,8 @@ func pathModelRegistry() *adapter.Registry {
 			}
 			return "/v1beta/models/" + model + ":generateContent"
 		},
-		Translator:    pkggemini.GeminiTranslator{},
-		ExtractTokens: pkggemini.ExtractTokens,
+		Translator:    productionSpec(adapters.Gemini).Translator,
+		ExtractTokens: productionSpec(adapters.Gemini).ExtractTokens,
 	}).Build()
 	return adapter.NewRegistry(cc, pathModel)
 }

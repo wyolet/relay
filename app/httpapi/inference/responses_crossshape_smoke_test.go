@@ -18,7 +18,6 @@ import (
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/binding"
 	"github.com/wyolet/relay/pkg/catalogkind/host"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -30,13 +29,13 @@ func buildRealCrossShapeRegistry() *adapter.Registry {
 		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  openai.CCTranslator{},
+		Translator:  productionSpec(adapters.OpenAI).Translator,
 	}).Build()
 	responses := (&adapter.Spec{
 		Name:        adapters.OpenAIResponses,
 		DefaultPath: "/v1/responses",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:  openai.ResponsesTranslator{},
+		Translator:  productionSpec(adapters.OpenAIResponses).Translator,
 		IsNativePath: func(b *binding.Binding, h *host.Host) bool {
 			return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
 		},

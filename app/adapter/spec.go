@@ -5,7 +5,7 @@
 // and a generic route mounter that iterates registered specs.
 //
 // This package is the composition root's extension point: to add a new wire
-// shape, add one Spec to the registry in cmd/relay/main.go. No branching in
+// shape, add one Spec to internal/adapterspecs. No branching in
 // dispatch; no per-shape packages inside app/.
 //
 // Deliberately out of scope:

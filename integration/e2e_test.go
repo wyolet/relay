@@ -60,6 +60,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/adapterspecs"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -77,8 +78,6 @@ import (
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/meta"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
-	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
 	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -201,22 +200,24 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		Header:       "x-api-key",
 		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	}
+	prod := adapter.NewRegistry(adapterspecs.Specs()...)
+	openaiCC, openaiResponses, anthropicMsgs := prod.Spec(adapters.OpenAI), prod.Spec(adapters.OpenAIResponses), prod.Spec(adapters.Anthropic)
 	specRegistry := adapter.NewRegistry(
 		(&adapter.Spec{
 			Name:          adapters.OpenAI,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/chat/completions", OperationID: "chat_completions", Summary: "Create a chat completion (OpenAI-compatible)"}},
 			DefaultPath:   "/v1/chat/completions",
 			Auth:          openaiAuth,
-			Translator:    pkgopenai.CCTranslator{},
-			ExtractTokens: pkgopenai.ExtractTokens,
+			Translator:    openaiCC.Translator,
+			ExtractTokens: openaiCC.ExtractTokens,
 		}).Build(),
 		(&adapter.Spec{
 			Name:          adapters.OpenAIResponses,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/responses", OperationID: "responses_create", Summary: "Create a response (OpenAI Responses API)"}},
 			DefaultPath:   "/v1/responses",
 			Auth:          openaiAuth,
-			Translator:    pkgopenai.ResponsesTranslator{},
-			ExtractTokens: pkgopenai.ExtractTokens,
+			Translator:    openaiResponses.Translator,
+			ExtractTokens: openaiCC.ExtractTokens,
 			UseHTTP1:      true,
 			IsNativePath: func(b *binding.Binding, h *host.Host) bool {
 				return b.Spec.Adapter == adapters.OpenAI && h.Meta.Name == "openai"
@@ -228,7 +229,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 			DefaultPath:   "/v1/embeddings",
 			Auth:          openaiAuth,
 			BytePass:      true,
-			ExtractTokens: pkgopenai.ExtractTokens,
+			ExtractTokens: openaiCC.ExtractTokens,
 		}).Build(),
 		// The canonical shape, as the composition root registers it: /v1/ws
 		// serves it and refuses the upgrade when it is missing.
@@ -242,8 +243,8 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"}},
 			DefaultPath:   "/v1/messages",
 			Auth:          anthropicAuth,
-			Translator:    pkganthropic.AnthropicTranslator{},
-			ExtractTokens: pkganthropic.ExtractTokens,
+			Translator:    anthropicMsgs.Translator,
+			ExtractTokens: anthropicMsgs.ExtractTokens,
 		}).Build(),
 	)
 

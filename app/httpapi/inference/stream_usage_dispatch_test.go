@@ -10,7 +10,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 )
 
 const (
@@ -65,9 +64,9 @@ func TestBytePassStreamUsageOptIn(t *testing.T) {
 				Name:          adapters.OpenAI,
 				DefaultPath:   "/v1/chat/completions",
 				Auth:          adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-				Translator:    openai.CCTranslator{},
-				ExtractTokens: openai.ExtractTokens,
-				StreamUsage:   &adapter.StreamUsageOptIn{Request: openai.RequestStreamUsage, IsUsageFrame: openai.IsUsageOnlyChunk},
+				Translator:    productionSpec(adapters.OpenAI).Translator,
+				ExtractTokens: productionSpec(adapters.OpenAI).ExtractTokens,
+				StreamUsage:   productionSpec(adapters.OpenAI).StreamUsage,
 			}).Build()))
 			d.RequestStreamUsage = tc.requestUsage
 

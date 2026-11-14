@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/usage"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -57,8 +56,8 @@ func upstreamErrorDeps(t *testing.T, status int) (Deps, *Principal, usageCapture
 			Name:          adapters.OpenAI,
 			DefaultPath:   "/v1/chat/completions",
 			Auth:          adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-			Translator:    openai.CCTranslator{},
-			ExtractTokens: openai.ExtractTokens,
+			Translator:    productionSpec(adapters.OpenAI).Translator,
+			ExtractTokens: productionSpec(adapters.OpenAI).ExtractTokens,
 		}).Build(),
 		(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 	)
