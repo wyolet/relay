@@ -74,7 +74,6 @@ func TestSanitizeUpstreamResponse(t *testing.T) {
 }
 
 func TestStripRemovesTheTrailerHeader(t *testing.T) {
-	t.Skip(`bug: Strip(Trailer: X-Checksum) keeps the header; the hop-by-hop list names "Trailers", which is not a header (RFC 7230 names "Trailer")`)
 	for name, strip := range map[string]func(http.Header) http.Header{"Strip": Strip, "SanitizeUpstreamResponse": SanitizeUpstreamResponse} {
 		if got := strip(http.Header{"Trailer": {"X-Checksum"}}); len(got) != 0 {
 			t.Errorf("%s kept %v", name, got)

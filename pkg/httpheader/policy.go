@@ -93,7 +93,7 @@ var HopByHop = []string{
 	"Proxy-Authenticate",
 	"Proxy-Authorization",
 	"Te",
-	"Trailers",
+	"Trailer", // "trailers" is a TE value, not a header (RFC 7230 errata 4522)
 	"Transfer-Encoding",
 	"Upgrade",
 }
