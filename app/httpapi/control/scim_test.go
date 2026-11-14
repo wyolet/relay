@@ -48,7 +48,7 @@ func TestSCIMWritesAreAuditedAsTheClient(t *testing.T) {
 			Actor: audit.Actor{Kind: audit.ActorSCIMClient, Name: "entra"}, Action: action,
 			Resource: audit.Resource{Kind: kind, ID: id, Name: name, Owner: &system},
 			Outcome:  audit.Outcome{Status: status, Code: http.StatusOK}, Request: audit.Request{Method: http.MethodPatch, Path: "/scim/v2/Users/u-1"},
-			Change:   &audit.Change{Fields: fields},
+			Change: &audit.Change{Fields: fields},
 		}
 	}
 	wantEvents(t, sink.all(),

@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -73,30 +74,35 @@ func TestLogsEraseRequiresAdmin(t *testing.T) {
 	}
 }
 
-func TestLogsEraseRequiresFilter(t *testing.T) {
-	eraser := &fakeEraser{}
-	h, _, em := newEraseHarness(t, testRBAC(), eraser)
-	defer em.Close()
-	for _, body := range []string{`{}`, `{"projectId":"","principalId":""}`} {
-		if w := scopeReq(t, h, "root", http.MethodPost, "/logs/erase", body); w.Code != http.StatusBadRequest {
-			t.Fatalf("%s: status = %d, want 400: %s", body, w.Code, w.Body.String())
-		}
-	}
-	if len(eraser.called) != 0 {
-		t.Fatal("an empty filter reached the eraser")
-	}
-}
-
-func TestLogsEraseUnsupportedBackend(t *testing.T) {
-	for name, pr := range map[string]payloadlog.Reader{
-		"reader without Erase": payloadfile.NewReader(filepath.Join(t.TempDir(), "payloads.jsonl")),
-		"backend refuses":      &fakeEraser{err: fmt.Errorf("%w (file)", payloadlog.ErrEraseUnsupported)},
+// A refusal before the eraser runs leaves it uncalled; a failure inside it is recorded, since some bodies may already be gone.
+func TestLogsEraseRefusals(t *testing.T) {
+	noErase := payloadfile.NewReader(filepath.Join(t.TempDir(), "payloads.jsonl"))
+	for _, tc := range []struct {
+		name, body string
+		pr         payloadlog.Reader
+		status     int
+		code, msg  string
+		audited    string
+	}{
+		{"no filter", `{}`, &fakeEraser{}, http.StatusBadRequest, "", "projectId or principalId is required", ""},
+		{"empty filter", `{"projectId":"","principalId":""}`, &fakeEraser{}, http.StatusBadRequest, "", "projectId or principalId is required", ""},
+		{"reader without Erase", `{"principalId":"u-1"}`, noErase, http.StatusNotImplemented, "", "the payload backend cannot erase captured bodies", ""},
+		{"backend refuses", `{"principalId":"u-1"}`, &fakeEraser{err: fmt.Errorf("%w (file)", payloadlog.ErrEraseUnsupported)}, http.StatusNotImplemented, "", payloadlog.ErrEraseUnsupported.Error() + " (file)", ""},
+		{"backend fails", `{"principalId":"u-1"}`, &fakeEraser{err: errors.New("disk full")}, http.StatusInternalServerError, "internal_error", "disk full", audit.StatusError},
 	} {
-		t.Run(name, func(t *testing.T) {
-			h, _, em := newEraseHarness(t, testRBAC(), pr)
-			defer em.Close()
-			if w := scopeReq(t, h, "root", http.MethodPost, "/logs/erase", `{"principalId":"u-1"}`); w.Code != http.StatusNotImplemented {
-				t.Fatalf("status = %d, want 501: %s", w.Code, w.Body.String())
+		t.Run(tc.name, func(t *testing.T) {
+			h, sink, em := newEraseHarness(t, testRBAC(), tc.pr)
+			wantAPIError(t, scopeReq(t, h, "root", http.MethodPost, "/logs/erase", tc.body), tc.status, tc.code, tc.msg)
+			if eraser, ok := tc.pr.(*fakeEraser); ok && eraser.err == nil && len(eraser.called) != 0 {
+				t.Fatal("a request with no filter reached the eraser")
+			}
+			em.Close()
+			evs := sink.all()
+			if tc.audited == "" && len(evs) != 0 {
+				t.Fatalf("audit events = %+v, want none", evs)
+			}
+			if tc.audited != "" && (len(evs) != 1 || evs[0].Action != "logs.erase" || evs[0].Outcome != (audit.Outcome{Status: tc.audited, Code: tc.status})) {
+				t.Fatalf("audit events = %+v, want one logs.erase %s/%d", evs, tc.audited, tc.status)
 			}
 		})
 	}

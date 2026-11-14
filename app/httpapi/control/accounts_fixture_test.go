@@ -29,12 +29,12 @@ import (
 
 // accountsWorld is a team with a project, two members of the project with a key each, and a priced model served through a system credential. The team's account caps requests shared, the project's account gives each lane a budget and a model-scoped cap, and the first member's account has a small cap of its own.
 type accountsWorld struct {
-	w            *plantest.World
-	team         *team.Team
-	proj         *project.Project
-	u1, u2       *user.User
-	m1, m2       *account.Account
-	k1, k2       *key.Key
+	w                         *plantest.World
+	team                      *team.Team
+	proj                      *project.Project
+	u1, u2                    *user.User
+	m1, m2                    *account.Account
+	k1, k2                    *key.Key
 	teamRL, projRL, laneRL    *ratelimit.RateLimit
 	teamPol, projPol, lanePol *policy.Policy
 	projBudget                *budget.Budget

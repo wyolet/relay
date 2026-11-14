@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -172,18 +174,17 @@ func (w *reviewWorld) auditRows(t *testing.T) []audit.Event {
 func TestAccessReviewSelf(t *testing.T) {
 	w := newReviewWorld(t)
 	code, got := w.review(t, "alice", `{"action":"keys.get","resource":{"kind":"keys","name":"k1"}}`)
-	if code != http.StatusOK || !got.Allowed || got.Reason != "binding" {
-		t.Fatalf("alice keys.get k1 = %d %+v, want allowed by a binding", code, got)
+	alice := w.actors["alice"]
+	p1, team := namedRef{Kind: "project", ID: w.p1, Name: "p1"}, namedRef{Kind: "team", ID: w.team, Name: "t"}
+	want := accessReview{
+		Allowed: true, Reason: "binding",
+		Binding: &reviewedBinding{ID: w.aliceBinding, Name: "alice-dev", Subject: namedRef{Kind: "user", ID: alice.UserID, Name: "alice"}, Role: namedRef{Kind: "role", ID: w.roleID, Name: "developer"}, Scope: p1},
+		Chain:   []namedRef{p1, team, {Kind: "system"}},
+		Subject: reviewedSubject{Kind: "user", ID: alice.UserID, Name: "alice", Subjects: alice.Subjects},
+		Action:  "keys.get", Resource: reviewedResource{Kind: "key", ID: w.keyP1, Name: "k1", Owner: &p1},
 	}
-	if b := got.Binding; b == nil || b.ID != w.aliceBinding || b.Name != "alice-dev" || b.Role.Name != "developer" ||
-		b.Scope.Name != "p1" || b.Subject.Kind != "user" || b.Subject.Name != "alice" {
-		t.Fatalf("binding = %+v, want alice-dev granting developer at p1", got.Binding)
-	}
-	if len(got.Chain) != 3 || got.Chain[0].Name != "p1" || got.Chain[1].Name != "t" || got.Chain[2].Kind != "system" {
-		t.Fatalf("chain = %+v, want p1, t, global", got.Chain)
-	}
-	if got.Subject.Name != "alice" || got.Resource.Name != "k1" || got.Resource.Owner == nil || got.Resource.Owner.Name != "p1" {
-		t.Fatalf("subject %+v, resource %+v", got.Subject, got.Resource)
+	if diff := cmp.Diff(want, got); code != http.StatusOK || diff != "" {
+		t.Fatalf("alice keys.get k1 = %d (-want +got):\n%s", code, diff)
 	}
 
 	// Naming yourself is still yourself; a bare verb takes the kind's plural.
