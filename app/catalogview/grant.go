@@ -1,6 +1,8 @@
 package catalogview
 
 import (
+	"slices"
+
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
@@ -18,9 +20,9 @@ import (
 //   - an empty Models list grants every model on a candidate host; otherwise
 //     the Models DSL must match (provider, model).
 //
-// Returns the host slug that satisfied the grant (for per-model limits) and,
-// when the grant fails, a human-readable reason (for the ?debug view).
-func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug string, modelHosts map[string]string) (string, bool, string) {
+// Returns every host slug that satisfies the grant (for per-model limits)
+// and, when the grant fails, a human-readable reason (for the ?debug view).
+func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug string, modelHosts map[string]string) ([]string, bool, string) {
 	candidates := map[string]string{}
 	for hostID, slug := range modelHosts {
 		if idx.policyCoversHost(p, hostID) {
@@ -29,16 +31,20 @@ func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug s
 	}
 	if len(candidates) == 0 {
 		if p.Meta.Owner.Kind == meta.OwnerHost {
-			return "", false, "host-tier policy's host has no binding for this model"
+			return nil, false, "host-tier policy's host has no binding for this model"
 		}
-		return "", false, "policy's pools reach no host that binds this model"
+		return nil, false, "policy's pools reach no host that binds this model"
 	}
+	var granting []string
 	for _, slug := range candidates {
 		if len(p.Spec.Models) == 0 || modelref.MatchAny(p.Spec.Models, provSlug, m.Meta.Name, slug) {
-			return slug, true, ""
+			granting = append(granting, slug)
 		}
 	}
-	return "", false, "policy's Models grant matches this model on no reachable host"
+	if len(granting) == 0 {
+		return nil, false, "policy's Models grant matches this model on no reachable host"
+	}
+	return granting, true, ""
 }
 
 // policyCoversHost reports whether the policy may serve on a host: a
@@ -135,9 +141,17 @@ func (idx *index) ownerOff(o meta.Owner) bool {
 // applies to (provider, model, host): its unscoped links and the scoped ones
 // whose models match.
 func (idx *index) limitsFor(p *policy.Policy, provSlug, modelSlug, hostSlug string) []Limit {
+	return idx.limitsOnAnyHost(p, provSlug, modelSlug, []string{hostSlug})
+}
+
+// limitsOnAnyHost is limitsFor across hosts: a scoped link applies when its
+// models match on at least one of hostSlugs, and each link counts once.
+func (idx *index) limitsOnAnyHost(p *policy.Policy, provSlug, modelSlug string, hostSlugs []string) []Limit {
 	out := []Limit{}
 	for _, l := range p.Spec.RateLimits {
-		if len(l.Models) > 0 && !modelref.MatchAny(l.Models, provSlug, modelSlug, hostSlug) {
+		if len(l.Models) > 0 && !slices.ContainsFunc(hostSlugs, func(h string) bool {
+			return modelref.MatchAny(l.Models, provSlug, modelSlug, h)
+		}) {
 			continue
 		}
 		out = append(out, idx.limitsOf(l.RateLimitID)...)

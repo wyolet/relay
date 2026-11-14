@@ -100,7 +100,6 @@ func TestModelPolicies(t *testing.T) {
 }
 
 func TestModelPolicies_LimitsAreTheSameOnEveryCall(t *testing.T) {
-	t.Skip("bug: ModelPolicies of a model on two hosts, under a policy whose rate limit link is scoped to one host → limits are [] or the link's rules from call to call (the granting host is picked in map order)")
 	// half is served on two hosts and the policy's one rate limit is scoped to one of them.
 	svc := newService(
 		provOf("openai"), hostOf("openai"), hostOf("azure"), modelOf("half"), bindOf("half", "openai"), bindOf("half", "azure"),
@@ -117,6 +116,17 @@ func TestModelPolicies_LimitsAreTheSameOnEveryCall(t *testing.T) {
 	if len(seen) != 1 {
 		t.Fatalf("one policy, one model: calls answered with different numbers of limits (limits → calls): %v", seen)
 	}
+}
+
+// A link scoped to one of the model's hosts is among the limits the policy applies to the model, once.
+func TestModelPolicies_LinkScopedToOneHostApplies(t *testing.T) {
+	svc := newService(
+		provOf("openai"), hostOf("openai"), hostOf("azure"), modelOf("half"), bindOf("half", "openai"), bindOf("half", "azure"),
+		limitedBy(limitedBy(policyOf("p", operator, nil), "azure-only", "openai/half@azure"), "both", "openai/half"), rlOf("azure-only", 30), rlOf("both", 40),
+	)
+	viewed(t, "scoped to one host", modelRef("half"), []ModelPolicyRow{
+		{ID: "policy:p", Name: "p", Owner: OwnerRef{Kind: "user"}, Limits: []Limit{limit(30), limit(40)}},
+	})(svc.ModelPolicies(context.Background(), "half"))
 }
 
 func TestHostModels(t *testing.T) {
