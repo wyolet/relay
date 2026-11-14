@@ -8,8 +8,10 @@ import (
 )
 
 var (
-	reIP  = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?`)
-	reURL = regexp.MustCompile(`https?://[^\s]+`)
+	reIP = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?`)
+	// Full eight-group form or any "::" compression; a clock time like 12:30:45 matches neither.
+	reIPv6 = regexp.MustCompile(`(?i)(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|[0-9a-f]{0,4}(?::[0-9a-f]{1,4})*::`)
+	reURL  = regexp.MustCompile(`https?://[^\s]+`)
 )
 
 // Relay-internal control headers. Read at the inference edge by the
@@ -80,7 +82,7 @@ var UpstreamErrorAllowlist = []string{
 // providerName is the public provider identifier (e.g. "openai").
 func SafeUpstreamError(providerName string, err error) string {
 	msg := err.Error()
-	if reURL.MatchString(msg) || reIP.MatchString(msg) {
+	if reURL.MatchString(msg) || reIP.MatchString(msg) || reIPv6.MatchString(msg) {
 		return providerName + ": upstream connection failed"
 	}
 	return providerName + ": " + msg
