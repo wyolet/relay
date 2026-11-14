@@ -1,7 +1,9 @@
 package openai
 
 import (
+	"cmp"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,7 +31,54 @@ func decodeMap(t *testing.T, b []byte) map[string]any {
 	return m
 }
 
-// --- ParseRequest ---
+// jsonEqual reports whether a and b are valid JSON holding the same value.
+func jsonEqual(a, b []byte) bool {
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
+}
+
+// assertJSON fails unless got holds the JSON value want; key order and spacing do not matter.
+func assertJSON(t *testing.T, got []byte, want string) {
+	t.Helper()
+	if !jsonEqual(got, []byte(want)) {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+// runStream feeds each frame, terminated with a blank line, through translate and returns the joined output.
+func runStream(t *testing.T, translate func([]byte) ([]byte, error), frames ...string) []byte {
+	t.Helper()
+	var out []byte
+	for i, f := range frames {
+		b, err := translate([]byte(f + "\n\n"))
+		if err != nil {
+			t.Fatalf("frame %d %q: %v", i, f, err)
+		}
+		out = append(out, b...)
+	}
+	return out
+}
+
+// assertEvents checks the SSE frames in out against want, one "<event> <data>" entry per frame; a frame without an event line is named "data", and JSON data compares by value.
+func assertEvents(t *testing.T, out []byte, want ...string) {
+	t.Helper()
+	frames := splitCanonicalFrames(out)
+	for i := range max(len(frames), len(want)) {
+		var got, w string
+		if i < len(frames) {
+			event, data, _ := v1.ParseSSEChunk(frames[i])
+			got = cmp.Or(event, "data") + " " + string(data)
+		}
+		if i < len(want) {
+			w = want[i]
+		}
+		gotEvent, gotData, _ := strings.Cut(got, " ")
+		wantEvent, wantData, _ := strings.Cut(w, " ")
+		if gotEvent != wantEvent || (gotData != wantData && !jsonEqual([]byte(gotData), []byte(wantData))) {
+			t.Errorf("frame %d:\n got  %s\n want %s", i, got, w)
+		}
+	}
+}
 
 // extractCanonicalEvents parses concatenated canonical SSE bytes and collects event names.
 func extractCanonicalEvents(b []byte) []string {
@@ -71,5 +120,3 @@ func indexDoubleNewline(b []byte) int {
 	}
 	return -1
 }
-
-// --- Ollama reasoning divergence (reasoning vs reasoning_content) ---

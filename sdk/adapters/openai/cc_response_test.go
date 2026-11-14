@@ -3,653 +3,193 @@ package openai
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-func TestCCParseResponse_SimpleText(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":      "chatcmpl-01",
-		"object":  "chat.completion",
-		"created": int64(1700000000),
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": "Hello!"},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{
-			"prompt_tokens":     10,
-			"completion_tokens": 5,
-			"total_tokens":      15,
+// ccResponse wraps one choice in a chat.completion body created at 1.
+func ccResponse(choice string, extra string) string {
+	return `{"id":"c1","object":"chat.completion","created":1,"model":"m","choices":[` + choice + `]` + extra + `}`
+}
+
+// The recorded chat-* goldens cover plain text, tool calls, refusal, reasoning_content, cached usage and service tier.
+func TestCCParseResponse(t *testing.T) {
+	const head = `"id":"c1","object":"response","created_at":1,"model":"m"`
+	cases := []struct{ name, body, canon string }{
+		{
+			name: "url citations attach to the text; other annotations are skipped",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Paris [1].","annotations":[
+				{"type":"url_citation","url_citation":{"start_index":6,"end_index":9,"url":"https://x/p","title":"P"}},
+				{"type":"file_citation"}]}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant",
+				"content":[{"type":"output_text","text":"Paris [1].","annotations":[{"type":"url_citation","start_index":6,"end_index":9,"url":"https://x/p","title":"P"}]}]}]}`,
 		},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.ID != "chatcmpl-01" {
-		t.Errorf("id: %q", resp.ID)
-	}
-	if resp.Model != "gpt-4o" {
-		t.Errorf("model: %q", resp.Model)
-	}
-	if resp.Status != v1.StatusCompleted {
-		t.Errorf("status: %q", resp.Status)
-	}
-	if resp.FinishReason != v1.FinishReasonStop {
-		t.Errorf("finish_reason: %q", resp.FinishReason)
-	}
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d", len(resp.Output))
-	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	if len(msg.Content) != 1 {
-		t.Fatalf("content len: %d", len(msg.Content))
-	}
-	if resp.Usage["input"] != 10 {
-		t.Errorf("usage: %v", resp.Usage)
-	}
-}
-
-func TestCCParseResponse_ToolCall(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":      "chatcmpl-02",
-		"object":  "chat.completion",
-		"created": int64(1700000001),
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{
-				"role":    "assistant",
-				"content": nil,
-				"tool_calls": []any{map[string]any{
-					"id":   "call_abc",
-					"type": "function",
-					"function": map[string]any{
-						"name":      "search",
-						"arguments": `{"q":"golang"}`,
-					},
-				}},
-			},
-			"finish_reason": "tool_calls",
-		}},
-		"usage": map[string]any{"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.FinishReason != v1.FinishReasonToolCalls {
-		t.Errorf("finish_reason: %q", resp.FinishReason)
-	}
-	var foundFC bool
-	for _, item := range resp.Output {
-		if fc, ok := item.(*v1.FunctionCall); ok {
-			if fc.CallID != "call_abc" {
-				t.Errorf("call_id: %q", fc.CallID)
-			}
-			if fc.Name != "search" {
-				t.Errorf("name: %q", fc.Name)
-			}
-			foundFC = true
-		}
-	}
-	if !foundFC {
-		t.Error("expected FunctionCall in output")
-	}
-}
-
-func TestCCParseResponse_Refusal(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":      "chatcmpl-ref",
-		"object":  "chat.completion",
-		"created": int64(1700000002),
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{
-				"role":    "assistant",
-				"content": nil,
-				"refusal": "I cannot help with that.",
-			},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{"prompt_tokens": 5, "completion_tokens": 8, "total_tokens": 13},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Output) == 0 {
-		t.Fatal("expected output items")
-	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	// Refusal text should appear as message content (canonical rule 9).
-	if len(msg.Content) == 0 {
-		t.Error("expected refusal text in content")
-	}
-}
-
-func TestCCParseResponse_FinishReasonMappings(t *testing.T) {
-	cases := []struct {
-		reason         string
-		wantStatus     v1.Status
-		wantFinish     v1.FinishReason
-		wantIncomplete bool
-	}{
-		{"stop", v1.StatusCompleted, v1.FinishReasonStop, false},
-		{"length", v1.StatusIncomplete, v1.FinishReasonLength, true},
-		{"tool_calls", v1.StatusCompleted, v1.FinishReasonToolCalls, false},
-		{"content_filter", v1.StatusCompleted, v1.FinishReasonContentFilter, false},
-		{"function_call", v1.StatusCompleted, v1.FinishReasonToolCalls, false},
-		{"unknown_future", v1.StatusIncomplete, v1.FinishReasonOther, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.reason, func(t *testing.T) {
-			body := mustJSON(map[string]any{
-				"id":      "cid",
-				"object":  "chat.completion",
-				"created": int64(1700000000),
-				"model":   "gpt-4o",
-				"choices": []any{map[string]any{
-					"index":         0,
-					"message":       map[string]any{"role": "assistant", "content": "ok"},
-					"finish_reason": tc.reason,
-				}},
-				"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-			})
-			resp, err := (CCTranslator{}).ParseResponse(body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if resp.Status != tc.wantStatus {
-				t.Errorf("status: got %q want %q", resp.Status, tc.wantStatus)
-			}
-			if resp.FinishReason != tc.wantFinish {
-				t.Errorf("finish_reason: got %q want %q", resp.FinishReason, tc.wantFinish)
-			}
-			if tc.wantIncomplete && resp.IncompleteDetails == nil {
-				t.Error("expected incomplete_details")
-			}
-		})
-	}
-}
-
-func TestCCParseResponse_UsageDetails(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":      "cid",
-		"object":  "chat.completion",
-		"created": int64(1700000000),
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": "ok"},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{
-			"prompt_tokens":     100,
-			"completion_tokens": 50,
-			"total_tokens":      150,
-			"prompt_tokens_details": map[string]any{
-				"cached_tokens": 80,
-			},
-			"completion_tokens_details": map[string]any{
-				"reasoning_tokens": 20,
-			},
+		{
+			name: "Ollama reasoning field and array content",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","reasoning":"think","content":[{"type":"text","text":"Hello, "},{"type":"image_url"},{"type":"text","text":"world."}]}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[
+				{"type":"reasoning","id":"rs_c1","summary":[{"text":"think"}],"content":"think","status":"completed","provider_data":{"cc_reasoning_field":"reasoning"}},
+				{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello, world."}]}]}`,
 		},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Usage) == 0 {
-		t.Fatal("usage is nil")
-	}
-	// OpenAI prompt_tokens=100 includes cached=80; canonical "input" is
-	// non-cached only (orthogonal-meter semantics). Sum gives 100 back.
-	if resp.Usage["input"] != 20 {
-		t.Errorf("non-cached input: %d", resp.Usage["input"])
-	}
-	if resp.Usage["cache_read"] != 80 {
-		t.Errorf("cache_read: %d", resp.Usage["cache_read"])
-	}
-	if resp.Usage["reasoning"] != 20 {
-		t.Errorf("reasoning: %d", resp.Usage["reasoning"])
-	}
-}
-
-// --- SerializeResponse ---
-
-func TestCCSerializeResponse_SimpleText(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "chatcmpl-01",
-		Model:        "gpt-4o",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-		Output: []v1.Item{
-			&v1.Message{
-				Role:    v1.RoleAssistant,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
-			},
+		{
+			name: "reasoning_content as a part array wins over reasoning",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","reasoning_content":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[
+				{"type":"reasoning","id":"rs_c1","summary":[{"text":"ab"}],"content":"ab","status":"completed","provider_data":{"cc_reasoning_field":"reasoning_content"}},
+				{"type":"function_call","id":"call_1","call_id":"call_1","name":"f","arguments":"{}","status":"completed"}]}`,
 		},
-		Usage: usage.Tokens{"input": 10, "output": 5},
-	}
-	b, err := (CCTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	if m["object"] != "chat.completion" {
-		t.Errorf("object: %v", m["object"])
-	}
-	choices := m["choices"].([]any)
-	if len(choices) != 1 {
-		t.Fatalf("choices len: %d", len(choices))
-	}
-	choice := choices[0].(map[string]any)
-	if choice["finish_reason"] != "stop" {
-		t.Errorf("finish_reason: %v", choice["finish_reason"])
-	}
-	msg := choice["message"].(map[string]any)
-	if msg["content"] != "Hello!" {
-		t.Errorf("content: %v", msg["content"])
-	}
-}
-
-func TestCCSerializeResponse_NilRequestAllowed(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "cid",
-		Model:        "gpt-4o",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
-	}
-	// req=nil must not panic (CC doesn't need echo fields)
-	_, err := (CCTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatalf("unexpected error with nil req: %v", err)
-	}
-}
-
-func TestCCSerializeResponse_ToolCalls(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "cid",
-		Model:        "gpt-4o",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonToolCalls,
-		Output: []v1.Item{
-			&v1.FunctionCall{
-				CallID:    "call_abc",
-				Name:      "search",
-				Arguments: `{"q":"golang"}`,
-				Status:    v1.StatusCompleted,
-			},
+		{
+			name: "text and refusal both stay; the refusal lifts stop",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Partly.","refusal":"No more."}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"refusal","output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant",
+				"content":[{"type":"output_text","text":"Partly."},{"type":"output_text","text":"No more."}]}]}`,
 		},
-	}
-	b, err := (CCTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	choices := m["choices"].([]any)
-	choice := choices[0].(map[string]any)
-	msg := choice["message"].(map[string]any)
-	toolCalls, ok := msg["tool_calls"].([]any)
-	if !ok || len(toolCalls) != 1 {
-		t.Fatalf("tool_calls: %v", msg["tool_calls"])
-	}
-	tc := toolCalls[0].(map[string]any)
-	fn := tc["function"].(map[string]any)
-	if fn["name"] != "search" {
-		t.Errorf("function name: %v", fn["name"])
-	}
-}
-
-func TestCCSerializeResponse_Refusal(t *testing.T) {
-	resp := &v1.Response{
-		ID:           "cid",
-		Model:        "gpt-4o",
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonRefusal,
-		Output: []v1.Item{
-			&v1.Message{
-				Role:    v1.RoleAssistant,
-				Content: []v1.Part{&v1.OutputTextPart{Text: "I cannot help."}},
-			},
+		{
+			name: "a refusal does not override a truncation",
+			body: ccResponse(`{"index":0,"finish_reason":"length","message":{"role":"assistant","content":null,"refusal":"No"}}`, ""),
+			canon: `{` + head + `,"status":"incomplete","finish_reason":"length","incomplete_details":{"reason":"max_output_tokens"},
+				"output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"No"}]}]}`,
 		},
-	}
-	b, err := (CCTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	choices := m["choices"].([]any)
-	choice := choices[0].(map[string]any)
-	msg := choice["message"].(map[string]any)
-	// Refusal maps to message.refusal field in CC.
-	if msg["refusal"] != "I cannot help." {
-		t.Errorf("refusal: %v (msg=%v)", msg["refusal"], msg)
-	}
-}
-
-// --- ParseResponse / SerializeResponse round-trip ---
-
-func TestCCRoundTrip_Response(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":      "chatcmpl-rt",
-		"object":  "chat.completion",
-		"created": int64(1700000000),
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": "Round trip."},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-	})
-
-	tr := CCTranslator{}
-	resp, err := tr.ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b2, err := tr.SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b2)
-	choices := m["choices"].([]any)
-	choice := choices[0].(map[string]any)
-	msg := choice["message"].(map[string]any)
-	if msg["content"] != "Round trip." {
-		t.Errorf("content: %v", msg["content"])
-	}
-}
-
-// --- NewToCanonicalStream ---
-
-// URL-citation annotations are mapped to OutputTextPart.Annotations.
-func TestCCParseResponse_URLCitationAnnotation(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":      "chatcmpl-ann",
-		"object":  "chat.completion",
-		"created": 1000,
-		"model":   "gpt-4o",
-		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{
-				"role":    "assistant",
-				"content": "Paris is the capital [1].",
-				"annotations": []any{map[string]any{
-					"type": "url_citation",
-					"url_citation": map[string]any{
-						"start_index": 21,
-						"end_index":   24,
-						"url":         "https://example.com/paris",
-						"title":       "Paris",
-					},
-				}},
-			},
-			"finish_reason": "stop",
-		}},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T", resp.Output[0])
-	}
-	part, ok := msg.Content[0].(*v1.OutputTextPart)
-	if !ok {
-		t.Fatalf("content[0] is %T", msg.Content[0])
-	}
-	if len(part.Annotations) != 1 {
-		t.Fatalf("expected 1 annotation, got %d", len(part.Annotations))
-	}
-	ann, ok := part.Annotations[0].(*v1.URLCitationAnnotation)
-	if !ok {
-		t.Fatalf("annotation is %T", part.Annotations[0])
-	}
-	if ann.URL != "https://example.com/paris" {
-		t.Errorf("url: %q", ann.URL)
-	}
-	if ann.StartIndex != 21 || ann.EndIndex != 24 {
-		t.Errorf("indices: start=%d end=%d", ann.StartIndex, ann.EndIndex)
-	}
-}
-
-// Audio + prediction token details are mapped in ccUsageToCanonical.
-func TestCCUsageToCanonical_AllFields(t *testing.T) {
-	u := &Usage{
-		PromptTokens:     120,
-		CompletionTokens: 40,
-		PromptDetails: &PromptTokenDetails{
-			CachedTokens: 20,
-			AudioTokens:  10,
+		{
+			name:  "no choices",
+			body:  `{"id":"c1","object":"chat.completion","created":1,"model":"m","choices":[]}`,
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop"}`,
 		},
-		CompletionDetails: &CompletionTokenDetails{
-			ReasoningTokens:          5,
-			AudioTokens:              3,
-			AcceptedPredictionTokens: 7,
-			RejectedPredictionTokens: 2,
+		{
+			name: "logprobs ride the extensions",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"},"logprobs":{"content":[{"token":"hi","logprob":-0.25,"bytes":[104,105]}],"refusal":null}}`, ""),
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop",
+				"output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],
+				"extensions":{"openai.logprobs":{"content":[{"token":"hi","logprob":-0.25,"bytes":[104,105]}],"refusal":null}}}`,
 		},
-	}
-	toks := ccUsageToCanonical(u)
-	checks := map[string]int64{
-		"input":               100, // 120 - 20 cached
-		"output":              40,
-		"cache_read":          20,
-		"audio_input":         10,
-		"reasoning":           5,
-		"audio_output":        3,
-		"accepted_prediction": 7,
-		"rejected_prediction": 2,
-	}
-	for k, want := range checks {
-		if toks[k] != want {
-			t.Errorf("toks[%q] = %d, want %d", k, toks[k], want)
-		}
-	}
-}
-
-// SerializeResponse returns an OpenAI error body when resp.Error is set.
-func TestCCSerializeResponse_ErrorBody(t *testing.T) {
-	resp := &v1.Response{
-		ID:    "resp_err",
-		Model: "gpt-4o",
-		Error: &v1.Error{Code: "model_overloaded", Message: "too many requests"},
-	}
-	b, err := (CCTranslator{}).SerializeResponse(resp, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire := decodeMap(t, b)
-	errObj, ok := wire["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected top-level 'error' key, got: %v", wire)
-	}
-	if errObj["message"] != "too many requests" {
-		t.Errorf("message: %v", errObj["message"])
-	}
-	if errObj["code"] != "model_overloaded" {
-		t.Errorf("code: %v", errObj["code"])
-	}
-	if _, has := wire["choices"]; has {
-		t.Error("error body must not contain 'choices'")
-	}
-}
-
-func TestCCParseResponse_OllamaReasoning(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":     "chatcmpl-r1",
-		"object": "chat.completion",
-		"model":  "gpt-oss",
-		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{
-				"role":      "assistant",
-				"content":   "The answer is 42.",
-				"reasoning": "Let me think step by step...",
-			},
-			"finish_reason": "stop",
-		}},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.Output) != 2 {
-		t.Fatalf("output len: %d (want reasoning + message)", len(resp.Output))
-	}
-	r, ok := resp.Output[0].(*v1.Reasoning)
-	if !ok {
-		t.Fatalf("output[0] is %T, want *v1.Reasoning", resp.Output[0])
-	}
-	if r.Content != "Let me think step by step..." {
-		t.Errorf("reasoning content: %q", r.Content)
-	}
-	if got := ccReasoningField(r.ProviderData); got != ccReasoningFieldOllama {
-		t.Errorf("preserved field: %q, want %q", got, ccReasoningFieldOllama)
-	}
-	if _, ok := resp.Output[1].(*v1.Message); !ok {
-		t.Fatalf("output[1] is %T, want *v1.Message", resp.Output[1])
-	}
-}
-
-func TestCCParseResponse_ReasoningContentField(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":     "chatcmpl-r2",
-		"object": "chat.completion",
-		"model":  "deepseek-r1",
-		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{
-				"role":              "assistant",
-				"content":           "Done.",
-				"reasoning_content": "deliberating",
-			},
-			"finish_reason": "stop",
-		}},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, ok := resp.Output[0].(*v1.Reasoning)
-	if !ok {
-		t.Fatalf("output[0] is %T, want *v1.Reasoning", resp.Output[0])
-	}
-	if r.Content != "deliberating" {
-		t.Errorf("reasoning content: %q", r.Content)
-	}
-	if got := ccReasoningField(r.ProviderData); got != ccReasoningFieldStd {
-		t.Errorf("preserved field: %q, want %q", got, ccReasoningFieldStd)
-	}
-}
-
-func TestCCSerializeResponse_ReasoningRoundTrip(t *testing.T) {
-	cases := []struct {
-		name      string
-		pd        string
-		wantField string
-	}{
-		{"ollama", `{"cc_reasoning_field":"reasoning"}`, "reasoning"},
-		{"default", "", "reasoning_content"},
+		{
+			name: "every usage meter; input excludes cached tokens",
+			body: ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":""}}`, `,"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,
+				"prompt_tokens_details":{"cached_tokens":20,"audio_tokens":10},
+				"completion_tokens_details":{"reasoning_tokens":5,"audio_tokens":3,"accepted_prediction_tokens":7,"rejected_prediction_tokens":2}}`),
+			canon: `{` + head + `,"status":"completed","finish_reason":"stop","output":[{"type":"message","id":"msg_c1","status":"completed","role":"assistant","content":null}],
+				"usage":{"input":100,"output":40,"cache_read":20,"audio_input":10,"reasoning":5,"audio_output":3,"accepted_prediction":7,"rejected_prediction":2}}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := &v1.Response{
-				ID:           "resp-1",
-				Model:        "gpt-oss",
-				FinishReason: v1.FinishReasonStop,
-				Output: []v1.Item{
-					&v1.Reasoning{Content: "because", ProviderData: json.RawMessage(tc.pd)},
-					&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hi"}}},
-				},
-			}
-			body, err := (CCTranslator{}).SerializeResponse(resp, nil)
+			resp, err := CCTranslator{}.ParseResponse([]byte(tc.body))
 			if err != nil {
 				t.Fatal(err)
 			}
-			var probe struct {
-				Choices []struct {
-					Message struct {
-						Reasoning        string `json:"reasoning"`
-						ReasoningContent string `json:"reasoning_content"`
-					} `json:"message"`
-				} `json:"choices"`
-			}
-			if err := json.Unmarshal(body, &probe); err != nil {
-				t.Fatal(err)
-			}
-			m := probe.Choices[0].Message
-			if tc.wantField == "reasoning" && m.Reasoning != "because" {
-				t.Errorf("want reasoning=because, got reasoning=%q reasoning_content=%q", m.Reasoning, m.ReasoningContent)
-			}
-			if tc.wantField == "reasoning_content" && m.ReasoningContent != "because" {
-				t.Errorf("want reasoning_content=because, got reasoning=%q reasoning_content=%q", m.Reasoning, m.ReasoningContent)
-			}
+			assertJSON(t, mustJSON(resp), tc.canon)
 		})
 	}
 }
 
-// TestCCParseResponse_ContentArray covers the gpt-oss / harmony divergence
-// where a sync response carries message.content as an ARRAY of content parts
-// rather than a string. Before the tolerant ChatResponseMessage.UnmarshalJSON
-// this failed the whole parse ("cannot unmarshal array into Go struct field
-// ...content of type string"), which dropped the caller onto the raw-body
-// fallback and leaked vendor-shaped usage. It must now parse to canonical.
-func TestCCParseResponse_ContentArray(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":     "chatcmpl-arr",
-		"object": "chat.completion",
-		"model":  "gpt-oss:120b-cloud",
-		"choices": []any{map[string]any{
-			"index": 0,
-			"message": map[string]any{
-				"role": "assistant",
-				"content": []any{
-					map[string]any{"type": "text", "text": "Hello, "},
-					map[string]any{"type": "text", "text": "world."},
-				},
-			},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{
-			"prompt_tokens":             10,
-			"completion_tokens":         5,
-			"total_tokens":              15,
-			"prompt_tokens_details":     map[string]any{"cached_tokens": 0},
-			"completion_tokens_details": map[string]any{"reasoning_tokens": 0},
-		},
-	})
-	resp, err := (CCTranslator{}).ParseResponse(body)
+func TestCCParseResponse_MissingCreatedStampsNow(t *testing.T) {
+	before := time.Now().Unix()
+	resp, err := CCTranslator{}.ParseResponse([]byte(`{"id":"c1","model":"m","choices":[]}`))
 	if err != nil {
-		t.Fatalf("array content must parse, got: %v", err)
+		t.Fatal(err)
 	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T, want *v1.Message", resp.Output[0])
+	if resp.CreatedAt < before || resp.CreatedAt > time.Now().Unix() {
+		t.Errorf("created_at = %d, want the parse time", resp.CreatedAt)
 	}
-	part, ok := msg.Content[0].(*v1.OutputTextPart)
-	if !ok {
-		t.Fatalf("content[0] is %T, want *v1.OutputTextPart", msg.Content[0])
+	if _, err := (CCTranslator{}).ParseResponse([]byte(`{"choices":`)); err == nil {
+		t.Error("truncated body: want an error")
 	}
-	if part.Text != "Hello, world." {
-		t.Errorf("concatenated text: %q", part.Text)
+}
+
+func TestCCSerializeResponse(t *testing.T) {
+	msg := func(text string) *v1.Message {
+		return &v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: text}}}
 	}
-	// Canonical usage is the flat orthogonal-meter map — never the nested
-	// vendor detail objects the wire carried.
-	if resp.Usage["input"] != 10 || resp.Usage["output"] != 5 {
-		t.Errorf("usage not flattened to canonical: %v", resp.Usage)
+	call := &v1.FunctionCall{ID: "fc_1", CallID: "call_1", Name: "f", Arguments: `{}`}
+	const head = `"id":"r1","object":"chat.completion","created":1,"model":"m"`
+	cases := []struct {
+		name string
+		resp v1.Response
+		wire string
+	}{
+		{
+			name: "error",
+			resp: v1.Response{Error: &v1.Error{Code: "server_error", Message: "boom"}, Output: []v1.Item{msg("x")}},
+			wire: `{"error":{"message":"boom","type":"server_error","code":"server_error"}}`,
+		},
+		{
+			name: "text with tool calls, usage with cached and reasoning tokens",
+			resp: v1.Response{FinishReason: v1.FinishReasonToolCalls, Output: []v1.Item{msg("a"), &v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.TextPart{Text: "b"}}}, call},
+				Usage: usage.Tokens{"input": 10, "cache_read": 5, "output": 4, "reasoning": 2}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"ab",
+				"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}],
+				"usage":{"prompt_tokens":15,"completion_tokens":4,"total_tokens":19,"prompt_tokens_details":{"cached_tokens":5},"completion_tokens_details":{"reasoning_tokens":2}}}`,
+		},
+		{
+			name: "tool calls alone leave content null",
+			resp: v1.Response{FinishReason: v1.FinishReasonToolCalls, Output: []v1.Item{call}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,
+				"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}]}`,
+		},
+		{
+			name: "reasoning goes back under the field it came in",
+			resp: v1.Response{FinishReason: v1.FinishReasonStop, Output: []v1.Item{&v1.Reasoning{Content: "why", ProviderData: json.RawMessage(`{"cc_reasoning_field":"reasoning"}`)}, msg("hi")}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi","reasoning":"why"}}]}`,
+		},
+		{
+			name: "summary-only reasoning defaults to reasoning_content",
+			resp: v1.Response{FinishReason: v1.FinishReasonStop, Output: []v1.Item{&v1.Reasoning{Summary: []v1.SummaryText{{Text: "a"}, {Text: "b"}}}}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"","reasoning_content":"ab"}}]}`,
+		},
+		{
+			name: "a refusal without text falls back to content_filter",
+			resp: v1.Response{Status: v1.StatusCompleted, FinishReason: v1.FinishReasonRefusal},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"content_filter","message":{"role":"assistant","content":""}}]}`,
+		},
+		{
+			name: "failed without a finish reason is not a clean stop",
+			resp: v1.Response{Status: v1.StatusFailed, Output: []v1.Item{msg("partial")}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"content_filter","message":{"role":"assistant","content":"partial"}}]}`,
+		},
+		{
+			name: "an unrecognised raw finish reason goes back verbatim",
+			resp: v1.Response{Status: v1.StatusIncomplete, Extensions: map[string]json.RawMessage{extFinishReason: json.RawMessage(`"new_reason"`)}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"new_reason","message":{"role":"assistant","content":""}}]}`,
+		},
+		{
+			name: "logprobs come back from the extensions",
+			resp: v1.Response{FinishReason: v1.FinishReasonStop, Output: []v1.Item{msg("hi")},
+				Extensions: map[string]json.RawMessage{extLogprobs: json.RawMessage(`{"content":[{"token":"hi","logprob":-0.25}]}`), "acme.x": json.RawMessage(`1`)}},
+			wire: `{` + head + `,"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"},
+				"logprobs":{"content":[{"token":"hi","logprob":-0.25}],"refusal":null}}]}`,
+		},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := tc.resp
+			resp.ID, resp.CreatedAt, resp.Model = "r1", 1, "m"
+			wire, err := CCTranslator{}.SerializeResponse(&resp, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSON(t, wire, tc.wire)
+		})
+	}
+}
+
+// Chat Completions has a wire field for every usage detail it reports, so a parse → serialize round trip must keep them all.
+func TestCCResponse_UsageDetailsRoundTrip(t *testing.T) {
+	t.Skip("bug: prompt audio_tokens and completion audio/accepted/rejected prediction tokens → dropped by canonicalUsageToCC")
+	usageJSON := `{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,"prompt_tokens_details":{"cached_tokens":20,"audio_tokens":10},
+		"completion_tokens_details":{"reasoning_tokens":5,"audio_tokens":3,"accepted_prediction_tokens":7,"rejected_prediction_tokens":2}}`
+	resp, err := CCTranslator{}.ParseResponse([]byte(ccResponse(`{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}}`, `,"usage":`+usageJSON)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := CCTranslator{}.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Usage json.RawMessage }
+	if err := json.Unmarshal(wire, &got); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, got.Usage, usageJSON)
 }

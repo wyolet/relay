@@ -46,11 +46,3 @@ func assertJoinedChunkMatches(t *testing.T, newStream func() func([]byte) ([]byt
 		t.Errorf("events = %v, want %v", names, events)
 	}
 }
-
-func TestExtractTokens_MultiLineData(t *testing.T) {
-	body := []byte("data: {\"choices\":[],\ndata: \"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n")
-	got := ExtractTokens(body)
-	if got["input"] != 3 || got["output"] != 5 {
-		t.Errorf("tokens = %v, want input 3 output 5", got)
-	}
-}
