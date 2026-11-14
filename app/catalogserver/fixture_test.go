@@ -1,7 +1,14 @@
 package catalogserver
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"errors"
+	"github.com/google/go-cmp/cmp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"io"
 	"log/slog"
 	"net/http"
@@ -139,6 +146,15 @@ func (r *sourceRepo) tag(name string, annotated bool) {
 	r.git(time.Time{}, "tag", name)
 }
 
+// release commits the fixture tree named displayName at at, tags it and
+// returns the tag's two files.
+func (r *sourceRepo) release(tag, displayName string, at time.Time) (data, catalog []byte) {
+	r.t.Helper()
+	r.commit(catalogTree(fixtureAPIVersion, displayName), at)
+	r.tag(tag, false)
+	return r.releaseFiles(tag)
+}
+
 // releaseFiles builds a tag's two files the way the release CI does.
 func (r *sourceRepo) releaseFiles(tag string) (data, catalog []byte) {
 	r.t.Helper()
@@ -207,6 +223,13 @@ func (f *fakeReleases) publishBoth(tag string, data, catalog []byte) {
 	f.publish(tag, CatalogAsset, catalog, catalog)
 }
 
+// release cuts a release of src the way release does and publishes its files.
+func (f *fakeReleases) release(src *sourceRepo, tag, displayName string, at time.Time) (data, catalog []byte) {
+	data, catalog = src.release(tag, displayName, at)
+	f.publishBoth(tag, data, catalog)
+	return data, catalog
+}
+
 func (f *fakeReleases) fileHits(tag, name string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -243,6 +266,68 @@ func get(t *testing.T, s *Server, path string, header ...string) *httptest.Respo
 	return rec
 }
 
+// answer is a response reduced to what a test states: the status, the body
+// and the headers it names.
+type answer struct {
+	Code   int
+	Body   string
+	Header map[string]string
+}
+
+// wantAnswer compares rec to want: the status, the body and the headers want names.
+func wantAnswer(t *testing.T, what string, want answer, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	got := answer{Code: rec.Code, Body: rec.Body.String()}
+	for h := range want.Header {
+		if got.Header == nil {
+			got.Header = map[string]string{}
+		}
+		got.Header[h] = rec.Header().Get(h)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s (-want +got):\n%s", what, diff)
+	}
+}
+
+func gzipBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func gunzip(t *testing.T, b []byte) []byte {
+	t.Helper()
+	gz := must(gzip.NewReader(bytes.NewReader(b)))(t)
+	out := must(io.ReadAll(gz))(t)
+	return out
+}
+
+// tarFiles lists the regular files of a gzipped tarball in archive order.
+func tarFiles(t *testing.T, archive []byte) []string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(gunzip(t, archive)))
+	var names []string
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return names
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			names = append(names, h.Name)
+		}
+	}
+}
+
 func indexLatest(t *testing.T, s *Server) map[string]string {
 	t.Helper()
 	s.mu.RLock()
@@ -258,3 +343,21 @@ var (
 	oldCommit = time.Date(2026, 7, 1, 20, 7, 4, 0, time.FixedZone("", 5*3600))
 	newCommit = time.Date(2026, 8, 1, 9, 0, 0, 0, time.FixedZone("", -4*3600))
 )
+
+// must fails t on err, else hands v on.
+func must[T any](v T, err error) func(testing.TB) T {
+	return func(t testing.TB) T {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+}
+
+func wantCount(t *testing.T, what string, c prometheus.Collector, want float64) {
+	t.Helper()
+	if n := testutil.ToFloat64(c); n != want {
+		t.Errorf("%s: counted %v, want %v", what, n, want)
+	}
+}

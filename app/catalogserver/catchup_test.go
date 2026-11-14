@@ -1,14 +1,13 @@
 package catalogserver
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // runLoop runs s.Run until the test ends and waits for its first sync.
@@ -81,9 +80,17 @@ func TestReadiness_ReplicaBehindTheIndexServesItsFiles(t *testing.T) {
 				t.Fatalf("ahead replica's index names %q", got)
 			}
 
-			for _, name := range []string{DataAsset("v0.1.1") + ".sha256", DataAsset("v0.1.1"), CatalogAsset + ".sha256", CatalogAsset} {
-				if rec := get(t, lagging, "/releases/v0.1.1/"+name); rec.Code != http.StatusOK {
-					t.Errorf("lagging replica: %s answered %d", name, rec.Code)
+			for _, f := range []struct {
+				name string
+				want []byte
+			}{
+				{DataAsset("v0.1.1") + ".sha256", SumFile(DataAsset("v0.1.1"), data1)},
+				{DataAsset("v0.1.1"), data1},
+				{CatalogAsset + ".sha256", SumFile(CatalogAsset, cat1)},
+				{CatalogAsset, cat1},
+			} {
+				if rec := get(t, lagging, "/releases/v0.1.1/"+f.name); rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), f.want) {
+					t.Errorf("lagging replica: %s answered %d, body equal %v", f.name, rec.Code, bytes.Equal(rec.Body.Bytes(), f.want))
 				}
 			}
 			rec := get(t, lagging, "/releases/v9.9.9/catalog.json.gz")
@@ -131,9 +138,7 @@ func TestGitHubHook_Debounced(t *testing.T) {
 	if signalled() {
 		t.Fatal("a sync was asked for with no hook pending")
 	}
-	if n := testutil.ToFloat64(s.metrics.githubHooks); n != 3 {
-		t.Fatalf("github hooks %v, want 3", n)
-	}
+	wantCount(t, "github hooks", s.metrics.githubHooks, 3)
 }
 
 func TestGitHubHook_FetchesWithoutWaitingForThePoll(t *testing.T) {
