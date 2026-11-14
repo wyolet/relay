@@ -300,7 +300,6 @@ func TestCalibrator_RatioSkipsUnusableRecords(t *testing.T) {
 		}
 	}
 	t.Run("not a finite number", func(t *testing.T) {
-		t.Skip(`bug: a stored record "NaN" or "Inf" → Ratio returns (NaN/+Inf, true) instead of falling back to the model's ratio`)
 		for _, session := range []string{"NaN", "Inf"} {
 			if got, ok := sessionRecord(session).Ratio(t.Context(), "s", "m"); !ok || got != 0.5 {
 				t.Errorf("session record %q: ratio = %v (ok=%v), want the model's 0.5", session, got, ok)
