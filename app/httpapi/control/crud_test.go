@@ -503,7 +503,6 @@ func TestCRUDCreate(t *testing.T) {
 	}
 
 	t.Run("an omitted name is derived from displayName", func(t *testing.T) {
-		t.Skip(`bug: POST {"metadata":{"displayName":"Burst"}} → 422 "expected required property name to be present"; the create contract derives the slug when name is omitted`)
 		if got := decodeMeta(t, scopeReq(t, h, "alice", "POST", "/rate-limits", `{"metadata":{"displayName":"Burst"}}`), 201); got.Name != "burst" {
 			t.Fatalf("name = %q, want burst", got.Name)
 		}
@@ -557,6 +556,11 @@ func TestCRUDUpdate(t *testing.T) {
 			}
 		})
 	}
+	// Only create derives an omitted name.
+	t.Run("an omitted name is a 422 naming it", func(t *testing.T) {
+		h, _ := newScopeHarness(t, testRBAC(), &scopedThing{Meta: meta.Metadata{ID: aliceID, Name: "alice-row", Owner: alice}})
+		wantFieldError(t, scopeReq(t, h, "alice", "PUT", "/rate-limits/by-id/"+aliceID, `{"metadata":{"displayName":"Burst"}}`), "body.metadata", "expected required property name to be present")
+	})
 }
 
 // failingStore fails every write with err.

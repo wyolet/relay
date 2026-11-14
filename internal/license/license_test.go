@@ -210,7 +210,6 @@ func TestService_HasReevaluatesExpiryOnEveryCall(t *testing.T) {
 }
 
 func TestService_InfoFollowsTheClock(t *testing.T) {
-	t.Skip("bug: a license set before expiry keeps Info() = {Licensed: true, Grace: false} after the clock passes expiry and then the grace window, while Has() already refuses")
 	priv := newTestKey(t)
 	clock := issued
 	svc := New(func() time.Time { return clock })
@@ -280,6 +279,21 @@ func TestService_Set(t *testing.T) {
 				t.Errorf("after Set: info %+v, Has(sso) %v; want customer %q", info, svc.Has(applicense.FeatureSSO), tc.customer)
 			}
 		})
+	}
+}
+
+// Verify judges a value as Set would, without putting it in force.
+func TestService_Verify(t *testing.T) {
+	priv := newTestKey(t)
+	svc := New(at(issued))
+	if err := svc.Verify(sign(t, priv, validClaims("acme"))); err != nil || svc.Has(applicense.FeatureSSO) || svc.Info().Licensed {
+		t.Fatalf("Verify(good) = %v with %+v live; want nil and nothing in force", err, svc.Info())
+	}
+	if err := svc.Verify("garbage"); err == nil || err.Error() != "license: malformed (want 3 dot-separated segments)" {
+		t.Errorf("Verify(garbage) = %v, want malformed", err)
+	}
+	if err := svc.Verify(""); err != nil {
+		t.Errorf("Verify(\"\") = %v, want nil: an empty value clears the license", err)
 	}
 }
 

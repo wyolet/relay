@@ -214,6 +214,8 @@ func TestLoad_Rejects(t *testing.T) {
 		{"pg max conns over int32", map[string]string{"RELAY_PG_MAX_CONNS": "2147483648"}, "RELAY_PG_MAX_CONNS must be between 1 and 2147483647"},
 		{"pg min conns zero", map[string]string{"RELAY_PG_MIN_CONNS": "0"}, "RELAY_PG_MIN_CONNS must be between 1 and 2147483647"},
 		{"pg min conns over int32", map[string]string{"RELAY_PG_MIN_CONNS": "2147483648"}, "RELAY_PG_MIN_CONNS must be between 1 and 2147483647"},
+		{"a floored integer that is not a number", map[string]string{"RELAY_MAX_CONNS": "10k"}, `RELAY_MAX_CONNS must be an integer, got "10k"`},
+		{"an unfloored integer that is not a number", map[string]string{"RELAY_MAX_INFLIGHT": "1e3"}, `RELAY_MAX_INFLIGHT must be an integer, got "1e3"`},
 		{"unknown authz", map[string]string{"RELAY_AUTHZ": "RBAC"}, `RELAY_AUTHZ must be "single" or "rbac", got "RBAC"`},
 		{"migrate on boot", map[string]string{"RELAY_MIGRATE_ON_BOOT": "Maybe"}, `RELAY_MIGRATE_ON_BOOT must be "on" or "off", got "maybe"`},
 		{"stream usage", map[string]string{"RELAY_STREAM_USAGE": "maybe"}, `RELAY_STREAM_USAGE must be "on" or "off", got "maybe"`},
@@ -291,7 +293,6 @@ func TestLoad_Rejects(t *testing.T) {
 }
 
 func TestLoad_RejectsNonNumericIntegers(t *testing.T) {
-	t.Skip(`bug: an integer variable that is not a number (RELAY_MAX_CONNS=10k, RELAY_BATCH_MAX_ITEMS=many, RELAY_STREAM_IDLE_TIMEOUT_S=10m) is silently read as unset instead of failing the boot`)
 	for name, bad := range map[string]string{"RELAY_MAX_CONNS": "10k", "RELAY_BATCH_MAX_ITEMS": "many", "RELAY_STREAM_IDLE_TIMEOUT_S": "10m", "RELAY_MAX_REQUEST_BYTES": "5GB", "RELAY_MAX_INFLIGHT": "1e3"} {
 		clearEnv(t)
 		t.Setenv(name, bad)

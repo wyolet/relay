@@ -149,7 +149,6 @@ func TestExpandOne(t *testing.T) {
 }
 
 func TestExpandOne_ModelMarkedActiveIsNotDeprecated(t *testing.T) {
-	t.Skip(`bug: a model with deprecation.status "active" expands to nothing by default, and /catalog/graph drops it or reports deprecated "active"`)
 	c := resolveCatalog()
 	c.Models[1].Spec.Deprecation = &model.Deprecation{Status: model.DeprecationActive}
 	idx, err := loadResolveIndex(Deps{Catalog: c.Load(t)})

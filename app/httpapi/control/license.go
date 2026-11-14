@@ -69,8 +69,7 @@ func registerLicense(api huma.API, d Deps, protect huma.Middlewares) {
 		if d.License == nil {
 			return nil, huma.Error500InternalServerError("license service not wired")
 		}
-		info, err := d.License.Set(in.Body.Value)
-		if err != nil {
+		if err := d.License.Verify(in.Body.Value); err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 		if d.Stores == nil || d.Stores.Settings == nil {
@@ -81,8 +80,13 @@ func registerLicense(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError("marshal: " + err.Error())
 		}
 		audit.Changed(ctx, []string{"license.value"})
+		// Stored before it goes live: the section is what other pods and the next boot read.
 		if _, err := d.Stores.Settings.Upsert(ctx, settings.SectionLicense, raw); err != nil {
 			return nil, huma.Error500InternalServerError("settings: " + err.Error())
+		}
+		info, err := d.License.Set(in.Body.Value)
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 		return &licenseOutput{Body: info}, nil
 	})

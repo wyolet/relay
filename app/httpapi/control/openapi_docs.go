@@ -101,6 +101,8 @@ func describeErrors(api huma.API) {
 	}
 }
 
+const metadataDescription = "Identity and provenance: id, name, owner, labels."
+
 // entityEnvelope documents the metadata and spec every kind carries, on every schema that holds both.
 func entityEnvelope(api huma.API) {
 	for _, s := range api.OpenAPI().Components.Schemas.Map() {
@@ -109,7 +111,7 @@ func entityEnvelope(api huma.API) {
 			continue
 		}
 		if md.Description == "" {
-			md.Description = "Identity and provenance: id, name, owner, labels."
+			md.Description = metadataDescription
 		}
 		if spec.Description == "" {
 			spec.Description = "The row's configuration."

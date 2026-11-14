@@ -87,7 +87,6 @@ func TestParseSince(t *testing.T) {
 		{"-1h", "-1h: a window ending before it starts is accepted; want a 400 as for to before from"},
 	} {
 		t.Run(bug.raw, func(t *testing.T) {
-			t.Skip("bug: parseSince(" + bug.raw + ") → " + bug.wrong)
 			if got, err := parseSince(bug.raw); err == nil && got != 25*time.Hour {
 				t.Fatalf("parseSince(%q) = %v, want 25h or an error", bug.raw, got)
 			}

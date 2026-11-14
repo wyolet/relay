@@ -46,9 +46,16 @@ func (f *fakeLicense) Has(feature string) bool {
 
 func (f *fakeLicense) Info() license.Info { return f.info }
 
-func (f *fakeLicense) Set(value string) (license.Info, error) {
+func (f *fakeLicense) Verify(value string) error {
 	if value != f.good {
-		return f.info, huma.Error400BadRequest("license: signature does not verify")
+		return huma.Error400BadRequest("license: signature does not verify")
+	}
+	return nil
+}
+
+func (f *fakeLicense) Set(value string) (license.Info, error) {
+	if err := f.Verify(value); err != nil {
+		return f.info, err
 	}
 	f.info = license.Info{Licensed: true, Customer: "acme", Features: []string{license.FeatureSSO}}
 	return f.info, nil
@@ -170,7 +177,6 @@ func TestPutLicense(t *testing.T) {
 
 // The stored section is what the next boot and the other pods read, so a value that could not be stored must not be live here alone.
 func TestPutLicenseThatCannotBeStoredIsNotLive(t *testing.T) {
-	t.Skip("bug: PUT /license with a good value whose settings write fails → 500, yet the value is already live in this process")
 	incumbent := license.Info{Licensed: true, Customer: "incumbent"}
 	lic := &fakeLicense{good: "good.license.value", info: incumbent}
 	h := newLicenseHarnessOver(t, lic, failingDBTX{})
@@ -188,6 +194,7 @@ func (badLicense) Info() license.Info { return license.Info{} }
 func (badLicense) Set(string) (license.Info, error) {
 	return license.Info{}, errors.New("signature does not verify")
 }
+func (badLicense) Verify(string) error { return errors.New("signature does not verify") }
 
 // A reload rebuilds the snapshot; a stored license that stopped verifying is a separate fact and must not turn the operator's rebuild into a 500.
 func TestReloadReportsABadLicenseWithout500(t *testing.T) {
