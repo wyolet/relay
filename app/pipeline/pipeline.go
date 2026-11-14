@@ -6,6 +6,7 @@
 package pipeline
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -235,10 +236,14 @@ func readBodyCapped(resp *http.Response, max int) []byte {
 	defer resp.Body.Close()
 	var src io.Reader = resp.Body
 	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-		gr, err := gzip.NewReader(resp.Body)
-		if err == nil {
-			defer gr.Close()
-			src = gr
+		// Sniff the magic without consuming it, so a body mislabelled as gzip is kept as sent.
+		br := bufio.NewReader(resp.Body)
+		src = br
+		if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+			if gr, err := gzip.NewReader(br); err == nil {
+				defer gr.Close()
+				src = gr
+			}
 		}
 	}
 	buf := make([]byte, max)
