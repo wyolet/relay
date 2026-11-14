@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,9 +53,28 @@ func NewTokenSource(cfg Config) *TokenSource {
 }
 
 type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	TokenType   string `json:"token_type"`
+	AccessToken string    `json:"access_token"`
+	ExpiresIn   expiresIn `json:"expires_in"`
+	TokenType   string    `json:"token_type"`
+}
+
+// expiresIn accepts a JSON number (Entra) or a numeric string (IMDS sends "3599").
+type expiresIn int
+
+func (e *expiresIn) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || b[0] != '"' {
+		return json.Unmarshal(b, (*int)(e))
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("expires_in %q is not a number", s)
+	}
+	*e = expiresIn(n)
+	return nil
 }
 
 type tokenError struct {
@@ -182,7 +202,7 @@ func (r *TokenSource) requestToken(ctx context.Context, method, tokenURL, body, 
 	if out.ExpiresIn <= 0 {
 		return "", 0, fmt.Errorf("secret/azure: token response missing expires_in")
 	}
-	return out.AccessToken, out.ExpiresIn, nil
+	return out.AccessToken, int(out.ExpiresIn), nil
 }
 
 func (r *TokenSource) httpClient() *http.Client {

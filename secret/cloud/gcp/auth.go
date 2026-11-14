@@ -28,6 +28,7 @@ const (
 	metadataFlavor     = "Google"
 	jwtGrantType       = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 	tokenRefreshSkew   = 60 * time.Second
+	maxErrorExcerpt    = 512
 )
 
 type serviceAccount struct {
@@ -181,7 +182,7 @@ func (ts *TokenSource) AccessToken(ctx context.Context) (string, error) {
 
 func (ts *TokenSource) fetchToken(ctx context.Context, now time.Time) (string, time.Time, error) {
 	if ts.cfg.UseMetadataServer {
-		return ts.fetchMetadataToken(ctx)
+		return ts.fetchMetadataToken(ctx, now)
 	}
 	if ts.sa == nil {
 		return "", time.Time{}, fmt.Errorf("secret/gcp: service account credentials are not configured")
@@ -190,10 +191,10 @@ func (ts *TokenSource) fetchToken(ctx context.Context, now time.Time) (string, t
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return ts.exchangeAssertion(ctx, assertion)
+	return ts.exchangeAssertion(ctx, assertion, now)
 }
 
-func (ts *TokenSource) fetchMetadataToken(ctx context.Context) (string, time.Time, error) {
+func (ts *TokenSource) fetchMetadataToken(ctx context.Context, now time.Time) (string, time.Time, error) {
 	endpoint := defaultMetadataURL
 	if ts.cfg.MetadataEndpoint != "" {
 		endpoint = ts.cfg.MetadataEndpoint
@@ -234,10 +235,10 @@ func (ts *TokenSource) fetchMetadataToken(ctx context.Context) (string, time.Tim
 	if expiresIn <= 0 {
 		expiresIn = 3600
 	}
-	return out.AccessToken, time.Now().Add(time.Duration(expiresIn) * time.Second), nil
+	return out.AccessToken, now.Add(time.Duration(expiresIn) * time.Second), nil
 }
 
-func (ts *TokenSource) exchangeAssertion(ctx context.Context, assertion string) (string, time.Time, error) {
+func (ts *TokenSource) exchangeAssertion(ctx context.Context, assertion string, now time.Time) (string, time.Time, error) {
 	endpoint := defaultTokenURL
 	if ts.cfg.TokenEndpoint != "" {
 		endpoint = ts.cfg.TokenEndpoint
@@ -269,18 +270,20 @@ func (ts *TokenSource) exchangeAssertion(ctx context.Context, assertion string) 
 	}
 
 	var out tokenResponse
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", time.Time{}, fmt.Errorf("secret/gcp: decode token response: %w", err)
-	}
 	if resp.StatusCode != http.StatusOK {
+		// A failure body need not be JSON (proxies, gateways); fall back to the raw body.
+		_ = json.Unmarshal(body, &out)
 		msg := out.ErrorDesc
 		if msg == "" {
 			msg = out.Error
 		}
 		if msg == "" {
-			msg = strings.TrimSpace(string(body))
+			msg = bodyExcerpt(body)
 		}
 		return "", time.Time{}, fmt.Errorf("secret/gcp: token exchange failed: %s (HTTP %d)", msg, resp.StatusCode)
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", time.Time{}, fmt.Errorf("secret/gcp: decode token response: %w", err)
 	}
 	if out.AccessToken == "" {
 		return "", time.Time{}, fmt.Errorf("secret/gcp: token response missing access_token")
@@ -289,5 +292,14 @@ func (ts *TokenSource) exchangeAssertion(ctx context.Context, assertion string) 
 	if expiresIn <= 0 {
 		expiresIn = 3600
 	}
-	return out.AccessToken, time.Now().Add(time.Duration(expiresIn) * time.Second), nil
+	return out.AccessToken, now.Add(time.Duration(expiresIn) * time.Second), nil
+}
+
+// bodyExcerpt trims body and caps it at maxErrorExcerpt bytes, dropping a rune cut by the cap.
+func bodyExcerpt(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > maxErrorExcerpt {
+		s = strings.ToValidUTF8(s[:maxErrorExcerpt], "") + "…"
+	}
+	return s
 }

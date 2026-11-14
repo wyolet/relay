@@ -215,10 +215,24 @@ func TestTokenSource_Caching(t *testing.T) {
 	}
 
 	t.Run("expiry follows Config.Now", func(t *testing.T) {
-		t.Skip("bug: Config.Now fixed at T, token with expires_in 3600 → still served at T+2h; expiry is stamped from time.Now() while freshness is read from Config.Now")
 		now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
 		f := &fakeEndpoint{status: 200, body: `{"access_token":"tok","expires_in":3600}`}
 		ts := NewTokenSource(Config{UseMetadataServer: true, HTTPClient: &http.Client{Transport: f}, Now: func() time.Time { return now }})
+		for _, step := range []struct {
+			advance  time.Duration
+			wantReqs int
+		}{{0, 1}, {59*time.Minute - time.Second, 1}, {time.Second, 2}, {2 * time.Hour, 3}} {
+			now = now.Add(step.advance)
+			if _, err := ts.AccessToken(context.Background()); err != nil || len(f.reqs) != step.wantReqs {
+				t.Fatalf("at %s: %v after %d requests, want %d", now.Format(time.TimeOnly), err, len(f.reqs), step.wantReqs)
+			}
+		}
+	})
+
+	t.Run("service account: expiry follows Config.Now", func(t *testing.T) {
+		now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+		f := &fakeEndpoint{status: 200, body: `{"access_token":"tok","expires_in":3600}`}
+		ts := NewTokenSource(Config{ServiceAccountJSON: saJSON(t, testEmail, "", pkcs8PEM(t, testKey())), HTTPClient: &http.Client{Transport: f}, Now: func() time.Time { return now }})
 		for _, step := range []struct {
 			advance  time.Duration
 			wantReqs int
@@ -258,6 +272,7 @@ func TestTokenSource_Errors(t *testing.T) {
 		{"error description", Config{ServiceAccountJSON: good}, fakeEndpoint{status: 401, body: `{"error":"invalid_grant","error_description":"bad assertion"}`}, "secret/gcp: token exchange failed: bad assertion (HTTP 401)", 1},
 		{"error only", Config{ServiceAccountJSON: good}, fakeEndpoint{status: 400, body: `{"error":"invalid_grant"}`}, "secret/gcp: token exchange failed: invalid_grant (HTTP 400)", 1},
 		{"json failure with no error field", Config{ServiceAccountJSON: good}, fakeEndpoint{status: 500, body: ` {"detail":"x"} `}, `secret/gcp: token exchange failed: {"detail":"x"} (HTTP 500)`, 1},
+		{"long failure body is capped", Config{ServiceAccountJSON: good}, fakeEndpoint{status: 502, body: strings.Repeat("x", 511) + "é" + strings.Repeat("y", 100)}, "secret/gcp: token exchange failed: " + strings.Repeat("x", 511) + "… (HTTP 502)", 1},
 		{"200 that is not json", Config{ServiceAccountJSON: good}, fakeEndpoint{status: 200, body: `<html>`}, "secret/gcp: decode token response: invalid character '<' looking for beginning of value", 1},
 		{"no access_token", Config{ServiceAccountJSON: good}, fakeEndpoint{status: 200, body: `{"expires_in":3600}`}, "secret/gcp: token response missing access_token", 1},
 		{"metadata: endpoint does not parse", Config{UseMetadataServer: true, MetadataEndpoint: "http://bad host"}, fakeEndpoint{}, `secret/gcp: build metadata request: parse "http://bad host": invalid character " " in host name`, 0},
@@ -282,7 +297,6 @@ func TestTokenSource_Errors(t *testing.T) {
 	}
 
 	t.Run("failure that is not json", func(t *testing.T) {
-		t.Skip("bug: token endpoint answers 502 with body `bad gateway` → \"decode token response: invalid character 'b'…\"; the status and body never reach the error because the body is decoded before the status is read")
 		f := &fakeEndpoint{status: 502, body: "bad gateway"}
 		_, err := NewTokenSource(Config{ServiceAccountJSON: good, HTTPClient: &http.Client{Transport: f}}).AccessToken(context.Background())
 		if want := "secret/gcp: token exchange failed: bad gateway (HTTP 502)"; err == nil || err.Error() != want {
