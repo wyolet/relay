@@ -97,6 +97,22 @@ func noBreakerRecord(t *testing.T, sel *keypool.Selector, keyHash string) {
 	}
 }
 
+// wantBreakerOpenForRateLimit waits for the key's breaker to open on an upstream rate limit: breaker writes run detached.
+func wantBreakerOpenForRateLimit(t *testing.T, sel *keypool.Selector, keyHash string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rec, found := sel.ReadCircuit(context.Background(), keyHash)
+		if found && rec.State == keypool.CircuitOpen && rec.Reason == keypool.ReasonUpstreamRateLimited {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("breaker of %s = %+v (found %v), want open for the rate limit", keyHash, rec, found)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A 429 on key a for model m cools the account for m: the same request moves to the other account's pool without calling key b, the next request for m skips the account, model n is still served by key a, and key a's breaker is untouched.
 func TestUpstream429CoolsAccountForModel(t *testing.T) {
 	t.Parallel()
@@ -201,17 +217,7 @@ func TestUpstream429WithoutAccountTripsBreaker(t *testing.T) {
 	if got := adp.take(); got != "a/m b/m" {
 		t.Fatalf("calls %q, want a/m b/m", got)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		rec, found := p.Selector.ReadCircuit(context.Background(), "hash-a")
-		if found && rec.State == keypool.CircuitOpen && rec.Reason == keypool.ReasonUpstreamRateLimited {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("breaker of hash-a = %+v (found %v), want open for the rate limit", rec, found)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	wantBreakerOpenForRateLimit(t, p.Selector, "hash-a")
 	noBreakerRecord(t, p.Selector, "hash-b")
 }
 
@@ -235,45 +241,38 @@ func TestUpstream429InGroupedAccountTripsBreaker(t *testing.T) {
 	if first.Slots[0].Account.Cooldown.Cooled(time.Now().UnixMilli(), modelM.Meta.ID) {
 		t.Fatal("the grouped account is cooling")
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		rec, found := p.Selector.ReadCircuit(context.Background(), "hash-a")
-		if found && rec.State == keypool.CircuitOpen && rec.Reason == keypool.ReasonUpstreamRateLimited {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("breaker of hash-a = %+v (found %v), want open for the rate limit", rec, found)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	wantBreakerOpenForRateLimit(t, p.Selector, "hash-a")
 }
 
-// Failures other than a rate limit never cool the account: a billing refusal (402) stops the request as before and the next one reaches key a again; a 403 moves on to key b in the same account.
+// Failures other than a rate limit never cool the account: a billing refusal (402) is handed to the caller as it is and the next request reaches key a again; a 403 moves on to key b in the same account.
 func TestNonRateLimitFailureDoesNotCoolAccount(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		status int
-		calls  string
+		status     int
+		calls      string
+		wantStatus int
+		wantKey    string
 	}{
-		{http.StatusPaymentRequired, "a/m"},
-		{http.StatusForbidden, "a/m b/m"},
+		{http.StatusPaymentRequired, "a/m", http.StatusPaymentRequired, "hash-a"},
+		{http.StatusForbidden, "a/m b/m", http.StatusOK, "hash-b"},
 	} {
 		p := newPipeline()
 		adp := &statusAdapter{status: tc.status, failing: func(key, _ string) bool { return key == "a" }}
 		first, _ := accountRoute()
 		hops := []plan.RouteHop{first}
-
-		_, _ = runModel(t, p, adp, hops, modelM)
-		if got := adp.take(); got != tc.calls {
-			t.Fatalf("%d: calls %q, want %q", tc.status, got, tc.calls)
-		}
-		if first.Slots[0].Account.Cooldown.Cooled(time.Now().UnixMilli(), modelM.Meta.ID) {
-			t.Fatalf("%d: the account is cooling", tc.status)
-		}
-		if tc.status == http.StatusPaymentRequired {
-			_, _ = runModel(t, p, adp, hops, modelM)
-			if got := adp.take(); got != "a/m" {
-				t.Fatalf("402: second request called %q, want a/m", got)
+		for i := range 2 {
+			res, err := runModel(t, p, adp, hops, modelM)
+			if err != nil || res.Status != tc.wantStatus || res.KeyHash != tc.wantKey {
+				t.Fatalf("%d, request %d: result %+v, err %v; want status %d served by %s", tc.status, i, res, err, tc.wantStatus, tc.wantKey)
+			}
+			if got := adp.take(); got != tc.calls {
+				t.Fatalf("%d, request %d: calls %q, want %q", tc.status, i, got, tc.calls)
+			}
+			if first.Slots[0].Account.Cooldown.Cooled(time.Now().UnixMilli(), modelM.Meta.ID) {
+				t.Fatalf("%d: the account is cooling", tc.status)
+			}
+			if tc.status == http.StatusForbidden {
+				break // key a's breaker opens on the 403, so a second request skips it
 			}
 		}
 	}

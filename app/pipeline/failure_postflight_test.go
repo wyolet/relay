@@ -13,7 +13,6 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits/lua"
 	"github.com/wyolet/relay/app/plan"
-	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -31,10 +30,7 @@ func (serverErrorAdapter) Retryable(*http.Response) (bool, keypool.FailureKind, 
 
 // A request whose every key fails writes its settles and key failures on the post-flight store only, and the caller's hold settles before the error is returned.
 func TestRunFailureWritesUsePostFlightStore(t *testing.T) {
-	mem := kv.NewMem()
-	t.Cleanup(func() { _ = mem.Close() })
-	pkgratelimit.RegisterScripts(mem)
-	keypool.RegisterScripts(mem)
+	mem := memScriptStore(t)
 	shared, post := kvtest.NewRecording(mem), kvtest.NewRecording(mem)
 
 	inbound := concurrencyRateLimit("rl-inbound", "inbound")

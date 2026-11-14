@@ -3,10 +3,8 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +16,6 @@ import (
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	appratelimit "github.com/wyolet/relay/pkg/catalogkind/ratelimit"
-	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/kv/kvtest"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/meta"
@@ -33,7 +30,7 @@ type keyRecordingAdapter struct {
 
 func (a keyRecordingAdapter) Call(_ context.Context, _ string, _ *string, key string, _ []byte, _ http.Header, _ string, _ bool, _ bool) (*http.Response, error) {
 	*a.used = append(*a.used, key)
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+	return ok200(), nil
 }
 
 type tierFullHarness struct {
@@ -49,10 +46,7 @@ type tierFullHarness struct {
 // newTierFullHarness builds n prioritized keys. The first full keys share one account whose tier allows one request a minute; the rest share an account with room and a token meter, so a served request also settles post-flight.
 func newTierFullHarness(t *testing.T, n, full int) *tierFullHarness {
 	t.Helper()
-	mem := kv.NewMem()
-	t.Cleanup(func() { _ = mem.Close() })
-	pkgratelimit.RegisterScripts(mem)
-	keypool.RegisterScripts(mem)
+	mem := memScriptStore(t)
 	h := &tierFullHarness{store: kvtest.NewRecording(mem), full: full, done: make(hostReached, 16)}
 	for i := range n {
 		h.keys = append(h.keys, testKey("key-"+string(rune('1'+i))))
@@ -114,11 +108,7 @@ func (h *tierFullHarness) runOn(t *testing.T, p *Pipeline, hops []plan.RouteHop)
 		return lc, err
 	}
 	_ = res.Body.Close()
-	select {
-	case <-h.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("post-flight never finished")
-	}
+	h.done.await(t)
 	return lc, nil
 }
 
