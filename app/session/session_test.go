@@ -21,15 +21,22 @@ type failStore struct {
 	err error
 }
 
-func (f *failStore) Get(context.Context, string) ([]byte, error)              { return nil, f.err }
+func (f *failStore) Get(context.Context, string) ([]byte, error) { return nil, f.err }
+
 func (f *failStore) Set(context.Context, string, []byte, time.Duration) error { return f.err }
-func (f *failStore) Del(context.Context, string) error                        { return f.err }
-func (f *failStore) Incr(context.Context, string, int64) (int64, error)       { return 0, f.err }
-func (f *failStore) Expire(context.Context, string, time.Duration) error      { return f.err }
-func (f *failStore) Range(context.Context, string) ([]kv.Entry, error)        { return nil, f.err }
+
+func (f *failStore) Del(context.Context, string) error { return f.err }
+
+func (f *failStore) Incr(context.Context, string, int64) (int64, error) { return 0, f.err }
+
+func (f *failStore) Expire(context.Context, string, time.Duration) error { return f.err }
+
+func (f *failStore) Range(context.Context, string) ([]kv.Entry, error) { return nil, f.err }
+
 func (f *failStore) WithLock(ctx context.Context, _ []string, fn func(context.Context) error) error {
 	return f.err
 }
+
 func (f *failStore) Close() error { return nil }
 
 func TestMiddlewareStoreFailure(t *testing.T) {
@@ -237,5 +244,96 @@ func TestDuplicateWriteHeader_SuppressedAndAttributed(t *testing.T) {
 	logged := logBuf.String()
 	if !strings.Contains(logged, "duplicate WriteHeader suppressed") || !strings.Contains(logged, "/api/buggy") {
 		t.Errorf("log = %q, want suppression warn with offender path", logged)
+	}
+}
+
+func loginCookie(t *testing.T, m *Manager, userID string) *http.Cookie {
+	t.Helper()
+	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.Login(r.Context(), userID, userID); err != nil {
+			t.Fatalf("Login: %v", err)
+		}
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", nil))
+	return rec.Result().Cookies()[0]
+}
+
+// principalFor is who a request carrying c authenticates as; nil when the session does not claim it.
+func principalFor(t *testing.T, m *Manager, c *http.Cookie) *principal.Principal {
+	t.Helper()
+	var got *principal.Principal
+	h := m.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		p, claimed, err := m.Authenticate(r)
+		if err != nil || claimed != (p != nil) {
+			t.Errorf("Authenticate = %+v, %v, %v", p, claimed, err)
+		}
+		got = p
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if c != nil {
+		req.AddCookie(c)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	return got
+}
+
+// DestroyUser ends every session of one account and no one else's.
+func TestDestroyUserEndsOnlyThatUsersSessions(t *testing.T) {
+	m := New(kv.NewMem(), false)
+	a1, a2, b := loginCookie(t, m, "u-a"), loginCookie(t, m, "u-a"), loginCookie(t, m, "u-b")
+	if err := m.DestroyUser(context.Background(), "u-a"); err != nil {
+		t.Fatalf("DestroyUser: %v", err)
+	}
+	for i, c := range []*http.Cookie{a1, a2} {
+		if a := principalFor(t, m, c); a != nil {
+			t.Fatalf("session %d of u-a still authenticates as %+v", i, a)
+		}
+	}
+	if a := principalFor(t, m, b); a == nil || a.ID != "u-b" {
+		t.Fatalf("u-b's session = %+v, want it intact", a)
+	}
+}
+
+// The actor's SessionID ends up in audit rows readable by lower-privileged
+// principals, so it must identify the session without being its credential.
+func TestActorSessionIDDoesNotAuthenticate(t *testing.T) {
+	m := New(kv.NewMem(), false)
+
+	login := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.Login(r.Context(), "u-admin", "admin", "admin"); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	rec := httptest.NewRecorder()
+	login.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == cookieName {
+			cookie = c
+		}
+	}
+	if cookie == nil || cookie.Value == "" {
+		t.Fatalf("no %s cookie set on login: %v", cookieName, rec.Result().Cookies())
+	}
+
+	stampedOn := func(c *http.Cookie) *principal.Principal { return principalFor(t, m, c) }
+
+	first := stampedOn(cookie)
+	if first == nil || first.ID != "u-admin" {
+		t.Fatalf("session cookie did not authenticate: %+v", first)
+	}
+	if first.SessionID == "" {
+		t.Fatal("actor.SessionID is empty, want a correlation id")
+	}
+	if first.SessionID == cookie.Value {
+		t.Fatal("actor.SessionID is the session cookie token")
+	}
+	if again := stampedOn(cookie); again == nil || again.SessionID != first.SessionID {
+		t.Fatalf("actor.SessionID not stable across requests: %q vs %+v", first.SessionID, again)
+	}
+	if replayed := stampedOn(&http.Cookie{Name: cookieName, Value: first.SessionID}); replayed != nil {
+		t.Fatalf("replaying actor.SessionID as the cookie authenticated as %+v", replayed)
 	}
 }

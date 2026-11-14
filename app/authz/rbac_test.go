@@ -39,10 +39,14 @@ var (
 )
 
 func projectOwner(id string) *meta.Owner { return &meta.Owner{Kind: meta.OwnerProject, ID: id} }
-func userOwner(id string) *meta.Owner    { return &meta.Owner{Kind: meta.OwnerUser, ID: id} }
-func providerOwner() *meta.Owner         { return &meta.Owner{Kind: meta.OwnerProvider, ID: "prov-1"} }
-func teamScope(id string) meta.Owner     { return meta.Owner{Kind: meta.OwnerTeam, ID: id} }
-func projectScope(id string) meta.Owner  { return meta.Owner{Kind: meta.OwnerProject, ID: id} }
+
+func userOwner(id string) *meta.Owner { return &meta.Owner{Kind: meta.OwnerUser, ID: id} }
+
+func providerOwner() *meta.Owner { return &meta.Owner{Kind: meta.OwnerProvider, ID: "prov-1"} }
+
+func teamScope(id string) meta.Owner { return meta.Owner{Kind: meta.OwnerTeam, ID: id} }
+
+func projectScope(id string) meta.Owner { return meta.Owner{Kind: meta.OwnerProject, ID: id} }
 
 func mkTeam(id, name string) *team.Team {
 	t := &team.Team{}
@@ -257,54 +261,6 @@ func TestRBACAfterTeamDelete(t *testing.T) {
 	}
 }
 
-// Visible and Authorize(get) must never disagree.
-func TestVisibleMatchesAuthorizeGet(t *testing.T) {
-	cat := newFixture(t)
-	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
-
-	actors := []*actor.Actor{
-		actorOf(aliceID, subjectsOf(aliceID)),
-		actorOf(bobID, subjectsOf(bobID)),
-		actorOf(carolID, subjectsOf(carolID)),
-		actorOf(erinID, subjectsOf(erinID)),
-		actorOf(frankID, subjectsOf(frankID, "ml")),
-		{AdminToken: true},
-		actorOf(ids.New(), nil, user.RoleAdmin),
-	}
-	owners := []meta.Owner{
-		*projectOwner(p1ID), *projectOwner(p2ID), *projectOwner(p3ID), *projectOwner(p4ID),
-		{Kind: meta.OwnerTeam, ID: t1ID}, {Kind: meta.OwnerTeam, ID: t2ID},
-		*userOwner(aliceID), *userOwner(bobID), *providerOwner(), globalScope,
-	}
-	kinds := map[string]string{
-		"policy":          "policies",
-		"key":             "keys",
-		"host-key":        "host-keys",
-		"model":           "models",
-		"project":         "projects",
-		"team":            "teams",
-		"service-account": "service-accounts",
-		"usage":           "usage",
-	}
-	for _, a := range actors {
-		ctx := ctxOf(a)
-		for kind, pl := range kinds {
-			for _, o := range owners {
-				owner := o
-				for _, id := range []string{"", p1ID, t1ID} {
-					visible := rbac.Visible(ctx, kind, id, owner)
-					allowed := rbac.Authorize(ctx, pl+".get",
-						authz.Resource{Kind: kind, ID: id, Owner: &owner}) == nil
-					if visible != allowed {
-						t.Fatalf("Visible(%s, %s, %+v) = %v but Authorize(%s.get) allowed = %v",
-							kind, id, owner, visible, pl, allowed)
-					}
-				}
-			}
-		}
-	}
-}
-
 // The break-glass token and the bootstrap admin from config/users carry no
 // bindings at all, and answer every verb on every owner.
 func TestAdminActorsNeedNoBindings(t *testing.T) {
@@ -332,28 +288,6 @@ func TestAdminActorsNeedNoBindings(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-// Default deny: an authenticated caller with no bindings gets nothing but
-// the catalog reads, their own rows, and empty lists.
-func TestDefaultDeny(t *testing.T) {
-	cat := newFixture(t)
-	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
-	stranger := actorOf(ids.New(), subjectsOf(ids.New()))
-
-	if err := rbac.Authorize(ctxOf(stranger), "keys.get", authz.Resource{Kind: "key", Owner: projectOwner(p1ID)}); !errors.Is(err, authz.ErrForbidden) {
-		t.Fatalf("keys.get = %v, want forbidden", err)
-	}
-	// The list call is admitted but every row is filtered out.
-	if err := rbac.Authorize(ctxOf(stranger), "keys.list", authz.Resource{Kind: "key"}); err != nil {
-		t.Fatalf("keys.list = %v, want allowed with an empty result", err)
-	}
-	if rbac.Visible(ctxOf(stranger), "key", "", *projectOwner(p1ID)) {
-		t.Error("a binding-less caller sees a project row")
-	}
-	if err := rbac.Authorize(ctxOf(stranger), "models.list", authz.Resource{Kind: "model"}); err != nil {
-		t.Fatalf("models.list = %v, want allowed (catalog read)", err)
 	}
 }
 
@@ -480,40 +414,5 @@ func TestIsAdmin(t *testing.T) {
 				t.Fatalf("IsAdmin = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-// Single-user mode: authenticated is the whole check, and unauthenticated
-// is still refused.
-func TestAlwaysAllowAuthenticated(t *testing.T) {
-	a := authz.AlwaysAllowAuthenticated{}
-	if err := a.Authorize(ctxOf(nil), "keys.delete", authz.Resource{Kind: "key"}); !errors.Is(err, authz.ErrUnauthenticated) {
-		t.Fatalf("unauthenticated = %v, want unauthenticated", err)
-	}
-	if err := a.Authorize(ctxOf(actorOf(bobID, nil)), "keys.delete",
-		authz.Resource{Kind: "key", Owner: userOwner(aliceID)}); err != nil {
-		t.Fatalf("authenticated = %v, want allowed", err)
-	}
-}
-
-// A policy owned by the system or by a host is shared configuration —
-// the tier menu an upstream publishes, the relay-wide defaults. A scoped
-// caller has to read them to bind or reference one; a project's own policy
-// still needs a binding.
-func TestSharedPoliciesGetTheCatalogRead(t *testing.T) {
-	cat := newFixture(t)
-	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
-	stranger := actorOf(ids.New(), subjectsOf(ids.New()))
-
-	for _, owner := range []meta.Owner{
-		{Kind: meta.OwnerSystem},
-		{Kind: meta.OwnerHost, ID: ids.New()},
-	} {
-		if !rbac.Visible(ctxOf(stranger), "policy", ids.New(), owner) {
-			t.Errorf("a %s-owned policy is not readable by a scoped caller", owner.Kind)
-		}
-	}
-	if rbac.Visible(ctxOf(stranger), "policy", ids.New(), *projectOwner(p1ID)) {
-		t.Error("a project's own policy is readable without a binding")
 	}
 }

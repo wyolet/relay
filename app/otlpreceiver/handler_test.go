@@ -17,11 +17,7 @@ import (
 	"testing"
 	"time"
 
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
-	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
-	"google.golang.org/protobuf/proto"
-
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/httpapi/inference"
@@ -48,6 +44,10 @@ import (
 	"github.com/wyolet/relay/pkg/payload"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/slug"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // relayKey is the reporter every export uses unless a test names another. siblingKey belongs to a second service account of the same project, outsiderKey to another project.
@@ -434,64 +434,29 @@ func TestExportRecordsAPricedUsageEvent(t *testing.T) {
 	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != otlp.MediaTypeProtobuf {
 		t.Errorf("success response = %q (%s), want the empty protobuf message", rec.Body, rec.Header().Get("Content-Type"))
 	}
-	if len(fx.events) != 1 {
-		t.Fatalf("recorded %d events, want 1", len(fx.events))
-	}
-	ev := fx.events[0]
-
-	if ev.Source != "otlp" || ev.Status != 200 || ev.DurationMs != 2000 || !ev.Timestamp.Equal(spanStart) {
-		t.Errorf("outcome = source %q status %d duration %d ts %v", ev.Source, ev.Status, ev.DurationMs, ev.Timestamp)
-	}
-	if ev.RequestID != "otlp-"+strings.Repeat("ab", 16)+"-"+strings.Repeat("01", 8) {
-		t.Errorf("RequestID = %q, want it derived from the span's ids", ev.RequestID)
-	}
-	// Attribution is the authenticated reporter's, never anything the export claims.
-	if ev.ProjectID != fx.project.Meta.ID || ev.Project != "ml-search" || ev.TeamID != fx.team.Meta.ID || ev.Team != "platform" {
-		t.Errorf("tenancy = %q/%q %q/%q", ev.ProjectID, ev.Project, ev.TeamID, ev.Team)
-	}
-	if ev.PrincipalKind != "serviceaccount" || ev.PrincipalID != fx.sa.Meta.ID || ev.Principal != "indexer" {
-		t.Errorf("principal = %q %q %q", ev.PrincipalKind, ev.PrincipalID, ev.Principal)
-	}
-	if ev.CredentialKind != "key" || ev.CredentialID != fx.keyRow.Meta.ID || ev.RelayKeyHash != fx.keyRow.Spec.KeyHash || ev.RelayKey != "indexer-prod" {
-		t.Errorf("credential = %q %q %q %q", ev.CredentialKind, ev.CredentialID, ev.RelayKeyHash, ev.RelayKey)
-	}
-	// Relay routed nothing, so no policy, host or host key is named.
-	if ev.PolicyID != "" || ev.HostID != "" || ev.HostKeyID != "" {
-		t.Errorf("routing identity set on a reported event: %q %q %q", ev.PolicyID, ev.HostID, ev.HostKeyID)
-	}
-	if ev.ModelID != fx.model.Meta.ID || ev.Model != "acme-large" || ev.Provider != "acme" || ev.RequestedModel != "acme-large" {
-		t.Errorf("model = %q %q provider %q requested %q", ev.ModelID, ev.Model, ev.Provider, ev.RequestedModel)
-	}
-
-	wantTokens := map[string]int64{"input": 100, "output": 300, "cache_read": 700, "cache_creation": 200}
-	if len(ev.Tokens) != len(wantTokens) {
-		t.Errorf("tokens = %v, want %v", ev.Tokens, wantTokens)
-	}
-	for k, v := range wantTokens {
-		if ev.Tokens[k] != v {
-			t.Errorf("tokens[%s] = %d, want %d", k, ev.Tokens[k], v)
-		}
-	}
+	traceID, spanID := strings.Repeat("ab", 16), strings.Repeat("01", 8)
 	// 100×$3 + 300×$15 + 700×$0.30 + 200×$3.75 per million, in nano-USD, at the provider's own host rather than the reseller's.
-	if ev.Pricing != "acme-large-list" || ev.CostNanos == nil || *ev.CostNanos != 5_760_000 {
-		t.Errorf("pricing = %q cost = %v, want acme-large-list / 5760000", ev.Pricing, ev.CostNanos)
+	cost := int64(5_760_000)
+	want := usagelog.Event{
+		RequestID: "otlp-" + traceID + "-" + spanID, Source: "otlp", Timestamp: spanStart, Status: 200, DurationMs: 2000,
+		// Attribution is the authenticated reporter's, never anything the export claims.
+		ProjectID: fx.project.Meta.ID, Project: "ml-search", TeamID: fx.team.Meta.ID, Team: "platform",
+		PrincipalKind: "serviceaccount", PrincipalID: fx.sa.Meta.ID, Principal: "indexer",
+		CredentialKind: "key", CredentialID: fx.keyRow.Meta.ID, RelayKeyHash: fx.keyRow.Spec.KeyHash, RelayKey: "indexer-prod",
+		LaneAccountID: fx.keyRow.Spec.AccountID,
+		// Relay routed nothing, so no policy, host or host key is named.
+		ModelID: fx.model.Meta.ID, Model: "acme-large", Provider: "acme", RequestedModel: "acme-large",
+		Tokens:  map[string]int64{"input": 100, "output": 300, "cache_read": 700, "cache_creation": 200},
+		Pricing: "acme-large-list", CostNanos: &cost,
+		CostBreakdown: map[string]int64{"tokens.input": 300_000, "tokens.output": 4_500_000, "tokens.cache_read": 210_000, "tokens.cache_creation": 750_000},
+		Extras: map[string]string{
+			"telemetry_convention": "gen_ai", "trace_id": traceID, "span_id": spanID,
+			"response_id": "resp_123", "session_id": "conv_9", "service": "billing-agent", "operation": "chat",
+			"reported_provider": "acme", "instance": "pod-a", "client_ip": "192.0.2.1",
+		},
 	}
-
-	wantExtras := map[string]string{
-		"telemetry_convention": "gen_ai",
-		"trace_id":             strings.Repeat("ab", 16),
-		"span_id":              strings.Repeat("01", 8),
-		"response_id":          "resp_123",
-		"session_id":           "conv_9",
-		"service":              "billing-agent",
-		"operation":            "chat",
-		"reported_provider":    "acme",
-		"instance":             "pod-a",
-	}
-	for k, v := range wantExtras {
-		if ev.Extras[k] != v {
-			t.Errorf("extras[%s] = %q, want %q", k, ev.Extras[k], v)
-		}
+	if diff := cmp.Diff([]usagelog.Event{want}, fx.events); diff != "" {
+		t.Fatalf("recorded events (-want +got):\n%s", diff)
 	}
 }
 
@@ -968,12 +933,7 @@ func TestExportLargerThanTheQueueIsTakenInParts(t *testing.T) {
 
 func TestStartTimes(t *testing.T) {
 	fx := newFixture(t)
-	startingAt := func(id byte, start time.Time) *tracepb.Span {
-		s := chatSpan(id, "acme-large")
-		s.StartTimeUnixNano = uint64(start.UnixNano())
-		s.EndTimeUnixNano = uint64(start.Add(time.Second).UnixNano())
-		return s
-	}
+	startingAt := func(id byte, start time.Time) *tracepb.Span { return startingAt(chatSpan(id, "acme-large"), start) }
 	unstamped := chatSpan(4, "acme-large")
 	unstamped.StartTimeUnixNano, unstamped.EndTimeUnixNano = 0, 0
 
@@ -1003,13 +963,9 @@ func TestStartTimes(t *testing.T) {
 	if resp.PartialSuccess.RejectedSpans != "1" || !strings.Contains(resp.PartialSuccess.ErrorMessage, "future") {
 		t.Errorf("partial success = %+v, want 1 span rejected for starting in the future", resp.PartialSuccess)
 	}
-	for _, ev := range fx.events {
-		if ev.Extras["span_id"] != spanIDsOf(4)[0] {
-			continue
-		}
-		if ev.Timestamp.Before(before) || ev.Timestamp.After(time.Now()) {
-			t.Errorf("call without a start time stamped %v, want the time it was received", ev.Timestamp)
-		}
+	i := slices.IndexFunc(fx.events, func(ev usagelog.Event) bool { return ev.Extras["span_id"] == spanIDsOf(4)[0] })
+	if ts := fx.events[i].Timestamp; ts.Before(before) || ts.After(time.Now()) {
+		t.Errorf("call without a start time stamped %v, want the time it was received", ts)
 	}
 }
 
