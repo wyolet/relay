@@ -234,6 +234,12 @@ func (s *responsesToCanonicalStream) translateEvent(event, data []byte) ([]byte,
 			break
 		}
 		cr := responsesResponseToCanonical(resp)
+		// The upstream error is the failure's terminal frame: canonical error ends the stream, so no generation.completed follows it.
+		if cr.Error != nil {
+			errData, _ := json.Marshal(v1.ErrorEvent{Code: cr.Error.Code, Message: cr.Error.Message})
+			frames = append(frames, v1.SSEFrame{Event: v1.EventError, Data: errData})
+			break
+		}
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 			ID:                cr.ID,
 			Status:            v1.StatusFailed,

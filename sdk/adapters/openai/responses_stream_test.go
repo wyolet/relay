@@ -104,7 +104,6 @@ func TestResponsesToCanonicalStream(t *testing.T) {
 }
 
 func TestResponsesToCanonicalStream_FailedKeepsError(t *testing.T) {
-	t.Skip(`bug: response.failed {"error":{"code":"server_error","message":"boom"}} → generation.completed {"status":"failed"}; the upstream error code and message reach no canonical frame`)
 	frames := respStream(t, ResponsesTranslator{}.NewToCanonicalStream(),
 		respSSE(ResponsesEventFailed, `{"response":{"id":"resp_1","status":"failed","output":[],"error":{"code":"server_error","message":"boom"}}}`))
 	respJSONEq(t, respData(t, frames, v1.EventError), `{"code":"server_error","message":"boom"}`)
@@ -168,7 +167,6 @@ func TestResponsesFromCanonicalStream_CallIDFallback(t *testing.T) {
 
 // Responses ends a failed generation with response.failed; response.completed tells the client the turn succeeded.
 func TestResponsesFromCanonicalStream_Failed(t *testing.T) {
-	t.Skip(`bug: canonical generation.completed {"status":"failed"} → "event: response.completed" carrying status failed, instead of response.failed`)
 	frames := respStream(t, ResponsesTranslator{}.NewFromCanonicalStream(),
 		canonicalChunk(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "gen_1", Model: "m"}),
 		canonicalChunk(v1.EventGenerationCompleted, v1.GenerationCompletedEvent{ID: "gen_1", Status: v1.StatusFailed}),
