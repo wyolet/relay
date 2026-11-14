@@ -138,7 +138,7 @@ func TestProxyShape_ModelKeySpelling(t *testing.T) {
 		for _, req := range []proxyShapeCall{{principal: pr}, {pin: "anthropic"}} {
 			req.body, req.length = strings.NewReader(body), int64(len(body))
 			w := serveProxyShape(d, req)
-			if w.Code != http.StatusBadRequest || parseDispatchErr(t, w.Body.Bytes()).Error.Code != "invalid_model_key" {
+			if w.Code != http.StatusBadRequest || envelopeOf(t, w).Code != "invalid_model_key" {
 				t.Fatalf("%s (pin %q): status %d %s, want 400 invalid_model_key", body, req.pin, w.Code, w.Body)
 			}
 		}
@@ -165,7 +165,7 @@ func TestProxyShape_ClientAbortMidBody(t *testing.T) {
 		_ = pw.CloseWithError(io.ErrUnexpectedEOF)
 	}()
 	w := serveProxyShape(d, proxyShapeCall{principal: pr, body: pr2, length: int64(len(body))})
-	if w.Code != http.StatusBadRequest || parseDispatchErr(t, w.Body.Bytes()).Error.Code != "read_body" {
+	if w.Code != http.StatusBadRequest || envelopeOf(t, w).Code != "read_body" {
 		t.Fatalf("status %d: %s, want 400 read_body", w.Code, w.Body)
 	}
 	select {

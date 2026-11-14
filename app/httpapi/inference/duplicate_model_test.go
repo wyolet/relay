@@ -16,8 +16,8 @@ func assertDuplicateModel(t *testing.T, w *httptest.ResponseRecorder) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400; body %s", w.Code, w.Body)
 	}
-	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Type != "invalid_request_error" || e.Error.Code != "duplicate_model" {
-		t.Fatalf("envelope %s/%s, want invalid_request_error/duplicate_model", e.Error.Type, e.Error.Code)
+	if e := envelopeOf(t, w); e.Type != "invalid_request_error" || e.Code != "duplicate_model" {
+		t.Fatalf("envelope %s/%s, want invalid_request_error/duplicate_model", e.Type, e.Code)
 	}
 }
 

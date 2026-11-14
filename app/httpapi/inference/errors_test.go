@@ -1,274 +1,251 @@
 package inference
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"strings"
+	"net/url"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 )
 
-func TestMapRouteRefusal_ModelNotAllowed_NamesModel(t *testing.T) {
-	rec := httptest.NewRecorder()
-	mapRouteRefusal(rec, &plan.Refusal{Code: plan.CodeModelNotAllowed, Rung: limits.RungProject, PolicyID: "pol_123", Message: "the model is not allowed by the project policy"}, "gpt-4o")
-
-	if rec.Code != 403 {
-		t.Fatalf("status: %d", rec.Code)
-	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Err.Code != "model_not_allowed" {
-		t.Errorf("code: %q", env.Err.Code)
-	}
-	if !strings.Contains(env.Err.Message, `"gpt-4o"`) {
-		t.Errorf("message should name the model: %q", env.Err.Message)
-	}
-	// Named as a caller limit's 429 names it: the rung, then the policy.
-	if want := `model "gpt-4o" is not allowed by the project policy pol_123`; env.Err.Message != want {
-		t.Errorf("message = %q, want %q", env.Err.Message, want)
-	}
-}
-
-// A refusal no policy made (a deprecated model nobody opted into) keeps the plan's reason.
-func TestMapRouteRefusal_ModelNotAllowed_WithoutAPolicy(t *testing.T) {
-	rec := httptest.NewRecorder()
-	mapRouteRefusal(rec, &plan.Refusal{Code: plan.CodeModelNotAllowed, Message: "deprecated models need a policy that names them or includes deprecated models"}, "gpt-3")
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Code != 403 || !strings.Contains(env.Err.Message, `"gpt-3"`) || !strings.Contains(env.Err.Message, "deprecated models need a policy") {
-		t.Fatalf("status %d message %q", rec.Code, env.Err.Message)
-	}
-}
-
-// A caller's own rate-limit refusal must be a 429 with Retry-After from the
-// limiter's refill timing — not a 502 blaming an upstream that was never
-// called — and names the rung and policy whose limit refused.
-func TestMapPipelineErr_CallerLimitExceeded_429WithRetryAfter(t *testing.T) {
-	rec := httptest.NewRecorder()
-	c := limits.Counter{Kind: limits.KindRule, Rung: limits.RungTeam, PolicyID: "pol_team", ID: "r:x"}
-	mapPipelineErr(rec, fmt.Errorf("run: %w", &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &c, RetryAfter: 2300 * time.Millisecond}}))
-
-	if rec.Code != 429 {
-		t.Fatalf("status: %d, want 429", rec.Code)
-	}
-	if got := rec.Header().Get("Retry-After"); got != "3" {
-		t.Fatalf("Retry-After: %q, want %q (2.3s rounds up)", got, "3")
-	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
-		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
-	}
-	// One client reads the delay out of the message text and never looks at Retry-After.
-	if !strings.Contains(env.Err.Message, "try again in 3s") || !strings.Contains(env.Err.Message, "team policy pol_team") {
-		t.Fatalf("message must name the rung, the policy and the retry delay: %q", env.Err.Message)
-	}
-}
-
-// A spent hard budget is a 429 of its own code, retried at the next period start.
-func TestMapPipelineErr_BudgetExceeded(t *testing.T) {
-	rec := httptest.NewRecorder()
-	c := limits.Counter{Kind: limits.KindBudget, Rung: limits.RungProject, PolicyID: "pol_p", ID: "b:x"}
-	mapPipelineErr(rec, &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &c, RetryAfter: 14 * time.Hour}})
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Code != 429 || env.Err.Code != "budget_exceeded" || rec.Header().Get("Retry-After") != strconv.Itoa(14*3600) {
-		t.Fatalf("status %d code %q retry %q, want 429 budget_exceeded at the period start", rec.Code, env.Err.Code, rec.Header().Get("Retry-After"))
-	}
-}
-
-// Every credential over an upstream limit is a 429 with the earliest time one has room, and keeps the upstream rules to itself.
-func TestMapPipelineErr_UpstreamLimited_429WithRetryAfter(t *testing.T) {
-	rec := httptest.NewRecorder()
-	mapPipelineErr(rec, &pipeline.UpstreamLimitedError{RetryAfter: 11500 * time.Millisecond})
-
-	if rec.Code != 429 {
-		t.Fatalf("status: %d, want 429", rec.Code)
-	}
-	if got := rec.Header().Get("Retry-After"); got != "12" {
-		t.Fatalf("Retry-After: %q, want %q", got, "12")
-	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
-		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
-	}
-	if !strings.Contains(env.Err.Message, "upstream rate limit") || !strings.Contains(env.Err.Message, "try again in 12s") {
-		t.Fatalf("message must name the upstream limit and the delay: %q", env.Err.Message)
-	}
-}
-
-// A zero-duration ExceededError still floors Retry-After at 1 — "0" reads
-// as retry-immediately to SDKs, which defeats the header's purpose.
-func TestSetRetryAfter_FloorsAtOneSecond(t *testing.T) {
-	rec := httptest.NewRecorder()
-	setRetryAfter(rec, 0)
-	if got := rec.Header().Get("Retry-After"); got != "1" {
-		t.Fatalf("Retry-After: %q, want %q", got, "1")
-	}
-}
-
-// Every response must declare which side produced it: relay-minted errors
-// carry origin "relay"; pass-through responses carry origin "upstream", and
-// an upstream cannot spoof the relay claim.
-func TestErrorAttribution_OriginHeaders(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeAPIError(rec, 401, "authentication_error", "bad_key", "invalid relay key")
-	if got := rec.Header().Get(HeaderOrigin); got != "relay" {
-		t.Fatalf("relay-minted origin: %q", got)
-	}
-
-	rec = httptest.NewRecorder()
-	src := http.Header{"X-Foo": {"bar"}, HeaderOrigin: {"relay"}} // spoof attempt
-	ForwardUpstreamHeaders(rec.Header(), src)
-	if got := rec.Header().Get(HeaderOrigin); got != "upstream" {
-		t.Fatalf("pass-through origin: %q (spoof must lose)", got)
-	}
-	if rec.Header().Get("X-Foo") != "bar" {
-		t.Fatal("regular upstream headers must still forward")
-	}
-}
-
-// An upstream failure that exhausted failover is forwarded, not flattened: the
-// caller gets the provider's own status, body and backoff headers, with
-// X-WR-Upstream-Status and origin "upstream" declaring who produced them.
-func TestMapPipelineErr_UpstreamFailure_ForwardsVerbatim(t *testing.T) {
-	rec := httptest.NewRecorder()
-	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`)
-	mapPipelineErr(rec, &pipeline.UpstreamFailureError{
-		Status: 429,
-		Header: http.Header{
-			"Retry-After":                       {"7"},
-			"Anthropic-Ratelimit-Unified-Reset": {"1750000000"},
-			"X-Request-Id":                      {"req_abc"},
-			"Content-Type":                      {"application/json"},
-			"Set-Cookie":                        {"session=leak"},
-			"Content-Length":                    {"9999"},
-		},
-		Body: body,
-	})
-
-	if rec.Code != 429 {
-		t.Fatalf("status: %d, want the upstream's 429", rec.Code)
-	}
-	if got := rec.Body.String(); got != string(body) {
-		t.Fatalf("body must be byte-identical:\n got %q\nwant %q", got, body)
-	}
-	for k, want := range map[string]string{
-		"Retry-After":                       "7",
-		"Anthropic-Ratelimit-Unified-Reset": "1750000000",
-		"X-Request-Id":                      "req_abc",
-		"Content-Type":                      "application/json",
-		HeaderUpstreamStatus:                "429",
-		HeaderOrigin:                        "upstream",
-	} {
-		if got := rec.Header().Get(k); got != want {
-			t.Errorf("header %s: %q, want %q", k, got, want)
-		}
-	}
-	if got := rec.Header().Get("Set-Cookie"); got != "" {
-		t.Errorf("Set-Cookie must not be copied from upstream: %q", got)
-	}
-	if got := rec.Header().Get("Content-Length"); got != "" {
-		t.Errorf("upstream Content-Length must not describe relay's body: %q", got)
-	}
-}
-
-// An HTTP-date Retry-After is rewritten as integer seconds — several clients
-// parse only the integer form and silently drop a date.
-func TestMapPipelineErr_UpstreamFailure_RetryAfterDateToSeconds(t *testing.T) {
-	rec := httptest.NewRecorder()
-	when := time.Now().Add(42 * time.Second).UTC().Format(http.TimeFormat)
-	mapPipelineErr(rec, &pipeline.UpstreamFailureError{
-		Status: 429,
-		Header: http.Header{"Retry-After": {when}},
-		Body:   []byte(`{"error":"rate limited"}`),
-	})
-	secs, err := strconv.Atoi(rec.Header().Get("Retry-After"))
-	if err != nil {
-		t.Fatalf("Retry-After not an integer: %q", rec.Header().Get("Retry-After"))
-	}
-	if secs < 35 || secs > 45 {
-		t.Fatalf("Retry-After: %ds, want ~42s from now", secs)
-	}
-}
-
-func TestMapPipelineErr_UpstreamFailure_ShouldRetry(t *testing.T) {
-	cases := []struct {
-		name     string
-		status   int
-		upstream http.Header
-		want     string
+// Every route refusal answers with its status, wire code, class and a message naming the model the caller asked for.
+func TestMapRouteRefusal(t *testing.T) {
+	const notAllowed, unreachable = string(plan.RefusalModelNotAllowed), string(plan.RefusalHostNotReachable)
+	tests := []struct {
+		name    string
+		refusal plan.Refusal
+		status  int
+		want    httpapi.APIErrorBody
 	}{
-		{"client error is not retryable", 400, nil, "false"},
-		{"server error is retryable", 503, nil, "true"},
-		{"upstream verdict wins", 503, http.Header{"X-Should-Retry": {"false"}}, "false"},
+		{"model not found", plan.Refusal{Code: plan.CodeModelNotFound, Message: "m"}, 404,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "model_not_found", Refusal: unreachable, Message: `model "gpt-4o" not found`}},
+		{"model disabled", plan.Refusal{Code: plan.CodeModelDisabled, Message: "m"}, 403,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "model_disabled", Refusal: unreachable, Message: `model "gpt-4o" is disabled`}},
+		// Named as a caller limit's 429 names it: the rung, then the policy.
+		{"model not allowed by a policy", plan.Refusal{Code: plan.CodeModelNotAllowed, Rung: limits.RungProject, PolicyID: "pol_123", Message: "the plan's reason"}, 403,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "model_not_allowed", Refusal: notAllowed, Message: `model "gpt-4o" is not allowed by the project policy pol_123`}},
+		// A refusal no policy made (a deprecated model nobody opted into) keeps the plan's reason.
+		{"model not allowed without a policy", plan.Refusal{Code: plan.CodeModelNotAllowed, Message: "deprecated models need a policy"}, 403,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "model_not_allowed", Refusal: notAllowed, Message: `model "gpt-4o" is not allowed: deprecated models need a policy`}},
+		{"no binding", plan.Refusal{Code: plan.CodeNoBinding, Message: "m"}, 503,
+			httpapi.APIErrorBody{Type: "server_error", Code: "no_host_binding", Refusal: unreachable, Message: "no enabled host binding for model"}},
+		{"no credentials", plan.Refusal{Code: plan.CodeNoCredentials, Message: "m"}, 503,
+			httpapi.APIErrorBody{Type: "server_error", Code: "no_keys", Refusal: unreachable, Message: `no credential you can reach serves "gpt-4o"`}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	// Codes without a message of their own answer 403 with the plan's.
+	for _, code := range []string{plan.CodePolicyDisabled, plan.CodeUnpricedUnderBudget, plan.CodeAccountClosed} {
+		r := plan.Refusal{Code: code, Message: "the plan's reason"}
+		tests = append(tests, struct {
+			name    string
+			refusal plan.Refusal
+			status  int
+			want    httpapi.APIErrorBody
+		}{code, r, 403, httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Refusal: notAllowed, Message: r.Error()}})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			mapPipelineErr(rec, &pipeline.UpstreamFailureError{
-				Status: tc.status, Header: tc.upstream, Body: []byte(`{"error":"nope"}`),
+			mapRouteRefusal(rec, &tt.refusal, "gpt-4o")
+			wantAnswer(t, rec, tt.status, tt.want, map[string]string{HeaderOrigin: "relay", "Retry-After": ""})
+		})
+	}
+}
+
+// Refusals the pipeline makes before any upstream call are classed and carry their backoff; a failure it cannot name is a 502 that discloses no address.
+func TestMapPipelineErr_RelayAnswers(t *testing.T) {
+	budgetCounter := limits.Counter{Kind: limits.KindBudget, Rung: limits.RungProject, PolicyID: "pol_p", ID: "b:x"}
+	ruleCounter := limits.Counter{Kind: limits.KindRule, Rung: limits.RungTeam, PolicyID: "pol_team", ID: "r:x"}
+	const noCapacity, unreachable = string(plan.RefusalNoCapacity), string(plan.RefusalHostNotReachable)
+	tests := []struct {
+		name       string
+		err        error
+		status     int
+		retryAfter string
+		want       httpapi.APIErrorBody
+	}{
+		// 2.3s rounds up; one client reads the delay out of the message and never looks at Retry-After.
+		{"caller rate limit", fmt.Errorf("run: %w", &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &ruleCounter, RetryAfter: 2300 * time.Millisecond}}), 429, "3",
+			httpapi.APIErrorBody{Type: "rate_limit_error", Code: "rate_limit_exceeded", Refusal: noCapacity, Message: "the rate limit of the team policy pol_team is exhausted; try again in 3s"}},
+		{"caller budget", &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &budgetCounter, RetryAfter: 14 * time.Hour}}, 429, "50400",
+			httpapi.APIErrorBody{Type: "rate_limit_error", Code: "budget_exceeded", Refusal: noCapacity, Message: "the budget of the project policy pol_p is exhausted; try again in 50400s"}},
+		// A zero delay still answers 1: "0" reads as retry-immediately.
+		{"caller rate limit with no delay", &pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &ruleCounter}}, 429, "1",
+			httpapi.APIErrorBody{Type: "rate_limit_error", Code: "rate_limit_exceeded", Refusal: noCapacity, Message: "the rate limit of the team policy pol_team is exhausted; try again in 1s"}},
+		// The upstream rules are the host's configuration and stay out of the message.
+		{"every credential over an upstream limit", &pipeline.UpstreamLimitedError{RetryAfter: 11500 * time.Millisecond}, 429, "12",
+			httpapi.APIErrorBody{Type: "rate_limit_error", Code: "rate_limit_exceeded", Refusal: noCapacity, Message: "every credential for this model is over its upstream rate limit; try again in 12s"}},
+		{"every key out of rotation", keypool.ErrNoHealthyKeys, 503, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "no_healthy_keys", Refusal: noCapacity, Message: "every host key for this model is out of rotation after failing; retry later"}},
+		{"no key for the shape", pipeline.ErrNoKeys, 503, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "no_keys", Refusal: unreachable, Message: "no host keys"}},
+		// The dial target stays in the error; the caller is told the host by slug.
+		{"no host connected", &pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial tcp 10.0.0.7:443"), NoneConnected: true}, 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unreachable", Refusal: unreachable, Message: `upstream host "h" unreachable after 2 attempt(s)`}},
+		{"last host down after another connected", &pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial")}, 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unreachable", Message: `upstream host "h" unreachable after 2 attempt(s)`}},
+		{"keys exhausted without a response", pipeline.ErrAllKeysExhausted, 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unavailable", Message: "all upstream keys failed"}},
+		{"upstream failure without a status", &pipeline.UpstreamFailureError{Cause: pipeline.ErrAllKeysExhausted}, 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unavailable", Message: "all upstream keys failed; upstream returned 0: (empty body)"}},
+		{"adapter missing", pipeline.ErrAdapterMissing, 500, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "no_adapter", Message: "adapter missing"}},
+		{"transport error", errors.New("reset by peer"), 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_error", Message: "upstream: reset by peer"}},
+		// Go's transport errors embed the request URL.
+		{"transport error naming the upstream URL", &url.Error{Op: "Post", URL: "https://10.0.0.7:8443/v1/messages", Err: errors.New("tls: failed to verify certificate")}, 502, "",
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_error", Message: "upstream: upstream connection failed"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mapPipelineErr(rec, tt.err)
+			wantAnswer(t, rec, tt.status, tt.want, map[string]string{
+				HeaderOrigin: "relay", "Retry-After": tt.retryAfter, HeaderUpstreamStatus: "",
+				"X-Should-Retry": fmt.Sprint(tt.status == 429 || tt.status >= 500),
 			})
-			if rec.Code != tc.status {
-				t.Fatalf("status: %d, want %d", rec.Code, tc.status)
-			}
-			if got := rec.Header().Get("X-Should-Retry"); got != tc.want {
-				t.Fatalf("X-Should-Retry: %q, want %q", got, tc.want)
+			if got := pipeline.RefusalOf(tt.err); string(got) != tt.want.Refusal {
+				t.Errorf("RefusalOf = %q, want %q", got, tt.want.Refusal)
 			}
 		})
 	}
 }
 
-// With no upstream body there is nothing to forward, but the status is still
-// the provider's verdict — the caller must not get a bodiless response.
-func TestMapPipelineErr_UpstreamFailure_EmptyBodyKeepsStatus(t *testing.T) {
-	rec := httptest.NewRecorder()
-	mapPipelineErr(rec, &pipeline.UpstreamFailureError{Status: 503, Body: []byte("  \n")})
-	if rec.Code != 503 {
-		t.Fatalf("status: %d, want 503", rec.Code)
+// An upstream failure that exhausted failover is forwarded, not flattened: the provider's status, body and backoff headers, with X-WR-Upstream-Status and the origin declaring who produced them.
+func TestMapPipelineErr_ForwardsUpstreamFailure(t *testing.T) {
+	const body = `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`
+	in42s := time.Now().Add(42 * time.Second).UTC().Format(http.TimeFormat)
+	tests := []struct {
+		name       string
+		err        pipeline.UpstreamFailureError
+		wantStatus int
+		wantBody   string // empty: relay's upstream_unavailable envelope
+		wantHeader http.Header
+	}{
+		{
+			name: "status, body and allowlisted headers",
+			err: pipeline.UpstreamFailureError{Status: 429, Body: []byte(body), Header: http.Header{
+				"Retry-After":                       {"7"},
+				"anthropic-ratelimit-unified-reset": {"1750000000"},
+				"X-Ratelimit-Remaining-Requests":    {"0", "1"},
+				"X-Request-Id":                      {"req_abc"},
+				"Content-Type":                      {"application/json"},
+				"Set-Cookie":                        {"session=leak"},
+				"Content-Length":                    {"9999"},
+				"Connection":                        {"close"},
+				HeaderOrigin:                        {"relay"},
+			}},
+			wantStatus: 429, wantBody: body,
+			wantHeader: http.Header{
+				"Retry-After":                       {"7"},
+				"Anthropic-Ratelimit-Unified-Reset": {"1750000000"},
+				"X-Ratelimit-Remaining-Requests":    {"0", "1"},
+				"X-Request-Id":                      {"req_abc"},
+				"Content-Type":                      {"application/json"},
+				"X-Should-Retry":                    {"true"},
+				HeaderUpstreamStatus:                {"429"},
+				HeaderOrigin:                        {"upstream"},
+			},
+		},
+		{
+			name:       "client error is not retryable",
+			err:        pipeline.UpstreamFailureError{Status: 400, Body: []byte(body)},
+			wantStatus: 400, wantBody: body,
+			wantHeader: http.Header{"X-Should-Retry": {"false"}, HeaderUpstreamStatus: {"400"}, HeaderOrigin: {"upstream"}},
+		},
+		{
+			name:       "the upstream's own retry verdict wins",
+			err:        pipeline.UpstreamFailureError{Status: 503, Body: []byte(body), Header: http.Header{"X-Should-Retry": {"false"}}},
+			wantStatus: 503, wantBody: body,
+			wantHeader: http.Header{"X-Should-Retry": {"false"}, HeaderUpstreamStatus: {"503"}, HeaderOrigin: {"upstream"}},
+		},
+		{
+			// Several clients parse only the integer form.
+			name:       "an HTTP-date Retry-After becomes seconds",
+			err:        pipeline.UpstreamFailureError{Status: 429, Body: []byte(body), Header: http.Header{"Retry-After": {in42s}}},
+			wantStatus: 429, wantBody: body,
+			wantHeader: http.Header{"Retry-After": {"42"}, "X-Should-Retry": {"true"}, HeaderUpstreamStatus: {"429"}, HeaderOrigin: {"upstream"}},
+		},
+		{
+			name:       "an unreadable Retry-After is dropped",
+			err:        pipeline.UpstreamFailureError{Status: 429, Body: []byte(body), Header: http.Header{"Retry-After": {"soon"}}},
+			wantStatus: 429, wantBody: body,
+			wantHeader: http.Header{"X-Should-Retry": {"true"}, HeaderUpstreamStatus: {"429"}, HeaderOrigin: {"upstream"}},
+		},
+		{
+			// A retryable non-error status that exhausted every key is relay's failure to report.
+			name:       "a status below 400 answers 502",
+			err:        pipeline.UpstreamFailureError{Status: 302, Body: []byte(body)},
+			wantStatus: 502, wantBody: body,
+			wantHeader: http.Header{"X-Should-Retry": {"true"}, HeaderUpstreamStatus: {"302"}, HeaderOrigin: {"upstream"}},
+		},
+		{
+			// Nothing to forward, but the status is still the provider's verdict and the caller must not get a bodiless response.
+			name:       "a blank body gets relay's envelope under the upstream status",
+			err:        pipeline.UpstreamFailureError{Status: 503, Body: []byte("  \n"), Header: http.Header{"Retry-After": {"9"}}},
+			wantStatus: 503,
+			wantHeader: http.Header{"Retry-After": {"9"}, "X-Should-Retry": {"true"}, HeaderUpstreamStatus: {"503"}, HeaderOrigin: {"relay"}, "Content-Type": {"application/json"}},
+		},
 	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatalf("relay envelope expected: %v (body %q)", err, rec.Body.String())
-	}
-	if env.Err.Code != "upstream_unavailable" {
-		t.Fatalf("code: %q", env.Err.Code)
-	}
-	if got := rec.Header().Get(HeaderOrigin); got != "relay" {
-		t.Fatalf("origin: %q, want relay (the envelope is relay's)", got)
-	}
-	if got := rec.Header().Get(HeaderUpstreamStatus); got != "503" {
-		t.Fatalf("upstream status header: %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mapPipelineErr(rec, &tt.err)
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if diff := cmp.Diff(tt.wantHeader, rec.Header()); diff != "" {
+				t.Errorf("headers (-want +got):\n%s", diff)
+			}
+			if tt.wantBody != "" {
+				if got := rec.Body.String(); got != tt.wantBody {
+					t.Errorf("body = %q, want the upstream's bytes", got)
+				}
+				return
+			}
+			want := httpapi.APIErrorBody{Type: "server_error", Code: "upstream_unavailable", Message: "all upstream keys failed; upstream returned 503: (empty body)"}
+			if diff := cmp.Diff(want, envelopeOf(t, rec)); diff != "" {
+				t.Errorf("envelope (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
-// Relay-minted errors carry their own retry verdict so a client never has to
-// guess from the status alone.
-func TestWriteAPIError_SetsShouldRetry(t *testing.T) {
-	for status, want := range map[int]string{429: "true", 500: "true", 502: "true", 503: "true", 401: "false", 404: "false"} {
+// Relay-minted errors carry their own retry verdict so a client never has to guess from the status alone.
+func TestWriteAPIError_ShouldRetry(t *testing.T) {
+	for status, want := range map[int]string{408: "true", 429: "true", 500: "true", 502: "true", 503: "true", 400: "false", 401: "false", 404: "false", 499: "false"} {
 		rec := httptest.NewRecorder()
-		writeAPIError(rec, status, "server_error", "x", "y")
-		if got := rec.Header().Get("X-Should-Retry"); got != want {
-			t.Errorf("status %d: X-Should-Retry=%q, want %q", status, got, want)
-		}
+		WriteAPIError(rec, status, "server_error", "x", "y")
+		wantAnswer(t, rec, status, httpapi.APIErrorBody{Type: "server_error", Code: "x", Message: "y"}, map[string]string{"X-Should-Retry": want, HeaderOrigin: "relay"})
+	}
+}
+
+// Pass-through headers keep every value, lose the hop-by-hop ones, and cannot claim relay produced the response.
+func TestForwardUpstreamHeaders(t *testing.T) {
+	dst := http.Header{"X-Existing": {"kept"}}
+	ForwardUpstreamHeaders(dst, http.Header{
+		"X-Foo":              {"a", "b"},
+		"Content-Type":       {"text/event-stream"},
+		HeaderOrigin:         {"relay"},
+		"Connection":         {"close"},
+		"keep-alive":         {"timeout=5"},
+		"Transfer-Encoding":  {"chunked"},
+		"Upgrade":            {"h2c"},
+		"Te":                 {"trailers"},
+		"Trailers":           {"X"},
+		"Proxy-Authenticate": {"Basic"},
+	})
+	want := http.Header{"X-Existing": {"kept"}, "X-Foo": {"a", "b"}, "Content-Type": {"text/event-stream"}, HeaderOrigin: {"upstream"}}
+	if diff := cmp.Diff(want, dst); diff != "" {
+		t.Errorf("forwarded headers (-want +got):\n%s", diff)
 	}
 }

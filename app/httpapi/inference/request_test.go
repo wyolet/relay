@@ -234,8 +234,8 @@ func TestHandleShape_StreamKeyRefused(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status %d, want 400; body %s", body, w.Code, w.Body)
 		}
-		if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Type != "invalid_request_error" || e.Error.Code != code {
-			t.Fatalf("%s: envelope %s/%s, want invalid_request_error/%s", body, e.Error.Type, e.Error.Code, code)
+		if e := envelopeOf(t, w); e.Type != "invalid_request_error" || e.Code != code {
+			t.Fatalf("%s: envelope %s/%s, want invalid_request_error/%s", body, e.Type, e.Code, code)
 		}
 	}
 }

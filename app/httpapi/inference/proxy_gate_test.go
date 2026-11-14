@@ -100,7 +100,7 @@ func TestProxyModeRefusalComesAfterTheCredential(t *testing.T) {
 		var reached bool
 		w := httptest.NewRecorder()
 		gatedEdge(d, &reached).ServeHTTP(w, poisonedProxyRequest(t, tc.relayKey))
-		if w.Code != tc.status || errCode(t, w.Body.Bytes()) != tc.code {
+		if w.Code != tc.status || envelopeOf(t, w).Code != tc.code {
 			t.Fatalf("%s: got %d %s, want %d %s", tc.relayKey, w.Code, w.Body, tc.status, tc.code)
 		}
 	}

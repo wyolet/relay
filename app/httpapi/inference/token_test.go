@@ -184,7 +184,7 @@ func TestTokenPrincipal_RevokedJTI(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := st.do(token)
-	if w.Code != http.StatusUnauthorized || errCode(t, w.Body.Bytes()) != "token_revoked" {
+	if w.Code != http.StatusUnauthorized || envelopeOf(t, w).Code != "token_revoked" {
 		t.Fatalf("revoked token: %d %s, want 401 token_revoked", w.Code, w.Body)
 	}
 }
@@ -250,7 +250,7 @@ func TestCallerLadder(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body)
 			}
 			if tc.wantCode != "" {
-				if got := errCode(t, rec.Body.Bytes()); got != tc.wantCode {
+				if got := envelopeOf(t, rec).Code; got != tc.wantCode {
 					t.Fatalf("code = %q, want %q", got, tc.wantCode)
 				}
 				return
@@ -441,7 +441,7 @@ func TestTokenActsInItsProject(t *testing.T) {
 	pol := *f.boundPol
 	pol.Spec.Enabled = &off
 	plantest.Apply(t, st.plans, &pol)
-	if w := st.do(token); w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "policy_disabled" {
+	if w := st.do(token); w.Code != http.StatusForbidden || envelopeOf(t, w).Code != "policy_disabled" {
 		t.Fatalf("token under a disabled project policy: %d %s, want 403 policy_disabled", w.Code, w.Body)
 	}
 	pol.Spec.Enabled = nil
@@ -449,7 +449,7 @@ func TestTokenActsInItsProject(t *testing.T) {
 	tm := *f.team
 	tm.Spec.Enabled = &off
 	plantest.Apply(t, st.plans, &tm)
-	if w := st.do(token); w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "subject_disabled" {
+	if w := st.do(token); w.Code != http.StatusForbidden || envelopeOf(t, w).Code != "subject_disabled" {
 		t.Fatalf("token under a disabled team: %d %s, want 403 subject_disabled", w.Code, w.Body)
 	}
 	fp, ok := st.auth.reauthenticate(httptest.NewRecorder(), nil, upgraded)

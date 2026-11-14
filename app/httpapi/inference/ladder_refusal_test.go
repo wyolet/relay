@@ -101,7 +101,7 @@ func TestBudgetRefusal_Is429WithRetryAfterAtTheNextPeriodStart(t *testing.T) {
 			break
 		}
 	}
-	if w.Code != http.StatusTooManyRequests || errCode(t, w.Body.Bytes()) != "budget_exceeded" {
+	if w.Code != http.StatusTooManyRequests || envelopeOf(t, w).Code != "budget_exceeded" {
 		t.Fatalf("request after the cap was spent = %d %s, want 429 budget_exceeded", w.Code, w.Body)
 	}
 	secs, err := strconv.Atoi(w.Header().Get("Retry-After"))
@@ -131,7 +131,7 @@ func TestBudgetRefusal_AlertBudgetNeverRefuses(t *testing.T) {
 func TestBudgetRefusal_UnpricedModelIsRefused(t *testing.T) {
 	d, p, _, hits, policyID := ladderDeps(t, ladderCase{budget: &budget.Spec{AmountUSD: "100", Period: budget.PeriodMonth, Mode: budget.ModeHard}}, time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
 	w := chat(d, p, "free")
-	if w.Code < 400 || w.Code >= 500 || errCode(t, w.Body.Bytes()) != "unpriced_under_budget" {
+	if w.Code < 400 || w.Code >= 500 || envelopeOf(t, w).Code != "unpriced_under_budget" {
 		t.Fatalf("unpriced request = %d %s, want a 4xx unpriced_under_budget", w.Code, w.Body)
 	}
 	if !strings.Contains(w.Body.String(), policyID) {
@@ -150,7 +150,7 @@ func TestLadderRefusal_DisabledPolicyIsForbidden(t *testing.T) {
 	disabled := false
 	d, p, _, hits, _ := ladderDeps(t, ladderCase{enabled: &disabled}, time.Now())
 	w := chat(d, p, "priced")
-	if w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "policy_disabled" {
+	if w.Code != http.StatusForbidden || envelopeOf(t, w).Code != "policy_disabled" {
 		t.Fatalf("request under a disabled policy = %d %s, want 403 policy_disabled", w.Code, w.Body)
 	}
 	if hits.Load() != 0 {
@@ -162,7 +162,7 @@ func TestLadderRefusal_DisabledPolicyIsForbidden(t *testing.T) {
 func TestLadderRefusal_ModelNotAllowedNamesRungAndPolicy(t *testing.T) {
 	d, p, _, hits, policyID := ladderDeps(t, ladderCase{models: []string{"openai/free"}}, time.Now())
 	w := chat(d, p, "priced")
-	if w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "model_not_allowed" {
+	if w.Code != http.StatusForbidden || envelopeOf(t, w).Code != "model_not_allowed" {
 		t.Fatalf("request outside the grant = %d %s, want 403 model_not_allowed", w.Code, w.Body)
 	}
 	if hits.Load() != 0 {
