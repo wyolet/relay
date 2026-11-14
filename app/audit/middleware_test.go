@@ -267,3 +267,12 @@ func TestChangedAndRecordAreNoOpsOutsideARequest(t *testing.T) {
 	Changed(context.Background(), []string{"spec.enabled"})
 	Record(context.Background(), "auth.login", Resource{Kind: "user"}, StatusAllowed)
 }
+
+func pluralOfAction(action string) string {
+	for i := len(action) - 1; i >= 0; i-- {
+		if action[i] == '.' {
+			return action[:i]
+		}
+	}
+	return action
+}
