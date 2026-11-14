@@ -32,7 +32,7 @@ done
 
 echo "Rule 4 & 5 — only the composition root (cmd/relay, internal/adapterspecs) imports a vendor adapter, tests included:"
 # Tests take real translators from the specs internal/adapterspecs builds.
-hits=$(grep -rnE '"github\.com/wyolet/relay/sdk/adapters/[^"]+"' app/ pkg/ internal/ cmd/ --include='*.go' | grep -vE '^(cmd/relay|internal/adapterspecs)/' || true)
+hits=$(grep -rnE '"github\.com/wyolet/relay/sdk/adapters/[^"]+"' app/ pkg/ internal/ cmd/ integration/ --include='*.go' | grep -vE '^(cmd/relay|internal/adapterspecs)/' || true)
 if [ -n "$hits" ]; then note "a vendor adapter imported outside the composition root (get it from internal/adapterspecs):"; echo "$hits"; else ok "clean"; fi
 
 echo "jobq purity — the jobq module imports nothing from app/, internal/, or sdk/:"

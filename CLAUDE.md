@@ -81,7 +81,7 @@ app/                       — the application: domain + composition + handlers
                              Spec, Registry, generic pipeline.Adapter
                              parameterised by upstream URL + auth strategy.
                              ONE Spec literal per wire shape lives in
-                             cmd/relay/main.go.
+                             internal/adapterspecs.
   pipeline/                — pure orchestration: reserve → pick key →
                              Adapter.Call → stream → post-flight emit
   proxy/                   — second inference flow: transparent forwarding
@@ -336,12 +336,13 @@ inherit them.
 4. **No vendor names in `app/` code.** Enforceable by
    `grep -rE "openai|anthropic|gemini|cohere" app/ --include="*.go"` —
    should return only catalog data string lookups, error messages, URL
-   paths, and (for the composition root) `cmd/relay/main.go`. Dispatch,
+   paths, and (for the composition root) `internal/adapterspecs`. Dispatch,
    routing, pipeline, registry, http-mw, inference — none branch on or
    import a vendor.
 5. **Composition root is the only place vendor names appear in code.**
-   `cmd/relay/main.go` builds `adapter.Spec` literals; every other binary,
-   test, or service consumes adapters via the `Registry`.
+   `internal/adapterspecs` builds the `adapter.Spec` literals that
+   `cmd/relay` registers; every other binary, test, or service consumes
+   adapters via the `Registry` (tests via `adapterspecs.Specs()`).
 6. **Adapters are stateless pure transforms.** A `Translator` is six
    methods (parse/serialize × request/response + the two stream
    factories). No per-request state on the `Translator` value — per-stream
@@ -461,7 +462,7 @@ wire protocols — Claude (Anthropic shape) and Llama (OpenAI shape). The
 dispatch key therefore lives on the per-`(Model, Host)` Binding.
 `Binding.Adapter` is `openai | anthropic | gemini` today; new vendors land
 as a new `sdk/adapters/<vendor>/` package implementing `v1.Translator`
-plus a `Spec` registration in `cmd/relay/main.go`.
+plus a `Spec` in `internal/adapterspecs`.
 
 Ollama uses `Adapter: openai` (OpenAI-compatible endpoint).
 
