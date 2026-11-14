@@ -2,6 +2,8 @@ package authz_test
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
@@ -104,13 +106,8 @@ func TestExplainReasons(t *testing.T) {
 			if found != (tt.binding != "") || (found && b.Meta.Name != tt.binding) {
 				t.Fatalf("matched binding = %v (%v), want %q", b, found, tt.binding)
 			}
-			if len(x.Chain) != len(tt.chain) {
+			if !slices.Equal(x.Chain, tt.chain) {
 				t.Fatalf("chain = %+v, want %+v", x.Chain, tt.chain)
-			}
-			for i := range tt.chain {
-				if x.Chain[i] != tt.chain[i] {
-					t.Fatalf("chain = %+v, want %+v", x.Chain, tt.chain)
-				}
 			}
 		})
 	}
@@ -119,9 +116,51 @@ func TestExplainReasons(t *testing.T) {
 func TestExplainRefusesUnauthenticated(t *testing.T) {
 	r := authz.RBAC{}
 	for _, a := range []*actor.Actor{nil, {}} {
-		if x, err := r.Explain(t.Context(), a, "keys.get", authz.Resource{Kind: "key"}); !errors.Is(err, authz.ErrUnauthenticated) || x.Allowed {
+		if x, err := r.Explain(t.Context(), a, "keys.get", authz.Resource{Kind: "key"}); err != authz.ErrUnauthenticated || !reflect.DeepEqual(x, rbac.Explanation{Reason: rbac.ReasonNone}) {
 			t.Fatalf("Explain(%+v) = %+v, %v; want unauthenticated", a, x, err)
 		}
+	}
+}
+
+// wrapped is an authorizer that delegates and can be unwrapped, like the audit one.
+type wrapped struct{ authz.Authorizer }
+
+func (w wrapped) Unwrap() authz.Authorizer { return w.Authorizer }
+
+// Explains looks through wrappers to the authorizer that decides.
+func TestExplains(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		a    authz.Authorizer
+		want bool
+	}{
+		{"rbac", authz.RBAC{}, true},
+		{"single-user", authz.AlwaysAllowAuthenticated{}, false},
+		{"nil", nil, false},
+		{"wrapped rbac", wrapped{wrapped{authz.RBAC{}}}, true},
+		{"wrapped single-user", wrapped{authz.AlwaysAllowAuthenticated{}}, false},
+		{"audit over rbac", audit.Authorizer{Inner: authz.RBAC{}}, true},
+		{"audit over single-user", audit.Authorizer{Inner: authz.AlwaysAllowAuthenticated{}}, false},
+	} {
+		if got := authz.Explains(tt.a); got != tt.want {
+			t.Errorf("Explains(%s) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestMatchedBindingWithoutABinding(t *testing.T) {
+	cat := newFixture(t)
+	for name, x := range map[string]rbac.Explanation{
+		"no role":         {Subject: "user:" + aliceID, Scope: rbac.Scope{Kind: "team", ID: t1ID}},
+		"unknown role":    {Subject: "user:" + aliceID, RoleID: ids.New(), Scope: rbac.Scope{Kind: "team", ID: t1ID}},
+		"unknown subject": {Subject: "user:" + ids.New(), RoleID: ids.New()},
+	} {
+		if b, ok := authz.MatchedBinding(cat.Current(), x); ok || b != nil {
+			t.Errorf("%s: matched %+v", name, b)
+		}
+	}
+	if b, ok := authz.MatchedBinding(nil, rbac.Explanation{RoleID: "r"}); ok || b != nil {
+		t.Errorf("nil snapshot: matched %+v", b)
 	}
 }
 
