@@ -106,6 +106,10 @@ func TestModelScanner(t *testing.T) {
 		{"object closes array", `{"model":"m","a":{]}`, "", "parse_error"},
 		{"non-string key", `{1:"m"}`, "", "parse_error"},
 		{"bad escape in top-level key", `{"mo\qdel":"m"}`, "", "parse_error"},
+		{"bad escape in the model", `{"model":"a\qb"}`, "", "parse_error"},
+		{"exponent sign without digits", `{"model":"m","x":1e+}`, "", "parse_error"},
+		{"key longer than any spelling of model", `{"` + strings.Repeat("model", 7) + `":"x","model":"m"}`, "m", ""},
+		{"long key with a bad escape is not decoded", `{"` + strings.Repeat("model", 7) + `\q":"x","model":"m"}`, "m", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,6 +117,14 @@ func TestModelScanner(t *testing.T) {
 			whole := scanChunks(b, nil)
 			if whole.code != tc.code || (tc.code == "" && whole.model != tc.model) {
 				t.Fatalf("got (%q, %q: %s), want (%q, %q)", whole.model, whole.code, whole.msg, tc.model, tc.code)
+			}
+			// The close is reported at the object's last byte, and only for a body the scan did not refuse mid-way.
+			wantClose := int64(-1)
+			if tc.code == "" || tc.code == "missing_model" {
+				wantClose = int64(len(bytes.TrimRight(b, " \t\r\n")) - 1)
+			}
+			if whole.closeAt != wantClose {
+				t.Fatalf("close at %d, want %d", whole.closeAt, wantClose)
 			}
 			for cut := 0; cut <= len(b); cut++ {
 				if got := scanChunks(b, []int{cut}); got != whole {
@@ -282,52 +294,44 @@ func FuzzModelScanner(f *testing.F) {
 	})
 }
 
-// FuzzModelScanner_ValidObjects builds a valid JSON object from each seed, so every input reaches the encoding/json comparison that random bytes rarely do.
+// checkGeneratedObject builds a valid JSON object from seed and compares the scan with encoding/json, whole and chunked, and with what proxy mode's exact-key scan must answer.
+func checkGeneratedObject(t *testing.T, seed uint64) {
+	t.Helper()
+	g := jsonGen{rng: rand.New(rand.NewPCG(seed, ^seed))}
+	g.object(0, true)
+	b := g.out.Bytes()
+	model, code, ok := referenceScan(b)
+	if !ok {
+		t.Fatalf("seed %d: generator produced invalid JSON: %q", seed, b)
+	}
+	whole := scanChunks(b, nil)
+	if whole.code != code || whole.model != model && code == "" {
+		t.Fatalf("seed %d: scanner (%q, %q: %s), encoding/json (%q, %q) on %q", seed, whole.model, whole.code, whole.msg, model, code, b)
+	}
+	var cuts []int
+	for at := 0; at < len(b); {
+		at += 1 + g.rng.IntN(16)
+		cuts = append(cuts, at)
+	}
+	if got := scanChunks(b, cuts); got != whole {
+		t.Fatalf("seed %d: chunked %v: %+v, whole: %+v on %q", seed, cuts, got, whole, b)
+	}
+	if got, want := scanChunksExact(b, cuts).code, g.exactKeyCode(code); got != want {
+		t.Fatalf("seed %d: exact key: %q, want %q on %q", seed, got, want, b)
+	}
+}
+
+// FuzzModelScanner_ValidObjects reaches the encoding/json comparison on every input, which random bytes rarely do.
 func FuzzModelScanner_ValidObjects(f *testing.F) {
 	for seed := range uint64(16) {
 		f.Add(seed)
 	}
-	f.Fuzz(func(t *testing.T, seed uint64) {
-		g := jsonGen{rng: rand.New(rand.NewPCG(seed, ^seed))}
-		g.object(0, true)
-		b := g.out.Bytes()
-		model, code, ok := referenceScan(b)
-		if !ok {
-			t.Fatalf("generator produced invalid JSON: %q", b)
-		}
-		whole := scanChunks(b, nil)
-		if whole.code != code || whole.model != model && code == "" {
-			t.Fatalf("scanner (%q, %q: %s), encoding/json (%q, %q) on %q", whole.model, whole.code, whole.msg, model, code, b)
-		}
-		var cuts []int
-		for at := 0; at < len(b); {
-			at += 1 + g.rng.IntN(16)
-			cuts = append(cuts, at)
-		}
-		if got := scanChunks(b, cuts); got != whole {
-			t.Fatalf("chunked %v: %+v, whole: %+v on %q", cuts, got, whole, b)
-		}
-		if got, want := scanChunksExact(b, cuts).code, g.exactKeyCode(code); got != want {
-			t.Fatalf("exact key: %q, want %q on %q", got, want, b)
-		}
-	})
+	f.Fuzz(checkGeneratedObject)
 }
 
 func TestModelScanner_AgreesOnGeneratedObjects(t *testing.T) {
 	for seed := range uint64(5000) {
-		g := jsonGen{rng: rand.New(rand.NewPCG(seed, ^seed))}
-		g.object(0, true)
-		b := g.out.Bytes()
-		model, code, ok := referenceScan(b)
-		if !ok {
-			t.Fatalf("seed %d: generator produced invalid JSON: %q", seed, b)
-		}
-		if got := scanChunks(b, nil); got.code != code || got.model != model && code == "" {
-			t.Fatalf("seed %d: scanner (%q, %q: %s), encoding/json (%q, %q) on %q", seed, got.model, got.code, got.msg, model, code, b)
-		}
-		if got, want := scanChunksExact(b, nil).code, g.exactKeyCode(code); got != want {
-			t.Fatalf("seed %d: exact key: %q, want %q on %q", seed, got, want, b)
-		}
+		checkGeneratedObject(t, seed)
 	}
 }
 
@@ -429,21 +433,6 @@ func (g *jsonGen) value(depth int) {
 		g.object(depth, false)
 	}
 	g.ws()
-}
-
-func TestParseRequest_DuplicateModel(t *testing.T) {
-	for _, body := range []string{
-		`{"model":"cheap","messages":[],"model":"expensive"}`,
-		`{"model":"cheap","Model":"expensive"}`,
-		`{"model":null,"model":"expensive"}`,
-	} {
-		if _, err := parseRequest([]byte(body), vendorKeys); err != errDuplicateModel {
-			t.Errorf("%s: err = %v, want errDuplicateModel", body, err)
-		}
-	}
-	if req, err := parseRequest([]byte(`{"model":"m","meta":{"model":"a","model":"b"}}`), vendorKeys); err != nil || req.Model != "m" {
-		t.Errorf("nested duplicate: (%+v, %v), want (m, nil)", req, err)
-	}
 }
 
 func BenchmarkModelScanner(b *testing.B) {

@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
@@ -187,9 +190,11 @@ func TestCatalog_SlugsMatchListedModels(t *testing.T) {
 		name      string
 		grants    []string
 		wantHosts []string
+		wantSlugs []string
 	}{
-		{"whole models", []string{"prov/big-model", "other-prov/small-model"}, []string{"alpha-host", "beta-host"}},
-		{"binding-scoped grant", []string{"prov/big-model@beta-host"}, []string{"beta-host"}},
+		{"whole models", []string{"prov/big-model", "other-prov/small-model"}, []string{"alpha-host", "beta-host"}, []string{"big-model-2025", "big-model-2026", "small-model-1"}},
+		{"binding-scoped grant", []string{"prov/big-model@beta-host"}, []string{"beta-host"}, []string{"big-model-2026"}},
+		{"no grant", []string{"prov/absent"}, []string{}, []string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -200,12 +205,14 @@ func TestCatalog_SlugsMatchListedModels(t *testing.T) {
 				t.Fatalf("status = %d — body: %s", rec.Code, rec.Body.String())
 			}
 			doc := decodeCatalog(t, rec.Body.Bytes())
-			want := listedIDs(t, d, pr)
-			if got := catalogSlugs(doc); strings.Join(got, ",") != strings.Join(want, ",") {
-				t.Errorf("catalog slugs = %v, /v1/models ids = %v", got, want)
+			if diff := cmp.Diff(tc.wantSlugs, catalogSlugs(doc)); diff != "" {
+				t.Errorf("catalog slugs (-want +got):\n%s", diff)
 			}
-			if got := hostNamesOf(doc); strings.Join(got, ",") != strings.Join(tc.wantHosts, ",") {
-				t.Errorf("hosts = %v, want %v", got, tc.wantHosts)
+			if diff := cmp.Diff(tc.wantSlugs, listedIDs(t, d, pr)); diff != "" {
+				t.Errorf("/v1/models ids (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantHosts, hostNamesOf(doc)); diff != "" {
+				t.Errorf("hosts (-want +got):\n%s", diff)
 			}
 			if doc.Version != "deployment" {
 				t.Errorf("version = %q, want deployment with no seeded marker", doc.Version)
@@ -251,17 +258,19 @@ func TestCatalog_CarriesProductLineAndStripsUpstreamFields(t *testing.T) {
 func TestCatalog_Headers(t *testing.T) {
 	cat, pr := catalogRouteFixture(t, "prov/big-model")
 	rec := getCatalog(t, catalogRouter(buildDeps(t, cat)), pr)
-	for k, want := range map[string]string{
-		"Cache-Control": "private, no-cache",
-		"Vary":          "Accept-Encoding, Authorization",
-		"Content-Type":  "application/json",
-	} {
-		if got := rec.Header().Get(k); got != want {
-			t.Errorf("%s = %q, want %q", k, got, want)
-		}
-	}
-	if etag := rec.Header().Get("ETag"); !strings.HasPrefix(etag, `W/"`) || len(etag) != len(`W/""`)+16 {
+	etag := rec.Header().Get("ETag")
+	if !regexp.MustCompile(`^W/"[0-9a-f]{16}"$`).MatchString(etag) {
 		t.Errorf("ETag = %q, want a weak 16-hex tag", etag)
+	}
+	want := http.Header{
+		"Cache-Control":  {"private, no-cache"},
+		"Vary":           {"Accept-Encoding, Authorization"},
+		"Content-Type":   {"application/json"},
+		"Content-Length": {strconv.Itoa(rec.Body.Len())},
+		"Etag":           {etag},
+	}
+	if diff := cmp.Diff(want, rec.Header()); diff != "" {
+		t.Errorf("headers (-want +got):\n%s", diff)
 	}
 }
 

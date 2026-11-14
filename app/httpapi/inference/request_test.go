@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,9 +13,6 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/pkg/adapters"
 
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/openai"
@@ -128,11 +123,15 @@ func TestParseRequest_ErrorParity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b := []byte(tc.body)
-			if _, code := requestCode(b, vendorKeys); code != tc.code {
+			req, code := requestCode(b, vendorKeys)
+			if code != tc.code {
 				t.Fatalf("code %q, want %q", code, tc.code)
 			}
 			if want := probeCode(b); want != tc.code {
 				t.Fatalf("the probe decode answered %q, the table says %q", want, tc.code)
+			}
+			if model, stream, _ := probeModelStream(b); code == "" && (req.Model != model || req.Stream != stream) {
+				t.Fatalf("read model %q stream %v, the probe decode read %q %v", req.Model, req.Stream, model, stream)
 			}
 		})
 	}
@@ -219,27 +218,6 @@ func TestParseRequest_StreamKeySpelling(t *testing.T) {
 	}
 }
 
-func TestHandleShape_StreamKeyRefused(t *testing.T) {
-	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	d := buildDeps(t, cat)
-	spec := &adapter.Spec{Name: adapters.OpenAI, Translator: openai.CCTranslator{}}
-	for body, code := range map[string]string{
-		`{"model":"test-model","stream":true,"Stream":false,"messages":[]}`: "duplicate_stream",
-		`{"model":"test-model","stream":true,"stream":null,"messages":[]}`:  "duplicate_stream",
-		`{"model":"test-model","` + longS + `tream":true,"messages":[]}`:    "invalid_stream_key",
-	} {
-		r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(body)), prin)
-		w := httptest.NewRecorder()
-		handleShape(spec, d, w, r)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("%s: status %d, want 400; body %s", body, w.Code, w.Body)
-		}
-		if e := envelopeOf(t, w); e.Type != "invalid_request_error" || e.Code != code {
-			t.Fatalf("%s: envelope %s/%s, want invalid_request_error/%s", body, e.Type, e.Code, code)
-		}
-	}
-}
-
 func TestParseRequest_DeepNesting(t *testing.T) {
 	ok := `{"model":"m","a":` + strings.Repeat("[", maxScanDepth-1) + strings.Repeat("]", maxScanDepth-1) + `}`
 	if _, code := requestCode([]byte(ok), vendorKeys); code != "" || !json.Valid([]byte(ok)) {
@@ -293,6 +271,31 @@ func TestUpstreamBody(t *testing.T) {
 				assertSameJSON(t, got, ref)
 			}
 		})
+	}
+}
+
+// Past maxPairwiseKeys the overridden members are found through a map; each key still keeps only its last member.
+func TestUpstreamBody_ManyKeys(t *testing.T) {
+	const distinct = maxPairwiseKeys + 4
+	var b strings.Builder
+	b.WriteString(`{"model":"m"`)
+	for i := range 2 * distinct {
+		fmt.Fprintf(&b, `,"k%d":%d`, i%distinct, i)
+	}
+	b.WriteString(`}`)
+	body := []byte(b.String())
+	checkAgainstMap(t, body, "up", false, nil)
+
+	req, rej := parseRequest(body, vendorKeys)
+	if rej != nil {
+		t.Fatal(rej)
+	}
+	out, err := scanJSONObject(req.upstreamBody("up", nil), nil)
+	if err != nil || len(out.members) != distinct+1 {
+		t.Fatalf("%d members sent (%v), want %d", len(out.members), err, distinct+1)
+	}
+	if got := string(req.Member("k0")); got != strconv.Itoa(distinct) {
+		t.Fatalf("k0 = %s, want its last value %d", got, distinct)
 	}
 }
 

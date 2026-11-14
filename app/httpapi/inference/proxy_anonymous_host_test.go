@@ -42,6 +42,9 @@ func TestProxyShape_AnonymousPinGoesThrough(t *testing.T) {
 			if w.Code != http.StatusOK || len(got) != 1 {
 				t.Fatalf("status %d, upstream reached %d times: %s", w.Code, len(got), w.Body)
 			}
+			if g := <-got; !bytes.Equal(g.body, body) || g.readErr != nil {
+				t.Fatalf("upstream got %q (%v), want the body as sent", g.body, g.readErr)
+			}
 		})
 	}
 }

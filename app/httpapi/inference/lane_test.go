@@ -1,7 +1,7 @@
 package inference
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -92,17 +92,47 @@ func (st *laneStack) wantLane(t *testing.T, w *httptest.ResponseRecorder, want *
 
 func wantForbidden(t *testing.T, w *httptest.ResponseRecorder, code string) {
 	t.Helper()
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body)
+	if e := envelopeOf(t, w); w.Code != http.StatusForbidden || e.Type != "invalid_request_error" || e.Code != code || e.Refusal != string(plan.RefusalModelNotAllowed) {
+		t.Fatalf("status %d, envelope %+v; want a 403 %s refusing the model", w.Code, e, code)
 	}
-	var body struct {
-		Error struct{ Code, Refusal string } `json:"error"`
+}
+
+// The account is read from a /a/{account}/ prefix with something after it, and from a host one label under the account domain.
+func TestLaneSelectors(t *testing.T) {
+	for path, want := range map[string][2]string{
+		"/a/acme/v1/models": {"acme", "/v1/models"},
+		"/a/acme/":          {"acme", "/"},
+		"/a/acme":           {},
+		"/a//v1/models":     {},
+		"/a/":               {},
+		"/ab/acme/v1":       {},
+		"/v1/a/acme/models": {},
+		"":                  {},
+	} {
+		account, rest, ok := cutAccountPath(path)
+		if account != want[0] || rest != want[1] || ok != (want[0] != "") {
+			t.Errorf("cutAccountPath(%q) = %q, %q, %v; want %q, %q", path, account, rest, ok, want[0], want[1])
+		}
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("body %q: %v", w.Body, err)
+	for host, want := range map[string]string{
+		"acme.acc.example.com":      "acme",
+		"ACME.Acc.Example.COM:8443": "acme",
+		"acc.example.com":           "",
+		".acc.example.com":          "",
+		"x.acme.acc.example.com":    "",
+		"acme-acc.example.com":      "",
+		"acme.acc.example.org":      "",
+		"acme.acc.example.com.evil": "",
+		"[::1]:8080":                "",
+		"[::1]":                     "",
+		"":                          "",
+	} {
+		if got := hostAccount(host, "acc.example.com"); got != want {
+			t.Errorf("hostAccount(%q) = %q, want %q", host, got, want)
+		}
 	}
-	if body.Error.Code != code {
-		t.Fatalf("code = %q, want %q", body.Error.Code, code)
+	if got := laneFrom(context.Background()); got != "" {
+		t.Errorf("a context the middleware never saw names lane %q", got)
 	}
 }
 
@@ -312,24 +342,6 @@ func TestLane_RecheckRunsInTheSwitchedLane(t *testing.T) {
 	}
 	if _, err := st.auth.Recheck("", f.user, f.project.Meta.ID, "jti", 1, now.Add(time.Hour).Unix(), f.personalAcct.Meta.ID, now); !errors.As(err, &refused) || refused.Code != plan.CodeAccountNotHeld {
 		t.Fatalf("a project token's item outside its project: err = %v, want account_not_held", err)
-	}
-}
-
-// The /a/{account}/ prefix serves under every route Mount registers, profile routes and listings included, with no route of its own.
-func TestMount_AccountPrefixReachesEveryRoute(t *testing.T) {
-	r := mountWithRoutedProfile(t)
-	for path, want := range map[string]int{
-		"/a/acme-ml/healthz":         http.StatusOK,
-		"/a/acme-ml/stub/api/hello":  http.StatusOK,
-		"/a/acme-ml/v1/models":       http.StatusUnauthorized,
-		"/a/acme-ml/stub/v1/models":  http.StatusUnauthorized,
-		"/a/acme-ml/stub/api/hidden": http.StatusNotFound,
-	} {
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != want {
-			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
-		}
 	}
 }
 
