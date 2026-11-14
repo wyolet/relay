@@ -8,9 +8,9 @@ import (
 )
 
 var summaryDecodeSeeds = []string{
-	`{"content":[{"type":"tool_use","name":"__relay_structured_output","type":null}],"stop_reason":"max_tokens","stop_reason":null}`,
-	`{"content":[{"name":"__relay_structured_output","type":"tool_use"},null],"usage":{"output_tokens":2,"service_tier":"priority"}}`,
-	`{"content":[{"type":"tool_use","name":"__relay_structured_output"}],"content":[{"name":"x"}]}`,
+	`{"content":[{"type":"tool_use","name":"lookup","type":null}],"stop_reason":"max_tokens","stop_reason":null}`,
+	`{"content":[{"name":"lookup","type":"tool_use"},null],"usage":{"output_tokens":2,"service_tier":"priority"}}`,
+	`{"content":[{"type":"tool_use","name":"lookup"}],"content":[{"name":"x"}]}`,
 	`{"content":[5],"usage":{"input_tokens":1}}`,
 	`{"content":[{"type":"text","text":5}],"usage":{"input_tokens":1e3}}`,
 	`{"usage":{"input_tokens":5},"usage":null,"stop_reason":"refusal"}`,

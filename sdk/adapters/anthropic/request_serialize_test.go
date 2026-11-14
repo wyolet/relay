@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -737,7 +738,7 @@ func TestSerializeRequest_ParallelNil_NoDisable(t *testing.T) {
 	}
 }
 
-// ---- Structured output (forced-tool trick) tests ----
+// ---- Structured output tests ----
 
 func makeStructuredOutputReq(model, formatType string, schema []byte) *v1.Request {
 	f := &v1.Format{Type: formatType}
@@ -758,159 +759,115 @@ func makeStructuredOutputReq(model, formatType string, schema []byte) *v1.Reques
 	}
 }
 
+func outputFormat(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	oc, ok := m["output_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("output_config missing: %v", m["output_config"])
+	}
+	f, ok := oc["format"].(map[string]any)
+	if !ok {
+		t.Fatalf("output_config.format missing: %v", oc)
+	}
+	return f
+}
+
 func TestSerializeRequest_StructuredOutput_JSONSchema(t *testing.T) {
-	schema := []byte(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
-	req := makeStructuredOutputReq("claude-3-5-sonnet-20241022", "json_schema", schema)
-	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	schema := `{"type":"object","properties":{"answer":{"type":"string"}},"additionalProperties":false}`
+	out, err := (AnthropicTranslator{}).SerializeRequest(makeStructuredOutputReq("claude-opus-5-5", "json_schema", []byte(schema)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := decodeMap(t, out)
-
-	tools, ok := m["tools"].([]any)
-	if !ok || len(tools) == 0 {
-		t.Fatalf("tools absent or empty: %v", m["tools"])
+	f := outputFormat(t, m)
+	if f["type"] != "json_schema" {
+		t.Errorf("format.type = %v, want json_schema", f["type"])
 	}
-	var synth map[string]any
-	for _, tt := range tools {
-		tm := tt.(map[string]any)
-		if tm["name"] == structuredOutputToolName {
-			synth = tm
-		}
+	if s, _ := f["schema"].(map[string]any); s["additionalProperties"] != false || s["properties"] == nil {
+		t.Errorf("format.schema = %v, want the caller's schema verbatim", f["schema"])
 	}
-	if synth == nil {
-		t.Fatalf("synthetic tool %q not found in tools: %v", structuredOutputToolName, tools)
+	if _, has := m["tools"]; has {
+		t.Errorf("tools present: %v", m["tools"])
 	}
-	schemaJSON, _ := json.Marshal(synth["input_schema"])
-	var got, want map[string]any
-	_ = json.Unmarshal(schemaJSON, &got)
-	_ = json.Unmarshal(schema, &want)
-	if got["type"] != want["type"] {
-		t.Errorf("input_schema type: got %v want %v", got["type"], want["type"])
-	}
-
-	tc, ok := m["tool_choice"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool_choice missing: %v", m["tool_choice"])
-	}
-	if tc["type"] != "tool" || tc["name"] != structuredOutputToolName {
-		t.Errorf("tool_choice: %v", tc)
+	if _, has := m["tool_choice"]; has {
+		t.Errorf("tool_choice present: %v", m["tool_choice"])
 	}
 }
 
-func TestSerializeRequest_StructuredOutput_JSONObject(t *testing.T) {
-	req := makeStructuredOutputReq("claude-3-5-sonnet-20241022", "json_object", nil)
-	out, err := (AnthropicTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, out)
-
-	tools := m["tools"].([]any)
-	var synth map[string]any
-	for _, tt := range tools {
-		tm := tt.(map[string]any)
-		if tm["name"] == structuredOutputToolName {
-			synth = tm
+// Anthropic rejects an object schema that leaves additionalProperties open,
+// so a format without a schema is refused before it reaches the upstream.
+func TestSerializeRequest_StructuredOutput_NoSchemaRefused(t *testing.T) {
+	for _, c := range []struct {
+		format string
+		schema []byte
+	}{{"json_object", nil}, {"json_object", []byte(`{"type":"object"}`)}, {"json_schema", nil}} {
+		out, err := (AnthropicTranslator{}).SerializeRequest(makeStructuredOutputReq("claude-opus-5-5", c.format, c.schema))
+		if !errors.Is(err, v1.ErrUnsupportedRequest) {
+			t.Errorf("%s schema=%s: err = %v (body %s), want ErrUnsupportedRequest", c.format, c.schema, err, out)
 		}
-	}
-	if synth == nil {
-		t.Fatalf("synthetic tool not found")
-	}
-	schemaJSON, _ := json.Marshal(synth["input_schema"])
-	var got map[string]any
-	_ = json.Unmarshal(schemaJSON, &got)
-	if got["type"] != "object" {
-		t.Errorf("json_object schema: want {type:object}, got %v", got)
 	}
 }
 
-func TestSerializeRequest_StructuredOutput_CallerForcesToolWins(t *testing.T) {
-	schema := []byte(`{"type":"object"}`)
-	model := "claude-3-5-sonnet-20241022"
-	req := &v1.Request{
-		Model:      v1.ModelRefs{model},
-		OutputMode: v1.OutputModeSync,
-		Tools: &v1.ToolsConfig{
-			Definitions: v1.Tools{&v1.FunctionTool{Name: "my_tool", Parameters: json.RawMessage(`{}`)}},
-			Choice:      &v1.ToolChoice{Mode: "function", FunctionName: "my_tool"},
-		},
-		ModelConfig: map[string]*v1.ModelOpts{
-			model: {
-				Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: schema}},
-			},
-		},
-		Input: []v1.Item{
-			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
-		},
+// The format no longer rides on tool_choice, so a caller's forced tool and a
+// response format both reach the wire.
+func TestSerializeRequest_StructuredOutput_KeepsCallerToolChoice(t *testing.T) {
+	req := makeStructuredOutputReq("claude-opus-5", "json_schema", []byte(`{"type":"object"}`))
+	req.Tools = &v1.ToolsConfig{
+		Definitions: v1.Tools{&v1.FunctionTool{Name: "my_tool", Parameters: json.RawMessage(`{}`)}},
+		Choice:      &v1.ToolChoice{Mode: "function", FunctionName: "my_tool"},
 	}
 	out, err := (AnthropicTranslator{}).SerializeRequest(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := decodeMap(t, out)
-
-	if tools, ok := m["tools"].([]any); ok {
-		for _, tt := range tools {
-			if tt.(map[string]any)["name"] == structuredOutputToolName {
-				t.Errorf("synthetic tool injected despite caller forcing their own tool")
-			}
-		}
+	outputFormat(t, m)
+	tc, _ := m["tool_choice"].(map[string]any)
+	if tc["type"] != "tool" || tc["name"] != "my_tool" {
+		t.Errorf("tool_choice = %v, want the caller's my_tool", m["tool_choice"])
 	}
-	tc := m["tool_choice"].(map[string]any)
-	if tc["name"] == structuredOutputToolName {
-		t.Errorf("tool_choice points to synthetic tool; should point to caller's tool")
-	}
-	if tc["name"] != "my_tool" {
-		t.Errorf("tool_choice.name: got %v want my_tool", tc["name"])
+	if tools, _ := m["tools"].([]any); len(tools) != 1 {
+		t.Errorf("tools = %v, want only the caller's tool", m["tools"])
 	}
 }
 
-func TestParseResponse_StructuredOutputTool_BecomesTextMessage(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"id":    "msg_so",
-		"type":  "message",
-		"role":  "assistant",
-		"model": "claude-3-5-sonnet-20241022",
-		"content": []any{
-			map[string]any{
-				"type":  "tool_use",
-				"id":    "toolu_so",
-				"name":  structuredOutputToolName,
-				"input": map[string]any{"answer": "Paris"},
-			},
-		},
-		"stop_reason": "tool_use",
-		"usage":       map[string]any{"input_tokens": 10, "output_tokens": 5},
-	})
-	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+func TestSerializeRequest_StructuredOutput_SharesOutputConfigWithEffort(t *testing.T) {
+	req := makeStructuredOutputReq("claude-opus-5-5", "json_schema", []byte(`{"type":"object"}`))
+	req.ModelConfig["claude-opus-5-5"].Reasoning = &v1.ReasoningConfig{Effort: "high"}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
 	if err != nil {
 		t.Fatal(err)
 	}
+	m := decodeMap(t, out)
+	outputFormat(t, m)
+	if e := m["output_config"].(map[string]any)["effort"]; e != "high" {
+		t.Errorf("output_config.effort = %v, want high", e)
+	}
+}
 
-	if len(resp.Output) != 1 {
-		t.Fatalf("output len: %d want 1", len(resp.Output))
+func TestParseRequest_OutputConfigFormat(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}],` +
+		`"output_config":{"effort":"low","format":{"type":"json_schema","schema":{"type":"object","additionalProperties":false}}}}`)
+	req, err := (AnthropicTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
 	}
-	msg, ok := resp.Output[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("output[0] is %T, want *v1.Message", resp.Output[0])
+	opts := req.ModelConfig["claude-opus-5-5"]
+	if opts == nil || opts.Output == nil || opts.Output.Format == nil {
+		t.Fatalf("Output.Format not parsed: %+v", opts)
 	}
-	tp, ok := msg.Content[0].(*v1.OutputTextPart)
-	if !ok {
-		t.Fatalf("msg.Content[0] is %T, want *v1.OutputTextPart", msg.Content[0])
+	if f := opts.Output.Format; f.Type != "json_schema" || string(f.Schema) != `{"type":"object","additionalProperties":false}` {
+		t.Errorf("Format = %+v (schema %s)", f, f.Schema)
 	}
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(tp.Text), &parsed); err != nil {
-		t.Fatalf("OutputTextPart.Text is not valid JSON: %v (text: %q)", err, tp.Text)
+	if opts.Reasoning == nil || opts.Reasoning.Effort != "low" {
+		t.Errorf("effort lost alongside format: %+v", opts.Reasoning)
 	}
-	if parsed["answer"] != "Paris" {
-		t.Errorf("parsed answer: %v", parsed["answer"])
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if resp.FinishReason != v1.FinishReasonStop {
-		t.Errorf("finish_reason: got %q want stop", resp.FinishReason)
-	}
-	if resp.Status != v1.StatusCompleted {
-		t.Errorf("status: got %q want completed", resp.Status)
+	if f := outputFormat(t, decodeMap(t, out)); f["type"] != "json_schema" {
+		t.Errorf("round-trip format = %v", f)
 	}
 }
 
@@ -947,84 +904,6 @@ func TestParseResponse_NormalToolUse_Unchanged(t *testing.T) {
 	}
 	if resp.FinishReason != v1.FinishReasonToolCalls {
 		t.Errorf("finish_reason: %q", resp.FinishReason)
-	}
-}
-
-func TestStream_StructuredOutputTool_TextDeltas(t *testing.T) {
-	chunks := [][]byte{
-		messageStartChunk("msg_so", "claude-3-5-sonnet-20241022"),
-		sseChunk("content_block_start", map[string]any{
-			"type":  "content_block_start",
-			"index": 0,
-			"content_block": map[string]any{
-				"type": "tool_use",
-				"id":   "toolu_so",
-				"name": structuredOutputToolName,
-			},
-		}),
-		sseChunk("content_block_delta", map[string]any{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]any{"type": "input_json_delta", "partial_json": `{"ans`},
-		}),
-		sseChunk("content_block_delta", map[string]any{
-			"type":  "content_block_delta",
-			"index": 0,
-			"delta": map[string]any{"type": "input_json_delta", "partial_json": `wer":"ok"}`},
-		}),
-		contentBlockStopChunk(0),
-		messageDeltaChunk("tool_use", 10),
-		messageStopChunk(),
-	}
-
-	fn := (AnthropicTranslator{}).NewToCanonicalStream()
-	var allFrames [][]byte
-	for _, c := range chunks {
-		out, err := fn(c)
-		if err != nil {
-			t.Fatalf("stream translate: %v", err)
-		}
-		allFrames = append(allFrames, splitFrames(out)...)
-	}
-
-	for _, f := range allFrames {
-		ev, data, ok := v1.ParseSSEChunk(f)
-		if !ok {
-			continue
-		}
-		switch ev {
-		case v1.EventItemStarted:
-			var e v1.ItemStartedEvent
-			_ = json.Unmarshal(data, &e)
-			if e.ItemType != v1.ItemTypeMessage {
-				t.Errorf("item.started ItemType: got %q want %q", e.ItemType, v1.ItemTypeMessage)
-			}
-		case v1.EventItemDelta:
-			var e v1.ItemDeltaEvent
-			_ = json.Unmarshal(data, &e)
-			if e.Kind != v1.DeltaKindText {
-				t.Errorf("item.delta Kind: got %q want text", e.Kind)
-			}
-		case v1.EventItemCompleted:
-			var raw struct {
-				Item json.RawMessage `json:"item"`
-			}
-			_ = json.Unmarshal(data, &raw)
-			var fields struct {
-				CallID  string `json:"call_id"`
-				Content []any  `json:"content"`
-			}
-			_ = json.Unmarshal(raw.Item, &fields)
-			if fields.CallID != "" {
-				t.Errorf("item.completed has call_id — should be a Message, not FunctionCall")
-			}
-		case v1.EventGenerationCompleted:
-			var ge v1.GenerationCompletedEvent
-			_ = json.Unmarshal(data, &ge)
-			if ge.FinishReason != v1.FinishReasonStop {
-				t.Errorf("generation.completed finish_reason: got %q want stop", ge.FinishReason)
-			}
-		}
 	}
 }
 

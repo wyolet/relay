@@ -35,10 +35,6 @@ type anthropicToCanonicalStream struct {
 	cacheCreation1h     int
 	serviceTier         string
 	stopReason          string
-	// structuredOutputSeen is set when a __relay_structured_output tool block
-	// is completed. It prevents handleMessageDelta from overwriting the
-	// already-corrected stop reason with "tool_use".
-	structuredOutputSeen bool
 }
 
 func (s *anthropicToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -143,11 +139,7 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 	if err := json.Unmarshal(data, &md); err != nil {
 		return nil, fmt.Errorf("anthropic stream: message_delta: %w", err)
 	}
-	// Don't let the wire "tool_use" stop_reason clobber the "end_turn" we
-	// already committed when the structured-output tool block completed.
-	if !s.structuredOutputSeen {
-		s.stopReason = md.Delta.StopReason
-	}
+	s.stopReason = md.Delta.StopReason
 	s.outputTokens = md.Usage.OutputTokens
 	// message_delta usage is cumulative and its input-side counts are optional; max keeps message_start's when they are absent or zero.
 	s.inputTokens = max(s.inputTokens, md.Usage.InputTokens)

@@ -39,8 +39,6 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// max_tokens: always required by Anthropic wire.
 	maxTokens := defaultMaxTokensCanonical
 
-	// Track the caller's tool choice separately so we can decide whether to
-	// override it with the structured-output forced-tool choice below.
 	var callerToolChoice *v1.ToolChoice
 	var callerParallel *bool
 
@@ -132,44 +130,28 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			out.Temperature, out.TopP, out.TopK = nil, nil, nil
 		}
 
-		// Structured output via forced-tool trick. Anthropic has no native
-		// response_format/json_schema param, so we inject a synthetic tool and
-		// force the model to call it. ParseResponse/stream unwrap it back to
-		// plain text so the caller sees a normal completed text response.
 		// canonical: Output.Verbosity dropped — the Messages API has no
 		// verbosity control.
 		if opts.Output != nil && opts.Output.Format != nil {
 			f := opts.Output.Format
-			// canonical: Format.Name/Description/Strict dropped — the
-			// structured-output tool uses a fixed name and description, and
-			// Anthropic tools take no strict flag.
+			// canonical: Format.Name/Description/Strict dropped — output_config.format
+			// takes only a schema, and its decoding is always constrained.
 			if f.Type == "json_schema" || f.Type == "json_object" {
-				// canonical: Output.Format ignored when caller forces their own
-				// tool choice — their explicit intent wins over structured output.
-				callerForces := callerToolChoice != nil &&
-					(callerToolChoice.Mode == "required" || callerToolChoice.Mode == "function")
-				if !callerForces {
-					schema := f.Schema
-					if len(schema) == 0 || f.Type == "json_object" {
-						schema = defaultJSONObjectSchema
-					}
-					out.Tools = append(out.Tools, anthropicCanonTool{
-						Name:                structuredOutputToolName,
-						Description:         "Return the response as JSON.",
-						InputSchema:         schema,
-						EagerInputStreaming: out.Stream,
-					})
-					out.ToolChoice = map[string]any{
-						"type": "tool",
-						"name": structuredOutputToolName,
-					}
+				// Native structured output takes only a strict schema, and an
+				// object schema must close additionalProperties, so "any JSON
+				// object" has no form here.
+				if f.Type == "json_object" || len(f.Schema) == 0 {
+					return nil, fmt.Errorf("anthropic serialize_request: %w: structured output needs a JSON schema (json_object has no Anthropic equivalent)", v1.ErrUnsupportedRequest)
 				}
+				if out.OutputConfig == nil {
+					out.OutputConfig = &anthropicOutputConfig{}
+				}
+				out.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: f.Schema}
 			}
 		}
 	}
 
-	// Apply the caller's tool choice only when structured-output didn't override it.
-	if out.ToolChoice == nil && callerToolChoice != nil {
+	if callerToolChoice != nil {
 		out.ToolChoice = canonicalToolChoiceToAnthropic(callerToolChoice, callerParallel)
 	}
 

@@ -7,7 +7,7 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// DecodeSummary implements v1.SummaryDecoder: ParseResponse's usage, service tier and finish reason, the structured-output tool block's override included, read in one pass that skips content.
+// DecodeSummary implements v1.SummaryDecoder: ParseResponse's usage, service tier and finish reason, read in one pass that only shape-checks content.
 func (AnthropicTranslator) DecodeSummary(body []byte) (v1.Summary, error) {
 	if sum, ok := anthropicScanSummary(body); ok {
 		return sum, nil
@@ -21,16 +21,16 @@ func anthropicScanSummary(body []byte) (v1.Summary, bool) {
 	var (
 		stop, tier             []byte
 		u                      anthropicFullUsage
-		structured             bool
 		seenContent, seenUsage bool
 	)
 	ok := r.StructField(func(key []byte) bool {
 		switch {
 		case jsonscan.KeyIs(key, "content"):
+			// Content is only shape-checked, so a body ParseResponse rejects fails here too.
 			first := !seenContent
 			seenContent = true
 			return first && r.SliceField(func(int) bool {
-				return anthropicScanBlock(&r, &structured)
+				return anthropicScanBlock(&r)
 			})
 		case jsonscan.KeyIs(key, "stop_reason"):
 			return r.StringField(&stop)
@@ -46,17 +46,14 @@ func anthropicScanSummary(body []byte) (v1.Summary, bool) {
 	}
 	reason, _ := jsonscan.String(stop)
 	_, finish, _ := anthropicStopReasonToCanonical(reason)
-	if structured {
-		finish = v1.FinishReasonStop
-	}
 	u.ServiceTier, _ = jsonscan.String(tier)
 	return v1.Summary{Tokens: anthropicUsageToCanonical(&u), FinishReason: finish, ServiceTier: u.ServiceTier}, true
 }
 
-// anthropicScanBlock reads one content block's type and name, reporting the structured-output tool block.
-func anthropicScanBlock(r *jsonscan.Reader, structured *bool) bool {
+// anthropicScanBlock checks one content block's type and name are strings.
+func anthropicScanBlock(r *jsonscan.Reader) bool {
 	var typ, name []byte
-	ok := r.StructField(func(key []byte) bool {
+	return r.StructField(func(key []byte) bool {
 		switch {
 		case jsonscan.KeyIs(key, "type"):
 			return r.StringField(&typ)
@@ -65,10 +62,6 @@ func anthropicScanBlock(r *jsonscan.Reader, structured *bool) bool {
 		}
 		return true
 	})
-	if jsonscan.StringDecodesTo(typ, "tool_use") && jsonscan.StringDecodesTo(name, structuredOutputToolName) {
-		*structured = true
-	}
-	return ok
 }
 
 // anthropicScanUsage reads usage as encoding/json decodes it into an anthropicFullUsage, leaving the service tier raw in tier.
@@ -114,10 +107,5 @@ func anthropicUnmarshalSummary(body []byte) (v1.Summary, error) {
 		return v1.Summary{}, err
 	}
 	_, finish, _ := anthropicStopReasonToCanonical(ar.StopReason)
-	for _, b := range ar.Content {
-		if b.Type == "tool_use" && b.Name == structuredOutputToolName {
-			finish = v1.FinishReasonStop
-		}
-	}
 	return v1.Summary{Tokens: anthropicUsageToCanonical(&ar.Usage), FinishReason: finish, ServiceTier: ar.Usage.ServiceTier}, nil
 }

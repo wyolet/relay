@@ -20,11 +20,6 @@ type anthropicStreamBlock struct {
 	sigBuf   strings.Builder
 	callID   string
 	toolName string
-	// structuredOutput marks a tool_use block that is the synthetic
-	// __relay_structured_output tool. Its input_json_delta chunks are
-	// accumulated in argsBuf but emitted as canonical text deltas so the
-	// caller sees a normal message, not a function-call stream.
-	structuredOutput bool
 }
 
 func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byte, error) {
@@ -65,10 +60,6 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "tool_use":
 		b.callID = cbs.ContentBlock.ID
 		b.toolName = cbs.ContentBlock.Name
-		if b.toolName == structuredOutputToolName {
-			// Treat as a text block — input_json_delta becomes canonical text deltas.
-			b.structuredOutput = true
-		}
 	}
 
 	s.currentBlock = b
@@ -78,11 +69,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "text":
 		itemType = v1.ItemTypeMessage
 	case "tool_use":
-		if b.structuredOutput {
-			itemType = v1.ItemTypeMessage
-		} else {
-			itemType = v1.ItemTypeFunctionCall
-		}
+		itemType = v1.ItemTypeFunctionCall
 	case "thinking":
 		itemType = v1.ItemTypeReasoning
 	default:
@@ -131,12 +118,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockDelta(data []byte) ([]byt
 		deltaText = cbd.Delta.Text
 	case "input_json_delta":
 		b.argsBuf.WriteString(cbd.Delta.PartialJSON)
-		if b.structuredOutput {
-			// Emit as text delta — caller sees streaming JSON text, not function args.
-			kind = v1.DeltaKindText
-		} else {
-			kind = v1.DeltaKindArguments
-		}
+		kind = v1.DeltaKindArguments
 		deltaText = cbd.Delta.PartialJSON
 	case "thinking_delta":
 		b.thinkBuf.WriteString(cbd.Delta.Thinking)
@@ -180,23 +162,12 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 			Content: []v1.Part{&v1.OutputTextPart{Text: b.textBuf.String()}},
 		}
 	case "tool_use":
-		if b.structuredOutput {
-			// Unwrap: emit as a completed Message with text content, finish_reason stop.
-			completedItem = &v1.Message{
-				ID:      b.itemID,
-				Role:    v1.RoleAssistant,
-				Status:  v1.StatusCompleted,
-				Content: []v1.Part{&v1.OutputTextPart{Text: b.argsBuf.String()}},
-			}
-			s.structuredOutputSeen = true
-		} else {
-			completedItem = &v1.FunctionCall{
-				ID:        b.itemID,
-				CallID:    b.callID,
-				Name:      b.toolName,
-				Arguments: b.argsBuf.String(),
-				Status:    functionCallStatus(b.argsBuf.String()),
-			}
+		completedItem = &v1.FunctionCall{
+			ID:        b.itemID,
+			CallID:    b.callID,
+			Name:      b.toolName,
+			Arguments: b.argsBuf.String(),
+			Status:    functionCallStatus(b.argsBuf.String()),
 		}
 	case "thinking":
 		thinkText := b.thinkBuf.String()

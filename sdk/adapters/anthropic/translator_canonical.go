@@ -27,16 +27,6 @@ import (
 
 const defaultMaxTokensCanonical = 4096
 
-// structuredOutputToolName is the synthetic tool injected to implement
-// Output.Format (json_schema / json_object) via the forced-tool trick.
-// The double-underscore prefix and "relay" namespace make collisions with
-// real caller tools practically impossible.
-const structuredOutputToolName = "__relay_structured_output"
-
-// defaultJSONObjectSchema is used for json_object format (and json_schema with
-// no schema provided) — the model must return any valid JSON object.
-var defaultJSONObjectSchema = json.RawMessage(`{"type":"object"}`)
-
 // AnthropicTranslator implements v1.Translator for the Anthropic Messages API.
 type AnthropicTranslator struct{}
 
@@ -60,7 +50,13 @@ type anthropicCanonReq struct {
 }
 
 type anthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"` // low | medium | high | xhigh | max
+	Effort string                 `json:"effort,omitempty"` // low | medium | high | xhigh | max
+	Format *anthropicOutputFormat `json:"format,omitempty"`
+}
+
+type anthropicOutputFormat struct {
+	Type   string          `json:"type"` // json_schema
+	Schema json.RawMessage `json:"schema"`
 }
 
 type anthropicCanonMsg struct {
