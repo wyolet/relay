@@ -17,7 +17,6 @@ import (
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -63,7 +62,7 @@ func ladderDeps(t *testing.T, c ladderCase, now time.Time) (Deps, *Principal, us
 	d := buildRunnableDepsAt(t, cat, func() time.Time { return now })
 	d.Plans = plans.Holder
 	useSpecs(&d, adapter.NewRegistry(
-		(&adapter.Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: openai.CCTranslator{}, ExtractTokens: openai.ExtractTokens}).Build(),
+		(&adapter.Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: productionSpec(adapters.OpenAI).Translator, ExtractTokens: productionSpec(adapters.OpenAI).ExtractTokens}).Build(),
 		(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 	))
 	events := make(usageCapture, 256) // roomy: a full buffer would block post-flight before the charge lands

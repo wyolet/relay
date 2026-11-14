@@ -25,8 +25,6 @@ import (
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/sse"
-	"github.com/wyolet/relay/sdk/adapters/anthropic"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -104,7 +102,7 @@ func checkStreamGolden(t *testing.T, name string, got []byte) {
 
 // anthropicToCanonicalFailingStop is the Anthropic stream translator failing on message_stop, as it would on a malformed terminal event.
 func anthropicToCanonicalFailingStop() func([]byte) ([]byte, error) {
-	next := anthropic.AnthropicTranslator{}.NewToCanonicalStream()
+	next := productionSpec(adapters.Anthropic).Translator.NewToCanonicalStream()
 	fail := failOn("message_stop")
 	return func(b []byte) ([]byte, error) {
 		if _, err := fail(b); err != nil {
@@ -126,15 +124,15 @@ func TestStreamCanonical_OneWriteAndFlushPerFrame(t *testing.T) {
 		{
 			// generation.created, three deltas, and the finish chunk + [DONE] (one canonical event, one frame write).
 			name:      "anthropic_to_cc",
-			toCanon:   anthropic.AnthropicTranslator{}.NewToCanonicalStream,
-			fromCanon: openai.CCTranslator{}.NewFromCanonicalStream,
+			toCanon:   productionSpec(adapters.Anthropic).Translator.NewToCanonicalStream,
+			fromCanon: productionSpec(adapters.OpenAI).Translator.NewFromCanonicalStream,
 			frames:    5,
 		},
 		{
 			// Held one frame back for the relay_usage splice; the last is written after the scan loop.
 			name:      "anthropic_to_canonical_echo",
 			echo:      true,
-			toCanon:   anthropic.AnthropicTranslator{}.NewToCanonicalStream,
+			toCanon:   productionSpec(adapters.Anthropic).Translator.NewToCanonicalStream,
 			fromCanon: v1.IdentityTranslator{}.NewFromCanonicalStream,
 			frames:    7,
 		},
@@ -142,7 +140,7 @@ func TestStreamCanonical_OneWriteAndFlushPerFrame(t *testing.T) {
 			// The terminal event is dropped, so the closing incomplete-stream frame ends it.
 			name:      "anthropic_to_cc_dropped_terminal",
 			toCanon:   anthropicToCanonicalFailingStop,
-			fromCanon: openai.CCTranslator{}.NewFromCanonicalStream,
+			fromCanon: productionSpec(adapters.OpenAI).Translator.NewFromCanonicalStream,
 			frames:    5,
 		},
 	}
@@ -161,7 +159,7 @@ func TestStreamCanonical_OneWriteAndFlushPerFrame(t *testing.T) {
 					reg.RegisterStreamObserver(usagelog.NewStreamUsageFactory(nil, "test"))
 					d.Lifecycle = reg
 					lc := lifecycle.NewContext("req-1", "pipeline", time.Now())
-					lc.Translator = anthropic.AnthropicTranslator{}
+					lc.Translator = productionSpec(adapters.Anthropic).Translator
 					lc.SetStreamSession(reg.NewStreamSession(lc))
 					r = r.WithContext(lifecycle.ContextWith(r.Context(), lc))
 				}

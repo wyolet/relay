@@ -11,7 +11,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -50,10 +49,10 @@ func wantBothDeltas(t *testing.T, stream string) {
 
 // Line endings are the transport's: the same frames in LF, CRLF or CR yield the same canonical stream.
 func TestStreamCanonical_FramesInOneReadYieldEachDelta(t *testing.T) {
-	lf := runStreamCanonical(t, twoDeltaFrames, streamShapes{}, openai.CCTranslator{}.NewToCanonicalStream(), nil)
+	lf := runStreamCanonical(t, twoDeltaFrames, streamShapes{}, productionSpec(adapters.OpenAI).Translator.NewToCanonicalStream(), nil)
 	wantBothDeltas(t, lf)
 	for name, eol := range map[string]string{"CRLF": "\r\n", "CR": "\r"} {
-		got := runStreamCanonical(t, strings.ReplaceAll(twoDeltaFrames, "\n", eol), streamShapes{}, openai.CCTranslator{}.NewToCanonicalStream(), nil)
+		got := runStreamCanonical(t, strings.ReplaceAll(twoDeltaFrames, "\n", eol), streamShapes{}, productionSpec(adapters.OpenAI).Translator.NewToCanonicalStream(), nil)
 		if got != lf {
 			t.Errorf("%s stream\n got %q\nwant %q", name, got, lf)
 		}
@@ -73,7 +72,7 @@ func TestDispatch_CRLFUpstreamStreamYieldsFullGeneration(t *testing.T) {
 			pointHostAt(t, cat, up.URL)
 			d := buildRunnableDeps(t, cat)
 			useSpecs(&d, adapter.NewRegistry(
-				(&adapter.Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: openai.CCTranslator{}}).Build(),
+				(&adapter.Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: productionSpec(adapters.OpenAI).Translator}).Build(),
 				(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 			))
 
