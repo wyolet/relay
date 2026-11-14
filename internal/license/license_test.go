@@ -283,6 +283,21 @@ func TestService_Set(t *testing.T) {
 	}
 }
 
+// Verify judges a value as Set would, without putting it in force.
+func TestService_Verify(t *testing.T) {
+	priv := newTestKey(t)
+	svc := New(at(issued))
+	if err := svc.Verify(sign(t, priv, validClaims("acme"))); err != nil || svc.Has(applicense.FeatureSSO) || svc.Info().Licensed {
+		t.Fatalf("Verify(good) = %v with %+v live; want nil and nothing in force", err, svc.Info())
+	}
+	if err := svc.Verify("garbage"); err == nil || err.Error() != "license: malformed (want 3 dot-separated segments)" {
+		t.Errorf("Verify(garbage) = %v, want malformed", err)
+	}
+	if err := svc.Verify(""); err != nil {
+		t.Errorf("Verify(\"\") = %v, want nil: an empty value clears the license", err)
+	}
+}
+
 func TestLoad(t *testing.T) {
 	priv := newTestKey(t)
 	if l, err := Load(context.Background()); l != nil || err != nil {

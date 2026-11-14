@@ -215,6 +215,13 @@ func (s *Service) Set(value string) (applicense.Info, error) {
 	return s.Info(), nil
 }
 
+// Verify checks value against the release public key and the clock without
+// making it live.
+func (s *Service) Verify(value string) error {
+	_, err := parseAt(value, s.now)
+	return err
+}
+
 // Has reports whether feature is unlocked by the live license. Expiry is
 // re-evaluated on every call: a license verified at boot must stop unlocking
 // features once its grace window closes, without a restart or a reload.

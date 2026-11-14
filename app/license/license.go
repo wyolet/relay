@@ -56,6 +56,10 @@ type Service interface {
 	// unusable value returns an error and leaves the previous license in
 	// place.
 	Set(value string) (Info, error)
+
+	// Verify reports why value is unusable as the stored license, leaving
+	// the live license as it is. An empty value verifies.
+	Verify(value string) error
 }
 
 // Community is the unlicensed gate: every gated feature is off. Used when
