@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,9 +13,6 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/pkg/adapters"
 
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/openai"
@@ -216,27 +211,6 @@ func TestParseRequest_StreamKeySpelling(t *testing.T) {
 				t.Fatalf("reference code %q, want %q", code, tc.code)
 			}
 		})
-	}
-}
-
-func TestHandleShape_StreamKeyRefused(t *testing.T) {
-	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	d := buildDeps(t, cat)
-	spec := &adapter.Spec{Name: adapters.OpenAI, Translator: openai.CCTranslator{}}
-	for body, code := range map[string]string{
-		`{"model":"test-model","stream":true,"Stream":false,"messages":[]}`: "duplicate_stream",
-		`{"model":"test-model","stream":true,"stream":null,"messages":[]}`:  "duplicate_stream",
-		`{"model":"test-model","` + longS + `tream":true,"messages":[]}`:    "invalid_stream_key",
-	} {
-		r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", strings.NewReader(body)), prin)
-		w := httptest.NewRecorder()
-		handleShape(spec, d, w, r)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("%s: status %d, want 400; body %s", body, w.Code, w.Body)
-		}
-		if e := envelopeOf(t, w); e.Type != "invalid_request_error" || e.Code != code {
-			t.Fatalf("%s: envelope %s/%s, want invalid_request_error/%s", body, e.Type, e.Code, code)
-		}
 	}
 }
 

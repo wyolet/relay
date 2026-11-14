@@ -2,8 +2,9 @@ package inference
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -13,34 +14,32 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/limits"
+	"github.com/wyolet/relay/app/proxy"
 	apphost "github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-func TestProxyUpstreamPath_DefaultsToSpecPath(t *testing.T) {
+// The host's own path wins verbatim (an explicit "" means the base URL is the whole endpoint), then the shape's native path, then the inbound path.
+func TestProxyUpstreamPath(t *testing.T) {
 	spec := (&adapter.Spec{DefaultPath: "/v1/responses"}).Build()
-
-	got := proxyUpstreamPath("/openai/v1/responses", spec, nil)
-
-	if got != "/v1/responses" {
-		t.Fatalf("path: got %q", got)
-	}
-}
-
-func TestProxyUpstreamPath_HostPathWins(t *testing.T) {
-	spec := (&adapter.Spec{DefaultPath: "/v1/responses"}).Build()
-	p := "/backend-api/codex/responses"
-	host := &apphost.Host{Spec: apphost.Spec{Path: &p}}
-
-	if got := proxyUpstreamPath("/openai/v1/responses", spec, host); got != p {
-		t.Fatalf("path: got %q", got)
-	}
-
-	// Explicit "" is a real value: baseURL is the whole endpoint.
-	empty := ""
-	host.Spec.Path = &empty
-	if got := proxyUpstreamPath("/openai/v1/responses", spec, host); got != "" {
-		t.Fatalf("path: got %q, want empty", got)
+	own, empty := "/backend-api/codex/responses", ""
+	for _, tc := range []struct {
+		name string
+		spec *adapter.Spec
+		host *apphost.Host
+		want string
+	}{
+		{"shape's native path", spec, &apphost.Host{}, "/v1/responses"},
+		{"no host", spec, nil, "/v1/responses"},
+		{"host path", spec, &apphost.Host{Spec: apphost.Spec{Path: &own}}, own},
+		{"empty host path", spec, &apphost.Host{Spec: apphost.Spec{Path: &empty}}, ""},
+		{"unknown shape", nil, &apphost.Host{}, "/openai/v1/responses"},
+		{"shape without a native path", &adapter.Spec{}, nil, "/openai/v1/responses"},
+	} {
+		if got := proxyUpstreamPath("/openai/v1/responses", tc.spec, tc.host); got != tc.want {
+			t.Errorf("%s: path %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -179,15 +178,96 @@ func TestBodyCapture_ConcurrentFinalize(t *testing.T) {
 	}
 }
 
-// The proxy path's rate-limit rejection is the same condition as the pipeline
-// path's, and must not report a different error.type/code for it.
-func TestMapProxyErr_RateLimit_UsesTheSharedEnvelope(t *testing.T) {
-	rec := httptest.NewRecorder()
-	c := limits.Counter{Kind: limits.KindRule, Rung: limits.RungSystem, ID: "r:x"}
-	mapProxyErr(rec, nil, &limits.Refused{Counter: &c, RetryAfter: 2300 * time.Millisecond})
+// A proxy request that names no usable upstream is refused before anything is forwarded, on a connection that then closes, and recorded with the reason.
+func TestProxyShape_RoutingRefusals(t *testing.T) {
+	invalid := func(code, msg string) httpapi.APIErrorBody {
+		return httpapi.APIErrorBody{Type: "invalid_request_error", Code: code, Message: msg}
+	}
+	for _, tc := range []struct {
+		name      string
+		anonymous bool
+		noPlans   bool
+		pin       string
+		model     string
+		status    int
+		want      httpapi.APIErrorBody
+		recorded  outcome // Status is the upstream's: 0 when relay answered without routing
+	}{
+		{name: "unknown pinned host", pin: "nowhere", model: "test-model", status: 400,
+			want: invalid("unknown_upstream_host", `unknown upstream host "nowhere"; see GET /v1/proxy/hosts`), recorded: outcome{Kind: "unknown_upstream_host", Message: "unknown upstream host nowhere"}},
+		{name: "unknown pinned host, anonymous", anonymous: true, pin: "nowhere", model: "test-model", status: 400,
+			want: invalid("unknown_upstream_host", `unknown upstream host "nowhere"; see GET /v1/proxy/hosts`), recorded: outcome{Kind: "unknown_upstream_host", Message: "unknown upstream host nowhere"}},
+		{name: "anonymous without a pin", anonymous: true, model: "test-model", status: 400,
+			want:     invalid("missing_upstream_host", "anonymous proxy traffic requires X-WR-Upstream-Host header naming a configured host"),
+			recorded: outcome{Kind: "missing_upstream_host", Message: "anonymous proxy traffic requires an upstream-host header"}},
+		{name: "anonymous before the plans are published", anonymous: true, noPlans: true, pin: "anthropic", model: "test-model", status: 503,
+			want: httpapi.APIErrorBody{Type: "server_error", Code: "not_ready", Message: "relay is starting; retry shortly"}, recorded: outcome{Kind: "not_ready", Message: "plans not published yet"}},
+		{name: "model the caller cannot route", model: "no-such-model", status: 404,
+			want:     httpapi.APIErrorBody{Type: "invalid_request_error", Code: "model_not_found", Refusal: "host_not_reachable", Message: `model "no-such-model" not found`},
+			recorded: outcome{Status: 404, Kind: "model_not_found", Refusal: "host_not_reachable", Message: `model "no-such-model" not found`}},
+		{name: "model not served at the pinned host", pin: "anthropic", model: "no-such-model", status: 404,
+			want:     httpapi.APIErrorBody{Type: "invalid_request_error", Code: "model_not_found", Refusal: "host_not_reachable", Message: `model "no-such-model" not found`},
+			recorded: outcome{Status: 404, Kind: "model_not_found", Refusal: "host_not_reachable", Message: `model "no-such-model" not found`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up, got := recordingUpstream(t)
+			d, pr, _ := proxyStreamDeps(t, up.URL)
+			outcomes := watchOutcomes(&d)
+			if tc.noPlans {
+				d.Plans = nil
+			}
+			call := proxyShapeCall{principal: pr, pin: tc.pin, body: bytes.NewReader(proxyTestBody(tc.model, 16, false)), length: -1}
+			if tc.anonymous {
+				call.principal = nil
+			}
+			wantAnswer(t, serveProxyShape(d, call), tc.status, tc.want, map[string]string{"Connection": "close"})
+			wantOutcome(t, outcomes, tc.recorded)
+			if len(got) != 0 {
+				t.Error("the upstream was reached")
+			}
+		})
+	}
+}
 
-	wantAnswer(t, rec, http.StatusTooManyRequests, httpapi.APIErrorBody{
-		Type: "rate_limit_error", Code: "rate_limit_exceeded", Refusal: "no_capacity",
-		Message: "the rate limit of the system policy  is exhausted; try again in 3s",
-	}, map[string]string{"Retry-After": "3", HeaderOrigin: "relay"})
+// Every failure of the proxy run is answered in relay's envelope; a refused counter and an unreachable store answer as they do on the pipeline path.
+func TestMapProxyErr(t *testing.T) {
+	c := limits.Counter{Kind: limits.KindRule, Rung: limits.RungSystem, ID: "r:x"}
+	for _, tc := range []struct {
+		name    string
+		err     error
+		status  int
+		want    httpapi.APIErrorBody
+		headers map[string]string
+	}{
+		{"refused body", fmt.Errorf("forward: %w", errTrailingBytes), 400,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "parse_error", Message: "invalid JSON: more than 1024 bytes after the top-level value"}, nil},
+		{"stalled forward", errForwardStalled, 502,
+			httpapi.APIErrorBody{Type: "upstream_error", Code: "upstream_stalled", Message: "the request body stopped moving: the upstream stopped reading it, or the client stopped sending"}, nil},
+		{"no upstream credential", proxy.ErrNoUpstreamAuth, 400,
+			httpapi.APIErrorBody{Type: "invalid_request_error", Code: "missing_upstream_auth", Message: "proxy mode requires Authorization: Bearer <upstream-key>"}, nil},
+		{"no limiter", proxy.ErrLimiterMissing, 500,
+			httpapi.APIErrorBody{Type: "server_error", Code: "limiter_missing", Message: "proxy mode is not wired to a limiter"}, nil},
+		{"state store unreachable", fmt.Errorf("reserve: %w", pkgratelimit.ErrUnavailable), 503,
+			httpapi.APIErrorBody{Type: "server_error", Code: "overloaded", Message: httpapi.OverloadMessage}, map[string]string{"Retry-After": httpapi.RetryAfterShed}},
+		{"refused counter", &limits.Refused{Counter: &c, RetryAfter: 2300 * time.Millisecond}, 429,
+			httpapi.APIErrorBody{Type: "rate_limit_error", Code: "rate_limit_exceeded", Refusal: "no_capacity", Message: "the rate limit of the system policy  is exhausted; try again in 3s"},
+			map[string]string{"Retry-After": "3"}},
+		{"upstream failure", errors.New("unexpected EOF"), 502,
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_error", Message: "upstream: unexpected EOF"}, nil},
+		{"upstream failure naming an address", errors.New("dial tcp 10.0.0.7:443: connection refused"), 502,
+			httpapi.APIErrorBody{Type: "server_error", Code: "upstream_error", Message: "upstream: upstream connection failed"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mapProxyErr(rec, nil, tc.err)
+			wantAnswer(t, rec, tc.status, tc.want, tc.headers)
+			if got := rec.Header().Get(HeaderOrigin); got != "relay" {
+				t.Errorf("%s = %q, want relay", HeaderOrigin, got)
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	mapProxyErr(rec, &adapter.Spec{Overloaded: testOverloaded}, pkgratelimit.ErrUnavailable)
+	assertSpecOverloaded(t, rec)
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wyolet/relay/app/httpapi"
 )
 
 // The upstream gets exactly the client's bytes, with the client's Content-Length, whether the forward waited for the model or not, and post-flight sees the body's length and model.
@@ -107,7 +109,8 @@ func TestProxyShape_DuplicateModel(t *testing.T) {
 	seen := watchPostFlight(&d)
 
 	early := []byte(`{"model":"test-model","model":"other","messages":[]}`)
-	assertDuplicateModel(t, serveProxyShape(d, proxyShapeCall{principal: pr, body: bytes.NewReader(early), length: int64(len(early))}))
+	duplicate := httpapi.APIErrorBody{Type: "invalid_request_error", Code: "duplicate_model", Message: "request body has more than one top-level 'model' field"}
+	wantAnswer(t, serveProxyShape(d, proxyShapeCall{principal: pr, body: bytes.NewReader(early), length: int64(len(early))}), http.StatusBadRequest, duplicate, map[string]string{"Connection": "close"})
 	select {
 	case g := <-got:
 		t.Fatalf("upstream called with %d bytes", len(g.body))
@@ -116,7 +119,7 @@ func TestProxyShape_DuplicateModel(t *testing.T) {
 
 	first := claudeCodeSizedBody(t, 2<<20, false)
 	late := append(first[:len(first)-1:len(first)-1], `,"model":"other"}`...)
-	assertDuplicateModel(t, serveProxyShape(d, proxyShapeCall{principal: pr, body: bytes.NewReader(late), length: int64(len(late))}))
+	wantAnswer(t, serveProxyShape(d, proxyShapeCall{principal: pr, body: bytes.NewReader(late), length: int64(len(late))}), http.StatusBadRequest, duplicate, nil)
 	select {
 	case g := <-got:
 		if g.readErr == nil && json.Valid(g.body) {

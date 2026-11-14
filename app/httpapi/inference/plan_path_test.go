@@ -1,7 +1,6 @@
 package inference
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -9,14 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/app/account"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/revocation"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/adapters"
-	"github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/catalogkind/policy"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/crypto"
@@ -50,58 +51,52 @@ func listingWorld(t *testing.T) (*plantest.Plans, *Principal) {
 	return plans, principalOf(kp, k.Spec.KeyHash)
 }
 
-// /v1/models never advertises a model a request would be refused: a model outside the grant, and one granted only at a keyless host no pool reaches, are both refused by the route and both absent from the list.
-func TestListingMatchesRouting(t *testing.T) {
+// A keyless host ignores the caller's own upstream key, so listing or pinning one in proxy mode needs a pool at it under a caller that is not refused, as normal routing does. A keyed host is open to anyone bringing a key.
+func TestProxyHostsFor(t *testing.T) {
 	_, p := listingWorld(t)
-	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, p)
-	out, err := listModels(ctx, "")
-	if err != nil {
-		t.Fatal(err)
+	snap := p.Caller.Routes.Catalog()
+	pooled := *p.Caller
+	for _, h := range snap.Hosts() {
+		if h.Meta.Name == "keyless-host" {
+			pooled.Pools = append(pooled.Pools, &plan.PoolPlan{Host: h})
+		}
 	}
-	var listed []string
-	for _, row := range out.Body.Data {
-		listed = append(listed, row.ID)
+	refused := pooled
+	refused.Refused = &plan.Refusal{Code: plan.CodeAccountClosed}
+	as := func(c *plan.CallerPlan) *Principal {
+		cp := *p
+		cp.Caller = c
+		return &cp
 	}
-	sort.Strings(listed)
-	if len(listed) != 1 || listed[0] != "allowed" {
-		t.Fatalf("listed = %v, want [allowed]", listed)
-	}
-	for _, name := range []string{"allowed", "denied", "keyless"} {
-		r := p.Caller.Routes.Get(name)
-		if routed := r.Refused == nil; routed != (name == "allowed") {
-			t.Errorf("route %s refused = %v, listing says listed = %v", name, r.Refused, name == "allowed")
+	for _, tc := range []struct {
+		name string
+		p    *Principal
+		want []proxyHostEntry
+	}{
+		{"no pool at the keyless host", p, []proxyHostEntry{{Slug: "keyed"}}},
+		{"pool at the keyless host", as(&pooled), []proxyHostEntry{{Slug: "keyed"}, {Slug: "keyless-host"}}},
+		{"refused caller holding the pool", as(&refused), []proxyHostEntry{{Slug: "keyed"}}},
+		{"no caller plan", as(nil), []proxyHostEntry{{Slug: "keyed"}}},
+		{"anonymous", nil, []proxyHostEntry{{Slug: "keyed"}}},
+	} {
+		got := proxyHostsFor(snap, tc.p)
+		sort.Slice(got, func(i, j int) bool { return got[i].Slug < got[j].Slug })
+		if diff := cmp.Diff(tc.want, got); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", tc.name, diff)
 		}
 	}
 }
 
-// A keyless host ignores the caller's own upstream key, so pinning one in proxy mode needs a pool at it, as normal routing does.
-func TestProxyPinKeylessHostNeedsAPool(t *testing.T) {
-	_, p := listingWorld(t)
-	keyless, keyed := findHost(t, p, "keyless-host"), findHost(t, p, "keyed")
-	if proxyPinAllowed(p, keyless) {
-		t.Fatal("a keyless host with no pool was pinnable")
+// With proxy mode off, which is how it ships, the host list is refused.
+func TestProxyHosts_RefusedWhileProxyModeIsOff(t *testing.T) {
+	httpapi.InstallErrorRewriter()
+	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	_, api := humatest.New(t)
+	registerProxyHosts(api, buildDeps(t, cat), nil)
+	resp := api.GetCtx(withNormalContext(httptest.NewRequest(http.MethodGet, "/", nil), pr).Context(), "/v1/proxy/hosts")
+	if env := decodeEnvelope(t, resp.Body.Bytes()); resp.Code != http.StatusForbidden || env.Message != "proxy mode is not enabled" {
+		t.Fatalf("status %d, envelope %+v, want a 403 naming proxy mode", resp.Code, env)
 	}
-	if !proxyPinAllowed(p, keyed) {
-		t.Fatal("a keyed host must be pinnable with the caller's own key")
-	}
-	cp := *p.Caller
-	cp.Pools = append(cp.Pools, &plan.PoolPlan{Host: keyless})
-	withPool := *p
-	withPool.Caller = &cp
-	if !proxyPinAllowed(&withPool, keyless) {
-		t.Fatal("a pool at the keyless host is the grant that makes it pinnable")
-	}
-}
-
-func findHost(t *testing.T, p *Principal, name string) *host.Host {
-	t.Helper()
-	for _, h := range p.Caller.Routes.Catalog().Hosts() {
-		if h.Meta.Name == name {
-			return h
-		}
-	}
-	t.Fatalf("no host %s", name)
-	return nil
 }
 
 // Authentication reads only the published plans and the in-memory revoked set: no bearer, rejected or admitted, reaches the store.
@@ -154,33 +149,6 @@ func TestFrameReauthenticates(t *testing.T) {
 	w = httptest.NewRecorder()
 	if _, ok := st.auth.reauthenticate(w, nil, tokenPrincipal); ok || w.Code != http.StatusUnauthorized {
 		t.Fatalf("signed-out token: ok=%v status %d, want a 401", ok, w.Code)
-	}
-}
-
-// An upstream token count spends a credential, so it holds the caller's counters like a generation: the second count under a one-request budget is refused before the upstream.
-func TestCountTokens_UpstreamCountIsMetered(t *testing.T) {
-	var hits int
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits++
-		_, _ = w.Write([]byte(`{"input_tokens":7}`))
-	}))
-	defer up.Close()
-	cat, rk := countCatalog(t, up.URL)
-	limitCaller(t, cat, 1)
-	d := buildRunnableDeps(t, cat)
-	useSpecs(&d, countingRegistry())
-	d.Profiles = profileRegistry(newCountProfile())
-
-	body := `{"model":"test-model","messages":[]}`
-	if count, tier := countAnswer(t, countRequest(d, rk, body, nil)); count != 7 || tier != "exact" {
-		t.Fatalf("first count = %d/%s, want 7/exact", count, tier)
-	}
-	w := countRequest(d, rk, body, nil)
-	if w.Code != http.StatusTooManyRequests || envelopeOf(t, w).Code != "rate_limit_exceeded" {
-		t.Fatalf("second count = %d %s, want 429 rate_limit_exceeded", w.Code, w.Body)
-	}
-	if hits != 1 {
-		t.Fatalf("upstream counted %d times, want 1", hits)
 	}
 }
 

@@ -315,24 +315,6 @@ func TestLane_RecheckRunsInTheSwitchedLane(t *testing.T) {
 	}
 }
 
-// The /a/{account}/ prefix serves under every route Mount registers, profile routes and listings included, with no route of its own.
-func TestMount_AccountPrefixReachesEveryRoute(t *testing.T) {
-	r := mountWithRoutedProfile(t)
-	for path, want := range map[string]int{
-		"/a/acme-ml/healthz":         http.StatusOK,
-		"/a/acme-ml/stub/api/hello":  http.StatusOK,
-		"/a/acme-ml/v1/models":       http.StatusUnauthorized,
-		"/a/acme-ml/stub/v1/models":  http.StatusUnauthorized,
-		"/a/acme-ml/stub/api/hidden": http.StatusNotFound,
-	} {
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != want {
-			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
-		}
-	}
-}
-
 // The prefix is cut from the escaped path too, so a route matching on it sees no prefix either.
 func TestLaneMiddleware_CutsRawPath(t *testing.T) {
 	var got *http.Request

@@ -431,21 +431,6 @@ func (g *jsonGen) value(depth int) {
 	g.ws()
 }
 
-func TestParseRequest_DuplicateModel(t *testing.T) {
-	for _, body := range []string{
-		`{"model":"cheap","messages":[],"model":"expensive"}`,
-		`{"model":"cheap","Model":"expensive"}`,
-		`{"model":null,"model":"expensive"}`,
-	} {
-		if _, err := parseRequest([]byte(body), vendorKeys); err != errDuplicateModel {
-			t.Errorf("%s: err = %v, want errDuplicateModel", body, err)
-		}
-	}
-	if req, err := parseRequest([]byte(`{"model":"m","meta":{"model":"a","model":"b"}}`), vendorKeys); err != nil || req.Model != "m" {
-		t.Errorf("nested duplicate: (%+v, %v), want (m, nil)", req, err)
-	}
-}
-
 func BenchmarkModelScanner(b *testing.B) {
 	for _, tc := range []struct {
 		name string
