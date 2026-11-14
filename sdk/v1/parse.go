@@ -65,6 +65,9 @@ func Parse(body []byte) (*Request, error) {
 	if err != nil {
 		return nil, fmt.Errorf("input: %w", err)
 	}
+	if len(input) == 0 {
+		return nil, fmt.Errorf("input is required")
+	}
 
 	return &Request{
 		Input:        input,

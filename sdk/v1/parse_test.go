@@ -129,10 +129,12 @@ func TestParse_Errors(t *testing.T) {
 }
 
 func TestParse_RejectsEmptyInput(t *testing.T) {
-	t.Skip(`bug: {"model":"x","input":null} and "input":[] parse into a request with no input items instead of "input is required"`)
 	for _, body := range []string{`{"model":"x","input":null}`, `{"model":"x","input":[]}`} {
-		if got, err := Parse([]byte(body)); err == nil {
+		got, err := Parse([]byte(body))
+		if got != nil || err == nil {
 			t.Errorf("Parse(%s) = %+v, want an error", body, got)
+			continue
 		}
+		wantErr(t, err, "input is required")
 	}
 }
