@@ -105,9 +105,7 @@ func TestRoute_ProviderWildcardGrantsTheProvidersModels(t *testing.T) {
 	b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 
-	if r := h.route(b.key, "acme/m1@host-a"); r.Refused != nil || len(r.Hops) == 0 {
-		t.Fatalf("acme/m1 under acme/* = %+v, want served", r.Refused)
-	}
+	wantHops(t, h.route(b.key, "acme/m1@host-a"), ids(b.a1), ids(b.a2))
 	_ = wantRefused(t, h.route(b.key, "beta/x"), CodeModelNotAllowed, limits.RungProject)
 	byModel := get[KeySlot](h, b.a1.Meta.ID).ByModel
 	if len(byModel[b.m1.Meta.ID]) != 1 || len(byModel[x.Meta.ID]) != 0 {

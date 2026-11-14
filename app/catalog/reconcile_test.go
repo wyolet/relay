@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/provider"
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 	"github.com/wyolet/relay/pkg/meta"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // catalogFromFixture returns a *Catalog loaded with the standard fixture.
@@ -118,33 +120,68 @@ func TestApply_UpsertNew(t *testing.T) {
 	}
 }
 
-func TestApply_UpsertExisting(t *testing.T) {
-	c := catalogFromFixture(t)
-	s0 := c.Current()
-
-	// Grab fixture model[0]; add a new alias and change its name.
-	var orig *model.Model
-	for _, m := range s0.modelsByID {
-		orig = m
-		break
+// Each model write re-indexes every name the model answers to, in a new snapshot: the ones taken before keep resolving what they held. Disabling a model removes it like a delete; enabling it again brings it back.
+func TestApply_ModelWritesReindexNamesCopyOnWrite(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
-
-	updated := &model.Model{
-		Meta: orig.Meta, // same ID
-		Spec: model.Spec{
-			Snapshots: orig.Spec.Snapshots,
-			Pointer:   orig.Spec.Pointer,
-		},
+	orig := models[0]
+	// The store holds a row before its write is applied: an upsert of a model the snapshot lacks re-lists it.
+	upsert := func(m *model.Model) error {
+		models[0] = m
+		return c.ApplyModelUpsert(m)
 	}
+	renamed := *orig
+	renamed.Spec.Snapshots = []model.Snapshot{{Name: "gpt-4o-2026-02-02", OriginalName: "gpt-4o-2026-02-02"}}
+	renamed.Spec.Pointer = "gpt-4o-2026-02-02"
+	off := false
+	disabled := renamed
+	disabled.Spec.Enabled = &off
 
-	if err := c.ApplyModelUpsert(updated); err != nil {
-		t.Fatalf("ApplyModelUpsert: %v", err)
+	const before, after = "gpt-4o-2025-01-01", "gpt-4o-2026-02-02"
+	refs := []string{before, after, "openai/" + after, after + "@openai-direct", "gpt-4o-mini-2025-01-01"}
+	gone := []string{"", "", "", "", "gpt-4o-mini"}
+	present := []string{"", "gpt-4o", "gpt-4o", "gpt-4o", "gpt-4o-mini"}
+	type step struct {
+		name  string
+		apply func() error
+		want  []string // the model each ref resolves to, "" for a miss
+		snap  *Snapshot
 	}
-	s := c.Current()
-
-	// Model still resolvable by its own name after upsert.
-	if got := s.ModelsByName(orig.Meta.Name); len(got) != 1 {
-		t.Errorf("model name: got %d, want 1", len(got))
+	steps := []*step{
+		{name: "as loaded", apply: func() error { return nil }, want: []string{"gpt-4o", "", "", "", "gpt-4o-mini"}},
+		{name: "snapshot renamed", apply: func() error { return upsert(&renamed) }, want: present},
+		{name: "disabled", apply: func() error { return upsert(&disabled) }, want: gone},
+		{name: "enabled again", apply: func() error { return upsert(&renamed) }, want: present},
+		{name: "deleted", apply: func() error { return c.ApplyModelDelete(orig.Meta.ID) }, want: gone},
+	}
+	for _, st := range steps {
+		if err := st.apply(); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		st.snap = c.Current()
+	}
+	// Checked after every write, so a write that reached into an earlier snapshot shows.
+	for _, st := range steps {
+		for i, ref := range refs {
+			got := ""
+			if m, _, _, ok := st.snap.ResolveSnapshot(slug.From(ref)); ok {
+				got = m.Meta.Name
+			}
+			if got != st.want[i] {
+				t.Errorf("%s: %s resolves to %q, want %q", st.name, ref, got, st.want[i])
+			}
+		}
+		_, byID := st.snap.Model(orig.Meta.ID)
+		wantModel := st.want[0] != "" || st.want[1] != ""
+		if byName := len(st.snap.ModelsByName("gpt-4o")); byID != wantModel || byName != map[bool]int{true: 1}[wantModel] {
+			t.Errorf("%s: model by id %v, %d by name; want present=%v", st.name, byID, byName, wantModel)
+		}
+	}
+	if orig.Spec.Pointer != before || len(orig.Spec.Snapshots) != 1 || orig.Spec.Snapshots[0].Name != before {
+		t.Errorf("the first snapshot's model row was modified: %+v", orig.Spec)
 	}
 }
 
@@ -285,62 +322,8 @@ func TestApply_DeleteModelKeepsThePolicy(t *testing.T) {
 	if !ok {
 		t.Fatal("policy should survive a model delete")
 	}
-	if len(got.Spec.Models) != len(pol.Spec.Models) {
-		t.Errorf("models = %v, want the grant kept as stored", got.Spec.Models)
-	}
-}
-
-func TestApply_DisableEqualsDelete(t *testing.T) {
-	c := catalogFromFixture(t)
-	s0 := c.Current()
-
-	var m *model.Model
-	for _, m2 := range s0.modelsByID {
-		m = m2
-		break
-	}
-
-	fls := false
-	disabled := &model.Model{Meta: m.Meta, Spec: m.Spec}
-	disabled.Spec.Enabled = &fls
-
-	if err := c.ApplyModelUpsert(disabled); err != nil {
-		t.Fatalf("ApplyModelUpsert (disabled): %v", err)
-	}
-
-	s := c.Current()
-	if _, ok := s.Model(m.Meta.ID); ok {
-		t.Error("disabled model should be absent (treated as delete)")
-	}
-}
-
-func TestApply_ToggleTwice(t *testing.T) {
-	c := catalogFromFixture(t)
-	s0 := c.Current()
-
-	var m *model.Model
-	for _, m2 := range s0.modelsByID {
-		m = m2
-		break
-	}
-
-	// Delete.
-	if err := c.ApplyModelDelete(m.Meta.ID); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if _, ok := c.Current().Model(m.Meta.ID); ok {
-		t.Error("should be gone after delete")
-	}
-
-	// Re-upsert — need enabled flag unset.
-	restored := &model.Model{Meta: m.Meta, Spec: m.Spec}
-	restored.Spec.Enabled = nil
-	if err := c.ApplyModelUpsert(restored); err != nil {
-		t.Fatalf("re-upsert: %v", err)
-	}
-
-	if _, ok := c.Current().Model(m.Meta.ID); !ok {
-		t.Error("model should be back after re-upsert")
+	if !slices.Equal(got.Spec.Models, pol.Spec.Models) || len(pol.Spec.Models) == 0 {
+		t.Errorf("models = %v, want the grant %v kept as stored", got.Spec.Models, pol.Spec.Models)
 	}
 }
 

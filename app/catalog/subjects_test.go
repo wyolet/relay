@@ -77,11 +77,17 @@ func newSubjectsFixture() subjectsFixture {
 	}
 }
 
-func (f subjectsFixture) catalog(t *testing.T) *Catalog {
+func (f subjectsFixture) catalog(t *testing.T) *Catalog { return f.catalogWith(t, rkList{f.k}, nil) }
+
+// catalogWith loads the fixture's tenancy with the given keys and, when users is set, that users source.
+func (f subjectsFixture) catalogWith(t *testing.T, keys rkList, users TokenVersionLister) *Catalog {
 	t.Helper()
-	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k}, rcList{}, bndList{})
+	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, keys, rcList{}, bndList{})
 	c.UseTenancy(teamList{f.team}, projList{f.project},
 		saList{f.sa, f.orphan}, grpList{f.group}, roleList{}, rbList{}, pbList{})
+	if users != nil {
+		c.UseTokenVersions(users)
+	}
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

@@ -29,13 +29,7 @@ func userKey(userID, keyHash string) *key.Key {
 func TestBuild_SubjectsByKey(t *testing.T) {
 	f := newSubjectsFixture()
 	alicesKey := userKey(f.alice, hash("b"))
-	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{},
-		rkList{f.k, alicesKey}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
-		roleList{}, rbList{}, pbList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := f.catalogWith(t, rkList{f.k, alicesKey}, nil)
 	s := c.Current()
 
 	want := []string{
@@ -58,15 +52,10 @@ func TestBuild_SubjectsByKey(t *testing.T) {
 func TestApplyGroupUpsert_ReindexesKeySubjects(t *testing.T) {
 	f := newSubjectsFixture()
 	bobsKey := userKey(f.bob, hash("c"))
-	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{},
-		rkList{bobsKey}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
-		roleList{}, rbList{}, pbList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if got := c.Current().SubjectsForKey(bobsKey.Meta.ID); len(got) != 3 {
-		t.Fatalf("bob's subjects = %v, want the group membership included", got)
+	c := f.catalogWith(t, rkList{bobsKey}, nil)
+	member := []string{"user:" + f.bob, "group:data-science", SubjectAuthenticated}
+	if got := c.Current().SubjectsForKey(bobsKey.Meta.ID); !reflect.DeepEqual(got, member) {
+		t.Fatalf("bob's subjects = %v, want %v", got, member)
 	}
 
 	dropped := *f.group
@@ -82,8 +71,8 @@ func TestApplyGroupUpsert_ReindexesKeySubjects(t *testing.T) {
 	if err := c.ApplyGroupUpsert(f.group); err != nil {
 		t.Fatalf("group re-upsert: %v", err)
 	}
-	if got := c.Current().SubjectsForKey(bobsKey.Meta.ID); len(got) != 3 {
-		t.Errorf("after re-adding subjects = %v, want the group back", got)
+	if got := c.Current().SubjectsForKey(bobsKey.Meta.ID); !reflect.DeepEqual(got, member) {
+		t.Errorf("after re-adding subjects = %v, want %v", got, member)
 	}
 }
 
@@ -98,23 +87,16 @@ func TestApplyProjectUpsert_ReindexesKeySubjects(t *testing.T) {
 	if err := c.ApplyProjectUpsert(&renamed); err != nil {
 		t.Fatalf("project upsert: %v", err)
 	}
-	want := SubjectServiceAccounts + ":ml-ranking"
-	got := c.Current().SubjectsForKey(f.k.Meta.ID)
-	if len(got) < 3 || got[2] != want {
-		t.Errorf("subjects after rename = %v, want %q among them", got, want)
+	want := []string{"serviceaccount:" + f.sa.Meta.ID, SubjectServiceAccounts, SubjectServiceAccounts + ":ml-ranking", SubjectAuthenticated}
+	if got := c.Current().SubjectsForKey(f.k.Meta.ID); !reflect.DeepEqual(got, want) {
+		t.Errorf("subjects after rename = %v, want %v", got, want)
 	}
 }
 
 func TestSnapshot_TokenVersions(t *testing.T) {
 	f := newSubjectsFixture()
 	versions := versionList{f.alice: 3}
-	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
-		roleList{}, rbList{}, pbList{})
-	c.UseTokenVersions(versions)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := f.catalogWith(t, rkList{}, versions)
 
 	if v, ok := c.Current().TokenVersion(f.alice); !ok || v != 3 {
 		t.Errorf("TokenVersion(alice) = (%d, %v), want (3, true)", v, ok)
@@ -150,13 +132,7 @@ func TestSnapshot_UserDisabled(t *testing.T) {
 	}
 
 	users := &disabledList{disabled: map[string]struct{}{f.alice: {}}}
-	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
-		roleList{}, rbList{}, pbList{})
-	c.UseTokenVersions(users)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	c := f.catalogWith(t, rkList{}, users)
 	if !c.Current().UserDisabled(f.alice) {
 		t.Error("UserDisabled(alice) after Reload = false, want true")
 	}
@@ -206,12 +182,7 @@ func (b *blockingVersionLister) TokenVersionsAndDisabled(context.Context) (map[s
 func TestReloadTokenVersions_ReadHappensUnderTheLock(t *testing.T) {
 	f := newSubjectsFixture()
 	lister := &blockingVersionLister{entered: make(chan struct{}), release: make(chan struct{})}
-	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
-		roleList{}, rbList{}, pbList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("initial reload: %v", err)
-	}
+	c := f.catalogWith(t, rkList{}, nil)
 	c.UseTokenVersions(lister)
 
 	reloadDone := make(chan error, 1)
