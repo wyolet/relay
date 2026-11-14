@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/wyolet/relay/secret/aead"
@@ -54,8 +55,10 @@ func TestIDGolden(t *testing.T) {
 }
 
 func TestNewCopiesAndChecksKey(t *testing.T) {
-	if _, err := New(make([]byte, 31)); err == nil {
-		t.Fatal("short key accepted")
+	for _, n := range []int{0, 16, 31, 33} {
+		if k, err := New(make([]byte, n)); err == nil || err.Error() != fmt.Sprintf("local: key must be 32 bytes, got %d", n) || k != nil {
+			t.Fatalf("New(%d bytes) = %v, %v", n, k, err)
+		}
 	}
 	key := bytes.Repeat([]byte{7}, 32)
 	k := mustNew(t, key)
@@ -64,8 +67,8 @@ func TestNewCopiesAndChecksKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	key[0] ^= 0xff
-	if _, err := k.Unwrap(context.Background(), wrapped, nil); err != nil {
-		t.Fatalf("Unwrap after caller mutated key: %v", err)
+	if got, err := k.Unwrap(context.Background(), wrapped, nil); err != nil || string(got) != "dek" {
+		t.Fatalf("Unwrap after caller mutated key: %q, %v", got, err)
 	}
 }
 
@@ -110,13 +113,13 @@ func TestUnwrapAADBinding(t *testing.T) {
 		"empty scope": id1,
 		"nil":         nil,
 	} {
-		if _, err := k.Unwrap(ctx, wrapped, aad); !errors.Is(err, aead.ErrAuthFailed) {
-			t.Fatalf("%s: err = %v, want ErrAuthFailed", name, err)
+		if got, err := k.Unwrap(ctx, wrapped, aad); err != aead.ErrAuthFailed || got != nil {
+			t.Fatalf("%s: Unwrap = %x, %v; want ErrAuthFailed", name, got, err)
 		}
 	}
 }
 
-func TestUnwrapWrongKEK(t *testing.T) {
+func TestUnwrapRejects(t *testing.T) {
 	ctx := context.Background()
 	a := mustNew(t, bytes.Repeat([]byte{1}, 32))
 	b := mustNew(t, bytes.Repeat([]byte{2}, 32))
@@ -124,11 +127,34 @@ func TestUnwrapWrongKEK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Unwrap(ctx, wrapped, nil); !errors.Is(err, ErrWrongKEK) {
-		t.Fatalf("err = %v, want ErrWrongKEK", err)
-	}
-	if _, err := a.Unwrap(ctx, []byte("not sealed"), nil); !errors.Is(err, aead.ErrNotSealed) {
-		t.Fatalf("err = %v, want ErrNotSealed", err)
+	// b's id written over a's: the right KEK is named, but its key never sealed this.
+	relabelled := bytes.Clone(wrapped)
+	bID := b.ID()
+	copy(relabelled[5:21], bID[:])
+	flipped := bytes.Clone(wrapped)
+	flipped[len(flipped)-1] ^= 1
+	otherVersion := bytes.Clone(wrapped)
+	otherVersion[4] = 2
+
+	for _, tc := range []struct {
+		name string
+		k    *KEK
+		in   []byte
+		want error
+	}{
+		{"another KEK's value", b, wrapped, ErrWrongKEK},
+		{"relabelled to this KEK", b, relabelled, aead.ErrAuthFailed},
+		{"relabelled away from its KEK", a, relabelled, ErrWrongKEK},
+		{"tag bit flipped", a, flipped, aead.ErrAuthFailed},
+		{"truncated", a, wrapped[:len(wrapped)-1], aead.ErrAuthFailed},
+		{"header only", a, wrapped[:21], aead.ErrNotSealed},
+		{"unknown version", a, otherVersion, aead.ErrUnsupportedVersion},
+		{"not sealed", a, []byte("not sealed"), aead.ErrNotSealed},
+		{"empty", a, nil, aead.ErrNotSealed},
+	} {
+		if got, err := tc.k.Unwrap(ctx, tc.in, nil); err != tc.want || got != nil {
+			t.Errorf("%s: Unwrap = %x, %v; want %v", tc.name, got, err, tc.want)
+		}
 	}
 }
 

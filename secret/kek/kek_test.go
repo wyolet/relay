@@ -2,6 +2,7 @@ package kek_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/wyolet/relay/secret/kek"
@@ -41,13 +42,15 @@ func TestNewSet(t *testing.T) {
 
 func TestNewSetRefuses(t *testing.T) {
 	a := newLocal(t, 1)
-	if _, err := kek.NewSet(); err == nil {
-		t.Fatal("empty set accepted")
-	}
-	if _, err := kek.NewSet(a, newLocal(t, 1)); err == nil {
-		t.Fatal("duplicate id accepted")
-	}
-	if _, err := kek.NewSet(a, nil); err == nil {
-		t.Fatal("nil KEK accepted")
+	id := a.ID()
+	for want, keks := range map[string][]kek.KEK{
+		"kek: empty set":    nil,
+		"kek: KEK 1 is nil": {a, nil},
+		"kek: KEK 0 is nil": {nil},
+		"kek: duplicate KEK id " + hex.EncodeToString(id[:]): {a, newLocal(t, 2), newLocal(t, 1)},
+	} {
+		if s, err := kek.NewSet(keks...); err == nil || err.Error() != want || s != nil {
+			t.Errorf("NewSet = %v, %v; want %q", s, err, want)
+		}
 	}
 }

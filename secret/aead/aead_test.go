@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -42,13 +43,10 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOverheadIs61(t *testing.T) {
+func TestSealLayout(t *testing.T) {
 	if overhead != 61 {
 		t.Fatalf("overhead = %d, want 61", overhead)
 	}
-}
-
-func TestSealLayout(t *testing.T) {
 	sealed := mustSeal(t, []byte("hello"), nil)
 	if !bytes.Equal(sealed[:5], []byte{0x00, 'W', 'S', 'K', 0x01}) {
 		t.Fatalf("header prefix = %x", sealed[:5])
@@ -59,13 +57,6 @@ func TestSealLayout(t *testing.T) {
 	again := mustSeal(t, []byte("hello"), nil)
 	if bytes.Equal(sealed[21:45], again[21:45]) {
 		t.Fatal("two seals reused a nonce")
-	}
-}
-
-func TestNilAndEmptyAADAreEqual(t *testing.T) {
-	sealed := mustSeal(t, []byte("x"), nil)
-	if _, err := Open(testKey, sealed, []byte{}); err != nil {
-		t.Fatalf("Open with empty aad: %v", err)
 	}
 }
 
@@ -97,39 +88,47 @@ func TestFlippedByteFails(t *testing.T) {
 	}
 }
 
-func TestWrongAADFails(t *testing.T) {
+func TestOpen_AAD(t *testing.T) {
 	sealed := mustSeal(t, []byte("v"), []byte("row-1"))
-	for _, aad := range [][]byte{nil, []byte("row-2"), []byte("row-1 "), []byte("row-")} {
-		if _, err := Open(testKey, sealed, aad); !errors.Is(err, ErrAuthFailed) {
-			t.Fatalf("aad %q: err = %v, want ErrAuthFailed", aad, err)
+	for _, aad := range [][]byte{nil, {}, []byte("row-2"), []byte("row-1 "), []byte("row-"), []byte("ROW-1")} {
+		if got, err := Open(testKey, sealed, aad); err != ErrAuthFailed || got != nil {
+			t.Errorf("aad %q: Open = %q, %v; want ErrAuthFailed", aad, got, err)
+		}
+	}
+	// A header byte moved into the aad keeps the concatenation but not the header.
+	if _, err := Open(testKey, sealed[1:], append([]byte{sealed[0]}, "row-1"...)); err != ErrNotSealed {
+		t.Errorf("shifted header: err = %v, want ErrNotSealed", err)
+	}
+
+	noAAD := mustSeal(t, []byte("x"), nil)
+	for _, aad := range [][]byte{nil, {}} {
+		if got, err := Open(testKey, noAAD, aad); err != nil || string(got) != "x" {
+			t.Errorf("sealed without aad, opened with %#v: %q, %v", aad, got, err)
 		}
 	}
 }
 
-// The key id is authenticated: a header rewritten to name another key must not open.
-func TestRewrittenKeyIDFails(t *testing.T) {
+func TestOpen_WrongKey(t *testing.T) {
 	sealed := mustSeal(t, []byte("v"), nil)
-	sealed[5+keyIDSize-1] ^= 0xff
-	if _, err := Open(testKey, sealed, nil); !errors.Is(err, ErrAuthFailed) {
-		t.Fatalf("err = %v, want ErrAuthFailed", err)
-	}
-}
-
-func TestWrongKeyFails(t *testing.T) {
-	sealed := mustSeal(t, []byte("v"), nil)
-	other := bytes.Repeat([]byte{0x99}, KeySize)
-	if _, err := Open(other, sealed, nil); !errors.Is(err, ErrAuthFailed) {
-		t.Fatalf("err = %v, want ErrAuthFailed", err)
+	other := bytes.Clone(testKey)
+	other[KeySize-1] ^= 1
+	if got, err := Open(other, sealed, nil); err != ErrAuthFailed || got != nil {
+		t.Fatalf("Open = %q, %v; want ErrAuthFailed", got, err)
 	}
 }
 
 func TestBadKeyLength(t *testing.T) {
-	for _, n := range []int{0, 16, 31, 33} {
-		if _, err := Seal(make([]byte, n), testKeyID, []byte("v"), nil); err == nil {
-			t.Fatalf("Seal with %d-byte key: want error", n)
+	sealed := mustSeal(t, []byte("v"), nil)
+	for _, n := range []int{0, 16, 24, 31, 33, 64} {
+		want := fmt.Sprintf("aead: key must be 32 bytes, got %d", n)
+		if _, err := Seal(make([]byte, n), testKeyID, []byte("v"), nil); err == nil || err.Error() != want {
+			t.Errorf("Seal with %d-byte key: %v", n, err)
 		}
-		if _, err := Open(make([]byte, n), mustSeal(t, []byte("v"), nil), nil); err == nil {
-			t.Fatalf("Open with %d-byte key: want error", n)
+		if _, err := Open(make([]byte, n), sealed, nil); err == nil || err.Error() != want {
+			t.Errorf("Open with %d-byte key: %v", n, err)
+		}
+		if _, err := OpenLegacy(make([]byte, n), sealed, make([]byte, legacyNonceSize)); err == nil || err.Error() != want {
+			t.Errorf("OpenLegacy with %d-byte key: %v", n, err)
 		}
 	}
 }
@@ -153,9 +152,17 @@ func TestUnknownVersionFails(t *testing.T) {
 func TestTruncatedFails(t *testing.T) {
 	sealed := mustSeal(t, []byte("a secret value"), nil)
 	for n := 0; n < len(sealed); n++ {
-		if _, err := Open(testKey, sealed[:n], nil); err == nil {
-			t.Fatalf("Open of %d/%d bytes succeeded", n, len(sealed))
+		want := ErrAuthFailed
+		if n < overhead {
+			want = ErrNotSealed
 		}
+		if got, err := Open(testKey, sealed[:n], nil); err != want || got != nil {
+			t.Fatalf("Open of %d/%d bytes = %q, %v; want %v", n, len(sealed), got, err, want)
+		}
+	}
+	// A value sealed twice over is not opened by trailing bytes either.
+	if _, err := Open(testKey, append(bytes.Clone(sealed), 0), nil); err != ErrAuthFailed {
+		t.Fatalf("Open with a trailing byte: %v, want ErrAuthFailed", err)
 	}
 }
 
@@ -195,16 +202,16 @@ func TestKeyID(t *testing.T) {
 }
 
 func TestParseKey(t *testing.T) {
-	bad := []string{
-		"",
-		"!!!notbase64!!!",
-		base64.StdEncoding.EncodeToString(make([]byte, 31)),
-		base64.StdEncoding.EncodeToString(make([]byte, 33)),
-		base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
-	}
-	for _, s := range bad {
-		if _, err := ParseKey(s); err == nil {
-			t.Errorf("ParseKey(%q): want error", s)
+	for s, want := range map[string]string{
+		"":                "aead: key is empty",
+		"!!!notbase64!!!": "aead: base64 decode key: illegal base64 data at input byte 0",
+		base64.StdEncoding.EncodeToString(make([]byte, 31)):               "aead: key must decode to 32 bytes, got 31",
+		base64.StdEncoding.EncodeToString(make([]byte, 33)):               "aead: key must decode to 32 bytes, got 33",
+		base64.RawStdEncoding.EncodeToString(make([]byte, 32)):            "aead: base64 decode key: illegal base64 data at input byte 40",
+		base64.URLEncoding.EncodeToString(bytes.Repeat([]byte{0xff}, 32)): "aead: base64 decode key: illegal base64 data at input byte 0",
+	} {
+		if got, err := ParseKey(s); err == nil || err.Error() != want || got != nil {
+			t.Errorf("ParseKey(%q) = %x, %v; want %q", s, got, err, want)
 		}
 	}
 	want := bytes.Repeat([]byte{7}, KeySize)

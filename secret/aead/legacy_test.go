@@ -3,7 +3,6 @@ package aead
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -95,21 +94,30 @@ func TestOpenLegacyRejects(t *testing.T) {
 	v := readLegacyVectors(t)[2]
 	key := legacyTestKey()
 
-	tampered := bytes.Clone(v.ciphertext)
-	tampered[0] ^= 0xff
-	if _, err := OpenLegacy(key, tampered, v.nonce); !errors.Is(err, ErrAuthFailed) {
-		t.Fatalf("tampered: err = %v, want ErrAuthFailed", err)
+	flip := func(b []byte, i int) []byte {
+		out := bytes.Clone(b)
+		out[i] ^= 1
+		return out
 	}
-	if _, err := OpenLegacy(bytes.Repeat([]byte{0x99}, KeySize), v.ciphertext, v.nonce); !errors.Is(err, ErrAuthFailed) {
-		t.Fatalf("wrong key: err = %v, want ErrAuthFailed", err)
-	}
-	if _, err := OpenLegacy(key[:16], v.ciphertext, v.nonce); err == nil {
-		t.Fatal("16-byte key: want error")
-	}
-	if _, err := OpenLegacy(key, v.ciphertext, v.nonce[:11]); err == nil {
-		t.Fatal("11-byte nonce: want error")
-	}
-	if _, err := OpenLegacy(key, v.ciphertext[:10], v.nonce); err == nil {
-		t.Fatal("ciphertext shorter than the tag: want error")
+	for _, tc := range []struct {
+		name                   string
+		key, ciphertext, nonce []byte
+		want                   string
+	}{
+		{"first ciphertext bit flipped", key, flip(v.ciphertext, 0), v.nonce, ErrAuthFailed.Error()},
+		{"last tag bit flipped", key, flip(v.ciphertext, len(v.ciphertext)-1), v.nonce, ErrAuthFailed.Error()},
+		{"nonce bit flipped", key, v.ciphertext, flip(v.nonce, 0), ErrAuthFailed.Error()},
+		{"wrong key", flip(key, KeySize-1), v.ciphertext, v.nonce, ErrAuthFailed.Error()},
+		{"tag truncated", key, v.ciphertext[:len(v.ciphertext)-1], v.nonce, ErrAuthFailed.Error()},
+		{"shorter than the tag", key, v.ciphertext[:10], v.nonce, ErrAuthFailed.Error()},
+		{"empty ciphertext", key, nil, v.nonce, ErrAuthFailed.Error()},
+		{"16-byte key", key[:16], v.ciphertext, v.nonce, "aead: key must be 32 bytes, got 16"},
+		{"11-byte nonce", key, v.ciphertext, v.nonce[:11], "aead: nonce must be 12 bytes, got 11"},
+		{"24-byte nonce", key, v.ciphertext, make([]byte, nonceSize), "aead: nonce must be 12 bytes, got 24"},
+	} {
+		got, err := OpenLegacy(tc.key, tc.ciphertext, tc.nonce)
+		if err == nil || err.Error() != tc.want || got != nil {
+			t.Errorf("%s: OpenLegacy = %q, %v; want %q", tc.name, got, err, tc.want)
+		}
 	}
 }

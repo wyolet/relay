@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/secret/aead"
+	"github.com/wyolet/relay/secret/kek"
 	"github.com/wyolet/relay/secret/keyring"
 	"github.com/wyolet/relay/secret/keyring/memstore"
 )
@@ -206,14 +207,22 @@ func TestRun(t *testing.T) {
 
 func TestNew(t *testing.T) {
 	set := newSet(t, newKEK(t, 1))
-	if _, err := keyring.New(ctx, nil, set, keyring.Options{}); err == nil {
-		t.Fatal("nil store accepted")
-	}
-	if _, err := keyring.New(ctx, memstore.New(), nil, keyring.Options{}); err == nil {
-		t.Fatal("nil set accepted")
-	}
-	if _, err := keyring.New(ctx, memstore.New(), set, keyring.Options{DestroyAfter: -time.Second}); err == nil {
-		t.Fatal("negative duration accepted")
+	const nilArg, negative = "keyring: nil store or KEK set", "keyring: negative duration in options"
+	for _, tc := range []struct {
+		st   keyring.Store
+		set  *kek.Set
+		opts keyring.Options
+		want string
+	}{
+		{nil, set, keyring.Options{}, nilArg},
+		{memstore.New(), nil, keyring.Options{}, nilArg},
+		{memstore.New(), set, keyring.Options{DestroyAfter: -1}, negative},
+		{memstore.New(), set, keyring.Options{RefreshInterval: -1}, negative},
+		{memstore.New(), set, keyring.Options{UnknownKeyTTL: -1}, negative},
+	} {
+		if r, err := keyring.New(ctx, tc.st, tc.set, tc.opts); err == nil || err.Error() != tc.want || r != nil {
+			t.Errorf("New(%+v) = %v, %v; want %q", tc.opts, r, err, tc.want)
+		}
 	}
 	boom := errors.New("down")
 	cs := &counting{Store: memstore.New()}
