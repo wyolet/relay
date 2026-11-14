@@ -72,7 +72,6 @@ func TestMakeMasterKey(t *testing.T) {
 	})
 
 	t.Run("argon2id", func(t *testing.T) {
-		t.Skip("bug: Argon2id account → master key derived with the email itself as salt; Bitwarden salts Argon2id with SHA-256(email), so the derived key opens nothing")
 		hashed := sha256.Sum256([]byte(salt))
 		for _, tc := range []struct {
 			name     string
@@ -90,11 +89,13 @@ func TestMakeMasterKey(t *testing.T) {
 	})
 
 	t.Run("argon2id settings the library refuses", func(t *testing.T) {
-		t.Skip(`bug: prelogin reply {"kdf":1,"kdfIterations":0} (or kdfParallelism 0) → argon2 panics in the sync goroutine and takes the process down; want an error`)
-		zero := 0
+		zero, lanes256, negative, huge := 0, 256, -1, 1<<20
 		for name, call := range map[string]func() ([]byte, error){
-			"no iterations": func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 0, &mem, &par) },
-			"no lanes":      func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 3, &mem, &zero) },
+			"no iterations":   func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 0, &mem, &par) },
+			"no lanes":        func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 3, &mem, &zero) },
+			"256 lanes":       func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 3, &mem, &lanes256) },
+			"negative memory": func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 3, &negative, &par) },
+			"1 TiB of memory": func() ([]byte, error) { return makeMasterKey("p", email, kdfArgon2id, 3, &huge, &par) },
 		} {
 			func() {
 				defer func() {

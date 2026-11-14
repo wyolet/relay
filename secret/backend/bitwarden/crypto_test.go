@@ -170,7 +170,6 @@ func TestCipherString_Decrypt(t *testing.T) {
 	}
 
 	t.Run("type 2 relabelled as type 0", func(t *testing.T) {
-		t.Skip("bug: a type-2 cipher string with its MAC cut off and its type rewritten to 0 → decrypts under a key that has a MAC key, so a tampered vault value is accepted unauthenticated")
 		cs := with(func(cs *cipherString) { cs.typ, cs.mac = encTypeAesCbc256B64, nil; cs.iv[0] ^= 1 })
 		if got, err := cs.decrypt(key); err == nil {
 			t.Errorf("decrypt = %q, want an error: the key carries a MAC key and the value carries no MAC", got)
