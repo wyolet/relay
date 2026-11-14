@@ -425,20 +425,13 @@ func chatSpan(spanID byte, modelName string) *tracepb.Span {
 	return pbSpan(spanID, chatAttrs(modelName)...)
 }
 
-func TestExportRecordsAPricedUsageEvent(t *testing.T) {
-	fx := newFixture(t)
-	rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", rec.Code, rec.Body)
-	}
-	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != otlp.MediaTypeProtobuf {
-		t.Errorf("success response = %q (%s), want the empty protobuf message", rec.Body, rec.Header().Get("Content-Type"))
-	}
-	traceID, spanID := strings.Repeat("ab", 16), strings.Repeat("01", 8)
+// chatRow is the usage event chatSpan(spanID, "acme-large") is recorded as.
+func (fx *fixture) chatRow(spanID byte) usagelog.Event {
+	traceID, spanHex := strings.Repeat("ab", 16), hex.EncodeToString(bytes.Repeat([]byte{spanID}, 8))
 	// 100×$3 + 300×$15 + 700×$0.30 + 200×$3.75 per million, in nano-USD, at the provider's own host rather than the reseller's.
 	cost := int64(5_760_000)
-	want := usagelog.Event{
-		RequestID: "otlp-" + traceID + "-" + spanID, Source: "otlp", Timestamp: spanStart, Status: 200, DurationMs: 2000,
+	return usagelog.Event{
+		RequestID: "otlp-" + traceID + "-" + spanHex, Source: "otlp", Timestamp: spanStart, Status: 200, DurationMs: 2000,
 		// Attribution is the authenticated reporter's, never anything the export claims.
 		ProjectID: fx.project.Meta.ID, Project: "ml-search", TeamID: fx.team.Meta.ID, Team: "platform",
 		PrincipalKind: "serviceaccount", PrincipalID: fx.sa.Meta.ID, Principal: "indexer",
@@ -450,12 +443,23 @@ func TestExportRecordsAPricedUsageEvent(t *testing.T) {
 		Pricing: "acme-large-list", CostNanos: &cost,
 		CostBreakdown: map[string]int64{"tokens.input": 300_000, "tokens.output": 4_500_000, "tokens.cache_read": 210_000, "tokens.cache_creation": 750_000},
 		Extras: map[string]string{
-			"telemetry_convention": "gen_ai", "trace_id": traceID, "span_id": spanID,
+			"telemetry_convention": "gen_ai", "trace_id": traceID, "span_id": spanHex,
 			"response_id": "resp_123", "session_id": "conv_9", "service": "billing-agent", "operation": "chat",
 			"reported_provider": "acme", "instance": "pod-a", "client_ip": "192.0.2.1",
 		},
 	}
-	if diff := cmp.Diff([]usagelog.Event{want}, fx.events); diff != "" {
+}
+
+func TestExportRecordsAPricedUsageEvent(t *testing.T) {
+	fx := newFixture(t)
+	rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body)
+	}
+	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != otlp.MediaTypeProtobuf {
+		t.Errorf("success response = %q (%s), want the empty protobuf message", rec.Body, rec.Header().Get("Content-Type"))
+	}
+	if diff := cmp.Diff([]usagelog.Event{fx.chatRow(1)}, fx.events); diff != "" {
 		t.Fatalf("recorded events (-want +got):\n%s", diff)
 	}
 }
@@ -498,16 +502,8 @@ func TestExportKeepsOnlyModelCalls(t *testing.T) {
 	if len(fx.events) != 1 || fx.events[0].Extras["span_id"] != strings.Repeat("01", 8) {
 		t.Fatalf("events = %+v, want only the chat span", fx.events)
 	}
-	var resp struct {
-		PartialSuccess struct {
-			RejectedSpans string `json:"rejectedSpans"`
-		} `json:"partialSuccess"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("response %q: %v", rec.Body, err)
-	}
-	if resp.PartialSuccess.RejectedSpans != "1" {
-		t.Errorf("rejectedSpans = %q, want 1 (the model call without a span id)", resp.PartialSuccess.RejectedSpans)
+	if got, want := rec.Body.String(), `{"partialSuccess":{"errorMessage":"model-call spans rejected: 1 without a trace id or span id","rejectedSpans":"1"}}`; got != want {
+		t.Errorf("body:\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -534,11 +530,7 @@ func mustJSON(t *testing.T, spans ...*tracepb.Span) []byte {
 			"attributes":        attrs,
 		})
 	}
-	b, err := json.Marshal(kv{"resourceSpans": []kv{{"scopeSpans": []kv{{"spans": out}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return must(json.Marshal(kv{"resourceSpans": []kv{{"scopeSpans": []kv{{"spans": out}}}}}))(t)
 }
 
 func TestExportAcceptsGzip(t *testing.T) {
@@ -575,11 +567,14 @@ func TestExportRefusals(t *testing.T) {
 		{"unsupported encoding", false, otlp.MediaTypeJSON, good, []string{"Content-Encoding", "br"}, http.StatusUnsupportedMediaType, `{"code":3,"message":"Content-Encoding must be gzip or identity"}`},
 		{"gzip encoding over a plain body", false, otlp.MediaTypeJSON, good, []string{"Content-Encoding", "gzip"}, http.StatusBadRequest, `{"code":3,"message":"could not read the export body"}`},
 	} {
-		fx := newFixture(t)
-		fx.enabled = !tc.disabled
-		rec := fx.post(t, tc.contentType, tc.body, tc.header...)
-		if got := rec.Body.String(); rec.Code != tc.wantStatus || got != tc.wantBody || len(fx.events) != 0 {
-			t.Errorf("%s: status %d, %d events, want %d and none; body:\n got %q\nwant %s", tc.name, rec.Code, len(fx.events), tc.wantStatus, got, tc.wantBody)
+		// Both signals refuse alike: nothing here depends on what the body reports.
+		for _, path := range []string{otlpreceiver.TracesPath, otlpreceiver.LogsPath} {
+			fx := newFixture(t)
+			fx.enabled = !tc.disabled
+			rec := fx.postTo(t, path, tc.contentType, tc.body, tc.header...)
+			if got := rec.Body.String(); rec.Code != tc.wantStatus || got != tc.wantBody || len(fx.events) != 0 {
+				t.Errorf("%s at %s: status %d, %d events, want %d and none; body:\n got %q\nwant %s", tc.name, path, rec.Code, len(fx.events), tc.wantStatus, got, tc.wantBody)
+			}
 		}
 	}
 }
@@ -610,47 +605,27 @@ func TestFailedCallIsALogOnlyRow(t *testing.T) {
 	}
 }
 
-func TestACallThatSucceededHasNoErrorKind(t *testing.T) {
-	fx := newFixture(t)
-	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large"))); rec.Code != http.StatusOK || len(fx.events) != 1 {
-		t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
-	}
-	if ev := fx.events[0]; ev.ErrorKind != "" || ev.Status != 200 {
-		t.Errorf("event = status %d kind %q", ev.Status, ev.ErrorKind)
-	}
-	if _, ok := fx.events[0].Extras["reported_error_type"]; ok {
-		t.Errorf("extras = %v, want no reported error type", fx.events[0].Extras)
-	}
-}
-
 func TestACredentialUnderADisabledPolicyMayNotReport(t *testing.T) {
 	yes := true
 	fx := newFixtureWith(t, fixtureOptions{policyCaptures: &yes, policyDisabled: true})
 	fx.captureContent, fx.payloads.enabled = true, true
+	refusal := `{"error":{"type":"invalid_request_error","code":"policy_disabled","refusal":"model_not_allowed","message":"policy_disabled: policy indexer-policy is disabled (lane rung account:` + fx.keyRow.Spec.AccountID
 	for path, body := range map[string][]byte{
 		otlpreceiver.TracesPath: export(t, pbSpan(1, contentAttrs(t, asText)...)),
 		otlpreceiver.LogsPath:   logsExport(t, chatEvent(2, "acme-large")),
 	} {
 		rec := fx.postTo(t, path, otlp.MediaTypeProtobuf, body)
-		var refusal struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
-			t.Fatalf("%s: body %q: %v", path, rec.Body, err)
-		}
-		// The answer inference gives the same credential.
-		if rec.Code != http.StatusForbidden || refusal.Error.Code != "policy_disabled" {
-			t.Errorf("%s: status = %d code = %q, want 403 policy_disabled", path, rec.Code, refusal.Error.Code)
+		// The answer inference gives the same credential, up to the id of the policy.
+		if got, _, _ := strings.Cut(rec.Body.String(), ", policy "); rec.Code != http.StatusForbidden || got != refusal {
+			t.Errorf("%s: status = %d, want 403; body:\n got %s\nwant %s", path, rec.Code, got, refusal)
 		}
 	}
 	if len(fx.events) != 0 || len(fx.payloads.records) != 0 {
 		t.Errorf("recorded %d events and %d payloads from a credential that may not report", len(fx.events), len(fx.payloads.records))
 	}
 	// Refused before the body is read: a body that cannot be decoded gets the same answer.
-	if rec := fx.post(t, otlp.MediaTypeProtobuf, []byte("not an export")); rec.Code != http.StatusForbidden {
-		t.Errorf("undecodable body: status = %d, want 403", rec.Code)
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, []byte("not an export")); rec.Code != http.StatusForbidden || !strings.HasPrefix(rec.Body.String(), refusal) {
+		t.Errorf("undecodable body: status = %d body = %s, want 403 and the same refusal", rec.Code, rec.Body)
 	}
 	// Another key of the same project, under no policy, still reports.
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(3, "acme-large")), "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK || len(fx.events) != 1 {
@@ -661,30 +636,35 @@ func TestACredentialUnderADisabledPolicyMayNotReport(t *testing.T) {
 // A credential whose lane inference refuses may not report: the same check, the same answer, nothing recorded.
 func TestACredentialInARefusedLaneMayNotReport(t *testing.T) {
 	for name, tc := range map[string]struct {
-		o          fixtureOptions
-		status     int
-		code, body string
+		o       fixtureOptions
+		status  int
+		code    string
+		message func(fx *fixture) string
 	}{
-		"closed account":              {fixtureOptions{laneClosed: true}, http.StatusForbidden, "account_closed", ""},
-		"account the key may not use": {fixtureOptions{keyInSiblingAccount: true}, http.StatusForbidden, "account_not_held", ""},
-		"disabled team":               {fixtureOptions{teamDisabled: true}, http.StatusForbidden, "subject_disabled", ""},
-		"disabled project":            {fixtureOptions{projectDisabled: true}, http.StatusForbidden, "subject_disabled", ""},
-		"disabled service account":    {fixtureOptions{saDisabled: true}, http.StatusUnauthorized, "unauthenticated", "api key disabled"},
+		"closed account": {fixtureOptions{laneClosed: true}, http.StatusForbidden, "account_closed", func(fx *fixture) string {
+			return "account_closed: account sa-indexer is closed: the membership it stood for has ended (lane rung account:" + fx.keyRow.Spec.AccountID + ", policy )"
+		}},
+		"account the key may not use": {fixtureOptions{keyInSiblingAccount: true}, http.StatusForbidden, "account_not_held", func(fx *fixture) string {
+			return "account_not_held: account sa-crawler does not take keys of serviceaccount:" + fx.sa.Meta.ID + " (lane rung account:" + fx.siblingAccount.Meta.ID + ", policy )"
+		}},
+		"disabled team": {fixtureOptions{teamDisabled: true}, http.StatusForbidden, "subject_disabled", func(*fixture) string {
+			return "subject_disabled: team platform is disabled (team rung , policy )"
+		}},
+		"disabled project": {fixtureOptions{projectDisabled: true}, http.StatusForbidden, "subject_disabled", func(*fixture) string {
+			return "subject_disabled: project ml-search is disabled (project rung , policy )"
+		}},
+		"disabled service account": {fixtureOptions{saDisabled: true}, http.StatusUnauthorized, "unauthenticated", func(*fixture) string { return "api key disabled" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fx := newFixtureWith(t, tc.o)
 			rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
-			var refusal struct {
-				Error struct{ Code, Message string } `json:"error"`
+			refusal := `"refusal":"model_not_allowed",`
+			if tc.status == http.StatusUnauthorized {
+				refusal = ""
 			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
-				t.Fatalf("body %q: %v", rec.Body, err)
-			}
-			if rec.Code != tc.status || refusal.Error.Code != tc.code || (tc.body != "" && refusal.Error.Message != tc.body) {
-				t.Errorf("status = %d error = %+v, want %d %s", rec.Code, refusal.Error, tc.status, tc.code)
-			}
-			if len(fx.events) != 0 {
-				t.Errorf("recorded %d events from a refused lane", len(fx.events))
+			want := `{"error":{"type":"invalid_request_error","code":"` + tc.code + `",` + refusal + `"message":"` + tc.message(fx) + `"}}`
+			if got := rec.Body.String(); rec.Code != tc.status || got != want || len(fx.events) != 0 {
+				t.Errorf("status = %d, %d events, want %d and none; body:\n got %s\nwant %s", rec.Code, len(fx.events), tc.status, got, want)
 			}
 		})
 	}
@@ -927,17 +907,8 @@ func TestStartTimes(t *testing.T) {
 	if got, want := fx.spanIDs(), spanIDsOf(2, 3, 4); !slices.Equal(got, want) {
 		t.Fatalf("recorded spans = %v, want %v", got, want)
 	}
-	var resp struct {
-		PartialSuccess struct {
-			RejectedSpans string `json:"rejectedSpans"`
-			ErrorMessage  string `json:"errorMessage"`
-		} `json:"partialSuccess"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("response %q: %v", rec.Body, err)
-	}
-	if got, want := resp.PartialSuccess.RejectedSpans+" "+resp.PartialSuccess.ErrorMessage, "1 model-call spans rejected: 1 starting more than 5 minutes in the future"; got != want {
-		t.Errorf("partial success = %q, want %q", got, want)
+	if got, want := rec.Body.String(), `{"partialSuccess":{"errorMessage":"model-call spans rejected: 1 starting more than 5 minutes in the future","rejectedSpans":"1"}}`; got != want {
+		t.Errorf("body:\n got %s\nwant %s", got, want)
 	}
 	i := slices.IndexFunc(fx.events, func(ev usagelog.Event) bool { return ev.Extras["span_id"] == spanIDsOf(4)[0] })
 	if ts := fx.events[i].Timestamp; ts.Before(before) || ts.After(time.Now()) {
@@ -1149,56 +1120,56 @@ func TestDisabledExportRateLimitRowAppliesNoLimit(t *testing.T) {
 	}
 }
 
-func TestProviderHints(t *testing.T) {
-	reported := func(provider, modelName string) *tracepb.Span {
-		return pbSpan(1,
-			str("gen_ai.operation.name", "chat"),
-			str("gen_ai.provider.name", provider),
-			str("gen_ai.request.model", modelName),
-			num("gen_ai.usage.input_tokens", 1000),
-			num("gen_ai.usage.output_tokens", 300),
-		)
+// The reported provider name, through its hint, and the reported host pick the model and the rate sheet a call is priced at.
+func TestReportedProviderAndHostResolveTheModelAndItsPrice(t *testing.T) {
+	type resolved struct {
+		Model, Provider, Pricing string
+		Cost                     int64
 	}
-	record := func(t *testing.T, fx *fixture, provider, modelName string) usagelog.Event {
-		t.Helper()
-		rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, reported(provider, modelName)))
-		if rec.Code != http.StatusOK || len(fx.events) != 1 {
-			t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-		return fx.events[0]
+	// 1000 in and 300 out: $3 + $15 per million at the provider's own host, $30 + $150 at the reseller.
+	ownList, reseller := resolved{"acme-large", "acme", "acme-large-list", 7_500_000}, resolved{"acme-large", "acme", "reseller-markup", 75_000_000}
+	for _, tc := range []struct {
+		name                  string
+		provider, model, host string
+		want                  resolved
+	}{
+		{"the hinted host prices the call", "ACME.cloud", "acme-large", "", reseller},
+		{"a provider without a hint resolves as reported", "nobody", "acme-large", "", ownList},
+		{"the reported host prices the call", "acme", "acme-large", "a-reseller", reseller},
+		{"the reported host goes before the hinted one", "acme.cloud", "acme-large", "acme", ownList},
+		{"an unknown host falls back to the provider's own", "acme", "acme-large", "no-such-host", ownList},
+		{"an unknown host falls back to the hinted one", "acme.cloud", "acme-large", "no-such-host", reseller},
+		{"the hinted provider picks between models that share a name", "zeta_ai", "shared", "", resolved{Model: "zeta-shared", Provider: "zeta"}},
+		{"the other hinted provider", "acme.cloud", "shared", "", resolved{Model: "acme-shared", Provider: "acme"}},
+		{"a provider's own name", "zeta", "shared", "", resolved{Model: "zeta-shared", Provider: "zeta"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			attrs := []*commonpb.KeyValue{
+				str("gen_ai.operation.name", "chat"), str("gen_ai.provider.name", tc.provider), str("gen_ai.request.model", tc.model),
+				num("gen_ai.usage.input_tokens", 1000), num("gen_ai.usage.output_tokens", 300),
+			}
+			if tc.host != "" {
+				attrs = append(attrs, str("wyolet.relay.host", tc.host))
+			}
+			if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, attrs...))); rec.Code != http.StatusOK || len(fx.events) != 1 {
+				t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
+			}
+			ev := fx.events[0]
+			got := resolved{Model: ev.Model, Provider: ev.Provider, Pricing: ev.Pricing}
+			if ev.CostNanos != nil {
+				got.Cost = *ev.CostNanos
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("resolved (-want +got):\n%s", diff)
+			}
+			wantID := map[string]string{"acme-large": fx.model.Meta.ID, "zeta-shared": fx.sharedZeta.Meta.ID, "acme-shared": fx.sharedAcme.Meta.ID}[tc.want.Model]
+			// The name the client sent is kept beside what it resolved to.
+			if ev.ModelID != wantID || ev.Extras["reported_provider"] != tc.provider {
+				t.Errorf("model id %q reported_provider %q, want %q and %q", ev.ModelID, ev.Extras["reported_provider"], wantID, tc.provider)
+			}
+		})
 	}
-
-	t.Run("the hinted host prices the call", func(t *testing.T) {
-		fx := newFixture(t)
-		ev := record(t, fx, "ACME.cloud", "acme-large")
-		// 1000×$30 + 300×$150 per million at the host the reported name stands for, not the provider's own list price.
-		if ev.ModelID != fx.model.Meta.ID || ev.Provider != "acme" || ev.Pricing != "reseller-markup" || ev.CostNanos == nil || *ev.CostNanos != 75_000_000 {
-			t.Errorf("model = %q provider = %q pricing = %q cost = %v", ev.Model, ev.Provider, ev.Pricing, ev.CostNanos)
-		}
-		if ev.Extras["reported_provider"] != "ACME.cloud" {
-			t.Errorf("reported_provider = %q, want the name as the client sent it", ev.Extras["reported_provider"])
-		}
-	})
-	t.Run("the hinted provider picks between models that share a name", func(t *testing.T) {
-		fx := newFixture(t)
-		if ev := record(t, fx, "zeta_ai", "shared"); ev.ModelID != fx.sharedZeta.Meta.ID || ev.Provider != "zeta" {
-			t.Errorf("zeta_ai/shared resolved to %q of %q, want zeta's model", ev.Model, ev.Provider)
-		}
-		fx = newFixture(t)
-		if ev := record(t, fx, "acme.cloud", "shared"); ev.ModelID != fx.sharedAcme.Meta.ID || ev.Provider != "acme" {
-			t.Errorf("acme.cloud/shared resolved to %q of %q, want acme's model", ev.Model, ev.Provider)
-		}
-	})
-	t.Run("a provider without a hint resolves as reported", func(t *testing.T) {
-		fx := newFixture(t)
-		if ev := record(t, fx, "zeta", "shared"); ev.ModelID != fx.sharedZeta.Meta.ID {
-			t.Errorf("zeta/shared resolved to %q, want zeta's model", ev.Model)
-		}
-		fx = newFixture(t)
-		if ev := record(t, fx, "nobody", "acme-large"); ev.ModelID != fx.model.Meta.ID || ev.Pricing != "acme-large-list" {
-			t.Errorf("unknown provider: model = %q pricing = %q, want the bare name at the provider's own host", ev.Model, ev.Pricing)
-		}
-	})
 }
 
 func TestReasoningTokensAreChargedOnce(t *testing.T) {
@@ -1260,23 +1231,26 @@ func TestErrorTypeCarryingTheHTTPStatusIsTheEventStatus(t *testing.T) {
 	}
 }
 
+const policyWarning = "message content of 1 model calls was not stored: the account this credential runs in does not allow storing message content. It is safe to stop sending content; usage was recorded."
+
+// The reporter's account decides whether content it sends is stored, inside the operator's two switches; every accepted export says which in its answer header.
 func TestThePolicyOfTheReporterDecidesWhetherContentIsStored(t *testing.T) {
 	yes, no := true, false
 	for _, tc := range []struct {
-		name string
-		opts fixtureOptions
-		// receiverOff and payloadLoggingOff turn one of the operator's switches off.
+		name                           string
+		opts                           fixtureOptions
 		receiverOff, payloadLoggingOff bool
-		wantStored                     bool
-		// wantByPolicy is whether the content is counted as refused by the policy.
-		wantByPolicy bool
+		answer                         string
+		// warning is what the client is told when the content was withheld; "" when it was stored.
+		warning string
 	}{
-		{name: "policy captures", opts: fixtureOptions{policyCaptures: &yes}, wantStored: true},
-		{name: "policy does not capture", opts: fixtureOptions{policyCaptures: &no}, wantByPolicy: true},
-		{name: "no policy: what the client sent is kept", opts: fixtureOptions{}, wantStored: true},
-		{name: "key flag set, policy does not capture", opts: fixtureOptions{policyCaptures: &no, keyCaptures: true}, wantByPolicy: true},
-		{name: "policy captures, receiver switch off", opts: fixtureOptions{policyCaptures: &yes}, receiverOff: true},
-		{name: "policy captures, payload logging off", opts: fixtureOptions{policyCaptures: &yes}, payloadLoggingOff: true},
+		{name: "policy captures", opts: fixtureOptions{policyCaptures: &yes}, answer: httpheader.ContentCaptureStore},
+		{name: "policy does not capture", opts: fixtureOptions{policyCaptures: &no}, answer: httpheader.ContentCaptureDrop, warning: policyWarning},
+		{name: "no policy: what the client sent is kept", answer: httpheader.ContentCaptureClient},
+		{name: "key flag set, policy does not capture", opts: fixtureOptions{policyCaptures: &no, keyCaptures: true}, answer: httpheader.ContentCaptureDrop, warning: policyWarning},
+		{name: "policy captures, receiver switch off", opts: fixtureOptions{policyCaptures: &yes}, receiverOff: true, answer: httpheader.ContentCaptureDrop, warning: captureOffWarning},
+		{name: "policy captures, payload logging off", opts: fixtureOptions{policyCaptures: &yes}, payloadLoggingOff: true, answer: httpheader.ContentCaptureDrop, warning: captureOffWarning},
+		{name: "no policy, payload logging off", payloadLoggingOff: true, answer: httpheader.ContentCaptureDrop, warning: captureOffWarning},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newFixtureWith(t, tc.opts)
@@ -1284,20 +1258,25 @@ func TestThePolicyOfTheReporterDecidesWhetherContentIsStored(t *testing.T) {
 			fx.payloads.enabled = !tc.payloadLoggingOff
 			byPolicy := otlpreceiver.ContentCount("policy")
 
+			// An empty logs export is how a client asks before it has calls to send.
+			ask := fx.postLogs(t, otlp.MediaTypeJSON, []byte(`{"resourceLogs":[]}`))
+			if got := ask.Header().Get(httpheader.HeaderContentCapture); ask.Code != http.StatusOK || got != tc.answer {
+				t.Errorf("empty logs export: status %d answer %q, want 200 and %q", ask.Code, got, tc.answer)
+			}
 			rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, pbSpan(1, contentAttrs(t, asText)...)))
-			// The usage row is recorded whatever happens to the content, and the export succeeds.
-			if rec.Code != http.StatusOK || len(fx.events) != 1 {
-				t.Fatalf("status = %d body = %q events = %d, want an accepted export and one usage row", rec.Code, rec.Body, len(fx.events))
+			// The usage row is recorded whatever happens to the content, and the export succeeds: withheld content is answered with a warning, never a rejection.
+			wantBody := "{}"
+			if tc.warning != "" {
+				wantBody = `{"partialSuccess":{"errorMessage":"` + tc.warning + `"}}`
 			}
-			// Stored content needs no word to the client; withheld content is answered with a warning, never a rejection.
-			if warned := rec.Body.String() != "{}"; warned == tc.wantStored {
-				t.Errorf("body = %s, want a warning only when the content was withheld", rec.Body)
+			if got := rec.Body.String(); rec.Code != http.StatusOK || len(fx.events) != 1 || got != wantBody || rec.Header().Get(httpheader.HeaderContentCapture) != tc.answer {
+				t.Fatalf("status = %d events = %d answer = %q, want 200, one usage row and %q; body:\n got %s\nwant %s", rec.Code, len(fx.events), rec.Header().Get(httpheader.HeaderContentCapture), tc.answer, got, wantBody)
 			}
-			if stored := len(fx.payloads.records) == 1; stored != tc.wantStored {
-				t.Errorf("payload records = %d, want stored = %v", len(fx.payloads.records), tc.wantStored)
+			if stored := len(fx.payloads.records) == 1; stored != (tc.warning == "") {
+				t.Errorf("payload records = %d, want stored = %v", len(fx.payloads.records), tc.warning == "")
 			}
-			if counted := otlpreceiver.ContentCount("policy")-byPolicy == 1; counted != tc.wantByPolicy {
-				t.Errorf("counted as refused by policy = %v, want %v", counted, tc.wantByPolicy)
+			if counted := otlpreceiver.ContentCount("policy") - byPolicy; counted != map[bool]float64{true: 1}[tc.warning == policyWarning] {
+				t.Errorf("counted %v as refused by policy", counted)
 			}
 			// A reported row names no policy even when one decided its content.
 			if fx.events[0].PolicyID != "" {
@@ -1326,6 +1305,8 @@ func partialSuccess(t *testing.T, rec *httptest.ResponseRecorder) (rejected, mes
 	return got.PartialSuccess.RejectedSpans + got.PartialSuccess.RejectedLogRecords, got.PartialSuccess.ErrorMessage, true
 }
 
+const captureOffWarning = "message content of 1 model calls was not stored: this server does not capture message content. It is safe to stop sending content; usage was recorded."
+
 func TestTheClientIsToldWhenItsContentWasNotStored(t *testing.T) {
 	no := false
 	withContent := func(t *testing.T, id byte) *tracepb.Span { return pbSpan(id, contentAttrs(t, asText)...) }
@@ -1349,8 +1330,8 @@ func TestTheClientIsToldWhenItsContentWasNotStored(t *testing.T) {
 		fx := newFixture(t)
 		rec := fx.postLogs(t, otlp.MediaTypeJSON, logsJSON(t, pbEvent(1, contentAttrs(t, asStructure)...)))
 		rejected, message, present := partialSuccess(t, rec)
-		if rec.Code != http.StatusOK || !present || rejected != "" || !strings.Contains(message, "message content of 1 model calls was not stored: this server does not capture message content") {
-			t.Errorf("status = %d body = %s, want a warning that the server does not capture content", rec.Code, rec.Body)
+		if rec.Code != http.StatusOK || !present || rejected != "" || message != captureOffWarning {
+			t.Errorf("status = %d body = %s, want only the warning %q", rec.Code, rec.Body, captureOffWarning)
 		}
 	})
 
@@ -1364,16 +1345,19 @@ func TestTheClientIsToldWhenItsContentWasNotStored(t *testing.T) {
 		if rec.Code != http.StatusOK || rejected != "1" || len(fx.events) != 1 {
 			t.Fatalf("status = %d body = %s events = %d, want one call recorded and one rejected", rec.Code, rec.Body, len(fx.events))
 		}
-		if !strings.HasPrefix(message, "model-call spans rejected: 1 without a trace id or span id. Also: message content of 1 model calls was not stored") {
-			t.Errorf("message = %q, want the rejection and then the warning", message)
+		want := "model-call spans rejected: 1 without a trace id or span id. Also: message content of 1 model calls was not stored: the account this credential runs in does not allow storing message content. It is safe to stop sending content; usage was recorded."
+		if message != want {
+			t.Errorf("message =\n%s\nwant the rejection and then the warning\n%s", message, want)
 		}
 	})
 
 	t.Run("in protobuf", func(t *testing.T) {
 		fx := newFixture(t)
 		rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, withContent(t, 1)))
-		if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte("this server does not capture message content")) {
-			t.Errorf("status = %d body = %q, want the warning in the partial success message", rec.Code, rec.Body)
+		// An ExportTraceServiceResponse whose partial_success (field 1, 153 bytes) holds only error_message (field 2, 150 bytes).
+		want := "\x0a\x99\x01\x12\x96\x01" + captureOffWarning
+		if got := rec.Body.String(); rec.Code != http.StatusOK || got != want {
+			t.Errorf("status = %d body = %q, want %q", rec.Code, got, want)
 		}
 	})
 
@@ -1435,5 +1419,16 @@ func TestAudioTokensAreRecorded(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("tokens[%s] = %d, want %d", k, got[k], v)
 		}
+	}
+}
+
+// must fails t on err, else hands v on.
+func must[T any](v T, err error) func(testing.TB) T {
+	return func(t testing.TB) T {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
 }

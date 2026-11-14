@@ -1,7 +1,14 @@
 package manifest_test
 
 import (
-	"reflect"
+	"github.com/google/go-cmp/cmp"
+	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 	"strings"
 	"testing"
 
@@ -41,60 +48,43 @@ metadata: {name: devs}
 spec: {role: developer, scope: {kind: team, name: platform}, subjects: [{kind: group, name: eng}, {kind: user, name: alice}]}
 `
 
-// The same documents parse to the same DTOs and translate to the same rows under either apiVersion.
+// The same documents translate to the same rows under either apiVersion.
 func TestAuthKindsParseTheSameUnderEitherAPIVersion(t *testing.T) {
-	relay, err := manifest.Parse(strings.NewReader(authKindsYAML))
-	if err != nil {
-		t.Fatalf("relay apiVersion: %v", err)
-	}
+	relay := parseDocs(t, authKindsYAML, 6)
 	// The auth apiVersion refuses metadata.owner; relay's ignores it, so dropping it changes no row.
 	moved := strings.ReplaceAll(authKindsYAML, manifest.APIVersion, authmanifest.APIVersion)
 	moved = strings.Replace(moved, " owner: {kind: user},", "", 1)
-	auth, err := manifest.Parse(strings.NewReader(moved))
-	if err != nil {
-		t.Fatalf("auth apiVersion: %v", err)
-	}
-	if len(relay) != 6 || len(auth) != 6 {
-		t.Fatalf("parsed %d and %d documents", len(relay), len(auth))
-	}
+	auth := parseDocs(t, moved, 6)
 	idx := manifest.MapResolver{
 		Teams: map[string]string{"platform": teamUUID}, Projects: map[string]string{"ml-search": projectUUID},
-		Policies: map[string]string{"ml-search-default": policyUUID}, Users: map[string]string{"alice": aliceUUID},
-		Roles: map[string]string{"developer": roleUUID},
+		Users: map[string]string{"alice": aliceUUID}, Roles: map[string]string{"developer": roleUUID},
 	}
-	for i := range relay {
-		a, b := relay[i], auth[i]
-		if a.Kind() != b.Kind() {
-			t.Fatalf("doc %d: %s vs %s", i, a.Kind(), b.Kind())
-		}
-		rowA, rowB := translate(t, a, idx), translate(t, b, idx)
-		if !reflect.DeepEqual(rowA, rowB) {
-			t.Errorf("%s rows differ:\n relay %+v\n auth  %+v", a.Kind(), rowA, rowB)
-		}
+	on, off := true, false
+	system, inTeam := meta.Owner{Kind: meta.OwnerSystem}, meta.Owner{Kind: meta.OwnerTeam, ID: teamUUID}
+	want := []any{
+		&team.Team{Meta: meta.Metadata{Name: "platform", Owner: system, Labels: map[string]string{"env": "prod"}}, Spec: team.Spec{Enabled: &on}},
+		&project.Project{Meta: meta.Metadata{Name: "ml-search", Owner: inTeam, Annotations: map[string]string{"note": "x"}}, Spec: project.Spec{TeamID: teamUUID}},
+		&serviceaccount.ServiceAccount{Meta: meta.Metadata{Name: "search-indexer", Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectUUID}}, Spec: serviceaccount.Spec{ProjectID: projectUUID, Enabled: &off}},
+		&group.Group{Meta: meta.Metadata{Name: "eng", Owner: system}, Spec: group.Spec{MemberIDs: []string{aliceUUID}}},
+		&role.Role{Meta: meta.Metadata{Name: "developer", Owner: system}, Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"get", "list"}}}}},
+		&rolebinding.RoleBinding{Meta: meta.Metadata{Name: "devs", Owner: inTeam}, Spec: rolebinding.Spec{RoleID: roleUUID, Scope: inTeam, Subjects: []rolebinding.Subject{
+			{Kind: rolebinding.SubjectGroup, Name: "eng"}, {Kind: rolebinding.SubjectUser, ID: aliceUUID},
+		}}},
 	}
-	if relay[0].Team.Spec.Enabled == nil || !*relay[0].Team.Spec.Enabled || relay[2].ServiceAccount.Spec.Project != "ml-search" {
-		t.Errorf("relay fields lost: %+v %+v", relay[0].Team.Spec, relay[2].ServiceAccount.Spec)
+	for name, docs := range map[string][]manifest.Document{"relay": relay, "auth": auth} {
+		got, kinds := make([]any, len(docs)), ""
+		for i, d := range docs {
+			got[i], kinds = translate(t, d, idx), kinds+" "+d.Kind()
+		}
+		if diff := cmp.Diff(want, got); diff != "" || kinds != " Team Project ServiceAccount Group Role RoleBinding" {
+			t.Errorf("under the %s apiVersion: kinds%s, rows (-want +got):\n%s", name, kinds, diff)
+		}
 	}
 }
 
-func translate(t *testing.T, d manifest.Document, idx manifest.Resolver) any {
+func translate(t *testing.T, d manifest.Document, idx manifest.MapResolver) any {
 	t.Helper()
-	var row any
-	var err error
-	switch {
-	case d.Team != nil:
-		row, err = manifest.ToTeam(*d.Team, idx)
-	case d.Project != nil:
-		row, err = manifest.ToProject(*d.Project, idx)
-	case d.ServiceAccount != nil:
-		row, err = manifest.ToServiceAccount(*d.ServiceAccount, idx)
-	case d.Group != nil:
-		row, err = manifest.ToGroup(*d.Group, idx)
-	case d.Role != nil:
-		row, err = manifest.ToRole(*d.Role, idx)
-	case d.RoleBinding != nil:
-		row, err = manifest.ToRoleBinding(*d.RoleBinding, idx)
-	}
+	row, err := relayTranslate(d, idx)
 	if err != nil {
 		t.Fatalf("%s: %v", d.Kind(), err)
 	}
@@ -124,10 +114,7 @@ func TestAuthKindsParseStrictlyUnderTheAuthAPIVersion(t *testing.T) {
 func TestAuthKindsStayLenientUnderRelayAPIVersion(t *testing.T) {
 	for _, tc := range strictCases {
 		t.Run(tc.name, func(t *testing.T) {
-			docs, err := manifest.Parse(strings.NewReader("apiVersion: relay.wyolet.dev/v1alpha3\n" + tc.doc + "\n"))
-			if err != nil || len(docs) != 1 {
-				t.Fatalf("docs = %v, err = %v", docs, err)
-			}
+			parseOne(t, "apiVersion: relay.wyolet.dev/v1alpha3\n"+tc.doc+"\n")
 		})
 	}
 }
@@ -167,32 +154,23 @@ spec: {username: admin, password: plain-is-fine-here}
 
 // Rendering a row through the module keeps relay's wire form: relay's apiVersion and the owner block naming the parent.
 func TestAuthKindsRenderInRelayForm(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(authKindsYAML))
-	if err != nil {
-		t.Fatal(err)
-	}
-	idx := manifest.MapResolver{
-		Teams: map[string]string{"platform": teamUUID}, Projects: map[string]string{"ml-search": projectUUID},
-		Policies: map[string]string{"ml-search-default": policyUUID},
-	}
-	rev := manifest.MapReverseResolver{
-		Teams: map[string]string{teamUUID: "platform"}, Projects: map[string]string{projectUUID: "ml-search"},
-		Policies: map[string]string{policyUUID: "ml-search-default"},
-	}
-	sa, err := manifest.ToServiceAccount(*docs[2].ServiceAccount, idx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	back := manifest.FromServiceAccount(sa, rev)
-	if back.APIVersion != manifest.APIVersion || back.Spec.Project != "ml-search" ||
-		back.Metadata.Owner.Kind != "project" || back.Metadata.Owner.Name != "ml-search" || back.Spec.Enabled == nil || *back.Spec.Enabled {
-		t.Errorf("FromServiceAccount = %+v", back)
-	}
-	tm, err := manifest.ToTeam(*docs[0].Team, idx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := manifest.FromTeam(tm, rev); got.Spec.Enabled == nil || got.Metadata.Labels["env"] != "prod" {
-		t.Errorf("FromTeam = %+v", got)
-	}
+	docs := parseDocs(t, authKindsYAML, 6)
+	idx := manifest.MapResolver{Teams: map[string]string{"platform": teamUUID}, Projects: map[string]string{"ml-search": projectUUID}}
+	rev := manifest.MapReverseResolver{Teams: map[string]string{teamUUID: "platform"}, Projects: map[string]string{projectUUID: "ml-search"}}
+
+	sa := translate(t, docs[2], idx).(*serviceaccount.ServiceAccount)
+	wantSA := *docs[2].ServiceAccount
+	wantSA.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerProject, Name: "ml-search"}
+	exported(t, "FromServiceAccount", wantSA, manifest.FromServiceAccount(sa, rev))
+
+	tm := translate(t, docs[0], idx).(*team.Team)
+	// The document's own owner is ignored: a team is the system's.
+	wantTeam := *docs[0].Team
+	wantTeam.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerSystem}
+	exported(t, "FromTeam", wantTeam, manifest.FromTeam(tm, rev))
+
+	p := translate(t, docs[1], idx).(*project.Project)
+	wantProject := *docs[1].Project
+	wantProject.Metadata.Owner = manifest.WireOwner{Kind: meta.OwnerTeam, Name: "platform"}
+	exported(t, "FromProject", wantProject, manifest.FromProject(p, rev))
 }

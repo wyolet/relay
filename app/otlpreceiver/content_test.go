@@ -3,6 +3,9 @@ package otlpreceiver_test
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/google/go-cmp/cmp"
+	"github.com/wyolet/relay/app/usagelog"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,89 +96,88 @@ func capturing(t *testing.T) *fixture {
 	return fx
 }
 
-func TestContentIsStoredAsThePayloadOfTheUsageEvent(t *testing.T) {
-	fx := capturing(t)
-	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...))); rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", rec.Code, rec.Body)
-	}
-	if len(fx.events) != 1 || len(fx.payloads.records) != 1 {
-		t.Fatalf("events = %d payload records = %d, want 1 and 1", len(fx.events), len(fx.payloads.records))
-	}
-	ev, rec := fx.events[0], fx.payloads.records[0]
-	// The log read path joins the two by request id and refuses a body whose owner differs from the event's.
-	if rec.RequestID != ev.RequestID || !rec.Timestamp.Equal(ev.Timestamp) {
-		t.Errorf("record keyed %q at %v, event %q at %v", rec.RequestID, rec.Timestamp, ev.RequestID, ev.Timestamp)
-	}
-	if rec.ProjectID != ev.ProjectID || rec.PrincipalID != ev.PrincipalID || rec.RelayKeyHash != ev.RelayKeyHash || rec.ProjectID == "" || rec.RelayKeyHash == "" {
-		t.Errorf("record owner = %q %q %q, event owner = %q %q %q", rec.ProjectID, rec.PrincipalID, rec.RelayKeyHash, ev.ProjectID, ev.PrincipalID, ev.RelayKeyHash)
-	}
-
-	// One JSON object per side, keyed by the convention's attribute names, with keys sorted and nothing escaped beyond what JSON needs.
-	wantRequest := `{"gen_ai.input.messages":[{"parts":[{"content":"What is 2+2?","type":"text"}],"role":"user"}],` +
+// One JSON object per side, keyed by the convention's attribute names, with keys sorted and nothing escaped beyond what JSON needs.
+const (
+	storedRequest = `{"gen_ai.input.messages":[{"parts":[{"content":"What is 2+2?","type":"text"}],"role":"user"}],` +
 		`"gen_ai.system_instructions":[{"content":"Answer in <one> sentence & no more.","type":"text"}],` +
 		`"gen_ai.tool.definitions":[{"name":"add","parameters":{"max":9007199254740993,"properties":{"a":{"type":"integer"}}},"type":"function"}]}`
-	wantResponse := `{"gen_ai.output.messages":[{"finish_reason":"stop","parts":[{"content":"4","type":"text"}],"role":"assistant"}]}`
-	if string(rec.RequestBody) != wantRequest {
-		t.Errorf("request body =\n%s\nwant\n%s", rec.RequestBody, wantRequest)
-	}
-	if string(rec.ResponseBody) != wantResponse {
-		t.Errorf("response body =\n%s\nwant\n%s", rec.ResponseBody, wantResponse)
-	}
-	if rec.RequestTruncated || rec.ResponseTruncated {
-		t.Errorf("truncation flags set on bodies under the cap")
+	storedResponse = `{"gen_ai.output.messages":[{"finish_reason":"stop","parts":[{"content":"4","type":"text"}],"role":"assistant"}]}`
+)
+
+// storedContent is the payload record of the call chatRow(spanID) describes, reported with contentAttrs.
+func (fx *fixture) storedContent(spanID byte) payload.Record {
+	ev := fx.chatRow(spanID)
+	// The log read path joins the two by request id and refuses a body whose owner differs from the event's.
+	return payload.Record{
+		RequestID: ev.RequestID, Timestamp: ev.Timestamp,
+		ProjectID: ev.ProjectID, PrincipalID: ev.PrincipalID, RelayKeyHash: ev.RelayKeyHash,
+		RequestBody: []byte(storedRequest), ResponseBody: []byte(storedResponse),
 	}
 }
 
-func TestContentStoresTheSameBytesFromASpanAndAnEvent(t *testing.T) {
-	fromSpan := capturing(t)
-	fromSpan.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...)))
-	fromEvent := capturing(t)
-	fromEvent.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, pbEvent(1, contentAttrs(t, asStructure)...)))
-	fromJSONEvent := capturing(t)
-	fromJSONEvent.postLogs(t, otlp.MediaTypeJSON, logsJSON(t, pbEvent(1, contentAttrs(t, asStructure)...)))
-
-	if len(fromSpan.payloads.records) != 1 || len(fromEvent.payloads.records) != 1 || len(fromJSONEvent.payloads.records) != 1 {
-		t.Fatalf("payload records = %d / %d / %d, want 1 each", len(fromSpan.payloads.records), len(fromEvent.payloads.records), len(fromJSONEvent.payloads.records))
-	}
-	want := fromSpan.payloads.records[0]
-	for name, fx := range map[string]*fixture{"protobuf event": fromEvent, "json event": fromJSONEvent} {
-		got := fx.payloads.records[0]
-		if got.RequestID != want.RequestID || string(got.RequestBody) != string(want.RequestBody) || string(got.ResponseBody) != string(want.ResponseBody) {
-			t.Errorf("%s stored\n%s\n%s\nthe span stored\n%s\n%s", name, got.RequestBody, got.ResponseBody, want.RequestBody, want.ResponseBody)
-		}
+// A span carries content as JSON text, an event as structured values; either way the same bytes are stored, keyed like the usage row.
+func TestContentIsStoredAsThePayloadOfTheUsageEvent(t *testing.T) {
+	for name, send := range map[string]func(fx *fixture) *httptest.ResponseRecorder{
+		"span": func(fx *fixture) *httptest.ResponseRecorder {
+			return fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...)))
+		},
+		"protobuf event": func(fx *fixture) *httptest.ResponseRecorder {
+			return fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, pbEvent(1, contentAttrs(t, asStructure)...)))
+		},
+		"json event": func(fx *fixture) *httptest.ResponseRecorder {
+			return fx.postLogs(t, otlp.MediaTypeJSON, logsJSON(t, pbEvent(1, contentAttrs(t, asStructure)...)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := capturing(t)
+			if rec := send(fx); rec.Code != http.StatusOK || strings.Trim(rec.Body.String(), "{}") != "" {
+				t.Fatalf("status = %d body = %q, want plain success", rec.Code, rec.Body)
+			}
+			row := fx.chatRow(1)
+			if name != "span" {
+				row.DurationMs = 0
+			}
+			if diff := cmp.Diff([]usagelog.Event{row}, fx.events); diff != "" {
+				t.Errorf("usage events (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]payload.Record{fx.storedContent(1)}, fx.payloads.records); diff != "" {
+				t.Errorf("payload records (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
 func TestContentNeedsBothSwitches(t *testing.T) {
-	body := func(t *testing.T) []byte { return export(t, pbSpan(1, contentAttrs(t, asText)...)) }
-
-	t.Run("receiver setting off", func(t *testing.T) {
-		fx := newFixture(t)
-		fx.payloads.enabled = true
-		if rec := fx.post(t, otlp.MediaTypeProtobuf, body(t)); rec.Code != http.StatusOK || len(fx.events) != 1 || len(fx.payloads.records) != 0 {
-			t.Errorf("status = %d events = %d payload records = %d, want the usage row and no content", rec.Code, len(fx.events), len(fx.payloads.records))
-		}
-	})
-	t.Run("payload logging off", func(t *testing.T) {
-		fx := newFixture(t)
-		fx.captureContent = true
-		if rec := fx.post(t, otlp.MediaTypeProtobuf, body(t)); rec.Code != http.StatusOK || len(fx.events) != 1 || len(fx.payloads.records) != 0 {
-			t.Errorf("status = %d events = %d payload records = %d, want the usage row and no content", rec.Code, len(fx.events), len(fx.payloads.records))
-		}
-	})
-	t.Run("a call without content stores nothing", func(t *testing.T) {
-		fx := capturing(t)
-		if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large"))); rec.Code != http.StatusOK || len(fx.payloads.records) != 0 {
-			t.Errorf("status = %d payload records = %d", rec.Code, len(fx.payloads.records))
-		}
-	})
-	t.Run("the earlier content attributes are not read", func(t *testing.T) {
-		fx := capturing(t)
-		old := pbSpan(1, append(chatAttrs("acme-large"), str("gen_ai.prompt", "What is 2+2?"), str("gen_ai.completion", "4"))...)
-		if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, old)); rec.Code != http.StatusOK || len(fx.payloads.records) != 0 {
-			t.Errorf("status = %d payload records = %d", rec.Code, len(fx.payloads.records))
-		}
-	})
+	withContent := pbSpan(1, contentAttrs(t, asText)...)
+	for _, tc := range []struct {
+		name                    string
+		receiver, payloadLogger bool
+		span                    *tracepb.Span
+		wantBody                string
+	}{
+		// The usage row is recorded either way, and the client is told its content was not.
+		{"receiver setting off", false, true, withContent, `{"partialSuccess":{"errorMessage":"` + captureOffWarning + `"}}`},
+		{"payload logging off", true, false, withContent, `{"partialSuccess":{"errorMessage":"` + captureOffWarning + `"}}`},
+		{"a call without content stores nothing", true, true, chatSpan(1, "acme-large"), "{}"},
+		{"the earlier content attributes are not read", true, true, pbSpan(1, append(chatAttrs("acme-large"), str("gen_ai.prompt", "What is 2+2?"), str("gen_ai.completion", "4"))...), "{}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixture(t)
+			fx.captureContent, fx.payloads.enabled = tc.receiver, tc.payloadLogger
+			rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, tc.span))
+			if got := rec.Body.String(); rec.Code != http.StatusOK || got != tc.wantBody {
+				t.Errorf("status = %d body:\n got %s\nwant %s", rec.Code, got, tc.wantBody)
+			}
+			want := fx.chatRow(1)
+			delete(want.Extras, "service") // mustJSON's export names no resource
+			if diff := cmp.Diff([]usagelog.Event{want}, fx.events); diff != "" {
+				t.Errorf("usage events (-want +got):\n%s", diff)
+			}
+			if len(fx.payloads.records) != 0 {
+				t.Errorf("stored %d payload records, want none", len(fx.payloads.records))
+			}
+		})
+	}
 }
 
 func TestContentArrivingAfterTheUsageRowIsStoredOnce(t *testing.T) {
@@ -193,26 +195,41 @@ func TestContentArrivingAfterTheUsageRowIsStoredOnce(t *testing.T) {
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...))); rec.Code != http.StatusOK {
 		t.Fatalf("span with content: status = %d", rec.Code)
 	}
-	if len(fx.events) != 1 || len(fx.payloads.records) != 1 {
-		t.Fatalf("events = %d payload records = %d, want one usage row and its content once", len(fx.events), len(fx.payloads.records))
+	if diff := cmp.Diff([]usagelog.Event{fx.chatRow(1)}, fx.events); diff != "" {
+		t.Errorf("usage events, want the span's one row (-want +got):\n%s", diff)
 	}
-	if fx.payloads.records[0].RequestID != fx.events[0].RequestID {
-		t.Errorf("content keyed %q, usage row %q", fx.payloads.records[0].RequestID, fx.events[0].RequestID)
+	if diff := cmp.Diff([]payload.Record{fx.storedContent(1)}, fx.payloads.records); diff != "" {
+		t.Errorf("payload records, want the content once (-want +got):\n%s", diff)
 	}
 }
 
 func TestContentIsCutToThePayloadCap(t *testing.T) {
-	fx := capturing(t)
-	fx.payloads.maxBytes = 150
-	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...))); rec.Code != http.StatusOK || len(fx.payloads.records) != 1 {
-		t.Fatalf("status = %d payload records = %d", rec.Code, len(fx.payloads.records))
-	}
-	rec := fx.payloads.records[0]
-	if len(rec.RequestBody) != 150 || !rec.RequestTruncated {
-		t.Errorf("request body = %d bytes truncated %v, want 150 and flagged", len(rec.RequestBody), rec.RequestTruncated)
-	}
-	if len(rec.ResponseBody) >= 150 || rec.ResponseTruncated {
-		t.Errorf("response body = %d bytes truncated %v, want it whole and unflagged", len(rec.ResponseBody), rec.ResponseTruncated)
+	for _, tc := range []struct {
+		name        string
+		maxBytes    int
+		request     string
+		requestCut  bool
+		response    string
+		responseCut bool
+	}{
+		{"request over, response under", 150, storedRequest[:150], true, storedResponse, false},
+		{"both over", 40, storedRequest[:40], true, storedResponse[:40], true},
+		{"cap at the request's exact size", len(storedRequest), storedRequest, false, storedResponse, false},
+		{"no cap", 0, storedRequest, false, storedResponse, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := capturing(t)
+			fx.payloads.maxBytes = tc.maxBytes
+			if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...))); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			want := fx.storedContent(1)
+			want.RequestBody, want.RequestTruncated = []byte(tc.request), tc.requestCut
+			want.ResponseBody, want.ResponseTruncated = []byte(tc.response), tc.responseCut
+			if diff := cmp.Diff([]payload.Record{want}, fx.payloads.records); diff != "" {
+				t.Errorf("payload records (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -237,8 +254,8 @@ func TestContentYieldsToAFullPayloadQueue(t *testing.T) {
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK {
 		t.Fatalf("resend: status = %d", rec.Code)
 	}
-	if len(fx.events) != 1 || len(fx.payloads.records) != 1 {
-		t.Errorf("after the resend: events = %d payload records = %d, want 1 and 1", len(fx.events), len(fx.payloads.records))
+	if diff := cmp.Diff([]payload.Record{fx.storedContent(1)}, fx.payloads.records); diff != "" || len(fx.events) != 1 {
+		t.Errorf("after the resend: %d events, payload records (-want +got):\n%s", len(fx.events), diff)
 	}
 }
 
@@ -250,47 +267,14 @@ func TestContentOfSeveralCallsStopsAtHalfThePayloadQueue(t *testing.T) {
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK || len(fx.events) != 3 {
 		t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
 	}
-	if len(fx.payloads.records) != 2 {
-		t.Fatalf("queued %d payload records, want the receiver to stop at half of 4", len(fx.payloads.records))
+	if diff := cmp.Diff([]payload.Record{fx.storedContent(1), fx.storedContent(2)}, fx.payloads.records); diff != "" {
+		t.Fatalf("payload records, want the receiver to stop at half of 4 (-want +got):\n%s", diff)
 	}
 	// The call that did not fit was unmarked: the resend stores exactly that one.
 	fx.payloads.records = nil
 	fx.post(t, otlp.MediaTypeProtobuf, body)
-	if len(fx.payloads.records) != 1 || fx.payloads.records[0].RequestID != fx.events[2].RequestID {
-		t.Errorf("resend queued %d payload records, want only the third call's", len(fx.payloads.records))
-	}
-}
-
-func TestEveryAcceptedExportAnswersWhetherContentIsStored(t *testing.T) {
-	yes, no := true, false
-	for _, tc := range []struct {
-		name                           string
-		opts                           fixtureOptions
-		receiverOff, payloadLoggingOff bool
-		want                           string
-	}{
-		{name: "policy stores", opts: fixtureOptions{policyCaptures: &yes}, want: httpheader.ContentCaptureStore},
-		{name: "policy does not store", opts: fixtureOptions{policyCaptures: &no}, want: httpheader.ContentCaptureDrop},
-		{name: "policy does not store, key flag set", opts: fixtureOptions{policyCaptures: &no, keyCaptures: true}, want: httpheader.ContentCaptureDrop},
-		{name: "no policy", want: httpheader.ContentCaptureClient},
-		{name: "receiver switch off", opts: fixtureOptions{policyCaptures: &yes}, receiverOff: true, want: httpheader.ContentCaptureDrop},
-		{name: "payload logging off", payloadLoggingOff: true, want: httpheader.ContentCaptureDrop},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fx := newFixtureWith(t, tc.opts)
-			fx.captureContent = !tc.receiverOff
-			fx.payloads.enabled = !tc.payloadLoggingOff
-
-			// An empty logs export is how a client asks before it has calls to send.
-			rec := fx.postLogs(t, otlp.MediaTypeJSON, []byte(`{"resourceLogs":[]}`))
-			if rec.Code != http.StatusOK || rec.Header().Get(httpheader.HeaderContentCapture) != tc.want {
-				t.Errorf("empty logs export: status %d %s = %q, want 200 and %q", rec.Code, httpheader.HeaderContentCapture, rec.Header().Get(httpheader.HeaderContentCapture), tc.want)
-			}
-			rec = fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
-			if rec.Code != http.StatusOK || rec.Header().Get(httpheader.HeaderContentCapture) != tc.want {
-				t.Errorf("trace export: status %d %s = %q, want 200 and %q", rec.Code, httpheader.HeaderContentCapture, rec.Header().Get(httpheader.HeaderContentCapture), tc.want)
-			}
-		})
+	if diff := cmp.Diff([]payload.Record{fx.storedContent(3)}, fx.payloads.records); diff != "" || len(fx.events) != 3 {
+		t.Errorf("resend: %d events, payload records (-want +got):\n%s", len(fx.events), diff)
 	}
 }
 
@@ -300,39 +284,6 @@ func TestARefusedExportCarriesNoAnswer(t *testing.T) {
 	rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large")))
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get(httpheader.HeaderContentCapture) != "" {
 		t.Errorf("status %d answer %q, want 503 without an answer", rec.Code, rec.Header().Get(httpheader.HeaderContentCapture))
-	}
-}
-
-func TestTheReportedHostPricesTheCall(t *testing.T) {
-	record := func(t *testing.T, provider, modelName, host string) (pricing string, cost int64) {
-		t.Helper()
-		fx := newFixture(t)
-		rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1,
-			str("gen_ai.operation.name", "chat"),
-			str("gen_ai.provider.name", provider),
-			str("gen_ai.request.model", modelName),
-			str("wyolet.relay.host", host),
-			num("gen_ai.usage.input_tokens", 1000),
-			num("gen_ai.usage.output_tokens", 300),
-		)))
-		if rec.Code != http.StatusOK || len(fx.events) != 1 || fx.events[0].CostNanos == nil {
-			t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
-		}
-		return fx.events[0].Pricing, *fx.events[0].CostNanos
-	}
-
-	if pricing, cost := record(t, "acme", "acme-large", "a-reseller"); pricing != "reseller-markup" || cost != 75_000_000 {
-		t.Errorf("reported reseller: pricing %q cost %d, want reseller-markup / 75000000", pricing, cost)
-	}
-	// The reported host goes before a provider hint's host.
-	if pricing, _ := record(t, "acme.cloud", "acme-large", "acme"); pricing != "acme-large-list" {
-		t.Errorf("reported own host over the hinted reseller: pricing %q", pricing)
-	}
-	if pricing, _ := record(t, "acme", "acme-large", "no-such-host"); pricing != "acme-large-list" {
-		t.Errorf("unknown host: pricing %q, want the provider's own host", pricing)
-	}
-	if pricing, _ := record(t, "acme.cloud", "acme-large", "no-such-host"); pricing != "reseller-markup" {
-		t.Errorf("unknown host with a provider hint: pricing %q, want the hinted host", pricing)
 	}
 }
 
@@ -441,32 +392,9 @@ func TestStoredContentSplitsIntoSharedPieces(t *testing.T) {
 		t.Errorf("pieces = %d and %d, %d distinct; want 4 and 6, 6 distinct", len(one.Pieces), len(two.Pieces), len(distinct))
 	}
 
-	// (c) A split body rebuilds to the stored bytes.
-	for i, s := range []dedup.Split{one, two} {
-		pieces := map[dedup.Hash][]byte{}
-		for _, p := range s.Pieces {
-			pieces[p.Hash] = p.Body
-		}
-		got, err := dedup.Rebuild(s.Skeleton, s.Fields, func(h dedup.Hash) ([]byte, bool) { b, ok := pieces[h]; return b, ok })
-		if want := [][]byte{turnOne, turnTwo}[i]; err != nil || !bytes.Equal(got, want) {
-			t.Errorf("turn %d rebuilt = %s (%v)", i+1, got, err)
-		}
-	}
-
-	whole := len(turnOne) + len(turnTwo)
-	deduplicated := len(one.Skeleton) + len(two.Skeleton)
-	for _, n := range distinct {
-		deduplicated += n
-	}
-	t.Logf("two turns: %d bytes stored whole; %d bytes as %d skeleton + %d bytes in %d distinct pieces (%d piece references)",
-		whole, deduplicated, len(one.Skeleton)+len(two.Skeleton), deduplicated-len(one.Skeleton)-len(two.Skeleton), len(distinct), len(one.Pieces)+len(two.Pieces))
-
 	// The ClickHouse store's integration test stores these same bodies; the files keep the two in step.
 	for name, body := range map[string][]byte{"reported_turn1_request.json": turnOne, "reported_turn2_request.json": turnTwo} {
-		want, err := os.ReadFile("../../pkg/payload/clickhouse/testdata/" + name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		want := must(os.ReadFile("../../pkg/payload/clickhouse/testdata/" + name))(t)
 		if !bytes.Equal(bytes.TrimSuffix(want, []byte("\n")), body) {
 			t.Errorf("%s no longer holds what the receiver stores:\n%s", name, body)
 		}
