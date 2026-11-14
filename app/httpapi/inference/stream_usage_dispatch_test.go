@@ -1,9 +1,5 @@
 package inference
 
-// Same-shape streamed Chat Completions: relay asks the upstream for usage so
-// token accounting sees it, and keeps the extra usage chunk from a caller
-// that did not ask for it.
-
 import (
 	"io"
 	"net/http"
@@ -45,51 +41,44 @@ func usageOptInUpstream(t *testing.T) (*httptest.Server, func() string) {
 	return srv, func() string { mu.Lock(); defer mu.Unlock(); return got }
 }
 
-func streamUsageDispatch(t *testing.T, requestUsage bool, body string) (upstreamBody, callerBody string) {
-	t.Helper()
-	up, received := usageOptInUpstream(t)
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	pointHostAt(t, cat, up.URL)
-	d := buildRunnableDeps(t, cat)
-	reg := adapter.NewRegistry((&adapter.Spec{
-		Name:          adapters.OpenAI,
-		DefaultPath:   "/v1/chat/completions",
-		Auth:          adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:    openai.CCTranslator{},
-		ExtractTokens: openai.ExtractTokens,
-		StreamUsage:   &adapter.StreamUsageOptIn{Request: openai.RequestStreamUsage, IsUsageFrame: openai.IsUsageOnlyChunk},
-	}).Build())
-	useSpecs(&d, reg)
-	d.RequestStreamUsage = requestUsage
+// Same-shape streamed Chat Completions: relay asks the upstream for usage so token accounting sees it, and keeps the extra usage chunk from a caller that did not ask for it.
+func TestBytePassStreamUsageOptIn(t *testing.T) {
+	const plain = `{"model":"test-model","stream":true,"messages":[]}`
+	const asked = `{"model":"test-model","stream":true,"stream_options":{"include_usage":true},"messages":[]}`
+	for name, tc := range map[string]struct {
+		requestUsage bool
+		body         string
+		wantUpstream string
+		wantCaller   string
+	}{
+		"relay asks and hides the usage chunk":       {true, plain, `{"model":"test-model","stream":true,"messages":[],"stream_options":{"include_usage":true}}`, ccContentChunk + ccDone},
+		"the caller's own ask is forwarded as it is": {true, asked, asked, ccContentChunk + ccUsageChunk + ccDone},
+		"opt-in off forwards the request unchanged":  {false, plain, plain, ccContentChunk + ccDone},
+		"opt-in off keeps the caller's ask":          {false, asked, asked, ccContentChunk + ccUsageChunk + ccDone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			up, received := usageOptInUpstream(t)
+			cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+			pointHostAt(t, cat, up.URL)
+			d := buildRunnableDeps(t, cat)
+			useSpecs(&d, adapter.NewRegistry((&adapter.Spec{
+				Name:          adapters.OpenAI,
+				DefaultPath:   "/v1/chat/completions",
+				Auth:          adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+				Translator:    openai.CCTranslator{},
+				ExtractTokens: openai.ExtractTokens,
+				StreamUsage:   &adapter.StreamUsageOptIn{Request: openai.RequestStreamUsage, IsUsageFrame: openai.IsUsageOnlyChunk},
+			}).Build()))
+			d.RequestStreamUsage = tc.requestUsage
 
-	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil), rk)
-	w := httptest.NewRecorder()
-	Dispatch(d, w, r, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(body), ModelName: "test-model", Stream: true})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
-	}
-	return received(), w.Body.String()
-}
+			w := dispatch(d, rk, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(tc.body), ModelName: "test-model", Stream: true})
 
-func TestBytePassStreamRequestsUsageAndHidesIt(t *testing.T) {
-	upstream, caller := streamUsageDispatch(t, true, `{"model":"test-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	mustContain(t, "upstream request", upstream, `"include_usage":true`)
-	if caller != ccContentChunk+ccDone {
-		t.Fatalf("caller stream = %q, want the upstream stream without the usage chunk", caller)
-	}
-}
-
-func TestBytePassStreamKeepsUsageTheCallerAskedFor(t *testing.T) {
-	_, caller := streamUsageDispatch(t, true, `{"model":"test-model","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`)
-	if caller != ccContentChunk+ccUsageChunk+ccDone {
-		t.Fatalf("caller stream = %q, want the upstream stream verbatim", caller)
-	}
-}
-
-func TestBytePassStreamUsageOffForwardsRequestUnchanged(t *testing.T) {
-	upstream, caller := streamUsageDispatch(t, false, `{"model":"test-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	mustNotContain(t, "upstream request", upstream, "stream_options")
-	if caller != ccContentChunk+ccDone {
-		t.Fatalf("caller stream = %q", caller)
+			if w.Code != http.StatusOK || w.Body.String() != tc.wantCaller {
+				t.Errorf("caller got %d %q, want %q", w.Code, w.Body, tc.wantCaller)
+			}
+			if got := received(); got != tc.wantUpstream {
+				t.Errorf("upstream request = %s, want %s", got, tc.wantUpstream)
+			}
+		})
 	}
 }

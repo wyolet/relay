@@ -1,9 +1,9 @@
 package inference
 
 import (
+	"github.com/wyolet/relay/app/httpapi"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -76,11 +76,19 @@ func ladderDeps(t *testing.T, c ladderCase, now time.Time) (Deps, *Principal, us
 }
 
 func chat(d Deps, p *Principal, model string) *httptest.ResponseRecorder {
-	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), p)
-	w := httptest.NewRecorder()
 	body := `{"model":"` + model + `","messages":[{"role":"user","content":"hi"}]}`
-	Dispatch(d, w, r, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(body), ModelName: model})
-	return w
+	return dispatch(d, p, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(body), ModelName: model})
+}
+
+// wantLadderRefusal checks a 403 the caller's ladder made: its code and class, and a message that names what refused (a generated row name sits between prefix and suffix) and then the lane rung and the policy.
+func wantLadderRefusal(t *testing.T, w *httptest.ResponseRecorder, p *Principal, policyID, code, prefix, suffix string) {
+	t.Helper()
+	got := envelopeOf(t, w)
+	suffix += " (lane rung account:" + p.Caller.Lane.Meta.ID + ", policy " + policyID + ")"
+	if w.Code != http.StatusForbidden || got.Type != "invalid_request_error" || got.Code != code || got.Refusal != "model_not_allowed" ||
+		!strings.HasPrefix(got.Message, prefix) || !strings.HasSuffix(got.Message, suffix) {
+		t.Errorf("answer = %d %+v, want 403 %s with message %q…%q", w.Code, got, code, prefix, suffix)
+	}
 }
 
 // A hard budget spent to its cap refuses the next request before the upstream with a 429 whose Retry-After is the next period start, naming the budget's rung and policy.
@@ -101,16 +109,11 @@ func TestBudgetRefusal_Is429WithRetryAfterAtTheNextPeriodStart(t *testing.T) {
 			break
 		}
 	}
-	if w.Code != http.StatusTooManyRequests || errCode(t, w.Body.Bytes()) != "budget_exceeded" {
-		t.Fatalf("request after the cap was spent = %d %s, want 429 budget_exceeded", w.Code, w.Body)
-	}
-	secs, err := strconv.Atoi(w.Header().Get("Retry-After"))
-	if err != nil || secs < 3599 || secs > 3601 {
-		t.Fatalf("Retry-After = %q, want 3600 (the next month start)", w.Header().Get("Retry-After"))
-	}
-	if body := w.Body.String(); !strings.Contains(body, "lane") || !strings.Contains(body, policyID) {
-		t.Fatalf("refusal %s does not name the lane rung and policy %s", body, policyID)
-	}
+	// The limiter's clock is fixed one hour before the month turns.
+	wantAnswer(t, w, http.StatusTooManyRequests, httpapi.APIErrorBody{
+		Type: "rate_limit_error", Code: "budget_exceeded", Refusal: "no_capacity",
+		Message: "the budget of the lane policy " + policyID + " is exhausted; try again in 3600s",
+	}, map[string]string{"Retry-After": "3600"})
 	if hits.Load() != served {
 		t.Fatal("the refused request reached the upstream")
 	}
@@ -131,12 +134,7 @@ func TestBudgetRefusal_AlertBudgetNeverRefuses(t *testing.T) {
 func TestBudgetRefusal_UnpricedModelIsRefused(t *testing.T) {
 	d, p, _, hits, policyID := ladderDeps(t, ladderCase{budget: &budget.Spec{AmountUSD: "100", Period: budget.PeriodMonth, Mode: budget.ModeHard}}, time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
 	w := chat(d, p, "free")
-	if w.Code < 400 || w.Code >= 500 || errCode(t, w.Body.Bytes()) != "unpriced_under_budget" {
-		t.Fatalf("unpriced request = %d %s, want a 4xx unpriced_under_budget", w.Code, w.Body)
-	}
-	if !strings.Contains(w.Body.String(), policyID) {
-		t.Errorf("refusal %s does not name policy %s", w.Body, policyID)
-	}
+	wantLadderRefusal(t, w, p, policyID, "unpriced_under_budget", "unpriced_under_budget: binding ", " has no pricing and a budget applies")
 	if hits.Load() != 0 {
 		t.Fatal("the unpriced request reached the upstream")
 	}
@@ -148,11 +146,9 @@ func TestBudgetRefusal_UnpricedModelIsRefused(t *testing.T) {
 // A disabled policy refuses with a 403 (the caller is known; access is not), and the request never reaches the upstream.
 func TestLadderRefusal_DisabledPolicyIsForbidden(t *testing.T) {
 	disabled := false
-	d, p, _, hits, _ := ladderDeps(t, ladderCase{enabled: &disabled}, time.Now())
+	d, p, _, hits, policyID := ladderDeps(t, ladderCase{enabled: &disabled}, time.Now())
 	w := chat(d, p, "priced")
-	if w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "policy_disabled" {
-		t.Fatalf("request under a disabled policy = %d %s, want 403 policy_disabled", w.Code, w.Body)
-	}
+	wantLadderRefusal(t, w, p, policyID, "policy_disabled", "policy_disabled: policy ", " is disabled")
 	if hits.Load() != 0 {
 		t.Fatal("a request under a disabled policy reached the upstream")
 	}
@@ -162,13 +158,11 @@ func TestLadderRefusal_DisabledPolicyIsForbidden(t *testing.T) {
 func TestLadderRefusal_ModelNotAllowedNamesRungAndPolicy(t *testing.T) {
 	d, p, _, hits, policyID := ladderDeps(t, ladderCase{models: []string{"openai/free"}}, time.Now())
 	w := chat(d, p, "priced")
-	if w.Code != http.StatusForbidden || errCode(t, w.Body.Bytes()) != "model_not_allowed" {
-		t.Fatalf("request outside the grant = %d %s, want 403 model_not_allowed", w.Code, w.Body)
-	}
+	wantAnswer(t, w, http.StatusForbidden, httpapi.APIErrorBody{
+		Type: "invalid_request_error", Code: "model_not_allowed", Refusal: "model_not_allowed",
+		Message: `model "priced" is not allowed by the lane policy ` + policyID,
+	}, nil)
 	if hits.Load() != 0 {
 		t.Fatal("a refused model reached the upstream")
-	}
-	if body := w.Body.String(); !strings.Contains(body, "lane") || !strings.Contains(body, policyID) {
-		t.Fatalf("refusal %s does not name the lane rung and policy %s", body, policyID)
 	}
 }

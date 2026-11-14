@@ -1,12 +1,19 @@
 package inference
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
@@ -78,17 +85,184 @@ func okUpstream(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// decodeEnvelope decodes body as relay's error envelope, failing on a body that is anything else.
+func decodeEnvelope(t *testing.T, body []byte) httpapi.APIErrorBody {
+	t.Helper()
+	var env httpapi.APIError
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&env); err != nil {
+		t.Fatalf("body %q is not an error envelope: %v", body, err)
+	}
+	return env.Err
+}
+
+func envelopeOf(t *testing.T, rec *httptest.ResponseRecorder) httpapi.APIErrorBody {
+	t.Helper()
+	return decodeEnvelope(t, rec.Body.Bytes())
+}
+
 func errCode(t *testing.T, body []byte) string {
 	t.Helper()
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+	return decodeEnvelope(t, body).Code
+}
+
+// wsFrame mirrors the transport's outbound frame; the transport keeps its own type unexported.
+type wsFrame struct {
+	ID     string `json:"id"`
+	Event  string `json:"event"`
+	Status int    `json:"status,omitempty"`
+	Data   string `json:"data,omitempty"`
+}
+
+// wsConn dials wsHandler(d) over an upgrade request carrying what the middleware chain leaves on it: pr and the snapshot it resolved against.
+func wsConn(t *testing.T, d Deps, pr *Principal) (*websocket.Conn, context.Context) {
+	t.Helper()
+	snap := d.Catalog.Current()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(withNormalContext(r, pr).Context(), ctxSnapshotT{}, snap)
+		wsHandler(d)(w, r.WithContext(ctx))
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	t.Cleanup(func() {
+		if conn != nil {
+			conn.Close(websocket.StatusNormalClosure, "")
+		}
+		cancel()
+		srv.Close()
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		t.Fatalf("decode error body %q: %v", body, err)
+	return conn, ctx
+}
+
+// wsExchange sends payload as the frame id and returns the status and body of its response.
+func wsExchange(t *testing.T, ctx context.Context, conn *websocket.Conn, id, payload string) (status int, body string) {
+	t.Helper()
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"id":"`+id+`","payload":`+payload+`}`)); err != nil {
+		t.Fatalf("write %s: %v", id, err)
 	}
-	return payload.Error.Code
+	for {
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		var f wsFrame
+		if err := json.Unmarshal(raw, &f); err != nil {
+			t.Fatalf("decode frame %q: %v", raw, err)
+		}
+		if f.ID != id {
+			t.Fatalf("frame for %q while waiting on %q", f.ID, id)
+		}
+		body += f.Data
+		if f.Event == "end" {
+			return f.Status, body
+		}
+	}
+}
+
+// wantAnswer checks a relay-minted error: its status, its whole envelope, and the named headers (an empty value means absent).
+func wantAnswer(t *testing.T, rec *httptest.ResponseRecorder, status int, want httpapi.APIErrorBody, headers map[string]string) {
+	t.Helper()
+	if rec.Code != status {
+		t.Errorf("status = %d, want %d", rec.Code, status)
+	}
+	if diff := cmp.Diff(want, envelopeOf(t, rec)); diff != "" {
+		t.Errorf("envelope (-want +got):\n%s", diff)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	for k, v := range headers {
+		if got := rec.Header().Get(k); got != v {
+			t.Errorf("header %s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+// answeringUpstream answers every request with reply as contentType; last returns the path and body of the most recent one.
+func answeringUpstream(t testing.TB, contentType, reply string) (baseURL string, last func() (path, body string)) {
+	t.Helper()
+	var mu sync.Mutex
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotPath, gotBody = r.URL.EscapedPath(), string(b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", contentType)
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() (string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotPath, gotBody
+	}
+}
+
+// wantJSON checks got is the JSON document want, whatever its member order and spacing.
+func wantJSON(t *testing.T, label, got, want string) {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatalf("%s: the expected document is not JSON: %v", label, err)
+	}
+	if err := json.Unmarshal([]byte(got), &g); err != nil {
+		t.Fatalf("%s: %q is not JSON: %v", label, got, err)
+	}
+	if diff := cmp.Diff(w, g); diff != "" {
+		t.Errorf("%s (-want +got):\n%s", label, diff)
+	}
+}
+
+// dispatch runs one normal-mode request as pr through Dispatch.
+func dispatch(d Deps, pr *Principal, in DispatchInput) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	Dispatch(d, w, withNormalContext(httptest.NewRequest(http.MethodPost, "/", nil), pr), in)
+	return w
+}
+
+// outcome is what a finalized request's post-flight event says happened.
+type outcome struct {
+	Status        int
+	Kind, Refusal string
+	Message       string
+}
+
+// watchOutcomes makes d's dispatch and pipeline report every finalized request's outcome.
+func watchOutcomes(d *Deps) <-chan outcome {
+	got := make(chan outcome, 8)
+	reg := lifecycle.New()
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "outcome", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+		got <- outcome{ev.Status, ev.ErrorKind, ev.Refusal, ev.ErrorMessage}
+		return nil, nil
+	}})
+	d.Lifecycle = reg
+	if d.Pipeline != nil {
+		d.Pipeline.Lifecycle = reg
+	}
+	return got
+}
+
+// wantOutcome checks the next finalized request's outcome, and that it is the only one.
+func wantOutcome(t *testing.T, got <-chan outcome, want outcome) {
+	t.Helper()
+	select {
+	case o := <-got:
+		if diff := cmp.Diff(want, o); diff != "" {
+			t.Errorf("post-flight outcome (-want +got):\n%s", diff)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no post-flight event")
+	}
+	select {
+	case o := <-got:
+		t.Errorf("a second post-flight event fired: %+v", o)
+	case <-time.After(20 * time.Millisecond):
+	}
 }
 
 // waitForFreeSlot waits for the detached post-flight to hand the admission slot back.

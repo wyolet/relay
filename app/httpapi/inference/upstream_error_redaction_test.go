@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/pkg/adapters"
 )
 
@@ -16,47 +17,27 @@ func TestDispatch_UnreachableHostKeepsItsAddressOutOfTheResponse(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	closed := up.URL
 	up.Close()
-	addr := strings.TrimPrefix(closed, "http://")
 
 	cat, pr := buildDispatchCatalog(t, "internal-host", adapters.OpenAI)
 	pointHostAt(t, cat, closed)
 	d := buildRunnableDeps(t, cat)
 
-	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil), pr)
-	w := httptest.NewRecorder()
-	Dispatch(d, w, r, DispatchInput{
+	w := dispatch(d, pr, DispatchInput{
 		Inbound:   adapters.OpenAI,
 		Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`),
 		ModelName: "test-model",
 	})
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body %s", w.Code, w.Body)
-	}
-	body := w.Body.String()
-	if strings.Contains(body, addr) || strings.Contains(body, "/v1/chat/completions") {
-		t.Fatalf("response discloses the upstream address: %s", body)
-	}
-	e := parseDispatchErr(t, w.Body.Bytes())
-	if e.Error.Code != "upstream_unreachable" || !strings.Contains(e.Error.Message, "internal-host") {
-		t.Errorf("error = %+v, want upstream_unreachable naming the host slug", e.Error)
-	}
+	wantAnswer(t, w, http.StatusBadGateway, httpapi.APIErrorBody{
+		Type: "server_error", Code: "upstream_unreachable", Refusal: "host_not_reachable",
+		Message: `upstream host "internal-host" unreachable after 3 attempt(s)`,
+	}, map[string]string{HeaderOrigin: "relay"})
 }
 
-// Other transport failures (TLS, timeouts) carry the request URL in Go's error text; neither error mapper may pass it through.
-func TestErrorMappers_RedactTransportURLs(t *testing.T) {
-	transportErr := &url.Error{Op: "Post", URL: "https://10.0.0.7:8443/v1/messages", Err: errors.New("tls: failed to verify certificate")}
-
-	for name, write := range map[string]func(http.ResponseWriter){
-		"pipeline": func(w http.ResponseWriter) { mapPipelineErr(w, transportErr) },
-		"proxy":    func(w http.ResponseWriter) { mapProxyErr(w, nil, transportErr) },
-	} {
-		w := httptest.NewRecorder()
-		write(w)
-		if w.Code != http.StatusBadGateway {
-			t.Errorf("%s: status = %d, want 502", name, w.Code)
-		}
-		if body := w.Body.String(); strings.Contains(body, "10.0.0.7") || strings.Contains(body, "/v1/messages") {
-			t.Errorf("%s: response discloses the upstream address: %s", name, body)
-		}
+// Other transport failures (TLS, timeouts) carry the request URL in Go's error text; the proxy's error mapper may not pass it through either.
+func TestMapProxyErr_RedactsTransportURLs(t *testing.T) {
+	w := httptest.NewRecorder()
+	mapProxyErr(w, nil, &url.Error{Op: "Post", URL: "https://10.0.0.7:8443/v1/messages", Err: errors.New("tls: failed to verify certificate")})
+	if body := w.Body.String(); w.Code != http.StatusBadGateway || strings.Contains(body, "10.0.0.7") || strings.Contains(body, "/v1/messages") {
+		t.Errorf("response = %d %s, want a 502 that does not disclose the upstream address", w.Code, body)
 	}
 }

@@ -2,8 +2,8 @@ package inference
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -186,20 +186,8 @@ func TestMapProxyErr_RateLimit_UsesTheSharedEnvelope(t *testing.T) {
 	c := limits.Counter{Kind: limits.KindRule, Rung: limits.RungSystem, ID: "r:x"}
 	mapProxyErr(rec, nil, &limits.Refused{Counter: &c, RetryAfter: 2300 * time.Millisecond})
 
-	if rec.Code != 429 {
-		t.Fatalf("status: %d, want 429", rec.Code)
-	}
-	if got := rec.Header().Get("Retry-After"); got != "3" {
-		t.Fatalf("Retry-After: %q, want %q", got, "3")
-	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatal(err)
-	}
-	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
-		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
-	}
-	if !strings.Contains(env.Err.Message, "try again in 3s") {
-		t.Fatalf("message must name the retry delay: %q", env.Err.Message)
-	}
+	wantAnswer(t, rec, http.StatusTooManyRequests, httpapi.APIErrorBody{
+		Type: "rate_limit_error", Code: "rate_limit_exceeded", Refusal: "no_capacity",
+		Message: "the rate limit of the system policy  is exhausted; try again in 3s",
+	}, map[string]string{"Retry-After": "3", HeaderOrigin: "relay"})
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
@@ -41,91 +42,43 @@ type lifecycleFields struct {
 	relayKeyHash, relayKey       string
 }
 
-func TestMintLifecycle_ServiceAccountKeyCarriesFullAttribution(t *testing.T) {
+// What the usage observer reads off a request is the whole attribution and nothing borrowed: a field with no source stays empty.
+func TestMintLifecycle_Attribution(t *testing.T) {
 	f := newPrincipalFixture()
-	k := saKey(f, "sk-sa")
-	st := f.stack(t, k)
+	f.bindings = []*policybinding.PolicyBinding{boundTo(f, "token-binding", f.boundPol.Meta.ID, "user:"+f.user)}
+	sa := saKey(f, "sk-sa")
+	personal := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-laptop", Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.user}},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: f.user}, KeyHash: sha("sk-user")},
+	}
+	st := f.stack(t, sa, personal)
 
-	_, got := mintFor(t, st, "sk-sa")
-
-	if got.projectID != f.project.Meta.ID || got.project != "ml-search" {
-		t.Fatalf("project: %q / %q", got.projectID, got.project)
-	}
-	if got.teamID != f.team.Meta.ID || got.team != "platform" {
-		t.Fatalf("team: %q / %q", got.teamID, got.team)
-	}
-	if got.principalKind != string(key.PrincipalServiceAccount) ||
-		got.principalID != f.sa.Meta.ID || got.principal != "indexer" {
-		t.Fatalf("principal: %q / %q / %q", got.principalKind, got.principalID, got.principal)
-	}
-	if got.credentialKind != "key" || got.credentialID != k.Meta.ID {
-		t.Fatalf("credential: %q / %q", got.credentialKind, got.credentialID)
-	}
-	if got.relayKeyHash != sha("sk-sa") || got.relayKey != "indexer-prod" {
-		t.Fatalf("relay key: %q / %q", got.relayKeyHash, got.relayKey)
-	}
-}
-
-// A personal key names its user and the credential, but has no tenancy: it
-// lives in no project, so project/team stay empty rather than borrowing one.
-func TestMintLifecycle_PersonalKeyHasNoTenancy(t *testing.T) {
-	f := newPrincipalFixture()
-	k := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-laptop",
-			Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.user}},
-		Spec: key.Spec{
-			Principal: key.Principal{Kind: key.PrincipalUser, ID: f.user},
-			KeyHash:   sha("sk-user"),
-		},
-	}
-	st := f.stack(t, k)
-
-	_, got := mintFor(t, st, "sk-user")
-
-	if got.projectID != "" || got.project != "" || got.teamID != "" || got.team != "" {
-		t.Fatalf("want empty tenancy, got %+v", got)
-	}
-	if got.principalKind != string(key.PrincipalUser) || got.principalID != f.user {
-		t.Fatalf("principal: %q / %q", got.principalKind, got.principalID)
-	}
-	// Users are not in the snapshot, so no slug is resolvable at entry.
-	if got.principal != "" {
-		t.Fatalf("principal slug: want empty, got %q", got.principal)
-	}
-	if got.credentialKind != "key" || got.credentialID != k.Meta.ID {
-		t.Fatalf("credential: %q / %q", got.credentialKind, got.credentialID)
-	}
-	if got.relayKeyHash != sha("sk-user") || got.relayKey != "alice-laptop" {
-		t.Fatalf("relay key: %q / %q", got.relayKeyHash, got.relayKey)
-	}
-}
-
-// A token presents no key, so relay_key_hash stays empty. Hashing the bearer
-// would record a hash that matches no key row and quietly pull token traffic
-// into a key's usage scope.
-func TestMintLifecycle_TokenCredential(t *testing.T) {
-	f := newPrincipalFixture()
-	f.bindings = []*policybinding.PolicyBinding{
-		boundTo(f, "token-binding", f.boundPol.Meta.ID, "user:"+f.user),
-	}
-	st := f.stack(t)
-	token := f.mint(t, nil)
-
-	_, got := mintFor(t, st, token)
-
-	if got.relayKeyHash != "" || got.relayKey != "" {
-		t.Fatalf("relay key = %q / %q, want both empty for a token", got.relayKeyHash, got.relayKey)
-	}
-	if got.credentialKind != CredentialToken || got.credentialID == "" {
-		t.Fatalf("credential: %q / %q, want the token kind and its jti",
-			got.credentialKind, got.credentialID)
-	}
-	if got.principalKind != string(key.PrincipalUser) || got.principalID != f.user {
-		t.Fatalf("principal: %q / %q", got.principalKind, got.principalID)
-	}
-	if got.projectID != f.project.Meta.ID || got.teamID != f.team.Meta.ID {
-		t.Fatalf("tenancy: %q / %q, want the token's project and its team",
-			got.projectID, got.teamID)
+	for name, tc := range map[string]struct {
+		bearer string
+		want   lifecycleFields
+	}{
+		"service account key": {"sk-sa", lifecycleFields{
+			projectID: f.project.Meta.ID, project: "ml-search", teamID: f.team.Meta.ID, team: "platform",
+			principalKind: "serviceaccount", principalID: f.sa.Meta.ID, principal: "indexer",
+			credentialKind: "key", credentialID: sa.Meta.ID, relayKeyHash: sha("sk-sa"), relayKey: "indexer-prod",
+		}},
+		// A personal key lives in no project, and users are not in the snapshot, so no tenancy and no principal slug.
+		"personal key": {"sk-user", lifecycleFields{
+			principalKind: "user", principalID: f.user,
+			credentialKind: "key", credentialID: personal.Meta.ID, relayKeyHash: sha("sk-user"), relayKey: "alice-laptop",
+		}},
+		// A token presents no key: hashing the bearer would record a hash matching no key row and pull token traffic into a key's usage scope.
+		"token": {f.mint(t, func(c *crypto.TokenClaims) { c.Jti = "jti-1" }), lifecycleFields{
+			projectID: f.project.Meta.ID, project: "ml-search", teamID: f.team.Meta.ID, team: "platform",
+			principalKind: "user", principalID: f.user,
+			credentialKind: CredentialToken, credentialID: "jti-1",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, got := mintFor(t, st, tc.bearer); *got != tc.want {
+				t.Errorf("attribution\n got %+v\nwant %+v", *got, tc.want)
+			}
+		})
 	}
 }
 

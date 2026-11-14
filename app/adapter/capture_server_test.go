@@ -1,44 +1,37 @@
 package adapter_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 )
 
-// capturedRequest holds the path and headers of the last request a
-// captureServer received.
-type capturedRequest struct {
-	mu     sync.Mutex
-	path   string
-	header http.Header
+// captured is what one upstream request carried.
+type captured struct {
+	Method string
+	URI    string
+	Header http.Header
+	Body   []byte
 }
 
-func (c *capturedRequest) Path() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.path
-}
-
-func (c *capturedRequest) Header(name string) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.header.Get(name)
-}
-
-// captureServer is an upstream that answers every request 200 with `{}` and
-// keeps what the last one carried; it closes on cleanup.
-func captureServer(t *testing.T) (*httptest.Server, *capturedRequest) {
+// captureServer is an upstream that answers every request 200 with `{}`; last returns what the most recent one carried.
+func captureServer(t testing.TB) (baseURL string, last func() captured) {
 	t.Helper()
-	got := &capturedRequest{}
+	var mu sync.Mutex
+	var got captured
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got.mu.Lock()
-		got.path, got.header = r.URL.Path, r.Header.Clone()
-		got.mu.Unlock()
-		w.WriteHeader(http.StatusOK)
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		got = captured{Method: r.Method, URI: r.RequestURI, Header: r.Header.Clone(), Body: body}
+		mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	t.Cleanup(srv.Close)
-	return srv, got
+	return srv.URL, func() captured {
+		mu.Lock()
+		defer mu.Unlock()
+		return got
+	}
 }

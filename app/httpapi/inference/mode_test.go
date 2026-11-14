@@ -3,11 +3,16 @@ package inference
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/wyolet/relay/app/httpapi"
 )
 
-func req(headers map[string]string) *http.Request {
-	r, _ := http.NewRequest("POST", "/v1/chat/completions", nil)
+func classifyRequest(headers map[string]string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	r.RemoteAddr = "203.0.113.5:54321"
 	for k, v := range headers {
 		r.Header.Set(k, v)
@@ -15,102 +20,72 @@ func req(headers map[string]string) *http.Request {
 	return r
 }
 
-func TestClassify_Normal_AuthorizationBearer(t *testing.T) {
-	c, err := Classify(req(map[string]string{
-		"Authorization": "Bearer wr_abc",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestClassify(t *testing.T) {
+	// No trusted proxies are configured under test, so X-Forwarded-For is ignored and the peer address is the client's.
+	const ip = "203.0.113.5"
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    Classification
+		wantErr error
+	}{
+		{"bearer key", map[string]string{"Authorization": "Bearer wr_abc", "X-Forwarded-For": "10.0.0.1"},
+			Classification{Mode: ModeNormal, Key: "wr_abc", ClientIP: ip}, nil},
+		{"X-WR-API-Key wins over the bearer", map[string]string{"X-WR-API-Key": "wr_via_header", "Authorization": "Bearer wr_via_auth", "X-Api-Key": "wr_via_x"},
+			Classification{Mode: ModeNormal, Key: "wr_via_header", ClientIP: ip}, nil},
+		{"the bearer wins over x-api-key", map[string]string{"Authorization": "Bearer wr_via_auth", "X-Api-Key": "wr_via_x"},
+			Classification{Mode: ModeNormal, Key: "wr_via_auth", ClientIP: ip}, nil},
+		{"x-api-key alone", map[string]string{"X-Api-Key": "wr_via_x"},
+			Classification{Mode: ModeNormal, Key: "wr_via_x", ClientIP: ip}, nil},
+		{"an Authorization that is not a bearer falls through", map[string]string{"Authorization": "Basic abc", "X-Api-Key": "wr_via_x"},
+			Classification{Mode: ModeNormal, Key: "wr_via_x", ClientIP: ip}, nil},
+		{"no credential", nil, Classification{Mode: ModeNormal, ClientIP: ip}, nil},
+		{"explicit No-Proxy", map[string]string{"X-WR-Proxy-Mode": "No-Proxy", "Authorization": "Bearer wr_abc", "X-WR-Upstream-Host": "openai"},
+			Classification{Mode: ModeNormal, Key: "wr_abc", ClientIP: ip}, nil},
+		{"proxy with a relay key", map[string]string{"X-WR-Proxy-Mode": "Proxy", "X-WR-API-Key": "wr_relay", "X-WR-Upstream-Host": "anthropic", "Authorization": "Bearer sk-ant-oauth-token"},
+			Classification{Mode: ModeProxyAuthed, Key: "wr_relay", UpstreamAuth: "Bearer sk-ant-oauth-token", UpstreamHost: "anthropic", ClientIP: ip}, nil},
+		// In proxy mode x-api-key is not a relay credential: only X-WR-API-Key is.
+		{"proxy without a relay key", map[string]string{"X-WR-Proxy-Mode": "Proxy", "X-WR-Upstream-Host": "openai", "Authorization": "Bearer sk-up", "X-Api-Key": "wr_via_x"},
+			Classification{Mode: ModeProxyAnonymous, UpstreamAuth: "Bearer sk-up", UpstreamHost: "openai", ClientIP: ip}, nil},
+		{"proxy without an upstream key", map[string]string{"X-WR-Proxy-Mode": "Proxy", "X-WR-Upstream-Host": "anthropic", "X-WR-API-Key": "wr_relay"},
+			Classification{}, ErrMissingUpstreamKey},
+		{"unknown proxy mode", map[string]string{"X-WR-Proxy-Mode": "weird"}, Classification{}, ErrInvalidProxyMode},
+		{"proxy mode is case-sensitive", map[string]string{"X-WR-Proxy-Mode": "proxy"}, Classification{}, ErrInvalidProxyMode},
 	}
-	if c.Mode != ModeNormal {
-		t.Fatalf("mode: want Normal, got %v", c.Mode)
-	}
-	if c.Key != "wr_abc" {
-		t.Fatalf("relay key: want wr_abc, got %q", c.Key)
-	}
-	if c.UpstreamAuth != "" || c.UpstreamHost != "" {
-		t.Fatalf("normal mode should not carry upstream fields: %+v", c)
-	}
-}
-
-func TestClassify_Normal_XWRAPIKeyPrecedence(t *testing.T) {
-	c, _ := Classify(req(map[string]string{
-		"X-WR-API-Key":  "wr_via_header",
-		"Authorization": "Bearer wr_via_auth",
-	}))
-	if c.Key != "wr_via_header" {
-		t.Fatalf("want X-WR-API-Key to win, got %q", c.Key)
-	}
-}
-
-func TestClassify_ProxyAuthed(t *testing.T) {
-	c, err := Classify(req(map[string]string{
-		"X-WR-Proxy-Mode":    "Proxy",
-		"X-WR-API-Key":       "wr_relay",
-		"X-WR-Upstream-Host": "anthropic",
-		"Authorization":      "Bearer sk-ant-oauth-token",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if c.Mode != ModeProxyAuthed {
-		t.Fatalf("mode: want ProxyAuthed, got %v", c.Mode)
-	}
-	if c.Key != "wr_relay" {
-		t.Fatalf("relay key: %q", c.Key)
-	}
-	if c.UpstreamAuth != "Bearer sk-ant-oauth-token" {
-		t.Fatalf("upstream auth: %q", c.UpstreamAuth)
-	}
-	if c.UpstreamHost != "anthropic" {
-		t.Fatalf("upstream host: %q", c.UpstreamHost)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Classify(classifyRequest(tt.headers))
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("classification (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
-func TestClassify_ProxyAnonymous(t *testing.T) {
-	c, err := Classify(req(map[string]string{
-		"X-WR-Proxy-Mode":    "Proxy",
-		"X-WR-Upstream-Host": "openai",
-		"Authorization":      "Bearer sk-...",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if c.Mode != ModeProxyAnonymous {
-		t.Fatalf("mode: want ProxyAnonymous, got %v", c.Mode)
-	}
-	if c.Key != "" {
-		t.Fatalf("anon should have no relay key: %q", c.Key)
-	}
-}
+// The middleware hands the classification on, and answers a request it cannot classify itself.
+func TestClassifyMiddleware(t *testing.T) {
+	var seen Classification
+	h := ClassifyMiddleware()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = ClassificationFrom(r.Context()) }))
 
-func TestClassify_ProxyMissingUpstreamKey(t *testing.T) {
-	_, err := Classify(req(map[string]string{
-		"X-WR-Proxy-Mode":    "Proxy",
-		"X-WR-Upstream-Host": "anthropic",
-	}))
-	if !errors.Is(err, ErrMissingUpstreamKey) {
-		t.Fatalf("want ErrMissingUpstreamKey, got %v", err)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, classifyRequest(map[string]string{"Authorization": "Bearer wr_abc"}))
+	if diff := cmp.Diff(Classification{Mode: ModeNormal, Key: "wr_abc", ClientIP: "203.0.113.5"}, seen); diff != "" || w.Code != http.StatusOK {
+		t.Errorf("status %d; classification on the context (-want +got):\n%s", w.Code, diff)
 	}
-}
 
-func TestClassify_InvalidProxyModeHeader(t *testing.T) {
-	_, err := Classify(req(map[string]string{
-		"X-WR-Proxy-Mode": "weird",
-	}))
-	if !errors.Is(err, ErrInvalidProxyMode) {
-		t.Fatalf("want ErrInvalidProxyMode, got %v", err)
+	seen = Classification{}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, classifyRequest(map[string]string{"X-WR-Proxy-Mode": "Proxy"}))
+	wantAnswer(t, w, http.StatusBadRequest, httpapi.APIErrorBody{
+		Type: "invalid_request_error", Code: "bad_request", Message: "inference: proxy mode requires Authorization: Bearer <upstream-key>",
+	}, nil)
+	if seen != (Classification{}) {
+		t.Error("an unclassifiable request reached the handler")
 	}
-}
-
-func TestClassify_ClientIP_NoProxyTrust(t *testing.T) {
-	// RELAY_TRUSTED_PROXIES unset (test environment), so XFF must be
-	// ignored and RemoteAddr wins.
-	r := req(map[string]string{
-		"X-Forwarded-For": "10.0.0.1",
-	})
-	c, _ := Classify(r)
-	if c.ClientIP != "203.0.113.5" {
-		t.Fatalf("client IP: want RemoteAddr (203.0.113.5), got %q", c.ClientIP)
+	if got := ClassificationFrom(httptest.NewRequest(http.MethodGet, "/", nil).Context()); got != (Classification{}) {
+		t.Errorf("classification without the middleware = %+v, want zero", got)
 	}
 }

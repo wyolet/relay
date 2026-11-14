@@ -5,16 +5,18 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/policybinding"
@@ -179,17 +181,16 @@ func sha(plaintext string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func authCode(t *testing.T, body []byte) string {
+// unauthenticated is the envelope of a 401 for a bad or missing credential.
+func unauthenticated(msg string) httpapi.APIErrorBody {
+	return httpapi.APIErrorBody{Type: "invalid_request_error", Code: "unauthenticated", Message: msg}
+}
+
+func wantUnauthenticated(t *testing.T, w *httptest.ResponseRecorder, msg string) {
 	t.Helper()
-	var payload struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
+	if diff := cmp.Diff(unauthenticated(msg), envelopeOf(t, w)); diff != "" || w.Code != http.StatusUnauthorized {
+		t.Errorf("status %d, want 401; envelope (-want +got):\n%s", w.Code, diff)
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		t.Fatalf("decode error body %q: %v", body, err)
-	}
-	return payload.Error.Message
 }
 
 func saKey(f principalFixture, plaintext string) *key.Key {
@@ -202,43 +203,30 @@ func saKey(f principalFixture, plaintext string) *key.Key {
 	}
 }
 
+// A disabled or revoked key has no plan and an expired one is not looked up, so each is rejected as unknown: the answer does not tell a guesser which keys exist.
 func TestPrincipalMiddleware_Rejections(t *testing.T) {
 	f := newPrincipalFixture()
 	past := time.Now().Add(-time.Hour)
 	fls := false
-
-	for _, tc := range []struct {
-		name   string
+	for name, tc := range map[string]struct {
 		mutate func(*key.Key)
-		want   string
+		bearer string
 	}{
-		// A disabled or revoked key has no plan and an expired one is not looked up, so each is rejected as unknown: the answer does not tell a guesser which keys exist.
-		{name: "disabled", mutate: func(k *key.Key) { k.Spec.Enabled = &fls }, want: "invalid api key"},
-		{name: "revoked", mutate: func(k *key.Key) { k.Spec.RevokedAt = &past }, want: "invalid api key"},
-		{name: "expired", mutate: func(k *key.Key) { k.Spec.ExpiresAt = &past }, want: "invalid api key"},
+		"disabled":    {func(k *key.Key) { k.Spec.Enabled = &fls }, "sk-wr-live"},
+		"revoked":     {func(k *key.Key) { k.Spec.RevokedAt = &past }, "sk-wr-live"},
+		"expired":     {func(k *key.Key) { k.Spec.ExpiresAt = &past }, "sk-wr-live"},
+		"unknown key": {func(*key.Key) {}, "sk-wr-other"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			k := saKey(f, "sk-wr-live")
 			tc.mutate(k)
-			w := f.stack(t, k).do("sk-wr-live")
-			if w.Code != http.StatusUnauthorized {
-				t.Fatalf("status = %d, want 401", w.Code)
-			}
-			if got := authCode(t, w.Body.Bytes()); got != tc.want {
-				t.Errorf("message = %q, want %q", got, tc.want)
+			st := f.stack(t, k)
+			wantUnauthenticated(t, st.do(tc.bearer), "invalid api key")
+			if st.seen != nil {
+				t.Error("the request reached the handler")
 			}
 		})
 	}
-
-	t.Run("unknown key", func(t *testing.T) {
-		w := f.stack(t, saKey(f, "sk-wr-live")).do("sk-wr-other")
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", w.Code)
-		}
-		if got := authCode(t, w.Body.Bytes()); got != "invalid api key" {
-			t.Errorf("message = %q, want %q", got, "invalid api key")
-		}
-	})
 }
 
 // A service account's key acts as the account: disabling the account refuses the key, whether the disable is in the plans' first load or arrives as a write.
@@ -246,12 +234,7 @@ func TestPrincipalMiddleware_DisabledServiceAccountKey(t *testing.T) {
 	fls := false
 	wantRefused := func(t *testing.T, w *httptest.ResponseRecorder) {
 		t.Helper()
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401: %s", w.Code, w.Body)
-		}
-		if got := authCode(t, w.Body.Bytes()); got != "api key disabled" {
-			t.Errorf("message = %q, want %q", got, "api key disabled")
-		}
+		wantUnauthenticated(t, w, "api key disabled")
 	}
 
 	t.Run("first load", func(t *testing.T) {
@@ -303,12 +286,9 @@ func TestPrincipalMiddleware_RotationGrace(t *testing.T) {
 		st := f.stack(t, k)
 		time.Sleep(60 * time.Millisecond)
 
-		w := st.do("sk-wr-old")
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", w.Code)
-		}
-		if got := authCode(t, w.Body.Bytes()); got != "invalid api key" {
-			t.Errorf("message = %q, want %q", got, "invalid api key")
+		wantUnauthenticated(t, st.do("sk-wr-old"), "invalid api key")
+		if w := st.do("sk-wr-new"); w.Code != http.StatusOK {
+			t.Errorf("new plaintext status = %d, want 200 after the window closed", w.Code)
 		}
 	})
 }

@@ -173,8 +173,8 @@ func TestCountTokens_UnknownModel(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body.String())
 	}
-	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "model_not_found" {
-		t.Errorf("error code = %q, want model_not_found", e.Error.Code)
+	if e := envelopeOf(t, w); e.Code != "model_not_found" {
+		t.Errorf("error code = %q, want model_not_found", e.Code)
 	}
 }
 

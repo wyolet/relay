@@ -1,8 +1,6 @@
 package inference
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,77 +8,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/budget"
-	"github.com/wyolet/relay/app/httpapi"
-	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/limits"
-	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/plan"
 	"github.com/wyolet/relay/app/usagelog"
 )
-
-func envelopeOf(t *testing.T, rec *httptest.ResponseRecorder) httpapi.APIErrorBody {
-	t.Helper()
-	var env httpapi.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatalf("body %q: %v", rec.Body, err)
-	}
-	return env.Err
-}
-
-// Every route refusal answers with its class beside the code, the codes relay renames on the wire included.
-func TestMapRouteRefusal_CarriesTheRefusal(t *testing.T) {
-	for _, tc := range []struct {
-		code, wire string
-		want       plan.RefusalKind
-	}{
-		{plan.CodeModelNotFound, plan.CodeModelNotFound, plan.RefusalHostNotReachable},
-		{plan.CodeModelDisabled, plan.CodeModelDisabled, plan.RefusalHostNotReachable},
-		{plan.CodeNoBinding, "no_host_binding", plan.RefusalHostNotReachable},
-		{plan.CodeNoCredentials, "no_keys", plan.RefusalHostNotReachable},
-		{plan.CodeModelNotAllowed, plan.CodeModelNotAllowed, plan.RefusalModelNotAllowed},
-		{plan.CodePolicyDisabled, plan.CodePolicyDisabled, plan.RefusalModelNotAllowed},
-		{plan.CodeUnpricedUnderBudget, plan.CodeUnpricedUnderBudget, plan.RefusalModelNotAllowed},
-		{plan.CodeAccountClosed, plan.CodeAccountClosed, plan.RefusalModelNotAllowed},
-	} {
-		rec := httptest.NewRecorder()
-		mapRouteRefusal(rec, &plan.Refusal{Code: tc.code, Message: "m"}, "gpt-4o")
-		if got := envelopeOf(t, rec); got.Code != tc.wire || got.Refusal != string(tc.want) {
-			t.Errorf("%s: code %q refusal %q, want %q %q", tc.code, got.Code, got.Refusal, tc.wire, tc.want)
-		}
-	}
-}
-
-// Refusals the pipeline makes before any upstream call are classed; an upstream's own failure is not a refusal.
-func TestMapPipelineErr_CarriesTheRefusal(t *testing.T) {
-	budget := limits.Counter{Kind: limits.KindBudget, Rung: limits.RungTeam, PolicyID: "p", ID: "b"}
-	rule := limits.Counter{Kind: limits.KindRule, Rung: limits.RungLane, PolicyID: "p", ID: "r"}
-	for name, tc := range map[string]struct {
-		err    error
-		status int
-		code   string
-		want   plan.RefusalKind
-	}{
-		"caller rate limit": {&pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &rule, RetryAfter: time.Second}}, http.StatusTooManyRequests, plan.CodeRateLimitExceeded, plan.RefusalNoCapacity},
-		"caller budget":     {&pipeline.CallerLimitedError{Refused: &limits.Refused{Counter: &budget, RetryAfter: time.Hour}}, http.StatusTooManyRequests, plan.CodeBudgetExceeded, plan.RefusalNoCapacity},
-		"upstream limits":   {&pipeline.UpstreamLimitedError{RetryAfter: time.Second}, http.StatusTooManyRequests, plan.CodeRateLimitExceeded, plan.RefusalNoCapacity},
-		"every key broken":  {keypool.ErrNoHealthyKeys, http.StatusServiceUnavailable, plan.CodeNoHealthyKeys, plan.RefusalNoCapacity},
-		"no key":            {pipeline.ErrNoKeys, http.StatusServiceUnavailable, "no_keys", plan.RefusalHostNotReachable},
-		"upstream status":   {&pipeline.UpstreamFailureError{Status: 500, Cause: pipeline.ErrAllKeysExhausted}, http.StatusInternalServerError, "upstream_unavailable", ""},
-		"no host connected": {&pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial"), NoneConnected: true}, http.StatusBadGateway, plan.CodeUpstreamUnreachable, plan.RefusalHostNotReachable},
-		"last host down":    {&pipeline.UpstreamUnreachableError{Host: "h", Attempts: 2, Cause: errors.New("dial")}, http.StatusBadGateway, plan.CodeUpstreamUnreachable, ""},
-		"transport":         {errors.New("reset"), http.StatusBadGateway, "upstream_error", ""},
-	} {
-		rec := httptest.NewRecorder()
-		mapPipelineErr(rec, tc.err)
-		got := envelopeOf(t, rec)
-		if rec.Code != tc.status || got.Code != tc.code || got.Refusal != string(tc.want) {
-			t.Errorf("%s: %d %q refusal %q, want %d %q %q", name, rec.Code, got.Code, got.Refusal, tc.status, tc.code, tc.want)
-		}
-		if refusal := pipeline.RefusalOf(tc.err); refusal != tc.want {
-			t.Errorf("%s: RefusalOf = %q, want %q", name, refusal, tc.want)
-		}
-	}
-}
 
 // The usage event of a request relay refused carries the class beside error_kind: a route refusal, and a caller budget the pipeline refuses; a served request carries none.
 func TestUsageEvent_CarriesTheRefusal(t *testing.T) {

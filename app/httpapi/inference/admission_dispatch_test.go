@@ -1,51 +1,46 @@
 package inference
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
-// TestDispatchShedAnswersOverloaded verifies that when the in-flight cap is reached the
-// pre-flight abort is mapped to relay's retriable 503 with a Retry-After header —
-// not the generic 500 other pre-flight errors get.
+// At the in-flight cap the pre-flight abort is relay's retriable 503 with Retry-After, and no usage row: a flood must not turn into one event per refusal.
 func TestDispatchShedAnswersOverloaded(t *testing.T) {
 	adm := admissionAt(t, true)
-	reg := lifecycle.New()
-	reg.RegisterPreFlight(adm.PreFlight)
-	reg.RegisterCollector(adm)
+	d := Deps{}
+	outcomes := watchOutcomes(&d)
+	d.Lifecycle.RegisterPreFlight(adm.PreFlight)
+	d.Lifecycle.RegisterCollector(adm)
 
-	body := []byte(`{"model":"m","stream":false}`)
-	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	Dispatch(Deps{Lifecycle: reg}, w, r, DispatchInput{Inbound: adapters.OpenAI, Body: body, ModelName: "m"})
+	Dispatch(d, w, httptest.NewRequest(http.MethodPost, "/", nil), DispatchInput{Inbound: adapters.OpenAI, Body: []byte(`{"model":"m"}`), ModelName: "m"})
 	assertOverloaded(t, w)
+	select {
+	case o := <-outcomes:
+		t.Errorf("a shed request was finalized: %+v", o)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
-// TestDispatchNonShedPreFlightStays500 confirms the shed mapping is type-aware:
-// a different pre-flight abort still returns the generic 500, not the overload answer.
+// Any other pre-flight abort is relay's own failure: a 500 without Retry-After, recorded.
 func TestDispatchNonShedPreFlightStays500(t *testing.T) {
-	reg := lifecycle.New()
-	reg.RegisterPreFlight(func(context.Context, *lifecycle.Context, *lifecycle.PreFlightEvent) error {
-		return context.DeadlineExceeded // any non-shed pre-flight error
+	d := Deps{}
+	outcomes := watchOutcomes(&d)
+	d.Lifecycle.RegisterPreFlight(func(context.Context, *lifecycle.Context, *lifecycle.PreFlightEvent) error {
+		return context.DeadlineExceeded
 	})
 
-	d := Deps{Lifecycle: reg}
-	body := []byte(`{"model":"m"}`)
-	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", bytes.NewReader(body))
 	w := httptest.NewRecorder()
+	Dispatch(d, w, httptest.NewRequest(http.MethodPost, "/", nil), DispatchInput{Inbound: adapters.OpenAI, Body: []byte(`{"model":"m"}`), ModelName: "m"})
 
-	Dispatch(d, w, r, DispatchInput{Inbound: adapters.OpenAI, Body: body, ModelName: "m"})
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", w.Code)
-	}
-	if got := w.Header().Get("Retry-After"); got != "" {
-		t.Fatalf("Retry-After = %q, want empty on a non-shed abort", got)
-	}
+	wantAnswer(t, w, http.StatusInternalServerError, httpapi.APIErrorBody{Type: "server_error", Code: "pre_flight_aborted", Message: "context deadline exceeded"}, map[string]string{"Retry-After": "", HeaderOrigin: "relay"})
+	wantOutcome(t, outcomes, outcome{Kind: "pre_flight_aborted", Message: "context deadline exceeded"})
 }

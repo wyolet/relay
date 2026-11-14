@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/google/go-cmp/cmp"
 	"io"
 	"log/slog"
 	"net"
@@ -199,12 +199,8 @@ func assertOverloaded(t *testing.T, w *httptest.ResponseRecorder) {
 			t.Errorf("%s = %q, want %q", header, got, want)
 		}
 	}
-	var env httpapi.APIError
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("body is not the relay error envelope: %v (%s)", err, w.Body)
-	}
-	if env.Err.Type != "server_error" || env.Err.Code != "overloaded" || env.Err.Message == "" {
-		t.Errorf("envelope = %+v, want server_error/overloaded with a message", env.Err)
+	if diff := cmp.Diff(httpapi.APIErrorBody{Type: "server_error", Code: "overloaded", Message: httpapi.OverloadMessage}, envelopeOf(t, w)); diff != "" {
+		t.Errorf("envelope (-want +got):\n%s", diff)
 	}
 }
 
