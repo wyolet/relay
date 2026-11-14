@@ -87,7 +87,11 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	// Tools
 	if len(wire.Tools) > 0 {
 		tc := &v1.ToolsConfig{}
-		for _, t := range wire.Tools {
+		for i, t := range wire.Tools {
+			// Canonical has no freeform tool; lowered onto a function tool, the caller would get function calls back for a tool it defined as custom.
+			if t.Type != "" && t.Type != "function" {
+				return nil, fmt.Errorf("cc parse_request: tools[%d]: unsupported tool type %q", i, t.Type)
+			}
 			params := t.Function.Parameters
 			if params == nil {
 				params = json.RawMessage(`{}`)

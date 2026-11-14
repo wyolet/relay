@@ -131,7 +131,6 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 	cases := []struct{ name, bug, body, keep string }{
 		{
 			name: "custom tool",
-			bug:  `{"type":"custom","custom":{"name":"grammar"}} tool → a function tool named ""`,
 			body: `{"model":"m","messages":[],"tools":[{"type":"custom","custom":{"name":"grammar"}}]}`,
 			keep: `"grammar"`,
 		},
