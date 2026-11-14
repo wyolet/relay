@@ -253,8 +253,16 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 
 		case "model":
 			var textParts []v1.Part
+			// Text is flushed before each call or thought so items keep wire order.
+			flushText := func() {
+				if len(textParts) > 0 {
+					items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts})
+					textParts = nil
+				}
+			}
 			for _, p := range c.Parts {
 				if p.FunctionCall != nil {
+					flushText()
 					args := "{}"
 					if len(p.FunctionCall.Args) > 0 {
 						args = string(p.FunctionCall.Args)
@@ -273,6 +281,7 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 					}
 					items = append(items, fc)
 				} else if p.Text != "" && p.Thought {
+					flushText()
 					r := &v1.Reasoning{Content: p.Text, Summary: []v1.SummaryText{{Text: p.Text}}}
 					if p.ThoughtSignature != "" {
 						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
@@ -282,9 +291,7 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 					textParts = append(textParts, &v1.OutputTextPart{Text: p.Text})
 				}
 			}
-			if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts})
-			}
+			flushText()
 
 		default:
 			// Unknown roles: treat as user.

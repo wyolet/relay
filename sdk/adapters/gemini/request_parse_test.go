@@ -163,7 +163,6 @@ func TestParseRequest_FunctionResponseOutputUnwrap(t *testing.T) {
 }
 
 func TestParseRequest_ModelTurnKeepsPartOrder(t *testing.T) {
-	t.Skip("bug: model turn [text, functionCall] parses to [FunctionCall, Message], so the call's output no longer follows the call")
 	req := parseRequest(t, `{"contents":[
 		{"role":"model","parts":[{"text":"Checking."},{"functionCall":{"name":"f","args":{}}}]},
 		{"role":"user","parts":[{"functionResponse":{"name":"f","response":{"ok":true}}}]}]}`)
