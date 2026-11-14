@@ -308,5 +308,5 @@ func TestConcurrencyCommitAfterKeyExpiry(t *testing.T) {
 	if got := peekOne(t, l, "scope", rules)[0]; got != 1 {
 		t.Fatalf("held slots = %d, want 1", got)
 	}
-	mustExceed(t, l, "scope", rules)
+	_ = mustExceed(t, l, "scope", rules)
 }
