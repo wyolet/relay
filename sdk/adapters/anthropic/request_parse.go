@@ -176,14 +176,21 @@ func (wire *requestScalars) toCanonical() *v1.Request {
 	// output_config.effort → Reasoning.Effort. Effort applies with or without
 	// a thinking block, so it alone opens a ReasoningConfig.
 	var outputConfig struct {
-		Effort string `json:"effort"`
+		Effort string                 `json:"effort"`
+		Format *anthropicOutputFormat `json:"format"`
 	}
-	if len(wire.OutputConfig) > 0 && json.Unmarshal(wire.OutputConfig, &outputConfig) == nil && outputConfig.Effort != "" {
-		if opts.Reasoning == nil {
-			opts.Reasoning = &v1.ReasoningConfig{}
+	if len(wire.OutputConfig) > 0 && json.Unmarshal(wire.OutputConfig, &outputConfig) == nil {
+		if outputConfig.Effort != "" {
+			if opts.Reasoning == nil {
+				opts.Reasoning = &v1.ReasoningConfig{}
+			}
+			opts.Reasoning.Effort = outputConfig.Effort
+			hasOpts = true
 		}
-		opts.Reasoning.Effort = outputConfig.Effort
-		hasOpts = true
+		if f := outputConfig.Format; f != nil {
+			opts.Output = &v1.OutputConfig{Format: &v1.Format{Type: f.Type, Schema: f.Schema}}
+			hasOpts = true
+		}
 	}
 
 	if hasOpts {

@@ -126,7 +126,6 @@ func TestAnthropicSerializeRequest_ThinkingTextToolUseReplay_SingleAssistantMess
 // enabled. This test asserts only the non-contradiction — whatever
 // resolution lands, the wire body must not carry both halves of the 400.
 func TestAnthropicSerializeRequest_StructuredOutputWithThinking_NoForcedToolChoice(t *testing.T) {
-	t.Skip("known bug: structured-output forces tool_choice while thinking enabled; unskip with the fix")
 	const model = "claude-fable-5"
 	req := &v1.Request{
 		Model:      v1.ModelRefs{model},

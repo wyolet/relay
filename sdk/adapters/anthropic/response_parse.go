@@ -61,26 +61,6 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			outputIndex++
 
 		case "tool_use":
-			if block.Name == structuredOutputToolName {
-				// Unwrap the forced-tool trick: emit the tool input as plain text
-				// so the caller sees a normal completed text response (rule 9 semantics).
-				text := "{}"
-				if len(block.Input) > 0 {
-					text = string(block.Input)
-				}
-				msg := &v1.Message{
-					ID:      fmt.Sprintf("msg_%d", outputIndex),
-					Status:  v1.StatusCompleted,
-					Role:    v1.RoleAssistant,
-					Content: []v1.Part{&v1.OutputTextPart{Text: text}},
-				}
-				resp.Output = append(resp.Output, msg)
-				resp.Status = v1.StatusCompleted
-				resp.FinishReason = v1.FinishReasonStop
-				resp.IncompleteDetails = nil
-				outputIndex++
-				continue
-			}
 			args := "{}"
 			if len(block.Input) > 0 {
 				args = string(block.Input)
