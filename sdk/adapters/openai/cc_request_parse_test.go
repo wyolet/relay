@@ -149,14 +149,15 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 		},
 		{
 			name: "assistant refusal content part",
-			bug:  `assistant content [{"type":"refusal","refusal":"I won't"}] → an assistant message with null content`,
 			body: `{"model":"m","messages":[{"role":"assistant","content":[{"type":"refusal","refusal":"I won't"}]}]}`,
 			keep: `I won't`,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Skip("bug: " + tc.bug)
+			if tc.bug != "" {
+				t.Skip("bug: " + tc.bug)
+			}
 			req, err := CCTranslator{}.ParseRequest([]byte(tc.body))
 			if err != nil {
 				return
