@@ -97,7 +97,6 @@ func TestTokenSource_ManagedIdentityRequest(t *testing.T) {
 	}
 
 	t.Run("expires_in as the metadata service sends it", func(t *testing.T) {
-		t.Skip(`bug: IMDS reply {"access_token":"t","expires_in":"3599"} (the service encodes it as a string) → "decode token response: json: cannot unmarshal string into Go struct field"; managed identity never yields a token`)
 		f := &fakeEndpoint{status: 200, body: `{"access_token":"mi-tok","expires_in":"3599","expires_on":"1506484173","resource":"https://example.azure.net","token_type":"Bearer"}`}
 		tok, err := NewTokenSource(Config{UseManagedIdentity: true, Resource: "https://example.azure.net", HTTPClient: &http.Client{Transport: f}}).AccessToken(context.Background())
 		if err != nil || tok != "mi-tok" {
@@ -162,6 +161,7 @@ func TestTokenSource_Errors(t *testing.T) {
 		{"no access_token", fakeEndpoint{status: 200, body: `{"expires_in":3600}`}, ok, "secret/azure: token response missing access_token", 1},
 		{"no expires_in", fakeEndpoint{status: 200, body: `{"access_token":"tok"}`}, ok, "secret/azure: token response missing expires_in", 1},
 		{"negative expires_in", fakeEndpoint{status: 200, body: `{"access_token":"tok","expires_in":-5}`}, ok, "secret/azure: token response missing expires_in", 1},
+		{"expires_in string that is not a number", fakeEndpoint{status: 200, body: `{"access_token":"tok","expires_in":"soon"}`}, ok, `secret/azure: decode token response: expires_in "soon" is not a number`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.f
