@@ -11,6 +11,11 @@ import (
 // future support is additive.
 var ErrMultiplexNotImplemented = errors.New("multiplex_not_implemented")
 
+// ErrUnsupportedRequest wraps a SerializeRequest error for a request the
+// upstream wire shape cannot express. The caller has to change the request,
+// so it is a client error, not a server fault.
+var ErrUnsupportedRequest = errors.New("not supported by the upstream API")
+
 const (
 	OutputModeSync   = "sync"
 	OutputModeStream = "stream"

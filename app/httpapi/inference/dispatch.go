@@ -428,6 +428,10 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
 	if err != nil {
 		d.fireUsageFailure(ctx, "marshal_request", err.Error())
+		if errors.Is(err, v1.ErrUnsupportedRequest) {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_request", err.Error())
+			return
+		}
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
 		return
 	}

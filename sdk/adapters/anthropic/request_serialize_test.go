@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -793,17 +794,17 @@ func TestSerializeRequest_StructuredOutput_JSONSchema(t *testing.T) {
 	}
 }
 
-func TestSerializeRequest_StructuredOutput_JSONObject(t *testing.T) {
-	out, err := (AnthropicTranslator{}).SerializeRequest(makeStructuredOutputReq("claude-opus-5-5", "json_object", nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := outputFormat(t, decodeMap(t, out))
-	if f["type"] != "json_schema" {
-		t.Errorf("format.type = %v, want json_schema", f["type"])
-	}
-	if s, _ := f["schema"].(map[string]any); s["type"] != "object" {
-		t.Errorf("format.schema = %v, want {type:object}", f["schema"])
+// Anthropic rejects an object schema that leaves additionalProperties open,
+// so a format without a schema is refused before it reaches the upstream.
+func TestSerializeRequest_StructuredOutput_NoSchemaRefused(t *testing.T) {
+	for _, c := range []struct {
+		format string
+		schema []byte
+	}{{"json_object", nil}, {"json_object", []byte(`{"type":"object"}`)}, {"json_schema", nil}} {
+		out, err := (AnthropicTranslator{}).SerializeRequest(makeStructuredOutputReq("claude-opus-5-5", c.format, c.schema))
+		if !errors.Is(err, v1.ErrUnsupportedRequest) {
+			t.Errorf("%s schema=%s: err = %v (body %s), want ErrUnsupportedRequest", c.format, c.schema, err, out)
+		}
 	}
 }
 

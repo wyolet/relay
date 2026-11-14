@@ -27,10 +27,6 @@ import (
 
 const defaultMaxTokensCanonical = 4096
 
-// defaultJSONObjectSchema is sent for json_object (and json_schema without a
-// schema): any JSON object.
-var defaultJSONObjectSchema = json.RawMessage(`{"type":"object"}`)
-
 // AnthropicTranslator implements v1.Translator for the Anthropic Messages API.
 type AnthropicTranslator struct{}
 

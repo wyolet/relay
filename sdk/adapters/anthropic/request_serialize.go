@@ -137,17 +137,16 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			// canonical: Format.Name/Description/Strict dropped — output_config.format
 			// takes only a schema, and its decoding is always constrained.
 			if f.Type == "json_schema" || f.Type == "json_object" {
-				// Native structured output only: models without it answer with the
-				// upstream's 400. json_object has no native form, so it goes as the
-				// loosest object schema and the upstream decides whether it accepts it.
-				schema := f.Schema
-				if len(schema) == 0 || f.Type == "json_object" {
-					schema = defaultJSONObjectSchema
+				// Native structured output takes only a strict schema, and an
+				// object schema must close additionalProperties, so "any JSON
+				// object" has no form here.
+				if f.Type == "json_object" || len(f.Schema) == 0 {
+					return nil, fmt.Errorf("anthropic serialize_request: %w: structured output needs a JSON schema (json_object has no Anthropic equivalent)", v1.ErrUnsupportedRequest)
 				}
 				if out.OutputConfig == nil {
 					out.OutputConfig = &anthropicOutputConfig{}
 				}
-				out.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: schema}
+				out.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: f.Schema}
 			}
 		}
 	}

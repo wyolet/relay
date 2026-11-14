@@ -2,6 +2,7 @@ package adapters_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/gemini"
 	"github.com/wyolet/relay/sdk/adapters/openai"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // schema used throughout.
@@ -93,8 +95,8 @@ func TestCrossShape_CCJsonSchemaToAnthropic(t *testing.T) {
 	assertOutputConfigFormat(t, wire, "json_schema", soSchema)
 }
 
-// TestCrossShape_CCJsonObjectToAnthropic proves json_object becomes the loose
-// object schema {"type":"object"} in output_config.format.
+// TestCrossShape_CCJsonObjectToAnthropic proves json_object, which has no
+// Anthropic form, is refused instead of reaching the upstream.
 func TestCrossShape_CCJsonObjectToAnthropic(t *testing.T) {
 	body := []byte(`{
 		"model": "claude-sonnet-5-5",
@@ -105,11 +107,9 @@ func TestCrossShape_CCJsonObjectToAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire, err := anthropic.AnthropicTranslator{}.SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := (anthropic.AnthropicTranslator{}).SerializeRequest(req); !errors.Is(err, v1.ErrUnsupportedRequest) {
+		t.Fatalf("json_object to Anthropic: err = %v, want ErrUnsupportedRequest", err)
 	}
-	assertOutputConfigFormat(t, wire, "json_schema", json.RawMessage(`{"type":"object"}`))
 }
 
 // TestCrossShape_ResponsesJsonSchemaToAnthropic proves an OpenAI Responses
@@ -333,7 +333,9 @@ func TestCrossShape_AnthropicStreamToCC(t *testing.T) {
 				}
 				var chunk struct {
 					Choices []struct {
-						Delta        struct{ Content *string `json:"content"` } `json:"delta"`
+						Delta struct {
+							Content *string `json:"content"`
+						} `json:"delta"`
 						FinishReason *string `json:"finish_reason"`
 					} `json:"choices"`
 				}
