@@ -69,100 +69,68 @@ func newUsablePoolsHarnessWith(t *testing.T, az authz.Authorizer) http.Handler {
 	return r
 }
 
-// usable_by keeps the rows a policy of that scope may link, composes with the other filters, and refuses a malformed scope.
-func TestListUsableBy(t *testing.T) {
-	h := newUsablePoolsHarness(t)
-	all := []string{"pool-alice", "pool-bob", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}
-	for _, tc := range []struct {
-		query string
-		want  []string
-	}{
-		{"", all},
-		{"?usable_by=project:p-1", []string{"pool-p1", "pool-sys", "pool-t1"}},
-		{"?usable_by=team:t-1", []string{"pool-sys", "pool-t1"}},
-		{"?usable_by=user:u-alice", []string{"pool-alice", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}},
-		{"?usable_by=system", all},
-		{"?usable_by=project:p-1&name=pool-t1", []string{"pool-t1"}},
-		{"?usable_by=project:p-2&sort=-name", []string{"pool-t2", "pool-sys", "pool-p2"}},
-	} {
-		w := scopeReq(t, h, "alice", http.MethodGet, "/pools"+tc.query, "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s: status %d: %s", tc.query, w.Code, w.Body)
-		}
-		var body struct {
-			Items []pool.Pool `json:"items"`
-			Total int         `json:"total"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		var got []string
-		for _, p := range body.Items {
-			got = append(got, p.Meta.Name)
-		}
-		if !strings.Contains(tc.query, "sort=") {
-			slices.Sort(got)
-		}
-		if !slices.Equal(got, tc.want) || body.Total != len(tc.want) {
-			t.Errorf("%s: got %v (total %d), want %v", tc.query, got, body.Total, tc.want)
-		}
-	}
-	for _, bad := range []string{"?usable_by=project", "?usable_by=project:", "?usable_by=org:o-1", "?usable_by=system&usable_by=team:t-1", "?usable_by=team:a:b"} {
-		if w := scopeReq(t, h, "alice", http.MethodGet, "/pools"+bad, ""); w.Code != http.StatusBadRequest {
-			t.Errorf("%s: status %d, want 400: %s", bad, w.Code, w.Body)
-		}
-	}
-}
-
-// An admin sees every pool, but asking what a user's policy may link leaves out another user's pools: no binding of that policy is ever served by them.
-func TestListUsableBy_AdminGetsNoOtherUsersPools(t *testing.T) {
-	h := newUsablePoolsHarness(t)
-	for _, tc := range []struct{ who, scope string }{{"root", "user:u-root"}, {"token", "user:u-bob"}} {
-		w := scopeReq(t, h, tc.who, http.MethodGet, "/pools?usable_by="+tc.scope, "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s %s: status %d: %s", tc.who, tc.scope, w.Code, w.Body)
-		}
-		var body struct {
-			Items []pool.Pool `json:"items"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		var got []string
-		for _, p := range body.Items {
-			got = append(got, p.Meta.Name)
-		}
-		if slices.Contains(got, "pool-alice") || !slices.Contains(got, "pool-sys") {
-			t.Errorf("%s asking for %s: %v, want the system pool and not alice's", tc.who, tc.scope, got)
-		}
-	}
-}
-
-// usable_by takes any scope the caller may write the linking row in: an admin asking for another user gets that user's pools and the system's; a user asking for another user is refused with 403.
-func TestListUsableBy_ScopeTheCallerMayWrite(t *testing.T) {
-	h := newUsablePoolsHarnessWith(t, ownUserRowsAuthz{})
-	w := scopeReq(t, h, "root", http.MethodGet, "/pools?usable_by=user:u-alice", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("admin for alice: status %d: %s", w.Code, w.Body)
-	}
+// listed asks GET path as who and returns the status, the ids of the rows in the order listed, and total.
+func listed(t *testing.T, h http.Handler, who, path string) (int, []string, int) {
+	t.Helper()
+	w := scopeReq(t, h, who, http.MethodGet, path, "")
 	var body struct {
-		Items []pool.Pool `json:"items"`
+		Items []struct {
+			Metadata meta.Metadata `json:"metadata"`
+		} `json:"items"`
+		Total int `json:"total"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: decode %s: %v", path, w.Body, err)
+		}
 	}
-	var got []string
-	for _, p := range body.Items {
-		got = append(got, p.Meta.Name)
+	var names []string
+	for _, it := range body.Items {
+		names = append(names, it.Metadata.ID)
 	}
-	if !slices.Contains(got, "pool-alice") || !slices.Contains(got, "pool-sys") || slices.Contains(got, "pool-bob") {
-		t.Errorf("admin for alice: %v, want alice's and the system's pools, not bob's", got)
-	}
-	if w := scopeReq(t, h, "bob", http.MethodGet, "/pools?usable_by=user:u-alice", ""); w.Code != http.StatusForbidden {
-		t.Errorf("bob for alice: status %d, want 403: %s", w.Code, w.Body)
-	}
-	if w := scopeReq(t, h, "alice", http.MethodGet, "/pools?usable_by=user:u-alice", ""); w.Code != http.StatusOK {
-		t.Errorf("alice for herself: status %d", w.Code)
+	return w.Code, names, body.Total
+}
+
+// usable_by keeps the rows a policy of that scope may link and composes with the other filters. It takes any scope the caller may write the linking row in: asking for a user's policy leaves out every other user's pools, for an admin too, since no binding of that policy is ever served by them.
+func TestListUsableBy(t *testing.T) {
+	all := []string{"pool-alice", "pool-bob", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}
+	shared := []string{"pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}
+	alices := []string{"pool-alice", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}
+	open, ownRows := newUsablePoolsHarness(t), newUsablePoolsHarnessWith(t, ownUserRowsAuthz{})
+	for _, tc := range []struct {
+		h          http.Handler
+		who, query string
+		status     int
+		want       []string
+	}{
+		{open, "alice", "", 200, all},
+		{open, "alice", "?usable_by=project:p-1", 200, []string{"pool-p1", "pool-sys", "pool-t1"}},
+		{open, "alice", "?usable_by=team:t-1", 200, []string{"pool-sys", "pool-t1"}},
+		{open, "alice", "?usable_by=user:u-alice", 200, alices},
+		{open, "alice", "?usable_by=system", 200, all},
+		{open, "alice", "?usable_by=project:p-1&name=pool-t1", 200, []string{"pool-t1"}},
+		{open, "alice", "?usable_by=project:p-2&sort=-name", 200, []string{"pool-t2", "pool-sys", "pool-p2"}},
+		{open, "alice", "?usable_by=project:p-2&limit=1", 200, []string{"pool-p2"}},
+		{open, "root", "?usable_by=user:u-root", 200, shared},
+		{open, "token", "?usable_by=user:u-bob", 200, []string{"pool-bob", "pool-p1", "pool-p2", "pool-sys", "pool-t1", "pool-t2"}},
+		{ownRows, "root", "?usable_by=user:u-alice", 200, alices},
+		{ownRows, "alice", "?usable_by=user:u-alice", 200, alices},
+		{ownRows, "bob", "?usable_by=user:u-alice", 403, nil},
+		{open, "alice", "?usable_by=project", 400, nil},
+		{open, "alice", "?usable_by=project:", 400, nil},
+		{open, "alice", "?usable_by=org:o-1", 400, nil},
+		{open, "alice", "?usable_by=system&usable_by=team:t-1", 400, nil},
+		{open, "alice", "?usable_by=team:a:b", 400, nil},
+		{open, "alice", "?usable_by=system&usable_for=pool", 400, nil},
+	} {
+		code, got, total := listed(t, tc.h, tc.who, "/pools"+tc.query)
+		wantTotal := len(tc.want)
+		if strings.Contains(tc.query, "limit=1") {
+			wantTotal = 3
+		}
+		if !slices.Equal(got, tc.want) || code != tc.status || total != wantTotal {
+			t.Errorf("%s as %s: %d %v (total %d), want %d %v (total %d)", tc.query, tc.who, code, got, total, tc.status, tc.want, wantTotal)
+		}
 	}
 }
 
@@ -254,30 +222,17 @@ func TestListAccountsUsableFor(t *testing.T) {
 		{"?usable_by=project:p-1&usable_for=pool", []string{"acct-p1", "acct-sys", "acct-t1", "share-p1"}},
 	} {
 		bindingReads = 0
-		w := scopeReq(t, r, "alice", http.MethodGet, "/accounts"+tc.query, "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s: status %d: %s", tc.query, w.Code, w.Body)
+		code, got, total := listed(t, r, "alice", "/accounts"+tc.query)
+		slices.Sort(got)
+		if code != http.StatusOK || !slices.Equal(got, tc.want) || total != len(tc.want) {
+			t.Errorf("%s: %d %v (total %d), want %v", tc.query, code, got, total, tc.want)
 		}
 		// Seven accounts, one read of the bindings: the request's checks share it.
 		if bindingReads > 1 {
 			t.Errorf("%s: read the policy bindings %d times in one request, want at most 1", tc.query, bindingReads)
 		}
-		var body struct {
-			Items []account.Account `json:"items"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		var got []string
-		for _, a := range body.Items {
-			got = append(got, a.Meta.ID)
-		}
-		slices.Sort(got)
-		if !slices.Equal(got, tc.want) {
-			t.Errorf("%s: got %v, want %v", tc.query, got, tc.want)
-		}
 	}
-	// A scope that does not exist answers as a save naming it would; a user scope is the authorizer's to allow (TestListUsableBy_ScopeTheCallerMayWrite).
+	// A scope that does not exist answers as a save naming it would; a user scope is the authorizer's to allow (TestListUsableBy).
 	for _, bad := range []string{"?usable_by=team:t-9", "?usable_by=project:p-9&usable_for=pool"} {
 		if w := scopeReq(t, r, "alice", http.MethodGet, "/accounts"+bad, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400: %s", bad, w.Code, w.Body)

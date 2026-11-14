@@ -719,7 +719,11 @@ func TestHostKeyRefusesReservedEnvRef(t *testing.T) {
 		return fmt.Sprintf(`{"metadata":{"name":"env-key"},"spec":{"hostId":%q,"accountId":%q,"valueFrom":{"kind":"env","env":%q}}}`, hostID, accountID, env)
 	}
 	wantAPIError(t, scopeReq(t, h, "token", "POST", "/host-keys", body("RELAY_MASTER_KEY")), 400, "", reserved)
-	id := decodeMeta(t, scopeReq(t, h, "token", "POST", "/host-keys", body("OPENAI_API_KEY")), 201).ID
+	created := scopeReq(t, h, "token", "POST", "/host-keys", body("OPENAI_API_KEY"))
+	if created.Code != 201 {
+		t.Fatalf("create with an allowed env ref = %d: %s", created.Code, created.Body)
+	}
+	id := createdID(t, created.Body)
 	for _, env := range []string{"RELAY_ADMIN_TOKEN", "WYOLET_OIDC_CLIENT_SECRET"} {
 		wantAPIError(t, scopeReq(t, h, "token", "PUT", "/host-keys/by-id/"+id, body(env)), 400, "", reserved)
 	}

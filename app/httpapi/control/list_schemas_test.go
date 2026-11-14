@@ -31,20 +31,6 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// applyQ runs query q over items, failing the test when the schema refuses it.
-func applyQ[T any](t *testing.T, s filter.Schema[T], q string, items []*T) ([]*T, int) {
-	t.Helper()
-	v, err := url.ParseQuery(q)
-	if err != nil {
-		t.Fatalf("bad query %q: %v", q, err)
-	}
-	pq, err := s.Parse(v)
-	if err != nil {
-		t.Fatalf("Parse(%q): %v", q, err)
-	}
-	return pq.Apply(items)
-}
-
 // filterCase is a query and either the names it keeps, in the order the list returns them, or the refusal it gets.
 type filterCase struct {
 	q       string
