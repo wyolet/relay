@@ -21,9 +21,22 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		// Model is not part of the Gemini body (it lives in the URL), but we
 		// accept it as a convenience field so tests can round-trip cleanly.
 		Model string `json:"model"`
+
+		SystemInstructionSnake json.RawMessage `json:"system_instruction"`
+		GenerationConfigSnake  json.RawMessage `json:"generation_config"`
+		ToolConfigSnake        json.RawMessage `json:"tool_config"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("gemini parse_request: %w", err)
+	}
+	if wire.SystemInstruction == nil {
+		wire.SystemInstruction = wire.SystemInstructionSnake
+	}
+	if wire.GenerationConfig == nil {
+		wire.GenerationConfig = wire.GenerationConfigSnake
+	}
+	if wire.ToolConfig == nil {
+		wire.ToolConfig = wire.ToolConfigSnake
 	}
 
 	req := &v1.Request{}
@@ -45,6 +58,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		if err := json.Unmarshal(wire.GenerationConfig, &gc); err != nil {
 			return nil, fmt.Errorf("gemini parse_request: generationConfig: %w", err)
 		}
+		gc.fillFromSnakeCase()
 		sp := &v1.SamplingParams{}
 		hasSampling := false
 		if gc.Temperature != nil {
@@ -101,6 +115,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			if err := json.Unmarshal(rawTool, &gt); err != nil {
 				return nil, fmt.Errorf("gemini parse_request: tool: %w", err)
 			}
+			gt.fillFromSnakeCase()
 			for _, fd := range gt.FunctionDeclarations {
 				schema := fd.Parameters
 				if schema == nil {
@@ -115,8 +130,11 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		}
 		if len(wire.ToolConfig) > 0 && string(wire.ToolConfig) != "null" {
 			var tcWire toolConfig
-			if err := json.Unmarshal(wire.ToolConfig, &tcWire); err == nil && tcWire.FunctionCallingConfig != nil {
-				tc.Choice = geminiToolModeToChoice(tcWire.FunctionCallingConfig)
+			if err := json.Unmarshal(wire.ToolConfig, &tcWire); err == nil {
+				tcWire.fillFromSnakeCase()
+				if tcWire.FunctionCallingConfig != nil {
+					tc.Choice = geminiToolModeToChoice(tcWire.FunctionCallingConfig)
+				}
 			}
 		}
 		req.Tools = tc
@@ -204,9 +222,12 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 		if err := json.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
+		for i := range c.Parts {
+			c.Parts[i].fillFromSnakeCase()
+		}
 		switch c.Role {
-		case "user":
-			// user may have text parts or functionResponse parts
+		default:
+			// Any role but model reads as user, as the API reads a content without one.
 			var textParts []v1.Part
 			hasFunctionResponse := false
 			for _, p := range c.Parts {
@@ -253,8 +274,16 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 
 		case "model":
 			var textParts []v1.Part
+			// Text is flushed before each call or thought so items keep wire order.
+			flushText := func() {
+				if len(textParts) > 0 {
+					items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts})
+					textParts = nil
+				}
+			}
 			for _, p := range c.Parts {
 				if p.FunctionCall != nil {
+					flushText()
 					args := "{}"
 					if len(p.FunctionCall.Args) > 0 {
 						args = string(p.FunctionCall.Args)
@@ -273,6 +302,7 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 					}
 					items = append(items, fc)
 				} else if p.Text != "" && p.Thought {
+					flushText()
 					r := &v1.Reasoning{Content: p.Text, Summary: []v1.SummaryText{{Text: p.Text}}}
 					if p.ThoughtSignature != "" {
 						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
@@ -282,21 +312,7 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 					textParts = append(textParts, &v1.OutputTextPart{Text: p.Text})
 				}
 			}
-			if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleAssistant, Content: textParts})
-			}
-
-		default:
-			// Unknown roles: treat as user.
-			var textParts []v1.Part
-			for _, p := range c.Parts {
-				if p.Text != "" {
-					textParts = append(textParts, &v1.TextPart{Text: p.Text})
-				}
-			}
-			if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleUser, Content: textParts})
-			}
+			flushText()
 		}
 	}
 	return items, nil
