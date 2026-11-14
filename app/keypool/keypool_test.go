@@ -3,685 +3,86 @@ package keypool
 import (
 	"context"
 	"log/slog"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// poolRef is a tiny test-only struct that mirrors what Pick now takes:
-// a kv scope tag plus a selection strategy. Keeps the tests free of an
-// app/policy import (which would cycle via policy → keypool).
-type poolRef struct {
-	scope string
-	algo  KeySelection
-}
+var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// helpers
-
-func newSel(t *testing.T, clock func() time.Time) (*Selector, *kv.Mem) {
-	t.Helper()
-	ms := kv.NewMem()
-	t.Cleanup(func() { ms.Close() })
-	return New(ms, noopLogger(), clock, nil), ms
-}
-
-func noopLogger() *slog.Logger {
-	return slog.New(slog.DiscardHandler)
-}
-
-func key(name, hash string) *hostkey.HostKey {
-	return &hostkey.HostKey{
-		Meta:    meta.Metadata{Name: name},
-		KeyHash: hash,
-	}
-}
-
-func pool(name string) poolRef {
-	return poolRef{scope: name}
-}
-
-func poolWithStrategy(name string, strategy KeySelection) poolRef {
-	return poolRef{scope: name, algo: strategy}
-}
-
-// frozen clock helpers
+func noopLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 func frozenClock(t time.Time) func() time.Time { return func() time.Time { return t } }
 
-func advancedClock(base time.Time, delta time.Duration) func() time.Time {
-	return frozenClock(base.Add(delta))
+func key(name, hash string) *hostkey.HostKey {
+	return &hostkey.HostKey{Meta: meta.Metadata{Name: name}, KeyHash: hash}
 }
 
-var _ = advancedClock // suppress unused warning
-
-var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// TestRecordSuccess — fresh key, success recorded → closed + BackoffStep=0.
-func TestRecordSuccess(t *testing.T) {
-	sel, ms := newSel(t, frozenClock(t0))
-	_ = ms
-	ctx := context.Background()
-	sel.RecordSuccess(ctx, "hash1")
-	rec := sel.readRecord(ctx, "hash1")
-	if rec.State != CircuitClosed {
-		t.Fatalf("want closed, got %v", rec.State)
+func keys(hashes ...string) []*hostkey.HostKey {
+	out := make([]*hostkey.HostKey, len(hashes))
+	for i, h := range hashes {
+		out[i] = key(h, h)
 	}
-	if rec.BackoffStep != 0 {
-		t.Fatalf("want BackoffStep=0, got %d", rec.BackoffStep)
-	}
+	return out
 }
 
-// TestReadCircuit — found flag is false before any record exists and true
-// after a failure writes one; the returned record reflects the stored state.
-func TestReadCircuit(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-read"
-
-	rec, found := sel.ReadCircuit(ctx, k)
-	if found {
-		t.Fatal("want found=false for a key with no record")
-	}
-	if rec.State != CircuitClosed {
-		t.Fatalf("want default closed, got %v", rec.State)
-	}
-
-	sel.RecordFailure(ctx, k, FailureAuth, 0)
-	rec, found = sel.ReadCircuit(ctx, k)
-	if !found {
-		t.Fatal("want found=true after a failure wrote a record")
-	}
-	if rec.State != CircuitOpen || rec.Indefinite {
-		t.Fatalf("want open with an expiry, got state=%v indefinite=%v", rec.State, rec.Indefinite)
-	}
-	if rec.State.String() != "open" {
-		t.Fatalf("want state string \"open\", got %q", rec.State.String())
-	}
-	if rec.Reason != ReasonUpstreamAuthFailed {
-		t.Fatalf("want reason %q, got %q", ReasonUpstreamAuthFailed, rec.Reason)
-	}
-}
-
-// An auth failure opens the key for a bounded, escalating cooldown, then a
-// half-open probe: one rejected request never takes a shared key out for good.
-func TestAuthFailureOpensForBoundedCooldown(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-auth"
-	keys := []*hostkey.HostKey{key("s", k)}
-	p := pool("p")
-
-	sel.RecordFailure(ctx, k, FailureAuth, 0)
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitOpen || rec.Indefinite {
-		t.Fatalf("want open with an expiry, got state=%v indefinite=%v", rec.State, rec.Indefinite)
-	}
-	first := authCooldowns[0]
-	if want := t0.Add(first); !rec.OpenUntil.Equal(want) {
-		t.Fatalf("OpenUntil = %v, want %v", rec.OpenUntil, want)
-	}
-	if _, err := sel.Pick(ctx, p.scope, p.algo, keys); err != ErrNoHealthyKeys {
-		t.Fatalf("inside the cooldown: want ErrNoHealthyKeys, got %v", err)
-	}
-
-	sel.clock = frozenClock(t0.Add(first + time.Second))
-	if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
-		t.Fatalf("after the cooldown: want the key as a half-open probe, got %v, %v", got, err)
-	}
-
-	// Each failed probe escalates, capped at the last step.
-	for range len(authCooldowns) + 2 {
-		sel.RecordFailure(ctx, k, FailureAuth, 0)
-		sel.clock = frozenClock(sel.clock().Add(2 * time.Hour))
-		if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
-			t.Fatalf("after the cooldown: want the key as a probe, got %v, %v", got, err)
-		}
-	}
-	sel.RecordFailure(ctx, k, FailureAuth, 0)
-	rec = sel.readRecord(ctx, k)
-	if want := sel.clock().Add(authCooldowns[len(authCooldowns)-1]); !rec.OpenUntil.Equal(want) {
-		t.Fatalf("capped OpenUntil = %v, want %v", rec.OpenUntil, want)
-	}
-}
-
-// A 403 means the credential authenticated but the request was not allowed,
-// often because of what the request asked for. It cools the key down on the
-// short server-error ladder, not the auth one.
-func TestForbiddenUsesShortBackoff(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-403"
-	sel.RecordFailure(ctx, k, FailureForbidden, 0)
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitOpen || rec.Indefinite || rec.Reason != ReasonUpstreamForbidden {
-		t.Fatalf("want open/bounded/%q, got %v/%v/%q", ReasonUpstreamForbidden, rec.State, rec.Indefinite, rec.Reason)
-	}
-	if want := t0.Add(backoffSchedule[0]); !rec.OpenUntil.Equal(want) {
-		t.Fatalf("OpenUntil = %v, want %v", rec.OpenUntil, want)
-	}
-}
-
-// A record in the stored form used before times were milliseconds, including
-// one written as indefinite before cooldowns were bounded, reads as an expired
-// open record: the next pick probes the key and keeps its backoff step.
-func TestLegacyRecordIsProbed(t *testing.T) {
-	sel, ms := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-legacy"
-	legacy := `{"state":1,"open_until":"2026-01-01T01:00:00Z","backoff_step":2,"last_transition":"2026-01-01T00:00:00Z","indefinite":true,"reason":"upstream_auth_failed"}`
-	if err := ms.Set(ctx, circuitKey(k), []byte(legacy), 0); err != nil {
-		t.Fatal(err)
-	}
-	p := pool("p")
-	if got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)}); err != nil || got.KeyHash != k {
-		t.Fatalf("want the key as a probe, got %v, %v", got, err)
-	}
-	if rec := sel.readRecord(ctx, k); rec.Indefinite || rec.State != CircuitHalfOpen || rec.BackoffStep != 2 {
-		t.Fatalf("want half-open at step 2 without the indefinite flag, got %+v", rec)
-	}
-}
-
-// TestRateLimitShortStaysClosed — short rate-limit → state unchanged; Pick returns key.
-func TestRateLimitShortStaysClosed(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-rls"
-	sel.RecordFailure(ctx, k, FailureRateLimitShort, 2*time.Second)
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitClosed {
-		t.Fatalf("want closed, got %v", rec.State)
-	}
-	p := pool("p2")
-	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.KeyHash != k {
-		t.Fatalf("wrong key returned")
-	}
-}
-
-// TestRateLimitLongOpensForDuration — long RL opens until t+30s; skipped at t+10s; half-open at t+31s.
-func TestRateLimitLongOpensForDuration(t *testing.T) {
-	sel, ms := newSel(t, frozenClock(t0))
-	_ = ms
-	ctx := context.Background()
-	k := "hash-rll"
-	sel.RecordFailure(ctx, k, FailureRateLimitLong, 30*time.Second)
-
-	// at t+10s — still open
-	sel.clock = frozenClock(t0.Add(10 * time.Second))
-	p := pool("p3")
-	_, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
-	if err != ErrNoHealthyKeys {
-		t.Fatalf("want ErrNoHealthyKeys at t+10s, got %v", err)
-	}
-
-	// at t+31s — should auto-transition to half-open and be eligible
-	sel.clock = frozenClock(t0.Add(31 * time.Second))
-	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
-	if err != nil {
-		t.Fatalf("want key at t+31s, got err %v", err)
-	}
-	if got.KeyHash != k {
-		t.Fatal("wrong key")
-	}
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitHalfOpen {
-		t.Fatalf("want half-open after pick, got %v", rec.State)
-	}
-}
-
-// Server errors open a closed key only at the threshold; after that each
-// failed probe climbs the ladder and a successful probe steps it back down.
-func TestServerErrorBackoffEscalates(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-5xx"
-	keys := []*hostkey.HostKey{key("s", k)}
-	p := pool("p4")
-
-	for i := 1; i < DefaultFailureThreshold; i++ {
-		sel.RecordFailure(ctx, k, FailureServerError, 0)
-		if rec := sel.readRecord(ctx, k); rec.State != CircuitClosed || rec.Failures != i {
-			t.Fatalf("failure %d: want closed with %d failures, got %+v", i, i, rec)
-		}
-	}
-	sel.RecordFailure(ctx, k, FailureServerError, 0)
-	for step := 1; step <= 3; step++ {
-		rec := sel.readRecord(ctx, k)
-		if rec.State != CircuitOpen || rec.BackoffStep != step {
-			t.Fatalf("step %d: want open, got %+v", step, rec)
-		}
-		if want := sel.clock().Add(backoffSchedule[step-1]); !rec.OpenUntil.Equal(want) {
-			t.Fatalf("step %d: OpenUntil = %v, want %v", step, rec.OpenUntil, want)
-		}
-		sel.clock = frozenClock(rec.OpenUntil)
-		if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
-			t.Fatalf("step %d: want the key as a probe, got %v, %v", step, got, err)
-		}
-		if step < 3 {
-			sel.RecordFailure(ctx, k, FailureServerError, 0)
-		}
-	}
-	sel.RecordSuccess(ctx, k)
-	if rec := sel.readRecord(ctx, k); rec.State != CircuitClosed || rec.BackoffStep != 2 {
-		t.Fatalf("after the probe's success: want closed at step 2, got %+v", rec)
-	}
-}
-
-// TestNetworkBehavesLike5xx — network errors count toward the same threshold and ladder.
-func TestNetworkBehavesLike5xx(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-net"
-	for range DefaultFailureThreshold {
-		sel.RecordFailure(ctx, k, FailureNetwork, 0)
-	}
-	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitOpen || rec.BackoffStep != 1 || rec.Reason != ReasonUpstreamNetworkError {
-		t.Fatalf("want open/step=1/network, got %+v", rec)
-	}
-	if want := t0.Add(backoffSchedule[0]); !rec.OpenUntil.Equal(want) {
-		t.Fatalf("want OpenUntil=%v, got %v", want, rec.OpenUntil)
-	}
-}
-
-// TestPick_RoundRobin — three healthy keys; 30 picks → ~10 each (±1).
-func TestPick_RoundRobin(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	keys := []*hostkey.HostKey{
-		key("a", "hA"),
-		key("b", "hB"),
-		key("c", "hC"),
-	}
-	p := poolWithStrategy("rr", KeySelectionRoundRobin)
-	counts := map[string]int{}
-	for i := 0; i < 30; i++ {
-		got, err := sel.Pick(ctx, p.scope, p.algo, keys)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counts[got.KeyHash]++
-	}
-	for _, k := range []string{"hA", "hB", "hC"} {
-		if counts[k] < 9 || counts[k] > 11 {
-			t.Fatalf("uneven distribution: %v", counts)
-		}
-	}
-}
-
-// TestPick_SkipsOpen — one auth-failed key; picks distributed across other two.
-func TestPick_SkipsOpen(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	sel.RecordFailure(ctx, "hB", FailureAuth, 0)
-	keys := []*hostkey.HostKey{
-		key("a", "hA"),
-		key("b", "hB"),
-		key("c", "hC"),
-	}
-	p := poolWithStrategy("skip", KeySelectionRoundRobin)
-	for i := 0; i < 20; i++ {
-		got, err := sel.Pick(ctx, p.scope, p.algo, keys)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.KeyHash == "hB" {
-			t.Fatal("picked open key hB")
-		}
-	}
-}
-
-// TestPick_NoHealthy — all auth-failed → ErrNoHealthyKeys.
-func TestPick_NoHealthy(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	keys := []*hostkey.HostKey{
-		key("a", "hA"),
-		key("b", "hB"),
-	}
-	for _, k := range keys {
-		sel.RecordFailure(ctx, k.KeyHash, FailureAuth, 0)
-	}
-	p := pool("none")
-	_, err := sel.Pick(ctx, p.scope, p.algo, keys)
-	if err != ErrNoHealthyKeys {
-		t.Fatalf("want ErrNoHealthyKeys, got %v", err)
-	}
-}
-
-// TestPick_HalfOpenServesOneProbe — open key past OpenUntil → the first Pick probes it; the next skips it while the probe is out.
-func TestPick_HalfOpenServesOneProbe(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-ho"
-	sel.RecordFailure(ctx, k, FailureRateLimitLong, 5*time.Second)
-	sel.clock = frozenClock(t0.Add(10 * time.Second))
-	p := pool("ho")
-	sec := key("s", k)
-
-	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{sec})
-	if err != nil || got.KeyHash != k {
-		t.Fatalf("first pick: want key, got err=%v", err)
-	}
-	if _, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{sec}); err != ErrNoHealthyKeys {
-		t.Fatalf("second pick during the probe: want ErrNoHealthyKeys, got %v", err)
-	}
-}
-
-// TestPickConcurrent — 100 goroutines pick from a 3-key healthy pool; all 3 get hits.
-func TestPickConcurrent(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	keys := []*hostkey.HostKey{
-		key("a", "cA"),
-		key("b", "cB"),
-		key("c", "cC"),
-	}
-	p := poolWithStrategy("concurrent", KeySelectionRoundRobin)
-	var (
-		mu     sync.Mutex
-		counts = map[string]int{}
-		wg     sync.WaitGroup
-		errCnt atomic.Int64
-	)
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			got, err := sel.Pick(ctx, p.scope, p.algo, keys)
-			if err != nil {
-				errCnt.Add(1)
-				return
-			}
-			mu.Lock()
-			counts[got.KeyHash]++
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-	if errCnt.Load() > 0 {
-		t.Fatalf("%d concurrent picks returned errors", errCnt.Load())
-	}
-	for _, k := range []string{"cA", "cB", "cC"} {
-		if counts[k] == 0 {
-			t.Fatalf("key %s got zero picks: %v", k, counts)
-		}
-	}
-}
-
-// TestRecordSuccessDecaysBackoff — each success takes the backoff step down by one rather than to zero.
-func TestRecordSuccessDecaysBackoff(t *testing.T) {
-	sel, ms := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "hash-clr"
-	b, _ := encodeRecord(CircuitRecord{State: CircuitClosed, BackoffStep: 3})
-	if err := ms.Set(ctx, circuitKey(k), b, ttlFlat); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []int{2, 1, 0, 0} {
-		sel.RecordSuccess(ctx, k)
-		if rec := sel.readRecord(ctx, k); rec.BackoffStep != want || rec.State != CircuitClosed {
-			t.Fatalf("after RecordSuccess: want closed/%d, got %v/%d", want, rec.State, rec.BackoffStep)
-		}
-	}
-}
-
-// ── Strategy tests ─────────────────────────────────────────────────────────────
-
-// TestPick_Prioritized_HealthyFirst — A, B, C all healthy → A always picked.
-func TestPick_Prioritized_HealthyFirst(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	keys := []*hostkey.HostKey{
-		key("a", "hA"),
-		key("b", "hB"),
-		key("c", "hC"),
-	}
-	p := poolWithStrategy("pri", KeySelectionPrioritized)
-	for i := 0; i < 10; i++ {
-		got, err := sel.Pick(ctx, p.scope, p.algo, keys)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.KeyHash != "hA" {
-			t.Fatalf("prioritized: want hA, got %s", got.KeyHash)
-		}
-	}
-}
-
-// TestPick_Prioritized_SkipsOpenFirst — A in cooldown → B.
-func TestPick_Prioritized_SkipsOpenFirst(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	sel.RecordFailure(ctx, "hA", FailureAuth, 0)
-	keys := []*hostkey.HostKey{
-		key("a", "hA"),
-		key("b", "hB"),
-		key("c", "hC"),
-	}
-	p := poolWithStrategy("pri2", KeySelectionPrioritized)
-	got, err := sel.Pick(ctx, p.scope, p.algo, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.KeyHash != "hB" {
-		t.Fatalf("prioritized with A open: want hB, got %s", got.KeyHash)
-	}
-}
-
-// TestPick_LRU_PrefersNeverUsed — A used at t=1, B at t=2, C never → C.
-func TestPick_LRU_PrefersNeverUsed(t *testing.T) {
+func newSel(t *testing.T) (*Selector, *kv.Mem) {
+	t.Helper()
 	ms := kv.NewMem()
-	defer ms.Close()
-	ctx := context.Background()
-
-	clk := frozenClock(t0)
-	sel := New(ms, noopLogger(), clk, nil)
-	p := poolWithStrategy("lru1", KeySelectionLeastRecentlyUsed)
-
-	secA := key("a", "hA")
-	secB := key("b", "hB")
-	secC := key("c", "hC")
-
-	// Stamp A at t0, B at t0+1s.
-	sel.clock = frozenClock(t0)
-	_, _ = sel.Pick(ctx, "lru1", KeySelectionLeastRecentlyUsed, []*hostkey.HostKey{secA})
-	sel.clock = frozenClock(t0.Add(time.Second))
-	_, _ = sel.Pick(ctx, "lru1", KeySelectionLeastRecentlyUsed, []*hostkey.HostKey{secB})
-
-	// Now pick from all three — C was never used, prefer C.
-	sel.clock = frozenClock(t0.Add(2 * time.Second))
-	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB, secC})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.KeyHash != "hC" {
-		t.Fatalf("LRU: want hC (never used), got %s", got.KeyHash)
-	}
+	t.Cleanup(func() { _ = ms.Close() })
+	return New(ms, noopLogger(), frozenClock(t0), nil), ms
 }
 
-// TestPick_LRU_PrefersOldest — A at t=1, B at t=2, C at t=3 → next pick prefers A.
-func TestPick_LRU_PrefersOldest(t *testing.T) {
-	ms := kv.NewMem()
-	defer ms.Close()
-	ctx := context.Background()
+// at moves sel's clock to t0+d.
+func at(sel *Selector, d time.Duration) { sel.clock = frozenClock(t0.Add(d)) }
 
-	sel := New(ms, noopLogger(), frozenClock(t0), nil)
-	p := poolWithStrategy("lru2", KeySelectionLeastRecentlyUsed)
-	secA := key("a", "hA")
-	secB := key("b", "hB")
-	secC := key("c", "hC")
-
-	// Stamp all three at increasing times.
-	sel.clock = frozenClock(t0.Add(1 * time.Second))
-	_, _ = sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA})
-	sel.clock = frozenClock(t0.Add(2 * time.Second))
-	_, _ = sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secB})
-	sel.clock = frozenClock(t0.Add(3 * time.Second))
-	_, _ = sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secC})
-
-	// Next pick: A has oldest stamp (t0+1s) → prefer A.
-	sel.clock = frozenClock(t0.Add(4 * time.Second))
-	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB, secC})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.KeyHash != "hA" {
-		t.Fatalf("LRU: want hA (oldest), got %s", got.KeyHash)
-	}
-
-	// Now A has been used at t0+4s; next pick prefers B (t0+2s).
-	sel.clock = frozenClock(t0.Add(5 * time.Second))
-	got2, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB, secC})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got2.KeyHash != "hB" {
-		t.Fatalf("LRU second pick: want hB, got %s", got2.KeyHash)
-	}
-}
-
-// TestPick_Exclude — key in exclude list is never returned even if healthy.
-func TestPick_Exclude(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	secA := key("a", "hA")
-	secB := key("b", "hB")
-	secC := key("c", "hC")
-	keys := []*hostkey.HostKey{secA, secB, secC}
-	p := pool("excl")
-
-	for i := 0; i < 20; i++ {
-		got, err := sel.Pick(ctx, p.scope, p.algo, keys, []*hostkey.HostKey{secA})
-		if err != nil {
-			t.Fatal(err)
+// wantRecord asserts the stored record of keyHash; nil means the store holds none.
+func wantRecord(t *testing.T, sel *Selector, keyHash string, want *CircuitRecord) {
+	t.Helper()
+	got, found := sel.ReadCircuit(context.Background(), keyHash)
+	if want == nil {
+		if found || got != (CircuitRecord{}) {
+			t.Fatalf("record of %s = %+v (found %v), want none", keyHash, got, found)
 		}
-		if got.KeyHash == "hA" {
-			t.Fatal("excluded key hA was returned")
-		}
+		return
+	}
+	if d := cmp.Diff(*want, got); d != "" || !found {
+		t.Fatalf("record of %s (found %v) (-want +got):\n%s", keyHash, found, d)
 	}
 }
 
-// TestPick_ExcludeAll — excluding all healthy keys → ErrNoHealthyKeys.
-func TestPick_ExcludeAll(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	secA := key("a", "hA")
-	p := pool("excl-all")
-	_, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA}, []*hostkey.HostKey{secA})
-	if err != ErrNoHealthyKeys {
-		t.Fatalf("want ErrNoHealthyKeys when all excluded, got %v", err)
-	}
-}
+// noScripts hides the store's script runner, so the selector applies transitions from Go.
+type noScripts struct{ kv.Store }
 
-// TestCooldownReasons — each FailureKind stamps the expected Reason on the circuit record.
-func TestCooldownReasons(t *testing.T) {
-	cases := []struct {
-		name     string
-		kind     FailureKind
-		retry    time.Duration
-		times    int
-		wantRsn  CooldownReason
-		wantOpen bool
+func TestNew_DefaultsAndBreakerOverrides(t *testing.T) {
+	sel, _ := newSel(t)
+	if sel.runner == nil {
+		t.Fatal("a Mem-backed selector has no script runner")
+	}
+	if got := New(noScripts{kv.NewMem()}, noopLogger(), nil, nil); got.runner != nil || got.clock == nil || got.rng == nil {
+		t.Fatalf("selector over a store without scripts = %+v, want no runner and a default clock and rng", got)
+	}
+	for _, tc := range []struct {
+		threshold     int
+		window        time.Duration
+		wantThreshold int
+		wantWindow    time.Duration
 	}{
-		{"auth", FailureAuth, 0, 1, ReasonUpstreamAuthFailed, true},
-		{"forbidden", FailureForbidden, 0, 1, ReasonUpstreamForbidden, true},
-		{"rl_long", FailureRateLimitLong, 30 * time.Second, 1, ReasonUpstreamRateLimited, true},
-		{"server_error", FailureServerError, 0, DefaultFailureThreshold, ReasonUpstreamServerError, true},
-		{"network", FailureNetwork, 0, DefaultFailureThreshold, ReasonUpstreamNetworkError, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			sel, _ := newSel(t, frozenClock(t0))
-			ctx := context.Background()
-			h := "hash-" + tc.name
-			for range tc.times {
-				sel.RecordFailure(ctx, h, tc.kind, tc.retry)
-			}
-			rec := sel.readRecord(ctx, h)
-			if rec.Reason != tc.wantRsn {
-				t.Fatalf("want reason %q, got %q", tc.wantRsn, rec.Reason)
-			}
-			if tc.wantOpen && rec.State != CircuitOpen {
-				t.Fatalf("want CircuitOpen, got %v", rec.State)
-			}
-		})
-	}
-}
-
-// TestRateLimitShortPreservesReason — short RL does not write a record, so reason stays empty.
-func TestRateLimitShortPreservesReason(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	h := "hash-rls-reason"
-	sel.RecordFailure(ctx, h, FailureRateLimitShort, 2*time.Second)
-	rec := sel.readRecord(ctx, h)
-	// No record was written; default is closed with empty reason.
-	if rec.Reason != "" {
-		t.Fatalf("want empty reason, got %q", rec.Reason)
-	}
-}
-
-// TestRecordSuccessClearsReason — after a failure, RecordSuccess resets Reason to "".
-func TestRecordSuccessClearsReason(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	k := "reason-clear"
-	sel.RecordFailure(ctx, k, FailureAuth, 0)
-	rec := sel.readRecord(ctx, k)
-	if rec.Reason == "" {
-		t.Fatal("expected non-empty reason after auth failure")
-	}
-	sel.clock = frozenClock(rec.OpenUntil)
-	if _, err := sel.Pick(ctx, "p", KeySelectionPrioritized, []*hostkey.HostKey{key("s", k)}); err != nil {
-		t.Fatal(err)
-	}
-	sel.RecordSuccess(ctx, k)
-	rec = sel.readRecord(ctx, k)
-	if rec.Reason != "" {
-		t.Fatalf("want empty reason after success, got %q", rec.Reason)
-	}
-}
-
-// TestBackwardCompatNoReason — a record encoded without the "reason" field decodes
-// cleanly with Reason == "" (backward compat with records written before this field).
-func TestBackwardCompatNoReason(t *testing.T) {
-	oldJSON := []byte(`{"state":1,"open_until":"2026-01-01T00:00:30Z","backoff_step":2,"last_transition":"2026-01-01T00:00:00Z","indefinite":false}`)
-	rec, err := decodeRecord(oldJSON)
-	if err != nil {
-		t.Fatalf("decodeRecord failed: %v", err)
-	}
-	if rec.State != CircuitOpen {
-		t.Fatalf("want CircuitOpen, got %v", rec.State)
-	}
-	if rec.BackoffStep != 2 {
-		t.Fatalf("want BackoffStep=2, got %d", rec.BackoffStep)
-	}
-	if rec.Reason != "" {
-		t.Fatalf("want empty reason from old record, got %q", rec.Reason)
-	}
-}
-
-// TestPickWithExclude_Convenience — PickWithExclude wrapper works correctly.
-func TestPickWithExclude_Convenience(t *testing.T) {
-	sel, _ := newSel(t, frozenClock(t0))
-	ctx := context.Background()
-	secA := key("a", "hA")
-	secB := key("b", "hB")
-	p := pool("conv")
-	got, err := sel.PickWithExclude(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB}, []*hostkey.HostKey{secA})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.KeyHash != "hB" {
-		t.Fatalf("want hB, got %s", got.KeyHash)
+		{0, 0, DefaultFailureThreshold, DefaultFailureWindow},
+		{-1, -time.Second, DefaultFailureThreshold, DefaultFailureWindow},
+		{2, 0, 2, DefaultFailureWindow},
+		{0, time.Minute, DefaultFailureThreshold, time.Minute},
+		{1, time.Millisecond, 1, time.Millisecond},
+	} {
+		sel, _ := newSel(t)
+		sel.WithBreaker(tc.threshold, tc.window)
+		if sel.failureThreshold != tc.wantThreshold || sel.failureWindow != tc.wantWindow {
+			t.Errorf("WithBreaker(%d, %v) = %d within %v, want %d within %v", tc.threshold, tc.window, sel.failureThreshold, sel.failureWindow, tc.wantThreshold, tc.wantWindow)
+		}
 	}
 }
