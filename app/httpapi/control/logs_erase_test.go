@@ -9,10 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/payloadlog"
@@ -39,10 +35,7 @@ func newEraseHarness(t *testing.T, inner authz.Authorizer, pr payloadlog.Reader)
 	t.Helper()
 	sink := &auditSink{}
 	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	r.Use(audit.Middleware(em, nil))
-	api := humachi.New(r, huma.DefaultConfig("logs-erase-test", "0"))
+	r, api := testAPI(t, scopeActors, audit.Middleware(em, nil))
 	registerLogsErase(api, Deps{Authz: audit.Authorizer{Inner: inner}, PayloadReader: pr}, nil)
 	return r, sink, em
 }

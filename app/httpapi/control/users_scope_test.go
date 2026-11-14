@@ -5,10 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/meta"
@@ -37,9 +33,7 @@ func TestUsersListAuthorizesAtTheGlobalScope(t *testing.T) {
 
 func usersHandlerWith(t *testing.T, d Deps) http.Handler {
 	t.Helper()
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("users-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerUsers(api, d, nil)
 	return r
 }

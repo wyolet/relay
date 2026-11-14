@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/httpapi"
@@ -91,10 +89,7 @@ func newSecretKeysHarness(t *testing.T, keys SecretKeyManager) *secretKeysHarnes
 	t.Helper()
 	sink := &auditSink{}
 	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	r.Use(audit.Middleware(em, nil))
-	api := humachi.New(r, huma.DefaultConfig("secret-keys-test", "0"))
+	r, api := testAPI(t, scopeActors, audit.Middleware(em, nil))
 	d := Deps{SecretKeys: keys, Authz: audit.Authorizer{Inner: testRBAC()}}
 	registerSecretKeys(api, d, huma.Middlewares{httpapi.HumaAuth(RequireActor)})
 	return &secretKeysHarness{h: r, api: api, sink: sink, em: em}

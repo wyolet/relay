@@ -8,10 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/project"
@@ -38,9 +34,7 @@ func TestUsageGroupLabelsFallBackToCatalog(t *testing.T) {
 		{RequestID: "r-2", Timestamp: now, Status: 200, RelayKeyHash: "hash-gone", RelayKey: "stamped", TeamID: "t-gone"},
 		{RequestID: "r-3", Timestamp: now, Status: 200, RelayKeyHash: k.Spec.KeyHash, RelayKey: "ci-key-renamed"},
 	}}
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usage-labels-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerUsage(api, Deps{Authz: testRBAC(), UsageReader: reader, Catalog: cat}, nil)
 
 	for _, tc := range []struct {

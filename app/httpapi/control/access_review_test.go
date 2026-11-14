@@ -9,10 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
@@ -129,10 +125,7 @@ func newReviewWorld(t *testing.T) *reviewWorld {
 
 	w.sink = &auditSink{}
 	w.em = audit.NewEmitter(w.sink, slog.New(slog.DiscardHandler))
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", w.actors))
-	r.Use(audit.Middleware(w.em, nil))
-	api := humachi.New(r, huma.DefaultConfig("access-review-test", "0"))
+	r, api := testAPI(t, w.actors, audit.Middleware(w.em, nil))
 	az := audit.Authorizer{Inner: authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}}
 	rows := kindIndex{}
 	mount := func(plural, singular string, defaultOwner meta.OwnerKind, seed ...*scopedThing) {
@@ -298,9 +291,7 @@ func TestAccessReviewUnknownSubjectOrResource(t *testing.T) {
 }
 
 func TestAccessReviewUnderSingleUser(t *testing.T) {
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("access-review-single", "0"))
+	r, api := testAPI(t, scopeActors)
 	accessReviewer{authz: audit.Authorizer{Inner: authz.AlwaysAllowAuthenticated{}}, rows: kindIndex{}}.register(api, nil)
 	req := httptest.NewRequest(http.MethodPost, "/access-review", strings.NewReader(`{"action":"usage.read","resource":{"kind":"usage"}}`))
 	req.Header.Set("Content-Type", "application/json")

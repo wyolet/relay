@@ -8,10 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
@@ -63,9 +59,7 @@ func newUsablePoolsHarnessWith(t *testing.T, az authz.Authorizer) http.Handler {
 		Team:    func(_ context.Context, id string) *team.Team { return teams[id] },
 		Pool:    getOrNil(store.Get),
 	}}
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usable-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerKind[pool.Pool](
 		api, "pools", "pool", store, authz.AlwaysAllowAuthenticated{}, plmeta, nil, meta.OwnerUser,
 		listScanResolver[pool.Pool](store, plmeta),
@@ -239,9 +233,7 @@ func TestListAccountsUsableFor(t *testing.T) {
 		Account:        getOrNil(store.Get),
 		PolicyBindings: func(context.Context) ([]*policybinding.PolicyBinding, error) { bindingReads++; return held, nil },
 	}}
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usable-for-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerKind[account.Account](
 		api, "accounts", "account", store, authz.AlwaysAllowAuthenticated{}, ameta, nil, meta.OwnerUser,
 		listScanResolver[account.Account](store, ameta),

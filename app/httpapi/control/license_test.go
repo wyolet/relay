@@ -186,9 +186,7 @@ func (badLicense) Set(string) (license.Info, error) {
 func TestReloadReportsABadLicenseWithout500(t *testing.T) {
 	cat := catalogtest.Catalog{}.New()
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("reload-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerMisc(api, Deps{
 		Authz:   authz.AlwaysAllowAuthenticated{},
 		Catalog: cat,

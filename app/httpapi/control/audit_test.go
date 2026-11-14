@@ -63,10 +63,7 @@ func newAuditHarness(t *testing.T, inner authz.Authorizer, seed ...*scopedThing)
 		store.items[it.Meta.ID] = it
 	}
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	r.Use(audit.Middleware(em, nil))
-	api := humachi.New(r, huma.DefaultConfig("audit-test", "0"))
+	r, api := testAPI(t, scopeActors, audit.Middleware(em, nil))
 	registerKind[scopedThing](
 		api, "rate-limits", "rate-limit", store,
 		audit.Authorizer{Inner: inner}, tmeta,
