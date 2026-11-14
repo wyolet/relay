@@ -21,6 +21,7 @@ func TestApplyOutputDefaults(t *testing.T) {
 		{"no entry", nil, 8192, map[string]*v1.ModelOpts{"m": sampled(ptr(8192))}},
 		{"entry without sampling", map[string]*v1.ModelOpts{"m": {}}, 8192, map[string]*v1.ModelOpts{"m": sampled(ptr(8192))}},
 		{"sole entry under another name", map[string]*v1.ModelOpts{"alias": sampled(nil)}, 64000, map[string]*v1.ModelOpts{"alias": sampled(ptr(64000))}},
+		{"null sole entry under another name", map[string]*v1.ModelOpts{"alias": nil}, 64000, map[string]*v1.ModelOpts{"alias": sampled(ptr(64000))}},
 		{"caller's value kept", map[string]*v1.ModelOpts{"m": sampled(ptr(100))}, 64000, map[string]*v1.ModelOpts{"m": sampled(ptr(100))}},
 		{"model declares no max", nil, 0, nil},
 		{"several entries are left alone", map[string]*v1.ModelOpts{"m": sampled(nil), "b": sampled(nil)}, 8192, map[string]*v1.ModelOpts{"m": sampled(nil), "b": sampled(nil)}},
@@ -36,7 +37,6 @@ func TestApplyOutputDefaults(t *testing.T) {
 }
 
 func TestApplyOutputDefaults_NullEntry(t *testing.T) {
-	t.Skip(`bug: canonical body {"model":"m","model_config":{"m":null}} on a cross-shape route to a model with a max output → nil pointer panic in applyOutputDefaults`)
 	req, err := v1.Parse([]byte(`{"model":"m","model_config":{"m":null},"input":"hi"}`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
