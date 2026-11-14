@@ -130,7 +130,8 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 				argsObj = json.RawMessage(`{}`)
 			}
 			parts = append(parts, geminiPart{
-				FunctionCall: &geminiFC{ID: geminiWireCallID(v.CallID, v.Name), Name: v.Name, Args: argsObj},
+				FunctionCall:     &geminiFC{ID: geminiWireCallID(v.CallID, v.Name), Name: v.Name, Args: argsObj},
+				ThoughtSignature: thoughtSignatureFrom(v.ProviderData),
 			})
 		case *v1.Reasoning:
 			text := v.Content
@@ -138,7 +139,7 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 				text = v.Summary[0].Text
 			}
 			if text != "" {
-				parts = append(parts, geminiPart{Text: text, Thought: true})
+				parts = append(parts, geminiPart{Text: text, Thought: true, ThoughtSignature: thoughtSignatureFrom(v.ProviderData)})
 			}
 		}
 	}

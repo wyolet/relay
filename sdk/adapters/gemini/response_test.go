@@ -147,7 +147,6 @@ func TestFinishReason_MalformedFunctionCallRoundTrips(t *testing.T) {
 }
 
 func TestSerializeResponse_KeepsThoughtSignatures(t *testing.T) {
-	t.Skip("bug: SerializeResponse (and NewFromCanonicalStream) drop the thoughtSignature provider_data of reasoning and functionCall items, unannotated (rule 8)")
 	parts := `[{"text":"plan","thought":true,"thoughtSignature":"sig-rs"},{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-fc"}]`
 	out, err := tr.SerializeResponse(parseResponse(t, `{"candidates":[{"content":{"role":"model","parts":`+parts+`},"finishReason":"STOP","index":0}]}`), nil)
 	if err != nil {
@@ -158,4 +157,35 @@ func TestSerializeResponse_KeepsThoughtSignatures(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertJSON(t, gr.Candidates[0].Content.Parts, parts)
+}
+
+// The streamed thought text precedes its signature, which rides a trailing empty-text part.
+func TestFromCanonicalStream_KeepsThoughtSignatures(t *testing.T) {
+	frame := func(event string, v any) v1.SSEFrame {
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v1.SSEFrame{Event: event, Data: data}
+	}
+	frames := fromCanonical(t,
+		frame(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "rs_0", ItemType: v1.ItemTypeReasoning}),
+		frame(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "rs_0", Kind: v1.DeltaKindReasoning, Delta: "plan"}),
+		frame(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "rs_0", Item: &v1.Reasoning{Content: "plan", ProviderData: thoughtSignatureJSON("sig-rs")}}),
+		frame(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "fc_1", Index: 1, ItemType: v1.ItemTypeFunctionCall, Name: "f", CallID: "f"}),
+		frame(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_1", Index: 1, Kind: v1.DeltaKindArguments, Delta: "{}"}),
+		frame(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "fc_1", Index: 1, Item: &v1.FunctionCall{CallID: "f", Name: "f", Arguments: "{}", ProviderData: thoughtSignatureJSON("sig-fc")}}),
+	)
+	var parts []geminiPart
+	for _, f := range frames {
+		if f == "" {
+			continue
+		}
+		var gr geminiResponse
+		if err := json.Unmarshal(geminiData(t, f), &gr); err != nil {
+			t.Fatal(err)
+		}
+		parts = append(parts, gr.Candidates[0].Content.Parts...)
+	}
+	assertJSON(t, parts, `[{"text":"plan","thought":true},{"thought":true,"thoughtSignature":"sig-rs"},{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-fc"}]`)
 }
