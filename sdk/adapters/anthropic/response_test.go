@@ -274,7 +274,6 @@ func TestStopReasonMapping(t *testing.T) {
 }
 
 func TestStopReason_IncompleteWithoutFinishReasonAgreesBufferedAndStreamed(t *testing.T) {
-	t.Skip(`bug: status incomplete with no finish_reason → buffered "end_turn" but streamed "pause_turn"; with incomplete_details max_output_tokens → buffered "max_tokens" but streamed "pause_turn"`)
 	for _, details := range []*v1.IncompleteDetails{nil, {Reason: "max_output_tokens"}} {
 		buffered := bufferedStopReason(t, v1.StatusIncomplete, "", details)
 		streamed := streamedStopReason(t, v1.StatusIncomplete, "", details)
