@@ -2,21 +2,15 @@ package v1
 
 import "testing"
 
-func TestRegistryGet(t *testing.T) {
-	reg := Registry{}
-	if got := reg.Get("nonexistent"); got != nil {
-		t.Errorf("expected nil for absent name, got %v", got)
+func TestRegistry_Get(t *testing.T) {
+	reg := Registry{"identity": IdentityTranslator{}, "pass": passTranslator{}}
+	if got := reg.Get("pass"); got != (passTranslator{}) {
+		t.Errorf("Get(pass) = %#v, want the registered translator", got)
 	}
-}
-
-func TestRegistryGetPresent(t *testing.T) {
-	// Use a nil Translator value to verify the map lookup works.
-	reg := Registry{
-		"test-adapter": nil,
+	if got := reg.Get("absent"); got != nil {
+		t.Errorf("Get(absent) = %#v, want nil", got)
 	}
-	// Get returns whatever is stored — nil is valid for a registered-but-nil entry.
-	_ = reg.Get("test-adapter")
-	if _, ok := reg["test-adapter"]; !ok {
-		t.Error("expected test-adapter to be present in registry")
+	if got := Registry(nil).Get("identity"); got != nil {
+		t.Errorf("nil registry Get = %#v, want nil", got)
 	}
 }

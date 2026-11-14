@@ -4,226 +4,81 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/wyolet/relay/sdk/usage"
 )
 
-func TestResponseMarshalRoundTrip(t *testing.T) {
-	resp := &Response{
-		ID:           "resp_abc",
-		Object:       "response",
-		CreatedAt:    1716000000,
-		Model:        "gpt-4o",
-		Status:       StatusCompleted,
-		FinishReason: FinishReasonStop,
+// fullResponse sets every Response field; fullResponseWire is its exact wire form.
+func fullResponse() *Response {
+	return &Response{
+		ID: "resp_abc", Object: "response", CreatedAt: 1716000000, Model: "m",
+		Status: StatusIncomplete, FinishReason: FinishReasonRefusal,
 		Output: []Item{
-			&Message{
-				ID:     "msg_1",
-				Status: StatusCompleted,
-				Role:   RoleAssistant,
-				Content: []Part{
-					&OutputTextPart{Text: "Hello, world!"},
-				},
-			},
+			&Reasoning{ID: "rs_1", Summary: []SummaryText{{Text: "s"}}},
+			&Message{ID: "msg_1", Status: StatusCompleted, Role: RoleAssistant, Content: []Part{&OutputTextPart{Text: "I can't help with that."}}},
+			&FunctionCall{CallID: "c1", Name: "f", Arguments: "{}"},
 		},
-		Usage: usage.Tokens{
-			"input":  10,
-			"output": 5,
-		},
-	}
-
-	b, err := Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp2, err := UnmarshalResponse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if resp2.ID != resp.ID {
-		t.Errorf("id: got %q, want %q", resp2.ID, resp.ID)
-	}
-	if resp2.Object != resp.Object {
-		t.Errorf("object: got %q, want %q", resp2.Object, resp.Object)
-	}
-	if resp2.Model != resp.Model {
-		t.Errorf("model: got %q, want %q", resp2.Model, resp.Model)
-	}
-	if resp2.Status != resp.Status {
-		t.Errorf("status: got %q, want %q", resp2.Status, resp.Status)
-	}
-	if resp2.FinishReason != resp.FinishReason {
-		t.Errorf("finish_reason: got %q, want %q", resp2.FinishReason, resp.FinishReason)
-	}
-	if len(resp2.Output) != 1 {
-		t.Fatalf("output length: got %d, want 1", len(resp2.Output))
-	}
-	msg := resp2.Output[0].(*Message)
-	if msg.Role != RoleAssistant {
-		t.Errorf("output[0] role: %q", msg.Role)
-	}
-	if len(resp2.Usage) == 0 {
-		t.Fatal("expected usage")
-	}
-	if got := resp2.Usage.Sum(); got != 15 {
-		t.Errorf("sum: %d (input+output should be 15)", got)
-	}
-}
-
-func TestResponseNoRequestEchoFields(t *testing.T) {
-	resp := &Response{
-		ID:        "resp_1",
-		Object:    "response",
-		CreatedAt: 1716000000,
-		Model:     "gpt-4o",
-		Status:    StatusCompleted,
-	}
-	b, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// None of the request-echo fields should appear.
-	for _, field := range []string{"instructions", "temperature", "top_p", "tools", "tool_choice", "metadata", "parallel_tool_calls"} {
-		if containsField(b, field) {
-			t.Errorf("response contains request-echo field %q — should not be present", field)
-		}
-	}
-}
-
-func TestResponseWithError(t *testing.T) {
-	resp := &Response{
-		ID:        "resp_err",
-		Object:    "response",
-		CreatedAt: 1716000000,
-		Model:     "gpt-4o",
-		Status:    StatusFailed,
-		Error:     &Error{Code: "server_error", Message: "upstream failed"},
-	}
-	b, err := Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp2, err := UnmarshalResponse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp2.Error == nil {
-		t.Fatal("expected error in response")
-	}
-	if resp2.Error.Code != "server_error" {
-		t.Errorf("error code: %q", resp2.Error.Code)
-	}
-}
-
-func TestResponseWithIncompleteDetails(t *testing.T) {
-	resp := &Response{
-		ID:                "resp_inc",
-		Object:            "response",
-		CreatedAt:         1716000000,
-		Model:             "gpt-4o",
-		Status:            StatusIncomplete,
+		Usage:             usage.Tokens{"input": 10, "output": 5},
+		ServiceTier:       "priority",
+		Error:             &Error{Code: "server_error", Message: "upstream failed"},
 		IncompleteDetails: &IncompleteDetails{Reason: "max_output_tokens"},
-	}
-	b, err := Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp2, err := UnmarshalResponse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp2.IncompleteDetails == nil {
-		t.Fatal("expected incomplete_details")
-	}
-	if resp2.IncompleteDetails.Reason != "max_output_tokens" {
-		t.Errorf("reason: %q", resp2.IncompleteDetails.Reason)
+		RelayUsage: &RelayUsage{RequestID: "req_1", Tokens: usage.Tokens{"input": 10}, FinishReason: FinishReasonStop, Attempts: 2, Streamed: true,
+			Timing: &RelayTiming{Upstream: RelayUpstreamTiming{Start: 1, ResponseStart: 2, ResponseEnd: 3}, End: 4}},
+		Extensions: map[string]json.RawMessage{"cache_hit": json.RawMessage(`true`)},
 	}
 }
 
-func TestResponseWithExtensions(t *testing.T) {
-	resp := &Response{
-		ID:        "resp_ext",
-		Object:    "response",
-		CreatedAt: 1716000000,
-		Model:     "gpt-4o",
-		Status:    StatusCompleted,
-		Extensions: map[string]json.RawMessage{
-			"cache_hit": json.RawMessage(`true`),
-		},
+const fullResponseWire = `{"id":"resp_abc","object":"response","created_at":1716000000,"model":"m","status":"incomplete","finish_reason":"refusal",` +
+	`"output":[{"type":"reasoning","id":"rs_1","summary":[{"text":"s"}]},` +
+	`{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"I can't help with that."}]},` +
+	`{"type":"function_call","call_id":"c1","name":"f","arguments":"{}"}],` +
+	`"usage":{"input":10,"output":5},"service_tier":"priority","error":{"code":"server_error","message":"upstream failed"},` +
+	`"incomplete_details":{"reason":"max_output_tokens"},` +
+	`"relay_usage":{"request_id":"req_1","tokens":{"input":10},"finish_reason":"stop","attempts":2,"streamed":true,"timing":{"upstream":{"start":1,"response_start":2,"response_end":3},"end":4}},` +
+	`"extensions":{"cache_hit":true}}`
+
+func TestParseResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want *Response
+	}{
+		{"every field", fullResponseWire, fullResponse()},
+		{"minimal", `{"id":"r","object":"response","created_at":0,"model":"m","status":"completed"}`,
+			&Response{ID: "r", Object: "response", Model: "m", Status: StatusCompleted}},
+		{"null output stays nil", `{"id":"r","output":null}`, &Response{ID: "r"}},
+		{"empty output", `{"id":"r","output":[]}`, &Response{ID: "r", Output: []Item{}}},
 	}
-	b, err := Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseResponse([]byte(tc.body))
+			if err != nil {
+				t.Fatalf("ParseResponse: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("response (-want +got):\n%s", diff)
+			}
+		})
 	}
-	resp2, err := UnmarshalResponse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp2.Extensions) != 1 {
-		t.Fatalf("expected 1 extension, got %d", len(resp2.Extensions))
+
+	for _, tc := range []struct{ name, body, want string }{
+		{"invalid JSON", `{`, "invalid JSON: unexpected end of JSON input"},
+		{"output not an array", `{"output":{}}`, "output: input array: json: cannot unmarshal object…"},
+		{"unsupported output item", `{"output":[{"type":"web_search_call"}]}`, `output: unsupported item type "web_search_call"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseResponse([]byte(tc.body))
+			if got != nil {
+				t.Errorf("response = %+v, want nil on error", got)
+			}
+			wantErr(t, err, tc.want)
+		})
 	}
 }
 
-func TestParseResponseServiceTier(t *testing.T) {
-	b, err := Marshal(&Response{ID: "resp_tier", Object: "response", Model: "gpt-5", Status: StatusCompleted, ServiceTier: "priority"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := ParseResponse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.ServiceTier != "priority" {
-		t.Errorf("service_tier: got %q, want %q", resp.ServiceTier, "priority")
-	}
-}
-
-func TestResponseRefusalIsFinishReason(t *testing.T) {
-	resp := &Response{
-		ID:           "resp_ref",
-		Object:       "response",
-		CreatedAt:    1716000000,
-		Model:        "gpt-4o",
-		Status:       StatusCompleted,
-		FinishReason: FinishReasonRefusal,
-		Output: []Item{
-			&Message{
-				Role:    RoleAssistant,
-				Content: []Part{&OutputTextPart{Text: "I can't help with that."}},
-			},
-		},
-	}
-	b, err := Marshal(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp2, err := UnmarshalResponse(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp2.FinishReason != FinishReasonRefusal {
-		t.Errorf("finish_reason: got %q, want %q", resp2.FinishReason, FinishReasonRefusal)
-	}
-	// The refusal text is in the message content, not a separate item type.
-	if len(resp2.Output) != 1 {
-		t.Fatalf("expected 1 output item, got %d", len(resp2.Output))
-	}
-	msg := resp2.Output[0].(*Message)
-	op := msg.Content[0].(*OutputTextPart)
-	if op.Text != "I can't help with that." {
-		t.Errorf("refusal text: %q", op.Text)
-	}
-}
-
-// containsField is a simple check for whether a JSON field name appears in a
-// marshaled byte slice. Not a full parser; sufficient for these tests.
-func containsField(b []byte, field string) bool {
-	key := `"` + field + `"`
-	for i := 0; i+len(key) <= len(b); i++ {
-		if string(b[i:i+len(key)]) == key {
-			return true
-		}
-	}
-	return false
+func TestResponse_MarshalJSON(t *testing.T) {
+	wantJSON(t, fullResponse(), fullResponseWire)
+	// A bare response carries its five required members and nothing else.
+	wantJSON(t, &Response{ID: "r", Object: "response", Model: "m", Status: StatusCompleted},
+		`{"id":"r","object":"response","created_at":0,"model":"m","status":"completed"}`)
 }
