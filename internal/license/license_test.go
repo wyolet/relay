@@ -210,7 +210,6 @@ func TestService_HasReevaluatesExpiryOnEveryCall(t *testing.T) {
 }
 
 func TestService_InfoFollowsTheClock(t *testing.T) {
-	t.Skip("bug: a license set before expiry keeps Info() = {Licensed: true, Grace: false} after the clock passes expiry and then the grace window, while Has() already refuses")
 	priv := newTestKey(t)
 	clock := issued
 	svc := New(func() time.Time { return clock })

@@ -233,10 +233,12 @@ func (s *Service) Has(feature string) bool {
 	return l.Has(feature)
 }
 
-// Info summarizes the live license.
+// Info summarizes the live license, judging expiry and grace by the clock as
+// Has does: past the grace window it is the community summary.
 func (s *Service) Info() applicense.Info {
 	l := s.cur.Load()
-	if l == nil {
+	now := s.now().UTC()
+	if l == nil || now.After(l.ExpiresAt.Add(GraceWindow)) {
 		return applicense.Info{}
 	}
 	return applicense.Info{
@@ -244,6 +246,6 @@ func (s *Service) Info() applicense.Info {
 		Customer:  l.Customer,
 		ExpiresAt: l.ExpiresAt,
 		Features:  l.Features,
-		Grace:     l.Grace,
+		Grace:     now.After(l.ExpiresAt),
 	}
 }
