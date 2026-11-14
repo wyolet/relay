@@ -399,10 +399,20 @@ func effectiveModelOpts(req *v1.Request) *v1.ModelOpts {
 	if req.ModelConfig == nil {
 		req.ModelConfig = map[string]*v1.ModelOpts{}
 	}
+	// Parse keeps a JSON-null entry as a nil value; it is replaced in place so the
+	// serializer still resolves the entry that gets seeded.
 	if o, ok := req.ModelConfig[key]; ok {
+		if o == nil {
+			o = &v1.ModelOpts{}
+			req.ModelConfig[key] = o
+		}
 		return o
 	}
-	for _, o := range req.ModelConfig { // sole entry (key may differ from upstream name)
+	for k, o := range req.ModelConfig { // sole entry (key may differ from upstream name)
+		if o == nil {
+			o = &v1.ModelOpts{}
+			req.ModelConfig[k] = o
+		}
 		return o
 	}
 	o := &v1.ModelOpts{}
