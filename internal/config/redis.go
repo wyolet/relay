@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"runtime"
 	"time"
 
@@ -45,23 +44,23 @@ func loadRedisClient(cfg *Config) error {
 	} {
 		ms, err := envPositiveInt(d.key, int(d.def/time.Millisecond))
 		if err != nil {
-			return fmt.Errorf("%s must be >= 1", d.key)
+			return err
 		}
 		*d.dst = time.Duration(ms) * time.Millisecond
 	}
-	if v := envInt("RELAY_REDIS_MAX_RETRIES", 0); v < 0 {
-		return fmt.Errorf("RELAY_REDIS_MAX_RETRIES must be >= 0")
+	if v, err := envIntMin("RELAY_REDIS_MAX_RETRIES", 0, 0); err != nil {
+		return err
 	} else {
 		cfg.RedisMaxRetries = v
 	}
 	waiters, err := envPositiveInt("RELAY_REDIS_POOL_MAX_WAITERS", DefaultRedisPoolMaxWaitersPerConn*cfg.RedisPoolSize)
 	if err != nil {
-		return fmt.Errorf("RELAY_REDIS_POOL_MAX_WAITERS must be >= 1")
+		return err
 	}
 	cfg.RedisPoolMaxWaiters = waiters
 	v, err := envPositiveInt("RELAY_REDIS_POSTFLIGHT_POOL_SIZE", DefaultRedisPostFlightPoolSizePerCPU*runtime.GOMAXPROCS(0))
 	if err != nil {
-		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_POOL_SIZE must be >= 1")
+		return err
 	}
 	cfg.RedisPostFlightPoolSize = v
 	return loadSettleQueue(cfg)
@@ -70,17 +69,17 @@ func loadRedisClient(cfg *Config) error {
 func loadSettleQueue(cfg *Config) error {
 	size, err := envPositiveInt("RELAY_REDIS_POSTFLIGHT_BATCH_SIZE", DefaultRedisPostFlightBatchSize)
 	if err != nil {
-		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_BATCH_SIZE must be >= 1")
+		return err
 	}
 	cfg.RedisPostFlightBatchSize = size
-	delayMs := envInt("RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS", int(DefaultRedisPostFlightBatchDelay/time.Millisecond))
-	if delayMs < 0 {
-		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS must be >= 0")
+	delayMs, err := envIntMin("RELAY_REDIS_POSTFLIGHT_BATCH_DELAY_MS", int(DefaultRedisPostFlightBatchDelay/time.Millisecond), 0)
+	if err != nil {
+		return err
 	}
 	cfg.RedisPostFlightBatchDelay = time.Duration(delayMs) * time.Millisecond
-	queue := envInt("RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE", DefaultRedisPostFlightQueueSize)
-	if queue < 0 {
-		return fmt.Errorf("RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE must be >= 0")
+	queue, err := envIntMin("RELAY_REDIS_POSTFLIGHT_QUEUE_SIZE", DefaultRedisPostFlightQueueSize, 0)
+	if err != nil {
+		return err
 	}
 	cfg.RedisPostFlightQueueSize = queue
 	return nil
