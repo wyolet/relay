@@ -61,6 +61,10 @@ func (r ResponsesResponse) MarshalJSON() ([]byte, error) {
 		tcJSON = json.RawMessage(`"auto"`)
 	}
 
+	if r.Output == nil {
+		r.Output = []ResponsesItem{}
+	}
+
 	type wire struct {
 		Alias
 		Tools      json.RawMessage `json:"tools"`

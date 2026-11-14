@@ -251,20 +251,17 @@ func TestResponsesResponseOutputReplaysAsInput(t *testing.T) {
 }
 
 func TestResponsesParseRequest_TopK(t *testing.T) {
-	t.Skip(`bug: ParseRequest {"top_k":40} → canonical sampling {} (top_k parsed, then never copied into SamplingParams)`)
 	req := respParseRequest(t, `{"model":"m","input":"hi","top_k":40}`)
 	respJSONEq(t, req.ModelConfig["m"].Sampling, `{"top_k":40}`)
 }
 
 // The Responses API types function_call_output.output as a string or an array of input_text/input_image/input_file parts; there is no content member.
 func TestResponsesParseRequest_FunctionCallOutputArray(t *testing.T) {
-	t.Skip(`bug: ParseRequest function_call_output {"output":[{"type":"input_image",…}]} → error "cannot unmarshal array into Go value of type string"`)
 	req := respParseRequest(t, `{"model":"m","input":[{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`)
 	respJSONEq(t, req.Input, `[{"type":"function_call_output","call_id":"c","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`)
 }
 
 func TestResponsesSerializeRequest_FunctionCallOutputArray(t *testing.T) {
-	t.Skip(`bug: SerializeRequest of a tool result with an image part → {"content":[…]} and no "output", which the API rejects as a missing required parameter`)
 	got := respSerializeRequest(t, &v1.Request{Model: v1.ModelRefs{"m"}, Input: []v1.Item{
 		&v1.FunctionCallOutput{CallID: "c", Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png;base64,AAAA"}}},
 	}})

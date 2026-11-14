@@ -109,7 +109,6 @@ func TestResponsesSerializeResponse_Status(t *testing.T) {
 }
 
 func TestResponsesSerializeResponse_EmptyOutput(t *testing.T) {
-	t.Skip(`bug: SerializeResponse of a response with no output items → "output":null; the field is a required array`)
 	wire, err := ResponsesTranslator{}.SerializeResponse(&v1.Response{ID: "r", Model: "m", Status: v1.StatusFailed}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +118,6 @@ func TestResponsesSerializeResponse_EmptyOutput(t *testing.T) {
 
 // v1.RawAnnotation exists to carry annotation types canonical does not model.
 func TestResponsesParseResponse_UnmodeledAnnotation(t *testing.T) {
-	t.Skip(`bug: ParseResponse output_text annotation {"type":"container_file_citation",…} → dropped from canonical annotations without a trace`)
 	resp := respParseResponse(t, `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c","file_id":"f"}]}]}]}`)
 	respJSONEq(t, resp.Output, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[{"type":"container_file_citation","container_id":"c","file_id":"f"}]}]}]`)
 }

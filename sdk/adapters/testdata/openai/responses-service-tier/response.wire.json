@@ -4,7 +4,7 @@
   "created_at": 1741476542,
   "model": "gpt-5",
   "status": "completed",
-  "output": null,
+  "output": [],
   "usage": {
     "input_tokens": 10,
     "output_tokens": 2,
