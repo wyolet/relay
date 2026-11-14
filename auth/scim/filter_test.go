@@ -2,6 +2,7 @@ package scim
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -108,8 +109,8 @@ func TestFilterRefusesWhatItCannotEvaluate(t *testing.T) {
 			t.Errorf("%q: err = %v, want a 400 invalidFilter", filter, err)
 		}
 	}
-	if _, err := parseFilter(`members.display eq "x"`, groupSchema); err == nil {
-		t.Error("members.display accepted")
+	if _, err := parseFilter(`members.display eq "x"`, groupSchema); err == nil || err.Error() != `scim 400 invalidFilter: cannot filter by "members.display"` {
+		t.Errorf("members.display: %v", err)
 	}
 }
 
@@ -122,11 +123,19 @@ func TestFilterBoundsItsWork(t *testing.T) {
 	for range maxFilterDepth + 2 {
 		deep += ")"
 	}
-	if _, err := parseFilter(deep, userSchema); err == nil {
-		t.Error("a filter nested past the bound was accepted")
+	if _, err := parseFilter(deep, userSchema); err == nil || err.Error() != "scim 400 invalidFilter: filter nests deeper than 32" {
+		t.Errorf("a filter nested past the bound: %v", err)
 	}
-	long := `userName eq "` + string(make([]byte, maxFilterLen)) + `"`
-	if _, err := parseFilter(long, userSchema); err == nil {
-		t.Error("a filter past the length bound was accepted")
+	// The bounds themselves are inside.
+	atDepth := strings.Repeat("(", maxFilterDepth) + `userName eq "a"` + strings.Repeat(")", maxFilterDepth)
+	if _, err := parseFilter(atDepth, userSchema); err != nil {
+		t.Errorf("a filter nested to the bound: %v", err)
+	}
+	const head = `userName eq "`
+	for extra, want := range map[int]string{0: "", 1: "scim 400 invalidFilter: filter is longer than 4096 bytes"} {
+		long := head + strings.Repeat("a", maxFilterLen-len(head)-1+extra) + `"`
+		if _, err := parseFilter(long, userSchema); (want == "") != (err == nil) || (err != nil && err.Error() != want) {
+			t.Errorf("a filter of %d bytes: %v, want %q", len(long), err, want)
+		}
 	}
 }

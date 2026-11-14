@@ -136,7 +136,7 @@ func TestRoleBindings(t *testing.T) {
 	wantErr(t, "update a missing binding", h.d.UpdateRoleBinding(ctx, admin, b), directory.ErrNotFound)
 
 	h.grants.err = errors.New("source down")
-	if err := h.d.CreateRoleBinding(ctx, admin, bind(directory.Global, everyone)); err == nil || errors.Is(err, authz.ErrForbidden) {
+	if err := h.d.CreateRoleBinding(ctx, admin, bind(directory.Global, everyone)); !errors.Is(err, h.grants.err) || errors.Is(err, authz.ErrForbidden) {
 		t.Fatalf("a failed grant lookup = %v, want the lookup error", err)
 	}
 }

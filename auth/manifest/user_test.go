@@ -95,9 +95,7 @@ func TestUserIdentityClearRemovesEveryIdentityOnce(t *testing.T) {
 	e.apply(t, withIdentity, manifest.Options{})
 	u, _ := users.ByUsername(ctx, "alice")
 	for _, sub := range []string{"a2", "a3"} {
-		if err := e.dir.AddIdentity(ctx, u.ID, directory.UserIdentity{Identity: directory.Identity{Issuer: "https://idp", Subject: sub}}); err != nil {
-			t.Fatal(err)
-		}
+		must(t, e.dir.AddIdentity(ctx, u.ID, directory.UserIdentity{Identity: directory.Identity{Issuer: "https://idp", Subject: sub}}))
 	}
 
 	omitted := "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {password: {hash: \"" + aliceHash + "\"}}\n"
@@ -168,9 +166,7 @@ func TestApplyCredentialChangeEndsSessionsAndTokens(t *testing.T) {
 	ended := &endedSessions{}
 	cfg := testConfig()
 	dir, err := directory.New(directory.Config{Stores: e.store.Stores(), Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs, Revoker: ended})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	e.dir = dir
 	users := e.store.Stores().Users
 	e.apply(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {password: {hash: \""+aliceHash+"\"}, identity: {issuer: i, subject: a}}\n", manifest.Options{})
@@ -208,9 +204,7 @@ func TestUserIdentityClearIsOneWrite(t *testing.T) {
 	s.Users = failingIdentityRemoval{s.Users}
 	cfg := testConfig()
 	dir, err := directory.New(directory.Config{Stores: s, Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	p := e.plan(t, e.parse(t, "apiVersion: auth.wyolet.dev/v1alpha1\nkind: User\nmetadata: {name: alice}\nspec: {email: b@example.com, identity: null}\n"), manifest.Options{})
 	_, applyErr := p.Apply(ctx, dir, admin)
 	got, _ := s.Users.ByUsername(ctx, "alice")

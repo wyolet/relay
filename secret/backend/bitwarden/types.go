@@ -1,12 +1,5 @@
 package bitwarden
 
-const (
-	cipherTypeLogin      = 1
-	cipherTypeSecureNote = 2
-	cipherTypeCard       = 3
-	cipherTypeIdentity   = 4
-)
-
 type preloginResponse struct {
 	KDF            int  `json:"kdf"`
 	KDFIterations  int  `json:"kdfIterations"`

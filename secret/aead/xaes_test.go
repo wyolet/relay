@@ -40,9 +40,7 @@ func TestXAESVectors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			x, err := newXAES(mustHex(t, c.key))
-			if err != nil {
-				t.Fatal(err)
-			}
+			must(t, err)
 			var l [16]byte
 			x.block.Encrypt(l[:], l[:])
 			if got := hex.EncodeToString(l[:]); got != c.l {
@@ -59,9 +57,7 @@ func TestXAESVectors(t *testing.T) {
 				t.Errorf("Nx = %s, want %s", got, c.nx)
 			}
 			ct, err := x.seal(nil, nonce, []byte(c.plaintext), []byte(c.aad))
-			if err != nil {
-				t.Fatal(err)
-			}
+			must(t, err)
 			if got := hex.EncodeToString(ct); got != c.ciphertext {
 				t.Fatalf("ciphertext = %s, want %s", got, c.ciphertext)
 			}
@@ -92,13 +88,9 @@ func TestXAESAccumulated(t *testing.T) {
 		plaintext := read(int(read(1)[0]))
 		aad := read(int(read(1)[0]))
 		x, err := newXAES(key)
-		if err != nil {
-			t.Fatal(err)
-		}
+		must(t, err)
 		ct, err := x.seal(nil, nonce, plaintext, aad)
-		if err != nil {
-			t.Fatal(err)
-		}
+		must(t, err)
 		if _, err := hash.Write(ct); err != nil {
 			t.Fatal(err)
 		}
@@ -119,8 +111,6 @@ func TestXAESAccumulated(t *testing.T) {
 func mustHex(t testing.TB, s string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return b
 }

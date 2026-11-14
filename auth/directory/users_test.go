@@ -171,8 +171,8 @@ func TestDisableEnableUser(t *testing.T) {
 	wantErr(t, "update a missing user", h.d.UpdateUser(ctx, nil, &directory.User{ID: "nope", Username: "x"}), directory.ErrNotFound)
 
 	h.rev.err = errors.New("kv down")
-	if err := h.d.EnableUser(ctx, u.ID); err == nil {
-		t.Fatal("a failed session revoke was not reported")
+	if err := h.d.EnableUser(ctx, u.ID); !errors.Is(err, h.rev.err) || err.Error() != "directory: end sessions of user "+u.ID+": kv down" {
+		t.Fatalf("EnableUser with a failed session revoke = %v", err)
 	}
 }
 

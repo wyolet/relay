@@ -7,11 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/auth/authn"
 	"github.com/wyolet/relay/auth/principal"
@@ -141,10 +142,13 @@ func TestOptionsDefaultsAndCookie(t *testing.T) {
 		t.Errorf("default cookie = %+v", c)
 	}
 
-	m = New(newMemStore(), Options{CookieName: "app", Secure: true, Lifetime: time.Hour})
+	m = New(newMemStore(), Options{CookieName: "app", Secure: true, Lifetime: time.Hour, SameSite: http.SameSiteLaxMode})
 	c = login(t, m, func(ctx context.Context) error { return m.Login(ctx, "u", "u") })
-	if c.Name != "app" || !c.Secure || c.MaxAge < 3600 || c.MaxAge > 3601 {
+	if c.Name != "app" || c.Path != "/" || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.MaxAge < 3600 || c.MaxAge > 3601 {
 		t.Errorf("configured cookie = %+v", c)
+	}
+	if p := whoami(t, m, &http.Cookie{Name: "session", Value: c.Value}); p != nil {
+		t.Errorf("the token under the default cookie name authenticated %+v", p)
 	}
 }
 
@@ -156,14 +160,17 @@ func TestLoginRoundTripsAndRotatesToken(t *testing.T) {
 	if first.Value == second.Value {
 		t.Fatal("login did not issue a fresh token")
 	}
-	if ttl := store.index["u-1"][second.Value]; ttl != time.Hour {
-		t.Errorf("index ttl = %s, want the lifetime", ttl)
+	if d := cmp.Diff(map[string]time.Duration{first.Value: time.Hour, second.Value: time.Hour}, store.index["u-1"]); d != "" {
+		t.Errorf("token index of u-1 (-want +got):\n%s", d)
 	}
 
-	p := whoami(t, m, second)
-	want := principal.Principal{ID: "u-1", Kind: principal.KindUser, Username: "alice", Roles: []string{"admin"}, SessionID: sessionID(second.Value), Credential: principal.Credential{Kind: principal.CredentialSession}}
-	if p == nil || p.ID != want.ID || p.Kind != want.Kind || p.Username != want.Username || !slices.Equal(p.Roles, want.Roles) || p.SessionID != want.SessionID || p.Credential != want.Credential || p.Subjects != nil {
-		t.Errorf("principal = %+v, want %+v", p, want)
+	want := &principal.Principal{ID: "u-1", Kind: principal.KindUser, Username: "alice", Roles: []string{"admin"}, SessionID: sessionID(second.Value), Credential: principal.Credential{Kind: principal.CredentialSession}}
+	if d := cmp.Diff(want, whoami(t, m, second)); d != "" {
+		t.Errorf("principal (-want +got):\n%s", d)
+	}
+	want.Roles, want.SessionID = nil, sessionID(first.Value)
+	if d := cmp.Diff(want, whoami(t, m, first)); d != "" {
+		t.Errorf("principal of the first session (-want +got):\n%s", d)
 	}
 }
 
@@ -187,9 +194,9 @@ func TestLoginOverAnotherSessionStartsClean(t *testing.T) {
 			if len(cookies) != 1 || cookies[0].Value == first.Value {
 				t.Fatalf("second login set cookies %v, want one fresh token", cookies)
 			}
-			p := whoami(t, m, cookies[0])
-			if p == nil || p.ID != "u-bob" || p.Username != "bob" || p.Roles != nil || p.Groups != nil || p.Issuer != "" || p.Subject != "" {
-				t.Errorf("principal after the second login = %+v, want bob with nothing carried over", p)
+			want := &principal.Principal{ID: "u-bob", Kind: principal.KindUser, Username: "bob", SessionID: sessionID(cookies[0].Value), Credential: principal.Credential{Kind: principal.CredentialSession}}
+			if d := cmp.Diff(want, whoami(t, m, cookies[0])); d != "" {
+				t.Errorf("principal after the second login, want bob with nothing carried over (-want +got):\n%s", d)
 			}
 		})
 	}
@@ -219,17 +226,20 @@ func TestLoginOIDCAndSubjects(t *testing.T) {
 			t.Errorf("Authenticate: %v", err)
 		}
 	})).ServeHTTP(httptest.NewRecorder(), req)
-	if p == nil || p.Issuer != "https://idp" || p.Subject != "sub-1" || !slices.Equal(p.Groups, []string{"eng"}) || !slices.Equal(p.Roles, []string{"viewer"}) {
-		t.Fatalf("principal = %+v", p)
+	want := &principal.Principal{
+		ID: "u-1", Kind: principal.KindUser, Username: "alice", Issuer: "https://idp", Subject: "sub-1",
+		Roles: []string{"viewer"}, Groups: []string{"eng"}, Subjects: []string{"https://idp|sub-1", "user:u-1", "viewer", "eng"},
+		SessionID: sessionID(c.Value), Credential: principal.Credential{Kind: principal.CredentialSession},
 	}
-	if !slices.Equal(p.Subjects, []string{"https://idp|sub-1", "user:u-1", "viewer", "eng"}) {
-		t.Errorf("subjects = %v", p.Subjects)
+	if d := cmp.Diff(want, p); d != "" {
+		t.Fatalf("principal (-want +got):\n%s", d)
 	}
 
 	m = New(newMemStore(), Options{Subjects: func(_ context.Context, p *principal.Principal) ([]string, error) { return []string{p.ID}, nil }})
 	c = login(t, m, func(ctx context.Context) error { return m.LoginOIDC(ctx, "u-2", "bob", "", "", nil) })
-	if p := whoami(t, m, c); p == nil || !slices.Equal(p.Subjects, []string{"u-2"}) || p.Issuer != "" || p.Groups != nil {
-		t.Errorf("principal = %+v", p)
+	want = &principal.Principal{ID: "u-2", Kind: principal.KindUser, Username: "bob", Subjects: []string{"u-2"}, SessionID: sessionID(c.Value), Credential: principal.Credential{Kind: principal.CredentialSession}}
+	if d := cmp.Diff(want, whoami(t, m, c)); d != "" {
+		t.Errorf("principal without an IdP subject (-want +got):\n%s", d)
 	}
 }
 
@@ -250,14 +260,6 @@ func TestSubjectsErrorIsServerFailure(t *testing.T) {
 	})
 	if s := logged.String(); !strings.Contains(s, "session subjects failure") || !strings.Contains(s, "lookup down") {
 		t.Errorf("log = %q", s)
-	}
-}
-
-func TestSameSiteOption(t *testing.T) {
-	m := New(newMemStore(), Options{SameSite: http.SameSiteLaxMode})
-	c := login(t, m, func(ctx context.Context) error { return m.Login(ctx, "u", "u") })
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Errorf("SameSite = %v, want Lax", c.SameSite)
 	}
 }
 
@@ -304,8 +306,8 @@ func TestLogoutAndDestroyUser(t *testing.T) {
 	if p := whoami(t, m, a2); p != nil {
 		t.Errorf("destroyed session = %+v", p)
 	}
-	if len(store.index["a"]) != 0 {
-		t.Errorf("index of a = %v, want empty", store.index["a"])
+	if len(store.index["a"]) != 0 || len(store.data) != 1 {
+		t.Errorf("after DestroyUser: index of a = %v, %d stored sessions; want none of a's and only b's", store.index["a"], len(store.data))
 	}
 	if p := whoami(t, m, b); p == nil || p.ID != "b" {
 		t.Errorf("b's session = %+v, want intact", p)
@@ -347,6 +349,8 @@ type deleteFailStore struct {
 
 func (s *deleteFailStore) DeleteUserToken(context.Context, string, string) error { return s.err }
 
+const problemBody = `{"title":"Internal Server Error","status":500,"detail":"session layer failure"}`
+
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
@@ -362,7 +366,7 @@ func TestFindFailureIsAttributed500(t *testing.T) {
 	store.errFind = errors.New("find down")
 	m := New(store, Options{})
 	rec := serve(m, &http.Cookie{Name: "session", Value: "t"}, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	if rec.Code != http.StatusInternalServerError || rec.Header().Get("Content-Type") != "application/problem+json" || !strings.Contains(rec.Body.String(), `"status":500`) {
+	if rec.Code != http.StatusInternalServerError || rec.Header().Get("Content-Type") != "application/problem+json" || rec.Body.String() != problemBody {
 		t.Fatalf("response = %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 	if s := logged.String(); !strings.Contains(s, "session middleware failure") || !strings.Contains(s, "find down") || !strings.Contains(s, "/auth/login") {
@@ -383,7 +387,7 @@ func TestCommitFailureDropsHandlerResponse(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
-	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), `"ok":true`) || !strings.Contains(rec.Body.String(), `"status":500`) {
+	if rec.Code != http.StatusInternalServerError || rec.Body.String() != problemBody {
 		t.Fatalf("response = %d %q", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(logged.String(), "commit down") {
@@ -428,7 +432,7 @@ func TestErrorFuncOnPlainWriter(t *testing.T) {
 	m := New(newMemStore(), Options{})
 	rec := httptest.NewRecorder()
 	m.sm.ErrorFunc(rec, httptest.NewRequest(http.MethodGet, "/", nil), errors.New("x"))
-	if rec.Code != http.StatusInternalServerError || rec.Header().Get("Content-Type") != "application/problem+json" {
-		t.Errorf("response = %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	if rec.Code != http.StatusInternalServerError || rec.Header().Get("Content-Type") != "application/problem+json" || rec.Body.String() != problemBody {
+		t.Errorf("response = %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }

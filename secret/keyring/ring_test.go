@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/secret/aead"
+	"github.com/wyolet/relay/secret/kek"
 	"github.com/wyolet/relay/secret/keyring"
 	"github.com/wyolet/relay/secret/keyring/memstore"
 )
@@ -32,9 +33,7 @@ func TestUnknownKeyReloadAndNegativeCache(t *testing.T) {
 
 	bogusID := [16]byte{0xde, 0xad}
 	bogus, err := aead.Seal(make([]byte, 32), bogusID, []byte("x"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	var wg sync.WaitGroup
 	for i := 0; i < 64; i++ {
 		wg.Add(1)
@@ -60,9 +59,7 @@ func TestUnknownKeyReloadAndNegativeCache(t *testing.T) {
 		t.Fatalf("store reads after the TTL = %d, want 3", n)
 	}
 	// An explicit Reload bypasses the cache.
-	if err := r.Reload(ctx, bogusID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, r.Reload(ctx, bogusID))
 	if n := cs.gets.Load(); n != 4 {
 		t.Fatalf("store reads after Reload = %d, want 4", n)
 	}
@@ -117,25 +114,17 @@ func TestReloadSeesRotateAndTarget(t *testing.T) {
 	old, oldID := mustEncrypt(t, a, "s", "v", "")
 	mustDecrypt(t, b, "s", old, "", "v")
 	nk, err := a.Rotate(ctx, "s")
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	// Notified of the new key only, b still learns the old one was demoted.
-	if err := b.Reload(ctx, nk.ID); err != nil {
-		t.Fatal(err)
-	}
+	must(t, b.Reload(ctx, nk.ID))
 	if info, _ := keyInfo(b, oldID); info.State != keyring.DecryptOnly {
 		t.Fatalf("old key on b = %+v", info)
 	}
 	if st := mustDecrypt(t, b, "s", old, "", "v"); !st.Stale {
 		t.Fatal("old value not stale on b")
 	}
-	if err := ms.SetTargetKEK(ctx, k2.ID(), k1.ID()); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.ReloadTarget(ctx); err != nil {
-		t.Fatal(err)
-	}
+	must(t, ms.SetTargetKEK(ctx, k2.ID(), k1.ID()))
+	must(t, b.ReloadTarget(ctx))
 	if b.Target() != k2.ID() {
 		t.Fatal("ReloadTarget did not pick up the target")
 	}
@@ -155,9 +144,7 @@ func TestRun(t *testing.T) {
 		ReloadError: func(err error) { errs <- err },
 		OnReload:    func() { reloads.Add(1) },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if _, err := a.Rotate(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
@@ -206,14 +193,22 @@ func TestRun(t *testing.T) {
 
 func TestNew(t *testing.T) {
 	set := newSet(t, newKEK(t, 1))
-	if _, err := keyring.New(ctx, nil, set, keyring.Options{}); err == nil {
-		t.Fatal("nil store accepted")
-	}
-	if _, err := keyring.New(ctx, memstore.New(), nil, keyring.Options{}); err == nil {
-		t.Fatal("nil set accepted")
-	}
-	if _, err := keyring.New(ctx, memstore.New(), set, keyring.Options{DestroyAfter: -time.Second}); err == nil {
-		t.Fatal("negative duration accepted")
+	const nilArg, negative = "keyring: nil store or KEK set", "keyring: negative duration in options"
+	for _, tc := range []struct {
+		st   keyring.Store
+		set  *kek.Set
+		opts keyring.Options
+		want string
+	}{
+		{nil, set, keyring.Options{}, nilArg},
+		{memstore.New(), nil, keyring.Options{}, nilArg},
+		{memstore.New(), set, keyring.Options{DestroyAfter: -1}, negative},
+		{memstore.New(), set, keyring.Options{RefreshInterval: -1}, negative},
+		{memstore.New(), set, keyring.Options{UnknownKeyTTL: -1}, negative},
+	} {
+		if r, err := keyring.New(ctx, tc.st, tc.set, tc.opts); err == nil || err.Error() != tc.want || r != nil {
+			t.Errorf("New(%+v) = %v, %v; want %q", tc.opts, r, err, tc.want)
+		}
 	}
 	boom := errors.New("down")
 	cs := &counting{Store: memstore.New()}

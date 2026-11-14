@@ -2,312 +2,179 @@ package azure
 
 import (
 	"context"
-	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/secret"
 )
 
-// tokenResponse is the token body the fake Entra and IMDS endpoints return.
-type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	TokenType   string `json:"token_type"`
+// fakeAzure serves the token endpoint and the vault from one transport, keyed by host, and keeps every request.
+type fakeAzure struct {
+	token, vault string // "<status> <body>"
+	reqs         []*http.Request
+	forms        []url.Values
 }
 
-func TestParsePath(t *testing.T) {
-	name, ver, err := parsePath("openai-key/abc123")
-	if err != nil || name != "openai-key" || ver != "abc123" {
-		t.Fatalf("versioned: %q %q err %v", name, ver, err)
-	}
-	name, ver, err = parsePath("openai-key")
-	if err != nil || name != "openai-key" || ver != "" {
-		t.Fatalf("plain: %q %q err %v", name, ver, err)
-	}
-	for _, p := range []string{"", "/onlyver", "name/"} {
-		if _, _, err := parsePath(p); err == nil {
-			t.Fatalf("parsePath(%q): want error", p)
+func (f *fakeAzure) RoundTrip(r *http.Request) (*http.Response, error) {
+	f.reqs = append(f.reqs, r)
+	reply := f.vault
+	if r.URL.Host != "vault.test" {
+		reply = f.token
+		var form url.Values
+		if r.Body != nil {
+			b, _ := io.ReadAll(r.Body)
+			form, _ = url.ParseQuery(string(b))
 		}
+		f.forms = append(f.forms, form)
+	}
+	status, body, _ := strings.Cut(reply, " ")
+	code := map[string]int{"200": 200, "401": 401, "404": 404, "500": 500}[status]
+	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+
+func (f *fakeAzure) config() Config {
+	return Config{
+		VaultURL: " https://vault.test/ ", TenantID: "tenant", ClientID: "client", ClientSecret: "secret",
+		TokenEndpoint: "https://login.test/token", HTTPClient: &http.Client{Transport: f},
 	}
 }
 
-func TestConfigFromEnv(t *testing.T) {
-	t.Setenv("AZURE_KEYVAULT_URL", "https://myvault.vault.azure.net")
-	t.Setenv("AZURE_TENANT_ID", "tenant-id")
-	t.Setenv("AZURE_CLIENT_ID", "client-id")
-	t.Setenv("AZURE_CLIENT_SECRET", "client-secret")
+const tokenOK = `200 {"access_token":"access-tok","expires_in":3600,"token_type":"Bearer"}`
 
-	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.VaultURL != "https://myvault.vault.azure.net" ||
-		cfg.TenantID != "tenant-id" ||
-		cfg.ClientID != "client-id" ||
-		cfg.ClientSecret != "client-secret" ||
-		cfg.UseManagedIdentity {
-		t.Fatalf("cfg: %+v", cfg)
-	}
-}
-
-func TestConfigFromEnv_ManagedIdentity(t *testing.T) {
-	t.Setenv("AZURE_KEYVAULT_URL", "https://myvault.vault.azure.net")
-	t.Setenv("AZURE_USE_MANAGED_IDENTITY", "1")
-	t.Setenv("AZURE_TENANT_ID", "")
-
-	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.UseManagedIdentity || cfg.TenantID != "" {
-		t.Fatalf("cfg: %+v", cfg)
-	}
-}
-
-func TestResolver_PlainSecret(t *testing.T) {
-	var tokenCalls atomic.Int32
-	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenCalls.Add(1)
-		if r.Method != http.MethodPost {
-			http.Error(w, "bad method", http.StatusMethodNotAllowed)
-			return
-		}
-		if err := r.ParseForm(); err != nil ||
-			r.Form.Get("grant_type") != "client_credentials" ||
-			r.Form.Get("scope") != vaultResource+"/.default" {
-			http.Error(w, "bad form", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(tokenResponse{
-			AccessToken: "access-tok",
-			ExpiresIn:   3600,
-			TokenType:   "Bearer",
+func TestResolver_Resolve(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, vault string
+		wantURL           string
+		want, wantErr     string
+	}{
+		{"latest version", "openai-key", `200 {"value":"upstream-api-key","id":"x"}`, "https://vault.test/secrets/openai-key?api-version=2025-07-01", "upstream-api-key", ""},
+		{"pinned version", " my-secret/ver-42 ", `200 {"value":"versioned-value"}`, "https://vault.test/secrets/my-secret/ver-42?api-version=2025-07-01", "versioned-value", ""},
+		{"name and version are escaped", "a b?/c#d/e", `200 {"value":"v"}`, "https://vault.test/secrets/a%20b%3F/c%23d%2Fe?api-version=2025-07-01", "v", ""},
+		{"not found", "missing", `404 {"error":{"code":"SecretNotFound","message":"Secret not found"}}`, "https://vault.test/secrets/missing?api-version=2025-07-01", "", "secret/azure: SecretNotFound: Secret not found (HTTP 404)"},
+		{"message without a code", "missing", `404 {"error":{"message":"Secret not found"}}`, "https://vault.test/secrets/missing?api-version=2025-07-01", "", "secret/azure: Secret not found (HTTP 404)"},
+		{"code without a message", "x", `500 {"error":{"code":"Oops"}}`, "https://vault.test/secrets/x?api-version=2025-07-01", "", "secret/azure: key vault returned HTTP 500"},
+		{"opaque failure", "x", `500 <html>`, "https://vault.test/secrets/x?api-version=2025-07-01", "", "secret/azure: key vault returned HTTP 500"},
+		{"200 that is not json", "x", `200 <html>`, "https://vault.test/secrets/x?api-version=2025-07-01", "", "secret/azure: decode secret response: invalid character '<' looking for beginning of value"},
+		{"empty value", "x", `200 {"value":""}`, "https://vault.test/secrets/x?api-version=2025-07-01", "", `secret/azure: secret "x" has empty value`},
+		{"no value", "x", `200 {}`, "https://vault.test/secrets/x?api-version=2025-07-01", "", `secret/azure: secret "x" has empty value`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeAzure{token: tokenOK, vault: tc.vault}
+			got, err := New(f.config()).Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: tc.path})
+			if string(got) != tc.want || (tc.wantErr == "") != (err == nil) || (err != nil && err.Error() != tc.wantErr) {
+				t.Fatalf("Resolve = %q, %v; want %q, %q", got, err, tc.want, tc.wantErr)
+			}
+			if len(f.reqs) != 2 {
+				t.Fatalf("%d requests, want a token request then a vault request", len(f.reqs))
+			}
+			wantForm := url.Values{"grant_type": {"client_credentials"}, "client_id": {"client"}, "client_secret": {"secret"}, "scope": {"https://vault.azure.net/.default"}}
+			if d := cmp.Diff(wantForm, f.forms[0]); d != "" || f.reqs[0].URL.String() != "https://login.test/token" {
+				t.Errorf("token request to %s (-want +got):\n%s", f.reqs[0].URL, d)
+			}
+			v := f.reqs[1]
+			if v.Method != http.MethodGet || v.URL.String() != tc.wantURL || v.Header.Get("Authorization") != "Bearer access-tok" {
+				t.Errorf("vault request = %s %s auth %q, want GET %s", v.Method, v.URL, v.Header.Get("Authorization"), tc.wantURL)
+			}
 		})
-	}))
-	defer tokenSrv.Close()
-
-	vaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer access-tok" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if !strings.Contains(r.URL.Path, "/secrets/openai-key") {
-			http.Error(w, "bad path", http.StatusBadRequest)
-			return
-		}
-		if r.URL.Query().Get("api-version") != apiVersion {
-			http.Error(w, "bad api-version", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(secretBundle{Value: "upstream-api-key"})
-	}))
-	defer vaultSrv.Close()
-
-	res := New(testConfig(tokenSrv.URL, vaultSrv.URL, nil))
-	got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "openai-key"})
-	if err != nil || string(got) != "upstream-api-key" {
-		t.Fatalf("resolve: %q err %v", got, err)
-	}
-	if tokenCalls.Load() != 1 {
-		t.Fatalf("token calls: %d", tokenCalls.Load())
-	}
-
-	got2, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "openai-key"})
-	if err != nil || string(got2) != "upstream-api-key" {
-		t.Fatalf("cached resolve: %q err %v", got2, err)
-	}
-	if tokenCalls.Load() != 1 {
-		t.Fatalf("cached token calls: %d", tokenCalls.Load())
 	}
 }
 
-func TestResolver_VersionedSecret(t *testing.T) {
-	tokenSrv := httptest.NewServer(tokenOKHandler("tok"))
-	defer tokenSrv.Close()
-
-	vaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/secrets/my-secret/ver-42") {
-			http.Error(w, "path: "+r.URL.Path, http.StatusBadRequest)
-			return
+func TestResolver_ReusesTheToken(t *testing.T) {
+	f := &fakeAzure{token: tokenOK, vault: `200 {"value":"v"}`}
+	res := New(f.config())
+	for range 3 {
+		if got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "s"}); err != nil || string(got) != "v" {
+			t.Fatalf("Resolve = %q, %v", got, err)
 		}
-		_ = json.NewEncoder(w).Encode(secretBundle{Value: "versioned-value"})
-	}))
-	defer vaultSrv.Close()
-
-	res := New(testConfig(tokenSrv.URL, vaultSrv.URL, nil))
-	got, err := res.Resolve(context.Background(), secret.Ref{
-		Kind: secret.KindAzure,
-		Path: "my-secret/ver-42",
-	})
-	if err != nil || string(got) != "versioned-value" {
-		t.Fatalf("resolve: %q err %v", got, err)
 	}
-}
-
-func TestResolver_MissingSecret(t *testing.T) {
-	tokenSrv := httptest.NewServer(tokenOKHandler("tok"))
-	defer tokenSrv.Close()
-
-	vaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":{"code":"SecretNotFound","message":"Secret not found"}}`))
-	}))
-	defer vaultSrv.Close()
-
-	res := New(testConfig(tokenSrv.URL, vaultSrv.URL, nil))
-	_, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "missing"})
-	if err == nil || !strings.Contains(err.Error(), "Secret not found") {
-		t.Fatalf("missing secret: %v", err)
-	}
-}
-
-func TestResolver_TokenError(t *testing.T) {
-	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"bad creds"}`))
-	}))
-	defer tokenSrv.Close()
-
-	vaultSrv := httptest.NewServer(http.NotFoundHandler())
-	defer vaultSrv.Close()
-
-	res := New(testConfig(tokenSrv.URL, vaultSrv.URL, nil))
-	_, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "x"})
-	if err == nil || !strings.Contains(err.Error(), "invalid_client") {
-		t.Fatalf("token error: %v", err)
-	}
-}
-
-func TestResolver_TokenRefresh(t *testing.T) {
-	var tokenCalls atomic.Int32
-	now := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
-	clock := func() time.Time { return now }
-
-	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := tokenCalls.Add(1)
-		tok := "tok-1"
-		if n > 1 {
-			tok = "tok-2"
-		}
-		_ = json.NewEncoder(w).Encode(tokenResponse{
-			AccessToken: tok,
-			ExpiresIn:   120,
-			TokenType:   "Bearer",
-		})
-	}))
-	defer tokenSrv.Close()
-
-	var seenAuth atomic.Value
-	vaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenAuth.Store(r.Header.Get("Authorization"))
-		_ = json.NewEncoder(w).Encode(secretBundle{Value: "v"})
-	}))
-	defer vaultSrv.Close()
-
-	cfg := testConfig(tokenSrv.URL, vaultSrv.URL, clock)
-	res := New(cfg)
-
-	if _, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "s"}); err != nil {
-		t.Fatal(err)
-	}
-	if tokenCalls.Load() != 1 {
-		t.Fatalf("first token calls: %d", tokenCalls.Load())
-	}
-
-	now = now.Add(2 * time.Hour)
-	if _, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "s"}); err != nil {
-		t.Fatal(err)
-	}
-	if tokenCalls.Load() != 2 {
-		t.Fatalf("refresh token calls: %d", tokenCalls.Load())
-	}
-	if auth, _ := seenAuth.Load().(string); auth != "Bearer tok-2" {
-		t.Fatalf("refreshed auth: %q", auth)
+	if len(f.forms) != 1 || len(f.reqs) != 4 {
+		t.Errorf("%d token requests in %d requests, want 1 in 4", len(f.forms), len(f.reqs))
 	}
 }
 
 func TestResolver_ManagedIdentity(t *testing.T) {
-	imdsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "bad method", http.StatusMethodNotAllowed)
-			return
-		}
-		if r.Header.Get("Metadata") != "true" {
-			http.Error(w, "missing metadata", http.StatusBadRequest)
-			return
-		}
-		if r.URL.Query().Get("resource") != vaultResource {
-			http.Error(w, "bad resource", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(tokenResponse{
-			AccessToken: "mi-tok",
-			ExpiresIn:   3600,
-			TokenType:   "Bearer",
-		})
-	}))
-	defer imdsSrv.Close()
-
-	vaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer mi-tok" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(secretBundle{Value: "mi-secret"})
-	}))
-	defer vaultSrv.Close()
-
-	res := New(Config{
-		VaultURL:           vaultSrv.URL,
-		UseManagedIdentity: true,
-		IMDSEndpoint:       imdsSrv.URL + "?api-version=2019-08-01&resource=" + url.QueryEscape(vaultResource),
-		HTTPClient:         http.DefaultClient,
-	})
-	got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "key"})
+	f := &fakeAzure{token: `200 {"access_token":"mi-tok","expires_in":3600}`, vault: `200 {"value":"mi-secret"}`}
+	got, err := New(Config{VaultURL: "https://vault.test", UseManagedIdentity: true, HTTPClient: &http.Client{Transport: f}}).
+		Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "key"})
 	if err != nil || string(got) != "mi-secret" {
-		t.Fatalf("resolve: %q err %v", got, err)
+		t.Fatalf("Resolve = %q, %v", got, err)
+	}
+	imds, vault := f.reqs[0], f.reqs[1]
+	if imds.URL.String() != "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2019-08-01&resource=https%3A%2F%2Fvault.azure.net" || imds.Header.Get("Metadata") != "true" {
+		t.Errorf("metadata request = %s %v", imds.URL, imds.Header)
+	}
+	if vault.Header.Get("Authorization") != "Bearer mi-tok" {
+		t.Errorf("vault Authorization = %q", vault.Header.Get("Authorization"))
 	}
 }
 
-func TestResolver_Errors(t *testing.T) {
-	tokenSrv := httptest.NewServer(tokenOKHandler("tok"))
-	defer tokenSrv.Close()
-	vaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(secretBundle{Value: "x"})
-	}))
-	defer vaultSrv.Close()
-
-	res := New(testConfig(tokenSrv.URL, vaultSrv.URL, nil))
-	_, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindEnv, Path: "x"})
-	if err == nil || !strings.Contains(err.Error(), "wrong kind") {
-		t.Fatalf("wrong kind: %v", err)
-	}
-}
-
-func tokenOKHandler(tok string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(tokenResponse{
-			AccessToken: tok,
-			ExpiresIn:   3600,
-			TokenType:   "Bearer",
+func TestResolver_RefusesBeforeTheVault(t *testing.T) {
+	azure := func(path string) secret.Ref { return secret.Ref{Kind: secret.KindAzure, Path: path} }
+	for _, tc := range []struct {
+		name     string
+		ref      secret.Ref
+		cfg      func(*Config)
+		token    string
+		want     string
+		wantReqs int
+	}{
+		{"wrong kind", secret.Ref{Kind: secret.KindEnv, Path: "x"}, nil, tokenOK, `secret/azure: wrong kind "env"`, 0},
+		{"empty path", azure(" "), nil, tokenOK, "secret/azure: path is empty", 0},
+		{"no name", azure("/onlyver"), nil, tokenOK, `secret/azure: empty secret name in path "/onlyver"`, 0},
+		{"no version", azure("name/"), nil, tokenOK, `secret/azure: empty version in path "name/"`, 0},
+		{"token refused", azure("x"), nil, `401 {"error":"invalid_client","error_description":"bad creds"}`, `secret/azure: token endpoint returned "invalid_client: bad creds" (HTTP 401)`, 1},
+		{"no vault url", azure("x"), func(c *Config) { c.VaultURL = " / " }, tokenOK, "secret/azure: vault URL is not configured", 1},
+		{"vault url does not parse", azure("x"), func(c *Config) { c.VaultURL = "https://bad host" }, tokenOK, `secret/azure: parse secret url: parse "https://bad host/secrets/x": invalid character " " in host name`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeAzure{token: tc.token, vault: `200 {"value":"must not be read"}`}
+			cfg := f.config()
+			if tc.cfg != nil {
+				tc.cfg(&cfg)
+			}
+			got, err := New(cfg).Resolve(context.Background(), tc.ref)
+			if err == nil || err.Error() != tc.want || got != nil || len(f.reqs) != tc.wantReqs {
+				t.Errorf("Resolve = %q, %v after %d requests; want %q after %d", got, err, len(f.reqs), tc.want, tc.wantReqs)
+			}
 		})
 	}
 }
 
-func testConfig(tokenURL, vaultURL string, now func() time.Time) Config {
-	return Config{
-		VaultURL:      vaultURL,
-		TenantID:      "tenant",
-		ClientID:      "client",
-		ClientSecret:  "secret",
-		TokenEndpoint: tokenURL,
-		HTTPClient:    http.DefaultClient,
-		Now:           now,
+func TestConfigFromEnv(t *testing.T) {
+	set := func(vault, managed, tenant, id, sec string) {
+		t.Setenv("AZURE_KEYVAULT_URL", vault)
+		t.Setenv("AZURE_USE_MANAGED_IDENTITY", managed)
+		t.Setenv("AZURE_TENANT_ID", tenant)
+		t.Setenv("AZURE_CLIENT_ID", id)
+		t.Setenv("AZURE_CLIENT_SECRET", sec)
+	}
+	const vault = "https://myvault.vault.azure.net"
+	for _, tc := range []struct {
+		name string
+		env  [5]string
+		want Config
+		err  string
+	}{
+		{"client credentials, trimmed", [5]string{" " + vault + "\n", "", " tenant-id ", " client-id ", " client-secret "}, Config{VaultURL: vault, TenantID: "tenant-id", ClientID: "client-id", ClientSecret: "client-secret"}, ""},
+		{"managed identity needs no credentials", [5]string{vault, "1", "", "", ""}, Config{VaultURL: vault, UseManagedIdentity: true}, ""},
+		{"managed identity drops credentials", [5]string{vault, "1", "tenant-id", "client-id", "client-secret"}, Config{VaultURL: vault, UseManagedIdentity: true}, ""},
+		{"only 1 turns managed identity on", [5]string{vault, "true", "", "", ""}, Config{}, "secret/azure: AZURE_TENANT_ID is required"},
+		{"no vault", [5]string{" ", "1", "tenant-id", "client-id", "client-secret"}, Config{}, "secret/azure: AZURE_KEYVAULT_URL is unset or empty"},
+		{"no tenant", [5]string{vault, "", " ", "client-id", "client-secret"}, Config{}, "secret/azure: AZURE_TENANT_ID is required"},
+		{"no client id", [5]string{vault, "", "tenant-id", "", "client-secret"}, Config{}, "secret/azure: AZURE_CLIENT_ID and AZURE_CLIENT_SECRET are required"},
+		{"no client secret", [5]string{vault, "", "tenant-id", "client-id", " "}, Config{}, "secret/azure: AZURE_CLIENT_ID and AZURE_CLIENT_SECRET are required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			set(tc.env[0], tc.env[1], tc.env[2], tc.env[3], tc.env[4])
+			cfg, err := ConfigFromEnv()
+			if d := cmp.Diff(tc.want, cfg); d != "" || (tc.err == "") != (err == nil) || (err != nil && err.Error() != tc.err) {
+				t.Errorf("ConfigFromEnv: %v, want %q (-want +got):\n%s", err, tc.err, d)
+			}
+		})
 	}
 }
