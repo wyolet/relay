@@ -205,7 +205,6 @@ func TestToCanonicalStream_BlockedPromptTerminates(t *testing.T) {
 }
 
 func TestToCanonicalStream_ErrorFrameSurfaces(t *testing.T) {
-	t.Skip("bug: a mid-stream {\"error\":{…}} frame decodes as an empty geminiResponse, so it yields no error event and the stream ends without a terminal event")
 	s := toCanonical(t,
 		`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hel"}]},"index":0}]}`,
 		`{"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED"}}`,

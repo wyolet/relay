@@ -61,26 +61,33 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	return out, nil
 }
 
+// geminiStreamFrame is one streamed frame: a generateContent chunk, or an
+// {"error":{…}} frame, which would otherwise decode as an empty chunk.
+type geminiStreamFrame struct {
+	geminiResponse
+	Error *struct {
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
+}
+
 func (s *geminiToCanonicalStream) translateEvent(data []byte) ([]byte, error) {
-	var gr geminiResponse
-	if err := json.Unmarshal(data, &gr); err != nil {
-		// Try error shape.
-		var errResp struct {
-			Error struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-				Status  string `json:"status"`
-			} `json:"error"`
-		}
-		if jerr := json.Unmarshal(data, &errResp); jerr == nil && errResp.Error.Message != "" {
-			errData, _ := json.Marshal(v1.ErrorEvent{
-				Code:    errResp.Error.Status,
-				Message: errResp.Error.Message,
-			})
-			return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventError, Data: errData}}), nil
-		}
+	var frame geminiStreamFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
 		return nil, fmt.Errorf("gemini stream: %w", err)
 	}
+	if frame.Error != nil {
+		msg := frame.Error.Message
+		if msg == "" {
+			msg = string(data)
+		}
+		errData, _ := json.Marshal(v1.ErrorEvent{
+			Code:    frame.Error.Status,
+			Message: msg,
+		})
+		return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventError, Data: errData}}), nil
+	}
+	gr := &frame.geminiResponse
 
 	var out []byte
 
