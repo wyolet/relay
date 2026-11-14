@@ -205,8 +205,8 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 			return nil, err
 		}
 		switch c.Role {
-		case "user":
-			// user may have text parts or functionResponse parts
+		default:
+			// Any role but model reads as user, as the API reads a content without one.
 			var textParts []v1.Part
 			hasFunctionResponse := false
 			for _, p := range c.Parts {
@@ -292,18 +292,6 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 				}
 			}
 			flushText()
-
-		default:
-			// Unknown roles: treat as user.
-			var textParts []v1.Part
-			for _, p := range c.Parts {
-				if p.Text != "" {
-					textParts = append(textParts, &v1.TextPart{Text: p.Text})
-				}
-			}
-			if len(textParts) > 0 {
-				items = append(items, &v1.Message{Role: v1.RoleUser, Content: textParts})
-			}
 		}
 	}
 	return items, nil

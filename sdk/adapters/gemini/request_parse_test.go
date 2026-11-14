@@ -173,7 +173,6 @@ func TestParseRequest_ModelTurnKeepsPartOrder(t *testing.T) {
 }
 
 func TestParseRequest_RolelessContentKeepsMedia(t *testing.T) {
-	t.Skip("bug: a content with no role (the API reads it as user) keeps only text parts; inlineData, fileData and functionResponse are dropped")
 	req := parseRequest(t, `{"contents":[{"parts":[{"text":"Caption this."},{"inlineData":{"mimeType":"image/png","data":"iVBO"}}]}]}`)
 	assertJSON(t, req.Input, `[{"type":"message","role":"user","content":[{"type":"input_text","text":"Caption this."},{"type":"input_image","image_url":"data:image/png;base64,iVBO"}]}]`)
 }
