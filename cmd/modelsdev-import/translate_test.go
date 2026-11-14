@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +24,15 @@ func prov(id, npm string, models map[string]MDModel) MDProvider {
 	return MDProvider{ID: id, Name: id, NPM: npm, API: "https://" + id + ".example.com", Models: models}
 }
 
+func translateOK(t *testing.T, providers []MDProvider, o Opts) *TranslateResult {
+	t.Helper()
+	r, err := Translate(providers, o)
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	return r
+}
+
 // TestMetersAreKnown — every emitted pricing meter is one relay understands.
 func TestMetersAreKnown(t *testing.T) {
 	m := MDModel{ID: "m1", Name: "M1"}
@@ -32,24 +44,32 @@ func TestMetersAreKnown(t *testing.T) {
 			Size int    `json:"size"`
 		}{Type: "context", Size: 200000}}},
 	}
-	r, _ := Translate([]MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{"m1": m})}, Opts{})
-	if len(r.Pricings) == 0 {
-		t.Fatal("no pricing emitted")
+	r := translateOK(t, []MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{"m1": m})}, Opts{})
+	if len(r.Pricings) != 1 {
+		t.Fatalf("pricings = %d, want 1", len(r.Pricings))
 	}
-	for _, pr := range r.Pricings {
-		for _, rate := range pr.Spec.Rates {
-			if !knownMeters[rate.Meter] {
-				t.Errorf("emitted unknown meter %q (would compute to $0)", rate.Meter)
-			}
+	// Every source price lands once under the meter relay bills it by (cache_write as cache_creation), and the context tier as a second rate above its size.
+	var got []string
+	for _, rate := range r.Pricings[0].Spec.Rates {
+		if !knownMeters[rate.Meter] {
+			t.Errorf("emitted unknown meter %q (would compute to $0)", rate.Meter)
 		}
+		got = append(got, fmt.Sprintf("%s %s %v above %d", rate.Meter, rate.Unit, rate.Amount, rate.AboveTokens))
 	}
-	// cache_write must have mapped to cache_creation, not passed through.
-	for _, pr := range r.Pricings {
-		for _, rate := range pr.Spec.Rates {
-			if rate.Meter == "cache_write" || rate.Meter == "tokens.cache_write" {
-				t.Error("cache_write leaked unmapped")
-			}
-		}
+	slices.Sort(got)
+	want := []string{
+		"tokens.audio_input per_million 2 above 0",
+		"tokens.audio_output per_million 4 above 0",
+		"tokens.cache_creation per_million 3.75 above 0",
+		"tokens.cache_read per_million 0.3 above 0",
+		"tokens.input per_million 3 above 0",
+		"tokens.input per_million 6 above 200000",
+		"tokens.output per_million 15 above 0",
+		"tokens.output per_million 30 above 200000",
+		"tokens.reasoning per_million 1 above 0",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rates:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -60,7 +80,7 @@ func TestSnapshotFolding(t *testing.T) {
 		"opus-20260101": {ID: "opus-20260101", ReleaseDate: "2026-01-01"},
 		"opus-latest":   {ID: "opus-latest"},
 	}
-	r, _ := Translate([]MDProvider{prov("anthropic", "@ai-sdk/anthropic", models)}, Opts{})
+	r := translateOK(t, []MDProvider{prov("anthropic", "@ai-sdk/anthropic", models)}, Opts{})
 	if len(r.Models) != 1 {
 		t.Fatalf("want 1 folded model, got %d", len(r.Models))
 	}
@@ -92,7 +112,7 @@ func TestCrossHostDedupUnionsSnapshots(t *testing.T) {
 		"glm":          {ID: "glm"},
 		"glm-20260202": {ID: "glm-20260202"},
 	})
-	r, _ := Translate([]MDProvider{a, b}, Opts{})
+	r := translateOK(t, []MDProvider{a, b}, Opts{})
 
 	glm := 0
 	for _, m := range r.Models {
@@ -120,7 +140,7 @@ func TestCrossHostDedupUnionsSnapshots(t *testing.T) {
 
 // TestAdditiveSkip — a model whose name is already in the catalog is skipped.
 func TestAdditiveSkip(t *testing.T) {
-	r, _ := Translate(
+	r := translateOK(t,
 		[]MDProvider{prov("p", "@ai-sdk/openai-compatible", map[string]MDModel{"keep": {ID: "keep"}, "skip": {ID: "skip"}})},
 		Opts{Existing: map[string]bool{"skip": true}},
 	)
@@ -136,7 +156,7 @@ func TestAdditiveSkip(t *testing.T) {
 
 // TestUpstreamVerbatim — a non-slug-clean key is preserved as snapshot OriginalName.
 func TestUpstreamVerbatim(t *testing.T) {
-	r, _ := Translate([]MDProvider{prov("minimax", "@ai-sdk/anthropic", map[string]MDModel{
+	r := translateOK(t, []MDProvider{prov("minimax", "@ai-sdk/anthropic", map[string]MDModel{
 		"MiniMax-M2.1": {ID: "MiniMax-M2.1"},
 	})}, Opts{})
 	if len(r.Models) != 1 {
