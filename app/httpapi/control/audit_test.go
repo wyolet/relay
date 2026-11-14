@@ -224,7 +224,7 @@ func TestAuditSettingsUpdateRecordsSectionPath(t *testing.T) {
 		Actor: audit.Actor{Kind: audit.ActorAdminToken, Name: "admin-token"}, Action: "settings.update",
 		Resource: audit.Resource{Kind: "settings", Name: "proxy-mode"},
 		Outcome:  audit.Outcome{Status: audit.StatusAllowed, Code: 200}, Request: audit.Request{Method: "PUT", Path: "/settings/proxy-mode"},
-		Change:   &audit.Change{Fields: []string{"sections.proxy-mode"}},
+		Change: &audit.Change{Fields: []string{"sections.proxy-mode"}},
 	})
 }
 
