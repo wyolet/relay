@@ -1,84 +1,66 @@
 package provider
 
 import (
-	"strings"
+	"errors"
 	"testing"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-func TestValidate(t *testing.T) {
-	t.Run("ok", func(t *testing.T) {
-		p := &Provider{Meta: meta.Metadata{Name: "anthropic"}}
-		if err := p.Validate(); err != nil {
-			t.Fatalf("unexpected: %v", err)
+// problems reports why Validate refused: "Namespace tag" per failed field rule, or the message of a kind-specific rule.
+func problems(err error) []string {
+	var fields validator.ValidationErrors
+	if errors.As(err, &fields) {
+		var out []string
+		for _, f := range fields {
+			out = append(out, f.Namespace()+" "+f.Tag())
 		}
-	})
-
-	for _, tc := range []struct {
-		name string
-		p    *Provider
-		want string
-	}{
-		{
-			name: "missing name",
-			p:    &Provider{},
-			want: "Name",
-		},
-		{
-			name: "non-system owner rejected",
-			p: &Provider{
-				Meta: meta.Metadata{Name: "x", Owner: meta.Owner{Kind: meta.OwnerUser}},
-			},
-			want: "owner.kind must be system",
-		},
-		{
-			name: "bad homepageURL",
-			p: &Provider{
-				Meta: meta.Metadata{Name: "x"},
-				Spec: Spec{HomepageURL: "not-a-url"},
-			},
-			want: "HomepageURL",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.p.Validate()
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("got %v, want substring %q", err, tc.want)
-			}
-		})
+		return out
 	}
+	if err != nil {
+		return []string{err.Error()}
+	}
+	return nil
 }
 
-// A provider is shared catalog data: no user, team or project owns one.
-func TestValidate_TenantOwnersRefused(t *testing.T) {
-	for _, o := range []meta.Owner{
-		{Kind: meta.OwnerUser}, {Kind: meta.OwnerUser, ID: "u-1"},
-		{Kind: meta.OwnerTeam, ID: "t-1"}, {Kind: meta.OwnerProject, ID: "p-1"},
+func TestValidate(t *testing.T) {
+	const systemOnly = `provider "acme": owner.kind must be system or empty, got `
+	for _, tc := range []struct {
+		name string
+		p    Provider
+		want []string
+	}{
+		{"no owner", Provider{Meta: meta.Metadata{Name: "acme"}}, nil},
+		{"system owner", Provider{Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerSystem}}}, nil},
+		{"links", Provider{Meta: meta.Metadata{Name: "acme"}, Spec: Spec{HomepageURL: "https://acme.example", DocsURL: "http://docs.acme.example/x"}}, nil},
+		{"missing name", Provider{}, []string{"Provider.Meta.Name required"}},
+		{"homepage is not a URL", Provider{Meta: meta.Metadata{Name: "acme"}, Spec: Spec{HomepageURL: "not-a-url"}}, []string{"Provider.Spec.HomepageURL http_url"}},
+		{"every bad link is reported", Provider{Meta: meta.Metadata{Name: "acme"}, Spec: Spec{DocsURL: "docs", StatusPageURL: "status"}},
+			[]string{"Provider.Spec.DocsURL http_url", "Provider.Spec.StatusPageURL http_url"}},
+		// A provider is shared catalog data: nothing but the deployment owns one.
+		{"user owner", Provider{Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}}}, []string{systemOnly + `"user"`}},
+		{"user owner without an id", Provider{Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerUser}}}, []string{systemOnly + `"user"`}},
+		{"team owner", Provider{Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}}}, []string{systemOnly + `"team"`}},
+		{"project owner", Provider{Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}}}, []string{systemOnly + `"project"`}},
+		{"host owner", Provider{Meta: meta.Metadata{Name: "acme", Owner: meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}}}, []string{systemOnly + `"host"`}},
 	} {
-		p := &Provider{Meta: meta.Metadata{Name: "acme", Owner: o}}
-		if err := p.Validate(); err == nil {
-			t.Errorf("owner %+v accepted", o)
+		if diff := cmp.Diff(tc.want, problems(tc.p.Validate())); diff != "" {
+			t.Errorf("%s: Validate (-want +got):\n%s", tc.name, diff)
 		}
 	}
 }
 
 func TestIsEnabled(t *testing.T) {
-	tru, fls := true, false
+	yes, no := true, false
 	for _, tc := range []struct {
-		name string
 		val  *bool
 		want bool
-	}{
-		{"nil defaults to true", nil, true},
-		{"explicit true", &tru, true},
-		{"explicit false", &fls, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := &Provider{Spec: Spec{Enabled: tc.val}}
-			if got := p.IsEnabled(); got != tc.want {
-				t.Errorf("got %v, want %v", got, tc.want)
-			}
-		})
+	}{{nil, true}, {&yes, true}, {&no, false}} {
+		if got := (&Provider{Spec: Spec{Enabled: tc.val}}).IsEnabled(); got != tc.want {
+			t.Errorf("IsEnabled with enabled %v = %v, want %v", tc.val, got, tc.want)
+		}
 	}
 }

@@ -3,119 +3,107 @@ package crypto
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
+	"strings"
 	"testing"
 )
 
 var key32 = bytes.Repeat([]byte{0x42}, 32)
 
-func TestRoundTrip(t *testing.T) {
-	sizes := []int{0, 1, 256, 4 * 1024, 64 * 1024}
-	for _, sz := range sizes {
-		plain := make([]byte, sz)
-		for i := range plain {
-			plain[i] = byte(i)
-		}
+// Values sealed before the key ring are AES-256-GCM with a 12-byte nonce and no associated data; this vector was produced by another implementation.
+func TestDecryptStoredValue(t *testing.T) {
+	nonce := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	ct, err := hex.DecodeString("76b5bcb1d44b9368e42b2c7ca2a9765057e4a67de5bddce1d3a67de236d61d408741")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decrypt(key32, ct, nonce)
+	if err != nil || string(got) != "sk-legacy-host-key" {
+		t.Fatalf("Decrypt = %q, %v; want sk-legacy-host-key", got, err)
+	}
+}
+
+func TestEncryptDecrypt(t *testing.T) {
+	seenNonces := map[string]bool{}
+	for _, size := range []int{0, 1, 256, 64 << 10} {
+		plain := bytes.Repeat([]byte("secret-"), size/7+1)[:size]
 		ct, nonce, err := Encrypt(key32, plain)
 		if err != nil {
-			t.Fatalf("Encrypt size=%d: %v", sz, err)
+			t.Fatalf("Encrypt of %d bytes: %v", size, err)
 		}
-		got, err := Decrypt(key32, ct, nonce)
-		if err != nil {
-			t.Fatalf("Decrypt size=%d: %v", sz, err)
+		// The tag adds 16 bytes; nothing of the plaintext shows through.
+		if len(ct) != size+16 || len(nonce) != 12 || (size >= 7 && bytes.Contains(ct, []byte("secret-"))) {
+			t.Fatalf("Encrypt of %d bytes: %d ciphertext bytes, %d nonce bytes", size, len(ct), len(nonce))
 		}
-		if !bytes.Equal(got, plain) {
-			t.Fatalf("round-trip mismatch size=%d", sz)
+		if got, err := Decrypt(key32, ct, nonce); err != nil || !bytes.Equal(got, plain) {
+			t.Fatalf("Decrypt of %d bytes: %v", size, err)
 		}
+		again, nonce2, _ := Encrypt(key32, plain)
+		if bytes.Equal(again, ct) || seenNonces[string(nonce)] || seenNonces[string(nonce2)] || bytes.Equal(nonce, nonce2) {
+			t.Fatalf("Encrypt of %d bytes reused a nonce or repeated a ciphertext", size)
+		}
+		seenNonces[string(nonce)], seenNonces[string(nonce2)] = true, true
 	}
 }
 
-func TestTamperedCiphertext(t *testing.T) {
+func TestDecryptRejections(t *testing.T) {
 	ct, nonce, err := Encrypt(key32, []byte("hello"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ct[0] ^= 0xFF
-	_, err = Decrypt(key32, ct, nonce)
-	if err == nil {
-		t.Fatal("expected error on tampered ciphertext")
+	flip := func(b []byte, i int) []byte {
+		out := bytes.Clone(b)
+		out[i] ^= 0x01
+		return out
 	}
-}
-
-func TestMismatchedKey(t *testing.T) {
-	ct, nonce, err := Encrypt(key32, []byte("hello"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherKey := bytes.Repeat([]byte{0x99}, 32)
-	_, err = Decrypt(otherKey, ct, nonce)
-	if err == nil {
-		t.Fatal("expected error on mismatched key")
-	}
-}
-
-func TestNonceUniqueness(t *testing.T) {
-	seen := make(map[string]bool, 10000)
-	plain := []byte("nonce-test")
-	for i := 0; i < 10000; i++ {
-		_, nonce, err := Encrypt(key32, plain)
-		if err != nil {
-			t.Fatal(err)
+	for _, tc := range []struct {
+		name          string
+		key, ct, nnce []byte
+		want          string
+	}{
+		{"first ciphertext byte changed", key32, flip(ct, 0), nonce, "crypto: decrypt: "},
+		{"tag changed", key32, flip(ct, len(ct)-1), nonce, "crypto: decrypt: "},
+		{"nonce changed", key32, ct, flip(nonce, 0), "crypto: decrypt: "},
+		{"another key", bytes.Repeat([]byte{0x99}, 32), ct, nonce, "crypto: decrypt: "},
+		{"ciphertext cut short", key32, ct[:len(ct)-1], nonce, "crypto: decrypt: "},
+		{"no ciphertext", key32, nil, nonce, "crypto: decrypt: "},
+		{"short nonce", key32, ct, nonce[:11], "crypto: nonce must be 12 bytes, got 11"},
+		{"no nonce", key32, ct, nil, "crypto: nonce must be 12 bytes, got 0"},
+		{"16-byte key", key32[:16], ct, nonce, "crypto: masterKey must be 32 bytes, got 16"},
+		{"no key", nil, ct, nonce, "crypto: masterKey must be 32 bytes, got 0"},
+	} {
+		got, err := Decrypt(tc.key, tc.ct, tc.nnce)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) || got != nil {
+			t.Errorf("%s: Decrypt = %q, %v; want no plaintext and an error starting %q", tc.name, got, err, tc.want)
 		}
-		k := string(nonce)
-		if seen[k] {
-			t.Fatalf("duplicate nonce at iteration %d", i)
-		}
-		seen[k] = true
+	}
+	if _, _, err := Encrypt(key32[:16], []byte("x")); err == nil || err.Error() != "crypto: masterKey must be 32 bytes, got 16" {
+		t.Errorf("Encrypt with a 16-byte key: err = %v", err)
 	}
 }
 
 func TestParseMasterKey(t *testing.T) {
-	// empty
-	if _, err := ParseMasterKey(""); err == nil {
-		t.Fatal("expected error for empty string")
+	for _, tc := range []struct{ raw, want string }{
+		{"", "crypto: RELAY_MASTER_KEY is empty"},
+		{"!!!notbase64!!!", "crypto: base64 decode RELAY_MASTER_KEY: "},
+		{base64.RawStdEncoding.EncodeToString(key32), "crypto: base64 decode RELAY_MASTER_KEY: "}, // padding is required
+		{base64.StdEncoding.EncodeToString(key32[:31]), "crypto: RELAY_MASTER_KEY must decode to 32 bytes, got 31"},
+		{base64.StdEncoding.EncodeToString(append(bytes.Clone(key32), 0)), "crypto: RELAY_MASTER_KEY must decode to 32 bytes, got 33"},
+	} {
+		if key, err := ParseMasterKey(tc.raw); err == nil || !strings.HasPrefix(err.Error(), tc.want) || key != nil {
+			t.Errorf("ParseMasterKey(%q) = %x, %v; want an error starting %q", tc.raw, key, err, tc.want)
+		}
+	}
+	if key, err := ParseMasterKey(base64.StdEncoding.EncodeToString(key32)); err != nil || !bytes.Equal(key, key32) {
+		t.Errorf("ParseMasterKey of a 32-byte key = %x, %v", key, err)
 	}
 
-	// not base64
-	if _, err := ParseMasterKey("!!!notbase64!!!"); err == nil {
-		t.Fatal("expected error for non-base64")
-	}
-
-	// base64 of 31 bytes — valid base64 but wrong decoded length
-	if _, err := ParseMasterKey(base64.StdEncoding.EncodeToString(make([]byte, 31))); err == nil {
-		t.Fatal("expected error for 31-byte decoded key")
-	}
-
-	// base64 of 33 bytes
-	if _, err := ParseMasterKey(base64.StdEncoding.EncodeToString(make([]byte, 33))); err == nil {
-		t.Fatal("expected error for 33-byte decoded key")
-	}
-}
-
-func TestGenerateParseMasterKey(t *testing.T) {
-	s, err := GenerateMasterKey()
+	first, err := GenerateMasterKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := ParseMasterKey(s)
-	if err != nil {
-		t.Fatalf("GenerateMasterKey output rejected by ParseMasterKey: %v", err)
-	}
-	if len(k) != 32 {
-		t.Fatalf("expected 32 bytes, got %d", len(k))
-	}
-}
-
-func TestEncryptBadKeyLen(t *testing.T) {
-	_, _, err := Encrypt(make([]byte, 16), []byte("test"))
-	if err == nil {
-		t.Fatal("expected error for 16-byte key")
-	}
-}
-
-func TestDecryptBadKeyLen(t *testing.T) {
-	ct, nonce, _ := Encrypt(key32, []byte("test"))
-	_, err := Decrypt(make([]byte, 16), ct, nonce)
-	if err == nil {
-		t.Fatal("expected error for 16-byte key")
+	second, _ := GenerateMasterKey()
+	if key, err := ParseMasterKey(first); err != nil || len(key) != 32 || first == second {
+		t.Errorf("GenerateMasterKey = %q then %q; parsed to %d bytes, %v", first, second, len(key), err)
 	}
 }
