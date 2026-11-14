@@ -68,6 +68,7 @@ func (c Checker) newShare(ctx context.Context, src, share *account.Account) erro
 // receiverVisible answers a receiver the caller may not see as one that does not exist.
 func (c Checker) receiverVisible(ctx context.Context, r account.Receiver) error {
 	var visible bool
+	kind := string(r.Kind)
 	switch r.Kind {
 	case account.ReceiverUser:
 		visible = c.Rows.UserVisible == nil || c.Rows.UserVisible(ctx, r.ID)
@@ -78,11 +79,13 @@ func (c Checker) receiverVisible(ctx context.Context, r account.Receiver) error 
 		p := c.Rows.Project
 		visible = p == nil || (p(ctx, r.ID) != nil && Visible(ctx, c.Authz, "project", r.ID, p(ctx, r.ID).Meta.Owner))
 	case account.ReceiverServiceAccount:
+		// The API kind, as receiverExists answers a missing one: a different word would tell hidden from missing.
+		kind = "service-account"
 		s := c.Rows.ServiceAccount
-		visible = s == nil || (s(ctx, r.ID) != nil && Visible(ctx, c.Authz, "service-account", r.ID, s(ctx, r.ID).Meta.Owner))
+		visible = s == nil || (s(ctx, r.ID) != nil && Visible(ctx, c.Authz, kind, r.ID, s(ctx, r.ID).Meta.Owner))
 	}
 	if !visible {
-		return notVisible(string(r.Kind), r.ID)
+		return notVisible(kind, r.ID)
 	}
 	return nil
 }
