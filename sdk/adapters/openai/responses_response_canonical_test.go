@@ -109,7 +109,6 @@ func TestResponsesSerializeResponse_Status(t *testing.T) {
 }
 
 func TestResponsesSerializeResponse_EmptyOutput(t *testing.T) {
-	t.Skip(`bug: SerializeResponse of a response with no output items → "output":null; the field is a required array`)
 	wire, err := ResponsesTranslator{}.SerializeResponse(&v1.Response{ID: "r", Model: "m", Status: v1.StatusFailed}, nil)
 	if err != nil {
 		t.Fatal(err)
