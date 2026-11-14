@@ -12,10 +12,6 @@ func sseEvent(event, data string) []byte {
 	return []byte("event: " + event + "\ndata: " + data + "\n\n")
 }
 
-func ccDataFrame(data string) []byte {
-	return []byte("data: " + data + "\n\n")
-}
-
 // feedStream runs chunks through one stream closure, returning the
 // concatenated output and the indexes of chunks that returned an error.
 func feedStream(t *testing.T, translate func([]byte) ([]byte, error), chunks [][]byte) ([]byte, []int) {
@@ -99,54 +95,35 @@ func TestResponsesToCanonicalStream_MalformedEventMidStream(t *testing.T) {
 	}
 }
 
+// A malformed chunk fails alone: the stream around it carries on with its state intact.
 func TestCCToCanonicalStream_MalformedChunkMidStream(t *testing.T) {
 	chunks := [][]byte{
-		ccDataFrame(`{"id":"c1","model":"m","created":1,"choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}`),
-		ccDataFrame(`{"id":"c1","choices":[{"index":0,"delta":{"content":`),
-		ccDataFrame(`{"id":"c1","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}`),
-		ccDataFrame(`[DONE]`),
+		[]byte(ccChunk(`{"role":"assistant","content":"Hel"}`) + "\n\n"),
+		[]byte("data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\n\n"),
+		[]byte(`data: {"id":"c1","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}` + "\n\n"),
+		[]byte("data: [DONE]\n\n"),
 	}
 	out, failed := feedStream(t, CCTranslator{}.NewToCanonicalStream(), chunks)
 	if !reflect.DeepEqual(failed, []int{1}) {
 		t.Fatalf("failed chunks = %v, want [1]", failed)
 	}
-	want := []string{
-		v1.EventGenerationCreated, v1.EventItemStarted, v1.EventItemDelta,
-		v1.EventItemDelta, v1.EventItemCompleted, v1.EventGenerationCompleted,
-	}
-	if got := extractCanonicalEvents(out); !reflect.DeepEqual(got, want) {
-		t.Fatalf("events = %v, want %v", got, want)
-	}
+	assertEvents(t, out,
+		`generation.created {"id":"c1","model":"m"}`,
+		`item.started {"item_id":"msg_0","item_type":"message","index":0}`,
+		`item.delta {"item_id":"msg_0","index":0,"kind":"text","delta":"Hel"}`,
+		`item.delta {"item_id":"msg_0","index":0,"kind":"text","delta":"lo"}`,
+		`item.completed {"item_id":"msg_0","index":0,"item":{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}`,
+		`generation.completed {"id":"c1","status":"completed","finish_reason":"stop"}`,
+	)
 }
 
-var canonicalStreamEvents = []string{
-	v1.EventGenerationCreated,
-	v1.EventItemStarted,
-	v1.EventItemDelta,
-	v1.EventItemCompleted,
-	v1.EventGenerationCompleted,
-	v1.EventError,
-}
-
-func TestCCFromCanonicalStream_MalformedEventReturnsError(t *testing.T) {
-	for _, event := range canonicalStreamEvents {
-		t.Run(event, func(t *testing.T) {
-			translate := CCTranslator{}.NewFromCanonicalStream()
-			if out, err := translate(sseEvent(event, `{"item_id":`)); err == nil {
-				t.Fatalf("malformed canonical %s: want error, got nil (output %q)", event, out)
+func TestFromCanonicalStream_MalformedEventReturnsError(t *testing.T) {
+	for _, tr := range []v1.Translator{CCTranslator{}, ResponsesTranslator{}} {
+		for _, event := range []string{v1.EventGenerationCreated, v1.EventItemStarted, v1.EventItemDelta, v1.EventItemCompleted, v1.EventGenerationCompleted, v1.EventError} {
+			if out, err := tr.NewFromCanonicalStream()(sseEvent(event, `{"item_id":`)); err == nil {
+				t.Errorf("%T: malformed canonical %s: want error, got output %q", tr, event, out)
 			}
-		})
-	}
-}
-
-func TestResponsesFromCanonicalStream_MalformedEventReturnsError(t *testing.T) {
-	for _, event := range canonicalStreamEvents {
-		t.Run(event, func(t *testing.T) {
-			translate := ResponsesTranslator{}.NewFromCanonicalStream()
-			if out, err := translate(sseEvent(event, `{"item_id":`)); err == nil {
-				t.Fatalf("malformed canonical %s: want error, got nil (output %q)", event, out)
-			}
-		})
+		}
 	}
 }
 
@@ -168,11 +145,14 @@ func TestCCFromCanonicalStream_MalformedEventMidStream(t *testing.T) {
 	if !reflect.DeepEqual(failed, []int{3}) {
 		t.Fatalf("failed chunks = %v, want [3]", failed)
 	}
-	for _, want := range []string{`"content":"Hel"`, `"content":"lo"`, `"finish_reason":"stop"`, "data: [DONE]"} {
-		if !bytes.Contains(out, []byte(want)) {
-			t.Errorf("output missing %s:\n%s", want, out)
-		}
-	}
+	const head = `"id":"g1","object":"chat.completion.chunk","model":"m"`
+	assertCCChunks(t, out,
+		`{`+head+`,"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`{`+head+`,"choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}`,
+		`{`+head+`,"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}]}`,
+		`{`+head+`,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`[DONE]`,
+	)
 }
 
 func TestResponsesFromCanonicalStream_MalformedEventMidStream(t *testing.T) {
@@ -181,9 +161,15 @@ func TestResponsesFromCanonicalStream_MalformedEventMidStream(t *testing.T) {
 	if !reflect.DeepEqual(failed, []int{3}) {
 		t.Fatalf("failed chunks = %v, want [3]", failed)
 	}
-	for _, want := range []string{`"delta":"Hel"`, `"delta":"lo"`, "event: " + ResponsesEventCompleted} {
-		if !bytes.Contains(out, []byte(want)) {
-			t.Errorf("output missing %s:\n%s", want, out)
-		}
+	want := []string{
+		ResponsesEventCreated, ResponsesEventInProgress, ResponsesEventOutputItemAdded, ResponsesEventContentPartAdded,
+		ResponsesEventOutputTextDelta, ResponsesEventOutputTextDelta, ResponsesEventOutputTextDone,
+		ResponsesEventContentPartDone, ResponsesEventOutputItemDone, ResponsesEventCompleted,
+	}
+	if got := extractCanonicalEvents(out); !reflect.DeepEqual(got, want) {
+		t.Errorf("events = %v\nwant     %v", got, want)
+	}
+	if !bytes.Contains(out, []byte(`"text":"Hello"`)) {
+		t.Errorf("the closing frames lost the text around the bad delta:\n%s", out)
 	}
 }

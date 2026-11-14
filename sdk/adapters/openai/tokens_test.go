@@ -1,253 +1,58 @@
 package openai
 
 import (
+	"maps"
 	"testing"
+
+	"github.com/wyolet/relay/sdk/usage"
 )
 
-func TestExtractTokens_FullResponse(t *testing.T) {
-	body := []byte(`{
-		"id": "chatcmpl-abc",
-		"choices": [],
-		"usage": {
-			"prompt_tokens": 100,
-			"completion_tokens": 50,
-			"total_tokens": 150,
-			"prompt_tokens_details": {"cached_tokens": 20},
-			"completion_tokens_details": {"reasoning_tokens": 10}
-		}
-	}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil Tokens")
-	}
-	if tok["input"] != 80 {
-		t.Errorf("input: want 80, got %d", tok["input"])
-	}
-	if tok["output"] != 50 {
-		t.Errorf("output: want 50, got %d", tok["output"])
-	}
-	if tok["cache_read"] != 20 {
-		t.Errorf("cache_read: want 20, got %d", tok["cache_read"])
-	}
-	if tok["reasoning"] != 10 {
-		t.Errorf("reasoning: want 10, got %d", tok["reasoning"])
-	}
-	if _, ok := tok["total"]; ok {
-		t.Error("total should not be present in map")
-	}
-}
-
-func TestExtractTokens_NoUsage(t *testing.T) {
-	body := []byte(`{"id":"chatcmpl-abc","choices":[{"delta":{"content":"hello"}}]}`)
-	tok := ExtractTokens(body)
-	if tok != nil {
-		t.Errorf("expected nil for no-usage chunk, got %v", tok)
-	}
-}
-
-func TestExtractTokens_ZeroUsage(t *testing.T) {
-	body := []byte(`{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`)
-	tok := ExtractTokens(body)
-	if tok != nil {
-		t.Errorf("expected nil for zero-usage, got %v", tok)
-	}
-}
-
-func TestExtractTokens_PartialFields(t *testing.T) {
-	body := []byte(`{"usage":{"prompt_tokens":5}}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil when only prompt_tokens present")
-	}
-	if tok["input"] != 5 {
-		t.Errorf("input: want 5, got %d", tok["input"])
-	}
-	if _, ok := tok["output"]; ok {
-		t.Error("output should not be present when zero")
-	}
-}
-
-func TestExtractTokens_MalformedJSON(t *testing.T) {
-	tok := ExtractTokens([]byte(`{bad json`))
-	if tok != nil {
-		t.Error("expected nil for malformed JSON")
-	}
-}
-
-func TestExtractTokens_StreamingFinalChunk(t *testing.T) {
-	// OpenAI streaming final chunk with include_usage: true
-	body := []byte(`{"id":"chatcmpl-xyz","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":30,"completion_tokens":15,"total_tokens":45}}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil Tokens from streaming final chunk")
-	}
-	if tok["input"] != 30 {
-		t.Errorf("input: want 30, got %d", tok["input"])
-	}
-	if tok["output"] != 15 {
-		t.Errorf("output: want 15, got %d", tok["output"])
-	}
-}
-
-func TestExtractTokens_StreamedSSEFinalUsage(t *testing.T) {
-	tests := []struct {
-		name       string
-		body       []byte
-		wantInput  int64
-		wantOutput int64
-		wantCache  int64
-		wantReason int64
+func TestExtractTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want usage.Tokens
 	}{
 		{
-			name: "usage only in terminal frame",
-			body: []byte(`data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","choices":[{"delta":{"content":"hel"}}]}
-
-data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","choices":[{"delta":{"content":"lo"}}]}
-
-data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7,"total_tokens":49,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens_details":{"reasoning_tokens":3}}}
-
-data: [DONE]
-
-`),
-			wantInput:  30,
-			wantOutput: 7,
-			wantCache:  12,
-			wantReason: 3,
+			name: "every meter; input excludes cached tokens",
+			body: `{"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,
+				"prompt_tokens_details":{"cached_tokens":20,"audio_tokens":30},
+				"completion_tokens_details":{"reasoning_tokens":10,"audio_tokens":12,"accepted_prediction_tokens":40,"rejected_prediction_tokens":8}}}`,
+			want: usage.Tokens{"input": 80, "output": 50, "cache_read": 20, "audio_input": 30, "reasoning": 10, "audio_output": 12, "accepted_prediction": 40, "rejected_prediction": 8},
 		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			tok := ExtractTokens(tc.body)
-			if tok == nil {
-				t.Fatal("expected non-nil Tokens from full SSE stream")
-			}
-			if tok["input"] != tc.wantInput {
-				t.Errorf("input: want %d, got %d", tc.wantInput, tok["input"])
-			}
-			if tok["output"] != tc.wantOutput {
-				t.Errorf("output: want %d, got %d", tc.wantOutput, tok["output"])
-			}
-			if tok["cache_read"] != tc.wantCache {
-				t.Errorf("cache_read: want %d, got %d", tc.wantCache, tok["cache_read"])
-			}
-			if tok["reasoning"] != tc.wantReason {
-				t.Errorf("reasoning: want %d, got %d", tc.wantReason, tok["reasoning"])
-			}
-		})
-	}
-}
-
-func TestExtractTokens_CacheReadDoesNotOverlapInput(t *testing.T) {
-	tests := []struct {
-		name   string
-		body   []byte
-		prompt int64
-		cached int64
-	}{
 		{
-			name:   "buffered usage",
-			body:   []byte(`{"usage":{"prompt_tokens":64,"completion_tokens":8,"prompt_tokens_details":{"cached_tokens":9}}}`),
-			prompt: 64,
-			cached: 9,
+			name: "zero details stay out",
+			body: `{"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},
+				"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}`,
+			want: usage.Tokens{"input": 10, "output": 5},
+		},
+		{name: "prompt only", body: `{"usage":{"prompt_tokens":5}}`, want: usage.Tokens{"input": 5}},
+		{name: "all cached", body: `{"usage":{"prompt_tokens":9,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":9}}}`, want: usage.Tokens{"output": 1, "cache_read": 9}},
+		{name: "zero usage", body: `{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`},
+		{name: "no usage", body: `{"id":"c","choices":[{"delta":{"content":"hello"}}]}`},
+		{name: "malformed", body: `{bad json`},
+		{name: "blank", body: " \n\t"},
+		{
+			name: "stream: the last usage frame wins; non-JSON frames are skipped",
+			body: "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n" +
+				"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n" +
+				"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":12},\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n" +
+				"data: {\"choices\":[],\"usage\":null}\n\n" +
+				"data: [DONE]\n\n",
+			want: usage.Tokens{"input": 30, "output": 7, "cache_read": 12, "reasoning": 3},
+		},
+		{
+			name: "stream: one event split over data lines",
+			body: "data: {\"choices\":[],\ndata: \"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n",
+			want: usage.Tokens{"input": 3, "output": 5},
 		},
 	}
-
-	for _, tc := range tests {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			tok := ExtractTokens(tc.body)
-			if tok == nil {
-				t.Fatal("expected non-nil Tokens")
-			}
-			if tok["cache_read"] != tc.cached {
-				t.Fatalf("cache_read: want %d, got %d", tc.cached, tok["cache_read"])
-			}
-			if got := tok["input"] + tok["cache_read"]; got != tc.prompt {
-				t.Errorf("input + cache_read: want provider prompt %d, got %d (tokens=%v)", tc.prompt, got, tok)
+			got := ExtractTokens([]byte(tc.body))
+			if !maps.Equal(got, tc.want) || (got == nil) != (tc.want == nil) {
+				t.Errorf("tokens = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestExtractTokens_AudioMeters(t *testing.T) {
-	body := []byte(`{
-		"usage": {
-			"prompt_tokens": 100,
-			"completion_tokens": 50,
-			"prompt_tokens_details": {"cached_tokens": 20, "audio_tokens": 30},
-			"completion_tokens_details": {"audio_tokens": 12}
-		}
-	}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil")
-	}
-	if tok["audio_input"] != 30 {
-		t.Errorf("audio_input: want 30, got %d", tok["audio_input"])
-	}
-	if tok["audio_output"] != 12 {
-		t.Errorf("audio_output: want 12, got %d", tok["audio_output"])
-	}
-	if tok["cache_read"] != 20 {
-		t.Errorf("cache_read: want 20, got %d", tok["cache_read"])
-	}
-}
-
-func TestExtractTokens_SpeculativeDecoding(t *testing.T) {
-	body := []byte(`{
-		"usage": {
-			"prompt_tokens": 100,
-			"completion_tokens": 50,
-			"completion_tokens_details": {
-				"accepted_prediction_tokens": 40,
-				"rejected_prediction_tokens": 8
-			}
-		}
-	}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil")
-	}
-	if tok["accepted_prediction"] != 40 {
-		t.Errorf("accepted_prediction: want 40, got %d", tok["accepted_prediction"])
-	}
-	if tok["rejected_prediction"] != 8 {
-		t.Errorf("rejected_prediction: want 8, got %d", tok["rejected_prediction"])
-	}
-}
-
-func TestExtractTokens_AllZeroDetailFieldsStaySilent(t *testing.T) {
-	body := []byte(`{
-		"usage": {
-			"prompt_tokens": 10,
-			"completion_tokens": 5,
-			"prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
-			"completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0,
-				"accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}
-		}
-	}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil")
-	}
-	for _, k := range []string{"cache_read", "audio_input", "reasoning", "audio_output",
-		"accepted_prediction", "rejected_prediction"} {
-		if _, has := tok[k]; has {
-			t.Errorf("%s should not appear when zero", k)
-		}
-	}
-}
-
-func TestExtractTokens_NoCacheOrReasoning(t *testing.T) {
-	body := []byte(`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
-	tok := ExtractTokens(body)
-	if tok == nil {
-		t.Fatal("expected non-nil")
-	}
-	if _, ok := tok["cache_read"]; ok {
-		t.Error("cache_read should not be present")
-	}
-	if _, ok := tok["reasoning"]; ok {
-		t.Error("reasoning should not be present")
 	}
 }

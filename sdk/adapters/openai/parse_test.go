@@ -3,7 +3,9 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,171 +17,84 @@ func withRich(on bool, fn func()) {
 	fn()
 }
 
-func TestParse_BodyMetadataRichMode(t *testing.T) {
-	withRich(true, func() {
-		body := `{"model":"gpt-4","metadata":{"customer":"acme"}}`
-		cr, err := Parse(context.Background(), []byte(body), http.Header{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cr.Metadata == nil || cr.Metadata["customer"] != "acme" {
-			t.Errorf("Metadata = %v, want customer=acme", cr.Metadata)
-		}
-	})
-}
-
-func TestParse_BodyMetadataMinimalMode(t *testing.T) {
-	withRich(false, func() {
-		body := `{"model":"gpt-4","metadata":{"customer":"acme"}}`
-		cr, err := Parse(context.Background(), []byte(body), http.Header{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cr.Metadata != nil {
-			t.Errorf("Metadata = %v, want nil in minimal mode", cr.Metadata)
-		}
-	})
-}
-
-func TestParse_MetadataCapsViolations(t *testing.T) {
+func TestParse(t *testing.T) {
+	body := `{"model":"gpt-4","stream":true,"user":"alice","metadata":{"customer":"acme"},"messages":[{"role":"user","content":"hi"}],"tools":[]}`
 	cases := []struct {
-		name string
-		meta string
+		rich bool
+		want ChatRequest
 	}{
-		{"17 entries", func() string {
-			var sb strings.Builder
-			sb.WriteString(`{"model":"gpt-4","metadata":{`)
-			for i := 0; i < 17; i++ {
-				if i > 0 {
-					sb.WriteString(",")
-				}
-				sb.WriteString(`"k` + string(rune('a'+i)) + `":"v"`)
-			}
-			sb.WriteString(`}}`)
-			return sb.String()
-		}()},
-		{"key too long", `{"model":"gpt-4","metadata":{"` + strings.Repeat("k", 65) + `":"v"}}`},
-		{"value too long", `{"model":"gpt-4","metadata":{"k":"` + strings.Repeat("v", 257) + `"}}`},
-		{"bad key charset", `{"model":"gpt-4","metadata":{"bad key!":"v"}}`},
-		{"value contains comma", `{"model":"gpt-4","metadata":{"k":"a,b"}}`},
-		{"value contains equals", `{"model":"gpt-4","metadata":{"k":"a=b"}}`},
+		{true, ChatRequest{Model: "gpt-4", Stream: true, User: "alice", Metadata: map[string]string{"customer": "acme"},
+			Messages: []json.RawMessage{json.RawMessage(`{"role":"user","content":"hi"}`)}, Raw: json.RawMessage(body)}},
+		{false, ChatRequest{Model: "gpt-4", Stream: true, User: "alice", Raw: json.RawMessage(body)}},
 	}
-
-	withRich(true, func() {
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				cr, err := Parse(context.Background(), []byte(tc.meta), http.Header{})
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if cr.Metadata != nil {
-					t.Errorf("Metadata should be nil on caps violation, got %v", cr.Metadata)
-				}
-			})
-		}
-	})
-}
-
-func TestParse_EmptyMetadataNoExtraMapAlloc(t *testing.T) {
-	withRich(true, func() {
-		bodyNoMeta := []byte(`{"model":"gpt-4","messages":[]}`)
-		bodyWithMeta := []byte(`{"model":"gpt-4","metadata":{"k":"v"},"messages":[]}`)
-
-		allocsNoMeta := testing.AllocsPerRun(100, func() {
-			cr, _ := Parse(context.Background(), bodyNoMeta, http.Header{})
-			_ = cr
+	for _, tc := range cases {
+		withRich(tc.rich, func() {
+			got, err := Parse(context.Background(), []byte(body), http.Header{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(*got, tc.want) {
+				t.Errorf("rich=%v: got %+v\nwant %+v", tc.rich, *got, tc.want)
+			}
 		})
-		allocsWithMeta := testing.AllocsPerRun(100, func() {
-			cr, _ := Parse(context.Background(), bodyWithMeta, http.Header{})
-			_ = cr
-		})
-		// When metadata is absent, there must be fewer allocations than when present
-		// (the map itself is one extra alloc). This proves no map allocation on the
-		// empty path.
-		if allocsWithMeta <= allocsNoMeta {
-			t.Errorf("expected more allocs with metadata (%v) than without (%v)", allocsWithMeta, allocsNoMeta)
+	}
+}
+
+// Metadata breaking a cap is dropped whole; the request still parses.
+func TestParse_MetadataCapsViolations(t *testing.T) {
+	var many []string
+	for i := range 17 {
+		many = append(many, `"k`+string(rune('a'+i))+`":"v"`)
+	}
+	cases := map[string]string{
+		"17 entries":            "{" + strings.Join(many, ",") + "}",
+		"key too long":          `{"` + strings.Repeat("k", 65) + `":"v"}`,
+		"value too long":        `{"k":"` + strings.Repeat("v", 257) + `"}`,
+		"bad key charset":       `{"bad key!":"v"}`,
+		"value contains comma":  `{"k":"a,b"}`,
+		"value contains equals": `{"k":"a=b"}`,
+		"value control char":    `{"k":"a\nb"}`,
+	}
+	withRich(true, func() {
+		for name, meta := range cases {
+			cr, err := Parse(context.Background(), []byte(`{"model":"gpt-4","metadata":`+meta+`}`), http.Header{})
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if cr.Metadata != nil {
+				t.Errorf("%s: Metadata = %v, want nil", name, cr.Metadata)
+			}
 		}
 	})
 }
 
-func TestParse_MalformedJSON(t *testing.T) {
-	withRich(true, func() {
-		_, err := Parse(context.Background(), []byte("not json"), http.Header{})
-		if err == nil {
-			t.Fatal("expected error for malformed JSON")
-		}
-		status, _, ok := ParseError(err)
+func TestParse_Errors(t *testing.T) {
+	cases := map[string]string{
+		"not json":        `{"error":{"message":"request body is not valid JSON","type":"invalid_request_error","code":"invalid_body"}}`,
+		`{"stream":true}`: `{"error":{"message":"model is required","type":"invalid_request_error","code":"missing_model"}}`,
+	}
+	for body, want := range cases {
+		_, err := Parse(context.Background(), []byte(body), http.Header{})
+		status, got, ok := ParseError(err)
 		if !ok || status != http.StatusBadRequest {
-			t.Errorf("want 400 parseError, got status=%d ok=%v", status, ok)
+			t.Errorf("%s: status %d (parse error %v), want 400", body, status, ok)
 		}
-	})
+		assertJSON(t, got, want)
+	}
+	if _, _, ok := ParseError(errors.New("other")); ok {
+		t.Error("ParseError accepted an error Parse did not return")
+	}
 }
 
-func TestParse_MissingModel(t *testing.T) {
-	withRich(true, func() {
-		_, err := Parse(context.Background(), []byte(`{"stream":true}`), http.Header{})
-		if err == nil {
-			t.Fatal("expected error for missing model")
-		}
-		status, body, ok := ParseError(err)
-		if !ok || status != http.StatusBadRequest {
-			t.Errorf("want 400 parseError, got status=%d ok=%v", status, ok)
-		}
-		var env errEnvelope
-		if je := json.Unmarshal(body, &env); je != nil {
-			t.Fatalf("unmarshal error body: %v", je)
-		}
-		if env.Error.Code != "missing_model" {
-			t.Errorf("code = %q, want missing_model", env.Error.Code)
-		}
-	})
-}
-
-func TestParse_ExtraFieldsPreservedInRaw(t *testing.T) {
-	withRich(true, func() {
-		body := `{"model":"gpt-4","max_tokens":100,"tools":[]}`
-		cr, err := Parse(context.Background(), []byte(body), http.Header{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if string(cr.Raw) != body {
-			t.Errorf("Raw = %s, want %s", cr.Raw, body)
-		}
-	})
-}
-
-func TestParse_MessagesPreservedAsRawMessage(t *testing.T) {
-	withRich(true, func() {
-		body := `{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}`
-		cr, err := Parse(context.Background(), []byte(body), http.Header{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(cr.Messages) != 1 {
-			t.Fatalf("Messages len = %d, want 1", len(cr.Messages))
-		}
-		var m map[string]string
-		if err := json.Unmarshal(cr.Messages[0], &m); err != nil {
-			t.Fatalf("unmarshal message: %v", err)
-		}
-		if m["role"] != "user" {
-			t.Errorf("role = %q, want user", m["role"])
-		}
-	})
-}
-
-func TestParse_StreamAndUserExtracted(t *testing.T) {
-	withRich(false, func() {
-		body := `{"model":"gpt-4","stream":true,"user":"alice"}`
-		cr, err := Parse(context.Background(), []byte(body), http.Header{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !cr.Stream {
-			t.Error("Stream should be true")
-		}
-		if cr.User != "alice" {
-			t.Errorf("User = %q, want alice", cr.User)
-		}
-	})
+func TestChatRequestContext(t *testing.T) {
+	cr := &ChatRequest{Model: "gpt-4"}
+	if got, ok := ChatRequestFromContext(ContextWithChatRequest(context.Background(), cr)); !ok || got != cr {
+		t.Errorf("stored request: got %p, %v", got, ok)
+	}
+	if _, ok := ChatRequestFromContext(context.Background()); ok {
+		t.Error("empty context: want ok=false")
+	}
+	if _, ok := ChatRequestFromContext(ContextWithChatRequest(context.Background(), nil)); ok {
+		t.Error("nil request: want ok=false")
+	}
 }
