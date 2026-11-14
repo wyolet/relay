@@ -43,14 +43,42 @@ var testRev = manifest.MapReverseResolver{
 	Accounts:   map[string]string{"acc-mmm": "acme-anthropic"},
 }
 
-// parseOne parses a manifest holding exactly one document.
-func parseOne(t *testing.T, yaml string) manifest.Document {
+// parseDocs parses a manifest holding exactly n documents.
+func parseDocs(t *testing.T, yaml string, n int) []manifest.Document {
 	t.Helper()
 	docs, err := manifest.Parse(strings.NewReader(yaml))
-	if err != nil || len(docs) != 1 {
-		t.Fatalf("Parse = %d docs, %v; want one", len(docs), err)
+	if err != nil || len(docs) != n {
+		t.Fatalf("Parse = %d docs, %v; want %d", len(docs), err, n)
 	}
-	return docs[0]
+	return docs
+}
+
+func parseOne(t *testing.T, yaml string) manifest.Document {
+	t.Helper()
+	return parseDocs(t, yaml, 1)[0]
+}
+
+// translated fails the test unless a To<Kind> call returned exactly want, and hands the row on.
+func translated[R any](t *testing.T, what string, want R) func(R, error) R {
+	t.Helper()
+	return func(row R, err error) R {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if diff := cmp.Diff(want, row); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", what, diff)
+		}
+		return row
+	}
+}
+
+// exported fails the test unless a From<Kind> export is exactly the document want.
+func exported[D any](t *testing.T, what string, want, got D) {
+	t.Helper()
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s (-document +export):\n%s", what, diff)
+	}
 }
 
 func errText(err error) string {
