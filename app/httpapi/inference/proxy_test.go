@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/proxy"
+	"github.com/wyolet/relay/pkg/adapters"
 	apphost "github.com/wyolet/relay/pkg/catalogkind/host"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -147,10 +149,43 @@ func TestHoldProxyBody_SizesTheBufferFromContentLength(t *testing.T) {
 	}
 }
 
-// TestBodyCapture_ConcurrentFinalize races finalizeInto against a
-// transport-like reader still draining the tee: the published snapshot
-// must always be a consistent prefix of the body, stable after finalize,
-// and flagged truncated whenever it is partial. Meaningful under -race.
+// The capture is the held prefix plus what streamed past, up to its limit; it is whole only when the body ended within the limit before the capture was published.
+func TestBodyCapture(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		limit     int
+		read      int // reads of the rest before the capture is published; -1 = to the end
+		want      string
+		truncated bool
+	}{
+		{"whole body", 64, -1, "prefix-0123456789", false},
+		{"body ending exactly at the limit", 17, -1, "prefix-0123456789", false},
+		{"limit inside a read", 12, -1, "prefix-01234", true},
+		{"limit inside the prefix", 3, -1, "prefix-", true},
+		{"published before the body ended", 64, 1, "prefix-0123", true},
+		{"published before any read", 64, 0, "prefix-", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newBodyCapture([]byte("prefix-"), tc.limit)
+			// Four bytes a read, the last one returning its data with the end.
+			tee := c.tee(iotest.DataErrReader(strings.NewReader("0123456789")))
+			buf := make([]byte, 4)
+			for n := 0; tc.read < 0 || n < tc.read; n++ {
+				if _, err := tee.Read(buf); err != nil {
+					break
+				}
+			}
+			lc := lifecycle.NewContext("r", "proxy", time.Now())
+			c.finalizeInto(lc)
+			_, _ = io.Copy(io.Discard, tee)
+			if string(lc.RequestBody) != tc.want || lc.RequestBodyTruncated != tc.truncated {
+				t.Fatalf("captured %q (truncated %v), want %q (truncated %v)", lc.RequestBody, lc.RequestBodyTruncated, tc.want, tc.truncated)
+			}
+		})
+	}
+}
+
+// Racing finalizeInto against a reader still draining the tee, the published capture is always a prefix of the body, flagged truncated when partial, and stable afterwards. Meaningful under -race.
 func TestBodyCapture_ConcurrentFinalize(t *testing.T) {
 	body := bytes.Repeat([]byte("0123456789abcdef"), 64<<10) // 1 MiB
 	prefix := append([]byte(nil), body[:1024]...)
@@ -226,6 +261,44 @@ func TestProxyShape_RoutingRefusals(t *testing.T) {
 				t.Error("the upstream was reached")
 			}
 		})
+	}
+}
+
+// A caller that holds the whole body (a WebSocket frame) hands it to Dispatch without a scannedBody: it is scanned as proxy mode scans a streamed one, then forwarded unchanged.
+func TestDispatch_ProxyWholeBody(t *testing.T) {
+	up, got := recordingUpstream(t)
+	d, pr, _ := proxyStreamDeps(t, up.URL)
+	seen := watchPostFlight(&d)
+	d.Lifecycle = d.Proxy.Lifecycle
+	run := func(body []byte) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		Dispatch(d, w, proxyShapeCall{principal: pr}.request(d), DispatchInput{Inbound: adapters.Anthropic, Body: body, ModelName: "test-model"})
+		return w
+	}
+
+	body := proxyTestBody("test-model", 64, false)
+	if w := run(body); w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	if g := <-got; !bytes.Equal(g.body, body) {
+		t.Errorf("upstream got %q, want the body as sent", g.body)
+	}
+	if s := awaitPostFlight(t, seen); s.requestBytes != len(body) || s.errorKind != "" {
+		t.Errorf("post-flight saw %d bytes, error %q; want %d and none", s.requestBytes, s.errorKind, len(body))
+	}
+
+	for body, want := range map[string]httpapi.APIErrorBody{
+		`{"model":"test-model","model":"other"}`: {Type: "invalid_request_error", Code: "duplicate_model", Message: "request body has more than one top-level 'model' field"},
+		`{"Model":"test-model"}`: {Type: "invalid_request_error", Code: "invalid_model_key",
+			Message: `proxy mode forwards the body as sent: its top-level 'model' key must be spelled exactly "model", without escapes or other letter case`},
+	} {
+		wantAnswer(t, run([]byte(body)), http.StatusBadRequest, want, nil)
+		if s := awaitPostFlight(t, seen); s.errorKind != want.Code {
+			t.Errorf("%s: recorded as %q, want %s", body, s.errorKind, want.Code)
+		}
+	}
+	if len(got) != 0 {
+		t.Error("a refused body reached the upstream")
 	}
 }
 

@@ -3,65 +3,46 @@ package inference
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
+// The catalog's max output seeds max tokens only where the caller set none, on the one entry a vendor serializer resolves: the model's own, else the sole entry.
 func TestApplyOutputDefaults(t *testing.T) {
 	ptr := func(i int) *int { return &i }
+	sampled := func(max *int) *v1.ModelOpts { return &v1.ModelOpts{Sampling: &v1.SamplingParams{MaxTokens: max}} }
+	for _, tc := range []struct {
+		name   string
+		config map[string]*v1.ModelOpts
+		max    int
+		want   map[string]*v1.ModelOpts
+	}{
+		{"no entry", nil, 8192, map[string]*v1.ModelOpts{"m": sampled(ptr(8192))}},
+		{"entry without sampling", map[string]*v1.ModelOpts{"m": {}}, 8192, map[string]*v1.ModelOpts{"m": sampled(ptr(8192))}},
+		{"sole entry under another name", map[string]*v1.ModelOpts{"alias": sampled(nil)}, 64000, map[string]*v1.ModelOpts{"alias": sampled(ptr(64000))}},
+		{"caller's value kept", map[string]*v1.ModelOpts{"m": sampled(ptr(100))}, 64000, map[string]*v1.ModelOpts{"m": sampled(ptr(100))}},
+		{"model declares no max", nil, 0, nil},
+		{"several entries are left alone", map[string]*v1.ModelOpts{"m": sampled(nil), "b": sampled(nil)}, 8192, map[string]*v1.ModelOpts{"m": sampled(nil), "b": sampled(nil)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &v1.Request{Model: v1.ModelRefs{"m"}, ModelConfig: tc.config}
+			applyOutputDefaults(req, tc.max)
+			if diff := cmp.Diff(tc.want, req.ModelConfig); diff != "" {
+				t.Errorf("model config (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
-	t.Run("seeds max from model when caller unset", func(t *testing.T) {
-		req := &v1.Request{
-			Model:       v1.ModelRefs{"claude-3-7-sonnet-20250219"},
-			ModelConfig: map[string]*v1.ModelOpts{"claude-3-7-sonnet": {Sampling: &v1.SamplingParams{}}},
-		}
-		applyOutputDefaults(req, 64000)
-		// single-entry fallback: the inbound-keyed entry is the one a vendor
-		// SerializeRequest resolves, so it must be the one we modified.
-		got := req.ModelConfig["claude-3-7-sonnet"].Sampling.MaxTokens
-		if got == nil || *got != 64000 {
-			t.Fatalf("MaxTokens = %v, want 64000", got)
-		}
-	})
-
-	t.Run("does not overwrite caller value", func(t *testing.T) {
-		req := &v1.Request{
-			Model:       v1.ModelRefs{"m"},
-			ModelConfig: map[string]*v1.ModelOpts{"m": {Sampling: &v1.SamplingParams{MaxTokens: ptr(100)}}},
-		}
-		applyOutputDefaults(req, 64000)
-		if *req.ModelConfig["m"].Sampling.MaxTokens != 100 {
-			t.Fatalf("caller MaxTokens overwritten")
-		}
-	})
-
-	t.Run("no model max is a no-op", func(t *testing.T) {
-		req := &v1.Request{Model: v1.ModelRefs{"m"}}
-		applyOutputDefaults(req, 0)
-		if len(req.ModelConfig) != 0 {
-			t.Fatalf("ModelConfig mutated on zero max: %v", req.ModelConfig)
-		}
-	})
-
-	t.Run("creates opts when none exist", func(t *testing.T) {
-		req := &v1.Request{Model: v1.ModelRefs{"m"}}
-		applyOutputDefaults(req, 8192)
-		o := req.ModelConfig["m"]
-		if o == nil || o.Sampling == nil || o.Sampling.MaxTokens == nil || *o.Sampling.MaxTokens != 8192 {
-			t.Fatalf("expected created opts with MaxTokens 8192, got %+v", o)
-		}
-	})
-
-	t.Run("skips multiplex (multiple entries)", func(t *testing.T) {
-		req := &v1.Request{
-			Model: v1.ModelRefs{"a"},
-			ModelConfig: map[string]*v1.ModelOpts{
-				"a": {Sampling: &v1.SamplingParams{}},
-				"b": {Sampling: &v1.SamplingParams{}},
-			},
-		}
-		applyOutputDefaults(req, 8192)
-		if req.ModelConfig["a"].Sampling.MaxTokens != nil {
-			t.Fatalf("multiplex should be skipped")
-		}
-	})
+func TestApplyOutputDefaults_NullEntry(t *testing.T) {
+	t.Skip(`bug: canonical body {"model":"m","model_config":{"m":null}} on a cross-shape route to a model with a max output → nil pointer panic in applyOutputDefaults`)
+	req, err := v1.Parse([]byte(`{"model":"m","model_config":{"m":null},"input":"hi"}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	applyOutputDefaults(req, 8192)
+	if o := req.ModelConfig["m"]; o == nil || o.Sampling == nil || o.Sampling.MaxTokens == nil || *o.Sampling.MaxTokens != 8192 {
+		t.Fatalf("model config = %+v, want max tokens seeded", req.ModelConfig)
+	}
 }

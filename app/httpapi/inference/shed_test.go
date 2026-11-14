@@ -69,23 +69,17 @@ func gatedRouter(adm *httpapi.Admission, kvPoolBusy func() bool) (chi.Router, *b
 	return r, reached
 }
 
-func TestShedWhenFull_PassesThroughBelowCap(t *testing.T) {
+func TestShedWhenFull_RefusesAtCapWithoutReadingBody(t *testing.T) {
 	r, reached := gatedRouter(admissionAt(t, false), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", strings.NewReader(`{}`)))
-	if !*reached {
-		t.Fatalf("handler not reached below the cap (status %d)", w.Code)
+	if !*reached || w.Code != http.StatusNoContent {
+		t.Fatalf("below the cap: handler reached %v, status %d; want the handler's 204", *reached, w.Code)
 	}
-	if w.Code == http.StatusServiceUnavailable {
-		t.Fatal("shed below the cap")
-	}
-}
 
-func TestShedWhenFull_RefusesAtCapWithoutReadingBody(t *testing.T) {
-	r, reached := gatedRouter(admissionAt(t, true), nil)
-	w := httptest.NewRecorder()
+	r, reached = gatedRouter(admissionAt(t, true), nil)
+	w = httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", unreadBody{t}))
-
 	if *reached {
 		t.Fatal("handler reached at the cap")
 	}
@@ -136,8 +130,8 @@ func TestShedWhenFull_RefusesWhileKVPoolBusyWithoutReadingBody(t *testing.T) {
 	busy = false
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/gated", strings.NewReader(`{}`)))
-	if !*reached {
-		t.Fatalf("handler not reached once the pool freed (status %d)", w.Code)
+	if !*reached || w.Code != http.StatusNoContent {
+		t.Fatalf("once the pool freed: handler reached %v, status %d; want the handler's 204", *reached, w.Code)
 	}
 }
 
@@ -178,7 +172,7 @@ func TestShedWhenFull_KeepsTheConnection(t *testing.T) {
 		t.Fatalf("at the cap: status %d close %v, want 503 on an open connection", res.StatusCode, res.Close)
 	}
 	adm.Collect(holder)
-	if res := post(); res.StatusCode >= 300 || !*reached {
+	if res := post(); res.StatusCode != http.StatusNoContent || !*reached {
 		t.Fatalf("next request on the same connection: status %d, handler reached %v", res.StatusCode, *reached)
 	}
 }
@@ -228,8 +222,8 @@ func TestMount_ShedsOnlyGenerationRoutes(t *testing.T) {
 	for _, path := range []string{"/healthz", "/v1/models"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		if w.Code == testOverloaded.Status {
-			t.Errorf("GET %s shed at the cap", path)
+		if want := map[string]int{"/healthz": http.StatusOK, "/v1/models": http.StatusUnauthorized}[path]; w.Code != want {
+			t.Errorf("GET %s = %d at the cap, want its own %d", path, w.Code, want)
 		}
 	}
 }

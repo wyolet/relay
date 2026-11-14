@@ -123,11 +123,15 @@ func TestParseRequest_ErrorParity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b := []byte(tc.body)
-			if _, code := requestCode(b, vendorKeys); code != tc.code {
+			req, code := requestCode(b, vendorKeys)
+			if code != tc.code {
 				t.Fatalf("code %q, want %q", code, tc.code)
 			}
 			if want := probeCode(b); want != tc.code {
 				t.Fatalf("the probe decode answered %q, the table says %q", want, tc.code)
+			}
+			if model, stream, _ := probeModelStream(b); code == "" && (req.Model != model || req.Stream != stream) {
+				t.Fatalf("read model %q stream %v, the probe decode read %q %v", req.Model, req.Stream, model, stream)
 			}
 		})
 	}
@@ -267,6 +271,31 @@ func TestUpstreamBody(t *testing.T) {
 				assertSameJSON(t, got, ref)
 			}
 		})
+	}
+}
+
+// Past maxPairwiseKeys the overridden members are found through a map; each key still keeps only its last member.
+func TestUpstreamBody_ManyKeys(t *testing.T) {
+	const distinct = maxPairwiseKeys + 4
+	var b strings.Builder
+	b.WriteString(`{"model":"m"`)
+	for i := range 2 * distinct {
+		fmt.Fprintf(&b, `,"k%d":%d`, i%distinct, i)
+	}
+	b.WriteString(`}`)
+	body := []byte(b.String())
+	checkAgainstMap(t, body, "up", false, nil)
+
+	req, rej := parseRequest(body, vendorKeys)
+	if rej != nil {
+		t.Fatal(rej)
+	}
+	out, err := scanJSONObject(req.upstreamBody("up", nil), nil)
+	if err != nil || len(out.members) != distinct+1 {
+		t.Fatalf("%d members sent (%v), want %d", len(out.members), err, distinct+1)
+	}
+	if got := string(req.Member("k0")); got != strconv.Itoa(distinct) {
+		t.Fatalf("k0 = %s, want its last value %d", got, distinct)
 	}
 }
 

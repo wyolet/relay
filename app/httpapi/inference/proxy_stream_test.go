@@ -140,10 +140,8 @@ func TestProxyShape_ModelKeySpelling(t *testing.T) {
 	for _, body := range []string{`{"Model":"test-model","messages":[]}`, `{"` + uEscape("006d") + `odel":"test-model","messages":[]}`} {
 		for _, req := range []proxyShapeCall{{principal: pr}, {pin: "anthropic"}} {
 			req.body, req.length = strings.NewReader(body), int64(len(body))
-			w := serveProxyShape(d, req)
-			if w.Code != http.StatusBadRequest || envelopeOf(t, w).Code != "invalid_model_key" {
-				t.Fatalf("%s (pin %q): status %d %s, want 400 invalid_model_key", body, req.pin, w.Code, w.Body)
-			}
+			wantAnswer(t, serveProxyShape(d, req), http.StatusBadRequest, httpapi.APIErrorBody{Type: "invalid_request_error", Code: "invalid_model_key",
+				Message: `proxy mode forwards the body as sent: its top-level 'model' key must be spelled exactly "model", without escapes or other letter case`}, map[string]string{"Connection": "close"})
 		}
 	}
 	select {
@@ -168,9 +166,7 @@ func TestProxyShape_ClientAbortMidBody(t *testing.T) {
 		_ = pw.CloseWithError(io.ErrUnexpectedEOF)
 	}()
 	w := serveProxyShape(d, proxyShapeCall{principal: pr, body: pr2, length: int64(len(body))})
-	if w.Code != http.StatusBadRequest || envelopeOf(t, w).Code != "read_body" {
-		t.Fatalf("status %d: %s, want 400 read_body", w.Code, w.Body)
-	}
+	wantAnswer(t, w, http.StatusBadRequest, httpapi.APIErrorBody{Type: "invalid_request_error", Code: "read_body", Message: "unexpected EOF"}, map[string]string{"Connection": "close"})
 	select {
 	case g := <-got:
 		if g.readErr == nil {

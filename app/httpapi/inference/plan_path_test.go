@@ -109,10 +109,20 @@ func TestRejectedCredentialsNeverTouchTheStore(t *testing.T) {
 	// The revoked set is the one store-backed thing authentication holds; it must answer from memory.
 	auth := &Auth{Catalog: st.cat, Plans: st.plans.Holder, Revoked: revocation.New(rec).Set(), Tokens: f.tokens}
 	h := ClassifyMiddleware()(PrincipalMiddleware(auth)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
-	for _, bearer := range []string{"sk-wr-unknown", "ey.not.a-token", f.mint(t, func(c *crypto.TokenClaims) { c.Ver = 99 }), "sk-wr-live", f.mint(t, nil)} {
+	for bearer, status := range map[string]int{
+		"sk-wr-unknown":  http.StatusUnauthorized,
+		"ey.not.a-token": http.StatusUnauthorized,
+		f.mint(t, func(c *crypto.TokenClaims) { c.Ver = 99 }): http.StatusUnauthorized,
+		"sk-wr-live":   http.StatusOK,
+		f.mint(t, nil): http.StatusOK,
+	} {
 		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		r.Header.Set("Authorization", "Bearer "+bearer)
-		h.ServeHTTP(httptest.NewRecorder(), r)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Errorf("bearer %.16s: status %d, want %d", bearer, w.Code, status)
+		}
 	}
 	if n := rec.RoundTrips(); n != 0 {
 		t.Fatalf("store round trips = %d, want 0", n)
@@ -209,6 +219,12 @@ func TestCapturesPayload(t *testing.T) {
 		if got := p.CapturesPayload(); got != tc.want {
 			t.Errorf("%s: captures = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+	// Anonymous proxy traffic carries no opt-in; a principal without a lane has only its credential's.
+	var anonymous *Principal
+	keyOn, keyOff := &Principal{PayloadLogging: true}, &Principal{}
+	if anonymous.CapturesPayload() || !keyOn.CapturesPayload() || keyOff.CapturesPayload() {
+		t.Error("without a lane, capture must follow the credential's own flag, and be off for no principal")
 	}
 }
 
