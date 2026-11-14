@@ -2,6 +2,7 @@ package file
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -21,6 +22,24 @@ func (c *countingBuffer) Write(p []byte) (int, error) {
 		return 0, fmt.Errorf("write of %d bytes does not end on a line", len(p))
 	}
 	return c.Buffer.Write(p)
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestSink_WriterErrorIsReturned(t *testing.T) {
+	full := errors.New("disk full")
+	s := NewSinkFromWriter(failingWriter{full})
+	if err := s.Write(usage.Event{RequestID: "r"}); !errors.Is(err, full) {
+		t.Errorf("Write: err = %v, want the writer's", err)
+	}
+	if err := s.WriteBatch([]usage.Event{{RequestID: "r"}}); !errors.Is(err, full) {
+		t.Errorf("WriteBatch: err = %v, want the writer's", err)
+	}
+	if err := s.WriteBatch(nil); err != nil {
+		t.Errorf("WriteBatch of nothing reached the writer: %v", err)
+	}
 }
 
 func TestSink_WriteBatchMatchesWrite(t *testing.T) {

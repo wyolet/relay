@@ -7,9 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/oklog/ulid/v2"
 )
 
 func newHandler(fn func(context.Context)) http.Handler {
@@ -24,29 +27,64 @@ func applyMiddleware(base *slog.Logger, h http.Handler, r *http.Request) *httpte
 	return w
 }
 
-func TestInboundIDKeptAsClientIDOnly(t *testing.T) {
-	inbound := "0123456789abcdefABCDEF"
-	var ids []string
-	for range 2 {
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		r.Header.Set(HeaderInbound, inbound)
-		var gotID, gotClient string
-		w := applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
-			gotID, gotClient = From(ctx), ClientID(ctx)
-		}), r)
-		if gotID == inbound || len(gotID) != 26 {
-			t.Fatalf("From(ctx) = %q, want a relay-minted ULID", gotID)
-		}
-		if w.Header().Get(HeaderOutbound) != gotID {
-			t.Errorf("outbound header = %q, want %q", w.Header().Get(HeaderOutbound), gotID)
-		}
-		if gotClient != inbound || w.Header().Get(HeaderInbound) != inbound {
-			t.Errorf("client id = %q, echoed %q, want %q", gotClient, w.Header().Get(HeaderInbound), inbound)
-		}
-		ids = append(ids, gotID)
-	}
-	if ids[0] == ids[1] {
-		t.Fatalf("two requests with the same %s share request id %q", HeaderInbound, ids[0])
+// The relay always mints its own id. A client's X-Request-Id is kept beside it, echoed and logged, only when it is 1 to 128 printable ASCII bytes; anything else is dropped whole.
+func TestMiddlewareInboundID(t *testing.T) {
+	seen := map[string]bool{}
+	for _, tc := range []struct {
+		name    string
+		inbound string
+		set     bool
+		kept    bool
+	}{
+		{"no header", "", false, false},
+		{"empty header", "", true, false},
+		{"plain id", "0123456789abcdefABCDEF", true, true},
+		{"the same id again", "0123456789abcdefABCDEF", true, true},
+		{"spaces and tildes are printable", "a b~c", true, true},
+		{"128 bytes", strings.Repeat("a", 128), true, true},
+		{"129 bytes", strings.Repeat("a", 129), true, false},
+		{"control byte", "bad\x01value", true, false},
+		{"unit separator, just below the range", "bad\x1fvalue", true, false},
+		{"delete, just above the range", "bad\x7fvalue", true, false},
+		{"non-ASCII", "réq", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tc.set {
+				r.Header.Set(HeaderInbound, tc.inbound)
+			}
+			var id, clientID string
+			w := applyMiddleware(slog.New(slog.NewJSONHandler(&buf, nil)), newHandler(func(ctx context.Context) {
+				id, clientID = From(ctx), ClientID(ctx)
+				Logger(ctx).Info("hello")
+			}), r)
+
+			if _, err := ulid.ParseStrict(id); err != nil || id == tc.inbound || seen[id] {
+				t.Fatalf("From(ctx) = %q, want a fresh relay-minted ULID (%v)", id, err)
+			}
+			seen[id] = true
+			wantClient := ""
+			if tc.kept {
+				wantClient = tc.inbound
+			}
+			echoed := w.Header().Values(HeaderInbound)
+			if clientID != wantClient || (tc.kept && !slices.Equal(echoed, []string{tc.inbound})) || (!tc.kept && echoed != nil) {
+				t.Errorf("client id = %q, echoed %q; want %q", clientID, echoed, wantClient)
+			}
+			if got := w.Header().Get(HeaderOutbound); got != id {
+				t.Errorf("%s = %q, want the minted id %q", HeaderOutbound, got, id)
+			}
+
+			var record map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+				t.Fatalf("log line: %v (%q)", err, buf.String())
+			}
+			logged, isLogged := record["client_request_id"]
+			if record["request_id"] != id || isLogged != tc.kept || (tc.kept && logged != tc.inbound) {
+				t.Errorf("log line = %v, want request_id %q and client_request_id only for a kept id", record, id)
+			}
+		})
 	}
 }
 
@@ -59,59 +97,6 @@ func TestWithNewIDReplacesID(t *testing.T) {
 	}), r)
 	if child == "" || child == parent {
 		t.Fatalf("WithNewID id = %q, parent %q: want a fresh id", child, parent)
-	}
-}
-
-func TestMissingHeaderGeneratesULID(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := applyMiddleware(slog.Default(), newHandler(func(context.Context) {}), r)
-
-	id := w.Header().Get(HeaderOutbound)
-	if len(id) != 26 {
-		t.Errorf("generated ID length = %d, want 26; id=%q", len(id), id)
-	}
-}
-
-func TestInvalidInboundGeneratesULID(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set(HeaderInbound, "bad\x01value")
-
-	w := applyMiddleware(slog.Default(), newHandler(func(context.Context) {}), r)
-
-	id := w.Header().Get(HeaderOutbound)
-	if id == "bad\x01value" {
-		t.Error("used invalid inbound header verbatim")
-	}
-	if len(id) != 26 {
-		t.Errorf("generated ID length = %d, want 26; id=%q", len(id), id)
-	}
-}
-
-func TestTooLongInboundGeneratesULID(t *testing.T) {
-	inbound := strings.Repeat("a", 129)
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set(HeaderInbound, inbound)
-
-	w := applyMiddleware(slog.Default(), newHandler(func(context.Context) {}), r)
-
-	id := w.Header().Get(HeaderOutbound)
-	if id == inbound {
-		t.Error("used too-long inbound header verbatim")
-	}
-	if len(id) != 26 {
-		t.Errorf("generated ID length = %d, want 26; id=%q", len(id), id)
-	}
-}
-
-func TestEmptyInboundGeneratesULID(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set(HeaderInbound, "")
-
-	w := applyMiddleware(slog.Default(), newHandler(func(context.Context) {}), r)
-
-	id := w.Header().Get(HeaderOutbound)
-	if len(id) != 26 {
-		t.Errorf("generated ID length = %d, want 26; id=%q", len(id), id)
 	}
 }
 
@@ -129,29 +114,6 @@ func TestGenerateConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-}
-
-func TestLoggerIncludesRequestID(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set(HeaderInbound, "test-req-id-123")
-
-	applyMiddleware(logger, newHandler(func(ctx context.Context) {
-		Logger(ctx).Info("hello")
-	}), r)
-
-	var record map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
-		t.Fatalf("json decode: %v; buf=%q", err, buf.String())
-	}
-	if id, _ := record["request_id"].(string); len(id) != 26 {
-		t.Errorf("request_id attr = %v, want a ULID", record["request_id"])
-	}
-	if record["client_request_id"] != "test-req-id-123" {
-		t.Errorf("client_request_id attr = %v, want %q", record["client_request_id"], "test-req-id-123")
-	}
 }
 
 func TestLoggerBuiltOnceOnFirstUse(t *testing.T) {

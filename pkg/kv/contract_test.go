@@ -6,10 +6,13 @@ package kv_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -28,12 +31,23 @@ func contractGetSet(t *testing.T, factory storeFactory) {
 	if err := s.Set(ctx, "k", []byte("hello"), 0); err != nil {
 		t.Fatal(err)
 	}
-	v, err := s.Get(ctx, "k")
-	if err != nil {
+	if v, err := s.Get(ctx, "k"); err != nil || string(v) != "hello" {
+		t.Fatalf("Get after Set = %q, %v; want hello", v, err)
+	}
+	if err := s.Set(ctx, "k", []byte("again"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if string(v) != "hello" {
-		t.Fatalf("want hello, got %s", v)
+	if v, err := s.Get(ctx, "k"); err != nil || string(v) != "again" {
+		t.Fatalf("Get after a second Set = %q, %v; want again", v, err)
+	}
+	if err := s.Del(ctx, "k"); err != nil {
+		t.Fatalf("Del: %v", err)
+	}
+	if _, err := s.Get(ctx, "k"); !errors.Is(err, kv.ErrNotFound) {
+		t.Fatalf("Get after Del: err = %v, want ErrNotFound", err)
+	}
+	if err := s.Del(ctx, "k"); err != nil {
+		t.Fatalf("Del of a missing key: %v", err)
 	}
 }
 
@@ -42,24 +56,31 @@ func contractIncr(t *testing.T, factory storeFactory) {
 	ctx := context.Background()
 	s := factory(t)
 
+	// Each of 100 racing increments returns a count of its own: none is lost, none is seen twice.
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := s.Incr(ctx, "counter", 1); err != nil {
+	returned := make([]int64, 100)
+	for i := range returned {
+		wg.Go(func() {
+			n, err := s.Incr(ctx, "counter", 1)
+			if err != nil {
 				t.Error(err)
 			}
-		}()
+			returned[i] = n
+		})
 	}
 	wg.Wait()
-
-	v, err := s.Get(ctx, "counter")
-	if err != nil {
-		t.Fatal(err)
+	slices.Sort(returned)
+	for i, n := range returned {
+		if n != int64(i+1) {
+			t.Fatalf("sorted Incr results = %v, want 1..100", returned)
+		}
 	}
-	if string(v) != "100" {
-		t.Fatalf("want 100, got %s", v)
+
+	if n, err := s.Incr(ctx, "counter", -30); err != nil || n != 70 {
+		t.Fatalf("Incr by -30 = %d, %v; want 70", n, err)
+	}
+	if v, err := s.Get(ctx, "counter"); err != nil || string(v) != "70" {
+		t.Fatalf("Get = %q, %v; want 70", v, err)
 	}
 }
 
@@ -93,8 +114,8 @@ func contractRange(t *testing.T, factory storeFactory) {
 	ctx := context.Background()
 	s := factory(t)
 
-	for _, k := range []string{"r:2", "r:1", "other"} {
-		if err := s.Set(ctx, k, []byte(k), 0); err != nil {
+	for _, k := range []string{"r:2", "r:1", "other", "r"} {
+		if err := s.Set(ctx, k, []byte("value of "+k), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,11 +123,12 @@ func contractRange(t *testing.T, factory storeFactory) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("want 2 entries, got %d", len(entries))
+	want := []kv.Entry{{Key: "r:1", Value: []byte("value of r:1")}, {Key: "r:2", Value: []byte("value of r:2")}}
+	if diff := cmp.Diff(want, entries); diff != "" {
+		t.Fatalf("Range(r:), in key order (-want +got):\n%s", diff)
 	}
-	if entries[0].Key != "r:1" || entries[1].Key != "r:2" {
-		t.Fatalf("entries not in key order: %v", entries)
+	if entries, err := s.Range(ctx, "r:1:"); err != nil || len(entries) != 0 {
+		t.Fatalf("Range of a prefix no key has = %v, %v", entries, err)
 	}
 }
 

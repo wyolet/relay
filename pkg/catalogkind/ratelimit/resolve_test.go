@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/pkg/meta"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 func rule(m Meter, s Strategy, w time.Duration, amount int64) Rule {
@@ -24,11 +27,24 @@ func keysByContent(t *testing.T, rules ...Rule) map[string]string {
 	return out
 }
 
-func TestResolveWithScope_KeyFormat(t *testing.T) {
-	rl := &RateLimit{Spec: Spec{Rules: []Rule{rule(MeterTokensInput, StrategySlidingWindow, time.Hour, 5)}}}
-	got := ResolveWithScope("proxy", "abc", rl)
-	if len(got) != 1 || got[0].Key != "proxy:abc:sliding-window:3600:tokens.input" {
-		t.Fatalf("keys = %+v, want proxy:abc:sliding-window:3600:tokens.input", got)
+func TestResolveWithScope(t *testing.T) {
+	no := false
+	rules := []Rule{
+		rule(MeterTokensInput, StrategySlidingWindow, time.Hour, 5),
+		rule(MeterConcurrency, StrategyFixedWindow, 90*time.Second, 2),
+	}
+	want := []pkgratelimit.Rule{
+		{Key: "proxy:abc:sliding-window:3600:tokens.input", Name: "tokens.input on abc", Meter: "tokens.input", Strategy: pkgratelimit.StrategySlidingWindow, Amount: 5, Window: time.Hour},
+		{Key: "proxy:abc:fixed-window:90:concurrency", Name: "concurrency on abc", Meter: "concurrency", Strategy: pkgratelimit.StrategyFixedWindow, Amount: 2, Window: 90 * time.Second},
+	}
+	if diff := cmp.Diff(want, ResolveWithScope("proxy", "abc", &RateLimit{Spec: Spec{Rules: rules}})); diff != "" {
+		t.Errorf("resolved rules (-want +got):\n%s", diff)
+	}
+	// Nothing to enforce: no rate limit, no rules, or a disabled one.
+	for name, rl := range map[string]*RateLimit{"nil": nil, "no rules": {}, "disabled": {Spec: Spec{Rules: rules, Enabled: &no}}} {
+		if got := ResolveWithScope("proxy", "abc", rl); got != nil {
+			t.Errorf("%s: resolved %+v, want nil", name, got)
+		}
 	}
 }
 

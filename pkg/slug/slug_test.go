@@ -72,14 +72,54 @@ func TestUnique(t *testing.T) {
 	}
 }
 
+// A suffixed slug still fits MaxLen: the base gives way, never the suffix, and no dash is left doubled.
+func TestWithSuffix(t *testing.T) {
+	for _, tc := range []struct {
+		base string
+		n    int
+		want string
+	}{
+		{"openai-prod", 2, "openai-prod-2"},
+		{strings.Repeat("a", 61), 2, strings.Repeat("a", 61) + "-2"},
+		{strings.Repeat("a", 63), 2, strings.Repeat("a", 61) + "-2"},
+		{strings.Repeat("a", 63), 100, strings.Repeat("a", 59) + "-100"},
+		{strings.Repeat("a", 60) + "-bc", 2, strings.Repeat("a", 60) + "-2"},
+	} {
+		got := WithSuffix(tc.base, tc.n)
+		if got != tc.want || !Valid(got) {
+			t.Errorf("WithSuffix(%q, %d) = %q (valid %v), want %q", tc.base, tc.n, got, Valid(got), tc.want)
+		}
+	}
+}
+
 func TestValid(t *testing.T) {
-	if !Valid("openai-prod") {
-		t.Fatal("openai-prod should be valid")
+	for s, want := range map[string]bool{
+		"openai-prod":           true,
+		"a":                     true,
+		"0":                     true,
+		"a-0":                   true,
+		"a--b":                  true,
+		strings.Repeat("a", 63): true,
+		strings.Repeat("a", 64): false,
+		"":                      false,
+		"OpenAI":                false,
+		"-leading":              false,
+		"trailing-":             false,
+		"-":                     false,
+		"under_score":           false,
+		"dot.ted":               false,
+		"sp ace":                false,
+		"ünï":                   false,
+		"a\n":                   false,
+	} {
+		if got := Valid(s); got != want {
+			t.Errorf("Valid(%q) = %v, want %v", s, got, want)
+		}
 	}
-	if Valid("OpenAI") {
-		t.Fatal("OpenAI should be invalid (uppercase)")
-	}
-	if Valid("-leading") || Valid("trailing-") {
-		t.Fatal("dashes at edges invalid")
+	// Whatever From makes of free text is a valid slug or empty.
+	for _, in := range []string{"OpenAI Prod", strings.Repeat("ab-", 40), strings.Repeat("a", 62) + "--b", "---", "已经"} {
+		if got := From(in); got != "" && !Valid(got) {
+			t.Errorf("From(%q) = %q, which is not a valid slug", in, got)
+		}
 	}
 }

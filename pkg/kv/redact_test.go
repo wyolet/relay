@@ -14,19 +14,18 @@ import (
 const secretTail = "s3cr3t-session-token"
 
 func TestRedactKey(t *testing.T) {
-	cases := map[string]string{
+	// A leading {tag} survives; anything else is the first four bytes of the key's sha256.
+	for key, want := range map[string]string{
 		"{secret_health}:abc" + secretTail: "{secret_health}",
 		"{rl}:" + secretTail:               "{rl}",
-	}
-	for key, want := range cases {
+		"{rl}":                             "{rl}",
+		"sess:" + secretTail:               "sha256:9728832c",
+		"{unterminated:" + secretTail:      "sha256:a6048998",
+		"}{x}":                             "sha256:fe012f7d",
+		"":                                 "sha256:e3b0c442",
+	} {
 		if got := redactKey(key); got != want {
 			t.Errorf("redactKey(%q) = %q, want %q", key, got, want)
-		}
-	}
-	for _, key := range []string{"sess:" + secretTail, "{unterminated:" + secretTail, ""} {
-		got := redactKey(key)
-		if !strings.HasPrefix(got, "sha256:") || strings.Contains(got, secretTail) {
-			t.Errorf("redactKey(%q) = %q, want a sha256 digest", key, got)
 		}
 	}
 }
@@ -68,10 +67,11 @@ func TestMemIncrErrorOmitsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := s.Incr(ctx, key, 1)
-	if err == nil {
-		t.Fatal("want error on non-integer Incr")
+	const want = `state: Incr on non-integer key sha256:9728832c: strconv.ParseInt: parsing "not-a-number": invalid syntax`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Incr on text: err = %v, want %q", err, want)
 	}
-	if strings.Contains(err.Error(), secretTail) {
-		t.Fatalf("Incr error leaks the key: %v", err)
+	if v, _ := s.Get(ctx, key); string(v) != "not-a-number" {
+		t.Fatalf("a failed Incr changed the value to %q", v)
 	}
 }

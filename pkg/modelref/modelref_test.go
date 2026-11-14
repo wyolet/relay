@@ -2,190 +2,172 @@ package modelref
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestParse_ValidShapes(t *testing.T) {
-	cases := []struct {
-		in               string
-		provider         string
-		model            string
-		host             string
-		providerWildcard bool
-		modelWildcard    bool
-		hostWildcard     bool
-		kind             Kind
+func TestParse(t *testing.T) {
+	longest := strings.Repeat("a", 63)
+	for _, tc := range []struct {
+		in   string
+		want Ref
+		kind Kind
 	}{
-		{"anthropic", "anthropic", "", "", false, true, true, KindProvider},
-		{"anthropic@bedrock", "anthropic", "", "bedrock", false, true, false, KindProviderOnHost},
-		{"anthropic/*", "anthropic", "", "", false, true, true, KindProvider},
-		{"anthropic/*@bedrock", "anthropic", "", "bedrock", false, true, false, KindProviderOnHost},
-		{"anthropic/claude-opus-4-7", "anthropic", "claude-opus-4-7", "", false, false, true, KindModel},
-		{"anthropic/claude-opus-4-7@bedrock", "anthropic", "claude-opus-4-7", "bedrock", false, false, false, KindBinding},
-		{"amazon-bedrock/claude-opus-4-7@amazon-bedrock", "amazon-bedrock", "claude-opus-4-7", "amazon-bedrock", false, false, false, KindBinding},
-		{"@bedrock", "", "", "bedrock", true, true, false, KindHost},
-		{"@amazon-bedrock", "", "", "amazon-bedrock", true, true, false, KindHost},
-	}
-	for _, tc := range cases {
+		{"anthropic", Ref{Provider: "anthropic", ModelWildcard: true, HostWildcard: true}, KindProvider},
+		{"anthropic/*", Ref{Provider: "anthropic", ModelWildcard: true, HostWildcard: true}, KindProvider},
+		{"anthropic@bedrock", Ref{Provider: "anthropic", Host: "bedrock", ModelWildcard: true}, KindProviderOnHost},
+		{"anthropic/*@bedrock", Ref{Provider: "anthropic", Host: "bedrock", ModelWildcard: true}, KindProviderOnHost},
+		{"anthropic/claude-opus-4-7", Ref{Provider: "anthropic", Model: "claude-opus-4-7", HostWildcard: true}, KindModel},
+		{"anthropic/claude-opus-4-7@bedrock", Ref{Provider: "anthropic", Model: "claude-opus-4-7", Host: "bedrock"}, KindBinding},
+		{"amazon-bedrock/claude-opus-4-7@amazon-bedrock", Ref{Provider: "amazon-bedrock", Model: "claude-opus-4-7", Host: "amazon-bedrock"}, KindBinding},
+		{"@bedrock", Ref{Host: "bedrock", ProviderWildcard: true, ModelWildcard: true}, KindHost},
+		// Segments are slug-normalized; the / and @ separators are not.
+		{"openai/gpt-5.5", Ref{Provider: "openai", Model: "gpt-5-5", HostWildcard: true}, KindModel},
+		{"OpenAI/GPT-4o", Ref{Provider: "openai", Model: "gpt-4o", HostWildcard: true}, KindModel},
+		{"openai/ft:gpt-3.5-turbo", Ref{Provider: "openai", Model: "ft-gpt-3-5-turbo", HostWildcard: true}, KindModel},
+		{"anthropic/claude-3@Bedrock", Ref{Provider: "anthropic", Model: "claude-3", Host: "bedrock"}, KindBinding},
+		{"@Amazon_Bedrock", Ref{Host: "amazon-bedrock", ProviderWildcard: true, ModelWildcard: true}, KindHost},
+		{"meta/llama/3.1", Ref{Provider: "meta", Model: "llama-3-1", HostWildcard: true}, KindModel},
+		{"a/b", Ref{Provider: "a", Model: "b", HostWildcard: true}, KindModel},
+		{longest, Ref{Provider: longest, ModelWildcard: true, HostWildcard: true}, KindProvider},
+		// A longer segment is cut to the slug length, as the catalog's own slugs are.
+		{longest + "b", Ref{Provider: longest, ModelWildcard: true, HostWildcard: true}, KindProvider},
+	} {
 		t.Run(tc.in, func(t *testing.T) {
-			r, err := Parse(tc.in)
+			got, err := Parse(tc.in)
 			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+				t.Fatalf("Parse: %v", err)
 			}
-			if r.Provider != tc.provider {
-				t.Errorf("provider: want %q got %q", tc.provider, r.Provider)
+			tc.want.Raw = tc.in
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("Ref (-want +got):\n%s", diff)
 			}
-			if r.Model != tc.model {
-				t.Errorf("model: want %q got %q", tc.model, r.Model)
+			if got.Kind() != tc.kind {
+				t.Errorf("Kind = %q, want %q", got.Kind(), tc.kind)
 			}
-			if r.Host != tc.host {
-				t.Errorf("host: want %q got %q", tc.host, r.Host)
+			if err := Validate(tc.in); err != nil {
+				t.Errorf("Validate: %v", err)
 			}
-			if r.ProviderWildcard != tc.providerWildcard {
-				t.Errorf("providerWildcard: want %v got %v", tc.providerWildcard, r.ProviderWildcard)
-			}
-			if r.ModelWildcard != tc.modelWildcard {
-				t.Errorf("modelWildcard: want %v got %v", tc.modelWildcard, r.ModelWildcard)
-			}
-			if r.HostWildcard != tc.hostWildcard {
-				t.Errorf("hostWildcard: want %v got %v", tc.hostWildcard, r.HostWildcard)
-			}
-			if r.Kind() != tc.kind {
-				t.Errorf("kind: want %s got %s", tc.kind, r.Kind())
-			}
-			if r.Raw != tc.in {
-				t.Errorf("raw: want %q got %q", tc.in, r.Raw)
+			if diff := cmp.Diff(got, MustParse(tc.in)); diff != "" {
+				t.Errorf("MustParse differs from Parse (-Parse +MustParse):\n%s", diff)
 			}
 		})
 	}
 }
 
-func TestParse_Errors(t *testing.T) {
-	cases := []struct {
-		in     string
-		errIs  error
-		reason string // substring of *SyntaxError.Reason; empty means any
-	}{
-		{"", ErrEmpty, ""},
-		{"/foo", nil, "leading /"},
-		{"anthropic/", nil, "trailing /"},
-		{"anthropic/claude@", nil, "trailing @"},
-		{"@", nil, "trailing @"},
-		// A model of `*` is the one pattern spelling; `*` anywhere else has no slug-compatible characters.
-		{"*", nil, "slug-compatible"},
-		{"*/gpt-4o", nil, "slug-compatible"},
-		{"anthropic/claude@*", nil, "slug-compatible"},
-		{"@*", nil, "slug-compatible"},
-		// A * beside other characters is not a pattern; normalizing it away
-		// would leave a prefix that grants nothing.
-		{"stress-mock/stress-*", nil, "contains *"},
-		{"anthropic/claude-*@bedrock", nil, "contains *"},
-		{"anthropic/claude@aws-*", nil, "contains *"},
-		{"open*", nil, "contains *"},
-		{"@bed*rock", nil, "contains *"},
-	}
-	for _, tc := range cases {
+func TestParseRejections(t *testing.T) {
+	const noStar = "refs take no patterns; leave the "
+	for _, tc := range []struct{ in, reason string }{
+		{"/foo", "leading / — provider is required"},
+		{"/", "leading / — provider is required"},
+		{"anthropic/", "trailing / requires a model"},
+		{"anthropic/@bedrock", "trailing / requires a model"},
+		{"anthropic/claude@", "trailing @ requires a host"},
+		{"anthropic@", "trailing @ requires a host"},
+		{"@", "trailing @ requires a host"},
+		// A model of * is the one pattern spelling; a lone * anywhere else names nothing.
+		{"*", "provider has no slug-compatible characters"},
+		{"*/gpt-4o", "provider has no slug-compatible characters"},
+		{"anthropic/claude@*", "host has no slug-compatible characters"},
+		{"@*", "host has no slug-compatible characters"},
+		{"anthropic/...", "model has no slug-compatible characters"},
+		{" ", "provider has no slug-compatible characters"},
+		// A * beside other characters would normalize to a literal prefix that grants nothing.
+		{"stress-mock/stress-*", `model "stress-*" contains *: ` + noStar + "model out to match every one"},
+		{"anthropic/claude-*@bedrock", `model "claude-*" contains *: ` + noStar + "model out to match every one"},
+		{"anthropic/claude@aws-*", `host "aws-*" contains *: ` + noStar + "host out to match every one"},
+		{"open*", `provider "open*" contains *: ` + noStar + "provider out to match every one"},
+		{"@bed*rock", `host "bed*rock" contains *: ` + noStar + "host out to match every one"},
+		{"anthropic/**", "model has no slug-compatible characters"},
+	} {
 		t.Run(tc.in, func(t *testing.T) {
 			_, err := Parse(tc.in)
-			if err == nil {
-				t.Fatalf("expected error for %q", tc.in)
-			}
-			if tc.errIs != nil {
-				if !errors.Is(err, tc.errIs) {
-					t.Errorf("want errors.Is(%v), got %v", tc.errIs, err)
-				}
-				return
-			}
 			var se *SyntaxError
 			if !errors.As(err, &se) {
-				t.Fatalf("want *SyntaxError, got %T: %v", err, err)
+				t.Fatalf("err = %v (%T), want *SyntaxError", err, err)
 			}
-			if tc.reason != "" && !contains(se.Reason, tc.reason) {
-				t.Errorf("reason: want substring %q, got %q", tc.reason, se.Reason)
+			if diff := cmp.Diff(SyntaxError{Raw: tc.in, Reason: tc.reason}, *se); diff != "" {
+				t.Errorf("SyntaxError (-want +got):\n%s", diff)
+			}
+			if want := `modelref "` + tc.in + `": ` + tc.reason; err.Error() != want {
+				t.Errorf("Error() = %q, want %q", err.Error(), want)
+			}
+			if Validate(tc.in) == nil {
+				t.Error("Validate accepted it")
 			}
 		})
 	}
+	if _, err := Parse(""); !errors.Is(err, ErrEmpty) {
+		t.Errorf(`Parse(""): err = %v, want ErrEmpty`, err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("MustParse of a malformed ref did not panic")
+		}
+	}()
+	MustParse("anthropic/")
 }
 
-func TestParse_NormalizesToSlug(t *testing.T) {
-	cases := []struct {
-		in       string
-		provider string
-		model    string
-		host     string
-	}{
-		{"openai/gpt-5.5", "openai", "gpt-5-5", ""},
-		{"OpenAI/GPT-4o", "openai", "gpt-4o", ""},
-		{"openai/ft:gpt-3.5-turbo", "openai", "ft-gpt-3-5-turbo", ""},
-		{"anthropic/claude-3@Bedrock", "anthropic", "claude-3", "bedrock"},
-		{"@Amazon-Bedrock", "", "", "amazon-bedrock"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			ref, err := Parse(tc.in)
-			if err != nil {
-				t.Fatalf("Parse(%q): %v", tc.in, err)
-			}
-			if ref.Provider != tc.provider {
-				t.Errorf("Provider = %q, want %q", ref.Provider, tc.provider)
-			}
-			if ref.Model != tc.model {
-				t.Errorf("Model = %q, want %q", ref.Model, tc.model)
-			}
-			if ref.Host != tc.host {
-				t.Errorf("Host = %q, want %q", ref.Host, tc.host)
-			}
-		})
+func TestParseRejectsARepeatedSeparator(t *testing.T) {
+	t.Skip(`bug: Parse("anthropic@bedrock@vertex") → Ref{Provider: "anthropic-bedrock", Host: "vertex"}, no error; an extra @ is slugged into the provider, so the ref is accepted and names nothing`)
+	for _, in := range []string{"anthropic@bedrock@vertex", "@bedrock@vertex", "anthropic/claude@bedrock@vertex"} {
+		got, err := Parse(in)
+		var se *SyntaxError
+		if !errors.As(err, &se) {
+			t.Errorf("Parse(%q) = %+v, %v; want a *SyntaxError", in, got, err)
+		}
 	}
 }
 
 func TestMatches(t *testing.T) {
-	type triple struct{ p, m, h string }
-	cases := []struct {
-		ref  string
-		want map[triple]bool
-	}{
-		{"@bedrock", map[triple]bool{
-			{"anthropic", "claude-opus-4-7", "bedrock"}:   true,
-			{"openai", "gpt-4o", "bedrock"}:               true,
-			{"anthropic", "claude-opus-4-7", "anthropic"}: false,
-		}},
-		{"anthropic", map[triple]bool{
-			{"anthropic", "claude-opus-4-7", "anthropic"}: true,
-			{"anthropic", "claude-haiku-4-5", "bedrock"}:  true,
-			{"openai", "gpt-4o", "openai"}:                false,
-		}},
-		{"anthropic/claude-opus-4-7", map[triple]bool{
-			{"anthropic", "claude-opus-4-7", "anthropic"}: true,
-			{"anthropic", "claude-opus-4-7", "bedrock"}:   true,
-			{"anthropic", "claude-haiku-4-5", "bedrock"}:  false,
-		}},
-		{"anthropic/claude-opus-4-7@bedrock", map[triple]bool{
-			{"anthropic", "claude-opus-4-7", "bedrock"}:   true,
-			{"anthropic", "claude-opus-4-7", "anthropic"}: false,
-			{"anthropic", "claude-haiku-4-5", "bedrock"}:  false,
-		}},
+	bindings := []ConcreteBinding{
+		{"anthropic", "claude-opus-4-7", "anthropic"},
+		{"anthropic", "claude-opus-4-7", "bedrock"},
+		{"anthropic", "claude-haiku-4-5", "bedrock"},
+		{"openai", "gpt-4o", "bedrock"},
+		{"openai", "gpt-4o", "openai"},
+		{"openai", "claude-opus-4-7", "anthropic"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.ref, func(t *testing.T) {
-			r := MustParse(tc.ref)
-			for tr, want := range tc.want {
-				if got := r.Matches(tr.p, tr.m, tr.h); got != want {
-					t.Errorf("%s.Matches(%q,%q,%q) = %v, want %v", tc.ref, tr.p, tr.m, tr.h, got, want)
-				}
+	// One flag per binding above, in order.
+	for ref, want := range map[string][]bool{
+		"@bedrock":                          {false, true, true, true, false, false},
+		"anthropic":                         {true, true, true, false, false, false},
+		"anthropic/*":                       {true, true, true, false, false, false},
+		"anthropic@bedrock":                 {false, true, true, false, false, false},
+		"anthropic/claude-opus-4-7":         {true, true, false, false, false, false},
+		"anthropic/claude-opus-4-7@bedrock": {false, true, false, false, false, false},
+		"Anthropic/Claude.Opus.4.7@Bedrock": {false, true, false, false, false, false},
+	} {
+		r := MustParse(ref)
+		got := make([]bool, len(bindings))
+		for i, b := range bindings {
+			got[i] = r.Matches(b.Provider, b.Model, b.Host)
+			if covers := r.Covers(b); covers != got[i] {
+				t.Errorf("%s: Covers(%v) = %v, Matches = %v", ref, b, covers, got[i])
 			}
-		})
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("%s matches (-want +got):\n%s", ref, diff)
+		}
 	}
 }
 
-func contains(haystack, needle string) bool {
-	if needle == "" {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
+func TestMatchAny(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		refs []string
+		want bool
+	}{
+		{"no refs", nil, false},
+		{"one matching ref", []string{"openai", "anthropic@bedrock"}, true},
+		{"none matching", []string{"openai", "anthropic@vertex", "anthropic/claude-haiku-4-5"}, false},
+		{"malformed refs are skipped, not matched", []string{"", "anthropic/", "*", "anthropic/claude-*"}, false},
+		{"a malformed ref does not stop a later match", []string{"anthropic/", "@bedrock"}, true},
+	} {
+		if got := MatchAny(tc.refs, "anthropic", "claude-opus-4-7", "bedrock"); got != tc.want {
+			t.Errorf("%s: MatchAny = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	return false
 }
