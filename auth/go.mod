@@ -2,7 +2,7 @@ module github.com/wyolet/relay/auth
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
