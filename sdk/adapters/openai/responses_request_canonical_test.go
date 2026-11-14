@@ -262,7 +262,6 @@ func TestResponsesParseRequest_FunctionCallOutputArray(t *testing.T) {
 }
 
 func TestResponsesSerializeRequest_FunctionCallOutputArray(t *testing.T) {
-	t.Skip(`bug: SerializeRequest of a tool result with an image part → {"content":[…]} and no "output", which the API rejects as a missing required parameter`)
 	got := respSerializeRequest(t, &v1.Request{Model: v1.ModelRefs{"m"}, Input: []v1.Item{
 		&v1.FunctionCallOutput{CallID: "c", Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png;base64,AAAA"}}},
 	}})

@@ -105,26 +105,20 @@ func (*ResponsesFunctionCallOutput) ResponsesItemType() ResponsesItemType {
 	return ResponsesItemTypeFunctionCallOutput
 }
 
-// MarshalJSON emits exactly one of output (string) or content (array). output
-// is REQUIRED on the wire, and an empty tool result ("") is valid — so unless
-// the content array actually has parts, emit output unconditionally (a
-// *string, non-nil even for ""). Keying on non-emptiness rather than non-nil
-// matters: a non-nil empty Content (parse round-trip of "content":[], or
-// every part dropped in conversion) would take the content branch, omitempty
-// would erase it, and the item would ship with NEITHER form — 400
-// ("Missing required parameter: 'input[N].output'").
+// MarshalJSON emits output as the parts array when Content has parts, else as
+// the string. output is REQUIRED on the wire (there is no content member), and
+// an empty tool result ("") is valid, so it is never omitted.
 func (f *ResponsesFunctionCallOutput) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type    ResponsesItemType `json:"type"`
-		CallID  string            `json:"call_id"`
-		Output  *string           `json:"output,omitempty"`
-		Content []ResponsesPart   `json:"content,omitempty"`
+		Type   ResponsesItemType `json:"type"`
+		CallID string            `json:"call_id"`
+		Output any               `json:"output"`
 	}
 	w := wire{Type: ResponsesItemTypeFunctionCallOutput, CallID: f.CallID}
 	if len(f.Content) > 0 {
-		w.Content = f.Content
+		w.Output = f.Content
 	} else {
-		w.Output = &f.Output
+		w.Output = f.Output
 	}
 	return json.Marshal(w)
 }
