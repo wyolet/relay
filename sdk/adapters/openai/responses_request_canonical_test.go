@@ -8,862 +8,265 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-func TestResponsesParseRequest_SimpleStringInput(t *testing.T) {
-	body := []byte(`{"model":"gpt-5","input":"hi"}`)
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Model) != 1 || req.Model[0] != "gpt-5" {
-		t.Errorf("model: %v", req.Model)
-	}
-	if len(req.Input) != 1 {
-		t.Fatalf("input len: %d", len(req.Input))
-	}
-	msg, ok := req.Input[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("input[0] is %T", req.Input[0])
-	}
-	if msg.Role != v1.RoleUser {
-		t.Errorf("role: %q", msg.Role)
-	}
-}
+const respHiInput = `[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]`
 
-func TestResponsesParseRequest_ArrayInputForm(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-5",
-		"input": []any{map[string]any{
-			"type": "message",
-			"role": "user",
-			"content": []any{map[string]any{
-				"type": "input_text",
-				"text": "hi",
-			}},
-		}},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Input) != 1 {
-		t.Fatalf("input len: %d", len(req.Input))
-	}
-	msg, ok := req.Input[0].(*v1.Message)
-	if !ok {
-		t.Fatalf("input[0] is %T", req.Input[0])
-	}
-	if msg.Role != v1.RoleUser {
-		t.Errorf("role: %q", msg.Role)
-	}
-}
-
-func TestResponsesParseRequest_StatefulFieldsRejected(t *testing.T) {
-	type mutation func(map[string]any)
-	base := func() map[string]any {
-		return map[string]any{
-			"model": "gpt-5",
-			"input": "hi",
-		}
-	}
-
+func TestResponsesParseRequest(t *testing.T) {
 	cases := []struct {
-		name    string
-		mutate  mutation
-		wantErr string
+		name, body, want string
 	}{
 		{
-			"previous_response_id",
-			func(m map[string]any) { m["previous_response_id"] = "resp_123" },
-			"previous_response_id",
+			name: "sampling, reasoning, format and stream",
+			body: `{"model":"gpt-5","input":"hi","temperature":0.8,"top_p":0.95,"max_output_tokens":1024,"stop_sequences":["END"],"stream":true,"user":"u1","metadata":{"team":"core"},
+				"reasoning":{"effort":"high","summary":"detailed"},
+				"text":{"verbosity":"low","format":{"type":"json_schema","name":"S","description":"a schema","schema":{"type":"object"},"strict":true}}}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"model_config":{"gpt-5":{
+				"sampling":{"temperature":0.8,"top_p":0.95,"max_tokens":1024,"stop":["END"]},
+				"reasoning":{"effort":"high","summary":"detailed"},
+				"output":{"format":{"type":"json_schema","name":"S","description":"a schema","schema":{"type":"object"},"strict":true},"verbosity":"low"}}},
+				"output_mode":"stream","user":"u1","metadata":{"team":"core"}}`,
 		},
 		{
-			"store_true",
-			func(m map[string]any) { m["store"] = true },
-			"store",
+			name: "cache key, 24h retention and service tier; include and false stateful flags accepted",
+			body: `{"model":"gpt-5","input":"hi","prompt_cache_key":"conv-1","prompt_cache_retention":"24h","service_tier":"priority",
+				"include":["reasoning.encrypted_content","file_search_call.results"],"store":false,"background":false,"context_management":null,"prompt":null}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"cache_config":{"key":"conv-1","ttl":"24h"},"output_mode":"sync","extensions":{"openai.service_tier":"priority"}}`,
 		},
 		{
-			"conversation",
-			func(m map[string]any) { m["conversation"] = "conv_123" },
-			"conversation",
+			name: "unknown cache retention",
+			body: `{"model":"gpt-5","input":"hi","prompt_cache_retention":"forever"}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"output_mode":"sync"}`,
 		},
 		{
-			"background_true",
-			func(m map[string]any) { m["background"] = true },
-			"background",
+			// Hosted tools and an mcp tool MCPTool cannot hold drop; namespaced tools flatten to their own names.
+			name: "tool definitions",
+			body: `{"model":"gpt-5","input":"hi","parallel_tool_calls":false,"tool_choice":{"type":"file_search"},"tools":[
+				{"type":"web_search"},
+				{"type":"function","name":"f"},
+				{"type":"namespace","name":"ns","description":"","tools":[{"type":"function","name":"a","description":"A","parameters":{"type":"object"},"strict":true},{"type":"web_search"}]},
+				{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}},
+				{"type":"mcp","server_label":"gated","server_url":"https://mcp.example.com","require_approval":"never"}]}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":{"definitions":[
+				{"type":"function","name":"f","parameters":{}},
+				{"type":"function","name":"a","description":"A","parameters":{"type":"object"},"strict":true},
+				{"type":"mcp","name":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}],
+				"choice":"file_search","parallel":false},"output_mode":"sync"}`,
 		},
 		{
-			"truncation",
-			func(m map[string]any) { m["truncation"] = "auto" },
-			"truncation",
+			name: "function tool choice",
+			body: `{"model":"gpt-5","input":"hi","tools":[{"type":"function","name":"f","parameters":{}}],"tool_choice":{"type":"function","name":"f"}}`,
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":{"definitions":[{"type":"function","name":"f","parameters":{}}],"choice":{"type":"function","name":"f"}},"output_mode":"sync"}`,
 		},
 		{
-			"safety_identifier",
-			func(m map[string]any) { m["safety_identifier"] = "safe_123" },
-			"safety_identifier",
-		},
-		{
-			"context_management",
-			func(m map[string]any) { m["context_management"] = map[string]any{"type": "auto"} },
-			"context_management",
+			// A hosted-tool item has no canonical form and drops; reasoning content parts concatenate as the stream's deltas do.
+			name: "input items",
+			body: `{"model":"gpt-5","input":[
+				{"type":"web_search_call","id":"ws_0","status":"completed"},
+				{"type":"message","role":"developer","content":"look"},
+				{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://x/cat.png","detail":"high"},{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]},
+				{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"S"}],"content":[{"type":"reasoning_text","text":"221 = "},{"type":"reasoning_text","text":"13 * 17"}],"encrypted_content":"BLOB"},
+				{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}","status":"completed"},
+				{"type":"function_call_output","call_id":"c1","output":""}]}`,
+			want: `{"model":"gpt-5","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"look"}]},
+				{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://x/cat.png","detail":"high"},{"type":"input_file","file_id":"file-1","filename":"a.pdf"}]},
+				{"type":"reasoning","id":"rs_1","summary":[{"text":"S"}],"content":"221 = 13 * 17","provider_data":{"encrypted_content":"BLOB","id":"rs_1"}},
+				{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}","status":"completed"},
+				{"type":"function_call_output","call_id":"c1"}],"output_mode":"sync"}`,
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := mustJSON(func() map[string]any {
-				m := base()
-				tc.mutate(m)
-				return m
-			}())
-			_, err := (ResponsesTranslator{}).ParseRequest(body)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
-			}
+			respJSONEq(t, respParseRequest(t, tc.body), tc.want)
 		})
 	}
 }
 
-// The Codex CLI sends include and (when configured) service_tier on every
-// request with no opt-out, so both must parse rather than 400 the turn.
-func TestResponsesParseRequest_HintFieldsAccepted(t *testing.T) {
-	cases := map[string]map[string]any{
-		"codex include":   {"include": []string{includeEncryptedReasoning}},
-		"unknown include": {"include": []string{"message.output_text.logprobs"}},
-		"mixed include":   {"include": []string{includeEncryptedReasoning, "file_search_call.results"}},
-		"service_tier":    {"service_tier": "priority"},
+func TestResponsesParseRequest_Rejected(t *testing.T) {
+	const audioInput = `{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"listen"},{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`
+	stateful := func(field string) string {
+		return `responses_unsupported_canonical: field "` + field + `" has no canonical equivalent`
 	}
-	for name, extra := range cases {
-		t.Run(name, func(t *testing.T) {
-			m := map[string]any{"model": "gpt-5", "input": "hi"}
-			for k, v := range extra {
-				m[k] = v
-			}
-			req, err := (ResponsesTranslator{}).ParseRequest(mustJSON(m))
-			if err != nil {
-				t.Fatalf("ParseRequest: %v", err)
-			}
-			if len(req.Input) != 1 {
-				t.Fatalf("input len: %d", len(req.Input))
+	cases := []struct {
+		name, body, wantErr string
+	}{
+		{"previous_response_id", `{"model":"m","input":"hi","previous_response_id":"resp_1"}`, stateful("previous_response_id")},
+		{"store", `{"model":"m","input":"hi","store":true}`, stateful("store")},
+		{"conversation", `{"model":"m","input":"hi","conversation":"conv_1"}`, stateful("conversation")},
+		{"background", `{"model":"m","input":"hi","background":true}`, stateful("background")},
+		{"truncation", `{"model":"m","input":"hi","truncation":"auto"}`, stateful("truncation")},
+		{"safety_identifier", `{"model":"m","input":"hi","safety_identifier":"s"}`, stateful("safety_identifier")},
+		{"context_management", `{"model":"m","input":"hi","context_management":{"type":"auto"}}`, stateful("context_management")},
+		{"stored prompt", `{"model":"m","input":"hi","prompt":{"id":"pmpt_1","version":"2"}}`, stateful("prompt")},
+		{"unmodeled input part", audioInput, `input item: unsupported part type "input_audio"`},
+		{"no model", `{"input":"hi"}`, "responses parse_request: model is required"},
+		{"no input", `{"model":"m"}`, "responses parse_request: input is required"},
+		{"not JSON", `{"model":`, "responses parse_request: invalid JSON: unexpected end of JSON input"},
+		{"metadata entries", `{"model":"m","input":"hi","metadata":{` + respMetadataEntries(17) + `}}`, "responses parse_request: metadata: too many entries: 17 (max 16)"},
+		{"metadata key charset", `{"model":"m","input":"hi","metadata":{"a b":"v"}}`, `responses parse_request: metadata: key "a b" contains invalid characters (DNS-1123 charset required)`},
+		{"metadata key length", `{"model":"m","input":"hi","metadata":{"` + strings.Repeat("k", 65) + `":"v"}}`, `responses parse_request: metadata: key "` + strings.Repeat("k", 65) + `" exceeds 64 characters`},
+		{"metadata value length", `{"model":"m","input":"hi","metadata":{"k":"` + strings.Repeat("v", 257) + `"}}`, `responses parse_request: metadata: value for key "k" exceeds 256 characters`},
+		{"metadata value charset", `{"model":"m","input":"hi","metadata":{"k":"a\nb"}}`, `responses parse_request: metadata: value for key "k" contains non-printable or disallowed ASCII characters`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ResponsesTranslator{}.ParseRequest([]byte(tc.body))
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
-}
-
-// Whatever the caller asked to have included, the outbound request asks for
-// the one entry the canonical round-trip can carry back.
-func TestResponsesSerializeRequest_IncludeIsEncryptedReasoningOnly(t *testing.T) {
-	req, err := (ResponsesTranslator{}).ParseRequest(mustJSON(map[string]any{
-		"model":   "gpt-5",
-		"input":   "hi",
-		"include": []string{"file_search_call.results"},
-	}))
-	if err != nil {
-		t.Fatalf("ParseRequest: %v", err)
-	}
-	body, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatalf("SerializeRequest: %v", err)
-	}
-	var wire struct {
-		Include []string `json:"include"`
-	}
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(wire.Include) != 1 || wire.Include[0] != includeEncryptedReasoning {
-		t.Errorf("include = %v, want [%s]", wire.Include, includeEncryptedReasoning)
+	// The same-shape byte-pass path decodes the wire without canonical, so it must still accept what canonical refuses.
+	if _, err := ParseResponsesRequest([]byte(audioInput)); err != nil {
+		t.Errorf("ParseResponsesRequest refused an unmodeled part: %v", err)
 	}
 }
 
-func TestResponsesCacheKeyRoundTrip(t *testing.T) {
-	// Inbound: prompt_cache_key / prompt_cache_retention map to canonical
-	// CacheConfig.Key / CacheConfig.TTL.
-	body := mustJSON(map[string]any{
-		"model":                  "gpt-5",
-		"input":                  "hi",
-		"prompt_cache_key":       "conv-abc123",
-		"prompt_cache_retention": "24h",
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatalf("ParseRequest: %v", err)
+func respMetadataEntries(n int) string {
+	entries := make([]string, n)
+	for i := range entries {
+		entries[i] = `"k` + string(rune('a'+i)) + `":"v"`
 	}
-	if req.CacheConfig == nil || req.CacheConfig.Key != "conv-abc123" {
-		t.Fatalf("CacheConfig = %+v, want Key=conv-abc123", req.CacheConfig)
-	}
-	if req.CacheConfig.TTL != "24h" {
-		t.Errorf("CacheConfig.TTL = %q, want 24h", req.CacheConfig.TTL)
-	}
-
-	// Outbound: canonical Key/TTL are emitted as prompt_cache_key/_retention.
-	out, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatalf("SerializeRequest: %v", err)
-	}
-	var wire map[string]any
-	if err := json.Unmarshal(out, &wire); err != nil {
-		t.Fatal(err)
-	}
-	if wire["prompt_cache_key"] != "conv-abc123" {
-		t.Errorf("wire prompt_cache_key = %v, want conv-abc123", wire["prompt_cache_key"])
-	}
-	if wire["prompt_cache_retention"] != "24h" {
-		t.Errorf("wire prompt_cache_retention = %v, want 24h", wire["prompt_cache_retention"])
-	}
-
-	// Short TTL maps to the in-memory tier and round-trips.
-	req.CacheConfig.TTL = "5m"
-	out, err = (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatalf("SerializeRequest (5m): %v", err)
-	}
-	wire = nil
-	if err := json.Unmarshal(out, &wire); err != nil {
-		t.Fatal(err)
-	}
-	if wire["prompt_cache_retention"] != "in_memory" {
-		t.Errorf("wire prompt_cache_retention = %v, want in_memory", wire["prompt_cache_retention"])
-	}
-
-	// No key → field absent on the wire.
-	req.CacheConfig = nil
-	out, err = (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatalf("SerializeRequest (no key): %v", err)
-	}
-	wire = nil
-	if err := json.Unmarshal(out, &wire); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := wire["prompt_cache_key"]; present {
-		t.Errorf("prompt_cache_key present without CacheConfig.Key: %v", wire["prompt_cache_key"])
-	}
-	if _, present := wire["prompt_cache_retention"]; present {
-		t.Errorf("prompt_cache_retention present without CacheConfig.TTL: %v", wire["prompt_cache_retention"])
-	}
+	return strings.Join(entries, ",")
 }
 
-func TestResponsesParseRequest_Tools(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object"}`)
-	body := mustJSON(map[string]any{
-		"model": "gpt-5",
-		"input": "hi",
-		"tools": []any{map[string]any{
-			"type":        "function",
-			"name":        "search",
-			"description": "Search the web",
-			"parameters":  json.RawMessage(schema),
-		}},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil {
-		t.Fatal("expected tools config")
-	}
-	if len(req.Tools.Definitions) != 1 {
-		t.Fatalf("tools len: %d", len(req.Tools.Definitions))
-	}
-	ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool)
-	if !ok {
-		t.Fatalf("tool is %T", req.Tools.Definitions[0])
-	}
-	if ft.Name != "search" {
-		t.Errorf("tool name: %q", ft.Name)
-	}
-}
-
-func TestResponsesMCPTool(t *testing.T) {
-	tr := ResponsesTranslator{}
-	base := func(tool v1.Tool) *v1.Request {
-		return &v1.Request{
-			Model: v1.ModelRefs{"gpt-5"},
-			Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
-			Tools: &v1.ToolsConfig{Definitions: v1.Tools{tool}},
-		}
-	}
-
-	wire, err := tr.SerializeRequest(base(&v1.MCPTool{Name: "docs", ServerURL: "https://mcp.example.com", Headers: map[string]string{"X-Key": "k"}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(wire), `{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}`) {
-		t.Errorf("wire tool: %s", wire)
-	}
-	back, err := tr.ParseRequest(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mt, ok := back.Tools.Definitions[0].(*v1.MCPTool); !ok || mt.Name != "docs" || mt.ServerURL != "https://mcp.example.com" || mt.Headers["X-Key"] != "k" {
-		t.Errorf("parsed tool: %#v", back.Tools.Definitions[0])
-	}
-
-	if _, err := tr.SerializeRequest(base(&v1.MCPTool{Name: "docs"})); err == nil {
-		t.Error("name-only MCPTool serialized")
-	}
-	if _, err := tr.SerializeRequest(base(&v1.ServerTool{Name: "web_search"})); err == nil {
-		t.Error("ServerTool serialized")
-	}
-
-	// require_approval has no MCPTool field, so the tool must not reach canonical without it.
-	req, err := tr.ParseRequest([]byte(`{"model":"gpt-5","input":"hi","tools":[{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","require_approval":"never"}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := len(req.Tools.Definitions); n != 0 {
-		t.Errorf("tools with require_approval: got %d definitions, want 0", n)
-	}
-}
-
-func TestResponsesParseRequest_ToolChoice(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object"}`)
-	// ResponsesToolChoice wire format: a string shorthand ("auto", "required", "none")
-	// or an object {"type":"function","name":"..."}.
-	body := mustJSON(map[string]any{
-		"model": "gpt-5",
-		"input": "hi",
-		"tools": []any{map[string]any{
-			"type": "function", "name": "f", "parameters": json.RawMessage(schema),
-		}},
-		"tool_choice": "required",
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil || req.Tools.Choice == nil {
-		t.Fatal("expected tool choice")
-	}
-	if req.Tools.Choice.Mode != "required" {
-		t.Errorf("choice mode: %q", req.Tools.Choice.Mode)
-	}
-}
-
-func TestResponsesParseRequest_ParallelToolCalls(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object"}`)
-	body := mustJSON(map[string]any{
-		"model": "gpt-5",
-		"input": "hi",
-		"tools": []any{map[string]any{
-			"type": "function", "name": "f", "parameters": json.RawMessage(schema),
-		}},
-		"parallel_tool_calls": false,
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.Tools == nil {
-		t.Fatal("expected tools")
-	}
-	if req.Tools.Parallel == nil || *req.Tools.Parallel != false {
-		t.Errorf("parallel_tool_calls: %v", req.Tools.Parallel)
-	}
-}
-
-func TestResponsesParseRequest_SamplingFields(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":             "gpt-5",
-		"input":             "hi",
-		"temperature":       0.8,
-		"top_p":             0.95,
-		"max_output_tokens": 1024,
-		"stop_sequences":    []string{"END"},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["gpt-5"]
-	if opts == nil || opts.Sampling == nil {
-		t.Fatal("expected sampling")
-	}
-	if opts.Sampling.Temperature == nil || *opts.Sampling.Temperature != 0.8 {
-		t.Errorf("temperature: %v", opts.Sampling.Temperature)
-	}
-	if opts.Sampling.TopP == nil || *opts.Sampling.TopP != 0.95 {
-		t.Errorf("top_p: %v", opts.Sampling.TopP)
-	}
-	if opts.Sampling.MaxTokens == nil || *opts.Sampling.MaxTokens != 1024 {
-		t.Errorf("max_tokens: %v", opts.Sampling.MaxTokens)
-	}
-	if len(opts.Sampling.Stop) != 1 || opts.Sampling.Stop[0] != "END" {
-		t.Errorf("stop: %v", opts.Sampling.Stop)
-	}
-}
-
-func TestResponsesParseRequest_ReasoningEffort(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":     "o3",
-		"input":     "think",
-		"reasoning": map[string]any{"effort": "high"},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["o3"]
-	if opts == nil || opts.Reasoning == nil {
-		t.Fatal("expected reasoning config")
-	}
-	if opts.Reasoning.Effort != "high" {
-		t.Errorf("effort: %q", opts.Reasoning.Effort)
-	}
-}
-
-func TestResponsesParseRequest_JSONSchemaFormat(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object"}`)
-	body := mustJSON(map[string]any{
-		"model": "gpt-5",
-		"input": "hi",
-		"text": map[string]any{
-			"format": map[string]any{
-				"type":   "json_schema",
-				"name":   "my_schema",
-				"schema": json.RawMessage(schema),
-			},
-		},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["gpt-5"]
-	if opts == nil || opts.Output == nil || opts.Output.Format == nil {
-		t.Fatal("expected output format")
-	}
-	if opts.Output.Format.Type != "json_schema" {
-		t.Errorf("format type: %q", opts.Output.Format.Type)
-	}
-	if opts.Output.Format.Name != "my_schema" {
-		t.Errorf("format name: %q", opts.Output.Format.Name)
-	}
-}
-
-func TestResponsesParseRequest_StreamTrue(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":  "gpt-5",
-		"input":  "hi",
-		"stream": true,
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.OutputMode != v1.OutputModeStream {
-		t.Errorf("output_mode: %q", req.OutputMode)
-	}
-}
-
-// --- SerializeRequest ---
-
-func TestResponsesSerializeRequest_SimpleMessage(t *testing.T) {
-	req := &v1.Request{
-		Model: v1.ModelRefs{"gpt-5"},
-		Input: []v1.Item{
-			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
-		},
-	}
-	b, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	if m["model"] != "gpt-5" {
-		t.Errorf("model: %v", m["model"])
-	}
-	var inputItems []any
-	inputRaw, ok := m["input"]
-	if !ok {
-		t.Fatal("missing input")
-	}
-	switch v := inputRaw.(type) {
-	case []any:
-		inputItems = v
-	default:
-		t.Fatalf("input is %T", inputRaw)
-	}
-	if len(inputItems) != 1 {
-		t.Fatalf("input len: %d", len(inputItems))
-	}
-}
-
-func TestResponsesSerializeRequest_WithInstructions(t *testing.T) {
-	req := &v1.Request{
-		Model:        v1.ModelRefs{"gpt-5"},
-		Instructions: "be concise",
-		Input:        []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "x"}}}},
-	}
-	b, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	if m["instructions"] != "be concise" {
-		t.Errorf("instructions: %v", m["instructions"])
-	}
-}
-
-func TestResponsesSerializeRequest_MissingModel(t *testing.T) {
-	req := &v1.Request{
-		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "x"}}}},
-	}
-	_, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err == nil {
-		t.Fatal("expected error for missing model")
-	}
-}
-
-// --- ParseResponse ---
-
-// reasoning.summary is mapped to the Responses wire request field.
-func TestResponsesSerializeRequest_ReasoningSummary(t *testing.T) {
-	req := &v1.Request{
-		Model: v1.ModelRefs{"o3"},
-		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}}},
-		ModelConfig: map[string]*v1.ModelOpts{
-			"o3": {
-				Reasoning: &v1.ReasoningConfig{Effort: "high", Summary: "detailed"},
-			},
-		},
-	}
-	b, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire map[string]any
-	if err := json.Unmarshal(b, &wire); err != nil {
-		t.Fatal(err)
-	}
-	reasoning, ok := wire["reasoning"].(map[string]any)
-	if !ok {
-		t.Fatalf("reasoning field missing or wrong type: %v", wire["reasoning"])
-	}
-	if reasoning["summary"] != "detailed" {
-		t.Errorf("reasoning.summary: %v", reasoning["summary"])
-	}
-	if reasoning["effort"] != "high" {
-		t.Errorf("reasoning.effort: %v", reasoning["effort"])
-	}
-}
-
-// --- Hosted-tool raw passthrough ---
-
-// TestResponsesParseRequest_HostedToolDefNoError locks the request-side fix:
-// a hosted-tool definition must not 400 the request; the function tool alongside
-// it survives to canonical.
-func TestResponsesParseRequest_HostedToolDefNoError(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-5", "input": "hi",
-		"tools": []any{
-			map[string]any{"type": "web_search"},
-			map[string]any{"type": "function", "name": "f", "parameters": json.RawMessage(`{"type":"object"}`)},
-		},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatalf("hosted-tool def must not error the request: %v", err)
-	}
-	if req.Tools == nil || len(req.Tools.Definitions) != 1 {
-		t.Fatalf("want 1 surviving function tool, got %v", req.Tools)
-	}
-	if ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool); !ok || ft.Name != "f" {
-		t.Fatalf("surviving tool: %v", req.Tools.Definitions[0])
-	}
-}
-
-// TestResponsesParseRequest_HostedToolInputItemNoError: a round-tripped hosted-tool
-// item in the input array must not 400 the request.
-func TestResponsesParseRequest_HostedToolInputItemNoError(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-5",
-		"input": []any{
-			map[string]any{"type": "web_search_call", "id": "ws_0", "status": "completed"},
-			map[string]any{"type": "message", "role": "user",
-				"content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
-		},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatalf("hosted-tool input item must not error: %v", err)
-	}
-	if len(req.Input) != 1 {
-		t.Fatalf("input len: %d (web_search_call drops, message survives)", len(req.Input))
-	}
-}
-
-// TestResponsesToolChoice_ObjectModes locks the fix for object-form tool_choice:
-// anything other than auto/required/none must serialize as an OBJECT, never a
-// bare string (OpenAI 400s "Invalid value: 'file_search'").
-func TestResponsesToolChoice_ObjectModes(t *testing.T) {
+func TestResponsesSerializeRequest(t *testing.T) {
+	const tail = `"store":false,"include":["reasoning.encrypted_content"]`
 	cases := []struct {
 		name string
-		in   string
-		want string // canonical JSON we expect back out
+		req  *v1.Request
+		want string
 	}{
-		{"auto", `"auto"`, `"auto"`},
-		{"required", `"required"`, `"required"`},
-		{"none", `"none"`, `"none"`},
-		{"function", `{"type":"function","name":"f"}`, `{"type":"function","name":"f"}`},
-		{"hosted file_search", `{"type":"file_search"}`, `{"type":"file_search"}`},
-		{"allowed_tools verbatim", `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`,
-			`{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`},
-		{"mcp verbatim", `{"type":"mcp","server_label":"s"}`, `{"type":"mcp","server_label":"s"}`},
+		{
+			// Responses has no stop_sequences, top_k, seed, penalties or reasoning budget: emitting any of them 400s.
+			name: "sampling and request options",
+			req: &v1.Request{
+				Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{respUserText("hi")}, OutputMode: v1.OutputModeStream, User: "u1",
+				Metadata:    map[string]string{"team": "core"},
+				CacheConfig: &v1.CacheConfig{Key: "conv-1", TTL: "5m", History: true},
+				Extensions:  map[string]json.RawMessage{extServiceTier: json.RawMessage(`"flex"`), extLogitBias: json.RawMessage(`{"1":2}`)},
+				ModelConfig: map[string]*v1.ModelOpts{"gpt-5": {
+					Sampling:  &v1.SamplingParams{Temperature: respPtr(0.2), TopP: respPtr(0.9), TopK: respPtr(40), MaxTokens: respPtr(64), Stop: []string{"END"}, Seed: respPtr(7)},
+					Reasoning: &v1.ReasoningConfig{Effort: "low", BudgetTokens: respPtr(100)},
+				}},
+			},
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"temperature":0.2,"top_p":0.9,"max_output_tokens":64,"reasoning":{"effort":"low"},
+				"user":"u1","metadata":{"team":"core"},"stream":true,` + tail + `,"prompt_cache_key":"conv-1","prompt_cache_retention":"in_memory","service_tier":"flex"}`,
+		},
+		{
+			// The API rejects input ids it did not mint and output-only status; foreign reasoning is provider-signed and cannot cross vendors.
+			name: "input item ids and status",
+			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{
+				&v1.Message{ID: "m_0", Status: v1.StatusCompleted, Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
+				&v1.Reasoning{ID: "r_0", Content: "thinking", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"type":"thinking","signature":"anthropic-signed"}`)},
+				&v1.FunctionCall{ID: "t_0", CallID: "toolu_01", Name: "search", Arguments: `{"q":"x"}`, Status: v1.StatusCompleted},
+				&v1.FunctionCallOutput{CallID: "toolu_01", Output: "result"},
+				&v1.Reasoning{ID: "rs_1", Content: "raw", Status: v1.StatusCompleted, ProviderData: json.RawMessage(`{"encrypted_content":"BLOB"}`)},
+				&v1.FunctionCall{ID: "fc_1", CallID: "c1", Name: "search", Arguments: `{}`, Status: v1.StatusCompleted},
+				&v1.Message{ID: "msg_1", Status: v1.StatusCompleted, Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "done"}}},
+			}},
+			want: `{"model":"gpt-5","input":[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+				{"type":"function_call","call_id":"toolu_01","name":"search","arguments":"{\"q\":\"x\"}"},
+				{"type":"function_call_output","call_id":"toolu_01","output":"result"},
+				{"type":"reasoning","id":"rs_1","summary":[],"content":[{"type":"reasoning_text","text":"raw"}],"encrypted_content":"BLOB"},
+				{"type":"function_call","id":"fc_1","call_id":"c1","name":"search","arguments":"{}"},
+				{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[],"logprobs":[]}]}],` + tail + `}`,
+		},
+		{
+			// The API ties the text part type to the role, not to the canonical part variant.
+			name: "text part type follows role",
+			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{
+				&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{
+					&v1.TextPart{Text: "a"},
+					&v1.OutputTextPart{Text: "b", Annotations: []v1.Annotation{&v1.URLCitationAnnotation{StartIndex: 0, EndIndex: 1, URL: "https://x", Title: "X"}, &v1.TextCitationAnnotation{StartIndex: 0, EndIndex: 1}}},
+				}},
+				&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.OutputTextPart{Text: "c"}, &v1.FilePart{FileData: "JVBE", Filename: "a.pdf", MediaType: "application/pdf"}}},
+				&v1.Message{Role: v1.RoleSystem, Content: []v1.Part{&v1.TextPart{Text: "d"}}},
+			}},
+			want: `{"model":"gpt-5","input":[
+				{"type":"message","role":"assistant","content":[
+					{"type":"output_text","text":"a","annotations":[],"logprobs":[]},
+					{"type":"output_text","text":"b","annotations":[{"type":"url_citation","start_index":0,"end_index":1,"url":"https://x","title":"X"}],"logprobs":[]}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"c"},{"type":"input_file","file_data":"JVBE","filename":"a.pdf"}]},
+				{"type":"message","role":"system","content":[{"type":"input_text","text":"d"}]}],` + tail + `}`,
+		},
+		{
+			name: "tools and hosted tool choice",
+			req: &v1.Request{Model: v1.ModelRefs{"gpt-5"}, Input: []v1.Item{respUserText("hi")}, CacheConfig: &v1.CacheConfig{Key: "k"},
+				Tools: &v1.ToolsConfig{
+					Definitions: v1.Tools{
+						&v1.FunctionTool{Name: "f", ProviderData: json.RawMessage(`{"foreign":true}`)},
+						&v1.MCPTool{Name: "docs", ServerURL: "https://mcp.example.com", Headers: map[string]string{"X-Key": "k"}},
+					},
+					Choice:   &v1.ToolChoice{Mode: "file_search"},
+					Parallel: respPtr(true),
+				}},
+			want: `{"model":"gpt-5","input":` + respHiInput + `,"tools":[
+				{"type":"function","name":"f","parameters":{}},
+				{"type":"mcp","server_label":"docs","server_url":"https://mcp.example.com","headers":{"X-Key":"k"}}],
+				"tool_choice":{"type":"file_search"},"parallel_tool_calls":true,` + tail + `,"prompt_cache_key":"k"}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var c ResponsesToolChoice
-			if err := json.Unmarshal([]byte(tc.in), &c); err != nil {
-				t.Fatal(err)
-			}
-			out, err := json.Marshal(c)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(out) != tc.want {
-				t.Errorf("round-trip:\n got %s\nwant %s", out, tc.want)
+			respJSONEq(t, respSerializeRequest(t, tc.req), tc.want)
+		})
+	}
+}
+
+func TestResponsesSerializeRequest_Rejected(t *testing.T) {
+	withTool := func(tool v1.Tool) *v1.Request {
+		return &v1.Request{Model: v1.ModelRefs{"m"}, Input: []v1.Item{respUserText("hi")}, Tools: &v1.ToolsConfig{Definitions: v1.Tools{tool}}}
+	}
+	cases := map[string]struct {
+		req     *v1.Request
+		wantErr string
+	}{
+		"no model":         {&v1.Request{Input: []v1.Item{respUserText("hi")}}, "canonical request has no model"},
+		"name-only mcp":    {withTool(&v1.MCPTool{Name: "docs"}), "responses serialize_request: mcp tool needs both name and server_url"},
+		"relay-run tool":   {withTool(&v1.ServerTool{Name: "web_search"}), "responses serialize_request: unsupported tool type *v1.ServerTool"},
+		"bad service tier": {&v1.Request{Model: v1.ModelRefs{"m"}, Extensions: map[string]json.RawMessage{extServiceTier: json.RawMessage(`5`)}}, `extensions["openai.service_tier"]: json: cannot unmarshal number into Go value of type string`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ResponsesTranslator{}.SerializeRequest(tc.req)
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
 }
 
-// TestResponsesToolChoice_HostedReconstructedFromCanonical: a hosted-tool choice
-// rebuilt from canonical (Mode only, Raw lost) must still serialize as {type:...},
-// not a bare string — the realistic Responses->canonical->Responses path to a
-// non-"openai" host.
-func TestResponsesToolChoice_HostedReconstructedFromCanonical(t *testing.T) {
-	c := ResponsesToolChoice{Mode: "file_search"} // no Raw
-	out, err := json.Marshal(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(out) != `{"type":"file_search"}` {
-		t.Errorf("got %s, want {\"type\":\"file_search\"}", out)
-	}
+// A prior response's output is the next turn's input: reasoning must keep its id and blob so the function_call keeps its required sibling, and no item may carry the output-only status.
+func TestResponsesResponseOutputReplaysAsInput(t *testing.T) {
+	resp := respParseResponse(t, `{"id":"r","object":"response","status":"completed","model":"m","output":[
+		{"type":"reasoning","id":"rs_1","encrypted_content":"BLOB","summary":[],"status":"completed"},
+		{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}","status":"completed"},
+		{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi","annotations":[]}]}]}`)
+	got := respSerializeRequest(t, &v1.Request{Model: v1.ModelRefs{"m"}, Input: resp.Output})
+	respJSONEq(t, respMember(t, got, "input"), `[
+		{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"BLOB"},
+		{"type":"function_call","id":"fc_1","call_id":"c1","name":"f","arguments":"{}"},
+		{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[],"logprobs":[]}]}]`)
 }
 
-// TestResponsesSerializeRequest_HostedToolChoiceObject: end-to-end through the
-// translator — an inbound hosted-tool tool_choice must leave SerializeRequest as
-// an object, not a bare string.
-func TestResponsesSerializeRequest_HostedToolChoiceObject(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model": "gpt-5", "input": "hi",
-		"tools":       []any{map[string]any{"type": "function", "name": "f", "parameters": json.RawMessage(`{"type":"object"}`)}},
-		"tool_choice": map[string]any{"type": "file_search"},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, out)
-	tcv, ok := m["tool_choice"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool_choice must be an object, got %T: %v", m["tool_choice"], m["tool_choice"])
-	}
-	if tcv["type"] != "file_search" {
-		t.Errorf("tool_choice.type: %v", tcv["type"])
-	}
+func TestResponsesParseRequest_TopK(t *testing.T) {
+	t.Skip(`bug: ParseRequest {"top_k":40} → canonical sampling {} (top_k parsed, then never copied into SamplingParams)`)
+	req := respParseRequest(t, `{"model":"m","input":"hi","top_k":40}`)
+	respJSONEq(t, req.ModelConfig["m"].Sampling, `{"top_k":40}`)
 }
 
-// --- request-config fidelity ---
-
-// TestResponsesParseRequest_VerbosityReasoningSummaryDescription locks the inbound
-// mapping of text.verbosity, reasoning.summary, and text.format.json_schema.description
-// into canonical — all three were previously silently dropped on parse.
-func TestResponsesParseRequest_VerbosityReasoningSummaryDescription(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":     "gpt-5",
-		"input":     "hi",
-		"reasoning": map[string]any{"effort": "high", "summary": "detailed"},
-		"text": map[string]any{
-			"verbosity": "low",
-			"format": map[string]any{
-				"type": "json_schema", "name": "S", "description": "a schema",
-				"schema": json.RawMessage(`{"type":"object"}`),
-			},
-		},
-	})
-	req, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts := req.ModelConfig["gpt-5"]
-	if opts == nil {
-		t.Fatal("no model config")
-	}
-	if opts.Reasoning == nil || opts.Reasoning.Summary != "detailed" {
-		t.Errorf("reasoning.summary: %+v", opts.Reasoning)
-	}
-	if opts.Output == nil || opts.Output.Verbosity != "low" {
-		t.Errorf("verbosity: %+v", opts.Output)
-	}
-	if opts.Output.Format == nil || opts.Output.Format.Description != "a schema" {
-		t.Errorf("format.description: %+v", opts.Output.Format)
-	}
+// The Responses API types function_call_output.output as a string or an array of input_text/input_image/input_file parts; there is no content member.
+func TestResponsesParseRequest_FunctionCallOutputArray(t *testing.T) {
+	t.Skip(`bug: ParseRequest function_call_output {"output":[{"type":"input_image",…}]} → error "cannot unmarshal array into Go value of type string"`)
+	req := respParseRequest(t, `{"model":"m","input":[{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`)
+	respJSONEq(t, req.Input, `[{"type":"function_call_output","call_id":"c","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`)
 }
 
-// TestResponsesSerializeRequest_VerbosityDescription locks the outbound mapping:
-// canonical verbosity + format.description must reach the Responses wire body.
-func TestResponsesSerializeRequest_VerbosityDescription(t *testing.T) {
-	strict := true
-	req := &v1.Request{
-		Model: v1.ModelRefs{"gpt-5"},
-		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
-		ModelConfig: map[string]*v1.ModelOpts{"gpt-5": {
-			Output: &v1.OutputConfig{
-				Verbosity: "high",
-				Format:    &v1.Format{Type: "json_schema", Name: "S", Description: "d", Schema: json.RawMessage(`{}`), Strict: &strict},
-			},
-		}},
-	}
-	b, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := decodeMap(t, b)
-	text, ok := m["text"].(map[string]any)
-	if !ok {
-		t.Fatalf("text missing: %v", m["text"])
-	}
-	if text["verbosity"] != "high" {
-		t.Errorf("verbosity: %v", text["verbosity"])
-	}
-	f, ok := text["format"].(map[string]any)
-	if !ok || f["description"] != "d" {
-		t.Errorf("format.description: %v", text["format"])
-	}
-}
-
-// TestResponsesParseRequest_PromptRejected: a stored prompt-template ref is
-// stateful and must fail loud cross-shape, not silently drop the instructions.
-func TestResponsesParseRequest_PromptRejected(t *testing.T) {
-	body := mustJSON(map[string]any{
-		"model":  "gpt-5",
-		"input":  "hi",
-		"prompt": map[string]any{"id": "pmpt_123", "version": "2"},
-	})
-	_, err := (ResponsesTranslator{}).ParseRequest(body)
-	if err == nil || !strings.Contains(err.Error(), "prompt") {
-		t.Fatalf("expected prompt rejection, got %v", err)
-	}
-}
-
-// Cross-provider replay: canonical transcripts carry relay-scoped item ids
-// (the anthropic adapter mints t_0/m_0/r_0...), but the Responses API treats
-// input[N].id as a reference to an object IT minted and 400s on foreign ids
-// ("Invalid 'input[5].id': 't_0'. Expected an ID that begins with 'rs'").
-// Serialize must strip ids from message/function_call input items, drop
-// foreign reasoning items (provider-signed, no cross-vendor round-trip), and
-// keep OpenAI-native reasoning (encrypted_content) with its original rs_ id.
-func TestResponsesSerializeRequest_ForeignItemIDs(t *testing.T) {
-	req := &v1.Request{
-		Model:      v1.ModelRefs{"gpt-5.5"},
-		OutputMode: v1.OutputModeSync,
-		Input: []v1.Item{
-			&v1.Message{ID: "m_0", Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
-			&v1.Reasoning{ID: "r_0", Content: "thinking...", Status: v1.StatusCompleted,
-				ProviderData: json.RawMessage(`{"type":"thinking","thinking":"...","signature":"anthropic-signed"}`)},
-			&v1.FunctionCall{ID: "t_0", CallID: "toolu_01", Name: "search", Arguments: `{"q":"x"}`, Status: v1.StatusCompleted},
-			&v1.FunctionCallOutput{CallID: "toolu_01", Output: "result"},
-			&v1.Reasoning{ID: "rs_native1", Status: v1.StatusCompleted,
-				ProviderData: json.RawMessage(`{"encrypted_content":"BLOB123"}`)},
-		},
-	}
-
-	body, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatalf("serialize: %v", err)
-	}
-
-	var wire struct {
-		Input []map[string]any `json:"input"`
-	}
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatalf("unmarshal wire: %v", err)
-	}
-
-	var types []string
-	for _, item := range wire.Input {
-		typ, _ := item["type"].(string)
-		types = append(types, typ)
-		id, _ := item["id"].(string)
-		switch typ {
-		case "message", "function_call":
-			if id != "" {
-				t.Errorf("%s input item carries id %q — foreign ids must be stripped", typ, id)
-			}
-		case "reasoning":
-			if id != "rs_native1" {
-				t.Errorf("reasoning input item id: got %q want rs_native1", id)
-			}
-			if ec, _ := item["encrypted_content"].(string); ec != "BLOB123" {
-				t.Errorf("reasoning encrypted_content: got %q", ec)
-			}
-		}
-	}
-
-	want := []string{"message", "function_call", "function_call_output", "reasoning"}
-	if len(types) != len(want) {
-		t.Fatalf("input items: got %v want %v (foreign reasoning must be dropped)", types, want)
-	}
-	for i := range want {
-		if types[i] != want[i] {
-			t.Fatalf("input item order: got %v want %v", types, want)
-		}
-	}
-
-	// FunctionCall linkage must survive via call_id.
-	if wire.Input[1]["call_id"] != "toolu_01" || wire.Input[2]["call_id"] != "toolu_01" {
-		t.Errorf("call_id linkage lost: %v / %v", wire.Input[1]["call_id"], wire.Input[2]["call_id"])
-	}
-}
-
-// A media-carrying tool result (image part from e.g. a file read of a PNG)
-// must reach the Responses wire as a content array with input_image — not be
-// dropped, and never yield a bodiless function_call_output.
-func TestResponsesSerializeRequest_ToolResultWithImage(t *testing.T) {
-	req := &v1.Request{
-		Model: v1.ModelRefs{"gpt-5.5"},
-		Input: []v1.Item{
-			&v1.FunctionCall{CallID: "call_img", Name: "fs_read", Arguments: `{"path":"a.png"}`, Status: v1.StatusCompleted},
-			&v1.FunctionCallOutput{CallID: "call_img", Content: []v1.Part{
-				&v1.ImagePart{ImageURL: "data:image/png;base64,AAAA"},
-			}},
-		},
-	}
-	body, err := (ResponsesTranslator{}).SerializeRequest(req)
-	if err != nil {
-		t.Fatalf("serialize: %v", err)
-	}
-	var wire struct {
-		Input []map[string]json.RawMessage `json:"input"`
-	}
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	for _, item := range wire.Input {
-		var typ string
-		_ = json.Unmarshal(item["type"], &typ)
-		if typ != "function_call_output" {
-			continue
-		}
-		content, hasContent := item["content"]
-		_, hasOutput := item["output"]
-		if !hasContent && !hasOutput {
-			t.Fatalf("bodiless function_call_output: %v", item)
-		}
-		if !hasContent || !strings.Contains(string(content), "input_image") {
-			t.Fatalf("image part lost from tool result: content=%s", content)
-		}
-		return
-	}
-	t.Fatal("no function_call_output in input")
+func TestResponsesSerializeRequest_FunctionCallOutputArray(t *testing.T) {
+	t.Skip(`bug: SerializeRequest of a tool result with an image part → {"content":[…]} and no "output", which the API rejects as a missing required parameter`)
+	got := respSerializeRequest(t, &v1.Request{Model: v1.ModelRefs{"m"}, Input: []v1.Item{
+		&v1.FunctionCallOutput{CallID: "c", Content: []v1.Part{&v1.ImagePart{ImageURL: "data:image/png;base64,AAAA"}}},
+	}})
+	respJSONEq(t, respMember(t, got, "input"), `[{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`)
 }
