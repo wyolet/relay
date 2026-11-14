@@ -3,7 +3,7 @@ package clickhouse
 import (
 	"bytes"
 	"errors"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,9 +56,20 @@ func TestEraseWhere(t *testing.T) {
 	if _, _, err := eraseWhere(payload.EraseFilter{}); !errors.Is(err, errEmptyEraseFilter) {
 		t.Fatalf("empty filter: err = %v, want errEmptyEraseFilter", err)
 	}
-	where, args, err := eraseWhere(payload.EraseFilter{ProjectID: "p-1", PrincipalID: "u-1"})
-	if err != nil || where != "project_id = ? AND principal_id = ?" || len(args) != 2 || args[0] != "p-1" || args[1] != "u-1" {
-		t.Fatalf("eraseWhere = %q %v %v", where, args, err)
+	// Each set field narrows the erase; an unset one adds no condition.
+	for _, tc := range []struct {
+		filter payload.EraseFilter
+		where  string
+		args   []any
+	}{
+		{payload.EraseFilter{ProjectID: "p-1", PrincipalID: "u-1"}, "project_id = ? AND principal_id = ?", []any{"p-1", "u-1"}},
+		{payload.EraseFilter{ProjectID: "p-1"}, "project_id = ?", []any{"p-1"}},
+		{payload.EraseFilter{PrincipalID: "u-1"}, "principal_id = ?", []any{"u-1"}},
+	} {
+		where, args, err := eraseWhere(tc.filter)
+		if err != nil || where != tc.where || !slices.Equal(args, tc.args) {
+			t.Errorf("eraseWhere(%+v) = %q, %v, %v; want %q, %v", tc.filter, where, args, err, tc.where, tc.args)
+		}
 	}
 }
 
@@ -68,10 +79,9 @@ func TestPiecesLeftErrorNamesTheRetry(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Fatalf("err = %v, want it to wrap the cause", err)
 	}
-	for _, want := range []string{`principalId "u-1"`, `"p-1", "p-2"`} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("err = %q, want it to contain %s", err, want)
-		}
+	const want = `boom; the request rows are erased but their pieces are not: retry with principalId "u-1" and projectId set to each of "p-1", "p-2"`
+	if err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
 	}
 }
 

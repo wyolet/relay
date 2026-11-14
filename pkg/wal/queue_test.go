@@ -178,6 +178,38 @@ func TestSegmentDropCountsLostRecords(t *testing.T) {
 	}
 }
 
+// Segments that fill while a flush is still running are picked up by the pass after it: none waits for the tick, none is flushed twice.
+func TestFlushOnRotateDuringARunningFlush(t *testing.T) {
+	entered, release := make(chan struct{}, 8), make(chan struct{})
+	var sink collector
+	q := openTestQueue(t, Config{MaxLines: 2, FlushOnRotate: true}, func(recs []testRecord) error {
+		entered <- struct{}{}
+		<-release
+		sink.add(recs)
+		return nil
+	})
+	defer q.StopBackground()
+	recs := testRecords(8)
+	if err := q.WriteBatch(recs[:2]); err != nil {
+		t.Fatal(err)
+	}
+	<-entered // the first segment's flush is now blocked
+	if err := q.WriteBatch(recs[2:]); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(sink.sorted()) < len(recs) {
+		if time.Now().After(deadline) {
+			t.Fatalf("sink received %q before the tick, want all of %q", sink.sorted(), recordIDs(recs))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := sink.sorted(); !slices.Equal(got, recordIDs(recs)) {
+		t.Fatalf("sink received %q, want each record once: %q", got, recordIDs(recs))
+	}
+}
+
 // The tick rotates a partly filled active segment and flushes it.
 func TestTickFlushesPartialSegment(t *testing.T) {
 	flushed := make(chan []testRecord, 4)
