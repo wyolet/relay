@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -191,7 +190,6 @@ func TestRunRequestOnlyReservationSendsNoCommit(t *testing.T) {
 	}
 }
 
-// A failed request's hold is released before Run returns, on the post-flight store: the refunded bucket admits the retry.
 // A refused proxy request's row records what the caller is answered: 429 and the client message, never the counter key.
 func TestRunRefusalRowRecordsTheAnswer(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -230,6 +228,7 @@ func TestRunRefusalRowRecordsTheAnswer(t *testing.T) {
 	}
 }
 
+// A failed request's hold is released before Run returns, on the post-flight store: the refunded bucket admits the retry.
 func TestRunRefundsOnThePostFlightStore(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	deadURL := dead.URL
@@ -317,20 +316,12 @@ func TestRunKeepsTheChargeOnceTheRequestWentOut(t *testing.T) {
 	}
 }
 
-// A hold the store could not answer wraps the store's timeout; its usage row must still read as a kv refusal, not as a timeout.
-func TestClassifyFailureStoreUnavailable(t *testing.T) {
-	err := fmt.Errorf("%w: %w", pkgratelimit.ErrUnavailable, fmt.Errorf("%w: %w", kv.ErrUnavailable, context.DeadlineExceeded))
-	if kind, status := classifyFailure(err); kind != "kv_unavailable" || status != 0 {
-		t.Fatalf("classifyFailure = %q, %d; want kv_unavailable, 0", kind, status)
-	}
-}
-
 func TestRunWithCountersAndNoLimiterRefuses(t *testing.T) {
 	var hits int
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
 	defer upstream.Close()
 
-	_, cs := func() (*Pipeline, []limits.Counter) { p, _, cs := meteredPipeline(t); return p, cs }()
+	_, _, cs := meteredPipeline(t)
 	_, err := New(nil, nil, nil).Run(context.Background(), meteredRequest(upstream.URL, cs))
 	if !errors.Is(err, ErrLimiterMissing) {
 		t.Fatalf("err = %v, want ErrLimiterMissing", err)

@@ -16,6 +16,9 @@ func finalized(t *testing.T, o *Observer, lc *lifecycle.Context, ev *usagelog.Ev
 	t.Helper()
 	reg := lifecycle.New()
 	reg.RegisterHook(lifecycle.HookFunc{HookName: usagelog.Namespace, Fn: func(*lifecycle.Context, *lifecycle.PostFlightEvent) (any, error) {
+		if ev == nil {
+			return nil, nil
+		}
 		return ev, nil
 	}})
 	reg.RegisterCollector(o)
@@ -111,7 +114,7 @@ func BenchmarkObserverCollect(b *testing.B) {
 	}
 }
 
-// A request with no body, or which never resolved to a model, or which reported no input tokens, measures nothing.
+// A request with no body, or which never resolved to a model, or which reported no prompt tokens, measures nothing.
 func TestObserver_SkipsUnmeasurableRequests(t *testing.T) {
 	cases := []struct {
 		name string
@@ -120,7 +123,9 @@ func TestObserver_SkipsUnmeasurableRequests(t *testing.T) {
 	}{
 		{"no model", newLC(4000, "", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}}},
 		{"no body", newLC(0, "m", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"input": 1000}}},
-		{"no input tokens", newLC(4000, "m", "s"), &usagelog.Event{}},
+		{"no tokens", newLC(4000, "m", "s"), &usagelog.Event{}},
+		{"output tokens only", newLC(4000, "m", "s"), &usagelog.Event{Tokens: sdkusage.Tokens{"output": 1000}}},
+		{"no usage event", newLC(4000, "m", "s"), nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,4 +138,11 @@ func TestObserver_SkipsUnmeasurableRequests(t *testing.T) {
 			}
 		})
 	}
+
+	// Collect outside a finalize, or on an observer without its parts, is a no-op rather than a panic.
+	lc := newLC(4000, "m", "s")
+	(*Observer)(nil).Collect(lc)
+	NewObserver(nil).Collect(lc)
+	NewObserver(NewCalibrator(kv.NewMem())).Collect(nil)
+	NewObserver(NewCalibrator(kv.NewMem())).Collect(lc)
 }
