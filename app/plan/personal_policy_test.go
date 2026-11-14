@@ -49,12 +49,8 @@ func TestUserOwnBindingStaysWithItsOwnersPolicy(t *testing.T) {
 	if rung := h.keyPlan(bobKey).Caller.LaneRung(); rung.Policy != nil || h.keyPlan(bobKey).Caller.Refused != nil {
 		t.Fatalf("bob governed by alice's policy: rung %+v, refused %+v", rung.Policy, h.keyPlan(bobKey).Caller.Refused)
 	}
-	if !hasIssue(h.issues(KindPolicyBinding, onBob.Meta.ID), IssueSubjectOutOfScope) {
-		t.Fatalf("alice's binding of bob: issues %+v, want %s", h.issues(KindPolicyBinding, onBob.Meta.ID), IssueSubjectOutOfScope)
-	}
-	if !hasIssue(h.issues(KindPolicyBinding, bobsOwn.Meta.ID), IssuePolicyNotBindable) {
-		t.Fatalf("bob's binding of alice's policy: issues %+v, want %s", h.issues(KindPolicyBinding, bobsOwn.Meta.ID), IssuePolicyNotBindable)
-	}
+	h.wantIssue(KindPolicyBinding, onBob.Meta.ID, IssueSubjectOutOfScope, true)
+	h.wantIssue(KindPolicyBinding, bobsOwn.Meta.ID, IssuePolicyNotBindable, true)
 }
 
 // A project binds a member's personal policy to its service account while the member may manage the project's policy bindings, however that permission is granted; without it the binding is ignored with an issue.
@@ -116,16 +112,12 @@ func TestPersonalPolicyBindingFollowsItsOwnersPermission(t *testing.T) {
 	if r := h.route(b.key, "m1"); r.Refused != nil {
 		t.Fatalf("route after the owner lost the permission refused: %+v", r.Refused)
 	}
-	if !hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssuePolicyNotBindable) {
-		t.Fatalf("issues = %+v, want %s", h.issues(KindPolicyBinding, pb.Meta.ID), IssuePolicyNotBindable)
-	}
+	h.wantIssue(KindPolicyBinding, pb.Meta.ID, IssuePolicyNotBindable, true)
 	apply(h, rb)
 	if r := h.route(b.key, "m1"); r.Refused == nil || r.Refused.Code != CodeModelNotAllowed {
 		t.Fatalf("route after the permission came back = %+v, want model_not_allowed", r.Refused)
 	}
-	if hasIssue(h.issues(KindPolicyBinding, pb.Meta.ID), IssuePolicyNotBindable) {
-		t.Fatal("the issue stayed after the permission came back")
-	}
+	h.wantIssue(KindPolicyBinding, pb.Meta.ID, IssuePolicyNotBindable, false)
 }
 
 // Under the single-user authorizer every user may manage every binding, so the plans apply a project's binding of a personal policy without asking.

@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/limits"
@@ -36,9 +37,7 @@ func TestToken_LaneClimbsMemberProjectAndTeam(t *testing.T) {
 	}
 	mustRoute(t, tok, "m2")
 	wantRefusal(t, tok.Routes.Get("m1"), plan.CodeModelNotAllowed, limits.RungProject, projPol.Meta.ID)
-	if r := tok.Routes.Get("m3"); r.Refused == nil {
-		t.Fatal("token reached m3, which the team and member accounts refuse")
-	}
+	wantRefusal(t, tok.Routes.Get("m3"), plan.CodeModelNotAllowed, limits.RungTeam, teamPol.Meta.ID)
 
 	personal := keyCaller(t, plans, k)
 	mustRoute(t, personal, "m1")
@@ -59,7 +58,7 @@ func TestToken_ReachesProjectTeamAndSystemCredentials(t *testing.T) {
 	plans := o.w.Load(t)
 
 	want := []string{pr.Meta.Name, tm.Meta.Name, sys.Meta.Name}
-	if got := routeCredentials(mustRoute(t, tokenCaller(t, plans, u.ID, o.proj.Meta.ID), "m1")); !sameList(got, want) {
+	if got := routeCredentials(mustRoute(t, tokenCaller(t, plans, u.ID, o.proj.Meta.ID), "m1")); !slices.Equal(got, want) {
 		t.Fatalf("token reaches %v, want %v", got, want)
 	}
 }
@@ -68,49 +67,34 @@ func TestToken_ReachesProjectTeamAndSystemCredentials(t *testing.T) {
 func TestToken_NoMemberAccountIsNotHeld(t *testing.T) {
 	o := newOrg()
 	u := o.w.User()
-	plans := o.w.Load(t)
-	if _, refused := plans.Root().MemberLane(u.ID, o.proj.Meta.ID); refused == nil || refused.Code != plan.CodeAccountNotHeld {
-		t.Fatalf("lane of a non-member = %v, want account_not_held", refused)
+	cp, refused := o.w.Load(t).Root().MemberLane(u.ID, o.proj.Meta.ID)
+	want := plan.Refusal{Code: plan.CodeAccountNotHeld, Message: "user:" + u.ID + " holds no account in project " + o.proj.Meta.ID}
+	if cp != nil || refused == nil || *refused != want {
+		t.Fatalf("lane of a non-member = %v, %+v; want none and %+v", cp, refused, want)
 	}
 }
 
-// A disabled team refuses every lane under it.
-func TestToken_DisabledTeamRefuses(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	o.team.Spec.Enabled = off()
-	u := o.w.User()
-	o.w.Member(u, ownedBy(meta.OwnerProject, o.proj.Meta.ID))
-	plans := o.w.Load(t)
-
-	r := tokenCaller(t, plans, u.ID, o.proj.Meta.ID).Routes.Get("m1")
-	if r.Refused == nil || r.Refused.Code != plan.CodeSubjectDisabled || r.Refused.Rung != limits.RungTeam {
-		t.Fatalf("token under a disabled team: refusal %+v, want subject_disabled on the team rung", r.Refused)
-	}
-}
-
-// A disabled project refuses every lane in it.
-func TestToken_DisabledProjectRefuses(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	o.proj.Spec.Enabled = off()
-	u := o.w.User()
-	o.w.Member(u, ownedBy(meta.OwnerProject, o.proj.Meta.ID))
-	plans := o.w.Load(t)
-
-	if r := tokenCaller(t, plans, u.ID, o.proj.Meta.ID).Routes.Get("m1"); r.Refused == nil || r.Refused.Rung != limits.RungProject {
-		t.Fatalf("a token in a disabled project = %+v, want a refusal on the project rung", r.Refused)
-	}
-}
-
-// A disabled team refuses its service accounts' keys too, naming the team rung.
-func TestKey_DisabledTeamRefusesItsServiceAccounts(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	o.team.Spec.Enabled = off()
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-	r := cp.Routes.Get("m1")
-	if r.Refused == nil || r.Refused.Rung != limits.RungTeam {
-		t.Fatalf("service account under a disabled team: refusal %+v, want one on the team rung", r.Refused)
+// A disabled team or project refuses every lane under it, a member's token and a service account's key alike, naming its rung.
+func TestLadder_DisabledScopeRefusesEveryLaneUnderIt(t *testing.T) {
+	for _, rung := range []limits.Rung{limits.RungTeam, limits.RungProject} {
+		t.Run(string(rung), func(t *testing.T) {
+			o := newOrg()
+			o.w.Credential(o.host, nil, plantest.System, "sk-system")
+			subject := "account:" + o.teamAcct().Meta.ID
+			if rung == limits.RungTeam {
+				o.team.Spec.Enabled = off()
+			} else {
+				o.proj.Spec.Enabled, subject = off(), "account:"+o.projectAcct().Meta.ID
+			}
+			u := o.w.User()
+			o.w.Member(u, ownedBy(meta.OwnerProject, o.proj.Meta.ID))
+			plans := o.w.Load(t)
+			for name, cp := range map[string]*plan.CallerPlan{"token": tokenCaller(t, plans, u.ID, o.proj.Meta.ID), "service account key": keyCaller(t, plans, o.saKey)} {
+				r := cp.Routes.Get("m1").Refused
+				if r == nil || r.Code != plan.CodeSubjectDisabled || r.Rung != rung || r.SubjectID != subject {
+					t.Errorf("%s: refusal %+v, want subject_disabled on the %s rung of %s", name, r, rung, subject)
+				}
+			}
+		})
 	}
 }

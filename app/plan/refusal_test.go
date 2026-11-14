@@ -47,6 +47,17 @@ func TestKindOf_EveryCode(t *testing.T) {
 	}
 }
 
+func TestRefusal_Error(t *testing.T) {
+	for want, r := range map[string]plan.Refusal{
+		"model_not_found: no model named x":                                {Code: plan.CodeModelNotFound, Message: "no model named x"},
+		"model_not_allowed: not granted (team rung account:a, policy p-1)": {Code: plan.CodeModelNotAllowed, Message: "not granted", Rung: limits.RungTeam, SubjectID: "account:a", PolicyID: "p-1"},
+	} {
+		if got := r.Error(); got != want {
+			t.Errorf("Error() = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestLimitCode(t *testing.T) {
 	budget := &limits.Refused{Counter: &limits.Counter{Kind: limits.KindBudget}}
 	rule := &limits.Refused{Counter: &limits.Counter{}}

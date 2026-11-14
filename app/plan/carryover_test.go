@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
-// C15: /v1/models never lists what resolution refuses, and lists everything it serves.
+// /v1/models never lists what resolution refuses, and lists everything it serves.
 func TestCarryOver_ListingMatchesResolve(t *testing.T) {
 	b := newBasic()
 	w := b.w
@@ -62,7 +62,7 @@ func TestCarryOver_ListingMatchesResolve(t *testing.T) {
 	}
 }
 
-// C16: a keyless host is reached only through a pool linked on purpose, never by a wildcard grant or by ownership.
+// A keyless host is reached only through a pool linked on purpose, never by a wildcard grant or by ownership.
 func TestCarryOver_KeylessHostNeedsAnExplicitPool(t *testing.T) {
 	b := newBasic()
 	w := b.w
@@ -155,24 +155,23 @@ func TestCarryOver_DisabledUnknownAndUnroutable(t *testing.T) {
 	_ = wantRefused(t, h.route(b.key, "m4"), CodeNoBinding, "")
 }
 
-// C29: a grant that can never match narrows to nothing and is reported, never read as "no list".
+// A grant that can never match narrows to nothing and is reported, never read as "no list".
 func TestCarryOver_UnmatchableGrantNarrowsToNothing(t *testing.T) {
-	for _, ref := range []string{"group:wr/frontier", "a/b/c/d@@"} {
+	for ref, issue := range map[string]string{"group:wr/frontier": IssueModelGroupUnsupported, "a/b/c/d@@": IssueModelRefInvalid} {
 		t.Run(ref, func(t *testing.T) {
 			b := newBasic()
 			p := b.w.policy("p", policy.Spec{Models: []string{ref}})
 			b.w.bindPolicy(p, b.w.projectAccount(b.proj))
 			h := b.w.start(t)
 			_ = wantRefused(t, h.route(b.key, "m1"), CodeModelNotAllowed, limits.RungProject)
-			is := h.issues(KindPolicy, p.Meta.ID)
-			if !hasIssue(is, IssueModelGroupUnsupported) && !hasIssue(is, IssueModelRefInvalid) {
-				t.Fatalf("issues = %v, want the unmatchable ref reported", is)
+			if is := h.issues(KindPolicy, p.Meta.ID); issueAt(is, issue, "spec.models[0]") == nil {
+				t.Fatalf("issues = %v, want %s at spec.models[0]", is, issue)
 			}
 		})
 	}
 }
 
-// C1: every model a scoped upstream rule matches gets its own counter; an unscoped rule counts once for all.
+// Every model a scoped upstream rule matches gets its own counter; an unscoped rule counts once for all.
 func TestCounters_ScopedUpstreamRulesAreDistinctPerModel(t *testing.T) {
 	b := newBasic()
 	m2 := b.w.model(b.prov, "m2")
@@ -266,7 +265,5 @@ func TestPoolPlan_KeylessPoolIgnoresCredentials(t *testing.T) {
 	if len(pp.Slots) != 1 || pp.Slots[0].Credential.Meta.ID != hostkey.AnonIDPrefix+local.Meta.ID {
 		t.Fatalf("keyless pool slots = %v", pp.Slots)
 	}
-	if !hasIssue(h.issues(KindPool, p.Meta.ID), IssueCredentialsIgnored) {
-		t.Fatal("a keyless pool listing credentials raised nothing")
-	}
+	h.wantIssue(KindPool, p.Meta.ID, IssueCredentialsIgnored, true)
 }

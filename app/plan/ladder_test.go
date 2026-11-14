@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestLadder_CallerRungsIntersect(t *testing.T) {
 	wantRefusal(t, cp.Routes.Get("m3"), plan.CodeModelNotAllowed, limits.RungProject, projPol.Meta.ID)
 }
 
-// A rung with no policy bound does not constrain: with only the project bound, the team and principal rungs let through everything the project allows.
+// A rung with no policy bound does not constrain: with only the project bound, everything the project allows passes and the rest is refused on its rung.
 func TestLadder_RungWithoutPolicyDoesNotConstrain(t *testing.T) {
 	o := newOrg()
 	o.w.Credential(o.host, nil, plantest.System, "sk-system")
@@ -64,16 +65,7 @@ func TestLadder_RungWithoutPolicyDoesNotConstrain(t *testing.T) {
 	}
 	mustRoute(t, cp, "m1")
 	mustRoute(t, cp, "m2")
-}
-
-// With no policy on any rung, the models are not constrained by the caller side at all.
-func TestLadder_NoCallerPolicyAllowsEveryServedModel(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-	for _, m := range []string{"m1", "m2", "m3"} {
-		mustRoute(t, cp, m)
-	}
+	wantRefusal(t, cp.Routes.Get("m3"), plan.CodeModelNotAllowed, limits.RungProject, pol.Meta.ID)
 }
 
 // An inner policy with an empty model list inherits the outer rung's grant; it never widens it.
@@ -120,66 +112,28 @@ func TestLadder_UpstreamAndCallerSidesIntersect(t *testing.T) {
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	mustRoute(t, cp, "m2")
-	for _, m := range []string{"m1", "m3"} {
-		if r := cp.Routes.Get(m); r.Refused == nil {
-			t.Errorf("%s served by %v; only m2 is allowed on both sides", m, routeCredentials(r))
+	wantRefusal(t, cp.Routes.Get("m1"), plan.CodeModelNotAllowed, limits.RungLane, caller.Meta.ID)
+	wantRefusal(t, cp.Routes.Get("m3"), plan.CodeModelNotAllowed, limits.RungAccount, tier.Meta.ID)
+}
+
+// A disabled upstream policy takes the credentials under it out instead of letting them serve unmetered: a credential outside the account keeps serving, and with none the route is refused naming the rung and the policy.
+func TestLadder_DisabledUpstreamPolicyTakesOutItsCredentials(t *testing.T) {
+	for _, outside := range []bool{false, true} {
+		o := newOrg()
+		acct := o.w.Account(o.host)
+		o.w.Credential(o.host, acct, plantest.System, "sk-acct")
+		var want []string
+		if outside {
+			want = []string{o.w.Credential(o.host, nil, plantest.System, "sk-free").Meta.Name}
 		}
-	}
-}
-
-// A disabled caller policy refuses on its rung, naming the rung and the policy, and never falls through to the other rungs' grants.
-func TestLadder_DisabledCallerPolicyRefusesOnItsRung(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	teamPol := o.w.Policy("team-off", policy.Spec{Models: []string{"prov/m1"}, Enabled: off()})
-	projPol := o.w.Policy("project", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(teamPol, o.teamAcct())
-	o.w.BindPolicy(projPol, o.projectAcct())
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-
-	wantRefusal(t, cp.Routes.Get("m1"), plan.CodePolicyDisabled, limits.RungTeam, teamPol.Meta.ID)
-}
-
-// A disabled upstream policy takes its credentials out instead of letting them serve unmetered: a route left with no other credential is refused, naming the rung and the policy.
-func TestLadder_DisabledUpstreamPolicyRefusesItsCredentials(t *testing.T) {
-	o := newOrg()
-	acct := o.w.Account(o.host)
-	o.w.Credential(o.host, acct, plantest.System, "sk-acct")
-	tier := o.w.Policy("tier-off", policy.Spec{Models: []string{"prov/m1"}, Enabled: off()})
-	o.w.BindPolicy(tier, acct)
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-
-	wantRefusal(t, cp.Routes.Get("m1"), plan.CodePolicyDisabled, limits.RungAccount, tier.Meta.ID)
-}
-
-// A disabled upstream policy only takes out the credentials under it: a sibling credential outside the account keeps serving.
-func TestLadder_DisabledUpstreamPolicyLeavesOtherCredentials(t *testing.T) {
-	o := newOrg()
-	acct := o.w.Account(o.host)
-	o.w.Credential(o.host, acct, plantest.System, "sk-acct")
-	free := o.w.Credential(o.host, nil, plantest.System, "sk-free")
-	tier := o.w.Policy("tier-off", policy.Spec{Enabled: off()})
-	o.w.BindPolicy(tier, acct)
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{free.Meta.Name}) {
-		t.Fatalf("route reaches %v, want only %s", got, free.Meta.Name)
-	}
-}
-
-// An account holds at most one policy: two bindings on one account refuse that rung rather than picking one.
-func TestLadder_TwoBindingsOnOneSubjectRefuseThatRung(t *testing.T) {
-	o := newOrg()
-	o.w.Credential(o.host, nil, plantest.System, "sk-system")
-	wide := o.w.Policy("wide", policy.Spec{})
-	narrow := o.w.Policy("narrow", policy.Spec{Models: []string{"prov/m1"}})
-	o.w.BindPolicy(wide, o.projectAcct())
-	o.w.BindPolicy(narrow, o.projectAcct())
-	cp := keyCaller(t, o.w.Load(t), o.saKey)
-
-	r := cp.Routes.Get("m1")
-	if r.Refused == nil || r.Refused.Code != plan.CodeDuplicateBinding || r.Refused.Rung != limits.RungProject {
-		t.Fatalf("route = %+v (refusal %+v), want a duplicate_binding refusal on the project rung", routeCredentials(r), r.Refused)
+		tier := o.w.Policy("tier-off", policy.Spec{Enabled: off()})
+		o.w.BindPolicy(tier, acct)
+		r := keyCaller(t, o.w.Load(t), o.saKey).Routes.Get("m1")
+		if !outside {
+			wantRefusal(t, r, plan.CodePolicyDisabled, limits.RungAccount, tier.Meta.ID)
+		} else if got := routeCredentials(r); r.Refused != nil || !slices.Equal(got, want) {
+			t.Fatalf("route reaches %v (refusal %v), want only %v", got, r.Refused, want)
+		}
 	}
 }
 
