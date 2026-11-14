@@ -156,13 +156,13 @@ func TestReach_KeylessHostOnlyThroughAPool(t *testing.T) {
 		}
 		return keyCaller(t, o.w.Load(t), o.saKey)
 	}
-	if r := build(false, nil).Routes.Get("local"); r.Refused == nil {
-		t.Error("a keyless host was reached with no policy at all")
+	for name, models := range map[string][]string{"no policy at all": nil, "a wildcard model grant": {"prov/*"}} {
+		if r := build(false, models).Routes.Get("local"); r.Refused == nil || r.Refused.Code != plan.CodeNoCredentials || len(r.Hops) != 0 {
+			t.Errorf("%s: keyless host route = %v with hops %v, want refused %s", name, r.Refused, routeCredentials(r), plan.CodeNoCredentials)
+		}
 	}
-	if r := build(false, []string{"prov/*"}).Routes.Get("local"); r.Refused == nil {
-		t.Error("a wildcard model grant reached a keyless host")
-	}
-	if r := build(true, nil).Routes.Get("local"); r.Refused != nil || len(r.Hops) == 0 {
-		t.Errorf("a pool at the keyless host did not reach it: %v", r.Refused)
+	r := mustRoute(t, build(true, nil), "local")
+	if len(r.Hops) != 1 || r.Hops[0].Host.Meta.Name != "free" || len(r.Hops[0].Slots) != 1 {
+		t.Errorf("a pool at the keyless host: hops = %v, want one hop at it with its one anonymous slot", routeCredentials(r))
 	}
 }
