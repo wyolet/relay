@@ -56,6 +56,7 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 		sp := &v1.SamplingParams{}
 		sp.Temperature = req.Temperature
 		sp.TopP = req.TopP
+		sp.TopK = req.TopK
 		if req.MaxOutputTokens != nil {
 			sp.MaxTokens = req.MaxOutputTokens
 		}

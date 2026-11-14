@@ -251,7 +251,6 @@ func TestResponsesResponseOutputReplaysAsInput(t *testing.T) {
 }
 
 func TestResponsesParseRequest_TopK(t *testing.T) {
-	t.Skip(`bug: ParseRequest {"top_k":40} → canonical sampling {} (top_k parsed, then never copied into SamplingParams)`)
 	req := respParseRequest(t, `{"model":"m","input":"hi","top_k":40}`)
 	respJSONEq(t, req.ModelConfig["m"].Sampling, `{"top_k":40}`)
 }
