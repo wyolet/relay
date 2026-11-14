@@ -1,10 +1,16 @@
 package manifest_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/meta"
 )
 
 const tenancyYAML = `
@@ -34,59 +40,46 @@ const teamUUID = "0195f8a0-0000-7000-8000-000000000001"
 var tenancyResolver = manifest.MapResolver{Teams: map[string]string{"platform": teamUUID}}
 var tenancyRev = manifest.MapReverseResolver{Teams: map[string]string{teamUUID: "platform"}}
 
-func TestRoundTrip_TeamAndProject(t *testing.T) {
+// A project names its team, which becomes its owner; annotations survive both directions.
+func TestTeamAndProject(t *testing.T) {
 	docs, err := manifest.Parse(strings.NewReader(tenancyYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if len(docs) != 2 || docs[0].Team == nil || docs[1].Project == nil {
-		t.Fatalf("want Team + Project docs, got %d: %v", len(docs), docs)
+	if err != nil || len(docs) != 2 || docs[0].Team == nil || docs[1].Project == nil {
+		t.Fatalf("Parse = %+v, %v; want a Team then a Project", docs, err)
 	}
 
 	tm, err := manifest.ToTeam(*docs[0].Team, tenancyResolver)
 	if err != nil {
 		t.Fatalf("ToTeam: %v", err)
 	}
-	if tm.Meta.Annotations["wyolet.com/owner-email"] != "platform@example.com" {
-		t.Errorf("team annotations = %v", tm.Meta.Annotations)
+	wantTeam := &team.Team{Meta: meta.Metadata{Name: "platform", DisplayName: "Platform Engineering", Owner: meta.Owner{Kind: meta.OwnerSystem},
+		Annotations: map[string]string{"wyolet.com/owner-email": "platform@example.com"}}}
+	if diff := cmp.Diff(wantTeam, tm); diff != "" {
+		t.Errorf("ToTeam (-want +got):\n%s", diff)
 	}
-	if err := tm.Validate(); err != nil {
-		t.Errorf("team Validate: %v", err)
-	}
-	back := manifest.FromTeam(tm, tenancyRev)
-	if back.Metadata.Annotations["wyolet.com/owner-email"] != "platform@example.com" {
-		t.Errorf("team round-trip lost fields: %+v", back)
+	if diff := cmp.Diff(docs[0].Team.Metadata, manifest.FromTeam(tm, tenancyRev).Metadata); diff != "" {
+		t.Errorf("FromTeam metadata (-document +export):\n%s", diff)
 	}
 
 	p, err := manifest.ToProject(*docs[1].Project, tenancyResolver)
 	if err != nil {
 		t.Fatalf("ToProject: %v", err)
 	}
-	if p.Spec.TeamID != teamUUID {
-		t.Errorf("spec.team did not resolve: %q", p.Spec.TeamID)
+	wantProject := &project.Project{
+		Meta: meta.Metadata{Name: "ml-search", DisplayName: "ML Search", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamUUID},
+			Annotations: map[string]string{"wyolet.com/cost-center": "1042"}},
+		Spec: project.Spec{TeamID: teamUUID},
 	}
-	if p.Meta.Owner.ID != teamUUID {
-		t.Errorf("owner not derived from spec.team: %+v", p.Meta.Owner)
+	if diff := cmp.Diff(wantProject, p); diff != "" {
+		t.Errorf("ToProject (-want +got):\n%s", diff)
 	}
-	if p.Meta.Annotations["wyolet.com/cost-center"] != "1042" {
-		t.Errorf("project annotations = %v", p.Meta.Annotations)
+	back := manifest.FromProject(p, tenancyRev)
+	if back.Spec.Team != "platform" || back.Metadata.Annotations["wyolet.com/cost-center"] != "1042" || back.Metadata.Name != "ml-search" {
+		t.Errorf("FromProject = %+v, want the team by name and the annotations kept", back)
 	}
-	if err := p.Validate(); err != nil {
-		t.Errorf("project Validate: %v", err)
-	}
-	backP := manifest.FromProject(p, tenancyRev)
-	if backP.Spec.Team != "platform" ||
-		backP.Metadata.Annotations["wyolet.com/cost-center"] != "1042" {
-		t.Errorf("project round-trip lost fields: %+v", backP)
-	}
-}
 
-func TestToProject_UnknownTeam(t *testing.T) {
-	docs, err := manifest.Parse(strings.NewReader(tenancyYAML))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if _, err := manifest.ToProject(*docs[1].Project, manifest.MapResolver{}); err == nil {
-		t.Fatal("want error for an unknown team name")
+	_, err = manifest.ToProject(*docs[1].Project, manifest.MapResolver{})
+	var notFound *manifest.RefNotFoundError
+	if want := `project "ml-search": team "platform" not found`; err == nil || err.Error() != want || !errors.As(err, &notFound) {
+		t.Errorf("an unknown team: err = %v, want RefNotFoundError %s", err, want)
 	}
 }

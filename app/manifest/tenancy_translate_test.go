@@ -8,99 +8,67 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// A manifest may not choose who owns a Team, Group or Role: those rows name a
-// scope or a grant, and a user-owned one would hand its author every binding
-// already made against that name.
+// A manifest may not choose who owns a Team, Group or Role: those rows name a scope or a grant, and a user-owned one would hand its author every binding already made against that name.
 func TestTenancyKindsAreAlwaysSystemOwned(t *testing.T) {
 	idx := MapResolver{Users: map[string]string{"mallory": "u-mallory"}}
-
-	teamDoc := TeamDTO{Metadata: WireMeta{Name: "platform"}}
-	teamDoc.Metadata.Owner = WireOwner{Kind: meta.OwnerUser, Name: "mallory"}
-	tm, err := ToTeam(teamDoc, idx)
+	md := WireMeta{Name: "x", Owner: WireOwner{Kind: meta.OwnerUser, Name: "mallory"}}
+	owners := map[string]meta.Owner{}
+	tm, err := ToTeam(TeamDTO{Metadata: md}, idx)
 	if err != nil {
 		t.Fatalf("ToTeam: %v", err)
 	}
-	if tm.Meta.Owner.Kind != meta.OwnerSystem || tm.Meta.Owner.ID != "" {
-		t.Errorf("team owner = %+v, want system", tm.Meta.Owner)
-	}
-
-	groupDoc := GroupDTO{Metadata: WireMeta{Name: "platform-eng"}}
-	groupDoc.Metadata.Owner = WireOwner{Kind: meta.OwnerUser, Name: "mallory"}
-	g, err := ToGroup(groupDoc, idx)
+	owners["team"] = tm.Meta.Owner
+	g, err := ToGroup(GroupDTO{Metadata: md}, idx)
 	if err != nil {
 		t.Fatalf("ToGroup: %v", err)
 	}
-	if g.Meta.Owner.Kind != meta.OwnerSystem || g.Meta.Owner.ID != "" {
-		t.Errorf("group owner = %+v, want system", g.Meta.Owner)
-	}
-
-	roleDoc := RoleDTO{Metadata: WireMeta{Name: "auditor-lite"}}
-	roleDoc.Metadata.Owner = WireOwner{Kind: meta.OwnerUser, Name: "mallory"}
-	roleDoc.Spec.Rules = []RoleRuleDTO{{Kinds: []string{"usage"}, Verbs: []string{"read"}}}
-	r, err := ToRole(roleDoc, idx)
+	owners["group"] = g.Meta.Owner
+	r, err := ToRole(RoleDTO{Metadata: md, Spec: RoleSpec{Rules: []RoleRuleDTO{{Kinds: []string{"usage"}, Verbs: []string{"read"}}}}}, idx)
 	if err != nil {
 		t.Fatalf("ToRole: %v", err)
 	}
-	if r.Meta.Owner.Kind != meta.OwnerSystem || r.Meta.Owner.ID != "" {
-		t.Errorf("role owner = %+v, want system", r.Meta.Owner)
+	owners["role"] = r.Meta.Owner
+	for kind, o := range owners {
+		if o != (meta.Owner{Kind: meta.OwnerSystem}) {
+			t.Errorf("%s owner = %+v, want system", kind, o)
+		}
 	}
 }
 
-// A user-owned row names its owner by username on the wire like every other
-// cross-reference; leaving the username in place would make the stored owner
-// unresolvable.
-func TestUserOwnerNameResolvesToID(t *testing.T) {
-	idx := MapResolver{Users: map[string]string{"alice": "u-alice"}}
-	d := KeyDTO{Metadata: WireMeta{Name: "alice-cli"}}
-	d.Metadata.Owner = WireOwner{Kind: meta.OwnerUser, Name: "alice"}
-	d.Spec.Principal = PrincipalDTO{Kind: "user", Name: "alice"}
-
-	k, err := ToKey(d, idx)
-	if err != nil {
-		t.Fatalf("ToKey: %v", err)
+// A user or host owner is named on the wire like every other cross-reference; leaving the name in place would make the stored owner unresolvable.
+func TestOwnerNameResolvesToID(t *testing.T) {
+	idx := MapResolver{Users: map[string]string{"alice": "u-alice"}, Hosts: map[string]string{"acme-api": "h-acme"}}
+	k, err := ToKey(KeyDTO{
+		Metadata: WireMeta{Name: "alice-cli", Owner: WireOwner{Kind: meta.OwnerUser, Name: "alice"}},
+		Spec:     KeySpec{Principal: PrincipalDTO{Kind: "user", Name: "alice"}},
+	}, idx)
+	if want := (meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}); err != nil || k.Meta.Owner != want || k.Spec.Principal.ID != "u-alice" {
+		t.Errorf("ToKey owner %+v principal %+v, %v; want both resolved to u-alice", k.Meta.Owner, k.Spec.Principal, err)
 	}
-	if k.Meta.Owner.ID != "u-alice" {
-		t.Errorf("owner id = %q, want the resolved user id", k.Meta.Owner.ID)
-	}
-}
-
-// Export names a host owner by slug, so a host-owned HostKey has to resolve
-// it back to the id the way a host-owned Policy does.
-func TestHostOwnerNameResolvesToID(t *testing.T) {
-	idx := MapResolver{Hosts: map[string]string{"acme-api": "h-acme"}}
-	d := HostKeyDTO{Metadata: WireMeta{Name: "acme-key"}}
-	d.Metadata.Owner = WireOwner{Kind: meta.OwnerHost, Name: "acme-api"}
-	d.Spec.HostID = "acme-api"
-
-	k, err := ToHostKey(d, idx)
-	if err != nil {
-		t.Fatalf("ToHostKey: %v", err)
-	}
-	if k.Meta.Owner.ID != "h-acme" {
-		t.Errorf("owner id = %q, want the resolved host id", k.Meta.Owner.ID)
+	hk, err := ToHostKey(HostKeyDTO{
+		Metadata: WireMeta{Name: "acme-key", Owner: WireOwner{Kind: meta.OwnerHost, Name: "acme-api"}},
+		Spec:     HostKeySpec{HostID: "acme-api"},
+	}, idx)
+	if want := (meta.Owner{Kind: meta.OwnerHost, ID: "h-acme"}); err != nil || hk.Meta.Owner != want || hk.Spec.HostID != "h-acme" {
+		t.Errorf("ToHostKey owner %+v host %q, %v; want both resolved to h-acme", hk.Meta.Owner, hk.Spec.HostID, err)
 	}
 }
 
-// A Key holds no policy: a v1alpha3 document still carrying spec.policy is
-// refused rather than silently dropping the restriction it meant.
-func TestKeyPolicyIsRefused(t *testing.T) {
-	doc := "apiVersion: " + APIVersion + "\nkind: Key\nmetadata: {name: ci-key}\n" +
-		"spec: {principal: {kind: serviceaccount, name: ci}, keyHash: x, policy: basic}\n"
-	_, err := Parse(strings.NewReader(doc))
-	if err == nil || !strings.Contains(err.Error(), "spec.policy") {
-		t.Fatalf("Parse = %v, want a refusal naming spec.policy", err)
-	}
-}
-
-// A Team or Project spend cap is a Budget kind now; a document still carrying spec.budget is refused rather than silently losing the cap it meant.
-func TestScopeBudgetIsRefused(t *testing.T) {
-	for _, doc := range []string{
-		"apiVersion: " + APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n",
-		"apiVersion: relay.wyolet.dev/v1alpha2\nkind: Project\nmetadata: {name: search}\nspec: {team: platform, budget: {amount: \"100\", period: week}}\n",
-		"apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n",
+// A field v1alpha3 dropped from one of relay's kinds is refused by name with what replaces it, under either apiVersion and the auth module's: ignoring it would drop a restriction the author meant.
+func TestRemovedFieldsAreRefused(t *testing.T) {
+	for _, tc := range []struct{ name, doc, want string }{
+		{"a key's policy", "apiVersion: " + APIVersion + "\nkind: Key\nmetadata: {name: ci-key}\nspec: {principal: {kind: serviceaccount, name: ci}, keyHash: x, policy: basic}\n", "wire: doc 0 kind=Key name=ci-key: Key no longer has spec.policy (use a PolicyBinding on the account the key runs in)"},
+		{"a team's budget", "apiVersion: " + APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n", "wire: doc 0 kind=Team name=platform: Team no longer has spec.budget (use a Budget linked by the policy bound to the team)"},
+		{"a project's budget, previous apiVersion", "apiVersion: " + PreviousAPIVersion + "\nkind: Project\nmetadata: {name: search}\nspec: {team: platform, budget: {amount: \"100\", period: week}}\n", "wire: doc 0 kind=Project name=search: Project no longer has spec.budget (use a Budget linked by the policy bound to the project)"},
+		{"a team's budget, the auth module's apiVersion", "apiVersion: " + authmanifest.APIVersion + "\nkind: Team\nmetadata: {name: platform}\nspec: {budget: {amount: \"100\"}}\n", `wire: doc 0 Team "platform": spec.budget: unknown field "budget"`},
 	} {
-		if _, err := Parse(strings.NewReader(doc)); err == nil || !strings.Contains(err.Error(), "budget") {
-			t.Errorf("Parse(%q) err = %v, want a refusal naming spec.budget", doc, err)
+		_, err := Parse(strings.NewReader(tc.doc))
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		if got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
 		}
 	}
 }

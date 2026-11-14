@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/overlay"
 )
 
@@ -94,17 +96,16 @@ func TestOverlayRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToOverlay: %v", err)
 	}
-	if back.ResourceID != "m-1" {
-		t.Fatalf("resource id = %q", back.ResourceID)
+	var got map[string]any
+	if err := json.Unmarshal(back.Patch, &got); err != nil {
+		t.Fatalf("patch %s: %v", back.Patch, err)
 	}
-	var got, want map[string]any
-	_ = json.Unmarshal(back.Patch, &got)
-	_ = json.Unmarshal(o.Patch, &want)
-	if len(got) != len(want) || got["family"] != want["family"] {
-		t.Fatalf("patch %v, want %v", got, want)
+	want := map[string]any{"family": "custom", "aliases": []any{"team-fast"}}
+	if diff := cmp.Diff(want, got); diff != "" || back.ResourceID != "m-1" || back.Kind != overlay.KindModel {
+		t.Errorf("overlay %s %q, patch (-want +got):\n%s", back.Kind, back.ResourceID, diff)
 	}
 
-	if _, err := ToOverlay(dto, MapResolver{}); err == nil {
-		t.Fatal("an overlay naming an unknown model must be rejected")
+	if _, err := ToOverlay(dto, MapResolver{}); err == nil || err.Error() != `overlay: model "gpt-4o" not found` {
+		t.Errorf("an overlay naming an unknown model: err = %v", err)
 	}
 }

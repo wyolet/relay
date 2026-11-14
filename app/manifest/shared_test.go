@@ -65,7 +65,8 @@ func TestSharedAccountAndPoolAccounts_RoundTrip(t *testing.T) {
 
 	missing := *docs[0].Account
 	missing.Spec.SourceAccount = "gone"
-	if _, err := manifest.ToAccount(missing, idx); err == nil {
-		t.Error("a share of an unknown account was accepted")
+	_, err = manifest.ToAccount(missing, idx)
+	if got, want := errText(err), `account "acme-for-ci": sourceAccount "gone" not found`; got != want {
+		t.Errorf("a share of an unknown account:\n got %q\nwant %s", got, want)
 	}
 }

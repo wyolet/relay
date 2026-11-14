@@ -103,9 +103,9 @@ func translate(t *testing.T, d manifest.Document, idx manifest.Resolver) any {
 
 // strictCases fail under the auth apiVersion and parse under relay's, which keeps its leniency.
 var strictCases = []struct{ name, doc, want string }{
-	{"unknown field", "kind: Group\nmetadata: {name: g}\nspec: {membrs: [a]}", `spec.membrs: unknown field "membrs"`},
-	{"rule typo", "kind: Role\nmetadata: {name: r}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}", `spec.rules[0].verbs[0]: "updat" is not a registered verb`},
-	{"owner", "kind: Team\nmetadata: {name: t, owner: {kind: user}}", `metadata.owner is not accepted`},
+	{"unknown field", "kind: Group\nmetadata: {name: g}\nspec: {membrs: [a]}", `wire: doc 1 Group "g": spec.membrs: unknown field "membrs"`},
+	{"rule typo", "kind: Role\nmetadata: {name: r}\nspec: {rules: [{kinds: [models], verbs: [updat]}]}", `wire: doc 1 Role "r": spec.rules[0].verbs[0]: "updat" is not a registered verb`},
+	{"owner", "kind: Team\nmetadata: {name: t, owner: {kind: user}}", "wire: doc 1 Team: metadata.owner: metadata.owner is not accepted: the owner is derived from the kind and its spec (the system for Team, Role and Group, the parent for Project and ServiceAccount, the scope for RoleBinding)"},
 }
 
 // Under the auth apiVersion the module decodes these kinds strictly: each problem fails at parse, naming the document and the field.
@@ -113,8 +113,8 @@ func TestAuthKindsParseStrictlyUnderTheAuthAPIVersion(t *testing.T) {
 	for _, tc := range strictCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := manifest.Parse(strings.NewReader("apiVersion: auth.wyolet.dev/v1alpha1\nkind: Team\nmetadata: {name: first}\n---\napiVersion: auth.wyolet.dev/v1alpha1\n" + tc.doc + "\n"))
-			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "doc 1") {
-				t.Fatalf("err = %v, want %q at doc 1", err, tc.want)
+			if got := errText(err); got != tc.want {
+				t.Errorf("%s:\n got %q\nwant %s", tc.name, got, tc.want)
 			}
 		})
 	}
@@ -150,8 +150,9 @@ spec: {username: admin, password: plain-is-fine-here}
 	if len(docs) != 2 || docs[0].User == nil || docs[0].Kind() != "User" || docs[0].User.Metadata.Name != "alice" || docs[1].Foreign != "User" {
 		t.Fatalf("docs = %+v", docs)
 	}
-	if _, err := manifest.Parse(strings.NewReader("apiVersion: auth.wyolet.dev/v1alpha1\nkind: Policy\nmetadata: {name: p}\n")); err == nil {
-		t.Error("a relay kind under the auth apiVersion parsed")
+	_, err = manifest.Parse(strings.NewReader("apiVersion: auth.wyolet.dev/v1alpha1\nkind: Policy\nmetadata: {name: p}\n"))
+	if got, want := errText(err), `wire: doc 0: unsupported apiVersion "auth.wyolet.dev/v1alpha1" (want "relay.wyolet.dev/v1alpha3")`; got != want {
+		t.Errorf("a relay kind under the auth apiVersion:\n got %q\nwant %s", got, want)
 	}
 	// The CLI re-renders what it parsed before sending it; an account must survive that.
 	out, err := manifest.Render(docs[:1], "")

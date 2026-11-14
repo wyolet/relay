@@ -1,6 +1,7 @@
 package manifest_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -160,60 +161,24 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	}
 }
 
-func TestToRoleBinding_UnknownScopeTarget(t *testing.T) {
-	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RoleBinding
-metadata:
-  name: ghost-team
-spec:
-  role: developer
-  scope: {kind: team, name: nowhere}
-  subjects:
-    - {kind: group, name: platform-eng}
----
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RoleBinding
-metadata:
-  name: ghost-project
-spec:
-  role: developer
-  scope: {kind: project, name: nowhere}
-  subjects:
-    - {kind: group, name: platform-eng}
-`
-	docs, err := manifest.Parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if _, err := manifest.ToRoleBinding(*docs[0].RoleBinding, rbacResolver); err == nil ||
-		!strings.Contains(err.Error(), `team "nowhere" not found`) {
-		t.Errorf("ToRoleBinding = %v, want an unknown-team error", err)
-	}
-	if _, err := manifest.ToRoleBinding(*docs[1].RoleBinding, rbacResolver); err == nil ||
-		!strings.Contains(err.Error(), `project "nowhere" not found`) {
-		t.Errorf("ToRoleBinding = %v, want an unknown-project error", err)
-	}
-}
-
-func TestToRoleBinding_UnknownSubject(t *testing.T) {
-	const yaml = `
-apiVersion: relay.wyolet.dev/v1alpha3
-kind: RoleBinding
-metadata:
-  name: ghosts
-spec:
-  role: developer
-  scope: {kind: system}
-  subjects:
-    - {kind: serviceaccount, name: nobody}
-`
-	docs, err := manifest.Parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if _, err := manifest.ToRoleBinding(*docs[0].RoleBinding, rbacResolver); err == nil ||
-		!strings.Contains(err.Error(), "service account") {
-		t.Fatalf("ToRoleBinding = %v, want an unknown-service-account error", err)
+// A binding naming a role, scope or subject the resolver does not know is refused by name, as a row the caller may not see.
+func TestToRoleBindingUnknownRefs(t *testing.T) {
+	group := manifest.SubjectDTO{Kind: "group", Name: "platform-eng"}
+	for _, tc := range []struct {
+		name string
+		spec manifest.RoleBindingSpec
+		want string
+	}{
+		{"team", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerTeam, Name: "nowhere"}, Subjects: []manifest.SubjectDTO{group}}, `rolebinding "ghost": team "nowhere" not found`},
+		{"project", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerProject, Name: "nowhere"}, Subjects: []manifest.SubjectDTO{group}}, `rolebinding "ghost": project "nowhere" not found`},
+		{"role", manifest.RoleBindingSpec{Role: "nobody", Scope: manifest.WireOwner{Kind: meta.OwnerSystem}, Subjects: []manifest.SubjectDTO{group}}, `rolebinding "ghost": role "nobody" not found`},
+		{"service account", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerSystem}, Subjects: []manifest.SubjectDTO{group, {Kind: "serviceaccount", Name: "nobody"}}}, `binding "ghost": service account "nobody" not found`},
+		{"user", manifest.RoleBindingSpec{Role: "developer", Scope: manifest.WireOwner{Kind: meta.OwnerSystem}, Subjects: []manifest.SubjectDTO{{Kind: "user", Name: "nobody"}}}, `binding "ghost": user "nobody" not found`},
+	} {
+		_, err := manifest.ToRoleBinding(manifest.RoleBindingDTO{Metadata: manifest.WireMeta{Name: "ghost"}, Spec: tc.spec}, rbacResolver)
+		var notFound *manifest.RefNotFoundError
+		if got := errText(err); got != tc.want || !errors.As(err, &notFound) {
+			t.Errorf("unknown %s:\n got %q\nwant %s", tc.name, got, tc.want)
+		}
 	}
 }
