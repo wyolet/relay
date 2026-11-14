@@ -164,11 +164,11 @@ func TestSpecRefusals(t *testing.T) {
 	if _, err := encodeSpec(enabledDoc{}, map[string]json.RawMessage{"x": json.RawMessage(`{`)}, teamSpecKeys); !errors.Is(err, directory.ErrInvalid) {
 		t.Fatalf("attribute that is not JSON: err = %v", err)
 	}
-	if _, err := decodeSpec([]byte(`[`), &enabledDoc{}, teamSpecKeys); err == nil {
-		t.Fatal("decode of broken JSON succeeded")
+	if _, err := decodeSpec([]byte(`[`), &enabledDoc{}, teamSpecKeys); err == nil || err.Error() != "spec: unexpected end of JSON input" {
+		t.Fatalf("decode of broken JSON: %v", err)
 	}
-	if _, err := decodeMetadata("", "", "", []byte(`[`), ts(), ts(), 1); err == nil {
-		t.Fatal("decode of broken metadata succeeded")
+	if _, err := decodeMetadata("", "", "", []byte(`[`), ts(), ts(), 1); err == nil || err.Error() != "metadata: unexpected end of JSON input" {
+		t.Fatalf("decode of broken metadata: %v", err)
 	}
 }
 

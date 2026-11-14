@@ -99,9 +99,7 @@ var testEnv = map[string]string{"ALICE_PASSWORD": "correct horse battery"}
 func testRegistry(t *testing.T) *manifest.Registry {
 	t.Helper()
 	r, err := manifest.NewRegistry(testConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	return r
 }
 
@@ -117,9 +115,7 @@ func newEnv(t *testing.T) *env {
 	store := memstore.New()
 	cfg := testConfig()
 	dir, err := directory.New(directory.Config{Stores: store.Stores(), Grants: allowAll{}, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	refs := products{"q3": "budget-q3", "q4": "budget-q4"}
 	return &env{reg: testRegistry(t), store: store, dir: dir, opts: manifest.Options{Refs: refs, Names: refs}}
 }
@@ -180,4 +176,11 @@ func asError(t *testing.T, err error) *manifest.Error {
 		t.Fatalf("err = %v (%T), want a *manifest.Error", err, err)
 	}
 	return e
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

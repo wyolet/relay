@@ -55,8 +55,8 @@ func TestWriteCreatesThenUpdatesThroughTheDirectory(t *testing.T) {
 	if stored.Meta.DisplayName != "Renamed" {
 		t.Errorf("team = %+v", stored.Meta)
 	}
-	if err := manifest.Write(ctx, e.dir, admin, "not a row"); err == nil {
-		t.Error("Write accepted a value that is no row")
+	if err := manifest.Write(ctx, e.dir, admin, "not a row"); err == nil || err.Error() != "manifest: cannot write a string" {
+		t.Errorf("Write of a value that is no row: %v", err)
 	}
 	for i := len(docs) - 1; i >= 0; i-- {
 		if docs[i].Kind == manifest.KindUser {
@@ -66,11 +66,9 @@ func TestWriteCreatesThenUpdatesThroughTheDirectory(t *testing.T) {
 			t.Fatalf("delete %s: %v", docs[i].Kind, err)
 		}
 	}
-	if err := manifest.Delete(ctx, e.dir, manifest.KindUser, refs.ids[manifest.KindUser]["bob"]); err != nil {
-		t.Fatal(err)
-	}
-	if err := manifest.Delete(ctx, e.dir, "Policy", "x"); err == nil {
-		t.Error("Delete accepted an unknown kind")
+	must(t, manifest.Delete(ctx, e.dir, manifest.KindUser, refs.ids[manifest.KindUser]["bob"]))
+	if err := manifest.Delete(ctx, e.dir, "Policy", "x"); err == nil || err.Error() != `manifest: unknown kind "Policy"` {
+		t.Errorf("Delete of an unknown kind: %v", err)
 	}
 }
 

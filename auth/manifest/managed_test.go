@@ -16,9 +16,7 @@ func TestPlanSkipsManagedGroupsUnlessForced(t *testing.T) {
 	ctx := context.Background()
 	ext := directory.External{Source: "scim-1", ID: "g-1"}
 	g := &directory.Group{Meta: directory.Metadata{Name: "ops", Labels: map[string]string{"owner": "gitops"}}, Spec: directory.GroupSpec{External: ext}}
-	if err := e.dir.WithWriter(directory.Writer{Source: "scim-1"}).CreateGroup(ctx, admin, g); err != nil {
-		t.Fatal(err)
-	}
+	must(t, e.dir.WithWriter(directory.Writer{Source: "scim-1"}).CreateGroup(ctx, admin, g))
 
 	wantLines(t, actions(e.apply(t, managedGroups, manifest.Options{})), []string{"skip-managed Group/ops metadata.displayName"})
 	prune := manifest.Options{Prune: true, Selector: map[string]string{"owner": "gitops"}}

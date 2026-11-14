@@ -23,6 +23,11 @@ func TestVerify(t *testing.T) {
 		{"empty stored never matches", "", "anything", false, false},
 		{"empty password never matches", string(hash), "", false, false},
 		{"empty password against plain", "legacy-plain", "", false, false},
+		{"both empty", "", "", false, false},
+		{"the hash itself is not the password", string(hash), string(hash), false, false},
+		{"plain prefix of the stored value", "legacy-plain", "legacy", false, true},
+		{"plain differs in case", "legacy-plain", "Legacy-plain", false, true},
+		{"truncated hash", string(hash[:len(hash)-1]), "s3cret", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ok, plain := Verify(tc.stored, tc.given)
@@ -38,11 +43,18 @@ func TestHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !IsBcryptHash(hash) {
-		t.Fatalf("Hash = %q, not a bcrypt hash", hash)
+	if cost, err := bcrypt.Cost([]byte(hash)); err != nil || cost != bcrypt.DefaultCost || !IsBcryptHash(hash) {
+		t.Fatalf("Hash = %q (cost %d, %v), want a bcrypt hash at the default cost", hash, cost, err)
 	}
-	if ok, _ := Verify(hash, "s3cret"); !ok {
-		t.Error("Hash output does not verify")
+	if ok, plain := Verify(hash, "s3cret"); !ok || plain {
+		t.Errorf("Verify of Hash output = (%v, %v)", ok, plain)
+	}
+	if again, err := Hash("s3cret"); err != nil || again == hash {
+		t.Errorf("a second Hash of the same password = %q, %v; want a fresh salt", again, err)
+	}
+	// bcrypt reads at most 72 bytes and refuses more rather than truncating.
+	if h, err := Hash(string(make([]byte, 73))); err != bcrypt.ErrPasswordTooLong || h != "" {
+		t.Errorf("Hash of a 73-byte password = %q, %v", h, err)
 	}
 }
 

@@ -26,9 +26,7 @@ func TestProductFieldsRideInAttributes(t *testing.T) {
 		t.Fatalf("attributes = %s", got)
 	}
 	d, err := e.reg.FromServiceAccount(sas[0], storeNames(t, e))
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if string(d.Fields["budget"]) != `"q4"` {
 		t.Errorf("rendered fields = %s", d.Fields)
 	}
@@ -47,25 +45,17 @@ func TestAFieldWithoutHooksIsStoredVerbatim(t *testing.T) {
 	cfg.Fields[manifest.KindGroup] = []manifest.Field{{Name: "quota"}}
 	r := manifest.MustRegistry(cfg)
 	docs, err := r.Parse(strings.NewReader("apiVersion: auth.wyolet.dev/v1alpha1\nkind: Group\nmetadata: {name: g}\nspec: {quota: {seats: 5, tier: gold}}\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	g, err := r.ToGroup(&docs[0], nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	var quota map[string]any
 	if err := json.Unmarshal(g.Spec.Attributes["quota"], &quota); err != nil || quota["seats"] != 5.0 {
 		t.Fatalf("attribute = %s (%v)", g.Spec.Attributes["quota"], err)
 	}
 	back, err := r.FromGroup(g, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	out, err := manifest.Render([]*manifest.Document{back})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if !strings.Contains(string(out), "quota:\n    seats: 5\n    tier: gold") {
 		t.Errorf("rendered:\n%s", out)
 	}
@@ -74,9 +64,7 @@ func TestAFieldWithoutHooksIsStoredVerbatim(t *testing.T) {
 func TestJSONSchemaCarriesTheVocabularyAndTheFields(t *testing.T) {
 	r := testRegistry(t)
 	all, err := r.JSONSchemas()
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if len(all) != len(manifest.Kinds()) {
 		t.Fatalf("%d schemas, want one per kind", len(all))
 	}
@@ -100,9 +88,7 @@ func TestJSONSchemaCarriesTheVocabularyAndTheFields(t *testing.T) {
 			} `json:"spec"`
 		} `json:"properties"`
 	}
-	if err := json.Unmarshal(all[manifest.KindRole], &role); err != nil {
-		t.Fatal(err)
-	}
+	must(t, json.Unmarshal(all[manifest.KindRole], &role))
 	if got := strings.Join(role.Properties.Spec.Properties.Rules.Items.Properties.Verbs.Items.Enum, ","); got != "*,get,list,update" {
 		t.Errorf("verb enum = %s", got)
 	}
@@ -115,7 +101,7 @@ func TestJSONSchemaCarriesTheVocabularyAndTheFields(t *testing.T) {
 	if strings.Contains(string(all[manifest.KindTeam]), `"owner"`) {
 		t.Errorf("team schema offers metadata.owner:\n%s", all[manifest.KindTeam])
 	}
-	if _, err := r.JSONSchema("Policy"); err == nil {
-		t.Error("schema for an unknown kind")
+	if raw, err := r.JSONSchema("Policy"); err == nil || err.Error() != `manifest: unknown kind "Policy"` || raw != nil {
+		t.Errorf("schema for an unknown kind = %s, %v", raw, err)
 	}
 }

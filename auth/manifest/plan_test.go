@@ -50,9 +50,7 @@ func TestPlanSkipsDirtyRowsUnlessForced(t *testing.T) {
 	teams := e.store.Stores().Teams
 	rows, _ := teams.List(ctx)
 	rows[0].Meta.DisplayName, rows[0].Meta.Dirty = "Edited", true
-	if err := teams.Upsert(ctx, rows[0]); err != nil {
-		t.Fatal(err)
-	}
+	must(t, teams.Upsert(ctx, rows[0]))
 	if got := e.plan(t, e.parse(t, bundle), manifest.Options{}).Entries[0]; got.Action != manifest.ActionSkipDirty || len(got.ChangedFields) == 0 {
 		t.Errorf("team = %s %v, want skip-dirty with the differing fields", got.Action, got.ChangedFields)
 	}
@@ -71,9 +69,7 @@ func TestPlanReportsADirtyRowMatchingTheDocumentAsUnchanged(t *testing.T) {
 	teams := e.store.Stores().Teams
 	rows, _ := teams.List(ctx)
 	rows[0].Meta.Dirty = true
-	if err := teams.Upsert(ctx, rows[0]); err != nil {
-		t.Fatal(err)
-	}
+	must(t, teams.Upsert(ctx, rows[0]))
 	if got := e.plan(t, e.parse(t, bundle), manifest.Options{}).Entries[0]; got.Action != manifest.ActionUnchanged {
 		t.Errorf("team = %s %v, want unchanged", got.Action, got.ChangedFields)
 	}
@@ -86,18 +82,10 @@ func TestPruneLeavesRowsCreatedOutsideManifestsAlone(t *testing.T) {
 	ctx := context.Background()
 	// A team, project and group created by hand (through the directory, as a UI would), without the selector label.
 	handTeam := &directory.Team{Meta: directory.Metadata{Name: "ui-team"}}
-	if err := e.dir.CreateTeam(ctx, handTeam); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.dir.CreateProject(ctx, &directory.Project{Meta: directory.Metadata{Name: "ui-project"}, Spec: directory.ProjectSpec{TeamID: handTeam.Meta.ID}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.dir.CreateGroup(ctx, admin, &directory.Group{Meta: directory.Metadata{Name: "ui-group", Labels: map[string]string{"managed-by": "someone-else"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.dir.CreateUser(ctx, nil, &directory.User{Username: "carol"}); err != nil {
-		t.Fatal(err)
-	}
+	must(t, e.dir.CreateTeam(ctx, handTeam))
+	must(t, e.dir.CreateProject(ctx, &directory.Project{Meta: directory.Metadata{Name: "ui-project"}, Spec: directory.ProjectSpec{TeamID: handTeam.Meta.ID}}))
+	must(t, e.dir.CreateGroup(ctx, admin, &directory.Group{Meta: directory.Metadata{Name: "ui-group", Labels: map[string]string{"managed-by": "someone-else"}}}))
+	must(t, e.dir.CreateUser(ctx, nil, &directory.User{Username: "carol"}))
 	// Keep only the team and the project; drop the account, role, group and binding documents.
 	kept := strings.Join(strings.Split(bundle, "---\n")[:2], "---\n")
 	if _, err := e.reg.Plan(ctx, e.store.Stores(), e.parse(t, kept), manifest.Options{Prune: true}); !errors.Is(err, manifest.ErrSelectorRequired) {
@@ -142,9 +130,7 @@ func TestApplyRunsTheDirectoryGrantCheck(t *testing.T) {
 	cfg := testConfig()
 	denying := &denyBindings{}
 	dir, err := directory.New(directory.Config{Stores: e.store.Stores(), Grants: denying, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	p := e.plan(t, e.parse(t, bundle), manifest.Options{})
 	applied, err := p.Apply(context.Background(), dir, admin)
 	var ae *manifest.ApplyError
@@ -160,9 +146,7 @@ func TestApplyChecksGroupMembersAsGrants(t *testing.T) {
 	cfg := testConfig()
 	denying := &denyBindings{}
 	dir, err := directory.New(directory.Config{Stores: e.store.Stores(), Grants: denying, Kinds: cfg.RuleKinds, Verbs: cfg.RuleVerbs})
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	fewer := strings.Replace(bundle, "members: [alice, bob]", "members: [alice]", 1)
 	if _, err := e.plan(t, e.parse(t, fewer), manifest.Options{}).Apply(context.Background(), dir, admin); err != nil || denying.called {
 		t.Fatalf("removing a member = %v (checked %v), want no grant check", err, denying.called)

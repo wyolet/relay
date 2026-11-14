@@ -356,9 +356,8 @@ func TestReturnPath(t *testing.T) {
 
 	// Without rd the flow cookie carries no return path.
 	_, c := f.start()
-	raw, _ := base64.RawURLEncoding.DecodeString(c.Value)
-	if strings.Contains(string(raw), `"r"`) {
-		t.Errorf("flow cookie without rd = %s", raw)
+	if fs := flowOf(t, c); fs.Return != "" {
+		t.Errorf("flow cookie without rd carries the return path %q", fs.Return)
 	}
 
 	f.rp.ReturnParam = "next"
@@ -647,22 +646,22 @@ func TestDiscovery(t *testing.T) {
 	t.Run("errors", func(t *testing.T) {
 		f := newFixture(t)
 		f.p.metadata = map[string]any{"issuer": f.p.srv.URL, "token_endpoint": "x"}
-		if _, err := discover(context.Background(), f.p.srv.URL); err == nil || !strings.Contains(err.Error(), "authorization_endpoint") {
-			t.Errorf("incomplete metadata: %v", err)
-		}
-		if _, err := discover(context.Background(), ""); err == nil {
-			t.Error("empty issuer accepted")
-		}
-		if _, err := discover(context.Background(), "http://127.0.0.1:0"); err == nil {
-			t.Error("unreachable issuer accepted")
-		}
-		if _, err := discover(context.Background(), "http://bad host"); err == nil {
-			t.Error("malformed issuer accepted")
-		}
 		bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("<html>")) }))
 		defer bad.Close()
-		if _, err := discover(context.Background(), bad.URL); err == nil || !strings.Contains(err.Error(), "decode") {
-			t.Errorf("non-JSON metadata: %v", err)
+		for _, tc := range []struct{ name, issuer, want string }{
+			{"no authorization_endpoint", f.p.srv.URL, "oidc: discover " + f.p.srv.URL + ": metadata missing authorization_endpoint or token_endpoint"},
+			{"empty issuer", "", "oidc: discovery needs an issuer"},
+			{"unreachable issuer", "http://127.0.0.1:0", "oidc: discover http://127.0.0.1:0: "},
+			{"malformed issuer", "http://bad host", "oidc: discover http://bad host: "},
+			{"metadata that is not json", bad.URL, "oidc: discover " + bad.URL + ": "},
+		} {
+			if md, err := discover(context.Background(), tc.issuer); err == nil || !strings.HasPrefix(err.Error(), tc.want) || md != nil {
+				t.Errorf("%s: discover = %v, %v; want an error starting %q", tc.name, md, err, tc.want)
+			}
+		}
+		f.p.metadata = map[string]any{"issuer": f.p.srv.URL, "authorization_endpoint": "x"}
+		if _, err := discover(context.Background(), f.p.srv.URL); err == nil || !strings.HasSuffix(err.Error(), "metadata missing authorization_endpoint or token_endpoint") {
+			t.Errorf("no token_endpoint: %v", err)
 		}
 	})
 }

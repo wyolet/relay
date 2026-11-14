@@ -122,9 +122,7 @@ func renderAll(t *testing.T, e *env) []byte {
 	names := storeNames(t, e)
 	var docs []*manifest.Document
 	add := func(d *manifest.Document, err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
+		must(t, err)
 		docs = append(docs, d)
 	}
 	teams, _ := s.Teams.List(ctx)
@@ -156,9 +154,7 @@ func renderAll(t *testing.T, e *env) []byte {
 		add(e.reg.FromRoleBinding(x, names))
 	}
 	out, err := manifest.Render(docs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	must(t, err)
 	if !bytes.Contains(out, []byte("budget: q3")) || !bytes.Contains(out, []byte("team: platform")) {
 		t.Errorf("rendered names missing:\n%s", out)
 	}

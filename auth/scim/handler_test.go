@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -91,23 +92,46 @@ func TestErrorsUseTheSCIMFormat(t *testing.T) {
 
 func TestRequestsNeedALiveToken(t *testing.T) {
 	f := newFixture(t)
-	for name, auth := range map[string]string{
-		"none":         "",
-		"wrong scheme": "Basic " + f.tokenOf["entra"],
-		"unknown":      "Bearer scim_not-a-real-token",
-		"foreign":      "Bearer rk_something",
-	} {
+	live := f.tokenOf["entra"]
+	get := func(auth string) *httptest.ResponseRecorder {
 		req, _ := http.NewRequest(http.MethodGet, "/ServiceProviderConfig", nil)
 		if auth != "" {
 			req.Header.Set("Authorization", auth)
 		}
 		rec := httptest.NewRecorder()
 		f.h.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") == "" {
-			t.Errorf("%s: %d", name, rec.Code)
+		return rec
+	}
+	const refusal = `{"schemas":["urn:ietf:params:scim:api:messages:2.0:Error"],"status":"401","detail":"a valid bearer token is required"}`
+	for name, auth := range map[string]string{
+		"none":                       "",
+		"wrong scheme":               "Basic " + live,
+		"token without a scheme":     live,
+		"scheme without a token":     "Bearer",
+		"empty token":                "Bearer ",
+		"unknown":                    "Bearer scim_not-a-real-token",
+		"foreign":                    "Bearer rk_something",
+		"last character changed":     "Bearer " + live[:len(live)-1] + map[bool]string{true: "B", false: "A"}[live[len(live)-1] == 'A'],
+		"truncated":                  "Bearer " + live[:len(live)-1],
+		"extended":                   "Bearer " + live + "A",
+		"the stored hash":            "Bearer " + f.tokens.byName["entra"].TokenHash,
+		"prefix and the stored hash": "Bearer " + TokenPrefix + f.tokens.byName["entra"].TokenHash,
+		"the display prefix":         "Bearer " + f.tokens.byName["entra"].TokenPrefix,
+		"upper-cased":                "Bearer " + strings.ToUpper(live),
+	} {
+		rec := get(auth)
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != `Bearer realm="scim"` || strings.TrimSpace(rec.Body.String()) != refusal {
+			t.Errorf("%s: %d %q %s", name, rec.Code, rec.Header().Get("WWW-Authenticate"), rec.Body)
 		}
 	}
-	f.do(http.MethodGet, "/ServiceProviderConfig", "").want(t, http.StatusOK)
+	if len(f.tokens.used) != 0 {
+		t.Errorf("refused requests were recorded as use: %v", f.tokens.used)
+	}
+	for name, auth := range map[string]string{"bearer": "Bearer " + live, "lower-case scheme": "bearer " + live, "trailing space": "Bearer " + live + " "} {
+		if rec := get(auth); rec.Code != http.StatusOK {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
 	if f.tokens.used["entra"].IsZero() {
 		t.Error("use was not recorded")
 	}
@@ -119,8 +143,9 @@ func TestRequestsNeedALiveToken(t *testing.T) {
 
 func TestCreateClientValidatesAndHidesTheToken(t *testing.T) {
 	f := newFixture(t)
-	if _, _, err := CreateClient(context.Background(), f.tokens, "Not A Label"); err == nil {
-		t.Fatal("a name that is not a DNS label was accepted")
+	if tok, c, err := CreateClient(context.Background(), f.tokens, "Not A Label"); err == nil || tok != "" || c != nil ||
+		err.Error() != `scim: client name "Not A Label" must be a DNS-1123 label of at most 63 characters` {
+		t.Fatalf("CreateClient with a name that is not a DNS label = %q, %v, %v", tok, c, err)
 	}
 	tok, c, err := CreateClient(context.Background(), f.tokens, "okta")
 	if err != nil {
