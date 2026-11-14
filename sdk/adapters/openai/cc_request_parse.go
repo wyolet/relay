@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -158,7 +159,9 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	// Build Input from messages.
 	var instructions string
 	var input []v1.Item
-	for _, msg := range wire.Messages {
+	// Legacy function calls carry no id; one is minted per call (names repeat, and some upstreams require unique ids) and handed to the "function" message that answers it.
+	var legacyCallID string
+	for i, msg := range wire.Messages {
 		switch msg.Role {
 		case "system":
 			// First system message → instructions; subsequent ones go as developer-role messages.
@@ -185,7 +188,11 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			}
 			input = append(input, &v1.Message{Role: v1.RoleUser, Content: parts})
 		case "assistant":
-			item, err := ccAssistantMessageToItem(&msg)
+			legacyCallID = ""
+			if msg.FunctionCall != nil {
+				legacyCallID = msg.FunctionCall.Name + "_" + strconv.Itoa(i)
+			}
+			item, err := ccAssistantMessageToItem(&msg, legacyCallID)
 			if err != nil {
 				return nil, fmt.Errorf("cc parse_request: assistant message: %w", err)
 			}
@@ -196,6 +203,12 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 				return nil, fmt.Errorf("cc parse_request: tool message content: %w", err)
 			}
 			input = append(input, out)
+		case "function":
+			callID := msg.Name
+			if legacyCallID != "" {
+				callID, legacyCallID = legacyCallID, ""
+			}
+			input = append(input, &v1.FunctionCallOutput{CallID: callID, Output: ccContentToText(msg.Content)})
 		}
 		// canonical: ChatMessage.Name dropped — canonical messages carry no
 		// participant name and no other vendor has one to map it onto.

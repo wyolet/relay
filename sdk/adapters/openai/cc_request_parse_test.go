@@ -55,6 +55,24 @@ func TestCCParseRequest(t *testing.T) {
 				{"role":"assistant","content":null}]}`,
 		},
 		{
+			name: "legacy function calls pair with their function results under minted ids",
+			body: `{"model":"m","messages":[
+				{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{}"}},
+				{"role":"function","name":"f","content":"sunny"},
+				{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{\"d\":2}"}},
+				{"role":"function","name":"f","content":"rain"}]}`,
+			canon: `{"model":"m","output_mode":"sync","input":[
+				{"type":"function_call","id":"f_0","call_id":"f_0","name":"f","arguments":"{}"},
+				{"type":"function_call_output","call_id":"f_0","output":"sunny"},
+				{"type":"function_call","id":"f_2","call_id":"f_2","name":"f","arguments":"{\"d\":2}"},
+				{"type":"function_call_output","call_id":"f_2","output":"rain"}]}`,
+			wire: `{"model":"m","messages":[
+				{"role":"assistant","content":null,"tool_calls":[{"id":"f_0","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"f_0","content":"sunny"},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"f_2","type":"function","function":{"name":"f","arguments":"{\"d\":2}"}}]},
+				{"role":"tool","tool_call_id":"f_2","content":"rain"}]}`,
+		},
+		{
 			name: "sampling with stop string and max_completion_tokens over max_tokens",
 			body: `{"model":"m","messages":[],"temperature":0.5,"top_p":0.9,"max_tokens":10,"max_completion_tokens":20,"frequency_penalty":0.1,"presence_penalty":0.2,"seed":7,"stop":"END","reasoning_effort":"low"}`,
 			canon: `{"model":"m","output_mode":"sync","input":null,"model_config":{"m":{
@@ -142,7 +160,6 @@ func TestCCParseRequest_NoSilentDrop(t *testing.T) {
 		},
 		{
 			name: "legacy function role message",
-			bug:  `{"role":"function","name":"f","content":"sunny"} message → dropped from input`,
 			body: `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"function","name":"f","content":"sunny"}]}`,
 			keep: `sunny`,
 		},
