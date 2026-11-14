@@ -117,22 +117,29 @@ func canonicalFinishReasonToAnthropicStr(reason v1.FinishReason) string {
 	}
 }
 
-// anthropicCitationsToCanonical maps Anthropic url_citation annotations to canonical Annotations.
+// anthropicCitationsToCanonical maps text-block citations to canonical Annotations.
+// Web search results become URL citations; document and search-result locations
+// (char, page, content block) have no canonical type and ride verbatim as RawAnnotation.
 func anthropicCitationsToCanonical(cits []anthropicCitation) []v1.Annotation {
 	if len(cits) == 0 {
 		return nil
 	}
-	var out []v1.Annotation
+	out := make([]v1.Annotation, 0, len(cits))
 	for _, c := range cits {
-		if c.Type == "url_citation" {
+		switch c.Type {
+		case "url_citation":
 			out = append(out, &v1.URLCitationAnnotation{
 				URL:        c.URL,
 				Title:      c.Title,
 				StartIndex: c.StartIndex,
 				EndIndex:   c.EndIndex,
 			})
+		case "web_search_result_location":
+			// canonical: web_search_result_location cited_text and encrypted_index dropped — URLCitationAnnotation holds only url, title and output-text offsets.
+			out = append(out, &v1.URLCitationAnnotation{URL: c.URL, Title: c.Title})
+		default:
+			out = append(out, &v1.RawAnnotation{Type: c.Type, JSON: c.raw})
 		}
-		// char_location and page_location dropped — no clean v1 equivalent.
 	}
 	return out
 }
