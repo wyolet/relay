@@ -3,10 +3,10 @@ package v1
 // StreamSummarizer is the incremental counterpart to ExtractSummary's SSE
 // path: instead of buffering a whole vendor SSE body and walking it once at
 // the end, it harvests the Summary frame-by-frame as they arrive, retaining
-// only the running canonical stream state and the last usage-bearing
-// Summary. Feeding every frame of a body to a StreamSummarizer yields the
+// only the running canonical stream state and the Summary merged so far.
+// Feeding every frame of a body to a StreamSummarizer yields the
 // same Summary that ExtractSummary would return for the concatenated body —
-// same per-frame translation, same "last non-empty summary wins" rule — so a
+// same per-frame translation, same "last non-empty field wins" rule — so a
 // streamed observer never has to retain the whole stream to report usage.
 //
 // Not safe for concurrent use: one stream, one summarizer, one goroutine
@@ -44,9 +44,8 @@ func summaryStream(tr Translator) (func([]byte) ([]byte, error), func([]byte) bo
 // Observe feeds one vendor SSE frame — a single event, WITHOUT the trailing
 // blank-line separator (it is re-appended internally, mirroring
 // extractSummaryFromSSE which feeds the closure separator-terminated chunks).
-// Usage/finish from a terminal generation.completed event replaces the
-// retained Summary wholesale (last non-empty wins), exactly as the batch
-// ExtractSummary does.
+// Each non-empty field of a generation.completed event replaces the retained
+// one (last non-empty field wins), exactly as the batch ExtractSummary does.
 func (s *StreamSummarizer) Observe(frame []byte) {
 	if s == nil || !s.hasTranslator || len(frame) == 0 {
 		return
@@ -66,9 +65,7 @@ func (s *StreamSummarizer) Observe(frame []byte) {
 		}
 		canon = c
 	}
-	if sum := harvestSummaryFromCanonicalSSE(canon); !sum.isEmpty() {
-		s.found = sum
-	}
+	s.found.merge(harvestSummaryFromCanonicalSSE(canon))
 }
 
 // Summary returns the Summary harvested so far (zero until a usage-bearing
