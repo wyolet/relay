@@ -2,9 +2,11 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,8 +52,8 @@ func TestCall_StreamOutlivesSyncTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream body cut short after %d bytes: %v", len(body), err)
 	}
-	if len(body) == 0 {
-		t.Fatal("stream body empty")
+	if want := strings.Repeat("data: tick\n\n", 8); string(body) != want {
+		t.Fatalf("stream body = %q, want all 8 ticks", body)
 	}
 }
 
@@ -75,8 +77,9 @@ func TestCall_StreamIdleTimeoutEndsBody(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if _, err := io.ReadAll(resp.Body); err == nil {
-		t.Fatal("silent upstream: read returned nil error, want the idle deadline")
+	// The idle timer cancels the call's context; the bytes before the silence are still delivered.
+	if got, err := io.ReadAll(resp.Body); !errors.Is(err, context.Canceled) || string(got) != "data: first\n\n" {
+		t.Fatalf("silent upstream: read = %q, %v; want the first frame then context.Canceled", got, err)
 	}
 }
 
@@ -99,8 +102,8 @@ func TestCall_SyncTimeoutCoversBodyRead(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if _, err := io.ReadAll(resp.Body); err == nil {
-		t.Fatal("stalled upstream: read returned nil error, want the total deadline")
+	if _, err := io.ReadAll(resp.Body); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled upstream: read err = %v, want the total deadline", err)
 	}
 }
 
@@ -154,8 +157,8 @@ func TestCall_CallerDeadlineIsReused(t *testing.T) {
 	if _, derived := resp.Body.(*cancelOnCloseBody); derived {
 		t.Fatal("adapter derived a context under a caller deadline inside its cap")
 	}
-	if _, err := io.ReadAll(resp.Body); err == nil {
-		t.Fatal("stalled upstream: read returned nil error, want the caller's deadline")
+	if _, err := io.ReadAll(resp.Body); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled upstream: read err = %v, want the caller's deadline", err)
 	}
 }
 
@@ -170,8 +173,8 @@ func TestCall_LaterCallerDeadlineKeepsCap(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	start := time.Now()
-	if _, err := io.ReadAll(resp.Body); err == nil {
-		t.Fatal("stalled upstream: read returned nil error, want the sync cap")
+	if _, err := io.ReadAll(resp.Body); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled upstream: read err = %v, want the sync cap", err)
 	}
 	if waited := time.Since(start); waited > 5*time.Second {
 		t.Fatalf("read ended after %v, want about the 100ms cap", waited)

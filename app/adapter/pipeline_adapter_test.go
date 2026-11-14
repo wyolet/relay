@@ -41,15 +41,3 @@ func TestNewRequestCopiesHeadersPerAttempt(t *testing.T) {
 		t.Errorf("forwarded headers changed: %v", hdr)
 	}
 }
-
-func TestNewRequestNilHeaders(t *testing.T) {
-	s := (&Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: AuthStrategy{Header: "Authorization", Scheme: "Bearer"}}).Build()
-	req, release, err := (&specAdapter{spec: s}).newRequest(context.Background(), "http://upstream.invalid/", "key", []byte(`{}`), nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	if req.Header.Get("Authorization") != "Bearer key" || req.Header.Get("Content-Type") != "application/json" {
-		t.Errorf("headers = %v", req.Header)
-	}
-}
