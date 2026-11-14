@@ -2,9 +2,9 @@ package inference
 
 import (
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
@@ -15,80 +15,73 @@ import (
 var ccPaths = map[string]string{"temperature": "temperature", "top_p": "top_p"}
 
 func TestStripCanonicalParams(t *testing.T) {
-	temp, topP := 0.7, 0.9
-	topK := 5
-	req := &v1.Request{
-		Model: v1.ModelRefs{"m"},
-		ModelConfig: map[string]*v1.ModelOpts{
-			"m": {Sampling: &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK}},
-		},
+	temp, topP, topK := 0.7, 0.9, 5
+	all := func() *v1.SamplingParams { return &v1.SamplingParams{Temperature: &temp, TopP: &topP, TopK: &topK} }
+	tests := []struct {
+		name        string
+		config      map[string]*v1.ModelOpts
+		unsupported []string
+		wantDropped []string
+		wantKept    map[string]v1.SamplingParams
+	}{
+		{"flagged params go, the rest stay, unknown names are inert",
+			map[string]*v1.ModelOpts{"m": {Sampling: all()}}, []string{"temperature", "top_k", "unknown_future_param"},
+			[]string{"temperature", "top_k"}, map[string]v1.SamplingParams{"m": {TopP: &topP}}},
+		{"every flagged param",
+			map[string]*v1.ModelOpts{"m": {Sampling: all()}}, []string{"temperature", "top_p", "top_k"},
+			[]string{"temperature", "top_p", "top_k"}, map[string]v1.SamplingParams{"m": {}}},
+		{"a param set on several entries is reported once",
+			map[string]*v1.ModelOpts{"a": {Sampling: &v1.SamplingParams{Temperature: &temp}}, "b": {Sampling: &v1.SamplingParams{Temperature: &temp}}}, []string{"temperature"},
+			[]string{"temperature"}, map[string]v1.SamplingParams{"a": {}, "b": {}}},
+		{"a param the request does not set is not reported",
+			map[string]*v1.ModelOpts{"m": {Sampling: &v1.SamplingParams{TopP: &topP}}}, []string{"temperature"},
+			nil, map[string]v1.SamplingParams{"m": {TopP: &topP}}},
+		{"entries without sampling", map[string]*v1.ModelOpts{"m": {}, "n": nil}, []string{"temperature"}, nil, nil},
+		{"no model config", nil, []string{"temperature"}, nil, nil},
 	}
-	dropped := stripCanonicalParams(req, []string{"temperature", "top_k", "unknown_future_param"})
-	if len(dropped) != 2 {
-		t.Fatalf("dropped = %v, want temperature+top_k", dropped)
-	}
-	s := req.ModelConfig["m"].Sampling
-	if s.Temperature != nil || s.TopK != nil {
-		t.Error("flagged params survived the strip")
-	}
-	if s.TopP == nil {
-		t.Error("unflagged top_p was stripped")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &v1.Request{Model: v1.ModelRefs{"m"}, ModelConfig: tt.config}
+			if diff := cmp.Diff(tt.wantDropped, stripCanonicalParams(req, tt.unsupported)); diff != "" {
+				t.Errorf("dropped (-want +got):\n%s", diff)
+			}
+			for name, want := range tt.wantKept {
+				if diff := cmp.Diff(want, *req.ModelConfig[name].Sampling); diff != "" {
+					t.Errorf("sampling left on %q (-want +got):\n%s", name, diff)
+				}
+			}
+		})
 	}
 }
 
-func TestStripCanonicalParamsNothingSet(t *testing.T) {
-	req := &v1.Request{Model: v1.ModelRefs{"m"}}
-	if dropped := stripCanonicalParams(req, []string{"temperature"}); dropped != nil {
-		t.Fatalf("dropped = %v, want none", dropped)
-	}
-}
-
-// TestDispatch_BytePass_StripsUnsupportedParams drives the byte-pass guard
-// through Dispatch: a same-shape request carrying temperature to a model
-// flagged unsupported must surface the drop via the warnings header (set
-// before the pipeline runs, so no live upstream is needed). top_p is also
-// flagged but absent from the body, so it must not be reported dropped.
+// A same-shape request carrying a param the routed model declares unsupported reaches the upstream without it, and the caller is told; a param that is flagged but absent, or present on an unflagged model, changes nothing.
 func TestDispatch_BytePass_StripsUnsupportedParams(t *testing.T) {
-	cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI,
-		model.Capabilities{UnsupportedParams: []string{"temperature", "top_p"}})
-	d := buildDeps(t, cat)
+	const body = `{"model":"test-model","temperature":0.7,"messages":[]}`
+	for name, tc := range map[string]struct {
+		caps         []model.Capabilities
+		wantUpstream string
+		wantWarning  string
+	}{
+		"flagged":   {[]model.Capabilities{{UnsupportedParams: []string{"temperature", "top_p"}}}, `{"model":"test-model","messages":[]}`, "dropped_params=temperature; reason=unsupported_by_model"},
+		"unflagged": {nil, body, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			upURL, last := answeringUpstream(t, "application/json", `{}`)
+			cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI, tc.caps...)
+			pointHostAt(t, cat, upURL)
+			d := buildRunnableDeps(t, cat)
 
-	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
-	r = withNormalContext(r, pr)
-	w := httptest.NewRecorder()
+			w := dispatch(d, pr, DispatchInput{Inbound: adapters.OpenAI, Body: []byte(body), ModelName: "test-model"})
 
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.OpenAI,
-		Body:      []byte(`{"model":"test-model","temperature":0.7,"messages":[{"role":"user","content":"hi"}]}`),
-		ModelName: "test-model",
-	})
-
-	warn := w.Header().Get(httpheader.HeaderWarnings)
-	if !strings.Contains(warn, "temperature") {
-		t.Fatalf("warnings header = %q, want dropped temperature", warn)
-	}
-	if strings.Contains(warn, "top_p") {
-		t.Errorf("warnings header = %q reports top_p, which was not in the body", warn)
-	}
-}
-
-// TestDispatch_BytePass_UnflaggedModelUntouched: no capability flags → the
-// guard must not fire at all, temperature or not.
-func TestDispatch_BytePass_UnflaggedModelUntouched(t *testing.T) {
-	cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
-	d := buildDeps(t, cat)
-
-	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
-	r = withNormalContext(r, pr)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.OpenAI,
-		Body:      []byte(`{"model":"test-model","temperature":0.7,"messages":[]}`),
-		ModelName: "test-model",
-	})
-
-	if warn := w.Header().Get(httpheader.HeaderWarnings); warn != "" {
-		t.Fatalf("warnings header = %q on an unflagged model, want none", warn)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", w.Code, w.Body)
+			}
+			if _, got := last(); got != tc.wantUpstream {
+				t.Errorf("upstream body = %s, want %s", got, tc.wantUpstream)
+			}
+			if got := w.Header().Get(httpheader.HeaderWarnings); got != tc.wantWarning {
+				t.Errorf("warnings header = %q, want %q", got, tc.wantWarning)
+			}
+		})
 	}
 }

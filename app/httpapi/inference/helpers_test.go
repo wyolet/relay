@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,6 +179,42 @@ func wantAnswer(t *testing.T, rec *httptest.ResponseRecorder, status int, want h
 		if got := rec.Header().Get(k); got != v {
 			t.Errorf("header %s = %q, want %q", k, got, v)
 		}
+	}
+}
+
+// answeringUpstream answers every request with reply as contentType; last returns the path and body of the most recent one.
+func answeringUpstream(t testing.TB, contentType, reply string) (baseURL string, last func() (path, body string)) {
+	t.Helper()
+	var mu sync.Mutex
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotPath, gotBody = r.URL.EscapedPath(), string(b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", contentType)
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() (string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotPath, gotBody
+	}
+}
+
+// wantJSON checks got is the JSON document want, whatever its member order and spacing.
+func wantJSON(t *testing.T, label, got, want string) {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatalf("%s: the expected document is not JSON: %v", label, err)
+	}
+	if err := json.Unmarshal([]byte(got), &g); err != nil {
+		t.Fatalf("%s: %q is not JSON: %v", label, got, err)
+	}
+	if diff := cmp.Diff(w, g); diff != "" {
+		t.Errorf("%s (-want +got):\n%s", label, diff)
 	}
 }
 

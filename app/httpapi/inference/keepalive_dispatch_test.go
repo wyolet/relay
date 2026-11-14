@@ -1,7 +1,5 @@
 package inference
 
-// Keepalive on the streamed response paths: when the upstream goes silent mid-stream, relay must keep the connection alive with a frame of the INBOUND shape (Anthropic callers get `ping`, everyone else an SSE comment), and it must never splice one into a half-written frame.
-
 import (
 	"net/http"
 	"net/http/httptest"
@@ -72,27 +70,6 @@ func silentGapUpstream(t *testing.T, head, tail string) *httptest.Server {
 	return srv
 }
 
-// assertWellFormedSSE fails if any frame carries a line that is not an SSE field or comment — the shape a keepalive spliced into a half-written frame would produce.
-func assertWellFormedSSE(t *testing.T, body string) {
-	t.Helper()
-	for _, frame := range strings.Split(body, "\n\n") {
-		for _, line := range strings.Split(frame, "\n") {
-			if line == "" {
-				continue
-			}
-			switch {
-			case strings.HasPrefix(line, ":"),
-				strings.HasPrefix(line, "event:"),
-				strings.HasPrefix(line, "data:"),
-				strings.HasPrefix(line, "id:"),
-				strings.HasPrefix(line, "retry:"):
-			default:
-				t.Fatalf("corrupt SSE line %q in frame %q", line, frame)
-			}
-		}
-	}
-}
-
 const anthropicStreamHead = `event: message_start
 data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}
 
@@ -115,89 +92,45 @@ data: {"type":"message_stop"}
 
 `
 
-// Byte-pass (Anthropic in, Anthropic upstream): the gap is filled with the shape's own `ping`, not a comment.
-func TestDispatch_KeepAlive_BytePass_EmitsPing(t *testing.T) {
-	up := silentGapUpstream(t, anthropicStreamHead, anthropicStreamTail)
-	cat, rk := keepAliveCatalog(t, up.URL)
-	d := keepAliveDeps(t, cat, keepAliveInterval)
-
-	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", nil)
-	r = withNormalContext(r, rk)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.Anthropic,
-		Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-		ModelName: "test-model",
-		Stream:    true,
-	})
-
-	body := w.Body.String()
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, body)
+// While the upstream is silent mid-stream relay keeps the connection alive with a frame of the inbound shape: an Anthropic caller gets `ping`, everyone else an SSE comment. The frames land only between the stream's own, so taking them out leaves exactly the stream a relay without keepalive sends.
+func TestDispatch_KeepAlive(t *testing.T) {
+	run := func(t *testing.T, inbound adapters.Name, every time.Duration) string {
+		t.Helper()
+		up := silentGapUpstream(t, anthropicStreamHead, anthropicStreamTail)
+		cat, rk := keepAliveCatalog(t, up.URL)
+		w := dispatch(keepAliveDeps(t, cat, every), rk, DispatchInput{
+			Inbound:   inbound,
+			Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+			ModelName: "test-model",
+			Stream:    true,
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body)
+		}
+		return string(clockFields.ReplaceAll(w.Body.Bytes(), []byte(`"$1":0`)))
 	}
-	if got := strings.Count(body, "event: ping"); got < 2 {
-		t.Fatalf("ping frames during a %v upstream gap = %d, want >= 2\n%s", upstreamSilence, got, body)
-	}
-	mustContain(t, "byte-pass stream", body, "Hello")
-	mustContain(t, "byte-pass stream", body, "message_stop")
-	assertWellFormedSSE(t, body)
-}
-
-// Cross-shape (CC in, Anthropic upstream): CC has no idle frame of its own, so the caller gets the SSE comment.
-func TestDispatch_KeepAlive_CrossShape_EmitsComment(t *testing.T) {
-	up := silentGapUpstream(t, anthropicStreamHead, anthropicStreamTail)
-	cat, rk := keepAliveCatalog(t, up.URL)
-	d := keepAliveDeps(t, cat, keepAliveInterval)
-
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.OpenAI,
-		Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-		ModelName: "test-model",
-		Stream:    true,
-	})
-
-	body := w.Body.String()
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, body)
-	}
-	if got := strings.Count(body, string(v1.DefaultKeepAliveFrame)); got < 2 {
-		t.Fatalf("keepalive comments during a %v upstream gap = %d, want >= 2\n%s", upstreamSilence, got, body)
-	}
-	mustContain(t, "cross-shape stream", body, "chat.completion.chunk")
-	mustContain(t, "cross-shape stream", body, "Hello")
-	assertWellFormedSSE(t, body)
-}
-
-// StreamKeepAlive = 0 leaves the stream exactly as it was.
-func TestDispatch_KeepAlive_DisabledEmitsNothing(t *testing.T) {
-	up := silentGapUpstream(t, anthropicStreamHead, anthropicStreamTail)
-	cat, rk := keepAliveCatalog(t, up.URL)
-	d := keepAliveDeps(t, cat, 0)
-
-	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", nil)
-	r = withNormalContext(r, rk)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.Anthropic,
-		Body:      []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`),
-		ModelName: "test-model",
-		Stream:    true,
-	})
-
-	body := w.Body.String()
-	if w.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", w.Code, body)
-	}
-	if got := strings.Count(body, "event: ping"); got != 0 {
-		t.Fatalf("ping frames with the keepalive disabled = %d, want 0\n%s", got, body)
-	}
-	if strings.Contains(body, string(v1.DefaultKeepAliveFrame)) {
-		t.Fatalf("keepalive comment emitted with the keepalive disabled\n%s", body)
+	for name, tc := range map[string]struct {
+		inbound adapters.Name
+		frame   string
+	}{
+		"byte-pass, the shape's own ping": {adapters.Anthropic, "event: ping\ndata: {\"type\":\"ping\"}\n\n"},
+		"cross-shape, an SSE comment":     {adapters.OpenAI, ": keepalive\n\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			quiet := run(t, tc.inbound, 0)
+			if strings.Contains(quiet, tc.frame) {
+				t.Fatalf("keepalive frame emitted with the keepalive disabled:\n%s", quiet)
+			}
+			if tc.inbound == adapters.Anthropic && quiet != anthropicStreamHead+anthropicStreamTail {
+				t.Errorf("byte-pass stream = %q, want the upstream's bytes", quiet)
+			}
+			kept := run(t, tc.inbound, keepAliveInterval)
+			if n := strings.Count(kept, tc.frame); n < 2 {
+				t.Errorf("keepalive frames during a %v upstream gap = %d, want >= 2\n%s", upstreamSilence, n, kept)
+			}
+			if got := strings.ReplaceAll(kept, tc.frame, ""); got != quiet {
+				t.Errorf("stream without its keepalive frames\n got %q\nwant %q", got, quiet)
+			}
+		})
 	}
 }

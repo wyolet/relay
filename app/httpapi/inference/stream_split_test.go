@@ -1,10 +1,13 @@
 package inference
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/pkg/adapters"
@@ -12,32 +15,49 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// Two upstream content frames that reach dispatch in one read. The SDK
-// to-canonical parsers keep only a chunk's last data: line, so dispatch must
-// hand them one frame at a time for both deltas to survive.
+// Upstream content frames that reach dispatch in one read. The to-canonical parsers keep only a chunk's last data: line, so dispatch must hand them one frame at a time for both deltas to survive.
 const twoDeltaFrames = `data: {"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"Hel"}}]}` + "\n\n" +
 	`data: {"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"lo."}}]}` + "\n\n" +
 	`data: {"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
 	"data: [DONE]\n\n"
 
-func assertBothDeltas(t *testing.T, out string) {
+// canonicalText returns a canonical stream's text deltas in order and its last event's name.
+func canonicalText(t *testing.T, stream string) (deltas []string, last string) {
 	t.Helper()
-	for _, want := range []string{`"delta":"Hel"`, `"delta":"lo."`, "event: generation.completed"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("canonical stream missing %s:\n%s", want, out)
+	for _, frame := range strings.Split(strings.TrimSuffix(stream, "\n\n"), "\n\n") {
+		event, data, _ := v1.ParseSSEChunk([]byte(frame))
+		if last = event; event != v1.EventItemDelta {
+			continue
 		}
+		var d struct{ Kind, Delta string }
+		if err := json.Unmarshal(data, &d); err != nil {
+			t.Fatalf("delta frame %q: %v", frame, err)
+		}
+		if d.Kind == "text" {
+			deltas = append(deltas, d.Delta)
+		}
+	}
+	return deltas, last
+}
+
+func wantBothDeltas(t *testing.T, stream string) {
+	t.Helper()
+	deltas, last := canonicalText(t, stream)
+	if diff := cmp.Diff([]string{"Hel", "lo."}, deltas); diff != "" || last != v1.EventGenerationCompleted {
+		t.Errorf("text deltas (-want +got):\n%s\nlast event %q, want generation.completed\n%s", diff, last, stream)
 	}
 }
 
-func TestStreamCanonical_TwoFramesInOneReadYieldBoth(t *testing.T) {
-	out := runStreamCanonical(t, twoDeltaFrames, streamShapes{}, openai.CCTranslator{}.NewToCanonicalStream(), nil)
-	assertBothDeltas(t, out)
-}
-
-func TestStreamCanonical_CRLFFramesYieldBoth(t *testing.T) {
-	crlf := strings.ReplaceAll(twoDeltaFrames, "\n", "\r\n")
-	out := runStreamCanonical(t, crlf, streamShapes{}, openai.CCTranslator{}.NewToCanonicalStream(), nil)
-	assertBothDeltas(t, out)
+// Line endings are the transport's: the same frames in LF, CRLF or CR yield the same canonical stream.
+func TestStreamCanonical_FramesInOneReadYieldEachDelta(t *testing.T) {
+	lf := runStreamCanonical(t, twoDeltaFrames, streamShapes{}, openai.CCTranslator{}.NewToCanonicalStream(), nil)
+	wantBothDeltas(t, lf)
+	for name, eol := range map[string]string{"CRLF": "\r\n", "CR": "\r"} {
+		got := runStreamCanonical(t, strings.ReplaceAll(twoDeltaFrames, "\n", eol), streamShapes{}, openai.CCTranslator{}.NewToCanonicalStream(), nil)
+		if got != lf {
+			t.Errorf("%s stream\n got %q\nwant %q", name, got, lf)
+		}
+	}
 }
 
 // A canonical caller streaming from an upstream that ends its SSE lines in CRLF or CR gets the whole generation, not an empty one reported as completed.
@@ -53,30 +73,21 @@ func TestDispatch_CRLFUpstreamStreamYieldsFullGeneration(t *testing.T) {
 			pointHostAt(t, cat, up.URL)
 			d := buildRunnableDeps(t, cat)
 			useSpecs(&d, adapter.NewRegistry(
-				(&adapter.Spec{
-					Name:        adapters.OpenAI,
-					DefaultPath: "/v1/chat/completions",
-					Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-					Translator:  openai.CCTranslator{},
-				}).Build(),
+				(&adapter.Spec{Name: adapters.OpenAI, DefaultPath: "/v1/chat/completions", Auth: adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}, Translator: openai.CCTranslator{}}).Build(),
 				(&adapter.Spec{Name: adapters.Canonical, Translator: v1.IdentityTranslator{}}).Build(),
 			))
 
-			r := withNormalContext(httptest.NewRequest(http.MethodPost, "/v1/generate", nil), pr)
-			w := httptest.NewRecorder()
-			Dispatch(d, w, r, DispatchInput{
+			w := dispatch(d, pr, DispatchInput{
 				Inbound:   adapters.Canonical,
 				Body:      []byte(`{"model":"test-model","input":"hi","output_mode":"stream"}`),
 				ModelName: "test-model",
 				Stream:    true,
 			})
 
-			out := w.Body.String()
 			if w.Code != http.StatusOK {
-				t.Fatalf("status %d: %s", w.Code, out)
+				t.Fatalf("status %d: %s", w.Code, w.Body)
 			}
-			assertBothDeltas(t, out)
-			mustNotContain(t, "canonical stream", out, "event: error")
+			wantBothDeltas(t, w.Body.String())
 		})
 	}
 }

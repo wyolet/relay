@@ -3,6 +3,7 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,13 +12,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/wyolet/relay/pkg/adapters"
 	"github.com/wyolet/relay/pkg/metrics"
-	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// failOn returns a stream transform that passes frames through unchanged and
-// fails, like a translator decoding a malformed payload, on any frame carrying marker.
+// failOn returns a stream transform that passes frames through unchanged and fails, like a translator decoding a malformed payload, on any frame carrying marker.
 func failOn(marker string) func([]byte) ([]byte, error) {
 	return func(b []byte) ([]byte, error) {
 		if bytes.Contains(b, []byte(marker)) {
@@ -32,79 +30,91 @@ func identityStream(b []byte) ([]byte, error) { return b, nil }
 
 func runStreamCanonical(t *testing.T, stream string, shapes streamShapes, toCanon, fromCanon func([]byte) ([]byte, error)) string {
 	t.Helper()
-	cat, _ := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	d := buildDeps(t, cat)
-	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
 	w := httptest.NewRecorder()
-	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false, false, shapes, toCanon, fromCanon)
+	streamCanonical(Deps{}, w, httptest.NewRequest(http.MethodPost, "/v1/generate", nil), io.NopCloser(strings.NewReader(stream)), false, false, shapes, toCanon, fromCanon)
 	return w.Body.String()
 }
 
-func droppedCount(adapter, direction, reason string) float64 {
-	return testutil.ToFloat64(metrics.StreamEventsDropped.WithLabelValues(adapter, direction, reason))
+// A frame either translator rejects is skipped and counted against that translator; the rest of the stream reaches the caller untouched. Only when the terminal event is among the lost does relay end the stream itself, with an error the caller cannot read as a completed response.
+func TestStreamCanonical_DroppedFrames(t *testing.T) {
+	const (
+		created   = "event: generation.created\ndata: {\"id\":\"g1\",\"model\":\"m\"}\n\n"
+		hel       = "event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"Hel\"}\n\n"
+		bad       = "event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"BAD\"}\n\n"
+		lo        = "event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"lo\"}\n\n"
+		completed = "event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"completed\"}\n\n"
+		badEnd    = "event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"BAD\"}\n\n"
+		upErr     = "event: error\ndata: {\"code\":\"upstream\",\"message\":\"overloaded\"}\n\n"
+		closing   = "event: error\ndata: {\"code\":\"translate_stream\",\"message\":\"relay could not translate part of the upstream stream; the response is incomplete\"}\n\n"
+	)
+	tests := []struct {
+		name      string
+		stream    string
+		toCanon   func([]byte) ([]byte, error)
+		fromCanon func([]byte) ([]byte, error)
+		want      string
+		// wantDrops is the count per (adapter, direction, reason) label set.
+		wantDrops map[[3]string]float64
+	}{
+		{"nothing dropped", created + hel + lo + completed, identityStream, identityStream, created + hel + lo + completed, nil},
+		{"upstream frame", created + hel + bad + lo + completed, failOn("BAD"), identityStream, created + hel + lo + completed,
+			map[[3]string]float64{{"up", "to_canonical", "syntax"}: 1}},
+		{"inbound frame", created + hel + bad + lo + completed, identityStream, failOn("BAD"), created + hel + lo + completed,
+			map[[3]string]float64{{"in", "from_canonical", "syntax"}: 1}},
+		{"several frames", created + bad + hel + bad + completed, failOn("BAD"), identityStream, created + hel + completed,
+			map[[3]string]float64{{"up", "to_canonical", "syntax"}: 2}},
+		{"terminal frame", created + hel + badEnd, failOn("BAD"), identityStream, created + hel + closing,
+			map[[3]string]float64{{"up", "to_canonical", "syntax"}: 1}},
+		{"terminal frame on the inbound side", created + hel + badEnd, identityStream, failOn("BAD"), created + hel + closing,
+			map[[3]string]float64{{"in", "from_canonical", "syntax"}: 1}},
+		// An upstream error event already ends the stream; a second error would misreport it.
+		{"frame before an upstream error", created + bad + upErr, failOn("BAD"), identityStream, created + upErr,
+			map[[3]string]float64{{"up", "to_canonical", "syntax"}: 1}},
+		// A stream cut short with nothing dropped is the upstream's truncation, passed on as it came.
+		{"no terminal frame and nothing dropped", created + hel, identityStream, identityStream, created + hel, nil},
+		{"every frame", bad + bad, failOn("BAD"), identityStream, closing,
+			map[[3]string]float64{{"up", "to_canonical", "syntax"}: 2}},
+		{"a failure that is not a decode error", created + bad + completed, func(b []byte) ([]byte, error) {
+			if bytes.Contains(b, []byte("BAD")) {
+				return nil, errors.New("unknown event")
+			}
+			return b, nil
+		}, identityStream, created + completed, map[[3]string]float64{{"up", "to_canonical", "invalid"}: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels := [][3]string{{"up", "to_canonical", "syntax"}, {"up", "to_canonical", "invalid"}, {"in", "from_canonical", "syntax"}}
+			count := func(l [3]string) float64 {
+				return testutil.ToFloat64(metrics.StreamEventsDropped.WithLabelValues(l[0], l[1], l[2]))
+			}
+			before := map[[3]string]float64{}
+			for _, l := range labels {
+				before[l] = count(l)
+			}
+
+			got := runStreamCanonical(t, tt.stream, streamShapes{upstream: "up", inbound: "in"}, tt.toCanon, tt.fromCanon)
+
+			if got != tt.want {
+				t.Errorf("stream\n got %q\nwant %q", got, tt.want)
+			}
+			for _, l := range labels {
+				if d := count(l) - before[l]; d != tt.wantDrops[l] {
+					t.Errorf("dropped%v rose by %v, want %v", l, d, tt.wantDrops[l])
+				}
+			}
+		})
+	}
 }
 
-const canonStreamWithBadDelta = "" +
-	"event: generation.created\ndata: {\"id\":\"g1\",\"model\":\"m\"}\n\n" +
-	"event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"Hel\"}\n\n" +
-	"event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"BAD\"}\n\n" +
-	"event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"lo\"}\n\n" +
-	"event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"completed\"}\n\n"
-
-func TestStreamCanonical_UntranslatableUpstreamFrameSkippedAndCounted(t *testing.T) {
-	shapes := streamShapes{upstream: "up-shape-a", inbound: "in-shape-a"}
-	before := droppedCount("up-shape-a", "to_canonical", "syntax")
-
-	out := runStreamCanonical(t, canonStreamWithBadDelta, shapes, failOn("BAD"), identityStream)
-
-	if got := droppedCount("up-shape-a", "to_canonical", "syntax") - before; got != 1 {
-		t.Fatalf("dropped counter delta = %v, want 1", got)
-	}
-	for _, want := range []string{`"delta":"Hel"`, `"delta":"lo"`, "event: generation.completed"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("stream missing %s after the dropped frame:\n%s", want, out)
+func TestStreamDropReason(t *testing.T) {
+	var n int
+	for want, err := range map[string]error{
+		"syntax":  json.Unmarshal([]byte(`{`), &n),
+		"type":    json.Unmarshal([]byte(`"x"`), &n),
+		"invalid": errors.New("unknown event"),
+	} {
+		if got := streamDropReason(err); got != want {
+			t.Errorf("streamDropReason(%v) = %q, want %q", err, got, want)
 		}
-	}
-	if strings.Contains(out, "BAD") || strings.Contains(out, "event: error") {
-		t.Errorf("dropped frame leaked or a terminal error was added to a stream that completed:\n%s", out)
-	}
-}
-
-func TestStreamCanonical_UntranslatableInboundFrameSkippedAndCounted(t *testing.T) {
-	shapes := streamShapes{upstream: "up-shape-b", inbound: "in-shape-b"}
-	before := droppedCount("in-shape-b", "from_canonical", "syntax")
-
-	out := runStreamCanonical(t, canonStreamWithBadDelta, shapes, identityStream, failOn("BAD"))
-
-	if got := droppedCount("in-shape-b", "from_canonical", "syntax") - before; got != 1 {
-		t.Fatalf("dropped counter delta = %v, want 1", got)
-	}
-	for _, want := range []string{`"delta":"Hel"`, `"delta":"lo"`, "event: generation.completed"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("stream missing %s after the dropped frame:\n%s", want, out)
-		}
-	}
-}
-
-func TestStreamCanonical_LostTerminalFrameEndsWithError(t *testing.T) {
-	stream := "" +
-		"event: generation.created\ndata: {\"id\":\"g1\",\"model\":\"m\"}\n\n" +
-		"event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"Hel\"}\n\n" +
-		"event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"BAD\"}\n\n"
-	shapes := streamShapes{upstream: "up-shape-c", inbound: "in-shape-c"}
-
-	out := runStreamCanonical(t, stream, shapes, failOn("BAD"), identityStream)
-
-	frames := splitCanonFrames([]byte(out + "\n\n"))
-	if len(frames) == 0 {
-		t.Fatal("empty stream")
-	}
-	event, data, _ := v1.ParseSSEChunk(frames[len(frames)-1])
-	if event != v1.EventError {
-		t.Fatalf("last event = %q, want %q so the caller cannot read the stream as complete:\n%s", event, v1.EventError, out)
-	}
-	var ev v1.ErrorEvent
-	if err := json.Unmarshal(data, &ev); err != nil || ev.Code == "" {
-		t.Fatalf("terminal error event = %s (%v), want a coded error", data, err)
 	}
 }
