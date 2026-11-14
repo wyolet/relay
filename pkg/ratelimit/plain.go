@@ -113,14 +113,11 @@ func CheckPlain(r Rule, cur, prev int64, now time.Time) (time.Duration, bool) {
 		elapsedMs := nowMs - (nowMs/winMs)*winMs
 		retryMs := float64(winMs) - float64(elapsedMs)
 		if prev > 0 {
-			fracT := 1.0 - float64(r.Amount-cur)/float64(prev)
-			if fracT > 0 && fracT < 1.0 {
-				if wait := fracT*float64(winMs) - float64(elapsedMs); wait > 0 && wait < retryMs {
-					retryMs = wait
-				}
+			if wait := retryMs - float64(r.Amount-cur-1)*float64(winMs)/float64(prev); wait > 0 && wait < retryMs {
+				retryMs = wait
 			}
 		}
-		return time.Duration(math.Floor(retryMs)) * time.Millisecond, false
+		return time.Duration(math.Ceil(retryMs)) * time.Millisecond, false
 	}
 	return 0, false
 }

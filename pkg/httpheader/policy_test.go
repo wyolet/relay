@@ -74,7 +74,6 @@ func TestSanitizeUpstreamResponse(t *testing.T) {
 }
 
 func TestStripRemovesTheTrailerHeader(t *testing.T) {
-	t.Skip(`bug: Strip(Trailer: X-Checksum) keeps the header; the hop-by-hop list names "Trailers", which is not a header (RFC 7230 names "Trailer")`)
 	for name, strip := range map[string]func(http.Header) http.Header{"Strip": Strip, "SanitizeUpstreamResponse": SanitizeUpstreamResponse} {
 		if got := strip(http.Header{"Trailer": {"X-Checksum"}}); len(got) != 0 {
 			t.Errorf("%s kept %v", name, got)
@@ -83,7 +82,6 @@ func TestStripRemovesTheTrailerHeader(t *testing.T) {
 }
 
 func TestStripHonoursEveryConnectionLine(t *testing.T) {
-	t.Skip("bug: Strip of two Connection lines, [close] and [X-Hop], keeps X-Hop; only the first line's tokens are removed")
 	got := Strip(http.Header{"Connection": {"close", "X-Hop"}, "X-Hop": {"1"}, "Accept": {"*/*"}})
 	if diff := cmp.Diff(http.Header{"Accept": {"*/*"}}, got); diff != "" {
 		t.Errorf("headers forwarded upstream (-want +got):\n%s", diff)
@@ -182,6 +180,9 @@ func TestSafeUpstreamError(t *testing.T) {
 		{"dial tcp 10.0.0.1: i/o timeout", "vendor: upstream connection failed"},
 		{`Post "https://api.vendor.example/v1/foo": dial tcp: connection refused`, "vendor: upstream connection failed"},
 		{"redirected to http://internal/x", "vendor: upstream connection failed"},
+		{"dial tcp 2001:db8:1:2:3:4:5:6: i/o timeout", "vendor: upstream connection failed"},
+		{"listen tcp [::]:443: bind: address already in use", "vendor: upstream connection failed"},
+		{"stream reset at 12:30:45", "vendor: stream reset at 12:30:45"},
 		{"context deadline exceeded", "vendor: context deadline exceeded"},
 		{"unexpected EOF", "vendor: unexpected EOF"},
 		{"", "vendor: "},
@@ -193,7 +194,6 @@ func TestSafeUpstreamError(t *testing.T) {
 }
 
 func TestSafeUpstreamErrorRedactsIPv6(t *testing.T) {
-	t.Skip(`bug: SafeUpstreamError("dial tcp [fd00::1234]:443: connect: connection refused") → the message unchanged; only IPv4 addresses and URLs are recognised, so an IPv6 upstream address reaches the caller`)
 	const in = "dial tcp [fd00::1234]:443: connect: connection refused"
 	if got := SafeUpstreamError("vendor", errors.New(in)); got != "vendor: upstream connection failed" {
 		t.Errorf("SafeUpstreamError(%q) = %q, want the address replaced", in, got)

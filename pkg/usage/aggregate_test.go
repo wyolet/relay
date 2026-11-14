@@ -112,7 +112,6 @@ func TestSummarizeGrouping(t *testing.T) {
 }
 
 func TestSummarizeOrdersEqualCountsStably(t *testing.T) {
-	t.Skip("bug: Summarize of six groups with one request each → row order differs between calls (rows sort by request count with no tiebreak over map iteration)")
 	var events []Event
 	for _, m := range []string{"a", "b", "c", "d", "e", "f"} {
 		events = append(events, Event{RequestID: m, Status: 200, Model: m})

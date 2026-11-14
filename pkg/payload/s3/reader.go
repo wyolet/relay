@@ -58,9 +58,6 @@ func NewReader(ctx context.Context, cfg Config) (*Reader, error) {
 func (r *Reader) Get(ctx context.Context, requestID string) (payload.Record, error) {
 	suffix := "/" + requestID + ".json"
 	base := r.prefix
-	if base == "" {
-		suffix = requestID + ".json" // root-level objects have no leading slash
-	}
 	for obj := range r.client.ListObjects(ctx, r.bucket, minio.ListObjectsOptions{
 		Prefix:    base,
 		Recursive: true,
@@ -68,7 +65,8 @@ func (r *Reader) Get(ctx context.Context, requestID string) (payload.Record, err
 		if obj.Err != nil {
 			return payload.Record{}, fmt.Errorf("payload/s3: list: %w", obj.Err)
 		}
-		if strings.HasSuffix(obj.Key, suffix) || obj.Key == suffix {
+		// Without a prefix a record may also sit at the bucket root, with no slash before its id.
+		if strings.HasSuffix(obj.Key, suffix) || (base == "" && obj.Key == suffix[1:]) {
 			return r.fetchObject(ctx, obj.Key)
 		}
 	}

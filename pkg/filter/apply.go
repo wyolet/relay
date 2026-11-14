@@ -21,7 +21,10 @@ func (q Query[T]) Apply(items []*T) (page []*T, total int) {
 	if q.sortField != nil {
 		f := q.sortField
 		sort.SliceStable(matched, func(i, j int) bool {
-			return f.less(matched[i], matched[j]) != q.sortDesc
+			if q.sortDesc {
+				return f.less(matched[j], matched[i])
+			}
+			return f.less(matched[i], matched[j])
 		})
 	}
 
