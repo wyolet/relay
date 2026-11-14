@@ -60,13 +60,12 @@ func TestSettingsRetention(t *testing.T) {
 	}
 
 	// Omitting retentionDays must be rejected, not read as keep-forever.
-	for _, body := range []string{`{` + payloadRest + `}`, `{` + usageRest + `}`, `{` + usageRest + `,"retentionDays":-1}`} {
-		section := settings.SectionUsageLogging
-		if strings.Contains(body, "enabled") {
-			section = settings.SectionPayloadLogging
-		}
-		if w := putSetting(t, r, deps.AdminToken, section, body); w.Code == http.StatusOK {
-			t.Fatalf("PUT %s %s accepted: %s", section, body, w.Body.String())
-		}
+	for _, tc := range []struct{ section, body, at, want string }{
+		{settings.SectionPayloadLogging, `{` + payloadRest + `}`, "body", "expected required property retentionDays to be present"},
+		{settings.SectionUsageLogging, `{` + usageRest + `}`, "body", "expected required property retentionDays to be present"},
+		{settings.SectionAudit, `{}`, "body", "expected required property retentionDays to be present"},
+	} {
+		wantFieldError(t, putSetting(t, r, deps.AdminToken, tc.section, tc.body), tc.at, tc.want)
 	}
+	wantAPIError(t, putSetting(t, r, deps.AdminToken, settings.SectionUsageLogging, `{`+usageRest+`,"retentionDays":-1}`), 400, "", "usage-logging: retentionDays must be >= 0")
 }

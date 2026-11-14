@@ -9,10 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
@@ -102,9 +98,7 @@ func newAccountsHarness(t *testing.T, w *plantest.World, az authz.Authorizer, ac
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	lim := lua.New(pkgratelimit.New(mem, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return now }))
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", actors))
-	api := humachi.New(r, huma.DefaultConfig("accounts-test", "0"))
+	r, api := testAPI(t, actors)
 	d := Deps{Authz: az, PlanView: plans.Engine.View, Counters: lim}
 	registerMyAccounts(api, d, nil)
 	registerLimits(api, d, nil)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -127,22 +128,33 @@ func mountDeps(t *testing.T) Deps {
 func TestMountRegistersEveryOperation(t *testing.T) {
 	r := chi.NewRouter()
 	api := Mount(r, mountDeps(t))
-	if api == nil {
-		t.Fatal("Mount returned no api")
-	}
 
-	// The generated document is where the registry's names surface.
-	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /openapi.json = %d: %s", w.Code, w.Body)
-	}
-	body := w.Body.String()
-	for _, want := range []string{"AuditEvent", "Event", "audit_list", "usage_events", "list_users"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("openapi.json does not mention %q", want)
+	// The two Event types come from different packages; the registry keeps both under their own names.
+	schemas := api.OpenAPI().Components.Schemas.Map()
+	for _, name := range []string{"AuditEvent", "Event"} {
+		if schemas[name] == nil {
+			t.Errorf("no schema %s", name)
 		}
+	}
+	ops := map[string]string{}
+	for path, item := range api.OpenAPI().Paths {
+		for _, op := range []*huma.Operation{item.Get, item.Post, item.Put, item.Delete} {
+			if op != nil {
+				ops[op.OperationID] = op.Method + " " + path
+			}
+		}
+	}
+	for id, want := range map[string]string{"audit_list": "GET /audit", "usage_events": "GET /usage/events", "list_users": "GET /users"} {
+		if ops[id] != want {
+			t.Errorf("operation %s is %q, want %q", id, ops[id], want)
+		}
+	}
+	// The document is served, unauthenticated, as the UI's codegen fetches it.
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	var served struct{ OpenAPI string }
+	if err := json.Unmarshal(w.Body.Bytes(), &served); err != nil || w.Code != http.StatusOK || !strings.HasPrefix(served.OpenAPI, "3.") {
+		t.Fatalf("GET /openapi.json = %d (%v), want an OpenAPI 3 document", w.Code, err)
 	}
 }
 

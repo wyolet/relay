@@ -2,105 +2,58 @@ package control
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
-
-	"github.com/wyolet/relay/pkg/filter"
+	"github.com/google/go-cmp/cmp"
 )
 
-// TestFilterParamsReachOpenAPI proves the schema-derived filter params land
-// in the generated OpenAPI document — the contract the frontend's TS codegen
-// consumes. Without this wiring the list ops (empty typed input) would expose
-// zero query params.
-func TestFilterParamsReachOpenAPI(t *testing.T) {
-	api := humachi.New(chi.NewMux(), huma.DefaultConfig("t", "1.0.0"))
-	huma.Register(api, huma.Operation{
-		OperationID: "list_policies",
-		Method:      "GET",
-		Path:        "/policies",
-		Parameters:  filterParams(&policyFilter),
-	}, func(ctx context.Context, _ *struct{}) (*struct {
-		Body struct {
-			Items []string `json:"items"`
-		}
-	}, error) {
-		return nil, nil
-	})
-
-	spec, err := json.Marshal(api.OpenAPI())
-	if err != nil {
-		t.Fatalf("marshal openapi: %v", err)
+// The list operations take an empty typed input, so the filter surface reaches the OpenAPI document, and the client generated from it, only through filterParams: one query parameter per accepted key, a repeatable one as an exploded array, an enum carried through.
+func TestFilterParamsDescribeTheSchema(t *testing.T) {
+	type param struct {
+		Type, Items string
+		Explode     bool
+		Enum        []any
 	}
-	doc := string(spec)
-	// A representative spread: a bool, a repeatable IN, a time range pair,
-	// and the engine-owned sort/q/label/limit params.
-	for _, want := range []string{
-		`"name":"enabled"`, `"name":"rate_limit_id"`, `"name":"pool_id"`,
-		`"name":"created_from"`, `"name":"created_to"`, `"name":"owner"`,
-		`"name":"q"`, `"name":"label"`, `"name":"sort"`, `"name":"limit"`, `"name":"offset"`,
-	} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("openapi missing param %s", want)
+	got := map[string]param{}
+	for _, p := range filterParams(&policyFilter) {
+		if p.In != "query" || p.Description == "" {
+			t.Errorf("%s: in %q, description %q; want a described query parameter", p.Name, p.In, p.Description)
 		}
+		d := param{Type: p.Schema.Type, Enum: p.Schema.Enum, Explode: p.Explode != nil && *p.Explode}
+		if p.Schema.Items != nil {
+			d.Items, d.Enum = p.Schema.Items.Type, p.Schema.Items.Enum
+		}
+		got[p.Name] = d
 	}
-	// pool_id is repeatable → array-typed (explode).
-	if !strings.Contains(doc, `"type":"array"`) {
-		t.Error("expected an array-typed (repeatable) param in the spec")
+	str, many := param{Type: "string"}, param{Type: "array", Items: "string", Explode: true}
+	want := map[string]param{
+		"name": str, "owner": str, "enabled": {Type: "boolean"},
+		"owner_id": many, "pool_id": many, "rate_limit_id": many, "budget_id": many, "label": many,
+		"created_from": str, "created_to": str, "updated_from": str, "updated_to": str,
+		"q": str, "limit": {Type: "integer"}, "offset": {Type: "integer"},
+		"sort": {Type: "string", Enum: []any{"name", "-name", "created", "-created", "updated", "-updated"}},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("policy list parameters (-want +got):\n%s", diff)
 	}
 }
 
-// TestUsageFilterParamsReachOpenAPI guards against the embedded-struct
-// regression: huma skips UNEXPORTED fields, so an unexported embedded filter
-// input would silently expose zero params (no docs, no runtime binding). The
-// embed must stay exported (UsageFilterInput) for the logs/usage filter
-// surface to work at all.
+// huma skips unexported fields, so the filter input embedded in the logs query must stay exported or the route would bind and document no filter at all.
 func TestUsageFilterParamsReachOpenAPI(t *testing.T) {
 	api := humachi.New(chi.NewMux(), huma.DefaultConfig("t", "1.0.0"))
 	huma.Register(api, huma.Operation{OperationID: "logs_list", Method: "GET", Path: "/logs"},
 		func(ctx context.Context, _ *logsListInput) (*logsListOutput, error) { return nil, nil })
 
-	spec, err := json.Marshal(api.OpenAPI())
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	have := map[string]bool{}
+	for _, p := range api.OpenAPI().Paths["/logs"].Get.Parameters {
+		have[p.Name] = p.In == "query"
 	}
-	doc := string(spec)
-	for _, want := range []string{
-		`"name":"from"`, `"name":"to"`, `"name":"model_id"`, `"name":"host_id"`,
-		`"name":"policy_id"`, `"name":"status_class"`, `"name":"duration_ms_min"`,
-		`"name":"ttft_ms_min"`, `"name":"host_key_id"`, `"name":"q"`,
-	} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("/logs openapi missing filter param %s (embedded UsageFilterInput not flattened?)", want)
+	for _, name := range []string{"from", "to", "model_id", "host_id", "policy_id", "status_class", "duration_ms_min", "ttft_ms_min", "host_key_id", "q", "tag", "cursor", "limit", "count"} {
+		if !have[name] {
+			t.Errorf("GET /logs lacks query parameter %s", name)
 		}
-	}
-}
-
-func TestSchemaParamsExpansion(t *testing.T) {
-	ps := policyFilter.Params()
-	byName := map[string]filter.Param{}
-	for _, p := range ps {
-		byName[p.Name] = p
-	}
-	// Time field "created" expands to a _from/_to pair.
-	if _, ok := byName["created_from"]; !ok {
-		t.Error("created_from missing")
-	}
-	if _, ok := byName["created_to"]; !ok {
-		t.Error("created_to missing")
-	}
-	if p := byName["pool_id"]; !p.Repeatable {
-		t.Error("pool_id should be repeatable")
-	}
-	if p := byName["enabled"]; p.Type != "boolean" {
-		t.Errorf("enabled type = %q, want boolean", p.Type)
-	}
-	// sort enum lists the sortable fields.
-	if p := byName["sort"]; len(p.Enum) == 0 {
-		t.Error("sort param should carry an enum of sortable fields")
 	}
 }

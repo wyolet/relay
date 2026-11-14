@@ -1,10 +1,12 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,12 +14,18 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/license"
+	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // fakeLicense accepts exactly one value and, like the real service, leaves
@@ -50,7 +58,21 @@ func (f *fakeLicense) Set(value string) (license.Info, error) {
 // carrying X-Test-Admin: 1 arrive authenticated.
 func newLicenseHarness(t *testing.T, lic license.Service) http.Handler {
 	t.Helper()
-	d := Deps{Authz: authz.AlwaysAllowAuthenticated{}, License: lic}
+	return newLicenseHarnessOver(t, lic, execOnlyDBTX{})
+}
+
+// failingDBTX is a database every write to fails.
+type failingDBTX struct{ execOnlyDBTX }
+
+func (failingDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, errors.New("pg down")
+}
+
+// newLicenseHarnessOver is newLicenseHarness with the settings section stored in db.
+func newLicenseHarnessOver(t *testing.T, lic license.Service, db gen.DBTX) http.Handler {
+	t.Helper()
+	httpapi.Install()
+	d := Deps{Authz: authz.AlwaysAllowAuthenticated{}, License: lic, Stores: &appcatalog.Stores{Settings: settings.NewStore(gen.New(db))}}
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-Admin", map[string]*actor.Actor{"1": {AdminToken: true}}))
 	api := humachi.New(r, huma.DefaultConfig("license-test", "0"))
@@ -74,105 +96,91 @@ func licenseReq(t *testing.T, h http.Handler, admin bool, method, path, body str
 	return w
 }
 
-func TestVersionCarriesLicenseForAdminsOnly(t *testing.T) {
-	expires := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	lic := &fakeLicense{good: "good.license.value", info: license.Info{
-		Licensed: true, Customer: "acme", ExpiresAt: expires,
-		Features: []string{license.FeatureSSO}, Grace: true,
-	}}
-	h := newLicenseHarness(t, lic)
-
-	var anon struct {
+// /version is public and carries the license only for a signed-in caller; /license needs one, and answers the community shape when nothing is licensed or no license service is wired.
+func TestVersionAndLicenseReads(t *testing.T) {
+	held := license.Info{Licensed: true, Customer: "acme", ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), Features: []string{license.FeatureSSO}, Grace: true}
+	type versionBody struct {
 		Version string        `json:"version"`
 		License *license.Info `json:"license"`
 	}
-	w := licenseReq(t, h, false, http.MethodGet, "/version", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	for _, tc := range []struct {
+		name     string
+		lic      license.Service
+		signedIn bool
+		path     string
+		status   int
+		want     any
+	}{
+		{"version, anonymous", &fakeLicense{info: held}, false, "/version", 200, versionBody{Version: httpapi.Version}},
+		{"version, signed in", &fakeLicense{info: held}, true, "/version", 200, versionBody{Version: httpapi.Version, License: &held}},
+		{"version, signed in, no license service", nil, true, "/version", 200, versionBody{Version: httpapi.Version, License: &license.Info{}}},
+		{"license, licensed", &fakeLicense{info: held}, true, "/license", 200, held},
+		{"license, community", &fakeLicense{}, true, "/license", 200, license.Info{}},
+		{"license, no license service", nil, true, "/license", 200, license.Info{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := licenseReq(t, newLicenseHarness(t, tc.lic), tc.signedIn, http.MethodGet, tc.path, "")
+			got := reflect.New(reflect.TypeOf(tc.want))
+			if err := json.Unmarshal(w.Body.Bytes(), got.Interface()); err != nil || w.Code != tc.status {
+				t.Fatalf("status = %d (%v), want %d: %s", w.Code, err, tc.status, w.Body)
+			}
+			if diff := cmp.Diff(tc.want, got.Elem().Interface(), cmpopts.EquateEmpty()); diff != "" {
+				t.Fatalf("body (-want +got):\n%s", diff)
+			}
+		})
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &anon); err != nil {
-		t.Fatal(err)
-	}
-	if anon.Version == "" || anon.License != nil {
-		t.Fatalf("anonymous /version must omit the license block: %s", w.Body.String())
-	}
-
-	var admin struct {
-		License *license.Info `json:"license"`
-	}
-	w = licenseReq(t, h, true, http.MethodGet, "/version", "")
-	if err := json.Unmarshal(w.Body.Bytes(), &admin); err != nil {
-		t.Fatal(err)
-	}
-	if admin.License == nil {
-		t.Fatalf("admin /version must carry the license block: %s", w.Body.String())
-	}
-	if !admin.License.Licensed || admin.License.Customer != "acme" ||
-		!admin.License.ExpiresAt.Equal(expires) || !admin.License.Grace ||
-		len(admin.License.Features) != 1 {
-		t.Fatalf("license block = %+v", *admin.License)
+	w := licenseReq(t, newLicenseHarness(t, &fakeLicense{info: held}), false, http.MethodGet, "/license", "")
+	if w.Code != http.StatusUnauthorized || w.Body.String() != unauthenticatedBody {
+		t.Fatalf("anonymous /license = %d %s, want 401", w.Code, w.Body)
 	}
 }
 
-func TestGetLicenseShape(t *testing.T) {
-	t.Run("community", func(t *testing.T) {
-		h := newLicenseHarness(t, &fakeLicense{good: "good"})
-		w := licenseReq(t, h, true, http.MethodGet, "/license", "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
-		}
+// A value that does not verify is refused and leaves the live license as it was; one that verifies replaces it.
+func TestPutLicense(t *testing.T) {
+	incumbent := license.Info{Licensed: true, Customer: "incumbent", Features: []string{license.FeatureSSO}}
+	lic := &fakeLicense{good: "good.license.value", info: incumbent}
+	h := newLicenseHarness(t, lic)
+	read := func() license.Info {
+		t.Helper()
 		var got license.Info
-		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		if err := json.Unmarshal(licenseReq(t, h, true, http.MethodGet, "/license", "").Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Licensed || got.Customer != "" || got.Grace {
-			t.Fatalf("community info = %+v", got)
-		}
-	})
-
-	t.Run("no service wired", func(t *testing.T) {
-		h := newLicenseHarness(t, nil)
-		w := licenseReq(t, h, true, http.MethodGet, "/license", "")
-		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"licensed":false`) {
-			t.Fatalf("status = %d body = %s, want a community answer", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("unauthenticated", func(t *testing.T) {
-		h := newLicenseHarness(t, &fakeLicense{good: "good"})
-		if w := licenseReq(t, h, false, http.MethodGet, "/license", ""); w.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", w.Code)
-		}
-	})
-}
-
-func TestPutLicenseRejectsAnInvalidKey(t *testing.T) {
-	lic := &fakeLicense{good: "good.license.value", info: license.Info{
-		Licensed: true, Customer: "incumbent", Features: []string{license.FeatureSSO},
-	}}
-	h := newLicenseHarness(t, lic)
-
-	w := licenseReq(t, h, true, http.MethodPut, "/license", `{"value":"not-a-license"}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		return got
 	}
 
-	// The previous license is still live and still unlocking its features.
-	w = licenseReq(t, h, true, http.MethodGet, "/license", "")
+	wantAPIError(t, licenseReq(t, h, true, http.MethodPut, "/license", `{"value":"not-a-license"}`), 400, "", "license: signature does not verify")
+	if diff := cmp.Diff(incumbent, read()); diff != "" || !lic.Has(license.FeatureSSO) {
+		t.Fatalf("after a refused PUT the live license changed (-want +got):\n%s", diff)
+	}
+	if w := licenseReq(t, h, false, http.MethodPut, "/license", `{"value":"good.license.value"}`); w.Code != http.StatusUnauthorized || lic.info.Customer != "incumbent" {
+		t.Fatalf("anonymous PUT = %d with customer %q, want 401 and no change", w.Code, lic.info.Customer)
+	}
+
+	replaced := license.Info{Licensed: true, Customer: "acme", Features: []string{license.FeatureSSO}}
 	var got license.Info
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
+	w := licenseReq(t, h, true, http.MethodPut, "/license", `{"value":"good.license.value"}`)
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("PUT of a good value = %d (%v): %s", w.Code, err, w.Body)
 	}
-	if !got.Licensed || got.Customer != "incumbent" {
-		t.Fatalf("info = %+v, want the previous license intact", got)
-	}
-	if !lic.Has(license.FeatureSSO) {
-		t.Error("a rejected PUT must not revoke the live license's features")
+	if diff := cmp.Diff(replaced, got); diff != "" || cmp.Diff(replaced, read()) != "" {
+		t.Fatalf("after a good PUT (-want +got):\n%s", diff)
 	}
 }
 
-// badLicense refuses every value it is handed, the way a stored licence that
-// no longer verifies does.
+// The stored section is what the next boot and the other pods read, so a value that could not be stored must not be live here alone.
+func TestPutLicenseThatCannotBeStoredIsNotLive(t *testing.T) {
+	t.Skip("bug: PUT /license with a good value whose settings write fails → 500, yet the value is already live in this process")
+	incumbent := license.Info{Licensed: true, Customer: "incumbent"}
+	lic := &fakeLicense{good: "good.license.value", info: incumbent}
+	h := newLicenseHarnessOver(t, lic, failingDBTX{})
+	wantAPIError(t, licenseReq(t, h, true, http.MethodPut, "/license", `{"value":"good.license.value"}`), 500, "internal_error", "settings: settings.Upsert: pg down")
+	if diff := cmp.Diff(incumbent, lic.Info()); diff != "" {
+		t.Fatalf("the live license after a failed PUT (-want +got):\n%s", diff)
+	}
+}
+
+// badLicense refuses every value, as a stored license that no longer verifies does.
 type badLicense struct{}
 
 func (badLicense) Has(string) bool    { return false }
@@ -181,37 +189,18 @@ func (badLicense) Set(string) (license.Info, error) {
 	return license.Info{}, errors.New("signature does not verify")
 }
 
-// A reload rebuilds the snapshot; a stored licence that stopped verifying is
-// a separate fact and must not turn the operator's rebuild into a 500.
+// A reload rebuilds the snapshot; a stored license that stopped verifying is a separate fact and must not turn the operator's rebuild into a 500.
 func TestReloadReportsABadLicenseWithout500(t *testing.T) {
-	cat := catalogtest.Catalog{}.New()
-
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("reload-test", "0"))
-	registerMisc(api, Deps{
-		Authz:   authz.AlwaysAllowAuthenticated{},
-		Catalog: cat,
-		License: badLicense{},
-	}, nil)
+	r, api := testAPI(t, scopeActors)
+	registerMisc(api, Deps{Authz: authz.AlwaysAllowAuthenticated{}, Catalog: catalogtest.Catalog{}.New(), License: badLicense{}}, nil)
 
 	w := scopeReq(t, r, "root", http.MethodPost, "/reload", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%v), want 200: %s", w.Code, err, w.Body)
 	}
-	var body struct {
-		Status  string `json:"status"`
-		License *struct {
-			Error string `json:"error"`
-		} `json:"license"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Status != "ok" {
-		t.Errorf("status = %q, want ok", body.Status)
-	}
-	if body.License == nil || body.License.Error == "" {
-		t.Fatalf("body = %s, want a license.error", w.Body)
+	delete(body, "$schema")
+	if diff := cmp.Diff(map[string]any{"status": "ok", "license": map[string]any{"error": "signature does not verify"}}, body); diff != "" {
+		t.Fatalf("body (-want +got):\n%s", diff)
 	}
 }

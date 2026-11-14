@@ -10,10 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
@@ -72,9 +68,7 @@ func newReachFixture(t *testing.T) *reachFixture {
 	w.BindPolicy(f.saved, w.TeamAccount(f.team))
 	f.teamAcctID = w.TeamAccount(f.team).Meta.ID
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}}))
-	api := humachi.New(r, huma.DefaultConfig("reach-test", "0"))
+	r, api := testAPI(t, map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}})
 	registerReachable(api, Deps{Authz: reachAuthz{noCreate: otherOwner, hidden: otherOwner}, PlanView: w.Load(t).Engine.View}, nil)
 	f.h = r
 	return f
@@ -194,9 +188,7 @@ func newSAShareFixture(t *testing.T) *saShareFixture {
 	f.team = w.Team()
 	f.teamAcctID = w.TeamAccount(f.team).Meta.ID
 
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}}))
-	api := humachi.New(r, huma.DefaultConfig("reach-test", "0"))
+	r, api := testAPI(t, map[string]*actor.Actor{"u": {UserID: meta.NewID(), Username: "u"}})
 	registerReachable(api, Deps{Authz: authz.AlwaysAllowAuthenticated{}, PlanView: w.Load(t).Engine.View}, nil)
 	f.h = r
 	return f

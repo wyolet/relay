@@ -10,10 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/payload"
 	payloadfile "github.com/wyolet/relay/pkg/payload/file"
@@ -39,9 +35,7 @@ type logGetBody struct {
 
 func newLogsHarness(t *testing.T, ur usagelog.Reader, pr payload.Reader) http.Handler {
 	t.Helper()
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("logs-owner-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerLogs(api, Deps{Authz: testRBAC(), UsageReader: ur, PayloadReader: pr}, nil)
 	return r
 }

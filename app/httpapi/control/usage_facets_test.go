@@ -10,10 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/key"
@@ -26,9 +22,7 @@ import (
 
 func newFacetsHarness(t *testing.T, reader *fakeUsageReader, cat *appcatalog.Catalog) http.Handler {
 	t.Helper()
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", scopeActors))
-	api := humachi.New(r, huma.DefaultConfig("usage-facets-test", "0"))
+	r, api := testAPI(t, scopeActors)
 	registerUsageFacets(api, Deps{Authz: testRBAC(), UsageReader: reader, Catalog: cat}, nil)
 	return r
 }

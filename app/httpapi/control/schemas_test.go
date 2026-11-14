@@ -43,7 +43,7 @@ func TestSchemasEndpointServesEveryKind(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&index); err != nil {
 		t.Fatalf("decode index: %v", err)
 	}
-	if index.Version != manifest.SchemaVersion || len(index.Kinds) == 0 {
+	if index.Version != manifest.SchemaVersion {
 		t.Fatalf("index = %+v", index)
 	}
 	// The kinds the loader can parse and the kinds we publish are the same
@@ -88,6 +88,9 @@ func TestSchemasEndpointRejectsUnknown(t *testing.T) {
 		"/api/schemas/" + manifest.SchemaVersion + "/NotAKind",
 		"/api/schemas/v0alpha9/Team",
 		"/api/schemas/v0alpha9",
+		// ".." survives path.Base, so the whole path is checked, not its last segment.
+		"/api/schemas/" + manifest.SchemaVersion + "/..",
+		"/api/schemas/..",
 	} {
 		resp, err := http.Get(srv.URL + path)
 		if err != nil {
