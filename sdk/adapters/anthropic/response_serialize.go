@@ -20,13 +20,7 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 	}
 
 	// Map canonical status/finish_reason back to Anthropic stop_reason.
-	stopReason := canonicalFinishReasonToAnthropic(resp.FinishReason, resp.IncompleteDetails)
-	if resp.Status == v1.StatusFailed && resp.FinishReason == "" {
-		// canonical: status=failed with no finish_reason must not surface as end_turn
-		// (rule 11); refusal is the nearest non-success Anthropic stop_reason.
-		stopReason = "refusal"
-	}
-	out["stop_reason"] = stopReason
+	out["stop_reason"] = canonicalFinishReasonToAnthropic(resp.Status, resp.FinishReason, resp.IncompleteDetails)
 	if resp.Error != nil {
 		out["error"] = map[string]string{
 			"type":    resp.Error.Code,

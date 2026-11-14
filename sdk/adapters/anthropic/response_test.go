@@ -117,6 +117,19 @@ var responseCases = []struct {
 		}),
 	},
 	{
+		name: "web search and document citations",
+		dir:  parseOnly,
+		wire: respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"web_search_result_location","url":"https://x","title":"T","cited_text":"c","encrypted_index":"E"},{"type":"page_location","cited_text":"c","document_index":1,"start_page_number":2,"end_page_number":3}]}],"stop_reason":"end_turn"`),
+		resp: response(func(r *v1.Response) {
+			msg := outputText("msg_0", "cited")
+			msg.Content[0].(*v1.OutputTextPart).Annotations = []v1.Annotation{
+				&v1.URLCitationAnnotation{URL: "https://x", Title: "T"},
+				&v1.RawAnnotation{Type: "page_location", JSON: json.RawMessage(`{"type":"page_location","cited_text":"c","document_index":1,"start_page_number":2,"end_page_number":3}`)},
+			}
+			r.Output = []v1.Item{msg}
+		}),
+	},
+	{
 		name: "cache usage with its ttl split and service tier",
 		dir:  parseOnly,
 		wire: respBody(`"content":[],"stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":300,"cache_read_input_tokens":30,"cache_creation_input_tokens":4000,"cache_creation":{"ephemeral_5m_input_tokens":2500,"ephemeral_1h_input_tokens":1500},"service_tier":"priority"}`),
@@ -274,7 +287,6 @@ func TestStopReasonMapping(t *testing.T) {
 }
 
 func TestStopReason_IncompleteWithoutFinishReasonAgreesBufferedAndStreamed(t *testing.T) {
-	t.Skip(`bug: status incomplete with no finish_reason → buffered "end_turn" but streamed "pause_turn"; with incomplete_details max_output_tokens → buffered "max_tokens" but streamed "pause_turn"`)
 	for _, details := range []*v1.IncompleteDetails{nil, {Reason: "max_output_tokens"}} {
 		buffered := bufferedStopReason(t, v1.StatusIncomplete, "", details)
 		streamed := streamedStopReason(t, v1.StatusIncomplete, "", details)
@@ -285,7 +297,6 @@ func TestStopReason_IncompleteWithoutFinishReasonAgreesBufferedAndStreamed(t *te
 }
 
 func TestParseResponse_KeepsDocumentAndSearchCitations(t *testing.T) {
-	t.Skip(`bug: text block citations of type char_location / web_search_result_location → no annotations; only the non-Anthropic type "url_citation" is read and the rest vanish unannotated`)
 	wire := respBody(`"content":[{"type":"text","text":"cited","citations":[{"type":"char_location","cited_text":"c","document_index":0,"start_char_index":0,"end_char_index":1},{"type":"web_search_result_location","url":"https://x","title":"T","cited_text":"c"}]}],"stop_reason":"end_turn"`)
 	resp, err := AnthropicTranslator{}.ParseResponse([]byte(wire))
 	if err != nil {

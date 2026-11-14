@@ -176,4 +176,15 @@ type anthropicCitation struct {
 	Title      string `json:"title,omitempty"`
 	StartIndex int    `json:"start_index,omitempty"`
 	EndIndex   int    `json:"end_index,omitempty"`
+	// raw is the whole citation object, carried verbatim for types canonical does not model.
+	raw json.RawMessage
+}
+
+func (c *anthropicCitation) UnmarshalJSON(b []byte) error {
+	type fields anthropicCitation
+	if err := json.Unmarshal(b, (*fields)(c)); err != nil {
+		return err
+	}
+	c.raw = append(json.RawMessage(nil), b...)
+	return nil
 }
