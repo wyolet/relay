@@ -63,9 +63,7 @@ func benchCatalog(b *testing.B, n int) *Catalog {
 		rkList(keys), rcList{}, bndList{})
 	c.UseTenancy(teamList{tm}, projList{proj}, saList{}, grpList(groups),
 		roleList{}, rbList{}, pbList{})
-	if err := c.Reload(context.Background()); err != nil {
-		b.Fatalf("reload: %v", err)
-	}
+	must(b, c.Reload(context.Background()))
 	return c
 }
 
@@ -89,9 +87,7 @@ func BenchmarkGroupUpsert10kKeys(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		next := *g
-		if err := c.ApplyGroupUpsert(&next); err != nil {
-			b.Fatal(err)
-		}
+		must(b, c.ApplyGroupUpsert(&next))
 	}
 }
 
@@ -104,8 +100,6 @@ func BenchmarkProjectUpsert10kKeys(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		next := *p
 		next.Meta.DisplayName = "d" + strconv.Itoa(i)
-		if err := c.ApplyProjectUpsert(&next); err != nil {
-			b.Fatal(err)
-		}
+		must(b, c.ApplyProjectUpsert(&next))
 	}
 }

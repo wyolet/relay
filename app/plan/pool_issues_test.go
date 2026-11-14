@@ -58,9 +58,7 @@ func TestPoolMemberUnusable_DisabledAndUnresolvedKeys(t *testing.T) {
 	if issueAt(is, IssuePoolMemberUnusable, "spec.credentialIds[0]") != nil || issueAt(is, IssuePoolMemberUnusable, "spec.accountIds[0]") != nil {
 		t.Errorf("enabled key still reported: %+v", is)
 	}
-	if hasIssue(h.issues(KindPolicy, pol.Meta.ID), IssuePoolsServeNothing) {
-		t.Error("policy still reports its pools serve nothing")
-	}
+	h.wantIssue(KindPolicy, pol.Meta.ID, IssuePoolsServeNothing, false)
 }
 
 // Personal accounts turned off reach the pool through each kind of member: an account the user owns, a key in it, and a share of it.
@@ -82,9 +80,7 @@ func TestPoolMemberUnusable_PersonalAccountOff(t *testing.T) {
 			t.Errorf("%s: %+v, want it to name alice's switch", field, i)
 		}
 	}
-	if !hasIssue(h.issues(KindPolicy, pol.Meta.ID), IssuePoolsServeNothing) {
-		t.Errorf("policy issues = %+v, want %s", h.issues(KindPolicy, pol.Meta.ID), IssuePoolsServeNothing)
-	}
+	h.wantIssue(KindPolicy, pol.Meta.ID, IssuePoolsServeNothing, true)
 }
 
 // A keyless host's pool serves with no key, so a policy linking it is served; listing accounts only there names spec.accountIds.
@@ -95,9 +91,7 @@ func TestPoolsServeNothing_KeylessPoolServes(t *testing.T) {
 	b.w.pools = append(b.w.pools, p)
 	pol := b.w.policy("keyless", policy.Spec{PoolIDs: []string{p.Meta.ID}})
 	h := b.w.start(t)
-	if hasIssue(h.issues(KindPolicy, pol.Meta.ID), IssuePoolsServeNothing) {
-		t.Errorf("a keyless pool counts as serving nothing: %+v", h.issues(KindPolicy, pol.Meta.ID))
-	}
+	h.wantIssue(KindPolicy, pol.Meta.ID, IssuePoolsServeNothing, false)
 	if issueAt(h.issues(KindPool, p.Meta.ID), IssueCredentialsIgnored, "spec.accountIds") == nil {
 		t.Errorf("pool issues = %+v, want %s at spec.accountIds", h.issues(KindPool, p.Meta.ID), IssueCredentialsIgnored)
 	}
@@ -117,9 +111,7 @@ func TestHostDisabled_PoolKeyAndHost(t *testing.T) {
 	if i := issueAt(h.issues(KindCredential, b.a1.Meta.ID), IssueHostDisabled, "spec.hostId"); i == nil || i.Severity != engine.SeverityWarning {
 		t.Errorf("key issues = %+v, want %s warning", h.issues(KindCredential, b.a1.Meta.ID), IssueHostDisabled)
 	}
-	if !hasIssue(h.issues(KindPolicy, pol.Meta.ID), IssuePoolsServeNothing) {
-		t.Errorf("policy issues = %+v, want %s", h.issues(KindPolicy, pol.Meta.ID), IssuePoolsServeNothing)
-	}
+	h.wantIssue(KindPolicy, pol.Meta.ID, IssuePoolsServeNothing, true)
 	is := h.issues(KindHost, b.hostA.Meta.ID)
 	if len(is) != 1 || is[0].Code != IssueHostDisabledInUse || !strings.Contains(is[0].Message, "1 pool and 2 enabled keys") {
 		t.Errorf("host issues = %+v, want %s naming 1 pool and 2 keys", is, IssueHostDisabledInUse)

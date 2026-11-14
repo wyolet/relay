@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
@@ -20,9 +22,7 @@ func tenancyCatalog(t *testing.T, teams []*team.Team, projects []*project.Projec
 		rkList(keys), rcList{}, bndList{})
 	c.UseTenancy(teamList(teams), projList(projects), saList{}, grpList(groups),
 		roleList{}, rbList{}, pbList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	return c
 }
 
@@ -40,30 +40,32 @@ func tenancySnap(t *testing.T, keys ...*key.Key) (*Catalog, *team.Team, *project
 	return c, tm, proj, pol
 }
 
-// A project write that is not a rename leaves every key's subject list
-// alone; only a rename can change them (the project slug is part of a
-// service account's subjects).
+// A project write that is not a rename leaves every key's subject list alone; a rename rewrites them, since the project slug is part of a service account's subjects.
 func TestProjectUpsertReindexesSubjectsOnlyOnRename(t *testing.T) {
-	c, _, proj, _ := tenancySnap(t)
-	before := c.Current()
+	f := newDisabledPolicyFixture(true)
+	c := f.catalog(t)
+	subjects := func(project string) []string {
+		return []string{"serviceaccount:" + f.sa.Meta.ID, SubjectServiceAccounts, SubjectServiceAccounts + ":" + project, SubjectAuthenticated}
+	}
+	before := c.Current().SubjectsForKey(f.key.Meta.ID)
+	if !slices.Equal(before, subjects("ml")) {
+		t.Fatalf("subjects = %v, want %v", before, subjects("ml"))
+	}
+	touched := *f.project
+	touched.Meta.DisplayName = "ML (display only)"
+	must(t, c.ApplyProjectUpsert(&touched))
+	if after := c.Current().SubjectsForKey(f.key.Meta.ID); &after[0] != &before[0] {
+		t.Fatal("a non-rename project write rebuilt the key's subject list")
+	}
 
-	touched := *proj
-	touched.Meta.DisplayName = "Search (renamed display only)"
-	if err := c.ApplyProjectUpsert(&touched); err != nil {
-		t.Fatalf("apply project: %v", err)
+	renamed := *f.project
+	renamed.Meta.Name = "ml-2"
+	must(t, c.ApplyProjectUpsert(&renamed))
+	if got := c.Current().SubjectsForKey(f.key.Meta.ID); !slices.Equal(got, subjects("ml-2")) {
+		t.Fatalf("subjects after the rename = %v, want %v", got, subjects("ml-2"))
 	}
-	after := c.Current()
-	if len(after.subjectsByKey) != len(before.subjectsByKey) {
-		t.Fatalf("subject index size changed on a non-rename write")
-	}
-
-	renamed := *proj
-	renamed.Meta.Name = "search-2"
-	if err := c.ApplyProjectUpsert(&renamed); err != nil {
-		t.Fatalf("apply rename: %v", err)
-	}
-	if _, ok := c.Current().projectsByName["search-2"]; !ok {
-		t.Fatal("rename did not land")
+	if _, ok := c.Current().projectsByName["ml"]; ok {
+		t.Error("the old project name still resolves")
 	}
 }
 
@@ -71,9 +73,7 @@ func TestProjectUpsertReindexesSubjectsOnlyOnRename(t *testing.T) {
 // delete, or a group write reindexes the wrong keys.
 func TestKeysByPrincipalIndexTracksWrites(t *testing.T) {
 	user := meta.NewID()
-	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "k1", Owner: meta.Owner{Kind: meta.OwnerUser, ID: user}}}
-	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: user}
-	k.Spec.KeyHash = hex64("a")
+	k := userKeyFor(user)
 
 	c, _, _, _ := tenancySnap(t, k)
 	pk := principalKey(key.PrincipalUser, user)
@@ -83,16 +83,12 @@ func TestKeysByPrincipalIndexTracksWrites(t *testing.T) {
 
 	updated := *k
 	updated.Spec.KeyHash = hex64("b")
-	if err := c.ApplyKeyUpsert(&updated); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-	if got := len(c.Current().keysByPrincipal[pk]); got != 1 {
-		t.Fatalf("index holds %d keys after an update, want 1", got)
+	must(t, c.ApplyKeyUpsert(&updated))
+	if got := c.Current().keysByPrincipal[pk]; len(got) != 1 || got[0].Spec.KeyHash != hex64("b") {
+		t.Fatalf("index after an update = %v, want the updated key alone", got)
 	}
 
-	if err := c.ApplyKeyDelete(k.Meta.ID); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
+	must(t, c.ApplyKeyDelete(k.Meta.ID))
 	if got := len(c.Current().keysByPrincipal[pk]); got != 0 {
 		t.Fatalf("index holds %d keys after a delete, want 0", got)
 	}
@@ -102,26 +98,21 @@ func TestKeysByPrincipalIndexTracksWrites(t *testing.T) {
 // what a full rebuild would.
 func TestGroupWriteReindexesMemberSubjects(t *testing.T) {
 	user := meta.NewID()
-	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "k1", Owner: meta.Owner{Kind: meta.OwnerUser, ID: user}}}
-	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: user}
-	k.Spec.KeyHash = hex64("a")
+	k := userKeyFor(user)
 
 	g := &group.Group{Meta: meta.Metadata{ID: meta.NewID(), Name: "data-science", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	g.Spec.MemberIDs = []string{user}
 
 	c := tenancyCatalog(t, nil, nil, nil, []*key.Key{k}, []*group.Group{g})
-	subs := c.Current().SubjectsForKey(k.Meta.ID)
-	if !contains(subs, "group:data-science") {
-		t.Fatalf("subjects = %v, want the group membership", subs)
+	member := []string{"user:" + user, "group:data-science", SubjectAuthenticated}
+	if subs := c.Current().SubjectsForKey(k.Meta.ID); !slices.Equal(subs, member) {
+		t.Fatalf("subjects = %v, want %v", subs, member)
 	}
-
 	dropped := *g
 	dropped.Spec.MemberIDs = []string{meta.NewID()}
-	if err := c.ApplyGroupUpsert(&dropped); err != nil {
-		t.Fatalf("apply group: %v", err)
-	}
-	if subs := c.Current().SubjectsForKey(k.Meta.ID); contains(subs, "group:data-science") {
-		t.Fatalf("subjects = %v, want the membership dropped", subs)
+	must(t, c.ApplyGroupUpsert(&dropped))
+	if subs, want := c.Current().SubjectsForKey(k.Meta.ID), []string{"user:" + user, SubjectAuthenticated}; !slices.Equal(subs, want) {
+		t.Fatalf("subjects = %v, want the membership dropped: %v", subs, want)
 	}
 }
 
@@ -129,41 +120,29 @@ func TestGroupWriteReindexesMemberSubjects(t *testing.T) {
 // the slice rather than write through it.
 func TestCloneDoesNotShareMutatedSubjectSlices(t *testing.T) {
 	user := meta.NewID()
-	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "k1", Owner: meta.Owner{Kind: meta.OwnerUser, ID: user}}}
-	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: user}
-	k.Spec.KeyHash = hex64("a")
+	k := userKeyFor(user)
 	g := &group.Group{Meta: meta.Metadata{ID: meta.NewID(), Name: "g1", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	g.Spec.MemberIDs = []string{user}
 
 	c := tenancyCatalog(t, nil, nil, nil, []*key.Key{k}, []*group.Group{g})
 	old := c.Current()
-	oldSubs := append([]string(nil), old.SubjectsForKey(k.Meta.ID)...)
-
-	dropped := *g
-	dropped.Spec.MemberIDs = nil
-	if err := c.ApplyGroupDelete(g.Meta.ID); err != nil {
-		t.Fatalf("delete group: %v", err)
-	}
-	got := old.SubjectsForKey(k.Meta.ID)
-	if len(got) != len(oldSubs) {
+	oldSubs := slices.Clone(old.SubjectsForKey(k.Meta.ID))
+	must(t, c.ApplyGroupDelete(g.Meta.ID))
+	if got := old.SubjectsForKey(k.Meta.ID); !slices.Equal(got, oldSubs) {
 		t.Fatalf("the published snapshot's subject list changed under it: %v, want %v", got, oldSubs)
+	}
+	if got, want := c.Current().SubjectsForKey(k.Meta.ID), []string{"user:" + user, SubjectAuthenticated}; !slices.Equal(got, want) {
+		t.Fatalf("subjects after the group delete = %v, want %v", got, want)
+	}
+}
+
+// userKeyFor is a key user owns and acts as.
+func userKeyFor(user string) *key.Key {
+	return &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "k1", Owner: meta.Owner{Kind: meta.OwnerUser, ID: user}},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: user}, KeyHash: hex64("a")},
 	}
 }
 
 // hex64 renders a 64-char hex string, the shape Key.Spec.KeyHash validates.
-func hex64(seed string) string {
-	out := make([]byte, 64)
-	for i := range out {
-		out[i] = seed[0]
-	}
-	return string(out)
-}
-
-func contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
+func hex64(seed string) string { return strings.Repeat(seed[:1], 64) }

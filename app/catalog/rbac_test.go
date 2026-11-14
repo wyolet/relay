@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/policybinding"
@@ -109,38 +110,25 @@ func (f rbacFixture) catalog(t *testing.T) *Catalog {
 		roleList{f.role},
 		rbList{f.global, f.teamWide, f.inProject, f.noRole, f.onDead},
 		pbList{f.low, f.highA, f.highB, f.noPol, f.onDeadP})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	return c
 }
 
-func bindingNames(bs []*rolebinding.RoleBinding) []string {
-	out := make([]string, 0, len(bs))
-	for _, b := range bs {
-		out = append(out, b.Meta.Name)
+// namesOf lists rows by the name fn reads, in order.
+func namesOf[T any](rows []T, name func(T) string) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, name(r))
 	}
 	return out
+}
+
+func bindingNames(bs []*rolebinding.RoleBinding) []string {
+	return namesOf(bs, func(b *rolebinding.RoleBinding) string { return b.Meta.Name })
 }
 
 func policyBindingNames(bs []*policybinding.PolicyBinding) []string {
-	out := make([]string, 0, len(bs))
-	for _, b := range bs {
-		out = append(out, b.Meta.Name)
-	}
-	return out
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return namesOf(bs, func(b *policybinding.PolicyBinding) string { return b.Meta.Name })
 }
 
 func TestBuild_BindingMembership(t *testing.T) {
@@ -170,7 +158,7 @@ func TestSnapshot_RoleBindingsForSubject(t *testing.T) {
 
 	got := bindingNames(s.RoleBindingsForSubject("group:platform-eng"))
 	want := []string{"alpha-team", "mid-project", "zeta-global"}
-	if !equalStrings(got, want) {
+	if !slices.Equal(got, want) {
 		t.Errorf("RoleBindingsForSubject = %v, want %v (sorted by name, across scopes)", got, want)
 	}
 	if got := s.RoleBindingsForSubject("group:nobody"); len(got) != 0 {
@@ -184,7 +172,7 @@ func TestSnapshot_PolicyBindingsForProject(t *testing.T) {
 
 	got := policyBindingNames(s.PolicyBindingsForProject(f.live.Meta.ID))
 	want := []string{"alpha-high", "beta-high", "zeta-low"}
-	if !equalStrings(got, want) {
+	if !slices.Equal(got, want) {
 		t.Errorf("PolicyBindingsForProject = %v, want %v (by name)", got, want)
 	}
 }
@@ -193,9 +181,7 @@ func TestReconcile_RoleDeleteEvictsBindings(t *testing.T) {
 	f := newRBACFixture()
 	c := f.catalog(t)
 
-	if err := c.ApplyRoleDelete(f.role.Meta.ID); err != nil {
-		t.Fatalf("ApplyRoleDelete: %v", err)
-	}
+	must(t, c.ApplyRoleDelete(f.role.Meta.ID))
 	s := c.Current()
 	if _, ok := s.Role(f.role.Meta.ID); ok {
 		t.Error("role should be gone")
@@ -214,9 +200,7 @@ func TestReconcile_ProjectDeleteEvictsBindings(t *testing.T) {
 	f := newRBACFixture()
 	c := f.catalog(t)
 
-	if err := c.ApplyProjectDelete(f.live.Meta.ID); err != nil {
-		t.Fatalf("ApplyProjectDelete: %v", err)
-	}
+	must(t, c.ApplyProjectDelete(f.live.Meta.ID))
 	s := c.Current()
 	if _, ok := s.RoleBinding(f.inProject.Meta.ID); ok {
 		t.Error("project-scoped role binding should be evicted with its project")
@@ -229,52 +213,29 @@ func TestReconcile_ProjectDeleteEvictsBindings(t *testing.T) {
 	}
 }
 
-// TestApplyRoleBindingUpsert_EmptySubjectsRemovesIt covers the shape a
-// binding actually arrives in once PG cascades its last subject away: still
-// enabled, but Spec.Subjects is empty. Validate rejects that, so the upsert
-// must be treated as a delete rather than leaving the stale grant behind.
-func TestApplyRoleBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
+// A binding arrives still enabled but with no subjects once PG cascades its last one away. Validate rejects that shape, so the upsert is a delete: the stale grant leaves the snapshot and its index, and the other bindings stay.
+func TestApplyBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
 	f := newRBACFixture()
 	c := f.catalog(t)
+	role := *f.teamWide
+	role.Spec.Subjects = nil
+	must(t, c.ApplyRoleBindingUpsert(&role))
+	pol := *f.highA
+	pol.Spec.AccountIDs = nil
+	must(t, c.ApplyPolicyBindingUpsert(&pol))
 
-	stripped := *f.teamWide
-	stripped.Spec.Subjects = nil
-	if err := c.ApplyRoleBindingUpsert(&stripped); err != nil {
-		t.Fatalf("ApplyRoleBindingUpsert: %v", err)
-	}
 	s := c.Current()
 	if _, ok := s.RoleBinding(f.teamWide.Meta.ID); ok {
-		t.Error("binding with no subjects should be removed from the snapshot, not kept stale")
+		t.Error("role binding with no subjects kept in the snapshot")
 	}
-	if got := s.RoleBindingsForSubject("group:platform-eng"); len(got) != 0 {
-		for _, b := range got {
-			if b.Meta.ID == f.teamWide.Meta.ID {
-				t.Errorf("subject index still holds the emptied binding: %v", bindingNames(got))
-			}
-		}
+	if got, want := bindingNames(s.RoleBindingsForSubject("group:platform-eng")), []string{"mid-project", "zeta-global"}; !slices.Equal(got, want) {
+		t.Errorf("subject index = %v, want %v", got, want)
 	}
-}
-
-// TestApplyPolicyBindingUpsert_EmptySubjectsRemovesIt is the PolicyBinding
-// half of the same rule.
-func TestApplyPolicyBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
-	f := newRBACFixture()
-	c := f.catalog(t)
-
-	stripped := *f.highA
-	stripped.Spec.AccountIDs = nil
-	if err := c.ApplyPolicyBindingUpsert(&stripped); err != nil {
-		t.Fatalf("ApplyPolicyBindingUpsert: %v", err)
-	}
-	s := c.Current()
 	if _, ok := s.PolicyBinding(f.highA.Meta.ID); ok {
-		t.Error("policy binding with no subjects should be removed from the snapshot, not kept stale")
+		t.Error("policy binding with no accounts kept in the snapshot")
 	}
-	got := policyBindingNames(s.PolicyBindingsForProject(f.live.Meta.ID))
-	for _, name := range got {
-		if name == f.highA.Meta.Name {
-			t.Errorf("project index still holds the emptied binding: %v", got)
-		}
+	if got, want := policyBindingNames(s.PolicyBindingsForProject(f.live.Meta.ID)), []string{"beta-high", "zeta-low"}; !slices.Equal(got, want) {
+		t.Errorf("project index = %v, want %v", got, want)
 	}
 }
 
@@ -282,9 +243,7 @@ func TestReconcile_PolicyDeleteEvictsPolicyBindings(t *testing.T) {
 	f := newRBACFixture()
 	c := f.catalog(t)
 
-	if err := c.ApplyPolicyDelete(f.pol.Meta.ID); err != nil {
-		t.Fatalf("ApplyPolicyDelete: %v", err)
-	}
+	must(t, c.ApplyPolicyDelete(f.pol.Meta.ID))
 	s := c.Current()
 	if len(s.PolicyBindingsForProject(f.live.Meta.ID)) != 0 {
 		t.Errorf("policy bindings should be evicted with their policy: %v",

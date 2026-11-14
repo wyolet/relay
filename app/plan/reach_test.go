@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/wyolet/relay/app/plan"
@@ -25,7 +26,7 @@ func TestReach_WithoutCallerPolicyServiceAccountReachesOwnScopesAndSystem(t *tes
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	want := []string{pr.Meta.Name, tm.Meta.Name, sys.Meta.Name}
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, want) {
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, want) {
 		t.Fatalf("route reaches %v, want %v (project, team, system)", got, want)
 	}
 }
@@ -43,7 +44,7 @@ func TestReach_WithoutCallerPolicyUserReachesOwnAndSystem(t *testing.T) {
 	cp := keyCaller(t, o.w.Load(t), k)
 
 	want := []string{own.Meta.Name, sys.Meta.Name}
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, want) {
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, want) {
 		t.Fatalf("route reaches %v, want %v", got, want)
 	}
 }
@@ -58,7 +59,7 @@ func TestReach_PolicyWithoutLinksKeepsOwnershipReach(t *testing.T) {
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	want := []string{pr.Meta.Name, sys.Meta.Name}
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, want) {
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, want) {
 		t.Fatalf("route reaches %v, want %v", got, want)
 	}
 }
@@ -74,7 +75,7 @@ func TestReach_CallerPolicyReachesOnlyWhatItLinks(t *testing.T) {
 	o.w.BindPolicy(pol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{linked.Meta.Name}) {
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, []string{linked.Meta.Name}) {
 		t.Fatalf("route reaches %v, want only %s", got, linked.Meta.Name)
 	}
 }
@@ -94,10 +95,10 @@ func TestReach_PoolsInInnermostOrderOuterRungsIntersect(t *testing.T) {
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
 	want := []string{c3.Meta.Name, c1.Meta.Name}
-	if got := callerCredentials(cp); !sameList(got, want) {
+	if got := callerCredentials(cp); !slices.Equal(got, want) {
 		t.Fatalf("caller pools hold %v, want %v (inner order, outer intersect)", got, want)
 	}
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, want) {
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, want) {
 		t.Fatalf("route reaches %v, want %v", got, want)
 	}
 }
@@ -114,7 +115,7 @@ func TestReach_OuterRungLinksApplyWhenInnerLinksNothing(t *testing.T) {
 	o.w.BindPolicy(saPol, o.saAcct())
 	cp := keyCaller(t, o.w.Load(t), o.saKey)
 
-	if got := routeCredentials(mustRoute(t, cp, "m1")); !sameList(got, []string{c1.Meta.Name}) {
+	if got := routeCredentials(mustRoute(t, cp, "m1")); !slices.Equal(got, []string{c1.Meta.Name}) {
 		t.Fatalf("route reaches %v, want only %s", got, c1.Meta.Name)
 	}
 }

@@ -26,9 +26,7 @@ func TestBindingOutsideItsOwnersScopeNeverApplies(t *testing.T) {
 	if rung := h.keyPlan(b.key).Caller.LaneRung(); rung.Policy != nil {
 		t.Fatalf("service account governed by another project's binding: %+v", rung.Policy)
 	}
-	if !hasIssue(h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope) {
-		t.Fatalf("issues = %+v, want %s", h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope)
-	}
+	h.wantIssue(KindPolicyBinding, foreign.Meta.ID, IssueSubjectOutOfScope, true)
 
 	team := clone(foreign)
 	team.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: b.team.Meta.ID}
@@ -36,9 +34,7 @@ func TestBindingOutsideItsOwnersScopeNeverApplies(t *testing.T) {
 	if rung := h.keyPlan(b.key).Caller.LaneRung(); rung.Policy == nil || rung.Policy.Policy.Meta.ID != pol.Meta.ID {
 		t.Fatalf("service account under its team's binding = %+v, want the bound policy", rung.Policy)
 	}
-	if hasIssue(h.issues(KindPolicyBinding, foreign.Meta.ID), IssueSubjectOutOfScope) {
-		t.Fatal("the out-of-scope issue stayed after the binding moved to the team")
-	}
+	h.wantIssue(KindPolicyBinding, foreign.Meta.ID, IssueSubjectOutOfScope, false)
 }
 
 // A binding written around the save check, whose policy links another tenant's pool and a shared pool holding another tenant's key, reaches neither for its account: the pool and the slot are left out with an issue, the account's own scope keeps the rest.

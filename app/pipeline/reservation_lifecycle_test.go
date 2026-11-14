@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -88,7 +87,7 @@ func (a reservationTestAdapter) Call(ctx context.Context, _ string, _ *string, _
 	if a.call != nil {
 		return a.call(ctx)
 	}
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}, nil
+	return ok200(), nil
 }
 
 func (a reservationTestAdapter) ExtractTokens([]byte) pkgusage.Tokens {

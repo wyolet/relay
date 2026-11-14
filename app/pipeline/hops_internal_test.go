@@ -1,6 +1,11 @@
 package pipeline
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
 	"time"
 
 	"github.com/wyolet/relay/app/account"
@@ -67,4 +72,25 @@ func perMinute(id string, meter appratelimit.Meter, strategy appratelimit.Strate
 	return &appratelimit.RateLimit{Meta: meta.Metadata{ID: id, Name: id}, Spec: appratelimit.Spec{Rules: []appratelimit.Rule{
 		{Meter: meter, Amount: amount, Window: appratelimit.Window(time.Minute), Strategy: strategy},
 	}}}
+}
+
+// ok200 is an upstream 200 with the body "ok".
+func ok200() *http.Response {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}}
+}
+
+// hostReached signals post-flight's last step, which runs after the settle.
+type hostReached chan struct{}
+
+func (h hostReached) Reachable(context.Context, string)         { h <- struct{}{} }
+func (hostReached) Unreachable(context.Context, string, string) {}
+
+// await blocks until a request's post-flight has finished.
+func (h hostReached) await(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-flight never finished")
+	}
 }

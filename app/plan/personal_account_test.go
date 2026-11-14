@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/meta"
@@ -62,45 +63,27 @@ func TestPersonalAccountOff_ClosesPersonalLaneAndOwnedAccounts(t *testing.T) {
 	providerLaneKey := s.w.keyIn(s.alice, s.real)
 	memberKey := s.w.keyIn(s.alice, s.w.member(s.alice, meta.Owner{Kind: meta.OwnerTeam, ID: s.team.Meta.ID}))
 	h := s.w.start(t)
-	for _, k := range []string{"personal", "provider lane", "share"} {
-		var r *Route
-		switch k {
-		case "personal":
-			r = h.route(personalKey, "m1")
-		case "provider lane":
-			r = h.route(providerLaneKey, "m1")
-		case "share":
-			r = h.route(bobKey, "m1")
-		}
-		if r.Refused != nil {
-			t.Fatalf("%s before: %v", k, r.Refused)
+	for name, k := range map[string]*key.Key{"personal": personalKey, "provider lane": providerLaneKey, "share": bobKey} {
+		if r := h.route(k, "m1"); r.Refused != nil {
+			t.Fatalf("%s before: %v", name, r.Refused)
 		}
 	}
-
 	apply(h, withPersonalAccount(s.alice, settings.PersonalAccountsOff))
 	for name, k := range map[string]*KeyPlan{"personal": h.keyPlan(personalKey), "provider lane": h.keyPlan(providerLaneKey)} {
 		if r := k.Caller.Refused; r == nil || r.Code != CodePersonalAccountOff {
 			t.Errorf("%s key: refused %+v, want %s", name, r, CodePersonalAccountOff)
 		}
-		if is := h.issues(KindKey, k.Key.Meta.ID); !hasIssue(is, IssuePersonalAccountOff) {
-			t.Errorf("%s key issues = %+v, want %s", name, is, IssuePersonalAccountOff)
-		}
+		h.wantIssue(KindKey, k.Key.Meta.ID, IssuePersonalAccountOff, true)
 	}
-	if is := h.issues(KindAccount, s.real.Meta.ID); !hasIssue(is, IssuePersonalAccountOff) {
-		t.Errorf("issues on alice's provider account = %+v, want %s", is, IssuePersonalAccountOff)
-	}
-	if is := h.issues(KindCredential, s.key.Meta.ID); hasIssue(is, IssueRefMissing) {
-		t.Errorf("the credential reports its account missing: %+v", is)
-	}
+	h.wantIssue(KindAccount, s.real.Meta.ID, IssuePersonalAccountOff, true)
+	h.wantIssue(KindCredential, s.key.Meta.ID, IssueRefMissing, false)
 	if r := h.route(bobKey, "m1"); r.Refused == nil || r.Refused.Code != CodeNoCredentials {
 		t.Errorf("share after: %+v, want no_credentials", r.Refused)
 	}
 	if is := h.issues(KindAccount, shared.Meta.ID); !hasIssue(is, IssuePersonalAccountOff) || hasIssue(is, IssueSharedAccountMissing) {
 		t.Errorf("issues on the share = %+v, want %s alone", is, IssuePersonalAccountOff)
 	}
-	if is := h.issues(KindAccount, s.w.personal(s.alice).Meta.ID); !hasIssue(is, IssuePersonalAccountOff) {
-		t.Errorf("issues on alice's personal account = %+v, want %s", is, IssuePersonalAccountOff)
-	}
+	h.wantIssue(KindAccount, s.w.personal(s.alice).Meta.ID, IssuePersonalAccountOff, true)
 	if r := h.keyPlan(memberKey).Caller.Refused; r != nil {
 		t.Errorf("member lane refused: %v", r)
 	}
@@ -112,12 +95,8 @@ func TestPersonalAccountOff_ClosesPersonalLaneAndOwnedAccounts(t *testing.T) {
 	if r := h.route(bobKey, "m1"); r.Refused != nil {
 		t.Errorf("share after turning it on: %v", r.Refused)
 	}
-	if is := h.issues(KindKey, personalKey.Meta.ID); hasIssue(is, IssuePersonalAccountOff) {
-		t.Errorf("the key still reports %s", IssuePersonalAccountOff)
-	}
-	if is := h.issues(KindAccount, s.w.personal(s.alice).Meta.ID); hasIssue(is, IssuePersonalAccountOff) {
-		t.Errorf("alice's personal account still reports %s", IssuePersonalAccountOff)
-	}
+	h.wantIssue(KindKey, personalKey.Meta.ID, IssuePersonalAccountOff, false)
+	h.wantIssue(KindAccount, s.w.personal(s.alice).Meta.ID, IssuePersonalAccountOff, false)
 }
 
 // The deployment setting turns every personal account off; a group can turn it on again for its members, and a user's own value beats both.

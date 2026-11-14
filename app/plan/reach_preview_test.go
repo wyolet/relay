@@ -224,6 +224,10 @@ func TestModelRefBlocked(t *testing.T) {
 	team2 := b.w.team()
 	proj2 := b.w.project(team2)
 	pol := b.w.policy("proj", policy.Spec{Models: []string{"acme/m1", "acme/m2"}, PoolIDs: []string{pa.Meta.ID}})
+	// An account bound twice refuses as a whole, so it blocks no entry in particular and is not counted among the bound accounts.
+	twice := b.w.projectAccount(b.w.project(team2))
+	b.w.bindPolicy(pol, twice)
+	b.w.bindPolicy(b.w.policy("second", policy.Spec{}), twice)
 	b.w.bindPolicy(pol, b.w.projectAccount(b.proj))
 	h := b.w.start(t)
 

@@ -79,6 +79,15 @@ func waitBudgetCommit(t *testing.T, mem *kv.Mem) {
 	t.Fatalf("post-flight commit did not land")
 }
 
+// wantCallerLimited checks that err is the refusal of the caller's one counter cs holds.
+func wantCallerLimited(t *testing.T, err error, cs []limits.Counter) {
+	t.Helper()
+	var ex *pipeline.CallerLimitedError
+	if !errors.As(err, &ex) || ex.Refused.Counter == nil || ex.Refused.Counter.ID != cs[0].ID || ex.Refused.RetryAfter <= 0 {
+		t.Fatalf("err = %v, want a refusal of the caller's %s counter with a retry-after", err, cs[0].Rule.Meter)
+	}
+}
+
 const (
 	sseContent = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\n"
 	sseUsage   = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":60}}\n\ndata: [DONE]\n\n"
@@ -108,10 +117,7 @@ func TestEarlyCloseStillChargesTokens(t *testing.T) {
 		waitBudgetCommit(t, mem)
 
 		_, err = pl.Run(context.Background(), mk())
-		var ex *pipeline.CallerLimitedError
-		if !errors.As(err, &ex) {
-			t.Fatalf("drained=%v: second request err = %v, want tokens budget exceeded", drain, err)
-		}
+		wantCallerLimited(t, err, pol)
 	}
 }
 
@@ -153,10 +159,7 @@ func TestCallerGoneBeforeUsageFrameStillChargesTokens(t *testing.T) {
 	waitBudgetCommit(t, mem)
 
 	_, err = pl.Run(context.Background(), &pipeline.Request{Body: []byte("{}"), Headers: http.Header{}, Adapter: &sseAdapter{body: "{}"}, Hops: budgetHops(pol)})
-	var ex *pipeline.CallerLimitedError
-	if !errors.As(err, &ex) {
-		t.Fatalf("second request err = %v, want tokens budget exceeded", err)
-	}
+	wantCallerLimited(t, err, pol)
 }
 
 // An upstream that keeps the response open after the caller closed is cut off
@@ -214,10 +217,7 @@ func TestCutResponseChargesTokenFloor(t *testing.T) {
 	waitBudgetCommit(t, mem)
 
 	_, err = pl.Run(context.Background(), &pipeline.Request{Body: reqBody, Headers: http.Header{}, Adapter: &sseAdapter{body: "{}"}, Hops: budgetHops(pol)})
-	var ex *pipeline.CallerLimitedError
-	if !errors.As(err, &ex) {
-		t.Fatalf("second request err = %v, want tokens budget exceeded", err)
-	}
+	wantCallerLimited(t, err, pol)
 }
 
 type cutAdapter struct{ sseAdapter }
@@ -254,8 +254,5 @@ func TestCancelAfterDispatchKeepsRequestCharge(t *testing.T) {
 	if res != nil {
 		drainResult(t, res)
 	}
-	var ex *pipeline.CallerLimitedError
-	if !errors.As(err, &ex) {
-		t.Fatalf("second request after a dispatched-then-cancelled request: err = %v, want requests budget exceeded", err)
-	}
+	wantCallerLimited(t, err, pol)
 }

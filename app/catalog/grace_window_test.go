@@ -23,17 +23,13 @@ func TestGraceWindowIndexUsesTheCatalogClock(t *testing.T) {
 	c := New(provList{}, hostList{}, polList{}, modList{}, keyList{}, rlList{},
 		rkList{k}, rcList{}, bndList{})
 	c.UseClock(func() time.Time { return now })
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	if got, prev := c.Current().KeyByHash(hex64("d")); got == nil || !prev {
 		t.Fatal("previous hash is not indexed inside the grace window")
 	}
 
 	now = until.Add(time.Second)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	must(t, c.Reload(context.Background()))
 	if got, _ := c.Current().KeyByHash(hex64("d")); got != nil {
 		t.Fatal("previous hash still indexed after the grace window closed")
 	}
