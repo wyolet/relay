@@ -5,12 +5,15 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/app/account"
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/limits"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/catalogkind/ratelimit"
 )
 
 const testUSD = int64(1_000_000_000)
@@ -31,109 +34,85 @@ func (ah *accountsHarness) spend(t *testing.T, k *key.Key, n int, cost int64) {
 	}
 }
 
-func TestAccountLimits_LadderSharedAndEach(t *testing.T) {
+// wantLimits builds the answers the limits reads give over newAccountsWorld.
+type wantLimits struct{ aw *accountsWorld }
+
+func limitsOf(a *account.Account, kind account.Kind) LimitsAccount {
+	return LimitsAccount{ID: a.Meta.ID, Name: a.Meta.Name, Kind: kind}
+}
+
+// rateLimit is rl's link with used counted against its one rule; used -1 is a per-lane link read on a scope account, which has no count.
+func (wantLimits) rateLimit(rl *ratelimit.RateLimit, shared bool, used int64, models ...string) []LimitsRateLimit {
+	rule := LimitsRule{Meter: ratelimit.MeterRequests, Strategy: ratelimit.StrategyFixedWindow, Amount: rl.Spec.Rules[0].Amount, Window: 3600}
+	if used >= 0 {
+		left := rule.Amount - used
+		rule.Used, rule.Remaining = &used, &left
+	}
+	return []LimitsRateLimit{{RateLimitID: rl.Meta.ID, Name: rl.Meta.Name, Models: append([]string{}, models...), Shared: shared, PerLane: used < 0, Rules: []LimitsRule{rule}}}
+}
+
+func (w wantLimits) teamRung(used int64) LimitsRung {
+	return LimitsRung{
+		Account: limitsOf(w.aw.w.TeamAccount(w.aw.team), account.KindTeam), Policy: &BoundPolicy{ID: w.aw.teamPol.Meta.ID, Name: w.aw.teamPol.Meta.Name},
+		RateLimits: w.rateLimit(w.aw.teamRL, true, used), Budgets: []LimitsBudget{},
+	}
+}
+
+// projectRung is the project's rung as one lane reads it; used -1 reads it on the project's own account.
+func (w wantLimits) projectRung(used int64, spent, left string) LimitsRung {
+	b := w.aw.projBudget
+	return LimitsRung{
+		Account: limitsOf(w.aw.w.ProjectAccount(w.aw.proj), account.KindProject), Policy: &BoundPolicy{ID: w.aw.projPol.Meta.ID, Name: w.aw.projPol.Meta.Name},
+		RateLimits: w.rateLimit(w.aw.projRL, false, used, "prov/m1"),
+		Budgets:    []LimitsBudget{{BudgetID: b.Meta.ID, Name: b.Meta.Name, PerLane: used < 0, AmountUSD: "10", Period: "month", Mode: "hard", SpentUSD: spent, RemainingUSD: left}},
+	}
+}
+
+// Shared links read what every lane under the account spent together, the others this lane's own; tightest is the hard limit with the least left as a share of its cap. A team's or project's own account reads the accounts above and including it, its per-lane links marked and left out of tightest.
+func TestAccountLimits(t *testing.T) {
 	aw := newAccountsWorld()
-	actors := map[string]*actor.Actor{"u1": {UserID: aw.u1.ID}, "u2": {UserID: aw.u2.ID}}
+	actors := map[string]*actor.Actor{"u1": {UserID: aw.u1.ID}, "u2": {UserID: aw.u2.ID}, "root": {UserID: "u-root"}}
 	ah := newAccountsHarness(t, aw.w, authz.AlwaysAllowAuthenticated{}, actors)
 	ah.spend(t, aw.k1, 3, testUSD)
 	ah.spend(t, aw.k2, 2, 2*testUSD)
-
-	var got AccountLimits
-	if code := ah.get(t, "u1", "/accounts/"+aw.m1.Meta.ID+"/limits", &got); code != http.StatusOK {
-		t.Fatalf("status %d", code)
-	}
-	if got.Lane.ID != aw.m1.Meta.ID || got.Lane.Kind != account.KindMember {
-		t.Fatalf("lane = %+v", got.Lane)
-	}
-	if len(got.Rungs) != 3 {
-		t.Fatalf("rungs = %+v, want team, project and lane", got.Rungs)
-	}
-	teamRung, projRung, laneRung := got.Rungs[0], got.Rungs[1], got.Rungs[2]
-	if teamRung.Account.Kind != account.KindTeam || projRung.Account.Kind != account.KindProject || laneRung.Account.ID != aw.m1.Meta.ID {
-		t.Fatalf("rung accounts = %v, %v, %v", teamRung.Account, projRung.Account, laneRung.Account)
-	}
-	if teamRung.Policy == nil || teamRung.Policy.ID != aw.teamPol.Meta.ID {
-		t.Errorf("team rung policy = %+v", teamRung.Policy)
-	}
-
-	// Shared on the team account: both members' requests count.
-	if rl := teamRung.RateLimits[0]; !rl.Shared || rl.PerLane || num(rl.Rules[0].Used) != 5 || num(rl.Rules[0].Remaining) != 95 || rl.Models == nil || len(rl.Models) != 0 {
-		t.Errorf("team rate limit = %+v", rl)
-	}
-	// Each on the project account: only this lane's.
-	if rl := projRung.RateLimits[0]; rl.Shared || rl.PerLane || num(rl.Rules[0].Used) != 3 || rl.Rules[0].Window != 3600 || len(rl.Models) != 1 || rl.Models[0] != "prov/m1" {
-		t.Errorf("project rate limit = %+v", rl)
-	}
-	if b := projRung.Budgets[0]; b.Shared || b.SpentUSD != "3" || b.RemainingUSD != "7" || b.AmountUSD != "10" || b.Period != "month" || b.Mode != "hard" {
-		t.Errorf("project budget = %+v", b)
-	}
-	if rl := laneRung.RateLimits[0]; num(rl.Rules[0].Used) != 3 || num(rl.Rules[0].Remaining) != 1 {
-		t.Errorf("lane rate limit = %+v", rl)
-	}
-	// A quarter of the lane's cap left beats 70% of the budget and 95% of the team's cap.
-	if tt := got.Tightest; tt == nil || tt.Kind != "rateLimit" || tt.ID != aw.laneRL.Meta.ID || tt.AccountID != aw.m1.Meta.ID || tt.Remaining != 1 || tt.Label != "1 requests left: member "+aw.laneRL.Meta.Name {
-		t.Errorf("tightest = %+v", got.Tightest)
-	}
-
-	// The second member's account has no policy of its own: the project budget is tightest, and its spend is this lane's alone.
-	var other AccountLimits
-	if code := ah.get(t, "u2", "/keys/"+aw.k2.Meta.ID+"/limits", &other); code != http.StatusOK {
-		t.Fatalf("key limits status %d", code)
-	}
-	if other.Lane.ID != aw.m2.Meta.ID || len(other.Rungs) != 3 || other.Rungs[2].Policy != nil {
-		t.Fatalf("key limits = %+v", other)
-	}
-	if b := other.Rungs[1].Budgets[0]; b.SpentUSD != "4" || b.RemainingUSD != "6" {
-		t.Errorf("second lane's budget = %+v, want its own 4 spent", b)
-	}
-	if tt := other.Tightest; tt == nil || tt.Kind != "budget" || tt.ID != aw.projBudgetID || tt.Remaining != 6 || tt.Label != "$6 left: project "+other.Rungs[1].Budgets[0].Name {
-		t.Errorf("tightest = %+v", other.Tightest)
-	}
-}
-
-// num reads an optional count, -1 when absent.
-func num(p *int64) int64 {
-	if p == nil {
-		return -1
-	}
-	return *p
-}
-
-// A team's or project's own account reads the accounts above and including it: shared links from the bound account's counter, links counted per lane marked and left out of tightest.
-func TestAccountLimits_ScopeAccounts(t *testing.T) {
-	aw := newAccountsWorld()
-	ah := newAccountsHarness(t, aw.w, authz.AlwaysAllowAuthenticated{}, map[string]*actor.Actor{"root": {UserID: "u-root"}})
-	ah.spend(t, aw.k1, 3, testUSD)
-	ah.spend(t, aw.k2, 2, 2*testUSD)
+	w := wantLimits{aw}
 	teamAcc, projAcc := aw.w.TeamAccount(aw.team), aw.w.ProjectAccount(aw.proj)
+	teamCap := &LimitsTightest{AccountID: teamAcc.Meta.ID, Kind: "rateLimit", ID: aw.teamRL.Meta.ID, Remaining: 95, Label: "95 requests left: team " + aw.teamRL.Meta.Name}
 
-	var proj AccountLimits
-	if code := ah.get(t, "root", "/accounts/"+projAcc.Meta.ID+"/limits", &proj); code != http.StatusOK {
-		t.Fatalf("project account status %d", code)
-	}
-	if proj.Lane.ID != projAcc.Meta.ID || proj.Lane.Kind != account.KindProject || len(proj.Rungs) != 2 ||
-		proj.Rungs[0].Account.ID != teamAcc.Meta.ID || proj.Rungs[1].Account.ID != projAcc.Meta.ID {
-		t.Fatalf("project account limits = %+v, want the team's then the project's rung", proj)
-	}
-	if rl := proj.Rungs[0].RateLimits[0]; rl.PerLane || num(rl.Rules[0].Used) != 5 {
-		t.Errorf("team's shared rate limit = %+v, want both lanes' 5", rl)
-	}
-	if rl := proj.Rungs[1].RateLimits[0]; !rl.PerLane || rl.Rules[0].Used != nil || rl.Rules[0].Remaining != nil || rl.Rules[0].Amount != 50 {
-		t.Errorf("project's per-lane rate limit = %+v, want it marked with no reading", rl)
-	}
-	if b := proj.Rungs[1].Budgets[0]; !b.PerLane || b.SpentUSD != "" || b.RemainingUSD != "" || b.AmountUSD != "10" {
-		t.Errorf("project's per-lane budget = %+v, want it marked with no spend", b)
-	}
-	if tt := proj.Tightest; tt == nil || tt.Kind != "rateLimit" || tt.ID != aw.teamRL.Meta.ID || tt.AccountID != teamAcc.Meta.ID || tt.Remaining != 95 {
-		t.Errorf("tightest = %+v, want the team's shared cap", proj.Tightest)
-	}
-
-	var team AccountLimits
-	if code := ah.get(t, "root", "/accounts/"+teamAcc.Meta.Name+"/limits", &team); code != http.StatusOK {
-		t.Fatalf("team account status %d", code)
-	}
-	if len(team.Rungs) != 1 || team.Rungs[0].Account.Kind != account.KindTeam || team.Rungs[0].Policy == nil || team.Rungs[0].Policy.ID != aw.teamPol.Meta.ID {
-		t.Fatalf("team account limits = %+v, want the team's rung alone", team)
+	for _, tc := range []struct {
+		name, who, path string
+		want            AccountLimits
+	}{
+		{"a lane with a cap of its own", "u1", "/accounts/" + aw.m1.Meta.ID + "/limits", AccountLimits{
+			Lane: limitsOf(aw.m1, account.KindMember),
+			Rungs: []LimitsRung{w.teamRung(5), w.projectRung(3, "3", "7"), {
+				Account: limitsOf(aw.m1, account.KindMember), Policy: &BoundPolicy{ID: aw.lanePol.Meta.ID, Name: aw.lanePol.Meta.Name},
+				RateLimits: w.rateLimit(aw.laneRL, true, 3), Budgets: []LimitsBudget{},
+			}},
+			// A quarter of the lane's cap left beats 70% of the budget and 95% of the team's cap.
+			Tightest: &LimitsTightest{AccountID: aw.m1.Meta.ID, Kind: "rateLimit", ID: aw.laneRL.Meta.ID, Remaining: 1, Label: "1 requests left: member " + aw.laneRL.Meta.Name},
+		}},
+		{"a key's default lane, with no policy of its own", "u2", "/keys/" + aw.k2.Meta.ID + "/limits", AccountLimits{
+			Lane:     limitsOf(aw.m2, account.KindMember),
+			Rungs:    []LimitsRung{w.teamRung(5), w.projectRung(2, "4", "6"), {Account: limitsOf(aw.m2, account.KindMember), RateLimits: []LimitsRateLimit{}, Budgets: []LimitsBudget{}}},
+			Tightest: &LimitsTightest{AccountID: projAcc.Meta.ID, Kind: "budget", ID: aw.projBudget.Meta.ID, Remaining: 6, Label: "$6 left: project " + aw.projBudget.Meta.Name},
+		}},
+		{"the project's own account", "root", "/accounts/" + projAcc.Meta.ID + "/limits", AccountLimits{
+			Lane: limitsOf(projAcc, account.KindProject), Rungs: []LimitsRung{w.teamRung(5), w.projectRung(-1, "", "")}, Tightest: teamCap,
+		}},
+		{"the team's own account, by slug", "root", "/accounts/" + teamAcc.Meta.Name + "/limits", AccountLimits{
+			Lane: limitsOf(teamAcc, account.KindTeam), Rungs: []LimitsRung{w.teamRung(5)}, Tightest: teamCap,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got AccountLimits
+			if code := ah.get(t, tc.who, tc.path, &got); code != http.StatusOK {
+				t.Fatalf("status %d", code)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("limits (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -167,6 +146,28 @@ func TestAccountLimits_Visibility(t *testing.T) {
 	} {
 		if got := ah.get(t, tc.who, tc.path, nil); got != tc.want {
 			t.Errorf("%s GET %s = %d, want %d", tc.who, tc.path, got, tc.want)
+		}
+	}
+}
+
+// Counts come from the data plane's limiter: without one the read is refused, not answered with zeros.
+func TestAccountLimitsWithoutALimiter(t *testing.T) {
+	aw := newAccountsWorld()
+	r, api := testAPI(t, map[string]*actor.Actor{"u1": {UserID: aw.u1.ID}})
+	registerLimits(api, Deps{Authz: authz.AlwaysAllowAuthenticated{}, PlanView: aw.w.Load(t).Engine.View}, nil)
+	wantAPIError(t, scopeReq(t, r, "u1", http.MethodGet, "/accounts/"+aw.m1.Meta.ID+"/limits", ""), http.StatusServiceUnavailable, "", "no limiter to read counts from")
+}
+
+func TestMeterNoun(t *testing.T) {
+	for m, want := range map[ratelimit.Meter]string{
+		ratelimit.MeterRequests:        "requests",
+		ratelimit.MeterConcurrency:     "concurrent requests",
+		ratelimit.MeterTokens:          "tokens",
+		ratelimit.MeterTokensInput:     "input tokens",
+		ratelimit.MeterTokensCacheRead: "cache read tokens",
+	} {
+		if got := meterNoun(m); got != want {
+			t.Errorf("meterNoun(%s) = %q, want %q", m, got, want)
 		}
 	}
 }

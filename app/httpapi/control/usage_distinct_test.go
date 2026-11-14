@@ -70,29 +70,14 @@ func TestUsageSummaryDistinct(t *testing.T) {
 	}
 }
 
-func TestUsageTimeSeriesPassesDistinctToTheStore(t *testing.T) {
-	reader := &fakeUsageReader{}
-	h := newUsageHarness(t, testRBAC(), reader)
-	w := scopeReq(t, h, "root", http.MethodGet, "/usage/timeseries?interval=1h&distinct=principal_id", "")
-	if w.Code != 200 {
-		t.Fatalf("status = %d: %s", w.Code, w.Body)
-	}
-	if reader.distinct != "principal_id" {
-		t.Fatalf("store got distinct %q, want principal_id", reader.distinct)
-	}
-}
-
-func TestUsageDistinctAcceptsPoolAndAccount(t *testing.T) {
-	for _, dim := range []string{"pool_id", "account_id"} {
+// Every dimension the docs list reaches the store on both endpoints.
+func TestUsageDistinctReachesTheStore(t *testing.T) {
+	for _, dim := range []string{"relay_key_hash", "relay_key", "principal_id", "credential_id", "pool_id", "account_id", "lane_account_id", "via_account_id", "project_id", "team_id", "model_id", "host_id"} {
 		for _, path := range []string{"/usage/summary?group_by=none&distinct=" + dim, "/usage/timeseries?interval=1h&distinct=" + dim} {
 			reader := &fakeUsageReader{}
 			h := newUsageHarness(t, testRBAC(), reader)
-			w := scopeReq(t, h, "root", http.MethodGet, path, "")
-			if w.Code != 200 {
-				t.Fatalf("%s: status = %d: %s", path, w.Code, w.Body)
-			}
-			if reader.distinct != dim {
-				t.Fatalf("%s: store got distinct %q, want %s", path, reader.distinct, dim)
+			if w := scopeReq(t, h, "root", http.MethodGet, path, ""); w.Code != 200 || reader.distinct != dim {
+				t.Errorf("%s: status %d, store got distinct %q: %s", path, w.Code, reader.distinct, w.Body)
 			}
 		}
 	}

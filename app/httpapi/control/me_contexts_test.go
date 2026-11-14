@@ -1,17 +1,15 @@
 package control
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalog/catalogtest"
+	"github.com/wyolet/relay/app/plan/plantest"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -19,7 +17,7 @@ import (
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-// A team admin gets the team and its projects as admin contexts; a developer reached through a group gets that project alone; a viewer gets nothing to create in; the admin token gets every scope and no personal one.
+// A team admin gets the team and its projects as admin contexts; a developer reached through a group gets that project alone; a viewer gets nothing to create in; the admin token gets every scope and no personal one. Teams come first, then projects, each by slug.
 func TestMyContexts(t *testing.T) {
 	system := meta.Owner{Kind: meta.OwnerSystem}
 	roles, err := role.Builtins()
@@ -59,45 +57,42 @@ func TestMyContexts(t *testing.T) {
 		"dave":  {UserID: "u-dave", Username: "dave", Subjects: []string{"user:u-dave"}},
 		"token": {AdminToken: true},
 	}
-	r := chi.NewRouter()
-	r.Use(withTestActor("X-Test-Actor", actors))
-	registerMyContexts(humachi.New(r, huma.DefaultConfig("contexts-test", "0")), Deps{Authz: az, Catalog: cat}, nil)
-
-	type ctxRow struct {
-		kind, name string
-		admin      bool
+	// A user whose personal account is turned off: rows created there would serve nothing.
+	world := &plantest.World{}
+	off := world.User()
+	off.PersonalAccount = "off"
+	actors["off"] = &actor.Actor{UserID: off.ID, Username: "off", Subjects: []string{"user:" + off.ID}}
+	mount := func(d Deps) http.Handler {
+		r, api := testAPI(t, actors)
+		registerMyContexts(api, d, nil)
+		return r
 	}
-	for who, want := range map[string][]ctxRow{
-		"alice": {{"personal", "alice", true}, {"team", "alpha", true}, {"project", "web", true}},
-		"bob":   {{"personal", "bob", true}, {"project", "api", false}},
-		"dave":  {{"personal", "dave", true}},
-		"token": {{"team", "alpha", true}, {"team", "beta", true}, {"project", "api", true}, {"project", "ops", true}, {"project", "web", true}},
+	r := mount(Deps{Authz: az, Catalog: cat, PlanView: world.Load(t).Engine.View})
+
+	alpha, beta := teams[0].Meta.ID, teams[1].Meta.ID
+	personal := func(id, name string) MyContext {
+		return MyContext{Kind: "personal", ID: id, Name: name, DisplayName: name, Admin: true}
+	}
+	for who, want := range map[string][]MyContext{
+		"alice": {personal("u-alice", "alice"), {Kind: "team", ID: alpha, Name: "alpha", DisplayName: "Alpha", Admin: true}, {Kind: "project", ID: web.Meta.ID, Name: "web", DisplayName: "web", TeamID: alpha, Admin: true}},
+		"bob":   {personal("u-bob", "bob"), {Kind: "project", ID: api.Meta.ID, Name: "api", DisplayName: "api", TeamID: beta}},
+		"dave":  {personal("u-dave", "dave")},
+		"off":   {},
+		"token": {
+			{Kind: "team", ID: alpha, Name: "alpha", DisplayName: "Alpha", Admin: true}, {Kind: "team", ID: beta, Name: "beta", DisplayName: "beta", Admin: true},
+			{Kind: "project", ID: api.Meta.ID, Name: "api", DisplayName: "api", TeamID: beta, Admin: true}, {Kind: "project", ID: ops.Meta.ID, Name: "ops", DisplayName: "ops", TeamID: beta, Admin: true},
+			{Kind: "project", ID: web.Meta.ID, Name: "web", DisplayName: "web", TeamID: alpha, Admin: true},
+		},
 	} {
-		w := scopeReq(t, r, who, http.MethodGet, "/me/contexts", "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s: status %d: %s", who, w.Code, w.Body)
-		}
 		var got []MyContext
-		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != len(want) {
-			t.Errorf("%s: contexts %+v, want %+v", who, got, want)
-			continue
-		}
-		for i, c := range got {
-			if c.Kind != want[i].kind || c.Name != want[i].name || c.Admin != want[i].admin {
-				t.Errorf("%s: context %d = %+v, want %+v", who, i, c, want[i])
-			}
-			if c.Kind == "project" && c.TeamID == "" {
-				t.Errorf("%s: project %s has no teamId", who, c.Name)
-			}
-		}
-		if who == "alice" && (got[1].DisplayName != "Alpha" || got[0].ID != "u-alice") {
-			t.Errorf("alice: %+v", got)
+		wantJSON(t, scopeReq(t, r, who, http.MethodGet, "/me/contexts", ""), http.StatusOK, &got)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", who, diff)
 		}
 	}
 	if w := scopeReq(t, r, "", http.MethodGet, "/me/contexts", ""); w.Code != http.StatusUnauthorized {
 		t.Errorf("anonymous: status %d, want 401", w.Code)
 	}
+
+	wantAPIError(t, scopeReq(t, mount(Deps{Authz: az}), "alice", http.MethodGet, "/me/contexts", ""), http.StatusServiceUnavailable, "", "the catalog is not loaded yet")
 }

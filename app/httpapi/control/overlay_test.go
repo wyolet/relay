@@ -1,60 +1,49 @@
 package control
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/pkg/catalogkind/model"
 	"github.com/wyolet/relay/pkg/meta"
 )
 
-func overlayTmpl() *model.Model {
-	return &model.Model{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "claude-fable-5",
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: meta.NewID()}},
-		Spec: model.Spec{
-			Snapshots: []model.Snapshot{{Name: "claude-fable-5"}},
-			Pointer:   "claude-fable-5",
-		},
-	}
-}
-
 func TestBuildOverlayView(t *testing.T) {
-	tmpl := overlayTmpl()
+	spec := func() model.Spec {
+		return model.Spec{Snapshots: []model.Snapshot{{Name: "claude-fable-5"}}, Pointer: "claude-fable-5", Aliases: []string{"fable"}}
+	}
+	id := meta.NewID()
+	tmpl := &model.Model{Meta: meta.Metadata{ID: id, Name: "claude-fable-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: meta.NewID()}}, Spec: spec()}
+	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	merged := spec()
+	merged.Family, merged.Aliases = "custom", []string{"fable", "nick"}
 
-	t.Run("no overlay — template passthrough", func(t *testing.T) {
-		v := buildOverlayView(tmpl, nil)
-		if v.Patch != nil || v.Quarantined || v.Effective.Family != tmpl.Spec.Family {
-			t.Fatalf("passthrough view wrong: %+v", v)
-		}
-	})
-
-	t.Run("valid overlay — effective differs, template pristine", func(t *testing.T) {
-		o := &overlay.Overlay{Kind: overlay.KindModel, ResourceID: "",
-			Patch: []byte(`{"aliases":["nick"],"family":"custom"}`)}
-		o.ResourceID = tmpl.Meta.ID
-		v := buildOverlayView(tmpl, o)
-		if v.Quarantined {
-			t.Fatalf("unexpected quarantine: %s", v.QuarantineReason)
-		}
-		if v.Effective.Family != "custom" || len(v.Effective.Aliases) != 1 {
-			t.Errorf("effective not merged: %+v", v.Effective)
-		}
-		if v.Template.Family != "" || len(v.Template.Aliases) != 0 {
-			t.Errorf("template not pristine: %+v", v.Template)
-		}
-	})
-
-	t.Run("invalid merge — quarantined, template served", func(t *testing.T) {
-		o := &overlay.Overlay{Kind: overlay.KindModel, ResourceID: "",
-			Patch: []byte(`{"pointer":"nope"}`)}
-		o.ResourceID = tmpl.Meta.ID
-		v := buildOverlayView(tmpl, o)
-		if !v.Quarantined || v.QuarantineReason == "" {
-			t.Fatal("quarantine state not surfaced")
-		}
-		if v.Effective.Pointer != tmpl.Spec.Pointer {
-			t.Error("quarantined view must serve the template spec")
-		}
-	})
+	for _, tc := range []struct {
+		name  string
+		patch string
+		want  overlayView
+	}{
+		{name: "no overlay serves the template", want: overlayView{Effective: spec()}},
+		{name: "a patch merges into effective", patch: `{"aliases":["nick"],"family":"custom"}`, want: overlayView{Effective: merged}},
+		{name: "a patch that no longer merges is quarantined", patch: `{"pointer":"nope"}`, want: overlayView{Effective: spec(), Quarantined: true, QuarantineReason: `overlay: effective row invalid: model "claude-fable-5": pointer "nope" does not match any snapshot`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var o *overlay.Overlay
+			tc.want.Kind, tc.want.ResourceID, tc.want.Template = "model", id, spec()
+			if tc.patch != "" {
+				o = &overlay.Overlay{Kind: overlay.KindModel, ResourceID: id, Patch: json.RawMessage(tc.patch), UpdatedAt: at}
+				tc.want.Patch, tc.want.UpdatedAt = json.RawMessage(tc.patch), at
+			}
+			if diff := cmp.Diff(tc.want, buildOverlayView(tmpl, o)); diff != "" {
+				t.Errorf("view (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(spec(), tmpl.Spec); diff != "" {
+				t.Errorf("the merge changed the template (-want +got):\n%s", diff)
+			}
+		})
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -19,96 +20,40 @@ func recentEvents(n int, principalID string) []usagelog.Event {
 	return events
 }
 
-// logsTotals decodes the raw total fields so a test can tell an absent field from a zero one.
-func logsTotals(t *testing.T, body []byte) (total, capped json.RawMessage) {
-	t.Helper()
-	var out map[string]json.RawMessage
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatal(err)
-	}
-	return out["total"], out["total_capped"]
-}
-
+// The total is the whole filtered set whatever the page and cursor, counted one past the cap so the cap itself is not reported as capped; without count=true nothing is counted, and a caller scoped out of every row never reaches the store.
 func TestLogsListCount(t *testing.T) {
-	t.Run("count off adds no total and never counts", func(t *testing.T) {
-		reader := &fakeUsageReader{events: recentEvents(3, "")}
-		h := newUsageHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "root", http.MethodGet, "/logs", "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if total, capped := logsTotals(t, w.Body.Bytes()); total != nil || capped != nil {
-			t.Fatalf("total=%s total_capped=%s, want both absent", total, capped)
-		}
-		if reader.calls != 1 {
-			t.Fatalf("reader called %d times, want 1 (no count)", reader.calls)
-		}
-	})
-
-	t.Run("count on reports the whole filtered set regardless of page and cursor", func(t *testing.T) {
-		reader := &fakeUsageReader{events: recentEvents(3, "")}
-		h := newUsageHarness(t, testRBAC(), reader)
-		cursor := encodeCursor(time.Now().Add(-time.Minute), "r-00000")
-		w := scopeReq(t, h, "root", http.MethodGet, "/logs?count=true&limit=1&cursor="+cursor, "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if total, capped := logsTotals(t, w.Body.Bytes()); string(total) != "3" || string(capped) != "false" {
-			t.Fatalf("total=%s total_capped=%s, want 3/false", total, capped)
-		}
-		if reader.countLimit != logsTotalCap+1 {
-			t.Fatalf("count limit = %d, want %d", reader.countLimit, logsTotalCap+1)
-		}
-	})
-
-	t.Run("more than the cap reports the cap and total_capped", func(t *testing.T) {
-		reader := &fakeUsageReader{events: recentEvents(logsTotalCap+2, "")}
-		h := newUsageHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "root", http.MethodGet, "/logs?count=true&limit=1", "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if total, capped := logsTotals(t, w.Body.Bytes()); string(total) != "10000" || string(capped) != "true" {
-			t.Fatalf("total=%s total_capped=%s, want 10000/true", total, capped)
-		}
-	})
-
-	t.Run("exactly the cap is not capped", func(t *testing.T) {
-		reader := &fakeUsageReader{events: recentEvents(logsTotalCap, "")}
-		h := newUsageHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "root", http.MethodGet, "/logs?count=true&limit=1", "")
-		if total, capped := logsTotals(t, w.Body.Bytes()); string(total) != "10000" || string(capped) != "false" {
-			t.Fatalf("total=%s total_capped=%s, want 10000/false", total, capped)
-		}
-	})
-
-	t.Run("the count carries the caller's scope", func(t *testing.T) {
-		reader := &fakeUsageReader{events: append(recentEvents(2, "u-alice"), recentEvents(5, "u-bob")...)}
-		h := newUsageHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "alice", http.MethodGet, "/logs?count=true", "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if got := reader.lastCount.ScopePrincipalID; len(got) != 1 || got[0] != "u-alice" {
-			t.Fatalf("count ScopePrincipalID = %v, want [u-alice]", got)
-		}
-		if total, _ := logsTotals(t, w.Body.Bytes()); string(total) != "2" {
-			t.Fatalf("total = %s, want 2", total)
-		}
-	})
-
-	t.Run("a caller scoped out gets a zero total without reaching the store", func(t *testing.T) {
-		reader := &fakeUsageReader{events: recentEvents(3, "")}
-		h := newUsageHarness(t, testRBAC(), reader)
-		w := scopeReq(t, h, "nobody", http.MethodGet, "/logs?count=true", "")
-		if w.Code != 200 {
-			t.Fatalf("status = %d: %s", w.Code, w.Body)
-		}
-		if total, capped := logsTotals(t, w.Body.Bytes()); string(total) != "0" || string(capped) != "false" {
-			t.Fatalf("total=%s total_capped=%s, want 0/false", total, capped)
-		}
-		if reader.calls != 0 {
-			t.Fatalf("reader called %d times, want 0", reader.calls)
-		}
-	})
+	cursor := encodeCursor(time.Now().Add(-time.Minute), "r-00000")
+	alices := append(recentEvents(2, "u-alice"), recentEvents(5, "u-bob")...)
+	for _, tc := range []struct {
+		name, who, query string
+		events           []usagelog.Event
+		total, capped    string
+		calls            int
+	}{
+		{"count off", "root", "", recentEvents(3, ""), "", "", 1},
+		{"count on, a later page", "root", "?count=true&limit=1&cursor=" + cursor, recentEvents(3, ""), "3", "false", 2},
+		{"exactly the cap", "root", "?count=true&limit=1", recentEvents(logsTotalCap, ""), "10000", "false", 2},
+		{"more than the cap", "root", "?count=true&limit=1", recentEvents(logsTotalCap+2, ""), "10000", "true", 2},
+		{"the caller's scope", "alice", "?count=true", alices, "2", "false", 2},
+		{"a caller scoped out", "nobody", "?count=true", recentEvents(3, ""), "0", "false", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &fakeUsageReader{events: tc.events}
+			var out map[string]json.RawMessage
+			wantJSON(t, scopeReq(t, newUsageHarness(t, testRBAC(), reader), tc.who, http.MethodGet, "/logs"+tc.query, ""), http.StatusOK, &out)
+			// The raw fields tell an absent total from a zero one.
+			if total, capped := string(out["total"]), string(out["total_capped"]); total != tc.total || capped != tc.capped {
+				t.Errorf("total=%q total_capped=%q, want %q/%q", total, capped, tc.total, tc.capped)
+			}
+			if reader.calls != tc.calls {
+				t.Errorf("reader called %d times, want %d", reader.calls, tc.calls)
+			}
+			if tc.calls == 2 && reader.countLimit != logsTotalCap+1 {
+				t.Errorf("count limit = %d, want %d", reader.countLimit, logsTotalCap+1)
+			}
+			if tc.who == "alice" && !slices.Equal(reader.lastCount.ScopePrincipalID, []string{"u-alice"}) {
+				t.Errorf("count ScopePrincipalID = %v, want [u-alice]", reader.lastCount.ScopePrincipalID)
+			}
+		})
+	}
 }

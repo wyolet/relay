@@ -40,6 +40,25 @@ func newLogsHarness(t *testing.T, ur usagelog.Reader, pr payload.Reader) http.Ha
 	return r
 }
 
+// storedPayloads is a payload reader over a file holding recs.
+func storedPayloads(t *testing.T, recs ...payload.Record) payload.Reader {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "payloads.jsonl")
+	sink, err := payloadfile.NewSink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if err := sink.Write(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return payloadfile.NewReader(path)
+}
+
 func getLog(t *testing.T, h http.Handler, who, id string) (int, logGetBody) {
 	t.Helper()
 	w := scopeReq(t, h, who, http.MethodGet, "/logs/"+id, "")
@@ -72,27 +91,15 @@ func TestLogsSameClientRequestIDStaysPerPrincipal(t *testing.T) {
 		t.Fatalf("request ids bob=%q alice=%q: want distinct relay-minted ids", bobID, aliceID)
 	}
 
-	path := filepath.Join(t.TempDir(), "payloads.jsonl")
-	sink, err := payloadfile.NewSink(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now()
-	for _, r := range []payload.Record{
-		{RequestID: bobID, Timestamp: now.Add(-time.Hour), PrincipalID: "u-bob", RequestBody: []byte("BOB-PROMPT")},
-		{RequestID: aliceID, Timestamp: now, PrincipalID: "u-alice", RequestBody: []byte("ALICE-PROMPT")},
-	} {
-		if err := sink.Write(r); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_ = sink.Close()
-
+	stored := storedPayloads(t,
+		payload.Record{RequestID: bobID, Timestamp: now.Add(-time.Hour), PrincipalID: "u-bob", RequestBody: []byte("BOB-PROMPT")},
+		payload.Record{RequestID: aliceID, Timestamp: now, PrincipalID: "u-alice", RequestBody: []byte("ALICE-PROMPT")})
 	ur := &eventsByID{byID: map[string][]usagelog.Event{
 		bobID:   {{RequestID: bobID, PrincipalID: "u-bob", Timestamp: now.Add(-time.Hour)}},
 		aliceID: {{RequestID: aliceID, PrincipalID: "u-alice", Timestamp: now}},
 	}}
-	h := newLogsHarness(t, ur, payloadfile.NewReader(path))
+	h := newLogsHarness(t, ur, stored)
 
 	for _, tc := range []struct {
 		who, id, body string
@@ -118,23 +125,14 @@ func TestLogsSameClientRequestIDStaysPerPrincipal(t *testing.T) {
 // before ids were relay-minted) must not join another principal's body.
 func TestLogsPayloadJoinRequiresSameOwner(t *testing.T) {
 	const sharedID = "client-req-0001"
-	path := filepath.Join(t.TempDir(), "payloads.jsonl")
-	sink, err := payloadfile.NewSink(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sink.Write(payload.Record{
+	stored := storedPayloads(t, payload.Record{
 		RequestID: sharedID, Timestamp: time.Now().Add(-time.Hour), PrincipalID: "u-bob",
 		RequestBody: []byte("VICTIM-PROMPT"), ResponseBody: []byte("VICTIM-COMPLETION"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_ = sink.Close()
-
+	})
 	ur := &eventsByID{byID: map[string][]usagelog.Event{
 		sharedID: {{RequestID: sharedID, PrincipalID: "u-alice", Timestamp: time.Now()}},
 	}}
-	h := newLogsHarness(t, ur, payloadfile.NewReader(path))
+	h := newLogsHarness(t, ur, stored)
 
 	code, out := getLog(t, h, "alice", sharedID)
 	if code != http.StatusOK {
@@ -152,19 +150,10 @@ func TestLogsPayloadJoinRequiresSameOwner(t *testing.T) {
 // joins only for a reader who may already read every record.
 func TestLogsPayloadWithoutOwnerOnlyForUnrestrictedReader(t *testing.T) {
 	const id = "legacy-0001"
-	path := filepath.Join(t.TempDir(), "payloads.jsonl")
-	sink, err := payloadfile.NewSink(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sink.Write(payload.Record{RequestID: id, Timestamp: time.Now(), RequestBody: []byte("OLD")}); err != nil {
-		t.Fatal(err)
-	}
-	_ = sink.Close()
 	ur := &eventsByID{byID: map[string][]usagelog.Event{
 		id: {{RequestID: id, PrincipalID: "u-alice", Timestamp: time.Now()}},
 	}}
-	h := newLogsHarness(t, ur, payloadfile.NewReader(path))
+	h := newLogsHarness(t, ur, storedPayloads(t, payload.Record{RequestID: id, Timestamp: time.Now(), RequestBody: []byte("OLD")}))
 
 	if code, out := getLog(t, h, "alice", id); code != http.StatusOK || out.Payload != nil {
 		t.Fatalf("scoped reader: code=%d payload=%+v, want 200 without payload", code, out.Payload)
