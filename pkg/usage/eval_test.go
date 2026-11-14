@@ -1,390 +1,16 @@
 package usage
 
 import (
-	"strings"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
-// Pre-upstream rejections (LogOnly: status 0 + error_kind) must not reach
-// usage aggregates — they belong to the logs view. Upstream errors
-// (status >= 400) stay, counted in ErrorCount.
-func TestSummarize_ExcludesLogOnly(t *testing.T) {
-	now := time.Now().UTC()
-	events := []Event{
-		{RequestID: "ok", ModelID: "m1", Timestamp: now, Status: 200,
-			Tokens: sdkusage.Tokens{"input": 10, "output": 5}},
-		{RequestID: "upstream-err", ModelID: "m1", Timestamp: now, Status: 500,
-			ErrorKind: "upstream_5xx"},
-		{RequestID: "rejected", RequestedModel: "m1", Timestamp: now, Status: 0,
-			ErrorKind: "model_not_found"},
-		{RequestID: "no-keys", ModelID: "m1", Timestamp: now, Status: 0,
-			ErrorKind: "no_keys"},
-	}
-
-	res, err := Summarize(events, "model_id")
-	if err != nil {
-		t.Fatalf("Summarize: %v", err)
-	}
-	if len(res.Rows) != 1 {
-		t.Fatalf("want 1 group (LogOnly rows excluded, no empty-model bucket), got %d: %+v", len(res.Rows), res.Rows)
-	}
-	row := res.Rows[0]
-	if row.Group["model_id"] != "m1" {
-		t.Fatalf("group: %+v", row.Group)
-	}
-	if row.Requests != 2 {
-		t.Fatalf("requests: want 2 (ok + upstream error), got %d", row.Requests)
-	}
-	if row.ErrorCount != 1 {
-		t.Fatalf("errors: want 1 (the 500), got %d", row.ErrorCount)
-	}
-	if row.Tokens["input"] != 10 || row.Tokens["output"] != 5 {
-		t.Fatalf("tokens: %+v", row.Tokens)
-	}
-
-	ts, err := Bucketize(events, time.Hour, "")
-	if err != nil {
-		t.Fatalf("Bucketize: %v", err)
-	}
-	if len(ts.Rows) != 1 || len(ts.Rows[0].Points) != 1 {
-		t.Fatalf("timeseries shape: %+v", ts.Rows)
-	}
-	p := ts.Rows[0].Points[0]
-	if p.Requests != 2 || p.ErrorCount != 1 {
-		t.Fatalf("timeseries point: want reqs=2 errs=1, got reqs=%d errs=%d", p.Requests, p.ErrorCount)
-	}
-}
-
-func TestAggregates_LatencyTTFTAndErrorSplit(t *testing.T) {
-	now := time.Now().UTC()
-	events := []Event{
-		{RequestID: "a", ModelID: "m1", Timestamp: now, Status: 200, DurationMs: 100,
-			FinishReason: "stop", Upstream: &sdkusage.UpstreamTiming{ResponseStart: 50_000}},
-		{RequestID: "b", ModelID: "m1", Timestamp: now, Status: 200, DurationMs: 300,
-			FinishReason: "length", Upstream: &sdkusage.UpstreamTiming{ResponseStart: 150_000}},
-		{RequestID: "c", ModelID: "m1", Timestamp: now, Status: 429, DurationMs: 20,
-			ErrorKind: "upstream_429"},
-		{RequestID: "d", ModelID: "m1", Timestamp: now, Status: 502, DurationMs: 40,
-			ErrorKind: "upstream_5xx"},
-	}
-
-	res, err := Summarize(events, "model_id")
-	if err != nil {
-		t.Fatalf("Summarize: %v", err)
-	}
-	row := res.Rows[0]
-	if row.TTFTMs == nil {
-		t.Fatal("ttft_ms: want stats over the 2 events with upstream timing, got nil")
-	}
-	if row.TTFTMs.Max != 150 || row.TTFTMs.P50 != 50 {
-		t.Fatalf("ttft_ms: %+v", *row.TTFTMs)
-	}
-	if row.DurationMs.Max != 300 {
-		t.Fatalf("duration_ms: %+v", row.DurationMs)
-	}
-
-	// New group dimensions.
-	byFinish, err := Summarize(events, "finish_reason")
-	if err != nil {
-		t.Fatalf("Summarize finish_reason: %v", err)
-	}
-	if len(byFinish.Rows) != 3 { // "stop", "length", "" (the two errors)
-		t.Fatalf("finish_reason groups: %+v", byFinish.Rows)
-	}
-	byErrKind, err := Summarize(events, "error_kind")
-	if err != nil {
-		t.Fatalf("Summarize error_kind: %v", err)
-	}
-	if len(byErrKind.Rows) != 3 { // "", "upstream_429", "upstream_5xx"
-		t.Fatalf("error_kind groups: %+v", byErrKind.Rows)
-	}
-
-	ts, err := Bucketize(events, time.Hour, "")
-	if err != nil {
-		t.Fatalf("Bucketize: %v", err)
-	}
-	p := ts.Rows[0].Points[0]
-	if p.ErrorCount != 2 || p.Errors4xx != 1 || p.Errors5xx != 1 {
-		t.Fatalf("error split: errs=%d 4xx=%d 5xx=%d", p.ErrorCount, p.Errors4xx, p.Errors5xx)
-	}
-	if p.DurationMs.Max != 300 {
-		t.Fatalf("bucket duration_ms: %+v", p.DurationMs)
-	}
-	if p.TTFTMs == nil || p.TTFTMs.Max != 150 {
-		t.Fatalf("bucket ttft_ms: %+v", p.TTFTMs)
-	}
-
-	// A bucket with no upstream timing omits ttft entirely.
-	noTTFT, err := Bucketize(events[2:], time.Hour, "")
-	if err != nil {
-		t.Fatalf("Bucketize no-ttft: %v", err)
-	}
-	if noTTFT.Rows[0].Points[0].TTFTMs != nil {
-		t.Fatalf("want nil ttft_ms, got %+v", noTTFT.Rows[0].Points[0].TTFTMs)
-	}
-}
-
-func TestTags_FilterAndGroupBy(t *testing.T) {
-	now := time.Now().UTC()
-	events := []Event{
-		{RequestID: "a", Source: "pipeline", Timestamp: now, Status: 200,
-			Tags: map[string]string{"session_id": "s1", "leg": "bytepass"}},
-		{RequestID: "b", Source: "pipeline", Timestamp: now, Status: 200,
-			Tags: map[string]string{"session_id": "s1", "leg": "translate"}},
-		{RequestID: "c", Source: "pipeline", Timestamp: now, Status: 200,
-			Tags: map[string]string{"session_id": "s2"}},
-		{RequestID: "d", Source: "pipeline", Timestamp: now, Status: 200}, // untagged
-	}
-
-	got := FilterEvents(events, EventQuery{Tags: map[string][]string{"session_id": {"s1"}}})
-	if len(got) != 2 {
-		t.Fatalf("single value: want 2, got %d", len(got))
-	}
-	got = FilterEvents(events, EventQuery{Tags: map[string][]string{"session_id": {"s1", "s2"}}})
-	if len(got) != 3 {
-		t.Fatalf("OR within key: want 3, got %d", len(got))
-	}
-	got = FilterEvents(events, EventQuery{Tags: map[string][]string{"session_id": {"s1"}, "leg": {"translate"}}})
-	if len(got) != 1 || got[0].RequestID != "b" {
-		t.Fatalf("AND across keys: %+v", got)
-	}
-	// A missing key matches only an explicit "" value.
-	got = FilterEvents(events, EventQuery{Tags: map[string][]string{"leg": {""}}})
-	if len(got) != 2 {
-		t.Fatalf("missing-key as empty: want 2 (c + d), got %d", len(got))
-	}
-
-	res, err := Summarize(events, "tags.session_id")
-	if err != nil {
-		t.Fatalf("Summarize tags.session_id: %v", err)
-	}
-	if len(res.Rows) != 3 { // s1(2), s2(1), ""(1)
-		t.Fatalf("tag groups: %+v", res.Rows)
-	}
-	if res.Rows[0].Group["tags.session_id"] != "s1" || res.Rows[0].Requests != 2 {
-		t.Fatalf("top tag group: %+v", res.Rows[0])
-	}
-
-	ts, err := Bucketize(events, time.Hour, "tags.leg")
-	if err != nil {
-		t.Fatalf("Bucketize tags.leg: %v", err)
-	}
-	if len(ts.Rows) != 3 { // "bytepass", "translate", ""
-		t.Fatalf("tag series: %+v", ts.Rows)
-	}
-
-	if _, err := Summarize(events, "tags."); err == nil {
-		t.Fatal("empty tag key: want error")
-	}
-}
-
-func TestMapGroupKey(t *testing.T) {
-	if col, key, ok := MapGroupKey("tags.session_id"); !ok || col != "tags" || key != "session_id" {
-		t.Fatalf("tags.session_id: got %q %q, %v", col, key, ok)
-	}
-	if col, key, ok := MapGroupKey("extras.instance"); !ok || col != "extras" || key != "instance" {
-		t.Fatalf("extras.instance: got %q %q, %v", col, key, ok)
-	}
-	for _, bad := range []string{"tags.", "tags", "extras.", "extras", "session_id", "tags." + strings.Repeat("k", MaxTagKeyLen+1)} {
-		if _, _, ok := MapGroupKey(bad); ok {
-			t.Fatalf("want invalid: %q", bad)
-		}
-	}
-	if !IsValidGroupBy("tags.leg") {
-		t.Fatal("IsValidGroupBy(tags.leg): want true")
-	}
-	if IsValidGroupBy("tags.") {
-		t.Fatal("IsValidGroupBy(tags.): want false")
-	}
-}
-
-func TestSlugDimensions_FilterAndGroupBy(t *testing.T) {
-	now := time.Now().UTC()
-	events := []Event{
-		{RequestID: "a", Timestamp: now, Status: 200,
-			Model: "gpt-4o", Host: "openai", Policy: "default", RelayKey: "indexer-prod"},
-		{RequestID: "b", Timestamp: now, Status: 200,
-			Model: "claude-sonnet", Host: "anthropic", Policy: "default", RelayKey: "indexer-prod"},
-		{RequestID: "c", Timestamp: now, Status: 500,
-			Model: "gpt-4o", Host: "azure", Policy: "premium"},
-	}
-
-	for _, g := range []string{"model", "host", "policy", "relay_key"} {
-		if !IsValidGroupBy(g) {
-			t.Fatalf("IsValidGroupBy(%q) = false", g)
-		}
-	}
-
-	byModel, err := Summarize(events, "model")
-	if err != nil {
-		t.Fatalf("Summarize model: %v", err)
-	}
-	if len(byModel.Rows) != 2 {
-		t.Fatalf("model groups: want 2, got %+v", byModel.Rows)
-	}
-	if byModel.Rows[0].Group["model"] != "gpt-4o" || byModel.Rows[0].Requests != 2 {
-		t.Fatalf("top model group: %+v", byModel.Rows[0])
-	}
-
-	byHost, err := Summarize(events, "host")
-	if err != nil {
-		t.Fatalf("Summarize host: %v", err)
-	}
-	if len(byHost.Rows) != 3 {
-		t.Fatalf("host groups: want 3, got %+v", byHost.Rows)
-	}
-
-	byPolicy, err := Summarize(events, "policy")
-	if err != nil {
-		t.Fatalf("Summarize policy: %v", err)
-	}
-	if len(byPolicy.Rows) != 2 || byPolicy.Rows[0].Group["policy"] != "default" {
-		t.Fatalf("policy groups: %+v", byPolicy.Rows)
-	}
-
-	// A keyless request groups under the empty slug, not under another key.
-	byKey, err := Summarize(events, "relay_key")
-	if err != nil {
-		t.Fatalf("Summarize relay_key: %v", err)
-	}
-	if len(byKey.Rows) != 2 || byKey.Rows[0].Group["relay_key"] != "indexer-prod" ||
-		byKey.Rows[0].Requests != 2 || byKey.Rows[1].Group["relay_key"] != "" {
-		t.Fatalf("relay_key groups: %+v", byKey.Rows)
-	}
-
-	ts, err := Bucketize(events, time.Hour, "model")
-	if err != nil {
-		t.Fatalf("Bucketize model: %v", err)
-	}
-	if len(ts.Rows) != 2 || ts.Rows[0].Group["model"] != "gpt-4o" {
-		t.Fatalf("timeseries model groups: %+v", ts.Rows)
-	}
-
-	got := FilterEvents(events, EventQuery{Model: []string{"gpt-4o"}})
-	if len(got) != 2 {
-		t.Fatalf("model filter: want 2, got %d", len(got))
-	}
-	got = FilterEvents(events, EventQuery{Host: []string{"azure", "anthropic"}})
-	if len(got) != 2 {
-		t.Fatalf("host filter: want 2, got %d", len(got))
-	}
-	got = FilterEvents(events, EventQuery{Policy: []string{"premium"}})
-	if len(got) != 1 || got[0].RequestID != "c" {
-		t.Fatalf("policy filter: %+v", got)
-	}
-	got = FilterEvents(events, EventQuery{RelayKey: []string{"indexer-prod"}})
-	if len(got) != 2 {
-		t.Fatalf("relay_key filter: want 2, got %d", len(got))
-	}
-}
-
-func TestCostAggregates_SummaryAndTimeSeries(t *testing.T) {
-	now := time.Date(2026, 6, 11, 12, 0, 30, 0, time.UTC)
-	cost := func(n int64) *int64 { return &n }
-	events := []Event{
-		{RequestID: "a", Timestamp: now, Status: 200, Source: "pipeline",
-			Provider: "openai", CostNanos: cost(5_000_000)},
-		{RequestID: "b", Timestamp: now, Status: 200, Source: "pipeline",
-			Provider: "openai", CostNanos: cost(0)}, // priced $0, NOT unpriced
-		{RequestID: "c", Timestamp: now, Status: 500, Source: "pipeline",
-			Provider: "anthropic"}, // unpriced
-		{RequestID: "d", Timestamp: now.Add(time.Hour), Status: 200, Source: "pipeline",
-			Provider: "anthropic", CostNanos: cost(2_000_000)},
-		// LogOnly: excluded from aggregates entirely — not an unpriced count.
-		{RequestID: "e", Timestamp: now, Status: 0, ErrorKind: "no_keys"},
-	}
-
-	sum, err := Summarize(events, "source")
-	if err != nil {
-		t.Fatalf("Summarize: %v", err)
-	}
-	if len(sum.Rows) != 1 {
-		t.Fatalf("rows: %+v", sum.Rows)
-	}
-	r := sum.Rows[0]
-	if r.Requests != 4 || r.CostNanos != 7_000_000 || r.Unpriced != 1 {
-		t.Fatalf("summary cost: requests=%d cost=%d unpriced=%d", r.Requests, r.CostNanos, r.Unpriced)
-	}
-
-	byProvider, err := Summarize(events, "provider")
-	if err != nil {
-		t.Fatalf("Summarize provider: %v", err)
-	}
-	if len(byProvider.Rows) != 2 {
-		t.Fatalf("provider rows: %+v", byProvider.Rows)
-	}
-	for _, row := range byProvider.Rows {
-		switch row.Group["provider"] {
-		case "openai":
-			if row.CostNanos != 5_000_000 || row.Unpriced != 0 {
-				t.Fatalf("openai row: %+v", row)
-			}
-		case "anthropic":
-			if row.CostNanos != 2_000_000 || row.Unpriced != 1 {
-				t.Fatalf("anthropic row: %+v", row)
-			}
-		default:
-			t.Fatalf("unexpected group: %+v", row)
-		}
-	}
-
-	ts, err := Bucketize(events, time.Hour, "")
-	if err != nil {
-		t.Fatalf("Bucketize: %v", err)
-	}
-	if len(ts.Rows) != 1 || len(ts.Rows[0].Points) != 2 {
-		t.Fatalf("buckets: %+v", ts.Rows)
-	}
-	p0, p1 := ts.Rows[0].Points[0], ts.Rows[0].Points[1]
-	if p0.CostNanos != 5_000_000 || p0.Unpriced != 1 {
-		t.Fatalf("bucket 0: cost=%d unpriced=%d", p0.CostNanos, p0.Unpriced)
-	}
-	if p1.CostNanos != 2_000_000 || p1.Unpriced != 0 {
-		t.Fatalf("bucket 1: cost=%d unpriced=%d", p1.CostNanos, p1.Unpriced)
-	}
-
-	if !IsValidGroupBy("provider") {
-		t.Fatal("IsValidGroupBy(provider) = false")
-	}
-	got := FilterEvents(events, EventQuery{Provider: []string{"anthropic"}})
-	if len(got) != 2 {
-		t.Fatalf("provider filter: %+v", got)
-	}
-}
-
-// The read scope is the one disjunctive filter: an event qualifies through
-// its project OR its bearer hash, and it still ANDs with the caller's own
-// filters.
-func TestScopeIsADisjunction(t *testing.T) {
-	events := []Event{
-		{RequestID: "in-project", ProjectID: "p-1"},
-		{RequestID: "own-key", RelayKeyHash: "h-mine"},
-		{RequestID: "foreign", ProjectID: "p-2", RelayKeyHash: "h-theirs"},
-	}
-	got := ids(FilterEvents(events, EventQuery{
-		ScopeProjectID:    []string{"p-1"},
-		ScopeRelayKeyHash: []string{"h-mine"},
-	}))
-	if len(got) != 2 || !contains(got, "in-project") || !contains(got, "own-key") {
-		t.Fatalf("scoped = %v, want the project event and the own-key event", got)
-	}
-
-	if n := len(FilterEvents(events, EventQuery{})); n != 3 {
-		t.Fatalf("unscoped = %d events, want 3", n)
-	}
-
-	// A caller filter narrows further; it never widens the scope.
-	got = ids(FilterEvents(events, EventQuery{
-		ScopeProjectID: []string{"p-1"},
-		ProjectID:      []string{"p-2"},
-	}))
-	if len(got) != 0 {
-		t.Fatalf("scope + foreign filter = %v, want nothing", got)
-	}
-}
+func ptr[T any](v T) *T { return &v }
 
 func ids(evs []Event) []string {
 	out := make([]string, 0, len(evs))
@@ -394,11 +20,161 @@ func ids(evs []Event) []string {
 	return out
 }
 
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
+// A fixed past instant: a relative Since window never reaches it.
+var evalBase = time.Date(2020, 6, 11, 12, 0, 0, 0, time.UTC)
+
+// evalEvents differ in every scalar the query filters on; c and d share a timestamp.
+func evalEvents() []Event {
+	return []Event{
+		{RequestID: "a", Timestamp: evalBase, Status: 200, DurationMs: 100, Attempts: 1, Streamed: true,
+			Upstream: &sdkusage.UpstreamTiming{ResponseStart: 50_000}, ModelID: "gpt", Source: "pipeline",
+			ProjectID: "p-1", Tags: map[string]string{"session": "s1", "leg": "x"}},
+		{RequestID: "b", Timestamp: evalBase.Add(time.Minute), Status: 429, ErrorKind: "rate_limited", DurationMs: 20, Attempts: 3,
+			RequestedModel: "Claude-Sonnet", RelayKeyHash: "h-1", Tags: map[string]string{"session": "s1"}},
+		{RequestID: "c", Timestamp: evalBase.Add(2 * time.Minute), ErrorKind: "no_keys",
+			PrincipalID: "u-1", Tags: map[string]string{"session": "s2"}},
+		{RequestID: "d", Timestamp: evalBase.Add(2 * time.Minute), Status: 503, DurationMs: 300,
+			Upstream: &sdkusage.UpstreamTiming{ResponseStart: 150_999}, Source: "Proxy-GW", ProjectID: "p-2"},
+	}
+}
+
+func TestFilterEvents(t *testing.T) {
+	at := func(d time.Duration) time.Time { return evalBase.Add(d) }
+	for _, tc := range []struct {
+		name string
+		q    EventQuery
+		want []string
+	}{
+		{"no filter", EventQuery{}, []string{"a", "b", "c", "d"}},
+		{"from is inclusive", EventQuery{From: at(time.Minute)}, []string{"b", "c", "d"}},
+		{"to is inclusive", EventQuery{To: at(time.Minute)}, []string{"a", "b"}},
+		{"before is exclusive", EventQuery{Before: at(time.Minute)}, []string{"a"}},
+		{"since counts back from now", EventQuery{Since: time.Hour}, []string{}},
+		{"from overrides since", EventQuery{From: evalBase, Since: time.Hour}, []string{"a", "b", "c", "d"}},
+		{"cursor keeps strictly older rows and smaller ids at its instant", EventQuery{CursorTS: at(2 * time.Minute), CursorID: "d"}, []string{"a", "b", "c"}},
+		{"cursor drops its own row", EventQuery{CursorTS: at(2 * time.Minute), CursorID: "c"}, []string{"a", "b"}},
+		{"request id", EventQuery{RequestID: "b"}, []string{"b"}},
+		{"status min", EventQuery{StatusMin: 400}, []string{"b", "d"}},
+		{"status max", EventQuery{StatusMax: 429}, []string{"a", "b", "c"}},
+		{"status list", EventQuery{Status: []int{200, 503}}, []string{"a", "d"}},
+		{"status list ands with the range", EventQuery{Status: []int{200, 503}, StatusMin: 400}, []string{"d"}},
+		{"streamed", EventQuery{Streamed: ptr(true)}, []string{"a"}},
+		{"not streamed", EventQuery{Streamed: ptr(false)}, []string{"b", "c", "d"}},
+		{"errors only counts a status-0 failure", EventQuery{ErrorsOnly: ptr(true)}, []string{"b", "c", "d"}},
+		{"successes only", EventQuery{ErrorsOnly: ptr(false)}, []string{"a"}},
+		{"attempts min", EventQuery{AttemptsMin: 2}, []string{"b"}},
+		{"duration min is inclusive", EventQuery{DurationMsMin: 100}, []string{"a", "d"}},
+		{"duration max is inclusive", EventQuery{DurationMsMax: 100}, []string{"a", "b", "c"}},
+		{"ttft min drops events without upstream timing", EventQuery{TTFTMsMin: 51}, []string{"d"}},
+		{"ttft max truncates microseconds", EventQuery{TTFTMsMax: 150}, []string{"a", "d"}},
+		{"ttft range", EventQuery{TTFTMsMin: 50, TTFTMsMax: 50}, []string{"a"}},
+		{"q matches model id ignoring case", EventQuery{Q: "GPT"}, []string{"a"}},
+		{"q matches requested model", EventQuery{Q: "sonnet"}, []string{"b"}},
+		{"q matches source", EventQuery{Q: "proxy"}, []string{"d"}},
+		{"q matches request id", EventQuery{Q: "B"}, []string{"b"}},
+		{"tag value", EventQuery{Tags: map[string][]string{"session": {"s1"}}}, []string{"a", "b"}},
+		{"tag values or within a key", EventQuery{Tags: map[string][]string{"session": {"s1", "s2"}}}, []string{"a", "b", "c"}},
+		{"tag keys and across keys", EventQuery{Tags: map[string][]string{"session": {"s1"}, "leg": {"x"}}}, []string{"a"}},
+		{"a missing tag matches the empty value", EventQuery{Tags: map[string][]string{"leg": {""}}}, []string{"b", "c", "d"}},
+		{"scope is a disjunction", EventQuery{ScopeProjectID: []string{"p-1"}, ScopeRelayKeyHash: []string{"h-1"}}, []string{"a", "b"}},
+		{"scope by principal", EventQuery{ScopePrincipalID: []string{"u-1"}}, []string{"c"}},
+		{"a filter narrows the scope, never widens it", EventQuery{ScopeProjectID: []string{"p-1"}, ProjectID: []string{"p-2"}}, []string{}},
+		{"an empty scope value matches no unattributed event", EventQuery{ScopeProjectID: []string{""}, ScopeRelayKeyHash: []string{""}, ScopePrincipalID: []string{""}}, []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.want, ids(FilterEvents(evalEvents(), tc.q))); diff != "" {
+				t.Errorf("request ids (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// Every []string filter of EventQuery reads the Event field of the same name: one value keeps its event, several OR, an unknown value keeps nothing.
+func TestFilterEventsListFiltersMatchTheirOwnField(t *testing.T) {
+	queryType := reflect.TypeFor[EventQuery]()
+	checked := 0
+	for i := range queryType.NumField() {
+		f := queryType.Field(i)
+		if f.Type != reflect.TypeFor[[]string]() || len(f.Name) > 5 && f.Name[:5] == "Scope" {
+			continue
+		}
+		checked++
+		x, y := Event{RequestID: "x"}, Event{RequestID: "y"}
+		reflect.ValueOf(&x).Elem().FieldByName(f.Name).SetString("x-value")
+		reflect.ValueOf(&y).Elem().FieldByName(f.Name).SetString("y-value")
+		for _, tc := range []struct {
+			values []string
+			want   []string
+		}{
+			{[]string{"x-value"}, []string{"x"}},
+			{[]string{"y-value", "x-value"}, []string{"x", "y"}},
+			{[]string{"other"}, []string{}},
+		} {
+			var q EventQuery
+			reflect.ValueOf(&q).Elem().Field(i).Set(reflect.ValueOf(tc.values))
+			if diff := cmp.Diff(tc.want, ids(FilterEvents([]Event{x, y, {RequestID: "unset"}}, q))); diff != "" {
+				t.Errorf("%s = %v (-want +got):\n%s", f.Name, tc.values, diff)
+			}
 		}
 	}
-	return false
+	if checked != 22 {
+		t.Errorf("checked %d list filters, want 22: a new filter field needs an Event field of the same name", checked)
+	}
+}
+
+func TestSortAndLimit(t *testing.T) {
+	if diff := cmp.Diff([]string{"d", "c", "b", "a"}, ids(SortAndLimit(evalEvents(), 10))); diff != "" {
+		t.Errorf("newest first, larger id first at one instant (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"d", "c"}, ids(SortAndLimit(evalEvents(), 2))); diff != "" {
+		t.Errorf("limit 2 (-want +got):\n%s", diff)
+	}
+	many := make([]Event, MaxEventLimit+1)
+	for _, tc := range []struct{ limit, want int }{
+		{0, DefaultEventLimit},
+		{-1, DefaultEventLimit},
+		{MaxEventLimit, MaxEventLimit},
+		{MaxEventLimit + 1, MaxEventLimit},
+	} {
+		if got := len(SortAndLimit(many, tc.limit)); got != tc.want {
+			t.Errorf("limit %d kept %d events, want %d", tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestCountEvents(t *testing.T) {
+	cursor := EventQuery{CursorTS: evalBase, CursorID: "a"}
+	for _, tc := range []struct {
+		name  string
+		q     EventQuery
+		limit int
+		want  int64
+	}{
+		{"all", EventQuery{}, 0, 4},
+		{"the cursor is ignored", cursor, 0, 4},
+		{"filtered", EventQuery{StatusMin: 400}, 0, 2},
+		{"stops at the limit", EventQuery{}, 3, 3},
+		{"a limit above the matches", EventQuery{StatusMin: 400}, 5, 2},
+	} {
+		if got := CountEvents(evalEvents(), tc.q, tc.limit); got != tc.want {
+			t.Errorf("%s: count = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Paging by the last row's (timestamp, id) walks every event once, newest first, across a shared instant.
+func TestCursorPagingVisitsEveryEventOnce(t *testing.T) {
+	var got []string
+	q := EventQuery{Limit: 2}
+	for {
+		page := SortAndLimit(FilterEvents(evalEvents(), q), q.Limit)
+		got = append(got, ids(page)...)
+		if len(page) < q.Limit || len(got) > 4 {
+			break
+		}
+		q.CursorTS, q.CursorID = page[len(page)-1].Timestamp, page[len(page)-1].RequestID
+	}
+	if diff := cmp.Diff([]string{"d", "c", "b", "a"}, got); diff != "" {
+		t.Errorf("paged ids (-want +got):\n%s", diff)
+	}
 }

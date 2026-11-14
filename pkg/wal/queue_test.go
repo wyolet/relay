@@ -156,21 +156,127 @@ func TestSegmentDropCountsLostRecords(t *testing.T) {
 	lost := func() float64 { return testutil.ToFloat64(metrics.RecordsLost.WithLabelValues(kind)) }
 	before := lost()
 
-	q := openTestQueue(t, Config{MaxLines: 2, MaxSegments: 1, Kind: kind},
+	dir := t.TempDir()
+	q := openTestQueue(t, Config{Dir: dir, MaxLines: 2, MaxSegments: 1, Kind: kind},
 		func([]testRecord) error { return errors.New("sink down") })
 	defer q.StopBackground()
 
-	// 6 records at 2 per segment = 3 segments; the cap keeps 1.
+	// 6 records at 2 per segment = 3 segments; the cap keeps the newest.
 	if err := q.WriteBatch(testRecords(6)); err != nil {
 		t.Fatal(err)
 	}
 	q.FlushPending()
+	if left := pendingIDs(t, dir); !slices.Equal(left, []string{"r4", "r5"}) {
+		t.Fatalf("records left on disk = %q, want the newest segment [r4 r5]", left)
+	}
 
 	if got := q.Dropped(); got != 2 {
 		t.Fatalf("Dropped() = %d segments, want 2", got)
 	}
 	if got := lost() - before; got != 4 {
 		t.Fatalf("records_lost_total{kind=%q} rose by %v, want 4", kind, got)
+	}
+}
+
+// The tick rotates a partly filled active segment and flushes it.
+func TestTickFlushesPartialSegment(t *testing.T) {
+	flushed := make(chan []testRecord, 4)
+	q := openTestQueue(t, Config{MaxLines: 10_000, FlushInterval: 20 * time.Millisecond}, func(recs []testRecord) error {
+		flushed <- recs
+		return nil
+	})
+	defer q.StopBackground()
+	recs := testRecords(2)
+	if err := q.WriteBatch(recs); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-flushed:
+		if !slices.Equal(recordIDs(got), recordIDs(recs)) {
+			t.Fatalf("tick flushed %q, want %q", recordIDs(got), recordIDs(recs))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tick never flushed the active segment")
+	}
+}
+
+func TestCloseFlushesActiveSegment(t *testing.T) {
+	dir := t.TempDir()
+	var sink collector
+	q := openTestQueue(t, Config{Dir: dir, MaxLines: 10_000}, func(recs []testRecord) error {
+		sink.add(recs)
+		return nil
+	})
+	if err := q.WriteBatch(testRecords(3)); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := sink.sorted(); !slices.Equal(got, []string{"r0", "r1", "r2"}) {
+		t.Fatalf("sink received %q, want [r0 r1 r2]", got)
+	}
+	if files := walFiles(t, dir); !slices.Equal(files, []string{""}) {
+		t.Fatalf("files after Close = %q, want only an empty active segment", files)
+	}
+}
+
+// Segments and a half-written active segment left by a run that never flushed reach the sink of the next one, oldest first, once Recover is called.
+func TestRecoverFlushesWhatAnEarlierRunLeft(t *testing.T) {
+	dir := t.TempDir()
+	crashed := openTestQueue(t, Config{Dir: dir, MaxLines: 2}, func([]testRecord) error { return errors.New("sink down") })
+	if err := crashed.WriteBatch(testRecords(5)); err != nil {
+		t.Fatal(err)
+	}
+	crashed.FlushPending()
+	crashed.StopBackground()
+	if left := pendingIDs(t, dir); !slices.Equal(left, []string{"r0", "r1", "r2", "r3", "r4"}) {
+		t.Fatalf("records on disk after the crash = %q", left)
+	}
+
+	var got []string
+	q := openTestQueue(t, Config{Dir: dir, MaxLines: 2}, func(recs []testRecord) error {
+		got = append(got, recordIDs(recs)...)
+		return nil
+	})
+	defer q.StopBackground()
+	if len(got) != 0 {
+		t.Fatalf("Open flushed %q before Recover", got)
+	}
+	q.Recover()
+	if !slices.Equal(got, []string{"r0", "r1", "r2", "r3", "r4"}) {
+		t.Fatalf("recovered %q, want r0..r4 in order", got)
+	}
+	if left := pendingIDs(t, dir); len(left) != 0 {
+		t.Fatalf("records %q left on disk after recovery", left)
+	}
+}
+
+// The lag gauge reads above zero while a refused segment waits and returns to zero once a pass drains it.
+func TestFlushLagFollowsTheOldestPendingSegment(t *testing.T) {
+	const kind = "wal_lag_test"
+	lag := func() float64 { return testutil.ToFloat64(metrics.FlushLag.WithLabelValues(kind)) }
+	var down atomic.Bool
+	down.Store(true)
+	q := openTestQueue(t, Config{MaxLines: 1, Kind: kind}, func([]testRecord) error {
+		if down.Load() {
+			return errors.New("sink down")
+		}
+		return nil
+	})
+	defer q.StopBackground()
+	if err := q.WriteBatch(testRecords(1)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	q.FlushPending()
+	if got := lag(); got < 0.002 || got > 60 {
+		t.Fatalf("flush lag = %vs after a refused flush, want the segment's age", got)
+	}
+	down.Store(false)
+	q.FlushPending()
+	if got := lag(); got != 0 {
+		t.Fatalf("flush lag = %v after the drain, want 0", got)
 	}
 }
 
