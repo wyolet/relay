@@ -9,6 +9,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/httpapi/openapitest"
+	"github.com/wyolet/relay/internal/adapterspecs"
 )
 
 // The inference document is built from the adapter specs registered here, so its guard lives beside them: every operation and field described, and every refusal a caller can meet named on the generation routes.
@@ -57,7 +58,7 @@ func TestInferenceOpenAPIIsDocumented(t *testing.T) {
 
 func inferenceDoc(t *testing.T) map[string]any {
 	t.Helper()
-	reg := buildSpecRegistry(buildAdapterSpecs())
+	reg := buildSpecRegistry(adapterspecs.Specs())
 	api := inference.Mount(chi.NewRouter(), inference.Deps{
 		Catalog:       &appcatalog.Catalog{},
 		Specs:         reg,
