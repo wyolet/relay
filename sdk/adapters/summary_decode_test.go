@@ -16,6 +16,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/gemini"
 	"github.com/wyolet/relay/sdk/adapters/openai"
@@ -281,17 +283,20 @@ func TestSummaryTokensMatchExtractTokens(t *testing.T) {
 
 // TestUnfinishedStreamsKeepTheirTokens shows why the rate-limit commit asks ExtractTokens when the Summary has no tokens: a stream that ends on an error event, or before its terminal frame, completes no generation, yet reported the usage the upstream served.
 func TestUnfinishedStreamsKeepTheirTokens(t *testing.T) {
-	cases := []struct{ shape, body string }{
-		{"anthropic", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":30}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"},
-		{"openai-chat", "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2}}\n\n"},
+	cases := []struct {
+		shape, body string
+		want        usage.Tokens
+	}{
+		{"anthropic", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":30}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n", usage.Tokens{"input": 12, "cache_creation": 30, "output": 7}},
+		{"openai-chat", "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2}}\n\n", usage.Tokens{"input": 9, "output": 2}},
 	}
 	for _, c := range cases {
 		sum, err := v1.ExtractSummary(shapeByName(c.shape).tr, []byte(c.body))
 		if err != nil || len(sum.Tokens) != 0 {
 			t.Errorf("%s: Summary tokens %v (%v), want none: the case no longer needs the ExtractTokens fallback", c.shape, sum.Tokens, err)
 		}
-		if got := extractTokens[c.shape]([]byte(c.body)); len(got) == 0 {
-			t.Errorf("%s: ExtractTokens found no tokens", c.shape)
+		if diff := cmp.Diff(c.want, extractTokens[c.shape]([]byte(c.body))); diff != "" {
+			t.Errorf("%s: ExtractTokens (-want +got):\n%s", c.shape, diff)
 		}
 	}
 }
