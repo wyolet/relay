@@ -126,6 +126,30 @@ func TestControlOpenAPI(t *testing.T) {
 		}
 	})
 
+	// Create derives an omitted name, so its body is a named schema of its own; update and the answers keep the kind's schema, where name is required.
+	t.Run("create bodies are named schemas", func(t *testing.T) {
+		for _, tc := range []struct{ base, kind string }{{"/providers", "Provider"}, {"/host-keys", "HostKey"}, {"/rate-limits", "RateLimit"}} {
+			if ref := bodyRef(operation(t, doc, tc.base, "post")); ref != "#/components/schemas/"+tc.kind+"Create" {
+				t.Errorf("POST %s takes %q, want %sCreate", tc.base, ref, tc.kind)
+			}
+			if ref := responseRef(operation(t, doc, tc.base, "post"), "201"); ref != "#/components/schemas/"+tc.kind {
+				t.Errorf("POST %s answers %q, want %s", tc.base, ref, tc.kind)
+			}
+			if ref := bodyRef(operation(t, doc, tc.base+"/by-id/{id}", "put")); ref != "#/components/schemas/"+tc.kind {
+				t.Errorf("PUT %s/by-id/{id} takes %q, want %s", tc.base, ref, tc.kind)
+			}
+		}
+		comps, _ := doc["components"].(map[string]any)
+		schemas, _ := comps["schemas"].(map[string]any)
+		for name, wantName := range map[string]bool{"Metadata": true, "MetadataCreate": false} {
+			s, _ := schemas[name].(map[string]any)
+			required, _ := s["required"].([]any)
+			if slices.Contains(required, any("name")) != wantName {
+				t.Errorf("%s requires name: %v, want %v", name, !wantName, wantName)
+			}
+		}
+	})
+
 	t.Run("usage and logs filter on lane, share and refusal", func(t *testing.T) {
 		for _, path := range []string{"/usage/events", "/logs"} {
 			params, _ := operation(t, doc, path, "get")["parameters"].([]any)
@@ -186,6 +210,15 @@ func operation(t *testing.T, doc map[string]any, path, method string) map[string
 		t.Fatalf("no %s %s", method, path)
 	}
 	return op
+}
+
+func bodyRef(op map[string]any) string {
+	b, _ := op["requestBody"].(map[string]any)
+	c, _ := b["content"].(map[string]any)
+	j, _ := c["application/json"].(map[string]any)
+	s, _ := j["schema"].(map[string]any)
+	ref, _ := s["$ref"].(string)
+	return ref
 }
 
 func responseRef(op map[string]any, code string) string {
