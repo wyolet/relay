@@ -2,24 +2,19 @@ package ratelimit
 
 import (
 	"context"
-	"sort"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-// commitboth_test.go — parity gate for CommitBoth.
-//
-// CommitBoth batches the two per-reservation commit scripts into one round
-// trip instead of committing inbound then upstream sequentially. The two
-// reservations live under different hash tags (policy scope vs. hostkey scope),
-// so a single CROSSSLOT-safe Lua is impossible; the guarantee we hold instead
-// is EXACT semantic parity with the two sequential Commit calls. These tests
-// run each scenario both ways against fresh stores and assert the resulting
-// bucket state is byte-identical (modulo the random-ID idempotency guard keys).
+// CommitBoth batches two commit scripts that live under different hash tags; it must leave exactly what two sequential Commit calls leave.
 
 // scripterOnly wraps a Scripter but deliberately does NOT expose
 // RunScriptBatch, forcing CommitBoth down its sequential fallback path.
@@ -69,75 +64,42 @@ const (
 	upstreamScope = "hostkey:key-abc-123"
 )
 
-// commitMode runs the commit half of a scenario against an already-reserved
-// pair, either sequentially or via CommitBoth.
-type commitMode func(t *testing.T, l *Limiter, inbound, upstream *Reservation, obs Observations)
-
-func sequentialCommit(t *testing.T, l *Limiter, inbound, upstream *Reservation, obs Observations) {
-	t.Helper()
-	if err := l.Commit(context.Background(), inbound, obs); err != nil {
-		t.Fatalf("sequential inbound commit: %v", err)
-	}
-	if err := l.Commit(context.Background(), upstream, obs); err != nil {
-		t.Fatalf("sequential upstream commit: %v", err)
-	}
+// commitModes are the ways to commit an inbound and an upstream reservation; all must leave the same counters.
+var commitModes = []struct {
+	name   string
+	commit func(l *Limiter, inbound, upstream *Reservation, obs Observations) error
+}{
+	{"sequential", func(l *Limiter, inbound, upstream *Reservation, obs Observations) error {
+		ctx := context.Background()
+		return errors.Join(l.Commit(ctx, inbound, obs), l.Commit(ctx, upstream, obs))
+	}},
+	{"both", func(l *Limiter, inbound, upstream *Reservation, obs Observations) error {
+		return l.CommitBoth(context.Background(), inbound, upstream, obs)
+	}},
+	{"both without a batching store", func(l *Limiter, inbound, upstream *Reservation, obs Observations) error {
+		l.runner = scripterOnly{inner: l.runner}
+		return l.CommitBoth(context.Background(), inbound, upstream, obs)
+	}},
 }
 
-func batchedCommit(t *testing.T, l *Limiter, inbound, upstream *Reservation, obs Observations) {
-	t.Helper()
-	if err := l.CommitBoth(context.Background(), inbound, upstream, obs); err != nil {
-		t.Fatalf("CommitBoth: %v", err)
-	}
-}
-
-// runParityScenario reserves inbound+upstream, advances the clock to commitNow,
-// commits via mode, and returns the resulting non-guard bucket dump.
-func runParityScenario(
-	t *testing.T,
-	mode commitMode,
-	inboundRules, upstreamRules []Rule,
-	obs Observations,
-	reserveNow, commitNow time.Time,
-) map[string]string {
+// commitDump reserves inbound and upstream rules (nil rules reserve nothing), moves the clock to commitNow, commits through commit and returns the counters left.
+func commitDump(t *testing.T, commit func(*Limiter, *Reservation, *Reservation, Observations) error, inboundRules, upstreamRules []Rule, obs Observations, reserveNow, commitNow time.Time) map[string]string {
 	t.Helper()
 	store := newTestStore(t)
 	now := reserveNow
 	l := New(store, discardLog(), func() time.Time { return now })
-
-	inbound, err := l.Reserve(context.Background(), inboundScope, inboundRules)
-	if err != nil {
-		t.Fatalf("reserve inbound: %v", err)
+	var inbound, upstream *Reservation
+	if inboundRules != nil {
+		inbound = mustReserve(t, l, inboundScope, inboundRules)
 	}
-	upstream, err := l.Reserve(context.Background(), upstreamScope, upstreamRules)
-	if err != nil {
-		t.Fatalf("reserve upstream: %v", err)
+	if upstreamRules != nil {
+		upstream = mustReserve(t, l, upstreamScope, upstreamRules)
 	}
-
 	now = commitNow
-	mode(t, l, inbound, upstream, obs)
+	if err := commit(l, inbound, upstream, obs); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
 	return dumpBuckets(t, store)
-}
-
-func assertMapsEqual(t *testing.T, seq, batch map[string]string) {
-	t.Helper()
-	if len(seq) != len(batch) {
-		t.Errorf("key count: sequential=%d batched=%d", len(seq), len(batch))
-	}
-	keys := make([]string, 0, len(seq))
-	for k := range seq {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if batch[k] != seq[k] {
-			t.Errorf("key %q: sequential=%q batched=%q", k, seq[k], batch[k])
-		}
-	}
-	for k := range batch {
-		if _, ok := seq[k]; !ok {
-			t.Errorf("key %q present only in batched=%q", k, batch[k])
-		}
-	}
 }
 
 func TestCommitBothParity(t *testing.T) {
@@ -222,49 +184,30 @@ func TestCommitBothParity(t *testing.T) {
 			obs:           Observations{Tokens: map[string]int64{"input": 111, "output": 222}},
 			commitAdvance: 3 * window,
 		},
+		{
+			name:    "inbound only",
+			inbound: []Rule{reqRule("inb:req", "inbound requests", 100, window), tokRule("inb:tok", "inbound tokens", 1_000_000, window)},
+			obs:     Observations{Tokens: map[string]int64{"input": 300, "output": 200}},
+		},
+		{
+			name:     "upstream only",
+			upstream: []Rule{conRule("ups:con", "upstream concurrency", 10, window), tokRule("ups:tok", "upstream tokens", 1_000_000, window)},
+			obs:      Observations{Tokens: map[string]int64{"input": 300, "output": 200}},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			commitNow := base.Add(tc.commitAdvance)
-			seq := runParityScenario(t, sequentialCommit, tc.inbound, tc.upstream, tc.obs, base, commitNow)
-			batch := runParityScenario(t, batchedCommit, tc.inbound, tc.upstream, tc.obs, base, commitNow)
-			assertMapsEqual(t, seq, batch)
+			want := commitDump(t, commitModes[0].commit, tc.inbound, tc.upstream, tc.obs, base, commitNow)
+			for _, mode := range commitModes[1:] {
+				got := commitDump(t, mode.commit, tc.inbound, tc.upstream, tc.obs, base, commitNow)
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("%s (-sequential +got):\n%s", mode.name, diff)
+				}
+			}
 		})
 	}
-}
-
-// TestCommitBothFallbackParity: a runner without RunScriptBatch must produce
-// the same result as the batched path (the sequential fallback).
-func TestCommitBothFallbackParity(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC)
-	window := time.Minute
-	inbound := []Rule{reqRule("inb:req", "inbound requests", 100, window), tokRule("inb:tok", "inbound tokens", 1_000_000, window)}
-	upstream := []Rule{reqRule("ups:req", "upstream requests", 100, window), conRule("ups:con", "upstream concurrency", 10, window)}
-	obs := Observations{Tokens: map[string]int64{"input": 300, "output": 200}}
-
-	// Batched path.
-	batch := runParityScenario(t, batchedCommit, inbound, upstream, obs, base, base)
-
-	// Fallback path: same scenario, but force runner to a non-batch Scripter.
-	store := newTestStore(t)
-	now := base
-	l := New(store, discardLog(), func() time.Time { return now })
-	l.runner = scripterOnly{inner: store}
-
-	inb, err := l.Reserve(context.Background(), inboundScope, inbound)
-	if err != nil {
-		t.Fatalf("reserve inbound: %v", err)
-	}
-	ups, err := l.Reserve(context.Background(), upstreamScope, upstream)
-	if err != nil {
-		t.Fatalf("reserve upstream: %v", err)
-	}
-	if err := l.CommitBoth(context.Background(), inb, ups, obs); err != nil {
-		t.Fatalf("CommitBoth (fallback): %v", err)
-	}
-	fallback := dumpBuckets(t, store)
-	assertMapsEqual(t, fallback, batch)
 }
 
 // TestCommitBothIdempotent: a duplicate CommitBoth is a no-op for both
@@ -302,8 +245,9 @@ func TestCommitBothIdempotent(t *testing.T) {
 	if err := l.CommitBoth(context.Background(), inb, ups, Observations{Tokens: map[string]int64{"input": 9999}}); err != nil {
 		t.Fatalf("CommitBoth #2: %v", err)
 	}
-	afterSecond := dumpBuckets(t, store)
-	assertMapsEqual(t, afterFirst, afterSecond)
+	if diff := cmp.Diff(afterFirst, dumpBuckets(t, store)); diff != "" {
+		t.Fatalf("duplicate commit changed counters (-first +second):\n%s", diff)
+	}
 	if g := countGuards(t, store); g != 2 {
 		t.Fatalf("guard count after duplicate commit = %d, want 2", g)
 	}
@@ -359,43 +303,13 @@ func TestCommitBothConcurrent(t *testing.T) {
 	}
 }
 
-// TestCommitBothSingleSided: with one reservation nil, CommitBoth must match a
-// single Commit of the present side (fallback-to-single path).
-func TestCommitBothSingleSided(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC)
-	window := time.Minute
-	rules := []Rule{reqRule("inb:req", "inbound requests", 100, window), tokRule("inb:tok", "inbound tokens", 1_000_000, window)}
-	obs := Observations{Tokens: map[string]int64{"input": 300, "output": 200}}
-
-	// Single Commit reference.
-	refStore := newTestStore(t)
-	now := base
-	lref := New(refStore, discardLog(), func() time.Time { return now })
-	res, err := lref.Reserve(context.Background(), inboundScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
+func TestCommitBothOfNothingIsNoOp(t *testing.T) {
+	rec := kvtest.NewRecording(newTestStore(t))
+	l := New(rec, discardLog(), nil)
+	if err := l.CommitBoth(context.Background(), nil, nil, Observations{Cancelled: true}); err != nil {
+		t.Fatalf("CommitBoth(nil, nil): %v", err)
 	}
-	if err := lref.Commit(context.Background(), res, obs); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	ref := dumpBuckets(t, refStore)
-
-	// CommitBoth with upstream nil.
-	store := newTestStore(t)
-	now2 := base
-	l := New(store, discardLog(), func() time.Time { return now2 })
-	r, err := l.Reserve(context.Background(), inboundScope, rules)
-	if err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	if err := l.CommitBoth(context.Background(), r, nil, obs); err != nil {
-		t.Fatalf("CommitBoth single: %v", err)
-	}
-	got := dumpBuckets(t, store)
-	assertMapsEqual(t, ref, got)
-
-	// Both nil is a clean no-op.
-	if err := l.CommitBoth(context.Background(), nil, nil, obs); err != nil {
-		t.Fatalf("CommitBoth(nil,nil): %v", err)
+	if n := rec.RoundTrips(); n != 0 {
+		t.Fatalf("round trips = %d, want 0", n)
 	}
 }
