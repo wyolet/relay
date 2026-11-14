@@ -215,10 +215,24 @@ func TestTokenSource_Caching(t *testing.T) {
 	}
 
 	t.Run("expiry follows Config.Now", func(t *testing.T) {
-		t.Skip("bug: Config.Now fixed at T, token with expires_in 3600 → still served at T+2h; expiry is stamped from time.Now() while freshness is read from Config.Now")
 		now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
 		f := &fakeEndpoint{status: 200, body: `{"access_token":"tok","expires_in":3600}`}
 		ts := NewTokenSource(Config{UseMetadataServer: true, HTTPClient: &http.Client{Transport: f}, Now: func() time.Time { return now }})
+		for _, step := range []struct {
+			advance  time.Duration
+			wantReqs int
+		}{{0, 1}, {59*time.Minute - time.Second, 1}, {time.Second, 2}, {2 * time.Hour, 3}} {
+			now = now.Add(step.advance)
+			if _, err := ts.AccessToken(context.Background()); err != nil || len(f.reqs) != step.wantReqs {
+				t.Fatalf("at %s: %v after %d requests, want %d", now.Format(time.TimeOnly), err, len(f.reqs), step.wantReqs)
+			}
+		}
+	})
+
+	t.Run("service account: expiry follows Config.Now", func(t *testing.T) {
+		now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+		f := &fakeEndpoint{status: 200, body: `{"access_token":"tok","expires_in":3600}`}
+		ts := NewTokenSource(Config{ServiceAccountJSON: saJSON(t, testEmail, "", pkcs8PEM(t, testKey())), HTTPClient: &http.Client{Transport: f}, Now: func() time.Time { return now }})
 		for _, step := range []struct {
 			advance  time.Duration
 			wantReqs int
