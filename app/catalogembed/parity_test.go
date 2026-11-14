@@ -1,6 +1,8 @@
 package catalogembed
 
 import (
+	"github.com/google/go-cmp/cmp"
+	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 	"testing"
 	"time"
 
@@ -97,22 +99,24 @@ func TestFlatten_IndexMatchesSnapshot(t *testing.T) {
 	if string(fromSnap) != string(fromIndex) {
 		t.Fatalf("index flatten differs from snapshot flatten:\nsnapshot %s\nindex    %s", fromSnap, fromIndex)
 	}
-
 	// The fixture must exercise the drops, or agreement proves little.
-	amounts := map[string][]float64{}
-	for _, h := range cat.Hosts {
-		for _, b := range h.Models {
-			var a float64
-			if len(b.Pricing) > 0 {
-				a = b.Pricing[0].Amount
-			}
-			amounts[h.Name] = append(amounts[h.Name], a)
-		}
+	pointer := func(amount float64) sdkcatalog.Binding {
+		b := row("m-2", amount)
+		b.Featured, b.Aliases = true, []string{"m-latest"}
+		return b
 	}
-	if len(cat.Hosts) != 2 || len(amounts["host-a"]) != 4 || len(amounts["host-b"]) != 2 || amounts["host-b"][0] != 0 {
-		t.Fatalf("unexpected document: %s", fromIndex)
+	want := &sdkcatalog.Catalog{
+		Version:     "relay-catalog@v1alpha3",
+		GeneratedAt: at,
+		Hosts: []sdkcatalog.Host{
+			// A binding whose own sheet is gone or doesn't target it falls back to the covering sheet (1).
+			{Name: "host-a", BaseURL: "http://a.example", Models: []sdkcatalog.Binding{row("m-1", 1), row("m-1", 7), pointer(1), pointer(7)}},
+			{Name: "host-b", BaseURL: "http://b.example", Models: []sdkcatalog.Binding{row("m-1", 0), pointer(0)}},
+		},
+		Models:    []sdkcatalog.ModelInfo{{MetadataName: "m-1", Provider: "prov"}, {MetadataName: "m-2", Provider: "prov"}},
+		Providers: []sdkcatalog.ProviderInfo{{Name: "prov", DisplayName: "Prov"}},
 	}
-	if len(cat.Models) != 2 || len(cat.Providers) != 1 {
-		t.Fatalf("sidecars: models=%d providers=%d, want 2 and 1", len(cat.Models), len(cat.Providers))
+	if diff := cmp.Diff(want, cat); diff != "" {
+		t.Fatalf("document (-want +got):\n%s", diff)
 	}
 }
